@@ -1,11 +1,18 @@
-use super::*;
+use super::{Args, Automation, Result, ToolError, Value, child, failed, json, with_warnings, write_atomic};
 
 impl Automation {
     pub(crate) fn doc_export_office(&self, a: &Args) -> Result<Value> {
         let path = self.resolve(a.str("path")?, true)?;
         let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
         let format = pdfcraft_engine::compare::OfficeFormat::from_extension(&ext)
-            .ok_or_else(|| ToolError::InvalidArgs(format!("unsupported extension {ext:?} (docx, pptx, html or rtf)")))?;
+            .ok_or_else(|| ToolError::InvalidArgs(format!("unsupported extension {ext:?} (docx, pptx, html, rtf or md)")))?;
+        let html_mode = a.opt_str("html_mode")?.unwrap_or("rich");
+        let format = match (format, html_mode) {
+            (pdfcraft_engine::compare::OfficeFormat::Html, "rich") => pdfcraft_engine::compare::OfficeFormat::Html,
+            (pdfcraft_engine::compare::OfficeFormat::Html, "simple") => pdfcraft_engine::compare::OfficeFormat::HtmlSimple,
+            (_, "rich") => format,
+            (_, _) => return Err(ToolError::InvalidArgs("html_mode is only available for HTML exports (rich or simple)".into())),
+        };
         let export = self.doc_to_copy(a)?.export_office_checked(format);
         write_atomic(&path, &export.bytes)?;
         // Text left out to keep a hostile page bounded is said, not silent (#3120).
@@ -15,7 +22,7 @@ impl Automation {
         if !export.truncated_pages.is_empty() {
             use pdfcraft_engine::compare::{MAX_FORM_DEPTH, MAX_FORM_VISITS};
             out["warnings"] = json!([format!(
-                "forms nested more than {MAX_FORM_DEPTH} deep, or past the first {MAX_FORM_VISITS} forms of a page (forms the page draws itself count too), were left out on the pages in truncated_pages: their text and images are missing from the export, although the viewer may still show them"
+                "pictures past what one export may hold or decode, or forms nested more than {MAX_FORM_DEPTH} deep, or past the first {MAX_FORM_VISITS} forms of a page (forms the page draws itself count too), were left out on the pages in truncated_pages: their text and images are missing from the export, although the viewer may still show them"
             )]);
         }
         Ok(out)
@@ -96,8 +103,8 @@ impl Automation {
     pub(crate) fn pdfa_convert(&mut self, a: &Args) -> Result<Value> {
         let level = self.pdfa_level(a)?;
         let id = self.doc(a)?.id;
-        self.session.apply(id, pdfcraft_engine::Edit::ConvertPdfA { level }).map_err(failed)?;
-        self.pdfa_verify(a)
+        let warnings = self.apply_with_warnings(id, pdfcraft_engine::Edit::ConvertPdfA { level })?;
+        Ok(with_warnings(self.pdfa_verify(a)?, warnings))
     }
 
     pub(crate) fn action_list(&self) -> Result<Value> {
@@ -111,6 +118,9 @@ impl Automation {
         Ok(json!({ "actions": actions, "steps": steps }))
     }
 
+    /// `action_run`: run a named action or a list of steps on each file in `paths`, writing the
+    /// results into `folder`; each file is processed in its own session that keeps this
+    /// session's JavaScript preference.
     pub(crate) fn action_run(&mut self, a: &Args) -> Result<Value> {
         use pdfcraft_engine::actions::{Action, Step, builtin, run_on};
         let action = if let Some(name) = a.opt_str("action")? {
@@ -131,6 +141,8 @@ impl Automation {
         };
         let folder = self.resolve(a.str("folder")?, true)?;
         std::fs::create_dir_all(&folder).map_err(|e| failed(e.to_string()))?;
+        // Each file runs in its own session; it keeps this one's JavaScript preference.
+        let javascript = self.session.javascript();
         let mut out = Vec::new();
         for p in a.strs("paths")? {
             let name = std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "document.pdf".into());
@@ -138,21 +150,10 @@ impl Automation {
                 .resolve(p, false)
                 .map_err(|e| e.to_string())
                 .and_then(|src| crate::read_input_bytes(&src).map_err(|e| e.to_string()))
-                .and_then(|bytes| run_on(&action, &name, std::sync::Arc::new(bytes), |_, _| {}));
+                .and_then(|bytes| run_on(&action, &name, std::sync::Arc::new(bytes), javascript, |_, _| {}));
             out.push(match result {
                 Ok(r) => {
-                    let target = child(&folder, &name);
-                    let target = if target.exists() {
-                        let stem =
-                            std::path::Path::new(&name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
-                        unused(&folder, &stem)
-                    } else {
-                        target
-                    };
-                    if target.exists() {
-                        return Err(failed(format!("{}: no unused output name available", target.display())));
-                    }
-                    write_atomic(&target, &r.bytes)?;
+                    let target = crate::batch::publish(&child(&folder, &name), &r.bytes)?;
                     json!({ "path": p, "output": target.to_string_lossy(), "log": r.log })
                 }
                 Err(e) => json!({ "path": p, "error": e }),
@@ -213,7 +214,7 @@ impl Automation {
 
     pub(crate) fn doc_compare_mark(&mut self, a: &Args) -> Result<Value> {
         let (old, new) = self.compare_ids(a)?;
-        let n = self.session.mark_differences(old, new).map_err(failed)?;
-        Ok(json!({ "comments": n }))
+        let (n, out) = self.session.with_own_js_output(new, |s| s.mark_differences(old, new)).map_err(failed)?;
+        Ok(with_warnings(json!({ "comments": n }), out.errors))
     }
 }

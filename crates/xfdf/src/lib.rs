@@ -2,8 +2,10 @@
 //!
 //! - **XFDF** (ISO 19444-1, Acrobat's "Export all to data file" / "Import comments", and form
 //!   data): comments with their geometry, colours, flags, authors, dates, replies, pop-ups,
-//!   ink, quadrilaterals, line ends and callouts; field values, nested by name.
-//! - **FDF** (ISO 32000-2 §12.7.8): fields and comments in PDF syntax.
+//!   ink, quadrilaterals, line ends, callouts, formatting (rich text, default style, border
+//!   style and dashes, rotation, justification, fringe, line leaders) and a stamp's appearance;
+//!   field values, nested by name.
+//! - **FDF** (ISO 32000-2 §12.7.8): fields and comments in PDF syntax, with their appearances.
 //! - Form data as **XML**, **CSV** and **tab-delimited text** (Acrobat's Export data formats).
 //!
 //! Import merges: a comment whose name (`/NM`) already exists on its page replaces it; field
@@ -18,24 +20,29 @@ use std::io::Write as _;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 use pdfcraft_forms::{FieldKind, FieldValue};
 
+mod appearance;
 mod common;
 mod fdf;
 mod xfdf;
 
 #[cfg(test)]
 use common::{MAX_DEPTH, MAX_XML_DEPTH, arr, nums_of, parse_hex, text_of, xml_nesting_depth};
-use common::{check_form_xml_depth, esc, parse_form_xml, walk_xfdf, xml_name};
+use common::{check_form_xml_depth, el_text, esc, parse_form_xml, xml_name};
+use craft_xfdf::grammar::SUBTYPES;
+pub use craft_xfdf::grammar::is_xfdf_comments;
 pub use fdf::export_fdf;
 use fdf::{ImportBudget, fdf_body, import_fdf, walk_fdf};
 #[cfg(test)]
 use fdf::{MAX_FDF_BYTES, MAX_FDF_OBJECTS};
-pub use xfdf::export_xfdf;
 #[cfg(test)]
 use xfdf::{LOCKED, find_by_name};
+pub use xfdf::{Outline, comment_count, comment_outlines, comments_bounds, export_xfdf, export_xfdf_comments, import_comments};
 use xfdf::{apply_values, import_xfdf};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_format;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum DataError {
@@ -45,6 +52,10 @@ pub enum DataError {
     Malformed(String),
     #[error("nothing in the file matches this document")]
     NothingImported,
+    /// Every value the file gave for this document's fields was refused ([`Report::rejected`]):
+    /// the names, as the caller wants them said.
+    #[error("the form refused every value in the file, so nothing was imported: {0}")]
+    Refused(String),
     #[error("FDF export exceeds the {0} limit; no data was exported")]
     ExportLimit(&'static str),
     #[error(transparent)]
@@ -85,6 +96,9 @@ pub struct Report {
     pub fields: usize,
     /// Field values the form refused (format, validation, unknown options).
     pub rejected: Vec<String>,
+    /// What the import left out of a comment it did import, each as "name: why" (an appearance
+    /// it could not read: the comment is drawn from its other entries instead).
+    pub skipped: Vec<String>,
 }
 
 /// Form data as XML, CSV or tab-delimited text (Acrobat's Export data formats).
@@ -95,7 +109,7 @@ pub fn export_data(doc: &Document, format: Format) -> String {
         .map(|f| {
             let v = match f.kind {
                 FieldKind::CheckBox | FieldKind::Radio if f.value.is_empty() => "Off".to_string(),
-                _ => f.value.join(", "),
+                _ => f.export_values().join(", "),
             };
             (f.name, v)
         })
@@ -112,7 +126,17 @@ pub fn export_data(doc: &Document, format: Format) -> String {
             out
         }
         Format::Csv => {
-            let q = |s: &str| if s.contains([',', '"', '\n', '\r', '\t']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() };
+            // A formula-like cell gets a leading `'`, as in `merge_csv`; import takes it off again.
+            let q = |s: &str| {
+                let s = if csv_guarded(s) { format!("'{s}") } else { s.to_string() };
+                if s.contains('\t') {
+                    format!("\"{}\"", s.replace('"', "\"\""))
+                } else {
+                    let mut out = String::new();
+                    craft_csv::push_field(&mut out, &s, ',');
+                    out
+                }
+            };
             format!(
                 "{}\n{}\n",
                 fields.iter().map(|f| q(&f.0)).collect::<Vec<_>>().join(","),
@@ -120,7 +144,11 @@ pub fn export_data(doc: &Document, format: Format) -> String {
             )
         }
         _ => {
-            let clean = |s: &str| s.replace(['\t', '\n', '\r'], " ");
+            // A formula-like cell gets a leading `'`, as in CSV; `tab_delimited` takes it off.
+            let clean = |s: &str| {
+                let s = if csv_guarded(s) { format!("'{s}") } else { s.to_string() };
+                s.replace(['\t', '\n', '\r'], " ")
+            };
             format!(
                 "{}\n{}\n",
                 fields.iter().map(|f| clean(&f.0)).collect::<Vec<_>>().join("\t"),
@@ -148,25 +176,19 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
             .into_iter()
             .filter(|f| !matches!(f.kind, FieldKind::PushButton | FieldKind::Signature))
             .map(|f| {
-                let v =
-                    if matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) && f.value.is_empty() { vec!["Off".to_string()] } else { f.value };
+                let v = if matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) && f.value.is_empty() {
+                    vec!["Off".to_string()]
+                } else {
+                    f.export_values()
+                };
                 (f.name, v)
             })
             .collect());
     }
-    let text = String::from_utf8_lossy(bytes);
-    let t = text.trim_start_matches('\u{feff}').trim_start();
-    check_form_xml_depth(t)?;
-    let xml = parse_form_xml(t).map_err(|_| DataError::UnknownFormat)?;
-    let root = xml.root_element();
-    if root.tag_name().name() != "xfdf" {
-        return Err(DataError::UnknownFormat);
-    }
-    let mut values = Vec::new();
-    if let Some(fields) = root.children().find(|c| c.has_tag_name("fields")) {
-        walk_xfdf(fields, "", &mut values, 0)?;
-    }
-    Ok(values)
+    craft_xfdf::read_fields(bytes).map_err(|error| match error {
+        craft_xfdf::Error::UnknownFormat => DataError::UnknownFormat,
+        craft_xfdf::Error::Malformed(message) => DataError::Malformed(message),
+    })
 }
 
 /// Merge Data Files into Spreadsheet: one CSV row per file, one column per field name (in the
@@ -177,34 +199,64 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
 /// is written with a leading `'`, which keeps it text; a plain number such as `-12.5` is not.
 pub fn merge_csv(files: &[Vec<(String, Vec<String>)>]) -> String {
     let mut columns: Vec<&str> = Vec::new();
+    let mut known: HashSet<&str> = HashSet::new();
     for f in files {
         for (k, _) in f {
-            if !columns.contains(&k.as_str()) {
+            if known.insert(k.as_str()) {
                 columns.push(k);
             }
         }
     }
-    let literal = |s: &str| {
-        let t = s.trim_start();
-        let formula = match t.chars().next() {
-            Some('=' | '@') => true,
-            Some('+' | '-') => !t.parse::<f64>().is_ok_and(f64::is_finite),
-            _ => false,
-        };
-        if formula { format!("'{s}") } else { s.to_string() }
-    };
+    let literal = |s: &str| if runs_as_formula(s) { format!("'{s}") } else { s.to_string() };
     let q = |s: &str| {
         let s = literal(s);
-        if s.contains([',', '"', '\n', '\r', '\t']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s }
+        if s.contains('\t') {
+            format!("\"{}\"", s.replace('"', "\"\""))
+        } else {
+            let mut out = String::new();
+            craft_csv::push_field(&mut out, &s, ',');
+            out
+        }
     };
     let mut out = columns.iter().map(|c| q(c)).collect::<Vec<_>>().join(",");
     out.push('\n');
     for f in files {
-        let row: Vec<String> = columns.iter().map(|c| f.iter().find(|(k, _)| k == c).map_or(String::new(), |(_, v)| q(&v.join(", ")))).collect();
+        // The first value of a name repeated in one file wins, as the scan it replaces found it.
+        let mut by_name: HashMap<&str, &Vec<String>> = HashMap::new();
+        for (k, v) in f {
+            by_name.entry(k.as_str()).or_insert(v);
+        }
+        let row: Vec<String> = columns.iter().map(|c| by_name.get(c).map_or(String::new(), |v| q(&v.join(", ")))).collect();
         out.push_str(&row.join(","));
         out.push('\n');
     }
     out
+}
+
+/// Whether a spreadsheet program runs CSV cell `s` as a formula: after any leading whitespace it
+/// starts with `=` or `@`, or with `+` or `-` and is not a plain number.
+fn runs_as_formula(s: &str) -> bool {
+    let t = s.trim_start();
+    match t.chars().next() {
+        Some('=' | '@') => true,
+        Some('+' | '-') => !t.parse::<f64>().is_ok_and(f64::is_finite),
+        _ => false,
+    }
+}
+
+/// Whether Export Data writes CSV cell `s` with a leading `'`: it runs as a formula, or it already
+/// starts with `'` in front of one. That second case gets one more `'`, so [`csv_text`] can take
+/// exactly one off on import and every value comes back unchanged.
+fn csv_guarded(s: &str) -> bool {
+    runs_as_formula(s.trim_start_matches('\''))
+}
+
+/// A CSV cell's text without the `'` that Export Data added (see [`csv_guarded`]).
+fn csv_text(cell: String) -> String {
+    match cell.strip_prefix('\'') {
+        Some(rest) if csv_guarded(rest) => rest.to_string(),
+        _ => cell,
+    }
 }
 
 // Inspect the first logical record: tabs within quoted CSV cells are data. A quote
@@ -238,15 +290,12 @@ fn import_table(doc: &mut Document, text: &str) -> Result<Report, DataError> {
     let t = text.trim_start_matches('\u{feff}');
     let values: Vec<(String, Vec<String>)> = if t.trim_start().starts_with('<') {
         check_form_xml_depth(t)?;
-        let xml = parse_form_xml(t).map_err(|e| DataError::Malformed(e.to_string()))?;
-        xml.root_element()
-            .children()
-            .filter(|c| c.is_element())
+        let root = parse_form_xml(t).map_err(|e| DataError::Malformed(e.to_string()))?;
+        root.elements()
             .map(|c| {
-                let name =
-                    c.attributes().find(|a| a.name() == "original").map(|a| a.value().to_string()).unwrap_or_else(|| c.tag_name().name().to_string());
+                let name = c.attr_local("original").map(str::to_owned).unwrap_or_else(|| c.local().to_string());
                 // Comments and processing instructions do not end a field's character data.
-                (name, vec![c.children().filter(|node| node.is_text()).filter_map(|node| node.text()).collect()])
+                (name, vec![el_text(c)])
             })
             .collect()
     } else if has_tab_delimiter(t) {
@@ -287,7 +336,11 @@ fn import_table(doc: &mut Document, text: &str) -> Result<Report, DataError> {
         let (Some(head), Some(row)) = (records.next(), records.next()) else { return Err(DataError::UnknownFormat) };
         // Text exported from a one-field form has no tab to show for it (#1321). CSV quotes a
         // value with a comma, so one name over several unquoted cells is that text, not CSV.
-        if head.len() == 1 && row.len() > 1 { tab_delimited(t)? } else { head.into_iter().zip(row).map(|(k, v)| (k, vec![v])).collect() }
+        if head.len() == 1 && row.len() > 1 {
+            tab_delimited(t)?
+        } else {
+            head.into_iter().zip(row).map(|(k, v)| (csv_text(k), vec![csv_text(v)])).collect()
+        }
     };
     apply_values(doc, &values, &mut report);
     Ok(report)
@@ -297,12 +350,19 @@ fn import_table(doc: &mut Document, text: &str) -> Result<Report, DataError> {
 fn tab_delimited(t: &str) -> Result<Vec<(String, Vec<String>)>, DataError> {
     let mut lines = t.lines();
     let (Some(head), Some(row)) = (lines.next(), lines.next()) else { return Err(DataError::UnknownFormat) };
-    Ok(head.split('\t').map(str::to_string).zip(row.split('\t')).map(|(k, v)| (k, vec![v.to_string()])).collect())
+    Ok(head.split('\t').map(|k| csv_text(k.to_string())).zip(row.split('\t')).map(|(k, v)| (k, vec![csv_text(v.to_string())])).collect())
 }
 
 /// Import comments and/or field values from XFDF, FDF, XML, CSV or tab-delimited text
-/// (detected from the content).
+/// (detected from the content). All or nothing: on an error `doc` is left as it was.
 pub fn import(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
+    let mut work = doc.clone();
+    let report = import_into(&mut work, bytes)?;
+    *doc = work;
+    Ok(report)
+}
+
+fn import_into(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
     let report = if bytes.starts_with(b"%FDF") {
         import_fdf(doc, bytes)?
     } else {

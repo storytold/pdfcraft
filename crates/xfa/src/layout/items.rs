@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, Face, HAlign, Rect, Span, Views};
 
 /// How far below its baseline an underline is drawn, in the text's size: an underline is the
 /// level line pushed just before its span, this far below it (the PDF writer tells it apart from
@@ -27,6 +27,28 @@ pub enum Item {
         content_type: String,
     },
     Widget(Box<Widget>),
+    /// An item drawn only on screen or only in print (XFA `relevant`, `presence`): written in an
+    /// optional content group whose usage says so.
+    Only {
+        views: Views,
+        item: Box<Item>,
+    },
+    /// A draw turned about its anchor.
+    Turned(Box<Turned>),
+}
+
+/// A draw turned about its anchor ([`Item::Turned`]). It stays one item, so a page break doesn't
+/// cut it, and what it holds is written unturned under one matrix.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Turned {
+    /// The point it turns about.
+    pub about: (f64, f64),
+    /// Quarter turns counter-clockwise, 1 to 3.
+    pub quarters: u8,
+    /// Top and bottom of its box once turned.
+    pub extent: (f64, f64),
+    /// The draw as it stands before turning.
+    pub items: Vec<Item>,
 }
 
 /// A box with rounded corners ([`Item::Rounded`]).
@@ -128,6 +150,10 @@ pub struct Widget {
     pub items: Vec<String>,
     /// A text field that doesn't scroll: it takes no more text than it shows (`DoNotScroll`).
     pub no_scroll: bool,
+    /// Where the field is shown: on screen, in print, or both (its annotation flags).
+    pub views: Views,
+    /// The field must be filled in (`Required`); a radio button, when its group must be.
+    pub required: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -135,6 +161,8 @@ pub struct Page {
     pub width: f64,
     pub height: f64,
     pub items: Vec<Item>,
+    /// The name of the page area the page was made from (`None` for an unnamed one).
+    pub area: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

@@ -2,13 +2,17 @@
 //! document inputs or the optional craft-fonts build input, never system-interface fallbacks.
 
 use std::collections::HashMap;
-use std::fmt::Write as _;
 
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use skrifa::{
     FontRef, MetadataProvider,
     instance::{LocationRef, Size},
     raw::TableProvider,
+};
+
+use crate::wire::{
+    CidMapping, FontDescriptorSpec, build_cid_encoding_cmap, build_cid_font_dict, build_font_descriptor, build_to_unicode_cmap,
+    build_type0_font_dict, font_program_stream,
 };
 
 /// Compare PDF subset/PostScript names with the full face's family name.
@@ -54,19 +58,38 @@ pub fn validate_document_input(bytes: &[u8]) -> Result<(), String> {
         return Err("this font family is excluded by the project's asset policy".into());
     }
     let f = FontRef::new(bytes).map_err(|e| e.to_string())?;
-    let attribution: String =
-        [StringId::COPYRIGHT_NOTICE, StringId::MANUFACTURER].into_iter().flat_map(|id| f.localized_strings(id)).map(|s| s.to_string()).collect();
-    if attribution.to_ascii_lowercase().contains("adobe") {
+    // An Adobe scan that could not finish fails closed, like a match.
+    if any_name_record(&f, &[StringId::COPYRIGHT_NOTICE, StringId::MANUFACTURER], |t| t.to_ascii_lowercase().contains("adobe")) != Some(false) {
         return Err("Adobe-authored font assets are excluded by the project's asset policy".into());
     }
-    let license: String = f.localized_strings(StringId::LICENSE_DESCRIPTION).map(|s| s.to_string()).collect();
-    if !["SIL OPEN FONT", "SIL Open Font", "Apache License", "Ubuntu Font Licence", "Bitstream Vera", "MIT License"]
-        .iter()
-        .any(|l| license.contains(l))
-    {
+    let licences = ["SIL OPEN FONT", "SIL Open Font", "Apache License", "Ubuntu Font Licence", "Bitstream Vera", "MIT License"];
+    if any_name_record(&f, &[StringId::LICENSE_DESCRIPTION], |t| licences.iter().any(|l| t.contains(l))) != Some(true) {
         return Err("select an openly licensed font whose name table declares its licence (OFL, Apache, Ubuntu, Bitstream Vera or MIT)".into());
     }
     Ok(())
+}
+
+/// Name-table text one policy check reads in all.
+const MAX_NAME_BYTES: usize = 1 << 20;
+
+/// Whether `found` holds for any record of the name-table strings `ids`, read one at a time
+/// within [`MAX_NAME_BYTES`] in all: `Some(true)` for a match, `Some(false)` when every record was
+/// read and none matched, `None` when the allowance ran out first (a record that does not fit what
+/// is left is not searched). The table can point many records at one large string, so the records
+/// are never joined.
+fn any_name_record(font: &FontRef, ids: &[skrifa::string::StringId], found: impl Fn(&str) -> bool) -> Option<bool> {
+    let mut left = MAX_NAME_BYTES;
+    for s in ids.iter().flat_map(|id| font.localized_strings(*id)) {
+        let text = s.to_string();
+        if text.len() > left {
+            return None;
+        }
+        left -= text.len().max(1).min(left);
+        if found(&text) {
+            return Some(true);
+        }
+    }
+    Some(false)
 }
 
 /// Validate before allocating any PDF objects, so an invalid font cannot partly mutate a doc.
@@ -95,10 +118,6 @@ pub fn validate(bytes: &[u8]) -> Result<(), String> {
         return Err("the selected font maps Unicode to a glyph outside its program".into());
     }
     Ok(())
-}
-
-fn stream(doc: &mut Document, bytes: Vec<u8>) -> Object {
-    Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), bytes))))
 }
 
 /// Embed the complete font once and provide separate CIDs for Unicode aliases. /ToUnicode,
@@ -135,40 +154,27 @@ pub fn embed_mapping(
     let m = font.metrics(Size::unscaled(), loc);
     let scale = 1000.0 / f64::from(m.units_per_em);
     let advances = font.glyph_metrics(Size::unscaled(), loc);
-    let mut cid_encoding = String::from(
-        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapName /PCGlyphs def\n/CMapType 1 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n",
-    );
     let mut cff_widths = std::collections::BTreeMap::new();
     let mut gids = vec![0, 0];
     let mut widths = Vec::with_capacity(mappings.len());
-    let mut cmap = String::from(
-        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapName /PCUnicode def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n",
-    );
-    for (chunk_index, chunk) in mappings.chunks(100).enumerate() {
-        let _ = writeln!(cmap, "{} beginbfchar", chunk.len());
-        let _ = writeln!(cid_encoding, "{} begincidchar", chunk.len());
-        for (offset, (unicode, gid)) in chunk.iter().enumerate() {
-            let cid = u16::try_from(chunk_index.saturating_mul(100).saturating_add(offset).saturating_add(1)).map_err(|_| "font mapping limit")?;
-            let glyph = u16::try_from(gid.to_u32()).map_err(|_| "font glyph limit")?;
-            if glyph == 0 || u32::from(glyph) >= u32::from(m.glyph_count) {
-                return Err("font contains an unavailable shaped glyph".into());
-            }
-            let width = advances.advance_width(*gid).unwrap_or(0.0) as f64 * scale;
-            if !width.is_finite() || !(0.0..=16_000.0).contains(&width) {
-                return Err("font contains an invalid advance".into());
-            }
-            gids.extend_from_slice(&glyph.to_be_bytes());
-            widths.push(Object::Real(width));
-            cff_widths.insert(glyph, width);
-            let _ = writeln!(cid_encoding, "<{cid:04X}> {glyph}");
-            let hex: String = unicode.encode_utf16().map(|u| format!("{u:04X}")).collect();
-            let _ = writeln!(cmap, "<{cid:04X}> <{hex}>");
+    let mut cid_mappings = Vec::with_capacity(mappings.len());
+    for (index, (unicode, gid)) in mappings.iter().enumerate() {
+        let cid = u16::try_from(index.saturating_add(1)).map_err(|_| "font mapping limit")?;
+        let glyph = u16::try_from(gid.to_u32()).map_err(|_| "font glyph limit")?;
+        if glyph == 0 || u32::from(glyph) >= u32::from(m.glyph_count) {
+            return Err("font contains an unavailable shaped glyph".into());
         }
-        cmap.push_str("endbfchar\n");
-        cid_encoding.push_str("endcidchar\n");
+        let width = advances.advance_width(*gid).unwrap_or(0.0) as f64 * scale;
+        if !width.is_finite() || !(0.0..=16_000.0).contains(&width) {
+            return Err("font contains an invalid advance".into());
+        }
+        gids.extend_from_slice(&glyph.to_be_bytes());
+        widths.push(Object::Real(width));
+        cff_widths.insert(glyph, width);
+        cid_mappings.push(CidMapping { cid, glyph, width, unicode });
     }
-    cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
-    cid_encoding.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+    let cid_encoding = build_cid_encoding_cmap(&cid_mappings);
+    let cmap = build_to_unicode_cmap(&cid_mappings);
     let name = family.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')).collect::<String>();
     if name.is_empty() || name.len() > 128 {
         return Err("the font family name is invalid".into());
@@ -178,62 +184,25 @@ pub fn embed_mapping(
     if let Some(resource) = same_resource(doc, fonts, &name, &mut programs, glyph_map, cmap.as_bytes()) {
         return Ok(resource);
     }
-    let mut descriptor = Dict::new();
-    descriptor.set(b"Type".to_vec(), Object::name("FontDescriptor"));
-    descriptor.set(b"FontName".to_vec(), Object::name(&name));
-    descriptor.set(b"FontFamily".to_vec(), Object::String(PdfString::literal(family.as_bytes().to_vec())));
-    descriptor.set(b"Flags".to_vec(), Object::Int(4));
-    descriptor.set(b"ItalicAngle".to_vec(), Object::Real(f64::from(m.italic_angle)));
-    descriptor.set(b"Ascent".to_vec(), Object::Real(f64::from(m.ascent) * scale));
-    descriptor.set(b"Descent".to_vec(), Object::Real(f64::from(m.descent) * scale));
-    descriptor.set(b"CapHeight".to_vec(), Object::Real(f64::from(m.cap_height.unwrap_or(m.ascent)) * scale));
-    descriptor.set(b"StemV".to_vec(), Object::Int(80));
     let bounds = m.bounds.ok_or("font has no outline bounds")?;
-    descriptor.set(
-        b"FontBBox".to_vec(),
-        Object::Array([bounds.x_min, bounds.y_min, bounds.x_max, bounds.y_max].map(|v| Object::Real(f64::from(v) * scale)).to_vec()),
-    );
     // Reuse the program another resource of this page already has, else one registered on another
     // page; source subset programs stay untouched.
-    let existing = existing_program(doc, fonts, &mut programs);
-    let program = existing.unwrap_or_else(|| {
-        let mut d = Dict::new();
-        d.set(b"Length1".to_vec(), Object::Int(bytes.len() as i64));
-        if cff {
-            d.set(b"Subtype".to_vec(), Object::name("OpenType"));
-        }
-        d.set(b"PCFullFont".to_vec(), Object::Bool(true));
-        Object::Ref(doc.add(Object::Stream(Stream::flate(d, bytes))))
+    let program = existing_program(doc, fonts, &mut programs).unwrap_or_else(|| font_program_stream(doc, bytes, cff));
+    let descriptor = build_font_descriptor(&FontDescriptorSpec {
+        font_name: &name,
+        family,
+        italic_angle: f64::from(m.italic_angle),
+        ascent: f64::from(m.ascent) * scale,
+        descent: f64::from(m.descent) * scale,
+        cap_height: f64::from(m.cap_height.unwrap_or(m.ascent)) * scale,
+        bbox: [bounds.x_min, bounds.y_min, bounds.x_max, bounds.y_max].map(|v| f64::from(v) * scale),
+        cff,
+        program,
     });
-    descriptor.set(if cff { b"FontFile3".to_vec() } else { b"FontFile2".to_vec() }, program);
     let desc = Object::Ref(doc.add(Object::Dict(descriptor)));
-    let mut system = Dict::new();
-    system.set(b"Registry".to_vec(), Object::String(PdfString::literal(b"Adobe".to_vec())));
-    system.set(b"Ordering".to_vec(), Object::String(PdfString::literal(b"Identity".to_vec())));
-    system.set(b"Supplement".to_vec(), Object::Int(0));
-    let mut cid = Dict::new();
-    cid.set(b"Type".to_vec(), Object::name("Font"));
-    cid.set(b"Subtype".to_vec(), Object::name(if cff { "CIDFontType0" } else { "CIDFontType2" }));
-    cid.set(b"BaseFont".to_vec(), Object::name(&name));
-    cid.set(b"CIDSystemInfo".to_vec(), Object::Dict(system));
-    cid.set(b"FontDescriptor".to_vec(), desc);
-    if cff {
-        cid.set(
-            b"W".to_vec(),
-            Object::Array(cff_widths.into_iter().flat_map(|(gid, w)| [Object::Int(i64::from(gid)), Object::Array(vec![Object::Real(w)])]).collect()),
-        );
-    } else {
-        cid.set(b"CIDToGIDMap".to_vec(), stream(doc, gids));
-        cid.set(b"W".to_vec(), Object::Array(vec![Object::Int(1), Object::Array(widths)]));
-    }
+    let cid = build_cid_font_dict(doc, &name, desc, cff, cff_widths, gids, widths);
     let descendant = Object::Ref(doc.add(Object::Dict(cid)));
-    let mut top = Dict::new();
-    top.set(b"Type".to_vec(), Object::name("Font"));
-    top.set(b"Subtype".to_vec(), Object::name("Type0"));
-    top.set(b"BaseFont".to_vec(), Object::name(&name));
-    top.set(b"Encoding".to_vec(), if cff { stream(doc, cid_encoding.into_bytes()) } else { Object::name("Identity-H") });
-    top.set(b"DescendantFonts".to_vec(), Object::Array(vec![descendant]));
-    top.set(b"ToUnicode".to_vec(), stream(doc, cmap.into_bytes()));
+    let top = build_type0_font_dict(doc, &name, descendant, cff.then(|| cid_encoding.into_bytes()), cmap.into_bytes());
     let mut index = 0usize;
     while fonts.contains(format!("PCFull{index}").as_bytes()) {
         index = index.saturating_add(1);
@@ -341,6 +310,7 @@ fn same_resource(doc: &Document, fonts: &Dict, name: &str, programs: &mut Progra
 mod tests {
     use super::*;
     use crate::pdf::Metrics;
+    use pdfcraft_cos::Stream;
 
     #[test]
     fn full_unicode_embedding_keeps_outlines_advances_and_roundtrip_codes() {
@@ -371,6 +341,17 @@ mod tests {
         embed(&mut doc, &mut second, bytes, "Inter").unwrap();
         assert_eq!(doc.scan_objects().filter(|(_, o)| matches!(o.as_ref(), Object::Stream(s) if s.dict.get(b"PCFullFont").is_some())).count(), 1);
         assert_eq!(face_key("ABCDEF+Droid-Sans-Fallback"), face_key("Droid Sans Fallback"));
+    }
+
+    #[test]
+    fn licence_policy_reads_name_records_one_at_a_time() {
+        use skrifa::string::StringId;
+        let bytes = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+        assert!(validate_document_input(bytes).is_ok(), "an OFL font passes");
+        let face = FontRef::new(bytes).unwrap();
+        assert_eq!(any_name_record(&face, &[StringId::LICENSE_DESCRIPTION], |t| t.contains("SIL Open Font")), Some(true));
+        assert_eq!(any_name_record(&face, &[StringId::LICENSE_DESCRIPTION], |_| false), Some(false));
+        assert_eq!(any_name_record(&face, &[], |_| true), Some(false), "no ids, no records");
     }
 
     #[test]

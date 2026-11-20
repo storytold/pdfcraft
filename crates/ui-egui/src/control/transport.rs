@@ -1,4 +1,4 @@
-use super::*;
+use super::{ControlClient, Value, json};
 
 // ---- transport (native only) -----------------------------------------------------------------
 
@@ -331,7 +331,7 @@ mod transport_tests {
     #[test]
     fn malformed_input_before_auth_closes_the_connection() {
         use std::io::{BufRead, BufReader, ErrorKind, Write};
-        let (_control, client) = super::attach(&egui::Context::default());
+        let (_control, client) = crate::control::attach(&egui::Context::default());
         let ep = super::serve(client).unwrap();
         let s = std::net::TcpStream::connect(("127.0.0.1", ep.port)).unwrap();
         s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
@@ -375,7 +375,7 @@ mod transport_tests {
     #[test]
     fn an_overlong_line_before_auth_is_refused() {
         use std::io::{BufRead, BufReader, ErrorKind, Write};
-        let (_control, client) = super::attach(&egui::Context::default());
+        let (_control, client) = crate::control::attach(&egui::Context::default());
         let ep = super::serve(client).unwrap();
         let s = std::net::TcpStream::connect(("127.0.0.1", ep.port)).unwrap();
         s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
@@ -429,7 +429,7 @@ mod transport_tests {
     #[test]
     fn an_unauthenticated_connection_is_closed_at_the_deadline() {
         use std::io::{BufReader, Write};
-        let (_control, client) = super::attach(&egui::Context::default());
+        let (_control, client) = crate::control::attach(&egui::Context::default());
         let ep = super::serve_with(client, TEST_LIMITS).unwrap();
         // Idle.
         let started = std::time::Instant::now();
@@ -468,7 +468,7 @@ mod transport_tests {
     #[test]
     fn a_client_refused_with_input_unread_gets_the_reason() {
         use std::io::{BufReader, Write};
-        let (_control, client) = super::attach(&egui::Context::default());
+        let (_control, client) = crate::control::attach(&egui::Context::default());
         let ep = super::serve_with(client, TEST_LIMITS).unwrap();
         let s = connect(ep.port);
         let mut w = s.try_clone().unwrap();
@@ -488,7 +488,7 @@ mod transport_tests {
         use std::io::{BufReader, Write};
         // A linger far longer than the checks below take, even on a loaded machine.
         let limits = super::Limits { linger: std::time::Duration::from_secs(5), ..TEST_LIMITS };
-        let (_control, client) = super::attach(&egui::Context::default());
+        let (_control, client) = crate::control::attach(&egui::Context::default());
         let ep = super::serve_with(client, limits).unwrap();
         let auth = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "auth", "params": { "token": ep.token } });
         // Refused with most of its line unread, and left open: it lingers for `linger`.
@@ -517,7 +517,7 @@ mod transport_tests {
         use std::io::{BufReader, Write};
         // A linger far longer than the checks below take, even on a loaded machine.
         let limits = super::Limits { linger: std::time::Duration::from_secs(5), max_lingering: 1, ..TEST_LIMITS };
-        let (_control, client) = super::attach(&egui::Context::default());
+        let (_control, client) = crate::control::attach(&egui::Context::default());
         let ep = super::serve_with(client, limits).unwrap();
         let bad = r#"{"jsonrpc": "2.0", "id": 1, "method": "page_count"}"#;
         // The first refused connection takes the only lingering place and keeps it.
@@ -553,7 +553,7 @@ mod transport_tests {
     #[test]
     fn only_so_many_connections_may_wait_to_authenticate() {
         use std::io::{BufReader, Write};
-        let (_control, client) = super::attach(&egui::Context::default());
+        let (_control, client) = crate::control::attach(&egui::Context::default());
         let ep = super::serve_with(client, TEST_LIMITS).unwrap();
         let auth = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "auth", "params": { "token": ep.token } });
         let first = connect(ep.port);
@@ -593,7 +593,7 @@ mod transport_tests {
     #[test]
     fn long_lines_after_auth_are_still_read() {
         use std::io::{BufRead, BufReader, Write};
-        let (_control, client) = super::attach(&egui::Context::default());
+        let (_control, client) = crate::control::attach(&egui::Context::default());
         let ep = super::serve(client).unwrap();
         let s = std::net::TcpStream::connect(("127.0.0.1", ep.port)).unwrap();
         s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();

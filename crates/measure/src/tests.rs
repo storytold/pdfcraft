@@ -80,7 +80,7 @@ fn standard_annotations_captions_restyle_move_and_unknown_keys() {
     let (r, dict) = annot(&d, 0, 0).unwrap();
     assert_eq!(dict.name(b"IT"), Some(&b"LineDimension"[..]));
     d.update_dict(r, |d| d.set(b"VendorKey".to_vec(), Object::Int(42))).unwrap();
-    pdfcraft_annot::set_style(&mut d, 0, 0, Some([1.0, 0.0, 0.0]), None, Some(2.0), None, &meta).unwrap();
+    pdfcraft_annot::set_style(&mut d, 0, 0, pdfcraft_annot::StyleChange::new(Some([1.0, 0.0, 0.0]), None, Some(2.0), None), &meta).unwrap();
     let (_, dict) = annot(&d, 0, 0).unwrap();
     assert_eq!(dict.int(b"VendorKey"), Some(42));
     let ap = d.resolve(dict.get(b"AP").unwrap());
@@ -112,7 +112,7 @@ fn filled_open_triangle_snaps_to_closing_edge() {
     for (op, closed) in [("f", true), ("F", true), ("f*", true), ("B", true), ("B*", true), ("h f", true), ("S", false)] {
         let d = fixture(&format!("40 50 m 160 50 l 100 170 l {op}"), "", &[]);
         let paths = snap::geometry(&d, 0).unwrap();
-        assert_eq!(paths.segments.len(), if closed { 3 } else { 2 }, "{op}");
+        assert_eq!(paths.segment_count(), if closed { 3 } else { 2 }, "{op}");
         let hit = paths.snap([70.0, 110.0], 5.0, snap::SnapOptions::default()).unwrap();
         assert_eq!(hit.is_some(), closed, "{op}");
     }
@@ -121,7 +121,7 @@ fn filled_open_triangle_snaps_to_closing_edge() {
 fn snap_paths_endpoints_midpoints_and_intersections() {
     let d = fixture("10 20 m 110 20 l S 60 0 m 60 80 l S 10 100 100 40 re S", "", &[]);
     let paths = snap::geometry(&d, 0).unwrap();
-    assert_eq!(paths.segments.len(), 6);
+    assert_eq!(paths.segment_count(), 6);
     let opts = snap::SnapOptions::default();
     let hit = paths.snap([11.0, 20.0], 3.0, opts).unwrap().unwrap();
     assert_eq!(hit.kind, snap::SnapKind::Endpoint);
@@ -147,9 +147,9 @@ fn filled_open_subpath_offers_the_same_snap_edges_as_explicit_close() {
     let explicit = snap::geometry(&closed, 0).unwrap();
     let stroked = snap::geometry(&stroke, 0).unwrap();
 
-    assert_eq!(filled.segments, explicit.segments);
-    assert_eq!(filled.segments.len(), 3);
-    assert_eq!(stroked.segments.len(), 2);
+    assert!(filled.segments().eq(explicit.segments()));
+    assert_eq!(filled.segment_count(), 3);
+    assert_eq!(stroked.segment_count(), 2);
     let paths_only = snap::SnapOptions { endpoints: false, midpoints: false, intersections: false, paths: true };
     let hit = filled.snap([55.0, 80.0], 5.0, paths_only).unwrap().unwrap();
     assert_eq!(hit.kind, snap::SnapKind::Path);
@@ -163,12 +163,12 @@ fn fills_close_all_open_subpaths_but_strokes_do_not() {
     for paint in ["f", "F", "f*", "B", "B*", "b", "b*"] {
         let doc = fixture(&format!("{triangles} {paint}"), "", &[]);
         let geometry = snap::geometry(&doc, 0).unwrap();
-        assert_eq!(geometry.segments.len(), 6, "{paint}");
-        assert!(geometry.segments.contains(&[[10.0, 20.0], [0.0, 0.0]]), "{paint}");
-        assert!(geometry.segments.contains(&[[50.0, 20.0], [40.0, 0.0]]), "{paint}");
+        assert_eq!(geometry.segment_count(), 6, "{paint}");
+        assert!(geometry.segments().any(|s| s == [[10.0, 20.0], [0.0, 0.0]]), "{paint}");
+        assert!(geometry.segments().any(|s| s == [[50.0, 20.0], [40.0, 0.0]]), "{paint}");
     }
     let stroked = fixture(&format!("{triangles} S"), "", &[]);
-    assert_eq!(snap::geometry(&stroked, 0).unwrap().segments.len(), 4);
+    assert_eq!(snap::geometry(&stroked, 0).unwrap().segment_count(), 4);
 }
 
 #[test]
@@ -180,12 +180,12 @@ fn nested_forms_transforms_curves_and_cycles_are_bounded() {
     );
     let d = fixture("q 1 0 0 1 100 200 cm /Nested Do Q", "", &[&form]);
     let geometry = snap::geometry(&d, 0).unwrap();
-    assert_eq!(geometry.segments[0], [[100.0, 200.0], [120.0, 200.0]]);
-    assert!(geometry.endpoints.contains(&[120.0, 200.0]));
-    assert!(geometry.midpoints.contains(&[110.0, 222.5]));
-    assert!(geometry.segments.len() > 4 && geometry.segments.len() < 200);
+    assert_eq!(geometry.segments().next(), Some([[100.0, 200.0], [120.0, 200.0]]));
+    assert!(geometry.endpoints().any(|p| p == [120.0, 200.0]));
+    assert!(geometry.midpoints().any(|p| p == [110.0, 222.5]));
+    assert!(geometry.segment_count() > 4 && geometry.segment_count() < 200);
     let d = fixture(&"0 0 m 1 1 l S ".repeat(20_001), "", &[]);
-    assert!(snap::geometry(&d, 0).unwrap().truncated);
+    assert!(snap::geometry_with_limits(&d, 0, SMALL).unwrap().truncated);
 }
 #[test]
 fn measurement_csv_quotes_newlines_and_blocks_formula_cells() {
@@ -242,35 +242,39 @@ fn imported_measurement_appearance_is_not_silently_replaced() {
     close(list(&d).measurements[0].reading.value, 100.0);
 }
 
+/// The limits snapping had before heavy sheets, which the cap tests below were written for.
+const SMALL: snap::Limits = snap::Limits { segments: 20_000, targets: 40_000, bytes: 16 << 20 };
+
 #[test]
 fn degenerate_and_dense_paths_keep_snap_targets_bounded() {
     // Rejected (zero-length) segments record no endpoints or midpoints at all.
     let d = fixture(&"0 0 0 0 re f ".repeat(100_000), "", &[]);
-    let g = snap::geometry(&d, 0).unwrap();
-    assert!(g.segments.is_empty() && g.endpoints.is_empty() && g.midpoints.is_empty(), "{} {}", g.endpoints.len(), g.midpoints.len());
+    let g = snap::geometry_with_limits(&d, 0, SMALL).unwrap();
+    assert!(g.segment_count() == 0 && g.endpoints().next().is_none() && g.midpoints().next().is_none());
     // Every paint drains into the page geometry; the page-wide target cap still holds.
     let d = fixture(&"0 0 1 1 re f ".repeat(30_000), "", &[]);
-    let g = snap::geometry(&d, 0).unwrap();
+    let g = snap::geometry_with_limits(&d, 0, SMALL).unwrap();
     assert!(g.truncated);
-    assert!(g.endpoints.len() + g.midpoints.len() <= 40_000 + 12, "{}", g.endpoints.len() + g.midpoints.len());
-    assert!(g.segments.len() <= 20_000 + 4);
+    let targets = g.endpoints().count() + g.midpoints().count();
+    assert!(targets <= 40_000 + 12, "{targets}");
+    assert!(g.segment_count() <= 20_000 + 4);
     // Unpainted curves and lines are capped too.
     let d = fixture(&"0 0 m 5 9 1 9 7 0 c 0 3 l ".repeat(30_000), "", &[]);
-    let g = snap::geometry(&d, 0).unwrap();
-    assert!(g.truncated && g.endpoints.is_empty());
+    let g = snap::geometry_with_limits(&d, 0, SMALL).unwrap();
+    assert!(g.truncated && g.endpoints().next().is_none());
 }
 #[test]
 fn deep_graphics_state_and_unreadable_streams_are_skipped_not_fatal() {
     let d = fixture(&format!("0 0 m 10 0 l S {}", "q ".repeat(300)), "", &[]);
     let g = snap::geometry(&d, 0).unwrap();
     assert!(g.truncated);
-    assert_eq!(g.segments.len(), 1);
+    assert_eq!(g.segment_count(), 1);
     // An unsupported filter cannot be decoded at all (corrupt Flate is decoded tolerantly).
     let broken = "<< /Length 10 /Filter /NoSuchDecode >>\nstream\nnot-zlib!!\nendstream";
     let d = fixture_with("[4 0 R 5 0 R]", "0 0 m 10 0 l S", "", &[broken]);
     let g = snap::geometry(&d, 0).unwrap();
     assert_eq!(g.unreadable, 1);
-    assert_eq!(g.segments.len(), 1);
+    assert_eq!(g.segment_count(), 1);
     let d = fixture_with("5 0 R", "", "", &[broken]);
     assert_eq!(snap::geometry(&d, 0).unwrap().unreadable, 1);
 }
@@ -279,13 +283,14 @@ fn unsupported_measurements_are_reported_not_fatal() {
     let mut d = fixture("", "", &[]);
     add(&mut d, &new(Kind::Distance, vec![[0.0, 0.0], [3.0, 4.0]]), &Meta::default()).unwrap();
     add(&mut d, &new(Kind::Distance, vec![[10.0, 0.0], [13.0, 4.0]]), &Meta::default()).unwrap();
-    // An imported compound feet-and-inches format (two NumberFormat dictionaries).
+    // An imported format this crate can't show (an unknown /F).
     let (r, _) = annot(&d, 0, 1).unwrap();
     let format = |unit: &str, c: f64| {
         let mut f = Dict::new();
         f.set(b"Type".to_vec(), Object::name("NumberFormat"));
         f.set(b"U".to_vec(), PdfString::text(unit));
         f.set(b"C".to_vec(), Object::Real(c));
+        f.set(b"F".to_vec(), Object::name("X"));
         Object::Dict(f)
     };
     d.update_dict(r, |a| {
@@ -298,7 +303,7 @@ fn unsupported_measurements_are_reported_not_fatal() {
     assert_eq!(listing.measurements.len(), 1);
     assert_eq!(listing.unsupported.len(), 1);
     assert_eq!((listing.unsupported[0].page, listing.unsupported[0].index), (0, 1));
-    assert!(listing.unsupported[0].reason.contains("compound"), "{}", listing.unsupported[0].reason);
+    assert_eq!(listing.unsupported[0].reason, "unknown measurement number format");
     // Invalid geometry on an imported annotation is reported the same way.
     let (r, _) = annot(&d, 0, 0).unwrap();
     d.update_dict(r, |a| a.set(b"L".to_vec(), nums([0.0, 0.0, f64::NAN, 1.0]))).unwrap();
@@ -410,7 +415,7 @@ fn xobject_resources_are_read_once_per_stream() {
     let d = fixture(&"/Missing Do\n".repeat(10_000), "", &[]);
     snap::XOBJECT_DICT_READS.with(|c| c.set(0));
     let paths = snap::geometry(&d, 0).unwrap();
-    assert!(paths.segments.is_empty());
+    assert_eq!(paths.segment_count(), 0);
     let reads = snap::XOBJECT_DICT_READS.with(std::cell::Cell::get);
     assert!(reads <= 1, "{reads} reads of the page's XObject resources");
 }
@@ -449,6 +454,16 @@ fn listing_skips_repeated_refs_and_caps_what_it_keeps() {
     assert!(!listing.measurements.is_empty());
 }
 #[test]
+fn ortho_holds_a_vertex_level_or_plumb_with_the_last() {
+    let last = [10.0, 20.0];
+    assert_eq!(snap::ortho(last, [50.0, 27.0]), [50.0, 20.0], "mostly across: level");
+    assert_eq!(snap::ortho(last, [-30.0, 13.0]), [-30.0, 20.0], "to the left too");
+    assert_eq!(snap::ortho(last, [14.0, 80.0]), [10.0, 80.0], "mostly up: plumb");
+    assert_eq!(snap::ortho(last, [8.0, -40.0]), [10.0, -40.0], "and down");
+    assert_eq!(snap::ortho(last, [30.0, 40.0]), [30.0, 20.0], "a tie stays level");
+    assert_eq!(snap::ortho(last, last), last);
+}
+#[test]
 fn a_stream_over_the_byte_budget_uses_it_up_once() {
     // 50 references to one Flate stream that inflates past the 16 MiB budget decode once.
     let big = pdfcraft_cos::Stream::flate(Dict::new(), &vec![b' '; 17 << 20]);
@@ -456,8 +471,241 @@ fn a_stream_over_the_byte_budget_uses_it_up_once() {
     let bomb = String::from_utf8(pdfcraft_testkit::stream_obj("/Filter [/ASCIIHexDecode /FlateDecode]", hex)).unwrap();
     let contents = format!("[4 0 R{}]", " 5 0 R".repeat(50));
     let d = fixture_with(&contents, "0 0 m 10 0 l S", "", &[bomb.as_str()]);
-    let g = snap::geometry(&d, 0).unwrap();
+    let g = snap::geometry_with_limits(&d, 0, SMALL).unwrap();
     assert_eq!(g.unreadable, 1);
     assert!(g.truncated);
-    assert_eq!(g.segments.len(), 1, "the parts before it still snap");
+    assert_eq!(g.segment_count(), 1, "the parts before it still snap");
+}
+
+/// A content stream drawn again and again pays for every filter stage's output each time, not
+/// only for what the last stage leaves: `/ASCIIHexDecode /RunLengthDecode` turns 4 MiB of hex
+/// into 2 MiB and then 1 MiB, and eight draws of it are 24 MiB of decoding against a 16 MiB bound.
+#[test]
+fn repeated_content_pays_for_every_filter_stage() {
+    let hex = "0058".repeat(1 << 20);
+    let pdf = Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents [4 0 R 4 0 R 4 0 R 4 0 R 4 0 R 4 0 R 4 0 R 4 0 R] >>")
+        .stream("/Filter [/ASCIIHexDecode /RunLengthDecode]", &hex);
+    let d = Document::open(Arc::new(pdf.build())).unwrap();
+    let g = snap::geometry_with_limits(&d, 0, SMALL).unwrap();
+    assert!(g.truncated, "eight draws decode past the page's bound");
+}
+
+/// One scale shared by many measurements is read once, and the self-intersection check of many
+/// areas is charged against one work bound rather than run in full for each.
+#[test]
+fn listing_reads_a_shared_scale_once_and_bounds_boundary_checks() {
+    let measure = "<< /Type /Measure /Subtype /RL /R (1 pt = 1 pt) /X [<< /Type /NumberFormat /U (pt) /C 1 /D 100 >>] /D [<< /Type /NumberFormat /U (pt) /C 1 /D 100 >>] /A [<< /Type /NumberFormat /U (pt) /C 1 /D 100 >>] >>";
+    // A convex 2,048-gon: every one of its edges is checked against every other.
+    let n = MAX_POINTS;
+    let verts: Vec<String> = (0..n)
+        .map(|i| {
+            let a = i as f64 / n as f64 * std::f64::consts::TAU;
+            format!("{:.3} {:.3}", 300.0 + 100.0 * a.cos(), 400.0 + 100.0 * a.sin())
+        })
+        .collect();
+    let verts = verts.join(" ");
+    let areas = 40;
+    let annots: Vec<String> = (0..areas).map(|i| format!("{} 0 R", 6 + i)).collect();
+    let mut pdf = Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>")
+        .obj(format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Annots [{}] >>", annots.join(" ")))
+        .stream("", "")
+        .obj(measure);
+    for _ in 0..areas {
+        pdf = pdf.obj(format!("<< /Type /Annot /Subtype /Polygon /IT /PolygonDimension /Rect [0 0 612 792] /Vertices [{verts}] /Measure 5 0 R >>"));
+    }
+    let d = Document::open(Arc::new(pdf.build())).unwrap();
+    let l = list(&d);
+    // 40 areas of 2,048 vertices are 168 million pairs: the listing stops at its bound, with the
+    // areas before it listed.
+    assert!(l.truncated, "{} listed", l.measurements.len());
+    assert!((5..areas).contains(&l.measurements.len()), "{} listed", l.measurements.len());
+    assert!(l.unsupported.is_empty(), "{:?}", l.unsupported);
+}
+
+/// Perimeters and distances read their vertices once: only areas pay for the pairwise boundary
+/// check, so many maximal perimeters list in full.
+#[test]
+fn perimeters_are_charged_linear_work() {
+    let measure = "<< /Type /Measure /Subtype /RL /R (1 pt = 1 pt) /X [<< /Type /NumberFormat /U (pt) /C 1 /D 100 >>] /D [<< /Type /NumberFormat /U (pt) /C 1 /D 100 >>] /A [<< /Type /NumberFormat /U (pt) /C 1 /D 100 >>] >>";
+    let verts: Vec<String> = (0..MAX_POINTS).map(|i| format!("{} {}", 10 + i % 500, 10 + i / 500 * 3 + (i % 2))).collect();
+    let verts = verts.join(" ");
+    let lines = 40;
+    let annots: Vec<String> = (0..lines).map(|i| format!("{} 0 R", 6 + i)).collect();
+    let mut pdf = Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>")
+        .obj(format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Annots [{}] >>", annots.join(" ")))
+        .stream("", "")
+        .obj(measure);
+    for _ in 0..lines {
+        pdf = pdf.obj(format!("<< /Type /Annot /Subtype /PolyLine /IT /PolyLineDimension /Rect [0 0 612 792] /Vertices [{verts}] /Measure 5 0 R >>"));
+    }
+    let d = Document::open(Arc::new(pdf.build())).unwrap();
+    let l = list(&d);
+    assert!(!l.truncated, "{} listed", l.measurements.len());
+    assert_eq!(l.measurements.len() + l.unsupported.len(), lines, "{:?}", l.unsupported.first());
+}
+
+#[test]
+fn indirect_scale_fields_and_closed_area_edges_are_handled() {
+    let mut d = fixture("", "", &[]);
+    let mut m = new(Kind::Area, vec![[0.0, 0.0], [3.0, 0.0], [3.0, 4.0], [0.0, 4.0]]);
+    m.scale = Scale { y: 3.0, ..Scale::new(2.0, "m", 2).unwrap() };
+    add(&mut d, &m, &Meta { date: None, id: "area-1".into() }).unwrap();
+
+    // Open and closed vertex lists for the same rectangle produce identical readings (including perimeter length).
+    let open = reading(Kind::Area, &[[0.0, 0.0], [3.0, 0.0], [3.0, 4.0], [0.0, 4.0]], &m.scale).unwrap();
+    let closed = reading(Kind::Area, &[[0.0, 0.0], [3.0, 0.0], [3.0, 4.0], [0.0, 4.0], [0.0, 0.0]], &m.scale).unwrap();
+    close(open.length, 36.0);
+    close(closed.length, 36.0);
+
+    // A doubled closing vertex leaves a zero-length closing edge after stripping one closing duplicate,
+    // and an area with fewer than 3 distinct vertices or a NaN coordinate is also rejected.
+    assert!(add(&mut d, &new(Kind::Area, vec![[0.0, 0.0], [3.0, 0.0], [3.0, 4.0], [0.0, 0.0], [0.0, 0.0]]), &Meta::default()).is_err());
+    assert!(add(&mut d, &new(Kind::Area, vec![[0.0, 0.0], [3.0, 0.0], [0.0, 0.0]]), &Meta::default()).is_err());
+    assert!(add(&mut d, &new(Kind::Area, vec![[0.0, 0.0], [3.0, 0.0], [f64::NAN, 4.0]]), &Meta::default()).is_err());
+    assert!(reading(Kind::Area, &[[0.0, 0.0], [3.0, 0.0], [f64::NAN, 4.0]], &m.scale).is_err());
+
+    // Indirect PDF objects inside /Measure, /NumberFormat, and the annotation dictionary still resolve cleanly.
+    let (r, mut annot_dict) = annot(&d, 0, 0).unwrap();
+    let it_ref = d.add(Object::name("PolygonDimension"));
+    let nm_ref = d.add(PdfString::text("area-indirect"));
+    let author_ref = d.add(PdfString::text("Architect"));
+    let label_ref = d.add(PdfString::text("Floor Plan"));
+    let rl_ref = d.add(Object::name("RL"));
+    let ratio_ref = d.add(PdfString::text("1 pt = 2 m"));
+    let cyx_ref = d.add(Object::Real(1.5));
+    let unit_ref = d.add(PdfString::text("m"));
+    let area_unit_ref = d.add(PdfString::text("m^2"));
+    let factor_x_ref = d.add(Object::Real(2.0));
+    let factor_y_ref = d.add(Object::Real(2.0));
+    let factor_d_ref = d.add(Object::Real(1.0));
+    let factor_a_ref = d.add(Object::Real(1.0));
+    let fmt_d_ref = d.add(Object::name("D"));
+    let denom_ref = d.add(Object::Int(1000));
+
+    let nf = |u: ObjRef, c: ObjRef| {
+        let mut f = Dict::new();
+        f.set(b"Type".to_vec(), Object::name("NumberFormat"));
+        f.set(b"U".to_vec(), Object::Ref(u));
+        f.set(b"C".to_vec(), Object::Ref(c));
+        f.set(b"F".to_vec(), Object::Ref(fmt_d_ref));
+        f.set(b"D".to_vec(), Object::Ref(denom_ref));
+        Object::Array(vec![Object::Dict(f)])
+    };
+    let mut measure = Dict::new();
+    measure.set(b"Type".to_vec(), Object::name("Measure"));
+    measure.set(b"Subtype".to_vec(), Object::Ref(rl_ref));
+    measure.set(b"R".to_vec(), Object::Ref(ratio_ref));
+    measure.set(b"CYX".to_vec(), Object::Ref(cyx_ref));
+    measure.set(b"X".to_vec(), nf(unit_ref, factor_x_ref));
+    measure.set(b"Y".to_vec(), nf(unit_ref, factor_y_ref));
+    measure.set(b"D".to_vec(), nf(unit_ref, factor_d_ref));
+    measure.set(b"A".to_vec(), nf(area_unit_ref, factor_a_ref));
+
+    annot_dict.set(b"IT".to_vec(), Object::Ref(it_ref));
+    annot_dict.set(b"NM".to_vec(), Object::Ref(nm_ref));
+    annot_dict.set(b"T".to_vec(), Object::Ref(author_ref));
+    annot_dict.set(b"PCMeasureLabel".to_vec(), Object::Ref(label_ref));
+    annot_dict.set(b"Measure".to_vec(), Object::Dict(measure.clone()));
+    d.update_dict(r, |target| *target = annot_dict).unwrap();
+
+    // Non-RL indirect subtypes and numeric subtypes are rejected by Scale::read.
+    let geo_ref = d.add(Object::name("GEO"));
+    let mut bad_geo = measure.clone();
+    bad_geo.set(b"Subtype".to_vec(), Object::Ref(geo_ref));
+    assert!(Scale::read(&d, &Object::Dict(bad_geo)).is_err());
+    let mut bad_num = measure;
+    bad_num.set(b"Subtype".to_vec(), Object::Int(42));
+    assert!(Scale::read(&d, &Object::Dict(bad_num)).is_err());
+
+    let listing = list(&d);
+    assert!(listing.unsupported.is_empty(), "{:?}", listing.unsupported);
+    assert_eq!(listing.measurements.len(), 1);
+    let item = &listing.measurements[0];
+    assert_eq!(item.id, "area-indirect");
+    assert_eq!(item.author, "Architect");
+    assert_eq!(item.label, "Floor Plan");
+    assert_eq!(item.scale, Scale { y: 3.0, ..Scale::new(2.0, "m", 3).unwrap() });
+}
+
+/// An Acrobat-style drawing scale of 1 in = 1 ft whose distances show in feet and sixteenths of
+/// inches (ISO 32000-2 §12.9.2): a viewport and a saved measurement using it read, are labelled
+/// in feet and inches, and a measurement added inside the viewport keeps the formats.
+#[test]
+fn compound_and_fractional_scales_read_label_and_carry_into_new_measurements() {
+    let feet_inches = "[<< /Type /NumberFormat /U (ft) /C 0.0138888888888889 /D 100 >> << /U (in) /C 12 /F /F /D 16 >>]";
+    let measure = format!(
+        "<< /Type /Measure /Subtype /RL /R (1 in = 1 ft) /X {feet_inches} /D [<< /U (ft) /C 1 >> << /U (in) /C 12 /F /F /D 16 >>] /A [<< /U (sq ft) /C 1 /F /T >>] >>"
+    );
+    let mut d = fixture("", &format!("/VP [<< /Type /Viewport /BBox [0 0 612 792] /Measure {measure} >>]"), &[]);
+    let scale = scale_at(&d, 0, [10.0, 10.0]).unwrap();
+    assert_eq!((scale.unit.as_str(), scale.area_unit.as_str(), scale.precision), ("ft", "sq ft", 0));
+    close(scale.x, 1.0 / 72.0);
+    let formats = scale.formats.as_ref().unwrap();
+    assert_eq!(formats.distance.len(), 2);
+    // 3 ft 6 1/2 in at 1 in = 1 ft is 3 in and 6.5 / 12 in on the page: 216 + 39 points.
+    let distance = reading(Kind::Distance, &[[0.0, 0.0], [0.0, 255.0]], &scale).unwrap();
+    close(distance.value, 255.0 / 72.0);
+    assert_eq!(distance.label, "3 ft 6 1/2 in");
+    // Just short of 2 ft carries into the feet; an area of 2.9 sq ft is cut off to 2.
+    assert_eq!(reading(Kind::Distance, &[[0.0, 0.0], [143.99, 0.0]], &scale).unwrap().label, "2 ft 0 in");
+    let side = (2.9f64).sqrt() * 72.0;
+    assert_eq!(reading(Kind::Area, &[[0.0, 0.0], [side, 0.0], [side, side], [0.0, side]], &scale).unwrap().label, "2 sq ft");
+
+    // Added inside the viewport, as the Measure tool and measure_distance do, the measurement
+    // keeps the compound formats and reads the same after a save.
+    let mut m = new(Kind::Distance, vec![[0.0, 0.0], [0.0, 255.0]]);
+    m.scale = scale.clone();
+    add(&mut d, &m, &Meta { date: None, id: "plan".into() }).unwrap();
+    let (_, dict) = annot(&d, 0, 0).unwrap();
+    assert_eq!(text(&d, &dict, b"Contents"), "3 ft 6 1/2 in");
+    let saved = d.resolve(dict.get(b"Measure").unwrap());
+    let saved_d = d.resolve(saved.as_dict().unwrap().get(b"D").unwrap());
+    let inches = saved_d.as_array().unwrap()[1].as_dict().unwrap().clone();
+    assert_eq!(inches.get(b"F").and_then(Object::as_name), Some(b"F".as_slice()));
+    assert_eq!(inches.get(b"D").and_then(Object::as_int), Some(16));
+    let reopened = Document::open(Arc::new(write_full(&d, &SaveOptions::default()).unwrap())).unwrap();
+    let listing = list(&reopened);
+    assert!(listing.unsupported.is_empty(), "{:?}", listing.unsupported);
+    assert_eq!(listing.measurements[0].reading.label, "3 ft 6 1/2 in");
+    close(listing.measurements[0].scale.x, scale.x);
+    assert_eq!(listing.measurements[0].scale.formats.as_ref().map(|f| (f.x.len(), f.distance.len(), f.area.len())), Some((2, 2, 1)));
+    // A plain decimal scale keeps no formats and labels as before.
+    assert_eq!(Scale::read(&d, &Object::Dict(Scale::new(2.0, "m", 3).unwrap().dictionary().unwrap())).unwrap().formats, None);
+}
+
+/// A compound Y in units of its own (metres and centimetres against feet and inches) is written
+/// back as read, with its CYX, so a viewer showing y coordinates reads the same units.
+#[test]
+fn a_compound_y_keeps_its_units_and_cyx() {
+    let x = "[<< /U (ft) /C 0.0138888888888889 >> << /U (in) /C 12 /F /F /D 16 >>]";
+    let y = "[<< /U (m) /C 0.000352778 >> << /U (cm) /C 100 /D 10 >>]";
+    let measure = format!("<< /Type /Measure /Subtype /RL /X {x} /Y {y} /CYX 3.28084 /D {x} /A [<< /U (sq ft) /C 1 >>] >>");
+    let d = fixture("", &format!("/VP [<< /Type /Viewport /BBox [0 0 612 792] /Measure {measure} >>]"), &[]);
+    let scale = scale_at(&d, 0, [10.0, 10.0]).unwrap();
+    close(scale.y, 0.000352778 * 3.28084);
+    let written = scale.dictionary().unwrap();
+    close(written.get(b"CYX").and_then(Object::as_f64).unwrap(), 3.28084);
+    let ys = written.get(b"Y").and_then(Object::as_array).unwrap();
+    let first = ys[0].as_dict().unwrap();
+    assert_eq!(text(&d, first, b"U"), "m");
+    close(first.get(b"C").and_then(Object::as_f64).unwrap(), 0.000352778);
+    assert_eq!(text(&d, ys[1].as_dict().unwrap(), b"U"), "cm");
+    let again = Scale::read(&d, &Object::Dict(written)).unwrap();
+    close(again.y, scale.y);
+    let formats = again.formats.unwrap();
+    assert_eq!((formats.y.unwrap()[1].factor, formats.cyx), (100.0, 3.28084));
+    // If `Scale.y` is mutated so `self.y / cyx` exceeds the factor bound, `dictionary()` refuses it.
+    let mut overflow_y = scale;
+    if let Some(f) = &mut overflow_y.formats {
+        f.cyx = 1e-12;
+    }
+    overflow_y.y = 2.0;
+    assert!(overflow_y.dictionary().is_err());
 }

@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, BTreeSet, Modifiers, SourceProblem, SystemTime};
 
 /// A column of the list: what it shows and what it sorts by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -127,6 +127,12 @@ pub(crate) struct Preview {
 /// A password: kept in memory only, never printed (debug output ends up in logs).
 #[derive(Clone, Default)]
 pub struct Secret(pub(super) String);
+
+impl Drop for Secret {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.0);
+    }
+}
 
 impl std::fmt::Debug for Secret {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -272,6 +278,13 @@ pub(crate) struct Incoming {
     pub note: Option<String>,
     /// The open document it is, when it came from a tab.
     pub open_doc: Option<pdfcraft_engine::DocId>,
+}
+
+impl Incoming {
+    /// A file known only by its name and bytes.
+    pub(crate) fn new(name: String, bytes: Vec<u8>) -> Self {
+        Incoming { name, bytes: Arc::new(bytes), modified: None, note: None, open_doc: None }
+    }
 }
 
 /// A new value for [`CombineFile::auth`]: counted for the whole run, outside the undo history.

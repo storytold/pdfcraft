@@ -1,11 +1,10 @@
 //! Preferences › Appearance: the appearance mode (follow the system, light or dark) above a light
 //! and a dark theme card, each with a small picture of PdfCraft in that theme.
 
-use egui::{Rect, RichText, pos2, vec2};
+use egui::{CornerRadius, Rect, RichText, Stroke, pos2, vec2};
 
 use crate::PdfCraftApp;
 use crate::theme::{self, ThemeKind, ThemePreference, Tokens};
-use crate::widgets;
 
 /// The themes each card offers. One of each today; a new theme is one more row here.
 pub const LIGHT_THEMES: &[(ThemeKind, &str)] = &[(ThemeKind::Light, "Light gray")];
@@ -82,44 +81,71 @@ fn preview(ui: &mut egui::Ui, kind: ThemeKind, width: f32) {
     }
 }
 
-/// One theme card: its title, Active when it is what shows now, a preview of the chosen theme
-/// and a radio row per theme. Returns true when the card or one of its radio rows was clicked.
-fn card(ui: &mut egui::Ui, t: &Tokens, title: &str, active: bool, themes: &[(ThemeKind, &str)]) -> bool {
-    let inner = egui::Frame::new()
-        .fill(t.card)
-        .stroke(egui::Stroke::new(1.0, if active { t.accent } else { t.border }))
-        .corner_radius(6.0)
-        .inner_margin(egui::Margin::same(8))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(title).font(theme::semibold(12.5)).color(t.text));
-                if active {
-                    ui.label(RichText::new(tl!("Active")).color(t.accent_text).small());
-                }
-            });
-            ui.add_space(4.0);
-            let shown = themes.first().map_or(ThemeKind::Light, |(kind, _)| *kind);
-            preview(ui, shown, ui.available_width());
-            ui.add_space(4.0);
-            let mut clicked = false;
-            for (kind, label) in themes {
-                // One theme per card today, so it is always the chosen one.
-                clicked |= ui.add(widgets::radio(*kind == shown, tl!(label))).clicked();
-            }
-            clicked
-        });
-    // The whole card picks its theme, not just the radio row.
-    let whole = inner.response.interact(egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
-    inner.inner || whole.clicked()
+/// One theme card: its title, Active when it is what shows now, and a preview of the chosen theme.
+/// Returns whether the card was clicked and the control's Response.
+fn card(ui: &mut egui::Ui, t: &Tokens, title: &str, active: bool, themes: &[(ThemeKind, &str)], query: &str) -> (bool, egui::Response) {
+    let mut card_clicked = false;
+    let frame_stroke = if active { Stroke::new(1.5, t.accent) } else { Stroke::new(1.0, t.border) };
+    let scope_res = ui.scope_builder(egui::UiBuilder::new().id_salt(title).sense(egui::Sense::click()), |ui| {
+        egui::Frame::new().fill(t.card).stroke(frame_stroke).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(
+            ui,
+            |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    let font = theme::semibold(12.5);
+                    let ranges = crate::dialogs::preferences::find_match_ranges(title, query);
+                    let galley = if ranges.is_empty() {
+                        crate::bidi::layout_ui(ui, title.to_owned(), font, t.text)
+                    } else {
+                        let (job, _) = crate::dialogs::preferences::create_highlight_job(title, &ranges, font, t.text);
+                        ui.painter().layout_job(job)
+                    };
+                    let (title_rect, _) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
+                    ui.painter().galley(title_rect.min, galley, t.text);
+                    if active {
+                        ui.label(RichText::new(tl!("Active")).color(t.accent_text).small());
+                    }
+                });
+                ui.add_space(4.0);
+                let shown = themes.first().map_or(ThemeKind::Light, |(kind, _)| *kind);
+                preview(ui, shown, ui.available_width());
+            },
+        );
+    });
+
+    let resp = scope_res.response;
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, active, title));
+
+    if resp.has_focus() {
+        ui.painter().rect_stroke(resp.rect, CornerRadius::same(6), Stroke::new(2.0, t.accent_text), egui::StrokeKind::Outside);
+    }
+
+    let resp = theme::hand(resp);
+    let key_select = resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Space) || i.key_pressed(egui::Key::Enter));
+    if resp.clicked() || key_select {
+        card_clicked = true;
+    }
+    (card_clicked, resp)
 }
 
 /// The Appearance section of Preferences.
+#[cfg_attr(not(test), expect(dead_code, reason = "called by unit tests"))]
 pub fn preferences_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
-    ui.label(RichText::new(tl_ctx!("theme", "Appearance")).font(theme::semibold(13.0)));
+    let mut ctx = crate::dialogs::preferences::PrefSearchContext::new("", false);
+    preferences_section_with_context(ui, app, t, &mut ctx);
+}
+
+/// The Appearance section of Preferences with live search highlighting and scrolling context.
+pub(crate) fn preferences_section_with_context(
+    ui: &mut egui::Ui,
+    app: &mut PdfCraftApp,
+    t: &Tokens,
+    ctx: &mut crate::dialogs::preferences::PrefSearchContext,
+) {
+    ctx.label(ui, tl_ctx!("theme", "Appearance"), theme::semibold(13.0), t.text);
     ui.horizontal(|ui| {
-        let label = ui.label(tl!("Appearance mode"));
-        let combo = egui::ComboBox::from_id_salt("appearance-mode").selected_text(tl!(mode_label(app.theme_preference))).show_ui(ui, |ui| {
+        let label = ctx.label(ui, tl!("Appearance mode"), theme::regular(13.0), t.text);
+        let combo = craft_ui::ComboBox::from_id_salt("appearance-mode").selected_text(tl!(mode_label(app.theme_preference))).show_ui(ui, |ui| {
             for preference in [ThemePreference::System, ThemePreference::Light, ThemePreference::Dark] {
                 if ui.selectable_label(app.theme_preference == preference, tl!(mode_label(preference))).clicked() {
                     app.execute(mode_command(preference));
@@ -132,18 +158,29 @@ pub fn preferences_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
     });
     ui.add_space(4.0);
     let light_active = app.theme == ThemeKind::Light;
+    let light_title = tl!("Light theme");
+    let dark_title = tl!("Dark theme");
+    let light_matches = crate::dialogs::preferences::find_match_ranges(light_title, ctx.query).len();
+    let dark_matches = crate::dialogs::preferences::find_match_ranges(dark_title, ctx.query).len();
+    ctx.total_matches += light_matches + dark_matches;
+
     ui.columns(2, |cols| {
         let [light, dark] = cols else { return };
-        if card(light, t, tl!("Light theme"), light_active, LIGHT_THEMES) {
+        let (light_clicked, light_resp) = card(light, t, light_title, light_active, LIGHT_THEMES, ctx.query);
+        if light_clicked {
             app.execute(mode_command(ThemePreference::Light));
         }
-        if card(dark, t, tl!("Dark theme"), !light_active, DARK_THEMES) {
+        ctx.scroll_if_first_match(&light_resp, light_matches);
+
+        let (dark_clicked, dark_resp) = card(dark, t, dark_title, !light_active, DARK_THEMES, ctx.query);
+        if dark_clicked {
             app.execute(mode_command(ThemePreference::Dark));
         }
+        ctx.scroll_if_first_match(&dark_resp, dark_matches);
     });
     ui.add_space(4.0);
     // Acrobat's "Highlight existing fields": shared with the toggle in the form bar.
-    ui.add(crate::widgets::checkbox(&mut app.view_defaults.highlight_fields, tl!("Highlight fields")));
+    ctx.checkbox(ui, &mut app.view_defaults.highlight_fields, tl!("Highlight fields"), t);
 }
 
 #[cfg(test)]
@@ -175,7 +212,6 @@ mod tests {
         );
         h.run();
         assert!(h.query_by_label("Light theme").is_some() && h.query_by_label("Dark theme").is_some());
-        assert!(h.query_by_label("Light gray").is_some() && h.query_by_label("Dark gray").is_some());
         assert_eq!(h.query_all_by_label("Active").count(), 1);
         if let Ok(path) = std::env::var("PDFCRAFT_APPEARANCE_SHOT") {
             h.render().unwrap().save(path).unwrap();
@@ -200,7 +236,7 @@ mod tests {
         assert_eq!(h.state().theme_preference, ThemePreference::System);
     }
 
-    /// Clicking a theme card, or its radio row, picks that theme, not only the mode combo box.
+    /// Clicking a theme card picks that theme, not only the mode combo box.
     #[test]
     fn clicking_a_theme_card_picks_that_theme() {
         let mut app = PdfCraftApp::new();
@@ -219,10 +255,9 @@ mod tests {
             app,
         );
         h.run();
-        h.get_by_label("Dark gray").click();
+        h.get_by_label("Dark theme").click();
         h.run();
         assert_eq!((h.state().theme_preference, h.state().theme), (ThemePreference::Dark, ThemeKind::Dark));
-        // The card's title is not a widget of its own: the click lands on the card.
         h.get_by_label("Light theme").click();
         h.run();
         assert_eq!((h.state().theme_preference, h.state().theme), (ThemePreference::Light, ThemeKind::Light));

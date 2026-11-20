@@ -1,5 +1,8 @@
 use super::thumbs::{Key, Look, MAX_SIDE, PREVIEW, PREVIEW_SIDE, SIZE_STEP, Thumbs, Want};
-use super::*;
+use super::{
+    ABOVE, Align2, Arc, BAR_H, Color32, CombineFile, CornerRadius, ERROR, FALLBACK_PAGE, GridDrag, Lock, MAX_EXPAND, ON_PAPER, PdfCraftApp, Rect,
+    RowAction, Sense, Stroke, TextureHandle, Tokens, Vec2, WARNING, fit_name, icons, paper_size, pos2, theme, vec2,
+};
 
 /// One card's place and what it shows.
 pub(super) struct Card {
@@ -16,6 +19,16 @@ pub(super) struct Card {
     pub(super) ppp: f32,
     /// The box the page is fitted in (the zoom).
     pub(super) fit: Vec2,
+}
+
+/// The paper box a card's page is drawn in.
+struct Paper {
+    rect: Rect,
+    size: Vec2,
+    /// The page's size in points.
+    size_pt: (f32, f32),
+    /// Whether the page's own size is known (else a fallback is drawn and no preview is asked for).
+    known: bool,
 }
 
 impl Card {
@@ -81,56 +94,7 @@ impl Card {
         painter.rect_filled(paper, CornerRadius::ZERO, Color32::WHITE);
 
         // What goes on the paper: the thumbnail, or why there isn't one.
-        let mut why: Option<(&str, Color32, String)> = None;
-        if let Some(lock) = f.lock {
-            let text = match lock {
-                Lock::Open => tl!("Password-protected"),
-                Lock::Permissions => tl!("Its security settings don't allow copying pages"),
-            };
-            why = Some(("lock", ON_PAPER, text.to_owned()));
-        } else if let Some(p) = &f.problem {
-            why = Some(("circle-x", ERROR, p.clone()));
-        } else {
-            match page {
-                Err(e) => why = Some(("circle-x", ERROR, e)),
-                // The pages couldn't be counted, or the page's size is unknown (some passwords
-                // open a file for combining but not for reading it here): nothing is drawn (the
-                // engine decides at Combine), and the card says so rather than look blank.
-                Ok(p) if p >= f.pages || known.is_none() => why = Some(("eye-off", ON_PAPER, tl!("No preview").to_owned())),
-                Ok(p) => {
-                    // Pixels per point: the size the paper is drawn at, on both sides, and never a
-                    // side longer than a thumbnail's (a long, thin page fits by its long side).
-                    let (w, h) = size_pt;
-                    let scale = (size.x * self.ppp / w).min(size.y * self.ppp / h).min(MAX_SIDE / w.max(h));
-                    let px = [w * scale, h * scale].map(|v| (v.max(1.0).ceil() as u32).div_ceil(SIZE_STEP).saturating_mul(SIZE_STEP));
-                    let key = Key { source: Arc::as_ptr(&f.bytes) as usize, auth: f.auth, page: p, px };
-                    let look = thumbs.look((f.group, p), key);
-                    let mut want = false;
-                    match look {
-                        Look::Ready(tex) => {
-                            painter.image(tex, paper, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-                        }
-                        Look::Failed(e) => why = Some(("triangle-alert", WARNING, crate::i18n::fmt(tl!("Preview unavailable: {e}"), &[("e", &e)]))),
-                        Look::Pending(stand_in) => {
-                            if let Some(tex) = stand_in {
-                                painter.image(tex, paper, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-                            }
-                            want = true;
-                        }
-                    }
-                    if want && scale.is_finite() && scale > 0.0 {
-                        thumbs.wants.push(Want {
-                            slot: (f.group, p),
-                            key,
-                            bytes: f.bytes.clone(),
-                            password: f.password().map(Arc::from),
-                            scale,
-                            visible: ui.is_rect_visible(c),
-                        });
-                    }
-                }
-            }
-        }
+        let why = self.paper_content(ui, &painter, f, thumbs, page, Paper { rect: paper, size, size_pt, known: known.is_some() });
         if let Some((icon, colour, _)) = &why {
             icons::paint(ui, Rect::from_center_size(paper.center(), Vec2::splat(28.0)), icon, 28.0, *colour);
         }
@@ -187,26 +151,7 @@ impl Card {
         let previewable = why.is_none();
         // A file that adds more pages than one can be spread out into them.
         let expandable = self.page.is_none() && takes > 1 && takes <= MAX_EXPAND && f.lock.is_none() && f.problem.is_none() && self.check.is_ok();
-        // Shown large: the file from its first page, or a page card's page.
-        let preview = match self.page {
-            Some((nth, ..)) => RowAction::PreviewAt(f.id, nth),
-            None => RowAction::Preview(f.id),
-        };
-        // The card's own actions, in this order: expand (or, on a page, collapse), remove (the file,
-        // or the page), show large.
-        let mut buttons: Vec<(&str, String, RowAction)> = Vec::new();
-        if expandable {
-            buttons.push(("maximize-2", tl!("Expand").to_owned(), RowAction::Expand(f.id, true)));
-        }
-        if let Some((nth, ..)) = self.page {
-            buttons.push(("minimize-2", tl!("Collapse").to_owned(), RowAction::Expand(f.id, false)));
-            buttons.push(("trash-2", tl!("Remove page").to_owned(), RowAction::RemovePages(Some((f.id, nth)))));
-        } else {
-            buttons.push(("trash-2", crate::i18n::fmt(tl!("Remove {name}"), &[("name", &f.name)]), RowAction::RemoveFile(f.id)));
-        }
-        if previewable {
-            buttons.push(("search", tl!("Preview").to_owned(), preview));
-        }
+        let buttons = self.card_buttons(f, expandable, previewable);
         // Nothing of the card shows over a dialog (the preview, the password box).
         let covered = ui.ctx().memory(|m| m.top_modal_layer().is_some());
         let mut over_bar = false;
@@ -227,24 +172,7 @@ impl Card {
             }
         }
 
-        // The full name and everything known about the file, on hover (on a page card, which page).
-        let mut tip = match &page_label {
-            Some(page) => format!("{}\n{page}", f.name),
-            None => format!("{}\n{pages} · {}", f.name, crate::panels::human_size(f.bytes.len())),
-        };
-        for line in why.iter().map(|(_, _, s)| s).chain(&f.notes) {
-            tip.push('\n');
-            tip.push_str(line);
-        }
-        if self.twice {
-            tip.push('\n');
-            tip.push_str(tl!("Added more than once"));
-        }
-        // Page ranges are typed in the list.
-        if self.page.is_none() && self.check.is_err() {
-            tip.push('\n');
-            tip.push_str(tl!("Switch to List view to change the pages it takes."));
-        }
+        let tip = self.tooltip(f, page_label.as_deref(), &pages, why.as_ref().map(|(_, _, reason)| reason.as_str()));
         // (Over the bar, its buttons say what they do instead.)
         let resp = if covered || over_bar { resp } else { resp.on_hover_text(tip) };
 
@@ -278,6 +206,117 @@ impl Card {
             });
         }
         action
+    }
+
+    /// The card's own actions, in this order: expand (or, on a page, collapse), remove (the file, or
+    /// the page), show large.
+    fn card_buttons(&self, f: &CombineFile, expandable: bool, previewable: bool) -> Vec<(&'static str, String, RowAction)> {
+        // Shown large: the file from its first page, or a page card's page.
+        let preview = match self.page {
+            Some((nth, ..)) => RowAction::PreviewAt(f.id, nth),
+            None => RowAction::Preview(f.id),
+        };
+        // The card's own actions, in this order: expand (or, on a page, collapse), remove (the file,
+        // or the page), show large.
+        let mut buttons: Vec<(&'static str, String, RowAction)> = Vec::new();
+        if expandable {
+            buttons.push(("maximize-2", tl!("Expand").to_owned(), RowAction::Expand(f.id, true)));
+        }
+        if let Some((nth, ..)) = self.page {
+            buttons.push(("minimize-2", tl!("Collapse").to_owned(), RowAction::Expand(f.id, false)));
+            buttons.push(("trash-2", tl!("Remove page").to_owned(), RowAction::RemovePages(Some((f.id, nth)))));
+        } else {
+            buttons.push(("trash-2", crate::i18n::fmt(tl!("Remove {name}"), &[("name", &f.name)]), RowAction::RemoveFile(f.id)));
+        }
+        if previewable {
+            buttons.push(("search", tl!("Preview").to_owned(), preview));
+        }
+        buttons
+    }
+
+    /// The full name and everything known about the file, on hover (on a page card, which page).
+    fn tooltip(&self, f: &CombineFile, page_label: Option<&str>, pages: &str, why: Option<&str>) -> String {
+        let mut tip = match page_label {
+            Some(page) => format!("{}\n{page}", f.name),
+            None => format!("{}\n{pages} · {}", f.name, crate::panels::human_size(f.bytes.len())),
+        };
+        for line in why.into_iter().chain(f.notes.iter().map(String::as_str)) {
+            tip.push('\n');
+            tip.push_str(line);
+        }
+        if self.twice {
+            tip.push('\n');
+            tip.push_str(tl!("Added more than once"));
+        }
+        // Page ranges are typed in the list.
+        if self.page.is_none() && self.check.is_err() {
+            tip.push('\n');
+            tip.push_str(tl!("Switch to List view to change the pages it takes."));
+        }
+        tip
+    }
+
+    /// What goes on the paper: the thumbnail, or why there isn't one (an icon, its colour and the reason).
+    fn paper_content(
+        &self,
+        ui: &egui::Ui,
+        painter: &egui::Painter,
+        f: &CombineFile,
+        thumbs: &mut Thumbs,
+        page: Result<usize, String>,
+        paper: Paper,
+    ) -> Option<(&'static str, Color32, String)> {
+        let mut why: Option<(&'static str, Color32, String)> = None;
+        if let Some(lock) = f.lock {
+            let text = match lock {
+                Lock::Open => tl!("Password-protected"),
+                Lock::Permissions => tl!("Its security settings don't allow copying pages"),
+            };
+            why = Some(("lock", ON_PAPER, text.to_owned()));
+        } else if let Some(p) = &f.problem {
+            why = Some(("circle-x", ERROR, p.clone()));
+        } else {
+            match page {
+                Err(e) => why = Some(("circle-x", ERROR, e)),
+                // The pages couldn't be counted, or the page's size is unknown (some passwords
+                // open a file for combining but not for reading it here): nothing is drawn (the
+                // engine decides at Combine), and the card says so rather than look blank.
+                Ok(p) if p >= f.pages || !paper.known => why = Some(("eye-off", ON_PAPER, tl!("No preview").to_owned())),
+                Ok(p) => {
+                    // Pixels per point: the size the paper is drawn at, on both sides, and never a
+                    // side longer than a thumbnail's (a long, thin page fits by its long side).
+                    let (w, h) = paper.size_pt;
+                    let scale = (paper.size.x * self.ppp / w).min(paper.size.y * self.ppp / h).min(MAX_SIDE / w.max(h));
+                    let px = [w * scale, h * scale].map(|v| (v.max(1.0).ceil() as u32).div_ceil(SIZE_STEP).saturating_mul(SIZE_STEP));
+                    let key = Key { source: Arc::as_ptr(&f.bytes) as usize, auth: f.auth, page: p, px };
+                    let look = thumbs.look((f.group, p), key);
+                    let mut want = false;
+                    match look {
+                        Look::Ready(tex) => {
+                            painter.image(tex, paper.rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                        }
+                        Look::Failed(e) => why = Some(("triangle-alert", WARNING, crate::i18n::fmt(tl!("Preview unavailable: {e}"), &[("e", &e)]))),
+                        Look::Pending(stand_in) => {
+                            if let Some(tex) = stand_in {
+                                painter.image(tex, paper.rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                            }
+                            want = true;
+                        }
+                    }
+                    if want && scale.is_finite() && scale > 0.0 {
+                        thumbs.wants.push(Want {
+                            slot: (f.group, p),
+                            key,
+                            bytes: f.bytes.clone(),
+                            password: f.password().map(Arc::from),
+                            scale,
+                            visible: ui.is_rect_visible(self.rect),
+                        });
+                    }
+                }
+            }
+        }
+        why
     }
 }
 

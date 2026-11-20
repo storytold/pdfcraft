@@ -1,5 +1,8 @@
-use super::layout::{Flow, along_baseline, arrange_flow, compatible, continues, from_upright, to_upright, unrolled};
-use super::*;
+use super::layout::{Flow, along_baseline, arrange_flow, compatible, continues, from_upright, to_upright, union, unrolled};
+use super::{
+    Affine, BezPath, BlendMode, ClipPath, Context, Device, Glyph, GlyphDrawMode, HashMap, Image, InterpreterCache, InterpreterSettings,
+    InterpreterWarning, PageText, Paint, PathDrawMode, Pdf, Rect, Shape, SoftMask, TextFilter, TextGlyph, TransformExt, interpret_page,
+};
 
 /// Largest sine of the angle between a glyph's writing direction and a flow's for the glyph to be
 /// laid out in that flow's frame. Turning an em box by θ moves its edges along the line by up to
@@ -9,6 +12,10 @@ pub(super) const DIRECTION_TOLERANCE: f64 = WORD_GAP as f64;
 
 /// A word gap is wider than the line's typical letter gap by this fraction of the line height.
 pub(super) const WORD_GAP: f32 = 0.15;
+
+/// A gap of this many heights between two glyphs of a line is wider than one run of text holds (`arrange` continues
+/// a run across less than three heights), so it separates cells that share a baseline.
+pub(super) const CELL_GAP: f32 = 3.0;
 
 /// A glyph with its writing direction to the nearest quarter turn (right, down, left, up) and as
 /// a unit vector.
@@ -22,11 +29,24 @@ pub(super) struct TextDevice {
     /// The outermost open `/ActualText` replacement: its depth, text and the glyphs drawn inside
     /// it (with no text of their own yet).
     actual: Option<(usize, String, Vec<Drawn>)>,
+    /// What the open `/ActualText` replacement paints besides glyphs (paths, images), as far as
+    /// it can be seen: where its text reads when it marks no glyph (words drawn as outlines).
+    painted: Option<Painted>,
+    /// Whether the open `/ActualText` replacement paints anything an exclusion leaves out.
+    paint_filtered: bool,
+    /// Whether the open `/ActualText` replacement paints anything wholly outside the crop box.
+    paint_cropped: bool,
+    /// The bounding boxes of the clip paths in force (view space), innermost last, each cut to the
+    /// one before it: an outer bound on what can show.
+    clips: Vec<Rect>,
     /// Every `/ActualText` replacement made on the page.
     pub(super) replaced: Vec<Replaced>,
+    /// Visible page bounds in view space (`intersected_crop_box` after `initial_transform`).
+    page: Rect,
     filter: TextFilter,
     excluded_depth: Option<usize>,
     actual_filtered: bool,
+    actual_cropped: bool,
     partial_replacement: bool,
 }
 
@@ -99,16 +119,115 @@ fn merge(drawn: &[Drawn], text: String) -> Option<Drawn> {
     Some((quarter, u, TextGlyph { text, rect, quad, direction: first.2.direction }))
 }
 
+/// The widest or tallest box (view-space points) a glyph, or the paint standing in for one, may
+/// have and still be placed: anything bigger is damage, not text.
+const MAX_GLYPH_EXTENT: f64 = 10_000.0;
+
+/// The quarter turn of direction `(dx, dy)` (view space, y down): 0 right, 1 down, 2 left, 3 up.
+fn quarter_turn(dx: f64, dy: f64) -> usize {
+    if dx.abs() >= dy.abs() {
+        if dx >= 0.0 { 0 } else { 2 }
+    } else if dy > 0.0 {
+        1
+    } else {
+        3
+    }
+}
+
+/// What an `/ActualText` replacement paints besides glyphs, measured as [`merge`] measures
+/// glyphs: along the writing direction of the first of it (its transform's x axis, `u`) and
+/// across it.
+struct Painted {
+    quarter: usize,
+    u: [f64; 2],
+    along: [f64; 2],
+    across: [f64; 2],
+}
+
+impl Painted {
+    fn new(transform: Affine) -> Self {
+        let [a, b, ..] = transform.as_coeffs();
+        let length = a.hypot(b);
+        let u = if length.is_finite() && length > 0.0 { [a / length, b / length] } else { [1.0, 0.0] };
+        let empty = [f64::INFINITY, f64::NEG_INFINITY];
+        Painted { quarter: quarter_turn(u[0], u[1]), u, along: empty, across: empty }
+    }
+
+    /// Grow the measure by the view-space box `b`.
+    fn add(&mut self, b: Rect) {
+        let n = [-self.u[1], self.u[0]];
+        for (x, y) in [(b.x0, b.y0), (b.x1, b.y0), (b.x1, b.y1), (b.x0, b.y1)] {
+            let (s, t) = (x * self.u[0] + y * self.u[1], x * n[0] + y * n[1]);
+            self.along = [self.along[0].min(s), self.along[1].max(s)];
+            self.across = [self.across[0].min(t), self.across[1].max(t)];
+        }
+    }
+
+    /// A stand-in glyph with no text of its own, boxed around what was painted and read along its
+    /// direction; `None` when that is too big to be the place of words.
+    fn glyph(self) -> Option<Drawn> {
+        let ([s0, s1], [t0, t1]) = (self.along, self.across);
+        // Too big to be the place of words, or NaN.
+        if !(s1 - s0 <= MAX_GLYPH_EXTENT && t1 - t0 <= MAX_GLYPH_EXTENT) {
+            return None;
+        }
+        let (u, n) = (self.u, [-self.u[1], self.u[0]]);
+        let point = |s: f64, t: f64| [(s * u[0] + t * n[0]) as f32, (s * u[1] + t * n[1]) as f32];
+        // The edge towards the next line starts the quad, as a glyph's em box does.
+        let quad = [point(s0, t1), point(s1, t1), point(s1, t0), point(s0, t0)];
+        let rect = quad.iter().fold([f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY], |r, p| {
+            [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])]
+        });
+        rect.iter()
+            .all(|v| v.is_finite())
+            .then(|| (self.quarter, u, TextGlyph { text: String::new(), rect, quad, direction: [u[0] as f32, u[1] as f32] }))
+    }
+}
+
+/// The part of `b` inside `c`, or `None` when none of it is. A NaN edge of `c` (a damaged clip)
+/// leaves that edge uncut.
+fn cut(b: Rect, c: Rect) -> Option<Rect> {
+    let (x0, y0, x1, y1) = (b.x0.max(c.x0), b.y0.max(c.y0), b.x1.min(c.x1), b.y1.min(c.y1));
+    (x0 <= x1 && y0 <= y1).then(|| Rect::new(x0, y0, x1, y1))
+}
+
+/// The view-space box of `path` drawn with `transform`, from its control points (as redaction
+/// measures a path), or `None` when it has no finite point.
+fn control_box(path: &BezPath, transform: Affine) -> Option<Rect> {
+    let mut b: Option<Rect> = None;
+    let mut add = |p: kurbo::Point| {
+        let q = transform * p;
+        if q.is_finite() {
+            b = Some(b.map_or_else(|| Rect::from_points(q, q), |r| r.union_pt(q)));
+        }
+    };
+    for el in path.elements() {
+        match *el {
+            kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => add(p),
+            kurbo::PathEl::QuadTo(p1, p2) => [p1, p2].into_iter().for_each(&mut add),
+            kurbo::PathEl::CurveTo(p1, p2, p3) => [p1, p2, p3].into_iter().for_each(&mut add),
+            kurbo::PathEl::ClosePath => {}
+        }
+    }
+    b
+}
+
 impl TextDevice {
     pub(super) fn new() -> Self {
         TextDevice {
             glyphs: Vec::new(),
             depth: 0,
             actual: None,
+            painted: None,
+            paint_filtered: false,
+            paint_cropped: false,
+            clips: Vec::new(),
             replaced: Vec::new(),
+            page: Rect::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::INFINITY),
             filter: TextFilter::default(),
             excluded_depth: None,
             actual_filtered: false,
+            actual_cropped: false,
             partial_replacement: false,
         }
     }
@@ -120,14 +239,41 @@ impl TextDevice {
     /// words can't be found.
     ///
     /// A replacement spanning several lines or writing directions stays per glyph (each glyph's own
-    /// Unicode). An empty one (a soft hyphen at a line break, say) stands for no text at all.
+    /// Unicode). An empty one (a soft hyphen at a line break, say) stands for no text at all. One
+    /// that marks no glyph reads where it paints, as far as that can be seen: words drawn as
+    /// outlines or pictures.
     fn end_actual_text(&mut self) {
-        let Some((_, text, drawn)) = self.actual.take() else { return };
+        let Some((_, text, mut drawn)) = self.actual.take() else { return };
+        let painted = self.painted.take();
+        let paint_filtered = std::mem::take(&mut self.paint_filtered);
+        let paint_cropped = std::mem::take(&mut self.paint_cropped);
+        let cropped = std::mem::take(&mut self.actual_cropped);
         if std::mem::take(&mut self.actual_filtered) {
             // ActualText has no mapping from replacement words to individual glyphs. A mixed
             // span cannot be filtered honestly; a wholly excluded span can simply be omitted.
             self.partial_replacement |= !drawn.is_empty();
             return;
+        }
+        // Before the paint: a span whose glyphs the crop box took has none left, yet it marks
+        // glyphs, so its paint doesn't place it.
+        if cropped {
+            self.glyphs.extend(drawn.into_iter().filter(|d| !d.2.text.chars().all(|c| c.is_control())));
+            return;
+        }
+        if drawn.is_empty()
+            && !self.filter.painted
+            && let Some(stand_in) = painted.and_then(Painted::glyph)
+        {
+            // The paint places it, so paint left out mixes it as excluded glyphs would.
+            if paint_filtered {
+                self.partial_replacement = true;
+                return;
+            }
+            // Its words may be among what the crop box hides, as with a glyph cropped away.
+            if paint_cropped {
+                return;
+            }
+            drawn.push(stand_in);
         }
         let Some(glyph) = merge(&drawn, text.clone()) else {
             self.glyphs.extend(drawn.into_iter().filter(|d| !d.2.text.chars().all(char::is_control)));
@@ -141,6 +287,25 @@ impl TextDevice {
             Some(self.glyphs.len() - 1)
         };
         self.replaced.push(Replaced { at, text, originals });
+    }
+
+    /// Record view-space box `b`, drawn with `transform`, as painted by the open `/ActualText`
+    /// replacement, cut to the visible area (the crop box, and the clip in force); paint wholly
+    /// outside the crop box, or that an exclusion leaves out (`excluded`), only marks the
+    /// replacement.
+    fn paint(&mut self, b: Rect, transform: Affine, excluded: bool) {
+        // Wholly outside the crop box, as a glyph dropped there is: the replacement can't be read.
+        let Some(on_page) = cut(b, self.page) else {
+            self.paint_cropped = true;
+            return;
+        };
+        // Clipped away entirely: nothing of it shows.
+        let Some(seen) = self.clips.last().map_or(Some(on_page), |c| cut(on_page, *c)) else { return };
+        if excluded {
+            self.paint_filtered = true;
+        } else {
+            self.painted.get_or_insert_with(|| Painted::new(transform)).add(seen);
+        }
     }
 
     /// Ends the page. Some producers draw text twice, the copy for an outline, shadow or
@@ -236,6 +401,35 @@ impl TextDevice {
     }
 }
 
+/// `text` with each Latin compatibility ligature (U+FB00–U+FB06: ff, fi, fl, ffi, ffl, long s t,
+/// st) written as the letters it stands for, their compatibility decomposition. A font whose
+/// encoding names a ligature glyph (`/fi`) reads as the ligature character, and copied or searched
+/// text wants the letters, as a ToUnicode map gives them (ISO 32000-2 §9.10.3 maps the ff, fi and
+/// ffl glyphs to "LATIN SMALL LETTER F … I"). Nothing else is normalised. The glyph keeps its one
+/// box: the PDF gives no position for the letters inside it.
+pub(super) fn ligature_letters(text: String) -> String {
+    let letters = |c: char| match c {
+        '\u{FB00}' => Some("ff"),
+        '\u{FB01}' => Some("fi"),
+        '\u{FB02}' => Some("fl"),
+        '\u{FB03}' => Some("ffi"),
+        '\u{FB04}' => Some("ffl"),
+        '\u{FB05}' | '\u{FB06}' => Some("st"),
+        _ => None,
+    };
+    if !text.chars().any(|c| letters(c).is_some()) {
+        return text;
+    }
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match letters(c) {
+            Some(s) => out.push_str(s),
+            None => out.push(c),
+        }
+    }
+    out
+}
+
 /// Whether `PDFCRAFT_TEXT_DEBUG` is set. `draw_glyph` runs once per glyph and `getenv` scans the
 /// whole environment under a lock, so read it once.
 fn text_debug() -> bool {
@@ -246,8 +440,23 @@ fn text_debug() -> bool {
 impl<'a> Device<'a> for TextDevice {
     fn set_soft_mask(&mut self, _: Option<SoftMask<'a>>) {}
     fn set_blend_mode(&mut self, _: BlendMode) {}
-    fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'a>, _: &PathDrawMode) {}
-    fn push_clip_path(&mut self, _: &ClipPath) {}
+    fn draw_path(&mut self, path: &BezPath, transform: Affine, _: &Paint<'a>, _: &PathDrawMode) {
+        // A path is no text, but it places an `/ActualText` replacement that marks no glyph.
+        if self.actual.is_some()
+            && let Some(b) = control_box(path, transform)
+        {
+            self.paint(b, transform, self.excluded_depth.is_some());
+        }
+    }
+    fn push_clip_path(&mut self, clip: &ClipPath) {
+        // Clip paths arrive in view space. NaN edges (a damaged clip) leave that edge unclipped.
+        let b = clip.path.bounding_box();
+        let visible = match self.clips.last() {
+            Some(c) => Rect::new(c.x0.max(b.x0), c.y0.max(b.y0), c.x1.min(b.x1), c.y1.min(b.y1)),
+            None => b,
+        };
+        self.clips.push(visible);
+    }
     fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
     fn draw_glyph(&mut self, glyph: &Glyph<'a>, transform: Affine, glyph_transform: Affine, _: &Paint<'a>, mode: &GlyphDrawMode) {
         if self.excluded_depth.is_some() || (self.filter.images && matches!(mode, GlyphDrawMode::Invisible)) {
@@ -274,6 +483,7 @@ impl<'a> Device<'a> for TextDevice {
         if !replaced && text.chars().all(char::is_control) {
             return;
         }
+        let text = ligature_letters(text);
         // Glyph space → view space. Glyph space uses 1000 units per em for outline glyphs; the em
         // box spans descender (−200) to ascender (800), the advance gives the width.
         let t = transform * glyph_transform;
@@ -282,9 +492,17 @@ impl<'a> Device<'a> for TextDevice {
             eprintln!("{kind} {text:?} transform={:?} glyph_transform={:?}", transform.as_coeffs(), glyph_transform.as_coeffs());
         }
         let advance = match glyph {
-            Glyph::Outline(g) => {
-                g.advance_width().filter(|a| *a > 0.0).map(f64::from).unwrap_or_else(|| g.outline().bounding_box().width().max(500.0))
-            }
+            // A vertical font's advance runs down the column; across it, the glyph is as wide as
+            // its horizontal width w0, centred on the column by default (ISO 32000-2 §9.7.4.3). Taking
+            // the outline's width instead gave a column of Latin letters boxes of uneven widths,
+            // off its centre, and a narrow letter cut the line's gap allowance below the spacing
+            // of widely tracked text, so the column fell apart into lines.
+            Glyph::Outline(g) => g
+                .vertical_glyph_width()
+                .or_else(|| g.advance_width())
+                .filter(|a| a.is_finite() && *a > 0.0)
+                .map(f64::from)
+                .unwrap_or_else(|| g.outline().bounding_box().width().max(500.0)),
             Glyph::Type3(g) => g.advance_width().filter(|a| a.is_finite() && *a > 0.0).map(f64::from).unwrap_or(600.0),
         };
         // The baseline direction in view space (y down).
@@ -296,13 +514,7 @@ impl<'a> Device<'a> for TextDevice {
         } else {
             (coefficients[0], coefficients[1])
         };
-        let dir = if dx.abs() >= dy.abs() {
-            if dx >= 0.0 { 0 } else { 2 }
-        } else if dy > 0.0 {
-            1
-        } else {
-            3
-        };
+        let dir = quarter_turn(dx, dy);
         let em = Rect::new(0.0, -200.0, advance, 800.0);
         let corners = if matches!(glyph, Glyph::Outline(g) if g.is_vertical()) {
             [(em.x0, em.y1), (em.x0, em.y0), (em.x1, em.y0), (em.x1, em.y1)]
@@ -313,7 +525,13 @@ impl<'a> Device<'a> for TextDevice {
         let b = corners.iter().fold(Rect::new(f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY), |b, p| {
             Rect::new(b.x0.min(p.x), b.y0.min(p.y), b.x1.max(p.x), b.y1.max(p.y))
         });
-        if !(b.x0.is_finite() && b.y0.is_finite() && b.x1.is_finite() && b.y1.is_finite()) || b.width() > 10_000.0 || b.height() > 10_000.0 {
+        let outside_crop = b.x0.max(self.page.x0) >= b.x1.min(self.page.x1) || b.y0.max(self.page.y0) >= b.y1.min(self.page.y1);
+        if !(b.x0.is_finite() && b.y0.is_finite() && b.x1.is_finite() && b.y1.is_finite())
+            || b.width() > MAX_GLYPH_EXTENT
+            || b.height() > MAX_GLYPH_EXTENT
+            || outside_crop
+        {
+            self.actual_cropped |= replaced && outside_crop;
             return;
         }
         let length = dx.hypot(dy);
@@ -331,8 +549,23 @@ impl<'a> Device<'a> for TextDevice {
             None => self.glyphs.push((dir, direction, glyph)),
         }
     }
-    fn draw_image(&mut self, _: Image<'a, '_>, _: Affine) {}
-    fn pop_clip_path(&mut self) {}
+    fn draw_image(&mut self, image: Image<'a, '_>, transform: Affine) {
+        // A picture of words, like an outline, places a replacement that marks no glyph; with
+        // images excluded, it is not counted.
+        if self.actual.is_none() {
+            return;
+        }
+        // The transform places the picture's pixels, not a unit square.
+        let (w, h) = (f64::from(image.width()), f64::from(image.height()));
+        let corners = [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)].map(|(x, y)| transform * kurbo::Point::new(x, y));
+        let [a, b, c, d] = corners;
+        if corners.iter().all(|p| p.is_finite()) {
+            self.paint(Rect::from_points(a, c).union_pt(b).union_pt(d), transform, self.excluded_depth.is_some() || self.filter.images);
+        }
+    }
+    fn pop_clip_path(&mut self) {
+        self.clips.pop();
+    }
     fn pop_transparency_group(&mut self) {}
     fn begin_marked_content(&mut self, tag: &[u8], mcid: Option<i32>) {
         self.depth = self.depth.saturating_add(1);
@@ -355,6 +588,11 @@ impl<'a> Device<'a> for TextDevice {
         }
         self.depth = self.depth.saturating_sub(1);
     }
+    fn begin_annotations(&mut self) {
+        // A replacement the page content never closed ends with it: the annotations drawn next
+        // are not part of it.
+        self.end_actual_text();
+    }
 }
 
 /// Extract the text of one page. Panics inside the interpreter are the caller's to catch.
@@ -369,10 +607,27 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
     let cache = InterpreterCache::new();
     // Annotation appearances are included: form-field values and comment text are searchable,
     // as in Acrobat, and match what other extractors report.
-    let settings = settings.clone();
+    // The interpreter says when the content was cut at its limits (#623): the text is then
+    // marked incomplete, and the caller's own sink still hears it.
+    let cut = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let settings = {
+        let flag = cut.clone();
+        let inner = settings.warning_sink.clone();
+        InterpreterSettings {
+            warning_sink: std::sync::Arc::new(move |warning| {
+                if matches!(warning, InterpreterWarning::ContentTruncated) {
+                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                inner(warning);
+            }),
+            ..settings.clone()
+        }
+    };
     let initial = p.initial_transform(true).to_kurbo();
-    let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, w as f64, h as f64), &cache, p.xref(), settings);
+    let c = p.intersected_crop_box();
+    let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, f64::from(w), f64::from(h)), &cache, p.xref(), settings);
     let mut dev = TextDevice::new();
+    dev.page = initial.transform_rect_bbox(Rect::new(c.x0, c.y0, c.x1, c.y1));
     dev.filter = filter;
     interpret_page(p, &mut ctx, &mut dev);
     // A replacement the content never closed ends with the page.
@@ -432,7 +687,8 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
         flows.sort_by(|a, b| a.top.total_cmp(&b.top));
         flows
     };
-    let flows = upright(quarters);
+    let mut flows = upright(quarters);
+    let (main, mut inline, place) = turned_lines_in_place(&glyphs, &mut flows);
     let mut extra: Vec<Flow> = curves
         .into_iter()
         .map(|ids| (None, ids))
@@ -478,7 +734,8 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
             text.space_before.push(space);
         }
     };
-    for flow in flows {
+    let placed = |ids: &[usize]| ids.iter().filter_map(|&i| place.get(i).copied()).min().unwrap_or(usize::MAX);
+    for (fi, flow) in flows.into_iter().enumerate() {
         let mut k = 0;
         while k < flow.ids.len() {
             let line = flow.line_of[k];
@@ -487,12 +744,99 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
             while let Some(f) = extra.next_if(|f| first(&f.ids) < before) {
                 emit(&mut text, &f.ids, &f.line_of, &f.space_before, None);
             }
+            if Some(fi) == main {
+                let at = placed(&flow.ids[k..end]);
+                while let Some(l) = inline.next_if(|l| l.at < at) {
+                    emit(&mut text, &l.ids, &vec![0; l.ids.len()], &l.space_before, l.quarter);
+                }
+            }
             emit(&mut text, &flow.ids[k..end], &vec![0; end - k], &flow.space_before[k..end], flow.quarter);
             k = end;
+        }
+        if Some(fi) == main {
+            for l in inline.by_ref() {
+                emit(&mut text, &l.ids, &vec![0; l.ids.len()], &l.space_before, l.quarter);
+            }
         }
     }
     for f in extra {
         emit(&mut text, &f.ids, &f.line_of, &f.space_before, None);
     }
+    text.truncated = cut.load(std::sync::atomic::Ordering::Relaxed);
     Ok(text)
+}
+
+/// A line turned a quarter from the page's main text, read in place among it.
+struct InPlace {
+    /// Where laying it out with the main text puts its first glyph.
+    at: usize,
+    ids: Vec<usize>,
+    space_before: Vec<bool>,
+    /// The quarter turn of the flow it came from.
+    quarter: Option<u8>,
+}
+
+/// Takes out of `flows` the lines that are turned a quarter from the page's main text (the unturned flow, when it
+/// holds more glyphs than any other) and sit inside that text's area: a label set upwards beside a row, a turned
+/// table heading. Each is placed where laying it out among the main text, by its box on the page, puts its first
+/// glyph, rather than after all the main text. Lines outside the area (a stamp in the margin) and every other flow
+/// keep their place, as does a page whose main text is vertical.
+///
+/// Returns the main flow's index, the lines in place order, and each glyph's place in that layout.
+fn turned_lines_in_place(glyphs: &[Drawn], flows: &mut [Flow]) -> (Option<usize>, std::iter::Peekable<std::vec::IntoIter<InPlace>>, Vec<usize>) {
+    let nothing = || (None, Vec::new().into_iter().peekable(), Vec::new());
+    let Some((main, size)) = flows.iter().enumerate().find(|(_, f)| f.quarter == Some(0)).map(|(i, f)| (i, f.ids.len())) else { return nothing() };
+    if flows.iter().enumerate().any(|(i, f)| i != main && f.ids.len() >= size) {
+        return nothing();
+    }
+    let rect = |i: usize| glyphs.get(i).map_or([0.0; 4], |g| g.2.rect);
+    let bounds = |ids: &[usize]| {
+        let mut b = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+        for &i in ids {
+            union(&mut b, &rect(i));
+        }
+        b
+    };
+    let Some(area) = flows.get(main).map(|f| bounds(&f.ids)) else { return nothing() };
+    let mut lines = Vec::new();
+    for (fi, flow) in flows.iter_mut().enumerate() {
+        // Upside-down text (a half turn) is not turned a quarter, and keeps its own flow.
+        if fi == main || !matches!(flow.quarter, Some(1 | 3)) {
+            continue;
+        }
+        let (mut ids, mut line_of, mut space_before) = (Vec::new(), Vec::new(), Vec::new());
+        let mut k = 0;
+        while let Some(&line) = flow.line_of.get(k) {
+            let end = flow.line_of.get(k..).and_then(|rest| rest.iter().position(|l| *l != line)).map_or(flow.line_of.len(), |n| k + n);
+            let (Some(line_ids), Some(line_spaces)) = (flow.ids.get(k..end), flow.space_before.get(k..end)) else { break };
+            let b = bounds(line_ids);
+            let (cx, cy) = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+            if (area[0]..=area[2]).contains(&cx) && (area[1]..=area[3]).contains(&cy) {
+                lines.push(InPlace { at: usize::MAX, ids: line_ids.to_vec(), space_before: line_spaces.to_vec(), quarter: flow.quarter });
+            } else {
+                ids.extend_from_slice(line_ids);
+                line_of.extend(std::iter::repeat_n(line, line_ids.len()));
+                space_before.extend_from_slice(line_spaces);
+            }
+            k = end;
+        }
+        (flow.ids, flow.line_of, flow.space_before) = (ids, line_of, space_before);
+    }
+    if lines.is_empty() {
+        return nothing();
+    }
+    let ids: Vec<usize> =
+        flows.get(main).map_or(&[][..], |f| &f.ids[..]).iter().copied().chain(lines.iter().flat_map(|l| l.ids.iter().copied())).collect();
+    let rects = ids.iter().map(|&i| rect(i)).collect();
+    let mut place = vec![usize::MAX; glyphs.len()];
+    for (r, i) in arrange_flow(glyphs, ids, rects, Some(0)).ids.into_iter().enumerate() {
+        if let Some(p) = place.get_mut(i) {
+            *p = r;
+        }
+    }
+    for l in &mut lines {
+        l.at = l.ids.iter().filter_map(|&i| place.get(i).copied()).min().unwrap_or(usize::MAX);
+    }
+    lines.sort_by_key(|l| l.at);
+    (Some(main), lines.into_iter().peekable(), place)
 }
