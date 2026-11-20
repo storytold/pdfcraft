@@ -46,7 +46,7 @@ fn protected(algorithm: Algorithm) -> Vec<u8> {
 
 fn protected_with(algorithm: Algorithm, content: &str) -> Vec<u8> {
     let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(content))).unwrap();
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm,
         user_password: "user",
         owner_password: "owner",

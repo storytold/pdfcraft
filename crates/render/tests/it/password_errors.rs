@@ -29,7 +29,7 @@ fn protected(algorithm: Algorithm) -> Arc<Vec<u8>> {
     }
     bytes.extend_from_slice(format!("trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
     let mut doc = pdfcraft_cos::Document::open(Arc::new(bytes)).unwrap();
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm,
         user_password: "user",
         owner_password: "owner",
