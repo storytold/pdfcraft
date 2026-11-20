@@ -1116,7 +1116,7 @@ impl Metrics {
         out
     }
 
-    fn cid(&self, code: u32) -> u32 {
+    pub(crate) fn cid(&self, code: u32) -> u32 {
         if self.cid_map.is_empty() {
             return code;
         }
