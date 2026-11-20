@@ -53,6 +53,10 @@ const PREPARE_FIELD: PartKey = PartKey::new("prepare_field");
 const PARAGRAPH: PartKey = PartKey::new("paragraph");
 const PICTURE: PartKey = PartKey::new("picture");
 const OBJECTS: PartKey = PartKey::new("objects");
+/// The page-part control's identity also lets the view cancel its captured press on leaving.
+pub(crate) fn control_id(view_key: u64) -> egui::Id {
+    egui::Id::new(("page-parts", view_key))
+}
 const FRAME: PartKey = PartKey::new("frame");
 const ADDED: PartKey = PartKey::new("added");
 const SIGN_TAB: PartKey = PartKey::new("sign_tab");
