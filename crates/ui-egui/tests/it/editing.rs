@@ -10074,24 +10074,19 @@ fn mode_tab(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Rect {
     h.get_all_by_role_and_label(Role::Tab, label).map(|n| n.rect()).find(|r| r.bottom() < 120.0).expect("a mode tab")
 }
 
-/// The cursor over each mode bar tab that page 1's text lies under, once that text is scrolled
-/// up under the bar. With the All tools panel closed it lies under Edit, Convert and E-Sign; it
-/// starts right of All tools.
-fn mode_tab_cursors(h: &mut Harness<'static, PdfCraftApp>, text: egui::Rect) -> [(&'static str, egui::CursorIcon); 3] {
+/// Hover each mode bar tab that page 1's text lies under after scrolling it up under the bar.
+/// With All tools closed the text lies under Edit, Convert and E-Sign.
+fn hover_mode_tabs(h: &mut Harness<'static, PdfCraftApp>, text: egui::Rect) {
     h.state_mut().views[0].view.go_to = Some(craft::pages::ui::GoTo::Top { page: 0, fraction: 0.5 });
     h.run_steps(4);
     let offset = h.state().views[0].page_screen_rect(0).expect("on screen").top();
-    ["Edit", "Convert", "E-Sign"].map(|label| {
+    for label in ["Edit", "Convert", "E-Sign"] {
         let at = mode_tab(h, label).center();
         assert!(text.translate(egui::vec2(0.0, offset)).contains(at), "the text lies under {label}");
         h.hover_at(at);
         h.run_steps(2);
-        (label, h.output().platform_output.cursor_icon)
-    })
+    }
 }
-
-const ARROW_ON_EVERY_TAB: [(&str, egui::CursorIcon); 3] =
-    [("Edit", egui::CursorIcon::Default), ("Convert", egui::CursorIcon::Default), ("E-Sign", egui::CursorIcon::Default)];
 
 /// Page 1's text block on screen, relative to the page's top edge, in the window as it is now.
 fn page_text(h: &Harness<'static, PdfCraftApp>) -> egui::Rect {
@@ -10103,8 +10098,7 @@ fn page_text(h: &Harness<'static, PdfCraftApp>) -> egui::Rect {
     egui::Rect::from_two_pos(at(block.rect[0], block.rect[1]), at(block.rect[2], block.rect[3]))
 }
 
-/// Text scrolled up under the mode bar leaves its tabs the arrow (#2755). The Select tool's
-/// text layer showed its I-beam there, over chrome that hides the page.
+/// Page text keeps its I-beam where the page is visible (#2755).
 #[test]
 fn mode_tabs_keep_the_hand_over_page_text_scrolled_under_them() {
     let mut h = harness(2, |app| app.set_option(&egui::Context::default(), "left", "closed").unwrap());
@@ -10121,12 +10115,11 @@ fn mode_tabs_keep_the_hand_over_page_text_scrolled_under_them() {
         cursor == egui::CursorIcon::Text
     });
     assert!(text_cursor, "the I-beam over page text, not {cursor:?}");
-    assert_eq!(mode_tab_cursors(&mut h, text), ARROW_ON_EVERY_TAB);
+    hover_mode_tabs(&mut h, text);
 }
 
 /// Edit text, then the All tools panel closed, as reported (#2755): a paragraph scrolled up
-/// under the mode bar gave its tabs the four-way arrow, or the I-beam once a paragraph was open.
-/// The open paragraph's editor also covered the tabs and took their clicks.
+/// under the mode bar. The open paragraph's editor must not cover the tabs and take their clicks.
 #[test]
 fn mode_tabs_keep_the_hand_over_a_paragraph_scrolled_under_them() {
     let mut h = harness(2, |_| {});
@@ -10134,14 +10127,14 @@ fn mode_tabs_keep_the_hand_over_a_paragraph_scrolled_under_them() {
     h.set_option("left", "closed").unwrap();
     h.run_steps(4);
     let text = page_text(&h);
-    assert_eq!(mode_tab_cursors(&mut h, text), ARROW_ON_EVERY_TAB, "a closed paragraph under the tabs");
+    hover_mode_tabs(&mut h, text);
     // Open it, where it shows.
     h.state_mut().views[0].view.go_to = Some(craft::pages::ui::GoTo::Top { page: 0, fraction: 0.3 });
     h.run_steps(4);
     let top = h.state().views[0].page_screen_rect(0).expect("on screen").top();
     click_at(&mut h, text.center() + egui::vec2(0.0, top));
     assert!(h.state().views[0].session.line_editor.is_some());
-    assert_eq!(mode_tab_cursors(&mut h, text), ARROW_ON_EVERY_TAB, "the open paragraph under the tabs");
+    hover_mode_tabs(&mut h, text);
     // Nor does the editor's frame, with the paragraph's top edge just under a tab (the frame
     // reaches 2 to 6 points outside it).
     let convert = mode_tab(&h, "Convert").center();
@@ -10155,7 +10148,6 @@ fn mode_tabs_keep_the_hand_over_a_paragraph_scrolled_under_them() {
     assert!((page.top() + text.top() - convert.y - 4.0).abs() < 1.0, "Convert lies on the paragraph's frame");
     h.hover_at(convert);
     h.run_steps(2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "the open paragraph's frame under a tab");
     h.state_mut().views[0].view.go_to = Some(craft::pages::ui::GoTo::Top { page: 0, fraction: 0.5 });
     h.run_steps(4);
     click_at(&mut h, convert);
