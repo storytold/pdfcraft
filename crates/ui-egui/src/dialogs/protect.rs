@@ -152,10 +152,14 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         egui::Grid::new("protect-advanced").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             ui.label(tl!("Compatibility"));
             let algos = [
-                (A::Aes256, tl!("Acrobat X and later (256-bit AES)")),
-                (A::Aes128, tl!("Acrobat 7.0 and later (128-bit AES)")),
-                (A::Rc4_128, tl!("Acrobat 5.0 and later (128-bit RC4)")),
-                (A::Rc4_40, tl!("Acrobat 3.0 and later (40-bit RC4)")),
+                // The guide's compatibility names with the PDF version each needs, as the guide
+                // gives them (ISO 32000-2 Table 20 and Table 25; 256-bit AES in a PDF 1.7 file is
+                // declared as Adobe extension level 8).
+                (A::Aes256, tl!("Acrobat X and later (PDF 1.7, 256-bit AES)")),
+                (A::Aes128, tl!("Acrobat 7.0 and later (PDF 1.6, 128-bit AES)")),
+                (A::Rc4_128CryptFilter, tl!("Acrobat 6.0 and later (PDF 1.5, 128-bit RC4)")),
+                (A::Rc4_128, tl!("Acrobat 5.0 and later (PDF 1.4, 128-bit RC4)")),
+                (A::Rc4_40, tl!("Acrobat 3.0 and later (PDF 1.3, 40-bit RC4)")),
             ];
             let cur = algos.iter().find(|(a, _)| *a == p.algorithm).map_or(algos[0].1, |(_, l)| *l);
             craft_ui::ComboBox::from_id_salt("protect-algo").width(300.0).selected_text(cur).show_ui(ui, |ui| {
@@ -167,8 +171,8 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             ui.label(tl!("Encrypt"));
             ui.vertical(|ui| {
                 widgets::radio_value(ui, &mut p.encrypt_metadata, true, tl!("All document contents"));
-                // Unencrypted metadata needs crypt filters (Acrobat 6.0 and later).
-                ui.add_enabled_ui(p.algorithm != A::Rc4_40 && p.algorithm != A::Rc4_128, |ui| {
+                // Unencrypted metadata needs crypt filters (Acrobat 6.0 and later, PDF 1.5).
+                ui.add_enabled_ui(p.algorithm.has_crypt_filters(), |ui| {
                     widgets::radio_value(ui, &mut p.encrypt_metadata, false, tl!("All document contents except metadata"));
                 });
             });
@@ -207,7 +211,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 ui.end_row();
             }
         });
-        if p.algorithm == A::Rc4_40 || p.algorithm == A::Rc4_128 {
+        if !p.algorithm.has_crypt_filters() {
             p.encrypt_metadata = true;
         }
     }
