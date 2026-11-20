@@ -101,7 +101,7 @@ fn reading_colours_preference_round_trips() {
     h.get_by_label("Appearance").click();
     h.run_steps(3);
     pick_reading_colours(&mut h, "White on black");
-    assert_eq!(h.state().reading_colors, ReadingColors::default(), "a row edits the draft, not the app");
+    assert_eq!(h.state().reading_colors, ReadingColors::WHITE_ON_BLACK, "the row applies immediately");
     h.get_by_label("OK").click();
     h.run_steps(3);
     assert_eq!(h.state().reading_colors, ReadingColors::WHITE_ON_BLACK);

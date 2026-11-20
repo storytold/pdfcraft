@@ -465,10 +465,11 @@ impl PreferencesModel for Prefs<'_> {
         }
     }
 
-    fn custom_row(&mut self, ui: &mut Ui, key: &str) {
+    fn custom_row(&mut self, ui: &mut Ui, key: &str) -> bool {
         if key != "fill.date_pattern" {
-            return;
+            return false;
         }
+        let before = self.draft.date_format.clone();
         let mut text = self.draft.date_format.clone();
         TextField::new(tl!("Pattern"), Bind::bound(&mut text)).limit(pdfcraft_engine::dates::MAX_DATE_FORMAT_CHARS).show(ui);
         self.draft.date_format = text;
@@ -484,12 +485,14 @@ impl PreferencesModel for Prefs<'_> {
         if !self.texts.unwritable.is_empty() {
             Notice::new(Tone::Warn, Label::from(self.texts.unwritable.clone())).layout(NoticeLayout::Inline).show(ui);
         }
+        self.draft.date_format != before
     }
 
-    fn custom_page(&mut self, ui: &mut Ui, page: &str) {
+    fn custom_page(&mut self, ui: &mut Ui, page: &str) -> bool {
         if page != "appearance" {
-            return;
+            return false;
         }
+        let before = self.selection.clone();
         // PdfCraft keeps its own appearance and no favourite themes (L-224).
         let suite = self.app.suite_view();
         let system_dark = craft::ui::runtime::env::system_appearance(self.ctx).appearance.mode == Some(craft::theme::Mode::Dark);
@@ -500,6 +503,7 @@ impl PreferencesModel for Prefs<'_> {
             .contrast(false)
             .system_dark(system_dark)
             .show(ui);
+        *self.selection != before
     }
 
     fn differs(&self) -> bool {

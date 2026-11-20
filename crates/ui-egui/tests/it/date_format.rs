@@ -58,7 +58,7 @@ fn fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered() 
     });
     h.run_steps(4);
     assert_eq!(h.state().session.date_format(), "m/d/yyyy");
-    // The window edits a draft: the pattern applies on OK, and the window opens again for the next step.
+    // The window applies valid changes live and opens again for the next step.
     fn reopen(h: &mut Harness<'static, PdfCraftApp>) {
         h.state_mut().open_preferences();
         h.run_steps(4);
@@ -69,16 +69,16 @@ fn fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered() 
         h.run_steps(3);
     }
     preferences_page(&mut h, "Fill & Sign");
-    // A valid pattern shows a preview of today while it's typed and applies on OK.
+    // A valid pattern shows a preview of today and applies while it is typed.
     retype(&mut h, "d \\de mmmm yyyy");
-    assert_eq!(h.state().session.date_format(), "m/d/yyyy", "typing edits the draft, not the session");
+    assert_eq!(h.state().session.date_format(), "d \\de mmmm yyyy", "typing applies the pattern");
     h.get_by_label_contains("Today: ");
     ok(&mut h);
     assert_eq!(h.state().session.date_format(), "d \\de mmmm yyyy");
     reopen(&mut h);
     // An invalid one stays in the box with the reason, and the last valid one is kept.
     retype(&mut h, "dd/mm HH");
-    h.get_by_label_contains("is a time letter (H h M s t)");
+    assert!(h.query_all_by_label_contains("is a time letter (H h M s t)").next().is_some());
     assert_eq!(h.state().session.date_format(), "d \\de mmmm yyyy");
     assert_eq!(pattern(&h).as_deref(), Some("dd/mm HH"));
     // Typed a key at a time, spaces stay where they are typed (the box isn't trimmed under the cursor).
@@ -95,7 +95,7 @@ fn fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered() 
     reopen(&mut h);
     // A letter group that isn't a date code is refused, not silently shortened.
     retype(&mut h, "yyyyyyyy");
-    h.get_by_label_contains("`yyyyyyyy` is not a date code");
+    assert!(h.query_all_by_label_contains("`yyyyyyyy` is not a date code").next().is_some());
     assert_eq!(h.state().session.date_format(), "yyyy mm dd");
     retype(&mut h, "yyyy.mm.dd.");
     ok(&mut h);
