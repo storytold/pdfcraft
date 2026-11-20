@@ -42,19 +42,24 @@ pub(crate) fn placeholder(alt: &str) -> Option<Placeholder> {
     None
 }
 
-/// Ends in `.ext` for an image extension, with something before the dot.
+/// Ends in `.ext` for an image extension, with a name right before the dot. A space there means
+/// prose that mentions an extension (`converting .jpg to .png`), which is a description.
 fn is_file_name(alt: &str) -> bool {
     let Some((stem, ext)) = alt.rsplit_once('.') else { return false };
+    if stem.ends_with(char::is_whitespace) {
+        return false;
+    }
     let stem = stem.trim_end_matches(['/', '\\']);
     !stem.trim().is_empty() && EXTENSIONS.iter().any(|e| ext.eq_ignore_ascii_case(e))
 }
 
-/// A generic word on its own, or followed by separators and a number (`Picture 1`, `image_003`,
-/// `Figure-2`). A word followed by anything else (`Picture of the team`) is a description.
+/// A generic word on its own, or followed by separators (any white space, `_`, `-`, `#`, `.`) and
+/// a number (`Picture 1`, `image_003`, `Figure-2`). A word followed by anything else
+/// (`Picture of the team`) is a description.
 fn is_generic(alt: &str) -> bool {
     let end = alt.find(|c: char| !c.is_ascii_alphabetic()).unwrap_or(alt.len());
     let (word, rest) = alt.split_at(end);
-    let rest = rest.trim_start_matches([' ', '_', '-', '#', '.']);
+    let rest = rest.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '_' | '-' | '#' | '.'));
     GENERIC.iter().any(|g| word.eq_ignore_ascii_case(g)) && rest.chars().all(|c| c.is_ascii_digit())
 }
 
@@ -68,8 +73,8 @@ mod tests {
         for alt in ["IMG_2041.png", "C:\\Users\\a\\scan 3.TIFF "] {
             assert_eq!(placeholder(alt), Some(Placeholder::FileName), "{alt:?}");
         }
-        // A word alone, or numbered after a separator or none, in any case.
-        for alt in ["picture", "Picture 1", "IMAGE_003", "img12"] {
+        // A word alone, or numbered after a separator (a no-break space too) or none, in any case.
+        for alt in ["picture", "Picture 1", "Picture\u{a0}1", "IMAGE_003", "img12"] {
             assert_eq!(placeholder(alt), Some(Placeholder::Generic), "{alt:?}");
         }
         for alt in ["  x  ", "ab"] {
@@ -88,6 +93,7 @@ mod tests {
             "Photographs on a wall",
             "PNG export settings dialog",
             "Version 2.png of the logo",
+            "Flowchart for converting .jpg to .png",
             ".png",
             "地图",
         ] {
