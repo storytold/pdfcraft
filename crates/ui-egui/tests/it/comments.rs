@@ -1813,7 +1813,7 @@ fn delete_one_reply_row() {
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.event(egui::Event::Text("Right reply, reworded".into()));
     h.run_steps(2);
-    h.get_by_label("Save").click();
+    h.query_all_by_label("Post").find(|n| !n.accesskit_node().is_disabled()).expect("the editor's Post").click();
     h.run_steps(3);
     assert_eq!(texts(&h), ["The comment", "Right reply, reworded", "Accepted set by Ben"]);
 
