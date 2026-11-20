@@ -329,7 +329,7 @@ pub(crate) fn overlay_parts(
             if rect.is_finite() && rect.is_positive() {
                 out.parts.push(
                     PagePart::new(Owner::Badge { index }, page, HitShape::Rect(rect), PageLayer::Text)
-                        .passes_drag()
+                        .hover_only()
                         .tip_now(crate::i18n::t(badge.summary).to_string()),
                 );
             }
