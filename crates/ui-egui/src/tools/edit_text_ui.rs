@@ -692,7 +692,33 @@ pub(crate) fn page_parts(
         .filter(|(block, _)| Some(*block) != open)
         .filter_map(|(block, &bounds)| {
             let reach = if adding_text { bounds } else { reach_of(&boxes, block, upright) }.intersect(placed.rect);
-            reach.is_positive().then(|| PagePart::new(Owner::Paragraph { block }, page, HitShape::Rect(reach), PageLayer::Text).cursor(cursor))
+            if !reach.is_positive() {
+                return None;
+            }
+            let shape = if adding_text || !upright {
+                HitShape::Rect(reach)
+            } else {
+                let inner = (bounds.width() / 4.0).min(EDGE_REACH);
+                let left = (bounds.left() + inner).clamp(reach.left(), reach.right());
+                let right = (bounds.right() - inner).clamp(reach.left(), reach.right());
+                let top = bounds.top().clamp(reach.top(), reach.bottom());
+                let bottom = bounds.bottom().clamp(reach.top(), reach.bottom());
+                HitShape::Polygon(vec![
+                    egui::pos2(reach.left(), reach.top()),
+                    egui::pos2(left, reach.top()),
+                    egui::pos2(left, top),
+                    egui::pos2(right, top),
+                    egui::pos2(right, reach.top()),
+                    egui::pos2(reach.right(), reach.top()),
+                    egui::pos2(reach.right(), reach.bottom()),
+                    egui::pos2(right, reach.bottom()),
+                    egui::pos2(right, bottom),
+                    egui::pos2(left, bottom),
+                    egui::pos2(left, reach.bottom()),
+                    egui::pos2(reach.left(), reach.bottom()),
+                ])
+            };
+            Some(PagePart::new(Owner::Paragraph { block }, page, shape, PageLayer::Text).cursor(cursor))
         })
         .collect()
 }
