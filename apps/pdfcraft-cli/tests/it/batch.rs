@@ -171,11 +171,7 @@ fn cli_batch_writes_the_log_file_only_when_asked_review_regression_3() {
         .unwrap();
     drop(child.stdout.take());
     let output = child.wait_with_output().unwrap();
-    assert!(
-        !output.status.success(),
-        "a failed --log write must survive stdout closure: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert!(!output.status.success(), "a failed --log write must survive stdout closure: {}", String::from_utf8_lossy(&output.stderr));
 
     std::fs::remove_dir_all(dir).unwrap();
 }
