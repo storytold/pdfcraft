@@ -46,6 +46,10 @@ pub use resources::attachment_data;
 #[cfg(test)]
 use resources::{MAX_LAYER_LABEL_CHARS, MAX_LAYER_ORDER_ROWS, xfa_config_dynamic_render, xfa_packet_text};
 
+/// The longest `/Lang` [`DocInfo::language`] reports, in bytes as stored: far above any real
+/// language tag, and it keeps a hostile string out of every `doc_info`.
+const MAX_LANGUAGE_BYTES: usize = 256;
+
 #[derive(Clone, Debug, Default)]
 pub struct DocInfo {
     pub title: Option<String>,
@@ -61,6 +65,9 @@ pub struct DocInfo {
     pub file_size: usize,
     pub encrypted: bool,
     pub tagged: bool,
+    /// The catalog's `/Lang` (ISO 32000-2 §14.9.2): a text string, trimmed, of at most
+    /// `MAX_LANGUAGE_BYTES` bytes; `None` when missing, empty, too long or not a string.
+    pub language: Option<String>,
     pub has_javascript: bool,
     /// The form is (also) an XFA form, which isn't read yet (`form.xfa-*` in the parity list).
     pub xfa: Option<Xfa>,

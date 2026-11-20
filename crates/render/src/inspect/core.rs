@@ -212,6 +212,10 @@ impl<'a> Inspector<'a> {
             .map(|o| self.resolve(o))
             .and_then(|o| o.as_bool().ok())
             .unwrap_or(false);
+        info.language = match catalog.get(b"Lang").map(|o| self.resolve(o)) {
+            Ok(o @ Object::String(bytes, _)) if bytes.len() <= super::MAX_LANGUAGE_BYTES => trimmed_text(o).filter(|l| !l.is_empty()),
+            _ => None,
+        };
         match self.page_labels(catalog, &mut info.pages) {
             Ok(notes) => info.warnings.extend(notes.into_iter().map(|note| format!("Page labels: {note}."))),
             Err(reason) => info.warnings.push(format!("Page labels were skipped: {reason}; using physical page numbers.")),
