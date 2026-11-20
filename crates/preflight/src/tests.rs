@@ -2367,3 +2367,20 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+#[test]
+fn xmp_packet_drops_xml_illegal_characters_from_info() {
+    let doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [] /Count 0 >>",
+            "<< /Title <410142> /Author <410142> /Subject <410142> /Keywords <410142> /Producer <410142> /Creator <410142> >>",
+        ],
+        "/Info 3 0 R",
+    );
+    let packet = xmp::packet(&doc, Level::A2b);
+    let bad: Vec<char> =
+        packet.chars().filter(|c| matches!(c, '\u{0}'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}' | '\u{fffe}' | '\u{ffff}')).collect();
+    assert!(bad.is_empty(), "XMP packet holds XML-illegal control chars {bad:?}");
+    assert_eq!(xmp::value(&packet, "dc:title").as_deref(), Some("AB"));
+}
