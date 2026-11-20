@@ -39,7 +39,14 @@ struct Inlined {
 /// Prepare grouped source text atomically, within eight levels and 64 placements per page, and
 /// repair the page fonts' damaged legacy Thai maps (`repair_thai_fonts`), grouped or not.
 /// Shared forms and other pages are untouched. Preparation is a distinct undoable engine edit.
+/// Evaluates optional content against default `/OCProperties /D` visibility.
 pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError> {
+    prepare_with_layers(doc, page, &[])
+}
+
+/// [`prepare`] evaluating optional content against explicit live `layers` visibility (`[]` =
+/// default `/OCProperties /D` visibility).
+pub fn prepare_with_layers(doc: &mut Document, page: usize, layers: &[(i32, i32, bool)]) -> Result<Preparation, EditError> {
     let mut next = doc.clone();
     let mut result = Preparation::default();
     let mut bytes_left = MAX_PREPARED_BYTES;
@@ -78,7 +85,7 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
         let resources = p.dict.get(b"Resources").map(|r| next.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
         let space = ungroup::page_blend_space(&next, &p.dict);
         let images: std::collections::BTreeMap<_, _> =
-            crate::page_images(&next, page)?.into_iter().filter(|i| i.is_form).map(|i| (i.op, i)).collect();
+            crate::page_images_with_layers(&next, page, layers)?.into_iter().filter(|i| i.is_form).map(|i| (i.op, i)).collect();
         let mut replacements = std::collections::BTreeMap::new();
         let mut merged = resources;
         let (mut refused_here, mut expanded_here) = (std::collections::HashSet::new(), std::collections::HashSet::new());
@@ -206,8 +213,17 @@ pub fn prepare(doc: &mut Document, page: usize) -> Result<Preparation, EditError
 /// [`prepare`] would make editable, read as its first pass reads it, without changing anything:
 /// a logo or a refused group is `false`. A group refused only because its resources need renaming
 /// is `true`, as another group's names can still let [`prepare`] open it.
+/// Evaluates optional content against default `/OCProperties /D` visibility.
 pub fn grouped_text_at(doc: &Document, page: usize, image: usize) -> Result<bool, EditError> {
-    let Some(img) = crate::page_images(doc, page)?.into_iter().nth(image).filter(|i| i.is_form) else { return Ok(false) };
+    grouped_text_at_with_layers(doc, page, image, &[])
+}
+
+/// [`grouped_text_at`] using `image` as an index into [`crate::page_images_with_layers`] for
+/// explicit live `layers` visibility (`[]` = default `/OCProperties /D` visibility).
+pub fn grouped_text_at_with_layers(doc: &Document, page: usize, image: usize, layers: &[(i32, i32, bool)]) -> Result<bool, EditError> {
+    let Some(img) = crate::page_images_with_layers(doc, page, layers)?.into_iter().nth(image).filter(|i| i.is_form) else {
+        return Ok(false);
+    };
     let p = page_dict(doc, page)?;
     let parsed = joined(&strict_streams(doc, &p.dict)?).parse();
     if parsed.skipped > 0 {

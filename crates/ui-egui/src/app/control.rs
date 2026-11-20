@@ -308,7 +308,7 @@ impl PdfCraftApp {
                     .and_then(|d| d.info.layers.iter().position(|l| l.name == name))
                     .ok_or_else(|| format!("no layer named {name}"))?;
                 if self.session.set_layer_visible(id, idx, state != "off") {
-                    self.views[i].invalidate_content();
+                    self.views[i].invalidate_layers();
                 }
             }
             ("find", Some(v)) => {

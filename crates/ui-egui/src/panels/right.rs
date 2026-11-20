@@ -475,10 +475,10 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if let Some((layer, visible)) = toggle_layer
         && app.session.set_layer_visible(id, layer, visible)
     {
-        app.views[index].invalidate_content();
+        app.views[index].invalidate_layers();
     }
     if reset_layers && app.session.reset_layers(id) {
-        app.views[index].invalidate_content();
+        app.views[index].invalidate_layers();
     }
     match nav {
         Some(Nav::Page(p)) => app.views[index].go_to_page(p),

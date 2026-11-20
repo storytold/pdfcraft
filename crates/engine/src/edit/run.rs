@@ -948,7 +948,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;
         }
         Edit::PrepareText { page } => {
-            let result = pdfcraft_edit::text::forms::prepare(doc, *page)?;
+            let result = pdfcraft_edit::text::forms::prepare_with_layers(doc, *page, &cx.layers)?;
             if result.expanded == 0 && result.repaired_fonts == 0 {
                 return Err(EditError::Invalid(
                     result.refused.first().cloned().unwrap_or_else(|| "this page has no supported grouped text to prepare".into()),

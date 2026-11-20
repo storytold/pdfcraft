@@ -352,7 +352,8 @@ impl Document {
     /// opened or a page that can't be read.
     pub fn grouped_text_at(&self, page: usize, index: usize) -> bool {
         let Some(editor) = self.editor.as_ref() else { return false };
-        crate::guard(|| pdfcraft_edit::text::forms::grouped_text_at(&editor.cos, page, index)).is_ok_and(|r| r.is_ok_and(|yes| yes))
+        crate::guard(|| pdfcraft_edit::text::forms::grouped_text_at_with_layers(&editor.cos, page, index, &self.config.layers))
+            .is_ok_and(|r| r.is_ok_and(|yes| yes))
     }
 
     /// Edit a PDF ▸ Edit text: the paragraphs on `page` (0-based).

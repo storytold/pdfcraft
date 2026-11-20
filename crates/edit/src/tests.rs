@@ -14778,6 +14778,54 @@ fn grouped_text_at_says_which_artwork_preparation_would_open() {
     assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before);
 }
 
+/// Live layer visibility controls which grouped artwork sits at `image` and which Forms `prepare_with_layers` opens:
+/// turning a preceding layer ON/OFF shifts indices in both directions, and turning a hidden text Form ON lets it prepare.
+#[test]
+fn grouped_text_at_and_prepare_with_layers_follow_live_layer_visibility() {
+    let build_layered = |initially_on: bool, marked: bool, lead_body: &str, body_body: &str| {
+        let state = if initially_on { "ON" } else { "OFF" };
+        let lead_draw = if marked { "/OC /L BDC /Lead Do EMC" } else { "/Lead Do" };
+        let lead_oc = if marked { "" } else { "/OC 6 0 R" };
+        let res = "<< /Font << /F1 5 0 R >> /XObject << /Im 7 0 R >> >>";
+        let page_res = "<< /Font << /F1 5 0 R >> /Properties << /L 6 0 R >> /XObject << /Im 7 0 R /Lead 8 0 R /Body 9 0 R >> >>";
+        build(&[
+            &format!("<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [6 0 R] /D << /{state} [6 0 R] /Order [6 0 R] >> >> >>"),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            &format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources {page_res} /Contents 4 0 R >>"),
+            &stream("", &format!("{lead_draw} /Body Do")),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            "<< /Type /OCG /Name (Layer) >>",
+            &stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", "A"),
+            &stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources {res} {lead_oc}"), lead_body),
+            &stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources {res}"), body_body),
+        ])
+    };
+    let text_form = "BT /F1 14 Tf 40 500 Td (Live grouped) Tj ET";
+    let logo_form = "q 10 0 0 10 0 0 cm /Im Do Q";
+
+    for marked in [false, true] {
+        // 1. Preceding initially-OFF logo turned ON shifts text Form /Body from live index 0 to 1.
+        let doc_shift_up = build_layered(false, marked, logo_form, text_form);
+        assert!(text::forms::grouped_text_at(&doc_shift_up, 0, 0).unwrap());
+        assert!(!text::forms::grouped_text_at(&doc_shift_up, 0, 1).unwrap());
+        assert!(!text::forms::grouped_text_at_with_layers(&doc_shift_up, 0, 0, &[(6, 0, true)]).unwrap());
+        assert!(text::forms::grouped_text_at_with_layers(&doc_shift_up, 0, 1, &[(6, 0, true)]).unwrap());
+
+        // 2. Preceding initially-ON text Form turned OFF shifts logo /Body to live index 0 (no false positive or hidden expansion).
+        let mut doc_shift_down = build_layered(true, marked, text_form, logo_form);
+        assert!(text::forms::grouped_text_at(&doc_shift_down, 0, 0).unwrap());
+        assert!(!text::forms::grouped_text_at_with_layers(&doc_shift_down, 0, 0, &[(6, 0, false)]).unwrap());
+        assert_eq!(text::forms::prepare_with_layers(&mut doc_shift_down, 0, &[(6, 0, false)]).unwrap().expanded, 0);
+
+        // 3. Initially-OFF text Form itself turned ON prepares via live layers.
+        let mut doc_hidden_text = build_layered(false, marked, text_form, logo_form);
+        assert!(!text::forms::grouped_text_at(&doc_hidden_text, 0, 0).unwrap());
+        assert_eq!(text::forms::prepare(&mut doc_hidden_text, 0).unwrap().expanded, 0);
+        assert!(text::forms::grouped_text_at_with_layers(&doc_hidden_text, 0, 0, &[(6, 0, true)]).unwrap());
+        assert_eq!(text::forms::prepare_with_layers(&mut doc_hidden_text, 0, &[(6, 0, true)]).unwrap().expanded, 1);
+    }
+}
+
 /// Artwork and groups refused for what they are (knockout groups, content that restores more
 /// graphics states than it saves) are read once, not again on every pass: 10 logo forms and 30 such groups beside a text
 /// group are 41 reads, within the 64-placement limit, where reading either again on the second
