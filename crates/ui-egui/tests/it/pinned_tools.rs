@@ -94,13 +94,13 @@ fn clicking_pinned_tool_card_selects_it() {
     h.get_by_label("Unpin from Home").click();
     h.run_steps(3);
     assert!(h.state().pinned_tools.is_empty());
-    assert!(h.query_by_label("Redact a PDF").is_none());
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::ListBox, "Pinned Tools").is_none());
     h.get_by_label_contains("Pinned Tools");
 
     // Pinned again, a click on the tile selects the tool.
     h.state_mut().pin_tool("redact");
     h.run_steps(3);
-    h.get_by_label("Redact a PDF").click();
+    h.get_by_role_and_label(egui::accesskit::Role::ListBox, "Pinned Tools").get_by_label("Redact a PDF").click();
     h.run_steps(3);
 
     // Redact tool panel is now active

@@ -1278,17 +1278,17 @@ mod tests {
     /// Two paragraphs, one above the other, close enough that the reach of their edges overlaps.
     fn two_paragraphs() -> Vec<u8> {
         let streams = [
-            "BT /F1 12 Tf 20 160 Td (Alpha beta gamma delta epsilon zeta eta theta) Tj ET",
-            "BT /F2 9 Tf 20 143 Td (Iota kappa lambda mu nu xi omicron pi rho) Tj ET",
+            "/P BMC BT /F1 12 Tf 20 160 Td (Alpha beta gamma delta epsilon zeta eta theta) Tj ET EMC",
+            "/P BMC BT /F2 9 Tf 20 143 Td (Iota kappa lambda mu nu xi omicron pi rho) Tj ET EMC",
         ];
         let body = streams.join("\n");
         let objs = [
             "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
-            "<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_string(),
+            "<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 400 300] >>".to_string(),
             "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
             "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R /F2 6 0 R >> >> >>".to_string(),
             format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
-            // A face of its own, so the lower paragraph is not read as the upper one's next line.
+            // A second face gives each paragraph its own appearance.
             "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>".to_string(),
         ];
         let mut out = b"%PDF-1.7\n".to_vec();
@@ -1333,7 +1333,7 @@ mod tests {
         assert_eq!(before.len(), 2, "the fixture has two paragraphs: {before:?}");
         let (upper_rows, lower_rows) = (rows_of(&h, "Alpha").unwrap(), rows_of(&h, "Iota").unwrap());
         let r = h.state().views[0].page_screen_rect(0).expect("on screen");
-        let k = r.width() / 200.0;
+        let k = r.width() / 400.0;
         let screen = |x: f64, y: f64| pos2(r.left() + x as f32 * k, r.top() + (300.0 - y as f32) * k);
         let drag = |h: &mut egui_kittest::Harness<'static, crate::PdfCraftApp>, from: Pos2, to: Pos2| {
             h.hover_at(from);

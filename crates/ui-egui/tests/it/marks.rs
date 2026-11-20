@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 const BOX_LABELS: [&str; 6] =
     ["Left Header Text", "Center Header Text", "Right Header Text", "Left Footer Text", "Center Footer Text", "Right Footer Text"];
-const WATERMARK_TEXT: &str = "Watermark text";
+const WATERMARK_TEXT: &str = "Text";
 const REPLACE: &str = "Page 1 paints its own white backdrop, which would hide the background. Replace it";
 
 const FIXTURE: &[u8] = b"%PDF-1.7
@@ -82,22 +82,22 @@ impl Rig {
 }
 
 /// The app on a host built over `ManualJobs`.
-fn app_on(jobs: Arc<ManualJobs>) -> PdfCraftApp {
-    support::held_app(jobs)
-}
-
 fn harness() -> Rig {
     harness_with(FIXTURE.to_vec())
 }
 
 fn harness_with(pdf: Vec<u8>) -> Rig {
+    harness_with_files(pdf, Arc::new(craft::host::ScriptedFiles::new()))
+}
+
+fn harness_with_files(pdf: Vec<u8>, files: Arc<craft::host::ScriptedFiles>) -> Rig {
     let jobs = Arc::new(ManualJobs::new());
     let uploads = Uploads::default();
     let on = jobs.clone();
     let h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).renderer(uploads.clone()).build_eframe(move |cc| {
         crate::support::install_runtime(&cc.egui_ctx);
         {
-            let mut app = app_on(on.clone());
+            let mut app = support::test_app(support::host_with(on.clone(), files.clone()));
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf.clone()).unwrap();
             app
@@ -146,7 +146,9 @@ fn set_range(h: &mut Rig, kind: MarkKind, range: PageRange) {
 }
 
 fn type_into(h: &mut Rig, label: &str, text: &str) {
-    h.get_by_label(label).type_text(text);
+    h.get_by_role_and_label(egui::accesskit::Role::MultilineTextInput, label).focus();
+    h.steps(1);
+    h.get_by_role_and_label(egui::accesskit::Role::MultilineTextInput, label).type_text(text);
     h.steps(2);
 }
 
@@ -189,8 +191,9 @@ fn header_and_footer_dialog_draws_in_the_chosen_face() {
     let mut h = harness();
     assert!(h.execute("edit.header_footer"));
     h.steps(3);
-    h.get_by_label("Font:");
-    h.get_by_value("Helvetica").click();
+    let font = h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Font");
+    assert_eq!(font.value().as_deref(), Some("Helvetica"));
+    font.click();
     h.steps(2);
     h.get_by_label("Times").click();
     h.steps(2);
@@ -230,43 +233,34 @@ fn watermark_and_background_dialogs() {
     assert!(ok_disabled(&h), "OK waits for text");
     h.get_by_label("Horizontal offset from centre");
     type_into(&mut h, WATERMARK_TEXT, "DRAFT");
-    h.get_by_label("OK").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Add Watermark").get_by_label("OK").click();
     h.steps(3);
     h.execute("edit.background");
     h.steps(2);
-    h.get_by_label("OK").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Add Background").get_by_label("OK").click();
     h.steps(3);
     assert_eq!(marks(&h).len(), 2);
 }
 
 #[test]
 fn backgrounds_and_watermarks_from_a_file() {
-    let mut h = harness();
+    let files = Arc::new(craft::host::ScriptedFiles::answering([craft::host::Picked::Contents(vec![("letterhead.pdf".into(), FIXTURE.to_vec())])]));
+    let mut h = harness_with_files(FIXTURE.to_vec(), files);
     h.execute("edit.background");
     h.steps(2);
-    support::outside_menus(&h, "File").click();
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "File").click();
     h.steps(2);
-    h.get_by_label("No file chosen");
+    assert!(h.get_by_role_and_label(egui::accesskit::Role::TextInput, "File").value().unwrap_or_default().is_empty());
     assert!(ok_disabled(&h), "OK waits for a file");
-    // (Browse… opens the system picker; the test answers it with a file.)
-    let dir = std::env::temp_dir().join(format!("pdfcraft-marks-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("letterhead.pdf");
-    std::fs::write(&file, FIXTURE).unwrap();
-    h.state_mut()
-        .dialogs
-        .get_mut_by_id::<HostedParamDialog>(dialog_of(MarkKind::Background))
-        .expect("the dialog is open")
-        .answer_path("file.path", file);
+    h.get_by_label("Browse…").click();
     h.steps(3);
-    h.get_by_label("Page number");
-    h.get_by_label("Scale relative to target page");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Add Background").get_by_role_and_label(egui::accesskit::Role::SpinButton, "Page number");
+    h.get_by_role_and_label(egui::accesskit::Role::Slider, "Scale relative to target page");
     h.get_by_label("OK").click();
     h.steps(3);
     assert_eq!(marks(&h), vec![MarkKind::Background]);
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Add background"));
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Three pages: a white backdrop of its own (as browsers write), a page-sized picture (a scan)
