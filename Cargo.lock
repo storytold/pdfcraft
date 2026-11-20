@@ -1815,16 +1815,6 @@ dependencies = [
 [[package]]
 name = "craft-xml"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=eacc8fcd1094785071d1482a1bdd552e4bf97536#eacc8fcd1094785071d1482a1bdd552e4bf97536"
-dependencies = [
- "quick-xml 0.41.0",
- "serde",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "craft-xml"
-version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=fbb3f47f7ae712192586984af11ca8f6c0f64d33#fbb3f47f7ae712192586984af11ca8f6c0f64d33"
 dependencies = [
  "quick-xml 0.41.0",
@@ -5101,7 +5091,7 @@ dependencies = [
  "craft-pptx",
  "craft-rtf",
  "craft-wordmodel 0.1.0 (git+https://github.com/storytold/craft-libs?rev=b8eaa8e2f3561f9fa27fcf3b7f67ce915e93caa3)",
- "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=eacc8fcd1094785071d1482a1bdd552e4bf97536)",
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=9dc2f7608a7342fd29f6e73811aa156050823344)",
  "craft-zip 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "flate2",
  "image",
@@ -5254,7 +5244,7 @@ name = "pdfcraft-preflight"
 version = "0.21.1"
 dependencies = [
  "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=8503f24cb845268f47f97e829491114fe9ad1bfa)",
- "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=eacc8fcd1094785071d1482a1bdd552e4bf97536)",
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=9dc2f7608a7342fd29f6e73811aa156050823344)",
  "flate2",
  "pdfcraft-content",
  "pdfcraft-cos",
@@ -5282,7 +5272,7 @@ name = "pdfcraft-redact"
 version = "0.21.1"
 dependencies = [
  "aho-corasick",
- "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=eacc8fcd1094785071d1482a1bdd552e4bf97536)",
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=9dc2f7608a7342fd29f6e73811aa156050823344)",
  "pdfcraft-annot",
  "pdfcraft-content",
  "pdfcraft-cos",
@@ -5451,7 +5441,7 @@ dependencies = [
  "base64 0.23.1",
  "craft-image-codecs",
  "craft-xfa",
- "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=eacc8fcd1094785071d1482a1bdd552e4bf97536)",
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=9dc2f7608a7342fd29f6e73811aa156050823344)",
  "pdfcraft-cos",
  "pdfcraft-fonts",
  "sha2 0.11.1",
@@ -5465,7 +5455,7 @@ dependencies = [
  "base64 0.23.1",
  "craft-csv",
  "craft-xfdf",
- "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=eacc8fcd1094785071d1482a1bdd552e4bf97536)",
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=9dc2f7608a7342fd29f6e73811aa156050823344)",
  "pdfcraft-annot",
  "pdfcraft-cos",
  "pdfcraft-forms",

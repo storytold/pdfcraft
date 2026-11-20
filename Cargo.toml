@@ -42,7 +42,7 @@ craft-rtf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0"
 # Shared Base64 encoder; use the existing RTF revision to reuse its codepage dependency.
 craft-mime = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "b8eaa8e2f3561f9fa27fcf3b7f67ce915e93caa3" }
 craft-csv = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
-craft-xml = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "eacc8fcd1094785071d1482a1bdd552e4bf97536" }
+craft-xml = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "9dc2f7608a7342fd29f6e73811aa156050823344" }
 craft-image-codecs = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 craft-tiff = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 craft-jpeg = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
