@@ -2367,3 +2367,129 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// A file of a catalog, a page tree and a page, with object `n` written as `layout[n - 1]`: the
+/// bytes before it and its own text, from its object number to just past `endobj`. The
+/// cross-reference table points just past the end-of-line markers that start the bytes before it:
+/// at the object number, or at the white space that follows them.
+fn laid_out(layout: &[(&str, &str)]) -> Document {
+    let mut out = b"%PDF-1.7\n%\xE2\xE3\xCF\xD3".to_vec();
+    let mut offsets = Vec::new();
+    for (before, text) in layout {
+        offsets.push(out.len() + before.bytes().take_while(|b| matches!(b, b'\r' | b'\n')).count());
+        out.extend_from_slice(before.as_bytes());
+        out.extend_from_slice(text.as_bytes());
+    }
+    let xref = out.len() + 1;
+    out.extend_from_slice(format!("\nxref\n0 {}\n0000000000 65535 f \n", layout.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", layout.len() + 1).as_bytes());
+    Document::open(std::sync::Arc::new(out)).unwrap()
+}
+
+const CATALOG: &str = "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj";
+const PAGES: &str = "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj";
+const PAGE: &str = "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>\nendobj";
+
+fn syntax(layout: &[(&str, &str)]) -> Vec<String> {
+    verify(&laid_out(layout), Level::A2b).into_iter().filter(|i| i.clause == "6.1.9").map(|i| i.message).collect()
+}
+
+#[test]
+fn indirect_objects_are_written_as_pdfa_asks_clause_6_1_9() {
+    let fine = [("\n", CATALOG), ("\n", PAGES), ("\r\n", PAGE)];
+    assert_eq!(syntax(&fine), Vec::<String>::new());
+    let with_page = |before: &str, page: &str| syntax(&[("\n", CATALOG), ("\n", PAGES), (before, page)]);
+
+    // The numbers and `obj`: one white-space character each, of any kind.
+    assert_eq!(
+        with_page("\n", "3  0 obj\n<< /Type /Page /Parent 2 0 R >>\nendobj"),
+        ["Object 3 doesn't separate its object number, generation number and obj keyword by single white-space characters"]
+    );
+    assert_eq!(with_page("\n", "3 0\n\nobj\n<< /Type /Page /Parent 2 0 R >>\nendobj").len(), 1);
+    assert_eq!(with_page("\n", "3\t0 obj\n<< /Type /Page /Parent 2 0 R >>\nendobj"), Vec::<String>::new());
+    // An end-of-line marker before the object number and after `obj`, also when the offset points
+    // at white space before the number.
+    assert_eq!(
+        with_page(
+            "
+    ", PAGE
+        ),
+        ["The object number of object 3 isn't preceded by an end-of-line marker"]
+    );
+    // A space there also leaves the `endobj` before it without one after.
+    assert_eq!(
+        with_page(" ", PAGE),
+        [
+            "The object number of object 3 isn't preceded by an end-of-line marker",
+            "The endobj keyword of object 2 isn't both preceded and followed by an end-of-line marker"
+        ]
+    );
+    assert_eq!(
+        with_page("\n", "3 0 obj<< /Type /Page /Parent 2 0 R >>\nendobj"),
+        ["The obj keyword of object 3 isn't followed by an end-of-line marker"]
+    );
+    assert_eq!(with_page("\n", "3 0 obj \n<< /Type /Page /Parent 2 0 R >>\nendobj").len(), 1);
+    // And on both sides of `endobj`.
+    assert_eq!(
+        with_page("\n", "3 0 obj\n<< /Type /Page /Parent 2 0 R >>endobj"),
+        ["The endobj keyword of object 3 isn't both preceded and followed by an end-of-line marker"]
+    );
+    assert_eq!(syntax(&[("\n", CATALOG), ("\n", "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj "), ("\n", PAGE)]).len(), 1);
+    assert_eq!(syntax(&[("\n", "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\n endobj"), ("\n", PAGES), ("\n", PAGE)]).len(), 1);
+
+    // A stream's data may hold the bytes `endobj` and `obj<<`: only the object's own count.
+    let stream = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 22 >>\nstream\n4 0 obj<< >>endobj x\n\nendstream\nendobj";
+    assert_eq!(with_page("\n", stream), Vec::<String>::new());
+    let stream_bad = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 22 >>\nstream\n4 0 obj<< >>endobj x\n\nendstream endobj";
+    assert_eq!(with_page("\n", stream_bad).len(), 1);
+    // A literal string in the stream dictionary may hold `stream` and an end-of-line marker: the
+    // stream data starts after the real keyword.
+    let stream_note = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Note (stream\n) /Length 18 >>\nstream\nendstream endobj x\nendstream\nendobj";
+    assert_eq!(with_page("\n", stream_note), Vec::<String>::new());
+    // So may a comment after `endstream`.
+    let stream_comment = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 2 >>\nstream\nxx\nendstream % endobj\nendobj";
+    assert_eq!(with_page("\n", stream_comment), Vec::<String>::new());
+    // Also when the data itself ends in the bytes `endstream`: the keyword is the one after it.
+    let stream_suffix = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 9 >>\nstream\nendstream\nendstream % endobj\nendobj";
+    assert_eq!(with_page("\n", stream_suffix), Vec::<String>::new());
+    assert_eq!(with_page("\n", "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 2 >>\nstream\nxx\nendstream % c\n endobj").len(), 1);
+    // An object with an unsaved edit is written again on saving, so its old bytes aren't read,
+    // nor taken to hold the data of its replacement, which would find `endstream` in the old data.
+    let old = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 18 >>\nstream\nendstream endobj x\nendstream\nendobj";
+    let mut file = laid_out(&[("\n", CATALOG), ("\n", PAGES), ("\n", old)]);
+    assert!(verify(&file, Level::A2b).iter().all(|i| i.clause != "6.1.9"));
+    let mut emptied = Dict::new();
+    emptied.set(b"Type".to_vec(), Object::name("Page"));
+    emptied.set(b"Parent".to_vec(), Object::Ref(ObjRef::new(2, 0)));
+    file.set(ObjRef::new(3, 0), Object::Stream(pdfcraft_cos::Stream::from_raw(emptied, Vec::new())));
+    assert!(verify(&file, Level::A2b).iter().all(|i| i.clause != "6.1.9"));
+
+    // `endobj` inside a literal string, a name or a comment isn't the object's `endobj`.
+    assert_eq!(with_page("\n", "3 0 obj\n<< /Type /Page /Parent 2 0 R /T (endobj) >>\nendobj"), Vec::<String>::new());
+    assert_eq!(with_page("\n", "3 0 obj\n<< /Type /Page /Parent 2 0 R /endobj 1 >>\nendobj"), Vec::<String>::new());
+    assert_eq!(with_page("\n", "3 0 obj\n<< /Type /Page /Parent 2 0 R >> %endobj\nendobj"), Vec::<String>::new());
+
+    // A comment in the header is a white-space character of its own (ISO 32000-2 7.2.4), so the
+    // gap holding it isn't a single one; the header's other findings are still made.
+    assert_eq!(
+        with_page("\n", "3 0 %c\nobj<< /Type /Page /Parent 2 0 R >>\nendobj"),
+        [
+            "Object 3 doesn't separate its object number, generation number and obj keyword by single white-space characters",
+            "The obj keyword of object 3 isn't followed by an end-of-line marker"
+        ]
+    );
+
+    // Each problem is named once, with the first object that has it.
+    let twice = syntax(&[
+        ("\n", "1 0 obj<< /Type /Catalog /Pages 2 0 R >>\nendobj"),
+        ("\n", "2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj"),
+        ("\n", PAGE),
+    ]);
+    assert_eq!(twice, ["The obj keyword of object 1 isn't followed by an end-of-line marker"]);
+    // None of them is fixable.
+    let issues = verify(&laid_out(&[(" ", CATALOG), ("\n", PAGES), ("\n", PAGE)]), Level::A2b);
+    assert!(issues.iter().filter(|i| i.clause == "6.1.9").all(|i| !i.fixable));
+}
