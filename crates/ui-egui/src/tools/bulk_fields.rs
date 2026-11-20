@@ -27,6 +27,11 @@ impl<T: Clone + PartialEq> Change<T> {
     }
 }
 
+/// Each widget's mark (#6682). A field without widgets, or one that is not a button, has none.
+fn button_styles(doc: &pdfcraft_engine::Document, name: &str) -> Vec<CheckStyle> {
+    doc.field_check_styles(name).unwrap_or_default()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
     General,
@@ -145,7 +150,14 @@ impl Draft {
             align: Change::from_values(fields.iter().map(|f| f.quadding))?,
             multiline: Change::from_values(fields.iter().map(|f| f.has(field_flags::MULTILINE)))?,
             max_length: Change::from_values(fields.iter().map(|f| f.max_len.unwrap_or(0)))?,
-            check_style: Change::from_values(fields.iter().map(|f| doc.field_check_style(&f.name).unwrap_or(CheckStyle::Check)))?,
+            // Every widget's mark (#6682): a field's buttons can differ.
+            // A check when no selected widget has a mark: the fields aren't buttons (the style
+            // is hidden), or have no widgets (there is nothing to change).
+            check_style: Change::from_values(fields.iter().flat_map(|f| button_styles(doc, &f.name))).unwrap_or(Change {
+                value: CheckStyle::Check,
+                mixed: false,
+                apply: false,
+            }),
             flags,
             error: None,
             text_fields,
@@ -186,7 +198,8 @@ impl Draft {
                 multiline: self.text_fields.then(|| self.multiline.changed(&f.has(field_flags::MULTILINE))).flatten(),
                 max_len: self.text_fields.then(|| self.max_length.changed(&f.max_len.unwrap_or(0))).flatten().map(|v| (v > 0).then_some(v)),
                 quadding: (self.text_fields || self.choice_fields).then(|| self.align.changed(&f.quadding)).flatten(),
-                check_style: self.check_fields.then(|| self.check_style.changed(&doc.field_check_style(name).unwrap_or(CheckStyle::Check))).flatten(),
+                check_style: (self.check_fields && self.check_style.apply && button_styles(doc, name).iter().any(|s| *s != self.check_style.value))
+                    .then_some(self.check_style.value),
                 flags: self
                     .flags
                     .iter()

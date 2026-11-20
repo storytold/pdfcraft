@@ -235,16 +235,30 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                     if let Some(style) = d.check_style.as_mut() {
                         ui.horizontal(|ui| {
                             let l = ui.label(tl!(if d.kind == FormFieldKind::CheckBox { "Check Box Style:" } else { "Button Style:" }));
+                            let mixed = &mut d.check_mixed;
                             craft_ui::ComboBox::from_id_salt("check-style")
-                                .selected_text(tl!(style.label()))
+                                .selected_text(if *mixed { tl!("Mixed") } else { tl!(style.label()) })
                                 .show_ui(ui, |ui| {
                                     for s in pdfcraft_engine::CheckStyle::ALL {
-                                        ui.selectable_value(style, s, tl!(s.label()));
+                                        // Choosing a style gives it to every button.
+                                        if ui.selectable_label(!*mixed && *style == s, tl!(s.label())).clicked() {
+                                            (*style, *mixed) = (s, false);
+                                        }
                                     }
                                 })
                                 .response
                                 .labelled_by(l.id);
                         });
+                        // The dialog edits the whole field: say so before a style replaces each
+                        // widget's own mark (#6682).
+                        if d.check_mixed {
+                            let note = if d.kind == FormFieldKind::CheckBox {
+                                "This check box's widgets have different styles. Choosing one gives it to every widget."
+                            } else {
+                                "The buttons have different styles. Choosing one gives it to every button."
+                            };
+                            ui.label(egui::RichText::new(tl!(note)).small().color(t.text_muted));
+                        }
                     }
                     if d.kind == FormFieldKind::Radio {
                         flag_box(ui, &mut d.flags, ff::RADIOS_IN_UNISON, false, tl!("Buttons with the same name and value are selected in unison"));

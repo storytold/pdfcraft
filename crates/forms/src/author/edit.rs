@@ -163,6 +163,20 @@ fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, prop
     if let Some(rotation) = props.rotation {
         check_rotation(&f, name, rotation)?;
     }
+    // So is a check style and its widget (#6682): a refused one must not leave a rename or lock
+    // behind.
+    if props.check_style.is_some() && !matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) {
+        return invalid("only check boxes and radio buttons have a check style");
+    }
+    if props.check_style.is_none() && props.check_style_widget.is_some() {
+        return invalid("check_style_widget changes one widget's check style; give check_style too");
+    }
+    if props.check_style.is_some()
+        && let Some(wi) = props.check_style_widget
+        && wi >= f.widgets.len()
+    {
+        return invalid(format!("{name} has no widget {}; it has {}", wi.saturating_add(1), f.widgets.len()));
+    }
     // A locked field only takes unlocking (Acrobat greys its properties out).
     if f.locked() && props.locked != Some(false) && *props != (FieldProps { locked: props.locked, ..FieldProps::default() }) {
         return invalid(format!("{name} is locked: unlock it first"));
@@ -235,9 +249,6 @@ fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, prop
     }
     if props.options.as_ref().is_some_and(Vec::is_empty) && matches!(f.kind, FieldKind::Combo | FieldKind::List) {
         return invalid("a list needs at least one option");
-    }
-    if props.check_style.is_some() && !matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) {
-        return invalid("only check boxes and radio buttons have a check style");
     }
     let mut list_picked = None;
     let (sort_items, old_selection) = items_to_sort(doc, &f, props);
@@ -486,7 +497,9 @@ fn apply_widget_style_props(doc: &mut Document, f: &Field, name: &str, props: &F
         }
     }
     if let Some(style) = props.check_style {
-        for w in &f.widgets {
+        // One widget's mark, or every widget's: each keeps its own unless named.
+        let widgets = f.widgets.iter().enumerate().filter(|(i, _)| props.check_style_widget.is_none_or(|wi| wi == *i)).map(|(_, w)| w);
+        for w in widgets {
             // Resolved first: an indirect /MK keeps its colours.
             let mut mk = doc.get(w.obj).as_dict().and_then(|d| d.get(b"MK").map(|m| doc.resolve(m).as_dict().cloned())).flatten().unwrap_or_default();
             mk.set(b"CA".to_vec(), PdfString::text(style.code()));
@@ -602,9 +615,13 @@ fn apply_late_widget_props(doc: &mut Document, f: &Field, props: &FieldProps, ne
             doc.update_dict(w.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
         }
     }
-    // A label-only edit must not replace another widget's custom appearances.
+    // A label-only edit, or one widget's mark alone (#6682), must not replace another widget's
+    // custom appearances.
     let only = props.caption.as_ref().filter(|_| *props == (FieldProps { caption: props.caption.clone(), ..Default::default() })).map(|(wi, _)| *wi);
-    Ok(only)
+    let mark_only = props
+        .check_style_widget
+        .filter(|_| *props == (FieldProps { check_style: props.check_style, check_style_widget: props.check_style_widget, ..Default::default() }));
+    Ok(only.or(mark_only))
 }
 
 /// Name field `old` `new` in each field's Calculate script that reads it
