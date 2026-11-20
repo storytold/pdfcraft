@@ -4,6 +4,7 @@
 //! producer's winding is not trusted to face outward.
 
 use crate::WorldMesh;
+use crate::lighting::{LightingScheme, SchemeShader};
 use crate::raster::{Corner, Target, View, ViewCorner, at};
 use crate::vec3::{cross, dot, length, normalize, scale, span, sub, unit_cross};
 use craft_prc::TriangleMesh;
@@ -196,6 +197,9 @@ pub enum Lighting {
     Headlight,
     /// No shading: every surface in its own colour.
     Unlit,
+    /// A 3D view's lighting scheme: its infinite lights, fixed to the camera, plus any ambient term.
+    /// A channel past full colour saturates.
+    Scheme(LightingScheme),
 }
 
 /// What [`render`] draws.
@@ -287,7 +291,12 @@ pub fn render(meshes: &[WorldMesh], camera: &Camera, options: &RenderOptions) ->
     let pixels = usize::try_from(pixels).map_err(|_| size)?;
     let view = View::new(camera, f64::from(width) / f64::from(height))?;
     let perspective = matches!(view, View::Perspective { .. });
-    let scene = Scene { eye: camera.eye, basis: camera.basis()?, view, lighting: options.lighting };
+    let basis = camera.basis()?;
+    let scheme = match options.lighting {
+        Lighting::Scheme(s) => Some(SchemeShader::new(s, &basis)),
+        Lighting::Headlight | Lighting::Unlit => None,
+    };
+    let scene = Scene { eye: camera.eye, basis, view, lighting: options.lighting, scheme };
     let mut rgba = options.background.repeat(pixels);
     let mut depth = vec![f64::NEG_INFINITY; pixels];
     let mut target = Target { perspective, width, height, rgba: &mut rgba, depth: &mut depth, work: MAX_RENDER_WORK };
@@ -312,6 +321,8 @@ struct Scene {
     basis: [[f64; 3]; 3],
     view: View,
     lighting: Lighting,
+    /// [`Lighting::Scheme`]'s lights in world space.
+    scheme: Option<SchemeShader>,
 }
 
 impl Scene {
@@ -324,7 +335,10 @@ impl Scene {
             View::Perspective { .. } => normalize(sub(self.eye, p)),
             View::Orthographic { .. } => Some(scale(at3(&self.basis, 2), -1.0)),
         };
-        [0.3 + 0.7 * towards.map_or(1.0, |v| dot(n, v).abs().min(1.0)); 3]
+        match &self.scheme {
+            Some(scheme) => scheme.shade(n, towards),
+            None => [0.3 + 0.7 * towards.map_or(1.0, |v| dot(n, v).abs().min(1.0)); 3],
+        }
     }
 
     /// Draw triangle `t` of `mesh` into `target` in straight-RGBA `colour`; refused once the

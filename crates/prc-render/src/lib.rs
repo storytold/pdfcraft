@@ -2,7 +2,7 @@
 //!
 //! Layer L3: depends only on `craft-prc`. [`assemble`] turns a parsed [`craft_prc::PrcFile`]
 //! into world-space meshes; [`render`] draws them from a [`Camera`] with one depth-tested sample per
-//! pixel centre and a light at the camera; [`nav`] turns a viewer's input into that camera.
+//! pixel centre, lit by a light at the camera or a 3D view's lighting scheme; [`nav`] turns a viewer's input into that camera.
 //! Single-threaded and GUI-free, so it runs unchanged on wasm32.
 //! The image size is capped by [`MAX_RENDER_PIXELS`], the drawing work by [`MAX_RENDER_WORK`] and the
 //! assembled model by [`MAX_ASSEMBLED_TRIANGLES`] and [`MAX_ASSEMBLED_VERTICES`]; bad input is an
@@ -11,10 +11,12 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod assemble;
+mod lighting;
 pub mod nav;
 mod raster;
 mod render;
 mod vec3;
 
 pub use assemble::{MAX_ASSEMBLED_TRIANGLES, MAX_ASSEMBLED_VERTICES, WorldMesh, assemble, place};
+pub use lighting::LightingScheme;
 pub use render::{Bounds, Camera, Image, Lighting, MAX_RENDER_PIXELS, MAX_RENDER_WORK, Projection, RenderError, RenderOptions, render};

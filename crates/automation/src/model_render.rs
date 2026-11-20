@@ -3,7 +3,7 @@
 use craft_prc::PrcFile;
 use pdfcraft_engine::model3d::Model3dKind;
 use pdfcraft_prc_render::nav::{Axis, NamedView, Orbit, Upright, reach};
-use pdfcraft_prc_render::{Bounds, Camera, RenderOptions, WorldMesh, assemble, render};
+use pdfcraft_prc_render::{Bounds, Camera, Lighting, LightingScheme, RenderOptions, WorldMesh, assemble, render};
 use serde_json::Value;
 
 use super::Automation;
@@ -25,6 +25,7 @@ impl Automation {
         let width = side(a, "width")?;
         let height = side(a, "height")?;
         let perspective = a.opt_bool("perspective")?.unwrap_or(true);
+        let lighting = lighting(a)?;
         let doc = self.doc(a)?;
         let found = doc.model_3d_annotations(page).map_err(failed)?;
         let index = match a.opt_int("model")? {
@@ -51,10 +52,29 @@ impl Automation {
                 Camera::fit_meshes(&meshes, direction, up_for(direction), perspective, aspect).map_err(failed)?
             }
         };
-        let image = render(&meshes, &camera, &RenderOptions { width, height, ..RenderOptions::default() }).map_err(failed)?;
+        let image = render(&meshes, &camera, &RenderOptions { width, height, lighting, ..RenderOptions::default() }).map_err(failed)?;
         let data = encode_png(image.width, image.height, &premultiplied(image.rgba))?;
         Ok(vec![Content::Png { data, width: image.width, height: image.height }])
     }
+}
+
+/// `lighting`: `headlight` (default), `unlit`, or a lighting scheme's name in lower case.
+fn lighting(a: &Args) -> Result<Lighting> {
+    let Some(name) = a.opt_str("lighting")? else { return Ok(Lighting::Headlight) };
+    match name {
+        "headlight" => Ok(Lighting::Headlight),
+        "unlit" => Ok(Lighting::Unlit),
+        _ => LightingScheme::ALL
+            .into_iter()
+            .find(|s| s.name().to_ascii_lowercase() == name)
+            .map(Lighting::Scheme)
+            .ok_or_else(|| Args::wrong("lighting", &format!("headlight, unlit or one of {}", scheme_names().join(", ")))),
+    }
+}
+
+/// The scheme names `lighting` takes.
+fn scheme_names() -> Vec<String> {
+    LightingScheme::ALL.iter().map(|s| s.name().to_ascii_lowercase()).collect()
 }
 
 fn side(a: &Args, key: &str) -> Result<u32> {
