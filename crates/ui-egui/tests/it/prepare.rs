@@ -443,6 +443,21 @@ fn the_calculate_tab_shows_a_custom_calculation_script() {
     assert_eq!(city_calculation(&h), (pdfcraft_engine::form_scripts::Calculate::None, Some(js.to_owned())));
 }
 
+/// The custom calculation script's box colours it: a keyword, a string and a comment each in a
+/// colour of its own, a name as plain text.
+#[test]
+fn the_custom_calculation_script_is_coloured() {
+    use crate::support::painted_colour;
+    let js = "var total = getField(\"name\").value; // sum";
+    let mut h = with_calculate_script(js);
+    open_calculate(&mut h, "city");
+    let name = painted_colour(&h, js, "total").expect("the box shows the script");
+    for token in ["var", "\"name\"", "// sum"] {
+        let colour = painted_colour(&h, js, token).unwrap_or_else(|| panic!("the box paints {token} on its own"));
+        assert_ne!(colour, name, "{token} is coloured");
+    }
+}
+
 /// Only a script that is no sum or notation opens as a custom script: a sum stays a sum, and a
 /// field with no calculation opens on "Value is not calculated", with no script box.
 #[test]
@@ -1368,6 +1383,29 @@ fn actions_tab_shows_a_chain_and_keeps_it_when_the_first_action_is_replaced() {
     h.run_steps(3);
     open(&mut h);
     h.get_by_label("Open a web link: https://example.com, then 1 more action");
+}
+
+/// The Actions tab's box for a JavaScript action colours the script: a keyword, a string and a
+/// comment each in a colour of its own, a name as plain text.
+#[test]
+fn an_action_script_is_coloured() {
+    use crate::support::painted_colour;
+    let js = "var total = getField(\"name\").value; // sum";
+    let mut h = harness_with("chain.pdf", chained_action_fixture());
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().open_field_props("go", 0);
+    h.run_steps(2);
+    h.get_by_label("Actions").click();
+    h.run_steps(2);
+    h.state_mut().field_props.as_mut().unwrap().new_action =
+        pdfcraft_ui_egui::prepare::ActionDraft { trigger: pdfcraft_engine::FieldTrigger::MouseUp, kind: 0, text: js.into() };
+    h.run_steps(2);
+    let name = painted_colour(&h, js, "total").expect("the box shows the script");
+    for token in ["var", "\"name\"", "// sum"] {
+        let colour = painted_colour(&h, js, token).unwrap_or_else(|| panic!("the box paints {token} on its own"));
+        assert_ne!(colour, name, "{token} is coloured");
+    }
 }
 
 /// Text field table: pick the tool and drag out an area in the empty lower part of page 1, 200 by
