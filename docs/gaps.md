@@ -13,7 +13,7 @@
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (M1: raw-deflate fallback preserves decoding-limit errors; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: find and replace in Edit text mode, partial; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-13 · **Change:** minor (gap 14: Vietnamese catalog shipped; Hindi/Indonesian/Korean and Arabic RTL remain) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (gap 6: #1910 Organize Pages opens on the current page; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** minor (gap 19: Preferences has categories, #2264; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (gap 6: #1398 stamps read upright on rotated pages; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (gap 6: #1317, #1327, #1302, #1315 and #1340; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (#1316: replacing a line keeps a neighbouring line whose glyph box overlaps; gap 3 remains) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -387,8 +387,9 @@ update the numbers.
 ### 19. Preferences mostly missing
 
 - **Missing:** most of Acrobat's twenty or so preference pages (General, Documents, Commenting, Forms, Identity,
-  Signatures, Security, Measuring, Units and guides, Convert, …). Today: Interface language,
-  Documents and view, Identity, Fill & Sign, JavaScript.
+  Signatures, Security, Measuring, Units and guides, Convert, …), and a search box over them.
+  Today, in a window with the categories in a list (#2264): General, Appearance, Page display,
+  Accessibility, Commenting, Fill & Sign, JavaScript; a new page is one module in `prefs/`.
 - **Estimate:** 15–25 h. **Doc:** [ui-parity.md](ui-parity.md).
 
 ### 20. Scanners, GPU page rendering, pen pressure, Read Out Loud
@@ -435,6 +436,7 @@ update the numbers.
 |---|---|---|
 | 2026-11-11 | minor | Gap 8: known residual risk for the LibreOffice sidecar (Impress has no link-update setting; the soffice process isn't network-sandboxed). Sandboxing tracked in #6953. Estimates unchanged. |
 | 2026-10-26 | minor | Gap 8: the LibreOffice profile never updates Writer or Calc linked content on load; Impress has no such setting and the process's network access isn't sandboxed. Estimates unchanged. |
+| 2026-10-26 | minor | Gap 19: Preferences is a window with categories beside the settings (#2264), so the missing pages have a place to land. Estimates unchanged. |
 | 2026-10-25 | minor | Gaps 5 and 14 current state: native release builds embed LXGW WenKai Lite for Simplified Chinese, while the web build has no Hans face; Arabic catalogs stay logical with explicit RTL label direction and mirrored stock chrome, while native/browser RTL input, IME and complex workflows remain unqualified. Estimates unchanged. |
 | 2026-10-18 | minor | Gap 3: #2517 a partial rewrite keeps a kept source row in the paragraph and leaves the next marked region closed around its text. Estimates unchanged. |
 | 2026-10-15 | minor | Gap 3: #2517 a blank line at ordinary leading stays a paragraph break. Estimates unchanged. |

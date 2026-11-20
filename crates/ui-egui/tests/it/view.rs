@@ -1247,6 +1247,7 @@ fn preferences_turn_on_always_use_my_default_zoom_and_page_layout() {
     use egui_kittest::kittest::Queryable;
     let mut h = harness(&[]);
     assert!(h.state_mut().execute("app.preferences"));
+    h.state_mut().preferences_page = pdfcraft_ui_egui::PrefsPage::PageDisplay;
     h.run_steps(3);
     h.get_by_label("Always use my default zoom and page layout").scroll_to_me();
     h.run_steps(4);
@@ -1268,6 +1269,7 @@ fn preferences_turn_on_always_use_my_default_zoom_and_page_layout_updates_open_d
     assert!(!h.state().views[1].continuous());
     assert_ne!(h.state().views[1].fit, pdfcraft_ui_egui::canvas::Fit::Width);
     assert!(h.state_mut().execute("app.preferences"));
+    h.state_mut().preferences_page = pdfcraft_ui_egui::PrefsPage::PageDisplay;
     h.run_steps(3);
     h.get_by_label("Always use my default zoom and page layout").scroll_to_me();
     h.run_steps(4);
@@ -1287,6 +1289,7 @@ fn preferences_toggle_continuous_scrolling_updates_active_document() {
     assert!(!h.state().view_defaults.continuous);
     assert!(!h.state().views[0].continuous());
     assert!(h.state_mut().execute("app.preferences"));
+    h.state_mut().preferences_page = pdfcraft_ui_egui::PrefsPage::PageDisplay;
     h.run_steps(3);
     h.get_by_label("Continuous scrolling").scroll_to_me();
     h.run_steps(4);
@@ -1313,6 +1316,7 @@ fn preferences_during_full_screen_updates_saved_normal_display_and_restores_on_e
     assert_eq!(h.state().views[0].fit, Fit::Page);
 
     assert!(h.state_mut().execute("app.preferences"));
+    h.state_mut().preferences_page = pdfcraft_ui_egui::PrefsPage::PageDisplay;
     h.run_steps(3);
     h.get_by_label("Always use my default zoom and page layout").scroll_to_me();
     h.run_steps(4);
@@ -1352,6 +1356,7 @@ fn preferences_toggle_continuous_during_full_screen_updates_saved_normal_display
     assert_eq!(h.state().views[0].fit, Fit::Page);
 
     assert!(h.state_mut().execute("app.preferences"));
+    h.state_mut().preferences_page = pdfcraft_ui_egui::PrefsPage::PageDisplay;
     h.run_steps(3);
     h.get_by_label("Continuous scrolling").scroll_to_me();
     h.run_steps(4);
@@ -1386,6 +1391,7 @@ fn preferences_with_always_default_view_on_toggling_continuous_preserves_custom_
     assert_eq!(h.state().views[0].zoom, 2.0);
 
     assert!(h.state_mut().execute("app.preferences"));
+    h.state_mut().preferences_page = pdfcraft_ui_egui::PrefsPage::PageDisplay;
     h.run_steps(3);
     h.get_by_label("Continuous scrolling").scroll_to_me();
     h.run_steps(4);
@@ -1403,6 +1409,7 @@ fn preferences_set_the_default_zoom() {
     use egui_kittest::kittest::Queryable;
     let mut h = harness(&[]);
     assert!(h.state_mut().execute("app.preferences"));
+    h.state_mut().preferences_page = pdfcraft_ui_egui::PrefsPage::PageDisplay;
     h.run_steps(3);
     h.get_by_label("Zoom to page level").scroll_to_me();
     h.run_steps(4);
