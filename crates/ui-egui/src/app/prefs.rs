@@ -176,6 +176,11 @@ impl PdfCraftApp {
         v["full_screen_fill"] = serde_json::Value::Bool(self.view_defaults.full_screen_fill);
         v["full_screen_escape_exits"] = serde_json::Value::Bool(self.full_screen_escape_exits);
         v["redact_prefs"] = self.redact_defaults.to_json();
+        // Saved code sets that could not be read go back as they were, until the user discards them.
+        v["redaction_code_sets"] = match &self.redaction_codes_unread {
+            Some((saved, _)) => saved.clone(),
+            None => self.redaction_codes.to_json(),
+        };
         v["pinned_tools"] = serde_json::json!(self.pinned_tools);
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
@@ -462,7 +467,27 @@ impl PdfCraftApp {
         self.fill_text_border = self.fill_text_default.width;
         self.fill_text_border_color = self.fill_text_default.color;
         self.fill_text_border_shape = self.fill_text_default.shape;
-        if let Some(prefs) = RedactPrefs::from_json(&v["redact_prefs"]) {
+        // The custom code sets first: the saved properties may choose one of them. An entry that
+        // can't be read is neither dropped nor overwritten: it is kept as it was and the user is
+        // told, and Edit Codes offers to discard it.
+        match v.get("redaction_code_sets") {
+            None | Some(serde_json::Value::Null) => {}
+            Some(saved) => match pdfcraft_engine::redaction_codes::CodeLibrary::from_json(saved) {
+                Ok(codes) => {
+                    self.redaction_codes = codes;
+                    self.redaction_codes_unread = None;
+                }
+                Err(e) => {
+                    self.redaction_codes = Default::default();
+                    self.redaction_codes_unread = Some((saved.clone(), e.to_string()));
+                    self.notify_fmt(
+                        "Your custom redaction code sets could not be read from the settings ({e}). They are kept unchanged; Redaction Properties ▸ Edit Codes can discard them.",
+                        &[("e", &e.to_string())],
+                    );
+                }
+            },
+        }
+        if let Some(prefs) = RedactPrefs::from_json(&v["redact_prefs"], &self.redaction_codes) {
             self.redact_prefs = prefs.clone();
             self.redact_defaults = prefs;
         }

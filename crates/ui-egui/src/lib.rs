@@ -64,7 +64,10 @@ pub use print_ui::{
     DefaultPaperSource, Handling as PrintHandling, OptionsSource, PrintDraft, PrinterPapersSource, PrinterSetup, PrinterSource, Spooler,
     TwoSidedSource, Which as PrintWhich, system_printers, system_two_sided,
 };
-pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
+pub use redact_ui::{
+    CodeEditor as RedactCodeEditor, HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft,
+    SearchMode as RedactSearchMode,
+};
 pub mod i18n;
 pub mod theme;
 pub mod viewer_prefs;
@@ -850,6 +853,14 @@ pub struct PdfCraftApp {
     /// properties default" ticked left), and the values before the dialog opened, for Cancel.
     pub redact_defaults: RedactPrefs,
     pub redact_before: Option<RedactPrefs>,
+    /// The custom redaction code sets (Redaction Properties ▸ Edit Codes), kept in the settings.
+    pub redaction_codes: pdfcraft_engine::redaction_codes::CodeLibrary,
+    /// The saved code sets when the settings held some that could not be read: the entry as it
+    /// was, written back unchanged, and why it was refused. Edit Codes shows the reason and lets
+    /// the user discard them; until then no custom set can be made, so nothing overwrites them.
+    pub redaction_codes_unread: Option<(serde_json::Value, String)>,
+    /// The Edit Codes dialog's state.
+    pub code_editor: redact_ui::CodeEditor,
     pub redact_pages_draft: RedactPagesDraft,
     pub redact_search: RedactSearchDraft,
     pub hidden_draft: HiddenDraft,

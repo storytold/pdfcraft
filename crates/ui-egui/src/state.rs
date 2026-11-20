@@ -143,6 +143,8 @@ pub enum Dialog {
     RedactPages,
     RedactSearch,
     RedactProps,
+    /// Redaction Properties ▸ Edit Codes: custom code sets.
+    RedactCodes,
     RedactApply,
     /// File ▸ Print.
     Print,

@@ -27,6 +27,8 @@ pub enum FilePurpose {
     CreateMultipleSeparate,
     /// Find text and redact ▸ Import list: a text file with one word or phrase per line.
     RedactWords,
+    /// Redaction Properties ▸ Edit Codes ▸ Import: a code set file.
+    RedactionCodes,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -98,6 +100,9 @@ fn files_picker(purpose: FilePurpose) -> rfd::AsyncFileDialog {
     }
     if purpose == FilePurpose::RedactWords {
         return dialog.add_filter_any_case(tl!("Text"), &["txt"]);
+    }
+    if purpose == FilePurpose::RedactionCodes {
+        return dialog.add_filter_any_case(tl!("Redaction codes"), &["json"]);
     }
     if !matches!(purpose, FilePurpose::CreateMultiple | FilePurpose::CreateMultipleSeparate | FilePurpose::InsertPages | FilePurpose::Combine) {
         return dialog.add_filter_any_case("PDF", &["pdf"]);
@@ -423,6 +428,19 @@ impl PdfCraftApp {
                 self.notify_fmt("{name} is too large for a word list (at most 1 MB).", &[("name", &name)]);
                 return;
             }
+            // Read no further than the code set file's own limit, which then says what is wrong.
+            if purpose == FilePurpose::RedactionCodes {
+                use std::io::Read;
+                let mut bytes = Vec::new();
+                match std::fs::File::open(p).and_then(|f| f.take(pdfcraft_engine::redaction_codes::MAX_FILE_BYTES as u64 + 1).read_to_end(&mut bytes))
+                {
+                    Ok(_) => {
+                        self.import_redaction_codes(&name, &bytes);
+                    }
+                    Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
+                }
+                return;
+            }
             let read = if matches!(purpose, FilePurpose::TextFont { .. }) {
                 use std::io::Read;
                 std::fs::File::open(p).and_then(|f| {
@@ -596,6 +614,11 @@ impl PdfCraftApp {
             FilePurpose::CreateMultipleSeparate => {
                 let dir = self.export_dir_override.as_ref().map(std::path::PathBuf::from);
                 self.stage_create_separate(files.into_iter().map(Ok), dir);
+            }
+            FilePurpose::RedactionCodes => {
+                if let Some((name, bytes)) = files.into_iter().next() {
+                    self.import_redaction_codes(&name, &bytes);
+                }
             }
             FilePurpose::RedactWords => {
                 let Some((name, bytes)) = files.into_iter().next() else { return };

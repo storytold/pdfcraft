@@ -502,14 +502,14 @@ fn redaction_codes_become_the_overlay_text() {
     h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(2);
-    let prefs = &h.state().redact_prefs;
-    assert_eq!(prefs.overlay_text(), "(b)(6), (b)(7)(C)", "codes in the set's order");
-    let pdfcraft_engine::Edit::AddAnnotation(a) = prefs.mark(0, vec![pdfcraft_engine::rect_quad([10.0, 10.0, 50.0, 30.0])], "T") else {
+    let (prefs, codes) = (&h.state().redact_prefs, &h.state().redaction_codes);
+    assert_eq!(prefs.overlay_text(codes), "(b)(6), (b)(7)(C)", "codes in the set's order");
+    let pdfcraft_engine::Edit::AddAnnotation(a) = prefs.mark(codes, 0, vec![pdfcraft_engine::rect_quad([10.0, 10.0, 50.0, 30.0])], "T") else {
         panic!("a mark adds an annotation")
     };
     assert!(matches!(a.shape, pdfcraft_engine::Shape::Redact { ref overlay, .. } if overlay == "(b)(6), (b)(7)(C)"));
     h.state_mut().redact_prefs.use_code = false;
-    assert_eq!(h.state().redact_prefs.overlay_text(), "CONFIDENTIAL", "custom text is kept while codes are used");
+    assert_eq!(h.state().redact_prefs.overlay_text(&h.state().redaction_codes), "CONFIDENTIAL", "custom text is kept while codes are used");
 }
 
 /// The Redaction Tool Properties are the next run's too, like every other tool's defaults
@@ -523,8 +523,8 @@ fn redaction_properties_survive_a_restart() {
         p.fill = None;
         p.use_overlay = true;
         p.use_code = true;
-        p.code_set = pdfcraft_engine::REDACTION_CODE_SETS[0];
-        p.codes = vec!["(b)(6)", "(b)(7)(C)"];
+        p.code_set = pdfcraft_engine::REDACTION_CODE_SETS[0].id.into();
+        p.codes = vec!["(b)(6)".into(), "(b)(7)(C)".into()];
         p.overlay = "CONFIDENTIAL".into();
         p.look.font = pdfcraft_engine::OverlayFont::Courier;
         p.look.size = 12.0;
@@ -547,13 +547,14 @@ fn redaction_properties_survive_a_restart() {
     fresh.restore(&json);
     let p = &fresh.redact_prefs;
     assert_eq!(p.fill, None, "no colour is a saved choice, not a missing one");
-    assert_eq!(p.overlay_text(), "(b)(6), (b)(7)(C)");
+    assert_eq!(p.overlay_text(&fresh.redaction_codes), "(b)(6), (b)(7)(C)");
     assert_eq!(p.overlay, "CONFIDENTIAL");
     assert_eq!(p.look.font, pdfcraft_engine::OverlayFont::Courier);
     assert_eq!((p.look.size, p.look.color, p.look.align, p.look.repeat), (12.0, [0.0, 0.0, 1.0], 2, true));
     assert_eq!((p.outline, p.hover_fill, p.opacity), ([0.0, 0.5, 0.0], [1.0, 1.0, 0.0], 0.4));
     // The next mark takes the outline and opacity.
-    let pdfcraft_engine::Edit::AddAnnotation(a) = p.mark(0, vec![pdfcraft_engine::rect_quad([10.0, 10.0, 50.0, 30.0])], "T") else {
+    let pdfcraft_engine::Edit::AddAnnotation(a) = p.mark(&fresh.redaction_codes, 0, vec![pdfcraft_engine::rect_quad([10.0, 10.0, 50.0, 30.0])], "T")
+    else {
         panic!("a mark adds an annotation")
     };
     assert_eq!((a.style.color, a.style.opacity, a.style.fill), ([0.0, 0.5, 0.0], 0.4, None));
@@ -565,8 +566,8 @@ fn redaction_properties_survive_a_restart() {
     );
     let p = &odd.redact_prefs;
     assert_eq!((p.outline, p.opacity), ([0.89, 0.13, 0.13], 0.7));
-    assert_eq!(p.code_set.id, pdfcraft_engine::REDACTION_CODE_SETS[0].id);
-    assert_eq!(p.overlay_text(), "(b)(6)");
+    assert_eq!(p.code_set, pdfcraft_engine::REDACTION_CODE_SETS[0].id);
+    assert_eq!(p.overlay_text(&odd.redaction_codes), "(b)(6)");
 }
 
 /// "Make properties default" off: OK keeps the values for this run only, the saved defaults
@@ -788,4 +789,164 @@ fn applying_says_the_pdfa_identification_was_written_back() {
         toast,
         "Applied 1 redaction mark. Save to remove the content from the file. The document's XMP metadata held the redacted text and was removed. Its PDF/A identification was written back on its own."
     );
+}
+
+/// Click `label` once it has stopped moving: a dialog that changes size is centred again over a
+/// few frames.
+fn click(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    let mut last = None;
+    for _ in 0..40 {
+        let rect = h.get_by_label(label).rect();
+        if last == Some(rect) {
+            h.get_by_label(label).click();
+            return;
+        }
+        last = Some(rect);
+        h.run_steps(1);
+    }
+    panic!("{label} kept moving");
+}
+
+/// Redaction Properties ▸ Edit Codes: a custom set is made, given codes, renamed and edited, used
+/// for the overlay text, exported, deleted and imported again, and kept in the settings. Built-in
+/// sets stay as they are.
+#[test]
+fn custom_code_sets_from_edit_codes() {
+    use pdfcraft_engine::redaction_codes::CodeEdit;
+    let dir = std::env::temp_dir().join(format!("pdfcraft-redaction-codes-ui-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = harness();
+    h.state_mut().export_dir_override = Some(dir.to_string_lossy().into_owned());
+    assert!(h.state_mut().execute("redact.properties"));
+    h.run_steps(2);
+    click(&mut h, "Use overlay text");
+    h.run_steps(2);
+    click(&mut h, "Redaction code:");
+    h.run_steps(2);
+    click(&mut h, "Edit Codes…");
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::RedactCodes));
+    h.get_by_label("U.S. FOIA (built-in)");
+    h.get_by_label("Codes in U.S. FOIA");
+    h.get_by_label("Built-in sets can't be changed. Make a new set for your own codes.");
+    // A built-in set refuses edits, here and headlessly.
+    assert!(!h.state_mut().edit_redaction_codes(CodeEdit::AddCode { set: "foia".into(), code: "(b)(10)".into() }));
+    assert!(h.state().code_editor.message.as_ref().is_some_and(|(m, refused)| *refused && m.contains("built-in")));
+
+    h.state_mut().code_editor.set_name = "Court".into();
+    click(&mut h, "New set");
+    h.run_steps(2);
+    h.get_by_label("Codes in Court");
+    for code in ["Sealed", "Minor", "Juror"] {
+        h.state_mut().code_editor.code_text = code.into();
+        click(&mut h, "Add code");
+        h.run_steps(2);
+    }
+    click(&mut h, "Juror");
+    h.run_steps(2);
+    h.state_mut().code_editor.code_text = "Jury".into();
+    click(&mut h, "Rename code");
+    h.run_steps(2);
+    // A code the set already has is refused, with the reason shown.
+    h.state_mut().code_editor.code_text = "Sealed".into();
+    click(&mut h, "Add code");
+    h.run_steps(2);
+    h.get_by_label("the code set \"Court\" already has the code \"Sealed\"");
+    click(&mut h, "Minor");
+    h.run_steps(2);
+    click(&mut h, "Remove code");
+    h.run_steps(2);
+    h.state_mut().code_editor.set_name = "Bench".into();
+    click(&mut h, "Rename set");
+    h.run_steps(2);
+    assert_eq!(h.state().redaction_codes.find("Bench").unwrap().codes(), ["Sealed", "Jury"]);
+    click(&mut h, "Close");
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::RedactProps), "Close goes back to the properties");
+
+    // The custom set is chosen like a built-in one (the set list offers it), and its codes
+    // become the overlay text.
+    h.state_mut().redact_prefs.code_set = "Bench".into();
+    h.run_steps(2);
+    click(&mut h, "Jury");
+    h.run_steps(2);
+    click(&mut h, "Sealed");
+    h.run_steps(2);
+    click(&mut h, "OK");
+    h.run_steps(2);
+    let s = h.state();
+    assert_eq!(s.redact_prefs.code_set, "Bench");
+    assert_eq!(s.redact_prefs.overlay_text(&s.redaction_codes), "Sealed, Jury", "the set's order");
+    let pdfcraft_engine::Edit::AddAnnotation(a) =
+        s.redact_prefs.mark(&s.redaction_codes, 0, vec![pdfcraft_engine::rect_quad([10.0, 10.0, 50.0, 30.0])], "T")
+    else {
+        panic!("a mark adds an annotation")
+    };
+    assert!(matches!(a.shape, pdfcraft_engine::Shape::Redact { ref overlay, .. } if overlay == "Sealed, Jury"));
+
+    // The sets and the choice survive a restart.
+    let json = h.state().persist();
+    let mut fresh = PdfCraftApp::new();
+    fresh.restore(&json);
+    assert_eq!(fresh.redaction_codes, h.state().redaction_codes);
+    assert_eq!(fresh.redact_prefs.overlay_text(&fresh.redaction_codes), "Sealed, Jury");
+
+    // Export, delete, import.
+    assert!(h.state_mut().execute("redact.properties"));
+    h.run_steps(2);
+    click(&mut h, "Edit Codes…");
+    h.run_steps(3);
+    click(&mut h, "Export…");
+    h.run_steps(3);
+    let file = dir.join("redaction-codes.json");
+    let written = std::fs::read_to_string(&file)
+        .unwrap_or_else(|e| panic!("{e}: {:?} {:?} {:?}", h.state().dialog, h.state().code_editor.message, h.state().toast));
+    assert!(written.contains("\"pdfcraft-redaction-codes\"") && written.contains("\"Bench\""), "{written}");
+    click(&mut h, "Delete set");
+    h.run_steps(2);
+    assert!(h.state().redaction_codes.custom().is_empty());
+    assert_eq!(h.state().redact_prefs.code_set, "foia", "a deleted set is no longer chosen");
+    assert!(h.state().redact_prefs.codes.is_empty());
+    h.state_mut().pick_override = Some(vec![file.to_string_lossy().into_owned()]);
+    click(&mut h, "Import…");
+    h.run_steps(4);
+    assert_eq!(h.state().redaction_codes.find("Bench").unwrap().codes(), ["Sealed", "Jury"]);
+    h.get_by_label("Imported the code set Bench from redaction-codes.json.");
+    // The same file again: the name is taken, so nothing is imported, and the reason is shown.
+    click(&mut h, "Import…");
+    h.run_steps(4);
+    assert!(h.state().code_editor.message.as_ref().is_some_and(|(m, refused)| *refused && m.contains("already a code set named")));
+    assert_eq!(h.state().redaction_codes.custom().len(), 1);
+    // A damaged file is refused whole.
+    let bad = dir.join("bad.json");
+    std::fs::write(&bad, r#"{"format":"pdfcraft-redaction-codes","version":1,"sets":[{"name":"X","codes":["a\u0000"]}]}"#).unwrap();
+    h.state_mut().pick_override = Some(vec![bad.to_string_lossy().into_owned()]);
+    click(&mut h, "Import…");
+    h.run_steps(4);
+    assert!(h.state().code_editor.message.as_ref().is_some_and(|(m, _)| m.contains("bad.json was not imported") && m.contains("control character")));
+    assert_eq!(h.state().redaction_codes.custom().len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Saved code sets that can't be read are neither dropped nor overwritten: the user is told, the
+/// entry is written back as it was, and Edit Codes can discard it.
+#[test]
+fn unreadable_saved_code_sets_are_kept_until_discarded() {
+    use pdfcraft_engine::redaction_codes::CodeEdit;
+    let damaged = r#"{"redaction_code_sets":{"format":"pdfcraft-redaction-codes","version":1,"sets":[{"name":"A","codes":["x","x"]}]}}"#;
+    let mut odd = PdfCraftApp::new();
+    odd.restore(damaged);
+    assert!(odd.redaction_codes.custom().is_empty());
+    let (_, why) = odd.redaction_codes_unread.clone().expect("kept, with the reason");
+    assert!(why.contains("already has the code"), "{why}");
+    assert!(odd.toast.as_ref().is_some_and(|(m, _)| m.contains("could not be read")), "the user is told");
+    let saved: serde_json::Value = serde_json::from_str(&odd.persist()).unwrap();
+    let original: serde_json::Value = serde_json::from_str(damaged).unwrap();
+    assert_eq!(saved["redaction_code_sets"], original["redaction_code_sets"], "written back unchanged");
+    assert!(!odd.edit_redaction_codes(CodeEdit::CreateSet { name: "New".into() }), "nothing overwrites them");
+    odd.discard_unread_redaction_codes();
+    assert!(odd.edit_redaction_codes(CodeEdit::CreateSet { name: "New".into() }));
+    let saved: serde_json::Value = serde_json::from_str(&odd.persist()).unwrap();
+    assert_eq!(saved["redaction_code_sets"]["sets"][0]["name"], "New");
 }

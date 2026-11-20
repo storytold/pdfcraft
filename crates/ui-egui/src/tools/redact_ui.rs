@@ -4,7 +4,8 @@
 //! confirmation, as Acrobat asks) or clear them.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
-use pdfcraft_engine::{Edit, NewAnnotation, REDACT_PATTERNS, REDACTION_CODE_SETS, RedactPattern, RedactionCodeSet, Rgb, Shape, Style, rect_quad};
+use pdfcraft_engine::redaction_codes::{CodeEdit, CodeLibrary};
+use pdfcraft_engine::{Edit, NewAnnotation, REDACT_PATTERNS, REDACTION_CODE_SETS, RedactPattern, Rgb, Shape, Style, rect_quad};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
@@ -23,8 +24,10 @@ pub struct RedactPrefs {
     pub overlay: String,
     /// The overlay text is the picked redaction codes instead of `overlay`.
     pub use_code: bool,
-    pub code_set: RedactionCodeSet,
-    pub codes: Vec<&'static str>,
+    /// The chosen code set: a built-in set's id or a custom set's name (see [`CodeLibrary::find`]).
+    pub code_set: String,
+    /// The picked codes of `code_set`, in its order.
+    pub codes: Vec<String>,
     /// Overlay text font, size (0 = auto), colour, alignment and repetition.
     pub look: pdfcraft_engine::OverlayLook,
     /// How an unapplied mark looks on the page: its outline colour (`/C`), the fill shown while
@@ -45,7 +48,7 @@ impl Default for RedactPrefs {
             overlay: String::new(),
             use_code: false,
             // Infallible: a non-empty constant array.
-            code_set: REDACTION_CODE_SETS[0],
+            code_set: REDACTION_CODE_SETS[0].id.to_string(),
             codes: Vec::new(),
             look: Default::default(),
             outline: [0.89, 0.13, 0.13],
@@ -57,17 +60,46 @@ impl Default for RedactPrefs {
 }
 
 impl RedactPrefs {
-    pub fn overlay_text(&self) -> String {
+    /// The overlay text new marks get, with the code sets of `codes` (built-in and custom).
+    pub fn overlay_text(&self, codes: &CodeLibrary) -> String {
         match (self.use_overlay, self.use_code) {
             (false, _) => String::new(),
             (true, false) => self.overlay.clone(),
-            // `codes` only ever holds codes of `code_set`, so this can't fail.
-            (true, true) => self.code_set.overlay(&self.codes).unwrap_or_default(),
+            // `codes` only ever holds codes of `code_set` (see `settle`), so this can't fail.
+            (true, true) => codes.find(&self.code_set).and_then(|set| set.overlay(&self.codes).ok()).unwrap_or_default(),
         }
     }
 
-    pub fn mark(&self, page: usize, quads: Vec<[f64; 8]>, author: &str) -> Edit {
-        let shape = Shape::Redact { quads, overlay: self.overlay_text(), look: self.look };
+    /// Keep the chosen set and codes in step with an Edit Codes change: a renamed set or code
+    /// stays chosen under its new name, and what the change removed is no longer picked.
+    pub fn follow(&mut self, edit: &CodeEdit, codes: &CodeLibrary) {
+        match edit {
+            CodeEdit::RenameSet { from, to } if self.code_set == *from => self.code_set = to.clone(),
+            CodeEdit::RenameCode { set, from, to } if self.code_set == *set => {
+                for c in &mut self.codes {
+                    if c == from {
+                        *c = to.clone();
+                    }
+                }
+            }
+            _ => {}
+        }
+        self.settle(codes);
+    }
+
+    /// A set that is gone falls back to the first built-in one; only codes the set has stay
+    /// picked, each once, in the set's order.
+    pub fn settle(&mut self, codes: &CodeLibrary) {
+        let Some(set) = codes.find(&self.code_set) else {
+            self.code_set = Self::default().code_set;
+            self.codes.clear();
+            return;
+        };
+        self.codes = set.codes().into_iter().filter(|c| self.codes.iter().any(|p| p == c)).map(str::to_string).collect();
+    }
+
+    pub fn mark(&self, codes: &CodeLibrary, page: usize, quads: Vec<[f64; 8]>, author: &str) -> Edit {
+        let shape = Shape::Redact { quads, overlay: self.overlay_text(codes), look: self.look };
         let mut style = Style::default_for(&shape);
         style.fill = self.fill;
         style.color = self.outline;
@@ -83,7 +115,7 @@ impl RedactPrefs {
             "use_overlay": self.use_overlay,
             "overlay": self.overlay,
             "use_code": self.use_code,
-            "code_set": self.code_set.id,
+            "code_set": self.code_set,
             "codes": self.codes,
             "font": self.look.font.resource(),
             "size": self.look.size,
@@ -97,8 +129,9 @@ impl RedactPrefs {
     }
 
     /// Settings are untrusted: each value is taken only when it reads as what it should be;
-    /// anything else keeps the default. `None` when nothing was saved.
-    pub fn from_json(v: &serde_json::Value) -> Option<Self> {
+    /// anything else keeps the default. `None` when nothing was saved. `codes` holds the code
+    /// sets the saved choice may name.
+    pub fn from_json(v: &serde_json::Value, codes: &CodeLibrary) -> Option<Self> {
         if !v.is_object() {
             return None;
         }
@@ -133,13 +166,14 @@ impl RedactPrefs {
         if let Some(b) = v["use_code"].as_bool() {
             d.use_code = b;
         }
-        if let Some(set) = v["code_set"].as_str().and_then(RedactionCodeSet::from_id) {
-            d.code_set = set;
+        if let Some(set) = v["code_set"].as_str().and_then(|key| codes.find(key)) {
+            d.code_set = set.key().to_string();
         }
-        if let Some(codes) = v["codes"].as_array() {
-            // Only codes of the saved set, each once, in the set's order.
-            d.codes = d.code_set.codes.iter().copied().filter(|c| codes.iter().any(|x| x.as_str() == Some(c))).collect();
+        if let Some(picked) = v["codes"].as_array() {
+            d.codes = picked.iter().filter_map(|x| x.as_str()).map(str::to_string).collect();
         }
+        // Only codes of the saved set, each once, in the set's order.
+        d.settle(codes);
         if let Some(f) = v["font"].as_str() {
             d.look.font = pdfcraft_engine::OverlayFont::from_resource(f);
         }
@@ -324,7 +358,7 @@ impl PdfCraftApp {
             for h in hits {
                 let quads: Vec<[f64; 8]> = text.line_rects(h).into_iter().map(|r| page_info.view_rect_to_quad(r)).collect();
                 if !quads.is_empty() {
-                    edits.push(self.redact_prefs.mark(page, quads, &author));
+                    edits.push(self.redact_prefs.mark(&self.redaction_codes, page, quads, &author));
                 }
             }
         }
@@ -347,7 +381,7 @@ impl PdfCraftApp {
             .iter()
             .map(|&p| {
                 let c = doc.info.pages[p].crop;
-                self.redact_prefs.mark(p, vec![rect_quad([c[0] as f64, c[1] as f64, c[2] as f64, c[3] as f64])], &author)
+                self.redact_prefs.mark(&self.redaction_codes, p, vec![rect_quad([c[0] as f64, c[1] as f64, c[2] as f64, c[3] as f64])], &author)
             })
             .collect();
         match <[Edit; 1]>::try_from(edits) {
@@ -442,8 +476,9 @@ pub(crate) fn search_body(ui: &mut egui::Ui, d: &mut SearchDraft, t: &Tokens) ->
     (go || enter, cancel, import)
 }
 
-/// Redaction Tool Properties. Returns (apply, cancel).
-pub(crate) fn props_body(ui: &mut egui::Ui, d: &mut RedactPrefs, _t: &Tokens) -> (bool, bool) {
+/// Redaction Tool Properties, with the code sets of `codes`. Returns (apply, cancel, Edit Codes).
+pub(crate) fn props_body(ui: &mut egui::Ui, d: &mut RedactPrefs, codes: &CodeLibrary, _t: &Tokens) -> (bool, bool, bool) {
+    let mut edit_codes = false;
     ui.set_width(780.0);
     ui.label(egui::RichText::new(tl!("Redaction Tool Properties")).font(crate::theme::semibold(18.0)));
     ui.add_space(8.0);
@@ -481,27 +516,40 @@ pub(crate) fn props_body(ui: &mut egui::Ui, d: &mut RedactPrefs, _t: &Tokens) ->
                     d.use_code = true;
                 }
                 let codes_on = on && d.use_code;
-                ui.add_enabled_ui(codes_on, |ui| {
-                    craft_ui::ComboBox::from_id_salt("redaction-code-set").selected_text(d.code_set.name).show_ui(ui, |ui| {
-                        for set in REDACTION_CODE_SETS {
-                            if ui.selectable_label(d.code_set == set, set.name).clicked() && d.code_set != set {
-                                d.code_set = set;
-                                d.codes.clear();
+                let chosen = codes.find(&d.code_set);
+                ui.horizontal(|ui| {
+                    ui.add_enabled_ui(codes_on, |ui| {
+                        let shown = chosen.map_or(d.code_set.as_str(), |s| s.name());
+                        craft_ui::ComboBox::from_id_salt("redaction-code-set").selected_text(shown).show_ui(ui, |ui| {
+                            for set in codes.all() {
+                                let current = d.code_set == set.key();
+                                if ui.selectable_label(current, set.name()).clicked() && !current {
+                                    d.code_set = set.key().to_string();
+                                    d.codes.clear();
+                                }
                             }
-                        }
+                        });
                     });
+                    // Acrobat's Edit Codes: the user's own sets; the built-in ones stay as they are.
+                    edit_codes = ui.button(tl!("Edit Codes…")).clicked();
                 });
                 ui.end_row();
-                for row in d.code_set.codes.chunks(4) {
+                let set_codes = chosen.map(|s| s.codes()).unwrap_or_default();
+                let built_in = chosen.is_none_or(|s| s.built_in());
+                // Built-in codes are short: four to a row. Custom ones may be longer: two.
+                for row in set_codes.chunks(if built_in { 4 } else { 2 }) {
                     ui.label("");
                     ui.add_enabled_ui(codes_on, |ui| {
                         ui.horizontal(|ui| {
                             for &code in row {
-                                let mut picked = d.codes.contains(&code);
-                                if ui.add_sized([62.0, 18.0], widgets::checkbox(&mut picked, code)).changed() {
-                                    d.codes.retain(|c| *c != code);
+                                let mut picked = d.codes.iter().any(|c| c == code);
+                                let check = widgets::checkbox(&mut picked, code);
+                                // Built-in codes are short and line up; custom ones take their width.
+                                let changed = if built_in { ui.add_sized([62.0, 18.0], check) } else { ui.add(check) }.changed();
+                                if changed {
+                                    d.codes.retain(|c| c != code);
                                     if picked {
-                                        d.codes.push(code);
+                                        d.codes.push(code.to_string());
                                     }
                                 }
                             }
@@ -586,7 +634,291 @@ pub(crate) fn props_body(ui: &mut egui::Ui, d: &mut RedactPrefs, _t: &Tokens) ->
         });
     });
     ui.add_space(12.0);
-    buttons(ui, "OK", true)
+    let (ok, cancel) = buttons(ui, "OK", true);
+    (ok, cancel, edit_codes)
+}
+
+/// The Edit Codes dialog: the selected set and code, the text being typed for a set name and
+/// a code, whether an import replaces sets of the same name, and the last outcome.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CodeEditor {
+    /// The selected set's key (a built-in set's id or a custom set's name).
+    pub set: String,
+    pub code: Option<String>,
+    pub set_name: String,
+    pub code_text: String,
+    pub replace: bool,
+    /// What the last action said, and whether it was a refusal.
+    pub message: Option<(String, bool)>,
+}
+
+impl Default for CodeEditor {
+    fn default() -> Self {
+        Self {
+            set: REDACTION_CODE_SETS[0].id.to_string(),
+            code: None,
+            set_name: String::new(),
+            code_text: String::new(),
+            replace: false,
+            message: None,
+        }
+    }
+}
+
+/// What the Edit Codes dialog asked for, acted on after it is drawn.
+#[derive(Default)]
+pub(crate) struct CodesOutcome {
+    pub close: bool,
+    pub import: bool,
+    pub export: bool,
+}
+
+/// Redaction Properties ▸ Edit Codes: the code sets on the left, the selected set's codes on the
+/// right. Built-in sets are listed and can be read, never changed.
+pub(crate) fn codes_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> CodesOutcome {
+    let mut out = CodesOutcome::default();
+    let mut edit: Option<CodeEdit> = None;
+    ui.set_width(660.0);
+    ui.label(egui::RichText::new(tl!("Edit Codes")).font(crate::theme::semibold(18.0)));
+    ui.add_space(8.0);
+    let locked = app.redaction_codes_unread.clone();
+    let e = &mut app.code_editor;
+    if app.redaction_codes.find(&e.set).is_none() {
+        e.set = REDACTION_CODE_SETS[0].id.to_string();
+        e.code = None;
+    }
+    let Some(set) = app.redaction_codes.find(&e.set) else { return out };
+    let editable = !set.built_in() && locked.is_none();
+    let can_make = locked.is_none();
+    ui.horizontal_top(|ui| {
+        ui.vertical(|ui| {
+            ui.set_width(310.0);
+            ui.label(egui::RichText::new(tl!("Code sets")).strong());
+            egui::ScrollArea::vertical().id_salt("redaction-code-sets").max_height(170.0).auto_shrink([false, true]).show(ui, |ui| {
+                for s in app.redaction_codes.all() {
+                    let label = if s.built_in() { crate::i18n::fmt(tl!("{name} (built-in)"), &[("name", s.name())]) } else { s.name().to_string() };
+                    if ui.selectable_label(s.key() == e.set, label).clicked() && s.key() != e.set {
+                        e.set = s.key().to_string();
+                        e.code = None;
+                        e.set_name = if s.built_in() { String::new() } else { s.name().to_string() };
+                        e.code_text.clear();
+                    }
+                }
+            });
+            ui.add_space(6.0);
+            let l = ui.label(tl!("Set name:"));
+            ui.add_enabled(can_make, widgets::line(&mut e.set_name).desired_width(300.0)).labelled_by(l.id);
+            let name = e.set_name.trim().to_string();
+            ui.horizontal(|ui| {
+                if ui.add_enabled(can_make, egui::Button::new(tl!("New set"))).clicked() {
+                    edit = Some(CodeEdit::CreateSet { name: name.clone() });
+                }
+                if ui.add_enabled(editable, egui::Button::new(tl!("Rename set"))).clicked() {
+                    edit = Some(CodeEdit::RenameSet { from: set.key().to_string(), to: name.clone() });
+                }
+                if ui.add_enabled(editable, egui::Button::new(tl!("Delete set"))).clicked() {
+                    edit = Some(CodeEdit::DeleteSet { name: set.key().to_string() });
+                }
+            });
+            ui.horizontal(|ui| {
+                out.import = ui.add_enabled(can_make, egui::Button::new(tl!("Import…"))).clicked();
+                let any = !app.redaction_codes.custom().is_empty();
+                out.export = ui.add_enabled(any, egui::Button::new(tl!("Export…"))).clicked();
+            });
+            ui.add_enabled(can_make, widgets::checkbox(&mut e.replace, tl!("Imported sets replace sets with the same name")));
+        });
+        ui.add_space(20.0);
+        ui.vertical(|ui| {
+            ui.set_width(310.0);
+            ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Codes in {set}"), &[("set", set.name())])).strong());
+            egui::ScrollArea::vertical().id_salt("redaction-codes").max_height(170.0).auto_shrink([false, true]).show(ui, |ui| {
+                for code in set.codes() {
+                    let current = e.code.as_deref() == Some(code);
+                    if ui.selectable_label(current, code).clicked() && !current {
+                        e.code = Some(code.to_string());
+                        e.code_text = code.to_string();
+                    }
+                }
+            });
+            ui.add_space(6.0);
+            let l = ui.label(tl!("Code:"));
+            ui.add_enabled(editable, widgets::line(&mut e.code_text).desired_width(300.0)).labelled_by(l.id);
+            let code = e.code_text.trim().to_string();
+            ui.horizontal(|ui| {
+                if ui.add_enabled(editable, egui::Button::new(tl!("Add code"))).clicked() {
+                    edit = Some(CodeEdit::AddCode { set: set.key().to_string(), code: code.clone() });
+                }
+                let picked = e.code.clone().filter(|_| editable);
+                if ui.add_enabled(picked.is_some(), egui::Button::new(tl!("Rename code"))).clicked()
+                    && let Some(from) = picked.clone()
+                {
+                    edit = Some(CodeEdit::RenameCode { set: set.key().to_string(), from, to: code.clone() });
+                }
+                if ui.add_enabled(picked.is_some(), egui::Button::new(tl!("Remove code"))).clicked()
+                    && let Some(code) = picked
+                {
+                    edit = Some(CodeEdit::RemoveCode { set: set.key().to_string(), code });
+                }
+            });
+            if set.built_in() {
+                ui.label(egui::RichText::new(tl!("Built-in sets can't be changed. Make a new set for your own codes.")).small().color(t.text_muted));
+            }
+        });
+    });
+    if let Some((msg, refused)) = &e.message {
+        ui.add_space(6.0);
+        let color = if *refused { ui.visuals().error_fg_color } else { t.text_muted };
+        ui.label(egui::RichText::new(msg.as_str()).color(color));
+    }
+    if let Some((_, why)) = &locked {
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new(crate::i18n::fmt(
+                tl!("The custom code sets saved in the settings could not be read ({why}). They are kept unchanged until you discard them."),
+                &[("why", why)],
+            ))
+            .color(ui.visuals().error_fg_color),
+        );
+        if ui.button(tl!("Discard saved code sets")).clicked() {
+            app.discard_unread_redaction_codes();
+        }
+    }
+    if let Some(edit) = edit {
+        app.edit_redaction_codes(edit);
+    }
+    ui.add_space(12.0);
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        out.close = widgets::pill_button(ui, tl!("Close"), true).clicked();
+    });
+    out
+}
+
+impl PdfCraftApp {
+    /// Open Edit Codes on the set the Redaction Properties chose.
+    pub fn open_code_editor(&mut self) {
+        let set = self.redact_prefs.code_set.clone();
+        let name = self.redaction_codes.find(&set).filter(|s| !s.built_in()).map(|s| s.name().to_string()).unwrap_or_default();
+        self.code_editor = CodeEditor { set, set_name: name, ..Default::default() };
+    }
+
+    /// Make one Edit Codes change. The properties (this run's, the saved defaults and those
+    /// Cancel goes back to) follow it, so a renamed set or code stays chosen. A refusal changes
+    /// nothing and says why in the dialog.
+    pub fn edit_redaction_codes(&mut self, edit: CodeEdit) -> bool {
+        if self.redaction_codes_unread.is_some() {
+            self.code_editor.message = Some((tl!("Discard the saved code sets that could not be read first.").to_string(), true));
+            return false;
+        }
+        if let Err(e) = self.redaction_codes.apply(&edit) {
+            self.code_editor.message = Some((e.to_string(), true));
+            return false;
+        }
+        for prefs in [&mut self.redact_prefs, &mut self.redact_defaults].into_iter().chain(self.redact_before.as_mut()) {
+            prefs.follow(&edit, &self.redaction_codes);
+        }
+        let e = &mut self.code_editor;
+        match &edit {
+            CodeEdit::CreateSet { name } => {
+                e.set = name.clone();
+                e.code = None;
+            }
+            CodeEdit::RenameSet { from, to } if e.set == *from => e.set = to.clone(),
+            CodeEdit::DeleteSet { name } if e.set == *name => {
+                e.set = REDACTION_CODE_SETS[0].id.to_string();
+                e.set_name.clear();
+                e.code = None;
+            }
+            CodeEdit::AddCode { code, .. } => {
+                e.code = Some(code.clone());
+                e.code_text.clear();
+            }
+            CodeEdit::RenameCode { to, .. } => e.code = Some(to.clone()),
+            CodeEdit::RemoveCode { .. } => {
+                e.code = None;
+                e.code_text.clear();
+            }
+            _ => {}
+        }
+        e.message = None;
+        true
+    }
+
+    /// Edit Codes ▸ Import: add the sets of a code set file, all of them or none.
+    pub fn import_redaction_codes(&mut self, name: &str, bytes: &[u8]) -> bool {
+        if self.redaction_codes_unread.is_some() {
+            self.code_editor.message = Some((tl!("Discard the saved code sets that could not be read first.").to_string(), true));
+            return false;
+        }
+        let read = CodeLibrary::read_file(bytes).and_then(|sets| self.redaction_codes.import(sets, self.code_editor.replace));
+        match read {
+            Ok(names) => {
+                for prefs in [&mut self.redact_prefs, &mut self.redact_defaults].into_iter().chain(self.redact_before.as_mut()) {
+                    prefs.settle(&self.redaction_codes);
+                }
+                if let Some(first) = names.first() {
+                    self.code_editor.set = first.clone();
+                    self.code_editor.code = None;
+                }
+                let msg = match names.as_slice() {
+                    [one] => crate::i18n::fmt(tl!("Imported the code set {set} from {name}."), &[("set", one), ("name", name)]),
+                    _ => crate::i18n::fmt(tl!("Imported {n} code sets from {name}."), &[("n", &names.len().to_string()), ("name", name)]),
+                };
+                self.code_editor.message = Some((msg, false));
+                true
+            }
+            Err(e) => {
+                let msg = crate::i18n::fmt(tl!("{name} was not imported: {e}"), &[("name", name), ("e", &e.to_string())]);
+                self.code_editor.message = Some((msg.clone(), true));
+                self.notify(msg);
+                false
+            }
+        }
+    }
+
+    /// Edit Codes ▸ Export: write every custom set to a code set file.
+    pub fn export_redaction_codes(&mut self) {
+        let bytes = match self.redaction_codes.export(None) {
+            Ok(b) if !self.redaction_codes.custom().is_empty() => b,
+            Ok(_) => {
+                self.code_editor.message = Some((tl!("There are no custom code sets to export.").to_string(), true));
+                return;
+            }
+            Err(e) => {
+                self.code_editor.message = Some((e.to_string(), true));
+                return;
+            }
+        };
+        const NAME: &str = "redaction-codes.json";
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let write = move |app: &mut PdfCraftApp, path: std::path::PathBuf| {
+                let said = match crate::editing::write_atomically(&path.to_string_lossy(), &bytes) {
+                    Ok(()) => (tl!("Exported the custom code sets.").to_string(), false),
+                    Err(e) => (e.to_string(), true),
+                };
+                app.code_editor.message = Some(said);
+            };
+            match self.export_dir_override.as_ref().map(|d| std::path::PathBuf::from(d).join(NAME)) {
+                Some(path) => write(self, path),
+                None => {
+                    use crate::file_filter::AddFilterAnyCase as _;
+                    let dialog = rfd::AsyncFileDialog::new().set_file_name(NAME).add_filter_any_case(tl!("Redaction codes"), &["json"]);
+                    self.ask_one(crate::pickers::Ask::Save(dialog), None, write);
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        if let Err(e) = crate::editing::download(NAME, &bytes) {
+            self.code_editor.message = Some((e, true));
+        }
+    }
+
+    /// Forget saved code sets that could not be read, so new ones can be made and saved.
+    pub fn discard_unread_redaction_codes(&mut self) {
+        self.redaction_codes_unread = None;
+        self.redaction_codes = CodeLibrary::default();
+        self.code_editor.message = Some((tl!("The saved code sets were discarded.").to_string(), false));
+    }
 }
 
 /// Apply redactions confirmation. Returns (apply, cancel).

@@ -696,7 +696,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "redact_mark",
             "Mark for redaction",
-            "Mark content for redaction (nothing is removed until redact_apply). One of: rect [x0, y0, x1, y1] (points from the top-left of the displayed page) with page; find (text, every match); words (a list of words or phrases, every match of each; the result's matched_words says how many marks each made); pattern (phone, email, credit-card, ssn, date, iban: every match, Acrobat's Search & Redact patterns); regex (your own regular expression, every match, on the page text with words and lines separated by one space; Rust regex syntax: linear-time, no look-around or back-references, case-sensitive unless (?i), at most 1024 bytes, more than 10000 matches on one page fail the call, matches of the empty string are refused) with optional validate (luhn, mod97, iban: keep a match only if its checksum holds); whole_pages: true. find and words accept case_sensitive and whole_words (both default false). Select one page with page or multiple with pages (default all); do not pass both. rect requires page. overlay: text shown on the box once applied, or code_set (foia: U.S. FOIA (b)(1)(A)…(b)(9); privacy-act: U.S. Privacy Act (d)(5), (j)(1)…(k)(7)) with codes, shown as \"(b)(6), (b)(7)(C)\"; fill: box colour (default black). Undoable.",
+            "Mark content for redaction (nothing is removed until redact_apply). One of: rect [x0, y0, x1, y1] (points from the top-left of the displayed page) with page; find (text, every match); words (a list of words or phrases, every match of each; the result's matched_words says how many marks each made); pattern (phone, email, credit-card, ssn, date, iban: every match, Acrobat's Search & Redact patterns); regex (your own regular expression, every match, on the page text with words and lines separated by one space; Rust regex syntax: linear-time, no look-around or back-references, case-sensitive unless (?i), at most 1024 bytes, more than 10000 matches on one page fail the call, matches of the empty string are refused) with optional validate (luhn, mod97, iban: keep a match only if its checksum holds); whole_pages: true. find and words accept case_sensitive and whole_words (both default false). Select one page with page or multiple with pages (default all); do not pass both. rect requires page. overlay: text shown on the box once applied, or code_set (foia: U.S. FOIA (b)(1)(A)…(b)(9); privacy-act: U.S. Privacy Act (d)(5), (j)(1)…(k)(7); or the name of a custom set from redact_code_set_edit or redact_code_sets_import, listed by redact_code_sets) with codes, shown in the set's order as \"(b)(6), (b)(7)(C)\"; fill: box colour (default black). Undoable.",
         )
         .with(schema(
             json!({
@@ -713,7 +713,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "whole_pages": { "type": "boolean" },
                 "pages": pages("to search or mark (default: all); mutually exclusive with page, and not valid with rect"),
                 "overlay": { "type": "string" },
-                "code_set": { "type": "string", "enum": ["foia", "privacy-act"] },
+                "code_set": { "type": "string", "minLength": 1, "description": "foia, privacy-act, or a custom set's name (redact_code_sets lists them)." },
                 "codes": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Redaction codes from code_set, e.g. [\"(b)(6)\"]." },
                 "fill": { "type": "string", "description": "#RRGGBB or a colour name." },
                 "author": { "type": "string" },
@@ -730,6 +730,52 @@ pub fn tools() -> Vec<ToolDef> {
         t("redact_clear", "Remove redaction marks", "Remove every redaction mark without applying it. Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t(
+            "redact_code_sets",
+            "List redaction code sets",
+            "Redaction Properties ▸ Redaction code: every code set redact_mark's code_set can name, the built-in ones first (foia, privacy-act; read-only), then this session's custom sets. Each: id (what code_set takes: a built-in set's id, a custom set's name), name, built_in and codes in the order the overlay text lists them.",
+        )
+        .ro()
+        .with(schema(json!({}), &[])),
+        t(
+            "redact_code_set_edit",
+            "Edit redaction codes",
+            "Redaction Properties ▸ Edit Codes: change one custom code set. action: create (a new, empty set named set), rename (set to to), delete (set), add_code (code to set, at the end), rename_code (code to to) or remove_code (code). Built-in sets can't be changed. Names and codes can't be empty, start or end with a space, or hold control characters; a set name is at most 80 characters and can't repeat another set's name in any letter case; a code is at most 40 characters and can't repeat in its set; at most 50 custom sets of at most 200 codes each. A refused edit changes nothing and says why. Custom sets last for this automation session (the app keeps its own in its settings): export them with redact_code_sets_export to keep them. Returns the set as it is now (null once deleted).",
+        )
+        .destructive()
+        .with(schema(
+            json!({
+                "action": { "type": "string", "enum": ["create", "rename", "delete", "add_code", "rename_code", "remove_code"] },
+                "set": { "type": "string", "minLength": 1, "description": "The custom set to change; for create, the new set's name." },
+                "to": { "type": "string", "minLength": 1, "description": "rename and rename_code: the new name or code." },
+                "code": { "type": "string", "minLength": 1, "description": "add_code, rename_code and remove_code: the code." },
+            }),
+            &["action", "set"],
+        )),
+        t(
+            "redact_code_sets_import",
+            "Import redaction code sets",
+            "Edit Codes ▸ Import: add the custom sets of a code set file (written by redact_code_sets_export or the app's Export; JSON with format \"pdfcraft-redaction-codes\", version 1 and sets [{name, codes}]) to this session's custom sets. The file is checked whole first, at most 4 MiB, and refused with what was wrong (an unknown key, a newer version, an empty, repeated, too long or control-character name or code, too many sets or codes). A set whose name a custom set already has is refused unless replace is true, which replaces it; all of the file's sets are added or none. Returns the names imported.",
+        )
+        .with(schema(
+            json!({
+                "path": { "type": "string", "minLength": 1 },
+                "replace": { "type": "boolean", "description": "Replace custom sets of the same name (default false: refuse the file)." },
+            }),
+            &["path"],
+        )),
+        t(
+            "redact_code_sets_export",
+            "Export redaction code sets",
+            "Edit Codes ▸ Export: atomically write this session's custom code sets (all, or those named in sets) to path as a code set file that redact_code_sets_import and the app read. Built-in sets aren't exported (every copy has them). Returns the path, the number of sets and the bytes written.",
+        )
+        .with(schema(
+            json!({
+                "path": { "type": "string", "minLength": 1 },
+                "sets": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1, "maxItems": 50, "description": "Names of the custom sets to write (default: all)." },
+            }),
+            &["path"],
+        )),
         t(
             "doc_hidden_info",
             "Find hidden information",

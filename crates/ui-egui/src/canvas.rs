@@ -3759,7 +3759,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
                         author: author.clone(),
                     })
                 } else {
-                    app.redact_prefs.mark(page, quads, &author)
+                    app.redact_prefs.mark(&app.redaction_codes, page, quads, &author)
                 }
             })
             .collect();
