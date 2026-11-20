@@ -49,6 +49,12 @@ pub(crate) struct PageSelectTool<'a> {
     picks: PickSlots<'a>,
     xforms: &'a [(usize, PageXform)],
     generation: u64,
+    /// Cap multi-click selection at a word (double-click): markup tools mark a double-clicked word
+    /// without letting further rapid clicks widen to line/page selections.
+    cap_clicks: bool,
+    /// Whether `drag` ran in the active gesture: a plain single click without a drag clears the
+    /// single-glyph press anchor on release, as production's text selection did.
+    dragged: &'a mut bool,
 }
 
 impl<'a> PageSelectTool<'a> {
@@ -56,6 +62,7 @@ impl<'a> PageSelectTool<'a> {
     /// `texts`, keeping its gesture in `text`; `generation` is the document's edit generation, which a pick carries.
     // PLAN: the decisions give no `info`; the view-to-user mapping of the pick needs it (pdf-canvas-w9's arm passes it,
     // and the two pick fields as `PickSlots::new(&mut pending_pick, &mut picked_image)`).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         pages: &'a [PlacedPage],
         texts: &'a dyn PageTexts,
@@ -64,13 +71,20 @@ impl<'a> PageSelectTool<'a> {
         picks: PickSlots<'a>,
         xforms: &'a [(usize, PageXform)],
         generation: u64,
+        dragged: &'a mut bool,
     ) -> Self {
-        Self { text: TextSelectTool::new(pages, texts, text), info, picks, xforms, generation }
+        Self { text: TextSelectTool::new(pages, texts, text), info, picks, xforms, generation, cap_clicks: false, dragged }
     }
 
     /// The Column Select tool is active.
     pub(crate) fn column(mut self, on: bool) -> Self {
         self.text = self.text.column(on);
+        self
+    }
+
+    /// Markup and redaction tools cap rapid multi-clicks at a word (clicks > 2 act as a single click).
+    pub(crate) fn cap_clicks(mut self, on: bool) -> Self {
+        self.cap_clicks = on;
         self
     }
 
@@ -97,21 +111,30 @@ impl CanvasTool for PageSelectTool<'_> {
         // A drag replaces the selection without passing through none, so a re-drag over words whose bar Copy closed
         // would keep the bar hidden.
         *self.picks.dismissed = None;
-        let action = self.text.press(pointer, cx);
-        self.pick(pointer);
+        *self.dragged = false;
+        let capped = if self.cap_clicks && pointer.clicks > 2 { pointer.clicks(1) } else { *pointer };
+        let action = self.text.press(&capped, cx);
+        self.pick(&capped);
         action
     }
 
     fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        *self.dragged = true;
         self.picks.let_go();
         self.text.drag(pointer, cx);
     }
 
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        let clicks = if self.cap_clicks && pointer.clicks > 2 { 1 } else { pointer.clicks };
         self.text.release(pointer, cx);
+        if !*self.dragged && clicks < 2 && !pointer.mods.shift {
+            self.text.key(&ToolKey::Cancel, cx);
+        }
+        *self.dragged = false;
     }
 
     fn cancel(&mut self, reason: CancelReason, cx: &mut ToolContext<'_>) {
+        *self.dragged = false;
         self.picks.let_go();
         self.text.cancel(reason, cx);
     }

@@ -198,6 +198,20 @@ fn open_picker(
     app.open_colour_picker(crate::colour_picker::PickerHost::App, request, then);
 }
 
+/// The height of the toolbar's rail laid out `width` wide, with the active tool's controls under it.
+pub(crate) fn measure_rail(app: &mut PdfCraftApp, ui: &egui::Ui, width: f32) -> f32 {
+    app.hotbar.normalize();
+    let toolbar = slots(app);
+    let current = current_tool(app);
+    let last_used = last_used(app);
+    let editing = app.hotbar.drawer_open;
+    let mut rail = ToolRail::new(tl!("Toolbar").to_string(), &toolbar, &current, &last_used).edit_toolbar(tl!("Edit toolbar").to_string());
+    if editing {
+        rail = rail.editing();
+    }
+    rail.measure_rail(ui, width, |ui, _footer| footer_controls(ui, app)).y
+}
+
 /// Shows the toolbar's rail in the width `ui` has left, with the active tool's controls under it, and applies what
 /// the user did: a drawer pick runs its command, a drawer edit changes the tool list.
 pub(crate) fn show_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {

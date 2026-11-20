@@ -365,6 +365,7 @@ impl PdfCraftApp {
             screen_mode: Default::default(),
             host_dirty: None,
             close_guard: None,
+            close_guard_dialog: None,
             props_session: None,
             summary_sort: Default::default(),
             summarize_dialog: None,
@@ -533,13 +534,15 @@ impl PdfCraftApp {
         // Full screen draws the page alone: not the palette, nor the OCR Verify screen it was
         // entered over. Dialogs and prompts show there too.
         let shown = !(self.screen_mode.body_only() && self.active.is_some());
-        self.modal_open() || (self.palette_open || self.ocr_verify.open) && shown
+        self.modal_open() || self.prompts.full_screen.is_some() || (self.palette_open || self.ocr_verify.open) && shown
     }
 
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
-    /// on the document underneath it.
+    /// on the document underneath it. The full-screen prompt covers the pages (`covers_pages`)
+    /// while leaving the menus on, as production's `pending_full_screen` did.
     pub(crate) fn modal_open(&self) -> bool {
-        !self.dialogs.is_empty()
+        let fs_id = self.prompts.full_screen.map(|(id, _)| id);
+        self.dialogs.open_dialogs().iter().any(|d| Some(d.id) != fs_id)
             || self.password_prompt.is_some()
             || self.unlock_prompt.is_some()
             || self.pending_link.is_some()

@@ -262,15 +262,24 @@ pub(super) fn marked(map: &PageMap<'_>, a: &Annotation, members: &[&Annotation],
         rect = rect.union(map.doc_rect(a.page, m.shown_rect(rotation)));
     }
     let doc = |p: [f32; 2]| map.to_doc(a.page, [f64::from(p[0]), f64::from(p[1])]);
-    let points = if kind.is_pointwise() {
+    let points = if kind.is_pointwise() || kind == AnnotationKind::Callout {
         a.points.iter().map(|q| doc(*q)).collect()
     } else if kind.is_markup() {
-        std::iter::once(a)
+        let mut pts: Vec<Point> = std::iter::once(a)
             .chain(members.iter().copied())
             .flat_map(|m| m.quads.iter())
             .flat_map(|q| [[q[0], q[1]], [q[2], q[3]], [q[4], q[5]], [q[6], q[7]]])
             .map(doc)
-            .collect()
+            .collect();
+        // A Replace Text proposal pairs a strikeout (quads) with a caret (rect only): include the
+        // caret's box as a quad so `body_hit` / `pick_at` hits the caret directly too.
+        if kind == AnnotationKind::ReplaceText {
+            for c in std::iter::once(a).chain(members.iter().copied()).filter(|m| m.subtype == "Caret") {
+                let r = frame(c, rotation);
+                pts.extend([[r[0], r[3]], [r[2], r[3]], [r[0], r[1]], [r[2], r[1]]].into_iter().map(doc));
+            }
+        }
+        pts
     } else {
         Vec::new()
     };
@@ -405,6 +414,17 @@ pub(crate) fn parts(
     // A markup's lines, or its box when it has none (a highlight with no /QuadPoints is picked by its box too).
     let lines: Vec<Rect> = if found.kind.is_markup() { found.points.chunks(4).filter_map(bounds).collect() } else { Vec::new() };
     let mut shapes = if lines.is_empty() { vec![found.extent(icon_side)] } else { lines };
+    // A Replace Text group pairs a strikeout (its quads) with a caret: keep the caret's box clickable too.
+    if found.kind == AnnotationKind::ReplaceText
+        && let Some(rotation) = info.pages.get(page).map(|p| p.rotation)
+    {
+        let primary_key = key_of(id);
+        let carets = info
+            .annotations
+            .iter()
+            .filter(|a| a.subtype == "Caret" && ((a.page, a.index) == primary_key || (a.grouped && a.parent == Some(primary_key))));
+        shapes.extend(carets.map(|c| map.doc_rect(page, frame(c, rotation))));
+    }
     shapes.extend(markers.iter().filter(|(m, _)| *m == id).map(|(_, r)| *r));
     let screen_shapes: Vec<egui::Rect> = shapes
         .iter()
@@ -635,10 +655,21 @@ fn create(a: &Marked, map: &PageMap<'_>, prefs: &CommentPrefs) -> Option<Edit> {
 /// A placement opens its composer draft (a note, a text box, a callout, an insertion), or asks for an attachment's
 /// file, and leaves nothing selected.
 fn place(p: &Placement, map: &PageMap<'_>, view: &mut CommentView) {
-    let at = map.to_user(p.page, p.at);
+    let mut at = map.to_user(p.page, p.at);
     let kind = match p.kind {
         AnnotationKind::Note => ComposerKind::Note,
-        AnnotationKind::TextBox => ComposerKind::TextBox { size: p.size.map(|s| [map.shown_len(p.page, s.x), map.shown_len(p.page, s.y)]) },
+        AnnotationKind::TextBox => {
+            let size = match (p.size, map.info.pages.get(p.page)) {
+                (Some(s), Some(page)) => {
+                    let (top_left, size) = super::geometry::drawn_box(page, at, map.to_user(p.page, p.at + s));
+                    at = top_left;
+                    Some(size)
+                }
+                (Some(s), None) => Some([map.shown_len(p.page, s.x), map.shown_len(p.page, s.y)]),
+                (None, _) => None,
+            };
+            ComposerKind::TextBox { size }
+        }
         AnnotationKind::Callout => {
             let Some(from) = p.from else { return };
             ComposerKind::Callout { point: map.to_user(p.page, from) }

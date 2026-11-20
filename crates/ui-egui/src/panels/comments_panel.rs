@@ -281,12 +281,37 @@ pub(crate) fn show(
 ) -> Option<Edit> {
     let info = &doc.info;
     let (list, map) = threads(doc, prefs);
+    // Keep the panel's selection in step with the page's (clicks on the page, or newly added comments),
+    // without disturbing an open inline editor.
+    let mut selected_threads = Vec::new();
+    for key in view.session.comments.selection() {
+        if let Some(&id) = map.owner.get(&key)
+            && !selected_threads.contains(&id)
+        {
+            selected_threads.push(id);
+        }
+    }
+    let lead = selected_threads.first().copied();
+    let synced = craft::behavior::Selection::new(selected_threads, lead, lead);
+    if view.session.comments.panel.selected.items != synced.items || view.session.comments.panel.selected.lead != synced.lead {
+        view.session.comments.panel.selected = synced;
+    }
     // A comment selected elsewhere (on the page, or just added) is revealed in this same pass: the
     // panel unfolds its page and scrolls its card in. A reply or group member reveals its comment.
+    // `reveal` drops an inline edit when the lead changes, so preserve a newly opened editor on the
+    // revealed comment or an unsaved note being typed in another card.
     if std::mem::take(&mut view.session.comments.reveal)
         && let Some(id) = view.session.comments.selection().first().and_then(|key| map.owner.get(key).copied())
     {
+        let saved_edit = view.session.comments.panel.editing.clone();
         view.session.comments.panel.reveal(id);
+        match saved_edit {
+            Some((thread, index, text)) if thread == id => view.session.comments.panel.edit(thread, index, text),
+            Some((thread, index, text)) if !text.is_empty() => {
+                view.session.comments.panel.editing = Some((thread, index, text));
+            }
+            _ => {}
+        }
     }
     let output = CommentsPanel::new(tl!("Comments"), &list, &mut view.session.comments.panel)
         .header(CommentsHeader::Hosted)
@@ -298,6 +323,11 @@ pub(crate) fn show(
         .page_label(|page| info.pages.get(page).map_or("?", |p| p.label.as_str()).to_owned())
         .card_rows(|thread, index| card_rows(doc, &map, thread, index))
         .show(ui);
+    // Picking a card in the panel (even one already selected on the page) acts on the card's
+    // comment, forgetting any group subordinate a page click remembered (#4358).
+    if output.response.contains_pointer() && ui.input(|i| i.pointer.any_pressed()) {
+        view.session.comments.member = None;
+    }
     let mut applied = Vec::new();
     for e in output.edits {
         match e {
@@ -330,6 +360,14 @@ pub(crate) fn show(
                 {
                     if index == 0 {
                         view.session.comments.clear_selection();
+                    } else if let Some((et, ei, _)) = view.session.comments.panel.editing.as_mut()
+                        && *et == thread
+                    {
+                        if *ei == index {
+                            view.session.comments.panel.editing = None;
+                        } else if *ei > index {
+                            *ei -= 1;
+                        }
                     }
                     applied.push(Edit::DeleteAnnotation { page, index: at });
                 }

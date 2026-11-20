@@ -183,7 +183,7 @@ pub(super) fn inspector(app: &mut PdfCraftApp, ui: &mut egui::Ui, n: &mut Intent
         let field =
             TextField::new(tl!("Corrected text"), Bind::bound(correction)).placeholder(tl!("Corrected text (Enter commits)")).submits().show(ui);
         submitted |= field.submitted;
-        Row::new().show(ui, |ui, _| {
+        Row::new().wrap(true).show(ui, |ui, _| {
             if Button::new(tl!("Remove")).show(ui).clicked() {
                 n.set_removed = Some(true);
             }

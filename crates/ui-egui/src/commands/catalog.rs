@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use craft::keymap::{Key, Mods};
 use craft::menu::Chord;
 use craft::ui::runtime::commands::{
-    AppCatalog, Binding, CommandDef, CommandDefError, CommandGate, CommandInput, CommandKind, CommandRef, CommandState, Scope,
+    AppCatalog, Binding, CommandDef, CommandDefError, CommandGate, CommandInput, CommandKind, CommandRef, CommandState, ModalRule, Scope,
 };
 use pdfcraft_engine::commands::{self as engine, CommandSpec};
 
@@ -87,7 +87,12 @@ pub(crate) fn catalog(mac: bool) -> Result<AppCatalog, CommandDefError> {
         push(CommandDef::new(CommandRef::new(*id), *label, Scope::app()), shortcut.and_then(menus::chord).into_iter().collect());
     }
     for (id, label, icon) in CATALOG_ONLY {
-        push(CommandDef::new(CommandRef::new(*id), *label, Scope::app()).with_icon(*icon), Vec::new());
+        let mut def = CommandDef::new(CommandRef::new(*id), *label, Scope::app()).with_icon(*icon);
+        if *id == DOCUMENT {
+            // Window ▸ switching tabs stays available under the full-screen prompt (gated still blocks it under other modals).
+            def = def.with_modal(ModalRule::Always);
+        }
+        push(def, Vec::new());
     }
     // The rows are static, so the catalog never changes generation.
     AppCatalog::new(defs, 0)

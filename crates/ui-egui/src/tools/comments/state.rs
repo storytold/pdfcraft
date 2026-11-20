@@ -147,6 +147,10 @@ pub struct CommentView {
     pub panel: CommentsPanelState,
     /// What is typed or being dragged in each open pop-up window, by the comment's (page, index).
     pub popup_drafts: HashMap<(usize, usize), NoteDrafts>,
+    /// Stable per-window id for each entry in [`Self::popup_drafts`], so a pop-up's unsaved text
+    /// inside [`NoteDrafts`] still matches when a deletion shifts its comment's index.
+    popup_ids: HashMap<(usize, usize), u64>,
+    next_popup_id: u64,
     /// The panel should scroll the selected card into view.
     pub reveal: bool,
     /// Comment Properties was asked for from the panel: (page, index).
@@ -380,12 +384,15 @@ impl CommentView {
         // What is typed in a pop-up, and a window being dragged or resized, follow theirs too.
         let drafts: HashMap<(usize, usize), NoteDrafts> =
             std::mem::take(&mut self.popup_drafts).into_iter().filter_map(|(key, d)| moved(key).map(|key| (key, d))).collect();
+        let popup_ids: HashMap<(usize, usize), u64> =
+            std::mem::take(&mut self.popup_ids).into_iter().filter_map(|(key, id)| moved(key).map(|key| (key, id))).collect();
         // Other transient state still needs conservative pruning; refresh the slot snapshot too.
         self.document_changed(info);
         self.tool.selected = selected;
         self.member = None;
         self.panel.editing = editing;
         self.popup_drafts = drafts;
+        self.popup_ids = popup_ids;
     }
 
     /// Undo or Redo just ran. Either may have put annotations back or taken them away, on any
@@ -396,6 +403,15 @@ impl CommentView {
         self.clear_selection();
         self.panel.editing = None;
         self.popup_drafts.clear();
+        self.popup_ids.clear();
+    }
+
+    /// The stable window id for the open pop-up of `key`, kept across index shifts after deletions.
+    pub(super) fn popup_id(&mut self, key: (usize, usize)) -> u64 {
+        *self.popup_ids.entry(key).or_insert_with(|| {
+            self.next_popup_id = self.next_popup_id.wrapping_add(1);
+            self.next_popup_id
+        })
     }
 
     /// The comments the pop-ups hold unsaved text, a reply or a drag for, in page order.
@@ -416,6 +432,7 @@ impl CommentView {
         };
         let kept = |p: usize, i: usize| who(before, (p, i)).is_some_and(|w| who(after, (p, i)) == Some(w));
         self.popup_drafts.retain(|&(p, i), _| kept(p, i));
+        self.popup_ids.retain(|&(p, i), _| kept(p, i));
     }
 }
 

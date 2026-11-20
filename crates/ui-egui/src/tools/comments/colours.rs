@@ -84,7 +84,9 @@ pub(crate) fn palette(ui: &mut egui::Ui, label: &str, current: Option<Rgb>, key:
         .other(key, tl!("Other colour…"))
         .recent(tl!("Recent colours"), &recent)
         .show(ui);
-    PalettePick { picked: out.picked.map(to_rgb), request: out.pick_color }
+    // Snap swatch picks back to the exact f64 SWATCHES entry instead of an f32 round-trip.
+    let picked = out.picked.map(|c| SWATCHES.iter().find(|(_, rgb)| to_srgba(*rgb) == c).map_or_else(|| to_rgb(c), |(_, rgb)| *rgb));
+    PalettePick { picked, request: out.pick_color }
 }
 
 /// What a none-or-colour choice reported this pass.

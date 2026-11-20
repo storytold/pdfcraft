@@ -56,6 +56,50 @@ pub fn shared() -> Arc<I18n> {
     Arc::clone(&I18N)
 }
 
+/// The English name for a BCP 47 language code, used when a picker's fonts cannot draw the
+/// language's native name (including date-format languages in builds without `craft-i18n`).
+pub fn english_name_for_code(code: &str) -> &str {
+    match code {
+        "en" => "English",
+        "ja" => "Japanese",
+        "zh-hans" => "Simplified Chinese",
+        "zh-hant" => "Traditional Chinese",
+        "cs" => "Czech",
+        "pt-br" => "Portuguese (Brazil)",
+        "de" => "German",
+        "es" => "Spanish",
+        "fr" => "French",
+        "ru" => "Russian",
+        "kk" => "Kazakh",
+        "bg" => "Bulgarian",
+        "te" => "Telugu",
+        "hu" => "Hungarian",
+        "uk" => "Ukrainian",
+        "it" => "Italian",
+        "ar" => "Arabic",
+        "ckb" => "Central Kurdish",
+        "fa" => "Persian",
+        "pl" => "Polish",
+        "sl" => "Slovenian",
+        "bs" => "Bosnian",
+        "el" => "Greek",
+        "tr" => "Turkish",
+        "lt" => "Lithuanian",
+        "id" => "Indonesian",
+        "vi" => "Vietnamese",
+        "fi" => "Finnish",
+        "nb" => "Norwegian Bokmål",
+        "sq" => "Albanian",
+        "th" => "Thai",
+        "ca" => "Catalan",
+        "ro" => "Romanian",
+        "lo" => "Lao",
+        "hi" => "Hindi",
+        "ko" => "Korean",
+        other => other,
+    }
+}
+
 /// The `language` preference value that follows the system locale.
 pub const AUTO: &str = "auto";
 
@@ -249,47 +293,7 @@ impl Lang {
     /// The language's name in English, used by [`picker_name`](Self::picker_name) when this
     /// build's fonts cannot draw [`name`](Self::name).
     pub fn english_name(self) -> &'static str {
-        match self.code() {
-            "en" => "English",
-            "ja" => "Japanese",
-            "zh-hans" => "Simplified Chinese",
-            "zh-hant" => "Traditional Chinese",
-            "cs" => "Czech",
-            "pt-br" => "Portuguese (Brazil)",
-            "de" => "German",
-            "es" => "Spanish",
-            "fr" => "French",
-            "ru" => "Russian",
-            "kk" => "Kazakh",
-            "bg" => "Bulgarian",
-            "te" => "Telugu",
-            "hu" => "Hungarian",
-            "uk" => "Ukrainian",
-            "it" => "Italian",
-            "ar" => "Arabic",
-            "ckb" => "Central Kurdish",
-            "fa" => "Persian",
-            "pl" => "Polish",
-            "sl" => "Slovenian",
-            "bs" => "Bosnian",
-            "el" => "Greek",
-            "tr" => "Turkish",
-            "lt" => "Lithuanian",
-            "id" => "Indonesian",
-            "vi" => "Vietnamese",
-            "fi" => "Finnish",
-            "nb" => "Norwegian Bokmål",
-            "sq" => "Albanian",
-            "th" => "Thai",
-            "ca" => "Catalan",
-            "ro" => "Romanian",
-            "lo" => "Lao",
-            "hi" => "Hindi",
-            "ko" => "Korean",
-            // Only reached if a language is added to `LANGUAGES` without an English name; the
-            // code still tells the reader which entry it is.
-            code => code,
-        }
+        english_name_for_code(self.code())
     }
 
     /// The name to show in the language picker: the native name when the current fonts can draw

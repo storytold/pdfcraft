@@ -44,10 +44,13 @@ impl PdfCraftApp {
         if std::mem::take(&mut self.startup_check) && self.update_check_at_start {
             self.updater.check_at_start();
         }
+        // Answer any closed check-result dialog before `show_update_check`, so dismissing or
+        // restarting does not immediately reopen the dialog while `status` is still non-idle.
+        let dirty: Vec<usize> = (0..self.views.len()).filter(|&i| self.has_unsaved_work(i)).collect();
+        self.answer_update_check(ctx, dirty.is_empty());
         self.show_update_check();
 
         // The restart helper is scheduled before the app closes, so no update starts over unsaved work.
-        let dirty: Vec<usize> = (0..self.views.len()).filter(|&i| self.has_unsaved_work(i)).collect();
         let can_save = dirty.iter().all(|&i| self.saves_in_place(i));
         match self.updater.run_with_save(&mut self.dialogs, dirty.is_empty(), can_save) {
             Action::OpenUrl(url) => self.open_url(&url),
@@ -67,7 +70,6 @@ impl PdfCraftApp {
                 self.updater.save_stopped(None);
             }
         }
-        self.answer_update_check(ctx, dirty.is_empty());
     }
 
     /// Without an updater the web build has nothing to run.

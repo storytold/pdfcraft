@@ -329,7 +329,7 @@ fn open_parameters_wait_with_their_file_behind_a_password_prompt_and_a_full_queu
     h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Password required");
     // The password goes into the dialog's field and OK is pressed.
     // PLAN: the password field is found by its role; the OK button is the dialog's own (the last "Open" button)
-    let field = h.get_by(|n| n.role() == egui::accesskit::Role::PasswordInput);
+    let field = h.get_by(|n| n.role() == egui::accesskit::Role::PasswordInput && !n.is_hidden());
     field.focus();
     field.type_text("reader");
     h.run_steps(1);

@@ -262,7 +262,7 @@ impl PdfCraftApp {
         }
         let name = self.session.get(doc).map(|d| d.name.clone()).unwrap_or_default();
         let remaining = self.close_guard.as_ref().map_or(1, |g| g.remaining());
-        let _ = self.dialogs.open(UnsavedChangesDialog::new(scope, name).remaining(remaining));
+        self.close_guard_dialog = Some(self.dialogs.open(UnsavedChangesDialog::new(scope, name).remaining(remaining)));
     }
 
     /// Saves `doc`, then lets the guard go on. The save may finish on a later frame (the user
@@ -333,6 +333,7 @@ impl PdfCraftApp {
     /// The guard is done. A finished quit closes the window, which asks `close_requested` again
     /// and finds nothing left at risk; a quit that ended cancelled or held is called off.
     fn end_close_guard(&mut self, ctx: &egui::Context, finished: bool) {
+        self.close_guard_dialog = None;
         let Some(guard) = self.close_guard.take() else { return };
         if guard.scope() != CloseScope::Quit {
             return;

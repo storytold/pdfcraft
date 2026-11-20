@@ -1,5 +1,5 @@
-//! The Redact tool on the pages: a press over text selects it (the selection becomes marks when
-//! it ends), a press on free page space draws a box that becomes one mark.
+//! Shared text-or-area marking tool (Redact and Highlight, L-262): a press over text selects it,
+//! a press on free page space draws a box that becomes one mark.
 
 use craft::behavior::{CancelReason, Cursor, CursorIcon};
 use craft::pages::ui::PlacedPage;
@@ -20,37 +20,37 @@ const LEAST_BOX: f32 = 3.0;
 /// What the pointer's press is doing. The tool is built each pass, so the session holds this from the press to the
 /// release.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) enum RedactGesture {
+pub(crate) enum AreaMarkGesture {
     #[default]
     Idle,
     /// A text selection the select tool runs, begun on this page.
     Text { page: usize },
-    /// A box being drawn.
+    /// A box being drawn off text.
     Box,
 }
 
 /// What a finished gesture asks the document for.
-pub(crate) enum RedactResult {
-    /// A box on `page`, as a user-space quad.
-    Area { page: usize, quad: [f64; 8] },
-    /// A text selection that ended; the selection holds what to mark.
-    Text { page: usize },
+pub(crate) enum AreaMarkResult {
+    /// A box on `page`, as a user-space quad, made by `made_by`.
+    Area { made_by: QuickTool, page: usize, quad: [f64; 8] },
+    /// A text selection that ended for `made_by`; the selection holds what to mark.
+    Text { made_by: QuickTool, page: usize },
 }
 
-impl RedactResult {
-    /// Hands the finished gesture to the session as a pending redaction, or as a refusal when a
+impl AreaMarkResult {
+    /// Hands the finished gesture to the session as pending marks, or as a refusal when a
     /// selected page's text could not be read; `geo` places the pages of the pass.
     pub(crate) fn land(self, session: &mut PageSession, info: &DocInfo, geo: PageGeometry<'_>) {
         match self {
-            Self::Area { page, quad } => {
-                session.pending_redaction = Some((QuickTool::Redact, vec![(page, vec![quad])], page));
+            Self::Area { made_by, page, quad } => {
+                session.pending_marks = Some((made_by, vec![(page, vec![quad])], page));
             }
             // Across pages: a mark on each page it covers, once all are read; refused when one of
             // them could not be read, rather than leave it unmarked.
-            Self::Text { page } => match session.tool_marks(QuickTool::Redact, true, Some(page), true, info, geo) {
+            Self::Text { made_by, page } => match session.tool_marks(made_by, true, Some(page), made_by == QuickTool::Redact, info, geo) {
                 ToolMarks::Marks(marks, head) => {
                     session.clear_selection();
-                    session.pending_redaction = Some((QuickTool::Redact, marks, head));
+                    session.pending_marks = Some((made_by, marks, head));
                 }
                 ToolMarks::Unreadable => session.redaction_refused = true,
                 ToolMarks::None => {}
@@ -59,38 +59,37 @@ impl RedactResult {
     }
 }
 
-/// The Redact tool for one pass.
-pub(crate) struct RedactTool<'a> {
+/// The shared text-or-box marking tool for one pass (Redact and Highlight off text).
+pub(crate) struct AreaMarkTool<'a> {
+    made_by: QuickTool,
     select: PageSelectTool<'a>,
     drag: &'a mut PageBoxDrag,
-    gesture: &'a mut RedactGesture,
+    gesture: &'a mut AreaMarkGesture,
     placed: &'a [PlacedPage],
     /// The view's rotation, in degrees clockwise.
     rotation: u16,
     info: &'a DocInfo,
     over_text: Box<dyn Fn(Pos2) -> bool + 'a>,
-    finished: Option<RedactResult>,
+    finished: &'a mut Option<AreaMarkResult>,
 }
 
-impl<'a> RedactTool<'a> {
+impl<'a> AreaMarkTool<'a> {
     /// The tool over the placed pages, with the select tool that runs text selections, the session's box drag and
-    /// gesture, and the test of whether a screen point is over text (the same one the I-beam uses).
+    /// gesture, the test of whether a screen point is over text (the same one the I-beam uses), and the slot where
+    /// a finished gesture lands.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
+        made_by: QuickTool,
         select: PageSelectTool<'a>,
         drag: &'a mut PageBoxDrag,
-        gesture: &'a mut RedactGesture,
+        gesture: &'a mut AreaMarkGesture,
         placed: &'a [PlacedPage],
         rotation: u16,
         info: &'a DocInfo,
         over_text: impl Fn(Pos2) -> bool + 'a,
+        finished: &'a mut Option<AreaMarkResult>,
     ) -> Self {
-        Self { select, drag, gesture, placed, rotation, info, over_text: Box::new(over_text), finished: None }
-    }
-
-    /// After the host ran: the gesture the pass finished, which [`RedactResult::land`] applies once the tool's
-    /// borrows of the session end.
-    pub(crate) fn finished(self) -> Option<RedactResult> {
-        self.finished
+        Self { made_by, select, drag, gesture, placed, rotation, info, over_text: Box::new(over_text), finished }
     }
 
     fn placed_at(&self, p: Pos2) -> Option<&'a PlacedPage> {
@@ -107,7 +106,7 @@ impl<'a> RedactTool<'a> {
     }
 }
 
-impl CanvasTool for RedactTool<'_> {
+impl CanvasTool for AreaMarkTool<'_> {
     fn each_pass(&mut self, cx: &mut ToolContext<'_>) {
         self.select.each_pass(cx);
     }
@@ -117,43 +116,48 @@ impl CanvasTool for RedactTool<'_> {
         if (self.over_text)(pointer.pos) {
             let action = self.select.press(pointer, cx);
             match action {
-                ToolAction::Claimed => *self.gesture = RedactGesture::Text { page: placed.page },
-                // A double click selects a word whole: it ends the selection at once.
-                ToolAction::Done => self.finished = Some(RedactResult::Text { page: placed.page }),
+                ToolAction::Claimed => *self.gesture = AreaMarkGesture::Text { page: placed.page },
+                // A double click selects a word whole: Redact ends the selection at once; Highlight follows
+                // up through `page_after_text`.
+                ToolAction::Done if self.made_by == QuickTool::Redact => {
+                    *self.finished = Some(AreaMarkResult::Text { made_by: self.made_by, page: placed.page });
+                }
                 _ => {}
             }
             return action;
         }
         self.drag.press(placed, pointer.pos);
-        *self.gesture = RedactGesture::Box;
+        *self.gesture = AreaMarkGesture::Box;
         ToolAction::Claimed
     }
 
     fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         match *self.gesture {
-            RedactGesture::Text { .. } => self.select.drag(pointer, cx),
-            RedactGesture::Box => self.drag.drag(pointer.pos),
-            RedactGesture::Idle => {}
+            AreaMarkGesture::Text { .. } => self.select.drag(pointer, cx),
+            AreaMarkGesture::Box => self.drag.drag(pointer.pos),
+            AreaMarkGesture::Idle => {}
         }
     }
 
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         match std::mem::take(self.gesture) {
-            RedactGesture::Text { page } => {
+            AreaMarkGesture::Text { page } => {
                 self.select.release(pointer, cx);
-                self.finished = Some(RedactResult::Text { page });
+                if self.made_by == QuickTool::Redact {
+                    *self.finished = Some(AreaMarkResult::Text { made_by: self.made_by, page });
+                }
             }
-            RedactGesture::Box => {
+            AreaMarkGesture::Box => {
                 self.drag.drag(pointer.pos);
                 // A click with no drag marks nothing: `release` gives no box below the least size.
                 if let Some((page, rect)) = self.drag.release(LEAST_BOX)
                     && let Some(placed) = self.placed.iter().find(|p| p.page == page)
                     && let (Some(a), Some(b)) = (self.to_user(placed, rect.min), self.to_user(placed, rect.max))
                 {
-                    self.finished = Some(RedactResult::Area { page, quad: rect_quad([a[0], a[1], b[0], b[1]]) });
+                    *self.finished = Some(AreaMarkResult::Area { made_by: self.made_by, page, quad: rect_quad([a[0], a[1], b[0], b[1]]) });
                 }
             }
-            RedactGesture::Idle => {}
+            AreaMarkGesture::Idle => {}
         }
     }
 
@@ -162,7 +166,7 @@ impl CanvasTool for RedactTool<'_> {
     }
 
     fn cancel(&mut self, reason: CancelReason, cx: &mut ToolContext<'_>) {
-        if matches!(std::mem::take(self.gesture), RedactGesture::Text { .. }) {
+        if matches!(std::mem::take(self.gesture), AreaMarkGesture::Text { .. }) {
             self.select.cancel(reason, cx);
         }
         *self.drag = PageBoxDrag::default();
@@ -170,7 +174,6 @@ impl CanvasTool for RedactTool<'_> {
 
     fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
         self.select.paint(draw, cx);
-        // PLAN: assumed `PageBoxDrag::paint(&self, &ToolContext)` draws the box with marching ants (pdf-canvas-w18)
         self.drag.paint(cx);
     }
 

@@ -51,6 +51,27 @@ impl PdfCraftApp {
         false
     }
 
+    /// Hands a fired paste command's content to the clipboard service so `paste_from_clipboard` reads it
+    /// in the pass the command runs (F-89).
+    pub(crate) fn offer_clip(&mut self, clip: &craft::ui::runtime::commands::ClipContent) {
+        let mut flavors = Vec::new();
+        if let Some(text) = &clip.text {
+            flavors.push(Flavor::text(text.as_ref()));
+        }
+        if let Some(image) = &clip.image
+            && let (Ok(width), Ok(height)) = (u32::try_from(image.size[0]), u32::try_from(image.size[1]))
+        {
+            let mut data = Vec::with_capacity(8 + image.pixels.len() * 4);
+            data.extend_from_slice(&width.to_le_bytes());
+            data.extend_from_slice(&height.to_le_bytes());
+            data.extend(image.pixels.iter().flat_map(egui::Color32::to_srgba_unmultiplied));
+            flavors.push(Flavor::new(RGBA8, data));
+        }
+        if !flavors.is_empty() {
+            self.clipboard.offer_paste(flavors);
+        }
+    }
+
     /// Hands the pastes this frame's raw input carries to the clipboard, once per frame, so the
     /// Paste command reads them. A frame's input is applied once, in the pass that receives it.
     pub(crate) fn offer_pasted(&mut self, input: &egui::RawInput) {
@@ -162,9 +183,10 @@ impl PdfCraftApp {
             return;
         }
         let page = self.views.get(i).map_or(0, |v| v.current());
-        let text = if self.clipboard.has(&[TEXT]) { self.clipboard.read_text().ok().flatten().filter(|t| !t.is_empty()) } else { None };
+        let text = if self.clipboard.has(&[TEXT]) { self.clipboard.read_text().ok().flatten() } else { None };
+        let non_empty_text = text.as_deref().filter(|t| !t.is_empty());
         let image = self.clipboard.read_image().ok().flatten();
-        if self.quick_tool == QuickTool::EditText && self.object_clipboard.is_some() && self.pastes_objects(text.as_deref(), image.as_ref()) {
+        if self.quick_tool == QuickTool::EditText && self.object_clipboard.is_some() && self.pastes_objects(non_empty_text, image.as_ref()) {
             self.paste_objects(ctx, i);
             return;
         }
@@ -179,10 +201,13 @@ impl PdfCraftApp {
             return;
         }
         if let Some(text) = text {
-            self.last_copied_image = None;
-            self.last_copied_file = None;
-            self.paste_comment_text(ctx, i, text);
-            return;
+            if !text.is_empty() {
+                self.last_copied_image = None;
+                self.last_copied_file = None;
+            }
+            if self.paste_comment_text(ctx, i, text) {
+                return;
+            }
         }
         self.paste_image(ctx, page, None);
     }
@@ -275,11 +300,19 @@ impl PdfCraftApp {
     /// come from the system clipboard when it holds them, from the app's own only when it holds
     /// nothing legible (a word copied in another app since is that word, not the comments copied
     /// before it).
-    fn paste_comment_text(&mut self, ctx: &egui::Context, i: usize, text: String) {
+    fn paste_comment_text(&mut self, ctx: &egui::Context, i: usize, text: String) -> bool {
         if pdfcraft_engine::is_xfdf_comments(&text) {
             self.paste_comments(ctx, i, Some(text), None);
-        } else if text.trim().is_empty() && self.comment_clipboard.is_some() {
-            self.paste_comments(ctx, i, None, None);
+            true
+        } else if text.trim().is_empty() {
+            if self.comment_clipboard.is_some() {
+                self.paste_comments(ctx, i, None, None);
+                true
+            } else {
+                false
+            }
+        } else {
+            true
         }
     }
 

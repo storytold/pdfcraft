@@ -225,7 +225,7 @@ impl Texts {
         let system_text_scale = craft::ui::runtime::env::system_text_scale(ctx).unwrap_or(1.0);
         let auto_percent = ui_scale::percent(ui_scale::drawn(None, system_text_scale, native_pixels));
         let sample = |f: &str| format!("{}   {f}", app.date_text(Some(f)).unwrap_or_default());
-        let interface = i18n::current().picker_name(|_| true);
+        let interface = i18n::current().picker_name(|text| picker_text_is_drawable(ctx, text));
         let bad = app.date_text(None).map(|today| pdfcraft_engine::dates::unwritable(&today)).unwrap_or_default();
         let unwritable = if bad.is_empty() {
             String::new()
@@ -360,9 +360,25 @@ fn rgb(c: [u8; 3]) -> Rgba {
     Rgba([c[0], c[1], c[2], 255])
 }
 
-/// The name a date-language option shows: the language's own name, as the interface picker does.
-fn date_language_picker_name(l: &pdfcraft_engine::dates::DateLanguage) -> &'static str {
-    Lang::from_code(l.code).map_or(l.name, |lang| lang.picker_name(|_| true))
+/// Whether the interface can draw a language picker's native name in both the body and semibold faces.
+fn picker_text_is_drawable(ctx: &egui::Context, text: &str) -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (ctx, text);
+        true
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        ctx.fonts_mut(|fonts| {
+            fonts.has_glyphs(&egui::FontId::proportional(13.0), text)
+                && fonts.has_glyphs(&egui::FontId::new(13.0, egui::FontFamily::Name("semibold".into())), text)
+        })
+    }
+}
+
+/// The name a date-language option shows: the language's own name when the fonts can draw it, else English.
+fn date_language_picker_name(ctx: &egui::Context, l: &pdfcraft_engine::dates::DateLanguage) -> &'static str {
+    if picker_text_is_drawable(ctx, l.name) { l.name } else { i18n::english_name_for_code(l.code) }
 }
 
 impl PreferencesModel for Prefs<'_> {
@@ -631,7 +647,8 @@ impl Prefs<'_> {
         let d = &*self.draft;
         let t = &self.texts;
         let mut languages = vec![Entry::new(i18n::AUTO, tl!("Auto"))];
-        languages.extend(Lang::for_picker_by(|l| l.picker_name(|_| true)).into_iter().map(|l| Entry::new(l.code(), l.picker_name(|_| true))));
+        let drawable = |text: &str| picker_text_is_drawable(self.ctx, text);
+        languages.extend(Lang::for_picker_by(|l| l.picker_name(drawable)).into_iter().map(|l| Entry::new(l.code(), l.picker_name(drawable))));
         let language = if Lang::from_code(&d.language).is_some() { d.language.as_str() } else { i18n::AUTO };
         let mut scales = vec![Entry::new(AUTO_ID, t.auto_scale.clone())];
         scales.extend(t.scale_ids.iter().map(|(id, label)| Entry::new(id.as_str(), label.clone())));
@@ -750,7 +767,7 @@ impl Prefs<'_> {
         let mut presets: Vec<_> = DATE_FORMATS.iter().zip(&t.date_samples).map(|(f, sample)| Entry::new(*f, sample.clone())).collect();
         presets.push(Entry::new(t.date_custom_id, tl!("Custom")));
         let mut languages = vec![Entry::new(FOLLOW_ID, t.date_follow.clone())];
-        languages.extend(DATE_LANGUAGES.iter().map(|l| Entry::new(l.code, date_language_picker_name(l))));
+        languages.extend(DATE_LANGUAGES.iter().map(|l| Entry::new(l.code, date_language_picker_name(self.ctx, l))));
         let language = d.date_language.as_deref().filter(|c| DATE_LANGUAGES.iter().any(|l| l.code == *c)).unwrap_or(FOLLOW_ID);
         let rows = vec![
             RowSpec::new("fill.flatten", tl!("Flatten Fill & Sign when saving"), RowKind::Bool(d.flatten_fill_sign_on_save))

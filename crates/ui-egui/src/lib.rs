@@ -485,6 +485,8 @@ pub struct PdfCraftApp {
     pub host_dirty: Option<HostDirtyFn>,
     /// The "save changes?" questions of a closing tab or a quit, asked one document at a time.
     pub(crate) close_guard: Option<craft::quit::CloseGuard<DocId>>,
+    /// The open `UnsavedChangesDialog` belonging to `close_guard`, kept across a frame panic.
+    pub(crate) close_guard_dialog: Option<craft::ui::dialog::DialogId>,
     /// Original values and document revision for the editable Properties tabs.
     pub(crate) props_session: Option<properties_session::Draft>,
     /// Summarize Comments: sort order.

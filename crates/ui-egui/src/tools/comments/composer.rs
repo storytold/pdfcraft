@@ -36,7 +36,7 @@ pub(crate) fn composer(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, pr
         if part_visible {
             anchor = Some(at.clamp(viewport.min, viewport.max));
         } else {
-            anchor = None;
+            return None;
         }
     }
     let hint = match c.kind {

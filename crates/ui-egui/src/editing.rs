@@ -326,6 +326,11 @@ impl PdfCraftApp {
         if self.combine_showing() {
             self.combine_history_step(ctx, true);
         } else if !self.undo_in_page_box() {
+            if let Some((i, _)) = self.active_ids()
+                && self.views[i].session.comments.panel.editing.as_ref().is_some_and(|e| e.1 > 0)
+            {
+                self.views[i].session.comments.panel.editing = None;
+            }
             self.history_step(ctx, true);
         }
     }
@@ -349,6 +354,11 @@ impl PdfCraftApp {
         if self.combine_showing() {
             self.combine_history_step(ctx, false);
         } else if !self.redo_in_page_box() {
+            if let Some((i, _)) = self.active_ids()
+                && self.views[i].session.comments.panel.editing.as_ref().is_some_and(|e| e.1 > 0)
+            {
+                self.views[i].session.comments.panel.editing = None;
+            }
             self.history_step(ctx, false);
         }
     }

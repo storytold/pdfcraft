@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use craft::behavior::{DisplayOrder, IconId, ItemSource};
 use craft::theme::variant::Tone;
 use craft::ui::buttons::{Button, Link};
-use craft::ui::contract::{CollectionEvent, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::contract::{ActivateOn, CollectionEvent, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::layout_components::Stack;
 use craft::ui::list::{List, ListRow, OpenSet, RowInk};
 use craft::ui::notices::Notice;
@@ -279,23 +279,34 @@ pub(crate) fn panel(ui: &mut egui::Ui, sigs: &[SignatureInfo], open: &mut OpenSe
         }
         let rows = Rows { entries, open };
         let find = |field: &str| ordered.iter().find(|(s, _)| s.field == field);
-        let out = List::<SigRow>::new(tl!("Signatures")).tree(true).natural_height(true).show_items(ui, &rows, &mut |key, _| match key {
-            SigRow::Head(field) => match find(field) {
-                Some((s, _)) => head_row(s, rows.open.is_open(field)),
-                None => ListRow::new(Label::Empty),
+        let out = List::<SigRow>::new(tl!("Signatures")).tree(true).activate(ActivateOn::Click).natural_height(true).show_items(
+            ui,
+            &rows,
+            &mut |key, _| match key {
+                SigRow::Head(field) => match find(field) {
+                    Some((s, _)) => head_row(s, rows.open.is_open(field)),
+                    None => ListRow::new(Label::Empty),
+                },
+                SigRow::Line(field, i) => match find(field).and_then(|(s, lines)| lines.get(*i).map(|c| (s, c))) {
+                    Some((s, child)) => line_row(s, child, &action),
+                    None => ListRow::new(Label::Empty),
+                },
             },
-            SigRow::Line(field, i) => match find(field).and_then(|(s, lines)| lines.get(*i).map(|c| (s, c))) {
-                Some((s, child)) => line_row(s, child, &action),
-                None => ListRow::new(Label::Empty),
-            },
-        });
+        );
         let _ = heads;
-        // Alt on a disclosure opens or closes every head; the lines are no groups and never report it.
+        // Alt on a disclosure opens or closes every head; clicking a head row toggles it too, as production did.
         for event in &out.events {
-            if let CollectionEvent::Open(change) = event
-                && let SigRow::Head(field) = &change.key
-            {
-                open.apply(field, change.open, change.all, fields.iter());
+            match event {
+                CollectionEvent::Open(change) => {
+                    if let SigRow::Head(field) = &change.key {
+                        open.apply(field, change.open, change.all, fields.iter());
+                    }
+                }
+                CollectionEvent::Activate(SigRow::Head(field)) => {
+                    let was = open.is_open(field);
+                    open.set(field, !was);
+                }
+                _ => {}
             }
         }
     });
