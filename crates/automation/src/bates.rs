@@ -410,10 +410,9 @@ mod tests {
         use std::process::Command;
 
         let dir = tempfile::tempdir().unwrap();
-        let identity = Command::new("whoami.exe").args(["/user", "/fo", "csv", "/nh"]).output().unwrap();
-        assert!(identity.status.success());
-        let identity = String::from_utf8(identity.stdout).unwrap();
-        let sid = identity.split('"').nth(3).unwrap();
+        // Not `whoami`'s raw output: it is in the console's OEM code page, so an account name with
+        // a non-ASCII letter is not UTF-8 (#7701). The helper keeps only the ASCII SID.
+        let sid = pdfcraft_platform::owner_only::current_user_sid().unwrap();
         let acl = Command::new("icacls.exe").arg(dir.path()).arg("/deny").arg(format!("*{sid}:(AD)")).status().unwrap();
         assert!(acl.success());
 
