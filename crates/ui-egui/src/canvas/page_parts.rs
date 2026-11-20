@@ -436,6 +436,10 @@ impl Component for PageParts<'_> {
             declared.push(at);
             let mut builder =
                 cx.part(at, part.shape.clone()).sense(part.sense()).priority(part.layer.priority()).stacking(part.stacking.unwrap_or(order));
+            if part.layer == PageLayer::MovableComment && part.passes_drag {
+                // A movable comment's drag belongs to its canvas tool even over a draggable field.
+                builder = builder.drag_to_root();
+            }
             if let Some(cursor) = part.cursor {
                 builder = builder.cursor(cursor);
             }
