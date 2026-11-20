@@ -4,6 +4,8 @@ use pdfcraft_cos::{Document, SaveOptions, write_full, write_incremental};
 
 use super::*;
 
+#[path = "added_view_tests.rs"]
+mod added_view_tests;
 #[path = "mark_transaction_tests.rs"]
 mod mark_transactions;
 
