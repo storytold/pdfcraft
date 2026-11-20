@@ -2768,16 +2768,17 @@ fn password_prompt_opens_and_security_tab_reports_the_details() {
 /// off the buttons' centre line.
 #[test]
 fn the_security_notice_wraps_beside_its_buttons_and_lines_up_with_them() {
-    fn message_rect(shape: &egui::Shape) -> Option<egui::Rect> {
+    fn message_rect(shape: &egui::Shape) -> Option<(egui::Rect, f32)> {
         match shape {
             egui::Shape::Vec(shapes) => shapes.iter().find_map(message_rect),
             egui::Shape::Text(text) if text.galley.text().starts_with("This document is secured") => {
-                Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                let first = text.galley.rows.first()?;
+                Some((egui::Rect::from_min_size(text.pos, text.galley.size()), first.pos.y + first.row.size.y / 2.0))
             }
             _ => None,
         }
     }
-    // Wide: one line. Narrower: wrapped. Narrowest: cut short (the full text is on hover).
+    // Wide: one line. Narrower: wrapped. Narrowest: actions stack below the message.
     for (width, wraps) in [(1700.0, false), (1250.0, true), (900.0, false)] {
         let mut h = Harness::builder().with_size(egui::vec2(width, 800.0)).build_eframe(|cc| {
             crate::support::install_runtime(&cc.egui_ctx);
@@ -2790,15 +2791,20 @@ fn the_security_notice_wraps_beside_its_buttons_and_lines_up_with_them() {
             }
         });
         h.run_steps(4);
-        let msg = h.output().shapes.iter().find_map(|shape| message_rect(&shape.shape)).expect("the security message is painted");
+        let (msg, first_line_offset) =
+            h.output().shapes.iter().find_map(|shape| message_rect(&shape.shape)).expect("the security message is painted");
         let button = h.get_by_label("Security settings").rect();
         let dismiss = h.get_by_label("Dismiss").rect();
+        if width == 900.0 {
+            assert!(button.top() >= msg.bottom(), "{width}: stacked actions stay below the message: {msg:?} vs {button:?}");
+            assert!(!button.intersects(dismiss), "{width}: the actions stay apart: {button:?} vs {dismiss:?}");
+            continue;
+        }
         assert!(msg.right() <= button.left() + 0.5, "{width}: the message stops before the buttons: {msg:?} vs {button:?}");
         assert!(button.right() <= dismiss.left() + 0.5, "{width}: {button:?} vs {dismiss:?}");
         assert!((button.center().y - dismiss.center().y).abs() <= 0.5, "{width}: the buttons share a centre line");
         assert!(msg.top() >= button.top(), "{width}: the message stays inside the bar: {msg:?} vs {button:?}");
-        let lines = (msg.height() / 14.0).floor().max(1.0);
-        let first_line = msg.top() + msg.height() / lines / 2.0;
+        let first_line = msg.top() + first_line_offset;
         assert!((first_line - button.center().y).abs() <= 1.5, "{width}: first line centred on the buttons: {msg:?} vs {button:?}");
         assert_eq!(msg.height() > button.height(), wraps, "{width}: {msg:?}");
     }
