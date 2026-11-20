@@ -1698,9 +1698,24 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
                     "grouped Form artwork can be moved, resized, rotated, flipped or deleted; replacing it with a bitmap is not supported".into(),
                 ));
             }
-            let name = format!("PCImg{}", r.num);
             let mut res = p.dict.get(b"Resources").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
             let mut xo = res.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+            let base = format!("PCImg{}", r.num);
+            let mut name = base.clone();
+            let mut suffix = 0usize;
+            // An unbound Do must stay invisible: giving its name a resource would draw an
+            // unrelated placement. Collect once rather than rescan every operation per suffix.
+            let used: std::collections::HashSet<&[u8]> =
+                ops.iter().enumerate().filter(|(index, op)| *index != img.op && op.is("Do")).filter_map(|(_, op)| op.last_name()).collect();
+            // Resource names need not match object numbers. Only an existing binding to this
+            // replacement can be reused, even when other operations use the name too.
+            while match xo.get(name.as_bytes()) {
+                Some(o) => o.as_ref() != Some(*r),
+                None => used.contains(name.as_bytes()),
+            } {
+                suffix = suffix.saturating_add(1);
+                name = format!("{base}{suffix}");
+            }
             xo.set(name.clone().into_bytes(), Object::Ref(*r));
             res.set(b"XObject".to_vec(), Object::Dict(xo));
             resources = Some(res);
