@@ -786,6 +786,30 @@ fn contextual_labels_fall_back_to_the_plain_translation() {
     assert_eq!(tr_ctx(es, "no such context", "Type"), tr(es, "Type"));
 }
 
+/// With a craft-fonts Georgian face, Georgian text (the whole Mkhedruli alphabet and the
+/// language's own name) has glyphs: with all interface faces (desktop) and with the Georgian face
+/// as the only craft-fonts face (the web build keeps it).
+#[test]
+fn georgian_text_has_glyphs() {
+    let georgian: Vec<String> = pdfcraft_fonts::ui_georgian_fonts().iter().map(|f| f.name()).collect();
+    if georgian.is_empty() {
+        eprintln!("skipping Georgian glyph checks: build with CRAFT_FONTS_DIR and a Georgian face to run them");
+        return;
+    }
+    let text = "აბგდევზთიკლმნოპჟრსტუფქღყშჩცძწჭხჯჰ ქართული";
+    let mut georgian_only = crate::theme::font_definitions();
+    for family in georgian_only.families.values_mut() {
+        family.retain(|name| !pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.name() == *name) || georgian.contains(name));
+    }
+    use egui::epaint::text::{Fonts, TextOptions};
+    for (build, defs) in [("all faces", crate::theme::font_definitions()), ("Georgian face only", georgian_only)] {
+        let mut fonts = Fonts::new(TextOptions::default(), defs);
+        for id in [egui::FontId::proportional(13.0), egui::FontId::monospace(13.0), crate::theme::medium(13.0), crate::theme::semibold(17.0)] {
+            assert!(fonts.has_glyphs(&id, text), "{build}: {id:?} lacks a Georgian glyph");
+        }
+    }
+}
+
 /// With a craft-fonts Telugu face, every Telugu translation has glyphs: with all interface
 /// faces (desktop) and with the Telugu face as the only craft-fonts face (the web build keeps
 /// it; Telugu labels must not need a Japanese or Arabic face).
