@@ -105,6 +105,23 @@ pub(crate) fn popup_menu(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> Js
     for a in args {
         items.push(read_menu(a, ctx, 0, &mut remaining)?);
     }
+    show_menu(items)
+}
+
+/// The plain-string form of `app.popUpMenu`, using the same limits and reply handling as popUpMenuEx.
+pub(crate) fn popup_menu_plain(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    if args.len() > 1024 {
+        return Err(error("popup menu exceeds its size or depth limit"));
+    }
+    let mut items = Vec::with_capacity(args.len());
+    for arg in args {
+        let name = menu_text(arg, ctx)?;
+        items.push(MenuItem { value: name.clone(), name, enabled: true, marked: false, children: Vec::new() });
+    }
+    show_menu(items)
+}
+
+fn show_menu(items: Vec<MenuItem>) -> JsResult<JsValue> {
     // A menu with no items has nothing to pick: it answers null at once, without showing an empty
     // menu or using up a later menu's answer, but still counts toward the prompt limit (#2081).
     if items.is_empty() {
