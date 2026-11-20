@@ -5865,7 +5865,8 @@ fn redact_pattern_finds_numbers_typeset_with_dashes() {
     assert_eq!(r["marked"].as_u64(), Some(3), "{r}");
     ok(&mut a, "redact_apply", json!({ "doc": doc }));
     let text = page_text(&mut a, doc)[0].clone();
-    assert!(!["9876", "8765", "7654"].iter().any(|n| text.contains(n)), "{text}");
+    // The memo has no digits outside the three numbers, so none may be left.
+    assert!(!text.chars().any(|c| c.is_ascii_digit()), "{text}");
     assert!(text.contains("Ref one") && text.contains("Ref two") && text.contains("Ref three"), "{text}");
 }
 
