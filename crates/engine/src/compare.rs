@@ -255,11 +255,8 @@ impl Session {
             // the rectangles from the change's words so later-page rectangles are not attached to
             // the first page or lost.
             let (rects, rect_pages) = rects_for_words(new_slice);
-            let (rects, rect_pages) = if rects.is_empty() {
-                (ch.new.rects.clone(), vec![ch.new.page; ch.new.rects.len()])
-            } else {
-                (rects, rect_pages)
-            };
+            let (rects, rect_pages) =
+                if rects.is_empty() { (ch.new.rects.clone(), vec![ch.new.page; ch.new.rects.len()]) } else { (rects, rect_pages) };
             let mut pages_in_order: Vec<usize> = Vec::new();
             for page in &rect_pages {
                 if !pages_in_order.contains(page) {
@@ -267,25 +264,14 @@ impl Session {
                 }
             }
             for page in pages_in_order {
-                let rects: Vec<[f64; 4]> = rects
-                    .iter()
-                    .zip(&rect_pages)
-                    .filter(|(_, p)| **p == page)
-                    .map(|(r, _)| *r)
-                    .collect();
+                let rects: Vec<[f64; 4]> = rects.iter().zip(&rect_pages).filter(|(_, p)| **p == page).map(|(r, _)| *r).collect();
                 let shape = Shape::TextMarkup {
                     kind: Markup::Highlight,
                     quads: rects.iter().map(|r| [r[0], r[3], r[2], r[3], r[0], r[1], r[2], r[1]]).collect(),
                 };
                 let mut style = crate::Style::default_for(&shape);
                 style.color = color;
-                edits.push(Edit::AddAnnotation(NewAnnotation {
-                    page,
-                    shape,
-                    style,
-                    contents: contents.clone(),
-                    author: "Compare".into(),
-                }));
+                edits.push(Edit::AddAnnotation(NewAnnotation { page, shape, style, contents: contents.clone(), author: "Compare".into() }));
             }
         }
         let n = edits.len();
