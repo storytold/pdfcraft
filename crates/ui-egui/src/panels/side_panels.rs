@@ -330,7 +330,9 @@ impl DockPanels<PanelId> for Panels<'_> {
     }
 
     fn group_view(&mut self, panels: &[PanelId], _active: usize, ui: &mut Ui, at: GroupAt, _cx: &mut BodyCx<'_>) -> Option<f32> {
-        // Measuring is the dock's; a shown view takes the rect it is given.
+        if let GroupAt::Measure(width) = at {
+            return panels.contains(&PanelId::Toolbar).then(|| crate::hotbar::measure_rail(self.app, ui, width));
+        }
         let GroupAt::Show(rect) = at else { return None };
         if panels.contains(&PanelId::Toolbar) {
             crate::hotbar::show_rail(self.app, ui);

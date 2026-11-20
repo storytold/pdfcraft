@@ -8,13 +8,14 @@ use craft::behavior::{DisplayOrder, ItemSource, SizeHint};
 use craft::keymap::CommandRef;
 use craft::theme::variant::Tone;
 use craft::ui::buttons::{Button, IconButton};
-use craft::ui::contract::{CollectionEvent, Props as _, Show as _, ShowCollection as _};
+use craft::ui::contract::{ActivateOn, CollectionEvent, Pad, Props as _, Show as _, ShowCollection as _, ShowContainer as _, clicked};
 use craft::ui::display::{PictureSize, Text};
+use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::ThumbSize;
 use craft::ui::notices::Notice;
 use craft::ui::runtime::env::Env;
-use craft::ui::shell::{RecentFile, StartAction, StartLink, StartPlace, StartScreen};
-use craft::ui::style::DataColor;
+use craft::ui::shell::{RecentFile, StartAction, StartPlace, StartScreen};
+use craft::ui::style::{DataColor, SurfaceKind};
 use craft::ui::tile_grid::{Tile, TileGrid, TilePartEvent};
 use pdfcraft_engine::catalog::{self, ToolGroup};
 
@@ -30,6 +31,7 @@ enum Asked {
     Unpin(&'static str),
     PinTools,
     CloseCommunityCard,
+    Link(&'static str),
 }
 
 /// Tool tiles keyed by their position in the shown list.
@@ -66,9 +68,11 @@ fn tool_tile(g: &'static ToolGroup, unpinnable: bool) -> Tile<'static> {
 ///
 /// The start page scrolls as a whole, so the grid takes the height of its rows and owns no scroll.
 fn tool_grid(ui: &mut egui::Ui, name: &str, groups: &[&'static ToolGroup], unpinnable: bool, asked: &RefCell<Vec<Asked>>) {
-    let out = TileGrid::<usize>::new(name.to_string())
-        .natural_height(true)
-        .show_items(ui, &Tools(groups.len()), &mut |key, _| tool_tile(groups[*key], unpinnable));
+    let out = TileGrid::<usize>::new(name.to_string()).activate(ActivateOn::Click).natural_height(true).show_items(
+        ui,
+        &Tools(groups.len()),
+        &mut |key, _| tool_tile(groups[*key], unpinnable),
+    );
     for event in out.response.events {
         match event {
             CollectionEvent::Activate(key) => {
@@ -99,14 +103,6 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             RecentFile::new(r.path.as_str(), r.name.as_str()).note(format!("{pages} · {}", human_size(r.size)))
         })
         .collect();
-    let links: Vec<StartLink> = pdfcraft_engine::links::LINKS
-        .iter()
-        .enumerate()
-        .map(|(i, l)| {
-            let label = if i == 0 { tl!("Join our Discord") } else { tl!(l.label) };
-            StartLink::command(label.to_string(), Some(IconId::new(l.icon)), CommandRef::new(l.command))
-        })
-        .collect();
     #[cfg(not(target_arch = "wasm32"))]
     let pinned_folders = app.pinned_folders(&Env::of(ui));
 
@@ -121,18 +117,31 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .max_recent(app.recent_limit)
         .offers_new(false)
         .drop_hint(tl!("Files you open in PdfCraft appear here").to_string())
-        .links(&links)
         .section(StartPlace::BeforeRecent, |ui, _| {
             let _ = Text::new(tl!("Welcome to PdfCraft").to_string()).show(ui);
             let _ = Text::new(tl!("An open-source PDF workbench — local, private, and scriptable.").to_string()).show(ui);
             if community_card {
-                brand::mark(ui, PictureSize::Thumb(ThumbSize::Medium));
-                let _ = Text::new(tl!("Join the ArtCraft community").to_string()).show(ui);
-                let _ = Text::new(tl!("Get help, share feedback and follow development on Discord.").to_string()).show(ui);
-                // Closed for this run only: the card is back on the next launch.
-                if IconButton::new(IconId::new("x")).id_salt("community-close").label(tl!("Close")).show(ui).clicked() {
-                    asked.borrow_mut().push(Asked::CloseCommunityCard);
-                }
+                Stack::new().label(tl!("Join the ArtCraft community")).fill_width().surface(SurfaceKind::Raised).pad(Pad::Regular).show(
+                    ui,
+                    |ui, _| {
+                        Row::new().show(ui, |ui, _| {
+                            brand::mark(ui, PictureSize::Thumb(ThumbSize::Medium));
+                            let _ = Text::new(tl!("Join the ArtCraft community").to_string()).show(ui);
+                            if clicked(&IconButton::new(IconId::new("x")).id_salt("community-close").label(tl!("Close")).show(ui)) {
+                                asked.borrow_mut().push(Asked::CloseCommunityCard);
+                            }
+                        });
+                        let _ = Text::new(tl!("Get help, share feedback and follow development on Discord.").to_string()).show(ui);
+                        Row::new().wrap(true).show(ui, |ui, _| {
+                            for (i, link) in pdfcraft_engine::links::LINKS.iter().enumerate() {
+                                let label = if i == 0 { tl!("Join our Discord") } else { tl!(link.label) };
+                                if clicked(&Button::new(label.to_string()).icon(IconId::new(link.icon)).show(ui)) {
+                                    asked.borrow_mut().push(Asked::Link(link.command));
+                                }
+                            }
+                        });
+                    },
+                );
             }
             let _ = Text::new(tl!("Recommended tools").to_string()).show(ui);
             tool_grid(ui, tl!("Recommended tools"), &recommended, false, &asked);
@@ -187,6 +196,9 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             // PLAN: assumed `PdfCraftApp::open_pin_tools(&mut self)` (pdf-dialogs-w9).
             Asked::PinTools => app.open_pin_tools(),
             Asked::CloseCommunityCard => app.community_card_closed = true,
+            Asked::Link(id) => {
+                app.execute(ui.ctx(), id);
+            }
         }
     }
 }

@@ -179,6 +179,18 @@ pub(crate) fn panel_spec(app: &PdfCraftApp, ctx: &egui::Context) -> PanelSpec {
         .command(CommandRef::with_params("view.panel", serde_json::json!({ "panel": "toolbar" })))
 }
 
+pub(crate) fn measure_rail(app: &mut PdfCraftApp, ui: &egui::Ui, width: f32) -> f32 {
+    app.hotbar.normalize();
+    let toolbar = slots(app);
+    let current = current_tool(app);
+    let last_used = last_used(app);
+    let mut rail = ToolRail::new(tl!("Toolbar").to_string(), &toolbar, &current, &last_used).edit_toolbar(tl!("Edit toolbar").to_string());
+    if app.hotbar.drawer_open {
+        rail = rail.editing();
+    }
+    rail.measure_rail(ui, width, |ui, _footer| footer_controls(ui, app)).y
+}
+
 // Every conversion between the engine's `f64` colour and the framework's goes through these two.
 fn to_srgba(color: Rgb) -> Srgba {
     Srgba::rgb(color[0] as f32, color[1] as f32, color[2] as f32)
