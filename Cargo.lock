@@ -9236,11 +9236,13 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "craft-image-codecs",
  "lopdf",
  "pdfcraft-cos",
  "pdfcraft-oracle",
+ "roxmltree 0.20.0",
  "serde",
  "serde_json",
  "sha2 0.11.1",
