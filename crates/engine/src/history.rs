@@ -131,6 +131,11 @@ pub(crate) struct Editor {
     /// The file as last opened or saved. Incremental saves append to it, and Revert opens it.
     /// Undo may restore a snapshot whose own base is an earlier revision; this does not follow it.
     pub(crate) saved: Arc<Vec<u8>>,
+    /// The file where the document belongs as it is on disk: as read when opened, then as last
+    /// saved. It is [`Self::saved`] except when opening appended a revision in memory (an XFA
+    /// form laid out, a page tree recovered by scanning): a save replaces this file, so an
+    /// incremental save is one that keeps it as its first bytes.
+    pub(crate) file: Arc<Vec<u8>>,
     /// Passwords that open [`Self::saved`].
     pub(crate) saved_keys: Keys,
     /// [`Self::saved`] was never written where the document belongs: a new document (combine,

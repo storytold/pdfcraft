@@ -87,6 +87,7 @@ impl Session {
                 let mut datasets = None;
                 let _ = xfa_sync_datasets(&mut editor.cos, doc.xfa_template.as_deref(), &mut datasets);
             }
+            editor.file = bytes.clone();
             editor.saved = bytes;
             editor.saved_keys = keys;
             editor.unsaved_file = false;
