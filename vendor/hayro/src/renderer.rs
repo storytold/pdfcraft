@@ -1,6 +1,6 @@
 use crate::{ColorReplacement, RenderCache, derive_settings};
 use hayro_interpret::color::Color;
-use hayro_interpret::encode::EncodedShadingPattern;
+use hayro_interpret::encode::{EncodedShadingPattern, ShadingRowScratch};
 use hayro_interpret::font::Glyph;
 use hayro_interpret::pattern::Pattern;
 use hayro_interpret::{
@@ -2855,15 +2855,27 @@ fn render_shading_texture(
         * Point::new(path_bbox.x0, path_bbox.y0);
     let mut may_have_transparency = false;
 
+    let mut scratch = ShadingRowScratch::default();
+    let mut row_rgba = vec![[0u8; 4]; width as usize];
+
     for row in buf.chunks_exact_mut(width as usize) {
-        let mut point = start_point;
+        if let Some(row_transparent) =
+            shading_pattern.sample_row(start_point, x_advance, &mut row_rgba, &mut scratch)
+        {
+            may_have_transparency |= row_transparent;
+            for (pixel, &[r, g, b, a]) in row.iter_mut().zip(row_rgba.iter()) {
+                *pixel = PremulRgba8 { r, g, b, a };
+            }
+        } else {
+            let mut point = start_point;
 
-        for pixel in row {
-            let sample = shading_pattern.sample(point);
-            *pixel = AlphaColor::<Srgb>::new(sample).premultiply().to_rgba8();
-            may_have_transparency |= pixel.a != 255;
+            for pixel in row {
+                let sample = shading_pattern.sample(point);
+                *pixel = AlphaColor::<Srgb>::new(sample).premultiply().to_rgba8();
+                may_have_transparency |= pixel.a != 255;
 
-            point += x_advance;
+                point += x_advance;
+            }
         }
 
         start_point += y_advance;

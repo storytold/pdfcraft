@@ -11923,3 +11923,66 @@ fn a_to_unicode_cmap_reads_its_mappings_past_a_token_it_cannot_parse() {
     let unclosed = format!("{body}{}{}", "(".repeat(4096), "x".repeat(1 << 16));
     assert!(CMap::parse(unclosed.as_bytes(), |_| None).is_some_and(|c| c.lookup_bf_string(0x48).is_some()));
 }
+
+#[test]
+fn cmyk_function_shading_matches_background_domain_and_opacity_paths() {
+    // Type 1 CMYK shading over [20..80, 20..80] with cyan /Background outside the domain,
+    // a second semi-transparent copy (ca = 0.5) on the right (per-pixel fallback), and two
+    // solid CMYK reference swatches at the top-left.
+    let content = "1 0 0 0 k 0 90 8 8 re f\n0.25 0.25 0.25 0 k 10 90 8 8 re f\nq 10 10 80 80 re W n /Sh0 sh Q\nq /GsHalf gs 110 10 80 80 re W n 1 0 0 1 100 0 cm /Sh0 sh Q\n";
+    let mut pdf = format!(
+        "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Shading << /Sh0 5 0 R >> /ExtGState << /GsHalf << /ca 0.5 >> >> >> /Contents 4 0 R >> endobj\n\
+4 0 obj << /Length {} >> stream\n{content}endstream endobj\n\
+5 0 obj << /ShadingType 1 /ColorSpace /DeviceCMYK /Domain [0 1 0 1] /Matrix [60 0 0 60 20 20] /Background [1 0 0 0] /Function 6 0 R >> endobj\n\
+6 0 obj << /FunctionType 0 /Domain [0 1 0 1] /Range [0 1 0 1 0 1 0 1] /Size [2 2] /BitsPerSample 8 /Length 16 >> stream\n",
+        content.len()
+    )
+    .into_bytes();
+    pdf.extend_from_slice(b"\x00\x00\x00\x00\xff\x00\x00\x00\x00\xff\x00\x00\x00\x00\xff\x00");
+    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+
+    let page = render_first_page(pdf);
+    let bg_cyan = rgb_at(&page.rgba, 200, 4, 6);
+    assert_eq!(rgb_at(&page.rgba, 200, 15, 85), bg_cyan, "outside domain uses /Background");
+
+    // Pixel centre (50.5, 50.5) corresponds to u=v=0.5083 (~0.25 CMY), close to the 0.25 CMY swatch.
+    let mid = rgb_at(&page.rgba, 200, 50, 50);
+    let expected = rgb_at(&page.rgba, 200, 14, 6);
+    for c in 0..3 {
+        assert!((mid[c] as i16 - expected[c] as i16).abs() <= 4, "mid pixel {mid:?} vs {expected:?}");
+    }
+
+    // Semi-transparent copy blended over white must be strictly lighter than opaque background.
+    let half_cyan = rgb_at(&page.rgba, 200, 115, 85);
+    assert!(half_cyan[0] > bg_cyan[0] && half_cyan[0] < 255, "half-alpha cyan {half_cyan:?} vs opaque {bg_cyan:?}");
+}
+
+#[test]
+fn separation_row_shading_preserves_sample_boundaries_when_tint_transform_is_short() {
+    // Separation space over /DeviceRGB whose constant tint transform returns 1 value `[1]`
+    // instead of 3. Batched scanline conversion must preserve per-sample `[0, 0, 0]` output
+    // boundaries so every pixel matches scalar evaluation (`[255, 0, 0]`) instead of merging
+    // subsequent samples into `[255, 255, 0]` and trailing black.
+    let content = "q 0 0 100 100 re W n /Sh0 sh Q\n";
+    let pdf = format!(
+        "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Shading << /Sh0 5 0 R >> >> /Contents 4 0 R >> endobj\n\
+4 0 obj << /Length {} >> stream\n{content}endstream endobj\n\
+5 0 obj << /ShadingType 2 /ColorSpace [/Separation /Spot /DeviceRGB 6 0 R] /Coords [0 0 100 0] /Domain [0 1] /Function 7 0 R /Extend [true true] >> endobj\n\
+6 0 obj << /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [1] /N 1 >> endobj\n\
+7 0 obj << /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [1] /N 1 >> endobj\n\
+trailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len()
+    )
+    .into_bytes();
+
+    let page = render_first_page(pdf);
+    for x in [1, 10, 50, 90] {
+        assert_eq!(rgb_at(&page.rgba, 100, x, 50), [255, 0, 0], "pixel at x={x} should stay red");
+    }
+}

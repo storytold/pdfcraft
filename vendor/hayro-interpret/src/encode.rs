@@ -1,11 +1,21 @@
 //! Encoding shading patterns for easy sampling.
 
-use crate::color::{AlphaColor, ColorComponents, ColorSpace};
+use crate::color::{AlphaColor, ColorComponents, ColorSpace, ToRgb};
+use crate::function::Values;
 use crate::interpret::state::ActiveTransferFunction;
 use crate::pattern::ShadingPattern;
 use crate::shading::{ShadingFunction, ShadingType, Triangle, TriangleVertex};
-use kurbo::{Affine, Point};
+use kurbo::{Affine, Point, Vec2};
 use rustc_hash::FxHashMap;
+
+/// Reusable row scratch buffers for [`EncodedShadingPattern::sample_row`].
+#[derive(Default)]
+pub struct ShadingRowScratch {
+    components: Vec<f32>,
+    u8_components: Vec<u8>,
+    rgb: Vec<u8>,
+    indices: Vec<usize>,
+}
 use smallvec::{ToSmallVec, smallvec};
 
 /// A shading pattern that was encoded so it can be sampled.
@@ -44,6 +54,89 @@ impl EncodedShadingPattern {
                 components
             })
             .unwrap_or([0.0, 0.0, 0.0, 0.0])
+    }
+
+    /// Sample one scanline of opaque shading pixels into premultiplied RGBA8, batching colour-space
+    /// conversion across all evaluated pixels in the row. Returns `None` when per-pixel sampling is
+    /// required (e.g. non-unit opacity, active transfer function, or `None` separation).
+    pub fn sample_row(
+        &self,
+        start: Point,
+        x_advance: Vec2,
+        out: &mut [[u8; 4]],
+        scratch: &mut ShadingRowScratch,
+    ) -> Option<bool> {
+        if self.transfer_function.is_some()
+            || self.opacity != 1.0
+            || self.color_space.is_none()
+            || matches!(self.shading_type, EncodedShadingType::Dummy)
+        {
+            return None;
+        }
+        let n_comp = usize::from(self.color_space.num_components());
+        if n_comp == 0 {
+            return None;
+        }
+
+        let bg_rgba = AlphaColor::new(self.background_color.premultiplied()).to_rgba8();
+        let mut may_have_transparency = false;
+        scratch.components.clear();
+        scratch.indices.clear();
+
+        let mut point = start;
+        for (x, pixel) in out.iter_mut().enumerate() {
+            match self.shading_type.eval_raw(point) {
+                EvalSample::Background => {
+                    *pixel = bg_rgba;
+                    may_have_transparency |= bg_rgba[3] != 255;
+                }
+                EvalSample::Transparent => {
+                    *pixel = [0, 0, 0, 0];
+                    may_have_transparency = true;
+                }
+                EvalSample::Components(c) => {
+                    if c.len() == n_comp {
+                        scratch.components.extend_from_slice(&c);
+                        scratch.indices.push(x);
+                    } else {
+                        let rgba = self.color_space.to_rgba(&c, 1.0, false).to_rgba8();
+                        *pixel = rgba;
+                        may_have_transparency |= rgba[3] != 255;
+                    }
+                }
+            }
+            point += x_advance;
+        }
+
+        let count = scratch.indices.len();
+        if count > 0 {
+            scratch.rgb.resize(count * 3, 0);
+            if self
+                .color_space
+                .convert_rgb8_batch(
+                    &scratch.components,
+                    &mut scratch.u8_components,
+                    &mut scratch.rgb,
+                )
+                .is_some()
+            {
+                if count == out.len() {
+                    for (pixel, rgb) in out.iter_mut().zip(scratch.rgb.chunks_exact(3)) {
+                        *pixel = [rgb[0], rgb[1], rgb[2], 255];
+                    }
+                } else {
+                    for (&x, rgb) in scratch.indices.iter().zip(scratch.rgb.chunks_exact(3)) {
+                        out[x] = [rgb[0], rgb[1], rgb[2], 255];
+                    }
+                }
+            } else {
+                for &x in &scratch.indices {
+                    out[x] = [0, 0, 0, 255];
+                }
+            }
+        }
+
+        Some(may_have_transparency)
     }
 }
 
@@ -512,6 +605,12 @@ pub(crate) enum EncodedShadingType {
     Dummy,
 }
 
+enum EvalSample {
+    Background,
+    Transparent,
+    Components(Values),
+}
+
 impl EncodedShadingType {
     pub(crate) fn eval(
         &self,
@@ -519,14 +618,23 @@ impl EncodedShadingType {
         bg_color: AlphaColor,
         color_space: &ColorSpace,
     ) -> Option<AlphaColor> {
+        match self.eval_raw(pos) {
+            EvalSample::Background => Some(bg_color),
+            EvalSample::Transparent => None,
+            EvalSample::Components(c) => Some(color_space.to_rgba(&c, 1.0, false)),
+        }
+    }
+
+    fn eval_raw(&self, pos: Point) -> EvalSample {
         match self {
             Self::FunctionBased { domain, function } => {
                 if !domain.contains(pos) {
-                    Some(bg_color)
-                } else {
-                    let out = function.eval(&smallvec![pos.x as f32, pos.y as f32])?;
+                    EvalSample::Background
+                } else if let Some(out) = function.eval(&smallvec![pos.x as f32, pos.y as f32]) {
                     // TODO: Clamp out-of-range values.
-                    Some(color_space.to_rgba(&out, 1.0, false))
+                    EvalSample::Components(out)
+                } else {
+                    EvalSample::Transparent
                 }
             }
             Self::RadialAxial {
@@ -545,44 +653,49 @@ impl EncodedShadingType {
                 };
 
                 if t == f32::MIN {
-                    return Some(bg_color);
+                    return EvalSample::Background;
                 }
 
                 if t < 0.0 {
                     if extend[0] {
                         t = 0.0;
                     } else {
-                        return Some(bg_color);
+                        return EvalSample::Background;
                     }
                 } else if t > 1.0 {
                     if extend[1] {
                         t = 1.0;
                     } else {
-                        return Some(bg_color);
+                        return EvalSample::Background;
                     }
                 }
 
                 let t = t0 + (t1 - t0) * t;
 
-                let val = function.eval(&smallvec![t])?;
-
-                Some(color_space.to_rgba(&val, 1.0, false))
+                if let Some(val) = function.eval(&smallvec![t]) {
+                    EvalSample::Components(val)
+                } else {
+                    EvalSample::Transparent
+                }
             }
             Self::Sampled { samples, function } => {
                 let sample_point = (pos.x as u16, pos.y as u16);
 
                 if let Some(color) = samples.get(&sample_point) {
                     if let Some(function) = function {
-                        let val = function.eval(&color.to_smallvec())?;
-                        Some(color_space.to_rgba(&val, 1.0, false))
+                        if let Some(val) = function.eval(&color.to_smallvec()) {
+                            EvalSample::Components(val)
+                        } else {
+                            EvalSample::Transparent
+                        }
                     } else {
-                        Some(color_space.to_rgba(color, 1.0, false))
+                        EvalSample::Components(color.clone())
                     }
                 } else {
-                    Some(bg_color)
+                    EvalSample::Background
                 }
             }
-            Self::Dummy => Some(AlphaColor::TRANSPARENT),
+            Self::Dummy => EvalSample::Transparent,
         }
     }
 }
