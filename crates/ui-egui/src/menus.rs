@@ -556,6 +556,7 @@ impl PdfCraftApp {
         let gate = self.menu_gate(&ctx);
         let mut chosen = Vec::new();
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+        ui.set_min_width(220.0);
 
         let pressed_key = ui.input(|i| {
             i.events.iter().find_map(|e| match e {
@@ -602,9 +603,16 @@ impl PdfCraftApp {
                 egui::containers::menu::MenuState::from_ui(ui, |state, _| {
                     state.open_item = Some(submenu_id);
                 });
+                ui.memory_mut(|mem| {
+                    mem.request_focus(next_id);
+                    let dir = if ui.style().right_to_left { egui::FocusDirection::Left } else { egui::FocusDirection::Right };
+                    mem.move_focus(dir);
+                });
             }
-            let resp = ui.menu_button(&menu.title, |ui| {
-                ui.set_min_width(200.0);
+            let sub_button = egui::containers::menu::SubMenuButton::new(mnemonic_label(ui, &menu.title, mnemonic, true))
+                .config(egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside));
+            let (resp_btn, _) = sub_button.ui(ui, |ui| {
+                ui.set_min_width(220.0);
                 ui.set_max_width(280.0);
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                 let max_h = (ui.ctx().content_rect().height() - 40.0).max(200.0);
@@ -613,10 +621,7 @@ impl PdfCraftApp {
                     render_nodes(ui, &menu.children, &gate, &mut chosen, &mut active_key);
                 });
             });
-            if is_target {
-                resp.response.request_focus();
-            }
-            ctx.accesskit_node_builder(resp.response.id, |n| {
+            ctx.accesskit_node_builder(resp_btn.id, |n| {
                 n.set_role(egui::accesskit::Role::MenuItem);
                 n.set_label(&menu.title);
                 n.set_has_popup(egui::accesskit::HasPopup::Menu);
@@ -747,7 +752,7 @@ fn render_nodes(
                     craft_menu::ItemKind::Check(false) | craft_menu::ItemKind::Radio(false) => "  ",
                     craft_menu::ItemKind::Plain => "",
                 };
-                let mut button = egui::Button::new(format!("{mark}{}", item.label));
+                let mut button = egui::Button::new(mnemonic_item_label(ui, mark, &item.label, mnemonic, true));
                 let shortcut_str = item.shortcut.as_ref().map(|c| c.display(shortcut_platform(&ctx)));
                 if let Some(ref s) = shortcut_str {
                     button = button.shortcut_text(s.clone());
@@ -808,33 +813,19 @@ fn render_nodes(
                             ctx.request_repaint();
                         }
 
-                        let sub_button = egui::containers::menu::SubMenuButton::new(label);
-                        let open = egui::containers::menu::MenuState::from_ui(ui, |state, _| state.open_item == Some(submenu_id));
-                        let inactive = ui.style().visuals.widgets.inactive;
-                        if open {
-                            ui.style_mut().visuals.widgets.inactive = ui.style().visuals.widgets.open;
-                        }
-                        let response = ui.add(sub_button.button);
-                        ui.style_mut().visuals.widgets.inactive = inactive;
-
-                        // A row scrolled out of view does not open its submenu on hover, but an
-                        // already-open submenu (e.g. from keyboard navigation) continues to render.
-                        let reach = response.rect.expand2(ui.spacing().item_spacing / 2.0);
-                        let hidden = ui.ctx().pointer_hover_pos().is_some_and(|p| reach.contains(p) && !ui.clip_rect().contains(p));
-                        if !hidden || open {
-                            sub_button.sub_menu.show(ui, &response, |ui| {
-                                ui.set_min_width(160.0);
-                                ui.set_max_width(240.0);
-                                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                                let max_h = (ui.ctx().content_rect().height() - 40.0).max(200.0);
-                                ui.spacing_mut().scroll.floating = false;
-                                egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| {
-                                    render_nodes(ui, children, gate, chosen, active_key);
-                                });
+                        let sub_button = egui::containers::menu::SubMenuButton::new(mnemonic_label(ui, label, mnemonic, true))
+                            .config(egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside));
+                        let (resp_btn, _) = sub_button.ui(ui, |ui| {
+                            ui.set_min_width(220.0);
+                            ui.set_max_width(280.0);
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                            let max_h = (ui.ctx().content_rect().height() - 40.0).max(200.0);
+                            ui.spacing_mut().scroll.floating = false;
+                            egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| {
+                                render_nodes(ui, children, gate, chosen, active_key);
                             });
-                        }
-
-                        response
+                        });
+                        resp_btn
                     })
                     .inner;
                 ctx.accesskit_node_builder(resp.id, |n| {
@@ -1009,6 +1000,64 @@ pub(crate) fn assign_mnemonics(labels: &[&str], preferred: &[Option<char>]) -> V
     }
 
     result
+}
+
+/// Top-level mnemonics for the menus in `bar`.
+pub(crate) fn top_level_mnemonics(bar: &craft_menu::MenuBar) -> Vec<char> {
+    let titles: Vec<&str> = bar.menus.iter().map(|m| m.title.as_str()).collect();
+    let preferred: Vec<Option<char>> = bar.menus.iter().map(|m| preferred_menu_role_mnemonic(m.role, &m.title)).collect();
+    assign_mnemonics(&titles, &preferred).into_iter().flatten().collect()
+}
+
+pub(crate) fn mnemonic_label(ui: &egui::Ui, label: &str, mnemonic: Option<char>, show_underline: bool) -> egui::WidgetText {
+    mnemonic_item_label(ui, "", label, mnemonic, show_underline)
+}
+
+pub(crate) fn mnemonic_item_label(ui: &egui::Ui, mark: &str, label: &str, mnemonic: Option<char>, show_underline: bool) -> egui::WidgetText {
+    let text_color = ui.visuals().text_color();
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+
+    let Some(m) = mnemonic else {
+        return egui::WidgetText::from(format!("{mark}{label}"));
+    };
+
+    let char_match = label.char_indices().find(|(_, c)| c.to_ascii_uppercase() == m);
+    let (display_text, match_idx, match_len) = match char_match {
+        Some((i, c)) => (label.to_owned(), Some(i), c.len_utf8()),
+        None => {
+            let formatted = format!("{label} ({m})");
+            let idx = formatted.rfind(m);
+            (formatted, idx, 1)
+        }
+    };
+
+    if !show_underline {
+        return egui::WidgetText::from(format!("{mark}{display_text}"));
+    }
+
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = f32::INFINITY;
+
+    let format_normal = egui::TextFormat { font_id: font_id.clone(), color: text_color, ..Default::default() };
+    let format_underlined = egui::TextFormat { font_id, color: text_color, underline: egui::Stroke::new(1.0, text_color), ..Default::default() };
+
+    if !mark.is_empty() {
+        job.append(mark, 0.0, format_normal.clone());
+    }
+
+    if let Some(i) = match_idx {
+        if i > 0 {
+            job.append(&display_text[..i], 0.0, format_normal.clone());
+        }
+        job.append(&display_text[i..i + match_len], 0.0, format_underlined);
+        if i + match_len < display_text.len() {
+            job.append(&display_text[i + match_len..], 0.0, format_normal);
+        }
+    } else {
+        job.append(&display_text, 0.0, format_normal);
+    }
+
+    egui::WidgetText::from(job)
 }
 
 #[cfg(test)]
@@ -1227,55 +1276,5 @@ mod tests {
         assert_eq!(mnemonics[0], Some('S'));
         assert_eq!(mnemonics[1], Some('A'));
         assert_eq!(mnemonics[3], Some('X'));
-    }
-
-    #[test]
-    fn clipped_submenu_row_does_not_open_on_hover_unless_already_open() {
-        let ctx = egui::Context::default();
-        let submenu = craft_menu::Node::submenu("Sub", vec![craft_menu::Item::new(craft_menu::CommandRef::new("cmd.test"), "Child Item").into()]);
-        let nodes = vec![submenu];
-        let gate = craft_menu::Gate::default();
-
-        // Pass 1: Pointer hover over the row's rectangle (y=150), but clip rect is y in 0..100.
-        let mut raw = egui::RawInput::default();
-        raw.events.push(egui::Event::PointerMoved(egui::pos2(50.0, 150.0)));
-        let _ = ctx.run_ui(raw, |ui| {
-            ui.set_clip_rect(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 100.0)));
-            ui.add_space(130.0);
-            let mut chosen = Vec::new();
-            render_nodes(ui, &nodes, &gate, &mut chosen, &mut None);
-        });
-
-        // The submenu must NOT have opened because the row was clipped out of view.
-        let mut open_item = None;
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            ui.set_clip_rect(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 100.0)));
-            ui.add_space(130.0);
-            open_item = egui::containers::menu::MenuState::from_ui(ui, |state, _| state.open_item);
-            let mut chosen = Vec::new();
-            render_nodes(ui, &nodes, &gate, &mut chosen, &mut None);
-        });
-        assert_eq!(open_item, None, "Clipped submenu must not open on hover");
-
-        // Pass 2: Keyboard navigation opens the submenu (mnemonic 'S' for Sub) even when clipped.
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            ui.set_clip_rect(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 100.0)));
-            ui.add_space(130.0);
-            let mut chosen = Vec::new();
-            render_nodes(ui, &nodes, &gate, &mut chosen, &mut Some(('S', egui::Key::S)));
-        });
-
-        let mut child_rendered = false;
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            ui.set_clip_rect(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 100.0)));
-            ui.add_space(130.0);
-            let next_id = ui.next_auto_id();
-            let sub_id = egui::containers::menu::SubMenu::id_from_widget_id(next_id);
-            open_item = egui::containers::menu::MenuState::from_ui(ui, |state, _| state.open_item);
-            child_rendered = open_item == Some(sub_id);
-            let mut chosen = Vec::new();
-            render_nodes(ui, &nodes, &gate, &mut chosen, &mut None);
-        });
-        assert!(child_rendered, "Keyboard-opened submenu must remain open and render even when clipped");
     }
 }

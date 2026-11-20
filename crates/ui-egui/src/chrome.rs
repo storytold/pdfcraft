@@ -873,10 +873,13 @@ fn handle_menu_button_keys(app: &mut PdfCraftApp, ctx: &egui::Context, popup_id:
         if is_open {
             egui::Popup::close_all(ctx);
             menu_focused = false;
+            btn.surrender_focus();
         } else {
             menu_focused = !menu_focused;
             if menu_focused {
                 btn.request_focus();
+            } else {
+                btn.surrender_focus();
             }
         }
         ctx.request_repaint();
@@ -885,8 +888,10 @@ fn handle_menu_button_keys(app: &mut PdfCraftApp, ctx: &egui::Context, popup_id:
     if menu_focused {
         if ctx.input(|i| i.key_pressed(egui::Key::Tab)) || ctx.memory(|m| m.focused().is_some_and(|id| id != btn.id)) {
             menu_focused = false;
+            btn.surrender_focus();
         } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             menu_focused = false;
+            btn.surrender_focus();
             ctx.request_repaint();
         } else if ctx.input_mut(|i| {
             i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
@@ -935,14 +940,18 @@ fn handle_menu_button_keys(app: &mut PdfCraftApp, ctx: &egui::Context, popup_id:
         })
     });
     if let Some((c, key)) = alt_letter {
-        ctx.input_mut(|i| {
-            i.consume_key(egui::Modifiers::ALT, key);
-            i.events.retain(|e| !matches!(e, egui::Event::Text(t) if t.chars().count() == 1 && t.chars().all(|ch| ch.to_ascii_uppercase() == c)));
-        });
-        menu_focused = false;
-        egui::Popup::open_id(ctx, popup_id);
-        app.menu_target = Some(c);
-        ctx.request_repaint();
+        let bar = craft_menu::layout(&app.menu_bar(ctx), craft_menu::Target::current(), &crate::menus::layout_options()).bar;
+        let mnemonics = crate::menus::top_level_mnemonics(&bar);
+        if mnemonics.contains(&c) {
+            ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::ALT, key);
+                i.events.retain(|e| !matches!(e, egui::Event::Text(t) if t.chars().count() == 1 && t.chars().all(|ch| ch.to_ascii_uppercase() == c)));
+            });
+            menu_focused = false;
+            egui::Popup::open_id(ctx, popup_id);
+            app.menu_target = Some(c);
+            ctx.request_repaint();
+        }
     }
 
     ctx.data_mut(|d| d.insert_temp(focus_id, menu_focused));

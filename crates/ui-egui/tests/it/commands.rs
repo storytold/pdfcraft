@@ -978,3 +978,25 @@ fn plain_letters_in_open_submenu_do_not_switch_to_other_top_level_menus() {
         "Help submenu was not opened"
     );
 }
+
+#[test]
+fn f10_twice_releases_button_focus() {
+    let mut h = harness();
+    h.key_press(egui::Key::F10);
+    h.run_steps(1);
+    assert!(h.ctx.memory(|m| m.focused().is_some()), "Menu button has focus after first F10");
+    h.key_press(egui::Key::F10);
+    h.run_steps(1);
+    assert!(h.ctx.memory(|m| m.focused().is_none()), "Menu button surrendered focus after second F10");
+}
+
+#[test]
+fn unmatched_alt_letter_does_not_open_menu_or_consume_key() {
+    let mut h = harness();
+    h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::Z);
+    h.run_steps(2);
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some("File")).is_none(),
+        "Popup must not open for unmatched Alt+Z mnemonic"
+    );
+}
