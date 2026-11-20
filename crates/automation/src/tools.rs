@@ -1404,6 +1404,14 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("a11y.tags")
             .with(schema(json!({ "doc": doc(), "object": { "type": "integer", "minimum": 1 }, "generation": { "type": "integer", "minimum": 0, "maximum": 65535 } }), &["doc", "object", "generation"])),
+        t("accessibility_tag_boxes", "Highlight tag content", "Where one reachable indirect structure tag's content and its descendants' content is drawn: what the Tags panel outlines for the selected tag. Use object and generation from accessibility_tags. Returns one box per marked-content sequence or referenced object (glyphs, paths, images and forms it paints; an annotation's rectangle; a form XObject's placement for content inside it), and each page's union of them, as top-left-origin points on the displayed page. page limits the answer to one page.")
+            .ro()
+            .cmd("a11y.tags")
+            .with(schema(json!({
+                "doc": doc(), "object": { "type": "integer", "minimum": 1 },
+                "generation": { "type": "integer", "minimum": 0, "maximum": 65535 },
+                "page": { "type": "integer", "minimum": 1, "description": "Only boxes on this page" },
+            }), &["doc", "object", "generation"])),
         t("accessibility_set_tag_property", "Edit tag property", "Set or clear one property of a reachable indirect structure tag. Use object and generation from accessibility_tags. Properties: type, title, actual_text, alternate_text, language, summary (Table tags: the table's Summary attribute), scope (TH tags: Row, Column or Both). Summary and scope are written in the tag's Table attribute object (/A, /O /Table); the role map decides a tag's type. Empty or omitted value clears text properties, summary and scope; type requires a nonempty PDF name. Undoable.")
             .with(schema(json!({
                 "doc": doc(), "object": { "type": "integer", "minimum": 1 },

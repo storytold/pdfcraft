@@ -4343,6 +4343,57 @@ trailer << /Root 1 0 R >>
     assert_eq!(pdfcraft_engine::a11y::tags(&saved).into_iter().map(|t| t.kind).collect::<Vec<_>>(), ["Document", "Div", "Div", "P", "P"]);
 }
 
+/// `accessibility_tag_boxes` returns where a tag's content and its descendants' content is drawn,
+/// per box and one union per page, as top-left-origin points (#7070).
+#[test]
+fn a_tags_content_boxes_are_listed_through_automation() {
+    let dir = workdir("a11y-tag-boxes");
+    let content = "/TD << /MCID 0 >> BDC 10 150 40 20 re f EMC /TD << /MCID 1 >> BDC q 40 0 0 20 60 150 cm /Im1 Do Q EMC";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 12 0 R] /Count 2 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /XObject << /Im1 11 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /StructTreeRoot /K 6 0 R >> endobj
+6 0 obj << /S /Document /P 5 0 R /K [7 0 R] >> endobj
+7 0 obj << /S /Table /P 6 0 R /K [8 0 R] >> endobj
+8 0 obj << /S /TR /P 7 0 R /K [9 0 R 10 0 R 14 0 R] >> endobj
+9 0 obj << /S /TD /P 8 0 R /Pg 3 0 R /K 0 >> endobj
+10 0 obj << /S /TD /P 8 0 R /Pg 3 0 R /K 1 >> endobj
+11 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >> stream
+0
+endstream endobj
+12 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 13 0 R >> endobj
+13 0 obj << /Length 40 >> stream
+/TD << /MCID 0 >> BDC 0 0 10 10 re f EMC
+endstream endobj
+14 0 obj << /S /TD /P 8 0 R /Pg 12 0 R /K 0 >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len()
+    );
+    std::fs::write(dir.join("table.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let fd = ok(&mut a, "doc_open", json!({ "path": "table.pdf" }))["doc"].as_u64().unwrap();
+    let cell = ok(&mut a, "accessibility_tag_boxes", json!({ "doc": fd, "object": 10, "generation": 0 }));
+    assert_eq!(cell["boxes"], json!([{ "page": 1, "rect": [60.0, 30.0, 100.0, 50.0] }]), "the image cell, top-left origin");
+    let table = ok(&mut a, "accessibility_tag_boxes", json!({ "doc": fd, "object": 7, "generation": 0, "page": 1 }));
+    assert_eq!(table["count"], 2);
+    assert_eq!(table["boxes"][0]["rect"], json!([10.0, 30.0, 50.0, 50.0]), "the path cell");
+    assert_eq!(table["pages"], json!([{ "page": 1, "bounds": [10.0, 30.0, 100.0, 50.0] }]), "one box for the page");
+    let all = ok(&mut a, "accessibility_tag_boxes", json!({ "doc": fd, "object": 7, "generation": 0 }));
+    assert_eq!(all["count"], 3);
+    assert_eq!(all["pages"][1], json!({ "page": 2, "bounds": [0.0, 190.0, 10.0, 200.0] }), "the cell on page 2");
+    assert!(matches!(
+        err(&mut a, "accessibility_tag_boxes", json!({ "doc": fd, "object": 7, "generation": 0, "page": 3 })),
+        ToolError::InvalidArgs(_)
+    ));
+    assert!(matches!(err(&mut a, "accessibility_tag_boxes", json!({ "doc": fd, "object": 4, "generation": 0 })), ToolError::Failed(_)));
+}
+
 #[test]
 fn marking_a_leaf_tag_as_an_artifact_through_automation_is_undoable_and_saved() {
     let dir = workdir("a11y-artifact");

@@ -1,6 +1,6 @@
 use super::{
-    CosError, DecodeBudget, Dict, Document, HashMap, HashSet, MAX_DEPTH, Matrix, Metrics, ObjRef, Object, Op, Pieces, Rc, RedactError, Scope,
-    is_vertical, num, overlaps, page_streams, res_dict,
+    CosError, DecodeBudget, Dict, Document, HashMap, HashSet, MAX_DEPTH, Matrix, Metrics, ObjRef, Object, Op, Pieces, Rc, RedactError, Scope, num,
+    overlaps, page_streams, res_dict,
 };
 
 /// Drop every `replaced` name of the XObject resources `xo` that the rewritten `content` no
@@ -564,7 +564,7 @@ pub(super) fn extgstate_font(
     let [font, size] = entry.as_slice() else { return None };
     let size = doc.resolve(size).as_f64()?;
     let font_dict = doc.resolve(font).as_dict().cloned();
-    let vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
+    let vertical = font_dict.as_ref().is_some_and(|d| pdfcraft_fonts::pdf::writes_vertically(doc, d));
     let key = [b"\0".as_slice(), name].concat();
     let metrics = match scope.fonts.get(&key) {
         Some(m) => m.clone(),
