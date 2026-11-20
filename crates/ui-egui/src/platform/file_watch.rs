@@ -445,11 +445,12 @@ impl PdfCraftApp {
         self.watch.known.insert(c.doc, c.stamp);
         if self.has_unsaved_work(i) {
             if let Some(view) = self.views.get_mut(i) {
+                view.disk_reloaded = false;
                 view.disk_changed = true;
             }
             return;
         }
-        self.reload_view(i, c.bytes);
+        self.reload_view(i, c.bytes, true);
     }
 
     /// The notice bar's Reload: read the file now and replace the document, unsaved changes and
@@ -461,7 +462,7 @@ impl PdfCraftApp {
         match std::fs::read(&path) {
             Ok(bytes) => {
                 self.watch.known_as(doc, stamp);
-                self.reload_view(i, Arc::new(bytes));
+                self.reload_view(i, Arc::new(bytes), false);
             }
             Err(e) => {
                 let name = self.session.get(doc).map(|d| d.name.clone()).unwrap_or_default();
@@ -472,7 +473,7 @@ impl PdfCraftApp {
 
     /// Open `bytes` in place of tab `i`'s document, keeping the tab and the reader's place. A
     /// version that can't be opened leaves the document as it was, and says so.
-    fn reload_view(&mut self, i: usize, bytes: Arc<Vec<u8>>) {
+    fn reload_view(&mut self, i: usize, bytes: Arc<Vec<u8>>, automatic: bool) {
         let Some(id) = self.views.get(i).map(|v| v.id) else { return };
         match self.session.reload(id, bytes) {
             Ok(()) => {
@@ -482,6 +483,7 @@ impl PdfCraftApp {
                 self.placed_signatures.remove(&id);
                 if let (Some(view), Some(doc)) = (self.views.get_mut(i), self.session.get(id)) {
                     view.document_replaced(&doc.info);
+                    view.disk_reloaded = automatic;
                 }
                 // What the form's scripts said while it opened, as on opening.
                 let out = self.session.take_js_output(id);
@@ -593,9 +595,10 @@ mod tests {
         h.run_steps(3);
         let id = h.state().views[0].id;
         h.state_mut().placed_signatures.insert(id);
-        h.state_mut().reload_view(0, Arc::new(b"not a pdf".to_vec()));
+        h.state_mut().reload_view(0, Arc::new(b"not a pdf".to_vec()), true);
         assert!(h.state().placed_signatures.contains(&id), "a failed reload keeps the mark");
-        h.state_mut().reload_view(0, Arc::new(fixture(2)));
+        assert!(!h.state().views[0].disk_reloaded, "a failed reload shows no success notice");
+        h.state_mut().reload_view(0, Arc::new(fixture(2)), false);
         assert!(!h.state().placed_signatures.contains(&id), "the reloaded document has no placed signature");
     }
 
