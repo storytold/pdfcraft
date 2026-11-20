@@ -217,11 +217,16 @@ fn a_drag_ending_between_the_columns_selects_the_rows() {
 /// two-column layout sets them (#2387): five lines of 10 pt Courier each, 6 pt a glyph, the left
 /// column's fourth line a short one.
 fn narrow_columns() -> Vec<u8> {
+    narrow_columns_and("")
+}
+
+/// [`narrow_columns`], then the content `more`.
+fn narrow_columns_and(more: &str) -> Vec<u8> {
     let column = |x: u32, lines: &[&str]| {
         let lines: String = lines.iter().map(|line| format!("({line}) Tj T* ")).collect();
         format!("BT /F1 10 Tf 12 TL {x} 250 Td {lines}ET ")
     };
-    let content = format!("{}{}", column(20, &NARROW_LEFT), column(179, &NARROW_RIGHT));
+    let content = format!("{}{}{more}", column(20, &NARROW_LEFT), column(179, &NARROW_RIGHT));
     format!(
         "%PDF-1.7\n\
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
@@ -273,6 +278,50 @@ fn a_drag_stays_in_its_column_until_the_pointer_crosses_a_narrow_gutter() {
     let over = glyph(&h, starts[7]);
     drag(&mut h, from, over, Modifiers::NONE);
     assert_eq!(text(&h), Some([NARROW_LEFT.join("\n"), NARROW_RIGHT[..2].join("\n"), "n".into()].join("\n")), "over the right column");
+}
+
+/// The stamp of [`stamped_columns`].
+const STAMP: &str = "Resubmit.";
+
+/// [`narrow_columns`] with a stamp set up the gutter, as a preprint or "resubmitted" stamp is set
+/// up the side of a paper's text: 12 pt Courier running up the page from below the columns' last
+/// lines to above their first, over the gutter and the edge of each column.
+fn stamped_columns() -> Vec<u8> {
+    narrow_columns_and(&format!("BT /F1 12 Tf 0 1 -1 0 180 196 Tm ({STAMP}) Tj ET "))
+}
+
+/// A drag down a column of a page with a stamp set up its gutter ends beside the pointer: between
+/// two lines, where the stamp alone is level with the pointer, and over the stamp in the gutter,
+/// where the pointer has not left the column. The stamp does not take the drag back to where it
+/// is read.
+#[test]
+fn a_drag_is_not_taken_by_a_stamp_set_up_the_gutter() {
+    let mut h = opened("stamped.pdf", stamped_columns());
+    // The first glyph of each of the left column's lines, wherever the stamp is read.
+    assert!(h.state_mut().views[0].select_all());
+    h.run_steps(1);
+    let page = text(&h).expect("the page's text");
+    assert!(page.lines().any(|line| line == STAMP), "the stamp is a line of its own: {page:?}");
+    let start = |line: &str| page.lines().take_while(|l| *l != line).map(str::len).sum::<usize>();
+    let starts = NARROW_LEFT.map(start);
+    let rect = |h: &Harness<'static, PdfCraftApp>, g: usize| h.state().views[0].glyph_screen_rect(0, g).expect("glyph on screen");
+    // From the start of the second line.
+    let from = glyph(&h, starts[1]) - vec2(4.0, 0.0);
+    // Under the eleventh glyph of the third line, in the white between it and the fourth.
+    let above = rect(&h, starts[2] + 10);
+    let between = egui::pos2(above.center().x, above.bottom() + (rect(&h, starts[3]).top() - above.bottom()) / 4.0);
+    // In the middle of the gutter, over the stamp, level with the third line: from that line's end
+    // to the right column's start.
+    let (g0, g1) = (rect(&h, starts[2] + NARROW_LEFT[2].len() - 1).right(), rect(&h, start(NARROW_RIGHT[0])).left());
+    let gutter = egui::pos2((g0 + g1) / 2.0, above.center().y);
+    for (to, selected, place) in
+        [(between, [NARROW_LEFT[1], &NARROW_LEFT[2][..=10]], "between two lines"), (gutter, [NARROW_LEFT[1], NARROW_LEFT[2]], "over the stamp")]
+    {
+        h.key_press(egui::Key::Escape);
+        h.run_steps(60);
+        drag(&mut h, from, to, Modifiers::NONE);
+        assert_eq!(text(&h), Some(selected.join("\n")), "{place}");
+    }
 }
 
 /// Two columns 9 pt apart, the left one set ragged right, as text set flush left is: its second

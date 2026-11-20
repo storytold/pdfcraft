@@ -2204,6 +2204,69 @@ fn a_drag_measures_the_gutter_by_the_text_beside_it() {
     assert_eq!(kept, Some((160.0, 46.0)), "the end of the left column's line");
 }
 
+/// Two columns 9 pt apart, the right one's lines 3 pt lower than the left one's, with `stamp` set
+/// up the gutter from `bottom`: 13 pt high, 7 pt a glyph, reaching 2 pt into each column, as a
+/// "resubmitted" or preprint stamp is set up the side of a paper's text. The stamp is a line of
+/// its own, read last.
+fn columns_with_a_stamp(stamp: &str, bottom: f32) -> PageText {
+    let mut v = Vec::new();
+    column(&mut v, &NARROW_COLUMNS.0, 10.0, 10.0);
+    column(&mut v, &NARROW_COLUMNS.1, 169.0, 13.0);
+    let mut t = layout(v);
+    assert_eq!(t.plain_text(), [NARROW_COLUMNS.0, NARROW_COLUMNS.1].concat().join("\n"), "the columns");
+    let line = t.line_of.last().map_or(0, |l| l + 1);
+    for (k, c) in stamp.chars().enumerate() {
+        t.glyphs.push(tilted(&c.to_string(), [171.0, bottom - k as f32 * 7.0], [0.0, -1.0], [-1.0, 0.0], 7.0, 13.0));
+        t.line_of.push(line);
+        t.space_before.push(false);
+    }
+    t
+}
+
+/// A stamp set up the gutter has a glyph level with every height along it. Between two lines of a column it is
+/// the only text level with the pointer, or the nearest: the line right beside the pointer is found all the
+/// same, and the gutter still parts it from the other column's line that different baselines put level.
+#[test]
+fn a_stamp_up_the_gutter_is_no_row_of_the_lines_beside_it() {
+    let t = columns_with_a_stamp("Revision", 70.0);
+    let start = |i: Option<usize>| i.and_then(|i| t.glyphs.get(i)).map(|g| (g.rect[0], g.rect[1]));
+    // The left column's lines are at 22..32 and 34..44; the stamp alone is level with the white between them.
+    assert_eq!(start(t.nearest(80.0, 32.5)), Some((76.0, 22.0)), "between two lines of the left column");
+    // The right column's are at 25..35 and 37..47: the left column's third line is level with the white too.
+    assert_eq!(start(t.nearest(250.0, 35.5)), Some((247.0, 25.0)), "between two lines of the right column");
+    // Over the stamp it is the text under the pointer.
+    assert_eq!(t.nearest(164.0, 40.0).map(|i| t.glyphs[i].direction), Some([0.0, -1.0]), "over the stamp");
+}
+
+/// A drag that began in a column is not taken by a stamp set up the gutter beside it: over the stamp the pointer
+/// has not left its column, between two lines or level with one, nearer either column. Past the stamp it is in
+/// the next column. A turned label level with fewer than three lines, as the heading over a table's column is,
+/// is where the drag ends.
+#[test]
+fn a_drag_is_not_taken_by_a_stamp_up_the_gutter() {
+    let t = columns_with_a_stamp("Revision", 70.0);
+    let start = |t: &PageText, i: Option<usize>| i.and_then(|i| t.glyphs.get(i)).map(|g| (g.rect[0], g.rect[1]));
+    let end = |t: &PageText, i: Option<usize>| i.and_then(|i| t.glyphs.get(i)).map(|g| (g.rect[2], g.rect[1]));
+    let anchor = t.nearest(10.0, 15.0).expect("a glyph");
+    for (x, y) in [(162.0, 40.0), (164.0, 40.0), (167.0, 40.0), (164.0, 44.5)] {
+        assert_eq!(t.nearest(x, y).map(|i| t.glyphs[i].direction), Some([0.0, -1.0]), "the stamp is under {x}, {y}");
+        assert_eq!(end(&t, t.nearest_from(anchor, x, y)), Some((160.0, 34.0)), "the end of the left column's line, from {x}, {y}");
+    }
+    assert_eq!(start(&t, t.nearest_from(anchor, 176.0, 40.0)), Some((175.0, 37.0)), "past the stamp, over the right column");
+    // From the right column the drag stays there.
+    let from_right = t.nearest(250.0, 66.0).expect("a glyph");
+    for x in [162.0, 167.0] {
+        assert_eq!(start(&t, t.nearest_from(from_right, x, 40.0)), Some((169.0, 37.0)), "the start of the right column's line, from {x}");
+    }
+    // A drag that began on the stamp runs along it.
+    let on_stamp = t.nearest(164.0, 60.0).expect("a glyph");
+    assert_eq!(t.nearest_from(on_stamp, 164.0, 40.0), t.nearest(164.0, 40.0), "along the stamp");
+    // "No" set upwards over 32..46 is level with two lines (centres at 39 and 42).
+    let t = columns_with_a_stamp("No", 46.0);
+    let anchor = t.nearest(10.0, 15.0).expect("a glyph");
+    assert_eq!(t.nearest_from(anchor, 164.0, 40.0).map(|i| t.glyphs[i].direction), Some([0.0, -1.0]), "a turned label takes the drag");
+}
+
 /// Table cells padded with spaces to a fixed width, as wide as running text: the row reads across, as it did
 /// before gutters were looked for, and the gap after a cell's padding is no gutter.
 #[test]
@@ -3236,11 +3299,14 @@ fn a_justified_gap_is_not_a_gutter() {
     word(&mut v, "Wide", 10.0, 106.0, 6.0);
     word(&mut v, "gap", 94.0, 106.0, 6.0);
     let t = layout(v);
-    assert!(!t.gutter_between(20.0, 100.0, 106.0 - 40.0, 116.0 + 40.0, 10.0), "the rows above cross it");
-    assert!(!t.gutter_between(20.0, 100.0, 106.0, 116.0, 10.0), "on its own row it parts one line only");
-    assert!(!t.gutter_between(20.0, 200.0, 0.0, 200.0, 10.0), "past the text's right edge nothing is parted");
+    // The rows of the text that runs the first glyph's way: all of it.
+    let of = &t.glyphs[0];
+    assert!(!t.gutter_between(of, 20.0, 100.0, 106.0 - 40.0, 116.0 + 40.0, 10.0), "the rows above cross it");
+    assert!(!t.gutter_between(of, 20.0, 100.0, 106.0, 116.0, 10.0), "on its own row it parts one line only");
+    assert!(!t.gutter_between(of, 20.0, 200.0, 0.0, 200.0, 10.0), "past the text's right edge nothing is parted");
     // A table's columns part every row.
-    assert!(table().gutter_between(20.0, 100.0, 0.0, 60.0, 10.0));
+    let t = table();
+    assert!(t.gutter_between(&t.glyphs[0], 20.0, 100.0, 0.0, 60.0, 10.0));
 }
 
 /// A heading across the page just above a table crosses the table's gutter, but a drag over
