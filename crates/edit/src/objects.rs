@@ -10,7 +10,7 @@ use crate::text::ContentStream;
 use crate::{Content, EditError};
 
 mod clip;
-pub use clip::{CopiedObjects, copy_objects, paste_objects};
+pub use clip::{CopiedObjects, copy_objects, copy_objects_with_layers, paste_objects, paste_objects_with_layers};
 
 pub const MAX_MOVE_OBJECTS: usize = 1_000;
 const MAX_PAGE_OBJECTS: usize = 10_000;

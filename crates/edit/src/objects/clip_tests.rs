@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use pdfcraft_cos::{Document, SaveOptions, write_incremental};
 
+use super::super::editable_objects;
 use super::*;
 
 /// A document of `objs` (object 1 the catalog), numbered in order.
@@ -225,4 +226,63 @@ fn copying_and_pasting_refuse_what_they_cannot_do_and_change_nothing() {
     assert_eq!(ops.iter().filter(|o| o.is("BT")).count(), ops.iter().filter(|o| o.is("ET")).count());
     let mut work = stray.clone();
     paste_objects(&mut work, 1, &copied, [0.0, 0.0]).unwrap();
+}
+
+/// #4648: `copy_objects_with_layers` must follow the caller's live layer overrides so preceding
+/// hidden/revealed images and Form artwork target the exact index in `editable_objects_with_layers`.
+#[test]
+fn copying_with_live_layers_targets_visible_images_and_forms_by_live_index() {
+    use crate::objects::editable_objects_with_layers;
+    for initially_on in [false, true] {
+        for marked in [false, true] {
+            for form in [false, true] {
+                let state = if initially_on { "ON" } else { "OFF" };
+                let wrapped = if marked { "/OC /L BDC q 20 0 0 20 10 10 cm /First Do Q EMC" } else { "q 20 0 0 20 10 10 cm /First Do Q" };
+                let oc = if marked { "" } else { "/OC 5 0 R" };
+                let first_obj = if form {
+                    let body = "1 0 0 rg 0 0 1 1 re f";
+                    format!(
+                        "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >> {oc} /Length {} >>\nstream\n{body}\nendstream",
+                        body.len()
+                    )
+                } else {
+                    format!(
+                        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 {oc} /Length 3 >>\nstream\n\u{7f}\u{0}\u{0}\nendstream"
+                    )
+                };
+                let second_img = "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\n\u{0}\u{7f}\u{0}\nendstream";
+                let mut doc = pdf(&[
+                    format!("<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] /D << /{state} [5 0 R] /Order [5 0 R] >> >> >>"),
+                    "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 100 100] >>".into(),
+                    "<< /Type /Page /Parent 2 0 R /Contents 8 0 R /Resources << /Properties << /L 5 0 R >> /XObject << /First 6 0 R /Second 7 0 R >> >> >>".into(),
+                    "<< /Type /Page /Parent 2 0 R /Contents 9 0 R /Resources << >> >>".into(),
+                    "<< /Type /OCG /Name (Switchable) >>".into(),
+                    first_obj,
+                    second_img.into(),
+                    stream(&format!("{wrapped} q 20 0 0 20 60 60 cm /Second Do Q")),
+                    stream(""),
+                ]);
+                let img_target = |index| ObjectTarget { kind: ObjectKind::Image, index };
+                // Toggle layer 5 0 R opposite its default: off->on reveals /First at index 0; on->off leaves /Second at index 0.
+                let live = [(5, 0, !initially_on)];
+                let inv = editable_objects_with_layers(&doc, 0, &live).unwrap();
+                let img0 = copy_objects_with_layers(&doc, 0, &[img_target(0)], &live).unwrap();
+                let content0 = String::from_utf8_lossy(&img0.content);
+                if initially_on {
+                    assert_eq!(inv.len(), 1);
+                    assert_eq!(img0.rect, [60.0, 60.0, 80.0, 80.0]);
+                    assert!(content0.contains("/Second Do") && !content0.contains("/First"), "{content0}");
+                    assert!(copy_objects_with_layers(&doc, 0, &[img_target(1)], &live).is_err());
+                } else {
+                    assert_eq!(inv.len(), 2);
+                    assert_eq!(img0.rect, [10.0, 10.0, 30.0, 30.0]);
+                    assert!(content0.contains("/First Do") && !content0.contains("/Second"), "{content0}");
+                    let img1 = copy_objects_with_layers(&doc, 0, &[img_target(1)], &live).unwrap();
+                    assert_eq!(img1.rect, [60.0, 60.0, 80.0, 80.0]);
+                    assert!(String::from_utf8_lossy(&img1.content).contains("/Second Do"));
+                }
+                paste_objects_with_layers(&mut doc, 1, &img0, [0.0, 0.0], &live).unwrap();
+            }
+        }
+    }
 }

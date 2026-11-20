@@ -22,6 +22,7 @@ use common::{
 };
 pub(crate) use strip::USAGE_RIGHTS_REMOVED;
 use strip::drop_usage_rights;
+use strip::earlier_groups;
 pub use strip::{Stripped, XfaShape, existing_layout, strip, xfa_shape};
 
 /// Private key on generated fields: the template's SOM path, so data can be put back.
@@ -41,6 +42,11 @@ pub const DATE_KEY: &[u8] = b"PCXfaDate";
 /// fields they hold.
 pub const NODE_KEY: &[u8] = b"PCXfaNode";
 
+/// Private key on each page laying the form out writes: the name of the page area the page was
+/// made from. The n-th page with a name is that area's `[n-1]` instance, which scripts address
+/// even when no field on the page is left to show it (see `page_area_uses`).
+pub const AREA_KEY: &[u8] = b"PCXfaArea";
+
 pub struct Written {
     pub pages: usize,
     pub fields: usize,
@@ -52,6 +58,15 @@ pub struct Written {
 /// On a push button generated for an XFA image field: clicking it picks a picture (the forms
 /// layer reads this key).
 pub const IMAGE_FIELD_KEY: &[u8] = b"PCXfaImage";
+
+/// On an optional content group PdfCraft made for what a form shows only on screen (`/Screen`)
+/// or only in print (`/Print`): a later layout of the form finds and reuses it.
+pub const RELEVANT_KEY: &[u8] = b"PCXfaRelevant";
+
+/// The optional content groups of [`RELEVANT_KEY`], by index: what the key says, the group's
+/// resource name on the pages, its `/Name`, and its view and print states.
+const GROUPS: [(&str, &str, &str, &str, &str); 2] =
+    [("Screen", "PCXfaScreen", "Form: screen only", "ON", "OFF"), ("Print", "PCXfaPrint", "Form: print only", "OFF", "ON")];
 
 /// On a check box or radio button generated for a round XFA check button (`shape="round"`): its
 /// background and border are drawn as a circle, not the widget's rectangle (the forms layer
@@ -80,6 +95,11 @@ struct Emitter<'a> {
     warnings: Vec<String>,
     /// The signatures the file holds, by the SOM path of the field signed.
     signed: HashMap<String, Signed>,
+    /// The screen-only and print-only optional content groups ([`GROUPS`]): an earlier layout's,
+    /// or made when first needed.
+    groups: [Option<ObjRef>; 2],
+    /// Which of [`Self::groups`] this layout drew in.
+    used: [bool; 2],
     /// The full names of the fields the file came with, which a generated name must not repeat.
     taken: HashSet<String>,
     /// The fields above the signature fields named by their SOM paths, by the path they name:
@@ -95,10 +115,12 @@ struct Signed {
     appearance: Option<Object>,
 }
 
-/// Most fields looked at for signatures.
+/// Most fields looked at for signatures, counted as they are queued.
 const MAX_FIELDS_SEARCHED: usize = 20_000;
 /// Deepest field nesting followed.
 const MAX_FIELD_DEPTH: usize = 32;
+/// Most `/Fields` and `/Kids` entries read while looking, repeats included.
+const MAX_KIDS_READ: usize = 1 << 20;
 
 /// The fields the document came with: the full name of each, and the signed signature fields by
 /// SOM path. Signing applications name a dynamic form's fields by their SOM path
@@ -110,22 +132,18 @@ fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, 
     let mut names = HashSet::new();
     let Some(acro) = catalog.get(b"AcroForm").map(|a| doc.resolve(a)) else { return (out, names) };
     let Some(fields) = acro.as_dict().and_then(|a| a.get(b"Fields")).map(|f| doc.resolve(f)) else { return (out, names) };
+    let mut walk = FieldQueue::default();
     // The accumulated name is shared by the children it is queued for, not copied into each.
-    let mut stack: Vec<(Object, std::rc::Rc<str>, bool, usize)> =
-        fields.as_array().into_iter().flatten().map(|f| (f.clone(), "".into(), false, 0)).collect();
-    let mut seen = 0usize;
-    while let Some((field, prefix, parent_is_sig, depth)) = stack.pop() {
-        seen += 1;
-        if seen > MAX_FIELDS_SEARCHED {
-            break;
-        }
-        let field = doc.resolve(&field);
+    let top: std::rc::Rc<str> = "".into();
+    walk.queue(fields.as_array().map(Vec::as_slice).unwrap_or_default(), &top, false, 0);
+    while let Some((field, prefix, parent_is_sig, depth)) = walk.stack.pop() {
+        let field = doc.get(field);
         let Some(d) = field.as_dict() else { continue };
         if d.contains(NODE_KEY) {
             // Generated to name a signature field: only what it holds is looked at.
             if depth < MAX_FIELD_DEPTH {
-                let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
-                stack.extend(kids.into_iter().map(|k| (k, "".into(), false, depth + 1)));
+                let kids = d.get(b"Kids").map(|k| doc.resolve(k));
+                walk.queue(kids.as_deref().and_then(Object::as_array).map(Vec::as_slice).unwrap_or_default(), &top, false, depth + 1);
             }
             continue;
         }
@@ -151,17 +169,84 @@ fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, 
             Some(ft) => ft == b"Sig",
             None => parent_is_sig,
         };
-        let kids: Vec<Object> = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+        let kids = d.get(b"Kids").map(|k| doc.resolve(k));
+        let kids = kids.as_deref().and_then(Object::as_array).map(Vec::as_slice).unwrap_or_default();
         if is_sig && let Some(value) = d.get(b"V").filter(|v| doc.resolve(v).as_dict().is_some()) {
             // The appearance is on the field when it is its own widget, or on its one widget.
-            let appearance = d.get(b"AP").cloned().or_else(|| kids.iter().find_map(|k| doc.resolve(k).as_dict().and_then(|k| k.get(b"AP").cloned())));
+            let appearance = d.get(b"AP").cloned().or_else(|| walk.find_map(kids, |k| doc.resolve(k).as_dict().and_then(|k| k.get(b"AP").cloned())));
             out.entry(name.to_string()).or_insert(Signed { value: value.clone(), appearance });
         }
         if depth < MAX_FIELD_DEPTH {
-            stack.extend(kids.into_iter().map(|k| (k, name.clone(), is_sig, depth + 1)));
+            walk.queue(kids, &name, is_sig, depth + 1);
         }
     }
     (out, names)
+}
+
+/// Required (`Ff` bit 2), which viewers outline when they highlight a form's fields, for widget
+/// `w` when it must be filled in. A radio button's flags are its group's (the group takes it,
+/// [`Emitter::radio_group`]), and a push button keeps no value (ISO 32000-2 §12.7.5.2.2), so
+/// there is nothing it could be required to hold.
+fn required_flag(w: &Widget) -> i64 {
+    if w.required && !matches!(w.kind, WidgetKind::Radio { .. } | WidgetKind::Button { .. }) { 1 << 1 } else { 0 }
+}
+
+/// The fields [`existing_fields`] still has to look at: each with its parent's full name,
+/// whether it inherits a signature type, and its depth.
+#[derive(Default)]
+struct FieldQueue {
+    stack: Vec<(ObjRef, std::rc::Rc<str>, bool, usize)>,
+    /// The shallowest depth each object number was queued at: [`Document::get`] finds a field
+    /// by number alone, so `5 0 R` and `5 1 R` are the same field.
+    seen: HashMap<u32, usize>,
+    /// Entries pushed onto `stack`, a field queued again at a shallower depth included.
+    pushed: usize,
+    /// `/Fields` and `/Kids` entries read while queuing.
+    read: usize,
+    /// `/Kids` entries read while searching for a signed field's appearance.
+    searched: usize,
+}
+
+impl FieldQueue {
+    /// The first of `kids` for which `f` gives a value. At most [`MAX_KIDS_READ`] entries are
+    /// looked at in all: signed fields sharing one long `/Kids` would otherwise each search all
+    /// of it. The searches have a budget of their own, apart from the one for queuing, so a
+    /// search can never leave a field's kids unqueued. Past the limit nothing more is looked at.
+    fn find_map<T>(&mut self, kids: &[Object], mut f: impl FnMut(&Object) -> Option<T>) -> Option<T> {
+        for k in kids {
+            self.searched += 1;
+            if self.searched > MAX_KIDS_READ {
+                return None;
+            }
+            if let Some(v) = f(k) {
+                return Some(v);
+            }
+        }
+        None
+    }
+
+    /// Queue the fields `kids` lists, each the first time it is listed. Fields and kids are
+    /// indirect references (ISO 32000-2 §12.7.3.1); anything else is skipped. A field listed
+    /// again, by this list or another, under any generation, takes no room, unless it is now
+    /// shallower than where it was queued: first reached at [`MAX_FIELD_DEPTH`], its kids would
+    /// otherwise never be read. So a field is queued at most once per depth, and at most
+    /// [`MAX_FIELDS_SEARCHED`] entries are ever queued: a field listing one kid many times, or
+    /// fields sharing one long `/Kids`, would otherwise queue it all on every visit. Reading the
+    /// repeats costs too, so at most [`MAX_KIDS_READ`] entries are read in all.
+    fn queue(&mut self, kids: &[Object], prefix: &std::rc::Rc<str>, is_sig: bool, depth: usize) {
+        for k in kids {
+            self.read += 1;
+            if self.pushed >= MAX_FIELDS_SEARCHED || self.read > MAX_KIDS_READ {
+                return;
+            }
+            let Some(r) = k.as_ref() else { continue };
+            if self.seen.get(&r.num).is_none_or(|&queued| depth < queued) {
+                self.seen.insert(r.num, depth);
+                self.pushed += 1;
+                self.stack.push((r, std::rc::Rc::clone(prefix), is_sig, depth));
+            }
+        }
+    }
 }
 
 impl Emitter<'_> {
@@ -169,12 +254,49 @@ impl Emitter<'_> {
         format!("/{} {} Tf {} rg", face.resource_name(), n(face.size), rgb(face.color)).into_bytes()
     }
 
-    fn populate_widget_kind(&mut self, w: &Widget, d: &mut Dict, mk: &mut Dict) -> (i64, bool, Option<String>) {
+    /// The field of radio group `group`, which button `w` is a kid of: the one an earlier button
+    /// made (required too when `w` must be chosen), or a new field of the form, with `w`'s text
+    /// look and the group's SOM path (the button's without its last step).
+    fn radio_group(&mut self, w: &Widget, group: &str) -> Result<ObjRef, XfaError> {
+        if let Some((p, _)) = self.radio_groups.get(group) {
+            let p = *p;
+            // A later button that must be chosen makes the group required too.
+            if w.required {
+                self.doc.update_dict(p, |g| {
+                    let ff = g.int(b"Ff").unwrap_or(0);
+                    g.set(b"Ff".to_vec(), Object::Int(ff | (1 << 1)));
+                })?;
+            }
+            return Ok(p);
+        }
+        let mut g = Dict::new();
+        g.set(b"FT".to_vec(), Object::name("Btn"));
+        let required = if w.required { 1 << 1 } else { 0 };
+        g.set(b"Ff".to_vec(), Object::Int((1 << 15) | (1 << 14) | required));
+        g.set(b"T".to_vec(), Object::String(PdfString::text(group)));
+        g.set(b"V".to_vec(), Object::name("Off"));
+        g.set(b"DA".to_vec(), Object::String(PdfString::literal(Self::da(&w.face))));
+        g.set(b"Kids".to_vec(), Object::Array(Vec::new()));
+        let group_som = w.som.rsplit_once('.').map(|(g, _)| g.to_string()).unwrap_or_else(|| w.som.clone());
+        g.set(SOM_KEY.to_vec(), Object::String(PdfString::text(&group_som)));
+        let p = self.doc.add(Object::Dict(g));
+        self.radio_groups.insert(group.to_string(), (p, Vec::new()));
+        self.fields.push(p);
+        self.field_count += 1;
+        Ok(p)
+    }
+
+    /// Fill in widget `w`'s field by its kind (field type, flags, value, appearance states, items,
+    /// action) in `d` and `mk`. Returns its field flags, whether it is a top-level field (not a kid
+    /// of its radio group's field, nor a signature field under the fields generated for its SOM
+    /// path), and for such a signature field the SOM path of the generated field above it.
+    fn populate_widget_kind(&mut self, w: &Widget, d: &mut Dict, mk: &mut Dict) -> Result<(i64, bool, Option<String>), XfaError> {
         let r = w.rect;
         let mut ff: i64 = 0;
         if w.read_only {
             ff |= 1;
         }
+        ff |= required_flag(w);
         let mut top_level = true;
         // The SOM path of the generated field above this one, for a signature field named by its
         // SOM path.
@@ -319,26 +441,7 @@ impl Emitter<'_> {
             }
             WidgetKind::Radio { group, on, .. } => {
                 top_level = false;
-                let parent = match self.radio_groups.get(group) {
-                    Some((p, _)) => *p,
-                    None => {
-                        let mut g = Dict::new();
-                        g.set(b"FT".to_vec(), Object::name("Btn"));
-                        g.set(b"Ff".to_vec(), Object::Int((1 << 15) | (1 << 14)));
-                        g.set(b"T".to_vec(), Object::String(PdfString::text(group)));
-                        g.set(b"V".to_vec(), Object::name("Off"));
-                        g.set(b"DA".to_vec(), Object::String(PdfString::literal(Self::da(&w.face))));
-                        g.set(b"Kids".to_vec(), Object::Array(Vec::new()));
-                        // The group's SOM path: the button's without its last step.
-                        let group_som = w.som.rsplit_once('.').map(|(g, _)| g.to_string()).unwrap_or_else(|| w.som.clone());
-                        g.set(SOM_KEY.to_vec(), Object::String(PdfString::text(&group_som)));
-                        let p = self.doc.add(Object::Dict(g));
-                        self.radio_groups.insert(group.clone(), (p, Vec::new()));
-                        self.fields.push(p);
-                        self.field_count += 1;
-                        p
-                    }
-                };
+                let parent = self.radio_group(w, group)?;
                 d.set(b"Parent".to_vec(), Object::Ref(parent));
                 // Appearance states are PDF names, so a space becomes an underscore. The datasets
                 // still hold the template's text (`/PCOn`); writing the name back would drop the selection.
@@ -364,18 +467,27 @@ impl Emitter<'_> {
                 write_button_action(w.action.as_ref(), d);
             }
         }
-        (ff, top_level, under)
+        Ok((ff, top_level, under))
     }
 
     /// Write laid-out widget `w` on `page` as an AcroForm widget annotation (and its field), with
-    /// its border, background and kind, and return the annotation's object.
+    /// its border, background and kind, its flags saying whether it shows on screen and in print,
+    /// and return the annotation's object.
     fn widget(&mut self, w: &Widget, page: &Page, page_ref: ObjRef) -> Result<Option<ObjRef>, XfaError> {
         let r = w.rect;
         let (x0, y0, x1, y1) = (r.x, page.height - r.bottom(), r.right(), page.height - r.y);
         let mut d = Dict::new();
         d.set(b"Type".to_vec(), Object::name("Annot"));
         d.set(b"Subtype".to_vec(), Object::name("Widget"));
-        d.set(b"F".to_vec(), Object::Int(4));
+        // Print (4) when it prints, NoView (32) when it isn't shown on screen, Hidden (2) when
+        // it is shown nowhere.
+        let flags = match (w.views.screen, w.views.print) {
+            (true, true) => 4,
+            (true, false) => 0,
+            (false, true) => 4 | 32,
+            (false, false) => 2,
+        };
+        d.set(b"F".to_vec(), Object::Int(flags));
         d.set(b"P".to_vec(), Object::Ref(page_ref));
         d.set(b"Rect".to_vec(), Object::Array([x0, y0, x1, y1].iter().map(|v| Object::Real(*v)).collect()));
         d.set(b"DA".to_vec(), Object::String(PdfString::literal(Self::da(&w.face))));
@@ -399,7 +511,7 @@ impl Emitter<'_> {
         if matches!(w.kind, WidgetKind::CheckBox { round: true, .. } | WidgetKind::Radio { round: true, .. }) {
             d.set(ROUND_KEY.to_vec(), Object::Bool(true));
         }
-        let (ff, top_level, under) = self.populate_widget_kind(w, &mut d, &mut mk);
+        let (ff, top_level, under) = self.populate_widget_kind(w, &mut d, &mut mk)?;
         if !mk.is_empty() {
             d.set(b"MK".to_vec(), Object::Dict(mk));
         }
@@ -563,6 +675,37 @@ impl Emitter<'_> {
         }
     }
 
+    /// Optional content group `g` of [`GROUPS`] (0 screen only, 1 print only), marked as drawn in:
+    /// an earlier layout's, or a new one whose `/Usage` says where it shows.
+    fn group(&mut self, g: usize) -> ObjRef {
+        if let Some(u) = self.used.get_mut(g) {
+            *u = true;
+        }
+        if let Some(r) = self.groups.get(g).copied().flatten() {
+            return r;
+        }
+        let (key, _, name, view, print) = GROUPS.get(g).copied().unwrap_or(GROUPS[0]);
+        let state = |event: &str, key: &str, value: &str| {
+            let mut s = Dict::new();
+            s.set(key.as_bytes().to_vec(), Object::name(value));
+            (event.as_bytes().to_vec(), Object::Dict(s))
+        };
+        let mut usage = Dict::new();
+        for (k, v) in [state("View", "ViewState", view), state("Print", "PrintState", print)] {
+            usage.set(k, v);
+        }
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("OCG"));
+        d.set(b"Name".to_vec(), Object::String(PdfString::text(name)));
+        d.set(b"Usage".to_vec(), Object::Dict(usage));
+        d.set(RELEVANT_KEY.to_vec(), Object::name(key));
+        let r = self.doc.add(Object::Dict(d));
+        if let Some(slot) = self.groups.get_mut(g) {
+            *slot = Some(r);
+        }
+        r
+    }
+
     /// Write one laid-out page under `pages_ref`: its fills, lines, text and pictures in a
     /// content stream, the fonts and images it uses as resources, and its widgets and the links
     /// in its text as annotations. Returns the page object.
@@ -573,6 +716,9 @@ impl Emitter<'_> {
         let mut xobjects = Dict::new();
         let mut annots = Vec::new();
         let h = page.height;
+        // The group whose marked content is open, and the groups the page uses.
+        let mut open: Option<usize> = None;
+        let mut properties = Dict::new();
         // The link the text before ended in, which a next piece of it on the line widens.
         let mut last_link: Option<LinkPiece> = None;
         let steps = steps(&page.items);
@@ -580,7 +726,12 @@ impl Emitter<'_> {
         for (i, step) in steps.iter().enumerate() {
             let item = match step {
                 Step::Item(item) => *item,
+                // A turned draw's `q`/`Q` and the marked content nest, never cross: an open group
+                // is closed first, and opened again inside or after as its items need.
                 Step::Turn(t) => {
+                    if open.take().is_some() {
+                        content.extend_from_slice(b"EMC\n");
+                    }
                     let matrix = turn_matrix(t, h);
                     turn = Some(matrix);
                     last_link = None;
@@ -588,17 +739,37 @@ impl Emitter<'_> {
                     continue;
                 }
                 Step::EndTurn => {
+                    if open.take().is_some() {
+                        content.extend_from_slice(b"EMC\n");
+                    }
                     turn = None;
                     last_link = None;
                     content.extend_from_slice(b"Q\n");
                     continue;
                 }
             };
+            let (group, item) = match item {
+                Item::Only { views, item } => (Some(if views.screen { 0 } else { 1 }), item.as_ref()),
+                other => (None, other),
+            };
+            // A field's widget is an annotation, not page content: the marked content runs on.
+            if !matches!(item, Item::Widget(_)) && group != open {
+                if open.is_some() {
+                    content.extend_from_slice(b"EMC\n");
+                }
+                if let Some((g, (_, resource, ..))) = group.and_then(|g| GROUPS.get(g).map(|k| (g, k))) {
+                    properties.set(resource.as_bytes().to_vec(), Object::Ref(self.group(g)));
+                    content.extend(format!("/OC /{resource} BDC\n").bytes());
+                }
+                open = group;
+                // A link's pieces join only within one group: what is in another shows elsewhere.
+                last_link = None;
+            }
             // A link's pieces join only across text and the underline drawn just before it: a fill,
             // picture, field or any other line (a rule) between them ends the link there.
             let keeps_link = match item {
                 Item::Text(_) => true,
-                Item::Line { from, to, .. } => matches!(steps.get(i + 1), Some(Step::Item(Item::Text(s)))
+                Item::Line { from, to, .. } => matches!(steps.get(i + 1).and_then(Step::item).map(bare), Some(Item::Text(s))
                     if (from.1 - to.1).abs() < 0.01
                         && (from.0 - s.x).abs() < 0.01
                         && (from.1 - (s.baseline + s.face.size * crate::layout::UNDERLINE_DROP)).abs() < 0.01),
@@ -654,6 +825,12 @@ impl Emitter<'_> {
                     content.extend(literal(&win_ansi(&s.text)));
                     content.extend_from_slice(format!(" Tj{close}\n").as_bytes());
                     if let Some(r) = self.text_link(s, h, page_ref, &mut last_link, turn)? {
+                        // A link works only where its text shows: one in print-only text is
+                        // NoView (32), so it can't be clicked on screen, and one in screen-only
+                        // text doesn't print, as a field's widget there.
+                        if let Some(g) = group {
+                            self.doc.update_dict(r, |d| d.set(b"F".to_vec(), Object::Int(if g == 0 { 0 } else { 4 | 32 })))?;
+                        }
                         annots.push(Object::Ref(r));
                     }
                 }
@@ -670,7 +847,12 @@ impl Emitter<'_> {
                         annots.push(Object::Ref(r));
                     }
                 }
+                // Taken apart above: an item is never wrapped twice.
+                Item::Only { .. } => {}
             }
+        }
+        if open.is_some() {
+            content.extend_from_slice(b"EMC\n");
         }
         let mut font_dict = Dict::new();
         for (name, base) in fonts {
@@ -680,6 +862,9 @@ impl Emitter<'_> {
         res.set(b"Font".to_vec(), Object::Dict(font_dict));
         if !xobjects.is_empty() {
             res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        }
+        if !properties.is_empty() {
+            res.set(b"Properties".to_vec(), Object::Dict(properties));
         }
         let mut cd = Dict::new();
         cd.set(b"Type".to_vec(), Object::name("XObject"));
@@ -691,6 +876,9 @@ impl Emitter<'_> {
         pd.set(b"MediaBox".to_vec(), Object::Array([0.0, 0.0, page.width, page.height].iter().map(|v| Object::Real(*v)).collect()));
         pd.set(b"Resources".to_vec(), Object::Dict(res));
         pd.set(b"Contents".to_vec(), Object::Ref(contents));
+        if let Some(area) = &page.area {
+            pd.set(AREA_KEY.to_vec(), Object::String(PdfString::text(area)));
+        }
         if !annots.is_empty() {
             pd.set(b"Annots".to_vec(), Object::Array(annots));
         }
@@ -806,11 +994,29 @@ fn write_button_action(action: Option<&Action>, d: &mut Dict) {
     }
 }
 
+/// `item`, or what it holds when it is shown only on screen or only in print ([`Item::Only`]).
+fn bare(item: &Item) -> &Item {
+    match item {
+        Item::Only { item, .. } => item,
+        other => other,
+    }
+}
+
 /// What a page's content is written from: its items, with a turned draw opened out.
 enum Step<'a> {
     Item(&'a Item),
     Turn(&'a Turned),
     EndTurn,
+}
+
+impl<'a> Step<'a> {
+    /// The item, when the step is one.
+    fn item(&self) -> Option<&'a Item> {
+        match self {
+            Step::Item(item) => Some(item),
+            _ => None,
+        }
+    }
 }
 
 fn steps(items: &[Item]) -> Vec<Step<'_>> {
@@ -933,6 +1139,7 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
     // Pictures embedded by earlier passes, from the pages this pass replaces.
     let images = earlier_images(doc, pages_ref);
     let (signed, taken) = existing_fields(doc, &catalog);
+    let groups = earlier_groups(doc, &catalog);
     let mut em = Emitter {
         doc,
         images,
@@ -942,6 +1149,8 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
         field_count: 0,
         warnings: Vec::new(),
         signed,
+        groups,
+        used: [false; 2],
         taken,
         nodes: HashMap::new(),
     };
@@ -971,7 +1180,11 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
     for (node, kids) in nodes {
         em.doc.update_dict(node, |d| d.set(b"Kids".to_vec(), Object::Array(kids.iter().map(|r| Object::Ref(*r)).collect())))?;
     }
-    let Emitter { doc, fields, field_count, warnings, .. } = em;
+    let Emitter { doc, fields, field_count, warnings, groups, used, .. } = em;
+    let drawn: Vec<ObjRef> = groups.iter().zip(used).filter(|(_, u)| *u).filter_map(|(g, _)| *g).collect();
+    if !drawn.is_empty() {
+        catalog_changed |= register_groups(doc, &mut catalog, &groups, used)?;
+    }
     let count = kids.len();
     doc.update_dict(pages_ref, |d| {
         d.set(b"Type".to_vec(), Object::name("Pages"));
@@ -1034,6 +1247,101 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
     Ok(Written { pages: count, fields: field_count, warnings, usage_rights })
 }
 
+/// Add the screen-only and print-only `groups` this layout drew in (`used`) to the document's
+/// optional content properties, keeping its own layers as they are: each goes in `/OCGs`; in the
+/// default configuration the print-only one starts off (the screen-only one starts on when the
+/// base state is off); and both join `/AS` usage applications for the View and Print events (an
+/// existing one for that event and category, or a new one), so a viewer shows each where it
+/// belongs. Nothing already there is added again. Returns whether `catalog` itself changed (a
+/// direct `/OCProperties`); an indirect one is updated where it is.
+fn register_groups(doc: &mut Document, catalog: &mut Dict, groups: &[Option<ObjRef>; 2], used: [bool; 2]) -> Result<bool, XfaError> {
+    let mine: Vec<(usize, ObjRef)> =
+        groups.iter().zip(used).enumerate().filter(|(_, (_, u))| *u).filter_map(|(i, (g, _))| g.map(|r| (i, r))).collect();
+    let indirect = catalog.get(b"OCProperties").and_then(Object::as_ref);
+    let mut props = catalog.get(b"OCProperties").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()).unwrap_or_default();
+    // A list in `dict` under `key` (direct or not), with `add` appended where missing.
+    let add_refs = |doc: &mut Document, dict: &mut Dict, key: &[u8], add: &[ObjRef]| -> Result<(), XfaError> {
+        let at = dict.get(key).and_then(Object::as_ref);
+        let mut list = dict.get(key).map(|l| doc.resolve(l)).and_then(|l| l.as_array().cloned()).unwrap_or_default();
+        for r in add {
+            if !list.iter().any(|o| o.as_ref() == Some(*r)) {
+                list.push(Object::Ref(*r));
+            }
+        }
+        match at {
+            Some(a) => doc.set(a, Object::Array(list)),
+            None => dict.set(key.to_vec(), Object::Array(list)),
+        }
+        Ok(())
+    };
+    let all: Vec<ObjRef> = mine.iter().map(|(_, r)| *r).collect();
+    add_refs(doc, &mut props, b"OCGs", &all)?;
+    let d_at = props.get(b"D").and_then(Object::as_ref);
+    let mut d = props.get(b"D").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+    let base_off = d.name(b"BaseState") == Some(&b"OFF"[..]);
+    for (g, r) in &mine {
+        match (*g, base_off) {
+            (1, false) => add_refs(doc, &mut d, b"OFF", &[*r])?,
+            (0, true) => add_refs(doc, &mut d, b"ON", &[*r])?,
+            _ => {}
+        }
+    }
+    // The usage applications: one per event, with its own category.
+    let as_at = d.get(b"AS").and_then(Object::as_ref);
+    let mut apps = d.get(b"AS").map(|x| doc.resolve(x)).and_then(|x| x.as_array().cloned()).unwrap_or_default();
+    for event in ["View", "Print"] {
+        let matches = |doc: &Document, o: &Object| {
+            doc.resolve(o).as_dict().is_some_and(|a| {
+                a.name(b"Event") == Some(event.as_bytes())
+                    && a.get(b"Category")
+                        .map(|c| doc.resolve(c))
+                        .and_then(|c| c.as_array().cloned())
+                        .is_some_and(|c| c.len() == 1 && c.first().and_then(Object::as_name).is_some_and(|n| n == event.as_bytes()))
+            })
+        };
+        match apps.iter().position(|o| matches(doc, o)) {
+            Some(i) => {
+                let entry = apps.get(i).cloned().unwrap_or(Object::Null);
+                let mut app = doc.resolve(&entry).as_dict().cloned().unwrap_or_default();
+                add_refs(doc, &mut app, b"OCGs", &all)?;
+                match entry.as_ref() {
+                    Some(r) => doc.set(r, Object::Dict(app)),
+                    None => {
+                        if let Some(slot) = apps.get_mut(i) {
+                            *slot = Object::Dict(app);
+                        }
+                    }
+                }
+            }
+            None => {
+                let mut app = Dict::new();
+                app.set(b"Event".to_vec(), Object::name(event));
+                app.set(b"OCGs".to_vec(), Object::Array(all.iter().map(|r| Object::Ref(*r)).collect()));
+                app.set(b"Category".to_vec(), Object::Array(vec![Object::name(event)]));
+                apps.push(Object::Dict(app));
+            }
+        }
+    }
+    match as_at {
+        Some(a) => doc.set(a, Object::Array(apps)),
+        None => d.set(b"AS".to_vec(), Object::Array(apps)),
+    }
+    match d_at {
+        Some(a) => doc.set(a, Object::Dict(d)),
+        None => props.set(b"D".to_vec(), Object::Dict(d)),
+    }
+    match indirect {
+        Some(r) => {
+            doc.set(r, Object::Dict(props));
+            Ok(false)
+        }
+        None => {
+            catalog.set(b"OCProperties".to_vec(), Object::Dict(props));
+            Ok(true)
+        }
+    }
+}
+
 /// The rectangle of a widget in PDF user space (for tests).
 pub fn pdf_rect(r: Rect, page_height: f64) -> [f64; 4] {
     [r.x, page_height - r.bottom(), r.right(), page_height - r.y]
@@ -1042,6 +1350,157 @@ pub fn pdf_rect(r: Rect, page_height: f64) -> [f64; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fields `existing_fields` finds under an AcroForm listing `fields`.
+    fn names_found(doc: &Document, fields: Vec<Object>) -> Vec<String> {
+        let (signed, names) = existing(doc, fields);
+        assert!(signed.is_empty());
+        let mut names: Vec<String> = names.into_iter().collect();
+        names.sort();
+        names
+    }
+
+    fn field(name: &str, kids: Object) -> Object {
+        let mut d = Dict::new();
+        d.set(b"T".to_vec(), Object::String(PdfString::literal(name)));
+        d.set(b"Kids".to_vec(), kids);
+        Object::Dict(d)
+    }
+
+    #[test]
+    fn fields_listed_many_times_queue_a_bounded_number_of_kids() {
+        // A field lists itself 5,000 times: queuing every kid on each of 20,000 visits would
+        // hold a hundred million entries. It is read once.
+        let mut doc = Document::new_empty();
+        let r = doc.add(Object::Null);
+        doc.set(r, field("a", Object::Array(vec![Object::Ref(r); 5_000])));
+        assert_eq!(names_found(&doc, vec![Object::Ref(r)]), ["a"]);
+
+        // 5,000 fields share one /Kids array listing each of them 200 times. Read once each,
+        // the fields down one branch still queue the whole array at every level: 32 million
+        // entries, unless the queue itself is bounded.
+        let mut doc = Document::new_empty();
+        let kids = doc.add(Object::Null);
+        let fields: Vec<Object> = (0..5_000).map(|i| Object::Ref(doc.add(field(&format!("f{i}"), Object::Ref(kids))))).collect();
+        doc.set(kids, Object::Array(fields.iter().cycle().take(1_000_000).cloned().collect()));
+        let names = names_found(&doc, fields[..1].to_vec());
+        assert!(names.contains(&"f0".to_string()) && names.len() <= MAX_FIELDS_SEARCHED, "{} names", names.len());
+    }
+
+    #[test]
+    fn a_field_listed_many_times_leaves_room_for_the_fields_under_it() {
+        // The AcroForm lists one field 19,999 times. The copies take no room, so its kids are
+        // still queued, and the signed one among them is found.
+        let mut doc = Document::new_empty();
+        let parent = signed_parent(&mut doc);
+        let (signed, names) = existing(&doc, vec![Object::Ref(parent); MAX_FIELDS_SEARCHED - 1]);
+        assert!(signed.contains_key("c.sig"), "{:?}", signed.keys().collect::<Vec<_>>());
+        assert!(names.contains("c.plain"));
+    }
+
+    #[test]
+    fn a_field_listed_under_many_generations_is_queued_once() {
+        // `Document::get` finds a field by object number alone, so `5 0 R` and `5 1 R` are one
+        // field. Listed 19,999 times, each under another generation, it is still queued once,
+        // and the signed field under it is found.
+        let mut doc = Document::new_empty();
+        let parent = signed_parent(&mut doc);
+        let fields = (0..MAX_FIELDS_SEARCHED - 1).map(|g| Object::Ref(ObjRef::new(parent.num, u16::try_from(g).unwrap()))).collect();
+        let (signed, names) = existing(&doc, fields);
+        assert!(signed.contains_key("c.sig"), "{:?}", signed.keys().collect::<Vec<_>>());
+        assert!(names.contains("c.plain"));
+    }
+
+    #[test]
+    fn signed_fields_sharing_one_long_kids_array_search_it_within_the_read_limit() {
+        // 1,000 signed fields share one `/Kids` array of 100,000 nulls and a widget with an
+        // appearance at its end. Each searched the whole array for that appearance: with a
+        // million nulls, a billion lookups (39 s). The search counts against `MAX_KIDS_READ`, so
+        // the fields read once it is spent keep their value but get no appearance.
+        let mut doc = Document::new_empty();
+        let mut widget = Dict::new();
+        widget.set(b"AP".to_vec(), Object::Dict(Dict::new()));
+        let mut shared = vec![Object::Null; 100_000];
+        shared.push(Object::Ref(doc.add(Object::Dict(widget))));
+        let kids = doc.add(Object::Array(shared));
+        let fields = (0..1_000)
+            .map(|i| {
+                let mut d = Dict::new();
+                d.set(b"T".to_vec(), Object::String(PdfString::literal(format!("s{i}").as_str())));
+                d.set(b"FT".to_vec(), Object::Name(b"Sig".to_vec()));
+                d.set(b"V".to_vec(), Object::Dict(Dict::new()));
+                d.set(b"Kids".to_vec(), Object::Ref(kids));
+                Object::Ref(doc.add(Object::Dict(d)))
+            })
+            .collect();
+        let (signed, _) = existing(&doc, fields);
+        assert_eq!(signed.len(), 1_000);
+        let with_appearance = signed.values().filter(|s| s.appearance.is_some()).count();
+        assert!((1..=10).contains(&with_appearance), "{with_appearance} appearances found");
+    }
+
+    #[test]
+    fn an_appearance_search_leaves_the_kids_of_a_signed_field_queued() {
+        // A signed field with no appearance of its own lists a signed kid and then
+        // `MAX_KIDS_READ` nulls. Searching them all for an appearance must not spend what
+        // queuing its kids has to read, or the signed kid is never found.
+        let mut doc = Document::new_empty();
+        let mut kid = Dict::new();
+        kid.set(b"T".to_vec(), Object::String(PdfString::literal("c")));
+        kid.set(b"V".to_vec(), Object::Dict(Dict::new()));
+        let mut kids = vec![Object::Ref(doc.add(Object::Dict(kid)))];
+        kids.extend(std::iter::repeat_n(Object::Null, MAX_KIDS_READ));
+        let mut parent = Dict::new();
+        parent.set(b"T".to_vec(), Object::String(PdfString::literal("p")));
+        parent.set(b"FT".to_vec(), Object::Name(b"Sig".to_vec()));
+        parent.set(b"V".to_vec(), Object::Dict(Dict::new()));
+        parent.set(b"Kids".to_vec(), Object::Array(kids));
+        let parent = doc.add(Object::Dict(parent));
+        let (signed, _) = existing(&doc, vec![Object::Ref(parent)]);
+        assert!(signed.contains_key("p.c"), "{:?}", signed.keys().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_field_reached_first_at_the_depth_limit_is_read_again_when_reached_shallower() {
+        // Field `s` is listed at the bottom of a chain `MAX_FIELD_DEPTH` deep, which is walked
+        // first, and again under `b`. Reached first where its kids are not read, it is read
+        // again under `b`, and the signed field under it is found.
+        let mut doc = Document::new_empty();
+        let mut sig = Dict::new();
+        sig.set(b"T".to_vec(), Object::String(PdfString::literal("sig")));
+        sig.set(b"FT".to_vec(), Object::Name(b"Sig".to_vec()));
+        sig.set(b"V".to_vec(), Object::Dict(Dict::new()));
+        let sig = doc.add(Object::Dict(sig));
+        let shared = doc.add(field("s", Object::Array(vec![Object::Ref(sig)])));
+        let mut deep = shared;
+        for i in (0..MAX_FIELD_DEPTH).rev() {
+            deep = doc.add(field(&format!("d{i}"), Object::Array(vec![Object::Ref(deep)])));
+        }
+        let b = doc.add(field("b", Object::Array(vec![Object::Ref(shared)])));
+        let (signed, names) = existing(&doc, vec![Object::Ref(b), Object::Ref(deep)]);
+        assert!(signed.contains_key("b.s.sig"), "{:?}", signed.keys().collect::<Vec<_>>());
+        assert!(names.contains("b.s"));
+    }
+
+    /// Field `c` with two kids: `plain`, and `sig`, a signed signature field.
+    fn signed_parent(doc: &mut Document) -> ObjRef {
+        let plain = doc.add(field("plain", Object::Array(Vec::new())));
+        let mut sig = Dict::new();
+        sig.set(b"T".to_vec(), Object::String(PdfString::literal("sig")));
+        sig.set(b"FT".to_vec(), Object::Name(b"Sig".to_vec()));
+        sig.set(b"V".to_vec(), Object::Dict(Dict::new()));
+        let sig = doc.add(Object::Dict(sig));
+        doc.add(field("c", Object::Array(vec![Object::Ref(plain), Object::Ref(sig)])))
+    }
+
+    /// What `existing_fields` finds under an AcroForm listing `fields`.
+    fn existing(doc: &Document, fields: Vec<Object>) -> (HashMap<String, Signed>, HashSet<String>) {
+        let mut acro = Dict::new();
+        acro.set(b"Fields".to_vec(), Object::Array(fields));
+        let mut catalog = Dict::new();
+        catalog.set(b"AcroForm".to_vec(), Object::Dict(acro));
+        existing_fields(doc, &catalog)
+    }
 
     #[test]
     fn parse_hex32_rejects_non_hex_digits() {
@@ -1067,6 +1526,8 @@ mod tests {
             field_count: 0,
             warnings: Vec::new(),
             signed: Default::default(),
+            groups: [None; 2],
+            used: [false; 2],
             taken: Default::default(),
             nodes: HashMap::new(),
         };

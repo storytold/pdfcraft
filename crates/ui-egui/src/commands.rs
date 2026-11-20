@@ -65,7 +65,7 @@ pub(crate) fn command_modifier_label(ctx: &egui::Context) -> &'static str {
 
 /// How a registered command's shortcut is written on this platform ("" without one).
 pub(crate) fn command_shortcut_label(ctx: &egui::Context, id: &str) -> String {
-    commands::command(id).and_then(|c| c.shortcut).map(|s| shortcut_label(ctx, s)).unwrap_or_default()
+    commands::command(id).and_then(|c| c.shortcut_for(mac_shortcuts(ctx))).map(|s| shortcut_label(ctx, s)).unwrap_or_default()
 }
 
 /// A translated tooltip with a `{key}` placeholder, filled with `s` as written on this platform:
@@ -93,10 +93,9 @@ impl PdfCraftApp {
             || spec.needs == commands::Needs::Undo && self.page_typing_unapplied()
             || spec.needs == commands::Needs::Redo && self.open_box_can_redo())
             && (spec.id != "edit.copy"
-                || self
-                    .active
-                    .and_then(|i| self.views.get(i))
-                    .is_some_and(|v| !v.organize && (v.all_text || v.selected_text().is_some_and(|t| !t.is_empty()))))
+                || self.active.and_then(|i| self.views.get(i)).is_some_and(|v| {
+                    !v.organize && (v.all_text || v.selection_waits_for_text().is_some() || v.selected_text().is_some_and(|t| !t.is_empty()))
+                }))
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
             && match spec.id {
                 "comment.copy" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.comments.selected.is_some()),
@@ -113,7 +112,7 @@ impl PdfCraftApp {
     /// Last-resort guard (AGENTS.md §4): a command that panics is reported and the app, with its
     /// open documents, keeps running. Edits are applied to a copy, so the document is unchanged.
     pub fn execute(&mut self, id: &str) -> bool {
-        match pdfcraft_engine::guard(|| self.execute_unguarded(id)) {
+        let done = match pdfcraft_engine::guard(|| self.execute_unguarded(id)) {
             Ok(done) => done,
             Err(m) => {
                 // A command stopped part way through closing or replacing a tab must not leave
@@ -122,7 +121,9 @@ impl PdfCraftApp {
                 self.notify_fmt("That didn't work: an internal error stopped it ({m}). Your documents are unchanged.", &[("m", m.as_str())]);
                 true
             }
-        }
+        };
+        crate::dialogs::discard_inactive_password_drafts(self);
+        done
     }
 
     /// Why the command can't run right now, for the user.
@@ -141,6 +142,7 @@ impl PdfCraftApp {
                     pdfcraft_engine::MarkKind::HeaderFooter => tl!("header or footer"),
                     pdfcraft_engine::MarkKind::Watermark => tl!("watermark"),
                     pdfcraft_engine::MarkKind::Background => tl!("background"),
+                    pdfcraft_engine::MarkKind::PrinterMarks => tl!("printer marks"),
                 };
                 crate::i18n::fmt(tl!("This document has no {kind} to change"), &[("kind", kind)])
             }
@@ -153,7 +155,9 @@ impl PdfCraftApp {
                 }
             }
             commands::Needs::Unlock if self.active.is_some() => tl!("This document has no restrictions to lift").to_string(),
-            commands::Needs::Assembly | commands::Needs::Modification | commands::Needs::Annotate if self.active.is_some() => {
+            commands::Needs::Assembly | commands::Needs::PageExtraction | commands::Needs::Modification | commands::Needs::Annotate
+                if self.active.is_some() =>
+            {
                 tl!("The document's security settings don't allow this change").to_string()
             }
             commands::Needs::Copying if self.active.is_some() => crate::copy_refused().to_string(),
@@ -218,6 +222,7 @@ impl PdfCraftApp {
                 self.protect_draft = Default::default();
                 self.dialog = Some(Dialog::Protect);
             }
+            "prepress.convert_colors" => self.dialog = Some(Dialog::ConvertColours),
             "prepress.hairlines" => self.dialog = Some(Dialog::FixHairlines),
             "protect.remove" => {
                 if self.apply_edit(Edit::RemoveProtection) {
@@ -271,6 +276,16 @@ impl PdfCraftApp {
             }
             "view.select_tool" => self.quick_tool = crate::QuickTool::Select,
             "view.hand_tool" => self.quick_tool = crate::QuickTool::Hand,
+            // Find and replace changes page text, so it runs in Edit text mode (as Acrobat's
+            // does): the command turns the mode on, and the find bar shows its Replace row there.
+            "edit.replace" => {
+                if let Some(i) = active {
+                    self.quick_tool = crate::QuickTool::EditText;
+                    self.left = crate::LeftPanel::Tool("edit");
+                    self.reveal_tools();
+                    self.views[i].open_replace();
+                }
+            }
             "view.side_panel" => self.toggle_side_panel(),
             "view.tools_pane" => self.left_open = !self.left_open,
             "view.focus_page_input" => {
@@ -332,6 +347,7 @@ impl PdfCraftApp {
             }
             "view.read_mode" => self.switch_mode(if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false),
             "view.split" => self.toggle_split(),
+            crate::viewer_prefs::TOGGLE => self.toggle_interface(),
             "view.previous_view" | "view.next_view" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
                     return Some(v.view_history(id == "view.next_view"));
@@ -474,17 +490,27 @@ impl PdfCraftApp {
                 if self.right.is_none() && !self.comments_panel_closed {
                     self.choose_right_panel(Some(RightPanel::Comments));
                 }
-                // A text selection made before picking a markup tool is marked right away.
+                // A text selection made before picking a markup tool is marked right away, on
+                // every page it covers, in one undo step.
                 if let (Some(kind), Some(i)) = (tool.markup(), active)
                     && let Some(doc) = self.session.get(self.views[i].id)
                 {
-                    let info = &doc.info;
-                    if let Some((page, quads)) = self.views[i].selection_quads(info) {
-                        self.views[i].clear_selection();
-                        let style = self.comment_prefs.style(tool);
-                        let author = self.comment_prefs.author.clone();
-                        let shape = pdfcraft_engine::Shape::TextMarkup { kind, quads };
-                        self.apply_edit(Edit::AddAnnotation(pdfcraft_engine::NewAnnotation { page, shape, style, contents: String::new(), author }));
+                    // Pages still to be read are marked when they are, by the tool now picked.
+                    let tool_now = self.quick_tool;
+                    if let crate::canvas::ToolMarks::Marks(marks, head) = self.views[i].tool_marks(tool_now, true, None, false, &doc.info) {
+                        let edits: Vec<Edit> = marks
+                            .into_iter()
+                            .map(|(page, quads)| {
+                                let style = self.comment_prefs.style(tool);
+                                let author = self.comment_prefs.author.clone();
+                                let shape = pdfcraft_engine::Shape::TextMarkup { kind, quads };
+                                Edit::AddAnnotation(pdfcraft_engine::NewAnnotation { page, shape, style, contents: String::new(), author })
+                            })
+                            .collect();
+                        if let Some(edit) = self.views[i].selection_marks_edit(edits, head) {
+                            self.views[i].clear_selection();
+                            self.apply_edit(edit);
+                        }
                     }
                 }
             }
@@ -521,11 +547,13 @@ impl PdfCraftApp {
                 self.marks_draft.preview = None;
                 self.dialog = Some(Dialog::Marks(pdfcraft_engine::MarkKind::HeaderFooter));
             }
-            "edit.header_footer.remove" | "edit.watermark.remove" | "edit.background.remove" => {
+            "prepress.marks" => self.dialog = Some(Dialog::PrinterMarks),
+            "edit.header_footer.remove" | "edit.watermark.remove" | "edit.background.remove" | "prepress.marks.remove" => {
                 use pdfcraft_engine::MarkKind as K;
                 let kind = match id {
                     "edit.header_footer.remove" => K::HeaderFooter,
                     "edit.watermark.remove" => K::Watermark,
+                    "prepress.marks.remove" => K::PrinterMarks,
                     _ => K::Background,
                 };
                 self.apply_edit(Edit::RemoveMarks { kind });
@@ -754,15 +782,26 @@ impl PdfCraftApp {
                 self.quick_tool = crate::QuickTool::Redact;
                 self.left = crate::LeftPanel::Tool("redact");
                 self.reveal_tools();
-                // A text selection made first is marked right away.
+                // A text selection made first is marked right away, on every page it covers, in
+                // one undo step.
                 if let Some(i) = active
                     && let Some(doc) = self.session.get(self.views[i].id)
                 {
-                    let info = &doc.info;
-                    if let Some((page, quads)) = self.views[i].selection_quads(info) {
-                        self.views[i].clear_selection();
-                        let author = self.comment_prefs.author.clone();
-                        self.apply_edit(self.redact_prefs.mark(page, quads, &author));
+                    let author = self.comment_prefs.author.clone();
+                    // Pages still to be read are marked when they are, by the Redact tool now
+                    // picked; a page that could not be read refuses the whole selection.
+                    match self.views[i].tool_marks(crate::QuickTool::Redact, true, None, true, &doc.info) {
+                        crate::canvas::ToolMarks::Marks(marks, head) => {
+                            let edits: Vec<Edit> = marks.into_iter().map(|(page, quads)| self.redact_prefs.mark(page, quads, &author)).collect();
+                            if let Some(edit) = self.views[i].selection_marks_edit(edits, head) {
+                                self.views[i].clear_selection();
+                                self.apply_edit(edit);
+                            }
+                        }
+                        crate::canvas::ToolMarks::Unreadable => {
+                            self.notify_tr("Part of the selected text is on a page whose text could not be read, so nothing was marked for redaction. Mark that page with a box instead.");
+                        }
+                        crate::canvas::ToolMarks::None => {}
                     }
                 }
             }
@@ -820,12 +859,17 @@ impl PdfCraftApp {
         // Buttons also own keyboard focus for Tab/Enter activation, but they must not
         // suppress document shortcuts. Text editors retain their own undo/redo handling.
         let typing = ctx.text_edit_focused();
-        let mut specs: Vec<&CommandSpec> = COMMANDS.iter().filter(|c| c.shortcut.is_some()).collect();
-        specs.sort_by_key(|c| std::cmp::Reverse(c.shortcut.map(|s| s.modifier_count()).unwrap_or(0)));
-        for spec in specs {
-            let Some(s) = spec.shortcut else { continue };
+        let mac = mac_shortcuts(ctx);
+        let mut specs: Vec<_> = COMMANDS.iter().filter_map(|c| c.shortcut_for(mac).map(|s| (c, s))).collect();
+        specs.sort_by_key(|(_, s)| std::cmp::Reverse(s.modifier_count()));
+        for (spec, s) in specs {
             // Keep the canvas's silent no-op when there is no previous/next view to visit.
             if matches!(spec.id, "view.previous_view" | "view.next_view") && !self.command_enabled(spec) {
+                continue;
+            }
+            // The OCR Verify screen keeps the window's toolbars and owns F8 and Shift+F8 (the next
+            // and previous word to review), so they don't show or hide the interface there.
+            if spec.id == crate::viewer_prefs::TOGGLE && self.ocr_verify.open {
                 continue;
             }
             // A box typed into on the page (a paragraph being edited, added text) keeps Undo and

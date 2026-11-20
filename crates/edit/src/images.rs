@@ -61,6 +61,15 @@ impl PageImage {
         self.clips.iter().any(|clip| clip.app_crop)
     }
 
+    /// The editing frame, respecting explicit PDF/editor crops but not the page boundary.
+    /// Selected handles remain reachable outside the page; body hits still use `contains`.
+    pub fn frame_rect(&self) -> Option<[f64; 4]> {
+        self.clips.iter().try_fold(self.rect, |rect, clip| {
+            let b = clip.path.bounding_box();
+            intersection(rect, [b.x0, b.y0, b.x1, b.y1])
+        })
+    }
+
     /// Whether a user-space point belongs to the placed artwork and every active clip.
     pub fn contains(&self, point: [f64; 2]) -> bool {
         if !point.iter().all(|v| v.is_finite()) {
@@ -2097,13 +2106,14 @@ fn crop_image_impl(
     Ok(())
 }
 
-/// The `Do` of each image `indexes` (from [`page_images`]) on `page`, as an index among the
-/// page's joined operators: what Copy takes of them.
-pub(crate) fn image_ops(doc: &Document, page: usize, indexes: &[usize]) -> Result<Vec<usize>, EditError> {
+/// The `Do` of each image `indexes` (from [`page_images_with_layers`]) on `page`, as an index among
+/// the page's joined operators, evaluated with live layer overrides `(num, gen, visible)` on top
+/// of `/OCProperties /D`.
+pub(crate) fn image_ops_with_layers(doc: &Document, page: usize, indexes: &[usize], layers: &[(i32, i32, bool)]) -> Result<Vec<usize>, EditError> {
     if indexes.is_empty() {
         return Ok(Vec::new());
     }
-    let images = page_images(doc, page)?;
+    let images = page_images_with_layers(doc, page, layers)?;
     indexes
         .iter()
         .map(|i| {

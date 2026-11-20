@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use pdfcraft_content::{Matrix, Op, serialize_ops};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
-use super::{EditableObject, MAX_COORDINATE, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, checked_streams, editable_objects, valid_rect};
+use super::{EditableObject, MAX_COORDINATE, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, checked_streams, editable_objects_with_layers, valid_rect};
 use crate::EditError;
 use crate::ungroup::{CATEGORIES, DEFAULT_SPACES, MAX_FORM_BYTES, Ungrouped, page_blend_space, resource_operand, ungroup_ops};
 
@@ -54,10 +54,21 @@ impl CopiedObjects {
 /// Copy `targets` (references from one [`editable_objects`] inventory of `page`). The document
 /// is not changed.
 pub fn copy_objects(doc: &Document, page: usize, targets: &[ObjectTarget]) -> Result<CopiedObjects, EditError> {
+    copy_objects_with_layers(doc, page, targets, &[])
+}
+
+/// [`copy_objects`] evaluated with live layer overrides `(num, gen, visible)` on top of
+/// `/OCProperties /D`.
+pub fn copy_objects_with_layers(
+    doc: &Document,
+    page: usize,
+    targets: &[ObjectTarget],
+    layers: &[(i32, i32, bool)],
+) -> Result<CopiedObjects, EditError> {
     if targets.is_empty() || targets.len() > MAX_MOVE_OBJECTS {
         return Err(EditError::Invalid("select between 1 and 1000 objects to copy".into()));
     }
-    let mut inventory: BTreeMap<_, _> = editable_objects(doc, page)?.into_iter().map(|o| (o.target, o)).collect();
+    let mut inventory: BTreeMap<_, _> = editable_objects_with_layers(doc, page, layers)?.into_iter().map(|o| (o.target, o)).collect();
     let mut objects = Vec::with_capacity(targets.len());
     for target in targets.iter().collect::<BTreeSet<_>>() {
         objects
@@ -71,7 +82,7 @@ pub fn copy_objects(doc: &Document, page: usize, targets: &[ObjectTarget]) -> Re
     let pieces = crate::text::joined(&streams);
     let ops = pieces.parse().ops;
     let mut keep = crate::text::paragraph_ops(doc, page, &indexes(ObjectKind::Text), false)?;
-    keep.extend(crate::images::image_ops(doc, page, &indexes(ObjectKind::Image))?);
+    keep.extend(crate::images::image_ops_with_layers(doc, page, &indexes(ObjectKind::Image), layers)?);
     // Added content owns its stream: everything that stream paints is the item.
     let added: Vec<_> = crate::list_added(doc).into_iter().filter(|a| a.page == page).collect();
     let owned = indexes(ObjectKind::Added)
@@ -220,6 +231,18 @@ fn used_resources(doc: &Document, res: &Dict, ops: &[Op]) -> Dict {
 /// Paste `copied` on top of `page`, moved by `offset` (user space), as one change: its content
 /// and the page's resources merged with its own. Its resources must be this document's.
 pub fn paste_objects(doc: &mut Document, page: usize, copied: &CopiedObjects, offset: [f64; 2]) -> Result<(), EditError> {
+    paste_objects_with_layers(doc, page, copied, offset, &[])
+}
+
+/// [`paste_objects`] evaluated with live layer overrides `(num, gen, visible)` on top of
+/// `/OCProperties /D`.
+pub fn paste_objects_with_layers(
+    doc: &mut Document,
+    page: usize,
+    copied: &CopiedObjects,
+    offset: [f64; 2],
+    layers: &[(i32, i32, bool)],
+) -> Result<(), EditError> {
     let r = copied.rect;
     if !offset.iter().all(|v| v.is_finite() && v.abs() <= MAX_COORDINATE)
         || !valid_rect([r[0] + offset[0], r[1] + offset[1], r[2] + offset[0], r[3] + offset[1]])
@@ -273,7 +296,7 @@ pub fn paste_objects(doc: &mut Document, page: usize, copied: &CopiedObjects, of
     work.update_dict(p.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(merged)))?;
     crate::place_tagged(&mut work, &p, "Pasted", serialize_ops(&ops), false)?;
     // Keep the page's objects selectable together, as a move does.
-    editable_objects(&work, page)?;
+    editable_objects_with_layers(&work, page, layers)?;
     *doc = work;
     Ok(())
 }
