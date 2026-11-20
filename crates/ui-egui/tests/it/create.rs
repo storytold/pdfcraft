@@ -63,11 +63,11 @@ fn image_import_dialog_chooses_dpi_and_cancels() {
     h.run_steps(2);
     h.get_by_label("Use custom DPI").click();
     h.run_steps(2);
-    // The field's group shares its label: the field is the other node.
-    let field = h.get_all_by_label("DPI").find(|n| n.accesskit_node().role() != Role::Group).expect("the DPI field");
+    // The label and group also carry this name; type into the spin button.
+    let field = h.get_by_role_and_label(Role::SpinButton, "DPI");
     field.focus();
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
-    h.get_all_by_label("DPI").find(|n| n.accesskit_node().role() != Role::Group).expect("the DPI field").type_text("144");
+    h.get_by_role_and_label(Role::SpinButton, "DPI").type_text("144");
     // Enter in the field is the dialog's default action, Create.
     h.key_press(Key::Enter);
     h.run_steps(3);
