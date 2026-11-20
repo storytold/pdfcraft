@@ -2823,7 +2823,8 @@ fn xfdf_annotation_formatting_round_trips_via_shared_grammar() {
     let report = import_comments(&mut dst, &xfdf, None, None, None).unwrap();
     assert_eq!(report.comments, 1, "{report:?}");
     let dst_page = pdfcraft_model::pages(&dst)[0].obj;
-    let dst_ref = dst.get(dst_page).as_dict().unwrap().get(b"Annots").map(|a| dst.resolve(a)).unwrap().as_array().unwrap()[0].as_ref().unwrap();
+    let dst_ref =
+        dst.get(dst_page).as_dict().unwrap().get(b"Annots").map(|a| dst.resolve(a)).unwrap().as_array().unwrap().last().unwrap().as_ref().unwrap();
     let dst_obj = dst.get(dst_ref);
     let dst_dict = dst_obj.as_dict().unwrap();
     assert_eq!(dst_dict.get(b"F").and_then(|f| dst.resolve(f).as_int()), Some(4 | 128));
