@@ -34,6 +34,9 @@ pub(super) struct Seg {
     /// The right edge of its visible glyphs; the box may reach further with trailing spaces.
     /// Negative infinity when every glyph is blank.
     pub(super) ink: f32,
+    /// The left edge of its visible glyphs; the box may start further left with leading spaces.
+    /// Infinity when every glyph is blank.
+    pub(super) ink_start: f32,
     /// A row of a barcode drawn with a font (see [`mark_barcode_rows`]): it joins no other text.
     pub(super) barcode: bool,
 }
@@ -76,7 +79,17 @@ pub(super) fn is_script_on(host_bbox: &[f32; 4], host_h: f32, script_bbox: &[f32
 
 impl Seg {
     pub(super) fn new(first: Run, bbox: [f32; 4], h: f32, ink: f32) -> Self {
-        Seg { first, extra: None, bbox, h, ink, barcode: false }
+        // A new segment is its first glyph, which is visible when it has ink.
+        Seg { first, extra: None, bbox, h, ink, ink_start: if ink.is_finite() { bbox[0] } else { f32::INFINITY }, barcode: false }
+    }
+
+    /// Extend the segment's ink with glyph `g`.
+    pub(super) fn add_ink(&mut self, g: &TextGlyph) {
+        let ink = ink_of(g);
+        self.ink = self.ink.max(ink);
+        if ink.is_finite() {
+            self.ink_start = self.ink_start.min(g.rect[0]);
+        }
     }
 
     /// Whether this segment is a table cell padded with spaces towards `next`, the next cell on
@@ -115,6 +128,7 @@ impl Seg {
     pub(super) fn merge(&mut self, other: Seg) {
         self.extend_box(&other.bbox, other.h);
         self.ink = self.ink.max(other.ink);
+        self.ink_start = self.ink_start.min(other.ink_start);
         let extra = self.extra.get_or_insert_with(Default::default);
         extra.more.push(other.first);
         if let Some(o) = other.extra {
@@ -860,4 +874,217 @@ pub(super) fn same_line(p: &Seg, s: &Seg) -> bool {
     let baseline = |seg: &Seg| seg.bbox[3] - 0.2 * seg.h;
     let gap = s.bbox[0] - p.bbox[2];
     (baseline(p) - baseline(s)).abs() < 0.2 * h && gap > -WORD_GAP * h && gap < SAME_LINE_GAP * p.h.max(s.h)
+}
+
+/// Line heights above and below a gap that are looked over for the columns beside it.
+pub(super) const COLUMN_ROWS: f32 = 6.0;
+/// Lines of running text needed on each side of a gap for it to be a gutter.
+pub(super) const COLUMN_LINES: usize = 3;
+/// A line of running text is at least this many line heights wide, some 25 letters. Table cells, names, labels and
+/// list numbers are narrower.
+pub(super) const COLUMN_EMS: f32 = 12.0;
+/// A gap narrower than this many line heights is a word gap, never a gutter. Columns set 10 pt apart under 10 pt
+/// text leave under 8 pt, 0.7 line heights, between a line that ends in a hyphen hung in the margin and the next
+/// column. The space of a typewriter face is 0.6 of its size, and less of its line height.
+pub(super) const GUTTER_MIN: f32 = 0.6;
+/// Pieces of lines that one page may visit looking for gutters. Past it no gap is a gutter, and text joins as it
+/// did before gutters were looked for.
+const GUTTER_WORK: usize = 1 << 22;
+/// Gutters one page keeps. A page has a few: past this, the first ones found are the ones known.
+const GUTTERS_KEPT: usize = 64;
+/// Lines counted on each side of a gap. Twelve line heights hold about thirteen lines of the text beside it.
+const LINES_KEPT: usize = 64;
+
+/// A stretch of one line with no gap as wide as a gutter in it: its left edge, the right edge of its ink and its
+/// vertical centre.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Piece {
+    pub(super) x0: f32,
+    pub(super) ink: f32,
+    pub(super) cy: f32,
+}
+
+impl Seg {
+    /// The segment as a [`Piece`]: none for a row of a barcode, or for a segment of blanks.
+    pub(super) fn piece(&self) -> Option<Piece> {
+        (!self.barcode && self.ink.is_finite()).then(|| Piece { x0: self.ink_start, ink: self.ink, cy: self.cy() })
+    }
+}
+
+/// The gutter between two columns of running text in the gap from `g0` to `g1` on the line at height `cy`, whose
+/// text is `h` high and starts at `start` before the gap, as its left and right edges. `pieces` are the page's
+/// lines, the two beside the gap included.
+///
+/// The gutter is the widest corridor inside the gap, at least [`GUTTER_MIN`] heights wide, that the lines within
+/// [`COLUMN_ROWS`] heights above and below leave empty, or that fewer than [`COLUMN_LINES`] of them run into (a
+/// heading across both columns, a caption that ends inside the gutter). At least [`COLUMN_LINES`] of the lines that
+/// are [`COLUMN_EMS`] heights wide end before it, as many start after it, and fewer run across it. A wide word gap
+/// in a justified line has the lines above and below running across it. Table cells, labels and list numbers are
+/// narrow, so a row of them still reads across. The lines before it are the column of the text the gap follows:
+/// they reach to where that text starts, less than a gutter short of it. The gap after a bullet or a list number
+/// that hangs before its text in the second column has the first column's lines ending a gutter before the
+/// bullet, and is none.
+pub(super) fn gutter_in(
+    pieces: impl Iterator<Item = Piece> + Clone,
+    start: f32,
+    (g0, g1): (f32, f32),
+    cy: f32,
+    h: f32,
+    work: &mut usize,
+) -> Option<(f32, f32)> {
+    if !(h > 0.0 && g1 - g0 >= h * GUTTER_MIN) || *work == 0 {
+        return None;
+    }
+    let (reach, wide) = (h * COLUMN_ROWS, h * COLUMN_EMS);
+    // Where each line around the gap starts (+1) and ends (-1) inside it. A line across the whole gap is across
+    // every corridor in it.
+    let mut edges: Vec<(f32, i32)> = Vec::new();
+    let mut visited = 0usize;
+    for p in pieces.clone() {
+        visited = visited.saturating_add(2);
+        if (p.cy - cy).abs() <= reach && p.ink > g0 && p.x0 < g1 && !(p.x0 <= g0 && p.ink >= g1) {
+            edges.push((p.x0.max(g0), 1));
+            edges.push((p.ink.min(g1), -1));
+        }
+    }
+    *work = work.saturating_sub(visited);
+    edges.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // The widest stretch of the gap that at most `level` lines run into, for the fewest lines that leave one wide enough.
+    let (lo, hi) = (0..COLUMN_LINES as i32).find_map(|level| {
+        let (mut depth, mut from, mut best) = (0i32, Some(g0), None::<(f32, f32)>);
+        let mut close = |from: &mut Option<f32>, at: f32| {
+            if let Some(start) = from.take()
+                && best.is_none_or(|(a, b)| at - start > b - a)
+            {
+                best = Some((start, at));
+            }
+        };
+        for &(x, step) in &edges {
+            let (was, now) = (depth <= level, depth + step <= level);
+            depth += step;
+            if was && !now {
+                close(&mut from, x);
+            } else if !was && now {
+                from = Some(x);
+            }
+        }
+        close(&mut from, g1);
+        best.filter(|(a, b)| b - a >= h * GUTTER_MIN)
+    })?;
+    let mid = (lo + hi) / 2.0;
+    // The lines before, after and across it, each by its baseline: the pieces of one line are one line.
+    let (mut before, mut after, mut across) = (Vec::new(), Vec::new(), Vec::new());
+    let line = |lines: &mut Vec<f32>, at: f32| {
+        if lines.len() < LINES_KEPT && lines.iter().all(|y| (y - at).abs() > h * 0.5) {
+            lines.push(at);
+        }
+    };
+    for p in pieces.filter(|p| (p.cy - cy).abs() <= reach) {
+        if p.ink <= mid {
+            if p.ink - p.x0 >= wide && p.ink > start - h * GUTTER_MIN {
+                line(&mut before, p.cy);
+            }
+        } else if p.x0 >= mid {
+            if p.ink - p.x0 >= wide {
+                line(&mut after, p.cy);
+            }
+        } else {
+            line(&mut across, p.cy);
+        }
+    }
+    let (before, after, across) = (before.len(), after.len(), across.len());
+    (before >= COLUMN_LINES && after >= COLUMN_LINES && across < before.min(after)).then_some((lo, hi))
+}
+
+/// A gap on one line, with the text beside it: where the text before the gap starts and ends, and where the text
+/// after it starts and ends.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Gap {
+    pub(super) start: f32,
+    pub(super) from: f32,
+    pub(super) to: f32,
+    pub(super) end: f32,
+}
+
+/// The gutters found on a page, and the page's budget for looking for them ([`GUTTER_WORK`]).
+pub(super) struct Gutters {
+    work: usize,
+    /// Each gutter found, as its left and right edges and the top and bottom of the stretch of the page it runs
+    /// through: from the line it was found on, up and down as far as the nearest line across it.
+    found: Vec<[f32; 4]>,
+}
+
+impl Gutters {
+    pub(super) fn new() -> Self {
+        Gutters { work: GUTTER_WORK, found: Vec::new() }
+    }
+
+    /// The gutters found so far: each one's left and right edges, and the top and bottom of its stretch.
+    pub(super) fn found(&self) -> &[[f32; 4]] {
+        &self.found
+    }
+
+    /// Whether the page's budget is spent: no more gaps are looked at.
+    pub(super) fn spent(&self) -> bool {
+        self.work == 0
+    }
+
+    /// Take `pieces` visited off the page's budget.
+    pub(super) fn spend(&mut self, pieces: usize) {
+        self.work = self.work.saturating_sub(pieces);
+    }
+
+    /// The gutter between two columns of running text in `gap`, on the line at height `cy` whose text is `h` high,
+    /// as its left and right edges. `pieces` are the page's lines, the two beside the gap included.
+    ///
+    /// It is [`gutter_in`]'s, found from the lines around this one, and remembered with the stretch of the page
+    /// that it runs through; or a gutter remembered from another line that runs on to this one, where a formula, a
+    /// figure or a heading leaves too little text around the line to show it (an equation number at the edge of
+    /// its column, the last word of a column's line beside a caption).
+    pub(super) fn between(&mut self, pieces: impl Iterator<Item = Piece> + Clone, gap: Gap, cy: f32, h: f32) -> Option<(f32, f32)> {
+        if let Some(known) = self.known(gap, cy, h) {
+            return Some(known);
+        }
+        let (lo, hi) = gutter_in(pieces.clone(), gap.start, (gap.from, gap.to), cy, h, &mut self.work)?;
+        if self.found.len() < GUTTERS_KEPT {
+            let mid = (lo + hi) / 2.0;
+            let (mut top, mut bottom) = (f32::NEG_INFINITY, f32::INFINITY);
+            for p in pieces.filter(|p| p.x0 < mid && p.ink > mid) {
+                if p.cy < cy {
+                    top = top.max(p.cy);
+                } else if p.cy > cy {
+                    bottom = bottom.min(p.cy);
+                }
+            }
+            self.found.push([lo, hi, top, bottom]);
+        }
+        Some((lo, hi))
+    }
+
+    /// The part of `gap` that a gutter found on another line runs through, when that gutter reaches the line at
+    /// height `cy` with no line across it on the way, the part is at least [`GUTTER_MIN`] heights wide, and the
+    /// text on one side of the gap is as wide as running text. Two table cells or a label and its value below
+    /// two columns are narrow, and stay a row.
+    fn known(&self, gap: Gap, cy: f32, h: f32) -> Option<(f32, f32)> {
+        if !(h > 0.0 && (gap.from - gap.start).max(gap.end - gap.to) >= h * COLUMN_EMS) {
+            return None;
+        }
+        self.found.iter().find_map(|&[lo, hi, top, bottom]| {
+            let (from, to) = (lo.max(gap.from), hi.min(gap.to));
+            (top < cy && cy < bottom && to - from >= h * GUTTER_MIN).then_some((from, to))
+        })
+    }
+}
+
+/// Whether segments `a` and `b`, on one baseline, are parted by the gutter between two columns of running text
+/// ([`Gutters::between`]): the end of a line in one column and the start of a line in the next.
+pub(super) fn parted_by_gutter(segs: &[Seg], a: &Seg, b: &Seg, gutters: &mut Gutters) -> bool {
+    // Which is left, by where their visible text starts: blanks may reach back past the other's text.
+    let first = |a: &Seg, b: &Seg| if a.ink.is_finite() && b.ink.is_finite() { a.ink_start <= b.ink_start } else { a.bbox[0] <= b.bbox[0] };
+    let (left, right) = if first(a, b) { (a, b) } else { (b, a) };
+    // The visible gap: a line's spaces reach into the gutter. A segment of blanks starts and ends where its box does.
+    let (start, from) = if left.ink.is_finite() { (left.ink_start, left.ink) } else { (left.bbox[0], left.bbox[2]) };
+    let (to, end) = if right.ink.is_finite() { (right.ink_start, right.ink) } else { (right.bbox[0], right.bbox[2]) };
+    // The taller of the two is the text's height: a superscript or a bullet is smaller than the line it is on.
+    gutters.between(segs.iter().filter_map(Seg::piece), Gap { start, from, to, end }, (left.cy() + right.cy()) / 2.0, left.h.max(right.h)).is_some()
 }

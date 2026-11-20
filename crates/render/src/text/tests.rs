@@ -1824,6 +1824,709 @@ fn many_column_paragraphs_order_in_bounded_time() {
     assert!(text == expected, "the first R reads after {:?} lines, not 1000", text.find('R').map(|i| i / 2));
 }
 
+/// Two columns of running text, each line 25 letters of 6 pt (150 pt) at 10 pt, the right column `gutter` points
+/// after the left: `(left lines, right lines)`.
+const NARROW_COLUMNS: ([&str; 5], [&str; 5]) = (
+    ["The left column of a page", "set in two columns whose", "lines sit level with each", "other and whose gutter is", "narrower than a text line"],
+    ["while the right column of", "the page starts close by,", "nine points further along", "and reads after the whole", "left column has been read"],
+);
+
+/// Columns closer together than 1.2 line heights (#2387): a line of the left column ends right before the line
+/// level with it in the right column starts, as justified text does, and the two are not one line.
+#[test]
+fn columns_a_narrow_gutter_apart_keep_their_lines() {
+    let (left, right) = NARROW_COLUMNS;
+    let expected = [left, right].concat().join("\n");
+    // 7 pt is what columns set 10 pt apart leave beside a line that ends in a hyphen hung in the margin.
+    for gutter in [7.0, 8.0, 9.0, 11.0] {
+        // Drawn one column after the other: each line is a run, and the runs of a row nearly touch.
+        let mut v = Vec::new();
+        for (row, s) in left.iter().enumerate() {
+            word(&mut v, s, 10.0, 10.0 + row as f32 * 12.0, 6.0);
+        }
+        for (row, s) in right.iter().enumerate() {
+            word(&mut v, s, 160.0 + gutter, 10.0 + row as f32 * 12.0, 6.0);
+        }
+        assert_eq!(layout(v).plain_text(), expected, "column by column, {gutter} pt apart");
+        // Drawn row by row: the right column's line follows the left one's in the same run.
+        let mut v = Vec::new();
+        for row in 0..left.len() {
+            word(&mut v, left[row], 10.0, 10.0 + row as f32 * 12.0, 6.0);
+            word(&mut v, right[row], 160.0 + gutter, 10.0 + row as f32 * 12.0, 6.0);
+        }
+        assert_eq!(layout(v).plain_text(), expected, "row by row, {gutter} pt apart");
+    }
+    // Three columns 9 pt apart, drawn row by row: the middle one is parted from both its neighbours.
+    let third = [
+        "and a third column stands",
+        "beside the second one, as",
+        "close to it as the second",
+        "is to the first, and reads",
+        "last, after the other two",
+    ];
+    let mut v = Vec::new();
+    for row in 0..left.len() {
+        for (column, lines) in [left, right, third].iter().enumerate() {
+            word(&mut v, lines[row], 10.0 + 159.0 * column as f32, 10.0 + row as f32 * 12.0, 6.0);
+        }
+    }
+    assert_eq!(layout(v).plain_text(), [left, right, third].concat().join("\n"), "three columns");
+}
+
+/// The right column's lines sit 3 pt lower than the left one's, as columns with different headings do. A short
+/// line of the right column is no subscript on the left column's line beside it.
+#[test]
+fn a_short_line_across_a_narrow_gutter_is_no_subscript() {
+    let (left, mut right) = NARROW_COLUMNS;
+    right[2] = "end.";
+    let mut v = Vec::new();
+    for (row, s) in left.iter().enumerate() {
+        word(&mut v, s, 10.0, 10.0 + row as f32 * 12.0, 6.0);
+    }
+    for (row, s) in right.iter().enumerate() {
+        word(&mut v, s, 169.0, 13.0 + row as f32 * 12.0, 6.0);
+    }
+    assert_eq!(layout(v).plain_text(), [left, right].concat().join("\n"));
+}
+
+/// What a narrow gutter is not: a gap between two words of a justified line, even where two lines leave it at the
+/// same place, and the gap between the cells of a table.
+#[test]
+fn wide_word_gaps_and_narrow_cells_are_no_gutter() {
+    // Eight lines of one column. Three of them leave a 9 pt gap at the same place, and the others run across it.
+    let mut v = Vec::new();
+    let mut expected = Vec::new();
+    for row in 0..8 {
+        let y = 10.0 + row as f32 * 12.0;
+        if (3..6).contains(&row) {
+            word(&mut v, "A loose line leaves", 10.0, y, 6.0);
+            word(&mut v, "a gap between words", 133.0, y, 6.0);
+            expected.push("A loose line leaves a gap between words");
+        } else {
+            word(&mut v, "while the lines around it run on across", 10.0, y, 6.0);
+            expected.push("while the lines around it run on across");
+        }
+    }
+    assert_eq!(layout(v).plain_text(), expected.join("\n"), "a river through three lines");
+    // Two justified lines alone on a page whose gaps line up: nothing says these are columns.
+    let mut v = Vec::new();
+    for row in 0..2 {
+        word(&mut v, "Two lines by themselves", 10.0, 10.0 + row as f32 * 12.0, 6.0);
+        word(&mut v, "with gaps that line up", 157.0, 10.0 + row as f32 * 12.0, 6.0);
+    }
+    assert_eq!(layout(v).plain_text(), ["Two lines by themselves with gaps that line up"; 2].join("\n"), "two lines alone");
+    // A table drawn column by column, its columns 9 pt apart: the cells are narrow, and each row is one line.
+    let rows = [("Apple", "12"), ("Pears", "07"), ("Plums", "31"), ("Limes", "44"), ("Dates", "65")];
+    let mut v = Vec::new();
+    for (row, (name, _)) in rows.iter().enumerate() {
+        word(&mut v, name, 10.0, 10.0 + row as f32 * 12.0, 6.0);
+    }
+    for (row, (_, qty)) in rows.iter().enumerate() {
+        word(&mut v, qty, 49.0, 10.0 + row as f32 * 12.0, 6.0);
+    }
+    assert_eq!(layout(v).plain_text(), "Apple 12\nPears 07\nPlums 31\nLimes 44\nDates 65", "a table");
+}
+
+/// One column of `lines` at `x`, the first at `y`, 12 pt apart.
+fn column(v: &mut Vec<TextGlyph>, lines: &[&str], x: f32, y: f32) {
+    for (row, s) in lines.iter().enumerate() {
+        word(v, s, x, y + row as f32 * 12.0, 6.0);
+    }
+}
+
+/// Two columns of running text whose paragraphs start level (#3682): the second paragraph of the left column
+/// reads before the right column, and is no row with the paragraph beside it.
+#[test]
+fn paragraphs_level_across_a_gutter_are_no_rows() {
+    let a = ["The first paragraph of the", "left column takes up three", "lines of running text and"];
+    let b = ["the second one starts level", "with a paragraph beside it", "across the columns' gutter"];
+    let c = ["The right column has a first", "paragraph too, and it reads", "after the whole left column"];
+    let d = ["and so does its second, which", "starts where the left one's", "second paragraph starts too."];
+    let mut v = Vec::new();
+    column(&mut v, &a, 10.0, 10.0);
+    column(&mut v, &b, 10.0, 58.0);
+    column(&mut v, &c, 200.0, 10.0);
+    column(&mut v, &d, 200.0, 58.0);
+    assert_eq!(layout(v).plain_text(), [a, b, c, d].concat().join("\n"));
+}
+
+/// A figure in the left column leaves a gap of five lines above its caption, and the right column's second
+/// paragraph runs on beside both: the caption is the left column's, read before the right column and not in the
+/// middle of it. Under a figure as wide as the page the right column has nothing beside the gap, and the caption
+/// reads after both columns.
+#[test]
+fn a_column_goes_on_below_a_figure_the_next_column_runs_past() {
+    let left = ["The left column has three", "lines of text above a small", "figure that stands in it,"];
+    let caption = ["Figure 1: a caption below", "the figure, in its column."];
+    let first = ["while the right column has", "a first paragraph of three", "lines beside those lines,"];
+    let second = [
+        "and a second paragraph that",
+        "runs on past the figure and",
+        "past its caption, line after",
+        "line, as a column of text",
+        "beside a picture does, down",
+        "to the bottom of the column.",
+    ];
+    let mut v = Vec::new();
+    column(&mut v, &left, 10.0, 10.0);
+    column(&mut v, &caption, 10.0, 106.0);
+    column(&mut v, &first, 200.0, 10.0);
+    column(&mut v, &second, 200.0, 58.0);
+    assert_eq!(layout(v).plain_text(), [&left[..], &caption[..], &first[..], &second[..]].concat().join("\n"));
+    // The same page without the second paragraph: the right column ends above the figure.
+    let mut v = Vec::new();
+    column(&mut v, &left, 10.0, 10.0);
+    column(&mut v, &caption, 10.0, 106.0);
+    column(&mut v, &first, 200.0, 10.0);
+    assert_eq!(layout(v).plain_text(), [&left[..], &first[..], &caption[..]].concat().join("\n"), "a figure as wide as the page");
+}
+
+/// The last line of a justified paragraph set with its three words 45 pt apart, further than a run goes on: the
+/// two words on the right are blocks of their own above the next paragraph. They are the left column's, and read
+/// with their line before the column goes on, not after the right column.
+#[test]
+fn words_set_far_apart_stay_in_their_column() {
+    let a = ["A paragraph of the left column", "whose last line was stretched"];
+    let b = ["and the paragraph after it,", "which the column goes on with."];
+    let right = [
+        "The right column of the page",
+        "has running text beside all",
+        "of the left column's lines,",
+        "and it reads after that one,",
+        "from its first line down to",
+        "the last line of the column.",
+    ];
+    let mut v = Vec::new();
+    column(&mut v, &a, 10.0, 10.0);
+    for (word_, x) in [("right", 10.0), ("across", 85.0), ("it.", 166.0)] {
+        word(&mut v, word_, x, 34.0, 6.0);
+    }
+    column(&mut v, &b, 10.0, 58.0);
+    column(&mut v, &right, 220.0, 10.0);
+    assert_eq!(layout(v).plain_text(), [&a[..], &["right across it."], &b[..], &right[..]].concat().join("\n"));
+}
+
+/// Columns closer together than a line height (#2387), in a drag. One that ends over the next column keeps reading
+/// order (the rest of its column, then the next one down to the pointer) and does not take both columns' lines as
+/// the rows of a table. A pointer in the gutter is still beside the line it went past the end of, wherever in the
+/// gutter it is, until it is over the next column's text.
+#[test]
+fn a_drag_past_a_line_end_stays_in_its_column_across_a_narrow_gutter() {
+    let (left, right) = NARROW_COLUMNS;
+    let mut v = Vec::new();
+    column(&mut v, &left, 10.0, 10.0);
+    column(&mut v, &right, 169.0, 10.0);
+    let t = layout(v);
+    // The first glyph of a line: the left column's start at 10, the right one's at 169.
+    let first = |x: f32, row: usize| {
+        (0..t.glyphs.len()).find(|&i| t.glyphs[i].rect[0] == x && t.glyphs[i].rect[1] == 10.0 + row as f32 * 12.0).expect("a line")
+    };
+    let (anchor, head) = (first(10.0, 0), first(169.0, 2));
+    assert_eq!(t.visual_between(anchor, head, Some(172.0)), None, "over the next column: reading order, not rows");
+    // The gutter runs from 160 to 169. At 166 the right column's line is nearer.
+    let row = 10.0 + 2.0 * 12.0 + 5.0;
+    assert_eq!(t.nearest(166.0, row), Some(head));
+    let kept = t.nearest_from(anchor, 166.0, row).expect("a glyph");
+    assert_eq!((t.line_of[kept], t.glyphs[kept].rect[2]), (t.line_of[first(10.0, 2)], 160.0), "the end of the left column's line");
+    assert_eq!(t.nearest_from(anchor, 172.0, row), Some(head), "over the right column's text");
+    // A drag from the right column stays there, as far as the left column's text.
+    let from_right = first(169.0, 4);
+    assert_eq!(t.nearest_from(from_right, 162.0, row), Some(head));
+    assert_eq!(t.glyphs[t.nearest_from(from_right, 158.0, row).expect("a glyph")].rect[2], 160.0);
+    // Between the cells of a table the nearest glyph stays.
+    let mut v = Vec::new();
+    for (row, (name, qty)) in [("Apple", "12"), ("Pears", "07"), ("Plums", "31"), ("Limes", "44"), ("Dates", "65")].into_iter().enumerate() {
+        word(&mut v, name, 10.0, 10.0 + row as f32 * 12.0, 6.0);
+        word(&mut v, qty, 49.0, 10.0 + row as f32 * 12.0, 6.0);
+    }
+    let t = layout(v);
+    assert_eq!(t.nearest_from(0, 47.0, row), t.nearest(47.0, row));
+    assert_eq!(t.glyphs[t.nearest(47.0, row).expect("a glyph")].text, "3");
+}
+
+/// A drag stays in its column until the pointer has crossed the gutter beside it. In the white after a line that
+/// falls short of the gutter (a paragraph's last), in the gutter and below the end of the column, the next
+/// column's line is the nearer text: the drag still ends on the short line, or on its column's last one.
+#[test]
+fn a_drag_stays_in_its_column_until_the_pointer_crosses_the_gutter() {
+    let (mut left, right) = NARROW_COLUMNS;
+    left[3] = "other one.";
+    let mut v = Vec::new();
+    column(&mut v, &left, 10.0, 10.0);
+    column(&mut v, &[&right[..], &["and goes on a line more."]].concat(), 169.0, 10.0);
+    let t = layout(v);
+    let top = |row: f32| 10.0 + row * 12.0;
+    // Where a glyph starts or ends, and the top of its line.
+    let start = |t: &PageText, i: Option<usize>| i.and_then(|i| t.glyphs.get(i)).map(|g| (g.rect[0], g.rect[1]));
+    let end = |t: &PageText, i: Option<usize>| i.and_then(|i| t.glyphs.get(i)).map(|g| (g.rect[2], g.rect[1]));
+    let anchor = t.nearest(10.0, 15.0).expect("a glyph");
+    // The short line ends at 70. From the white after it (150) and from the gutter (166) the right column's line,
+    // which starts at 169, is nearer.
+    for x in [150.0, 166.0] {
+        assert_eq!(start(&t, t.nearest(x, top(3.0) + 5.0)), Some((169.0, top(3.0))), "the right column's line is nearer to {x}");
+        assert_eq!(end(&t, t.nearest_from(anchor, x, top(3.0) + 5.0)), Some((70.0, top(3.0))), "the end of the short line, from {x}");
+    }
+    // Below the left column's last line, level with the right column's sixth.
+    assert_eq!(end(&t, t.nearest_from(anchor, 166.0, top(5.0) + 5.0)), Some((160.0, top(4.0))), "the end of the left column");
+    // Past the gutter the drag is in the right column, beside its text too: after the end of its sixth line.
+    assert_eq!(end(&t, t.nearest_from(anchor, 316.0, top(5.0) + 5.0)), Some((313.0, top(5.0))), "the right column");
+    // From the right column the drag stays there, beside the left column's short line too.
+    let from_right = t.nearest(175.0, top(5.0) + 5.0).expect("a glyph");
+    assert_eq!(start(&t, t.nearest_from(from_right, 162.0, top(3.0) + 5.0)), Some((169.0, top(3.0))), "the start of the right column's line");
+    // Three columns, the middle one a line shorter. Below its end the third column's line is nearer and the first
+    // column's is level with the pointer: the drag ends on the middle column's last line.
+    let third = [
+        "and a third column stands",
+        "beside the second one, as",
+        "close to it as the second",
+        "is to the first and reads",
+        "last, after the other two",
+    ];
+    let mut v = Vec::new();
+    column(&mut v, &NARROW_COLUMNS.0, 10.0, 10.0);
+    column(&mut v, &right[..4], 169.0, 10.0);
+    column(&mut v, &third, 328.0, 10.0);
+    let t = layout(v);
+    let anchor = t.nearest(170.0, 15.0).expect("a glyph");
+    assert_eq!(start(&t, t.nearest(316.0, top(4.0) + 5.0)), Some((328.0, top(4.0))), "the third column's line is nearer");
+    assert_eq!(end(&t, t.nearest_from(anchor, 316.0, top(4.0) + 5.0)), Some((319.0, top(3.0))), "the end of the middle column");
+    // A figure fills the left column below its five lines, and the right column runs on beside it for twenty.
+    // Beside the middle of the figure no line of the left column is near: the gutter shows where the drag began.
+    let mut v = Vec::new();
+    column(&mut v, &NARROW_COLUMNS.0, 10.0, 10.0);
+    for part in 0..4 {
+        column(&mut v, &right, 169.0, top(part as f32 * 5.0));
+    }
+    let t = layout(v);
+    let anchor = t.nearest(10.0, 15.0).expect("a glyph");
+    for x in [100.0, 166.0] {
+        assert_eq!(start(&t, t.nearest(x, top(12.0) + 5.0)), Some((169.0, top(12.0))), "the right column's line is level with {x}");
+        assert_eq!(t.nearest_from(anchor, x, top(12.0) + 5.0).map(|i| t.glyphs[i].rect[1]), Some(top(4.0)), "the left column's last line, from {x}");
+    }
+    // A drag that begins on a heading set larger than the text: the columns are measured by the page's text, not
+    // by the glyph the drag began on, for which 9 pt would be no gutter.
+    let mut v = Vec::new();
+    for (i, c) in "Heading".chars().enumerate() {
+        v.push(tilted(&c.to_string(), [10.0 + i as f32 * 10.0, 10.0], [1.0, 0.0], [0.0, 1.0], 10.0, 16.0));
+    }
+    column(&mut v, &left, 10.0, top(2.0));
+    column(&mut v, &right, 169.0, top(2.0));
+    let t = layout(v);
+    let anchor = t.nearest(12.0, 18.0).expect("a glyph");
+    assert_eq!(t.glyphs[anchor].text, "H");
+    assert_eq!(end(&t, t.nearest_from(anchor, 166.0, top(5.0) + 5.0)), Some((70.0, top(5.0))), "from a heading");
+}
+
+/// A gutter found where both columns have running text also parts the lines that have none around them: an
+/// equation number at the right edge of the left column, alone beside a formula's white space, is not the start of
+/// the right column's line level with it.
+#[test]
+fn a_gutter_found_on_other_lines_parts_a_line_without_text_around_it() {
+    let (left, right) = NARROW_COLUMNS;
+    let below = ["and the column goes on in", "three more lines of text,", "down to its very last one"];
+    let beside: Vec<String> = (0..19).map(|row| format!("the right column, line {row:02}")).collect();
+    let mut v = Vec::new();
+    column(&mut v, &left[..4], 10.0, 10.0);
+    // More than six line heights from the text above and below it.
+    word(&mut v, "(1)", 142.0, 130.0, 6.0);
+    column(&mut v, &below, 10.0, 202.0);
+    for (row, s) in beside.iter().enumerate() {
+        word(&mut v, s, 169.0, 10.0 + row as f32 * 12.0, 6.0);
+    }
+    let text = layout(v).plain_text();
+    let expected: Vec<&str> = left[..4].iter().copied().chain(["(1)"]).chain(below).chain(beside.iter().map(String::as_str)).collect();
+    assert_eq!(text, expected.join("\n"));
+    assert!(!right.is_empty());
+}
+
+/// A figure in the left column with the space a word processor draws for an empty paragraph beside it, at the
+/// column's right edge: the column goes on to the caption below the figure, not to the space and from there to
+/// the right column.
+#[test]
+fn a_block_of_blanks_does_not_lead_a_column_away() {
+    let left = ["The left column has three", "lines of text above a small", "figure that stands in it,"];
+    let caption = ["Figure 1: a caption below", "the figure, in its column."];
+    let first = ["while the right column has", "a first paragraph of three", "lines beside those lines,"];
+    let second = [
+        "and a second paragraph that",
+        "runs on past the figure and",
+        "past its caption, line after",
+        "line, as a column of text",
+        "beside a picture does, down",
+        "to the bottom of the column.",
+    ];
+    let mut v = Vec::new();
+    column(&mut v, &left, 10.0, 10.0);
+    v.push(g(" ", 166.0, 70.0, 172.0));
+    column(&mut v, &caption, 10.0, 106.0);
+    column(&mut v, &first, 200.0, 10.0);
+    column(&mut v, &second, 200.0, 58.0);
+    let text = layout(v).plain_text();
+    let read: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(read, [&left[..], &caption[..], &first[..], &second[..]].concat());
+}
+
+/// A word processor draws a space for an empty paragraph, here a 1 pt one at the left column's edge beside its
+/// second paragraph: a block of blanks holds up no column.
+#[test]
+fn a_block_of_blanks_holds_up_no_column() {
+    let (a, b) = (["A1", "A2", "A3"], ["B1", "B2", "B3"]);
+    let (c, d) = (["C1", "C2", "C3"], ["D1", "D2", "D3"]);
+    let mut v = Vec::new();
+    column(&mut v, &a, 10.0, 10.0);
+    column(&mut v, &b, 10.0, 58.0);
+    v.push(em_box(" ", 9.9, 75.0, 10.1, 76.0));
+    column(&mut v, &c, 200.0, 10.0);
+    column(&mut v, &d, 200.0, 66.0);
+    let text = layout(v).plain_text();
+    let read: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(read, [a, b, c, d].concat());
+}
+
+/// A drag measures the gutter by the text around it: more text set larger elsewhere on the page, for which 9 pt
+/// would be no gutter, does not take a drag ending in the gutter of two 10 pt columns across it.
+#[test]
+fn a_drag_measures_the_gutter_by_the_text_beside_it() {
+    let (left, right) = NARROW_COLUMNS;
+    let mut v = Vec::new();
+    column(&mut v, &left, 10.0, 10.0);
+    column(&mut v, &right, 169.0, 10.0);
+    for row in 0..20 {
+        for (i, c) in "Large print set well below".chars().enumerate() {
+            v.push(tilted(&c.to_string(), [10.0 + i as f32 * 10.0, 200.0 + row as f32 * 20.0], [1.0, 0.0], [0.0, 1.0], 10.0, 16.0));
+        }
+    }
+    let t = layout(v);
+    let anchor = t.nearest(10.0, 15.0).expect("a glyph");
+    let y = 10.0 + 3.0 * 12.0 + 5.0;
+    assert_eq!(t.nearest(167.0, y).map(|i| t.glyphs[i].rect[0]), Some(169.0), "the right column's line is nearer");
+    let kept = t.nearest_from(anchor, 167.0, y).map(|i| (t.glyphs[i].rect[2], t.glyphs[i].rect[1]));
+    assert_eq!(kept, Some((160.0, 46.0)), "the end of the left column's line");
+}
+
+/// Two columns 9 pt apart, the right one's lines 3 pt lower than the left one's, with `stamp` set
+/// up the gutter from `bottom`: 13 pt high, 7 pt a glyph, reaching 2 pt into each column, as a
+/// "resubmitted" or preprint stamp is set up the side of a paper's text. The stamp is a line of
+/// its own, read last.
+fn columns_with_a_stamp(stamp: &str, bottom: f32) -> PageText {
+    let mut v = Vec::new();
+    column(&mut v, &NARROW_COLUMNS.0, 10.0, 10.0);
+    column(&mut v, &NARROW_COLUMNS.1, 169.0, 13.0);
+    let mut t = layout(v);
+    assert_eq!(t.plain_text(), [NARROW_COLUMNS.0, NARROW_COLUMNS.1].concat().join("\n"), "the columns");
+    let line = t.line_of.last().map_or(0, |l| l + 1);
+    for (k, c) in stamp.chars().enumerate() {
+        t.glyphs.push(tilted(&c.to_string(), [171.0, bottom - k as f32 * 7.0], [0.0, -1.0], [-1.0, 0.0], 7.0, 13.0));
+        t.line_of.push(line);
+        t.space_before.push(false);
+    }
+    t
+}
+
+/// A stamp set up the gutter has a glyph level with every height along it. Between two lines of a column it is
+/// the only text level with the pointer, or the nearest: the line right beside the pointer is found all the
+/// same, and the gutter still parts it from the other column's line that different baselines put level.
+#[test]
+fn a_stamp_up_the_gutter_is_no_row_of_the_lines_beside_it() {
+    let t = columns_with_a_stamp("Revision", 70.0);
+    let start = |i: Option<usize>| i.and_then(|i| t.glyphs.get(i)).map(|g| (g.rect[0], g.rect[1]));
+    // The left column's lines are at 22..32 and 34..44; the stamp alone is level with the white between them.
+    assert_eq!(start(t.nearest(80.0, 32.5)), Some((76.0, 22.0)), "between two lines of the left column");
+    // The right column's are at 25..35 and 37..47: the left column's third line is level with the white too.
+    assert_eq!(start(t.nearest(250.0, 35.5)), Some((247.0, 25.0)), "between two lines of the right column");
+    // Over the stamp it is the text under the pointer.
+    assert_eq!(t.nearest(164.0, 40.0).map(|i| t.glyphs[i].direction), Some([0.0, -1.0]), "over the stamp");
+}
+
+/// A drag that began in a column is not taken by a stamp set up the gutter beside it: over the stamp the pointer
+/// has not left its column, between two lines or level with one, nearer either column. Past the stamp it is in
+/// the next column. A turned label level with fewer than three lines, as the heading over a table's column is,
+/// is where the drag ends.
+#[test]
+fn a_drag_is_not_taken_by_a_stamp_up_the_gutter() {
+    let t = columns_with_a_stamp("Revision", 70.0);
+    let start = |t: &PageText, i: Option<usize>| i.and_then(|i| t.glyphs.get(i)).map(|g| (g.rect[0], g.rect[1]));
+    let end = |t: &PageText, i: Option<usize>| i.and_then(|i| t.glyphs.get(i)).map(|g| (g.rect[2], g.rect[1]));
+    let anchor = t.nearest(10.0, 15.0).expect("a glyph");
+    for (x, y) in [(162.0, 40.0), (164.0, 40.0), (167.0, 40.0), (164.0, 44.5)] {
+        assert_eq!(t.nearest(x, y).map(|i| t.glyphs[i].direction), Some([0.0, -1.0]), "the stamp is under {x}, {y}");
+        assert_eq!(end(&t, t.nearest_from(anchor, x, y)), Some((160.0, 34.0)), "the end of the left column's line, from {x}, {y}");
+    }
+    assert_eq!(start(&t, t.nearest_from(anchor, 176.0, 40.0)), Some((175.0, 37.0)), "past the stamp, over the right column");
+    // From the right column the drag stays there.
+    let from_right = t.nearest(250.0, 66.0).expect("a glyph");
+    for x in [162.0, 167.0] {
+        assert_eq!(start(&t, t.nearest_from(from_right, x, 40.0)), Some((169.0, 37.0)), "the start of the right column's line, from {x}");
+    }
+    // Nor does the stamp stand in for the right column where its line starts further in than the stamp reaches.
+    let mut indented = columns_with_a_stamp("Revision", 70.0);
+    for g in indented.glyphs.iter_mut().filter(|g| g.direction == [1.0, 0.0] && g.rect[0] >= 169.0 && g.rect[1] == 37.0) {
+        (g.rect[0], g.rect[2]) = (g.rect[0] + 12.0, g.rect[2] + 12.0);
+        for q in &mut g.quad {
+            q[0] += 12.0;
+        }
+    }
+    let from_right = indented.nearest(250.0, 66.0).expect("a glyph");
+    assert_eq!(start(&indented, indented.nearest_from(from_right, 164.0, 40.0)), Some((181.0, 37.0)), "the start of the indented line");
+    // A drag that began on the stamp runs along it.
+    let on_stamp = t.nearest(164.0, 60.0).expect("a glyph");
+    assert_eq!(t.nearest_from(on_stamp, 164.0, 40.0), t.nearest(164.0, 40.0), "along the stamp");
+    // "No" set upwards over 32..46 is level with two lines (centres at 39 and 42).
+    let t = columns_with_a_stamp("No", 46.0);
+    let anchor = t.nearest(10.0, 15.0).expect("a glyph");
+    assert_eq!(t.nearest_from(anchor, 164.0, 40.0).map(|i| t.glyphs[i].direction), Some([0.0, -1.0]), "a turned label takes the drag");
+}
+
+/// The rows a drag takes are of the text that runs the anchor's way: a stamp set up the gutter between the two
+/// columns of a table is no cell of its rows.
+#[test]
+fn rows_take_no_stamp_set_up_the_gutter() {
+    let mut t = table();
+    let line = t.line_of.last().map_or(0, |l| l + 1);
+    // "No" set upwards between the columns, from 46 to 32: level with the second and third rows.
+    for (k, c) in "No".chars().enumerate() {
+        t.glyphs.push(tilted(&c.to_string(), [80.0, 46.0 - k as f32 * 7.0], [0.0, -1.0], [-1.0, 0.0], 7.0, 13.0));
+        t.line_of.push(line);
+        t.space_before.push(false);
+    }
+    let (name, seven) = (0, t.glyphs.iter().position(|g| g.text == "7").expect("\"7\""));
+    let rows = t.visual_between(name, seven, None).expect("rows");
+    assert_eq!(t.column_text(&rows), "Name\tQty\nApple\t12\nPear\t7");
+}
+
+/// Beside its line, a drag's pointer is beside its column still while it has not crossed the gutter to the next
+/// column of running text: in the gutter, and in the white after a line that falls short of it. Past the gutter
+/// it is not, nor between the columns of a table, nor beside text with nothing beyond it.
+#[test]
+fn the_white_beside_a_line_is_its_columns_until_the_gutter_is_crossed() {
+    let (mut left, right) = NARROW_COLUMNS;
+    left[3] = "other one.";
+    let mut v = Vec::new();
+    column(&mut v, &left, 10.0, 10.0);
+    column(&mut v, &right, 169.0, 10.0);
+    let t = layout(v);
+    let top = |row: f32| 10.0 + row * 12.0;
+    // The head: the last glyph of the left column's third line, which ends at 160, and of its short fourth one, at 70.
+    let third = t.nearest(159.0, top(2.0) + 5.0).expect("a glyph");
+    let fourth = t.nearest(69.0, top(3.0) + 5.0).expect("a glyph");
+    assert!(t.beside_column(third, 163.0, top(2.0) + 5.0), "in the gutter, nearer its own line");
+    assert!(t.beside_column(third, 168.0, top(2.0) + 5.0), "in the gutter, nearer the next column");
+    assert!(t.beside_column(fourth, 120.0, top(3.0) + 5.0), "in the white after the short line");
+    assert!(!t.beside_column(third, 172.0, top(2.0) + 5.0), "past the gutter");
+    assert!(!t.beside_column(third, 100.0, top(2.0) + 5.0), "over its own line");
+    // From the right column, the gutter is before its line.
+    let right_third = t.nearest(170.0, top(2.0) + 5.0).expect("a glyph");
+    assert!(t.beside_column(right_third, 165.0, top(2.0) + 5.0), "in the gutter, from the right column");
+    assert!(!t.beside_column(right_third, 150.0, top(2.0) + 5.0), "past the gutter, over the left column");
+    assert!(!t.beside_column(right_third, 330.0, top(2.0) + 5.0), "nothing lies beyond the right column");
+    // Between the columns of a table the pointer has gone into the rows.
+    let t = table();
+    let pear = t.glyphs.iter().rposition(|g| g.text == "r").expect("\"Pear\"");
+    assert!(!t.beside_column(pear, 60.0, 43.0), "between two cells");
+}
+
+/// The glyphs of two formulas as a typesetter draws them, each as its left edge, top, width and height in tenths
+/// of a point: one in the left column, a row of three fractions with its number "(5)" at the column's edge, and
+/// one in the right column, with its number at that column's edge. Numerators stand above the baseline,
+/// denominators below it and subscripts smaller: such a formula is pieces at several heights, the number level
+/// with one of them.
+const FORMULAS: [[i32; 4]; 64] = [
+    [1086, 3844, 100, 100],
+    [1086, 3844, 78, 100],
+    [1090, 3912, 82, 100],
+    [1185, 3950, 50, 70],
+    [1233, 3950, 50, 70],
+    [1274, 3950, 50, 70],
+    [1324, 3950, 24, 70],
+    [1348, 3950, 49, 70],
+    [1397, 3950, 24, 70],
+    [1453, 3912, 78, 100],
+    [1558, 3912, 28, 100],
+    [1653, 3844, 73, 100],
+    [1799, 3912, 28, 100],
+    [1904, 3844, 80, 100],
+    [2056, 3912, 28, 100],
+    [2165, 3844, 82, 100],
+    [2314, 3912, 28, 100],
+    [2342, 3894, 47, 70],
+    [1598, 3980, 68, 100],
+    [1666, 4019, 31, 70],
+    [1697, 4019, 31, 70],
+    [1728, 4019, 54, 70],
+    [1855, 3980, 68, 100],
+    [1923, 4019, 31, 70],
+    [1954, 4019, 31, 70],
+    [1985, 4019, 54, 70],
+    [2113, 3980, 68, 100],
+    [2181, 4019, 31, 70],
+    [2212, 4019, 31, 70],
+    [2243, 4019, 54, 70],
+    [2884, 3912, 33, 100],
+    [2917, 3912, 50, 100],
+    [2967, 3912, 33, 100],
+    [3693, 3808, 100, 100],
+    [3693, 3808, 78, 100],
+    [3697, 3876, 83, 100],
+    [3792, 3915, 50, 70],
+    [3840, 3915, 50, 70],
+    [3881, 3915, 50, 70],
+    [3964, 3876, 78, 100],
+    [4069, 3807, 100, 100],
+    [4069, 3807, 78, 100],
+    [4089, 3876, 49, 100],
+    [4169, 3876, 39, 100],
+    [4207, 3876, 83, 100],
+    [4290, 3915, 50, 70],
+    [4338, 3915, 50, 70],
+    [4379, 3915, 50, 70],
+    [4434, 3876, 28, 100],
+    [4478, 3876, 65, 100],
+    [4544, 3876, 28, 100],
+    [4588, 3876, 47, 100],
+    [4637, 3876, 28, 100],
+    [4682, 3876, 65, 100],
+    [4750, 3876, 28, 100],
+    [4794, 3876, 50, 100],
+    [4844, 3915, 35, 70],
+    [4884, 3876, 28, 100],
+    [4929, 3876, 50, 100],
+    [4979, 3915, 35, 70],
+    [5019, 3876, 39, 100],
+    [5514, 3876, 33, 100],
+    [5547, 3876, 50, 100],
+    [5597, 3876, 33, 100],
+];
+
+/// A line of letters about 5 pt wide from `x0` to `x1`, with its top at `y`.
+fn letters(v: &mut Vec<TextGlyph>, x0: f32, x1: f32, y: f32) {
+    let n = ((x1 - x0) / 5.0).round().max(1.0);
+    for k in 0..n as usize {
+        v.push(g("x", x0 + k as f32 * (x1 - x0) / n, y, x0 + (k + 1) as f32 * (x1 - x0) / n));
+    }
+}
+
+/// Two columns of running text 12 pt apart, the gutter from 300 to 312, with one of [`FORMULAS`] between two
+/// paragraphs of each.
+fn formula_page() -> Vec<TextGlyph> {
+    let mut v = Vec::new();
+    // The left column, from 49 to 300: a paragraph that ends in a short line, another, the formula, and more text.
+    for (x1, y) in [(300.0, 285.0), (300.0, 297.0), (300.0, 309.0), (118.0, 321.0), (300.0, 357.0), (106.0, 369.0), (300.0, 413.0)] {
+        letters(&mut v, 49.0, x1, y);
+    }
+    // The right column, from 312 to 563, its lines 5 pt lower: a paragraph, the formula, and more text.
+    for (x0, x1, y) in [(312.0, 563.0, 292.0), (312.0, 563.0, 304.0), (312.0, 563.0, 316.0), (312.0, 563.0, 328.0), (312.0, 563.0, 340.0)] {
+        letters(&mut v, x0, x1, y);
+    }
+    for (x0, x1, y) in [(312.0, 563.0, 352.0), (312.0, 516.0, 364.0), (316.0, 562.0, 406.0), (312.0, 563.0, 418.0)] {
+        letters(&mut v, x0, x1, y);
+    }
+    v.extend(FORMULAS.map(|f| f.map(|c| c as f32 / 10.0)).map(|[x, y, w, h]| tilted("x", [x, y], [1.0, 0.0], [0.0, 1.0], w, h)));
+    v
+}
+
+/// A column is read to its end, formulas and all, before the next column (#3682). The formula's number at the
+/// column's edge is level with its first piece, and looked like the next cell of a row, which ended the column
+/// there: the page read in bands, a stretch of the left column and then of the right one.
+#[test]
+fn a_column_with_formulas_is_read_before_the_next_column() {
+    let t = layout(formula_page());
+    let right = t.glyphs.iter().position(|g| g.rect[0] > 306.0).expect("the right column");
+    let late: Vec<f32> = t.glyphs.iter().skip(right).filter(|g| g.rect[0] < 306.0).map(|g| g.rect[1]).collect();
+    assert!(late.is_empty(), "{} letters of the left column read after the right column began, from {:?} down", late.len(), late.first());
+}
+
+/// A running head over the right column and a footer under the left one stand apart from the columns' lines:
+/// the head is read first and the footer last, not between the two columns.
+#[test]
+fn a_running_head_and_a_footer_are_not_read_between_the_columns() {
+    let mut v = formula_page();
+    letters(&mut v, 380.0, 563.0, 245.0);
+    letters(&mut v, 49.0, 240.0, 470.0);
+    let t = layout(v);
+    assert_eq!(t.glyphs.first().map(|g| g.rect[1]), Some(245.0), "the running head is read first");
+    assert_eq!(t.glyphs.last().map(|g| g.rect[1]), Some(470.0), "the footer is read last");
+}
+
+/// Table cells padded with spaces to a fixed width, as wide as running text: the row reads across, as it did
+/// before gutters were looked for, and the gap after a cell's padding is no gutter.
+#[test]
+fn padded_cells_as_wide_as_running_text_stay_rows() {
+    let rows = [
+        ("The first cell of the row", "and the cell beside it too"),
+        ("A second cell of the rows", "with its own cell set next"),
+        ("The third cell is as wide", "as the cell that is beside"),
+        ("And the last of them ends", "the table with a last cell"),
+    ];
+    // Drawn one column of cells after the other. 25 letters to 160, four spaces of padding to 184, the next cell
+    // 5 pt further.
+    let mut v = Vec::new();
+    for (row, (a, _)) in rows.iter().enumerate() {
+        word(&mut v, &format!("{a}    "), 10.0, 10.0 + row as f32 * 12.0, 6.0);
+    }
+    for (row, (_, b)) in rows.iter().enumerate() {
+        word(&mut v, b, 189.0, 10.0 + row as f32 * 12.0, 6.0);
+    }
+    let text = layout(v).plain_text();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), rows.len(), "one line a row: {text:?}");
+    for (line, (a, b)) in lines.iter().zip(rows) {
+        assert!(line.starts_with(a) && line.ends_with(b), "{line:?}");
+    }
+}
+
+/// A footer below the left column, far below where the right column ends: the right column reads before it. The
+/// right column runs past the end of the left one only near its top, not beside the gap down to the footer.
+#[test]
+fn a_footer_below_the_column_reads_after_the_next_column() {
+    let (left, right) = NARROW_COLUMNS;
+    let more = ["and the right column goes", "on for four lines further", "than the column left of it", "before it ends at the top."];
+    let mut v = Vec::new();
+    column(&mut v, &left, 10.0, 10.0);
+    column(&mut v, &[&right[..], &more[..]].concat(), 169.0, 10.0);
+    word(&mut v, "A footer at the foot", 10.0, 500.0, 6.0);
+    assert_eq!(layout(v).plain_text(), [&left[..], &right[..], &more[..], &["A footer at the foot"]].concat().join("\n"));
+}
+
+/// Three wide pieces on one line beside three lines ending before a gap are one line's text, not three lines of a
+/// column: the gap after the short lines is no gutter, and the line reads across.
+#[test]
+fn pieces_of_one_line_count_as_one_line_of_a_column() {
+    let left = ["A short column of three", "lines stands at the left", "and a long line runs on"];
+    let pieces = ["beside its second one in", "three wide pieces drawn", "one after the other here"];
+    let mut v = Vec::new();
+    column(&mut v, &left, 10.0, 10.0);
+    // The second line's three pieces, each 24 letters (144 pt) wide and 9 pt after the text before, drawn last
+    // first, so that each is a run of its own.
+    let mut x = 10.0 + 24.0 * 6.0 + 9.0;
+    let mut at = Vec::new();
+    for piece in pieces {
+        at.push(x);
+        x += piece.len() as f32 * 6.0 + 9.0;
+    }
+    for (piece, x) in pieces.iter().zip(at).rev() {
+        word(&mut v, piece, x, 22.0, 6.0);
+    }
+    let text = layout(v).plain_text();
+    assert_eq!(text.lines().nth(1), Some([left[1], pieces[0], pieces[1], pieces[2]].join(" ").as_str()), "{text:?}");
+}
+
+/// Two segments on one line, the right one with blanks reaching back past the left one's start: which is left is
+/// told by their visible text, so the gutter between them is found.
+#[test]
+fn a_gutter_is_looked_for_between_the_visible_text() {
+    use super::order::{Gutters, parted_by_gutter};
+    let seg = |k: usize, x0: f32, x1: f32, row: f32| Seg::new(Run { start: k, end: k + 1 }, [x0, 10.0 + row * 12.0, x1, 20.0 + row * 12.0], 10.0, x1);
+    let mut segs = Vec::new();
+    for row in 0..5 {
+        segs.push(seg(2 * row, 10.0, 160.0, row as f32));
+        segs.push(seg(2 * row + 1, 169.0, 319.0, row as f32));
+    }
+    let (left, mut right) = (seg(4, 10.0, 160.0, 2.0), seg(5, 169.0, 319.0, 2.0));
+    right.bbox[0] = 4.0;
+    assert!(parted_by_gutter(&segs, &left, &right, &mut Gutters::new()));
+    assert!(parted_by_gutter(&segs, &right, &left, &mut Gutters::new()));
+}
+
 #[test]
 fn tracked_text_keeps_letters_together() {
     let mut v = Vec::new();
@@ -2394,6 +3097,25 @@ fn turned_text_keeps_its_place_in_the_reading_order() {
     assert_eq!(page_text(&ops), "Heading above\nTurned label\nCaption below");
 }
 
+/// A stamp set up the gutter between two columns of running text is read after them, not between two lines of
+/// a column, where its box on the page would put it. A turned label beside one line keeps its place.
+#[test]
+fn a_stamp_up_the_gutter_is_read_after_the_columns() {
+    let column = |x: u32, lines: &[&str]| {
+        let lines: String = lines.iter().map(|line| format!("({line}) Tj T* ")).collect();
+        format!("BT /F2 10 Tf 12 TL {x} 350 Td {lines}ET ")
+    };
+    let (left, right) = NARROW_COLUMNS;
+    // Eight glyphs of 7.2 pt up from 292: level with the second to the fifth line of each column.
+    let stamp = "BT /F2 12 Tf 0 1 -1 0 180 292 Tm (Revised.) Tj ET ";
+    let text = page_text(&(column(20, &left) + &column(179, &right) + stamp));
+    assert_eq!(text, [&left[..], &right[..], &["Revised."]].concat().join("\n"));
+    // "No" set upwards in the gutter beside one or two lines only: read where it stands.
+    let label = "BT /F2 12 Tf 0 1 -1 0 180 320 Tm (No) Tj ET ";
+    let text = page_text(&(column(20, &left) + &column(179, &right) + label));
+    assert!(text.lines().any(|line| line == "No") && text.lines().last() != Some("No"), "{text:?}");
+}
+
 #[test]
 fn turned_glyphs_keep_their_shape_and_direction() {
     // 30° counter-clockwise on the page is 30° up from the x axis in view space (y down).
@@ -2776,11 +3498,23 @@ fn a_justified_gap_is_not_a_gutter() {
     word(&mut v, "Wide", 10.0, 106.0, 6.0);
     word(&mut v, "gap", 94.0, 106.0, 6.0);
     let t = layout(v);
-    assert!(!t.gutter_between(20.0, 100.0, 106.0 - 40.0, 116.0 + 40.0, 10.0), "the rows above cross it");
-    assert!(!t.gutter_between(20.0, 100.0, 106.0, 116.0, 10.0), "on its own row it parts one line only");
-    assert!(!t.gutter_between(20.0, 200.0, 0.0, 200.0, 10.0), "past the text's right edge nothing is parted");
+    // The rows of the text that runs the first glyph's way: all of it.
+    let of = &t.glyphs[0];
+    assert!(!t.gutter_between(of, 20.0, 100.0, 106.0 - 40.0, 116.0 + 40.0, 10.0), "the rows above cross it");
+    assert!(!t.gutter_between(of, 20.0, 100.0, 106.0, 116.0, 10.0), "on its own row it parts one line only");
+    assert!(!t.gutter_between(of, 20.0, 200.0, 0.0, 200.0, 10.0), "past the text's right edge nothing is parted");
     // A table's columns part every row.
-    assert!(table().gutter_between(20.0, 100.0, 0.0, 60.0, 10.0));
+    let t = table();
+    assert!(t.gutter_between(&t.glyphs[0], 20.0, 100.0, 0.0, 60.0, 10.0));
+    // Two lines of a justified paragraph leave the same gap between two words, narrower than a line is high:
+    // each has words on both sides of it, and a drag over the two crosses no gutter.
+    let mut v = Vec::new();
+    for row in 0..2 {
+        word(&mut v, "Words set", 10.0, 10.0 + row as f32 * 12.0, 6.0);
+        word(&mut v, "far apart", 71.0, 10.0 + row as f32 * 12.0, 6.0);
+    }
+    let t = layout(v);
+    assert!(!t.gutter_between(&t.glyphs[0], 10.0, 125.0, 10.0, 32.0, 10.0), "a 7 pt word gap in both lines");
 }
 
 /// A heading across the page just above a table crosses the table's gutter, but a drag over
