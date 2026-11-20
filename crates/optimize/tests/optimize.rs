@@ -5840,3 +5840,334 @@ fn the_fewest_strips_that_make_a_picture_are_merged() {
     let r = optimize(&mut doc, &keep).unwrap();
     assert_eq!((r.merged_images, r.fragments_merged), (0, 0), "{r:?}");
 }
+
+/// An image drawn under a transfer function other than the identity keeps its samples: the
+/// function maps them (ISO 32000-2 §10.5), and a steep one turns the small changes resampling and
+/// JPEG make near white into colour. One drawn after the state is restored (`Q`), or after a
+/// graphics state sets the identity again (`/TR /Identity`, `/TR2 /Default`), is optimized as
+/// before; one drawn by a form under the function keeps its samples too.
+#[test]
+fn images_drawn_under_a_transfer_function_keep_their_samples() {
+    let mut doc = Document::new_empty();
+    let invert = doc.add(Object::Dict(dict_of([
+        (b"FunctionType".to_vec(), Object::Int(2)),
+        (b"Domain".to_vec(), Object::Array(vec![0.into(), 1.into()])),
+        (b"C0".to_vec(), Object::Array(vec![1.into()])),
+        (b"C1".to_vec(), Object::Array(vec![0.into()])),
+        (b"N".to_vec(), Object::Int(1)),
+    ])));
+    let under = image(&mut doc, 1200, 1200, 3, false, None);
+    let in_form = image(&mut doc, 1200, 1200, 3, false, None);
+    let restored = image(&mut doc, 1200, 1200, 3, false, None);
+    let reset = image(&mut doc, 1200, 1200, 3, false, None);
+    let defaulted = image(&mut doc, 1200, 1200, 3, false, None);
+    let form = {
+        let mut res = Dict::new();
+        res.set(b"XObject".to_vec(), Object::Dict(xobject_dict(&[("F", in_form)])));
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Form"));
+        d.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+        d.set(b"Resources".to_vec(), Object::Dict(res));
+        doc.add(Object::Stream(Stream::from_raw(d, b"/F Do".to_vec())))
+    };
+    let plain = image(&mut doc, 1200, 1200, 3, false, None);
+    let plain_form = {
+        let mut res = Dict::new();
+        res.set(b"XObject".to_vec(), Object::Dict(xobject_dict(&[("P", plain)])));
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Form"));
+        d.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+        d.set(b"Resources".to_vec(), Object::Dict(res));
+        doc.add(Object::Stream(Stream::from_raw(d, b"/P Do".to_vec())))
+    };
+    // `/Fm` is drawn first without the function and then with it, at the same scale: a form
+    // already walked is walked again under another transfer state. `/Fp` is drawn only without.
+    let p = page(
+        &mut doc,
+        &[("U", under), ("Fm", form), ("Fp", plain_form), ("R", restored), ("I", reset), ("D", defaulted)],
+        "q 144 0 0 144 36 600 cm /Fm Do /Fp Do Q q /Tr gs 144 0 0 144 36 600 cm /U Do /Fm Do Q q 144 0 0 144 300 600 cm /R Do Q \
+         q /Tr gs /Id gs 144 0 0 144 36 300 cm /I Do Q q /Tr gs /Df gs 144 0 0 144 300 300 cm /D Do Q",
+    );
+    let gs = |entries: Vec<(Vec<u8>, Object)>| Object::Dict(dict_of(entries));
+    let states = dict_of([
+        (b"Tr".to_vec(), gs(vec![(b"TR".to_vec(), Object::Ref(invert))])),
+        (b"Id".to_vec(), gs(vec![(b"TR".to_vec(), Object::name("Identity"))])),
+        (b"Df".to_vec(), gs(vec![(b"TR2".to_vec(), Object::name("Default"))])),
+    ]);
+    doc.update_dict(p, |d| {
+        let mut res = d.get(b"Resources").and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+        res.set(b"ExtGState".to_vec(), Object::Dict(states));
+        d.set(b"Resources".to_vec(), Object::Dict(res));
+    })
+    .unwrap();
+    let raw = |doc: &Document, r: ObjRef| stream(doc, r).raw.clone();
+    let (under_before, in_form_before) = (raw(&doc, under), raw(&doc, in_form));
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(raw(&doc, under), under_before, "drawn under the transfer function: {report:?}");
+    assert_eq!(raw(&doc, in_form), in_form_before, "drawn by a form under it");
+    for (what, r) in
+        [("after Q", restored), ("after /TR /Identity", reset), ("after /TR2 /Default", defaulted), ("in a form drawn only without it", plain)]
+    {
+        assert_eq!(stream(&doc, r).dict.int(b"Width"), Some(300), "{what} the image is resampled as before");
+    }
+    assert_eq!(report.images_resampled, 4, "{report:?}");
+}
+
+/// A transfer function that inverts: `1 - x`.
+fn inverting(doc: &mut Document) -> ObjRef {
+    doc.add(Object::Dict(dict_of([
+        (b"FunctionType".to_vec(), Object::Int(2)),
+        (b"Domain".to_vec(), Object::Array(vec![0.into(), 1.into()])),
+        (b"C0".to_vec(), Object::Array(vec![1.into()])),
+        (b"C1".to_vec(), Object::Array(vec![0.into()])),
+        (b"N".to_vec(), Object::Int(1)),
+    ])))
+}
+
+/// Page `p`'s resources with `/ExtGState` `states`, and `/Font` `fonts` when given.
+fn set_states(doc: &mut Document, p: ObjRef, states: Dict, fonts: Option<Dict>) {
+    doc.update_dict(p, |d| {
+        let mut res = d.get(b"Resources").and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+        res.set(b"ExtGState".to_vec(), Object::Dict(states));
+        if let Some(fonts) = fonts {
+            res.set(b"Font".to_vec(), Object::Dict(fonts));
+        }
+        d.set(b"Resources".to_vec(), Object::Dict(res));
+    })
+    .unwrap();
+}
+
+/// A graphics state dictionary of `entries`.
+fn gs_of(entries: Vec<(&str, Object)>) -> Object {
+    Object::Dict(dict_of(entries.into_iter().map(|(k, v)| (k.as_bytes().to_vec(), v))))
+}
+
+/// The graphics states `/Tr`, setting an inverting transfer function, alone.
+fn inverting_states(doc: &mut Document) -> Dict {
+    let invert = inverting(doc);
+    dict_of([(b"Tr".to_vec(), gs_of(vec![("TR", Object::Ref(invert))]))])
+}
+
+/// How `gs` is read: by its last operand, as the renderer reads it, so `/Id /Tr gs` sets `/Tr`;
+/// and a null `/TR2` is one that isn't there, so `/TR /Identity /TR2 null` sets the identity
+/// (ISO 32000-2 §7.3.9).
+#[test]
+fn a_transfer_state_is_read_from_the_last_operand_and_a_null_entry_is_absent() {
+    let mut doc = Document::new_empty();
+    let invert = inverting(&mut doc);
+    let surplus = image(&mut doc, 1200, 1200, 3, false, None);
+    let nulled = image(&mut doc, 1200, 1200, 3, false, None);
+    let p = page(&mut doc, &[("S", surplus), ("N", nulled)], "q /Id /Tr gs 144 0 0 144 36 600 cm /S Do Q q /Nl gs 144 0 0 144 300 600 cm /N Do Q");
+    let states = dict_of([
+        (b"Tr".to_vec(), gs_of(vec![("TR", Object::Ref(invert))])),
+        (b"Id".to_vec(), gs_of(vec![("TR", Object::name("Identity"))])),
+        (b"Nl".to_vec(), gs_of(vec![("TR", Object::name("Identity")), ("TR2", Object::Null)])),
+    ]);
+    set_states(&mut doc, p, states, None);
+    let before = stream(&doc, surplus).raw;
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(stream(&doc, surplus).raw, before, "`/Id /Tr gs` sets /Tr: {report:?}");
+    assert_eq!(stream(&doc, nulled).dict.int(b"Width"), Some(300), "a null /TR2 leaves /TR /Identity: {report:?}");
+}
+
+/// Where the walk may have missed the state an image is drawn in, every image keeps its samples
+/// when the document sets a transfer function anywhere: after content the parser couldn't read
+/// whole, through forms nested past the walk's depth (whose graphics states it never read), and
+/// in a Type 3 glyph, which draws an image with resources of its own.
+#[test]
+fn images_whose_state_the_walk_cannot_see_keep_their_samples_under_a_transfer_function() {
+    // An inline image the parser can't read: the page also lists a transfer function.
+    let mut doc = Document::new_empty();
+    let img = image(&mut doc, 1200, 1200, 3, false, None);
+    let p = page(&mut doc, &[("Im", img)], "BI /W 4 H 4 ID aa EI q 144 0 0 144 36 600 cm /Im Do Q");
+    let states = inverting_states(&mut doc);
+    set_states(&mut doc, p, states, None);
+    let before = stream(&doc, img).raw;
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(stream(&doc, img).raw, before, "after content the parser skipped: {report:?}");
+
+    // Forms nested past the walk's depth; the innermost sets the function before drawing.
+    let mut doc = Document::new_empty();
+    let img = image(&mut doc, 1200, 1200, 3, false, None);
+    let mut res = resources(xobjects(&[("Im", img)]));
+    res.set(b"ExtGState".to_vec(), Object::Dict(inverting_states(&mut doc)));
+    let mut inner = form(&mut doc, Some(Object::Dict(res)), "/Tr gs /Im Do");
+    for _ in 1..13 {
+        inner = form(&mut doc, Some(Object::Dict(resources(xobjects(&[("F", inner)])))), "/F Do");
+    }
+    page(&mut doc, &[("Im", img), ("F", inner)], "q 600 0 0 600 0 0 cm /Im Do Q /F Do");
+    let before = stream(&doc, img).raw;
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(stream(&doc, img).raw, before, "drawn under a state in a form the walk didn't reach: {report:?}");
+
+    // A Type 3 glyph sets the function from its own resources and draws the image the page
+    // draws too.
+    let mut doc = Document::new_empty();
+    let img = image(&mut doc, 1200, 1200, 3, false, None);
+    let glyph = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"0 0 d0 /Tr gs /Im Do".to_vec())));
+    let mut glyph_res = resources(xobjects(&[("Im", img)]));
+    glyph_res.set(b"ExtGState".to_vec(), Object::Dict(inverting_states(&mut doc)));
+    let font = doc.add(Object::Dict(dict_of([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("Type3")),
+        (b"FontBBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()])),
+        (b"FontMatrix".to_vec(), Object::Array(vec![1.into(), 0.into(), 0.into(), 1.into(), 0.into(), 0.into()])),
+        (b"CharProcs".to_vec(), Object::Dict(dict_of([(b"a".to_vec(), Object::Ref(glyph))]))),
+        (b"Encoding".to_vec(), Object::Dict(dict_of([(b"Differences".to_vec(), Object::Array(vec![97.into(), Object::name("a")]))]))),
+        (b"FirstChar".to_vec(), Object::Int(97)),
+        (b"LastChar".to_vec(), Object::Int(97)),
+        (b"Widths".to_vec(), Object::Array(vec![1.into()])),
+        (b"Resources".to_vec(), Object::Dict(glyph_res)),
+    ])));
+    let p = page(&mut doc, &[("Im", img)], "q 144 0 0 144 36 600 cm /Im Do Q BT /T3 144 Tf 36 300 Td (a) Tj ET");
+    set_states(&mut doc, p, Dict::new(), Some(dict_of([(b"T3".to_vec(), Object::Ref(font))])));
+    let before = stream(&doc, img).raw;
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(stream(&doc, img).raw, before, "drawn by a Type 3 glyph under its own transfer function: {report:?}");
+
+    // A Type 3 glyph without resources of its own draws with the page's, which list the function.
+    let mut doc = Document::new_empty();
+    let img = image(&mut doc, 1200, 1200, 3, false, None);
+    let glyph = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"0 0 d0 /Tr gs /Im Do".to_vec())));
+    let font = doc.add(Object::Dict(dict_of([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("Type3")),
+        (b"FontBBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()])),
+        (b"FontMatrix".to_vec(), Object::Array(vec![1.into(), 0.into(), 0.into(), 1.into(), 0.into(), 0.into()])),
+        (b"CharProcs".to_vec(), Object::Dict(dict_of([(b"a".to_vec(), Object::Ref(glyph))]))),
+        (b"Encoding".to_vec(), Object::Dict(dict_of([(b"Differences".to_vec(), Object::Array(vec![97.into(), Object::name("a")]))]))),
+        (b"FirstChar".to_vec(), Object::Int(97)),
+        (b"LastChar".to_vec(), Object::Int(97)),
+        (b"Widths".to_vec(), Object::Array(vec![1.into()])),
+    ])));
+    let p = page(&mut doc, &[("Im", img)], "q 144 0 0 144 36 600 cm /Im Do Q BT /T3 144 Tf 36 300 Td (a) Tj ET");
+    let states = inverting_states(&mut doc);
+    set_states(&mut doc, p, states, Some(dict_of([(b"T3".to_vec(), Object::Ref(font))])));
+    let before = stream(&doc, img).raw;
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(stream(&doc, img).raw, before, "drawn by a Type 3 glyph with the page's transfer function: {report:?}");
+}
+
+/// A picture's masks are stored again with it, or by the mask pass: those of a picture drawn
+/// under a transfer function stay as they are. Another picture naming the same eight-bit soft
+/// mask keeps its samples too (resizing it would resize the shared mask), and a one-bit soft mask
+/// isn't stored again as Group 4 by the mask pass.
+#[test]
+fn the_masks_of_a_picture_under_a_transfer_function_stay_as_they_are() {
+    let mut doc = Document::new_empty();
+    let shared = image(&mut doc, 1200, 1200, 1, false, None);
+    let a = image(&mut doc, 1200, 1200, 3, false, Some(shared));
+    let b = image(&mut doc, 1200, 1200, 3, false, Some(shared));
+    let bits = {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(1200));
+        d.set(b"Height".to_vec(), Object::Int(1200));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        doc.add(Object::Stream(Stream::from_raw(d, vec![0xF0; 150 * 1200])))
+    };
+    let c = image(&mut doc, 1200, 1200, 3, false, Some(bits));
+    let p = page(
+        &mut doc,
+        &[("A", a), ("B", b), ("C", c)],
+        "q /Tr gs 144 0 0 144 36 600 cm /A Do Q q 144 0 0 144 300 600 cm /B Do Q q /Tr gs 144 0 0 144 36 300 cm /C Do Q",
+    );
+    let states = inverting_states(&mut doc);
+    set_states(&mut doc, p, states, None);
+    let before = [shared, b].map(|r| stream(&doc, r).raw);
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(stream(&doc, shared).raw, before[0], "the soft mask A draws with: {report:?}");
+    assert_eq!(stream(&doc, b).raw, before[1], "B shares it: {report:?}");
+    // Clean Up still stores the unfiltered mask with Flate, losslessly; the mask pass would have
+    // stored it as Group 4.
+    let mask = stream(&doc, bits);
+    assert_eq!(mask.dict.get(b"Filter"), Some(&Object::name("FlateDecode")), "C's one-bit soft mask isn't stored again as Group 4: {report:?}");
+    assert_eq!(mask.decoded().unwrap(), vec![0xF0; 150 * 1200], "with the same samples");
+}
+
+/// A stencil mask that is the `/Mask` of a picture drawn under a transfer function, and that the
+/// page also paints on its own (ISO 32000-2 8.9.6.2 and 8.9.6.3), stays as it is: compressing or
+/// resampling it as a picture would change the picture's mask too. The picture's `/Mask` is a
+/// reference the page walk does not follow, so in a document that sets a transfer function the
+/// mask counts as drawn where the walk can't see, under one.
+#[test]
+fn a_held_stencil_mask_the_page_also_paints_stays_as_it_is() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200, 480);
+    let text = bilevel(w, h, false);
+    let stencil = mono_image(&mut doc, w, h, &text, None, &[("ImageMask", Object::Bool(true))]);
+    let picture = image(&mut doc, 200, 80, 3, false, None);
+    let mut with_mask = stream(&doc, picture);
+    with_mask.dict.set(b"Mask".to_vec(), Object::Ref(stencil));
+    doc.set(picture, Object::Stream(with_mask));
+    let p = page(&mut doc, &[("A", picture), ("M", stencil)], "q /Tr gs 300 0 0 120 20 660 cm /A Do Q q 0 0.4 0.8 rg 300 0 0 120 320 660 cm /M Do Q");
+    let states = inverting_states(&mut doc);
+    set_states(&mut doc, p, states, None);
+    let before = stream(&doc, picture).raw;
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(stream(&doc, picture).raw, before, "A, drawn under the transfer function: {report:?}");
+    // Drawn by name alone, the stencil would be stored again as Group 4
+    // (`a_pictures_one_bit_masks_are_stored_again`).
+    let mask = stream(&doc, stencil);
+    assert_ne!(mask.dict.name(b"Filter"), Some(&b"CCITTFaxDecode"[..]), "A's stencil mask, painted on its own as well: {report:?}");
+    assert_eq!((mask.dict.int(b"Width"), decoded_image(&doc, &mask).unwrap()), (Some(w as i64), text), "with the same samples");
+}
+
+/// Strips drawn under a transfer function aren't merged: merging resamples them to the finest
+/// strip's resolution. The same strips without it are (`the_fewest_strips_that_make_a_picture_are_merged`).
+#[test]
+fn strips_drawn_under_a_transfer_function_are_not_merged() {
+    use pdfcraft_optimize::fragments::MIN_FRAGMENTS;
+    let keep = Settings {
+        gray: ImageSettings { downsample: false, target_ppi: 150.0, above_ppi: 225.0, compression: Compression::Retain },
+        ..Settings::default()
+    };
+    let (mut doc, _) = printed_page(MIN_FRAGMENTS as _, |_| false, |r, s| if r == 0 { format!("/Tr gs\n{s}") } else { s });
+    let p = pdfcraft_annot::page_refs(&doc).unwrap()[0];
+    let states = inverting_states(&mut doc);
+    set_states(&mut doc, p, states, None);
+    let r = optimize(&mut doc, &keep).unwrap();
+    assert_eq!((r.merged_images, r.fragments_merged), (0, 0), "{r:?}");
+}
+
+/// Nor are strips on a page with an inline image whose end is a guess (no `EI` after it, so the
+/// renderer reads no image and nothing after it): what the parser read after it is not what the
+/// page draws, and the rewritten page, which would end the image with an `EI`, would draw it.
+#[test]
+fn strips_beside_an_ambiguous_inline_image_are_not_merged() {
+    use pdfcraft_optimize::fragments::MIN_FRAGMENTS;
+    let keep = Settings {
+        gray: ImageSettings { downsample: false, target_ppi: 150.0, above_ppi: 225.0, compression: Compression::Retain },
+        ..Settings::default()
+    };
+    let last = MIN_FRAGMENTS - 1;
+    let (mut doc, _) =
+        printed_page(MIN_FRAGMENTS as _, |_| false, |r, s| if r == last { format!("{s}BI /W 4 /H 1 /BPC 8 /CS /G ID abc") } else { s });
+    let r = optimize(&mut doc, &keep).unwrap();
+    assert_eq!((r.merged_images, r.fragments_merged), (0, 0), "{r:?}");
+}
+
+/// `Do` names its XObject with the operand from the end, as the renderer reads it: an image drawn
+/// under a transfer function by `/Other /Im Do` keeps its samples, though drawn once before
+/// without one.
+#[test]
+fn an_image_named_by_the_last_do_operand_keeps_its_samples_under_a_transfer_function() {
+    let mut doc = Document::new_empty();
+    let im = image(&mut doc, 1200, 1200, 3, false, None);
+    let p = page(&mut doc, &[("Im", im)], "q 144 0 0 144 36 600 cm /Im Do Q q /Tr gs 144 0 0 144 36 300 cm /Other /Im Do Q");
+    let states = inverting_states(&mut doc);
+    set_states(&mut doc, p, states, None);
+    let before = stream(&doc, im).raw;
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(stream(&doc, im).raw, before, "drawn under the transfer function by its last operand: {report:?}");
+}
+
+fn dict_of(entries: impl IntoIterator<Item = (Vec<u8>, Object)>) -> Dict {
+    let mut d = Dict::new();
+    for (k, v) in entries {
+        d.set(k, v);
+    }
+    d
+}
