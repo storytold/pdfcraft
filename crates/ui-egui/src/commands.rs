@@ -56,6 +56,9 @@ impl PdfCraftApp {
     /// automation. The catalog's app-side handlers come first; every other id is a registered
     /// command and goes through [`Self::execute`].
     pub(crate) fn run_fired(&mut self, ctx: &egui::Context, fired: &Fired) {
+        if let Some(content) = &fired.pasted {
+            self.offer_clip_content(content);
+        }
         let id = fired.command.id.as_str();
         // The OCR Verify screen keeps the window's toolbars and owns F8 and Shift+F8 (the next
         // and previous word to review), so they don't show or hide the interface there.
@@ -97,6 +100,9 @@ impl PdfCraftApp {
         let id = fired.command.id.as_str();
         let active = self.active;
         match id {
+            crate::menus::QUIT => {
+                self.request_quit(ctx);
+            }
             // The Combine list takes Select all and Delete while it shows, whatever has the focus
             // there (a text field keeps them).
             "edit.select_all" if self.combine_showing() => {
@@ -220,7 +226,9 @@ impl PdfCraftApp {
                         && (v.session.all_text
                             || v.selection_waits_for_text().is_some()
                             || v.selected_text().is_some_and(|t| !t.is_empty())
-                            || v.session.picked_image.is_some())
+                            || v.session.picked_image.is_some()
+                            || v.session.image_selection.is_some()
+                            || v.session.comments.primary().is_some())
                 }))
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
             && match spec.id {
@@ -304,12 +312,10 @@ impl PdfCraftApp {
             self.paste_from_clipboard(ctx, i);
             return true;
         }
-        // Copy and Cut take the objects selected together in Edit a PDF, as the catalog enables them for those.
         if (id == "edit.copy" || id == crate::menus::CUT)
-            && let Some(i) = self.active.filter(|&i| self.views.get(i).is_some_and(|v| !v.organize && v.session.objects.count() > 0))
-            && self.quick_tool == crate::QuickTool::EditText
+            && let Some(i) = self.active.filter(|&i| self.views.get(i).is_some_and(|v| !v.organize))
         {
-            return self.copy_objects(ctx, i, id == crate::menus::CUT);
+            return if id == "edit.copy" { self.copy_from_canvas(ctx, i) } else { self.cut_from_canvas(ctx, i) };
         }
         let Some(spec) = commands::command(id) else { return false };
         if !self.command_enabled(spec) {
@@ -747,14 +753,6 @@ impl PdfCraftApp {
             "edit.snapshot" => {
                 self.quick_tool = crate::QuickTool::Snapshot;
                 self.notify_tr("Drag a rectangle around the area to copy");
-            }
-            "edit.copy" => {
-                let Some(i) = active else { return Some(false) };
-                // With no text selected, a picked picture is copied in its original format.
-                if self.views.get(i).is_some_and(|v| v.selected_text().is_none_or(|t| t.is_empty())) && self.copy_picked_image(i) {
-                    return Some(true);
-                }
-                return Some(self.copy_selected_text(i));
             }
             "comment.copy" => {
                 let Some(i) = active else { return Some(false) };

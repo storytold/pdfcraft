@@ -27,6 +27,7 @@ pub(crate) const CUT: &str = "edit.cut";
 pub(crate) const PASTE: &str = "edit.paste";
 pub(crate) const DELETE: &str = "edit.delete";
 pub(crate) const SELECT_ALL: &str = "edit.select_all";
+pub(crate) const QUIT: &str = "app.quit";
 pub(crate) const NO_RECENT: &str = "file.no_recent";
 /// An open document in the Window menu, `{"index": n}` in the tab strip.
 pub(crate) const DOCUMENT: &str = "window.document";
@@ -44,6 +45,7 @@ const ROTATE_CCW: &str = "view.rotate.ccw";
 /// The menu-only items: id, English label and the shortcut shown (the keys stay with the view). The
 /// zoom and rotate ids are registry commands; only Fit to height has no registry row.
 pub(crate) const EXTRA: &[(&str, &str, Option<Shortcut>)] = &[
+    (QUIT, "Quit", Some(Shortcut::cmd("Q"))),
     (CUT, "Cut", Some(Shortcut::cmd("X"))),
     (PASTE, "Paste", Some(Shortcut::cmd("V"))),
     (DELETE, "Delete", Some(Shortcut { command: false, shift: false, mac_ctrl: false, key: "Delete" })),
@@ -116,6 +118,7 @@ const FILE: &[&str] = &[
     "file.word_count",
     SEP,
     "print.dialog",
+    QUIT,
 ];
 const CREATE: &[&str] = &["create.file", "create.multiple", "create.multiple_separate", "create.images", "create.clipboard"];
 const EXPORT: &[&str] = &["export.docx", "export.pptx", "export.rtf", "export.html", "export.text", SEP, "export.image", "export.all_images"];
@@ -371,6 +374,7 @@ impl PdfCraftApp {
         .documents(self.menu_documents());
         bar.tag_item(&CommandRef::new("help.about"), ItemRole::About);
         bar.tag_item(&CommandRef::new("app.preferences"), ItemRole::Settings);
+        bar.tag_item(&CommandRef::new(QUIT), ItemRole::Quit);
         bar
     }
 
