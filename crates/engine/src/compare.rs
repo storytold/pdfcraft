@@ -26,6 +26,37 @@ pub fn colour(kind: Kind) -> crate::Rgb {
     }
 }
 
+/// Merge word boxes into rectangles, keeping each rectangle on a single page. Rectangles are
+/// never merged across a page boundary, so a change that spans pages keeps one rectangle per
+/// page instead of attaching later-page rectangles to the first page.
+fn rects_for_words(words: &[pdfcraft_compare::Word]) -> (Vec<[f64; 4]>, Vec<usize>) {
+    let mut out: Vec<[f64; 4]> = Vec::new();
+    let mut pages: Vec<usize> = Vec::new();
+    for w in words {
+        let r = w.rect;
+        let merge = if let Some(last) = out.last() {
+            let last_page = pages.last().copied().unwrap_or(w.page);
+            last_page == w.page
+                && (last[1] - r[1]).abs() < (r[3] - r[1]).max(1.0) * 0.5
+                && r[0] - last[2] < (r[3] - r[1]).max(4.0) * 2.0
+                && r[0] >= last[0] - 1.0
+        } else {
+            false
+        };
+        if merge {
+            let last = out.last_mut().unwrap();
+            last[0] = last[0].min(r[0]);
+            last[1] = last[1].min(r[1]);
+            last[2] = last[2].max(r[2]);
+            last[3] = last[3].max(r[3]);
+        } else {
+            out.push(r);
+            pages.push(w.page);
+        }
+    }
+    (out, pages)
+}
+
 impl crate::Document {
     /// Standards ▸ Verify PDF/A: the rules the document breaks for `level`.
     pub fn pdfa_verify(&self, level: pdfcraft_preflight::Level) -> Vec<pdfcraft_preflight::Issue> {
@@ -162,6 +193,13 @@ impl Session {
     /// [`Session::mark_differences`] of the changes on `pages` ([`Session::compare_pages`]).
     pub fn mark_differences_of(&mut self, old: DocId, new: DocId, pages: &[usize]) -> Result<usize, EditError> {
         let c = self.compare_pages(old, new, pages)?;
+        let b = self.get(new).ok_or(EditError::NoDocument)?;
+        let new_words = b.words_on_pages(pages);
+        // `compare` groups consecutive edits into one `Change`, and a change's new-side
+        // words are a contiguous run of `new_words` with unchanged words between changes.
+        // Track where the next run may start instead of counting only changed words, so
+        // unchanged words before a change are not mistaken for its words.
+        let mut new_search_from = 0usize;
         let mut edits = Vec::new();
         for ch in &c.changes {
             let color = colour(ch.kind);
@@ -170,18 +208,85 @@ impl Session {
                 Kind::Inserted => format!("Inserted: \"{}\"", ch.new.text),
                 Kind::Deleted => format!("Deleted: \"{}\"", ch.old.text),
             };
-            let shape = if ch.new.rects.is_empty() {
-                let Some(r) = ch.new.near else { continue };
-                Shape::Note { at: [r[0], r[3]], icon: NoteIcon::Note }
+            let new_word_count = ch.new.text.split_whitespace().count();
+            let new_slice = if new_word_count == 0 || new_word_count > new_words.len() {
+                &new_words[0..0]
             } else {
-                Shape::TextMarkup {
-                    kind: Markup::Highlight,
-                    quads: ch.new.rects.iter().map(|r| [r[0], r[3], r[2], r[3], r[0], r[1], r[2], r[1]]).collect(),
+                // Find this change's words in document order. Searching from the previous
+                // change's end skips the unchanged words between changes; falling back to
+                // the whole list keeps a match when the first search misses.
+                let mut start = None;
+                for candidate in new_search_from..=new_words.len() - new_word_count {
+                    if new_words[candidate..candidate + new_word_count]
+                        .iter()
+                        .zip(ch.new.text.split_whitespace())
+                        .all(|(word, text)| word.text == text)
+                    {
+                        start = Some(candidate);
+                        break;
+                    }
                 }
+                if start.is_none() {
+                    for candidate in 0..=new_words.len() - new_word_count {
+                        if new_words[candidate..candidate + new_word_count]
+                            .iter()
+                            .zip(ch.new.text.split_whitespace())
+                            .all(|(word, text)| word.text == text)
+                        {
+                            start = Some(candidate);
+                            break;
+                        }
+                    }
+                }
+                let start = start.unwrap_or_else(|| new_search_from.min(new_words.len() - new_word_count));
+                new_search_from = (start + new_word_count).min(new_words.len());
+                &new_words[start..start + new_word_count]
             };
-            let mut style = crate::Style::default_for(&shape);
-            style.color = color;
-            edits.push(Edit::AddAnnotation(NewAnnotation { page: ch.new.page, shape, style, contents, author: "Compare".into() }));
+
+            if ch.new.rects.is_empty() {
+                let Some(r) = ch.new.near else { continue };
+                let shape = Shape::Note { at: [r[0], r[3]], icon: NoteIcon::Note };
+                let mut style = crate::Style::default_for(&shape);
+                style.color = color;
+                edits.push(Edit::AddAnnotation(NewAnnotation { page: ch.new.page, shape, style, contents, author: "Compare".into() }));
+                continue;
+            }
+            // A change can span several pages, and its rectangles keep their own pages. Re-derive
+            // the rectangles from the change's words so later-page rectangles are not attached to
+            // the first page or lost.
+            let (rects, rect_pages) = rects_for_words(new_slice);
+            let (rects, rect_pages) = if rects.is_empty() {
+                (ch.new.rects.clone(), vec![ch.new.page; ch.new.rects.len()])
+            } else {
+                (rects, rect_pages)
+            };
+            let mut pages_in_order: Vec<usize> = Vec::new();
+            for page in &rect_pages {
+                if !pages_in_order.contains(page) {
+                    pages_in_order.push(*page);
+                }
+            }
+            for page in pages_in_order {
+                let rects: Vec<[f64; 4]> = rects
+                    .iter()
+                    .zip(&rect_pages)
+                    .filter(|(_, p)| **p == page)
+                    .map(|(r, _)| *r)
+                    .collect();
+                let shape = Shape::TextMarkup {
+                    kind: Markup::Highlight,
+                    quads: rects.iter().map(|r| [r[0], r[3], r[2], r[3], r[0], r[1], r[2], r[1]]).collect(),
+                };
+                let mut style = crate::Style::default_for(&shape);
+                style.color = color;
+                edits.push(Edit::AddAnnotation(NewAnnotation {
+                    page,
+                    shape,
+                    style,
+                    contents: contents.clone(),
+                    author: "Compare".into(),
+                }));
+            }
         }
         let n = edits.len();
         if n > 0 {
