@@ -201,6 +201,8 @@ pub enum Dialog {
     CertificateViewer,
     /// Pin tools to Home: selection modal.
     PinTool,
+    /// Edit ▸ Search a folder.
+    FolderSearch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

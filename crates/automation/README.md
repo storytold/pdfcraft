@@ -278,6 +278,17 @@ unapplied with a warning.
 
 ## Folder batches
 
+`folder_search` searches the text of every PDF in a folder and returns matches by file, with the
+files it could not search and why. It reads and changes nothing else, and does not intentionally follow links.
+A search has a 30-minute overall deadline (including listing folders), a 10-minute limit per PDF
+and a 20-second limit to open a PDF or read a page. The deadline is reported as
+`stopped: "time_limit"`, with matches found so far retained. Listing a disconnected network share
+runs on a worker so cancellation and deadlines can return, although the blocked filesystem
+call may survive until the operating system releases it. Abandoned workers count toward the
+nine-thread limit and can hold PDF bytes (up to 512 MiB per file) in memory.
+A path swapped for a symlink after enumeration but before opening is a remaining race; the
+current path checks are not a filesystem capability boundary.
+
 `doc_batch` runs conversion, OCR and compression over files and optionally recursive
 folders. The CLI also exposes it as `pdfcraft-cli batch`. See the
 [batch guide](../../docs/cli-batch.md) for examples, output protection, errors and limits.
