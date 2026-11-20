@@ -717,7 +717,7 @@ impl PdfCraftApp {
                 *shown.lock().unwrap_or_else(PoisonError::into_inner) = now;
                 let (done, total) = stage_counts(now);
                 count.set(done, total);
-                !cancel.is_cancelled()
+                !cancel.is_cancelled() && !count.cancelled()
             })
         });
         self.optimize_run = Some(OptimizeRun { doc: id, kind, destination, progress, stage });
@@ -728,7 +728,12 @@ impl PdfCraftApp {
     fn show_optimize_stage(&mut self) {
         let Some(run) = self.optimize_run.as_ref() else { return };
         let stage = *run.stage.lock().unwrap_or_else(PoisonError::into_inner);
-        let notice = ProgressNotice { label: stage_label(stage), fraction: stage.fraction(), cancellable: true };
+        let cancelling = run.progress.cancelled();
+        let notice = ProgressNotice {
+            label: if cancelling { tl!("Cancelling…").to_string() } else { stage_label(stage) },
+            fraction: stage.fraction(),
+            cancellable: !cancelling,
+        };
         notices::set_progress(self, ProgressKey::Optimize, notice);
     }
 
@@ -736,6 +741,7 @@ impl PdfCraftApp {
     pub fn cancel_optimize(&mut self) {
         let Some(run) = &self.optimize_run else { return };
         run.progress.cancel();
+        self.show_optimize_stage();
     }
 
     /// Show progress; save the copy once the job is done.
@@ -774,19 +780,41 @@ mod tests {
 
     use super::*;
 
+    /// Cancelling while a queued optimization is waiting must reach its worker before it saves a copy.
+    #[test]
+    fn cancelling_a_queued_optimization_stops_the_worker() {
+        let jobs = Arc::new(craft::host::ManualJobs::new());
+        let host = craft::host::Host::builder(craft::host::AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).jobs(jobs.clone()).build();
+        let mut app = PdfCraftApp::for_unit_tests_on(Arc::new(host));
+        let ctx = egui::Context::default();
+        app.open_bytes(&ctx, "notes.txt", None, b"hello".to_vec()).unwrap();
+        let (_, id) = app.active_ids().unwrap();
+        app.run_optimize(&ctx, id, OptimizeKind::Advanced, &Settings::default(), &[], None);
+        app.cancel_optimize();
+        jobs.run_all();
+        let done = app.optimize_jobs.try_recv().expect("the optimization reported its outcome");
+        assert!(matches!(done.result, Err(EditError::Cancelled)), "the worker must observe the cancellation");
+    }
+
     #[test]
     fn the_progress_card_shows_the_stage_and_cancels() {
         let progress = Arc::new(JobCount::default());
         progress.set(3, 10);
         let stage = Arc::new(Mutex::new(OptimizeStage::Images { done: 3, total: 10 }));
         let (p, s) = (progress.clone(), stage.clone());
+        let jobs = Arc::new(craft::host::ManualJobs::new());
+        let host_jobs = jobs.clone();
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
             crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
             {
-                let mut app = PdfCraftApp::for_unit_tests();
+                let host = craft::host::Host::builder(craft::host::AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" })
+                    .jobs(host_jobs.clone())
+                    .build();
+                let mut app = PdfCraftApp::for_unit_tests_on(Arc::new(host));
                 app.set_option(&cc.egui_ctx, "language", "en").unwrap();
                 app.open_bytes(&egui::Context::default(), "notes.txt", None, b"hello".to_vec()).unwrap();
                 let (_, doc) = app.active_ids().unwrap();
+                app.optimize_jobs.submit(doc, Priority::BACKGROUND, |_| Err(EditError::Cancelled));
                 app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Advanced, destination: None, progress: p, stage: s });
                 app
             }
@@ -799,6 +827,11 @@ mod tests {
         h.get_by_label_contains("Optimizing… image 4 of 10");
 
         h.get_by_label("Cancel").click();
+        h.run_steps(2);
+        assert!(progress.cancelled(), "the worker was asked to stop");
+        assert!(h.query_all_by_label("Optimizing, Cancelling…").next().is_some());
+        assert!(h.query_by_label("Cancel").is_none(), "Cancel is not offered twice");
+        jobs.run_all();
         h.run_steps(2);
         assert!(h.state().optimize_run.is_none(), "the run ended");
         assert!(h.query_by_label("Cancel").is_none(), "the card and its Cancel are gone");
