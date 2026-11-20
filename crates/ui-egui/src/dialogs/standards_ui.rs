@@ -11,7 +11,8 @@ use crate::{PdfCraftApp, widgets};
 #[derive(Clone, Debug, PartialEq)]
 pub struct PdfaState {
     pub level: Level,
-    pub issues: Option<Vec<Issue>>,
+    /// The problems the last Verify found; `Err` when it could not check the document.
+    pub issues: Option<Result<Vec<Issue>, String>>,
     pub fixed: Vec<String>,
 }
 
@@ -25,7 +26,7 @@ impl PdfCraftApp {
     pub fn pdfa_verify(&mut self) {
         let Some((_, id)) = self.active_ids() else { return };
         let level = self.pdfa.level;
-        self.pdfa.issues = self.session.get(id).map(|d| d.pdfa_verify(level));
+        self.pdfa.issues = self.session.get(id).map(|d| d.pdfa_verify(level).map_err(|e| e.to_string()));
         self.pdfa.fixed.clear();
     }
 
@@ -33,7 +34,11 @@ impl PdfCraftApp {
         let level = self.pdfa.level;
         if self.apply_edit(pdfcraft_engine::Edit::ConvertPdfA { level }) {
             self.pdfa_verify();
-            let left = self.pdfa.issues.as_ref().map_or(0, Vec::len);
+            let left = match &self.pdfa.issues {
+                Some(Ok(v)) => v.len(),
+                // Not checked: say nothing about what is left.
+                _ => return,
+            };
             self.notify(if left == 0 {
                 crate::i18n::fmt(
                     tl!("PdfCraft's checks now find no problems for {level}. This is not a validator result. Save to keep the changes."),
@@ -93,13 +98,16 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool
                 None => {
                     ui.label(egui::RichText::new(tl!("Verify to see what the document needs.")).color(t.text_muted));
                 }
-                Some(v) if v.is_empty() => {
+                Some(Err(why)) => {
+                    ui.label(crate::i18n::fmt(tl!("Could not verify: {why}"), &[("why", why)]));
+                }
+                Some(Ok(v)) if v.is_empty() => {
                     ui.label(crate::i18n::fmt(
                         tl!("PdfCraft's checks found no problems for {level}. This is not a validator result."),
                         &[("level", app.pdfa.level.label())],
                     ));
                 }
-                Some(v) => {
+                Some(Ok(v)) => {
                     for i in v {
                         let page = i.page.map(|p| crate::i18n::fmt(tl!(" (page {p})"), &[("p", &(p + 1).to_string())])).unwrap_or_default();
                         let fix = if i.fixable { String::new() } else { tl!("  · not fixable here").to_string() };

@@ -28,8 +28,17 @@ pub fn colour(kind: Kind) -> crate::Rgb {
 
 impl crate::Document {
     /// Standards ▸ Verify PDF/A: the rules the document breaks for `level`.
-    pub fn pdfa_verify(&self, level: pdfcraft_preflight::Level) -> Vec<pdfcraft_preflight::Issue> {
-        self.editor.as_ref().map(|e| pdfcraft_preflight::verify(&e.cos, level)).unwrap_or_default()
+    ///
+    /// The checks read the object graph. A document whose objects could not be read (opened
+    /// read-only) was not checked, so it is an error rather than an empty list: no problems found
+    /// must not be said of a file nobody looked at (ISO 19005-2 clause 6 rules are about the file's
+    /// objects).
+    pub fn pdfa_verify(&self, level: pdfcraft_preflight::Level) -> Result<Vec<pdfcraft_preflight::Issue>, EditError> {
+        let editor = self.editor.as_ref().ok_or_else(|| {
+            let why = self.read_only_reason.as_deref().unwrap_or("its structure could not be read");
+            EditError::Invalid(format!("the document's objects could not be read ({why}), so it was not checked for {}", level.label()))
+        })?;
+        Ok(pdfcraft_preflight::verify(&editor.cos, level))
     }
 
     /// The standards the document declares (Standards panel).

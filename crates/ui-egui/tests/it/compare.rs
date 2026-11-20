@@ -242,7 +242,7 @@ fn pdfa_dialog_verifies_and_converts() {
     h.get_by_label("Save as PDF/A").click();
     h.run_steps(3);
     h.get_by_label("Declared conformance: PDF/A-2b");
-    let issues = h.state().pdfa.issues.clone().unwrap();
+    let issues = h.state().pdfa.issues.clone().unwrap().unwrap();
     assert!(issues.iter().all(|i| !i.fixable), "{issues:?}");
     let id = h.state().active_ids().unwrap().1;
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Save as PDF/A-2b"));

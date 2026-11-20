@@ -1999,6 +1999,22 @@ fn an_encrypted_document_without_an_editor_allows_neither_copying_nor_printing()
     assert!(s.get(plain).unwrap().allows_copying(), "an unencrypted document is not restricted");
 }
 
+/// A document whose objects could not be read (opened read-only) was not checked against PDF/A,
+/// so Verify says so instead of finding no problems (ISO 19005-2 rules are about the objects).
+#[test]
+fn pdfa_verify_of_a_document_without_an_editor_is_not_an_empty_result() {
+    let level = pdfcraft_preflight::Level::A2b;
+    let (mut s, id) = session_with(1);
+    // The fixture has no XMP metadata, so it breaks 6.6.2.1 when it can be read.
+    let issues = s.get(id).unwrap().pdfa_verify(level).unwrap();
+    assert!(issues.iter().any(|i| i.clause == "6.6.2.1"), "{issues:?}");
+    let d = s.doc_mut(id).unwrap();
+    d.editor = None;
+    d.read_only_reason = Some("syntax error at byte 9".into());
+    let err = s.get(id).unwrap().pdfa_verify(level).unwrap_err().to_string();
+    assert!(err.contains("not checked for PDF/A-2b") && err.contains("syntax error at byte 9"), "{err}");
+}
+
 /// Table 22, bit 3 (#2669): a document that forbids printing disables Print up front instead
 /// of refusing once the dialog is confirmed. Low-resolution printing (bit 3 on, bit 12 off) is
 /// still printing, and the owner password lifts the restriction.
