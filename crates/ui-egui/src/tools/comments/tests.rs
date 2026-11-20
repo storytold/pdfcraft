@@ -82,6 +82,7 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
         state: None,
         quads: Vec::new(),
         locked: false,
+        locked_contents: false,
         intent: None,
         fill_sign: false,
         no_rotate,
@@ -130,6 +131,7 @@ fn listed(page: usize, index: usize, contents: &str, parent: Option<(usize, usiz
         state: None,
         quads: Vec::new(),
         locked: false,
+        locked_contents: false,
         intent: None,
         fill_sign: false,
         no_rotate: false,
@@ -227,6 +229,7 @@ fn annotation(subtype: &str, contents: Option<&str>, fill_sign: bool) -> Annotat
         state: None,
         quads: Vec::new(),
         locked: false,
+        locked_contents: false,
         intent: None,
         fill_sign,
         no_rotate: false,
@@ -434,6 +437,7 @@ fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_men
             state: None,
             quads: Vec::new(),
             locked: false,
+            locked_contents: false,
             intent: None,
             fill_sign: false,
             points: Vec::new(),
@@ -473,6 +477,60 @@ fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_men
         matches!(actions.as_slice(), [CanvasAction::Edit(e)] if matches!(**e, Edit::StyleAnnotation { page: 0, index: 0, color: Some(_), .. })),
         "{actions:?}"
     );
+}
+
+#[test]
+fn context_menu_disables_edit_text_when_locked_contents_is_set() {
+    use egui_kittest::kittest::Queryable;
+    let info = DocInfo {
+        pages: vec![PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }],
+        annotations: vec![Annotation {
+            page: 0,
+            subtype: "FreeText".into(),
+            author: None,
+            contents: Some("Locked text".into()),
+            modified: None,
+            name: None,
+            in_reply_to: None,
+            parent: None,
+            grouped: false,
+            rect: [10.0, 10.0, 50.0, 50.0],
+            color: None,
+            index: 0,
+            state: None,
+            quads: Vec::new(),
+            locked: false,
+            locked_contents: true,
+            intent: None,
+            fill_sign: false,
+            points: Vec::new(),
+            no_rotate: false,
+            text_box: None,
+            popup: None,
+        }],
+        ..Default::default()
+    };
+    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
+    view.comments.selected = Some((0, 0));
+    let prefs = CommentPrefs::default();
+    let mut h = egui_kittest::Harness::new_ui_state(
+        |ui, (view, actions): &mut (DocView, Vec<CanvasAction>)| {
+            ui.button("Page").context_menu(|ui| {
+                let rights = MenuRights { allowed: true, can_paste: false, can_modify: true };
+                if let Some(a) = context_menu(ui, view, &info, &|_, _| true, &prefs, rights) {
+                    actions.push(a);
+                }
+            });
+        },
+        (view, Vec::new()),
+    );
+    h.run();
+    h.get_by_label("Page").click_secondary();
+    h.run();
+    // The "Edit text…" button is rendered disabled; clicking it emits no action.
+    h.get_by_label("Edit text…").click();
+    h.run();
+    assert!(h.state().1.is_empty(), "clicking disabled Edit text… emits no action: {:?}", h.state().1);
 }
 
 #[test]
@@ -680,6 +738,7 @@ fn stale_comment_state_is_cleared_and_delete_never_hits_non_comment_slots() {
         state: None,
         quads: Vec::new(),
         locked: false,
+        locked_contents: false,
         intent: None,
         fill_sign: false,
         no_rotate: false,
@@ -764,6 +823,7 @@ fn an_unnamed_shift_clears_state_for_the_old_index() {
         state: None,
         quads: Vec::new(),
         locked: false,
+        locked_contents: false,
         intent: None,
         fill_sign: false,
         no_rotate: false,
@@ -814,6 +874,7 @@ fn a_replace_text_group_makes_replace_text_defaults() {
         state: None,
         quads: Vec::new(),
         locked: false,
+        locked_contents: false,
         intent: intent.map(Into::into),
         fill_sign: false,
         no_rotate: false,

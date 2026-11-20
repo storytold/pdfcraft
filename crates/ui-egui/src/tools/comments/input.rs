@@ -346,6 +346,7 @@ fn select_input(
         && on_page
         && cx.allowed
         && let Some((a, _)) = owner
+        && !a.locked_contents
     {
         cv.select_only((cx.page, a.index));
         // A double-click opens the comment's pop-up window, as in Acrobat; a text box, whose
