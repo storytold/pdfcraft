@@ -1169,6 +1169,15 @@ fn route_press(
     }
 }
 
+/// Request the clipboard at a page-space menu point.
+fn request_paste_at_page(app: &PdfCraftApp, ctx: &egui::Context, index: usize, page: usize, at: [f64; 2]) {
+    let Some(view) = app.views.get(index) else { return };
+    let Some(info) = app.session.get(view.id).and_then(|doc| doc.info.pages.get(page)) else { return };
+    let Some(xf) = view.page_xform(page) else { return };
+    let point = info.user_to_view(at[0] as f32, at[1] as f32);
+    craft::ui::runtime::commands::request_paste_at(ctx, xf.norm_to_screen(point[0] / xf.pw, point[1] / xf.ph));
+}
+
 /// A right-click no part took, or the Menu key, at `at`. The page's menu is anchored on the page under it, the first
 /// where two pages touch, and on none between the pages. With every tool but Add text and the field tools it is the
 /// comments': the comment under it is selected for its menu, or the selection cleared, between the pages too. With
@@ -2061,7 +2070,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
         }
         Some(crate::edit_text_ui::ImageAction::Paste(page, at)) => {
             if let Some(pt) = at {
-                app.paste_image_at(ctx, page, pt);
+                request_paste_at_page(app, ctx, index, page, pt);
             } else {
                 app.paste_image(ctx, page, None);
             }
@@ -2105,7 +2114,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
             }
         }
         Some(PageMenuAction::Paste(page, at)) => {
-            app.paste_image_at(ctx, page, at);
+            request_paste_at_page(app, ctx, index, page, at);
         }
         Some(PageMenuAction::PasteComments(page, at)) => {
             app.paste_comments(ctx, index, None, Some((page, at)));

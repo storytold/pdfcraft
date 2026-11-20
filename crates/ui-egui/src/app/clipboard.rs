@@ -158,10 +158,25 @@ impl PdfCraftApp {
     /// [`Self::paste_from_clipboard`], preferring content delivered with the paste event (`pasted`, F-89)
     /// over a fresh system-clipboard read so desktop `SystemClipboard` hosts still receive event payloads.
     pub(crate) fn paste_from_clipboard_with(&mut self, ctx: &egui::Context, i: usize, pasted: Option<&craft::ui::runtime::commands::ClipContent>) {
+        self.paste_from_clipboard_at(ctx, i, pasted, None);
+    }
+
+    pub(crate) fn paste_from_clipboard_at(
+        &mut self,
+        ctx: &egui::Context,
+        i: usize,
+        pasted: Option<&craft::ui::runtime::commands::ClipContent>,
+        at: Option<egui::Pos2>,
+    ) {
         if self.views.get(i).is_some_and(|v| v.session.forms.focus.is_some() || v.organize) {
             return;
         }
-        let page = self.views.get(i).map_or(0, |v| v.current());
+        let target = at.and_then(|at| {
+            let view = self.views.get(i)?;
+            let doc = self.session.get(view.id)?;
+            view.session.user_point_at(view.geometry(), &doc.info, at)
+        });
+        let page = target.map_or_else(|| self.views.get(i).map_or(0, |v| v.current()), |(page, _)| page);
         let delivered_text = pasted.and_then(|c| c.text.as_deref()).filter(|t| !t.is_empty()).map(str::to_owned);
         let delivered_image = pasted.and_then(|c| c.image.as_ref()).and_then(|img| {
             let (width, height) = (u32::try_from(img.size[0]).ok()?, u32::try_from(img.size[1]).ok()?);
@@ -180,7 +195,7 @@ impl PdfCraftApp {
             match color_image(&image) {
                 // PLAN: assumed `paste_received_image(page, &egui::ColorImage) -> bool` (pdf-edit-w7)
                 Some(pixels) => {
-                    self.paste_received_image(ctx, page, &pixels);
+                    self.paste_received_image_at(ctx, page, &pixels, target.map(|(_, at)| at));
                 }
                 None => self.notify_error("the clipboard image is empty, malformed or exceeds size limits"),
             }
