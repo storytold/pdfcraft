@@ -23,6 +23,10 @@ fn main() {
                     if let Some(json) = cc.storage.and_then(|s| s.get_string("pdfcraft").or_else(|| s.get_string("printcraft"))) {
                         app.restore(&json);
                     }
+                    // `?embedded`: hide external community links when framed without `allow-popups` (#2490).
+                    if query_flag("embedded") {
+                        app.embedded = true;
+                    }
                     // `?file=<url>` opens a PDF from a URL (same-origin or CORS-enabled).
                     if let Some(url) = query_param("file") {
                         let inbox = app.startup_inbox.clone();
@@ -107,6 +111,13 @@ fn warn_before_unload(unsaved: std::sync::Arc<std::sync::atomic::AtomicBool>) {
 fn query_param(key: &str) -> Option<String> {
     let search = web_sys::window()?.location().search().ok()?;
     web_sys::UrlSearchParams::new_with_str(&search).ok()?.get(key)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn query_flag(key: &str) -> bool {
+    let Some(search) = web_sys::window().and_then(|w| w.location().search().ok()) else { return false };
+    let Ok(params) = web_sys::UrlSearchParams::new_with_str(&search) else { return false };
+    params.has(key) && params.get(key).as_deref() != Some("0") && params.get(key).as_deref() != Some("false")
 }
 
 #[cfg(target_arch = "wasm32")]

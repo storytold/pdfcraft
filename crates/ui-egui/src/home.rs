@@ -83,7 +83,8 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     .font(theme::regular(14.0)),
             );
             ui.add_space(14.0);
-            if !app.community_card_closed {
+            // Embedded mode (#2490) leaves the community card out, as closing it does.
+            if !app.community_card_closed && !app.embedded {
                 egui::Frame::NONE
                     .fill(t.card)
                     .stroke(Stroke::new(1.0, t.border))

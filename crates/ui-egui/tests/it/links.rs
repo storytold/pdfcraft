@@ -113,3 +113,34 @@ fn about_dialog_has_contributors_and_models_tabs() {
     h.run_steps(4);
     assert!(h.query_all_by_label("Anthropic").count() >= 1);
 }
+
+#[test]
+fn embedded_mode_hides_community_links_and_discord_button() {
+    let h = harness(|app| {
+        app.embedded = true;
+    });
+    assert!(h.query_by_label("Join the ArtCraft community").is_none());
+    assert!(h.query_by_label("Join our Discord").is_none());
+    assert!(h.query_by_label("PdfCraft web page").is_none());
+    assert!(h.query_by_label("PdfCraft on GitHub").is_none());
+    assert!(h.query_by_label("ArtCraft website").is_none());
+    assert!(h.query_by_label("Discord").is_none());
+}
+
+#[test]
+fn set_option_embedded_configures_flag() {
+    let mut app = PdfCraftApp::new();
+    assert!(!app.embedded);
+    app.set_option("embedded", "true").unwrap();
+    assert!(app.embedded);
+    app.set_option("embedded", "off").unwrap();
+    assert!(!app.embedded);
+    app.set_option("embedded", "1").unwrap();
+    assert!(app.embedded);
+    app.set_option("embedded", "0").unwrap();
+    assert!(!app.embedded);
+    app.set_option("embedded", "on").unwrap();
+    assert!(app.embedded);
+    app.set_option("embedded", "false").unwrap();
+    assert!(!app.embedded);
+}

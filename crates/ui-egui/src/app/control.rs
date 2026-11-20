@@ -95,6 +95,7 @@ impl PdfCraftApp {
                 self.select_tool(g.id);
             }
             ("left", _) => self.left_open = value != "closed",
+            ("embedded", _) => self.embedded = value == "true" || value == "on" || value == "1",
             ("home", _) => {
                 self.active = None;
                 // With no document open the expanded All tools view covers Home itself, so no
