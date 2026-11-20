@@ -64,11 +64,17 @@ impl Type1Font {
         let inner = if is_cff(dict) {
             if let Some(cff) = CffKind::new(dict) {
                 Self(cache_key, Kind::Cff(cff), to_unicode, OnceLock::new())
+            } else if let Some(f) = Type1Kind::new(dict, FONT_FILE3) {
+                // PdfCraft patch (107): a `FontFile3` whose program isn't CFF but a Type 1
+                // font, as PFB segments or as cleartext and an eexec section (Calamus SL
+                // writes it under `/Subtype /Type1C`, #6990), is read as Type 1, as other
+                // readers do, instead of being drawn with the standard substitute.
+                Self(cache_key, Kind::Type1(f), to_unicode, OnceLock::new())
             } else {
                 return fallback();
             }
         } else if is_type1(dict) {
-            if let Some(f) = Type1Kind::new(dict) {
+            if let Some(f) = Type1Kind::new(dict, FONT_FILE) {
                 Self(cache_key, Kind::Type1(f), to_unicode, OnceLock::new())
             } else {
                 return fallback();
@@ -205,9 +211,11 @@ struct Type1Kind {
 }
 
 impl Type1Kind {
-    fn new(dict: &Dict<'_>) -> Option<Self> {
+    /// The Type 1 font program in the descriptor's `key` stream (`FontFile`, or a `FontFile3`
+    /// holding Type 1 data: PdfCraft patch (107)).
+    fn new(dict: &Dict<'_>, key: &[u8]) -> Option<Self> {
         let descriptor = dict.get::<Dict<'_>>(FONT_DESC)?;
-        let data = descriptor.get::<Stream<'_>>(FONT_FILE)?;
+        let data = descriptor.get::<Stream<'_>>(key)?;
         let font = Type1FontBlob::new(Arc::new(data.decoded().ok()?.to_vec()))?;
 
         let (encoding, encodings) = read_encoding(dict);
@@ -219,6 +227,11 @@ impl Type1Kind {
             .glyph_names()
             .map(|(gid, name)| (name.to_string(), gid))
             .collect();
+        // A `FontFile3` program without glyphs (the reader adds a `.notdef` of its own) would
+        // draw nothing, so it falls back to the standard substitute, as it did before patch (107).
+        if key == FONT_FILE3 && name_to_gid.keys().all(|name| name == ".notdef") {
+            return None;
+        }
 
         Some(Self {
             font,
