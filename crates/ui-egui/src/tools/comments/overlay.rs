@@ -3,7 +3,7 @@ use craft::behavior::{Input, Sense};
 use craft::pages::ui::PageBody;
 use craft::review::annotate::pick_at;
 use craft::review::ui::annotate::{AnnotationOverlay, BodyPaint};
-use craft::review::{Annotation as Marked, AnnotationId, AnnotationKind, HandleRule};
+use craft::review::{Annotation as Marked, AnnotationEdit, AnnotationId, AnnotationKind, HandleRule};
 use craft::ui::canvas::ToolContext;
 use craft::ui::canvas_controls::{HoverOutline, HoverShape};
 use craft::ui::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Role, Show as _};
@@ -47,8 +47,18 @@ pub(crate) fn show(
     let all = bridge::annotations(info, &map, QuickTool::Select, hover.allowed);
     let reached = bridge::annotations(info, &map, tool, hover.allowed);
     let markers = bridge::markers(info, &map, hover.pick.1);
-    let selected: Vec<AnnotationId> = session.comments.tool.selected.clone();
     let in_flight = session.comments.tool.in_flight();
+    let selected: Vec<AnnotationId> = session
+        .comments
+        .tool
+        .selected
+        .iter()
+        .copied()
+        .filter(|id| {
+            let (page, index) = bridge::key_of(*id);
+            !(session.signature_drag.contains(page, index) && matches!(&in_flight, Some(AnnotationEdit::Move { ids, .. }) if ids.contains(id)))
+        })
+        .collect();
     let idle = in_flight.is_none() && session.comments.tool.drawing().is_empty() && !body.pass.is_some_and(|p| p.press.phase.is_press());
     for page in body.pages {
         let mut on_page: Vec<Marked> = all.iter().filter(|a| a.page == page.page).cloned().collect();
@@ -66,7 +76,14 @@ pub(crate) fn show(
         if let Some(edit) = &in_flight {
             overlay = overlay.live(edit);
         }
-        overlay.show(ui);
+        if session.comments.tool.selected.iter().any(|id| {
+            let (page, index) = bridge::key_of(*id);
+            session.signature_drag.contains(page, index)
+        }) {
+            overlay.show_at(ui, body.rect);
+        } else {
+            overlay.show(ui);
+        }
         let Some(at) = hover.pointer.filter(|p| idle && page.rect.contains(*p)) else { continue };
         let at = body.view.to_doc(at);
         let (tolerance, icon_side) = hover.pick;
