@@ -571,8 +571,35 @@ fn iban_length(country: &str) -> Option<usize> {
     IBAN_LENGTHS.iter().find(|(code, _)| *code == country).map(|&(_, len)| len)
 }
 
+/// `c` as the matchers of numbers read it: a dash or hyphen variant as `-` (word processors put
+/// an en dash or a non-breaking hyphen between digit groups), and a compatibility digit
+/// (full-width, mathematical, segmented) as its ASCII digit (#7893). Native-script digits
+/// (Arabic-Indic, Devanagari, …) are digits of their own and stay as they are.
+fn fold_number_char(c: char) -> char {
+    let ascii_digit = |zero: u32| char::from_digit((u32::from(c) - zero) % 10, 10).unwrap_or(c);
+    match c {
+        // Hyphen, non-breaking hyphen, figure dash, en dash, em dash, horizontal bar, minus sign,
+        // small em dash, small hyphen-minus, full-width hyphen-minus.
+        '\u{2010}'..='\u{2015}' | '\u{2212}' | '\u{FE58}' | '\u{FE63}' | '\u{FF0D}' => '-',
+        '\u{FF10}'..='\u{FF19}' => ascii_digit(0xFF10),
+        // Five styles of ten mathematical digits each.
+        '\u{1D7CE}'..='\u{1D7FF}' => ascii_digit(0x1D7CE),
+        '\u{1FBF0}'..='\u{1FBF9}' => ascii_digit(0x1FBF0),
+        _ => c,
+    }
+}
+
 /// Character ranges of `text` matching `pattern`.
 pub fn find(pattern: Pattern, text: &[char]) -> Vec<Range<usize>> {
+    // The numeric patterns read a copy with dash and digit variants folded, one character for
+    // one, so the ranges they return still index `text` (and so the same glyphs).
+    let folded: Vec<char>;
+    let text = if matches!(pattern, Pattern::Phone | Pattern::CreditCard | Pattern::Ssn) {
+        folded = text.iter().copied().map(fold_number_char).collect();
+        &folded
+    } else {
+        text
+    };
     let f: fn(&[char], usize) -> Option<usize> = match pattern {
         Pattern::Phone => phone,
         Pattern::Email => email,
@@ -778,6 +805,66 @@ mod tests {
         assert_eq!(found(Pattern::Email, "メールはtaro@example.jpまで、联系support@example.cn谢谢"), ["taro@example.jp", "support@example.cn"]);
         // Still no address without a dot in the domain or with a one-letter or numeric TLD.
         assert_eq!(found(Pattern::Email, "ayşe@örnek, ş@ğ.ü, kişi@alan.123, a@b.c"), Vec::<String>::new());
+    }
+
+    /// `s` with each ASCII hyphen replaced by `dash`, and each ASCII digit by its full-width form
+    /// when `wide`.
+    fn typeset(s: &str, dash: char, wide: bool) -> String {
+        s.chars()
+            .map(|c| match c {
+                '-' => dash,
+                '0'..='9' if wide => char::from_u32(u32::from(c) - u32::from('0') + 0xFF10).unwrap(),
+                _ => c,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn numbers_typeset_with_dash_variants_or_full_width_digits_are_found() {
+        let cases = [
+            (Pattern::Ssn, "SSN 321-54-9876 on file"),
+            (Pattern::Phone, "Call (555) 123-4567 today"),
+            (Pattern::Phone, "Tel. +49 2151-123456"),
+            (Pattern::CreditCard, "Card 3782-822463-10005 used"),
+        ];
+        // En dash, em dash, non-breaking hyphen, minus sign, full-width hyphen-minus, and ASCII
+        // hyphens between full-width digits.
+        let variants = [('\u{2013}', false), ('\u{2014}', false), ('\u{2011}', false), ('\u{2212}', false), ('\u{FF0D}', true), ('-', true)];
+        for (pattern, text) in cases {
+            let ascii = found(pattern, text);
+            assert_eq!(ascii.len(), 1, "{text}");
+            for (dash, wide) in variants {
+                // The match covers the same characters in the original text, variants and all.
+                assert_eq!(found(pattern, &typeset(text, dash, wide)), [typeset(&ascii[0], dash, wide)], "{pattern:?} {dash:?} wide {wide}");
+            }
+        }
+        // Mathematical and segmented digits are digits too.
+        assert_eq!(found(Pattern::Ssn, "SSN \u{1D7F9}21-54-9876 and 3\u{1FBF2}1-54-9876"), ["\u{1D7F9}21-54-9876", "3\u{1FBF2}1-54-9876"]);
+        // Folding keeps the rules: a full-width digit glued to either end of an SSN makes it part of
+        // a longer number.
+        assert_eq!(found(Pattern::Ssn, "\u{FF11}321-54-9876 and 321-54-9876\u{FF11}"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn number_chars_fold_to_ascii() {
+        for c in ['\u{2010}', '\u{2011}', '\u{2012}', '\u{2013}', '\u{2014}', '\u{2015}', '\u{2212}', '\u{FE58}', '\u{FE63}', '\u{FF0D}'] {
+            assert_eq!(fold_number_char(c), '-', "{c:?}");
+        }
+        assert_eq!(fold_number_char('\u{FF10}'), '0');
+        assert_eq!(fold_number_char('\u{FF19}'), '9');
+        assert_eq!(fold_number_char('\u{1D7CE}'), '0');
+        assert_eq!(fold_number_char('\u{1D7FF}'), '9');
+        assert_eq!(fold_number_char('\u{1FBF9}'), '9');
+        // Other characters, native-script digits among them, are left alone.
+        for c in ['-', '7', 'a', '\u{0663}', '\u{00B2}', '\u{2460}', '\u{FF21}'] {
+            assert_eq!(fold_number_char(c), c, "{c:?}");
+        }
+    }
+
+    #[test]
+    fn email_does_not_fold_dashes() {
+        // Only the numeric patterns fold: an en dash is no hyphen in a domain name.
+        assert_eq!(found(Pattern::Email, "Mail info@foo\u{2013}bar.com"), Vec::<String>::new());
     }
 
     #[test]
