@@ -56,7 +56,19 @@ impl PdfCraftApp {
     /// automation. The catalog's app-side handlers come first; every other id is a registered
     /// command and goes through [`Self::execute`].
     pub(crate) fn run_fired(&mut self, ctx: &egui::Context, fired: &Fired) {
+        if let Some(pasted) = &fired.pasted {
+            self.offer_clip_content(pasted);
+        }
         let id = fired.command.id.as_str();
+        // A Save shortcut pressed on one frame fires at the start of the next frame; if another
+        // document became active meanwhile, the shortcut belongs to the first document, not the new one.
+        if fired.source == craft::ui::runtime::commands::FireSource::Key
+            && matches!(id, "file.save" | "file.save_as")
+            && self.last_frame_active.is_some()
+            && self.last_frame_active != self.active_ids().map(|(_, doc)| doc)
+        {
+            return;
+        }
         // The OCR Verify screen keeps the window's toolbars and owns F8 and Shift+F8 (the next
         // and previous word to review), so they don't show or hide the interface there.
         if id == crate::viewer_prefs::TOGGLE && self.ocr_verify.open {
@@ -74,6 +86,12 @@ impl PdfCraftApp {
             crate::menus::PASTE => Some("page.paste"),
             _ => None,
         };
+        if !organize && !self.is_preparing() && id == crate::menus::PASTE && fired.pasted.is_some() {
+            if let Some(i) = self.active.filter(|&i| i < self.views.len()) {
+                self.paste_from_clipboard_with(ctx, i, fired.pasted.as_ref());
+            }
+            return;
+        }
         self.execute(ctx, page_command.filter(|_| organize).unwrap_or(id));
     }
 

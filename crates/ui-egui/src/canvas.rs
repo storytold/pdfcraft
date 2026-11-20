@@ -876,6 +876,7 @@ struct PageBodyCx<'a> {
     /// The user's Redaction Tool Properties hover colour and opacity, a data colour, not a theme role (L-90).
     redact_hover: ([f64; 3], f64),
     form: &'a Arc<Vec<pdfcraft_engine::FormField>>,
+    today: (i64, u32, u32),
     units: crate::units::Unit,
     find_marks: &'a [TextMark],
     table_preview: Option<&'a crate::field_table_ui::Preview>,
@@ -968,10 +969,18 @@ fn page_parts_of(
     }
     // Fields take the page's presses under Select only: another tool's press over a field is the tool's (a new
     // text box, a mark, a stamp).
+    let badge_tips = cx.unobstructed
+        && !matches!(
+            cx.tool,
+            QuickTool::Fill(_)
+                | QuickTool::Comment(comments::CommentTool::Ink | comments::CommentTool::FreehandHighlight | comments::CommentTool::Eraser)
+        )
+        && session.comments.tool.in_flight().is_none()
+        && session.comments.tool.drawing().is_empty();
     if cx.tool == QuickTool::Select && !cx.preparing {
         let can_fill = cx.doc.allows_form_filling();
         for placed in body.pages {
-            parts.extend(crate::forms_ui::field_parts(session, cx.info, cx.doc, placed.page, can_fill, geo));
+            parts.extend(crate::forms_ui::field_parts(session, cx.info, cx.doc, placed.page, can_fill, badge_tips, geo));
         }
     }
     // The sign tabs of each page, after the fields: a tab is painted over its field.
@@ -981,7 +990,7 @@ fn page_parts_of(
     for placed in body.pages {
         let size = cx.sizes.get(placed.page).copied().unwrap_or_default();
         let xf = PageXform::of(placed, cx.rotation, size);
-        let overlay = overlay_parts(ui, &xf, cx.doc, placed.page, cx.can_modify, shown);
+        let overlay = overlay_parts(ui, &xf, cx.doc, placed.page, cx.can_modify, shown, badge_tips);
         parts.extend(overlay.parts);
         tabs.push((placed.page, xf, overlay.tabs));
     }
@@ -1038,13 +1047,19 @@ fn route_press(
             {
                 owner = Owner::Picture { index };
             }
-            // A picture is selected for its menu; a right-click on anything else lets the selected one go.
+            // A picture is selected for its menu only when the right-click lands on its visible body
+            // on the page; a right-click on its out-of-page frame or anything else lets it go.
+            let on_page = press.phase.start().is_some_and(|start| body.pages.iter().any(|p| p.page == press.page && p.rect.contains(start.origin)));
             if !held {
                 let picture = match owner {
-                    Owner::Picture { index } => Some(index),
+                    Owner::Picture { index } if on_page => Some(index),
                     _ => None,
                 };
                 crate::edit_text_ui::picture_context(press.page, picture, session);
+            }
+            if matches!(owner, Owner::Picture { .. }) && !on_page {
+                session.menu_for = None;
+                return;
             }
         }
         let mut menu_for = Some((press.page, owner.clone()));
@@ -1064,7 +1079,7 @@ fn route_press(
             };
             // Added text, pictures and the objects selected together lie over the comments: a right-click on them
             // reaches no comment under them and leaves the selection cleared.
-            let over_comments = matches!(owner, Owner::Added { .. } | Owner::Picture { .. } | Owner::Objects | Owner::Frame { .. });
+            let over_comments = matches!(owner, Owner::Added { .. } | Owner::Picture { .. } | Owner::Objects { .. } | Owner::Frame { .. });
             if held || tool_takes_it || matches!(press.owner, Owner::Comment { .. }) {
                 comments::context_anchor(&page_cx, &mut session.comments, start.origin);
             } else if over_comments {
@@ -1128,10 +1143,11 @@ fn route_press(
                 session.sign.field = Some(field.name.clone());
             }
         }
+        Owner::Badge { .. } => {}
         // PLAN: assumed `prepare::tool::field_press(session, form, press)` (pdf-forms-w9).
         Owner::PrepareField { .. } => crate::prepare::tool::field_press(session, cx.form, press),
         // The Edit text families' presses, a modified press first taking it for the objects selected together.
-        Owner::Paragraph { .. } | Owner::Added { .. } | Owner::Picture { .. } | Owner::Objects | Owner::Frame { .. } => {
+        Owner::Paragraph { .. } | Owner::Added { .. } | Owner::Picture { .. } | Owner::Objects { .. } | Owner::Frame { .. } => {
             if let Some(edit) = page_tools::edit_text_press(session, cx.doc, cx.info, press, body.pages, geo, cx.tool) {
                 session.pending_edit = Some(edit);
             }
@@ -1190,10 +1206,21 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
     // 2-3. Every part on the pages, in one control: hit priority ranks parts inside one control only.
     let (parts, tabs) = page_parts_of(ui, body, &mut *session, cx);
     let focus = crate::forms_ui::focus_owner(&session.forms, cx.form);
+    // A focused field whose page has scrolled out of view lets go, unless Tab is scrolling to it.
+    if !session.forms.refocus
+        && session.pending_page.is_none()
+        && let Some(Owner::Field { field, widget }) = focus
+        && let Some(page) = cx.form.get(field).and_then(|f| f.widgets.get(widget)).and_then(|w| w.page)
+        && !body.pages.iter().any(|p| p.page == page)
+    {
+        session.forms.focus = None;
+    }
+    let focus = crate::forms_ui::focus_owner(&session.forms, cx.form);
     let parts_out = PageParts::new(&parts).focus(focus).show_at(ui, body.rect);
-    if std::mem::take(&mut session.forms.refocus)
+    if session.forms.refocus
         && let Some(at) = focus.and_then(|owner| page_parts::focus_stop(&parts, owner))
     {
+        session.forms.refocus = false;
         // The editor handed the keys on with Tab: the field the session moved to takes them, as Tab onto its part would.
         focus::request(ui.ctx(), FocusTarget::Part(parts_out.response.id, at));
     }
@@ -1222,7 +1249,11 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         }
         _ => false,
     };
-    if let Some((Owner::Field { .. }, key)) = &parts_out.key
+    if let Some((Owner::Field { .. }, forward)) = &parts_out.tab {
+        if let Some(edit) = crate::forms_ui::field_tab(session, cx.info, cx.form, *forward, cx.geometry(body)) {
+            session.pending_edit = Some(edit);
+        }
+    } else if let Some((Owner::Field { .. }, key)) = &parts_out.key
         && let Some(edit) = crate::forms_ui::field_key(session, cx.info, cx.form, key, cx.geometry(body))
     {
         session.pending_edit = Some(edit);
@@ -1274,6 +1305,7 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
     }
 
     // 5. The overlays.
+    page_overlays::PageBackdrop::new(body.pages, cx.sizes, cx.rotation, cx.info, session).show_at(ui, body.rect);
     for (page, xf, page_tabs) in &tabs {
         PageOverlays::new(*page, *xf, cx.doc, page_tabs, &session.compare_marks, &mut session.flash)
             .highlight_fields(session.highlight_fields)
@@ -1283,6 +1315,7 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         crate::prepare::tool::show_overlays(ui, body.rect, session, cx.form, cx.info, body.pages, cx.rotation);
     }
     if cx.editing_content {
+        page_overlays::PageDraft::new(&session.content).show_at(ui, body.rect);
         let geo = cx.geometry(body);
         let added_hovered = match parts_out.hovered {
             Some((Owner::Added { index }, page)) => Some((page, index)),
@@ -1305,7 +1338,7 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         }
     }
     // The focused field's editor, and the Fill & Sign text being typed, over their pages.
-    if let Some(editor) = crate::forms_ui::editor::show(ui, body, session, cx.doc, cx.form, cx.info, cx.geometry(body))
+    if let Some(editor) = crate::forms_ui::editor::show(ui, body, session, cx.doc, cx.form, cx.info, cx.today, cx.geometry(body))
         && field_arrived
     {
         // The keys of a field that takes typing are its editor's: it takes the focus over from the field's part.
@@ -1339,6 +1372,11 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         for placed in body.pages.iter().filter(|p| !loading(p.page)) {
             drag.page_received(placed.page);
             session.comments.page_rendered(placed.page);
+        }
+        for placed in body.pages.iter().filter(|p| matches!(p.picture, TextureState::Ready(_))) {
+            session.forms.unbaked.retain(|(_, p)| *p != placed.page);
+            session.move_background.page_received(placed.page);
+            session.text_background.page_received(placed.page);
         }
         let stale = drag.moving_page().is_some_and(loading);
         drag.prepare_move(&ctx, cx.doc, &session.comments, session.pending_edit.as_ref(), stale, cx.render_scale);
@@ -1641,6 +1679,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         prefs: &app.comment_prefs,
         redact_hover: (app.redact_prefs.hover_fill, app.redact_prefs.opacity),
         form: &form,
+        today: app.session.today(),
         units: app.units,
         find_marks: &find_marks,
         table_preview: table_preview.as_ref(),

@@ -48,7 +48,7 @@ impl DocView {
         self.session.text_queue.as_ref().is_some_and(|queue| queue.counts() != QueueCounts::default())
             || self.session.text_background.pending()
             || self.session.move_background.pending()
-            || self.session.placed.iter().any(|p| matches!(p.picture, TextureState::Loading { .. }))
+            || self.session.placed.iter().any(|p| matches!(p.picture, TextureState::Loading { .. } | TextureState::Missing))
     }
 
     /// Re-render every page and text layer (the document's appearance changed, e.g. a layer

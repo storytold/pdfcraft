@@ -52,12 +52,17 @@ pub(super) fn choice_list(ui: &mut egui::Ui, field: &FormField, rect: Rect, zoom
     };
     let names: Vec<&str> = field.options.iter().map(|(_, shown)| shown.as_str()).collect();
     let source = Names(&names);
-    let shown = PopupList::new(tl!("Options"), Bind::bound(&mut *open)).overlay(|overlay| overlay.anchor(Anchor::Rect(rect))).show(ui, |ui, _| {
-        List::<usize>::options(field.name.clone())
-            .document_rows(DocumentRows::new(FontRef::proportional(), size, align))
-            .show_items(ui, &source, &mut |key, _| ListRow::new(names.get(*key).copied().unwrap_or_default().to_owned()).option())
-            .events
-    });
+    let shown = PopupList::new(tl!("Options"), Bind::bound(&mut *open))
+        .overlay(|overlay| {
+            let dismiss = overlay.dismiss.focus_left(false);
+            overlay.anchor(Anchor::Rect(rect)).dismiss(dismiss)
+        })
+        .show(ui, |ui, _| {
+            List::<usize>::options(tl!("Options"))
+                .document_rows(DocumentRows::new(FontRef::proportional(), size, align))
+                .show_items(ui, &source, &mut |key, _| ListRow::new(names.get(*key).copied().unwrap_or_default().to_owned()).option())
+                .events
+        });
     let mut picked = None;
     for event in shown.inner.into_iter().flatten() {
         if let CollectionEvent::Activate(key) = event {

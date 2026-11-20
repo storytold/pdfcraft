@@ -71,10 +71,12 @@ impl CanvasTool for EditTextTool<'_> {
         };
         // A press with Shift or ⌘ on an object toggles it; where none lies it starts an area selection
         // that adds to the selection.
-        if object_ui::modified_press_at(self.session, self.doc, self.info, page, &xf, pointer.pos) {
+        if (pointer.mods.shift || pointer.mods.cmd || pointer.mods.ctrl)
+            && object_ui::modified_press_at(self.session, self.doc, self.info, page, &xf, pointer.pos)
+        {
             return ToolAction::Done;
         }
-        object_ui::begin_marquee(self.session, page);
+        object_ui::begin_marquee(self.session, page, pointer.mods);
         ToolAction::Claimed
     }
 

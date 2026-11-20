@@ -23,5 +23,6 @@ impl PdfCraftApp {
             let commands = crate::commands::catalog::command_input(self, ctx);
             FrameInput::new(self.root_env(ctx)).commands(commands).host(self.host.clone())
         });
+        self.last_frame_active = self.active_ids().map(|(_, id)| id);
     }
 }

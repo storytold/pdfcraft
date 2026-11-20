@@ -32,11 +32,17 @@ pub(crate) struct ObjectSelection {
     /// A paragraph (page, block) to select once the document is at hand: Esc in the inline
     /// editor asks for it, and the next `prepare` selects it.
     select_paragraph: Option<(usize, usize)>,
+    /// Modifiers held when a marquee drag started, so releasing Shift before the mouse button still extends.
+    marquee_mods: Mods,
 }
 
 impl ObjectSelection {
     pub fn count(&self) -> usize {
         self.selected.len()
+    }
+
+    pub(crate) fn target_at(&self, index: usize) -> Option<ObjectTarget> {
+        self.selected.get(index).map(|o| o.target)
     }
 
     /// The page and references of the objects selected together, if any: what Copy and Cut take.
@@ -297,8 +303,9 @@ fn modified_target(session: &mut PageSession, doc: &Document, page: usize, xf: &
 
 /// An area selection begins on `page`: the single selections of the families let go. The sweep itself is the
 /// press's span, read from each pass's press phase.
-pub(crate) fn begin_marquee(session: &mut PageSession, page: usize) {
+pub(crate) fn begin_marquee(session: &mut PageSession, page: usize, mods: Mods) {
     leave_single(session);
+    session.objects.marquee_mods = mods;
     session.pending_page = Some((page, None));
 }
 
@@ -324,6 +331,13 @@ pub(crate) fn end_marquee(
     geo: PageGeometry<'_>,
 ) {
     let Some((page, xf)) = session.page_xforms(geo).into_iter().find(|(_, xf)| xf.rect.contains(start.origin)) else { return };
+    let start_mods = std::mem::take(&mut session.objects.marquee_mods);
+    let mods = Mods {
+        shift: start_mods.shift || mods.shift,
+        cmd: start_mods.cmd || mods.cmd,
+        ctrl: start_mods.ctrl || mods.ctrl,
+        alt: start_mods.alt || mods.alt,
+    };
     let base = session.objects.selection().filter(|(on, _)| *on == page).map(|(_, targets)| targets).unwrap_or_default();
     let mut sweep = MarqueeSelect::begin(start.origin, mods, base);
     sweep.update(pos);
@@ -405,7 +419,7 @@ pub(crate) fn object_controls(
         }
         let offset = presses
             .iter()
-            .filter(|p| p.page == page && matches!(p.owner, Owner::Objects | Owner::Frame { .. }))
+            .filter(|p| p.page == page && matches!(p.owner, Owner::Objects { .. } | Owner::Frame { .. }))
             .find_map(|p| match &p.phase {
                 PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } => Some(*pos - start.origin),
                 _ => None,
@@ -441,20 +455,17 @@ pub(crate) fn page_parts(
             && let Ok(objects) = session.objects.inventory(doc, page)
             && let Some(object) = objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
         {
-            out.extend(
-                frame_band(screen(&xf, info, page, object))
-                    .map(|band| PagePart::new(Owner::Frame { block }, page, HitShape::Rect(band), PageLayer::Handle).cursor(CursorIcon::Move)),
-            );
+            out.extend(frame_band(screen(&xf, info, page, object)).into_iter().enumerate().map(|(side, band)| {
+                PagePart::new(Owner::Frame { block, side }, page, HitShape::Rect(band), PageLayer::Handle).cursor(CursorIcon::Move)
+            }));
         }
         let s = &session.objects;
         if s.page != Some(page) || s.selected.is_empty() {
             continue;
         }
-        out.extend(
-            s.selected
-                .iter()
-                .map(|o| PagePart::new(Owner::Objects, page, HitShape::Rect(screen(&xf, info, page, o)), PageLayer::Placed).cursor(CursorIcon::Move)),
-        );
+        out.extend(s.selected.iter().enumerate().map(|(index, o)| {
+            PagePart::new(Owner::Objects { index }, page, HitShape::Rect(screen(&xf, info, page, o)), PageLayer::Placed).cursor(CursorIcon::Move)
+        }));
     }
 }
 
@@ -465,7 +476,7 @@ pub(crate) fn objects_press(session: &mut PageSession, doc: &Document, info: &Do
     let page = press.page;
     match press.phase {
         PressPhase::Down { .. } => {
-            if let Owner::Frame { block } = press.owner {
+            if let Owner::Frame { block, .. } = press.owner {
                 let object = session
                     .objects
                     .inventory(doc, page)

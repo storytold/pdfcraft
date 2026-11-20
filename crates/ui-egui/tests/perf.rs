@@ -131,7 +131,7 @@ fn a_folded_page_builds_no_comment_cards_and_an_open_one_builds_only_the_rows_in
         assert_eq!(state.views[0].session.comments.panel.collapsed_pages, [0]);
     }
     let (folded, _) = most_work(&mut h, Some("CommentRow"), 6, |_, _| {});
-    assert_eq!(folded, 0, "a folded page builds no cards");
+    assert_eq!(folded, 1, "a folded page builds only its heading row, no cards");
     h.state_mut().views[0].session.comments.panel.collapsed_pages.clear();
     let (open, _) = most_work(&mut h, Some("CommentRow"), 6, |_, _| {});
     assert!(open > 0, "the open page builds the cards in view");
