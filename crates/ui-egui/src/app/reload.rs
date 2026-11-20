@@ -75,7 +75,7 @@ impl PdfCraftApp {
     /// holds until the save has taken its answer, since replacing the document first would save
     /// another version than the one the user was asked about.
     fn holds_reload(&self) -> bool {
-        self.modal_open() || self.pending_save.as_ref().is_some_and(|p| p.asking())
+        self.modal_open() || self.prompts.full_screen.is_some() || self.pending_save.as_ref().is_some_and(|p| p.asking())
     }
 
     /// A watched file has a new version: reload its document, or say so when it has unsaved
