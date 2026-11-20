@@ -4696,7 +4696,8 @@ fn a_picture_whose_jbig2_mask_a_decoder_limit_refuses_is_not_drawn() {
     });
     assert!(page.error.is_none(), "{:?}", page.error);
     assert_eq!(&page.rgba[((25 * 40 + 15) * 4)..][..4], [0, 0, 0, 255], "the picture after the stencil is drawn whole");
-    assert!(page.warnings.is_empty(), "the stencil left nothing out: {:?}", page.warnings);
+    // The stencil is reported as an image that didn't decode, not as content left out.
+    assert_eq!(page.warnings, [RenderWarning::ImageNotDecoded], "the stencil left nothing else out");
 }
 
 /// A JBIG2 image drawn on its own that a limit refuses, a stencil mask included, takes nothing else
@@ -9938,6 +9939,10 @@ mod type3_proc_cache;
 // A picture that doesn't decode is decoded once however often it is drawn (vendored
 // hayro-interpret patch 91).
 mod failed_image_decodes;
+
+// DCTDecode data is read from its start-of-image marker (hayro-syntax patch 56 in craft-libs,
+// PDFBOX-5992), and an image that doesn't decode is reported.
+mod dct_leading_bytes;
 
 // A page past its rasterizer coverage leaves the rest out and says so (vendored vello_cpu patch 1).
 mod coverage_budget;

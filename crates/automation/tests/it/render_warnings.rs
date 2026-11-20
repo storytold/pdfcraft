@@ -183,3 +183,29 @@ fn mcp_page_render_carries_the_warnings_as_structured_content() {
     assert_eq!(result["structuredContent"]["warnings"], json!([FALLBACK]));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// An image that can't be decoded (DCTDecode data with no JPEG start-of-image marker, ISO 32000-2
+/// §7.4.8) is not drawn, and `page_render` says so in the words `pdfcraft-cli render` prints. The
+/// image used to be left out without a word.
+#[test]
+fn page_render_reports_an_image_that_does_not_decode() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-render-warnings-undecoded-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let content = "q 200 0 0 200 0 0 cm BI /W 8 /H 8 /CS /G /BPC 8 /F /DCT ID\nno JPEG here\nEI Q";
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    );
+    std::fs::write(dir.join("undecoded.pdf"), pdf).unwrap();
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let doc = open(&mut a, "undecoded.pdf");
+    let out = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
+    let Some(Content::Json(report)) = out.get(1) else { panic!("expected the warnings as JSON: {out:?}") };
+    assert_eq!(report["warnings"], json!(["an image that could not be decoded was not drawn"]));
+    let _ = std::fs::remove_dir_all(dir);
+}

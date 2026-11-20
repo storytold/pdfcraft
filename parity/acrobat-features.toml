@@ -817,8 +817,8 @@ milestone = "M2"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/render/src/raster/tests.rs::group4_fax_with_rows_zero_decodes_to_the_image_height", "crates/render/src/raster/tests.rs::group4_fax_with_rows_below_its_height_decodes_to_the_image_height", "crates/render/src/raster/tests.rs::group4_fax_with_rows_past_its_height_decodes_to_the_image_height"]
-notes = "hayro bootstrap; a CCITT fax image is decoded to its /Height whatever its /DecodeParms /Rows says (0, fewer or more rows)"
+evidence = ["crates/render/src/raster/tests.rs::group4_fax_with_rows_zero_decodes_to_the_image_height", "crates/render/src/raster/tests.rs::group4_fax_with_rows_below_its_height_decodes_to_the_image_height", "crates/render/src/raster/tests.rs::group4_fax_with_rows_past_its_height_decodes_to_the_image_height", "crates/render/src/raster/tests/dct_leading_bytes.rs::an_inline_jpeg_after_more_white_space_than_one_draws", "crates/render/src/raster/tests/dct_leading_bytes.rs::bytes_before_the_start_of_image_marker_are_skipped", "crates/render/src/raster/tests/dct_leading_bytes.rs::an_image_that_does_not_decode_is_reported"]
+notes = "hayro bootstrap; a CCITT fax image is decoded to its /Height whatever its /DecodeParms /Rows says (0, fewer or more rows); a JPEG (DCTDecode) image whose data has bytes before its start-of-image marker, such as an inline image with more than one white-space character after ID (PDFBOX-5992), is decoded from the marker; an image that doesn't decode is reported as a render warning"
 
 [[feature]]
 id = "view.render-annotation-appearances"
