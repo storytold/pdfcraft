@@ -57,11 +57,12 @@ const CALLS_TOO_DEEP: &str = "functions are nested too deeply";
 const LOOPED_TOO_MUCH: &str = "the script looped too many times";
 const LIST_TOO_LONG: &str = "a list is too long";
 const STRING_TOO_LONG: &str = "a string is too long";
+const EVAL_TOO_LONG: &str = "the scripts given to Eval are too long";
 
 /// Whether `e` is a limit the run reached: those stop the script even where a fault is
 /// otherwise an answer (`Exists`).
 fn is_limit(e: &str) -> bool {
-    [RAN_TOO_LONG, TOO_DEEP, CALLS_TOO_DEEP, LOOPED_TOO_MUCH, LIST_TOO_LONG, STRING_TOO_LONG].contains(&e)
+    [RAN_TOO_LONG, TOO_DEEP, CALLS_TOO_DEEP, LOOPED_TOO_MUCH, LIST_TOO_LONG, STRING_TOO_LONG, EVAL_TOO_LONG].contains(&e)
 }
 
 /// Steps between looks at the clock.
@@ -91,6 +92,8 @@ struct Interp<'h> {
     funcs: HashMap<String, Rc<Func>>,
     event: XfaEvent,
     steps: u64,
+    /// Bytes of source `Eval` has read in this run, at most `MAX_SCRIPT_BYTES`.
+    evaluated: usize,
     loops_left: u64,
     depth: usize,
     max_depth: usize,
@@ -146,6 +149,7 @@ pub(crate) fn run_formcalc_at(
         funcs: HashMap::new(),
         event: event.clone(),
         steps: 0,
+        evaluated: 0,
         loops_left: limits.loop_iterations,
         depth: 0,
         // The JavaScript recursion limit, kept to 8..=128: statement nesting counts against it

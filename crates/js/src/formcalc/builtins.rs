@@ -3,7 +3,7 @@ use super::dates::{MAX_DAYS, civil_from_days, days_from_civil, format_date, pars
 use super::parser::parse;
 use super::value::{Val, fixed, is_numeric_text, parse_num};
 use super::words::{decode_entities, word_num};
-use super::{Interp, MAX_STRING, R, STRING_TOO_LONG, XfaKind, is_limit};
+use super::{EVAL_TOO_LONG, Interp, MAX_STRING, R, STRING_TOO_LONG, XfaKind, is_limit};
 
 impl Interp<'_> {
     /// A built-in function: its result is never a string past [`MAX_STRING`], and work on
@@ -287,6 +287,13 @@ impl Interp<'_> {
             }
             "eval" => {
                 let src = self.arg_str(args, 0)?;
+                // Its syntax tree, many times the size of its source, is held while it runs and
+                // kept for good if it declares a function: a run reads no more source through
+                // Eval than one script may hold.
+                self.evaluated = self.evaluated.saturating_add(src.len());
+                if self.evaluated > crate::MAX_SCRIPT_BYTES {
+                    return Err(EVAL_TOO_LONG.into());
+                }
                 self.charge((src.len() / 16) as u64)?;
                 let body = parse(&src)?;
                 let (_, v) = self.block(&body)?;
