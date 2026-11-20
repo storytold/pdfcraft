@@ -859,11 +859,21 @@ pub(crate) fn paragraph_controls(
         open_waiting(session, doc, page, &blocks, &boxes, geo);
         outline_closed(ui, body, session, page, &boxes, xf.rect.intersect(geo.viewport));
         draw_move(ui, body, session, page, &boxes, press);
-        let framed =
-            hovered.filter(|(p, _)| *p == page).and_then(|(_, block)| blocks.get(block).zip(boxes.get(block).copied()).map(|(l, b)| (block, l, b)));
+        let held = blocks
+            .iter()
+            .enumerate()
+            .find_map(|(block, _)| craft::ui::runtime::pointer::active_part(ui.ctx(), width_frame_id(ui, page, block)).map(|_| (page, block)));
+        let framed = held
+            .or(hovered)
+            .filter(|(p, _)| *p == page)
+            .and_then(|(_, block)| blocks.get(block).zip(boxes.get(block).copied()).map(|(l, b)| (block, l, b)));
         edit = edit.or_else(|| width_frame(ui, body, session, doc, page, framed, geo));
     }
     edit.or_else(|| editor_session(ui, body, session, doc, geo))
+}
+
+fn width_frame_id(ui: &egui::Ui, page: usize, block: usize) -> egui::Id {
+    ui.make_persistent_id(("paragraph-width", page, block))
 }
 
 /// Opens the paragraph a switching click, or a click on grouped text, asked for once the document is
@@ -968,7 +978,10 @@ fn width_frame(
         .with_min_side(4.0)
         .with_handles(BoxHandles::Sides)
         .with_edge_band(EDGE_REACH);
-    let output = TransformBox::text_frame(tl!("Width").to_string(), Bind::given(state), start).rules(rules).show_at(ui, body.rect);
+    let output = TransformBox::text_frame(tl!("Width").to_string(), Bind::given(state), start)
+        .id(width_frame_id(ui, page, block))
+        .rules(rules)
+        .show_at(ui, body.rect);
     let after = output.edit.events.iter().find_map(|event| match event {
         EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => Some(*after),
         _ => None,
