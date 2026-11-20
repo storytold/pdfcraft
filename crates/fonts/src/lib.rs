@@ -21,6 +21,7 @@ mod shaping;
 pub mod source_shaping;
 mod std14;
 mod std14_metrics;
+mod wire;
 pub use craft::{
     CRAFT_FONTS, CraftFont, SHIPPORI_MINCHO, document_arabic_font, document_devanagari_font, document_hebrew_font, document_japanese_font,
     document_japanese_font_for_style, document_japanese_fonts_for_style, document_latin_fonts, document_thai_font, ui_arabic_fonts, ui_chinese_fonts,
@@ -32,7 +33,8 @@ pub use script::{
     script_missing, script_outline,
 };
 pub use shaping::{
-    ShapedCluster, ShapedScript, arabic_glyph, arabic_has, face_glyph, hebrew_has, shape_arabic, shape_hebrew, shape_thai, shaped_glyph, thai_has,
+    ShapedCluster, ShapedScript, arabic_glyph, arabic_has, face_glyph, hebrew_has, latin_has, shape_arabic, shape_hebrew, shape_latin, shape_thai,
+    shaped_glyph, thai_has,
 };
 pub use std14::{Match as Std14Match, Std14};
 
@@ -248,7 +250,7 @@ pub fn first_non_win_ansi(s: &str) -> Option<char> {
 /// The first character of `s` the standard fonts (Helvetica and the rest of the standard 14, in
 /// WinAnsiEncoding) can't draw, so that a generated appearance would show it as `?`. Line breaks
 /// don't count: appearances lay lines out themselves. PdfCraft refuses such text with
-/// [`undrawable_message`] instead of writing `?` (AGENTS.md §4: never lose work silently).
+/// [`undrawable_message`] instead of writing `?` (app-agents.md rule 13: never lose work silently).
 pub fn first_undrawable(s: &str) -> Option<char> {
     s.chars().find(|c| !matches!(c, '\n' | '\r') && !win_ansi_encodable(*c))
 }
