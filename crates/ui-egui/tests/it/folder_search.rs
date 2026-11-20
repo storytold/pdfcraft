@@ -274,7 +274,7 @@ fn the_results_stay_on_screen_in_the_smallest_window() {
     h.run_steps(6);
     let dialog = h.ctx.memory(|m| m.area_rect(egui::Id::unique("dialog"))).unwrap();
     assert!(dialog.min.y >= 0.0 && dialog.max.y <= 520.0, "all of the dialog is in the window: {dialog:?}");
-    let first = result_row(&h, "Page 1…").rect();
+    let first = result_row(&h, "Page 1").rect();
     assert!(first.max.y <= 520.0, "the first result shows: {first:?}");
 }
 
