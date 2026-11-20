@@ -1,8 +1,8 @@
 //! Contributor-original synthetic pages for the outputs of a Type 4 (PostScript calculator)
 //! function (ISO 32000-2 §7.10.5): the outputs are the values left on top of the operand stack,
 //! as many as `/Range` has pairs. A program that leaves more values than that keeps the top
-//! ones (vendored hayro-interpret patch 115); one that leaves fewer fails like any evaluation
-//! that cannot finish.
+//! ones (hayro-interpret patch 115, storytold/craft-libs#2698); one that leaves fewer fails like
+//! any evaluation that cannot finish.
 use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RenderedPage};
 use std::sync::Arc;
 
