@@ -39,6 +39,9 @@ pub mod kind {
     pub const LINKS: &str = "links";
     pub const STRUCTURE: &str = "document structure";
     pub const PAGES: &str = "pages added or removed";
+    /// Pages added from the document's page templates (ISO 32000-2 §12.7.7), which certification
+    /// levels 2 and 3 permit.
+    pub const PAGE_TEMPLATE: &str = "pages added from page templates";
     pub const OTHER: &str = "other changes";
     /// A change to a field the signature locks (its field's `/Lock`, or a FieldMDP reference in its
     /// value), whatever else the change would count as.
@@ -48,8 +51,21 @@ pub mod kind {
     pub const UNREADABLE: &str = "the signed version could not be read";
 
     /// Every word above, for an interface to translate.
-    pub const ALL: &[&str] =
-        &[PAGE_CONTENT, FORM_FILL, COMMENTS, SIGNATURE, SECURITY_STORE, METADATA, LINKS, STRUCTURE, PAGES, OTHER, LOCKED_FIELD, UNREADABLE];
+    pub const ALL: &[&str] = &[
+        PAGE_CONTENT,
+        FORM_FILL,
+        COMMENTS,
+        SIGNATURE,
+        SECURITY_STORE,
+        METADATA,
+        LINKS,
+        STRUCTURE,
+        PAGES,
+        PAGE_TEMPLATE,
+        OTHER,
+        LOCKED_FIELD,
+        UNREADABLE,
+    ];
 }
 
 /// Changes made after signing.

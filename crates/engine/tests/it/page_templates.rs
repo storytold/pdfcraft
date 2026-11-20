@@ -131,3 +131,44 @@ fn a_script_run_for_a_field_that_is_no_button_may_not_change_the_pages() {
     }
     assert_eq!(s.get(id).unwrap().can_undo(), None, "nothing was changed");
 }
+
+/// A form certified at level 2 (ISO 32000-2 Table 257: "filling in forms, instantiating page
+/// templates, and signing") stays certified when a page is added from its template with its
+/// fields renamed, or the template is shown, and saved: the certification reads as valid, the
+/// change as one it permits. Adding the page flattens the page tree, moving the inherited
+/// `/MediaBox` onto the signed page, which shows the same.
+#[test]
+fn pages_from_a_certified_forms_template_keep_its_certification() {
+    use pdfcraft_engine::sign;
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/rsa-aes.p12")).unwrap();
+    let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
+    let opts = sign::SignOptions {
+        page: 0,
+        rect: Some([20.0, 40.0, 120.0, 80.0]),
+        date: "D:20261002120000+01'00'".into(),
+        certify: Some(2),
+        ..sign::SignOptions::default()
+    };
+    let certified = sign::sign(&pdfcraft_cos::Document::open(Arc::new(form())).unwrap(), &digital_id, &opts).unwrap();
+    let trust = sign::TrustStore { certs: vec![digital_id.certificate.clone()] };
+    for what in ["copy", "shown"] {
+        let mut s = Session::new();
+        let id = s.open("certified.pdf", None, Arc::new(certified.clone()), None).unwrap();
+        if what == "copy" {
+            s.apply(id, Edit::SpawnTemplate { name: "More".into(), at: 1, rename: true }).unwrap();
+        } else {
+            assert_eq!(s.run_javascript(id, "getTemplate('More').hidden = false;", None).unwrap().error, None);
+        }
+        assert_eq!(pages(&s, id), 2, "{what}");
+        let saved = s.save_bytes(id).unwrap();
+        let doc = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+        let signature = sign::signatures(&doc, &saved, &trust).into_iter().find(|x| x.signed && x.certify.is_some()).unwrap();
+        assert!(
+            signature.status == sign::Status::Valid
+                && matches!(&signature.modification, sign::Modification::Allowed(kinds) if kinds.contains(&sign::kind::PAGE_TEMPLATE)),
+            "{what}: {:?} {:?}",
+            signature.status,
+            signature.modification
+        );
+    }
+}

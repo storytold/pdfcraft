@@ -2,6 +2,8 @@ use super::types::{Modification, kind};
 use super::{Arc, Dict, Document, HashMap, HashSet, ObjRef, Object};
 use std::cell::{Cell, OnceCell};
 
+mod instantiation;
+
 /// The most annotation-list entries one classification expands. Pages sharing one long /Annots
 /// array, or many pages rewritten to list one, would otherwise cost pages × entries; past this
 /// the lists are not compared, and the change is refused.
@@ -74,6 +76,10 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
     let page_tree = page_tree_nodes(&old);
     let page_tree_unbounded = page_tree.is_none();
     let (page_nodes, kids_arrays) = page_tree.unwrap_or_default();
+    // What adding pages from the signed revision's page templates changed (ISO 32000-2 Table 257:
+    // permission 2 and 3 allow "instantiating page templates"); nothing when the page tree
+    // changed in any other way.
+    let instantiated = if page_tree_unbounded { HashSet::new() } else { instantiation::explained(doc, &old, &page_nodes, &kids_arrays) };
     // What each signed page draws from, by the role it held when signed (#1787).
     let signed_resources = signed_page_resources(&old, &signed_page_refs);
     let old_info = old.trailer().get(b"Info").and_then(Object::as_ref).map(|r| r.num);
@@ -132,6 +138,7 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         signed_annots: &signed_annots,
         page_nodes: &page_nodes,
         kids_arrays: &kids_arrays,
+        instantiated: &instantiated,
         old_form,
         placed_annots: &placed_annots,
         annot_budget: &annot_budget,
@@ -193,7 +200,7 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         let Some(what) = classifier.classify(r, &new, before.as_deref()) else { continue };
         let ok = match (what, p) {
             (kind::SIGNATURE | kind::SECURITY_STORE, _) => true,
-            (kind::FORM_FILL, Some(2 | 3) | None) => true,
+            (kind::FORM_FILL | kind::PAGE_TEMPLATE, Some(2 | 3) | None) => true,
             (kind::COMMENTS, Some(3) | None) => true,
             // Every save updates /Info (ModDate), signing included.
             (kind::METADATA, _) => true,
@@ -301,6 +308,8 @@ struct ChangedObjectClassifier<'a> {
     signed_annots: &'a HashSet<u32>,
     page_nodes: &'a HashSet<u32>,
     kids_arrays: &'a HashSet<u32>,
+    /// What adding pages from page templates changed: see [`instantiation::explained`].
+    instantiated: &'a HashSet<u32>,
     placed_annots: &'a HashSet<u32>,
     annot_budget: &'a Cell<usize>,
     signed_resources: &'a HashMap<u32, bool>,
@@ -316,6 +325,9 @@ impl ChangedObjectClassifier<'_> {
         }
         if self.dss.contains(&r.num) {
             return Some(kind::SECURITY_STORE);
+        }
+        if self.instantiated.contains(&r.num) {
+            return Some(kind::PAGE_TEMPLATE);
         }
         match new {
             // A signed page-tree node's /Kids array of its own lists the pages.
@@ -1137,6 +1149,7 @@ mod tests {
             signed_annots: &none,
             page_nodes: &none,
             kids_arrays: &none,
+            instantiated: &none,
             placed_annots: &none,
             annot_budget: &budget,
             signed_resources: &resources,
