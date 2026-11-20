@@ -939,6 +939,24 @@ fn a_repaired_file_is_rewritten_by_save_even_without_edits() {
     }
 }
 
+/// Form fields whose text is past what a reading of the form takes are left out of the form the
+/// document shows; opening the file says so.
+#[test]
+fn fields_left_out_of_the_form_are_recorded_on_open() {
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
+    let text = pdfcraft_forms::NewField::Text { multiline: false };
+    pdfcraft_forms::add_field(&mut doc, 0, [10.0, 50.0, 100.0, 70.0], &text, Some("ssn")).unwrap();
+    let field = pdfcraft_forms::fields(&doc).swap_remove(0).obj;
+    let tooltip = pdfcraft_cos::Object::String(pdfcraft_cos::PdfString::literal(vec![b' '; 256 << 20]));
+    doc.update_dict(field, |d| d.set(b"TU".to_vec(), tooltip)).unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions { object_streams: true, ..Default::default() }).unwrap();
+    drop(doc);
+    let mut s = Session::new();
+    let id = s.open("left-out.pdf", None, Arc::new(bytes), None).unwrap();
+    let log = s.get(id).unwrap().repair_log();
+    assert!(log.iter().any(|l| l.contains("1 form field holds more text than PdfCraft reads at once")), "{log:?}");
+}
+
 /// A damaged file that is signed keeps its bytes on a Save without edits: rewriting it in full
 /// to put the repair on disk would invalidate its signatures without a word.
 #[test]
@@ -3248,6 +3266,57 @@ fn a_typed_password_value_survives_save_and_mark_saved() {
     assert_eq!(value(&s), ["hunter2"], "the open document keeps the value after Save");
     assert!(!s.get(id).unwrap().dirty, "restoring it is not an unsaved change");
     assert!(!appears_in_pdf(&s.save_bytes(id).unwrap(), "hunter2"), "the next save still omits it");
+}
+
+/// A one-page form: `n` text fields with `entry` set to one string, by reference, that takes
+/// 1 MiB of a reading's allowance for each copy, then a text widget with the Password flag
+/// (`pw`, with `rest`), the page's one annotation.
+fn password_after_shared_text(n: usize, entry: &str, rest: &str) -> Vec<u8> {
+    let fields_list: String = (0..=n).map(|i| format!("{} 0 R ", i + 6)).collect();
+    let mut objs = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [{fields_list}] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 4 0 R >> >> >> >>"),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [{} 0 R] >>", n + 6),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        format!("({})", "x".repeat((1 << 20) - std::mem::size_of::<String>())),
+    ];
+    objs.extend((0..n).map(|i| format!("<< /FT /Tx /T (f{i}) /{entry} 5 0 R >>")));
+    objs.push(format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (pw) /Ff 8192{rest} /Rect [20 250 180 270] /P 3 0 R >>"));
+    pdf_of(&objs)
+}
+
+/// #6175 review: 65 text fields whose values are one long string spend what a reading of the
+/// form copies of values; a value typed into a text field with the Password flag after them is
+/// still found, so neither Save nor a recovery snapshot writes it, and the open document keeps
+/// it after the save.
+#[test]
+fn a_typed_password_past_the_other_values_is_written_to_no_file() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, Arc::new(password_after_shared_text(65, "V", "")), None).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "pw".into(), value: FieldValue::Text("hunter2".into()) }).unwrap();
+    assert!(appears_in_pdf(&s.get(id).unwrap().bytes, "hunter2"), "the working bytes hold it");
+    let saved = s.save_bytes(id).unwrap();
+    assert!(!appears_in_pdf(&saved, "hunter2"), "Save");
+    let snaps = s.autosave_snapshots();
+    assert_eq!(snaps.len(), 1);
+    assert!(!appears_in_pdf(&snaps[0].bytes, "hunter2"), "the recovery snapshot");
+    s.mark_saved(id, saved, Some("saved.pdf".into())).unwrap();
+    let value = s.get(id).unwrap().form.iter().find(|f| f.name == "pw").map(|f| f.value.clone());
+    assert_eq!(value, Some(vec!["hunter2".to_string()]), "the open document keeps it");
+}
+
+/// #6175 review: a text field with the Password flag that a reading of the form leaves out,
+/// behind 256 fields whose tooltips are one long string, can't be cleared through the fields read:
+/// Save refuses rather than write its value, and no recovery snapshot is written.
+#[test]
+fn a_password_field_the_form_reading_leaves_out_stops_save() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, Arc::new(password_after_shared_text(256, "TU", " /TU 5 0 R /V (hunter2)")), None).unwrap();
+    assert!(s.get(id).unwrap().form.iter().all(|f| f.name != "pw"), "the field is left out");
+    s.apply(id, Edit::SetFieldValue { name: "f0".into(), value: FieldValue::Text("typed".into()) }).unwrap();
+    let refused = s.save_bytes(id).unwrap_err().to_string();
+    assert!(refused.contains("isn't saved"), "{refused}");
+    assert!(s.autosave_snapshots().is_empty(), "no recovery snapshot");
 }
 
 /// #3926 / #3943 review: signing writes the signed file from the same copy a save does, so a
@@ -14919,44 +14988,54 @@ fn javascript_reset_preserves_unknown_default_like_native_reset() {
     }
 }
 
-/// Exhausting the shared default decode budget must also reach the JavaScript snapshot as unknown.
+/// Exhausting the reading's value allowance must also reach the JavaScript snapshot as unknown.
+/// A default string past it isn't copied, and resetForm keeps the value. A default stream that
+/// decodes past what is left spends the allowance, so the value after it isn't read either: the
+/// default is still unknown, and the reset changes nothing.
 #[test]
 fn javascript_snapshot_preserves_default_decode_budget_exhaustion() {
-    let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
-    let stream = cos.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::from_raw(pdfcraft_cos::Dict::new(), vec![b'd'; 1 << 20])));
-    let mut refs = Vec::new();
-    for i in 0..70 {
-        let mut field = pdfcraft_cos::Dict::new();
-        field.set(b"FT".to_vec(), pdfcraft_cos::Object::name("Tx"));
-        field.set(b"T".to_vec(), pdfcraft_cos::PdfString::text(&format!("budget{i}")));
-        field.set(b"V".to_vec(), pdfcraft_cos::PdfString::text("typed"));
-        field.set(b"DV".to_vec(), pdfcraft_cos::Object::Ref(stream));
-        refs.push(pdfcraft_cos::Object::Ref(cos.add(pdfcraft_cos::Object::Dict(field))));
+    for stream_default in [false, true] {
+        let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+        let default = if stream_default {
+            cos.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::from_raw(pdfcraft_cos::Dict::new(), vec![b'd'; 1 << 20])))
+        } else {
+            cos.add(pdfcraft_cos::Object::String(pdfcraft_cos::PdfString::literal(vec![b'd'; 1 << 20])))
+        };
+        let mut refs = Vec::new();
+        for i in 0..70 {
+            let mut field = pdfcraft_cos::Dict::new();
+            field.set(b"FT".to_vec(), pdfcraft_cos::Object::name("Tx"));
+            field.set(b"T".to_vec(), pdfcraft_cos::PdfString::text(&format!("budget{i}")));
+            field.set(b"V".to_vec(), pdfcraft_cos::PdfString::text("typed"));
+            field.set(b"DV".to_vec(), pdfcraft_cos::Object::Ref(default));
+            refs.push(pdfcraft_cos::Object::Ref(cos.add(pdfcraft_cos::Object::Dict(field))));
+        }
+        let root = cos.root().unwrap();
+        cos.update_dict(root, |catalog| {
+            let mut form = pdfcraft_cos::Dict::new();
+            form.set(b"Fields".to_vec(), pdfcraft_cos::Object::Array(refs));
+            catalog.set(b"AcroForm".to_vec(), pdfcraft_cos::Object::Dict(form));
+        })
+        .unwrap();
+        let fields = pdfcraft_forms::fields(&cos);
+        assert_eq!(fields.first().unwrap().default.first().unwrap().len(), 1 << 20);
+        let last = fields.iter().find(|f| f.name == "budget69").unwrap();
+        assert!(last.default.is_empty());
+        let snapshot = crate::js::field_state(&cos, last, &pdfcraft_js::DocInfo::default());
+        assert!(!snapshot.default_known, "a default stream: {stream_default}");
+        let out = pdfcraft_js::run(
+            "resetForm();String(getField('budget69').value);",
+            &pdfcraft_js::Event::doc("Console"),
+            &Default::default(),
+            &[snapshot],
+            &[],
+            Default::default(),
+        );
+        assert_eq!(out.error, None);
+        let value = if stream_default { "" } else { "typed" };
+        assert_eq!(out.result.as_deref(), Some(value), "a default stream: {stream_default}");
+        assert!(out.changed.is_empty());
     }
-    let root = cos.root().unwrap();
-    cos.update_dict(root, |catalog| {
-        let mut form = pdfcraft_cos::Dict::new();
-        form.set(b"Fields".to_vec(), pdfcraft_cos::Object::Array(refs));
-        catalog.set(b"AcroForm".to_vec(), pdfcraft_cos::Object::Dict(form));
-    })
-    .unwrap();
-    let fields = pdfcraft_forms::fields(&cos);
-    assert_eq!(fields.first().unwrap().default.first().unwrap().len(), 1 << 20);
-    let last = fields.iter().find(|f| f.name == "budget69").unwrap();
-    assert!(last.default.is_empty());
-    let snapshot = crate::js::field_state(&cos, last, &pdfcraft_js::DocInfo::default());
-    assert!(!snapshot.default_known);
-    let out = pdfcraft_js::run(
-        "resetForm();String(getField('budget69').value);",
-        &pdfcraft_js::Event::doc("Console"),
-        &Default::default(),
-        &[snapshot],
-        &[],
-        Default::default(),
-    );
-    assert_eq!(out.error, None);
-    assert_eq!(out.result.as_deref(), Some("typed"));
-    assert!(out.changed.is_empty());
 }
 
 /// Immediate dependent reads can explicitly request calculation without changing reset callback ordering.

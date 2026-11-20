@@ -161,6 +161,11 @@ pub struct Field {
     /// selected export values.
     pub value: Vec<String>,
     pub default: Vec<String>,
+    /// The field has a default (`/DV`, its own or inherited) that the reading didn't copy, its
+    /// value allowance spent or a stream that doesn't decode, so `default` is empty but the default
+    /// isn't known to be: Clear form and a script's reset leave the field as it is
+    /// ([`default_value_known`]).
+    pub default_unread: bool,
     pub flags: u32,
     pub max_len: Option<usize>,
     /// Choice options: (export value, display text).

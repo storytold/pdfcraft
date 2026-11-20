@@ -1703,6 +1703,7 @@ mod tests {
             kind,
             value: value.iter().map(|v| (*v).to_owned()).collect(),
             default: Vec::new(),
+            default_unread: false,
             flags: 0,
             max_len: None,
             options: Vec::new(),

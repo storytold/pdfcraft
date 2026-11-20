@@ -1,5 +1,7 @@
 use super::appearances::{declares_pdfa, need_appearances};
-use super::read::{acroform, field_flags, fields, listed_indices, listing_fields_named, page_refs, selected_options};
+use super::read::{
+    Reading, acroform, enumerate, field_flags, fields, held, listed_indices, listing_fields_named, page_refs, referred, selected_options,
+};
 use super::{
     Dict, Document, Field, FieldEvent, FieldKind, FieldValue, FormError, NoScripts, ObjRef, Object, PdfString, Scripts, Widget, af, appearance,
     author, calc_order, flags, invalid, name_obj, scripting,
@@ -741,16 +743,49 @@ pub(crate) fn ask_viewers_to_redraw(doc: &mut Document) -> Result<(), FormError>
     Ok(())
 }
 
-/// Text fields with the Password flag (inherited or their own) whose value (`/V`, inherited or
-/// their own) is not empty and not their default value (`/DV`, which the form's author wrote and
-/// a save restores), or one of whose separate widgets carries a `/V`.
-fn password_fields(doc: &Document) -> Vec<Field> {
+/// The form as a save reads it for the values of its text fields with the Password flag.
+struct Passwords {
+    reading: Reading,
+    /// The fields read that hold such a value ([`password_fields`]).
+    holding: Vec<Field>,
+    /// The reading left something out (`Fields::left_out`): a field, or a widget or a field under
+    /// one, past its text allowance. A save can't tell what it holds, or clear it.
+    incomplete: bool,
+}
+
+/// [`Passwords`]; `None` when no field dictionary sets the flag ([`has_password_flag`], which doesn't
+/// go through the reading), so a save of a form without one doesn't read the form, and a reading
+/// that left something out of it is no reason to refuse.
+fn passwords(doc: &Document) -> Option<Passwords> {
     if !has_password_flag(doc) {
-        return Vec::new();
+        return None;
     }
+    let reading = enumerate(doc);
+    let holding = password_fields(doc, &reading);
+    // Everything the reading holds back is counted: a field left out for its own text counts
+    // itself, and one left out for its name at least itself.
+    let incomplete = reading.left_out > 0;
+    Some(Passwords { reading, holding, incomplete })
+}
+
+fn is_password(f: &Field) -> bool {
+    f.kind == FieldKind::Text && f.has(flags::PASSWORD)
+}
+
+/// The text fields with the Password flag (inherited or their own) among `read` whose value
+/// (`/V`, inherited or their own) is not empty and not their default value (`/DV`, which the
+/// form's author wrote and a save restores), or wasn't copied by the reading, its allowance spent,
+/// so isn't known to be either; or one of whose separate widgets carries a `/V`.
+fn password_fields(doc: &Document, reading: &Reading) -> Vec<Field> {
     let on_widget = |f: &Field| f.widgets.iter().any(|w| w.obj != f.obj && doc.get(w.obj).as_dict().is_some_and(|d| d.get(b"V").is_some()));
     let typed = |f: &Field| f.value.iter().any(|v| !v.is_empty()) && f.value.first() != f.default.first();
-    fields(doc).into_iter().filter(|f| f.kind == FieldKind::Text && f.has(flags::PASSWORD) && (typed(f) || on_widget(f))).collect()
+    let unread = |f: &Field| f.value.is_empty() && unread_value(doc, reading, f.obj, b"V");
+    reading.items.iter().filter(|f| is_password(f) && (typed(f) || unread(f) || on_widget(f))).cloned().collect()
+}
+
+/// Whether field `r`'s own `key` (`/V` or `/DV`) holds a value ([`holds_value`]).
+pub(crate) fn holds_own(doc: &Document, r: ObjRef, key: &[u8]) -> bool {
+    doc.get(r).as_dict().and_then(|d| d.get(key).map(|v| holds_value(doc, v))).unwrap_or(false)
 }
 
 /// Whether any field dictionary sets the Password flag (#3943 review). A field that inherits the
@@ -823,15 +858,20 @@ pub(crate) fn has_password_flag(doc: &Document) -> bool {
     false
 }
 
-/// Whether any text field with the Password flag holds a value in `doc`.
+/// Whether any text field with the Password flag holds a value in `doc`, or may: one whose value
+/// the form's reading didn't copy counts, and so does any form with such a field whose reading
+/// left something out, as what that holds isn't known.
 pub fn has_password_values(doc: &Document) -> bool {
-    !password_fields(doc).is_empty()
+    passwords(doc).is_some_and(|p| !p.holding.is_empty() || p.incomplete)
 }
 
 /// The typed values of the text fields with the Password flag, as (name, text) pairs, for
 /// [`restore_password_values`] after the document was rebased on a file written without them.
+/// A value the reading didn't copy, past even the allowance these fields have of their own, isn't
+/// among them: the open document has it cleared after the save, as the file has.
 pub fn password_values(doc: &Document) -> Vec<(String, String)> {
-    password_fields(doc).into_iter().filter_map(|f| f.value.first().map(|v| (f.name.clone(), v.clone()))).collect()
+    let holding = passwords(doc).map(|p| p.holding).unwrap_or_default();
+    holding.into_iter().filter_map(|f| f.value.first().map(|v| (f.name.clone(), v.clone()))).collect()
 }
 
 /// Put values from [`password_values`] back into the open document, in memory only. A field
@@ -853,11 +893,12 @@ fn field_root(doc: &Document, chain: &[ObjRef], r: ObjRef) -> ObjRef {
 }
 
 /// `r` and its field ancestors (`/Parent`), nearest first, at most 64 deep and without repeats.
+/// A `/Parent` that is an object only referring on is followed, as the reading names the field.
 fn field_chain(doc: &Document, r: ObjRef) -> Vec<ObjRef> {
     let mut chain = vec![r];
     let mut cur = r;
     while chain.len() < 64 {
-        let Some(Object::Ref(parent)) = doc.get(cur).as_dict().and_then(|d| d.get(b"Parent").cloned()) else { break };
+        let Some(parent) = doc.get(cur).as_dict().and_then(|d| d.get(b"Parent").and_then(|p| referred(doc, p))) else { break };
         if chain.contains(&parent) {
             break;
         }
@@ -880,15 +921,25 @@ fn field_chain(doc: &Document, r: ObjRef) -> Vec<ObjRef> {
 /// is such a password field. Where an ancestor's value is shared with other fields and stays, the
 /// password field gets an empty value of its own so it no longer inherits it. Returns how many
 /// fields were cleared.
+///
+/// A value the form's reading didn't copy, its allowance spent, is cleared all the same; a default
+/// it didn't copy isn't restored, and the field is left empty. When the reading left anything out
+/// (`Fields::left_out`), a field past its text allowance or what is under one, what that holds
+/// isn't known, so neither that its value can be cleared nor that an ancestor's value is the
+/// password fields' alone: that is an error, and the file isn't written.
 pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
-    let targets = password_fields(doc);
+    let Some(Passwords { reading, holding: targets, incomplete }) = passwords(doc) else { return Ok(0) };
+    if incomplete {
+        return Err(FormError::Invalid(
+            "This form has more field text than PdfCraft reads (256 MiB) and a field with the Password flag, so it isn't saved: a password value could be among the fields PdfCraft didn't read. Export the form data (FDF or XFDF) to keep what you typed.".into(),
+        ));
+    }
     if targets.is_empty() {
         return Ok(0);
     }
-    let is_password = |f: &Field| f.kind == FieldKind::Text && f.has(flags::PASSWORD);
     // Each field's ancestors, found once: only values change below, never `/Parent` (#3943
     // review: walking them again for every ancestor of every target was quadratic).
-    let chains: Vec<(bool, Vec<ObjRef>)> = fields(doc).iter().map(|g| (is_password(g), field_chain(doc, g.obj))).collect();
+    let chains: Vec<(bool, Vec<ObjRef>)> = reading.items.iter().map(|g| (is_password(g), field_chain(doc, g.obj))).collect();
     for f in &targets {
         let chain = field_chain(doc, f.obj);
         for w in &f.widgets {
@@ -926,27 +977,37 @@ pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
     Ok(targets.len())
 }
 
-/// Whether `field`'s `key` (`/V` or `/DV`, its own or inherited) is a stream with data, which
-/// [`fields`] reads as empty once its value budget is spent.
-fn unread_stream(doc: &Document, field: ObjRef, key: &[u8]) -> bool {
-    let mut node = Some(field);
-    for _ in 0..64 {
-        let Some(r) = node else { break };
-        let obj = doc.get(r);
-        let Some(d) = obj.as_dict() else { break };
-        if let Some(value) = d.get(key) {
-            return matches!(&*doc.resolve(value), Object::Stream(s) if !s.raw.is_empty());
-        }
-        node = d.reference(b"Parent");
+/// Whether the `key` (`/V` or `/DV`) the field `field` was read with holds a value, which the
+/// reading reads as none once its value allowance is spent: a stream with data, a list whose first
+/// entry is text, or a string or name that reads as something other than nothing or Off. The
+/// entry is the one the reading took, on the field or on the one it inherits it from down `/Kids`
+/// ([`Reading::values_at`]).
+fn unread_value(doc: &Document, reading: &Reading, field: ObjRef, key: &[u8]) -> bool {
+    let (v, dv) = reading.values_at.get(&field).copied().unwrap_or_default();
+    let at = if key == b"DV" { dv } else { v };
+    at.is_some_and(|r| holds_own(doc, r, key))
+}
+
+/// Whether a `/V` or `/DV` entry holds a value, read where it is and without converting a long
+/// string: one that had no room in the reading would be copied again for each field that names
+/// it. A string of more than 16 bytes counts as text.
+fn holds_value(doc: &Document, o: &Object) -> bool {
+    match &*held(doc, o) {
+        Object::Stream(s) => !s.raw.is_empty(),
+        Object::Array(a) => a.first().is_some_and(|x| matches!(&*held(doc, x), Object::String(_) | Object::Name(_))),
+        Object::String(s) if s.bytes.len() > 16 => true,
+        Object::String(s) => !matches!(s.to_text().as_str(), "" | "Off"),
+        Object::Name(n) => !matches!(n.as_slice(), b"" | b"Off"),
+        _ => false,
     }
-    false
 }
 
 /// Whether this snapshot contains a known default, including a genuinely absent /DV.
-/// An unread nonempty default stream is unknown, not an instruction to clear the field.
-/// Reuse this policy when exposing reset defaults to other execution layers.
-pub fn default_value_known(doc: &Document, field: &Field) -> bool {
-    !field.default.is_empty() || !unread_stream(doc, field.obj, b"DV")
+/// A default the reading didn't read (its allowance spent) is unknown, not an instruction to
+/// clear the field. Reuse this policy when exposing reset defaults to other execution layers.
+/// Decided by the reading that made `field` ([`Field::default_unread`]).
+pub fn default_value_known(_doc: &Document, field: &Field) -> bool {
+    !field.default_unread
 }
 
 /// Acrobat's Clear form: every field (or the named ones) back to its default value.
@@ -971,7 +1032,8 @@ pub fn reset_with_formatting(
     scripts: &mut dyn Scripts,
     calculate_with_scripts: bool,
 ) -> Result<(usize, usize), FormError> {
-    let all = fields(doc);
+    let reading = enumerate(doc);
+    let all = &reading.items;
     if all.is_empty() {
         return Err(FormError::NoForm);
     }
@@ -986,10 +1048,10 @@ pub fn reset_with_formatting(
     let mut changed = 0;
     let mut redraw_fields = std::collections::HashSet::new();
     for f in all.iter().filter(|f| named.as_ref().is_none_or(|n| n.contains(f.name.as_str()))) {
-        // A default the reading didn't decode (its budget spent) is unknown, not empty: clearing
-        // the field to nothing would lose the value it should go back to. A value it didn't decode
+        // A default the reading didn't read (its allowance spent) is unknown, not empty: clearing
+        // the field to nothing would lose the value it should go back to. A value it didn't read
         // isn't known to be the default, so it is reset.
-        let unread = |key: &[u8], read: &[String]| read.is_empty() && unread_stream(doc, f.obj, key);
+        let unread = |key: &[u8], read: &[String]| read.is_empty() && unread_value(doc, &reading, f.obj, key);
         if !default_value_known(doc, f) || (f.value == f.default && !unread(b"V", &f.value)) {
             continue;
         }

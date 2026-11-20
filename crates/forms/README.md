@@ -55,6 +55,34 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   supplies widget geometry only, any existing small square widget can reserve a nearby label.
 - Inheritable attributes (`/FT`, `/Ff`, `/V`, `/DV`, `/DA`, `/Q`, `/MaxLen`) are resolved down the
   field tree; the form's `/DA` and `/Q` are the last fallback.
+- A reading of the form (`fields`) keeps at most 64 MiB of field values, 64 MiB more of the values
+  of text fields with the Password flag, 64 MiB of scripts and 256 MiB of the rest of the fields'
+  text (full names, `/DA`, options, tooltips, captions, widget states, button actions), however
+  many fields name or inherit the same string or stream. Past that, a value or script reads as
+  none (a list of values too, when one of them doesn't fit), and a field whose own text doesn't fit
+  is left out of the reading whole, never read with part of it, as is one that would draw with a
+  `/DA` that doesn't fit; its widgets go to a later field that lists them. `fields_with_adopted`
+  counts the fields left out (`Fields::left_out`): opening the file records them as a repair, and
+  redaction then refuses to remove a widget, but one written in place with no `/Parent`: a
+  field left out may list it, or another widget of its field. Clear form (`reset`) leaves a field
+  whose default the reading didn't reach as it is, rather than emptying it, looking for that
+  default where the reading took it, down `/Kids` (`Field::default_unread`), and a script's reset
+  does the same (`default_value_known`). A save still clears a password value past the
+  reading's allowances (`clear_password_values`), looked for the same way. When the form has a
+  field with the Password flag and the reading left anything out, what that holds isn't known, so
+  the save refuses and writes no file. Any form whose field text passes the 256 MiB allowance is
+  left incomplete, not only a hostile one: about 1,370 combo boxes listing one 2,000-item list of
+  options reach it, which `main` reads whole, so such a form with a password field can't be
+  saved. The open document doesn't keep a password value past the allowances after a save. With
+  nothing left out, a password value the reading doesn't see stays in the files written, as on
+  `main`: for example that of a field whose `/FT` is given by reference, unless a field above it
+  gives `/Tx` directly, or that is nested past 64 levels, a value of the text "Off", which reads
+  as none, a parent's value under a kid whose `/V` is null, which the reading takes for no value,
+  a value 64 levels above a password field, and a parent's value a password field inherits when
+  another field read under it has a value of its own.
+  `field_actions`, `document_scripts` and renaming a field read within the same allowances;
+  `field_actions` lists an action whose script or text doesn't fit as an action of another type,
+  which `set_field_actions` keeps as it is.
 - Text and choice fields get new appearance streams (`/Tx BMC … EMC`): auto-size (`0 Tf`), comb
   (cells parted in the border colour), multiline wrapping, password masking, quadding, `/MK`
   background and border, list-box selection.

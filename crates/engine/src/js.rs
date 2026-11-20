@@ -2218,6 +2218,7 @@ mod widget_budget_review_tests {
             kind: FieldKind::Text,
             value: vec![],
             default: vec![],
+            default_unread: false,
             flags: 0,
             max_len: None,
             options: vec![],

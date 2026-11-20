@@ -523,11 +523,12 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
         {
             in_array(doc, pairs, |pairs| {
                 for pair in pairs.chunks(2) {
+                    // Names count with the scripts: a name many entries share is copied for each.
+                    if !scripts.entry() {
+                        break;
+                    }
                     let [k, v] = pair else { continue };
-                    let key = match &*doc.resolve(k) {
-                        Object::String(s) => s.to_text(),
-                        _ => continue,
-                    };
+                    let Some(key) = scripts.string(doc, k) else { continue };
                     if let Some(js) = crate::script(doc, v, &mut scripts) {
                         out.push((key, js));
                     }
@@ -634,7 +635,8 @@ pub enum PageEvent {
 }
 
 /// A script a page runs as it opens or closes, with the field whose widget carries it (`None`:
-/// the page's own action, or an annotation that isn't a field's).
+/// the page's own action, an annotation that isn't a field's, or a widget whose name didn't fit
+/// what is copied of names, which would otherwise be read in part and name another field).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PageScript {
     pub field: Option<String>,
@@ -658,6 +660,8 @@ pub fn page_scripts(doc: &Document, page: usize, event: PageEvent) -> Vec<PageSc
     };
     let additional = |d: &pdfcraft_cos::Dict| d.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned());
     let mut budget = crate::script_budget();
+    // The widgets' names are copied within one allowance, as a reading of the form copies them.
+    let mut names = crate::read::Allowance::new(crate::read::MAX_TEXT_BYTES);
     let mut out = Vec::new();
     if let Some(action) = additional(pd).and_then(|aa| aa.get(own).cloned())
         && let Some(script) = javascript(doc, &action, &mut budget)
@@ -670,7 +674,7 @@ pub fn page_scripts(doc: &Document, page: usize, event: PageEvent) -> Vec<PageSc
         let Some(ad) = annot.as_dict() else { continue };
         let Some(aa) = additional(ad) else { continue };
         let field = match item {
-            Object::Ref(r) if ad.name(b"Subtype") == Some(b"Widget".as_slice()) => crate::qualified_name(doc, *r),
+            Object::Ref(r) if ad.name(b"Subtype") == Some(b"Widget".as_slice()) => crate::qualified_name(doc, *r, &mut names),
             _ => None,
         };
         for k in keys {
@@ -685,7 +689,7 @@ pub fn page_scripts(doc: &Document, page: usize, event: PageEvent) -> Vec<PageSc
 }
 
 /// The script of a JavaScript action (`/S /JavaScript`); `None` for any other action.
-fn javascript(doc: &Document, action: &Object, budget: &mut pdfcraft_cos::DecodeBudget) -> Option<String> {
+fn javascript(doc: &Document, action: &Object, budget: &mut crate::read::Allowance) -> Option<String> {
     let a = doc.resolve(action);
     if a.as_dict()?.name(b"S")? != b"JavaScript" {
         return None;

@@ -125,6 +125,18 @@ pub enum RedactError {
         "finding and storing again what shares JBIG2 symbol data with something being removed would read more of this file than one run allows, so it can't be shown that the data leaves with it; this was refused"
     )]
     SharedJbig2Budget,
+    /// Fields whose text is past what one reading of the form takes are left out of it, and a
+    /// widget under a mark (but one written in place with no `/Parent`) may be one of theirs, or
+    /// its field may share another widget with one of them, whose value would stay in the file.
+    #[error(
+        "{0} form field(s) hold more text than PdfCraft reads at once, and a widget under the marks may belong to one, so its value could stay in the file; nothing was redacted"
+    )]
+    FormPastAllowance(usize),
+    /// A widget under a mark belongs to a form field the form's reading doesn't have (its type
+    /// given by reference, nested too deep, or missing from its parent's `/Kids`): removing the
+    /// widget would keep the field and its value.
+    #[error("a form field under the marks can't be read, so its value would stay in the file; nothing was redacted")]
+    FieldNotRead,
     #[error(transparent)]
     Edit(#[from] pdfcraft_edit::EditError),
     #[error(transparent)]
@@ -551,10 +563,13 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         .iter()
         .map(|&(pi, page_marks)| overlay::content(page_marks, &mut remaining).map(|content| (pi, content)))
         .collect::<Result<Vec<_>, _>>()?;
+    let form = pdfcraft_forms::fields_with_adopted(doc);
+    let form_tree = form_tree(doc);
     report.pages = by_page.len();
     localize_resources(doc, &by_page)?;
+    let read_fields: HashSet<ObjRef> = form.items.iter().map(|f| f.obj).collect();
     let widget_owner: Vec<(ObjRef, ObjRef)> =
-        pdfcraft_forms::fields(doc).into_iter().flat_map(|f| f.widgets.iter().map(|w| (w.obj, f.obj)).collect::<Vec<_>>()).collect();
+        form.items.into_iter().flat_map(|f| f.widgets.iter().map(|w| (w.obj, f.obj)).collect::<Vec<_>>()).collect();
     let listed_before = listed_annotations(doc);
     let mut applying = Applying {
         report,
@@ -562,6 +577,9 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         doomed_xobjects: Vec::new(),
         retired_properties: Vec::new(),
         widget_owner,
+        read_fields,
+        left_out: form.left_out,
+        form_tree,
         removed_text: Vec::new(),
         removed_cut: false,
         removed_room: interp::MAX_REMOVED_BYTES,
@@ -806,6 +824,13 @@ struct Applying {
     doomed_xobjects: Vec<ObjRef>,
     retired_properties: Vec<Object>,
     widget_owner: Vec<(ObjRef, ObjRef)>,
+    /// The fields the form's reading has: those step 3 deletes.
+    read_fields: HashSet<ObjRef>,
+    /// Fields the form's reading left out, their text past its allowances
+    /// ([`pdfcraft_forms::Fields::left_out`]).
+    left_out: usize,
+    /// What the form's `/Fields` tree reaches ([`form_tree`]).
+    form_tree: HashSet<ObjRef>,
     removed_everywhere: HashSet<ObjRef>,
     /// The text of the removed glyphs, for the metadata check at the end.
     removed_text: Vec<String>,
@@ -949,6 +974,114 @@ fn redact_page_content(
     Ok(())
 }
 
+/// The field a widget under a mark (`d`, object `r` unless written in place) takes with it, when
+/// the form's reading has that field, or `None` for one that goes alone: written in place with no
+/// `/Parent`, or naming no field.
+fn widget_field(
+    d: &Dict,
+    r: Option<ObjRef>,
+    widget_owner: &[(ObjRef, ObjRef)],
+    read_fields: &HashSet<ObjRef>,
+    left_out: usize,
+    form_tree: &HashSet<ObjRef>,
+) -> Result<Option<ObjRef>, RedactError> {
+    // One written in place with no `/Parent` leaves with all it holds, field keys and all: `/Fields`
+    // and `/Kids` list references, so no field can list it.
+    if r.is_none() && !d.contains(b"Parent") {
+        return Ok(None);
+    }
+    // A field the reading left out may list this widget in its `/Kids`, or another widget of the
+    // field the reading has, and would keep its value when that field goes with its widgets; and
+    // a widget of a field the reading doesn't have would go and leave the field and its value.
+    // While the reading left fields out, any other widget refuses the redaction, whoever the
+    // reading says owns it.
+    if left_out > 0 {
+        return Err(RedactError::FormPastAllowance(left_out));
+    }
+    // A widget written in place has no reference of its own, so no entry in `widget_owner`: its
+    // `/Parent` is its field, when the form's reading has one there.
+    let owner = match r {
+        Some(r) => widget_owner.iter().find(|(w, _)| *w == r).map(|(_, f)| *f),
+        None => d.reference(b"Parent").filter(|p| read_fields.contains(p)),
+    };
+    match owner {
+        Some(field) => Ok(Some(field)),
+        // A widget of a field the form's reading doesn't have would go and leave the field and
+        // its value: one the form's tree reaches or that names a field.
+        None if r.is_some_and(|r| form_tree.contains(&r)) || d.contains(b"Parent") || d.contains(b"T") || d.contains(b"FT") => {
+            Err(RedactError::FieldNotRead)
+        }
+        None => Ok(None),
+    }
+}
+
+/// Every object the form's `/Fields` tree reaches through `/Kids`, fields and widgets alike, each
+/// once and however deep, its text unread: a widget it reaches belongs to a field, whether or not
+/// the form's reading has that field (one whose `/FT` is given by reference, or nested past what
+/// the reading follows, whose only widget needn't name it).
+fn form_tree(doc: &Document) -> HashSet<ObjRef> {
+    let refs = |o: &Object| -> Vec<ObjRef> { doc.resolve(o).as_array().into_iter().flatten().filter_map(Object::as_ref).collect() };
+    let fields = doc.root().map(|root| doc.get(root)).and_then(|catalog| {
+        let form = doc.resolve(catalog.as_dict()?.get(b"AcroForm")?);
+        Some(refs(form.as_dict()?.get(b"Fields")?))
+    });
+    // A root `/Fields` lists more than once is walked once: its `/Kids` array, when written in it,
+    // would be read again each time.
+    let mut tree = HashSet::new();
+    let mut stack: Vec<ObjRef> = fields.unwrap_or_default().into_iter().filter(|r| tree.insert(*r)).collect();
+    // A `/Kids` array given by reference is read once: the references on the way to it, followed
+    // as far as `Document::resolve` follows them, are noted once the walk reaches it, and a node
+    // naming one of them loads nothing. A chain that ends nowhere notes only its first.
+    let mut reached = HashSet::new();
+    while let Some(n) = stack.pop() {
+        let node = doc.get(n);
+        let Some(kids) = node.as_dict().and_then(|d| d.get(b"Kids")) else { continue };
+        let kids = match kids {
+            Object::Ref(first) => {
+                let (mut r, mut hops, mut list) = (*first, Vec::new(), None);
+                for _ in 0..=32 {
+                    if reached.contains(&r) {
+                        break;
+                    }
+                    hops.push(r);
+                    let o = doc.get(r);
+                    #[cfg(test)]
+                    TREE_LOADS.with(|c| c.set(c.get() + 1));
+                    match &*o {
+                        Object::Ref(next) => r = *next,
+                        _ => {
+                            list = Some(o);
+                            break;
+                        }
+                    }
+                }
+                match &list {
+                    Some(_) => reached.extend(hops),
+                    None => reached.extend(hops.first().copied()),
+                }
+                list.map(|o| o.as_array().into_iter().flatten().filter_map(Object::as_ref).collect()).unwrap_or_default()
+            }
+            direct => refs(direct),
+        };
+        #[cfg(test)]
+        TREE_ENTRIES.with(|c| c.set(c.get() + kids.len()));
+        for k in kids {
+            if tree.insert(k) {
+                stack.push(k);
+            }
+        }
+    }
+    tree
+}
+
+#[cfg(test)]
+thread_local! {
+    /// `/Kids` entries [`form_tree`] read on this thread.
+    pub(crate) static TREE_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Objects [`form_tree`] loaded on the way to a `/Kids` array on this thread.
+    pub(crate) static TREE_LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Step 2 for one page: the marks, and whatever lies under them (with their pop-ups).
 fn remove_page_annotations(
     doc: &mut Document,
@@ -957,7 +1090,18 @@ fn remove_page_annotations(
     rects: &[[f64; 4]],
     page_marks: &[&Mark],
 ) -> Result<(), RedactError> {
-    let Applying { report, doomed_fields, widget_owner, removed_everywhere, removed_appearances, appearance_scan_limit, .. } = applying;
+    let Applying {
+        report,
+        doomed_fields,
+        widget_owner,
+        read_fields,
+        left_out,
+        form_tree,
+        removed_everywhere,
+        removed_appearances,
+        appearance_scan_limit,
+        ..
+    } = applying;
     // 2. Annotations: the marks, and whatever lies under them (with their pop-ups). An entry
     // written in place (a dictionary in `/Annots`, not a reference) is judged like any other: its
     // `/Contents` and `/IRT` stay in the file for as long as the page lists it.
@@ -1010,11 +1154,7 @@ fn remove_page_annotations(
                 None => inline_gone[i] = true,
             }
             if kind == b"Widget" {
-                // A widget written in place has no reference of its own; its `/Parent` is the field,
-                // even one no referenced widget belongs to (it then has no entry in `widget_owner`).
-                // Step 3 deletes only what the form lists as a field, so any `/Parent` is safe here.
-                let owner = r.and_then(|r| widget_owner.iter().find(|(w, _)| *w == r).map(|(_, f)| *f)).or_else(|| d.reference(b"Parent"));
-                if let Some(field) = owner
+                if let Some(field) = widget_field(d, r, widget_owner, read_fields, *left_out, form_tree)?
                     && !doomed_fields.contains(&field)
                 {
                     doomed_fields.push(field);
