@@ -3546,11 +3546,11 @@ title = "Create PDF Portfolios"
 area = "D"
 tier = "P3"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["create.portfolio"]
+tools = ["doc_create_portfolio"]
+evidence = ["crates/organize/src/tests.rs::a_portfolio_lists_its_files_in_order_with_exhibits_and_dates", "crates/organize/src/tests.rs::a_portfolio_refuses_unknown_repeated_or_missing_files_and_changes_nothing", "crates/organize/src/tests.rs::exhibit_labels_count_in_letters_or_numbers", "crates/automation/tests/it/portfolio_create.rs::a_portfolio_holds_every_file_unchanged_and_presents_the_one_asked_for", "crates/automation/tests/it/portfolio_create.rs::a_portfolio_opens_on_its_cover_sheet_by_default", "crates/ui-egui/tests/it/portfolio_create.rs::the_portfolio_dialog_bundles_the_files_into_a_new_portfolio", "crates/ui-egui/tests/it/portfolio_create.rs::a_date_it_cannot_read_keeps_the_dialog_open_with_the_reason"]
+notes = "Create a PDF ▸ PDF portfolio bundles picked files of any type, unchanged and in order, into one PDF portfolio (ISO 32000-2 §7.11.6): its page is a cover sheet with a title, a note and an index of the files; each file is embedded with its exhibit label (A, B… or 1, 2…, after a chosen word such as Exhibit or Tab), description and document date, listed through a /Schema (Exhibit, Name, Description, Document date, Modified, Size) sorted by a hidden Order field, in a details or tile view, opening on the cover sheet or the first file. doc_create_portfolio does the same headlessly. Not yet: /Folders, adding to or editing an existing portfolio's files and column values, a custom navigator, colour and header styling of the list."
 
 [[feature]]
 id = "organize.document-properties"

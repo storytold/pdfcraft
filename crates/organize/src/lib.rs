@@ -22,13 +22,17 @@ mod labels;
 mod outline;
 mod outline_io;
 mod pdfx;
+mod portfolio;
 mod prune;
 mod templates;
 mod transition;
 pub mod view;
 mod xmp;
 
-pub use attachments::{add_attachment, attachment_keys, delete_attachment, mime_for_name, set_attachment_description};
+pub use attachments::{
+    NewAttachment, add_attachment, add_attachments, attachment_keys, delete_attachment, mime_for_name, set_attachment_description,
+    unique_attachment_keys,
+};
 pub use boxes::{BoxSpec, PageBox, page_boxes, set_page_box};
 pub use comments::import_comments;
 pub use dedupe::dedupe_resources;
@@ -43,6 +47,7 @@ pub use outline::{
     move_bookmark, rename_bookmark, set_bookmark_color, set_bookmark_open, set_bookmark_page, set_bookmark_style, top_level_bookmarks,
 };
 pub use outline_io::{MAX_IMPORT_BOOKMARKS, OutlineNode, OutlineTree, import_outline, outline_tree, unmapped, view_arity};
+pub use portfolio::{ExhibitStyle, MAX_PORTFOLIO_FILES, PortfolioItem, PortfolioLayout, PortfolioSpec, exhibit_label, set_portfolio};
 pub use templates::{Template, set_template_hidden, spawn_template, templates};
 pub use transition::{TRANSITION_DIRECTIONS, TRANSITION_STYLES, Transition, TransitionSpec, set_transition};
 pub use view::{InitialView, displays_doc_title, initial_view, set_initial_view};

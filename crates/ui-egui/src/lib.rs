@@ -210,6 +210,7 @@ use workflows::ocr_verify;
 #[cfg(target_arch = "wasm32")]
 use workflows::ocr_web;
 use workflows::optimize_ui;
+use workflows::portfolio_ui;
 use workflows::print_paper;
 use workflows::print_ui;
 use workflows::scan_clean_ui;
@@ -707,6 +708,8 @@ pub struct PdfCraftApp {
     pub(crate) combine_thumbs: combine_grid::Thumbs,
     /// Images waiting for the resolution choice (released on cancel).
     pub image_import: Option<create_ui::ImageImport>,
+    /// Create a PDF ▸ PDF portfolio: the files and settings waiting in its dialog.
+    pub portfolio_draft: Option<portfolio_ui::PortfolioDraft>,
     /// The custom stamp library, and the stamp being created.
     pub custom_stamps: Vec<stamps_ui::CustomStamp>,
     pub stamp_draft: stamps_ui::StampDraft,

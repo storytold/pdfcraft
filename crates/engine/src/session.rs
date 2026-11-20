@@ -21,8 +21,11 @@ use crate::{
 
 mod editing;
 mod files;
+mod portfolio;
 mod save;
 mod view;
+
+pub use portfolio::{PortfolioFile, PortfolioOptions, parse_document_date};
 
 #[derive(Default)]
 pub struct Session {
