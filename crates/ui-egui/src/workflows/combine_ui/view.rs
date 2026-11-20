@@ -261,6 +261,7 @@ fn skip_prompt(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         lines.push(crate::i18n::fmt(tl!("and {n} more"), &[("n", &more)]));
     }
     let out = Prompt::new(tl!("Leave out files that can't be read?"), tl!("These files can't be read, so they won't be in the combined PDF:"))
+        .opened(Bind::bound(&mut app.combine_tab.confirm_skip))
         .lines(lines.into_iter().map(Into::into))
         .answers([FooterButton::new(tl!("Combine the rest"), DialogRole::Accept), FooterButton::new(tl!("Cancel"), DialogRole::Cancel)])
         .show(ui);
@@ -289,7 +290,8 @@ fn unlock_dialog(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if let Some(error) = error {
         dialog = dialog.error(error.into());
     }
-    let out = dialog.show(ui);
+    let mut open = true;
+    let out = dialog.opened(Bind::bound(&mut open)).show(ui);
     if let Some(mut answer) = out.answer {
         let rows = answer.take_tag::<Vec<u64>>().unwrap_or(rows);
         // It closes the dialog on success and sets the error on a wrong password.

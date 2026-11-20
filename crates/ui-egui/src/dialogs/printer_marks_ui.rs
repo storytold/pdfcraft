@@ -121,7 +121,8 @@ fn params(count: usize, current: usize, unit: Unit) -> Vec<Param> {
             }
             out.response
         })
-        .companions(MARKS),
+        .companions(MARKS)
+        .full_width(),
     ];
     rows.extend(marks.map(|(key, label)| Param::new(key, label, ParamKind::bool(true))));
     rows.push(Param::number("line_weight", tl!("Line weight"), 0.25, 0.25, 2).bounds(Some(0.1), Some(4.0)).unit(unit_kind(Unit::Points)));
