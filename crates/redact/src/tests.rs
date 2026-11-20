@@ -4848,6 +4848,104 @@ fn hidden_fixture() -> Document {
     doc
 }
 
+/// A reply kept with the comments to an attachment or a link that Remove Hidden Information
+/// removes would keep it, and its file or address, in the saved file through its `/IRT`. The
+/// reply loses its `/IRT` and `/RT` and stays as a comment, held by reference or written in place
+/// in `/Annots`, and naming what it answers directly, through a reference to a reference, through
+/// a chain of 32 references, or as the pop-up that goes with it; a pop-up naming it through a
+/// reference to a reference goes too, and so do pop-ups written in place naming it directly or
+/// through a reference to a reference, and pop-ups whose `/Subtype` is given by reference. A reply
+/// to what stays keeps its `/IRT`, and pop-ups written in place whose `/Parent` names what stays
+/// are kept.
+#[test]
+fn a_reply_kept_to_an_attachment_or_link_removed_no_longer_keeps_it() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut objs = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        // 3 page: the attachment, the link, their replies, one more reply written in place, and
+        // three pop-ups of the attachment written in place, naming it directly and through 11,
+        // and one whose `/Subtype` is given by reference (49).
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R 10 0 R 12 0 R 13 0 R 14 0 R 15 0 R 48 0 R 50 0 R << /Type /Annot /Subtype /Text /Rect [90 90 100 100] /IRT 6 0 R /RT /R /Contents (Reply four) >> << /Type /Annot /Subtype /Popup /Rect [100 130 200 180] /Parent 5 0 R >> << /Type /Annot /Subtype /Popup /Rect [100 190 200 240] /Parent 11 0 R >> << /Type /Annot /Subtype 49 0 R /Rect [100 245 200 295] /Parent 5 0 R >>] >>".to_vec(),
+        stream("", b""),
+        // 5 attachment, 6 link
+        b"<< /Type /Annot /Subtype /FileAttachment /Rect [10 10 20 20] /FS 8 0 R /Popup 13 0 R >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Link /Rect [30 10 40 20] /A << /S /URI /URI (https://secret.example/x) >> >>".to_vec(),
+        // 7 a reply to the attachment
+        b"<< /Type /Annot /Subtype /Text /Rect [50 50 60 60] /IRT 5 0 R /RT /R /Contents (Reply one) >>".to_vec(),
+        b"<< /Type /Filespec /F (a.txt) /EF << /F 9 0 R >> >>".to_vec(),
+        stream("", b"SECRETFILECONTENTS"),
+        // 10 a reply to the link
+        b"<< /Type /Annot /Subtype /Text /Rect [60 60 70 70] /IRT 6 0 R /RT /Group /Contents (Reply two) >>".to_vec(),
+        // 11 a reference to the attachment, and 12 a reply naming it through that
+        b"5 0 R".to_vec(),
+        b"<< /Type /Annot /Subtype /Text /Rect [70 70 80 80] /IRT 11 0 R /Contents (Reply three) >>".to_vec(),
+        // 13 the attachment's pop-up, 14 a reply to that, and 15 a pop-up naming the attachment
+        // through the reference to it
+        b"<< /Type /Annot /Subtype /Popup /Rect [100 10 200 60] /Parent 5 0 R >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Text /Rect [80 80 90 90] /IRT 13 0 R /Contents (Reply five) >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Popup /Rect [100 70 200 120] /Parent 11 0 R >>".to_vec(),
+    ];
+    // 16 to 47 a chain of 32 references to the attachment, as many as `Document::resolve` follows,
+    // and 48 a reply naming it through them
+    objs.extend((16..48).map(|n| if n == 47 { b"5 0 R".to_vec() } else { format!("{} 0 R", n + 1).into_bytes() }));
+    objs.push(b"<< /Type /Annot /Subtype /Text /Rect [20 80 30 90] /IRT 16 0 R /Contents (Reply six) >>".to_vec());
+    // 49 the name `/Popup`, and 50 a pop-up of the attachment whose `/Subtype` is given by it
+    objs.push(b"/Popup".to_vec());
+    objs.push(b"<< /Type /Annot /Subtype 49 0 R /Rect [200 10 290 60] /Parent 5 0 R >>".to_vec());
+    // Whether a full save of `doc` holds `what` in any object it writes, a stream's decoded data
+    // or a string's bytes, object streams included.
+    fn holds(o: &Object, what: &[u8]) -> bool {
+        let has = |b: &[u8]| b.windows(what.len()).any(|w| w == what);
+        match o {
+            Object::String(s) => has(&s.bytes),
+            Object::Array(a) => a.iter().any(|v| holds(v, what)),
+            Object::Dict(d) => d.iter().any(|(_, v)| holds(v, what)),
+            Object::Stream(s) => s.dict.iter().any(|(_, v)| holds(v, what)) || s.decoded().is_ok_and(|d| has(&d)),
+            _ => false,
+        }
+    }
+    let saved = |doc: &Document| Document::open(Arc::new(write_full(doc, &SaveOptions::default()).unwrap())).unwrap();
+    let holds = |doc: &Document, what: &[u8]| doc.object_numbers().into_iter().any(|n| holds(&doc.get(ObjRef::new(n, doc.generation(n))), what));
+    let reply = |doc: &Document, n: u32| doc.get(ObjRef::new(n, 0)).as_dict().cloned().unwrap();
+    // The entries written in place in page 1's `/Annots` whose `/Subtype` is `kind`.
+    let written_in_place = |doc: &Document, kind: &[u8]| -> Vec<Dict> {
+        let p = pdfcraft_model::pages(doc).swap_remove(0);
+        annots_of(doc, &p.dict).into_iter().filter_map(|a| a.as_dict().cloned()).filter(|d| crate::subtype(doc, d).as_deref() == Some(kind)).collect()
+    };
+    let in_place = |doc: &Document| written_in_place(doc, b"Text").swap_remove(0);
+
+    let mut doc = pdf(objs.clone());
+    let chain = doc.resolve(&Object::Ref(ObjRef::new(16, 0)));
+    assert_eq!(chain.as_dict().and_then(|d| d.name(b"Subtype")), Some(&b"FileAttachment"[..]), "the chain reaches the attachment");
+    remove_hidden(&mut doc, &[Hidden::Attachments]).unwrap();
+    let file = saved(&doc);
+    assert!(!holds(&file, b"SECRETFILECONTENTS"), "the attachment's file is gone");
+    for n in [7, 12, 14, 48] {
+        let d = reply(&doc, n);
+        assert!(!d.contains(b"IRT") && !d.contains(b"RT") && d.contains(b"Contents"), "reply {n}: {d:?}");
+    }
+    assert!(reply(&doc, 10).contains(b"IRT") && in_place(&doc).contains(b"IRT"), "replies to the link, which stays, keep theirs");
+    assert!(holds(&file, b"Reply one") && holds(&file, b"Reply three") && holds(&file, b"Reply five"), "the replies stay");
+    let p = pdfcraft_model::pages(&doc).swap_remove(0);
+    let listed: Vec<Option<ObjRef>> = annots_of(&doc, &p.dict).iter().map(Object::as_ref).collect();
+    assert!(![13, 15, 50].iter().any(|&n| listed.contains(&Some(ObjRef::new(n, 0)))), "the pop-ups go with it: {listed:?}");
+    assert!(written_in_place(&doc, b"Popup").is_empty(), "so do the pop-ups written in place");
+
+    let mut doc = pdf(objs);
+    let popups = written_in_place(&doc, b"Popup");
+    assert_eq!(popups.len(), 3, "the attachment's pop-ups written in place");
+    remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]).unwrap();
+    let file = saved(&doc);
+    assert!(!holds(&file, b"secret.example"), "the link's address is gone");
+    for d in [reply(&doc, 10), in_place(&doc)] {
+        assert!(!d.contains(b"IRT") && !d.contains(b"RT") && d.contains(b"Contents"), "{d:?}");
+    }
+    assert!(reply(&doc, 7).contains(b"IRT") && reply(&doc, 48).contains(b"IRT"), "the replies to the attachment, which stays, keep theirs");
+    assert!(holds(&file, b"Reply two") && holds(&file, b"Reply four"), "the replies stay");
+    assert_eq!(written_in_place(&doc, b"Popup"), popups, "the attachment's pop-ups written in place stay as they were");
+}
+
 #[test]
 fn hidden_information_is_counted_and_removed() {
     use crate::sanitize::{Hidden, remove_hidden, sanitize, scan};
