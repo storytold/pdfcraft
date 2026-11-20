@@ -544,3 +544,32 @@ mod unlinked_update_tests {
         assert!(!pdfcraft_cos::Document::open(bytes).expect("cos opens it").rebuilt_unlinked_update());
     }
 }
+
+#[cfg(test)]
+mod decryption_message_tests {
+    use super::*;
+
+    /// A one-page file whose trailer names `encrypt` as its `/Encrypt`.
+    fn encrypted(encrypt: &str) -> Vec<u8> {
+        pdfcraft_testkit::Pdf::new()
+            .obj("<< /Type /Catalog /Pages 2 0 R >>")
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>")
+            .obj("<< /Type /Page /Parent 2 0 R >>")
+            .obj(encrypt)
+            .trailer_entry("/Encrypt 4 0 R /ID [<00112233445566778899aabbccddeeff> <00112233445566778899aabbccddeeff>]")
+            .build()
+    }
+
+    /// Encryption the parser can't decrypt is said in words, not with its error's name.
+    #[test]
+    fn an_unsupported_handler_is_said_in_words() {
+        for f in [
+            check_pages(Arc::new(encrypted("<< /Filter /Adobe.PubSec /V 4 /R 4 >>")), None, 1).err(),
+            inspect(Arc::new(encrypted("<< /Filter /Adobe.PubSec /V 4 /R 4 >>")), None).err(),
+        ] {
+            let message = f.expect("it doesn't open").to_string();
+            assert!(message.contains("can't decrypt"), "{message}");
+            assert!(!message.contains("UnsupportedAlgorithm"), "{message}");
+        }
+    }
+}
