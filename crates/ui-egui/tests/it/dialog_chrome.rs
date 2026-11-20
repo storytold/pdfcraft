@@ -58,7 +58,7 @@ fn space_audit_tab_measures_the_file() {
     crate::support::wait_until(&mut h, "the space audit", |app| !audit(app).is_empty());
     h.run_steps(2);
     let card = dialog_rect(&h);
-    let total = h.get_by_label("Total").rect();
+    let total = h.get_by_role_and_label(egui::accesskit::Role::ListItem, "Total").rect();
     assert!(card.contains_rect(total), "the Total row {total:?} lies in the dialog {card:?}");
 }
 
