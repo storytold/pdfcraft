@@ -117,32 +117,50 @@ pub(crate) fn bullet_items(blocks: &[Block]) -> Vec<(usize, usize)> {
 /// by `.` or `)`; or one letter followed by `)` ("a)", "а)"); then a space or nothing. "1.5 kg",
 /// "i.e." and "2026. Year" are text.
 pub(crate) fn list_item(text: &str) -> bool {
-    let t = text.trim_start();
-    let Some(first) = t.chars().next() else { return false };
+    list_item_chars(text.chars().map(|c| (0usize, c)))
+}
+
+fn list_item_runs(runs: &[Run]) -> bool {
+    list_item_chars(runs.iter().enumerate().flat_map(|(ri, r)| r.text.chars().map(move |c| (ri, c))))
+}
+
+fn list_item_chars(mut chars: impl Iterator<Item = (usize, char)>) -> bool {
+    let Some((_, first)) = chars.find(|(_, c)| !c.is_whitespace()) else { return false };
     if BULLETS.contains(&first) || DASHES.contains(&first) || first == '*' {
         return true;
     }
-    let digits = t.chars().take_while(char::is_ascii_digit).count();
-    // ASCII digits are one byte each and `first` is one whole character, so both cuts fall on
-    // character boundaries.
-    let (rest, marks): (&str, &[char]) = if (1..=3).contains(&digits) {
-        (t.get(digits..).unwrap_or_default(), &['.', ')'])
-    } else if digits == 0 && first.is_alphabetic() {
-        (t.get(first.len_utf8()..).unwrap_or_default(), &[')'])
+    let mark_run = if first.is_ascii_digit() {
+        let mut digits = 1usize;
+        loop {
+            let Some((ri, c)) = chars.next() else { return false };
+            if c.is_ascii_digit() {
+                digits += 1;
+                if digits > 3 {
+                    return false;
+                }
+            } else if c == '.' || c == ')' {
+                break ri;
+            } else {
+                return false;
+            }
+        }
+    } else if first.is_alphabetic() {
+        let Some((ri, ')')) = chars.next() else { return false };
+        ri
     } else {
         return false;
     };
-    let mut after = rest.chars();
-    after.next().is_some_and(|c| marks.contains(&c)) && after.next().is_none_or(char::is_whitespace)
+    chars.next().is_none_or(|(ri, c)| c.is_whitespace() || (ri != mark_run && !c.is_ascii_digit()))
 }
 
-/// Whether a line's text ends a sentence (closing quotes and brackets aside). Text set without
-/// paragraph spacing gives no other sign that a paragraph ends there, so such a line is left
-/// apart from the next rather than joined to it wrongly.
-fn ends_sentence(text: &str) -> bool {
-    text.trim_end()
-        .trim_end_matches(['"', '\'', '”', '’', '“', '»', ')', ']', '」', '』'])
-        .ends_with(['.', '!', '?', ':', ';', '…', '。', '！', '？'])
+/// Whether a paragraph's trailing text ends a sentence (closing quotes and brackets aside). Text
+/// set without paragraph spacing gives no other sign that a paragraph ends there, so such a line
+/// is left apart from the next rather than joined to it wrongly.
+fn ends_sentence(runs: &[Run]) -> bool {
+    let mut chars = runs.iter().rev().flat_map(|r| r.text.chars().rev()).skip_while(|c| c.is_whitespace());
+    chars
+        .find(|c| !['"', '\'', '”', '’', '“', '»', ')', ']', '」', '』'].contains(c))
+        .is_some_and(|c| ['.', '!', '?', ':', ';', '…', '。', '！', '？'].contains(&c))
 }
 
 /// Whether `c` is of the writing that puts no space between words: Chinese and Japanese
@@ -171,7 +189,7 @@ pub(crate) fn join_wrapped<'a>(mut paras: Vec<Vec<Run<'a>>>, level: impl Fn(&[Ru
         .map(|r| r.block.rect)
         .filter(|r| r[0].is_finite() && r[2].is_finite())
         .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, r), x| (l.min(x[0]), r.max(x[2])));
-    if right <= left {
+    if right <= left || !(right - left).is_finite() {
         return paras;
     }
     // Top to bottom, then left to right, by each paragraph's first run.
@@ -189,13 +207,14 @@ pub(crate) fn join_wrapped<'a>(mut paras: Vec<Vec<Run<'a>>>, level: impl Fn(&[Ru
                 // The line break was a word space, unless the line ends in a hyphen; the hyphen
                 // stays, as it may belong to the word ("well-known"). Chinese and Japanese text
                 // wraps between characters, with no space.
-                let unspaced_break = |end: &str| {
-                    end.chars().next_back().is_some_and(unspaced) && para.first().and_then(|r| r.text.chars().next()).is_some_and(unspaced)
-                };
-                if let Some(end) = prev.last_mut()
-                    && !end.text.ends_with(char::is_whitespace)
-                    && !end.text.ends_with('-')
-                    && !unspaced_break(&end.text)
+                let last_char = prev.iter().rev().flat_map(|r| r.text.chars().rev()).next();
+                let first_char = para.iter().flat_map(|r| r.text.chars()).next();
+                if let (Some(end_ch), Some(start_ch)) = (last_char, first_char)
+                    && !end_ch.is_whitespace()
+                    && !start_ch.is_whitespace()
+                    && end_ch != '-'
+                    && !(unspaced(end_ch) && unspaced(start_ch))
+                    && let Some(end) = prev.iter_mut().rev().find(|r| !r.text.is_empty())
                 {
                     end.text.push(' ');
                 }
@@ -214,7 +233,8 @@ fn wraps_into(prev: &[Run], next: &[Run], [left, right]: [f64; 2]) -> bool {
     let (a, b) = (last.block, first.block);
     let size = a.size;
     let alike = size.is_finite() && size > 0.0 && (a.size - b.size).abs() <= 0.5 && a.rotation.abs() <= 0.1 && b.rotation.abs() <= 0.1;
-    if !alike || a.rect[3] - a.rect[1] > ONE_LINE * size || list_item(&first.text) || ends_sentence(&last.text) {
+    let starts_list = if next.len() == 1 { list_item(&first.text) } else { list_item_runs(next) };
+    if !alike || a.rect[3] - a.rect[1] > ONE_LINE * size || starts_list || ends_sentence(prev) {
         return false;
     }
     // The last line: the runs at the end of `prev` that share the last run's line.
@@ -228,4 +248,81 @@ fn wraps_into(prev: &[Run], next: &[Run], [left, right]: [f64; 2]) -> bool {
     // Just below: no paragraph space between the two lines.
     let gap = a.rect[1] - b.rect[3];
     full && same_left && (-LINE_GAP * size..=LINE_GAP * size).contains(&gap)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn block(text: &str, rect: [f64; 4], bold: bool, italic: bool) -> Block {
+        Block { text: text.to_string(), rect, size: 12.0, bold, italic, color: [0.0, 0.0, 0.0], rotation: 0.0, space_around: [false, false] }
+    }
+
+    fn run<'a>(b: &'a Block) -> Run<'a> {
+        Run { block: b, text: b.text.clone() }
+    }
+
+    #[test]
+    fn sentence_end_and_list_marker_split_across_runs_do_not_join_wrapped() {
+        // 1. A sentence whose period is in an italic run followed by a closing parenthesis run
+        // on a full-width line must not merge with the paragraph below it.
+        let b1 = block("The parties agreed (", [50.0, 700.0, 200.0, 712.0], false, false);
+        let b2 = block("for one year.", [200.0, 700.0, 445.0, 712.0], false, true);
+        let b3 = block(")", [445.0, 700.0, 450.0, 712.0], false, false);
+        let b4 = block("The agreement begins in May", [50.0, 686.0, 300.0, 698.0], false, false);
+
+        let paras = vec![vec![run(&b1), run(&b2), run(&b3)], vec![run(&b4)]];
+        let joined = join_wrapped(paras, |_| 0);
+        assert_eq!(joined.len(), 2, "sentence ending before closing paren run should not wrap into next paragraph");
+
+        // 2. A numbered or lettered list item whose marker is split across styled runs (e.g. bold "2" + ". Item"
+        // or italic "a" + ") Item") must not merge into the full-width line above it.
+        let lead = block("The tenant shall comply with the following rules and conditions", [50.0, 700.0, 450.0, 712.0], false, false);
+        let num_bold = block("2", [50.0, 686.0, 58.0, 698.0], true, false);
+        let num_rest = block(". Keep the premises clean", [58.0, 686.0, 250.0, 698.0], false, false);
+        let paras_num = vec![vec![run(&lead)], vec![run(&num_bold), run(&num_rest)]];
+        let joined_num = join_wrapped(paras_num, |_| 0);
+        assert_eq!(joined_num.len(), 2, "split numbered list marker should stay a separate paragraph");
+
+        let let_italic = block("a", [50.0, 686.0, 58.0, 698.0], false, true);
+        let let_rest = block(") Keep the premises clean", [58.0, 686.0, 250.0, 698.0], false, false);
+        let paras_let = vec![vec![run(&lead)], vec![run(&let_italic), run(&let_rest)]];
+        let joined_let = join_wrapped(paras_let, |_| 0);
+        assert_eq!(joined_let.len(), 2, "split lettered list marker should stay a separate paragraph");
+
+        // 3. A styled marker run ("1." or "2" + ".") followed by an item run without a leading space
+        // must still be recognized as a list item, whereas a split decimal ("1." + "5 kg") wraps as text.
+        let num_marker = block("1.", [50.0, 686.0, 62.0, 698.0], true, false);
+        let item_no_space = block("Pay the rent on time", [70.0, 686.0, 250.0, 698.0], false, false);
+        let joined_marker = join_wrapped(vec![vec![run(&lead)], vec![run(&num_marker), run(&item_no_space)]], |_| 0);
+        assert_eq!(joined_marker.len(), 2, "styled '1.' run followed by unspaced item run must stay apart");
+
+        let dot_run = block(".", [58.0, 686.0, 62.0, 698.0], false, false);
+        let joined_three = join_wrapped(vec![vec![run(&lead)], vec![run(&num_bold), run(&dot_run), run(&item_no_space)]], |_| 0);
+        assert_eq!(joined_three.len(), 2, "three-run split list marker must stay apart");
+
+        let dec_frac = block("5 kg of flour", [62.0, 686.0, 200.0, 698.0], false, false);
+        let joined_dec = join_wrapped(vec![vec![run(&lead)], vec![run(&num_marker), run(&dec_frac)]], |_| 0);
+        assert_eq!(joined_dec.len(), 1, "split decimal '1.' + '5 kg' should wrap as ordinary text");
+    }
+
+    #[test]
+    fn join_wrapped_handles_overflowing_page_span_and_trailing_empty_runs() {
+        // Extreme coordinates whose span (right - left) overflows f64 to +inf must not treat short lines as full-width.
+        let b_far_left = block("Short line", [-1.0e308, 700.0, -1.0e308 + 50.0, 712.0], false, false);
+        let b_below = block("Next paragraph", [-1.0e308, 686.0, -1.0e308 + 60.0, 698.0], false, false);
+        let b_far_right = block("Far right", [1.0e308 - 50.0, 500.0, 1.0e308, 512.0], false, false);
+        let paras = vec![vec![run(&b_far_left)], vec![run(&b_below)], vec![run(&b_far_right)]];
+        let joined = join_wrapped(paras, |_| 0);
+        assert_eq!(joined.len(), 3);
+
+        // Hyphen before a trailing empty run must not insert a spurious space when wrapping.
+        let b_hyph = block("well-", [50.0, 700.0, 449.0, 712.0], false, false);
+        let b_empty = block("", [449.0, 700.0, 450.0, 712.0], false, true);
+        let b_cont = block("known fact.", [50.0, 686.0, 200.0, 698.0], false, false);
+        let joined_hyph = join_wrapped(vec![vec![run(&b_hyph), run(&b_empty)], vec![run(&b_cont)]], |_| 0);
+        assert_eq!(joined_hyph.len(), 1);
+        let text: String = joined_hyph.iter().flatten().map(|r| r.text.as_str()).collect();
+        assert_eq!(text, "well-known fact.");
+    }
 }
