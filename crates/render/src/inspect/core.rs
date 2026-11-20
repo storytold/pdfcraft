@@ -279,6 +279,7 @@ impl<'a> Inspector<'a> {
             info.has_javascript |= names.get(b"JavaScript").is_ok();
         }
         info.portfolio = catalog.get(b"Collection").ok().and_then(|o| self.dict(o)).map(|c| self.portfolio(c, &info.attachments));
+        self.associated_files(catalog, info, &mut text_budget);
         if let Ok(action) = catalog.get(b"OpenAction")
             && let Some(dict) = self.dict(action)
             && dict.get(b"S").ok().and_then(|o| self.resolve(o).as_name().ok()) == Some(&b"JavaScript"[..])

@@ -21,6 +21,7 @@ use crate::OpenError;
 use crate::structure::{LazyStructure, Structure};
 
 mod annotations;
+mod associated;
 mod core;
 mod model;
 mod navigation;
@@ -28,14 +29,15 @@ mod resources;
 
 #[cfg(test)]
 use annotations::{MAX_ANNOTATION_BYTES, MAX_LINK_ATTACHMENT_TEXT_BYTES, MAX_REMOTE_FILE_SPEC_BYTES, retained};
+pub use associated::associated_file_data;
 use core::Inspector;
 pub use core::{check_pages, inspect, pretty_date};
 #[cfg(test)]
 use core::{inspect_structure, spend};
 pub use model::{
-    Annotation, Attachment, AttachmentSource, DestView, Field, FieldKind, FontInfo, Layer, LayerItem, LayerOp, LayerRow, Link, LinkTarget,
-    MAX_GROUP_DEPTH, OutlineItem, PageInfo, PageTransition, Popup, Portfolio, PortfolioView, RemoteDestination, ReviewStates, TransitionStyle, Xfa,
-    fill_group_text, group_primaries, link_replies, thread_tops,
+    Annotation, AssociatedFile, AssociatedFileOwner, AssociatedFileRelationship, Attachment, AttachmentSource, DestView, Field, FieldKind, FontInfo,
+    Layer, LayerItem, LayerOp, LayerRow, Link, LinkTarget, MAX_ASSOCIATED_FILE_OWNERS, MAX_GROUP_DEPTH, OutlineItem, PageInfo, PageTransition, Popup,
+    Portfolio, PortfolioView, RemoteDestination, ReviewStates, TransitionStyle, Xfa, fill_group_text, group_primaries, link_replies, thread_tops,
 };
 pub use navigation::named_destination;
 #[cfg(test)]
@@ -86,6 +88,11 @@ pub struct DocInfo {
     pub attachments: Vec<Attachment>,
     /// The document is a PDF portfolio (`/Collection`): its documents are `attachments`.
     pub portfolio: Option<Portfolio>,
+    /// PDF 2.0 associated files (`/AF`) of the document, its pages and their annotations. A file
+    /// can be listed here and in `attachments` too (PDF/A-3 asks for both).
+    pub associated_files: Vec<AssociatedFile>,
+    /// The `/AF` entries left out of `associated_files`, or read with a default, and why.
+    pub associated_file_notes: Vec<String>,
     /// Pages with a presentation transition (`/Trans`) or display time (`/Dur`), in page order.
     pub transitions: Vec<PageTransition>,
     /// Where the document opens (`/OpenAction`): the (0-based page, view) of its destination,
@@ -95,6 +102,8 @@ pub struct DocInfo {
     pub warnings: Vec<String>,
 }
 
+#[cfg(test)]
+mod associated_tests;
 #[cfg(test)]
 mod portfolio_tests;
 #[cfg(test)]

@@ -183,11 +183,14 @@ pub fn tools() -> Vec<ToolDef> {
             )),
         t("attachment_edit", "Edit an attachment description", "Change the description of a document attachment by its exact key from doc_info, or by a unique displayed name. An empty description clears it. The file and other attachment data are preserved. Undoable.")
             .with(schema(json!({"doc": doc(), "key": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}}), &["doc", "description"])),
+        t("associated_file_save", "Save an associated file", "Write one of the document's PDF 2.0 associated files (/AF of the document, a page or an annotation; `file` is its number in doc_info's associated_files) to path, decoded, as the file it holds. The document is unchanged. An entry doc_info leaves out (associated_file_notes says why) can't be saved; a file whose stream can't be decoded, or that is encrypted without the password, is an error that says so.")
+            .destructive()
+            .with(schema(json!({ "doc": doc(), "file": { "type": "integer", "minimum": 1 }, "path": { "type": "string" } }), &["doc", "file", "path"])),
         t("doc_open", "Open a PDF", "Open a PDF file and return its document id, page count and whether it can be edited. A path that ends in open parameters, as help systems pass them (`manual.pdf#page=12`, `#nameddest=Intro` or `#Intro`), opens the file and reports its destination as link_open does; a path that names a file opens as it is.")
             .cmd("file.open")
             .with(schema(json!({ "path": { "type": "string" }, "password": { "type": "string", "description": "User or owner password for encrypted files." } }), &["path"])),
         t("doc_list", "List open documents", "List the open documents with their ids, page counts and unsaved state.").ro().with(schema(json!({}), &[])),
-        t("doc_info", "Inspect a document", "Metadata, page sizes and labels, bookmarks, annotations, form fields, links, layers and the Layers panel's tree (layer_order), page transitions and display times, the destination it opens at, attachments (and, for a PDF portfolio, the one it presents first), fonts, security, repair notes and the objects that could not be read.")
+        t("doc_info", "Inspect a document", "Metadata, page sizes and labels, bookmarks, annotations, form fields, links, layers and the Layers panel's tree (layer_order), page transitions and display times, the destination it opens at, attachments (and, for a PDF portfolio, the one it presents first), PDF 2.0 associated files (/AF of the document, pages and annotations, with their relationship; associated_file_notes says which entries were left out and why), fonts, security, repair notes and the objects that could not be read.")
             .ro()
             .cmd("file.properties")
             .with(schema(json!({ "doc": doc() }), &["doc"])),

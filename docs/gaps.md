@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-11-20 | **Last updated:** 2026-11-20 | **Change:** minor (gap 22: associated files (`/AF`) of the document, pages and annotations are listed and saved; writing them remains; estimates unchanged)
 > **Last reviewed:** 2026-11-11 | **Last updated:** 2026-11-11 | **Change:** minor (gap 8: known residual risk for the LibreOffice sidecar, sandbox tracked in #6953; estimates unchanged)
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
@@ -409,9 +410,11 @@ update the numbers.
 
 ### 22. PDF 2.0 extras, linearization, Arlington validation
 
-- **Missing:** UTF-8 text strings, associated files (`/AF`), document parts, structure namespaces;
-  linearized save (Fast Web View); deterministic save; structural validation against the Arlington
-  model.
+- **Missing:** UTF-8 text strings, writing associated files (`/AF`; those of the document, pages
+  and annotations are listed in `doc_info` and saved with `associated_file_save`, but none can be
+  added or edited, and `/AF` on form XObjects, structure elements and marked content isn't read),
+  document parts, structure namespaces; linearized save (Fast Web View); deterministic save;
+  structural validation against the Arlington model.
 - **Estimate:** 20–35 h. **Doc:** [pdf-spec-parity.md](pdf-spec-parity.md).
 
 ### 23. Local AI provider
@@ -433,6 +436,7 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-20 | minor | Gap 22: associated files (`/AF`) of the document, pages and annotations are read: `doc_info` lists them with their relationship and `associated_file_save` writes one (`core.pdf20-associated-files` partial). Estimates unchanged. |
 | 2026-11-11 | minor | Gap 8: known residual risk for the LibreOffice sidecar (Impress has no link-update setting; the soffice process isn't network-sandboxed). Sandboxing tracked in #6953. Estimates unchanged. |
 | 2026-10-26 | minor | Gap 8: the LibreOffice profile never updates Writer or Calc linked content on load; Impress has no such setting and the process's network access isn't sandboxed. Estimates unchanged. |
 | 2026-10-25 | minor | Gaps 5 and 14 current state: native release builds embed LXGW WenKai Lite for Simplified Chinese, while the web build has no Hans face; Arabic catalogs stay logical with explicit RTL label direction and mirrored stock chrome, while native/browser RTL input, IME and complex workflows remain unqualified. Estimates unchanged. |
