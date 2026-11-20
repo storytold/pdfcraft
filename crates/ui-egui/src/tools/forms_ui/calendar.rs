@@ -1,8 +1,10 @@
 //! A date field's calendar under the field, as the framework's `CalendarPopover`.
 
-use craft::ui::contract::{Bind, ShowContainer as _, overlay::Anchor};
+use craft::ui::contract::overlay::{Anchor, Dismiss};
+use craft::ui::contract::{Bind, ShowContainer as _};
 // PLAN: assumed `craft::ui::pickers` re-exports `CalendarPopover`, `DatePrecision` and `PickedDate`.
 use craft::ui::pickers::{CalendarPopover, DatePrecision, PickedDate};
+use craft::ui::runtime::focus::{FocusPolicy, Initial};
 use egui::Rect;
 use pdfcraft_engine::form_scripts::{DateTime, format_date, parse_date};
 
@@ -20,7 +22,12 @@ pub(super) fn calendar(ui: &mut egui::Ui, rect: Rect, text: &str, fmt: &str, ope
     let mut picked = before.clone();
     CalendarPopover::new("Calendar", Bind::bound(&mut *open), Bind::bound(&mut picked))
         .precisions(&[DatePrecision::Day])
-        .overlay(|overlay| overlay.anchor(Anchor::Rect(rect)))
+        .overlay(|overlay| {
+            overlay
+                .anchor(Anchor::Rect(rect))
+                .focus(FocusPolicy::POPUP.trap(false).restore(false).initial(Initial::KeepAnchor))
+                .dismiss(Dismiss::new().focus_left(false))
+        })
         .show(ui, |_, _| {});
     if picked == before {
         return None;

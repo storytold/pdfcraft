@@ -198,15 +198,15 @@ fn open_picker(
     app.open_colour_picker(crate::colour_picker::PickerHost::App, request, then);
 }
 
-/// The height of the toolbar's rail laid out `width` wide, with the active tool's controls under it.
-pub(crate) fn measure_rail(app: &mut PdfCraftApp, ui: &egui::Ui, width: f32) -> f32 {
+/// Measures the toolbar's rail at `width`, with the active tool's controls under it, so the dock gives the rail its
+/// full height.
+pub(crate) fn measure_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui, width: f32) -> f32 {
     app.hotbar.normalize();
     let toolbar = slots(app);
     let current = current_tool(app);
     let last_used = last_used(app);
-    let editing = app.hotbar.drawer_open;
     let mut rail = ToolRail::new(tl!("Toolbar").to_string(), &toolbar, &current, &last_used).edit_toolbar(tl!("Edit toolbar").to_string());
-    if editing {
+    if app.hotbar.drawer_open {
         rail = rail.editing();
     }
     rail.measure_rail(ui, width, |ui, _footer| footer_controls(ui, app)).y

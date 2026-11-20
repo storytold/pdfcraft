@@ -499,6 +499,9 @@ impl PdfCraftApp {
             "page-properties" => {
                 self.execute(ctx, "page.properties");
             }
+            "page.rotate_dialog" => {
+                self.execute(ctx, "page.rotate_dialog");
+            }
             "comment-props" => {
                 let (page, index) = self
                     .active

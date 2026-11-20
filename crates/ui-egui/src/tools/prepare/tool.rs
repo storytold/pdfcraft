@@ -17,7 +17,7 @@ use egui::{CornerRadius, Pos2, Rect, Response, Ui, Vec2, vec2};
 use pdfcraft_engine::{Edit, FieldProps, FormField};
 use pdfcraft_render::DocInfo;
 
-use super::{FieldTool, Gesture, PrepareView, delete_selected, place_tab_badge, screen_rect, table_rect, to_user, user_rect};
+use super::{FieldTool, Gesture, PrepareView, delete_selected_from, place_tab_badge, screen_rect, table_rect, to_user, user_rect};
 use crate::canvas::page_parts::{Owner, PageLayer, PagePart, PagePress};
 use crate::canvas::{PageBoxDrag, PageSession, PageXform};
 
@@ -114,7 +114,8 @@ pub(crate) struct PrepareTool<'a> {
     tool: Option<FieldTool>,
     allowed: bool,
     form: &'a [FormField],
-    session: &'a mut PageSession,
+    prepare: &'a mut PrepareView,
+    placed: &'a [PlacedPage],
     info: &'a DocInfo,
     /// The transforms of the pages placed this pass.
     xforms: &'a [(usize, PageXform)],
@@ -127,11 +128,22 @@ impl<'a> PrepareTool<'a> {
         tool: Option<FieldTool>,
         allowed: bool,
         form: &'a [FormField],
-        session: &'a mut PageSession,
+        prepare: &'a mut PrepareView,
+        placed: &'a [PlacedPage],
         info: &'a DocInfo,
         xforms: &'a [(usize, PageXform)],
     ) -> Self {
-        Self { tool, allowed, form, session, info, xforms }
+        Self { tool, allowed, form, prepare, placed, info, xforms }
+    }
+
+    /// Whether a pointer gesture is currently active in Prepare.
+    pub(crate) fn has_gesture(&self) -> bool {
+        !matches!(self.prepare.gesture, Gesture::Idle)
+    }
+
+    /// Whether the active gesture is a marquee press that has not dragged past click distance.
+    pub(crate) fn is_click_marquee(&self) -> bool {
+        matches!(self.prepare.gesture, Gesture::Marquee { dragged: false, .. })
     }
 
     /// Every widget key and screen rect on every shown page.
@@ -155,8 +167,8 @@ impl<'a> PrepareTool<'a> {
         let click = rect.width() < CLICK_SIZE || rect.height() < CLICK_SIZE;
         if tool == FieldTool::TextTable {
             let area = if click { Rect::from_min_size(origin, Vec2::ZERO) } else { rect };
-            self.session.prepare.outcome.table = Some((page, table_rect(&xf, area)));
-            self.session.prepare.outcome.placed = true;
+            self.prepare.outcome.table = Some((page, table_rect(&xf, area)));
+            self.prepare.outcome.placed = true;
             return;
         }
         let user = if click {
@@ -167,11 +179,11 @@ impl<'a> PrepareTool<'a> {
         } else {
             user_rect(&xf, self.info, page, rect)
         };
-        let join = self.session.prepare.selected.as_ref().and_then(|(n, _)| self.form.iter().find(|f| &f.name == n));
+        let join = self.prepare.selected.as_ref().and_then(|(n, _)| self.form.iter().find(|f| &f.name == n));
         let kind = tool.new_field(join);
-        self.session.prepare.select_added = Some(self.form.len());
-        self.session.pending_edit = Some(Edit::AddField { page, rect: user, kind, name: None });
-        self.session.prepare.outcome.placed = true;
+        self.prepare.select_added = Some(self.form.len());
+        self.prepare.outcome.edit = Some(Edit::AddField { page, rect: user, kind, name: None });
+        self.prepare.outcome.placed = true;
     }
 
     fn finish_move(&mut self, page: usize, offset: craft::behavior::kurbo::Vec2, widget: (String, usize)) {
@@ -184,13 +196,13 @@ impl<'a> PrepareTool<'a> {
         let moved = rect.translate(vec2(offset.x as f32, offset.y as f32));
         let user = user_rect(&xf, self.info, page, moved);
         let (name, wi) = widget;
-        self.session.pending_edit = Some(Edit::SetFieldProps { name, props: Box::new(FieldProps { rect: Some((wi, user)), ..Default::default() }) });
+        self.prepare.outcome.edit = Some(Edit::SetFieldProps { name, props: Box::new(FieldProps { rect: Some((wi, user)), ..Default::default() }) });
     }
 
     /// An arrow moves the selected field a point the way it points on screen, Shift and an arrow ten points, whatever
     /// the zoom; one press is one edit. Whether there was a field to move.
     fn nudge(&mut self, direction: Vec2, shift: bool) -> bool {
-        let Some(key) = self.session.prepare.selected.clone() else { return false };
+        let Some(key) = self.prepare.selected.clone() else { return false };
         let Some((page, rect)) = widget_rect(self.xforms, self.info, self.form, &key) else { return false };
         let Some(xf) = transform_of(self.xforms, page) else { return false };
         // Screen points per page point: the page's width on screen over its width as turned.
@@ -199,15 +211,15 @@ impl<'a> PrepareTool<'a> {
         let step = if shift { 10.0 } else { 1.0 };
         let user = user_rect(&xf, self.info, page, rect.translate(direction * step * zoom));
         let (name, wi) = key;
-        self.session.pending_edit = Some(Edit::SetFieldProps { name, props: Box::new(FieldProps { rect: Some((wi, user)), ..Default::default() }) });
+        self.prepare.outcome.edit = Some(Edit::SetFieldProps { name, props: Box::new(FieldProps { rect: Some((wi, user)), ..Default::default() }) });
         true
     }
 
     fn finish_marquee(&mut self, marquee: MarqueeSelect<(String, usize)>) {
         let hits = self.all_widgets().into_iter().filter(|(_, r)| r.intersects(marquee.rect())).collect::<Vec<_>>();
         let mut items = marquee.selection(hits).into_iter();
-        self.session.prepare.selected = items.next();
-        self.session.prepare.also = items.collect();
+        self.prepare.selected = items.next();
+        self.prepare.also = items.collect();
     }
 }
 
@@ -216,33 +228,36 @@ impl CanvasTool for PrepareTool<'_> {
         if !self.allowed || pointer.button != PointerButton::Primary {
             return ToolAction::Ignored;
         }
-        let Some(placed) = self.session.placed.iter().find(|p| p.rect.contains(pointer.pos)).cloned() else { return ToolAction::Ignored };
+        let Some(placed) = self.placed.iter().find(|p| p.rect.contains(pointer.pos)).cloned() else { return ToolAction::Ignored };
         if self.tool.is_some() {
             let mut drag = PageBoxDrag::default();
             drag.press(&placed, pointer.pos);
-            self.session.prepare.gesture = Gesture::Draw { drag, origin: pointer.pos };
+            self.prepare.gesture = Gesture::Draw { drag, origin: pointer.pos };
             return ToolAction::Claimed;
         }
         // A drag that began on a field part moves the field the part's press selected.
-        let on_selected = self.session.prepare.selected.clone().filter(|key| {
+        let on_selected = self.prepare.selected.clone().filter(|key| {
             widget_rect(self.xforms, self.info, self.form, key).is_some_and(|(page, r)| page == placed.page && r.contains(pointer.pos))
         });
         if let Some(widget) = on_selected {
             let slop = f64::from(cx.slop);
             let gesture = MoveGesture::press(&ConstrainStyle::new(slop, slop), point(pointer.pos), pointer.mods, Directions::Four);
-            self.session.prepare.gesture = Gesture::Move { page: placed.page, gesture, widget };
+            self.prepare.gesture = Gesture::Move { page: placed.page, gesture, widget };
             return ToolAction::Claimed;
         }
         let extend = pointer.mods.shift || pointer.mods.cmd;
-        let base = if extend { self.session.prepare.selected.iter().chain(self.session.prepare.also.iter()).cloned().collect() } else { Vec::new() };
-        self.session.prepare.gesture = Gesture::Marquee(MarqueeSelect::begin(pointer.pos, pointer.mods, base));
+        let base = if extend { self.prepare.selected.iter().chain(self.prepare.also.iter()).cloned().collect() } else { Vec::new() };
+        self.prepare.gesture = Gesture::Marquee { marquee: MarqueeSelect::begin(pointer.pos, pointer.mods, base), dragged: false };
         ToolAction::Claimed
     }
 
     fn drag(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {
-        match &mut self.session.prepare.gesture {
+        match &mut self.prepare.gesture {
             Gesture::Draw { drag, .. } => drag.drag(pointer.pos),
-            Gesture::Marquee(marquee) => marquee.update(pointer.pos),
+            Gesture::Marquee { marquee, dragged } => {
+                *dragged = true;
+                marquee.update(pointer.pos);
+            }
             Gesture::Move { gesture, .. } => {
                 gesture.follow(point(pointer.pos), pointer.mods, 1.0);
             }
@@ -251,13 +266,13 @@ impl CanvasTool for PrepareTool<'_> {
     }
 
     fn release(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {
-        match std::mem::take(&mut self.session.prepare.gesture) {
+        match std::mem::take(&mut self.prepare.gesture) {
             Gesture::Idle => {}
             Gesture::Draw { mut drag, origin } => {
                 drag.drag(pointer.pos);
                 self.finish_draw(drag, origin);
             }
-            Gesture::Marquee(mut marquee) => {
+            Gesture::Marquee { mut marquee, .. } => {
                 marquee.update(pointer.pos);
                 self.finish_marquee(marquee);
             }
@@ -269,27 +284,27 @@ impl CanvasTool for PrepareTool<'_> {
     }
 
     fn cancel(&mut self, _reason: CancelReason, _cx: &mut ToolContext<'_>) {
-        if let Gesture::Marquee(marquee) = std::mem::take(&mut self.session.prepare.gesture) {
+        if let Gesture::Marquee { marquee, .. } = std::mem::take(&mut self.prepare.gesture) {
             let mut before = marquee.cancel().into_iter();
-            self.session.prepare.selected = before.next();
-            self.session.prepare.also = before.collect();
+            self.prepare.selected = before.next();
+            self.prepare.also = before.collect();
         }
     }
 
     fn claims(&self) -> ToolClaims {
-        if self.session.prepare.selected.is_some() { ToolClaims::NONE.deletes() } else { ToolClaims::NONE }
+        if self.prepare.selected.is_some() { ToolClaims::NONE.deletes() } else { ToolClaims::NONE }
     }
 
     fn key(&mut self, key: &ToolKey, _cx: &mut ToolContext<'_>) -> bool {
         match key {
-            ToolKey::Delete { .. } if self.session.prepare.selected.is_some() => {
-                self.session.pending_edit = delete_selected(self.session);
+            ToolKey::Delete { .. } if self.prepare.selected.is_some() => {
+                self.prepare.outcome.edit = delete_selected_from(self.prepare);
                 true
             }
             ToolKey::Nudge { direction, mods, .. } => self.nudge(vec2(direction.x as f32, direction.y as f32), mods.shift),
-            ToolKey::Cancel if self.session.prepare.selected.is_some() => {
-                self.session.prepare.selected = None;
-                self.session.prepare.also.clear();
+            ToolKey::Cancel if self.prepare.selected.is_some() => {
+                self.prepare.selected = None;
+                self.prepare.also.clear();
                 true
             }
             _ => false,
@@ -297,9 +312,9 @@ impl CanvasTool for PrepareTool<'_> {
     }
 
     fn paint(&self, _draw: &Draw<'_>, cx: &ToolContext<'_>) {
-        match &self.session.prepare.gesture {
+        match &self.prepare.gesture {
             Gesture::Draw { drag, .. } => drag.paint(cx),
-            Gesture::Marquee(marquee) => {
+            Gesture::Marquee { marquee, .. } => {
                 let r = marquee.rect();
                 cx.marching_ants(&[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()], true);
             }
@@ -319,8 +334,16 @@ impl CanvasTool for PrepareTool<'_> {
 /// The corner handles of the anchor field, as a Free Transform box that only resizes: no rotating,
 /// skewing or distorting, and a press inside is the field part's. A corner drag's `Commit` and an
 /// arrow nudge's `Set` each become one field edit; Escape with no drag clears the selection.
-// PLAN: the box's state is in the canvas's document space; assumed that is screen space on the page body (pdf-canvas-w8).
-pub(crate) fn selection_box(ui: &mut Ui, session: &mut PageSession, form: &[FormField], info: &DocInfo, xforms: &[(usize, PageXform)], page: usize) {
+pub(crate) fn selection_box(
+    ui: &mut Ui,
+    body: Rect,
+    view: craft::behavior::CanvasView,
+    session: &mut PageSession,
+    form: &[FormField],
+    info: &DocInfo,
+    xforms: &[(usize, PageXform)],
+    page: usize,
+) {
     let Some(key) = session.prepare.selected.clone() else { return };
     let Some((widget_page, rect)) = widget_rect(xforms, info, form, &key) else { return };
     if widget_page != page {
@@ -331,12 +354,12 @@ pub(crate) fn selection_box(ui: &mut Ui, session: &mut PageSession, form: &[Form
         .with_scale(ScaleRule::Free)
         .with_allow(BoxAllow::new(false, false, false).with_warp(false))
         .with_handles(BoxHandles::Corners);
-    let start = kurbo_rect(rect);
+    let start = KRect::from_points(view.to_doc(rect.min), view.to_doc(rect.max));
     let shown = TransformBox::new("Field", Bind::given(BoxState::from_rect(start)), start, 0.0)
         .rules(rules)
         .reference_point(false)
         .inside_moves(false)
-        .show_at(ui, xf.rect);
+        .show_at(ui, body);
     let mut edit = None;
     for event in &shown.edit.events {
         let state = match event {
@@ -344,12 +367,8 @@ pub(crate) fn selection_box(ui: &mut Ui, session: &mut PageSession, form: &[Form
             EditEvent::Set { after, .. } => after,
             _ => continue,
         };
-        let (mut lo, mut hi) = (state.quad[0], state.quad[0]);
-        for p in state.quad {
-            lo = Point::new(lo.x.min(p.x), lo.y.min(p.y));
-            hi = Point::new(hi.x.max(p.x), hi.y.max(p.y));
-        }
-        let screen = Rect::from_min_max(Pos2::new(lo.x as f32, lo.y as f32), Pos2::new(hi.x as f32, hi.y as f32));
+        let corners = state.quad.map(|p| view.to_screen(p));
+        let screen = Rect::from_points(&corners);
         edit = Some(user_rect(&xf, info, page, screen));
     }
     if let Some(user) = edit {
@@ -366,6 +385,7 @@ pub(crate) fn selection_box(ui: &mut Ui, session: &mut PageSession, form: &[Form
 pub(crate) fn show_overlays(
     ui: &mut Ui,
     body: Rect,
+    view: craft::behavior::CanvasView,
     session: &mut PageSession,
     form: &[FormField],
     info: &DocInfo,
@@ -378,7 +398,7 @@ pub(crate) fn show_overlays(
         if let Some(overlay) = PrepareOverlay::new(form, &tab_order, session, info, &xforms, page) {
             overlay.show_at(ui, body);
         }
-        selection_box(ui, session, form, info, &xforms, page);
+        selection_box(ui, body, view, session, form, info, &xforms, page);
     }
 }
 
@@ -487,7 +507,7 @@ impl Component for PrepareOverlay {
             selected: cx.color(colors.accent.solid),
             tag: cx.color(colors.text.normal),
             tag_text: cx.color(colors.surface.sunken),
-            selected_tag: cx.color(colors.accent.strong),
+            selected_tag: cx.color(colors.accent.solid),
             selected_tag_text: cx.color(colors.text.on_strong),
             badge: cx.color(colors.accent.solid),
         }

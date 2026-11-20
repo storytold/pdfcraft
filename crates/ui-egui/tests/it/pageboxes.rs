@@ -90,6 +90,7 @@ fn set_page_boxes_dialog_applies_margins_to_the_chosen_pages() {
     for side in ["Top", "Bottom", "Left", "Right"] {
         h.get_by_label(side).click();
         h.run_steps(1);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
         h.get_by_label(side).type_text("1");
         h.key_press(egui::Key::Tab);
         h.run_steps(2);

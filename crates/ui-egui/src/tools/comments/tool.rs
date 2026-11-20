@@ -325,7 +325,7 @@ impl CanvasTool for CommentsTool<'_> {
                 self.annotate.selected.clear();
                 return true;
             }
-            if matches!(self.quick, QuickTool::Fill(_)) {
+            if matches!(self.quick, QuickTool::Fill(_) | QuickTool::Select) {
                 return self.beneath.as_mut().is_some_and(|beneath| beneath.key(key, cx));
             }
             if matches!(self.quick, QuickTool::Comment(_)) {

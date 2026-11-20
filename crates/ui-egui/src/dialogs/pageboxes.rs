@@ -133,6 +133,7 @@ fn params(count: usize, current: usize, media: Option<[f64; 4]>) -> Vec<Param> {
             }
             out.response.clone()
         })
+        .full_width()
         .companions(MARGIN_KEYS),
     );
     rows.push(PageRangeOptions::param("range", tl!("Pages"), count, current, PageRangeChoices::CurrentFromTo));
@@ -140,10 +141,13 @@ fn params(count: usize, current: usize, media: Option<[f64; 4]>) -> Vec<Param> {
         let label = crate::i18n::fmt(tl!("Page {label}"), &[("label", &(current + 1).to_string())]);
         let aspect =
             ThumbAspect::new((media[2] - media[0]).round().clamp(1.0, 65535.0) as u16, (media[3] - media[1]).round().clamp(1.0, 65535.0) as u16);
-        rows.push(Param::custom("preview", "", move |ui, fields, _| {
-            let margins = margins_of(fields);
-            Picture::painter(label.clone(), aspect, move |cx, rect| paint_preview(cx, rect, media, margins)).show(ui)
-        }));
+        rows.push(
+            Param::custom("preview", "", move |ui, fields, _| {
+                let margins = margins_of(fields);
+                Picture::painter(label.clone(), aspect, move |cx, rect| paint_preview(cx, rect, media, margins)).show(ui)
+            })
+            .full_width(),
+        );
     }
     rows
 }
