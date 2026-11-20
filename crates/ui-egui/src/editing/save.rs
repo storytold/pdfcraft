@@ -31,6 +31,20 @@ pub enum SaveTarget {
 }
 
 impl PdfCraftApp {
+    /// Whether Save has anything to do for tab `index`: work not saved yet, a document with no
+    /// file of its own to keep it in (opened from bytes, or an email attachment's temporary copy),
+    /// or a file repaired as it opened, whose repair only a save keeps (FredApps on #5336; the
+    /// saved file reopens clean, so the button greys out after it). The top bar's Save button is
+    /// greyed out otherwise, as Organize's Save pages is (#5307). Typing held by any view of the
+    /// document counts, not only this tab's, since Save commits it from every view (CodeRabbit on
+    /// #5336: a draft in the other pane of a split view).
+    pub(crate) fn save_has_work(&self, index: usize) -> bool {
+        let Some(id) = self.views.get(index).map(|v| v.id) else { return false };
+        let Some(doc) = self.session.get(id) else { return false };
+        let typing = self.views.iter().enumerate().any(|(i, v)| v.id == id && self.has_unsaved_typing(i));
+        doc.dirty || typing || doc.path.as_deref().is_none_or(is_mail_temp_copy) || doc.was_repaired()
+    }
+
     /// Save the active document. Returns `true` if it was written.
     pub fn save_active(&mut self, target: SaveTarget) -> bool {
         match self.active {
