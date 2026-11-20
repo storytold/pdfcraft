@@ -6271,8 +6271,8 @@ fn dragging_pages_panel_thumbnails_reorders_pages() {
     let thumb = |h: &Harness<'static, PdfCraftApp>, label: &str| {
         h.get_all_by_label(label).map(|n| n.rect()).max_by(|a, b| a.left().total_cmp(&b.left())).expect("the thumbnail")
     };
-    // Grab page 3 (page 4 is below the window) and drop it above page 1.
-    let (from, to) = (thumb(&h, "Page 3").center(), thumb(&h, "Page 1").center_top() + egui::vec2(0.0, 4.0));
+    // Grab page 3 (page 4 is below the window) and drop it before page 1.
+    let (from, to) = (thumb(&h, "Page 3").center(), thumb(&h, "Page 1").left_top() + egui::vec2(4.0, 4.0));
     drag(&mut h, from, to);
     h.run_steps(4);
     let after = page_texts(h.state());
