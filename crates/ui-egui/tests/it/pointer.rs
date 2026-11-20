@@ -1146,6 +1146,8 @@ fn a_right_click_with_edit_text_on_a_paragraph_under_a_comment_selects_the_comme
     assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the comment over the paragraph is selected");
     assert!(h.query_by_label("Properties…").is_some(), "its menu opens");
     assert_eq!(h.state().views[0].session.comments.context_at.map(|(page, _)| page), Some(0), "the menu is anchored on the page");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
     // The rectangle ends at x 200; the line goes on.
     let beside = at(&h, 230.0, 303.0);
     right_click(&mut h, beside);
@@ -1732,17 +1734,23 @@ fn paste_from_a_right_click_where_two_pages_touch_keeps_to_the_first_page() {
         let image = egui::ColorImage::from_rgba_unmultiplied([60, 40], &[50u8, 150, 250, 255].repeat(60 * 40));
         egui::Event::PasteImage(Arc::new(image))
     };
-    h.event(picture());
-    h.run_steps(1);
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(60, 40, image::Rgb([50, 150, 250])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
     let ctx_h = h.ctx.clone();
-    assert!(h.state_mut().paste_image_at(&ctx_h, 1, [100.0, 400.0]), "a picture across page 2's top edge");
+    assert!(
+        h.state_mut().apply_edit(
+            &ctx_h,
+            pdfcraft_engine::Edit::AddImage { page: 1, rect: Some([70.0, 380.0, 130.0, 420.0]), name: "picture.png".into(), bytes: Arc::new(png) },
+        ),
+        "a picture across page 2's top edge"
+    );
     h.state_mut().views[0].session.image_selection = None;
     h.run_steps(4);
     right_click(&mut h, seam);
     assert_eq!(h.state().views[0].session.comments.context_at.map(|(page, _)| page), Some(0), "page 1 takes the right-click");
     assert!(h.state().views[0].session.image_selection.is_none(), "page 2's picture is not selected for its menu");
     h.event(picture());
-    h.get_by_label_contains("Paste").click();
+    h.get_by_label("Paste").click();
     h.run_steps(3);
     let images = |page| {
         let s = h.state();
