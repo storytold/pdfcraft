@@ -6,7 +6,7 @@
 //! few more installed faces, [`devanagari_fallback`], [`telugu_fallback`], [`sinhala_fallback`],
 //! [`tamil_fallback`], [`hebrew_fallback`] and [`hangul_fallback`], draw Hindi, Telugu, Sinhala,
 //! Tamil, Hebrew and Korean when one is installed. It is read at runtime and never embedded or
-//! shipped (AGENTS.md §1.4), and `PDFCRAFT_SYSTEM_FONTS=0` turns it off (published screenshots do).
+//! shipped (docs/development.md "Fonts and attribution"), and `PDFCRAFT_SYSTEM_FONTS=0` turns it off (published screenshots do).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
