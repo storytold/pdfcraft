@@ -3,6 +3,9 @@ use crate::page_keys::PageKeys;
 
 impl PdfCraftApp {
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.viewport_id() != egui::ViewportId::ROOT {
+            return;
+        }
         use egui::Key;
         // "Save changes?" is modal: its keys are its own (⌘D is Don't save there, not Document
         // properties; Escape cancels it rather than clearing a selection), and nothing may run
@@ -67,6 +70,7 @@ impl PdfCraftApp {
         {
             self.set_full_screen(ctx, false);
         }
+        let detached_prompt_open = self.is_detached_save_prompt_open();
         if let Some(i) = self.active {
             if page_chords && chords {
                 self.select_all_keys(i, ctx);
@@ -88,7 +92,7 @@ impl PdfCraftApp {
             {
                 prepare::nudge_keys(ctx, keys, &mut self.views[i], doc);
             }
-            canvas::shortcuts(&mut self.views[i], ctx, keys, chords && page_chords, self.scroll_speed);
+            canvas::shortcuts(&mut self.views[i], ctx, keys, chords && page_chords, self.scroll_speed, detached_prompt_open);
             self.clipboard_keys(i, ctx);
             self.image_pick_keys(i, ctx);
         }

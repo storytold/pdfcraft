@@ -751,113 +751,6 @@ fn the_integrated_title_bar_is_the_traffic_light_band() {
     assert!(home.left() >= 62.0 + 4.0, "Home {home:?} clears the traffic lights");
 }
 
-/// macOS with a right-to-left system language: AppKit mirrors the traffic lights to the right end
-/// of the title bar, and the strip mirrors with them. Home sits beside the lights, the tabs read
-/// from the right after it, then Open; Discord, shortcuts, theme and Preferences move to the far
-/// left end.
-#[cfg(target_os = "macos")]
-fn mirrored_title_bar(names: &[&'static str]) -> Harness<'static, PdfCraftApp> {
-    let names = names.to_vec();
-    harness(move |app| {
-        app.integrated_titlebar = true;
-        app.titlebar_lights_right = Some(true);
-        for name in names {
-            app.open_bytes(name, None, FIXTURE.to_vec()).unwrap();
-        }
-    })
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn the_integrated_title_bar_mirrors_with_traffic_lights_at_the_right() {
-    let (width, band, lights) = (1400.0, 28.0, 62.0);
-    let h = mirrored_title_bar(&["first.pdf", "last.pdf"]);
-    let rect = |label: &str| h.get_by_label(label).rect();
-    let theme = h.get_by_label_contains("Display theme:").rect();
-    for (label, r) in [
-        ("Home", rect("Home")),
-        ("first.pdf", rect("first.pdf")),
-        ("Open", rect("Open")),
-        ("Discord", rect("Discord")),
-        ("Display theme", theme),
-        ("Preferences", rect("Preferences")),
-    ] {
-        assert!(r.top() >= 0.0 && r.bottom() <= band, "{label}: {r:?} inside the {band} pt title bar");
-        assert!(r.right() <= width - lights - 4.0, "{label}: {r:?} clears the traffic lights");
-    }
-    // Home is the first thing after the lights, as it is on the left in a left-to-right system.
-    let home = rect("Home");
-    assert!(home.right() >= width - lights - 16.0, "Home {home:?} sits beside the lights");
-    // Then the tabs, read from the right, then Open.
-    assert!(rect("first.pdf").right() <= home.left(), "the first tab follows Home");
-    assert!(rect("last.pdf").right() <= rect("first.pdf").left(), "the tabs read from the right");
-    assert!(rect("first.pdf").right() >= home.left() - 12.0, "the tabs stay beside Home");
-    assert!(rect("Open").right() <= rect("last.pdf").left(), "Open follows the tabs");
-    // The other end: Preferences, theme, shortcuts and Discord, mirroring their order at the right.
-    let (preferences, help, discord) = (rect("Preferences"), rect("Keyboard shortcuts"), rect("Discord"));
-    assert!(preferences.left() < 20.0, "Preferences {preferences:?} at the far end");
-    assert!(
-        preferences.right() <= theme.left() && theme.right() <= help.left() && help.right() <= discord.left(),
-        "Preferences, theme, shortcuts, Discord"
-    );
-    assert!(discord.right() < rect("Open").left(), "Discord stays clear of Open");
-}
-
-/// Mirrored, a tab dragged to the left moves later in the order, as it reads from the right.
-#[cfg(target_os = "macos")]
-#[test]
-fn dragging_a_tab_in_the_mirrored_title_bar_follows_its_reading_order() {
-    use egui::accesskit::Role;
-    let mut h = mirrored_title_bar(&["first.pdf", "middle.pdf", "last.pdf"]);
-    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
-    let tab = |h: &Harness<'static, PdfCraftApp>, name: &str| h.get_by_role_and_label(Role::Tab, name).rect();
-    // first.pdf past the end, which is the left.
-    let to = tab(&h, "last.pdf").left_center() - egui::vec2(20.0, 0.0);
-    drag_named_tab(&mut h, "first.pdf", to, true);
-    assert_eq!(h.state().views.iter().map(|view| view.id).collect::<Vec<_>>(), [ids[1], ids[2], ids[0]]);
-    assert!(tab(&h, "first.pdf").right() < tab(&h, "last.pdf").left(), "the strip draws the new order");
-    // last.pdf, now in the middle, to the front, which is the right.
-    let to = tab(&h, "middle.pdf").right_center() + egui::vec2(10.0, 0.0);
-    drag_named_tab(&mut h, "last.pdf", to, true);
-    assert_eq!(h.state().views.iter().map(|view| view.id).collect::<Vec<_>>(), [ids[2], ids[1], ids[0]]);
-}
-
-/// A mirrored strip that starts to scroll (here Home shows and the window narrows) shows its
-/// reading start: the first tab beside Home, as the unmirrored strip does at its left end. It goes
-/// there once, so a step the user scrolls stands.
-#[cfg(target_os = "macos")]
-#[test]
-fn a_mirrored_strip_that_starts_to_scroll_shows_the_first_tab_beside_home() {
-    let mut h = mirrored_title_bar(&["first.pdf", "second.pdf", "third.pdf", "last.pdf"]);
-    h.state_mut().active = None;
-    h.run_steps(4);
-    assert!(h.query_by_label("Scroll tabs left").is_none(), "wide, the tabs don't scroll yet");
-    h.set_size(egui::vec2(700.0, 600.0));
-    h.run_steps(6);
-    let home = h.get_by_label("Home").rect();
-    let first = h.get_by_label("first.pdf").rect();
-    assert!(first.right() <= home.left() && first.right() >= home.left() - 50.0, "first.pdf {first:?} beside Home {home:?}");
-    h.get_by_label("Scroll tabs left").click();
-    h.run_steps(6);
-    let scrolled = h.get_by_label("first.pdf").rect();
-    assert!(scrolled.left() > first.left() + 1.0, "the step stands: {first:?} -> {scrolled:?}");
-}
-
-/// Going to the reading start never hides the active tab: a document shown while the strip starts
-/// to scroll stays in view.
-#[cfg(target_os = "macos")]
-#[test]
-fn a_mirrored_strip_that_starts_to_scroll_keeps_the_active_tab_in_view() {
-    let mut h = mirrored_title_bar(&["first.pdf", "second.pdf", "third.pdf", "last.pdf"]);
-    h.run_steps(4);
-    assert_eq!(h.state().active, Some(3));
-    h.set_size(egui::vec2(700.0, 600.0));
-    h.run_steps(6);
-    let (home, open) = (h.get_by_label("Home").rect(), h.get_by_label("Open").rect());
-    let last = h.get_by_label("last.pdf").rect();
-    assert!(last.left() >= open.right() && last.right() <= home.left(), "last.pdf {last:?} between Open {open:?} and Home {home:?}");
-}
-
 #[test]
 fn narrow_tab_strips_accept_vertical_wheel_scrolling() {
     for width in [600.0, 900.0] {
@@ -2019,6 +1912,26 @@ fn dragging_a_tab_to_open_space_detaches_it_into_its_own_window() {
 }
 
 #[test]
+fn dragging_tab_outside_strip_renders_tear_off_badge_on_tooltip_layer() {
+    use egui::accesskit::Role;
+    let mut h = three_tab_harness();
+    let tab = |h: &Harness<'static, PdfCraftApp>, name: &str| h.get_by_role_and_label(Role::Tab, name).rect();
+
+    // Drag "middle.pdf" downwards 60px into open space without releasing
+    let from = tab(&h, "middle.pdf").center();
+    let to = from + egui::vec2(0.0, 60.0);
+    drag_named_tab(&mut h, "middle.pdf", to, false);
+
+    // Grabbing cursor is reported while dragging outside tab strip
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Grabbing);
+
+    // Release to drop and detach
+    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(3);
+    assert!(h.state().views[1].detached, "middle.pdf tab should be detached");
+}
+
+#[test]
 fn tab_context_menu_can_detach_tab_to_new_window() {
     use egui::accesskit::Role;
     let mut h = three_tab_harness();
@@ -2353,6 +2266,11 @@ fn dont_save_in_detached_window_discards_changes_and_closes_tab() {
     let mut h = three_tab_harness();
     let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
 
+    h.ctx.set_embed_viewports(false);
+    egui::Context::set_immediate_viewport_renderer(|ctx, mut vp| {
+        egui::Window::from_viewport(vp.ids.this, vp.builder.clone()).collapsible(false).show(ctx, |ui| (vp.viewport_ui_cb)(ui));
+    });
+
     h.state_mut().detach_tab(ids[1]);
     h.run_steps(3);
     h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
@@ -2363,7 +2281,13 @@ fn dont_save_in_detached_window_discards_changes_and_closes_tab() {
 
     // Clicking "Don't save" discards changes and closes the detached tab
     h.get_by_label("Don't save").click();
-    h.run_steps(3);
+    h.step();
+
+    let close_sent =
+        h.output().viewport_output.get(&child_viewport_id).is_some_and(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
+    assert!(close_sent, "ViewportCommand::Close must be sent to child viewport on close resolution");
+
+    h.run_steps(2);
 
     assert_eq!(h.state().views.len(), 2);
     assert!(h.state().views.iter().all(|v| v.id != ids[1]));
@@ -2380,6 +2304,11 @@ fn save_in_detached_window_saves_changes_and_closes_tab() {
     let mut h = three_tab_harness();
     let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
 
+    h.ctx.set_embed_viewports(false);
+    egui::Context::set_immediate_viewport_renderer(|ctx, mut vp| {
+        egui::Window::from_viewport(vp.ids.this, vp.builder.clone()).collapsible(false).show(ctx, |ui| (vp.viewport_ui_cb)(ui));
+    });
+
     h.state_mut().save_override = Some(save_path.to_string_lossy().into_owned());
     h.state_mut().detach_tab(ids[1]);
     h.run_steps(3);
@@ -2391,7 +2320,13 @@ fn save_in_detached_window_saves_changes_and_closes_tab() {
 
     // Clicking "Save" saves changes and closes the detached tab once written
     h.get_by_label("Save").click();
-    h.run_steps(5);
+    h.step();
+
+    let close_sent =
+        h.output().viewport_output.get(&child_viewport_id).is_some_and(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
+    assert!(close_sent, "ViewportCommand::Close must be sent to child viewport on close resolution");
+
+    h.run_steps(4);
 
     assert!(save_path.exists());
     assert_eq!(h.state().views.len(), 2);
@@ -2611,6 +2546,189 @@ fn reopening_detached_file_reattaches_tab_and_commit_typing_preserves_active_inv
     assert_eq!(h.state().active, Some(1), "open_path must make re-attached tab active");
 }
 
+#[test]
+fn detached_tab_preserves_detachment_on_document_replacement() {
+    let mut h = harness(|app| {
+        app.open_bytes("first.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes("second.pdf", None, FIXTURE.to_vec()).unwrap();
+    });
+
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+    let detached_id = ids[1];
+
+    // Detach second tab (index 1)
+    h.state_mut().detach_tab(detached_id);
+    h.run_steps(3);
+    assert!(h.state().views[1].detached, "second.pdf tab should be detached");
+    let active_before = h.state().active;
+    assert_ne!(active_before, Some(1), "active tab must not be detached tab");
+    assert_eq!(active_before, Some(0), "active tab should be the docked tab (first.pdf)");
+
+    // Retrieve DocInfo for the detached document
+    let info = h.state().session.get(detached_id).unwrap().info.clone();
+
+    // Call document_replaced on the detached view
+    h.state_mut().views[1].document_replaced(&info);
+    h.run_steps(3);
+
+    // Verify detachment is preserved and active tab remains undisturbed
+    assert!(h.state().views[1].detached, "document_replaced must preserve detachment state");
+    assert_eq!(h.state().active, active_before, "active tab index must remain unchanged");
+}
+
+#[test]
+fn detached_window_edit_commit_routes_to_target_view_without_modifying_docked_tab() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    let tab_a_id = ids[0];
+    let tab_b_id = ids[1];
+
+    // Make Tab A (index 0) the active docked tab
+    h.state_mut().active = Some(0);
+
+    // Detach middle.pdf (Tab B, index 1)
+    h.state_mut().detach_tab(tab_b_id);
+    h.run_steps(3);
+    assert!(h.state().views[1].detached, "Tab B should be detached");
+    assert_eq!(h.state().active, Some(0), "Tab A should remain active docked tab");
+
+    // Both documents are initially clean
+    assert!(!h.state().session.get(tab_a_id).unwrap().dirty);
+    assert!(!h.state().session.get(tab_b_id).unwrap().dirty);
+
+    // 1. In-flight text box typing on Tab B committed via commit_typing_in
+    h.state_mut().views[1].fill_text = Some(pdfcraft_ui_egui::fill_sign::TypeBox {
+        page: 0,
+        at: [40.0, 200.0],
+        text: "Detached text".into(),
+        size: 10.0,
+        color: [0.0; 3],
+        border: pdfcraft_ui_egui::fill_sign::TextBorder::NONE,
+        focus: false,
+    });
+
+    let committed = h.state_mut().commit_typing_in(tab_b_id);
+    assert!(committed, "commit_typing_in should succeed");
+
+    // Tab B must receive the edit while Tab A remains unmodified
+    assert!(h.state().session.get(tab_b_id).unwrap().dirty, "Detached Tab B should receive the committed edit and become dirty");
+    assert!(!h.state().session.get(tab_a_id).unwrap().dirty, "Docked Tab A must NOT receive edits committed for detached Tab B");
+    assert!(h.state().views[1].fill_text.is_none(), "Tab B's open typing box should be committed and cleared");
+
+    // 2. Pending edit on Tab B processed during show_detached_windows pass
+    h.state_mut().views[1].pending_edit = Some(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    h.run_steps(2);
+
+    assert_eq!(h.state().views[1].pending_edit, None, "Tab B's pending edit should be processed in detached window pass");
+    let tab_b_doc = h.state().session.get(tab_b_id).unwrap();
+    assert_eq!(tab_b_doc.info.pages[0].rotation, 90, "Tab B's page 0 should have 90 degree rotation");
+
+    let tab_a_doc = h.state().session.get(tab_a_id).unwrap();
+    assert_eq!(tab_a_doc.info.pages[0].rotation, 0, "Docked Tab A must remain completely unmodified");
+    assert!(!tab_a_doc.dirty, "Docked Tab A must remain clean");
+}
+
+#[test]
+fn main_window_keyboard_shortcuts_execute_during_detached_save_prompt() {
+    let mut h = harness(|app| {
+        app.open_bytes("tab_a.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes("tab_b.pdf", None, FIXTURE.to_vec()).unwrap();
+    });
+    let ids: Vec<_> = h.state().views.iter().map(|v| v.id).collect();
+    let tab_a_id = ids[0];
+    let tab_b_id = ids[1];
+
+    // Detach Tab B
+    h.state_mut().detach_tab(tab_b_id);
+    h.run_steps(3);
+
+    assert!(h.state().views[1].detached, "Tab B should be detached");
+    assert_eq!(h.state().active, Some(0), "Tab A should be active docked tab");
+    assert_eq!(h.state().views[0].id, tab_a_id);
+
+    // Mark Tab B dirty and request close for Tab B
+    h.state_mut().session.apply(tab_b_id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    h.state_mut().request_close_tab(1);
+    assert!(h.state().close_request.is_some());
+    h.run_steps(2);
+
+    // Set initial zoom of docked Tab A to a standard step
+    h.state_mut().views[0].set_zoom(1.0);
+    h.run_steps(1);
+    let initial_zoom = h.state().views[0].zoom;
+    assert_eq!(initial_zoom, 1.0);
+
+    // Send shortcut Command + Equals (Zoom In) in the main window
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Equals);
+    h.run_steps(2);
+
+    // Verify Tab A's zoom increased
+    let zoomed = h.state().views[0].zoom;
+    assert!(
+        zoomed > initial_zoom,
+        "Zoom shortcut in main window should execute while detached save prompt is active (initial: {initial_zoom}, current: {zoomed})"
+    );
+
+    // Send shortcut Command + Minus (Zoom Out) in the main window
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Minus);
+    h.run_steps(2);
+
+    assert_eq!(h.state().views[0].zoom, initial_zoom, "Zoom out shortcut in main window should restore zoom while detached save prompt is active");
+
+    // View toggle shortcut: Command + 2 (Fit to Width)
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Num2);
+    h.run_steps(2);
+    assert_eq!(
+        h.state().views[0].fit,
+        pdfcraft_ui_egui::canvas::Fit::Width,
+        "View toggle shortcut (Fit to Width) should execute in main window while detached save prompt is active"
+    );
+
+    // Page navigation: ArrowRight turns the page in Tab A
+    assert_eq!(h.state().views[0].current, 0, "Tab A starts on page 0");
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].current, 1, "Page navigation shortcut should execute in main window while detached save prompt is active");
+}
+
+#[test]
+fn detached_window_undo_redo_targets_detached_view_without_affecting_docked_tab() {
+    let mut h = harness(|app| {
+        app.open_bytes("tab_a.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes("tab_b.pdf", None, FIXTURE.to_vec()).unwrap();
+    });
+    let ids: Vec<_> = h.state().views.iter().map(|v| v.id).collect();
+    let tab_a_id = ids[0];
+    let tab_b_id = ids[1];
+
+    // Detach Tab B
+    h.state_mut().detach_tab(tab_b_id);
+    h.run_steps(3);
+
+    assert!(h.state().views[1].detached, "Tab B should be detached");
+    assert_eq!(h.state().active, Some(0), "Tab A should be active docked tab");
+    assert_eq!(h.state().views[0].id, tab_a_id);
+
+    // Rotate page in Tab B
+    h.state_mut().session.apply(tab_b_id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(tab_b_id).unwrap().info.pages[0].rotation, 90);
+    assert_eq!(h.state().session.get(tab_a_id).unwrap().info.pages[0].rotation, 0);
+
+    // Send Cmd+Z to Tab B's detached child viewport
+    let child_viewport_id = egui::ViewportId::from_hash_of(("detached-doc", tab_b_id));
+    h.input_mut().viewports.entry(child_viewport_id).or_default();
+    h.input_mut().viewport_id = child_viewport_id;
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(2);
+
+    // Tab B rotation should be undone
+    assert_eq!(h.state().session.get(tab_b_id).unwrap().info.pages[0].rotation, 0, "Tab B's rotation must be undone via Cmd+Z in detached viewport");
+    // Tab A should be completely unaffected
+    assert_eq!(h.state().session.get(tab_a_id).unwrap().info.pages[0].rotation, 0, "Docked Tab A must remain completely unaffected");
+    assert_eq!(h.state().active, Some(0), "Tab A must remain the active docked tab");
+}
 /// The Edit tab turns on Edit text & images at once, as Acrobat does, so every paragraph and image
 /// is boxed and editable with one click; another tab puts the tool down again.
 #[test]

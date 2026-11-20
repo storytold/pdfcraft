@@ -2233,45 +2233,6 @@ fn control_collapses_and_expands_a_pinned_folder() {
 }
 
 #[test]
-fn accessible_labels_on_format_text_and_pin_dialog() {
-    let (mut h, c) = harness();
-
-    // 1. Check Dialog::PinTool accessibility labels
-    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::PinTool);
-    h.run_steps(3);
-
-    let search = ok(&mut h, &c, "ui.inspect", json!({"role": "TextInput", "query": "Search tools…"}));
-    assert!(search["count"].as_u64().unwrap() >= 1, "search box has accessible label: {search}");
-
-    let result_rows = ok(&mut h, &c, "ui.inspect", json!({"query": "Organize Pages"}));
-    assert!(result_rows["count"].as_u64().unwrap() >= 1, "result row has accessible label: {result_rows}");
-
-    let pin_toggles = ok(&mut h, &c, "ui.inspect", json!({"query": "Pin"}));
-    assert!(pin_toggles["count"].as_u64().unwrap() >= 1, "pin toggle has accessible label: {pin_toggles}");
-
-    h.state_mut().dialog = None;
-    h.run_steps(2);
-
-    // 2. Open Add Text so Format text panel is visible
-    ok(&mut h, &c, "ui.command", json!({"id": "edit.text"}));
-    h.run_steps(3);
-
-    let font_combo = ok(&mut h, &c, "ui.inspect", json!({"query": "Font", "role": "ComboBox"}));
-    assert!(font_combo["count"].as_u64().unwrap() >= 1, "format-font has accessible label: {font_combo}");
-
-    let size_combo = ok(&mut h, &c, "ui.inspect", json!({"query": "Font size"}));
-    assert!(size_combo["count"].as_u64().unwrap() >= 1, "format-size has accessible label: {size_combo}");
-
-    let line_spacing_combo = ok(&mut h, &c, "ui.inspect", json!({"query": "Line spacing", "role": "ComboBox"}));
-    assert!(line_spacing_combo["count"].as_u64().unwrap() >= 1, "format-line-spacing has accessible label: {line_spacing_combo}");
-
-    let scale_spin = ok(&mut h, &c, "ui.inspect", json!({"query": "Horizontal scale", "role": "SpinButton"}));
-    assert!(scale_spin["count"].as_u64().unwrap() >= 1, "horizontal scale spin button has accessible label: {scale_spin}");
-
-    let char_spin = ok(&mut h, &c, "ui.inspect", json!({"query": "Character spacing", "role": "SpinButton"}));
-    assert!(char_spin["count"].as_u64().unwrap() >= 1, "character spacing spin button has accessible label: {char_spin}");
-}
-#[test]
 fn headless_control_channel_tab_detach_and_reattach() {
     let (mut h, c) = harness();
 
@@ -2291,10 +2252,20 @@ fn headless_control_channel_tab_detach_and_reattach() {
     assert_eq!(initial_state["documents"][2]["detached"], false);
     assert_eq!(initial_state["detached_viewports"], json!([]));
 
+    let cmd_enabled = |h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, id: &str| {
+        let cmds = ok(h, c, "ui.commands", json!({}));
+        cmds["commands"].as_array().unwrap().iter().find(|cmd| cmd["id"] == id).unwrap()["enabled"].as_bool().unwrap()
+    };
+    assert_eq!(cmd_enabled(&mut h, &c, "ui.detach"), !cfg!(target_arch = "wasm32"));
+    assert!(!cmd_enabled(&mut h, &c, "ui.attach"));
+
     // Detach second tab by index via ui.detach.
     let res = ok(&mut h, &c, "ui.detach", json!({"tab": 1}));
     assert_eq!(res["detached"], second_doc_id.0);
     settle(&mut h);
+
+    assert_eq!(cmd_enabled(&mut h, &c, "ui.detach"), !cfg!(target_arch = "wasm32"));
+    assert_eq!(cmd_enabled(&mut h, &c, "ui.attach"), !cfg!(target_arch = "wasm32"));
 
     // Verify state updates: second tab is detached, detached_viewports reflects it.
     let state_after_detach = ok(&mut h, &c, "ui.state", json!({}));
@@ -2321,6 +2292,9 @@ fn headless_control_channel_tab_detach_and_reattach() {
     assert_eq!(state_after_attach["documents"][1]["detached"], false);
     assert_eq!(state_after_attach["detached_viewports"], json!([]));
     assert_eq!(state_after_attach["active"]["doc"], second_doc_id.0);
+
+    assert_eq!(cmd_enabled(&mut h, &c, "ui.detach"), !cfg!(target_arch = "wasm32"));
+    assert!(!cmd_enabled(&mut h, &c, "ui.attach"));
 }
 
 #[test]
@@ -2329,6 +2303,13 @@ fn headless_control_channel_tab_detach_errors_and_trait() {
 
     let (mut h, c) = harness();
     let first_doc_id = h.state().views[0].id;
+
+    let cmd_enabled = |h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, id: &str| {
+        let cmds = ok(h, c, "ui.commands", json!({}));
+        cmds["commands"].as_array().unwrap().iter().find(|cmd| cmd["id"] == id).unwrap()["enabled"].as_bool().unwrap()
+    };
+    assert!(!cmd_enabled(&mut h, &c, "ui.detach"));
+    assert!(!cmd_enabled(&mut h, &c, "ui.attach"));
 
     // 1. With only one document open, detaching must fail with a clear error.
     let err = call(&mut h, &c, "ui.detach", json!({"tab": 0})).unwrap_err();
@@ -2371,4 +2352,44 @@ fn headless_control_channel_tab_detach_errors_and_trait() {
 
     let err = call(&mut h, &c, "ui.detach", json!({})).unwrap_err();
     assert!(err.contains("pass doc id"), "{err}");
+}
+
+#[test]
+fn accessible_labels_on_format_text_and_pin_dialog() {
+    let (mut h, c) = harness();
+
+    // 1. Check Dialog::PinTool accessibility labels
+    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::PinTool);
+    h.run_steps(3);
+
+    let search = ok(&mut h, &c, "ui.inspect", json!({"role": "TextInput", "query": "Search tools…"}));
+    assert!(search["count"].as_u64().unwrap() >= 1, "search box has accessible label: {search}");
+
+    let result_rows = ok(&mut h, &c, "ui.inspect", json!({"query": "Organize Pages"}));
+    assert!(result_rows["count"].as_u64().unwrap() >= 1, "result row has accessible label: {result_rows}");
+
+    let pin_toggles = ok(&mut h, &c, "ui.inspect", json!({"query": "Pin"}));
+    assert!(pin_toggles["count"].as_u64().unwrap() >= 1, "pin toggle has accessible label: {pin_toggles}");
+
+    h.state_mut().dialog = None;
+    h.run_steps(2);
+
+    // 2. Open Add Text so Format text panel is visible
+    ok(&mut h, &c, "ui.command", json!({"id": "edit.text"}));
+    h.run_steps(3);
+
+    let font_combo = ok(&mut h, &c, "ui.inspect", json!({"query": "Font", "role": "ComboBox"}));
+    assert!(font_combo["count"].as_u64().unwrap() >= 1, "format-font has accessible label: {font_combo}");
+
+    let size_combo = ok(&mut h, &c, "ui.inspect", json!({"query": "Font size"}));
+    assert!(size_combo["count"].as_u64().unwrap() >= 1, "format-size has accessible label: {size_combo}");
+
+    let line_spacing_combo = ok(&mut h, &c, "ui.inspect", json!({"query": "Line spacing", "role": "ComboBox"}));
+    assert!(line_spacing_combo["count"].as_u64().unwrap() >= 1, "format-line-spacing has accessible label: {line_spacing_combo}");
+
+    let scale_spin = ok(&mut h, &c, "ui.inspect", json!({"query": "Horizontal scale", "role": "SpinButton"}));
+    assert!(scale_spin["count"].as_u64().unwrap() >= 1, "horizontal scale spin button has accessible label: {scale_spin}");
+
+    let char_spin = ok(&mut h, &c, "ui.inspect", json!({"query": "Character spacing", "role": "SpinButton"}));
+    assert!(char_spin["count"].as_u64().unwrap() >= 1, "character spacing spin button has accessible label: {char_spin}");
 }

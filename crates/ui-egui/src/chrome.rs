@@ -31,7 +31,6 @@ const TAB_STRIP: f32 = 38.0;
 const TAB_HEIGHT: f32 = 30.0;
 const STRIP_BUTTON: f32 = 28.0;
 const TAB_TEAR_OFF_DISTANCE: f32 = 15.0;
-
 /// Whether AppKit lays the traffic lights out from the right end of the title bar, or `None` when
 /// no window can say yet. It does when the system language is right-to-left, whatever PdfCraft's
 /// own interface language is, so the window is asked rather than the interface language
@@ -120,7 +119,8 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 // Tabs shrink to share the strip (names end in "…") and scroll only once they reach
                 // their narrowest; then arrows either side say so and step through them.
                 let mut natural: Vec<f32> = Vec::with_capacity(app.views.len() + 1);
-                // (The main pane's tabs: split view's second pane has a strip of its own.)
+                // (The main pane's tabs: split view's second pane has a strip of its own.
+                // A tab torn out into its own window is drawn there, not here.)
                 for i in app.tabs_in(Place::Main) {
                     if app.views.get(i).is_some_and(|v| v.detached) {
                         continue;
@@ -456,6 +456,14 @@ fn tab_drag(
                 }
             } else if !released {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                let t = Tokens::get(ui.ctx());
+                if let Some(name) = crate::canvas::tab_label(app, from) {
+                    let badge_rect = egui::Rect::from_min_size(pos + egui::vec2(12.0, 12.0), egui::vec2(130.0, 26.0));
+                    let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, ui.scope_id().with("tear_off_badge")));
+                    painter.rect_filled(badge_rect, 4.0, t.panel);
+                    painter.rect_stroke(badge_rect, 4.0, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+                    painter.text(badge_rect.center(), egui::Align2::CENTER_CENTER, name, egui::FontId::proportional(12.0), t.text);
+                }
             }
             return None;
         }

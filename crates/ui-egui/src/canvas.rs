@@ -1287,6 +1287,7 @@ impl DocView {
         fresh.snapshot = self.snapshot.clone();
         fresh.close_requested = self.close_requested;
         fresh.cover = self.cover;
+        fresh.detached = self.detached;
         // What the document asked to hide, and what is hidden now (F8), belong to the tab.
         fresh.interface = self.interface;
         // Still presenting, with the display to go back to on leaving.
