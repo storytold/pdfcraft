@@ -3,8 +3,6 @@
 //! reach the screen while focus is in it. The controls write [`Intents`], never the app while
 //! `app.ocr_verify` is read; [`super::apply`] applies them after the drawing.
 
-use std::num::NonZeroU8;
-
 use craft::behavior::ColumnWidth;
 use craft::theme::variant::Tone;
 use craft::theme::{TypeRole, Variant};
@@ -70,8 +68,8 @@ pub(super) enum OcrVerifyCommands {
     Undo,
 }
 
-/// The three columns: the page list and the text column take their content, the page takes the rest.
-const COLUMNS: &[ColumnWidth] = &[ColumnWidth::Content, ColumnWidth::fill(1.0), ColumnWidth::Content];
+/// The page list and text column use their usual widths; the page takes the remaining room.
+const COLUMNS: &[ColumnWidth] = &[ColumnWidth::Fixed(190.0), ColumnWidth::fill(1.0), ColumnWidth::Fixed(340.0)];
 
 /// The OCR Verify screen (Scan & OCR ▸ Correct recognized text), in the document area.
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut Ui) {
@@ -220,9 +218,9 @@ fn options_bar(app: &mut PdfCraftApp, ui: &mut Ui, n: &mut Intents) {
     let mut verified = page_done;
     let engine_before = d.engine;
 
-    Bar::new(tl!("OCR options"), BarKind::Options).rows(NonZeroU8::MIN.saturating_add(1)).show(ui, |ui, _| {
+    Stack::new().label(tl!("OCR options")).fill_width().show(ui, |ui, _| {
         // Row 1: the settings (each written back into the persisted draft).
-        Row::new().show(ui, |ui, _| {
+        Row::new().wrap(true).show(ui, |ui, _| {
             Select::new(tl!("Language"), Bind::bound(&mut d.language), &languages).show(ui);
             Select::new(tl!("Engine"), Bind::bound(&mut d.engine), &engines).show(ui);
             Select::new(tl!("Strategy"), Bind::bound(&mut d.strategy), &strategies).show(ui);
@@ -238,7 +236,7 @@ fn options_bar(app: &mut PdfCraftApp, ui: &mut Ui, n: &mut Intents) {
         });
 
         // Row 2: scope and actions.
-        Row::new().show(ui, |ui, _| {
+        Row::new().wrap(true).show(ui, |ui, _| {
             RadioGroup::new(tl!("Pages to read"), Bind::bound(&mut d.pages)).show(ui, |ui, _| {
                 Row::new().show(ui, |ui, _| {
                     Radio::new(OcrPages::All).label(tl!("All pages")).show(ui);
