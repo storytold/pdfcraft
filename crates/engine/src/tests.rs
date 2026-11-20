@@ -5312,13 +5312,13 @@ fn shuffle_with_one_long_file_and_very_many_short_ones_is_in_order_and_quick() {
 #[test]
 fn shuffle_refuses_more_pages_than_its_cap() {
     let s = Session::new();
-    // Ten thousand pages is the most a blank document has, so eleven of them are over the cap.
+    // Ten thousand pages is the most a blank document has, so six of them are over the cap.
     let big = s.create_blank(10.0, 10.0, 10_000).unwrap();
-    let files: Vec<(String, Arc<Vec<u8>>)> = (0..11).map(|i| (format!("f{i}"), big.clone())).collect();
+    let files: Vec<(String, Arc<Vec<u8>>)> = (0..6).map(|i| (format!("f{i}"), big.clone())).collect();
     let err = shuffled(&s, &files).unwrap_err();
     assert!(matches!(err, EditError::Invalid(_)), "{err:?}");
-    // Ten are exactly at it and are accepted.
-    assert!(shuffled(&s, &files[..10]).is_ok());
+    // Five are exactly at it and are accepted.
+    assert!(shuffled(&s, &files[..5]).is_ok());
 }
 
 /// Edit ▸ Copy and Paste of added content (#2636): a text box comes back with all its style, an

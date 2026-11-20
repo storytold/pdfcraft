@@ -411,8 +411,10 @@ impl Session {
     }
 
     /// Most pages a shuffle writes (the sum over its files), so a hostile page count can't ask
-    /// for an unbounded list of parts.
-    pub const MAX_SHUFFLE_PAGES: usize = 100_000;
+    /// for an unbounded list of parts. It stays well below where the reader stops reopening a
+    /// written result: a combine of 100,000 blank pages no longer reopens, 89,000 does, and pages
+    /// with content take more objects each.
+    pub const MAX_SHUFFLE_PAGES: usize = 50_000;
 
     /// Interleave the pages of two or more files, as `pdftk A.pdf B.pdf shuffle` does (#4922):
     /// page 1 of each file in turn, then page 2 of each, and so on. A file that runs out drops
