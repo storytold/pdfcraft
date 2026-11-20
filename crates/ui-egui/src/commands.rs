@@ -531,20 +531,60 @@ impl PdfCraftApp {
                 } else {
                     K::Background
                 };
+                // Header & footer opens on the pages selected in Organize: that run of pages, or
+                // every page when none is selected. A page range is one run, so a selection with
+                // gaps is refused rather than applying to the pages in between.
+                let selection = if id.starts_with("edit.header_footer") { active.map(|i| self.views[i].selected.clone()) } else { None };
+                if let Some(selected) = selection.as_ref().filter(|s| !s.is_empty())
+                    && let (Some(&first), Some(&last)) = (selected.iter().min(), selected.iter().max())
+                    && last + 1 - first != selected.len()
+                {
+                    self.notify_tr("Header and footer can only be applied to a run of neighbouring pages. Select one, such as pages 2 to 4.");
+                    return Some(false);
+                }
                 self.marks_draft.replace = id.ends_with(".update");
                 self.marks_draft.opened(kind);
                 self.marks_draft.preview = None;
+                if id.starts_with("edit.header_footer") {
+                    self.marks_draft.range.subset = crate::marks_ui::Subset::All;
+                    match selection.as_ref().and_then(|s| Some((*s.iter().min()?, *s.iter().max()?))) {
+                        Some((first, last)) => {
+                            self.marks_draft.range.all = false;
+                            self.marks_draft.range.from = first + 1;
+                            self.marks_draft.range.to = last + 1;
+                        }
+                        None => self.marks_draft.range.all = true,
+                    }
+                }
                 self.dialog = Some(Dialog::Marks(kind));
             }
             "edit.bates" => {
                 // Bates numbering ▸ Add: the header & footer dialog with a Bates number in the
-                // bottom-right box (6 digits from 1), ready to edit.
+                // bottom-right box (6 digits from 1), ready to edit. Seed the page range from
+                // the Organize selection, as Add header & footer does.
+                let selection = active.map(|i| self.views[i].selected.clone());
+                if let Some(selected) = selection.as_ref().filter(|s| !s.is_empty())
+                    && let (Some(&first), Some(&last)) = (selected.iter().min(), selected.iter().max())
+                    && last + 1 - first != selected.len()
+                {
+                    self.notify_tr("Header and footer can only be applied to a run of neighbouring pages. Select one, such as pages 2 to 4.");
+                    return Some(false);
+                }
                 self.marks_draft.replace = false;
                 if self.marks_draft.hf.text.iter().all(|t| !t.contains("<<Bates")) {
                     self.marks_draft.hf.text[5] = "<<Bates Number#6#1##>>".into();
                 }
                 self.marks_draft.focused_box = 5;
                 self.marks_draft.preview = None;
+                self.marks_draft.range.subset = crate::marks_ui::Subset::All;
+                match selection.as_ref().and_then(|s| Some((*s.iter().min()?, *s.iter().max()?))) {
+                    Some((first, last)) => {
+                        self.marks_draft.range.all = false;
+                        self.marks_draft.range.from = first + 1;
+                        self.marks_draft.range.to = last + 1;
+                    }
+                    None => self.marks_draft.range.all = true,
+                }
                 self.dialog = Some(Dialog::Marks(pdfcraft_engine::MarkKind::HeaderFooter));
             }
             "prepress.marks" => self.dialog = Some(Dialog::PrinterMarks),
@@ -998,5 +1038,113 @@ mod tests {
         assert_eq!(tab_after(Some(7), 3, true), Some(0), "a stale index starts over");
         assert_eq!(tab_after(None, 0, true), None);
         assert_eq!(tab_after(Some(0), 0, false), None);
+    }
+
+    /// Edit ▸ Add header & footer opens the Marks dialog pre-set to the pages selected in the
+    /// Organize grid (here 0-based 1 and 2, so 1-based "from 2 to 3"), not to every page.
+    #[test]
+    fn header_footer_dialog_uses_selected_pages() {
+        const PDF: &[u8] = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R 7 0 R] /Count 5 /MediaBox [0 0 300 400] >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R >> endobj\n4 0 obj << /Type /Page /Parent 2 0 R >> endobj\n5 0 obj << /Type /Page /Parent 2 0 R >> endobj\n6 0 obj << /Type /Page /Parent 2 0 R >> endobj\n7 0 obj << /Type /Page /Parent 2 0 R >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF";
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc.pdf", None, PDF.to_vec()).unwrap();
+        app.views[0].select_pages(&[1, 2]);
+        assert!(app.execute("edit.header_footer"), "the command opens the dialog");
+        assert_eq!(app.dialog, Some(Dialog::Marks(pdfcraft_engine::MarkKind::HeaderFooter)));
+        let range = app.marks_draft.range;
+        assert!(!range.all, "the dialog's page range starts from the selection");
+        assert_eq!((range.from, range.to), (2, 3), "the selected pages, as a 1-based from/to pair");
+        assert_eq!(range.pages(5), vec![1, 2], "the range covers exactly the Organize selection");
+    }
+
+    /// A selection with a gap is refused: one page range would also mark the pages in between.
+    #[test]
+    fn header_footer_refuses_a_selection_with_gaps() {
+        const PDF: &[u8] = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R 7 0 R] /Count 5 /MediaBox [0 0 300 400] >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R >> endobj\n4 0 obj << /Type /Page /Parent 2 0 R >> endobj\n5 0 obj << /Type /Page /Parent 2 0 R >> endobj\n6 0 obj << /Type /Page /Parent 2 0 R >> endobj\n7 0 obj << /Type /Page /Parent 2 0 R >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF";
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc.pdf", None, PDF.to_vec()).unwrap();
+        app.views[0].select_pages(&[0, 3]);
+        assert!(!app.execute("edit.header_footer"), "pages 1 and 4 are refused");
+        assert_eq!(app.dialog, None, "no dialog opens for a refused selection");
+        assert!(app.toast.is_some(), "the user is told why");
+    }
+
+    /// With nothing selected the dialog covers every page again, even after a narrower run.
+    #[test]
+    fn header_footer_dialog_resets_to_all_pages_without_a_selection() {
+        const PDF: &[u8] = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R 7 0 R] /Count 5 /MediaBox [0 0 300 400] >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R >> endobj\n4 0 obj << /Type /Page /Parent 2 0 R >> endobj\n5 0 obj << /Type /Page /Parent 2 0 R >> endobj\n6 0 obj << /Type /Page /Parent 2 0 R >> endobj\n7 0 obj << /Type /Page /Parent 2 0 R >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF";
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc.pdf", None, PDF.to_vec()).unwrap();
+        app.views[0].select_pages(&[1, 2]);
+        assert!(app.execute("edit.header_footer"));
+        app.views[0].select_pages(&[]);
+        assert!(app.execute("edit.header_footer"));
+        assert!(app.marks_draft.range.all, "the range is every page again");
+    }
+
+    /// The header & footer dialog resets range.subset to All in both the selected-range
+    /// and no-selection branches (regression test for subset not being reset).
+    #[test]
+    fn header_footer_dialog_resets_to_all_pages_without_a_selection_review_regression_1() {
+        const PDF: &[u8] = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R 7 0 R] /Count 5 /MediaBox [0 0 300 400] >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R >> endobj\n4 0 obj << /Type /Page /Parent 2 0 R >> endobj\n5 0 obj << /Type /Page /Parent 2 0 R >> endobj\n6 0 obj << /Type /Page /Parent 2 0 R >> endobj\n7 0 obj << /Type /Page /Parent 2 0 R >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF";
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc.pdf", None, PDF.to_vec()).unwrap();
+
+        // An earlier dialog left the subset on Even; opening Header & Footer with a
+        // selection must reset it to All.
+        app.views[0].select_pages(&[1, 2]);
+        app.marks_draft.range.subset = crate::marks_ui::Subset::Even;
+        assert!(app.execute("edit.header_footer"));
+        assert_eq!(app.marks_draft.range.subset, crate::marks_ui::Subset::All, "subset is All when a range is selected");
+
+        // An earlier dialog left the subset on Odd; opening Header & Footer with no
+        // selection must reset it to All again.
+        app.views[0].select_pages(&[]);
+        app.marks_draft.range.subset = crate::marks_ui::Subset::Odd;
+        assert!(app.execute("edit.header_footer"));
+        assert_eq!(app.marks_draft.range.subset, crate::marks_ui::Subset::All, "subset is All again when nothing is selected");
+    }
+
+    /// Bates numbering opens the same header & footer dialog, so it uses the Organize selection
+    /// the same way: a neighbouring run, every page when nothing is selected, and All for the subset.
+    #[test]
+    fn bates_dialog_uses_selected_pages() {
+        const PDF: &[u8] = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R 7 0 R] /Count 5 /MediaBox [0 0 300 400] >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R >> endobj\n4 0 obj << /Type /Page /Parent 2 0 R >> endobj\n5 0 obj << /Type /Page /Parent 2 0 R >> endobj\n6 0 obj << /Type /Page /Parent 2 0 R >> endobj\n7 0 obj << /Type /Page /Parent 2 0 R >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF";
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc.pdf", None, PDF.to_vec()).unwrap();
+        app.views[0].select_pages(&[1, 2]);
+        assert!(app.execute("edit.bates"), "the command opens the dialog");
+        assert_eq!(app.dialog, Some(Dialog::Marks(pdfcraft_engine::MarkKind::HeaderFooter)));
+        let range = app.marks_draft.range;
+        assert!(!range.all, "the dialog's page range starts from the selection");
+        assert_eq!((range.from, range.to), (2, 3), "the selected pages, as a 1-based from/to pair");
+        assert_eq!(range.pages(5), vec![1, 2], "the range covers exactly the Organize selection");
+        assert!(app.marks_draft.hf.text.iter().any(|t| t.contains("<<Bates")), "a Bates token is in the dialog");
+    }
+
+    #[test]
+    fn bates_dialog_refuses_a_selection_with_gaps() {
+        const PDF: &[u8] = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R 7 0 R] /Count 5 /MediaBox [0 0 300 400] >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R >> endobj\n4 0 obj << /Type /Page /Parent 2 0 R >> endobj\n5 0 obj << /Type /Page /Parent 2 0 R >> endobj\n6 0 obj << /Type /Page /Parent 2 0 R >> endobj\n7 0 obj << /Type /Page /Parent 2 0 R >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF";
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc.pdf", None, PDF.to_vec()).unwrap();
+        app.views[0].select_pages(&[0, 3]);
+        assert!(!app.execute("edit.bates"), "pages 1 and 4 are refused");
+        assert_eq!(app.dialog, None, "no dialog opens for a refused selection");
+        assert!(app.toast.is_some(), "the user is told why");
+    }
+
+    #[test]
+    fn bates_dialog_resets_range_and_subset_without_a_selection() {
+        const PDF: &[u8] = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R 7 0 R] /Count 5 /MediaBox [0 0 300 400] >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R >> endobj\n4 0 obj << /Type /Page /Parent 2 0 R >> endobj\n5 0 obj << /Type /Page /Parent 2 0 R >> endobj\n6 0 obj << /Type /Page /Parent 2 0 R >> endobj\n7 0 obj << /Type /Page /Parent 2 0 R >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF";
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc.pdf", None, PDF.to_vec()).unwrap();
+        app.views[0].select_pages(&[1, 2]);
+        app.marks_draft.range.subset = crate::marks_ui::Subset::Even;
+        assert!(app.execute("edit.bates"));
+        assert_eq!(app.marks_draft.range.subset, crate::marks_ui::Subset::All);
+        app.views[0].select_pages(&[]);
+        app.marks_draft.range.subset = crate::marks_ui::Subset::Odd;
+        assert!(app.execute("edit.bates"));
+        assert!(app.marks_draft.range.all, "the range is every page again");
+        assert_eq!(app.marks_draft.range.subset, crate::marks_ui::Subset::All);
     }
 }
