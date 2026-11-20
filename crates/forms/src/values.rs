@@ -832,12 +832,10 @@ pub(crate) fn has_password_flag(doc: &Document) -> bool {
 fn unlinked_password_values(doc: &Document) -> Vec<ObjRef> {
     let is_password_text = |r: ObjRef| {
         let chain = field_chain(doc, r);
-        let nearest = |key: &[u8]| chain.iter().find_map(|c| doc.get(*c).as_dict().and_then(|d| d.get(key).map(|o| doc.resolve(o))));
-        let text = nearest(b"FT").is_some_and(|ft| ft.as_name() == Some(b"Tx".as_slice()));
-        let password = chain
-            .iter()
-            .find_map(|c| doc.get(*c).as_dict().and_then(|d| d.get(b"Ff").is_some().then(|| field_flags(doc, d).unwrap_or(0))))
-            .is_some_and(|ff| ff & flags::PASSWORD != 0);
+        // Inherited as the field reader inherits them: a `/FT` that isn't a name, or an `/Ff`
+        // that isn't a valid number (`null` included), is skipped and the parent's value applies.
+        let text = chain.iter().find_map(|c| doc.get(*c).as_dict().and_then(|d| d.name(b"FT").map(<[u8]>::to_vec))).is_some_and(|ft| ft == b"Tx");
+        let password = chain.iter().find_map(|c| doc.get(*c).as_dict().and_then(|d| field_flags(doc, d))).is_some_and(|ff| ff & flags::PASSWORD != 0);
         text && password
     };
     let mut found: Vec<ObjRef> = doc
