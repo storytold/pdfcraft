@@ -1857,10 +1857,8 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     view.want_text(&app.session, &visible_pages, &rest_pages);
 
     find_bar(view, info.pages.len(), rect, tool == QuickTool::EditText && can_modify, ui);
-    // Whether the clipboard holds a picture, read only when this pass opens the page menu (a clipboard read is slow).
-    // PLAN: a menu left open from an earlier pass keeps its row only if `page_menu` reads the clipboard itself.
-    let can_paste_image = body_out.context.is_some() && app.can_paste_image();
-    // The clipboard read takes the app; the document is read again after it.
+    // The clipboard is read when Paste is invoked, so its menu stays enabled while the document is open.
+    let can_paste_image = true;
     let doc = app.session.get(doc_id)?;
     let info = &doc.info;
     let view = &mut app.views[index];
