@@ -63,6 +63,81 @@ fn header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset() {
     assert!(marks(&h).is_empty());
 }
 
+/// The text of each page, read back from the document's current bytes.
+fn page_texts(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
+    use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let mut r = PageRenderer::new(doc.bytes.clone(), Default::default());
+    (0..r.page_count())
+        .map(|p| {
+            let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, scale: 1.0, ..Default::default() });
+            out.text.map(|t| t.plain_text().trim().to_string()).unwrap_or_default()
+        })
+        .collect()
+}
+
+/// Add a header with `text` on page `page` (1-based) only, through the dialog.
+fn add_header_on(h: &mut Harness<'static, PdfCraftApp>, page: usize, text: &str) {
+    assert!(h.state_mut().execute("edit.header_footer"));
+    h.run_steps(2);
+    let d = &mut h.state_mut().marks_draft;
+    d.hf.text = Default::default();
+    d.hf.text[1] = text.into();
+    d.range = pdfcraft_ui_egui::marks::PageRange { all: false, from: page, to: page, subset: pdfcraft_ui_egui::marks::Subset::All };
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, None);
+}
+
+#[test]
+fn update_offers_the_header_on_the_current_page_not_the_last_one_added() {
+    // #5785: with different headers on different pages, Update only ever reached the one added
+    // last. It now opens with the header of the page shown, and changes only that one.
+    let mut h = harness();
+    add_header_on(&mut h, 1, "Alpha");
+    add_header_on(&mut h, 2, "Beta");
+    assert_eq!(page_texts(&h)[..2], ["Alpha", "Beta"]);
+    h.state_mut().views[0].go_to_page(0);
+    h.run_steps(2);
+    assert!(h.state_mut().execute("edit.header_footer.update"));
+    h.run_steps(2);
+    let d = &h.state().marks_draft;
+    assert_eq!(d.hf.text[1], "Alpha", "Update opens with the current page's header");
+    assert_eq!(d.range.pages(3), [0], "and with the pages that header is on");
+    h.state_mut().marks_draft.hf.text[1] = "Gamma".into();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    assert_eq!(page_texts(&h)[..2], ["Gamma", "Beta"], "the other header stays as it was");
+}
+
+#[test]
+fn update_reaches_every_page_of_a_header_no_range_selects_exactly() {
+    // #5785: a header on pages 1, 2 and 4 with another one on 3 and 5. Update changes it on all
+    // three pages and leaves the other one alone.
+    let pdf = String::from_utf8(FIXTURE.to_vec())
+        .unwrap()
+        .replace("/Kids [3 0 R 4 0 R 5 0 R] /Count 3", "/Kids [3 0 R 4 0 R 5 0 R 6 0 R 7 0 R] /Count 5")
+        .replace("trailer", "6 0 obj << /Type /Page /Parent 2 0 R >> endobj\n7 0 obj << /Type /Page /Parent 2 0 R >> endobj\ntrailer");
+    let mut h = harness_with(pdf.into_bytes());
+    for (page, text) in [(1, "Alpha"), (2, "Alpha"), (3, "Beta"), (4, "Alpha"), (5, "Beta")] {
+        add_header_on(&mut h, page, text);
+    }
+    assert_eq!(page_texts(&h), ["Alpha", "Alpha", "Beta", "Alpha", "Beta"]);
+    h.state_mut().views[0].go_to_page(3);
+    h.run_steps(2);
+    assert!(h.state_mut().execute("edit.header_footer.update"));
+    h.run_steps(2);
+    assert_eq!(h.state().marks_draft.hf.text[1], "Alpha", "Update opens with the current page's header");
+    h.state_mut().marks_draft.hf.text[1] = "Gamma".into();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    assert_eq!(page_texts(&h), ["Gamma", "Gamma", "Beta", "Gamma", "Beta"]);
+}
+
 #[test]
 fn header_and_footer_dialog_draws_in_the_chosen_face() {
     // #3754: the dialog offers Helvetica, Times and Courier (it only said "Font: Helvetica"),
