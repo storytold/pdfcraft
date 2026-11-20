@@ -30,8 +30,8 @@ mod types;
 #[cfg(test)]
 use create::num_array;
 pub use create::{
-    CALLOUT_KNEE_LINE, CUSTOM_LINE_BAND, CUSTOM_LINE_TEXT, Side, add_annotation, callout_attach, callout_knee, callout_knee_on, callout_side,
-    custom_stamp_size, orient_image_stamp,
+    CALLOUT_KNEE_LINE, CUSTOM_LINE_BAND, CUSTOM_LINE_TEXT, Side, add_annotation, add_annotation_named, callout_attach, callout_knee, callout_knee_on,
+    callout_side, custom_stamp_size, orient_image_stamp,
 };
 pub use draw::{AppearanceCache, set_appearance, with_missing_appearances, with_missing_appearances_cached};
 pub use info::{PopupInfo, Props, Summary, is_comment_subtype, is_group_subordinate, props, set_info, summaries};
@@ -44,14 +44,14 @@ pub use lookup::{
 pub use model3d::{Model3d, Model3dKind, model_3d, model_3d_annotations};
 pub(crate) use modify::n;
 pub use modify::{
-    add_reply, add_text_replacement, deletable, delete_annotation, erase_ink, fillable, goes_with, lift_annotation, move_annotation, release_members,
-    set_border_color, set_border_shape, set_contents, set_fill, set_font_size, set_locked, set_marked, set_part_opacity, set_points, set_popup,
-    set_rect, set_review_state, set_style, with_replies_and_popups,
+    add_reply, add_reply_named, add_text_replacement, deletable, delete_annotation, erase_ink, fillable, goes_with, lift_annotation, move_annotation,
+    release_members, restyle, set_border_color, set_border_shape, set_contents, set_fill, set_font_size, set_locked, set_marked, set_part_opacity,
+    set_points, set_popup, set_rect, set_review_state, set_review_state_named, set_style, with_replies_and_popups,
 };
 pub use threed::{Activation as Activation3d, MAX_MODEL_BYTES, ModelFormat, NewModel3d, PosterPicture, add_3d_model, check_model};
 pub use types::{
-    AttachIcon, BorderShape, FillMark, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, NoteIcon, OverlayFont, OverlayLook, ReviewState, Rgb,
-    Shape, StampGroup, StampKind, Style, StyleChange, TextReplacement, rect_quad,
+    AttachIcon, BorderShape, FillMark, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, NoteIcon, OverlayFont, OverlayLook, Restyle, ReviewState,
+    Rgb, Shape, StampGroup, StampKind, Style, StyleChange, TextReplacement, rect_quad,
 };
 
 pub mod appearance;

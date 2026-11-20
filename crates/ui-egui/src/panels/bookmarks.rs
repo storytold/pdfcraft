@@ -12,6 +12,8 @@ pub enum BmAction {
     SetStyle(Vec<usize>, Option<bool>, Option<bool>),
     /// Colour the title; black is the default.
     SetColor(Vec<usize>, [f64; 3]),
+    /// Show the bookmark expanded (or collapsed) in the document, for one with children.
+    SetOpen(Vec<usize>, bool),
     Delete(Vec<usize>),
     MoveUp(Vec<usize>),
     MoveDown(Vec<usize>),
@@ -246,6 +248,12 @@ pub(super) fn outline_item(
                 pick(ui, &set_page, true, BmAction::SetToCurrentPage(path.to_vec()));
                 // The title's style and colour (ISO 32000-2 §12.3.3, Tables 151 and 152).
                 let mut styled = None;
+                // Whether the file keeps this bookmark expanded (the sign of /Count,
+                // Table 151). The chevron below is the reader's own view of it.
+                let mut expanded = item.open;
+                if ui.add_enabled(!item.children.is_empty(), crate::widgets::checkbox(&mut expanded, tl!("Expanded in the document"))).clicked() {
+                    styled = Some(BmAction::SetOpen(path.to_vec(), expanded));
+                }
                 ui.menu_button(tl!("Style"), |ui| {
                     let (mut bold, mut italic) = (item.bold, item.italic);
                     if ui.add(crate::widgets::checkbox(&mut bold, tl!("Bold"))).clicked() {

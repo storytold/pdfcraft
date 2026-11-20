@@ -1,0 +1,37 @@
+[package]
+name = "pdfcraft-collab-ws"
+description = "WebSocket transport for collaborative PDF editing: frames, JWT sessions, hub pump"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pdfcraft-collab-hub = { workspace = true }
+pdfcraft-collab-proto = { workspace = true }
+pdfcraft-collab-server = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+# The server transport is native-only: the web client reaches the server through
+# the host bridge, so this crate is empty on wasm (and its crypto/socket deps are
+# not built there).
+#
+# `aws_lc_rs`, not `rust_crypto`: jsonwebtoken 11.1's RustCrypto backend pins
+# p256/p384 0.13 -> elliptic-curve 0.13 -> crypto-bigint 0.5.5, and 0.5.5 is
+# RUSTSEC-2026-0387 (timing branches in constant-time arithmetic). This crate is
+# native-only, where aws-lc-rs is already built for `pdfcraft-sign` (ADR-0009).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+jsonwebtoken = { version = "11.1", default-features = false, features = ["aws_lc_rs", "use_pem"] }
+tungstenite = "0.30"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+pdfcraft-collab-client-pdf = { workspace = true }
+pdfcraft-collab-pdf = { workspace = true }
+pdfcraft-engine = { workspace = true }
+rand = "0.8"
+rsa = "0.9"

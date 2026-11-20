@@ -908,3 +908,23 @@ fn insert_text_icon_is_distinct_from_edit_text_and_matches_its_command() {
     assert_eq!(insert, command, "the annotation toolbar and command use the same icon");
     assert!(crate::widgets::icons::exists(insert));
 }
+
+/// Save keeps a draft the wire would refuse, and says why: the panel is the only
+/// place the text can be shortened, and the server's refusal would arrive after
+/// the draft was cleared (thread #1 on PR #6622).
+#[test]
+fn a_comment_over_the_wire_limit_keeps_its_draft() {
+    use crate::panels::comments_panel::{MAX_COMMENT_TEXT_BYTES, save_inline_edit};
+    let mut editing = Some((1, 2, "x".repeat(MAX_COMMENT_TEXT_BYTES + 1)));
+    let mut notice = None;
+    assert!(save_inline_edit(&mut editing, &mut notice).is_none(), "an oversized comment is not turned into an edit");
+    assert!(editing.is_some(), "the draft stays in the editor");
+    assert!(notice.is_some(), "and the panel says why it was not saved");
+
+    let mut editing = Some((1, 2, "a short comment".into()));
+    let mut notice = None;
+    let edit = save_inline_edit(&mut editing, &mut notice).expect("a comment within the limit is saved");
+    assert!(matches!(edit, pdfcraft_engine::Edit::SetAnnotationContents { page: 1, index: 2, .. }));
+    assert!(editing.is_none(), "the editor closes on Save");
+    assert!(notice.is_none());
+}

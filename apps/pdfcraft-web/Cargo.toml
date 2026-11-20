@@ -9,12 +9,27 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+default = []
+# Real-time collaboration over the host bridge: `pdfcraft:session`, `session-state`,
+# `presence`, `commit`, `committed` (INTEGRATION.md §6). Off by default, like the
+# feature in `pdfcraft-ui-egui`: a `cargo build`/`cargo test` is single-user. The
+# page build turns it on for its own asset (`index.html`, `data-cargo-features`),
+# which is what the cabinet's pinned bundle is: `trunk build --release`.
+collab = ["pdfcraft-ui-egui/collab"]
+
 [dependencies]
 pdfcraft-ui-egui = { workspace = true }
 # The host messages (storytold/craft-libs): one contract and one bridge for the web builds.
 # The page command API (storytold/craft-libs#413): window.pdfcraft over the UI control channel.
 craft-web-api = { git = "https://github.com/storytold/craft-libs", rev = "fd5e2feff6ea25bed371a99cc732b3968d621505", version = "0.1.0" }
-craft-web-host = { git = "https://github.com/storytold/craft-libs", rev = "fd5e2feff6ea25bed371a99cc732b3968d621505", version = "0.1.0" }
+# The collaboration messages (`session`, `session-state`, `presence`, `commit`,
+# `committed`) came with storytold/craft-libs#716 (ADR-0016 §3), still open: not in
+# `storytold/main` yet. The pin is that PR's head commit, fetched from
+# `storytold/craft-libs` (where it is reachable as `refs/pull/716/head`) rather than
+# from the fork: the CI job "Git dependencies come from storytold" rejects any git
+# source outside `github.com/storytold/` (ci.yml, `git-sources`).
+craft-web-host = { git = "https://github.com/storytold/craft-libs", rev = "7666e2b100d8cf12998f9b57d3b036964cc3189c", version = "0.1.0" }
 eframe = { workspace = true, features = ["default_fonts", "glow", "persistence", "accesskit"] }
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 serde_json = { workspace = true }

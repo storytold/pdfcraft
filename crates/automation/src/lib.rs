@@ -30,6 +30,7 @@ pub mod mcp;
 mod measure;
 mod model3d;
 mod model_render;
+mod named_dests;
 mod print_colour;
 mod printing;
 mod reading;

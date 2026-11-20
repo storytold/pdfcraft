@@ -284,6 +284,33 @@ impl DocView {
         edit
     }
 
+    /// The caret of the text selection, in user space: the active end of a run (where
+    /// typing would start) or the dragged corner of a column select, as (page, point).
+    /// Presence shares it; the document keeps nothing. Its only reader is `collab.rs`, so
+    /// a build without the feature would carry it as dead code.
+    #[cfg(feature = "collab")]
+    pub(crate) fn selection_caret(&self, info: &DocInfo) -> Option<(usize, [f64; 2])> {
+        let s = self.selection?;
+        let (caret_page, x, y) = match s.span {
+            Span::Run { anchor, head, head_page, .. } => {
+                // The head may be on another page than the anchor (a run across pages).
+                let text = self.texts.get(&head_page)?;
+                let glyph = text.glyphs.get(head)?;
+                let rect = glyph.rect;
+                // A forward run ends after its last glyph, a backward one before it.
+                let forward = head_page > s.page || (head_page == s.page && head >= anchor);
+                (head_page, if forward { rect[2] } else { rect[0] }, rect[3])
+            }
+            Span::Column { rect } => (s.page, rect[2], rect[3]),
+        };
+        if !x.is_finite() || !y.is_finite() {
+            return None;
+        }
+        let page = info.pages.get(caret_page)?;
+        let [ux, uy] = page.view_to_user(x, y);
+        Some((caret_page, [f64::from(ux), f64::from(uy)]))
+    }
+
     pub(crate) fn clear_selection(&mut self) {
         self.selection = None;
         self.actions_dismissed = None;

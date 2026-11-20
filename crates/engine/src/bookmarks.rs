@@ -5,6 +5,11 @@
 pub struct BookmarkRow {
     /// Child indices from the top level, 0-based, as the edit functions take them.
     pub path: Vec<usize>,
+    /// The item's object reference: its identity in the document. A path moves
+    /// when a bookmark is added or removed above it, a page operation that keeps
+    /// the pages keeps every item where it is; the reference is what a
+    /// collaborative operation addresses (`docs/collab/RFC.md` §3.1.7).
+    pub object: Option<(u32, u16)>,
     pub title: String,
     /// Shown expanded (a positive `/Count`).
     pub open: bool,
@@ -45,6 +50,9 @@ pub(crate) fn outline_rows(items: &[pdfcraft_render::OutlineItem]) -> Vec<Bookma
         let path: Vec<usize> = levels.iter().map(|(_, listed)| listed.saturating_sub(1)).collect();
         rows.push(BookmarkRow {
             path,
+            // The viewer's copy carries no object reference: an outline read
+            // for display only cannot be addressed.
+            object: None,
             title: item.title.clone(),
             open: item.open,
             page: item.page,
@@ -58,4 +66,31 @@ pub(crate) fn outline_rows(items: &[pdfcraft_render::OutlineItem]) -> Vec<Bookma
         }
     }
     rows
+}
+
+/// A bookmark of the document's own outline as one row: its path, the object it
+/// is, its title and where it goes.
+pub(crate) fn row_of(bookmark: pdfcraft_organize::Bookmark) -> BookmarkRow {
+    let view = bookmark.view.map_or_else(Default::default, |(kind, numbers)| {
+        let numbers: Vec<Option<f32>> = numbers.iter().map(|n| n.map(|n| n as f32)).collect();
+        pdfcraft_render::DestView::from_operands(Some(&kind), &numbers)
+    });
+    BookmarkRow {
+        path: bookmark.path,
+        object: Some((bookmark.obj.num, bookmark.obj.generation)),
+        title: bookmark.title,
+        open: bookmark.open,
+        page: bookmark.page,
+        view,
+        color: bookmark.color,
+        italic: bookmark.italic,
+        bold: bookmark.bold,
+    }
+}
+
+/// Every bookmark of the document's own outline, in listing order. Empty when the
+/// document's structure cannot be read for editing (a viewer's copy is not
+/// addressable, so it is not offered here).
+pub(crate) fn document_rows(cos: &pdfcraft_cos::Document) -> Vec<BookmarkRow> {
+    pdfcraft_organize::bookmarks(cos).into_iter().map(row_of).collect()
 }

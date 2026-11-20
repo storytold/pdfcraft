@@ -1,0 +1,16 @@
+[package]
+name = "pdfcraft-collab-annot"
+description = "Typed wire representation of the annotation shapes a collaboration session shares"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pdfcraft-annot = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

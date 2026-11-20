@@ -76,7 +76,7 @@ fn select_after_edit(
         }
         // A stroke drawn with the pen stays unselected, so the selection box and
         // author popup don't sit over the next stroke (#429).
-        Edit::AddAnnotation(a)
+        Edit::AddAnnotation(a) | Edit::AddAnnotationNamed(a, _)
             if matches!(a.shape, pdfcraft_engine::Shape::Ink { .. } | pdfcraft_engine::Shape::FreehandHighlight { .. })
                 && matches!(
                     quick_tool,
@@ -85,7 +85,7 @@ fn select_after_edit(
         {
             view.comments.clear_selection();
         }
-        Edit::AddAnnotation(a) => {
+        Edit::AddAnnotation(a) | Edit::AddAnnotationNamed(a, _) => {
             // Select the new comment alone (appended last among the page's comments).
             let newest = info.annotations.iter().filter(|x| x.page == a.page && !x.is_reply()).map(|x| x.index).max();
             view.comments.clear_selection();
@@ -171,6 +171,18 @@ fn form_edit_pages(
 impl PdfCraftApp {
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
+        // In a shared session an edit is sent to the room and comes back as the broadcast
+        // operation; the replica applies that, not the local intent (STATUS §2 p.7). Kept out of
+        // the single-document path so that path stays within the complexity limit.
+        #[cfg(feature = "collab")]
+        if let Some(result) = self.collab_apply_edit(&edit) {
+            return result;
+        }
+        self.apply_local_edit(edit)
+    }
+
+    /// The single-document path of [`Self::apply_edit`].
+    fn apply_local_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
         // Taken whatever happens to this edit, so it never carries over to another.
         let across_pages = std::mem::take(&mut self.views[i].marks_across_pages).filter(|_| annotated_pages(&edit).is_some());
@@ -229,7 +241,7 @@ impl PdfCraftApp {
                 if let Some(ctx) = &self.ctx {
                     ctx.request_repaint();
                 }
-                if matches!(edit, Edit::AddAnnotation(_)) {
+                if matches!(edit, Edit::AddAnnotation(_) | Edit::AddAnnotationNamed(..)) {
                     // A released drawing's raster can come now: it will have the annotation.
                     view.comments.drawings_committed();
                 } else {
@@ -264,7 +276,7 @@ impl PdfCraftApp {
                 } else {
                     view.document_changed(info);
                 }
-                if matches!(edit, Edit::AddAnnotation(_)) || across_pages.is_some() {
+                if matches!(edit, Edit::AddAnnotation(_) | Edit::AddAnnotationNamed(..)) || across_pages.is_some() {
                     view.comments.comment_added();
                 }
                 // A deletion moves the pop-ups' state with its comments (`annotation_deleted`).
@@ -401,6 +413,10 @@ impl PdfCraftApp {
     }
 
     fn history_step(&mut self, undo: bool) {
+        #[cfg(feature = "collab")]
+        if self.collab_history_step(undo) {
+            return;
+        }
         let Some((i, id)) = self.active_ids() else { return };
         if !self.close_text_editors(i, id) {
             return;
@@ -573,7 +589,15 @@ impl PdfCraftApp {
             Some(crate::canvas::ViewAction::InsertFromFileAt(at)) => self.insert_from_file_at(Some(at)),
             Some(crate::canvas::ViewAction::ReplacePages) => self.replace_pages_dialog(),
             Some(crate::canvas::ViewAction::Save) => {
-                self.save_active(SaveTarget::InPlace);
+                // The pages' own Save action takes the same route as the command:
+                // in a hosted session it is the cabinet's commit.
+                #[cfg(feature = "collab")]
+                let committed = self.commit_instead_of_save();
+                #[cfg(not(feature = "collab"))]
+                let committed = false;
+                if !committed {
+                    self.save_active(SaveTarget::InPlace);
+                }
             }
             Some(crate::canvas::ViewAction::Extract) => self.open_extract_dialog(),
             Some(crate::canvas::ViewAction::Split) => self.dialog = Some(crate::Dialog::Split),
@@ -1243,10 +1267,11 @@ fn one_page_changed(
 
 fn comment_page(edit: &Edit) -> Option<usize> {
     match edit {
-        Edit::AddAnnotation(a) => Some(a.page),
+        Edit::AddAnnotation(a) | Edit::AddAnnotationNamed(a, _) => Some(a.page),
         Edit::DeleteAnnotation { page, .. }
         | Edit::SetAnnotationContents { page, .. }
         | Edit::ReplyToAnnotation { page, .. }
+        | Edit::ReplyToAnnotationNamed { page, .. }
         | Edit::SetAnnotationStatus { page, .. }
         | Edit::MoveAnnotation { page, .. }
         | Edit::ReshapeAnnotation { page, .. }
@@ -1258,6 +1283,7 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::FontSizeAnnotation { page, .. }
         | Edit::BorderColorAnnotation { page, .. }
         | Edit::BorderShapeAnnotation { page, .. }
+        | Edit::RestyleAnnotation { page, .. }
         | Edit::SetAnnotationInfo { page, .. } => Some(*page),
         _ => None,
     }
@@ -1325,6 +1351,10 @@ impl PdfCraftApp {
             A::SetToCurrentPage(path) => Edit::SetBookmarkPage { path, page: current },
             A::SetStyle(path, bold, italic) => Edit::SetBookmarkStyle { path, bold, italic },
             A::SetColor(path, color) => Edit::SetBookmarkColor { path, color: Some(color) },
+            // One addressed step: the look goes through the same `outline.item.update`
+            // a colour or a style does (collab-client-pdf), and the engine writes
+            // the sign of `/Count` for it.
+            A::SetOpen(path, open) => Edit::UpdateBookmark { path, title: None, dest: None, color: None, bold: None, italic: None, open: Some(open) },
             A::Delete(path) => Edit::DeleteBookmark { path },
             A::MoveUp(path) => {
                 let at = path[path.len() - 1].saturating_sub(1);
@@ -1466,6 +1496,8 @@ mod revert_draft_tests {
             calendar_text: None,
             list: Default::default(),
             had_focus: false,
+            caret: None,
+            caret_at: None,
         }
     }
 

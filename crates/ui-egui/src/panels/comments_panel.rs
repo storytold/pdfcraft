@@ -21,6 +21,13 @@ use crate::{icons, widgets};
 /// Accent bar of the selected card (11-visual-spec §3: `#0165DD`).
 const CARD_ACCENT: Color32 = Color32::from_rgb(0x01, 0x65, 0xDD);
 
+/// The wire's limit on a comment's text: `MAX_TEXT_BYTES` in
+/// `pdfcraft-collab-annot`, which the collaboration adapter and every receiver
+/// check. The panel is built without the collaboration feature, so the number
+/// is named here; a longer body is refused after the draft was cleared unless
+/// Save checks first (thread #1 on PR #6622).
+pub(crate) const MAX_COMMENT_TEXT_BYTES: usize = 64 * 1024;
+
 /// Reader-friendly names for annotation subtypes (the PDF names are shown in tooltips).
 pub fn subtype_label(s: &str) -> &str {
     match s {
@@ -671,6 +678,20 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
     edit
 }
 
+/// What Save in the inline editor does. A draft over the wire limit stays in the box,
+/// with a notice, because the panel is the only place it can be shortened: the server
+/// would refuse it after the draft was gone (thread #1 on PR #6622).
+pub(crate) fn save_inline_edit(editing: &mut Option<(usize, usize, String)>, notice: &mut Option<&'static str>) -> Option<Edit> {
+    let (page, index, text) = editing.as_ref()?;
+    if text.len() > MAX_COMMENT_TEXT_BYTES {
+        *notice = Some("This comment is too long to share (64 KiB at most); shorten it before saving");
+        return None;
+    }
+    let edit = Edit::SetAnnotationContents { page: *page, index: *index, text: text.clone() };
+    *editing = None;
+    Some(edit)
+}
+
 /// The inline editor open on comment or reply `key` in the panel, with Save and Cancel; returns
 /// the edit Save makes.
 fn inline_editor(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, key: (usize, usize), rows: usize) -> Option<Edit> {
@@ -684,10 +705,8 @@ fn inline_editor(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, key: (usize,
     }
     let submit = crate::comments::submit_key(ui, &r, false);
     ui.horizontal(|ui| {
-        if (ui.add(egui::Button::new(egui::RichText::new(tl!("Save")).color(Color32::WHITE)).fill(t.accent).corner_radius(12)).clicked() || submit)
-            && let Some((page, index, text)) = view.comments.editing.take()
-        {
-            edit = Some(Edit::SetAnnotationContents { page, index, text });
+        if ui.add(egui::Button::new(egui::RichText::new(tl!("Save")).color(Color32::WHITE)).fill(t.accent).corner_radius(12)).clicked() || submit {
+            edit = save_inline_edit(&mut view.comments.editing, &mut view.comments.notice);
         }
         if ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             view.comments.editing = None;

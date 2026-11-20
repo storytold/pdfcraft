@@ -1,0 +1,35 @@
+[package]
+name = "pdfcraft-collab-daemon"
+description = "The PdfCraft collaboration server: WebSocket rooms, JWT sessions, commits"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pdfcraft-collab-hub = { workspace = true }
+pdfcraft-collab-pdf = { workspace = true }
+pdfcraft-collab-proto = { workspace = true }
+pdfcraft-collab-server = { workspace = true }
+pdfcraft-collab-ws = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.11"
+
+# The crash test drives the daemon over a real socket and signs its own tokens,
+# exactly as the cabinet would. `aws_lc_rs` for the same reason as in
+# `pdfcraft-collab-ws`: the RustCrypto backend would bring crypto-bigint 0.5.5
+# (RUSTSEC-2026-0387) through p256/p384, and exactly one provider feature is
+# what jsonwebtoken requires.
+[dev-dependencies]
+jsonwebtoken = { version = "11.1", default-features = false, features = ["aws_lc_rs", "use_pem"] }
+rand = "0.8"
+rsa = "0.9"
+tungstenite = "0.30"
+
+[[bin]]
+name = "pdfcraft-collab-server"
+path = "src/main.rs"

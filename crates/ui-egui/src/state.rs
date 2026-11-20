@@ -121,6 +121,8 @@ pub enum Dialog {
     Protect,
     /// Bookmarks ▸ New bookmarks from text styles (#1693).
     BookmarksFromTextStyles,
+    /// Bookmarks ▸ Named destinations: the document's `/Names /Dests` list.
+    NamedDestinations,
     /// Set Page Boxes (crop, trim, bleed, art, media).
     PageBoxes,
     /// Add / Update Header and Footer, Watermark, Background.

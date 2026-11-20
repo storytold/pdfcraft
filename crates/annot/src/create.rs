@@ -311,6 +311,14 @@ pub(crate) fn on_side(rect: [f64; 4], side: Side, end: [f64; 2]) -> bool {
     }
 }
 
+/// Add a comment with a caller-chosen `/NM`; returns its index in the page's `/Annots`.
+pub fn add_annotation_named(doc: &mut Document, new: &NewAnnotation, meta: &Meta, name: &str) -> Result<usize, AnnotError> {
+    if name.trim().is_empty() {
+        return Err(AnnotError::Invalid("an annotation name must not be empty".into()));
+    }
+    add_annotation(doc, new, &meta.named(name))
+}
+
 /// Add a comment; returns its index in the page's `/Annots`.
 pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> Result<usize, AnnotError> {
     let page = page_ref(doc, new.page)?;
