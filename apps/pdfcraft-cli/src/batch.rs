@@ -135,10 +135,8 @@ fn normalize_path(path: &Path) -> PathBuf {
             }
             _ => {
                 resolved.push(component.as_os_str());
-                if resolved.exists() {
-                    if let Ok(canonical) = resolved.canonicalize() {
-                        resolved = canonical;
-                    }
+                if let Ok(canonical) = resolved.canonicalize() {
+                    resolved = canonical;
                 }
             }
         }
