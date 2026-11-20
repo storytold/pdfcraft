@@ -187,8 +187,9 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], expan
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 // Trust exactly the signer shown above (s.certificate), not the chain top the
-                // document embedded: trusting an issuer or root is a separate, explicit step in
-                // the Certificate Viewer's Trust tab, which names that certificate.
+                // document embedded, and as a signer only: it vouches for no certificate it
+                // issued (#6758). Trusting an issuer or root is a separate, explicit step in the
+                // Certificate Viewer's Trust tab, which names that certificate.
                 if let Some(c) = s.certificate.as_ref()
                     && s.status == SignatureStatus::Unknown
                     && ui.button(tl!("Add to trusted certificates")).clicked()
@@ -235,6 +236,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ")
 }
 
+/// A certificate's key usage bits as the interface names them, or None when no bit is set.
 fn key_usage(bits: u16) -> String {
     const NAMES: [&str; 9] = [
         "Digital Signature",
@@ -253,12 +255,15 @@ fn key_usage(bits: u16) -> String {
 
 /// What the viewer asks for.
 pub(crate) enum CertAction {
-    Trust(Box<Certificate>),
+    /// Trust signatures made with exactly this certificate.
+    TrustSigner(Box<Certificate>),
+    /// Trust it as a root: it vouches for every certificate it may issue.
+    TrustRoot(Box<Certificate>),
     Export(Box<Certificate>),
 }
 
 /// The Certificate Viewer dialog: the chain on the left, the selected certificate's tabs.
-pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Certificate], t: &Tokens) -> (bool, Option<CertAction>) {
+pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trust: &pdfcraft_engine::TrustStore, t: &Tokens) -> (bool, Option<CertAction>) {
     title(ui, "Certificate Viewer");
     ui.label(egui::RichText::new(tl!("This dialog shows the details of a certificate and its chain.")).color(t.text_muted));
     ui.add_space(8.0);
@@ -328,18 +333,36 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Cert
                     ],
                 ),
                 CertTab::Trust => {
-                    let is_trusted = trusted.iter().any(|x| x.raw == c.raw);
-                    let anchored = v.chain.iter().any(|x| trusted.iter().any(|y| y.raw == x.raw));
-                    ui.label(if is_trusted {
+                    let root = trust.certs.iter().any(|x| x.raw == c.raw);
+                    let signer = trust.signers.iter().any(|x| x.raw == c.raw);
+                    let anchored = v.chain.iter().any(|x| trust.certs.iter().any(|y| y.raw == x.raw));
+                    ui.label(if root {
                         tl!("This certificate is in your list of trusted certificates.")
+                    } else if signer {
+                        tl!("You trust signatures made with this certificate. It does not vouch for any other certificate.")
                     } else if anchored {
                         tl!("This certificate is trusted through a certificate above it in the chain.")
                     } else {
                         tl!("This certificate is not trusted. Signatures made with it show an unknown identity.")
                     });
                     ui.add_space(8.0);
-                    if !is_trusted && widgets::pill_button(ui, tl!("Add to Trusted Certificates"), false).clicked() {
-                        action = Some(CertAction::Trust(Box::new(c.clone())));
+                    if !root && !signer && widgets::pill_button(ui, tl!("Add to Trusted Certificates"), false).clicked() {
+                        action = Some(CertAction::TrustSigner(Box::new(c.clone())));
+                    }
+                    // Trusting a certificate as a root is its own choice, made after reading what it
+                    // implies (#6758), and offered only where it means something: one that may issue.
+                    if !root && c.may_issue() {
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new(tl!(
+                                "Trusting this certificate as a root also trusts every certificate it issues: signatures made with any of them show as valid, whatever name they carry. Do this only for an authority you know and expect to issue certificates."
+                            ))
+                            .color(t.text_muted),
+                        );
+                        ui.add_space(4.0);
+                        if widgets::pill_button(ui, tl!("Trust as a Root Certificate"), false).clicked() {
+                            action = Some(CertAction::TrustRoot(Box::new(c.clone())));
+                        }
                     }
                 }
             }
