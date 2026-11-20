@@ -763,7 +763,7 @@ fn keyboard_find_step_is_explicit_and_a_late_text_layer_cannot_undo_it() {
     ctx.input_mut(|i| {
         i.events.push(egui::Event::Key { key: egui::Key::G, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
     });
-    shortcuts(&mut v, &ctx, Default::default(), true, Default::default());
+    shortcuts(&mut v, &ctx, Default::default(), true, Default::default(), false);
 
     assert_eq!(v.current, 2, "the keyboard step chose the next match");
     assert_eq!(v.find.as_ref().unwrap().auto_from, None, "the keyboard step is the user's choice");
@@ -2205,6 +2205,35 @@ fn many_open_documents_share_one_raster_allowance_and_close_releases_handles() {
 }
 
 #[test]
+fn all_detached_views_retain_render_demand_without_count_limit() {
+    let ctx = egui::Context::default();
+    let mut app = PdfCraftApp::new();
+    let bytes = app.session.create_blank(612.0, 792.0, 1).unwrap();
+    for index in 0..10 {
+        app.open_bytes(&format!("synthetic-{index}.pdf"), None, bytes.as_ref().clone()).unwrap();
+        let info = app.session.get(app.views.last().unwrap().id).unwrap().info.clone();
+        let view = app.views.last_mut().unwrap();
+        view.detached = true;
+        view.begin_render_frame();
+        view.need_thumbnail(0, true);
+        let request = view.thumbnail_requests(&info, ctx.pixels_per_point()).into_iter().next().unwrap();
+        let page = info.pages.get(request.page).unwrap();
+        let dimensions = (device_pixels(page.width, request.scale), device_pixels(page.height, request.scale));
+        view.last_queue = vec![request];
+        view.receive_result(&ctx, solid_result(request, dimensions.0, dimensions.1));
+    }
+    assert_eq!(app.views.len(), 10);
+    app.active = None;
+
+    app.finish_render_frame(&ctx);
+
+    for (i, view) in app.views.iter().enumerate() {
+        assert!(view.detached, "view {i} is detached");
+        assert_eq!(view.thumbs.len(), 1, "detached view {i} must retain its thumbnail");
+    }
+}
+
+#[test]
 fn suspended_signature_preview_releases_layers_and_rebuilds_without_editing() {
     let ctx = egui::Context::default();
     let img = craft_image_codecs::Image::from_u8(12, 4, craft_image_codecs::ChannelLayout::Rgba, [20, 30, 40, 255].repeat(48)).unwrap();
@@ -2915,10 +2944,10 @@ fn esc_with_a_field_being_filled_leaves_the_selection() {
             modifiers: egui::Modifiers::NONE,
         });
     });
-    shortcuts(&mut v, &ctx, Default::default(), true, Default::default());
+    shortcuts(&mut v, &ctx, Default::default(), true, Default::default(), false);
     assert!(v.all_text, "the selection stays while the field takes Esc");
     v.forms.focus = None;
-    shortcuts(&mut v, &ctx, Default::default(), true, Default::default());
+    shortcuts(&mut v, &ctx, Default::default(), true, Default::default(), false);
     assert!(!v.all_text, "with no field being filled, Esc clears the selection");
 }
 

@@ -495,6 +495,11 @@ impl PdfCraftApp {
         if !self.full_screen && self.panes.split.is_some() {
             add(self.pane_front(Place::Second));
         }
+        for (i, view) in self.views.iter().enumerate() {
+            if view.detached {
+                add(Some(i));
+            }
+        }
         shown
     }
 }

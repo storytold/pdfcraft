@@ -31,7 +31,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Quick-action toolbar, customisable | yes | customizable floating/docked hotbar, adjustable size, persistent multi-select picker | partial (`view.customize-quick-tools`; no shortcut reordering) |
 | Command search | "Search tools" | command palette (⌘K), matches translated and English labels | shipped |
 | Document tabs | yes | yes, with unsaved marker | shipped |
-| Multiple windows, drag a tab out | yes | no | planned |
+| Multiple windows, drag a tab out | yes | yes; drag a tab out of the window or use the tab menu (#5348) | shipped |
 | Split window, spreadsheet split | yes | split right or down (⌘\\, tab menu, a tab dropped on the page), one document or two; no four-pane spreadsheet split | split shipped; spreadsheet split planned |
 | Read mode, full screen | yes | yes; full screen is one fitted page or spread at a time on black, and background clicks and keys turn pages while clicks on links, comments, fields and other page objects do not (#1459), a right-click or Shift+Enter goes back, page transitions and display times play (#379), a still pointer hides | shipped; loop after the last page and the full-screen preferences planned |
 | Light, dark, system theme | yes | yes | shipped |
