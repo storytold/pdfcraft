@@ -10,8 +10,7 @@
 
 use craft_pdf::syntax::Pdf;
 use craft_pdf::syntax::object::dict::keys::{ANNOTS, IT, RT, SUBTYPE};
-use craft_pdf::syntax::object::r#ref::MaybeRef;
-use craft_pdf::syntax::object::{Array, Dict, Name, Object};
+use craft_pdf::syntax::object::{Array, Dict, MaybeRef, Name, Object};
 
 const MAX_TYPES: usize = 64;
 const MAX_TYPE_BYTES: usize = 64;
