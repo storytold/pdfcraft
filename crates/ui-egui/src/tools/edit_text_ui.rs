@@ -678,6 +678,7 @@ pub(crate) fn page_parts(
     page: usize,
     placed: &PlacedPage,
     geo: PageGeometry<'_>,
+    adding_text: bool,
 ) -> Vec<PagePart> {
     let Some(xf) = session.page_xform(page, geo) else { return Vec::new() };
     let info = &doc.info;
@@ -685,10 +686,12 @@ pub(crate) fn page_parts(
     let boxes: Vec<Rect> = blocks_of(session, doc, page).iter().map(|l| paragraph_box(&xf, info, page, l.rect)).collect();
     let upright = has_edges(info, page);
     let cursor = if open.is_some() { CursorIcon::Text } else { CursorIcon::Move };
-    (0..boxes.len())
-        .filter(|block| Some(*block) != open)
-        .filter_map(|block| {
-            let reach = reach_of(&boxes, block, upright).intersect(placed.rect);
+    boxes
+        .iter()
+        .enumerate()
+        .filter(|(block, _)| Some(*block) != open)
+        .filter_map(|(block, &bounds)| {
+            let reach = if adding_text { bounds } else { reach_of(&boxes, block, upright) }.intersect(placed.rect);
             reach.is_positive().then(|| PagePart::new(Owner::Paragraph { block }, page, HitShape::Rect(reach), PageLayer::Text).cursor(cursor))
         })
         .collect()
