@@ -2,7 +2,7 @@
 
 use crate::object::macros::object;
 use crate::object::r#ref::MaybeRef;
-use crate::object::{FromBytes, Object, ObjectLike};
+use crate::object::{FromBytes, Null, Object, ObjectLike};
 use crate::reader::Reader;
 use crate::reader::{Readable, ReaderContext, ReaderExt, Skippable};
 use alloc::vec::Vec;
@@ -129,16 +129,35 @@ impl<'a> Iterator for ArrayIter<'a> {
         self.reader.skip_white_spaces_and_comments();
 
         if !self.reader.at_end() {
-            // Objects are already guaranteed to be valid.
-            let item = self
+            // PdfCraft patch (46): the first pass validated each item by skipping it, but a lone
+            // sign (`+`, `++`) is skipped as a number and no number is read from it. Such an item
+            // reads as null in its slot instead of unwrapping the failed read.
+            let start = self.reader.clone();
+            if let Some(item) = self
                 .reader
                 .read_with_context::<MaybeRef<Object<'_>>>(&self.ctx)
-                .unwrap();
-            return Some(item);
+            {
+                return Some(item);
+            }
+            self.reader = skip_unreadable_item(start, &self.ctx)?;
+            return Some(MaybeRef::NotRef(Object::Null(Null)));
         }
 
         None
     }
+}
+
+/// PdfCraft patch (46): step over an array item at `start` that the first pass skipped but no
+/// object is read from. `None` (end the iteration) if it can't be skipped or the skip makes no
+/// progress, so a caller never loops.
+fn skip_unreadable_item<'a>(mut start: Reader<'a>, ctx: &ReaderContext<'a>) -> Option<Reader<'a>> {
+    let from = start.offset();
+    if ctx.in_content_stream() {
+        start.skip::<Object<'_>>(true)?;
+    } else {
+        start.skip::<MaybeRef<Object<'_>>>(false)?;
+    }
+    (start.offset() > from).then_some(start)
 }
 
 /// An iterator over the array that resolves objects of a specific type.
@@ -197,9 +216,28 @@ impl<'a> FlexArrayIter<'a> {
                 return self.reader.read_with_context::<T>(&self.ctx);
             }
 
-            return match self.reader.read_with_context::<MaybeRef<T>>(&self.ctx)? {
-                MaybeRef::Ref(r) => self.ctx.xref().get_with::<T>(r.into(), &self.ctx),
-                MaybeRef::NotRef(i) => Some(i),
+            let start = self.reader.clone();
+            return match self.reader.read_with_context::<MaybeRef<T>>(&self.ctx) {
+                Some(MaybeRef::Ref(r)) => self.ctx.xref().get_with::<T>(r.into(), &self.ctx),
+                Some(MaybeRef::NotRef(i)) => Some(i),
+                // PdfCraft patch (46): an item no object is read from (a lone sign such as `+`)
+                // reads as null in its slot, as in `raw_iter`, instead of ending the iteration
+                // and losing the items after it. An object of another type still ends it. The
+                // slot is passed only when null is a `T`: a typed read that fails leaves it in
+                // place, as a value of another type is, so the caller can read it as another type.
+                None => {
+                    let mut probe = start.clone();
+                    if probe
+                        .read_with_context::<MaybeRef<Object<'a>>>(&self.ctx)
+                        .is_some()
+                    {
+                        return None;
+                    }
+                    let after = skip_unreadable_item(start, &self.ctx)?;
+                    let item = Object::Null(Null).cast::<T>()?;
+                    self.reader = after;
+                    Some(item)
+                }
             };
         }
 
