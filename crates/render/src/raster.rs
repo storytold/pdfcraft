@@ -90,7 +90,7 @@ pub struct RenderConfig {
     /// Draw a CID font of an Adobe CJK collection that the PDF does not embed with one face already
     /// installed on this machine (see `system_font`). Off by default and on only for on-screen
     /// viewer and preview rasters: exports, printing and OCR render without it, so nothing drawn with an
-    /// installed font is saved or printed (AGENTS.md §1.2, §1.4).
+    /// installed font is saved or printed (licences.md; docs/development.md "Fonts and attribution").
     pub system_fonts: bool,
     /// The render is output for printing (print as image): the configuration's auto state for
     /// the View event (ISO 32000-2 §8.11.4.4) is not applied, since printing is not viewing.
@@ -109,7 +109,7 @@ impl RenderConfig {
     /// This configuration for a raster that is only shown on screen (the viewer, Combine
     /// thumbnails, figure previews): installed CJK faces may draw fonts the PDF doesn't embed.
     /// Never use it for anything that can be saved, printed, recognised or returned to an agent
-    /// (AGENTS.md §1.2, §1.4).
+    /// (licences.md; docs/development.md "Fonts and attribution").
     #[must_use]
     pub fn on_screen(self) -> Self {
         Self { system_fonts: true, ..self }

@@ -250,7 +250,7 @@ pub fn first_non_win_ansi(s: &str) -> Option<char> {
 /// The first character of `s` the standard fonts (Helvetica and the rest of the standard 14, in
 /// WinAnsiEncoding) can't draw, so that a generated appearance would show it as `?`. Line breaks
 /// don't count: appearances lay lines out themselves. PdfCraft refuses such text with
-/// [`undrawable_message`] instead of writing `?` (AGENTS.md §4: never lose work silently).
+/// [`undrawable_message`] instead of writing `?` (app-agents.md rule 13: never lose work silently).
 pub fn first_undrawable(s: &str) -> Option<char> {
     s.chars().find(|c| !matches!(c, '\n' | '\r') && !win_ansi_encodable(*c))
 }
