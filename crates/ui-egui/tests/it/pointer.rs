@@ -1023,6 +1023,7 @@ fn escape_cancels_a_crop_rectangle() {
     h.run_steps(4);
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), None, "no page box was set");
+    assert_eq!(s.dialog, None, "an abandoned rectangle doesn't open Set Page Boxes");
 }
 
 // ---------------------------------------------------------------------------------------------
