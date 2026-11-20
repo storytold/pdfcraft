@@ -3540,7 +3540,8 @@ fn opening_a_paragraph_leaves_the_page_as_it_is() {
         egui::pos2(page.left() + block[0] as f32 * k, page.top() + (300.0 - block[3] as f32) * k),
         egui::pos2(page.left() + block[2] as f32 * k, page.top() + (300.0 - block[1] as f32) * k),
     );
-    let at = egui::pos2(r.left() + 2.0, r.center().y);
+    // Click the text body: the width control owns the band around its edges.
+    let at = r.center();
     h.hover_at(at);
     h.run_steps(2);
     let before = h.render().unwrap();
@@ -6788,6 +6789,11 @@ fn inline_editor_preserves_source_font_and_previews_live_bounds() {
     h.drop_at(point);
     h.run_steps(8);
     assert!(!h.state().views[0].session.line_editor.as_ref().unwrap().overflow);
+    // The page paints unchanged text. Change only its colour to exercise the editor's
+    // source-font layout without changing the text or its geometry.
+    let original_color = h.state().views[0].session.line_editor.as_ref().unwrap().look.color;
+    h.state_mut().views[0].session.line_editor.as_mut().unwrap().look.color = [0.2, 0.3, 0.4];
+    h.run_steps(3);
     let shape = h
         .output()
         .shapes
@@ -6804,8 +6810,10 @@ fn inline_editor_preserves_source_font_and_previews_live_bounds() {
         assert!((y - (page.top() + (300.0 - line.baseline()[1] as f32) * scale)).abs() < 1.0);
     }
     for section in &shape.galley.job.sections {
-        assert!(matches!(&section.format.font_id.family,egui::FontFamily::Name(name) if name.starts_with("pdf-source-")));
+        assert!(matches!(&section.format.font_id.family,egui::FontFamily::Name(name) if name.starts_with("face:pdf-source-")));
     }
+    h.state_mut().views[0].session.line_editor.as_mut().unwrap().look.color = original_color;
+    h.run_steps(3);
     let frame = |h: &Harness<'_, PdfCraftApp>| {
         h.output()
             .shapes
