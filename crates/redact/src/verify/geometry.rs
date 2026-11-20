@@ -484,9 +484,11 @@ pub(super) fn image_cleared(doc: &Document, ctx: &Ctx, s: &Stream, ctm: &Matrix,
     let want = u8::from(mask && !inverted);
     for j in 0..h {
         let v = 1.0 - (j as f64 + 0.5) / h as f64;
-        // Rows that don't reach the region hold nothing to check.
+        // Rows that don't reach the region hold nothing to check. A row is a line: one drawn up
+        // the page (an image turned a quarter turn) has no width, so it is widened on both axes,
+        // or `overlaps` would never let it through.
         let ((ax, ay), (bx, by)) = (ctm.apply(0.0, v), ctm.apply(1.0, v));
-        if !overlaps(region, [ax.min(bx), ay.min(by) - 0.01, ax.max(bx), ay.max(by) + 0.01], 0.0) {
+        if !overlaps(region, [ax.min(bx) - 0.01, ay.min(by) - 0.01, ax.max(bx) + 0.01, ay.max(by) + 0.01], 0.0) {
             continue;
         }
         for i in 0..w {
