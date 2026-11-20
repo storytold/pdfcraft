@@ -2072,11 +2072,28 @@ fn buttons_take_presses_as_the_scripts_show_them() {
         app
     });
     h.run_steps(2);
-    press_field(&mut h, "shown");
-    press_field(&mut h, "gone");
     let id = h.state().views[0].id;
-    let pressed = h.state_mut().session.run_javascript(id, "pressed", None).expect("runs").result;
-    assert_eq!(pressed.as_deref(), Some("shown"));
+    // Native button actions run on a worker. Frames alone do not ensure it has finished;
+    // wait for the UI to accept its completion before inspecting the retained realm.
+    let pressed = |h: &mut Harness<'static, PdfCraftApp>| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+        loop {
+            h.run_steps(1);
+            let out = h.state_mut().session.run_javascript(id, "pressed", None).expect("runs");
+            if out.error.as_deref() != Some("another script is active in this document") {
+                assert_eq!(out.error, None, "reading the completed button's result");
+                return out.result;
+            }
+            assert!(out.execution_refused && out.realm_untouched, "a busy probe must not change the realm");
+            assert!(std::time::Instant::now() < deadline, "button script did not complete");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    press_field(&mut h, "shown");
+    assert_eq!(pressed(&mut h).as_deref(), Some("shown"));
+    // Do not let a still-busy first click reject the second and conceal a hit-test bug.
+    press_field(&mut h, "gone");
+    assert_eq!(pressed(&mut h).as_deref(), Some("shown"));
 }
 
 /// A radio group's read-only button can't be chosen by a click, while the group's other button
