@@ -5,14 +5,13 @@ use craft::behavior::kurbo::{BezPath, Point, Rect as DocRect, Vec2};
 use craft::behavior::{CanvasView, CursorIcon, EditEvent, HitShape, IconId, PointerButton};
 use craft::draw::ui::transform::{RotateZone, TransformBox};
 use craft::imaging::ui::transform_preview::{PreviewMap, PreviewPixels, PreviewTextures, TransformPreview};
-use craft::pages::ui::{PageBody, PlacedPage};
+use craft::pages::ui::{PageBody, PageRevision, PlacedPage};
 use craft::ui::buttons::Button;
 use craft::ui::canvas::{CropApply, CropOutside, CropOverlay};
 use craft::ui::canvas_controls::{SelectionOutline, TaskBar};
 use craft::ui::contract::{Access, Bind, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Show as _};
 use craft::ui::display::Divider;
 use craft::ui::menu::{Menu, MenuIcon, MenuIconRow, MenuItem};
-use craft::ui::primitives::textures::TextureState;
 use craft::ui::style::{ComponentStyle, Metrics, StyleCx};
 
 pub(crate) use pdfcraft_content::Matrix;
@@ -31,6 +30,8 @@ pub struct ImageSelection {
     /// A move or resize applied on release: the frame it had and the one it got, in the page's
     /// 0..1 coordinates, while the page raster still has the picture where it was.
     pub settled: Option<(Rect, Rect)>,
+    /// Revision containing the applied edit, once the edit has been accepted.
+    pub(crate) settled_revision: Option<PageRevision>,
     /// The picture's pixels, cut from the page render when a gesture begins, drawn through the
     /// box's map until the page render shows the picture where it went. It is the framework's
     /// session object and is not cloned or compared.
@@ -44,7 +45,15 @@ pub struct ImageSelection {
 
 impl Clone for ImageSelection {
     fn clone(&self) -> Self {
-        Self { page: self.page, index: self.index, crop: self.crop.clone(), settled: self.settled, preview: None, paper: None }
+        Self {
+            page: self.page,
+            index: self.index,
+            crop: self.crop.clone(),
+            settled: self.settled,
+            settled_revision: self.settled_revision,
+            preview: None,
+            paper: None,
+        }
     }
 }
 
@@ -69,7 +78,7 @@ impl std::fmt::Debug for ImageSelection {
 impl ImageSelection {
     /// Select a page image without an active gesture.
     pub fn at(page: usize, index: usize) -> Self {
-        Self { page, index, crop: None, settled: None, preview: None, paper: None }
+        Self { page, index, crop: None, settled: None, settled_revision: None, preview: None, paper: None }
     }
 
     /// Whether a gesture is running: the pixels are cut and the page has not yet been edited.
@@ -266,10 +275,13 @@ fn box_controls(
     let PagePicture { placed, xf, info, index, image } = *pic;
     let page = placed.page;
     // The page's picture is the current revision's, not a stand-in for the one before the edit.
-    if matches!(placed.picture, TextureState::Ready(_))
-        && let Some(s) = session.image_selection.as_mut()
-        && s.settled.take().is_some()
+    if let Some(s) = session.image_selection.as_mut()
+        && s.settled.is_some()
+        && s.settled_revision.is_some()
+        && s.settled_revision == placed.picture_revision
     {
+        s.settled = None;
+        s.settled_revision = None;
         s.preview = None;
     }
     let view = &body.view;
@@ -297,6 +309,7 @@ fn box_controls(
                 if let Some(s) = session.image_selection.as_mut() {
                     s.preview = cut;
                     s.settled = None;
+                    s.settled_revision = None;
                 }
             }
             EditEvent::Commit { after, .. } => {

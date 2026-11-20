@@ -254,6 +254,12 @@ impl PdfCraftApp {
                 } else {
                     view.document_changed(ctx, info);
                 }
+                if let Some(selection) = view.session.image_selection.as_mut()
+                    && selection.settled.is_some()
+                {
+                    let (document, page) = view.revisions.of(selection.page);
+                    selection.settled_revision = Some(craft::pages::ui::PageRevision { document, page });
+                }
                 if matches!(edit, Edit::AddAnnotation(_)) || across_pages.is_some() {
                     view.session.comments.comment_added();
                 }
