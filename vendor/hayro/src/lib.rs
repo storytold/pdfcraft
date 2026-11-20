@@ -298,10 +298,13 @@ pub fn render_into<'a>(
         device.push_transparency_group(1.0, None, BlendMode::Normal);
     }
 
+    // PdfCraft patch (32): a skip left over from another page is not this page's.
+    renderer::take_skipped_unbounded_curve();
     interpret_page(page, &mut state, &mut device);
     // PdfCraft patch (31): what the rasterizer left out once its coverage was full (a page that
     // paints the same content millions of times over) is content left out, said as such.
-    if device.ctx.coverage_full() {
+    // PdfCraft patch (32): so is a curve too large to flatten.
+    if device.ctx.coverage_full() | renderer::take_skipped_unbounded_curve() {
         (interpreter_settings.warning_sink)(hayro_interpret::InterpreterWarning::ContentTruncated);
     }
 

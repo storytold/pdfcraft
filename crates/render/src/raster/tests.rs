@@ -6815,6 +6815,76 @@ fn a_form_that_reaches_itself_through_a_pattern_or_a_glyph_is_drawn_once() {
     }
 }
 
+/// A curve too large to flatten is skipped and reported (#7381): flattening one cubic reaching
+/// 10^18 user units asked for 20 GB and aborted the process. A rectangle that large still paints
+/// (lines cost one segment each), and so does an ordinary curve. So does a small one drawn under a
+/// large scale, or under a shear that maps its huge user-space box far wider than the curve
+/// itself. Vendored patch: hayro `MAX_CURVE_EXTENT` (32).
+#[test]
+fn a_curve_too_large_to_flatten_is_skipped_and_reported() {
+    let cases = [
+        ("a curve reaching 10^12", "100 100 m 1000000000000 1000000000000 -1000000000000 1000000000000 100 100 c f", false, true),
+        ("a rectangle reaching 10^18", "-1000000000000000000 -1000000000000000000 2000000000000000000 2000000000000000000 re f", true, false),
+        ("an ordinary curve", "20 20 m 180 20 180 180 20 180 c f", true, false),
+        // 160 pixels across, drawn in user units 10^12 times smaller.
+        (
+            "a small curve under a large scale",
+            "1000000000000 0 0 1000000000000 0 0 cm 0.00000000002 0.00000000002 m 0.00000000018 0.00000000002 0.00000000018 0.00000000018 0.00000000002 0.00000000018 c f",
+            true,
+            false,
+        ),
+        // x' = 8x - 8y, y' = y / 2^20: the control points land within 256 × 224 units, while
+        // the corners of their user-space box land 1.9 × 10^9 apart.
+        (
+            "a small curve under a shear",
+            "8 0 -8 0.00000095367431640625 0 0 cm 33554432 33554432 m 33554464 33554432 268435488 268435456 268435456 268435456 c f",
+            true,
+            false,
+        ),
+    ];
+    for (what, path, painted, reported) in cases {
+        let content = format!("0 0 1 rg {path}");
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n",
+            content.len()
+        );
+        let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{what}: {:?}", page.error);
+        let blue = page.rgba.as_chunks::<4>().0.iter().filter(|p| p[0] < 64 && p[1] < 64 && p[2] > 192).count();
+        assert_eq!(blue > 0, painted, "{what}: painted");
+        assert_eq!(page.warnings.contains(&RenderWarning::ContentTruncated), reported, "{what}: reported");
+    }
+}
+
+/// A curved clip too large to flatten clips everything away and is reported: flattening it asked
+/// for as much as a curve drawn that large (8.9 GB for one reaching 10^18), and skipping it would
+/// show what it hides. A rectangle clip that large still clips (lines cost one segment each), and
+/// so does an ordinary curve; what follows the clip's `Q` draws in every case. Vendored patch:
+/// hayro `MAX_CURVE_EXTENT` (32), in `push_clip_path_inner`.
+#[test]
+fn a_clip_too_large_to_flatten_clips_everything_and_is_reported() {
+    let cases = [
+        ("a clip curve reaching 10^12", "100 100 m 1000000000000 1000000000000 -1000000000000 1000000000000 100 100 c W n", false, true),
+        ("a clip rectangle reaching 10^18", "-1000000000000000000 -1000000000000000000 2000000000000000000 2000000000000000000 re W n", true, false),
+        ("an ordinary curved clip", "20 20 m 180 20 180 180 20 180 c W n", true, false),
+    ];
+    for (what, clip, painted, reported) in cases {
+        let content = format!("q {clip} 0 0 1 rg 0 0 200 200 re f Q 0 1 0 rg 0 190 10 10 re f");
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n",
+            content.len()
+        );
+        let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{what}: {:?}", page.error);
+        let blue = page.rgba.as_chunks::<4>().0.iter().filter(|p| p[0] < 64 && p[1] < 64 && p[2] > 192).count();
+        assert_eq!(blue > 0, painted, "{what}: what the clip shows is painted");
+        assert_eq!(rgb_at(&page.rgba, 200, 5, 5), [0, 255, 0], "{what}: what follows the clip draws");
+        assert_eq!(page.warnings.contains(&RenderWarning::ContentTruncated), reported, "{what}: reported");
+    }
+}
+
 /// The page content budget counts what is held at once, not everything decoded: a form
 /// with 2 MiB of content painted three hundred times (600 MiB in all) draws every time.
 #[test]

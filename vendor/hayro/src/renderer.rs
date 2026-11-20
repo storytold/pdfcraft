@@ -711,21 +711,43 @@ fn may_paint_canvas(
     width: u16,
     height: u16,
 ) -> bool {
+    let (points, curved) = control_box(path, Affine::IDENTITY);
+    // PdfCraft patch (32): see `MAX_CURVE_EXTENT`. Measured on the path's own points mapped to
+    // the device, not on a box around them: under a shear a box's corners map far wider than
+    // the points do, and the padding below is in user units, which under a large scale would
+    // make a small curve look huge. Only a curve is measured: lines cost one segment each.
+    if curved && unbounded_curve(control_box(path, transform).0, curved) {
+        return false;
+    }
+    let grow = reach + DRAW_SLACK;
+    let device = transform
+        .transform_rect_bbox(points.inflate(grow, grow))
+        .inflate(2.0, 2.0);
+    paints_canvas(device, width, height)
+}
+
+/// The box of `path`'s points and control points mapped by `transform`, which holds the whole
+/// path (a curve stays inside their hull, and an affine map keeps it there), and whether the
+/// path has a curve.
+fn control_box(path: &BezPath, transform: Affine) -> (Rect, bool) {
     let mut points = Rect::new(
         f64::INFINITY,
         f64::INFINITY,
         f64::NEG_INFINITY,
         f64::NEG_INFINITY,
     );
-    let mut add = |p: Point| points = points.union_pt(p);
+    let mut curved = false;
+    let mut add = |p: Point| points = points.union_pt(transform * p);
     for el in path.elements() {
         match *el {
             kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => add(p),
             kurbo::PathEl::QuadTo(c, p) => {
+                curved = true;
                 add(c);
                 add(p);
             }
             kurbo::PathEl::CurveTo(c1, c2, p) => {
+                curved = true;
                 add(c1);
                 add(c2);
                 add(p);
@@ -733,11 +755,38 @@ fn may_paint_canvas(
             kurbo::PathEl::ClosePath => {}
         }
     }
-    let grow = reach + DRAW_SLACK;
-    let device = transform
-        .transform_rect_bbox(points.inflate(grow, grow))
-        .inflate(2.0, 2.0);
-    paints_canvas(device, width, height)
+    (points, curved)
+}
+
+/// PdfCraft patch (32): whether a path whose device-space box is `device` is a curve too large to
+/// flatten (see `MAX_CURVE_EXTENT`); the skip is noted for the page's warning.
+fn unbounded_curve(device: Rect, curved: bool) -> bool {
+    let unbounded =
+        curved && (device.width() > MAX_CURVE_EXTENT || device.height() > MAX_CURVE_EXTENT);
+    if unbounded {
+        SKIPPED_UNBOUNDED_CURVE.with(|skipped| skipped.set(true));
+    }
+    unbounded
+}
+
+/// PdfCraft patch (32): a curved path whose device-space box is wider or taller than this is not
+/// drawn. Flattening a curve makes a number of points that grows with its size on the device, all
+/// of it held at once: one cubic reaching 10^18 user units asked for 20 GB, and the process
+/// aborted when the allocation failed (#7381). Lines cost one segment however long they are, so
+/// only curved paths are refused. No page reaches this: 10^9 pixels is a page 3 km wide at
+/// 300 dpi, or a large poster at thousands of times its size.
+const MAX_CURVE_EXTENT: f64 = 1e9;
+
+std::thread_local! {
+    /// PdfCraft patch (32): whether a curve past `MAX_CURVE_EXTENT` was skipped on this page;
+    /// `render_into` reports it as `InterpreterWarning::ContentTruncated`. Kept per thread, not
+    /// per renderer, so a skip inside a group, mask or pattern renderer reaches the page.
+    static SKIPPED_UNBOUNDED_CURVE: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+
+/// PdfCraft patch (32): whether a curve past `MAX_CURVE_EXTENT` was skipped since the last call.
+pub(crate) fn take_skipped_unbounded_curve() -> bool {
+    SKIPPED_UNBOUNDED_CURVE.with(|skipped| skipped.replace(false))
 }
 
 /// PdfCraft patch: whether a `rect` drawn with `transform` can paint a pixel of a `width` ×
@@ -1677,6 +1726,17 @@ impl Renderer {
 
     fn push_clip_path_inner(&mut self, clip_path: &BezPath, fill: FillRule) {
         let old_transform = *self.ctx.transform();
+
+        // PdfCraft patch (32): a curved clip too large to flatten (`MAX_CURVE_EXTENT`; the path
+        // is in device space here) clips everything away instead. What it would have shown is
+        // skipped and reported, and nothing it would have hidden is shown.
+        let refused = BezPath::new();
+        let (points, curved) = control_box(clip_path, Affine::IDENTITY);
+        let clip_path = if unbounded_curve(points, curved) {
+            &refused
+        } else {
+            clip_path
+        };
 
         self.ctx.set_fill_rule(convert_fill_rule(fill));
         self.ctx.set_transform(Affine::IDENTITY);
