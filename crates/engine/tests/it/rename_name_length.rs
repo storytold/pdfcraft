@@ -13,7 +13,7 @@ fn name(typed: &str) -> Result<String, RenameError> {
 #[test]
 fn a_name_over_255_bytes_is_refused() {
     // 94 characters of 3 bytes each: 282 bytes, then ".pdf" makes 286. Under 255 characters.
-    let cjk = "å¹´".repeat(94);
+    let cjk = "年".repeat(94);
     assert!(cjk.chars().count() < 255);
     assert!(matches!(name(&cjk), Err(RenameError::Invalid(_))), "282 bytes of CJK must be refused");
 
@@ -25,9 +25,9 @@ fn a_name_over_255_bytes_is_refused() {
     assert!(matches!(name(&"x".repeat(252)), Err(RenameError::Invalid(_))));
 
     // 80 CJK characters + ".pdf" is 244 bytes: accepted.
-    let short = "å¹´".repeat(80);
+    let short = "年".repeat(80);
     assert_eq!(name(&short), Ok(format!("{short}.pdf")));
 
     // Characters outside the BMP take 2 UTF-16 units and 4 bytes: 63 + ".pdf" is 256 bytes.
-    assert!(matches!(name(&"ðŸ˜€".repeat(63)), Err(RenameError::Invalid(_))));
+    assert!(matches!(name(&"😀".repeat(63)), Err(RenameError::Invalid(_))));
 }
