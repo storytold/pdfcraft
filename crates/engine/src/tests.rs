@@ -699,7 +699,7 @@ fn edits_update_view_data_and_mark_dirty() {
 
 /// A font of an Adobe CJK collection that a PDF does not embed is drawn with an installed face on
 /// the viewer's pool only. An export of the same page, which can be saved, has nothing drawn with
-/// an installed font (AGENTS.md §1.2, §1.4). Skipped where no such face is installed.
+/// an installed font (licences.md; docs/development.md "Fonts and attribution"). Skipped where no such face is installed.
 #[test]
 fn installed_cjk_fonts_draw_in_the_viewer_but_not_in_an_export() {
     let content = "BT /F1 40 Tf 5 15 Td <7E419AD45B57> Tj ET";
@@ -15766,27 +15766,30 @@ fn inline_conversions_refuse_office_documents_without_running_libreoffice() {
     assert!(s.as_pdf_inline("scan.jpg", &Arc::new(jpeg_bytes())).unwrap().starts_with(b"%PDF-"));
 }
 
-/// A page tree the viewer reads one way and the object model another (here a page listed twice in
-/// `/Kids`: shown twice, walked once). A page edit, Extract and Split name pages as they are shown
-/// and act on the tree the editor walks, so each would act on another page or leave one out: they
-/// are refused, with nothing changed. Other edits go on.
+/// A page tree the viewer reads one way and the object model another (here an intermediate node
+/// without `/Type /Pages`, as in PDFBOX-2250's attachment: the viewer shows the node as one page,
+/// the walk follows its `/Kids` to two). A page edit, Extract and Split name pages as they are
+/// shown and act on the tree the editor walks, so each would act on another page or leave one out:
+/// they are refused, with nothing changed. Other edits go on.
 #[test]
 fn page_changes_are_refused_when_the_page_tree_shown_is_not_the_one_walked() {
     let pdf = pdfcraft_testkit::Pdf::new()
         .obj("<< /Type /Catalog /Pages 2 0 R >>")
-        .obj("<< /Type /Pages /Kids [3 0 R 3 0 R] /Count 2 >>")
-        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 2 >>")
+        .obj("<< /Parent 2 0 R /Kids [4 0 R 5 0 R] /Count 2 >>")
+        .obj("<< /Type /Page /Parent 3 0 R /MediaBox [0 0 100 100] >>")
+        .obj("<< /Type /Page /Parent 3 0 R /MediaBox [0 0 100 100] >>")
         .build();
     let mut s = Session::new().with_clock(|| 1_700_000_000);
-    let id = s.open("twice.pdf", None, Arc::new(pdf), None).expect("opens");
+    let id = s.open("untyped.pdf", None, Arc::new(pdf), None).expect("opens");
     let d = s.get(id).unwrap();
-    assert_eq!((d.info.pages.len(), pdfcraft_model::pages(&d.editor.as_ref().unwrap().cos).len()), (2, 1), "the fixture still diverges");
+    assert_eq!((d.info.pages.len(), pdfcraft_model::pages(&d.editor.as_ref().unwrap().cos).len()), (1, 2), "the fixture still diverges");
     let damaged = |r: Result<String, EditError>| match r {
-        Err(e) => assert!(e.to_string().contains("page tree is damaged: it shows 2 page(s), but its page tree leads to 1"), "{e}"),
+        Err(e) => assert!(e.to_string().contains("page tree is damaged: it shows 1 page(s), but its page tree leads to 2"), "{e}"),
         Ok(what) => panic!("{what} went ahead"),
     };
     damaged(s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).map(|_| "rotate".into()));
-    damaged(s.apply(id, Edit::DeletePages { pages: vec![1] }).map(|_| "delete".into()));
+    damaged(s.apply(id, Edit::DeletePages { pages: vec![0] }).map(|_| "delete".into()));
     damaged(s.apply(id, Edit::SpawnTemplate { name: "t".into(), at: 1, rename: false }).map(|_| "template".into()));
     damaged(s.extract(id, &[0]).map(|_| "extract".into()));
     damaged(s.split(id, &pdfcraft_organize::SplitBy::PageCount(1)).map(|_| "split".into()));
@@ -15795,31 +15798,23 @@ fn page_changes_are_refused_when_the_page_tree_shown_is_not_the_one_walked() {
 }
 
 /// An optimized copy is written in full, and a damaged page tree can be rewritten so that it reads
-/// with another number of pages than the one shown: here a page-tree node also lists the root
-/// among its kids, and a page names no `/Parent`. Shown with 5 pages, the rewritten copy reads 6,
-/// so the copy is refused instead of being handed back with a page more or less.
+/// with another number of pages than the one shown: here a page dictionary holds a stray `)`, as in
+/// pdf.js's `issue22011.pdf`. The viewer leaves that page out and shows 1 page; the object layer
+/// reads it, so the rewritten copy reads 2. The copy is refused instead of being handed back with
+/// a page more.
 #[test]
 fn an_optimized_copy_that_reads_with_another_page_count_is_refused() {
-    let page = |parent: u32| format!("<< /Type /Page /Parent {parent} 0 R /MediaBox [0 0 100 100] >>");
     let pdf = pdfcraft_testkit::Pdf::new()
         .obj("<< /Type /Catalog /Pages 2 0 R >>")
-        .obj("<< /Type /Pages /Kids [10 0 R 11 0 R 12 0 R] /Count 6 >>")
-        .obj(page(10))
-        .obj(page(10))
-        .obj(page(11))
-        .obj("<< /Type /Page /Parenp 11 0 R /MediaBox [0 0 100 100] >>")
-        .obj(page(12))
-        .obj(page(12))
-        .obj("null")
-        .obj("<< /Type /Pages /Parent 2 0 R /Kids [3 0 R 4 0 R] /Count 2 >>")
-        .obj("<< /Type /Pages /Parent 2 0 R /Kids [5 0 R 6 0 R] /Count 2 >>")
-        .obj("<< /Type /Pages /Parent 2 0 R /Kids [7 0 R 2 0 R 8 0 R] /Count 2 >>")
+        .obj("<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] ) >>")
         .build();
     let mut s = Session::new().with_clock(|| 1_700_000_000);
-    let id = s.open("loop.pdf", None, Arc::new(pdf), None).expect("opens");
-    assert_eq!(s.get(id).unwrap().info.pages.len(), 5, "the fixture still shows 5 pages");
+    let id = s.open("paren.pdf", None, Arc::new(pdf), None).expect("opens");
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 1, "the fixture still shows 1 page");
     match s.optimized_bytes(id, &optimize::Settings::default(), &[]) {
-        Err(EditError::Reopen(m)) => assert!(m.contains("page count from 5"), "{m}"),
+        Err(EditError::Reopen(m)) => assert!(m.contains("page count from 1"), "{m}"),
         Err(e) => panic!("refused for another reason: {e}"),
         Ok((bytes, _)) => panic!("the copy was handed back, reading {:?} page(s)", pdfcraft_render::page_count(bytes, None)),
     }
