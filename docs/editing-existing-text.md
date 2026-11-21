@@ -1,5 +1,29 @@
 # Editing existing text and source subsets
 
+In **Edit text and images**, text drawn inside a Form XObject (grouped artwork) is edited
+with one click: clicking its text prepares that page in an undoable **Prepare grouped text**
+step and opens the paragraph clicked for typing. Nothing is prepared while pages are only
+shown or scrolled. A drag still moves the selected group as a whole; a click on grouped
+artwork that preparation wouldn't open (a logo, a refused group) selects it as before, and
+changes nothing. To select a text group for moving, right-click it. While a paragraph is open
+or another edit is waiting, the click selects the group instead, as before; the next click
+prepares it. The group's original operators, clip, placement and resources become page
+content; shared forms on other pages stay unchanged. Ungroup (the artwork's right-click menu)
+draws one placement in place with the same code. Headless callers use `text_prepare`, then
+list `text_paragraphs` and call `text_edit`.
+This edits existing glyph operators; it adds neither a cover rectangle nor an Add Text box.
+Preparation refuses knockout/blended groups, groups that blend in a colour space other than
+the page group's (DeviceRGB on a page that names none), forms whose default
+colour spaces differ from the page's, tagged forms, forms drawn inside text objects or
+unfinished paths, groups whose nested content can't be checked and unreadable content. Forms
+that draw only images or vector artwork are left grouped. Decoding is capped at 16 MiB, 64
+placements and eight expansion levels per page; text grouped deeper is reported. Unsupported
+groups remain intact: `text_prepare` lists each with its reason, and the repair log records
+them when the page is prepared. A narrowly fingerprinted legacy THSarabunPSK exporter map can
+also be repaired in copied page fonts, only when every glyph the subset kept advances as its
+assumed Thai character does; `text_prepare` repairs it also for text that was never grouped,
+and the repair log records both preparation and map recovery.
+
 Click a text region in **Edit a PDF → Edit text and images**. One editor contains its
 source rows and mixed styles. Embedded TrueType and OpenType/CFF faces are used in memory;
 source font programs, colour, size and baseline anchors stay intact. A textless preview
@@ -44,6 +68,52 @@ this works only when that build input actually contains the full face. This chan
 add a font binary or change the release font pin. Fonts shared by releases belong in
 `storytold/craft-fonts` under the repository's asset rules.
 
+With **Keep source fonts**, an upright single-style paragraph can combine its source font
+with a fallback even when the replacement has no explicit line break (#2750). Characters
+the source can draw keep that font and its advances; only missing characters enter the
+generated Type 3 fonts, in batches. Wrapping and alignment measure both faces, including
+character spacing and horizontal scaling. Explicit family/weight changes and the existing
+turned, right-to-left and visual-order paths retain their selection rules. The styled-path
+fallback grouping below remains independent of this single-style path.
+
+**Keep source fonts** retains the existing Thai family, weight and point size. For legacy
+THSarabunPSK subsets, PdfCraft reconstructs an editor-only Unicode cmap from the PDF's
+Unicode and CID-to-glyph maps. HarfRust uses the retained Thai positional glyphs, and the
+saved text refers to the original PDF font resources. Several subsets of the same exact
+face can supply Thai and punctuation glyphs, including a Thai run whose clusters are split
+across subsets, and a subset whose glyph for a character is empty is skipped; Regular and
+Bold stay separate. Source font
+programs are never modified or replaced. Text settings, including character/word spacing,
+horizontal scale, rise, color and paint mode, remain in the PDF text state.
+
+A source subset that lacks a needed contextual glyph produces an error asking for the
+complete original face or an explicit replacement. Cross-family replacement requires an
+explicit choice. The document-font menu offers **Noto Sans Thai**: pass its `text_fonts`
+resource (normally `builtin:thai`) as `text_edit.font_resource` or a range's `font_resource`. This replacement
+requires the optional craft-fonts Thai input and currently uses Regular. A matching Noto
+subset can still be completed by that same bundled family when it is Regular and upright; a
+subset its name or descriptor marks bold or italic needs an explicit replacement.
+
+The bundled variable Thai face is written as bounded Type 3 glyph outlines, with shaped
+vowel/tone positions and logical Unicode text, rather than embedded as a static font.
+Saved paragraphs can be reopened and edited again without installing a font. Modern Thai
+shaping of vowels and tone marks uses the source's GPOS mark positioning (a `mark` or `mkmk` feature in the script and language system the shaper
+selects for Thai, not just a GPOS table); GSUB substitution is optional, as specified by
+[the OpenType Thai model](https://learn.microsoft.com/en-us/typography/script-development/thai).
+Verified legacy Thai PUA fonts use positional substitutions instead of requiring GPOS; their
+alternates are used only when each kept one has a mark's zero advance (or, for the two
+consonant forms, an advance) and, where the PDF's own map names its character, the character
+that alternate stands for. A THSarabunPSK program with its own Thai mark
+positioning, such as a complete face loaded with Load font, is shaped by that layout instead,
+still in its own codes. One without it takes the legacy path only when every Thai glyph it keeps
+is where the legacy glyph order puts it, and is otherwise shaped as an ordinary source font. A
+subset needs only the glyphs its new text uses. When no subset can show the new text in its
+existing codes, a complete program of the same face and style (one added with Load font, CFF
+included) shapes the whole span with its own layout, Latin rows too, rather than the edit being
+refused; a Regular program never completes text the source marks bold or italic.
+Mixed contextual style runs and dictionary word segmentation remain limited. No font binary
+or release pin changes are needed.
+
 When mixed-style text needs outline fallback, characters using the same actual fallback face
 share Type 3 fonts, with at most 240 distinct glyphs per font. Adjacent characters with the same
 font and source style are written as one run. Latin characters that the source font can encode
@@ -51,7 +121,7 @@ stay in it; Japanese serif/sans and weight choices remain separate. More than 24
 use additional fonts; a styled paragraph needing more than 15,360 distinct fallback glyphs is
 refused with an error. Unsupported glyphs are refused before fallback objects are written.
 This does not expand glyph coverage, shape mixed contextual runs or remove old unused fonts
-when editing again. The separate single-style fallback path is unchanged.
+when editing again. The single-style Keep source fonts path above has its own fallback grouping.
 
 Rewrapped Chinese and Japanese text, which has no spaces between words, may break between any
 two characters. A row never begins with closing punctuation, a closing bracket or quote, a small
@@ -59,6 +129,13 @@ kana or the prolonged sound mark, and never ends with an opening bracket or quot
 sign before an amount: the line-start and line-end rules of JIS X 4051, as in Unicode line
 breaking (UAX #14). Latin words inside such text are not split. Korean and Thai still break only
 at spaces.
+
+Text pasted from a browser or a word processor often carries an invisible break instead of a
+newline. Every Unicode row break starts a new row: U+2028 LINE SEPARATOR, U+2029 PARAGRAPH
+SEPARATOR, U+0085 NEXT LINE, the vertical tab, the form feed and the information separators
+(U+001C to U+001E), alongside the carriage return and the newline. These move the text down a
+row rather than being looked up in a font, so a paste no longer fails because no face has an
+outline for them. Other white space is still written as one space.
 
 Select text within the editor before changing size, colour, font, underline or spacing to
 format that selection. Automation supports up to 1024 disjoint UTF-8 byte ranges with the
@@ -89,8 +166,16 @@ On a scanned page, recognised text (Scan & OCR) is an invisible layer over the p
 text groups it into phrases: words joined by a word space, with a table cell, a tab stop and each
 scanned line kept apart. Applying an edit draws the new text visibly in the scan's ink colour (or
 the one chosen) and first covers the old words with the paper colour sampled around them. Each
-word keeps its position and width, and a longer phrase grows rightwards rather than wrapping. The
-cover is one flat colour, and the text uses the layer's Helvetica, not the scanned typeface.
+word keeps its position and width, and a longer phrase grows rightwards rather than wrapping.
+OCR sizes each word from its own box, so a phrase's words can come out several points apart: the
+editor and the rewrite set the whole phrase in one size, the median of its words' sizes.
+A text edit covers and redraws only the words it changes: the rest of the line stays the scan, and
+a deleted word leaves its gap, because the words after it are pixels. A replacement a little too
+wide is squeezed across to fit its place (by up to a quarter); wider than that it takes over the
+word it would run into, and new words with nothing to replace take a neighbour.
+The whole phrase is redrawn for a change of formatting or a new line, and for a layer whose words
+would move without the ones before them. While the phrase is open, the editor still shows all of
+it in the layer's Helvetica. The cover is one flat colour, and the text uses the layer's Helvetica, not the scanned typeface.
 This applies to any invisible text (rendering mode 3), not just a PdfCraft OCR layer: editing
 invisible text, such as another OCR tool's layer, makes the rewritten paragraph visible over a
 painted cover in the sampled paper colour. Edit text also groups invisible text differently: its lines never

@@ -1,4 +1,4 @@
-use super::{Arc, EditError, Hidden, SignatureInfo, TrustStore, optimize};
+use super::{Arc, ArrangeOrder, EditError, Hidden, SignatureInfo, TrustStore, optimize};
 
 /// A change to an existing page image.
 #[derive(Clone, Debug, PartialEq)]
@@ -20,6 +20,15 @@ pub enum ImageEdit {
         bytes: Arc<Vec<u8>>,
     },
     Delete,
+    /// Affine transform [a, b, c, d, e, f] applied to the image's matrix.
+    Transform([f64; 6]),
+    /// Change the stacking order.
+    Arrange(ArrangeOrder),
+    /// Remove any private crop on the image.
+    RemoveCrop,
+    /// Grouped Form artwork: draw its content in place, so its text and pictures can be edited
+    /// one by one (#2964).
+    Ungroup,
 }
 
 /// Forms ▸ Merge data files into spreadsheet: the field values of each file (FDF, XFDF or a
@@ -88,7 +97,7 @@ pub(crate) fn writable(cos: &pdfcraft_cos::Document) -> Result<std::borrow::Cow<
     Ok(std::borrow::Cow::Owned(copy))
 }
 
-/// The last-resort guard (AGENTS.md §4): run `f`, turning a panic that escapes it into an error
+/// The last-resort guard (app-agents.md rule 13): run `f`, turning a panic that escapes it into an error
 /// message, so one bad file or edit can't take the app and its other documents down. It is a
 /// safety net for bugs, not a substitute for returning errors.
 pub fn guard<T>(f: impl FnOnce() -> T) -> Result<T, String> {
