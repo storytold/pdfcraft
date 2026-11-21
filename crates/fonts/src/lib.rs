@@ -24,7 +24,8 @@ pub use craft::{
     ui_cjk_fonts, ui_devanagari_fonts, ui_hebrew_fonts, ui_japanese_fonts, ui_telugu_fonts, ui_thai_fonts,
 };
 pub use craft_pdf::fonts::{
-    Std14, Std14Match, UnicodeCMap, encodings, first_non_win_ansi, fits_win_ansi, win_ansi, win_ansi_byte, win_ansi_char, win_ansi_encodable,
+    LatinEncoding, Std14, Std14Match, UnicodeCMap, encodings, extra_letter, first_non_latin, first_non_win_ansi, fits_win_ansi, latin_drawable,
+    win_ansi, win_ansi_byte, win_ansi_char, win_ansi_encodable,
 };
 pub use plan::{MAX_PLAN_GLYPHS, MAX_TYPE3_GLYPHS, PlannedType3, TextPlan};
 pub use script::{
