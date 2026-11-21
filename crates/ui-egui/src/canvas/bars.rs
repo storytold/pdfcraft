@@ -49,9 +49,9 @@ pub(super) enum Notice {
     LockSignatures,
 }
 
-/// One inline notice with the icon named `icon`.
+/// One page notice bar with the icon named `icon`.
 fn bar(tone: Tone, icon: &'static str, text: String) -> Bar<'static> {
-    Bar::new(tone, text).layout(NoticeLayout::Inline).icon(NoticeIcon::Custom(IconId::new(icon).into()))
+    Bar::new(tone, text).layout(NoticeLayout::Bar).icon(NoticeIcon::Custom(IconId::new(icon).into()))
 }
 
 /// The notices above the pages, one after another: a file changed on disk first, then what a historical

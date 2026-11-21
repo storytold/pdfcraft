@@ -147,6 +147,7 @@ mod tests {
         let missing: Vec<String> =
             engine_icons().into_iter().filter(|(_, name)| !has_icon(&IconId::new(name))).map(|(owner, name)| format!("{owner}: {name}")).collect();
         assert!(missing.is_empty(), "icons nobody has: {missing:?}");
+        assert!(has_icon(&IconId::new(crate::chrome::HOME_ICON)), "the title bar Home icon resolves");
         // The eight documents the comment tools name stay served.
         for name in
             ["message-square-plus", "type", "highlighter", "move-right", "message-square-quote", "message-square-text", "replace", "paperclip"]
