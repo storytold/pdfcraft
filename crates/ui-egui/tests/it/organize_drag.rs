@@ -44,6 +44,28 @@ fn organize() -> Harness<'static, PdfCraftApp> {
     h
 }
 
+#[test]
+fn selected_pages_keep_actions_without_pointer_hover() {
+    let mut h = organize();
+    h.state_mut().views[0].select_pages(&[1, 2]);
+    h.hover_at(Pos2::new(10.0, 10.0));
+    h.run_steps(4);
+    for page in [2, 3] {
+        for action in ["Rotate page {label} counterclockwise", "Rotate page {label} clockwise", "Delete page {label}"] {
+            let label = action.replace("{label}", &page.to_string());
+            assert!(h.query_by_label(&label).is_some(), "selected page action is missing: {label}");
+        }
+    }
+}
+
+#[test]
+fn organize_header_paints_a_close_label() {
+    let h = organize();
+    assert!(h.output().shapes.iter().any(|shape| {
+        matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Close" && !text.galley.elided)
+    }), "the Organize header must show the Close label");
+}
+
 fn page_texts(app: &PdfCraftApp) -> Vec<String> {
     let doc = app.session.get(app.views[0].id).unwrap();
     let mut renderer = PageRenderer::new(doc.bytes.clone(), Default::default());

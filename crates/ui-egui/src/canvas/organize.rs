@@ -2,6 +2,7 @@ use super::{DocView, Edit, Pos2, ViewAction};
 use craft::behavior::{GesturePhase, IconId, MiddleButton, Selection};
 use craft::keymap::CommandRef;
 use craft::pages::ui::thumbnails::{ORGANIZE_ZOOM, PageThumbnails, ThumbnailArrangement, ThumbnailEvent};
+use craft::theme::Variant;
 use craft::ui::bars::{Bar, BarKind};
 use craft::ui::buttons::{Button, IconButton};
 use craft::ui::contract::overlay::Anchor;
@@ -167,7 +168,7 @@ pub(super) fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document,
             // PLAN: assumed `Props::tooltip(impl Into<Tooltip>)` and `TooltipSpec -> Tooltip`.
             let hint = craft::ui::contract::TooltipSpec::new(tl!("Save these pages as one PDF")).disabled_text(tl!("No changes to save"));
             save |= Button::new(tl!("Save pages")).enabled(dirty).tooltip(hint).show(ui).clicked();
-            close |= IconButton::new(IconId::new("x")).label(tl!("Close")).show(ui).clicked();
+            close |= Button::new(tl!("Close")).variant(Variant::GHOST).icon(IconId::new("x")).show(ui).clicked();
         })
         .show(cx.ui, |ui, _| {
             Text::new(label.clone()).show(ui);
