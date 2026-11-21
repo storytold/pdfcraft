@@ -80,9 +80,8 @@ fn duplicate_warnings_reuse_results_and_track_removal_and_parts() {
 #[test]
 fn the_same_image_or_text_file_added_twice_is_a_duplicate() {
     static NOW: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1_700_000_000);
-    let mut png = std::io::Cursor::new(Vec::new());
-    image::RgbaImage::from_pixel(12, 4, image::Rgba([20, 30, 40, 255])).write_to(&mut png, image::ImageFormat::Png).unwrap();
-    let png = png.into_inner();
+    let img = craft_image_codecs::Image::from_u8(12, 4, craft_image_codecs::ChannelLayout::Rgba, [20, 30, 40, 255].repeat(48)).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let warnings = |first: (&str, &[u8]), second: (&str, &[u8])| {
         let mut app = PdfCraftApp::new();
         app.session = std::mem::take(&mut app.session).with_clock(|| NOW.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
