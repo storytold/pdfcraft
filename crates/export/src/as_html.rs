@@ -1,10 +1,10 @@
 use super::as_docx::{rgb8, room_for};
-use super::html::{self, HtmlBlock, HtmlCell, HtmlRun, HtmlTable};
 use super::layout::{Image, Item, Page, items};
 #[cfg(test)]
 use super::layout::{Run, Table};
+use craft_html::standalone::{self as html, HtmlBlock, HtmlCell, HtmlRun, HtmlTable};
 
-pub(crate) use super::html::allowed;
+pub(crate) use craft_html::standalone::allowed;
 
 /// The longest language tag the exports write. BCP 47 sets no maximum (35 characters is only
 /// the least a protocol must hold), so this bounds only what a PDF's `/Lang` can put in a file.
