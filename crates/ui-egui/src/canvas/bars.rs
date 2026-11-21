@@ -49,7 +49,7 @@ pub(super) enum Notice {
     LockSignatures,
 }
 
-/// One inline notice with the icon named `icon`.
+/// One page notice bar with the icon named `icon`.
 fn bar(tone: Tone, icon: &'static str, text: String) -> Bar<'static> {
     Bar::new(tone, text).layout(NoticeLayout::Bar).icon(NoticeIcon::Custom(IconId::new(icon).into()))
 }

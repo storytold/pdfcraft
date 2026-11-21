@@ -18,6 +18,8 @@ pub(crate) mod doc_tabs;
 mod mode_bar;
 pub(crate) mod view_rail;
 
+pub(crate) const HOME_ICON: &str = "home";
+
 /// Compose the window: title bar, mode bar, view rail and the dock, whose document panel holds the
 /// pages.
 ///
@@ -100,14 +102,18 @@ fn title_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         title,
         |ui, _| {
             let home = app.active.is_none() && !app.combine_showing();
-            if IconButton::new(IconId::new("house")).label(tl!("Home")).selected(home).show(ui).clicked() {
+            if IconButton::new(IconId::new(HOME_ICON)).label(tl!("Home")).selected(home).show(ui).clicked() {
                 app.active = None;
                 app.combine_tab.focused = false;
             }
             doc_tabs::strip(app, ui, Place::Main);
         },
         |ui, _| {
-            IconButton::command(IconId::new("messages-square"), "help.discord").show(ui);
+            Button::command("help.discord")
+                .label("Discord")
+                .icon(IconId::new("messages-square"))
+                .tooltip(tl!("Join the ArtCraft Discord"))
+                .show(ui);
             IconButton::command(IconId::new("circle-help"), "help.shortcuts").show(ui);
             let theme_button = IconButton::command(IconId::new(theme_icon), ThemeChoice::NextMode.command()).label(theme_label.clone()).show(ui);
             let opener = theme_button.response().clone();

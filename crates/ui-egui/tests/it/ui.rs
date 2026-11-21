@@ -713,7 +713,7 @@ fn tabs_shrink_to_fit_then_arrows_step_through_them_and_open_stays_in_sight() {
         }
     });
     let open = h.get_by_label("Open…").rect();
-    let discord = h.get_by_label("Join the ArtCraft Discord").rect();
+    let discord = h.get_by_label("Discord").rect();
     assert!(open.right() <= discord.left(), "Open {open:?} must not run under Discord {discord:?}");
     let mut previous_right = f32::MIN;
     for i in 0..5 {
@@ -728,7 +728,7 @@ fn tabs_shrink_to_fit_then_arrows_step_through_them_and_open_stays_in_sight() {
         h.state_mut().open_bytes(&ctx_h, &name(i), None, FIXTURE.to_vec()).unwrap();
     }
     h.run_steps(6);
-    let (open, discord) = (h.get_by_label("Open…").rect(), h.get_by_label("Join the ArtCraft Discord").rect());
+    let (open, discord) = (h.get_by_label("Open…").rect(), h.get_by_label("Discord").rect());
     assert!(open.right() <= discord.left(), "Open {open:?} stays left of Discord {discord:?} with seven tabs");
     for i in 0..13 {
         let ctx_h = h.ctx.clone();
@@ -736,7 +736,7 @@ fn tabs_shrink_to_fit_then_arrows_step_through_them_and_open_stays_in_sight() {
     }
     h.run_steps(4);
     let open = h.get_by_label("Open…").rect();
-    let discord = h.get_by_label("Join the ArtCraft Discord").rect();
+    let discord = h.get_by_label("Discord").rect();
     assert!(open.left() > 0.0 && open.right() <= discord.left(), "Open {open:?} stays in sight left of Discord {discord:?}");
 }
 

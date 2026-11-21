@@ -28,7 +28,9 @@ const ICONS: &[(&str, &[u8])] = &[
     icon!("braces"),
     icon!("camera"),
     icon!("check-circle-2"),
+    icon!("circle-check"),
     icon!("circle-help"),
+    icon!("circle-x"),
     icon!("clipboard-paste"),
     icon!("clock-3"),
     icon!("cloud-upload"),
@@ -99,6 +101,7 @@ const ICONS: &[(&str, &[u8])] = &[
     icon!("text-cursor-input"),
     icon!("text-select"),
     icon!("trash-2"),
+    icon!("triangle-alert"),
     icon!("type"),
     icon!("user-round"),
     icon!("wrench"),
@@ -147,6 +150,10 @@ mod tests {
         let missing: Vec<String> =
             engine_icons().into_iter().filter(|(_, name)| !has_icon(&IconId::new(name))).map(|(owner, name)| format!("{owner}: {name}")).collect();
         assert!(missing.is_empty(), "icons nobody has: {missing:?}");
+        assert!(has_icon(&IconId::new(crate::chrome::HOME_ICON)), "the title bar Home icon resolves");
+        for name in ["circle-check", "circle-x", "triangle-alert"] {
+            assert!(has_icon(&IconId::new(name)), "signature notice icon {name}");
+        }
         // The eight documents the comment tools name stay served.
         for name in
             ["message-square-plus", "type", "highlighter", "move-right", "message-square-quote", "message-square-text", "replace", "paperclip"]
