@@ -1758,8 +1758,8 @@ fn a_jbig2_image_past_the_runs_allowance_stops_the_run() {
 }
 
 /// A Flate image past the run's allowance stops the run as a JBIG2 image does: removed whole, it
-/// would take what no mark covers with it, unreported. A JPEG, which clearing doesn't read, is
-/// removed whole as it always was, and spends nothing.
+/// would take what no mark covers with it, unreported. An unsupported JPX image, which clearing
+/// doesn't read, is removed whole and spends nothing. Eligible JPEGs now pay the run's allowance.
 #[test]
 fn a_flate_image_past_the_runs_allowance_stops_the_run() {
     let dict = "/Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /FlateDecode";
@@ -1772,7 +1772,7 @@ fn a_flate_image_past_the_runs_allowance_stops_the_run() {
     mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
     assert!(crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(u64::MAX)).is_ok());
 
-    let dict = "/Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /DCTDecode";
+    let dict = "/Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /JPXDecode";
     let mut doc = one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(dict, b"not read")]);
     mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
     let report = crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(0)).unwrap();
@@ -6209,6 +6209,24 @@ fn a_cleared_copy_keeps_parameters_for_data_in_another_file_only_with_one() {
         let copy = crate::image::clear(&doc, s, &pdfcraft_content::Matrix::IDENTITY, &left, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX));
         let Ok(Some(copy)) = copy else { panic!("{f}: cleared in a copy") };
         assert_eq!((copy.dict.contains(b"FFilter"), copy.dict.contains(b"FDecodeParms")), (kept, kept), "{f}");
+    }
+}
+
+/// Hostile dimensions must be rejected before multiplying them or allocating a raster.
+#[test]
+fn hostile_image_dimensions_are_removed_without_wrapping_or_panicking() {
+    for filter in ["DCTDecode", "FlateDecode"] {
+        let image = stream(
+            &format!(
+                "/Type /XObject /Subtype /Image /Width 4294967296 /Height 4294967296 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /{filter}"
+            ),
+            b"not decoded",
+        );
+        let mut doc = one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![image]);
+        mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!((report.images_removed, report.images_cleared), (1, 0), "{filter}");
+        assert!(!content(&doc, 0).contains(" Do"), "oversized {filter} image must no longer be drawn");
     }
 }
 
