@@ -144,9 +144,12 @@ impl Block {
         self.title.extend(text.chars().take(room));
     }
 
+    /// What the heading rules see. A block set inside a sentence still counts toward the body
+    /// style, since it is the paragraph's text, but is never a heading: the rules take no block
+    /// without letters as one.
     fn evidence(&self) -> TextBlock {
         let s = &self.first.style;
-        TextBlock { size: s.size, bold: s.bold, lines: self.lines, chars: self.chars, letters: self.letters }
+        TextBlock { size: s.size, bold: s.bold, lines: self.lines, chars: self.chars, letters: self.letters && !self.inline }
     }
 }
 
@@ -217,7 +220,7 @@ fn is_caption(text: &str) -> bool {
 /// The headings among `lines`, as outline entries: the first [`MAX_BOOKMARKS`], and whether there
 /// were more.
 fn inferred(lines: Vec<Line>) -> (Vec<OutlineEntry>, bool) {
-    let blocks: Vec<Block> = blocks(lines).into_iter().filter(|b| !b.inline && !is_caption(&b.title)).collect();
+    let blocks: Vec<Block> = blocks(lines).into_iter().filter(|b| !is_caption(&b.title)).collect();
     let evidence: Vec<TextBlock> = blocks.iter().map(Block::evidence).collect();
     let mut entries: Vec<OutlineEntry> = blocks
         .iter()
@@ -309,6 +312,25 @@ mod tests {
             body(0, 656.0),
         ];
         assert_eq!(titles(&inferred(lines).0), [(1, "MUST", 0), (1, "Numbered title", 0)]);
+    }
+
+    #[test]
+    fn text_beside_an_italic_word_still_sets_the_body_size() {
+        let italic = |top: f64| {
+            let mut l = run(top, false, "term", 252.0, 275.0);
+            l.style.italic = true;
+            l.style.font = "Helvetica-Oblique".into();
+            l
+        };
+        let mut lines = vec![line(0, 780.0, 14.0, true, "Overview")];
+        for top in [750.0, 736.0, 722.0, 708.0] {
+            lines.extend([
+                run(top, false, "The first part of the row runs to", 72.0, 250.0),
+                italic(top),
+                run(top, false, "and the rest of it follows on.", 277.0, 400.0),
+            ]);
+        }
+        assert_eq!(titles(&inferred(lines).0), [(1, "Overview", 0)]);
     }
 
     #[test]
