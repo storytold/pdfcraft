@@ -211,3 +211,81 @@ fn a_kept_original_group_does_not_keep_another_original_through_its_resources() 
     assert!(bytes.windows(11).any(|w| w == b"SMASKSECRET"), "page 2's mask lost its group");
     assert!(!bytes.windows(11).any(|w| w == b"BMASKSECRET"), "the second original group survived through the kept one's resources");
 }
+
+#[test]
+fn a_tiling_pattern_state_does_not_keep_the_original_group() {
+    // The page fills with a tiling pattern (object 8) whose own resources list an unused state
+    // naming the original group.
+    let pattern = stream(
+        "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 5 5] /XStep 5 /YStep 5 /Resources << /ExtGState << /GSP << /SMask << /S /Luminosity /G 7 0 R >> >> >> >>",
+        b"0 0 5 5 re f",
+    );
+    let group = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >> /Resources << /Font << /F1 5 0 R >> >>",
+        b"1 g BT /F1 10 Tf 10 100 Td (SMASKSECRET) Tj ET",
+    );
+    let mut doc = one_page(
+        b"q /GS0 gs 0 0 0.6 rg 0 0 300 300 re f Q /Pattern cs /P0 scn 200 200 20 20 re f",
+        "/ExtGState << /GS0 << /SMask << /S /Luminosity /G 7 0 R >> >> >> /Pattern << /P0 8 0 R >>",
+        vec![group, pattern],
+    );
+    mark(&mut doc, 0, &[MARK], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.glyphs, 11, "{r:?}");
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!bytes.windows(11).any(|w| w == b"SMASKSECRET"), "the original group survived through a pattern's resources");
+}
+
+#[test]
+fn a_state_a_resourceless_mask_group_selects_is_kept() {
+    // Both pages inherit /A and /B. Page 1 paints through /B, whose group (object 7) is under the
+    // mark. Page 2 paints only through /A, whose group (object 9) has no /Resources and selects /B
+    // through them: page 2 still needs /B and the original group it masks with.
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 8 0 R] /Count 2 /Resources << /Font << /F1 5 0 R >> /ExtGState << /A << /SMask << /S /Luminosity /G 9 0 R >> >> /B << /SMask << /S /Luminosity /G 7 0 R >> >> >> >> >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>".to_vec(),
+        stream("", b"q /B gs 0 0 0.6 rg 0 0 300 300 re f Q"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >> /Resources << /Font << /F1 5 0 R >> >>",
+            b"1 g BT /F1 10 Tf 10 100 Td (SMASKSECRET) Tj ET",
+        ),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 10 0 R >>".to_vec(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >>", b"/B gs 1 g 0 0 300 300 re f"),
+        stream("", b"q /A gs 0 0 0.6 rg 0 0 300 300 re f Q"),
+    ]);
+    mark(&mut doc, 0, &[MARK], "");
+    apply(&mut doc, None).unwrap();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(bytes.windows(11).any(|w| w == b"SMASKSECRET"), "page 2's mask group lost the state it selects through its caller's resources");
+}
+
+#[test]
+fn a_tiling_pattern_on_another_page_does_not_keep_the_original_group() {
+    // Page 2 fills with a tiling pattern (object 8) whose own resources list an unused state
+    // naming the original group (object 7), which page 1 rewrites.
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 9 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /ExtGState << /GS0 << /SMask << /S /Luminosity /G 7 0 R >> >> >> >> >>".to_vec(),
+        stream("", b"q /GS0 gs 0 0 0.6 rg 0 0 300 300 re f Q"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >> /Resources << /Font << /F1 5 0 R >> >>",
+            b"1 g BT /F1 10 Tf 10 100 Td (SMASKSECRET) Tj ET",
+        ),
+        stream(
+            "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 5 5] /XStep 5 /YStep 5 /Resources << /ExtGState << /GSP << /SMask << /S /Luminosity /G 7 0 R >> >> >> >>",
+            b"0 0 5 5 re f",
+        ),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 10 0 R /Resources << /Pattern << /P0 8 0 R >> >> >>".to_vec(),
+        stream("", b"/Pattern cs /P0 scn 200 200 20 20 re f"),
+    ]);
+    mark(&mut doc, 0, &[MARK], "");
+    apply(&mut doc, None).unwrap();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!bytes.windows(11).any(|w| w == b"SMASKSECRET"), "the original group survived through another page's pattern");
+}

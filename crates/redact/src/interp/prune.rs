@@ -413,7 +413,8 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
             }
             let object = doc.get(reference);
             let Object::Stream(form) = &*object else { continue };
-            if form.dict.name(b"Subtype") != Some(b"Form") {
+            // A tiling pattern's own /Resources can name a doomed group as a form's can.
+            if form.dict.name(b"Subtype") != Some(b"Form") && form.dict.int(b"PatternType") != Some(1) {
                 continue;
             }
             let Some(mut res) = form.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()) else { continue };
@@ -449,19 +450,14 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
     Ok(())
 }
 
-/// The forms a resource dictionary reaches: its XObjects, and the groups of the soft masks its
-/// graphics states keep (#7884). A doomed group is among them too: a state still selected
-/// elsewhere keeps it, and its own resources may name another doomed group.
+/// The forms a resource dictionary reaches: its XObjects, its patterns (the caller keeps the
+/// tiling ones), and the groups of the soft masks its graphics states keep (#7884). A doomed group
+/// is among them too: a state still selected elsewhere keeps it, and its own resources may name
+/// another doomed group.
 fn forms_in(doc: &Document, res: &Dict) -> Vec<ObjRef> {
     let mut forms: Vec<ObjRef> = res_dict(doc, res, b"XObject").iter().filter_map(|(_, v)| v.as_ref()).collect();
-    for (_, state) in res_dict(doc, res, b"ExtGState").iter() {
-        let group = doc
-            .resolve(state)
-            .as_dict()
-            .and_then(|s| s.get(b"SMask").map(|m| doc.resolve(m)))
-            .and_then(|m| m.as_dict().and_then(|m| m.get(b"G")).and_then(Object::as_ref));
-        forms.extend(group);
-    }
+    forms.extend(res_dict(doc, res, b"Pattern").iter().filter_map(|(_, v)| v.as_ref()));
+    forms.extend(res_dict(doc, res, b"ExtGState").iter().filter_map(|(_, state)| soft_mask_group(doc, state)));
     forms
 }
 
@@ -522,12 +518,21 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
         return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully read the content that uses these resources".into() });
     }
     let xobjects = res_dict(doc, res, b"XObject");
+    let states = res_dict(doc, res, b"ExtGState");
     let mut seen = HashSet::new();
     let mut cursor = 0;
     while cursor < ops.len() {
         let op = &ops[cursor];
-        if op.is("Do")
-            && let Some(r) = op.last_name().and_then(|n| xobjects.get(n)).and_then(Object::as_ref)
+        // A form drawn with `Do`, or a soft mask's group selected with `gs` (#7884): either one
+        // without /Resources of its own uses these.
+        let drawn = if op.is("Do") {
+            op.last_name().and_then(|n| xobjects.get(n)).and_then(Object::as_ref)
+        } else if op.is("gs") {
+            op.last_name().and_then(|n| states.get(n)).and_then(|s| soft_mask_group(doc, s))
+        } else {
+            None
+        };
+        if let Some(r) = drawn
             && seen.insert(r)
             && let Object::Stream(s) = &*doc.get(r)
             && s.dict.name(b"Subtype") == Some(b"Form")
@@ -610,9 +615,14 @@ pub(crate) fn selected_states(doc: &Document, budget: &mut DecodeBudget, res: &D
 
 /// Whether the ExtGState `state` has a soft mask whose group is one of `groups`.
 pub(crate) fn masks_with(doc: &Document, state: &Object, groups: &HashSet<ObjRef>) -> bool {
+    soft_mask_group(doc, state).is_some_and(|g| groups.contains(&g))
+}
+
+/// The group of the soft mask a graphics state sets, when it names one by reference.
+fn soft_mask_group(doc: &Document, state: &Object) -> Option<ObjRef> {
     let state = doc.resolve(state);
-    let Some(mask) = state.as_dict().and_then(|s| s.get(b"SMask")).map(|m| doc.resolve(m)) else { return false };
-    mask.as_dict().and_then(|m| m.get(b"G")).and_then(Object::as_ref).is_some_and(|g| groups.contains(&g))
+    let mask = doc.resolve(state.as_dict()?.get(b"SMask")?);
+    mask.as_dict()?.get(b"G")?.as_ref()
 }
 
 /// The font, writing direction and size an ExtGState's `/Font [font size]` entry sets, as `Tf`
