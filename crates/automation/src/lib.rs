@@ -35,6 +35,7 @@ mod printing;
 mod reading;
 mod redact;
 mod signing;
+mod spell_check;
 mod text_cache;
 mod tools;
 

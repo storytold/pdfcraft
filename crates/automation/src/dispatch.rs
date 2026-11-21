@@ -842,6 +842,7 @@ impl Automation {
             "measure_snap" => self.measurement_snap(&a)?,
             "measure_export" => self.measurement_export(&a)?,
             "comment_list" => self.comment_list(&a)?,
+            "spell_check_comments" => self.spell_check_comments(&a)?,
             "comment_add" => self.comment_add(&a)?,
             "stamp_custom" => self.stamp_custom(&a)?,
             "model_add" => self.model_add(&a)?,
