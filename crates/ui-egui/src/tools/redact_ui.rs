@@ -202,9 +202,19 @@ pub struct SearchDraft {
     pub case_sensitive: bool,
     pub whole_words: bool,
     pub pattern: RedactPattern,
+    /// Letters and digits left readable at the start and at the end of each match
+    /// (protect.redact-partial-words); 0 redacts the whole match.
+    pub leave_first: usize,
+    pub leave_last: usize,
     /// The result of the last search (matches marked), shown in the dialog.
     pub found: Option<usize>,
+    /// Matches of the last search with nothing left to mark once `leave_first` and `leave_last`
+    /// are kept readable, so not marked.
+    pub skipped_short: usize,
 }
+
+/// The most letters and digits the dialog leaves readable on either side of a match.
+pub(crate) const MAX_LEAVE_READABLE: usize = 1000;
 
 impl Default for SearchDraft {
     fn default() -> Self {
@@ -215,7 +225,10 @@ impl Default for SearchDraft {
             case_sensitive: false,
             whole_words: false,
             pattern: RedactPattern::Phone,
+            leave_first: 0,
+            leave_last: 0,
             found: None,
+            skipped_short: 0,
         }
     }
 }
@@ -299,6 +312,7 @@ pub(crate) fn paint(painter: &egui::Painter, page: usize, view: &DocView, pointe
 impl PdfCraftApp {
     /// Mark every match of the search draft on every page; returns how many were marked.
     pub fn redact_search(&mut self) -> usize {
+        self.redact_search.skipped_short = 0;
         let Some((_, id)) = self.active_ids() else { return 0 };
         let Some(doc) = self.session.get(id) else { return 0 };
         let d = self.redact_search.clone();
@@ -313,6 +327,7 @@ impl PdfCraftApp {
         let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
         let mut edits = Vec::new();
+        let mut skipped_short = 0;
         let author = self.comment_prefs.author.clone();
         for (page, page_info) in doc.info.pages.iter().enumerate() {
             let out = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
@@ -322,12 +337,17 @@ impl PdfCraftApp {
                 _ => needles.iter().flat_map(|w| text.find_opts(w, d.case_sensitive, d.whole_words)).collect(),
             };
             for h in hits {
+                let Some(h) = text.redaction_part(h, d.leave_first, d.leave_last) else {
+                    skipped_short += 1;
+                    continue;
+                };
                 let quads: Vec<[f64; 8]> = text.line_rects(h).into_iter().map(|r| page_info.view_rect_to_quad(r)).collect();
                 if !quads.is_empty() {
                     edits.push(self.redact_prefs.mark(page, quads, &author));
                 }
             }
         }
+        self.redact_search.skipped_short = skipped_short;
         let n = edits.len();
         if n > 0 {
             self.apply_edit(Edit::Batch { label: "Mark for redaction".into(), edits });
@@ -425,17 +445,35 @@ pub(crate) fn search_body(ui: &mut egui::Ui, d: &mut SearchDraft, t: &Tokens) ->
             }
         });
     });
+    ui.add_space(8.0);
+    // Redact part of each match: these letters and digits stay readable.
+    ui.horizontal(|ui| {
+        let first = ui.label(tl!("Leave readable: first"));
+        ui.add(egui::DragValue::new(&mut d.leave_first).range(0..=MAX_LEAVE_READABLE)).labelled_by(first.id);
+        let last = ui.label(tl!("last"));
+        ui.add(egui::DragValue::new(&mut d.leave_last).range(0..=MAX_LEAVE_READABLE)).labelled_by(last.id);
+    });
+    ui.label(egui::RichText::new(tl!("Letters and digits of each match; spaces and dashes don't count.")).small().color(t.text_faint));
     ui.add_space(6.0);
     ui.label(egui::RichText::new(tl!("Text in images isn't found; recognise text (OCR) first.")).small().color(t.text_faint));
     if let Some(n) = d.found {
         ui.label(
-            egui::RichText::new(if n == 0 {
+            egui::RichText::new(if n == 0 && d.skipped_short == 0 {
                 tl!("No matches.").to_string()
             } else {
                 crate::i18n::fmt(tl!("{n} match(es) marked for redaction."), &[("n", &n.to_string())])
             })
             .color(t.text_muted),
         );
+        if d.skipped_short > 0 {
+            ui.label(
+                egui::RichText::new(crate::i18n::fmt(
+                    tl!("{n} match(es) not marked: they have no more letters and digits than are left readable."),
+                    &[("n", &d.skipped_short.to_string())],
+                ))
+                .color(t.text_muted),
+            );
+        }
     }
     ui.add_space(12.0);
     let (go, cancel) = buttons(ui, "Mark all", true);

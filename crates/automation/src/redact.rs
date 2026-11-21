@@ -73,8 +73,11 @@ impl Automation {
         if a.get("validate").is_some() && a.get("regex").is_none() {
             return Err(ToolError::InvalidArgs("validate applies only to regex".into()));
         }
+        let (leave_first, leave_last) = leave_readable(a)?;
         // Per searched word or phrase: how many marks it made.
         let mut matched_words: Vec<(String, usize)> = Vec::new();
+        // Matches with nothing left to mark once leave_first and leave_last are kept readable.
+        let mut skipped_short = 0usize;
         if a.get("rect").is_some() {
             let page = self.page(a)?;
             let info = &self.doc(a)?.info.pages[page];
@@ -152,6 +155,10 @@ impl Automation {
                         .collect(),
                 };
                 for (word, h) in hits {
+                    let Some(h) = text.redaction_part(h, leave_first, leave_last) else {
+                        skipped_short += 1;
+                        continue;
+                    };
                     let quads: Vec<[f64; 8]> = text.line_rects(h).into_iter().map(|r| info.pages[p].view_rect_to_quad(r)).collect();
                     if !quads.is_empty() {
                         marks.push((p, quads));
@@ -160,6 +167,11 @@ impl Automation {
                         }
                     }
                 }
+            }
+            if marks.is_empty() && skipped_short > 0 {
+                return Err(failed(format!(
+                    "{skipped_short} match(es) found, but none has more letters and digits than leave_first and leave_last keep readable, so nothing was marked"
+                )));
             }
             if marks.is_empty() {
                 return Err(failed("nothing matched, so nothing was marked"));
@@ -181,6 +193,9 @@ impl Automation {
         out["marked"] = json!(count);
         out["pages_marked"] = json!(marks.iter().map(|m| m.0 + 1).collect::<std::collections::BTreeSet<_>>());
         out["marks_pending"] = json!(self.doc(a)?.redaction_marks());
+        if leave_first > 0 || leave_last > 0 {
+            out["skipped_short"] = json!(skipped_short);
+        }
         if a.get("words").is_some() {
             out["matched_words"] = json!(matched_words.iter().map(|(w, n)| json!({ "word": w, "marked": n })).collect::<Vec<_>>());
         }
@@ -296,4 +311,22 @@ impl Automation {
         out["removed"] = json!(before.saturating_sub(after));
         Ok(out)
     }
+}
+
+/// The letters and digits `redact_mark` leaves readable at the start and end of each match:
+/// `leave_first` and `leave_last`, for text searches only.
+fn leave_readable(a: &Args) -> Result<(usize, usize)> {
+    let read = |key: &str| -> Result<usize> {
+        match a.opt_int(key)? {
+            None => Ok(0),
+            Some(n @ 0..=1000) => Ok(n as usize),
+            Some(_) => Err(ToolError::InvalidArgs(format!("{key} must be from 0 to 1000"))),
+        }
+    };
+    let leave = (read("leave_first")?, read("leave_last")?);
+    let text_search = ["find", "words", "pattern", "regex"].iter().any(|k| a.get(k).is_some());
+    if (a.get("leave_first").is_some() || a.get("leave_last").is_some()) && !text_search {
+        return Err(ToolError::InvalidArgs("leave_first and leave_last apply only to find, words, pattern or regex".into()));
+    }
+    Ok(leave)
 }

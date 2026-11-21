@@ -4019,3 +4019,28 @@ fn an_unattached_alphabetic_mark_reads_with_the_glyphs_at_its_place() {
     let text = layout(v).plain_text();
     assert_eq!(text, "שלום\u{345}ab");
 }
+
+/// Redacting part of a match: separators use up none of the readable count, a ligature on the
+/// boundary is redacted whole, and a match with no more letters and digits than are kept has
+/// nothing to redact.
+#[test]
+fn the_part_of_a_match_to_redact_keeps_only_whole_letters_and_digits_readable() {
+    let of = |glyphs: &[&str]| PageText {
+        glyphs: glyphs.iter().map(|s| TextGlyph { text: (*s).into(), rect: [0.0; 4], quad: [[0.0; 2]; 4], direction: [1.0, 0.0] }).collect(),
+        line_of: vec![0; glyphs.len()],
+        space_before: vec![false; glyphs.len()],
+        truncated: false,
+    };
+    let card = of(&["x", "4", "1", "-", "2", "3", "-", "5", "6", "y"]);
+    // The match is glyphs 1..9 ("41-23-56"); the last four letters and digits are 2, 3, 5 and 6.
+    let kept_after = card.redaction_part(1..9, 0, 4).unwrap();
+    assert!(kept_after.start == 1 && kept_after.end <= 4, "only 4, 1 and at most the dash go: {kept_after:?}");
+    let kept_before = card.redaction_part(1..9, 2, 0).unwrap();
+    assert!(kept_before.start >= 3 && kept_before.end == 9, "4 and 1 stay: {kept_before:?}");
+    assert_eq!(card.redaction_part(1..9, 0, 0), Some(1..9), "nothing kept, the whole match goes");
+    assert_eq!(card.redaction_part(1..9, 3, 3), None, "six letters and digits, all kept");
+    // "ef" drawn as one ligature glyph: keeping the last letter can't split it, so it goes.
+    let lig = of(&["d", "ef", "g"]);
+    assert_eq!(lig.redaction_part(0..3, 0, 2), Some(0..2), "the ligature holding the boundary is redacted whole");
+    assert_eq!(lig.redaction_part(0..3, 2, 0), Some(1..3));
+}

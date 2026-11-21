@@ -650,6 +650,46 @@ fn redaction_search_can_match_case_and_whole_words() {
     assert_eq!((marks(&h), h.state().redact_search.found), (2, Some(2)));
 }
 
+/// Find text and redact can leave the last letters and digits of each match readable; a match
+/// with nothing left to redact is reported, not marked.
+#[test]
+fn redaction_search_can_leave_the_last_digits_readable() {
+    let memo = pdfcraft_engine::Session::new().create_from_text("memo", "Card 4111 2222 3333 4444 on file\nPIN 9876 here").unwrap().to_vec();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("memo.pdf", None, memo.clone()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.state_mut().execute("redact.search");
+    h.run_steps(2);
+    h.get_by_label("Leave readable: first");
+    h.get_by_label("last");
+    h.state_mut().redact_search.mode = pdfcraft_ui_egui::RedactSearchMode::Words;
+    h.state_mut().redact_search.words = "4111 2222 3333 4444\n9876".into();
+    h.state_mut().redact_search.leave_last = 4;
+    h.run_steps(2);
+    h.get_by_label("Mark all").click();
+    h.run_steps(3);
+    assert_eq!((marks(&h), h.state().redact_search.found, h.state().redact_search.skipped_short), (1, Some(1), 1));
+    h.get_by_label("1 match(es) not marked: they have no more letters and digits than are left readable.");
+    h.state_mut().dialog = None;
+    h.run_steps(2);
+    assert!(h.state_mut().execute("redact.apply"));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::RedactApply));
+    h.get_by_label("Apply").click();
+    h.run_steps(4);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), Default::default());
+    let out = r.render(pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
+    let text = out.text.map(|t| t.plain_text()).unwrap_or_default();
+    assert!(!text.contains("4111") && !text.contains("2222") && !text.contains("3333"), "{text}");
+    assert!(text.contains("4444 on file") && text.contains("PIN 9876 here"), "{text}");
+}
+
 #[test]
 fn removing_hidden_information_and_sanitizing() {
     let mut h = harness();

@@ -5855,6 +5855,40 @@ fn redacting_through_tools() {
 }
 
 #[test]
+fn redact_mark_can_leave_the_first_or_last_letters_and_digits_of_each_match() {
+    let dir = workdir("redact-partial");
+    std::fs::write(dir.join("memo.txt"), "Card 4111 2222 3333 4444 on file\nSSN 123-45-6789 is private\nCode AB12 here").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "text", "path": "memo.txt" }))["doc"].as_u64().unwrap();
+    // A regex and a built-in pattern, each with separators inside the match that use up nothing.
+    let r = ok(&mut a, "redact_mark", json!({ "doc": doc, "regex": r"\d{4} \d{4} \d{4} \d{4}", "leave_last": 4 }));
+    assert_eq!((r["marked"].as_u64(), r["skipped_short"].as_u64()), (Some(1), Some(0)));
+    ok(&mut a, "redact_mark", json!({ "doc": doc, "pattern": "ssn", "leave_last": 4 }));
+    ok(&mut a, "redact_mark", json!({ "doc": doc, "find": "AB12", "leave_first": 2 }));
+    // A match with no more letters and digits than are kept is not marked, and says so.
+    let short = json!({ "doc": doc, "find": "file", "leave_first": 2, "leave_last": 2 });
+    assert!(matches!(a.call("redact_mark", &short), Err(ToolError::Failed(m)) if m.contains("nothing was marked")));
+    let r = ok(&mut a, "redact_apply", json!({ "doc": doc }));
+    assert_eq!(r["applied"].as_u64(), Some(3));
+    let text = page_text(&mut a, doc)[0].clone();
+    for gone in ["4111", "2222", "3333", "123", "45", "12 "] {
+        assert!(!text.contains(gone), "{gone:?} is redacted: {text}");
+    }
+    for kept in ["Card", "4444 on file", "6789 is private", "Code AB", "here"] {
+        assert!(text.contains(kept), "{kept:?} stays readable: {text}");
+    }
+    // Only for text searches, and within range.
+    for args in [
+        json!({ "doc": doc, "page": 1, "rect": [1, 1, 10, 10], "leave_last": 4 }),
+        json!({ "doc": doc, "whole_pages": true, "leave_first": 1 }),
+        json!({ "doc": doc, "find": "Card", "leave_first": -1 }),
+        json!({ "doc": doc, "find": "Card", "leave_last": 1001 }),
+    ] {
+        assert!(matches!(a.call("redact_mark", &args), Err(ToolError::InvalidArgs(_))), "{args}");
+    }
+}
+
+#[test]
 fn redact_apply_refuses_unreadable_annotations_then_recovers_through_tools() {
     for inline in [false, true] {
         for rect in ["", "/Rect [10 140 /Bad 80 160]"] {
