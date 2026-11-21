@@ -899,6 +899,7 @@ pub(crate) fn paragraph_controls(
     doc: &pdfcraft_engine::Document,
     parts: &PagePartsOutput,
     geo: PageGeometry<'_>,
+    adding_text: bool,
 ) -> Option<Edit> {
     let press = parts.press.as_ref().filter(|p| matches!(p.owner, Owner::Paragraph { .. }));
     let hovered = match parts.hovered {
@@ -922,7 +923,11 @@ pub(crate) fn paragraph_controls(
             .or(hovered)
             .filter(|(p, _)| *p == page)
             .and_then(|(_, block)| blocks.get(block).zip(boxes.get(block).copied()).map(|(l, b)| (block, l, b)));
-        edit = edit.or_else(|| width_frame(ui, body, session, doc, page, framed, geo));
+        let mut clicked = None;
+        edit = edit.or_else(|| width_frame(ui, body, session, doc, page, framed, geo, &mut clicked));
+        if adding_text && let Some(block) = clicked {
+            edit = edit.or_else(|| open_by_click(session, doc, page, block, geo));
+        }
     }
     edit.or_else(|| editor_session(ui, body, session, doc, geo))
 }
@@ -1014,6 +1019,7 @@ fn width_frame(
     page: usize,
     framed: Option<(usize, &pdfcraft_engine::TextBlock, Rect)>,
     geo: PageGeometry<'_>,
+    clicked: &mut Option<usize>,
 ) -> Option<Edit> {
     let info = &doc.info;
     let xf = session.page_xform(page, geo)?;
@@ -1037,6 +1043,9 @@ fn width_frame(
         .id(width_frame_id(ui, page, block))
         .rules(rules)
         .show_at(ui, body.rect);
+    if output.clicked.is_some_and(|(_, point)| b.contains(body.view.to_screen(point))) {
+        *clicked = Some(block);
+    }
     let after = output.edit.events.iter().find_map(|event| match event {
         EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => Some(*after),
         _ => None,

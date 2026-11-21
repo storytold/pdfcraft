@@ -1404,7 +1404,7 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbac
             crate::edit_text_ui::picture_controls(ui, body, session, cx.doc, cx.info, geo),
             crate::object_ui::object_controls(ui, body, session, cx.info, parts_out.press.as_slice(), geo),
             crate::content_ui::content_controls(ui, body, session, cx.doc, added_hovered, cx.view_key),
-            crate::edit_text_ui::paragraph_controls(ui, body, session, cx.doc, &parts_out, geo),
+            crate::edit_text_ui::paragraph_controls(ui, body, session, cx.doc, &parts_out, geo, cx.tool == QuickTool::AddText),
         ];
         // One edit per pass, the first control's that made one, as each control's own `or` keeps its first.
         if let Some(edit) = edits.into_iter().flatten().next() {
