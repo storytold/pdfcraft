@@ -1,4 +1,4 @@
-//! Copy with formatting's recovered layer (hayro-interpret patch 107): one interpretation reads
+//! Copy with formatting's recovered layer: one interpretation reads
 //! the strict text layer, unchanged, and what the recovery rules read; rules fill glyphs without
 //! strict text, or override strict text they judge untrustworthy.
 
@@ -12,7 +12,7 @@ fn parse(bytes: Vec<u8>) -> Pdf {
 /// Both layers of page 0, and the strict layer as the plain extraction reads it.
 fn layers(pdf: &Pdf) -> (PageText, Option<RecoveredText>, PageText) {
     let settings = InterpreterSettings::default();
-    let (strict, recovered) = extract_page_recovering(pdf, 0, &settings).unwrap();
+    let (strict, recovered) = extract_page_recovering(pdf, 0, &settings, None).unwrap();
     (strict, recovered, extract_page(pdf, 0, &settings).unwrap())
 }
 
@@ -36,7 +36,7 @@ fn page_with_font(font: &str, shown: &str, strict_words: bool, extra: &[(&str, V
     pdf.build()
 }
 
-/// A simple Type 1 font (embedding the vendored Type 1 program as /Type1C) whose `/Differences` from code 1 are `names`, shown with
+/// A simple Type 1 font (embedding the bundled Courier stand-in, a Type 1 program, as /Type1C) whose `/Differences` from code 1 are `names`, shown with
 /// codes 1 to n.
 fn names_page(names: &str, base: &str, strict_words: bool) -> Vec<u8> {
     let codes: Vec<u8> = (1..=u8::try_from(names.split_whitespace().count()).unwrap_or(u8::MAX)).collect();
@@ -46,7 +46,9 @@ fn names_page(names: &str, base: &str, strict_words: bool) -> Vec<u8> {
 /// [`names_page`] showing `codes`.
 fn names_page_showing(names: &str, codes: &[u8], base: &str, strict_words: bool) -> Vec<u8> {
     let codes: String = codes.iter().map(|c| format!("{c:02x}")).collect();
-    const CFF: &[u8] = include_bytes!("../../../../vendor/hayro-interpret/assets/FoxitFixed.pfb");
+    // The bundled Courier stand-in, a Type 1 program.
+    let cff_program = craft_pdf::interpret::font::StandardFont::Courier.get_font_data().0;
+    let cff: &[u8] = (*cff_program).as_ref();
     let n = names.split_whitespace().count();
     let widths = vec!["600"; n].join(" ");
     let font = format!(
@@ -55,7 +57,7 @@ fn names_page_showing(names: &str, codes: &[u8], base: &str, strict_words: bool)
     let descriptor = format!(
         "<< /Type /FontDescriptor /FontName /{base} /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 8 0 R >>"
     );
-    page_with_font(&font, &format!("<{codes}>"), strict_words, &[(&descriptor, Vec::new()), ("/Subtype /Type1C", CFF.to_vec())])
+    page_with_font(&font, &format!("<{codes}>"), strict_words, &[(&descriptor, Vec::new()), ("/Subtype /Type1C", cff.to_vec())])
 }
 
 /// A Type 0 font (Identity-H) over an embedded TrueType program, without `/ToUnicode`, showing
@@ -483,7 +485,7 @@ fn without_recovery_there_is_no_recovered_layer() {
 /// text is the same, and over a glyph without strict text either is a fill.
 #[test]
 fn rules_fill_by_default_and_override_only_when_they_say_why() {
-    use hayro::hayro_interpret::hayro_cmap::BfString;
+    use craft_pdf::interpret::hayro_cmap::BfString;
     let rule = RecoveryRule::MacGlyphOrder;
     let strict = BfString::Char('a');
     let x = || BfString::Char('X');
@@ -662,7 +664,9 @@ fn recovered_glyphs_share_their_fonts_style() {
 /// recovered layer reads the word once, not the replacement and the recovered glyph again.
 #[test]
 fn a_recovered_glyph_inside_an_actual_text_redraw_goes_with_it() {
-    const CFF: &[u8] = include_bytes!("../../../../vendor/hayro-interpret/assets/FoxitFixed.pfb");
+    // The bundled Courier stand-in, a Type 1 program.
+    let cff_program = craft_pdf::interpret::font::StandardFont::Courier.get_font_data().0;
+    let cff: &[u8] = (*cff_program).as_ref();
     let show = "BT /F3 20 Tf 60 250 Td <010203> Tj ET";
     let pdf = pdfcraft_testkit::Pdf::new()
         .obj("<< /Type /Catalog /Pages 2 0 R >>")
@@ -671,7 +675,7 @@ fn a_recovered_glyph_inside_an_actual_text_redraw_goes_with_it() {
         .stream("", format!("/Span << /ActualText (Soc) >> BDC {show} EMC {show}"))
         .obj("<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+AdvTTSynthetic /FirstChar 1 /LastChar 3 /Widths [600 600 600] /FontDescriptor 6 0 R /Encoding << /Type /Encoding /Differences [1 /S /C111 /c] >> >>")
         .obj("<< /Type /FontDescriptor /FontName /ABCDEF+AdvTTSynthetic /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 7 0 R >>")
-        .stream("/Subtype /Type1C", CFF)
+        .stream("/Subtype /Type1C", cff)
         .build();
     let (strict, recovered, plain) = layers(&parse(pdf));
     assert_eq!(strict, plain);
@@ -724,7 +728,7 @@ fn a_nonsymbolic_truetype_font_keeps_its_strict_text() {
     }
 }
 
-/// A one-page PDF in which `content` shows codes of `F3`, a Type 1 font (the vendored CFF
+/// A one-page PDF in which `content` shows codes of `F3`, a Type 1 font (the bundled Courier stand-in, a CFF
 /// program) whose `/Differences` from code 1 are `names`, and `F1`, Helvetica.
 fn page_of(names: &str, content: &str) -> Vec<u8> {
     page_of_flags(names, content, 4)
@@ -732,7 +736,9 @@ fn page_of(names: &str, content: &str) -> Vec<u8> {
 
 /// [`page_of`] with the font descriptor's `/Flags` set to `flags`.
 fn page_of_flags(names: &str, content: &str, flags: impl std::fmt::Display) -> Vec<u8> {
-    const CFF: &[u8] = include_bytes!("../../../../vendor/hayro-interpret/assets/FoxitFixed.pfb");
+    // The bundled Courier stand-in, a Type 1 program.
+    let cff_program = craft_pdf::interpret::font::StandardFont::Courier.get_font_data().0;
+    let cff: &[u8] = (*cff_program).as_ref();
     let n = names.split_whitespace().count();
     let widths = vec!["600"; n].join(" ");
     pdfcraft_testkit::Pdf::new()
@@ -743,7 +749,7 @@ fn page_of_flags(names: &str, content: &str, flags: impl std::fmt::Display) -> V
         .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
         .obj(format!("<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+AdvTTSynthetic /FirstChar 1 /LastChar {n} /Widths [{widths}] /FontDescriptor 7 0 R /Encoding << /Type /Encoding /Differences [1 {names}] >> >>"))
         .obj(format!("<< /Type /FontDescriptor /FontName /ABCDEF+AdvTTSynthetic /Flags {flags} /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 8 0 R >>"))
-        .stream("/Subtype /Type1C", CFF)
+        .stream("/Subtype /Type1C", cff)
         .build()
 }
 
@@ -784,8 +790,8 @@ fn recovery_work_is_bounded_and_cant_cost_the_strict_text() {
 /// they read); a recovered-text request does.
 #[test]
 fn a_text_request_never_calls_the_recovery_rules() {
+    use crate::text::recovery::recovery_rule_calls;
     use crate::{PageRenderer, RenderRequest, RequestKind};
-    use hayro::hayro_interpret::font::recovery_rule_calls;
     let mut r = PageRenderer::new(std::sync::Arc::new(names_page("/C83 /C111 /C99", "ABCDEF+AdvTTSynthetic", true)), Default::default());
     let before = recovery_rule_calls();
     let strict = r.render(RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() });
@@ -877,7 +883,9 @@ fn fake_bold_above_a_mixed_word_keeps_every_strict_glyph() {
 fn dropping_recovered_doubles_stays_within_its_budget() {
     let n = 3000;
     let codes: String = (0..n).map(|k| format!("{:02x}", 1 + k % 5)).chain((0..n).map(|k| format!("{:02x}", 6 + k % 5))).collect();
-    const CFF: &[u8] = include_bytes!("../../../../vendor/hayro-interpret/assets/FoxitFixed.pfb");
+    // The bundled Courier stand-in, a Type 1 program.
+    let cff_program = craft_pdf::interpret::font::StandardFont::Courier.get_font_data().0;
+    let cff: &[u8] = (*cff_program).as_ref();
     let pdf = pdfcraft_testkit::Pdf::new()
         .obj("<< /Type /Catalog /Pages 2 0 R >>")
         .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>")
@@ -885,7 +893,7 @@ fn dropping_recovered_doubles_stays_within_its_budget() {
         .stream("", format!("BT /F3 12 Tf 60 400 Td <{codes}> Tj ET"))
         .obj("<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+AdvTTSynthetic /FirstChar 1 /LastChar 10 /Widths [0 0 0 0 0 0 0 0 0 0] /FontDescriptor 6 0 R /Encoding << /Type /Encoding /Differences [1 /a /b /c /d /e /C102 /C103 /C104 /C105 /C106] >> >>")
         .obj("<< /Type /FontDescriptor /FontName /ABCDEF+AdvTTSynthetic /Flags 32 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 7 0 R >>")
-        .stream("/Subtype /Type1C", CFF)
+        .stream("/Subtype /Type1C", cff)
         .build();
     DOUBLES_WORK.with(|c| c.set(0));
     let (strict, _, plain) = layers(&parse(pdf));
@@ -958,7 +966,7 @@ fn the_redraw_dedupe_and_drop_doubles_share_one_budget() {
 /// all is never recovered, alone or inside a string.
 #[test]
 fn the_candidate_policy_refuses_what_is_not_text() {
-    use hayro::hayro_interpret::hayro_cmap::BfString;
+    use craft_pdf::interpret::hayro_cmap::BfString;
     let read = |text: BfString| recovery_policy(RecoveryRule::MacGlyphOrder, None, text, RecoveryMode::Fill);
     for c in [
         '\u{E000}',
@@ -996,7 +1004,7 @@ fn the_candidate_policy_refuses_what_is_not_text() {
 /// whatever order the names come in.
 #[test]
 fn the_candidate_choice_is_deterministic() {
-    use hayro::hayro_interpret::font::test_hooks::choose;
+    use crate::text::recovery::test_hooks::choose;
     assert_eq!(choose(&['a']), Some('a'));
     assert_eq!(choose(&['a', 'a']), Some('a'));
     assert_eq!(choose(&['-', '\u{2010}']), Some('-'));
@@ -1018,7 +1026,7 @@ fn the_candidate_choice_is_deterministic() {
 /// (`Asmall`, 229 + …) or past 390.
 #[test]
 fn the_standard_orders_read_as_their_specifications_list_them() {
-    use hayro::hayro_interpret::font::test_hooks::{mac_glyph_char, standard_string_char};
+    use crate::text::recovery::test_hooks::{mac_glyph_char, standard_string_char};
     for (gid, c) in [(3, Some(' ')), (36, Some('A')), (68, Some('a')), (98, Some('\u{C4}')), (182, Some('\u{2018}')), (183, Some('\u{2019}'))] {
         assert_eq!(mac_glyph_char(gid), c, "glyph {gid}");
     }
@@ -1043,7 +1051,7 @@ fn the_standard_orders_read_as_their_specifications_list_them() {
 /// decides nothing, and the accented `i` letters are left out.
 #[test]
 fn the_shared_accent_check_compares_accents_with_their_base_letters() {
-    use hayro::hayro_interpret::font::test_hooks::accents_as_wide_as_bases;
+    use crate::text::recovery::test_hooks::accents_as_wide_as_bases;
     let width = |eacute: f32, iacute: f32| {
         move |gid: u16| match gid {
             112 => Some(eacute),
@@ -1094,7 +1102,7 @@ impl Lcg {
 /// numbering by ASCII or Unicode against one by standard string ids) and between the cases.
 #[test]
 fn the_width_evidence_never_proves_a_shifted_or_one_case_reading() {
-    use hayro::hayro_interpret::font::test_hooks::widths_prove;
+    use crate::text::recovery::test_hooks::widths_prove;
     // The review's own counter-examples, and the readings this test's generator found proving
     // one condition of the proof at a time.
     for (text, shift) in [
@@ -1201,7 +1209,7 @@ fn the_width_evidence_never_proves_a_shifted_or_one_case_reading() {
 /// glyphs whose widths fall right by chance as easily as by being read right.
 #[test]
 fn each_condition_of_the_width_proof_is_needed() {
-    use hayro::hayro_interpret::font::test_hooks::widths_prove;
+    use crate::text::recovery::test_hooks::widths_prove;
     let enough = [('a', 556.0), ('b', 556.0), ('d', 556.0), ('e', 556.0), ('i', 222.0), ('l', 222.0)];
     assert!(widths_prove(&enough), "four round letters against `i` and `l` prove");
     let capitals_only = [('A', 667.0), ('B', 667.0), ('C', 722.0), ('D', 722.0), ('i', 222.0), ('l', 222.0)];
@@ -1217,7 +1225,9 @@ fn each_condition_of_the_width_proof_is_needed() {
 /// A page of `type3` Type 3 fonts, then `/C83 /C111 /C99` (`Soc`) in a numbered-names font
 /// (rule 1).
 fn type3_fonts_then_names(type3: usize) -> Vec<u8> {
-    const CFF: &[u8] = include_bytes!("../../../../vendor/hayro-interpret/assets/FoxitFixed.pfb");
+    // The bundled Courier stand-in, a Type 1 program.
+    let cff_program = craft_pdf::interpret::font::StandardFont::Courier.get_font_data().0;
+    let cff: &[u8] = (*cff_program).as_ref();
     let resources: String = (0..type3).map(|k| format!("/T{k} {} 0 R ", k + 5)).collect();
     let names = type3 + 5;
     let mut content: String = (0..type3).map(|k| format!("BT /T{k} 10 Tf 20 {} Td <41> Tj ET ", 700 - (k % 60) * 11)).collect();
@@ -1241,7 +1251,7 @@ fn type3_fonts_then_names(type3: usize) -> Vec<u8> {
         "<< /Type /FontDescriptor /FontName /ABCDEF+AdvTTSynthetic /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 {} 0 R >>",
         names + 2
     ))
-    .stream("/Subtype /Type1C", CFF)
+    .stream("/Subtype /Type1C", cff)
     .stream("", content)
     .build()
 }
@@ -1252,7 +1262,7 @@ fn type3_fonts_then_names(type3: usize) -> Vec<u8> {
 /// them, which a few Type 3 fonts leave to rule 1. The strict text is the same either way.
 #[test]
 fn type3_glyphs_reach_the_rules_and_count_toward_the_font_budget() {
-    use hayro::hayro_interpret::font::recovery_rule_calls;
+    use crate::text::recovery::recovery_rule_calls;
     let pdf = parse(type3_fonts_then_names(3));
     let before = recovery_rule_calls();
     let (strict, recovered, plain) = layers(&pdf);
@@ -1299,7 +1309,7 @@ fn cid_cff_page(text: &str) -> Vec<u8> {
 /// its strict text (nothing, without `/ToUnicode`: ISO 32000-2 §9.10.2) and recovers nothing.
 #[test]
 fn a_cid_keyed_cff_font_is_asked_of_the_rules_and_keeps_its_strict_text() {
-    use hayro::hayro_interpret::font::recovery_rule_calls;
+    use crate::text::recovery::recovery_rule_calls;
     let text = "Indicated";
     let page = cid_cff_page(text);
     let before = recovery_rule_calls();
@@ -1337,11 +1347,11 @@ fn dense_cjk_page(glyphs: u16, shown: usize) -> Vec<u8> {
 
 /// Both layers of `pdf`'s first page, the strict layer as the plain extraction reads it, and
 /// what reading both layers cost the recovery layer.
-fn recovering_costs(pdf: &Pdf) -> (PageText, Option<RecoveredText>, PageText, hayro::hayro_interpret::font::RecoveryCounters) {
-    use hayro::hayro_interpret::font::recovery_counters;
+fn recovering_costs(pdf: &Pdf) -> (PageText, Option<RecoveredText>, PageText, crate::text::recovery::RecoveryCounters) {
+    use crate::text::recovery::recovery_counters;
     let settings = InterpreterSettings::default();
     let before = recovery_counters();
-    let (strict, recovered) = extract_page_recovering(pdf, 0, &settings).unwrap();
+    let (strict, recovered) = extract_page_recovering(pdf, 0, &settings, None).unwrap();
     let cost = recovery_counters().since(&before);
     (strict, recovered, extract_page(pdf, 0, &settings).unwrap(), cost)
 }
@@ -1370,10 +1380,12 @@ fn a_font_kind_no_rule_reads_costs_one_check_per_glyph() {
     assert_eq!((cost.guard_decisions, cost.facts_built, cost.glyph_facts_built, cost.program_walks), (2, 2, 0, 0), "{cost:?}");
 }
 
-/// A Type 3 font's cache key is worked out once per font, however many of its glyphs a page
-/// shows: the recovered layer asks for it with every glyph (its budget of fonts per page).
+/// A Type 3 font's glyphs are each asked of the rules once, however many a page shows, and read
+/// their strict text unchanged. (The font's cache key, which the recovered layer asks for with
+/// every glyph for its budget of fonts per page, is hashed once per font in hayro-interpret:
+/// craft-libs' `font::type3::tests::a_type3_font_hashes_its_dictionary_once`.)
 #[test]
-fn a_type3_fonts_key_is_hashed_once_however_many_glyphs_it_shows() {
+fn a_type3_fonts_glyphs_are_each_asked_once_however_many_it_shows() {
     let page = |glyphs: usize| {
         let codes = "41".repeat(glyphs);
         pdfcraft_testkit::Pdf::new()
@@ -1388,9 +1400,7 @@ fn a_type3_fonts_key_is_hashed_once_however_many_glyphs_it_shows() {
     let (_, _, _, few) = recovering_costs(&parse(page(10)));
     let (strict, _, plain, many) = recovering_costs(&parse(page(500)));
     assert_eq!(strict, plain);
-    assert_eq!(many.rule_calls, 500);
-    assert!(few.type3_key_hashes > 0);
-    assert_eq!(many.type3_key_hashes, few.type3_key_hashes, "the key is hashed per font, not per glyph");
+    assert_eq!((few.rule_calls, many.rule_calls), (10, 500));
 }
 
 /// A dense CJK page (3,000 glyphs of a Type 0 font over a program of 20,000 glyphs, no

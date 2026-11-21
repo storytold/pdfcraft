@@ -128,6 +128,7 @@ use dialogs::pageboxes;
 use dialogs::palette;
 use dialogs::printer_marks_ui;
 use dialogs::protect;
+use dialogs::rename_ui;
 use dialogs::standards_ui;
 use dialogs::word_count_ui;
 pub use home::folders_ui;
@@ -315,6 +316,11 @@ pub struct PdfCraftApp {
     pub(crate) status_captions_lang: Option<i18n::Lang>,
     pub views: Vec<DocView>,
     pub(crate) closed_tabs: Vec<String>,
+    /// The Rename dialog's name being typed.
+    pub(crate) rename_draft: Option<rename_ui::RenameDraft>,
+    /// A name typed in Rename whose "Save and Rename" save did not go through; the dialog opens
+    /// again with it on the next frame.
+    pub(crate) rename_returned: rename_ui::Returned,
     /// `None` shows the Home tab.
     pub active: Option<usize>,
     pub mode: Mode,
@@ -389,6 +395,9 @@ pub struct PdfCraftApp {
     pub invert_middle_drag: bool,
     /// Preferences ▸ Animation effects: on, off, or as the system's animation setting says.
     pub animation_effects: motion::AnimationEffects,
+    /// Preferences ▸ Esc leaves full screen (on by default). Off, only ⌘L / Ctrl+L leaves it, as
+    /// for a kiosk display; Esc still closes the find bar and the like.
+    pub full_screen_escape_exits: bool,
     /// Whether the system asked for no animations, and how the desktop app asks it.
     pub motion: motion::Motion,
     /// Interface language preference: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
@@ -539,6 +548,9 @@ pub struct PdfCraftApp {
     pub toast_dropped: u64,
     /// Whether the macOS title bar is drawn by us (traffic lights over our tab strip).
     pub integrated_titlebar: bool,
+    /// Whether AppKit put those traffic lights at the right end of the title bar, as it does when
+    /// the system language is right-to-left (`None` until a window has said).
+    pub titlebar_lights_right: Option<bool>,
     /// Set when the desktop leaves the window frame to the app (GNOME on Wayland): the tab strip
     /// carries these window buttons and the window's edges resize it.
     pub window_controls: Option<window_controls::Layout>,

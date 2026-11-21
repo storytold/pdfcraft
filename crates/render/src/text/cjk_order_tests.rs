@@ -1,12 +1,11 @@
-//! Copy with formatting's standard CJK order rule (hayro-interpret patch 107,
-//! `StandardCjkGlyphOrder`): Traditional Chinese read from the glyph ids of Type 0 subsets that
+//! Copy with formatting's standard CJK order rule (`StandardCjkGlyphOrder`): Traditional Chinese read from the glyph ids of Type 0 subsets that
 //! keep their original font's order, found from the document's text. Every document here is
 //! synthetic ([`super::cjk_fixture`]).
 
 use super::cjk_fixture::{Doc, Font, Program, Show};
 use super::*;
-use hayro::hayro_interpret::font::RecoveryDocument;
-use hayro::hayro_interpret::font::test_hooks::{
+use crate::text::recovery::RecoveryDocument;
+use crate::text::recovery::test_hooks::{
     cjk_common, cjk_group_reading, cjk_guards, cjk_order_char, cjk_output, cjk_output_counts_agree, cjk_outputs, cjk_placeholder_name, cjk_search,
     set_survey_glyph_cap,
 };
@@ -27,12 +26,12 @@ fn parse(bytes: Vec<u8>) -> Pdf {
 /// formatting reads it, in page order.
 fn recovered_pages(doc: &Doc) -> Vec<String> {
     let pdf = parse(doc.build());
-    let settings = InterpreterSettings { recovery_document: Some(Arc::new(RecoveryDocument::new())), ..InterpreterSettings::default() };
-    (0..doc.pages.len()).map(|p| recovered_on(&pdf, p, &settings)).collect()
+    let document = Arc::new(RecoveryDocument::new());
+    (0..doc.pages.len()).map(|p| recovered_on(&pdf, p, Some(&document))).collect()
 }
 
-fn recovered_on(pdf: &Pdf, page: usize, settings: &InterpreterSettings) -> String {
-    let (_, layer) = extract_page_recovering(pdf, page, settings).unwrap();
+fn recovered_on(pdf: &Pdf, page: usize, document: Option<&Arc<RecoveryDocument>>) -> String {
+    let (_, layer) = extract_page_recovering(pdf, page, &InterpreterSettings::default(), document).unwrap();
     layer.map(|l| l.text.plain_text()).unwrap_or_default().chars().filter(|c| !c.is_whitespace()).collect()
 }
 
@@ -268,8 +267,9 @@ fn fonts_with_text_of_their_own_are_never_read() {
     for font in [named, adobe, identity] {
         let doc = Doc { fonts: vec![font], pages: vec![vec![Show::Text(0, codes.clone())]] };
         let pdf = parse(doc.build());
-        let settings = InterpreterSettings { recovery_document: Some(Arc::new(RecoveryDocument::new())), ..InterpreterSettings::default() };
-        let (strict, layer) = extract_page_recovering(&pdf, 0, &settings).unwrap();
+        let settings = InterpreterSettings::default();
+        let document = Arc::new(RecoveryDocument::new());
+        let (strict, layer) = extract_page_recovering(&pdf, 0, &settings, Some(&document)).unwrap();
         assert!(layer.is_none_or(|l| l.recovery.iter().all(Option::is_none)));
         assert_eq!(strict, extract_page(&pdf, 0, &settings).unwrap());
     }
@@ -348,22 +348,22 @@ fn the_evidence_is_the_whole_documents_whatever_page_is_read_first() {
     };
     let pdf = parse(doc.build());
     for order in [[0, 1], [1, 0]] {
-        let settings = InterpreterSettings { recovery_document: Some(Arc::new(RecoveryDocument::new())), ..InterpreterSettings::default() };
+        let document = Arc::new(RecoveryDocument::new());
         let mut read = [String::new(), String::new()];
         for p in order {
-            read[p] = recovered_on(&pdf, p, &settings);
+            read[p] = recovered_on(&pdf, p, Some(&document));
         }
         assert_eq!(read, [first.clone(), rest.clone()], "order {order:?}");
     }
     // Without a document (each page alone) nothing is read: the rule needs the evidence.
-    assert_eq!(recovered_on(&pdf, 0, &InterpreterSettings::default()), "");
+    assert_eq!(recovered_on(&pdf, 0, None), "");
 
     let mut pages = vec![Vec::new(); 401];
     pages[400] = vec![Show::Text(0, glyphs("big5", 499, TEXT))];
     let late = Doc { fonts: vec![Font::truetype("ABCDEF+Kai", 30_000)], pages };
     let pdf = parse(late.build());
-    let settings = InterpreterSettings { recovery_document: Some(Arc::new(RecoveryDocument::new())), ..InterpreterSettings::default() };
-    assert_eq!(recovered_on(&pdf, 400, &settings), "");
+    let document = Arc::new(RecoveryDocument::new());
+    assert_eq!(recovered_on(&pdf, 400, Some(&document)), "");
 }
 
 /// A document past the survey's cap reads nothing: no reading rather than one from part of it.
@@ -391,8 +391,9 @@ fn the_strict_text_is_unchanged() {
         pages: vec![vec![Show::Text(0, glyphs("big5", 499, TEXT)), Show::Text(1, vec![0, 1, 2])]],
     };
     let pdf = parse(doc.build());
-    let settings = InterpreterSettings { recovery_document: Some(Arc::new(RecoveryDocument::new())), ..InterpreterSettings::default() };
-    let (strict, layer) = extract_page_recovering(&pdf, 0, &settings).unwrap();
+    let settings = InterpreterSettings::default();
+    let document = Arc::new(RecoveryDocument::new());
+    let (strict, layer) = extract_page_recovering(&pdf, 0, &settings, Some(&document)).unwrap();
     let plain = extract_page(&pdf, 0, &settings).unwrap();
     assert_eq!(strict, plain);
     assert_eq!(plain.plain_text().trim(), "XYZ");

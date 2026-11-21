@@ -647,7 +647,9 @@ mod tests {
 
     /// [`decimal_name_page`] with the font named `base`.
     fn decimal_name_page_in(names: &str, strict_words: bool, base: &str) -> Vec<u8> {
-        const CFF: &[u8] = include_bytes!("../../../vendor/hayro-interpret/assets/FoxitFixed.pfb");
+        // The bundled Courier stand-in, a Type 1 program.
+        let cff_program = craft_pdf::interpret::font::StandardFont::Courier.get_font_data().0;
+        let cff: &[u8] = (*cff_program).as_ref();
         let n = names.split_whitespace().count();
         let codes: String = (1..=n).map(|c| format!("{c:02x}")).collect();
         let mut content = format!("BT /F3 20 Tf 60 250 Td <{codes}> Tj ET");
@@ -663,7 +665,7 @@ mod tests {
             .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
             .obj(format!("<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+{base} /FirstChar 1 /LastChar {n} /Widths [{widths}] /FontDescriptor 7 0 R /Encoding << /Type /Encoding /Differences [1 {names}] >> >>"))
             .obj(format!("<< /Type /FontDescriptor /FontName /ABCDEF+{base} /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 8 0 R >>"))
-            .stream("/Subtype /Type1C", CFF)
+            .stream("/Subtype /Type1C", cff)
             .build()
     }
 
@@ -784,7 +786,9 @@ mod tests {
 
     /// [`mixed_line_page`] with more page resources (`/ColorSpace << … >>`).
     fn mixed_line_page_with(fonts: &[LineFont<'_>], paint: &str, resources_extra: &str) -> Vec<u8> {
-        const CFF: &[u8] = include_bytes!("../../../vendor/hayro-interpret/assets/FoxitFixed.pfb");
+        // The bundled Courier stand-in, a Type 1 program.
+        let cff_program = craft_pdf::interpret::font::StandardFont::Courier.get_font_data().0;
+        let cff: &[u8] = (*cff_program).as_ref();
         let mut pdf = pdfcraft_testkit::Pdf::new()
             .obj("<< /Type /Catalog /Pages 2 0 R >>")
             .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 300] >>");
@@ -812,7 +816,7 @@ mod tests {
             pdf = pdf
                 .obj(format!("<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+{base} /FirstChar 1 /LastChar {n} /Widths [{widths}] /FontDescriptor {descriptor} 0 R /Encoding << /Type /Encoding /Differences [1 {}] >> >>", names.join(" ")))
                 .obj(format!("<< /Type /FontDescriptor /FontName /ABCDEF+{base} /Flags {} /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 {} /FontFile3 {program} 0 R >>", f.flags, f.descriptor))
-                .stream("/Subtype /Type1C", CFF);
+                .stream("/Subtype /Type1C", cff);
         }
         pdf.build()
     }

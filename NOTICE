@@ -34,7 +34,7 @@ list (author, source, license) is in ATTRIBUTION.md.
 - hayro (rendering, via crates.io) — Apache-2.0 OR MIT. Its `embed-fonts` feature bundles the Foxit
   standard-14 Type 1 fonts under BSD-3-Clause ("Copyright 2014 PDFium Authors"), and hayro-cmap bundles
   Adobe CMap resources under BSD-3-Clause.
-- Common Traditional Chinese characters (vendor/hayro-interpret/src/font/recovery/common_traditional.rs),
+- Common Traditional Chinese characters (crates/render/src/text/recovery/common_traditional.rs),
   750 characters ranked by how often Taiwan's laws and regulations use them, which Copy with
   formatting scores Traditional Chinese glyph orders by. Derived by the PdfCraft contributors from
   the data below and distributed under CC BY 4.0 (licenses/CC-BY-4.0.txt), as section 4.2 of the
@@ -58,9 +58,9 @@ list (author, source, license) is in ATTRIBUTION.md.
 
 Required notices:
 
-  Foxit standard-14 substitute fonts (vendor/hayro-interpret/assets/*.pfb):
+  Foxit standard-14 substitute fonts (shared hayro-interpret):
     Copyright 2014 PDFium Authors. All rights reserved. Original code copyright 2014 Foxit Software Inc.
-    Redistributed under the BSD-3-Clause licence in vendor/hayro-interpret/assets/LICENSE_FOXIT.
+    Redistributed under the BSD-3-Clause licence in licenses/pdf-backend/hayro-interpret/assets/LICENSE_FOXIT.
 
   CMap resources (bundled by hayro-cmap; character-mapping data, not visual assets):
     Copyright 1990-2023 Adobe. All rights reserved. Redistributed under the BSD-3-Clause licence
@@ -100,9 +100,9 @@ google/fonts at a pinned commit, verified by SHA-256, all under the SIL Open Fon
 Asset licences are not visible to cargo-deny; keep this file current whenever assets or asset-bundling
 dependencies change (plan/adr/0002, 0006).
 
-Vendored (vendor/, patched; see vendor/README.md):
-- hayro 0.7.1 — Apache-2.0 OR MIT, Copyright the hayro authors (licence files kept in vendor/hayro).
-- hayro-interpret 0.7.0 — Apache-2.0 OR MIT, Copyright the hayro authors (LICENSE-APACHE, LICENSE-MIT kept in vendor/hayro-interpret).
+Shared PDF backend (pinned in Cargo.lock / licenses/pdf-backend/):
+- hayro 0.7.1 — Apache-2.0 OR MIT, Copyright the hayro authors (licence files kept in licenses/pdf-backend/hayro).
+- hayro-interpret 0.7.0 — Apache-2.0 OR MIT, Copyright the hayro authors (licence files kept in licenses/pdf-backend/hayro-interpret).
 
 Bundled egui font icons
 
