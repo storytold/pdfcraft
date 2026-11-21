@@ -494,6 +494,7 @@ fn view_keys(
     // An open menu takes Escape first and closes; the selection stays for the next one (#3535).
     // So does an open field, whose list closes.
     if key(Key::Escape) && !egui::Popup::is_any_open(ctx) && !field_open {
+        view.dynamic_zoom = None;
         escape_closes_one(view);
     }
     // The open field's keys leave the page under it where it is.
