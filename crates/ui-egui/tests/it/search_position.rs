@@ -109,13 +109,21 @@ fn settle(h: &mut Harness<'static, PdfCraftApp>) {
     }
 }
 
+/// The page and glyph range of a page-text hit. These tests search page text.
+fn text_match(hit: &pdfcraft_ui_egui::canvas::FindHit) -> (usize, std::ops::Range<usize>) {
+    match hit {
+        pdfcraft_ui_egui::canvas::FindHit::Text { page, range } => (*page, range.clone()),
+        pdfcraft_ui_egui::canvas::FindHit::Comment { .. } => panic!("search position tests use page text"),
+    }
+}
+
 /// Fail unless the current match is drawn inside the window, and, where the page lets the view
 /// scroll that far, near its middle (#3530 asks for the middle, as Acrobat does).
 fn assert_match_shown(h: &Harness<'static, PdfCraftApp>, what: &str) {
     let v = &h.state().views[0];
     let f = v.find.as_ref().unwrap();
     let i = f.current.unwrap_or_else(|| panic!("{what}: no current match"));
-    let (page, range) = f.matches[i].clone();
+    let (page, range) = text_match(&f.matches[i]);
     let window = v.viewport_rect();
     let at = |g: usize| v.glyph_screen_pos(page, g).unwrap_or_else(|| panic!("{what}: match {i} (page {}) is not on screen", page + 1));
     let (first, last) = (at(range.start), at(range.end - 1));
@@ -338,7 +346,7 @@ fn a_scroll_by_hand_after_a_step_lets_the_match_go() {
     settle(&mut h);
     let v = &h.state().views[0];
     let f = v.find.as_ref().unwrap();
-    let (page, range) = f.matches[f.current.unwrap()].clone();
+    let (page, range) = text_match(&f.matches[f.current.unwrap()]);
     let centre = v.glyph_screen_pos(page, range.start).map(|a| a.lerp(v.glyph_screen_pos(page, range.end - 1).unwrap_or(a), 0.5));
     assert!(
         centre.is_none_or(|c| c.distance(v.viewport_rect().center()) > 100.0),
