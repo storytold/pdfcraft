@@ -177,3 +177,37 @@ fn a_state_inside_a_surviving_soft_mask_group_does_not_keep_the_original_group()
     let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
     assert!(!bytes.windows(11).any(|w| w == b"SMASKSECRET"), "the original group survived through another soft-mask group's resources");
 }
+
+#[test]
+fn a_kept_original_group_does_not_keep_another_original_through_its_resources() {
+    // Page 1 paints through two masks whose groups (7 and 8) both hold text under the mark, so
+    // both are rewritten. Page 2 still paints through the original group 7, which keeps it; group
+    // 7's own resources list an unused state naming the original group 8.
+    let first = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >> /Resources << /Font << /F1 5 0 R >> /ExtGState << /GSB << /SMask << /S /Luminosity /G 8 0 R >> >> >> >>",
+        b"1 g BT /F1 10 Tf 10 100 Td (SMASKSECRET) Tj ET",
+    );
+    let second = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >> /Resources << /Font << /F1 5 0 R >> >>",
+        b"1 g BT /F1 10 Tf 10 100 Td (BMASKSECRET) Tj ET",
+    );
+    let masks = "/ExtGState << /GS0 << /SMask << /S /Luminosity /G 7 0 R >> >> /GS1 << /SMask << /S /Luminosity /G 8 0 R >> >> >>";
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 9 0 R] /Count 2 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> {masks} >> >>").into_bytes(),
+        stream("", b"q /GS0 gs 0 0 0.6 rg 0 0 300 300 re f Q q /GS1 gs 0 0 0.6 rg 0 0 300 300 re f Q"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        first,
+        second,
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 10 0 R /Resources << /ExtGState << /GS0 << /SMask << /S /Luminosity /G 7 0 R >> >> >> >> >>".to_vec(),
+        stream("", b"q /GS0 gs 0 0 0.6 rg 0 0 300 300 re f Q"),
+    ]);
+    mark(&mut doc, 0, &[MARK], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.glyphs, 22, "{r:?}");
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(bytes.windows(11).any(|w| w == b"SMASKSECRET"), "page 2's mask lost its group");
+    assert!(!bytes.windows(11).any(|w| w == b"BMASKSECRET"), "the second original group survived through the kept one's resources");
+}

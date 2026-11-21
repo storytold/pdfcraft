@@ -404,7 +404,7 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
         .collect();
     let mut seen = HashSet::new();
     while let Some(resources) = pending.pop() {
-        for reference in forms_in(doc, &resources, doomed) {
+        for reference in forms_in(doc, &resources) {
             if !seen.insert(reference) {
                 continue;
             }
@@ -450,9 +450,9 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
 }
 
 /// The forms a resource dictionary reaches: its XObjects, and the groups of the soft masks its
-/// graphics states keep (#7884). A doomed group is not among them: it is being unlinked, so its
-/// own resources reach nothing that survives.
-fn forms_in(doc: &Document, res: &Dict, doomed: &HashSet<ObjRef>) -> Vec<ObjRef> {
+/// graphics states keep (#7884). A doomed group is among them too: a state still selected
+/// elsewhere keeps it, and its own resources may name another doomed group.
+fn forms_in(doc: &Document, res: &Dict) -> Vec<ObjRef> {
     let mut forms: Vec<ObjRef> = res_dict(doc, res, b"XObject").iter().filter_map(|(_, v)| v.as_ref()).collect();
     for (_, state) in res_dict(doc, res, b"ExtGState").iter() {
         let group = doc
@@ -460,9 +460,7 @@ fn forms_in(doc: &Document, res: &Dict, doomed: &HashSet<ObjRef>) -> Vec<ObjRef>
             .as_dict()
             .and_then(|s| s.get(b"SMask").map(|m| doc.resolve(m)))
             .and_then(|m| m.as_dict().and_then(|m| m.get(b"G")).and_then(Object::as_ref));
-        if let Some(group) = group.filter(|g| !doomed.contains(g)) {
-            forms.push(group);
-        }
+        forms.extend(group);
     }
     forms
 }
