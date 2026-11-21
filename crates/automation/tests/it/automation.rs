@@ -4078,7 +4078,7 @@ trailer << /Root 1 0 R >>
     let tagged = std::fs::read_to_string(dir.join("tagged.txt")).unwrap();
     ok(&mut a, "doc_export_text", json!({ "doc": doc, "path": "plain.txt" }));
     let plain = std::fs::read_to_string(dir.join("plain.txt")).unwrap();
-    let at = |text: &str, word: &str| text.find(word);
+    let at = |text: &str, word: &str| text.find(word).unwrap_or_else(|| panic!("{word:?} is in {text:?}"));
     // Layout order puts the body first and keeps the header; tag order puts the heading first
     // and leaves the artifact out.
     assert!(at(&plain, "Body") < at(&plain, "Heading") && plain.contains("Running header"), "{plain:?}");

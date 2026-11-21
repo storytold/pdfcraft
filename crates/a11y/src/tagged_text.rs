@@ -13,7 +13,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use pdfcraft_model::Page;
 
 use crate::alt::{standard, tree_root};
-use crate::headings::mcid_texts;
+use crate::headings::mcid_texts_up_to;
 
 const MAX_VISITS: usize = 1_000_000;
 const MAX_DEPTH: usize = 256;
@@ -26,8 +26,9 @@ pub struct TaggedText {
     /// Lines of text, ending with a line break (empty when the tags mark no text).
     pub text: String,
     /// Content the tags hold that this reader can't read yet, so it is not in `text`: marked
-    /// content in a form XObject (`/Stm`), form fields (`/OBJR` to a widget), and marked content
-    /// whose page isn't known.
+    /// content in a form XObject (`/Stm`), form fields and comments (`/OBJR` to a widget, or to
+    /// an annotation other than a link that has `/Contents`), and marked content whose page isn't
+    /// known.
     pub unread: usize,
     /// The tree is larger or deeper than one export reads, so `text` stops early.
     pub truncated: bool,
@@ -57,6 +58,11 @@ struct Reader<'a> {
     /// Per page: the text each MCID shows (read once per page).
     texts: HashMap<usize, HashMap<i64, String>>,
     gap: Gap,
+    /// For each open table row, how many cells it has started.
+    rows: Vec<usize>,
+    /// A cell after the first in its row started and has put no text yet: its first text follows
+    /// a tab, even after a block inside the cell asked for a line.
+    cell_tab: bool,
     out: TaggedText,
 }
 
@@ -73,6 +79,8 @@ pub fn tagged_text(doc: &Document) -> Result<TaggedText, TaggedTextError> {
         visits: 0,
         texts: HashMap::new(),
         gap: Gap::Space,
+        rows: Vec::new(),
+        cell_tab: false,
         out: TaggedText::default(),
     };
     if let Some(k) = root.get(b"K") {
@@ -158,10 +166,12 @@ impl Reader<'_> {
                 } else if let Some(n) = d.get(b"MCID").and_then(Object::as_int) {
                     self.mark(pg, n);
                 } else if let Some(obj) = d.get(b"Obj").map(|o| self.doc.resolve(o))
-                    && obj.as_dict().is_some_and(|a| a.name(b"Subtype") == Some(b"Widget"))
+                    && obj
+                        .as_dict()
+                        .is_some_and(|a| a.name(b"Subtype") == Some(b"Widget") || (a.name(b"Subtype") != Some(b"Link") && a.contains(b"Contents")))
                 {
-                    // A form field: its value is not read here. Other annotations (links) carry
-                    // their text in marked content next to the reference.
+                    // A form field's value or a comment's text: not read here. A link carries its
+                    // text in marked content next to the reference.
                     self.out.unread += 1;
                 }
             }
@@ -172,15 +182,24 @@ impl Reader<'_> {
     fn element(&mut self, d: &Dict, pg: Option<ObjRef>, depth: usize) {
         let ty = d.name(b"S").map(|s| standard(self.doc, &self.role_map, s)).unwrap_or_default();
         let block = is_block(&ty);
+        let row = ty.as_slice() == b"TR";
         if block {
             self.gap(Gap::Line);
         } else if matches!(ty.as_slice(), b"TD" | b"TH") {
             self.gap(Gap::Tab);
+            if let Some(cells) = self.rows.last_mut() {
+                *cells += 1;
+                self.cell_tab = *cells > 1;
+            }
         }
+        if row {
+            self.rows.push(0);
+        }
+        // An empty /ActualText is still a replacement: the element reads as nothing.
         if let Some(t) = self.attr(d, b"ActualText") {
             self.put(&t);
         } else {
-            let alt = self.attr(d, b"Alt");
+            let alt = self.attr(d, b"Alt").filter(|t| !t.trim().is_empty());
             match alt {
                 Some(a) if matches!(ty.as_slice(), b"Figure" | b"Formula" | b"Form") => self.put(&a),
                 _ => {
@@ -196,6 +215,10 @@ impl Reader<'_> {
                 }
             }
         }
+        if row {
+            self.rows.pop();
+            self.cell_tab = false;
+        }
         if block {
             self.gap(Gap::Line);
         }
@@ -207,8 +230,16 @@ impl Reader<'_> {
             return;
         };
         let (doc, pages) = (self.doc, self.pages);
-        let text =
-            self.texts.entry(page).or_insert_with(|| pages.get(page).map(|p| mcid_texts(doc, &p.dict)).unwrap_or_default()).get(&mcid).cloned();
+        let texts = match self.texts.entry(page) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                // Each id's whole text, up to what one export gathers; more is reported.
+                let (texts, cut) = pages.get(page).map(|p| mcid_texts_up_to(doc, &p.dict, MAX_TEXT)).unwrap_or_default();
+                self.out.truncated |= cut;
+                e.insert(texts)
+            }
+        };
+        let text = texts.get(&mcid).cloned();
         if let Some(text) = text {
             self.put(&text);
         }
@@ -226,6 +257,7 @@ impl Reader<'_> {
         }
         if !self.out.text.is_empty() {
             self.out.text.push(match self.gap {
+                _ if self.cell_tab => '\t',
                 Gap::Space => ' ',
                 Gap::Tab => '\t',
                 Gap::Line => '\n',
@@ -233,6 +265,7 @@ impl Reader<'_> {
         }
         self.out.text.push_str(text);
         self.gap = Gap::Space;
+        self.cell_tab = false;
     }
 
     /// The text of the string `key` holds, unless it would not fit what is left of [`MAX_TEXT`]
@@ -245,6 +278,6 @@ impl Reader<'_> {
             self.out.truncated = true;
             return None;
         }
-        Some(s.to_text()).filter(|t| !t.trim().is_empty())
+        Some(s.to_text())
     }
 }

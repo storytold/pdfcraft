@@ -1529,6 +1529,45 @@ fn tagged_text_follows_tag_order_and_leaves_out_untagged_text() {
     assert_eq!(tagged_text(&untagged), Err(TaggedTextError::Untagged));
 }
 
+/// CodeRabbit on #8008: a long paragraph is exported whole (not at the heading reader's length),
+/// cells holding paragraphs stay apart by tabs, an empty /ActualText reads as nothing, and a
+/// comment the tags reference is counted as unread while a link is not.
+#[test]
+fn tagged_text_keeps_long_text_cell_tabs_empty_replacements_and_counts_comments() {
+    let long = "word ".repeat(600);
+    let content = stream(&format!(
+        "/P << /MCID 0 >> BDC BT /F1 12 Tf 20 190 Td ({long}) Tj ET EMC \
+         /P << /MCID 1 >> BDC BT /F1 12 Tf 20 170 Td (A) Tj ET EMC \
+         /P << /MCID 2 >> BDC BT /F1 12 Tf 90 170 Td (B) Tj ET EMC \
+         /P << /MCID 3 >> BDC BT /F1 12 Tf 20 150 Td (hidden) Tj ET EMC \
+         /P << /MCID 4 >> BDC BT /F1 12 Tf 20 130 Td (shown) Tj ET EMC"
+    ));
+    let bodies = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [8 0 R 9 0 R] >>".into(),
+        content,
+        FONT.into(),
+        "<< /Type /StructTreeRoot /K 7 0 R >>".into(),
+        "<< /S /Document /Pg 3 0 R /K [\
+            << /S /P /K 0 >> \
+            << /S /Table /K << /S /TR /K [<< /S /TD /K << /S /P /K 1 >> >> << /S /TD /K << /S /P /K 2 >> >>] >> >> \
+            << /S /Span /ActualText () /K 3 >> \
+            << /S /P /K 4 >> \
+            << /S /Annot /K << /Type /OBJR /Obj 8 0 R >> >> \
+            << /S /Link /K << /Type /OBJR /Obj 9 0 R >> >>\
+         ] >>"
+            .into(),
+        "<< /Type /Annot /Subtype /Text /Rect [0 0 10 10] /Contents (A note) >>".into(),
+        "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Contents (A link) >>".into(),
+    ];
+    let out = tagged_text(&pdf(&bodies, "")).unwrap();
+    let lines: Vec<&str> = out.text.lines().collect();
+    assert_eq!(lines.first().map(|l| l.split_whitespace().count()), Some(600), "the long paragraph is whole");
+    assert_eq!(lines.get(1..), Some(&["A\tB", "shown"][..]), "{:?}", out.text);
+    assert_eq!((out.unread, out.truncated), (1, false), "the note is unread; the link is not");
+}
+
 #[test]
 fn tag_content_reads_the_text_of_each_marked_content_reference() {
     let doc = pdf(&headings_doc(), "");

@@ -203,7 +203,17 @@ fn sub(doc: &Document, d: &Dict, key: &[u8]) -> Dict {
 /// than an em from it, starts a new word (the em is the font size times |`Tz`|; see [`new_word`]).
 /// Text-positioning operators alone don't break words: producers that place every glyph with its
 /// own `Td` (Chromium) would otherwise read as "C h a p t e r".
+///
+/// Each id gathers text only until it holds [`MAX_TITLE`] four times over, which is all a heading
+/// or a tag's label needs; [`mcid_texts_up_to`] takes another limit.
 pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
+    mcid_texts_up_to(doc, page, MAX_TITLE * 4).0
+}
+
+/// [`mcid_texts`], each id gathering text until it holds `cap` bytes, and whether any id had
+/// more text than that.
+pub(crate) fn mcid_texts_up_to(doc: &Document, page: &Dict, cap: usize) -> (HashMap<i64, String>, bool) {
+    let mut cut = false;
     let res = sub(doc, page, b"Resources");
     let (fonts, props) = (sub(doc, &res, b"Font"), sub(doc, &res, b"Properties"));
     let mut metrics: HashMap<Vec<u8>, std::rc::Rc<Metrics>> = HashMap::new();
@@ -337,8 +347,13 @@ pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
             for (code, len) in m.codes(&s.bytes) {
                 let trm = tm.then(&gs.ctm);
                 // A glyph's text is only built while its id still takes more.
+                let room = id.is_some_and(|id| out.get(&id).is_none_or(|t| t.len() < cap));
+                // Text left out only when the glyph has some.
+                if id.is_some() && !room && m.text_of(code).is_some() {
+                    cut = true;
+                }
                 if let Some(id) = id
-                    && out.get(&id).is_none_or(|t| t.len() < MAX_TITLE * 4)
+                    && room
                     && let Some(glyph) = m.text_of(code)
                 {
                     let text = out.entry(id).or_default();
@@ -356,7 +371,7 @@ pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
             }
         }
     }
-    out
+    (out, cut)
 }
 
 /// How deep `q` nests before the text state stops being saved (a hostile stream can nest millions).

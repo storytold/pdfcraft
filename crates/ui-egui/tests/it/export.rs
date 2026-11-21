@@ -97,7 +97,8 @@ fn export_text_from_tags_writes_tag_order_and_refuses_untagged_files() {
     let h = run("tagged.pdf", tagged_fixture());
     h.get_by_label_contains("Exported the text of the document's tags");
     let text = std::fs::read_to_string(dir.join("tagged.txt")).unwrap();
-    assert!(text.find("Heading") < text.find("Body") && !text.contains("Running"), "{text:?}");
+    let (heading, body) = (text.find("Heading").expect("the heading is exported"), text.find("Body").expect("the body is exported"));
+    assert!(heading < body && !text.contains("Running"), "{text:?}");
     drop(h);
     let h = run("plain.pdf", FIXTURE.to_vec());
     h.get_by_label_contains("the document has no tags");
