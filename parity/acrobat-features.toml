@@ -934,11 +934,11 @@ title = "Show or hide gaps between pages"
 area = "B"
 tier = "P2"
 milestone = "M3"
-status = "planned"
-commands = []
+status = "shipped"
+commands = ["view.page_gaps"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/it/view.rs::page_gaps_toggle_joins_edges_without_changing_the_document", "crates/ui-egui/tests/it/view.rs::page_gaps_menu_joins_pages_without_a_shadow_at_the_seam", "crates/ui-egui/tests/it/view.rs::page_gaps_default_survives_restart_and_applies_to_new_documents", "crates/ui-egui/tests/it/view.rs::page_gaps_work_for_mixed_sizes_and_two_page_rows", "crates/ui-egui/tests/it/view.rs::page_gaps_stay_closed_at_fractional_device_scales", "crates/ui-egui/tests/it/view.rs::page_gaps_in_organizer_do_not_move_the_document_scroll_position", "crates/ui-egui/tests/it/view.rs::page_gaps_comparison_menu_preserves_the_active_panes_choice", "crates/ui-egui/tests/it/view.rs::page_gaps_comparison_control_preserves_both_states"]
+notes = "View ▸ Page display ▸ Show gaps between pages (also in the rail's Page display button and the palette) joins page edges in every layout without cropping the PDF's own margins; page shadows go with the gaps. Preferences sets the default for new documents, which survives a restart. Also through the UI control channel (`page-gaps`, `default-page-gaps`) and the app's --page-gaps / --default-page-gaps options; see docs/page-display.md. The same tests are also cited by view.layout-continuous, where this shipped first. No automation tool: it is a view setting, not a document change."
 
 [[feature]]
 id = "view.auto-scroll"
