@@ -91,7 +91,7 @@ impl Seg {
         (self.bbox[1] + self.bbox[3]) / 2.0
     }
 
-    fn runs(&self) -> impl Iterator<Item = Run> + '_ {
+    pub(super) fn runs(&self) -> impl Iterator<Item = Run> + '_ {
         std::iter::once(self.first).chain(self.extra.iter().flat_map(|e| e.more.iter().copied()))
     }
 
@@ -234,7 +234,8 @@ pub(super) struct Scratch {
     pub(super) merged: Vec<usize>,
     /// For each glyph of the page, the glyph a combining mark drawn right after it rides on (the start of its cluster),
     /// or the glyph itself. Placement sorts clusters, so a mark keeps its content-stream place after its base (#6517).
-    /// A glyph past its end is its own anchor.
+    /// A right-to-left mark drawn right before its letter rides on that letter, the glyph after it
+    /// (`anchor_marks_drawn_before_letters`), and keeps its place before it. A glyph past its end is its own anchor.
     pub(super) anchor: Vec<usize>,
     /// The gap left of each glyph of `placed`, between clusters; `None` for the first glyph and for a riding mark.
     pub(super) cluster_gap: Vec<Option<f32>>,
@@ -249,7 +250,9 @@ const MARK_ADVANCE_TOLERANCE: f32 = 0.05;
 /// is no measure of where the pen went (`draw_glyph` widens it to its outline or half an em), and its start is only
 /// the base's advance moved by a mark-positioning offset. A mark whose font gives it an advance of its own does move
 /// the pen, and the glyph drawn after it starts right at its box's right edge: the cluster then ends there, or every
-/// letter after such a mark would start a word.
+/// letter after such a mark would start a word. A right-to-left mark drawn before its letter is placed before it, so
+/// the cluster starts there: the mark takes the gap left of the letter, and the letter none, or a word gap between two
+/// clusters would land between the letter and its marks once the line is reversed.
 pub(super) fn measure_cluster_gaps(glyphs: &[&TextGlyph], sc: &mut Scratch) {
     sc.cluster_gap.clear();
     let mut right = f32::NEG_INFINITY;
@@ -258,15 +261,19 @@ pub(super) fn measure_cluster_gaps(glyphs: &[&TextGlyph], sc: &mut Scratch) {
             sc.cluster_gap.push(None);
             continue;
         };
-        if anchor_of(&sc.anchor, c) != c {
-            sc.cluster_gap.push(None);
+        let a = anchor_of(&sc.anchor, c);
+        // The glyph placed before this one is of the same cluster: a mark drawn before its letter.
+        let after_own = w.checked_sub(1).and_then(|p| sc.placed.get(p)).is_some_and(|&p| anchor_of(&sc.anchor, p) == a);
+        if a != c {
+            let leads = a > c && !after_own && w > 0;
+            sc.cluster_gap.push(glyphs.get(a).filter(|_| leads).map(|letter| letter.rect[0] - right));
             let tolerance = MARK_ADVANCE_TOLERANCE * (g.rect[3] - g.rect[1]).max(0.1);
             let pen_moved = c.checked_add(1).and_then(|n| glyphs.get(n)).is_some_and(|n| (n.rect[0] - g.rect[2]).abs() <= tolerance);
             if pen_moved && g.rect[2] > right {
                 right = g.rect[2];
             }
         } else {
-            sc.cluster_gap.push((w > 0).then_some(g.rect[0] - right));
+            sc.cluster_gap.push((w > 0 && !after_own).then_some(g.rect[0] - right));
             right = g.rect[2];
         }
     }
@@ -398,14 +405,21 @@ pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32,
     }
     // Each mark goes before the first placed glyph whose x is greater than its own, or its letter's when it is a
     // combining mark riding on one. Marks are visited in that order, and that position never moves back, so one pass
-    // over `placed` puts all of them in.
+    // over `placed` puts all of them in. A mark riding on the letter drawn after it stops before the glyphs of its
+    // cluster drawn after it, that letter among them: it goes before the letter, as it does when the two share a run.
     sc.marks.sort_by(|a, b| by_cluster(glyphs, &sc.anchor, *a, *b));
     if !sc.marks.is_empty() {
         sc.merged.clear();
         let mut next = 0;
         for &m in &sc.marks {
-            while next < sc.placed.len() && x0(anchor_of(&sc.anchor, sc.placed[next])) <= x0(anchor_of(&sc.anchor, m)) {
-                sc.merged.push(sc.placed[next]);
+            let own = anchor_of(&sc.anchor, m);
+            while let Some(&p) = sc.placed.get(next) {
+                let cluster = anchor_of(&sc.anchor, p);
+                let drawn_after_in_cluster = own > m && cluster == own && p > m;
+                if drawn_after_in_cluster || x0(cluster).partial_cmp(&x0(own)).is_none_or(std::cmp::Ordering::is_gt) {
+                    break;
+                }
+                sc.merged.push(p);
                 next += 1;
             }
             sc.merged.push(m);
@@ -714,8 +728,8 @@ fn is_nonspacing_mark(text: &str) -> bool {
 }
 
 /// UAX #9 W1: a nonspacing mark takes the class of the letter it rides on ([`Scratch::anchor`]), which placement keeps
-/// right in front of it. A mark that rides on nothing (one after a word gap, or a right-to-left mark, which placement
-/// puts by its own position) keeps its own class.
+/// right in front of it. A mark that rides on nothing (one after a word gap, or a right-to-left mark not drawn right
+/// before its letter, which placement puts by its own position) keeps its own class.
 fn resolve_marks(glyphs: &[&TextGlyph], anchor: &[usize], items: &mut [(Option<usize>, Bidi)]) {
     let nsm = |i: usize| glyphs.get(i).is_some_and(|g| is_nonspacing_mark(&g.text));
     for k in 1..items.len() {

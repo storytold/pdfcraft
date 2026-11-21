@@ -107,7 +107,8 @@ fn is_complex(c: char) -> bool {
 
 /// Whether `text` is only combining marks (Unicode Mn and Me, which take bidi class NSM) of a
 /// left-to-right script: Thai tone marks and above or below vowels, Indic signs such as virama,
-/// Latin combining accents. Right-to-left marks are ordered with their script by [`reverse_rtl`].
+/// Latin combining accents. Right-to-left marks are ordered with their script by [`reverse_rtl`], after riding on the
+/// letter drawn after them when they are drawn before it ([`anchor_marks_drawn_before_letters`]).
 fn is_mark(text: &str) -> bool {
     !text.is_empty() && text.chars().all(|c| unicode_bidi::bidi_class(c) == unicode_bidi::BidiClass::NSM && !is_rtl(c))
 }
@@ -140,6 +141,94 @@ const MARK_RISE: f32 = 1.0;
 /// on `p` itself, or, for a mark stacked on another one, on its letter `a`.
 fn rides_on_cluster(glyphs: &[&TextGlyph], p: usize, a: usize, m: &TextGlyph) -> bool {
     glyphs.get(p).is_some_and(|pg| rides_on(pg, m)) || (a != p && glyphs.get(a).is_some_and(|ag| rides_on(ag, m)))
+}
+
+/// Whether `text` is only nonspacing marks of a right-to-left script: Hebrew points, Arabic harakat.
+fn is_rtl_mark(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(|c| is_rtl(c) && unicode_bidi::bidi_class(c) == unicode_bidi::BidiClass::NSM)
+}
+
+/// Whether `text` has a letter of a right-to-left script, which a right-to-left mark can ride on. Hebrew points are
+/// alphabetic too (Other_Alphabetic), so marks are left out.
+fn is_rtl_letter(text: &str) -> bool {
+    text.chars().any(|c| is_rtl(c) && c.is_alphabetic() && unicode_bidi::bidi_class(c) != unicode_bidi::BidiClass::NSM)
+}
+
+/// Makes each right-to-left mark drawn right before the letter it sits on ride on that letter ([`Scratch::anchor`]).
+///
+/// UAX #9 L2 reverses a right-to-left line character by character, which puts each mark before its letter, and only
+/// L3, which is optional, moves it back after the letter. A producer that draws the line left to right in that order
+/// (reverse-order show strings, ISO 32000-2 §14.8.2.5.3) draws each letter's marks just before the letter, from the
+/// letter's start give or take a mark-positioning offset. That offset can start a mark over the letter before it, as a
+/// holam at the top left of its lamed starts over the he to its right in reading order: placed by its own position,
+/// the holam read as the he's. A mark rides on the letter drawn right after it when its start is within
+/// [`MARK_REACH`] of that letter's box and the segment is drawn left to right there (the glyph drawn before the marks
+/// starts left of the letter). A segment that ends a word with marks drawn after its letter puts marks after their
+/// letters (L3), so none of its marks rides on the letter after it.
+///
+/// Reach does not tell the two orders apart: a mark drawn after its letter can start within that reach of the letter
+/// drawn next. The marks of a segment ride on the letters after them only when one of them starts at or right of the
+/// start of the letter after it, as a mark drawn before its letter usually does. A segment without such a mark is
+/// placed by position, as before.
+fn anchor_marks_drawn_before_letters(glyphs: &[&TextGlyph], segs: &[Seg], anchor: &mut [usize]) {
+    let text = |i: usize| glyphs.get(i).map_or("", |g| g.text.as_str());
+    let reaches = |m: usize, b: usize| {
+        let (Some(m), Some(b)) = (glyphs.get(m), glyphs.get(b)) else { return false };
+        let reach = MARK_REACH * (m.rect[3] - m.rect[1]).max(0.1);
+        let cy = |g: &TextGlyph| (g.rect[1] + g.rect[3]) / 2.0;
+        m.rect[0] >= b.rect[0] - reach && m.rect[0] <= b.rect[2] + reach && (cy(m) - cy(b)).abs() < (b.rect[3] - b.rect[1]).max(0.1) * MARK_RISE
+    };
+    let mut members: Vec<usize> = Vec::new();
+    let mut found: Vec<(usize, usize, usize)> = Vec::new();
+    for s in segs {
+        members.clear();
+        members.extend(s.runs().flat_map(|r| r.start..r.end));
+        members.sort_unstable();
+        found.clear();
+        let (mut after_letters, mut before_letters) = (false, false);
+        let mut k = 0;
+        while k < members.len() {
+            let Some(&first) = members.get(k) else { break };
+            if !is_rtl_mark(text(first)) {
+                k += 1;
+                continue;
+            }
+            // The marks drawn one after another from `first`, and the glyphs of the segment drawn right before and after.
+            let start = k;
+            k += 1;
+            while let (Some(&m), Some(&p)) = (members.get(k), members.get(k - 1)) {
+                if m != p + 1 || !is_rtl_mark(text(m)) {
+                    break;
+                }
+                k += 1;
+            }
+            let Some(&last) = members.get(k - 1) else { break };
+            let before = start.checked_sub(1).and_then(|b| members.get(b)).copied().filter(|&b| b + 1 == first);
+            let next = members.get(k).copied().filter(|&n| n == last + 1);
+            let all_reach = |b: usize| (first..=last).all(|m| reaches(m, b));
+            match (before, next) {
+                (Some(b), n) if is_rtl_letter(text(b)) && !n.is_some_and(|n| is_rtl_letter(text(n))) && all_reach(b) => after_letters = true,
+                (b, Some(n)) if is_rtl_letter(text(n)) && all_reach(n) => {
+                    let x0 = |i: usize| glyphs.get(i).map_or(0.0, |g| g.rect[0]);
+                    if b.is_none_or(|b| x0(b) < x0(n)) {
+                        before_letters |= (first..=last).any(|m| x0(m) >= x0(n));
+                        found.push((first, last, n));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if after_letters || !before_letters {
+            continue;
+        }
+        for &(first, last, letter) in &found {
+            for m in first..=last {
+                if let Some(slot) = anchor.get_mut(m) {
+                    *slot = letter;
+                }
+            }
+        }
+    }
 }
 
 /// Glyph `i` continues the run of glyph `i - 1`: when it is a combining mark on that glyph's cluster, it joins it.
@@ -474,6 +563,7 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     let mut line_of: Vec<u32> = Vec::with_capacity(n);
     let mut space_before: Vec<bool> = Vec::with_capacity(n);
     let mut line = 0u32;
+    anchor_marks_drawn_before_letters(&glyphs, &segs, &mut anchor);
     let mut sc = Scratch { anchor, ..Default::default() };
     // `spaces[w]`: a word gap left of the w-th glyph of the segment, by position on the line, not by drawing order
     // (#1062). Reused by every segment.
