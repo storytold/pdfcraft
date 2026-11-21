@@ -33,6 +33,7 @@ mod metadata;
 mod overlay;
 mod pattern_guard;
 pub mod patterns;
+mod reachable;
 pub mod sanitize;
 mod tags;
 #[cfg(test)]
@@ -121,6 +122,11 @@ pub enum RedactError {
     /// them: 0 when only something else keeps them.
     #[error("{}", shared_jbig2_text(*.0))]
     SharedJbig2Globals(usize),
+    /// An annotation or form field that redaction removed is still referred to by object `by` (by
+    /// the trailer when `None`), through a reference redaction doesn't clean, so a full save would
+    /// keep it and what it holds (#7885).
+    #[error("{}", still_referred_text(*removed, *by))]
+    StillReferred { removed: u32, by: Option<u32> },
     /// Finding what shares JBIG2 symbol data with what is being removed would read more of the file
     /// than one run allows (`globals::RUN_BUDGET`): its images and parameters refer to the same
     /// objects in more ways than are checked, or hold more than is decoded. Removing hidden
@@ -137,6 +143,14 @@ pub enum RedactError {
     Form(#[from] pdfcraft_forms::FormError),
     #[error(transparent)]
     Cos(#[from] pdfcraft_cos::CosError),
+}
+
+/// [`RedactError::StillReferred`]'s text, which says what keeps the removed object.
+fn still_referred_text(removed: u32, by: Option<u32>) -> String {
+    let holder = by.map_or_else(|| "the document trailer".to_string(), |by| format!("object {by}"));
+    format!(
+        "object {removed}, which the redaction removes, is still referred to by {holder}, so a saved file would keep it and the text it holds; nothing was changed"
+    )
 }
 
 /// [`RedactError::SharedJbig2Globals`]'s text, which says what keeps the data.
@@ -728,8 +742,12 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     }
 
     // 3. Form fields with a widget under a mark (all their widgets go).
+    // The fields deleted and their ancestors: an ancestor left without kids goes with its field,
+    // and can hold the value the field inherited.
+    let mut deleted_fields: HashSet<ObjRef> = HashSet::new();
     for field in &doomed_fields {
         if pdfcraft_forms::fields(doc).iter().any(|f| f.obj == *field) {
+            deleted_fields.extend(field_and_ancestors(doc, *field));
             pdfcraft_forms::delete_field_object(doc, *field)?;
             report.fields += 1;
         }
@@ -762,8 +780,11 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     // 3a. A tagged PDF's structure tree still points at the removed comments and widgets
     // (`/OBJR`, #2874): drop those references, or a full rewrite keeps them reachable, the
     // comment text and the field value included. Widgets of a removed field on other pages count.
+    // The images and forms the rewrite dropped or replaced count too: a figure's `/OBJR` would keep
+    // the original's samples or text (#7885).
     let gone: HashSet<ObjRef> = listed_before.difference(&listed_annotations(doc)).copied().collect();
-    report.tags += tags::drop_object_refs(doc, &gone)?;
+    let untagged: HashSet<ObjRef> = gone.iter().chain(&doomed_xobjects).copied().collect();
+    report.tags += tags::drop_object_refs(doc, &untagged)?;
 
     // 3b. An XFA form mirrors its field values in the /XFA datasets packet, and a relayout
     // rebuilds fields and pages from that packet, so deleting the AcroForm field alone leaves the
@@ -775,6 +796,18 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         let r = pdfcraft_xfa::strip(doc).map_err(|e| pdfcraft_edit::EditError::Invalid(e.to_string()))?;
         report.xfa_removed = !r.packets.is_empty();
     }
+
+    // 3c. Form actions name the annotations and fields they reset, submit or hide by reference
+    // (#7885): those references go, and any other reference that would keep a removed annotation
+    // or field in a full save refuses the redaction. Images and forms aren't checked here: one
+    // another page still draws stays on purpose.
+    let in_form: HashSet<ObjRef> = if deleted_fields.is_empty() {
+        HashSet::new()
+    } else {
+        pdfcraft_forms::fields(doc).iter().flat_map(|f| field_and_ancestors(doc, f.obj)).collect()
+    };
+    let removed: HashSet<ObjRef> = gone.into_iter().chain(deleted_fields.into_iter().filter(|f| !in_form.contains(f))).collect();
+    reachable::drop_action_targets(doc, &removed)?;
 
     // 4. The boxes.
     for (pi, content) in overlays {
@@ -846,6 +879,17 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     // rewritten file is a different file from its source, so it gets a new identifier.
     doc.require_full_save_with_new_id();
     Ok(report)
+}
+
+/// Field `field` and the fields above it through `/Parent`, as deep as the form deletes them.
+fn field_and_ancestors(doc: &Document, field: ObjRef) -> Vec<ObjRef> {
+    let mut chain = vec![field];
+    let mut parent = doc.get(field).as_dict().and_then(|d| d.reference(b"Parent"));
+    while let Some(p) = parent.filter(|p| chain.len() <= 64 && !chain.contains(p)) {
+        chain.push(p);
+        parent = doc.get(p).as_dict().and_then(|d| d.reference(b"Parent"));
+    }
+    chain
 }
 
 /// What applying the marks collects across pages.
