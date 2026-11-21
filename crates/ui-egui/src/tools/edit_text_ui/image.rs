@@ -364,7 +364,15 @@ fn box_controls(
     PicturePaper::new(paper_quad, placed.rect).show_at(ui, body.rect);
     let full = matrix_corners(xf, info, page, image.matrix).map(|p| view.to_doc(p));
     let map = affine_between(quad, to);
-    let _ = TransformPreview::new(tl!("Picture"), textures).map(PreviewMap::Quad(full.map(map))).clip_quad(to).show_at(ui, body.rect);
+    let unit = [Point::new(0.0, 0.0), Point::new(1.0, 0.0), Point::new(1.0, 1.0), Point::new(0.0, 1.0)];
+    let source = affine_between(full, unit);
+    let page_quad = [placed.rect.left_top(), placed.rect.right_top(), placed.rect.right_bottom(), placed.rect.left_bottom()];
+    let source_clip = page_quad.map(|p| source(view.to_doc(p)));
+    let _ = TransformPreview::new(tl!("Picture"), textures)
+        .map(PreviewMap::Quad(full.map(map)))
+        .source_clip(source_clip)
+        .clip_quad(to)
+        .show_at(ui, body.rect);
     edit
 }
 
