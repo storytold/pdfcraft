@@ -775,17 +775,32 @@ fn numbered_glyph_names_read_as_their_own_code() {
 /// `numbered_glyph_names_read_as_their_own_code` in a Type 3 font, which already reads codes
 /// 32-126 by the code: above 126, `C174` at 174, `C176` at 176 and `GE9` at 0xE9 read as the
 /// code's Latin-1 character, unless one numbered name in the font numbers another code
-/// (`/C1` at 233) or sits at a control code, as a first-use counter's `/C1` at 1 does.
+/// (`/C1` at 233) or sits at a control code, as a first-use counter's `/C1` at 1 does. A font
+/// naming all 256 codes in hexadecimal (`/x0` … `/xff`, TeX's dvips fonts, PDFBOX-728) has names
+/// at control codes too, but it names every one of them, 0 through 31, in hexadecimal, which no
+/// decimal counter or counter from code 1 does: "für Weierstraß" reads in full. A decimal
+/// counter `/C1` … `/C31` beside `/C174` (`/C10` at 10 reads 16 in hexadecimal), the same names
+/// from `/x1` (code 0 left out) and a hexadecimal subset keeping a few glyphs at their own
+/// control codes (`/G0A` at 10, `/G0D` at 13, `/GD9` at 0xD9) still read as nothing.
 #[test]
 fn numbered_type3_glyph_names_read_as_their_own_code() {
     use lopdf::{Document, Object, Stream, dictionary};
     let name = |n: &str| Object::Name(n.as_bytes().to_vec());
+    let names = |pairs: &[(i64, &str)]| pairs.iter().map(|&(code, n)| (code, n.to_string())).collect::<Vec<_>>();
+    let hex_names: Vec<_> = (0..=255).map(|code| (code, format!("x{code:x}"))).collect();
+    let mut counter_to_31: Vec<_> = (1..=31).map(|code| (code, format!("C{code}"))).collect();
+    counter_to_31.push((174, "C174".to_string()));
+    let hex_names_from_1: Vec<_> = hex_names.iter().skip(1).cloned().collect();
     // Each font's /Differences as (code, glyph name) pairs, and the codes its page shows.
-    type Names<'a> = &'a [(i64, &'a str)];
-    let fonts: [(Names, &[u8]); 3] = [
-        (&[(70, "C70"), (174, "C174"), (176, "C176"), (233, "GE9")], b"F\xae\xb0\xe9"),
-        (&[(174, "C174"), (176, "C176"), (233, "C1")], b"\xae\xb0\xe9"),
-        (&[(1, "C1"), (2, "C2"), (174, "C174"), (176, "C176")], b"\xae\xb0"),
+    type Names = Vec<(i64, String)>;
+    let fonts: [(Names, &[u8]); 7] = [
+        (names(&[(70, "C70"), (174, "C174"), (176, "C176"), (233, "GE9")]), b"F\xae\xb0\xe9"),
+        (names(&[(174, "C174"), (176, "C176"), (233, "C1")]), b"\xae\xb0\xe9"),
+        (names(&[(1, "C1"), (2, "C2"), (174, "C174"), (176, "C176")]), b"\xae\xb0"),
+        (hex_names, b"f\xfcrWeierstra\xdf"),
+        (counter_to_31, b"\xae"),
+        (hex_names_from_1, b"f\xfcrWeierstra\xdf"),
+        (names(&[(10, "G0A"), (13, "G0D"), (174, "GAE"), (217, "GD9")]), b"\xae\xd9"),
     ];
     let mut doc = Document::with_version("1.7");
     let pages_id = doc.new_object_id();
@@ -794,9 +809,9 @@ fn numbered_type3_glyph_names_read_as_their_own_code() {
         let glyph = doc.add_object(Stream::new(dictionary! {}, b"600 0 0 0 500 700 d1 0 0 500 700 re f".to_vec()));
         let mut differences = Vec::new();
         let mut procs = lopdf::Dictionary::new();
-        for &(code, glyph_name) in names {
-            differences.extend([Object::Integer(code), name(glyph_name)]);
-            procs.set(glyph_name, glyph);
+        for (code, glyph_name) in &names {
+            differences.extend([Object::Integer(*code), name(glyph_name)]);
+            procs.set(glyph_name.as_str(), glyph);
         }
         let font = doc.add_object(dictionary! {
             "Type" => "Font", "Subtype" => "Type3",
@@ -830,6 +845,10 @@ fn numbered_type3_glyph_names_read_as_their_own_code() {
     assert_eq!(lines(0), ["F", "\u{ae}", "\u{b0}", "\u{e9}"]);
     assert!(lines(1).is_empty(), "/C1 at 233 beside /C174 at 174: {:?}", lines(1));
     assert!(lines(2).is_empty(), "a counter's /C1 at 1 beside /C174 at 174: {:?}", lines(2));
+    assert_eq!(lines(3).concat(), "f\u{fc}rWeierstra\u{df}", "/x0 … /xff");
+    assert!(lines(4).is_empty(), "a counter /C1 … /C31 beside /C174 at 174: {:?}", lines(4));
+    assert_eq!(lines(5).concat(), "frWeierstra", "/x1 … /xff, code 0 left out");
+    assert!(lines(6).is_empty(), "/G0A at 10 and /G0D at 13 beside /GD9 at 217: {:?}", lines(6));
 }
 
 /// Review on #3239: the glyph list specification's `uni` and `u` forms take uppercase hex
