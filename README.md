@@ -201,7 +201,7 @@ Unsaved documents carry a dot on their tab, and closing or quitting asks before 
 **Extract** copies the pages you select into a new document. **Split** divides a document every *n* pages, or before the pages you choose.
 
 Nothing quietly disappears along the way:
-- links and named destinations are rewired to the copied pages;
+- links and named destinations follow their copied pages. When the same key appears in the same destination table of several files, the first copied target keeps the name;
 - form fields stay interactive;
 - layers keep their on/off defaults;
 - attachments come along.

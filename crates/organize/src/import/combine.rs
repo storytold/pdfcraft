@@ -1,10 +1,11 @@
 use super::carry::{Mark, add_outline, collect_attachments, kept_bookmarks, set_attachments, source_outline, write_outline_level};
+use super::destinations::Destinations;
 use super::{Dict, Document, FieldConflicts, HashMap, HashSet, ObjRef, Object, OrganizeError, import_pages_mapped, rebuild};
 
 /// A new document containing copies of `pages` from `src` (Extract Pages / Split).
 /// Document information (title, author…) is carried over, and so is the print standard the
 /// source declares (PDF/X: its output intents and identification, #263), and the bookmarks that
-/// go to the copied pages.
+/// go to the copied pages, along with their named destinations.
 pub fn extract_pages(src: &Document, pages: &[usize]) -> Result<Document, OrganizeError> {
     let mut out = Document::new_empty();
     let mut labels = Vec::new();
@@ -14,6 +15,9 @@ pub fn extract_pages(src: &Document, pages: &[usize]) -> Result<Document, Organi
     // same-named field roots stays one field, as it was), so Extract and Split never rename.
     let imported = import_pages_mapped(&mut out, src, pages, 0, FieldConflicts::Merge)?;
     crate::labels::finish_page_labels(&mut out, &labels, has_labels)?;
+    let mut destinations = Destinations::default();
+    destinations.collect(src, &imported.page_map);
+    destinations.write(&mut out)?;
     // The bookmarks of these pages come along, mapped to the copies (#4020).
     let outline = kept_bookmarks(source_outline(src, imported.page_map));
     if !outline.is_empty() {
@@ -123,6 +127,7 @@ pub struct Combiner {
     out: Document,
     marks: Vec<Mark>,
     attachments: Vec<(Vec<u8>, Object)>,
+    destinations: Destinations,
     labels: Vec<crate::LabelRange>,
     has_labels: bool,
     /// The first source's print standard, and what its pages brought along.
@@ -162,6 +167,7 @@ impl Combiner {
             out: Document::new_empty(),
             marks: Vec::new(),
             attachments: Vec::new(),
+            destinations: Destinations::default(),
             labels: Vec::new(),
             has_labels: false,
             standard: None,
@@ -197,6 +203,7 @@ impl Combiner {
         self.labels = labels;
         self.has_labels = has_labels;
         self.renamed_fields.extend(imported.renamed_fields);
+        self.destinations.collect(src, &imported.page_map);
         if let Some(first) = imported.pages.first() {
             let outline = source_outline(src, imported.page_map);
             self.marks.push(Mark { title: title.to_string(), page: *first, outline });
@@ -225,7 +232,7 @@ impl Combiner {
 
     /// [`Combiner::finish`] reporting what the combine renamed.
     pub fn finish_with_renames(self) -> Result<CombineOutcome, OrganizeError> {
-        let Combiner { mut out, marks, attachments, labels, has_labels, standard, agreed, renamed_fields, .. } = self;
+        let Combiner { mut out, marks, attachments, destinations, labels, has_labels, standard, agreed, renamed_fields, .. } = self;
         if let Some(first) = standard.filter(|_| agreed) {
             crate::pdfx::carry(&mut out, first.source.as_ref(), &first.declared, first.objects)?;
         }
@@ -235,6 +242,7 @@ impl Combiner {
         crate::labels::finish_page_labels(&mut out, &labels, has_labels)?;
         add_outline(&mut out, &marks)?;
         set_attachments(&mut out, attachments)?;
+        destinations.write(&mut out)?;
         Ok(CombineOutcome { doc: out, renamed_fields })
     }
 }
@@ -288,6 +296,7 @@ pub fn combine_grouped_with(runs: &[Run<'_>], conflicts: FieldConflicts) -> Resu
     let mut out = Document::new_empty();
     let mut marks = Vec::new();
     let mut attachments = Vec::new();
+    let mut destinations = Destinations::default();
     let mut copies: Vec<Vec<ObjRef>> = Vec::with_capacity(files.len());
     let mut renamed_fields = Vec::new();
     let mut standard: Option<(crate::pdfx::PrintStandard, &Document, HashMap<ObjRef, ObjRef>)> = None;
@@ -297,6 +306,7 @@ pub fn combine_grouped_with(runs: &[Run<'_>], conflicts: FieldConflicts) -> Resu
         let imported = import_pages_mapped(&mut out, file.src, &file.pages, at, conflicts)?;
         copies.push(imported.pages.clone());
         renamed_fields.extend(imported.renamed_fields);
+        destinations.collect(file.src, &imported.page_map);
         if let Some(first) = imported.pages.first() {
             marks.push(Mark { title: file.title.to_string(), page: *first, outline: source_outline(file.src, imported.page_map) });
         }
@@ -335,5 +345,6 @@ pub fn combine_grouped_with(runs: &[Run<'_>], conflicts: FieldConflicts) -> Resu
     crate::labels::finish_page_labels(&mut out, &labels, has_labels)?;
     add_outline(&mut out, &marks)?;
     set_attachments(&mut out, attachments)?;
+    destinations.write(&mut out)?;
     Ok(CombineOutcome { doc: out, renamed_fields })
 }

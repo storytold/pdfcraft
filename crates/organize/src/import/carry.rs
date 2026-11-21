@@ -66,16 +66,20 @@ fn write_attachments(dst: &mut Document, entries: &mut [(Vec<u8>, Object)], uniq
         names.push(Object::String(pdfcraft_cos::PdfString::literal(k.clone())));
         names.push(v.clone());
     }
+    set_name_tree(dst, b"EmbeddedFiles", names)
+}
+
+/// Set one catalog name tree without replacing the other trees.
+pub(super) fn set_name_tree(dst: &mut Document, key: &[u8], names: Vec<Object>) -> Result<(), OrganizeError> {
     let mut tree = Dict::new();
     tree.set(b"Names".to_vec(), Object::Array(names));
     let tree = dst.add(tree);
     let root = dst.root().ok_or(OrganizeError::NoPageTree)?;
-    // `/Names` may be an indirect dictionary (Acrobat writes it so): update it where it is, so
-    // its other trees (/Dests, /JavaScript…) stay.
+    // Update an indirect /Names dictionary where it is.
     if let Some(Object::Ref(names)) = dst.get(root).as_dict().and_then(|c| c.get(b"Names").cloned())
         && dst.get(names).as_dict().is_some()
     {
-        dst.update_dict(names, |n| n.set(b"EmbeddedFiles".to_vec(), Object::Ref(tree)))?;
+        dst.update_dict(names, |n| n.set(key.to_vec(), Object::Ref(tree)))?;
         return Ok(());
     }
     dst.update_dict(root, |c| {
@@ -83,7 +87,7 @@ fn write_attachments(dst: &mut Document, entries: &mut [(Vec<u8>, Object)], uniq
             Some(Object::Dict(d)) => d.clone(),
             _ => Dict::new(),
         };
-        n.set(b"EmbeddedFiles".to_vec(), Object::Ref(tree));
+        n.set(key.to_vec(), Object::Ref(tree));
         c.set(b"Names".to_vec(), Object::Dict(n));
     })?;
     Ok(())
