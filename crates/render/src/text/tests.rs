@@ -3994,6 +3994,15 @@ fn hebrew_points_drawn_after_their_letter_do_not_ride_on_the_next_one() {
     assert_eq!(layout(v).plain_text(), "שמ\u{5B7}");
 }
 
+/// A point drawn before its letter at another height is a run of its own, and a letter at a height between the two
+/// joins both runs into one line. The point still reads after its letter: a zero-width holam drawn before its lamed,
+/// and a he drawn after them.
+#[test]
+fn a_hebrew_point_in_a_run_of_its_own_reads_after_its_letter() {
+    let v = vec![em_box("\u{5B9}", 10.0, -8.0, 10.0, 2.0), em_box("ל", 10.0, 0.0, 16.0, 10.0), em_box("ה", 16.0, -4.0, 22.0, 6.0)];
+    assert_eq!(layout(v).plain_text(), "הל\u{5B9}");
+}
+
 /// Nonspacing marks count toward neither direction of a line: a line of four Latin letters and a
 /// three-letter Hebrew word whose letters each carry two points reads in the same order as without
 /// the points.

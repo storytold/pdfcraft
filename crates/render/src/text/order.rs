@@ -405,14 +405,21 @@ pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32,
     }
     // Each mark goes before the first placed glyph whose x is greater than its own, or its letter's when it is a
     // combining mark riding on one. Marks are visited in that order, and that position never moves back, so one pass
-    // over `placed` puts all of them in.
+    // over `placed` puts all of them in. A mark riding on the letter drawn after it stops before the glyphs of its
+    // cluster drawn after it, that letter among them: it goes before the letter, as it does when the two share a run.
     sc.marks.sort_by(|a, b| by_cluster(glyphs, &sc.anchor, *a, *b));
     if !sc.marks.is_empty() {
         sc.merged.clear();
         let mut next = 0;
         for &m in &sc.marks {
-            while next < sc.placed.len() && x0(anchor_of(&sc.anchor, sc.placed[next])) <= x0(anchor_of(&sc.anchor, m)) {
-                sc.merged.push(sc.placed[next]);
+            let own = anchor_of(&sc.anchor, m);
+            while let Some(&p) = sc.placed.get(next) {
+                let cluster = anchor_of(&sc.anchor, p);
+                let drawn_after_in_cluster = own > m && cluster == own && p > m;
+                if drawn_after_in_cluster || x0(cluster).partial_cmp(&x0(own)).is_none_or(std::cmp::Ordering::is_gt) {
+                    break;
+                }
+                sc.merged.push(p);
                 next += 1;
             }
             sc.merged.push(m);
