@@ -2227,11 +2227,11 @@ fn draw_pages(
             // On a page still being read, these items appear when the answer comes.
             let hit = view.pictures.get(ui.ctx(), doc, page).and_then(|pictures| pdfcraft_engine::picture_at(pictures, at)).map(|(index, _)| *index);
             if let Some(image) = hit {
-                if ui.button(tl!("Copy Image")).clicked() {
+                if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy Image"))).clicked() {
                     copy_image = Some(comments::CanvasAction::CopyImage(page, image));
                     ui.close();
                 }
-                if ui.button(tl!("Copy Image in Original Format")).clicked() {
+                if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy Image in Original Format"))).clicked() {
                     copy_image = Some(comments::CanvasAction::CopyImageFile(page, image));
                     ui.close();
                 }
