@@ -262,24 +262,35 @@ impl Recogniser<'_> {
     fn form(&mut self) {
         let (doc, old) = (self.doc, self.old);
         let (before, now) = (acroform(old), acroform(doc));
-        if same_entry(before.clone().map(Object::Dict).as_ref(), now.clone().map(Object::Dict).as_ref()) {
+        // `/Fields` as an array of its own grows in place, the form dictionary unchanged: judged
+        // by what it lists, not by its reference (review of #7041).
+        let fields = |d: &Document, form: &Option<Dict>| form.as_ref().and_then(|f| f.get(b"Fields")).map(|o| (*d.resolve(o)).clone());
+        let same_fields = same_entry(fields(doc, &now).as_ref(), fields(old, &before).as_ref());
+        if same_fields && same_entry(before.clone().map(Object::Dict).as_ref(), now.clone().map(Object::Dict).as_ref()) {
             return;
         }
         let (b, n) = (before.unwrap_or_default(), now.unwrap_or_default());
         let signing = self.signing();
         let mut ops = Vec::new();
         let mut explained = same_entries(&n, &b, &[b"Fields", b"SigFlags", b"NeedAppearances", b"DR"]);
-        if !same_entry(n.get(b"Fields"), b.get(b"Fields")) {
+        // The signed `/Fields` array of its own, rewritten in place: claimed by the signing that
+        // added to it.
+        let in_place = self.seen.snapshot.old_fields.filter(|num| {
+            n.get(b"Fields").and_then(Object::as_ref).is_some_and(|r| r.num == *num) && self.changed.get(num).is_some_and(|c| c.before.is_some())
+        });
+        let mut field_ops = Vec::new();
+        if !same_fields || !same_entry(n.get(b"Fields"), b.get(b"Fields")) {
             let old_fields = refs(old, b.get(b"Fields"));
             let added: Vec<ObjRef> = refs(doc, n.get(b"Fields")).into_iter().filter(|r| !old_fields.contains(r)).collect();
             // A field dropped, or the same fields only reordered or respelled.
             explained &= !lost_entries(doc, old, b.get(b"Fields"), n.get(b"Fields")) && !added.is_empty();
             for r in added {
                 match [Op::Sign, Op::Timestamp].into_iter().find(|op| self.claimed_by(r.num, *op)) {
-                    Some(op) => ops.push(op),
+                    Some(op) => field_ops.push(op),
                     None => explained = false,
                 }
             }
+            ops.extend(&field_ops);
         }
         if !same_entry(n.get(b"SigFlags"), b.get(b"SigFlags")) {
             // Only signing sets the signature flags: a lone change signs nothing (review of #6771).
@@ -308,6 +319,11 @@ impl Recogniser<'_> {
         // The form as an object of its own: the signed one rewritten, or a new one.
         let FormChange::By(ops) = &self.form else { return };
         let ops = ops.clone();
+        if let Some(num) = in_place {
+            for op in field_ops {
+                self.claim(num, op);
+            }
+        }
         let held = old.root().and_then(|c| doc.get(c).as_dict().and_then(|c| c.get(b"AcroForm").and_then(Object::as_ref))).map(|r| r.num);
         // A form dictionary the signed pages also placed (an annotation the catalog names as its
         // form) is judged as what it drew: a fill does not explain changing it.

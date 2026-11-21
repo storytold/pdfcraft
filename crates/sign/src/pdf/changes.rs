@@ -36,6 +36,9 @@ pub(super) struct Snapshot {
     pub(super) old_info: Option<u32>,
     /// The signed catalog's `/AcroForm`, when it is an object of its own.
     pub(super) old_form: Option<u32>,
+    /// The signed form's `/Fields`, when it is an array of its own: signing adds to it in place,
+    /// leaving the form dictionary as it was.
+    pub(super) old_fields: Option<u32>,
     /// What the signed pages' annotations draw: the appearance streams their `/AP` names, the
     /// appearance-state dictionaries that are objects of their own, and what those streams reach.
     pub(super) appearances: HashSet<u32>,
@@ -106,6 +109,7 @@ impl Snapshot {
         let signed_resources = signed_page_resources(old, &signed_page_refs);
         let old_info = old.trailer().get(b"Info").and_then(Object::as_ref).map(|r| r.num);
         let old_form = old.root().and_then(|c| old.get(c).as_dict().and_then(|c| c.get(b"AcroForm").and_then(Object::as_ref))).map(|r| r.num);
+        let old_fields = acroform(old).and_then(|form| form.get(b"Fields").and_then(Object::as_ref)).map(|r| r.num);
         let appearances = signed_appearances(old, &placed_annots, &signed_pages);
         let fields = signed_fields(old, &placed_annots);
         Snapshot {
@@ -122,6 +126,7 @@ impl Snapshot {
             signed_resources,
             old_info,
             old_form,
+            old_fields,
             appearances,
             fields,
             annot_budget,
@@ -435,6 +440,10 @@ impl ChangedObjectClassifier<'_> {
             // A signed page-tree node's /Kids array of its own lists the pages.
             Object::Array(_) if before.is_some() && self.snapshot.kids_arrays.contains(&r.num) => Some(kind::PAGES),
             Object::Array(_) if self.is_signed_annotation_array(r, before) => self.annotation_array_change(new, before),
+            // The signed form's /Fields array of its own is judged as the form's /Fields entry.
+            Object::Array(_) if before.is_some_and(|b| b.as_array().is_some()) && self.snapshot.old_fields == Some(r.num) => {
+                Some(fields_kind(self.doc, self.old, self.ends, before, Some(new)))
+            }
             Object::Dict(dict) => self.dictionary_change(r, dict, before),
             Object::Stream(stream) => self.stream_change(r, stream, before),
             _ if before.is_none() => None,
@@ -1085,17 +1094,23 @@ pub(super) fn acroform(doc: &Document) -> Option<Dict> {
 fn acroform_kind(doc: &Document, old: &Document, ends: &RevisionEnds, now: &Dict, before: Option<&Dict>) -> &'static str {
     let fallback = acroform(old).unwrap_or_default();
     let before = before.unwrap_or(&fallback);
-    // A field taken out of the form: no DocMDP permission covers dropping a signed field.
-    if lost_entries(doc, old, before.get(b"Fields"), now.get(b"Fields")) {
+    match fields_kind(doc, old, ends, before.get(b"Fields"), now.get(b"Fields")) {
+        kind::SIGNATURE if !same_entries(now, before, &[b"Fields", b"SigFlags"]) => kind::FORM_FILL,
+        k => k,
+    }
+}
+
+/// The form's `/Fields` going from `was` (as signed) to `now`: a field taken out of the form is
+/// no change any DocMDP permission covers; any field added that brings no new signature is a new
+/// annotation; otherwise signing.
+fn fields_kind(doc: &Document, old: &Document, ends: &RevisionEnds, was: Option<&Object>, now: Option<&Object>) -> &'static str {
+    if lost_entries(doc, old, was, now) {
         return kind::OTHER;
     }
-    let old_fields = refs(old, before.get(b"Fields"));
+    let old_fields = refs(old, was);
     let signs = |r: &ObjRef| doc.get(*r).as_dict().is_some_and(|d| gains_signature(doc, old, ends, r.num, d, None));
-    if !refs(doc, now.get(b"Fields")).iter().filter(|r| !old_fields.contains(r)).all(signs) {
+    if !refs(doc, now).iter().filter(|r| !old_fields.contains(r)).all(signs) {
         return kind::COMMENTS;
-    }
-    if !same_entries(now, before, &[b"Fields", b"SigFlags"]) {
-        return kind::FORM_FILL;
     }
     kind::SIGNATURE
 }
@@ -1403,6 +1418,7 @@ mod tests {
             signed_resources: HashMap::new(),
             old_info: None,
             old_form: None,
+            old_fields: None,
             appearances: HashSet::new(),
             fields: HashSet::new(),
             annot_budget: Cell::new(MAX_ANNOT_ENTRIES),

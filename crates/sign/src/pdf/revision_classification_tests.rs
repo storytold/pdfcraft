@@ -596,3 +596,52 @@ endstream",
     ]);
     assert_eq!(verdict(&grown.open(), signed.open(), Some(1)), Modification::Allowed(vec![super::kind::SECURITY_STORE]));
 }
+
+/// From review on #7041: a form whose `/Fields` is an array of its own gains a signature field in
+/// that array, the form dictionary and its reference unchanged. That is signing, as it is for an
+/// inline array; the same array gaining a text field, or losing the signed one, is not.
+#[test]
+fn a_signature_field_added_to_an_indirect_fields_array_is_signing() {
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields 8 0 R >> >>")),
+        (2, Row::Obj(0, 0, PAGES)),
+        (3, Row::Obj(0, 0, &page("/Annots [5 0 R]"))),
+        (4, Row::Obj(0, 0, &page("/Annots []"))),
+        (5, Row::Obj(0, 0, TEXT_FIELD)),
+        (8, Row::Obj(0, 0, "[5 0 R]")),
+    ]);
+    let sig = "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Sig1) /V 7 0 R /Rect [0 0 0 0] /P 4 0 R >>";
+    let with_range = |fields: &str, a: usize, b: usize, c: usize| {
+        let value =
+            format!("<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 {a:010} {b:010} {c:010}] /Contents <00> >>");
+        signed.clone().revision(&[
+            (4, Row::Obj(0, 0, &page("/Annots [6 0 R]"))),
+            (6, Row::Obj(0, 0, sig)),
+            (7, Row::Obj(0, 0, &value)),
+            (8, Row::Obj(0, 0, fields)),
+        ])
+    };
+    let signing = |fields: &str| {
+        let end = with_range(fields, 0, 0, 0).bytes.len();
+        with_range(fields, 1, 2, end - 2)
+    };
+    for p in [Some(2), Some(3), None] {
+        assert_eq!(verdict(&signing("[5 0 R 6 0 R]").open(), signed.open(), p), Modification::Allowed(vec![super::kind::SIGNATURE]), "P={p:?}");
+    }
+    // The signed field dropped while the signature is added.
+    assert!(matches!(verdict(&signing("[6 0 R]").open(), signed.open(), Some(2)), Modification::Disallowed(_)));
+    // A later save that changes only /SigFlags is judged against each signature by what changed
+    // since it: for the certification the signature and the flags together are what one signing
+    // save writes; the approval signature that save follows did not set them, and refuses it.
+    let approved = signing("[5 0 R 6 0 R]");
+    let flagged = approved.clone().revision(&[(1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields 8 0 R /SigFlags 1 >> >>"))]);
+    assert_eq!(verdict(&flagged.open(), signed.open(), Some(2)), Modification::Allowed(vec![super::kind::SIGNATURE]));
+    assert!(matches!(verdict(&flagged.open(), approved.open(), None), Modification::Disallowed(_)));
+    // A text field added to the array signs nothing.
+    let text = TEXT_FIELD.replace("(Name)", "(Other)").replace("3 0 R", "4 0 R");
+    let added =
+        signed.clone().revision(&[(4, Row::Obj(0, 0, &page("/Annots [9 0 R]"))), (8, Row::Obj(0, 0, "[5 0 R 9 0 R]")), (9, Row::Obj(0, 0, &text))]);
+    for p in [Some(2), Some(3), None] {
+        assert!(matches!(verdict(&added.open(), signed.open(), p), Modification::Disallowed(_)), "P={p:?}");
+    }
+}
