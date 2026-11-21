@@ -6906,6 +6906,9 @@ fn a_replaced_hebrew_line_keeps_its_right_edge() {
     let scaled = "q 1.5 0 0 1.5 0 0 cm BT /F1 10 Tf 80 Tz 0.5 Tc 14 TL 200 400 Td (EDCBA) Tj T* (HDGF) Tj ET Q";
     // Wrapped in an `/ActualText` span (בדיוק), as some writers mark right-to-left text.
     let spanned = "BT /F1 12 Tf 14 TL 300 700 Td /Span <</ActualText <FEFF05D105D305D905D505E7>>> BDC (EDCBA) Tj EMC T* (HDGF) Tj ET";
+    // A line in a `/PCEdLine` sequence of its own with a numeric `TJ` before its text: the rewrite drops the `TJ`
+    // with the sequence, so the replacement is measured from where it then starts (review on #8025).
+    let edited = "BT /F1 12 Tf 14 TL 300 700 Td /PCEdLine BMC [-1000] TJ (EDCBA) Tj EMC T* (HDGF) Tj ET";
     // The text, and whether it is shorter than the line it replaces.
     let mut cases = vec![("דוב", Some(true)), ("שלום בדיוק שלום", Some(false))];
     if pdfcraft_fonts::document_hebrew_font(false).is_some() {
@@ -6925,7 +6928,7 @@ fn a_replaced_hebrew_line_keeps_its_right_edge() {
         assert_eq!(after[1].text, before[1].text);
         assert!((after[1].rect[0] - before[1].rect[0]).abs() < 0.01, "{typed}: the next line moved: {:?} → {:?}", before[1].rect, after[1].rect);
     };
-    for content in [page, scaled, spanned] {
+    for content in [page, scaled, spanned, edited] {
         for &(typed, shorter) in &cases {
             let mut doc = hebrew_page(content);
             let before = text::text_lines(&doc, 0).unwrap();

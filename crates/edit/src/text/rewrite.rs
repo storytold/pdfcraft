@@ -214,14 +214,6 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
             }
         }
     }
-    // A right-to-left line is anchored at its right edge, as a paragraph is (see `Alignment`): the
-    // replacement moves so it ends where the old line ended, whether it is shorter or longer (#8012).
-    if crate::bidi::rtl_base(&text)
-        && target.upright()
-        && let Some(shift) = lead_font.as_ref().and_then(|font| right_edge_shift(doc, &res, &fonts_res, (&ops, first), &replacement, &target, font))
-    {
-        replacement.insert(lead, shift);
-    }
     // Rebuild: the line's first operator becomes the replacement, its others go. Each other
     // dropped `'` or `"` (a later run, or a copy on the same baseline) leaves its line move and
     // spacing behind, as the first one does inside the replacement, and a dropped copy its advance
@@ -230,15 +222,30 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
     for i in &target.ops {
         advances.remove(i);
     }
-    let new_data = splice(&pieces, &ops, |i| {
-        if i == first {
-            return (std::mem::take(&mut replacement), false);
-        }
+    // What the rebuilt content writes before operator `i` (any but the line's first), and whether it keeps it.
+    let rebuilt = |i: usize| {
         let keep = !drops.contains(&i);
         let mut insert = dropped_side_effects(&ops, i, keep, None);
-        insert.extend(advances.remove(&i));
+        insert.extend(advances.get(&i).cloned());
         (insert, keep)
-    });
+    };
+    // A right-to-left line is anchored at its right edge, as a paragraph is (see `Alignment`): the
+    // replacement moves so it ends where the old line ended, whether it is shorter or longer (#8012).
+    // It is measured after what the rebuilt content keeps before it: a numeric `TJ` inside the line's
+    // own `/PCEdLine` sequence goes with the sequence (review on #8025).
+    if crate::bidi::rtl_base(&text) && target.upright() {
+        let before: Vec<Op> = (0..first)
+            .flat_map(|i| {
+                let (mut out, keep) = rebuilt(i);
+                out.extend(ops.get(i).filter(|_| keep).cloned());
+                out
+            })
+            .collect();
+        if let Some(shift) = lead_font.as_ref().and_then(|font| right_edge_shift(doc, &res, &fonts_res, &before, &replacement, &target, font)) {
+            replacement.insert(lead, shift);
+        }
+    }
+    let new_data = splice(&pieces, &ops, |i| if i == first { (std::mem::take(&mut replacement), false) } else { rebuilt(i) });
     let contents = rewritten_contents(doc, &streams, new_data)?;
     let page_ref = p.obj;
     if substituted.is_some() {
@@ -276,9 +283,9 @@ fn font_size_before(ops: &[Op], at: usize) -> Option<f64> {
     ops[..at].iter().rev().find(|o| o.is("Tf")).and_then(|o| o.num(1))
 }
 
-/// The move that makes `replacement`, written in place of operator `first` of `ops`, end at the
-/// right edge of the upright line `target` it replaces: a `TJ` holding only a number, written
-/// before the replacement draws (after its `'` or `"` line move). It moves the text matrix and not
+/// The move that makes `replacement`, drawn after `before` (what the rebuilt content keeps ahead of
+/// the line), end at the right edge of the upright line `target` it replaces: a `TJ` holding only a
+/// number, written before the replacement draws (after its `'` or `"` line move). It moves the text matrix and not
 /// the line matrix, so the lines placed after it stay where they are; and the replacement then
 /// ends where the old line did, as text placed by the pen after it expects. `font` is the font and
 /// size in force where it is written.
@@ -290,7 +297,7 @@ fn right_edge_shift(
     doc: &Document,
     res: &Dict,
     fonts_res: &Dict,
-    (ops, first): (&[Op], usize),
+    before: &[Op],
     replacement: &[Op],
     target: &TextLine,
     (font, size): &(String, f64),
@@ -303,7 +310,8 @@ fn right_edge_shift(
     let mut resources = res.clone();
     resources.set(b"Font".to_vec(), Object::Dict(fonts_res.clone()));
     let properties = res.get(b"Properties").and_then(|o| doc.dict(o)).unwrap_or_default();
-    let mut probe = ops.get(..first)?.to_vec();
+    let first = before.len();
+    let mut probe = before.to_vec();
     probe.extend_from_slice(replacement);
     let shown = interpret(doc, &probe, &resources, &mut HashMap::new(), &mut Carry::new(), None, Some(&properties)).ok()?;
     let right = shown.iter().filter(|s| s.op >= first).map(|s| s.rect[2]).fold(f64::NEG_INFINITY, f64::max);
