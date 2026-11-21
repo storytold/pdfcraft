@@ -14806,6 +14806,21 @@ fn doc_compare_mark_places_marks_on_their_pages() {
     assert!(pages.contains(&1) && pages.contains(&2), "{list}");
 }
 
+#[test]
+fn doc_compare_mark_does_not_place_repeated_text_on_an_earlier_page() {
+    let dir = workdir("compare-mark-repeated-text");
+    let mut a = auto(&dir);
+    let v1 = ok(&mut a, "doc_create", json!({ "from": "text", "text": "same\x0Cother" }))["doc"].as_u64().unwrap();
+    let v2 = ok(&mut a, "doc_create", json!({ "from": "text", "text": "same\x0Csame" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_compare_mark", json!({ "doc": v2, "other": v1 }));
+    assert_eq!(r["comments"], 1, "{r}");
+    let list = ok(&mut a, "comment_list", json!({ "doc": v2 }));
+    let comments = list["comments"].as_array().unwrap();
+    assert_eq!(comments.len(), 1, "{list}");
+    let pages: Vec<u64> = comments.iter().map(|c| c["page"].as_u64().unwrap()).collect();
+    assert_eq!(pages, vec![2], "{list}");
+}
+
 /// `text_prepare` refuses what it can't act on, changing nothing: a page with no grouped text
 /// (with the reason), and a page the document doesn't have.
 #[test]
