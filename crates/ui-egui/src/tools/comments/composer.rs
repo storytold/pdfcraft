@@ -156,6 +156,7 @@ pub(crate) fn composer(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, 
                 page,
                 quads,
                 text,
+                original: std::mem::take(&mut view.comments.replace_original),
                 author: prefs.author.clone(),
                 strike: prefs.style(CommentTool::ReplaceText),
                 // One proposal, one look: the caret, the group's primary, takes the Replace text

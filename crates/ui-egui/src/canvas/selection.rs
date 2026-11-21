@@ -513,9 +513,11 @@ pub(super) fn selection_actions(
             let Ok([(page, quads)]) = <[_; 1]>::try_from(marks) else { return false };
             let last = quads.last().copied().unwrap_or_default();
             let at = [last[2].max(last[6]), last[1].max(last[3])];
+            let original = view.selected_text().unwrap_or_default();
             view.clear_selection();
             let kind = if matches!(action, SelectionAction::Replace) {
                 view.comments.replace = Some(quads);
+                view.comments.replace_original = original;
                 comments::ComposerKind::Replace
             } else {
                 comments::ComposerKind::TextNote { quads }

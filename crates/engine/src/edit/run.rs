@@ -723,7 +723,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::EditAttachmentDescription { key, description } => {
             pdfcraft_organize::set_attachment_description(doc, key, description.as_deref())?;
         }
-        Edit::ReplaceText { page, quads, text, author, strike, caret } => {
+        Edit::ReplaceText { page, quads, text, original, author, strike, caret } => {
             // One `/NM` each: the strikeout is grouped with the caret, and XFDF names that link by
             // the caret's `/NM` (#2666).
             let (strike_meta, caret_meta) = (cx.meta(), cx.meta());
@@ -733,6 +733,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                     page: *page,
                     quads,
                     replacement: text,
+                    original,
                     author,
                     strike,
                     caret,
