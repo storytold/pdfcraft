@@ -651,8 +651,8 @@ fn gains_signature(doc: &Document, old: &Document, ends: &RevisionEnds, num: u32
 }
 
 /// The bytes of the revision of `doc` that the signature dictionary `v` signs, when that is a
-/// revision added after the signed revision `old`: `v` has a `/Contents` string, and a
-/// `/ByteRange` `[0 a b c]` (`a` ≤ `b`) that ends where that revision ends. That is what signing (a
+/// revision added after the signed revision `old`: `v` has a non-empty `/Contents` string, and a
+/// `/ByteRange` `[0 a b c]` (`a` ≤ `b`, `c` > 0) that ends where that revision ends. That is what signing (a
 /// document timestamp included) writes, with or without `/Type`, and what the signature list then
 /// checks, so a forged one is shown as invalid there. Any other dictionary in `/V` signs nothing:
 /// `<< /Foo /Bar >>` under an opaque appearance is a new annotation, not a signature.
@@ -660,11 +660,13 @@ fn signed_revision(doc: &Document, old: &Document, ends: &RevisionEnds, v: &Dict
     let whole = |x: &f64| x.fract() == 0.0 && (0.0..9.0e15).contains(x);
     let range = super::listing::nums(doc, v, b"ByteRange").and_then(|r| <[f64; 4]>::try_from(r).ok());
     let [start, first_end, second_start, second_len] = range.filter(|r| r.iter().all(whole))?;
-    let contents = v.get(b"Contents").is_some_and(|c| doc.resolve(c).as_string().is_some());
+    // Signing always writes signature bytes and covers the file after them (its trailer at
+    // least): an empty `/Contents` or an empty second range is no signature (review of #6771).
+    let contents = v.get(b"Contents").is_some_and(|c| doc.resolve(c).as_string().is_some_and(|s| !s.bytes.is_empty()));
     // Whole and below 9e15, so the sum is exact and fits. A revision's end counts up to two
     // end-of-line bytes after its `%%EOF`, which a signature's range may leave out.
     let end = (second_start + second_len) as usize;
-    if !contents || start != 0.0 || first_end > second_start || end <= old.bytes().len() {
+    if !contents || start != 0.0 || first_end > second_start || second_len == 0.0 || end <= old.bytes().len() {
         return None;
     }
     let ends = ends.get_or_init(|| doc.revision_ends());
@@ -696,9 +698,14 @@ fn stored_at(doc: &Document, num: u32) -> Vec<usize> {
 /// that shows it (`/AS`, `/AP`): that is form fill. Any other change, or a new appearance without
 /// a new value, is a change to the annotation (#6756).
 fn widget_change(doc: &Document, old: &Document, d: &Dict, before: &Dict) -> &'static str {
+    if value_changed(doc, old, d, before) && same_entries(d, before, &[b"V", b"AS", b"AP"]) { kind::FORM_FILL } else { kind::COMMENTS }
+}
+
+/// Whether the value of the form field or widget `d` (its own `/V`, or the one it inherits) is not
+/// the one it had as `before` when signed.
+fn value_changed(doc: &Document, old: &Document, d: &Dict, before: &Dict) -> bool {
     let value = |doc: &Document, d: &Dict| inherited(doc, d, b"V").map(|(_, v)| (*doc.resolve(&v)).clone());
-    let filled = !same_entry(value(doc, d).as_ref(), value(old, before).as_ref());
-    if filled && same_entries(d, before, &[b"V", b"AS", b"AP"]) { kind::FORM_FILL } else { kind::COMMENTS }
+    !same_entry(value(doc, d).as_ref(), value(old, before).as_ref())
 }
 
 /// The references in the annotation list `o` (inline or indirect), its length spent from
@@ -1078,6 +1085,12 @@ fn change_kind(doc: &Document, old: &Document, ends: &RevisionEnds, num: u32, d:
     }
     if role.contains(b"Fields") {
         return acroform_kind(doc, old, ends, d, before);
+    }
+    // As for a widget: filling the form changes a field's value. A signed field rewritten with
+    // its value unchanged (a new `/DA` on a field its widgets inherit from) is a change to how its
+    // widgets look, as the same change on a widget is (review of #6771).
+    if before.is_some_and(|b| b.contains(b"FT") && !value_changed(doc, old, d, b)) {
+        return kind::COMMENTS;
     }
     if role.contains(b"FT") || (role.contains(b"T") && role.contains(b"Kids")) || role.contains(b"DR") {
         return kind::FORM_FILL;

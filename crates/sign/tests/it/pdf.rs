@@ -719,6 +719,84 @@ fn signing_an_empty_field_that_rewrites_its_default_appearance_is_signing() {
     assert_eq!((s.status, s.modification), (Status::Valid, Modification::Allowed(vec![kind::SIGNATURE])));
 }
 
+/// From review on #6771: a signature dictionary with an empty `/Contents`, or a `/ByteRange`
+/// whose second range is empty, holds no signature, even when its range ends where its revision
+/// ends. A widget added with such a value is an annotation drawn over the signed page, which a
+/// P=2 certification does not permit. A real approval signature stays signing
+/// (`an_empty_signature_widget_added_or_restyled_after_certification_is_not_signing`).
+#[test]
+fn a_widget_whose_value_has_empty_contents_or_an_empty_second_range_is_not_signing() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let certified = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(2), ..opts() }).unwrap();
+    // The placeholder is rewritten, digit for digit, with where the new revision ends.
+    const MARK: i64 = 9_999_999_999;
+    for (what, contents, range) in [
+        ("empty /Contents", PdfString::literal(""), [0, 1, MARK, 1]),
+        ("empty second range", PdfString { bytes: vec![0], hex: true }, [0, 0, MARK, 0]),
+    ] {
+        let value: &[(&[u8], Object)] = &[
+            (b"Type", Object::name("Sig")),
+            (b"Filter", Object::name("Adobe.PPKLite")),
+            (b"SubFilter", Object::name("adbe.pkcs7.detached")),
+            (b"Contents", Object::String(contents)),
+            (b"ByteRange", Object::Array(range.map(Object::Int).to_vec())),
+        ];
+        let mut edited = edit_after(&certified, |doc| add_opaque_sig_widget(doc, Some(value)));
+        let mark = MARK.to_string().into_bytes();
+        let at = edited.windows(mark.len()).rposition(|w| w == mark).unwrap();
+        // The range [0 a b c] ends at b + c, which is the revision's end.
+        let end = edited.len() - usize::try_from(range[3]).unwrap();
+        edited[at..at + mark.len()].copy_from_slice(format!("{end:010}").as_bytes());
+        let s = signatures(&open(&edited), &edited, &trust).into_iter().find(|s| s.certify == Some(2)).unwrap();
+        assert_ne!(s.status, Status::Valid, "{what}: {:?}", s.modification);
+        assert_eq!(s.modification, Modification::Disallowed(vec![kind::COMMENTS]), "{what}");
+    }
+}
+
+/// From review on #6771: filling the form changes a field's value. A signed text field whose
+/// `/DA` its widget inherits is rewritten with its value unchanged: a change to how the widget
+/// looks, as the same change on the widget is, so a P=2 certification refuses it and P=3 permits
+/// it as a comment change. Changing the value, with or without `/DA`, stays form fill.
+#[test]
+fn a_parent_fields_default_appearance_changed_without_its_value_is_not_form_fill() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let form = fixture_with(
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] /DA (/Helv 0 Tf 0 g) >> >>",
+        &[
+            b"<< /FT /Tx /T (Name) /V (Ann) /DA (/Helv 12 Tf 0 g) /Kids [8 0 R] >>",
+            b"<< /Type /Annot /Subtype /Widget /Parent 7 0 R /Rect [20 200 120 220] /P 3 0 R >>",
+        ],
+    );
+    let field = ObjRef { num: 7, generation: 0 };
+    let set = |entries: Vec<(&'static str, &'static str)>| {
+        move |doc: &mut Document| {
+            doc.update_dict(field, |f| {
+                for (k, v) in &entries {
+                    f.set(k.as_bytes().to_vec(), Object::String(PdfString::literal(*v)));
+                }
+            })
+            .unwrap()
+        }
+    };
+    for p in [2, 3] {
+        let certified = pdfcraft_sign::sign(&open(&form), &id, &SignOptions { certify: Some(p), ..opts() }).unwrap();
+        let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.certify == Some(p)).unwrap();
+        let s = check(&edit_after(&certified, set(vec![("DA", "/Helv 30 Tf 1 0 0 rg")])));
+        if p == 2 {
+            assert_ne!(s.status, Status::Valid, "{:?}", s.modification);
+            assert_eq!(s.modification, Modification::Disallowed(vec![kind::COMMENTS]));
+        } else {
+            assert_eq!((s.status, s.modification), (Status::Valid, Modification::Allowed(vec![kind::COMMENTS])));
+        }
+        for (what, entries) in [("filled", vec![("V", "Bob")]), ("filled and restyled", vec![("V", "Bob"), ("DA", "/Helv 30 Tf 1 0 0 rg")])] {
+            let s = check(&edit_after(&certified, set(entries)));
+            assert_eq!((s.status, s.modification), (Status::Valid, Modification::Allowed(vec![kind::FORM_FILL])), "P={p}, {what}");
+        }
+    }
+}
+
 /// A signature brings its widget with it: signing writes the value and the widget that shows it in
 /// one revision. Under a P=2 certification an approval signature may follow, but a widget added
 /// in a later revision that takes that signature's value (pointing at it, or as a kid of the
