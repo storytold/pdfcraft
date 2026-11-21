@@ -215,6 +215,12 @@ impl Automation {
             {
                 v["border_shape"] = json!(shape.name().to_ascii_lowercase());
             }
+            // Formatting inside the body, as comment_edit's `body` takes it.
+            if !c.is_reply()
+                && let Some(runs) = doc.comment_rich_body(c.page, c.index)
+            {
+                v["body"] = runs.iter().map(run_view).collect();
+            }
             // How opaque it is drawn: as a whole, or its fill and text each at their own.
             // Not for replies, which are drawn with the comment they answer.
             if !c.is_reply()
@@ -757,6 +763,9 @@ impl Automation {
         if let Some(text) = a.opt_str("contents")? {
             edits.push(Edit::SetAnnotationContents { page, index, text: text.to_string() });
         }
+        if let Some(body) = a.get("body") {
+            edits.push(Edit::SetAnnotationRichContents { page, index, runs: body_runs(body)? });
+        }
         let (color, opacity, width) = (a.color("color")?, a.opt_num("opacity")?, a.opt_num("width")?);
         if color.is_some() || opacity.is_some() || width.is_some() {
             edits.push(Edit::StyleAnnotation { page, index, color, opacity, width, endings: None });
@@ -813,7 +822,7 @@ impl Automation {
         }
         if edits.is_empty() {
             return Err(ToolError::InvalidArgs(
-                "nothing to change: pass contents, color, opacity, fill_opacity, text_opacity, width, fill, border_color, border_shape, font_size, rect, move or points".into(),
+                "nothing to change: pass contents, body, color, opacity, fill_opacity, text_opacity, width, fill, border_color, border_shape, font_size, rect, move or points".into(),
             ));
         }
         let edit = if edits.len() == 1 { edits.remove(0) } else { Edit::Batch { label: "Edit comment".into(), edits } };
@@ -939,4 +948,66 @@ mod tests {
         assert!(parse_color("#12").is_err() && parse_color("chartreuse").is_err());
         assert_eq!(hex([1.0, 0.5, 0.0]), "#FF8000");
     }
+}
+
+/// The formatted runs of `comment_edit`'s `body`: `[{text, bold?, italic?, underline?, script?, color?, size?}, …]`.
+fn body_runs(body: &Value) -> Result<Vec<pdfcraft_annot::Run>> {
+    let wrong = |what: &str| {
+        ToolError::InvalidArgs(format!(
+            "body must be an array of runs {{text, bold, italic, underline, script (normal, super, sub), color, size}}: {what}"
+        ))
+    };
+    let items = body.as_array().ok_or_else(|| wrong("not an array"))?;
+    items
+        .iter()
+        .map(|item| {
+            let flag = |key: &str| match item.get(key) {
+                None | Some(Value::Null) => Ok(false),
+                Some(v) => v.as_bool().ok_or_else(|| wrong(&format!("{key} is true or false"))),
+            };
+            let text = item.get("text").and_then(Value::as_str).ok_or_else(|| wrong("every run needs a text string"))?;
+            let script = match item.get("script").and_then(Value::as_str) {
+                None | Some("normal") => pdfcraft_annot::Script::Normal,
+                Some("super") => pdfcraft_annot::Script::Super,
+                Some("sub") => pdfcraft_annot::Script::Sub,
+                Some(other) => return Err(wrong(&format!("script {other:?} is normal, super or sub"))),
+            };
+            let color = item.get("color").and_then(Value::as_str).map(parse_color).transpose()?.map(|c| c.map(f64::from));
+            let size = match item.get("size") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(v.as_f64().ok_or_else(|| wrong("size is a number of points"))?),
+            };
+            Ok(pdfcraft_annot::Run {
+                text: text.to_string(),
+                bold: flag("bold")?,
+                italic: flag("italic")?,
+                underline: flag("underline")?,
+                script,
+                color,
+                size,
+            })
+        })
+        .collect()
+}
+
+/// A run as `comment_list` reports it: only what is set.
+fn run_view(run: &pdfcraft_annot::Run) -> Value {
+    let mut v = json!({ "text": run.text });
+    for (key, on) in [("bold", run.bold), ("italic", run.italic), ("underline", run.underline)] {
+        if on {
+            v[key] = json!(true);
+        }
+    }
+    match run.script {
+        pdfcraft_annot::Script::Normal => {}
+        pdfcraft_annot::Script::Super => v["script"] = json!("super"),
+        pdfcraft_annot::Script::Sub => v["script"] = json!("sub"),
+    }
+    if let Some(color) = run.color {
+        v["color"] = json!(hex(color.map(|c| c as f32)));
+    }
+    if let Some(size) = run.size {
+        v["size"] = json!(size);
+    }
+    v
 }

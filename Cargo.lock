@@ -4996,6 +4996,7 @@ dependencies = [
  "craft-prc",
  "craft-wordmodel 0.1.0 (git+https://github.com/storytold/craft-libs?rev=b8eaa8e2f3561f9fa27fcf3b7f67ce915e93caa3)",
  "flate2",
+ "pdfcraft-annot",
  "pdfcraft-cos",
  "pdfcraft-engine",
  "pdfcraft-fonts",

@@ -232,7 +232,7 @@ impl Edit {
             Edit::AddModel3d { .. } => Label::of("Add 3D model"),
             Edit::DeleteAnnotation { .. } => Label::of("Delete comment"),
             Edit::PasteComments { .. } => Label::of("Paste comments"),
-            Edit::SetAnnotationContents { .. } => Label::of("Edit comment"),
+            Edit::SetAnnotationContents { .. } | Edit::SetAnnotationRichContents { .. } => Label::of("Edit comment"),
             Edit::ReplyToAnnotation { .. } => Label::of("Reply"),
             // The state's name is part of the wording: a language may need to agree it with the rest.
             Edit::SetAnnotationStatus { state, .. } => Label::of(match state {

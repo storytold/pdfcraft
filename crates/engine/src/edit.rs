@@ -204,6 +204,13 @@ pub enum Edit {
         index: usize,
         text: String,
     },
+    /// Give the comment a body with bold, italic, underline, super/subscript, colour and size on
+    /// stretches of its text (#3737, #5929): `/Contents` gets the plain text, `/RC` the look.
+    SetAnnotationRichContents {
+        page: usize,
+        index: usize,
+        runs: Vec<pdfcraft_annot::Run>,
+    },
     ReplyToAnnotation {
         page: usize,
         index: usize,
