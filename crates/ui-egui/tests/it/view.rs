@@ -1748,7 +1748,7 @@ fn required_fields_get_a_red_border_when_highlighting() {
     let at = egui::pos2(r.min.x + r.width() * (50.0 / 300.0) + 0.75, r.min.y + r.height() * (1.0 - 315.0 / 400.0));
     let img = h.render().expect("renders");
     let px = *img.get_pixel((at.x * ppp) as u32, (at.y * ppp) as u32);
-    let theme = craft::theme::builtins().iter().find(|theme| theme.id.as_str() == craft::theme::SUITE_DEFAULT).unwrap();
+    let theme = craft::theme::builtins().iter().find(|theme| theme.id.as_str() == "craft.graphite").unwrap();
     let appearance = craft::theme::Appearance {
         mode: craft::theme::Mode::Light,
         contrast: craft::theme::Contrast::Standard,
