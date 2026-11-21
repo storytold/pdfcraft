@@ -404,18 +404,27 @@ pub fn autotag_text(doc: &mut Document) -> Result<AutoTagResult, AutoTagError> {
                             let entry = next.add(Object::Null);
                             let mut kids = Vec::with_capacity(2);
                             let shown_label = page.evidence.get(item.body).and_then(|e| e.label_op);
+                            let (first, last) = tags.span(item.body)?;
+                            let mut body = vec![(first, last)];
                             match (item.label, shown_label) {
                                 (Some(label), _) => {
-                                    kids.push(Object::Ref(tags.leaf(&mut next, label, "Lbl", entry)?));
-                                    kids.push(Object::Ref(tags.leaf(&mut next, item.body, "LBody", entry)?));
+                                    let (first, last) = tags.span(label)?;
+                                    kids.push(Object::Ref(tags.own(&mut next, &[(first, last)], "Lbl", entry)?));
                                 }
-                                // The marker's own show operator, inside the item's text object.
-                                (None, Some(at)) => {
-                                    let (lbl, body) = tags.split(&mut next, item.body, at, entry)?;
-                                    kids.extend([Object::Ref(lbl), Object::Ref(body)]);
+                                // The marker's own show operator, inside the item's text object: the
+                                // label runs from after `BT` through it, the body from after it to `ET`.
+                                // `Evidence::label_op` is a show with another after it, so both hold one.
+                                (None, Some(at)) if at > first && at.saturating_add(1) < last => {
+                                    kids.push(Object::Ref(tags.own(&mut next, &[(first + 1, at)], "Lbl", entry)?));
+                                    body = vec![(at + 1, last - 1)];
                                 }
-                                (None, None) => kids.push(Object::Ref(tags.leaf(&mut next, item.body, "LBody", entry)?)),
+                                (None, _) => {}
                             }
+                            // An item's wrapped lines drawn as text objects of their own.
+                            for &line in &item.wrapped {
+                                body.push(tags.span(line)?);
+                            }
+                            kids.push(Object::Ref(tags.own(&mut next, &body, "LBody", entry)?));
                             next.set(entry, element("LI", list, Object::Array(kids)));
                             list_items.push(Object::Ref(entry));
                         }
@@ -476,33 +485,26 @@ impl<'a> PageTags<'a> {
 
     /// Add the element of type `role`, under `parent`, that owns text object `span`.
     fn leaf(&mut self, next: &mut Document, span: usize, role: &'static str, parent: ObjRef) -> Result<ObjRef, AutoTagError> {
-        let (first, last) = self.span(span)?;
-        self.mark(next, first, last, role, parent)
+        let range = self.span(span)?;
+        self.own(next, &[range], role, parent)
     }
 
-    /// Split text object `span` at its marker's show operator `at`: an `Lbl` from after `BT`
-    /// through `at`, and an `LBody` from after `at` up to `ET`, both under `parent`.
-    fn split(&mut self, next: &mut Document, span: usize, at: usize, parent: ObjRef) -> Result<(ObjRef, ObjRef), AutoTagError> {
-        let (first, last) = self.span(span)?;
-        // `Evidence::label_op` is a show operator with another after it, so both parts hold one.
-        if at <= first || at.saturating_add(1) >= last {
-            return Err(unsupported(self.index, "a list marker is outside its text object"));
+    /// Add the element of type `role`, under `parent`, owning each `first..=last` range of operators
+    /// as a marked-content sequence of its own.
+    fn own(&mut self, next: &mut Document, ranges: &[(usize, usize)], role: &'static str, parent: ObjRef) -> Result<ObjRef, AutoTagError> {
+        let reference = next.add(Object::Null);
+        let mut kids = Vec::with_capacity(ranges.len());
+        for &(first, last) in ranges {
+            let mcid = self.parents.len();
+            kids.push(Object::Int(i64::try_from(mcid).map_err(|_| AutoTagError::TooManyPages)?));
+            self.parents.push(Object::Ref(reference));
+            self.starts.insert(first, (mcid, role));
+            self.ends.insert(last);
         }
-        let label = self.mark(next, first + 1, at, "Lbl", parent)?;
-        let body = self.mark(next, at + 1, last - 1, "LBody", parent)?;
-        Ok((label, body))
-    }
-
-    /// Add the element of type `role`, under `parent`, owning operators `first..=last` as one
-    /// marked-content sequence.
-    fn mark(&mut self, next: &mut Document, first: usize, last: usize, role: &'static str, parent: ObjRef) -> Result<ObjRef, AutoTagError> {
-        let mcid = self.parents.len();
-        let mut leaf = element(role, parent, Object::Int(i64::try_from(mcid).map_err(|_| AutoTagError::TooManyPages)?));
+        let kids = if kids.len() == 1 { kids.swap_remove(0) } else { Object::Array(kids) };
+        let mut leaf = element(role, parent, kids);
         leaf.set(b"Pg".to_vec(), Object::Ref(self.page));
-        let reference = next.add(leaf);
-        self.parents.push(Object::Ref(reference));
-        self.starts.insert(first, (mcid, role));
-        self.ends.insert(last);
+        next.set(reference, leaf);
         Ok(reference)
     }
 }

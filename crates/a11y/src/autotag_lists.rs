@@ -5,7 +5,12 @@
 //! nothing. Two or more consecutive paragraph objects whose markers have the same kind and
 //! punctuation, start at the same indent and, when ordered, count up by one, form a list: `L` ›
 //! `LI` › `LBody`. An object that shows only a marker, followed by the item's text on the same
-//! line, is the item's `Lbl`. Anything else ends the list, and a run of one item stays a paragraph.
+//! line, is the item's `Lbl`. A paragraph without a marker right below an item's full line, flush
+//! with its marker or at a hanging indent, is the item's wrapped line and joins its `LBody` when its
+//! first word would not have fitted at the end of that line. A line that stops short of its column
+//! ends the item, so a paragraph after it stays a paragraph, and a list whose column no two lines
+//! fill keeps its items to their own objects.
+//! Anything else ends the list, and a run of one item stays a paragraph.
 //!
 //! A marker shown by its own operator, before the item's text in the same text object, is tagged
 //! `Lbl` there (see `Evidence::label_op`). Otherwise only whole text objects are grouped. These are
@@ -13,7 +18,6 @@
 //! - a list drawn in one text object: an object with a later line that continues its first line's
 //!   marker, at the same indent, stays a paragraph;
 //! - a marker in the same show as its item's text (it stays in `LBody`);
-//! - an item's wrapped lines drawn as separate objects;
 //! - nested lists.
 
 use crate::autotag_roles::Evidence;
@@ -25,6 +29,17 @@ pub(crate) const INDENT_TOLERANCE: f64 = 2.0;
 const SAME_LINE: f64 = 0.5;
 /// Decimal markers longer than this are numbers, not list markers.
 const MAX_DIGITS: usize = 3;
+/// An item's wrapped line starts at most this many text sizes right of its marker.
+const MAX_HANG: f64 = 4.0;
+/// An item's wrapped line starts at most this many text sizes below the line before it, per line
+/// that line's object shows.
+const MAX_LINE_STEP: f64 = 1.6;
+/// A line is full, so the text after it may wrap, when it ends at least this fraction of the way
+/// across its column; a column's edge is where at least two of its lines end that far.
+const FULL_LINE: f64 = 0.75;
+/// The width of a space between words, in text sizes, for whether the next line's first word
+/// would have fitted on the line before.
+const SPACE: f64 = 0.25;
 /// Roman numerals longer than this are words, not list markers.
 const MAX_ROMAN: usize = 6;
 
@@ -213,10 +228,12 @@ fn to_roman(mut value: u32) -> String {
 
 /// A list item: the text object of its label, if drawn apart, and of its body, as indexes into
 /// the page's text objects.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Item {
     pub label: Option<usize>,
     pub body: usize,
+    /// The item's further lines, drawn as text objects of their own after `body`.
+    pub wrapped: Vec<usize>,
 }
 
 /// The page's text objects in order, each alone or grouped into a list.
@@ -264,30 +281,101 @@ fn item_at(evidence: &[Evidence], roles: &[&str], i: usize) -> Option<(Item, Mar
     let e = evidence.get(i).filter(|_| paragraph(i))?;
     let m = e.marker?;
     if !m.alone {
-        return Some((Item { label: None, body: i }, m, 1));
+        return Some((Item { label: None, body: i, wrapped: Vec::new() }, m, 1));
     }
     let body = evidence.get(i + 1).filter(|_| paragraph(i + 1))?;
     let same_line = (body.y - e.y).abs() <= e.size.max(1.0) * SAME_LINE;
     let follows = body.chars > 0 && body.x > e.x && !body.marker.is_some_and(|b| b.alone);
-    (same_line && follows).then_some((Item { label: Some(i), body: i + 1 }, m, 2))
+    (same_line && follows).then_some((Item { label: Some(i), body: i + 1, wrapped: Vec::new() }, m, 2))
+}
+
+/// The text objects from `j` on that continue `item`: paragraphs without a marker, flush with the
+/// marker at `x` or at a hanging indent within [`MAX_HANG`] text sizes right of it, each starting
+/// within [`MAX_LINE_STEP`] lines below the line before, which must be full: ending at least
+/// [`FULL_LINE`] of the way from `x` to `edge`, the right edge of the column, with no room left
+/// there for the object's first word.
+fn wraps_after(evidence: &[Evidence], roles: &[&str], item: &Item, x: f64, edge: Option<f64>, mut j: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    let Some(edge) = edge else { return out };
+    let mut above = evidence.get(item.body).copied();
+    while let (Some(prev), Some(e)) = (above, evidence.get(j)) {
+        let size = prev.size.max(1.0);
+        let step = prev.y - e.y;
+        let lines = prev.lines.max(1) as f64;
+        let flush = (e.x - x).abs() <= INDENT_TOLERANCE;
+        let hanging = e.x > x + INDENT_TOLERANCE && e.x <= x + MAX_HANG * size;
+        let full = prev.end >= x + (edge - x) * FULL_LINE && edge > x;
+        let fitted = e.word > 0.0 && prev.end + SPACE * size + e.word <= edge;
+        let wraps = roles.get(j).is_some_and(|r| *r == "P")
+            && e.marker.is_none()
+            && e.chars > 0
+            && (flush || hanging)
+            && full
+            && !fitted
+            && step > 0.0
+            && step <= MAX_LINE_STEP * size * lines;
+        if !wraps {
+            break;
+        }
+        out.push(j);
+        above = Some(*e);
+        j += 1;
+    }
+    out
+}
+
+/// The right edge of the column the list at text object `i` starts in, if the first lines of two
+/// of its items reach it: the furthest any line of the block reaches, where the block is the objects from `i` on
+/// that start flush with the marker at `x` or at a hanging indent, each within [`MAX_LINE_STEP`]
+/// lines below the one before, with what is beside them on their line. Text elsewhere on the page,
+/// such as a full-width footer at the same indent, does not count. A block in which only one object
+/// comes near its widest line, such as a short list with one long item, has no edge to wrap at.
+/// Lines without a marker may be wrapped lines or the paragraph after the list, so they widen the
+/// edge but do not vouch for it.
+fn column_edge(evidence: &[Evidence], i: usize, x: f64) -> Option<f64> {
+    let mut block = Vec::new();
+    let mut above: Option<&Evidence> = None;
+    for e in evidence.iter().skip(i) {
+        let size = e.size.max(1.0);
+        let beside = above.is_some_and(|prev| (prev.y - e.y).abs() <= prev.size.max(1.0) * SAME_LINE && e.x > prev.x);
+        let indented = e.x >= x - INDENT_TOLERANCE && e.x <= x + MAX_HANG * size;
+        let below = above.is_none_or(|prev| {
+            let step = prev.y - e.y;
+            step > 0.0 && step <= MAX_LINE_STEP * prev.size.max(1.0) * prev.lines.max(1) as f64
+        });
+        if !beside && !(indented && below) {
+            break;
+        }
+        block.push((e.right, e.marker.is_some() || beside));
+        above = Some(e);
+    }
+    let edge = block.iter().map(|&(right, _)| right).fold(x, f64::max);
+    // Only the items' own first lines vouch for the edge: a paragraph after the list must not.
+    let reached = block.iter().filter(|&&(right, item)| item && right >= x + (edge - x) * FULL_LINE).count();
+    (edge > x && reached >= 2).then_some(edge)
 }
 
 /// The items of the list that starts at text object `i` with `numbering` and `value`, and how many
 /// objects they take.
 fn run(evidence: &[Evidence], roles: &[&str], i: usize, numbering: Numbering, value: u32) -> (Vec<Item>, usize) {
-    let Some((first, marker, mut used)) = item_at(evidence, roles, i) else { return (Vec::new(), 1) };
+    let Some((mut first, marker, mut used)) = item_at(evidence, roles, i) else { return (Vec::new(), 1) };
     let x = evidence.get(i).map_or(0.0, |e| e.x);
+    let edge = column_edge(evidence, i, x);
+    first.wrapped = wraps_after(evidence, roles, &first, x, edge, i + used);
+    used += first.wrapped.len();
     let (mut items, mut previous) = (vec![first], value);
-    while let Some((item, next, n)) = item_at(evidence, roles, i + used) {
+    while let Some((mut item, next, n)) = item_at(evidence, roles, i + used) {
         let reading = [Some((next.numbering, next.value)), next.alternative].into_iter().flatten().find(|(kind, _)| *kind == numbering);
         let counts = |v: u32| !numbering.ordered() || v == previous.saturating_add(1);
         let continues = next.punctuation == marker.punctuation
             && evidence.get(i + used).is_some_and(|e| (e.x - x).abs() <= INDENT_TOLERANCE)
             && reading.is_some_and(|(_, v)| counts(v));
         let Some((_, v)) = reading.filter(|_| continues) else { break };
+        used += n;
+        item.wrapped = wraps_after(evidence, roles, &item, x, edge, i + used);
+        used += item.wrapped.len();
         items.push(item);
         previous = v;
-        used += n;
     }
     (items, used)
 }
@@ -321,8 +409,11 @@ mod tests {
         }
     }
 
+    /// One line of 12 pt text at `x`, `y`, 6 pt per character wide.
     fn line(text: &str, x: f64, y: f64) -> Evidence {
-        Evidence { size: 12.0, lines: 1, chars: text.len(), letters: true, marker: marker(text), x, y, ..Evidence::default() }
+        let end = x + 6.0 * text.chars().count() as f64;
+        let word = 6.0 * text.split_whitespace().next().map_or(0, |w| w.chars().count()) as f64;
+        Evidence { size: 12.0, lines: 1, chars: text.len(), letters: true, marker: marker(text), x, y, end, right: end, word, ..Evidence::default() }
     }
 
     fn grouped(lines: &[Evidence]) -> Vec<Block> {
@@ -364,6 +455,86 @@ mod tests {
         // A heading is never a list item.
         let headed = [line("1. Scope", 20.0, 240.0), line("2. Terms", 20.0, 225.0)];
         assert_eq!(blocks(&headed, &["H1", "P"]), [Block::Text(0), Block::Text(1)]);
+    }
+
+    #[test]
+    fn a_line_below_an_items_full_line_is_its_wrapped_line_and_a_line_below_a_short_one_is_not() {
+        let long = "• Print voucher and bring it to a merchant listed on";
+        let page = [
+            line(long, 20.0, 400.0),
+            line("this voucher.", 20.0, 388.0),
+            line("• Write your name and the full address on your ID in", 20.0, 376.0),
+            line("the space below, at a hanging indent, with its name", 32.0, 364.0),
+            line("as the person redeeming it.", 32.0, 352.0),
+            line("• Bring photo ID.", 20.0, 340.0),
+            line("A paragraph after the list, flush with its bullets.", 20.0, 328.0),
+            // Far below, at the same indent but twice as wide: not part of the list's column.
+            line(&"A full-width footer. ".repeat(5), 20.0, 60.0),
+        ];
+        let found = grouped(&page);
+        let [Block::List { items, .. }, Block::Text(6), Block::Text(7)] = found.as_slice() else { panic!("{found:?}") };
+        let wrapped: Vec<&[usize]> = items.iter().map(|i| i.wrapped.as_slice()).collect();
+        assert_eq!(wrapped, [&[1][..], &[3, 4][..], &[][..]]);
+        // A full line does not reach across a gap of more than a line and a half.
+        let spaced = [line(long, 20.0, 400.0), line("this voucher.", 20.0, 370.0), line(long, 20.0, 358.0)];
+        assert_eq!(grouped(&spaced), [Block::Text(0), Block::Text(1), Block::Text(2)]);
+        // With bullets drawn apart, the items' text beside them makes the column.
+        let apart = [
+            line("•", 20.0, 352.0),
+            line("Print voucher and bring it to a merchant listed on", 32.0, 352.0),
+            line("•", 20.0, 340.0),
+            line("Write your name and the address on your ID in the", 32.0, 340.0),
+            line("space below.", 32.0, 328.0),
+        ];
+        let found = grouped(&apart);
+        let [Block::List { items, .. }] = found.as_slice() else { panic!("{found:?}") };
+        assert_eq!(items.iter().map(|i| i.wrapped.as_slice()).collect::<Vec<_>>(), [&[][..], &[4][..]]);
+    }
+
+    #[test]
+    fn a_paragraph_after_a_list_stays_a_paragraph_unless_the_line_above_had_no_room_for_it() {
+        let wrapped = |found: &[Block]| match found {
+            [Block::List { items, .. }, ..] => items.iter().map(|i| i.wrapped.len()).sum::<usize>(),
+            _ => panic!("{found:?}"),
+        };
+        // Bullets drawn apart from their text: the column is the items' text, not the bullets.
+        let apart =
+            [line("•", 20.0, 352.0), line("Milk", 32.0, 352.0), line("•", 20.0, 340.0), line("Bread", 32.0, 340.0), line("Open daily.", 20.0, 328.0)];
+        // One long item in a short list does not make the column, so it is not full.
+        let short = [
+            line("• A", 20.0, 352.0),
+            line("• B", 20.0, 340.0),
+            line("• Bring photo ID and your voucher to the desk.", 20.0, 328.0),
+            line("Open daily.", 20.0, 316.0),
+        ];
+        // Lines that fill the column, but the next line's first word would have fitted on the last.
+        let room = [
+            line("• Print voucher and bring it to a merchant listed on", 20.0, 352.0),
+            line("• Write your name and the address on your ID in the", 20.0, 340.0),
+            line("• Call ahead to book a class at the front desk", 20.0, 328.0),
+            line("Open daily.", 20.0, 316.0),
+        ];
+        // Nor does a long paragraph after it, whose first word would not have fitted.
+        let after = [
+            line("• A", 20.0, 352.0),
+            line("• B", 20.0, 340.0),
+            line("• Bring photo ID and your voucher to the desk.", 20.0, 328.0),
+            line("Unfortunately the office is closed on public holidays.", 20.0, 316.0),
+        ];
+        for page in [&apart[..], &short[..], &room[..], &after[..]] {
+            let found = grouped(page);
+            assert_eq!((wrapped(&found), found.last()), (0, Some(&Block::Text(page.len() - 1))), "{found:?}");
+        }
+        // A paragraph between two lists still ends the first one.
+        let two = [
+            line("• A", 20.0, 352.0),
+            line("• B", 20.0, 340.0),
+            line("• Bring photo ID and your voucher.", 20.0, 328.0),
+            line("Then wait.", 20.0, 316.0),
+            line("• X", 20.0, 304.0),
+            line("• Y", 20.0, 292.0),
+        ];
+        assert!(matches!(grouped(&two).as_slice(), [Block::List { .. }, Block::Text(3), Block::List { .. }]), "{:?}", grouped(&two));
     }
 
     #[test]

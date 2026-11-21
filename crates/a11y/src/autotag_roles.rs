@@ -53,6 +53,13 @@ pub(crate) struct Evidence {
     /// Where the first shown glyph starts, in default user space.
     pub x: f64,
     pub y: f64,
+    /// Where the object's last line ends, and the furthest any of its lines ends, in default user
+    /// space: whether a line is full, so the text after it is its wrapped continuation.
+    pub end: f64,
+    pub right: f64,
+    /// How wide the first word of the object's text is, in default user space, or 0 when unknown:
+    /// whether it would have fitted at the end of the line before, which then did not wrap.
+    pub word: f64,
 }
 
 /// The structure type for each text object, in document order: `H1`–`H6` or `P`.
@@ -110,6 +117,10 @@ struct State {
     tlm: Matrix,
     size: f64,
     leading: f64,
+    char_spacing: f64,
+    word_spacing: f64,
+    /// Horizontal scaling, `Tz` / 100.
+    h_scale: f64,
     /// Text render mode 3 or 7: shown text that paints nothing, such as an OCR layer or a
     /// clip-only object.
     invisible: bool,
@@ -167,33 +178,61 @@ struct Shown {
     /// directly join (`(1) Tj (.) Tj` is `1.`).
     gap: bool,
     start: Option<(f64, f64)>,
+    /// Where the current line's text ends so far, and the furthest any line ended.
+    end: f64,
+    right: f64,
     /// The first operator that shows something, the start of what it shows, and whether text past
     /// that start was left out.
     first_show: Option<(usize, String, bool)>,
     /// A later operator shows something too.
     shown_after: bool,
+    /// Where the first word of the first line ends, once it has started, and whether it has ended.
+    word_end: Option<f64>,
+    word_done: bool,
 }
 
 impl Shown {
-    /// `bytes` shown by operator `at`.
-    fn show(&mut self, state: &State, at: usize, bytes: &[u8]) {
-        let Some(metrics) = state.metrics.as_ref().filter(|_| !state.invisible) else { return };
+    /// `bytes` shown by operator `at`. How far the text position moves, in text space.
+    fn show(&mut self, state: &State, at: usize, bytes: &[u8]) -> f64 {
+        let Some(metrics) = state.metrics.as_ref() else { return 0.0 };
+        let advance = advance(state, metrics, bytes);
+        if state.invisible {
+            return advance;
+        }
         let text = metrics.decode(bytes);
         let chars = text.chars().filter(|c| !c.is_whitespace()).count();
         if chars == 0 {
             // A shown space still separates words (`[(1.)( )(Apples)] TJ`).
             self.gap |= !text.is_empty();
-            return;
+            return advance;
         }
         self.letters |= text.chars().any(char::is_alphabetic);
+        // Where the first glyph other than a space is drawn.
+        let lead: f64 = metrics
+            .codes(bytes)
+            .into_iter()
+            .take_while(|&(code, len)| blank(metrics, code, len))
+            .map(|(code, len)| glyph_advance(state, metrics, code, len))
+            .sum();
+        let [.., x, y] = Matrix::translate(lead, 0.0).then(&state.tm).then(&state.ctm).0;
         if self.start.is_none() {
-            let [.., e, f] = state.tm.then(&state.ctm).0;
-            self.start = Some((e, f));
+            self.start = Some((x, y));
+            self.end = x;
         }
         if self.shown && self.moved {
             self.close_line();
-            let [.., e, _] = state.tm.then(&state.ctm).0;
-            self.line = Some((String::new(), e));
+            self.line = Some((String::new(), x));
+            self.end = x;
+        }
+        // A line move sets `gap` too.
+        self.word_done |= self.word_end.is_some() && self.gap;
+        if !self.word_done {
+            self.first_word(state, metrics, bytes);
+        }
+        let ends = Matrix::translate(advance, 0.0).then(&state.tm).then(&state.ctm).0[4];
+        if ends.is_finite() {
+            self.end = self.end.max(ends);
+            self.right = self.right.max(self.end);
         }
         let gap = std::mem::take(&mut self.gap);
         self.prefix_cut |= keep_start(&mut self.prefix, &text, gap);
@@ -218,12 +257,30 @@ impl Shown {
         let [_, _, c, d, _, _] = state.tm.then(&state.ctm).0;
         let size = (state.size * c.hypot(d)).abs();
         if !size.is_finite() || size <= 0.0 || size > 1e6 {
-            return;
+            return advance;
         }
         let entry = self.by_size.entry(half_points(size)).or_default();
         entry.0 = entry.0.saturating_add(chars);
         if metrics.bold {
             entry.1 = entry.1.saturating_add(chars);
+        }
+        advance
+    }
+
+    /// Follow the first word of the first line through `bytes`, shown at the text position.
+    fn first_word(&mut self, state: &State, metrics: &Metrics, bytes: &[u8]) {
+        let mut at = 0.0;
+        for (code, len) in metrics.codes(bytes) {
+            if blank(metrics, code, len) {
+                self.word_done |= self.word_end.is_some();
+            } else if !self.word_done {
+                let ends = Matrix::translate(at + glyph_advance(state, metrics, code, len), 0.0).then(&state.tm).then(&state.ctm).0[4];
+                self.word_end = Some(ends).filter(|e| e.is_finite()).or(self.word_end);
+            }
+            if self.word_done {
+                return;
+            }
+            at += glyph_advance(state, metrics, code, len);
         }
     }
 
@@ -252,6 +309,7 @@ impl Shown {
             return Evidence::default();
         };
         let (x, y) = self.start.unwrap_or_default();
+        let (end, right) = (self.end, self.right.max(self.end));
         Evidence {
             size: size as f64 / 2.0,
             bold: bold.saturating_mul(2) > count,
@@ -266,8 +324,35 @@ impl Shown {
                 .map(|(at, ..)| at),
             x,
             y,
+            end,
+            right,
+            word: self.word_end.map_or(0.0, |w| (w - x).max(0.0)),
         }
     }
+}
+
+/// How far showing `bytes` moves the text position, in text space (§9.4.4): each glyph's width at
+/// the font size, plus character spacing and word spacing for a single-byte space, scaled
+/// horizontally.
+fn advance(state: &State, metrics: &Metrics, bytes: &[u8]) -> f64 {
+    let total: f64 = metrics.codes(bytes).into_iter().map(|(code, len)| glyph_advance(state, metrics, code, len)).sum();
+    if total.is_finite() { total } else { 0.0 }
+}
+
+/// Whether `code` shows white space: by its text, or, without one, a single-byte space. Word spacing
+/// still follows the byte (§9.3.3), but a font whose code 32 draws a glyph shows no space there, and
+/// a two-byte font's space is not code 32.
+fn blank(metrics: &Metrics, code: u32, len: usize) -> bool {
+    match metrics.text_of(code) {
+        Some(text) if !text.is_empty() => text.chars().all(char::is_whitespace),
+        _ => metrics.is_space(code, len),
+    }
+}
+
+/// How far one glyph moves the text position, in text space.
+fn glyph_advance(state: &State, metrics: &Metrics, code: u32, len: usize) -> f64 {
+    let spacing = state.char_spacing + if metrics.is_space(code, len) { state.word_spacing } else { 0.0 };
+    (metrics.width(code) * state.size + spacing) * state.h_scale
 }
 
 /// Add `text` to `kept`, up to [`MAX_PREFIX`] characters: without leading white space when `kept`
@@ -288,8 +373,18 @@ fn keep_start(kept: &mut String, text: &str, gap: bool) -> bool {
 /// `/Font` resource dictionary; `fonts` is shared by the document's pages.
 pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops: &[Op], spans: &[(usize, usize)]) -> Vec<Evidence> {
     let mut by_name: HashMap<Vec<u8>, Option<Rc<Metrics>>> = HashMap::new();
-    let mut state =
-        State { ctm: Matrix::IDENTITY, tm: Matrix::IDENTITY, tlm: Matrix::IDENTITY, size: 0.0, leading: 0.0, invisible: false, metrics: None };
+    let mut state = State {
+        ctm: Matrix::IDENTITY,
+        tm: Matrix::IDENTITY,
+        tlm: Matrix::IDENTITY,
+        size: 0.0,
+        leading: 0.0,
+        char_spacing: 0.0,
+        word_spacing: 0.0,
+        h_scale: 1.0,
+        invisible: false,
+        metrics: None,
+    };
     let (mut saved, mut unsaved) = (Vec::new(), 0usize);
     let mut out = Vec::with_capacity(spans.len());
     let mut spans = spans.iter().peekable();
@@ -321,6 +416,9 @@ pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops:
                     .and_then(|name| by_name.entry(name.to_vec()).or_insert_with(|| resources.get(name).and_then(|f| fonts.get(doc, f))).clone());
             }
             b"TL" => state.leading = op.num(0).unwrap_or(state.leading),
+            b"Tc" => state.char_spacing = op.num(0).filter(|n| n.is_finite()).unwrap_or(state.char_spacing),
+            b"Tw" => state.word_spacing = op.num(0).filter(|n| n.is_finite()).unwrap_or(state.word_spacing),
+            b"Tz" => state.h_scale = op.num(0).filter(|n| n.is_finite()).map_or(state.h_scale, |n| n / 100.0),
             b"Tr" => state.invisible = matches!(op.num(0), Some(m) if m == 3.0 || m == 7.0),
             b"Td" | b"TD" => {
                 if let Some([x, y]) = op.nums::<2>() {
@@ -354,16 +452,23 @@ pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops:
                 state.tm = state.tlm;
                 if let Some(o) = object {
                     o.new_line();
+                    if op.op == b"\""
+                        && let (Some(w), Some(c)) = (op.num(0), op.num(1))
+                    {
+                        (state.word_spacing, state.char_spacing) = (w, c);
+                    }
                     if op.op != b"T*"
                         && let Some(Object::String(s)) = op.operands.last()
                     {
-                        o.show(&state, at, &s.bytes);
+                        let moved = o.show(&state, at, &s.bytes);
+                        state.tm = Matrix::translate(moved, 0.0).then(&state.tm);
                     }
                 }
             }
             b"Tj" => {
                 if let (Some(o), Some(Object::String(s))) = (object, op.operands.first()) {
-                    o.show(&state, at, &s.bytes);
+                    let moved = o.show(&state, at, &s.bytes);
+                    state.tm = Matrix::translate(moved, 0.0).then(&state.tm);
                 }
             }
             b"TJ" => {
@@ -377,16 +482,13 @@ pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops:
                             Object::String(s) => {
                                 o.gap |= adjusted <= -WORD_GAP;
                                 adjusted = 0.0;
-                                o.show(&state, at, &s.bytes);
+                                let moved = o.show(&state, at, &s.bytes);
+                                state.tm = Matrix::translate(moved, 0.0).then(&state.tm);
                             }
                             other => {
                                 let Some(n) = other.as_f64().filter(|n| n.is_finite()) else { continue };
                                 adjusted += n;
-                                // Before the object's first glyph the adjustment only moves where it
-                                // starts; after it, glyph advances are not tracked, so neither is this.
-                                if o.start.is_none() {
-                                    state.tm = Matrix::translate(-n / 1000.0 * state.size, 0.0).then(&state.tm);
-                                }
+                                state.tm = Matrix::translate(-n / 1000.0 * state.size * state.h_scale, 0.0).then(&state.tm);
                             }
                         }
                     }
@@ -491,8 +593,9 @@ mod tests {
         let found = walk(
             b"q 2 0 0 2 0 0 cm BT /F1 1 Tf 9 0 0 9 10 10 Tm (Title) Tj ET Q BT /F1 12 Tf 10 50 Td (one) Tj T* (two) ' 0 -14 Td (three) Tj ET BT ET",
         );
-        assert_eq!(found[0], Evidence { size: 18.0, bold: true, lines: 1, chars: 5, letters: true, marker: None, label_op: None, x: 20.0, y: 20.0 });
-        assert_eq!(found[1], Evidence { size: 12.0, bold: true, lines: 3, chars: 11, letters: true, marker: None, label_op: None, x: 10.0, y: 50.0 });
+        let style = |e: &Evidence| (e.size, e.bold, e.lines, e.chars, e.letters, e.marker, e.label_op, e.x, e.y);
+        assert_eq!(style(&found[0]), (18.0, true, 1, 5, true, None, None, 20.0, 20.0));
+        assert_eq!(style(&found[1]), (12.0, true, 3, 11, true, None, None, 10.0, 50.0));
         assert_eq!(found[2], Evidence::default());
         assert_eq!(found.len(), 3);
     }
@@ -544,11 +647,45 @@ mod tests {
             b"BT /F1 12 Tf 20 100 Td (1. Written by John) Tj 12 -14 Td (A. Smith and others) Tj ET \
               BT /F1 12 Tf 20 70 Td (2. Decided in Roe) Tj 12 -14 Td (v. Wade, 1973) Tj ET \
               BT /F1 12 Tf 20 40 Td (3. Built) Tj 0 -14 Td (c. 1900 by) Tj ET \
-              BT /F1 12 Tf 20 10 Td (4. One) Tj 0 -14 Td (5. Two) Tj ET",
+              BT /F1 12 Tf 20 10 Td (4. One) Tj 0 -14 Td (5. Two) Tj ET \
+              BT /F1 12 Tf 20 -20 Td (6. One) Tj 0 -14 Td [-1000 (7. example)] TJ ET",
         );
         let markers: Vec<Option<u32>> = found.iter().map(|e| e.marker.map(|m| m.value)).collect();
-        // Only the last continues its first line's marker at the same indent.
-        assert_eq!(markers, [Some(1), Some(2), Some(3), None]);
+        // Only `4.` continues its first line's marker at the same indent. `7.` is moved 12 pt
+        // right by its `TJ` adjustment, so it is a wrapped line, not a second item.
+        assert_eq!(markers, [Some(1), Some(2), Some(3), None, Some(6)]);
+    }
+
+    #[test]
+    fn a_line_ends_where_its_glyphs_end() {
+        let found = walk(
+            b"BT /F1 12 Tf 20 100 Td (Apples) Tj ET \
+              BT /F1 12 Tf 20 80 Td (Apples) Tj (Pears) Tj ET \
+              BT /F1 12 Tf 20 60 Td (Apples) Tj 0 -14 Td (Pears) Tj ET",
+        );
+        assert!(found[0].end > found[0].x, "{found:?}");
+        // A second show continues after the first.
+        assert!(found[1].end > found[0].end, "{found:?}");
+        // The last line ends where its own text does; the furthest line end is kept apart.
+        assert!(found[2].end < found[2].right && found[2].right == found[0].end, "{found:?}");
+    }
+
+    #[test]
+    fn the_first_word_is_measured_across_shows_up_to_a_space_or_a_move() {
+        let found = walk(
+            b"BT /F1 12 Tf 20 100 Td (Apples and pears) Tj ET \
+              BT /F1 12 Tf 20 80 Td (  App) Tj (les) Tj ( and) Tj ET \
+              BT /F1 12 Tf 20 60 Td (Apples) Tj 0 -14 Td (and pears) Tj ET \
+              BT /F1 12 Tf 20 40 Td [(Apples) -300 (and)] TJ ET \
+              BT /F1 12 Tf 20 20 Td (Apples) Tj ET",
+        );
+        let whole = found[4].end - found[4].x;
+        // The word ends at the space, joins shows that follow each other, and ends at a line move
+        // or a word gap.
+        for e in &found[..4] {
+            assert!((e.word - whole).abs() < 1e-6, "{found:?}");
+        }
+        assert!(whole > 0.0);
     }
 
     #[test]

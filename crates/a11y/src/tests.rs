@@ -147,14 +147,16 @@ fn autotag_text_says_why_it_cannot_read_a_page() {
 
 #[test]
 fn autotag_text_tags_typed_lists_and_leaves_lone_or_interrupted_markers_as_paragraphs() {
-    // From the top: a paragraph; a numbered list; a bulleted list whose bullets are drawn apart
+    // From the top: a paragraph; a numbered list whose second item wraps onto a text object of its
+    // own; a bulleted list whose bullets are drawn apart
     // from their text; "1." and "2." with a paragraph between them; a paragraph; a bulleted list
     // whose bullets are shown apart inside each item's text object; a lone "1." line.
     let lines = [
         (20, 280, "Shopping:"),
-        (20, 260, "1. Apples"),
-        (20, 245, "2. Pears"),
-        (20, 230, "3. Plums"),
+        (20, 260, "1. Apples, crisp and red, from the stall by the"),
+        (20, 245, "2. Pears, ripe and green, picked this week from the"),
+        (20, 233, "orchard by the river."),
+        (20, 221, "3. Plums"),
         (20, 210, "\\225"),
         (32, 210, "Milk"),
         (20, 195, "\\225"),
@@ -200,6 +202,8 @@ fn autotag_text_tags_typed_lists_and_leaves_lone_or_interrupted_markers_as_parag
         crate::tag_content(&doc, tag.object).unwrap().into_iter().map(|c| c.text).collect::<String>()
     };
     assert_eq!((text("Lbl", 1), text("LBody", 4)), ("•".to_string(), "Bread".to_string()));
+    let wrapped = text("LBody", 1);
+    assert!(wrapped.starts_with("2. Pears") && wrapped.ends_with("orchard by the river."), "{wrapped:?}");
     assert_eq!((text("Lbl", 3), text("LBody", 6)), ("•".to_string(), "Jam".to_string()));
     let numbering: Vec<Vec<u8>> = tags
         .iter()
