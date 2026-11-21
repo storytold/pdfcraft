@@ -25,8 +25,39 @@ impl PdfCraftApp {
 
     /// Enter or leave full-screen reading (Acrobat: View ▸ Full Screen Mode, ⌘L).
     pub fn set_full_screen(&mut self, ctx: &egui::Context, on: bool) {
+        if on && !self.full_screen {
+            self.full_screen_maximized = ctx.input(|i| i.viewport().maximized);
+        }
         self.apply_full_screen(on);
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(on));
+    }
+
+    /// Keep Windows' borderless full-screen state aligned with PdfCraft's Full Screen Mode (#8010).
+    ///
+    /// Full Screen Mode is a per-session document view, not a saved window style:
+    /// - If `app.ron` from an earlier build restored a borderless fullscreen window (which strips
+    ///   `WS_OVERLAPPEDWINDOW` on Windows) while `self.full_screen` is off, exit OS fullscreen so
+    ///   the native title bar, caption buttons, resizing and Snap return automatically.
+    /// - If the last document tab closes while in Full Screen Mode, leave Full Screen Mode so the
+    ///   Home tab is not shown inside an undecorated fullscreen window where `view.full_screen` is
+    ///   disabled.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn sync_full_screen(&mut self, ctx: &egui::Context) {
+        if cfg!(target_os = "windows") {
+            self.reconcile_full_screen(ctx);
+        }
+    }
+
+    /// Platform-independent implementation of [`Self::sync_full_screen`], exposed so regression
+    /// tests run on every OS.
+    pub fn reconcile_full_screen(&mut self, ctx: &egui::Context) {
+        if self.full_screen && self.active.is_none() {
+            self.set_full_screen(ctx, false);
+            return;
+        }
+        if !self.full_screen && ctx.input(|i| i.viewport().fullscreen == Some(true)) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+        }
     }
 
     /// The full-screen state without the window: every document shows one page (or spread) at a
@@ -38,8 +69,11 @@ impl PdfCraftApp {
         if on && !self.full_screen {
             self.full_screen_tool = Some(self.quick_tool);
             self.quick_tool = QuickTool::Select;
-        } else if !on && let Some(tool) = self.full_screen_tool.take() {
-            self.quick_tool = tool;
+        } else if !on {
+            self.full_screen_maximized = None;
+            if let Some(tool) = self.full_screen_tool.take() {
+                self.quick_tool = tool;
+            }
         }
         self.full_screen = on;
         for view in &mut self.views {
