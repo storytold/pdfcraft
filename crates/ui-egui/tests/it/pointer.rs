@@ -1451,7 +1451,8 @@ fn with_prepare_a_drag_from_a_highlight_draws_the_selection_rectangle() {
 /// is the one selected, and leaves the selection as it is.
 #[test]
 fn a_right_click_with_the_button_held_opens_the_selected_comments_menu() {
-    let mut h = open(comment_on_text_pdf(), "150", false);
+    // Keep the drag clear of the floating quick toolbar.
+    let mut h = open(comment_on_text_pdf(), "100", false);
     // On the rectangle's left edge: an unfilled one takes a press on its border.
     let edge = at(&h, 30.0, 303.0);
     wait_for_cursor(&mut h, edge, |c| c != egui::CursorIcon::Default);
