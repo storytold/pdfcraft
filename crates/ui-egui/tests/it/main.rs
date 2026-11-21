@@ -40,6 +40,7 @@ mod date_format;
 mod dialog_chrome;
 mod document_links;
 mod download_mime;
+mod edit;
 mod editing;
 mod editor_taps;
 mod export;
