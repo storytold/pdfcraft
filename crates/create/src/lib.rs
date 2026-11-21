@@ -191,6 +191,7 @@ fn bilevel(data: &[u8], (w, h): (u32, u32), n: usize, bits: Option<i64>) -> Opti
 /// than Flate: losslessly, and several times smaller than the eight bits a scan saved as a 1-bit
 /// PNG decodes to. RGB keeps its colour space when it has a colour profile.
 fn add_image(doc: &mut Document, img: Embedded, profiles: &mut Vec<(Vec<u8>, ObjRef)>) -> ObjRef {
+    count_held(0, 1);
     let mut d = img.dict;
     d.set(b"Type".to_vec(), Object::name("XObject"));
     d.set(b"Subtype".to_vec(), Object::name("Image"));
@@ -649,26 +650,46 @@ pub fn source_kind(name: &str, bytes: &[u8]) -> Option<SourceKind> {
     (lower.ends_with(".txt") || lower.ends_with(".text")).then_some(SourceKind::Text)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Images `embed` read that are not yet added to a document, and the most at once since a
+    /// test reset it: for the tests that keep Create from images from holding every file's pixels.
+    pub(crate) static IMAGES_HELD: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// Counts `_read` images read and `_added` added to a document (tests only).
+#[inline]
+fn count_held(_read: usize, _added: usize) {
+    #[cfg(test)]
+    IMAGES_HELD.with(|c| {
+        let (held, most) = c.get();
+        let held = held.saturating_add(_read).saturating_sub(_added);
+        c.set((held, most.max(held)));
+    });
+}
+
 /// Detect the image format from its bytes; a TIFF may hold several pages, of which the first
 /// `wanted` are read.
 fn embed(name: &str, bytes: &[u8], wanted: usize) -> Result<Vec<Embedded>, CreateError> {
-    if bytes.starts_with(&[0xFF, 0xD8]) {
-        Ok(vec![jpeg(name, &upright_image::upright(bytes))?])
+    let images = if bytes.starts_with(&[0xFF, 0xD8]) {
+        vec![jpeg(name, &upright_image::upright(bytes))?]
     } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        Ok(vec![png_image(name, bytes)?])
+        vec![png_image(name, bytes)?]
     } else if is_tiff(bytes) {
-        tiff_pages(name, bytes, wanted)
+        tiff_pages(name, bytes, wanted)?
     } else if bytes.starts_with(b"BM") {
-        Ok(vec![decoded(name, &pdfcraft_xfa::image::bmp_with_pixel_offset(bytes), craft_image_codecs::Format::Bmp)?])
+        vec![decoded(name, &pdfcraft_xfa::image::bmp_with_pixel_offset(bytes), craft_image_codecs::Format::Bmp)?]
     } else if is_gif(bytes) {
-        Ok(vec![decoded(name, bytes, craft_image_codecs::Format::Gif)?])
+        vec![decoded(name, bytes, craft_image_codecs::Format::Gif)?]
     } else if is_pcx(bytes) {
-        Ok(vec![pcx(name, bytes)?])
+        vec![pcx(name, bytes)?]
     } else if is_jpx(bytes) {
-        Ok(vec![jpx(name, bytes)?])
+        vec![jpx(name, bytes)?]
     } else {
-        Err(CreateError::Image(name.into(), "use a PNG, JPEG, JPEG 2000, TIFF, GIF or BMP image".into()))
-    }
+        return Err(CreateError::Image(name.into(), "use a PNG, JPEG, JPEG 2000, TIFF, GIF or BMP image".into()));
+    };
+    count_held(images.len(), 0);
+    Ok(images)
 }
 
 /// Embed an image file (its first page, for TIFFs) as an image XObject in `doc`. Returns the
@@ -707,23 +728,27 @@ pub fn from_images_with_resolution(images: &[(String, Vec<u8>)], resolution: Ima
     let mut doc = Document::new_empty();
     let mut tree = Pages::of(&doc)?;
     let mut profiles = Vec::new();
-    for img in images.iter().map(|(name, bytes)| embed(name, bytes, usize::MAX)).collect::<Result<Vec<_>, _>>()?.into_iter().flatten() {
-        let dpi = match resolution {
-            ImageResolution::Embedded => img.dpi,
-            ImageResolution::Dpi(dpi) => (dpi, dpi),
-        };
-        let (mut w, mut h) = (img.px.0 as f64 * 72.0 / dpi.0, img.px.1 as f64 * 72.0 / dpi.1);
-        // Keep huge images within the largest page PDF allows.
-        let k = (MAX_SIDE / w.max(h)).min(1.0);
-        w *= k;
-        h *= k;
-        let xr = add_image(&mut doc, img, &mut profiles);
-        let mut xobj = Dict::new();
-        xobj.set(b"Im0".to_vec(), Object::Ref(xr));
-        let mut res = Dict::new();
-        res.set(b"XObject".to_vec(), Object::Dict(xobj));
-        let content = format!("q {w:.3} 0 0 {h:.3} 0 0 cm /Im0 Do Q\n").into_bytes();
-        tree.add(&mut doc, w, h, res, Some(content));
+    // One file at a time: its pixels are decoded, added (compressed) and dropped before the next
+    // file is read, so many pages (a print as image) never hold every page's pixels at once.
+    for (name, bytes) in images {
+        for img in embed(name, bytes, usize::MAX)? {
+            let dpi = match resolution {
+                ImageResolution::Embedded => img.dpi,
+                ImageResolution::Dpi(dpi) => (dpi, dpi),
+            };
+            let (mut w, mut h) = (img.px.0 as f64 * 72.0 / dpi.0, img.px.1 as f64 * 72.0 / dpi.1);
+            // Keep huge images within the largest page PDF allows.
+            let k = (MAX_SIDE / w.max(h)).min(1.0);
+            w *= k;
+            h *= k;
+            let xr = add_image(&mut doc, img, &mut profiles);
+            let mut xobj = Dict::new();
+            xobj.set(b"Im0".to_vec(), Object::Ref(xr));
+            let mut res = Dict::new();
+            res.set(b"XObject".to_vec(), Object::Dict(xobj));
+            let content = format!("q {w:.3} 0 0 {h:.3} 0 0 cm /Im0 Do Q\n").into_bytes();
+            tree.add(&mut doc, w, h, res, Some(content));
+        }
     }
     tree.finish(&mut doc)?;
     if let Some((name, _)) = images.first() {
