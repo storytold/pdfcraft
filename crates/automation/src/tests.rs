@@ -575,6 +575,17 @@ fn doc_save_keeps_the_documents_zone() {
     let id = a.session.open("local.pdf", Some(local.to_string_lossy().into_owned()), Arc::new(numbered_pages(1)), None).unwrap();
     json(&mut a, "doc_save", json!({"doc": id.0, "path": "local copy.pdf"}));
     assert_eq!(read_zone(&root.join("local copy.pdf")), None, "a local document's copy stays local");
+    // The zone is read like any other input: a document whose file is outside the root passes
+    // on nothing from there.
+    let outside_dir = staging_dir("zone-outside");
+    let outside = outside_dir.canonicalize().unwrap().join("outside.pdf");
+    std::fs::write(&outside, numbered_pages(1)).unwrap();
+    std::fs::write(format!("{}:Zone.Identifier", outside.display()), zone).unwrap();
+    let id = a.session.open("outside.pdf", Some(outside.to_string_lossy().into_owned()), Arc::new(numbered_pages(1)), None).unwrap();
+    json(&mut a, "doc_save", json!({"doc": id.0, "path": "outside copy.pdf"}));
+    assert!(root.join("outside copy.pdf").exists());
+    assert_eq!(read_zone(&root.join("outside copy.pdf")), None, "no zone is read outside the root");
+    std::fs::remove_dir_all(outside_dir).unwrap();
     std::fs::remove_dir_all(dir).unwrap();
 }
 
