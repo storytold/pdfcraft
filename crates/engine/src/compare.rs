@@ -71,6 +71,31 @@ fn change_matches_position(word: &pdfcraft_compare::Word, page: usize, rects: &[
     }
 }
 
+/// Whether every word of the old-side phrase starting at `candidate` matches `ch`'s text and,
+/// when the diff carries positions, overlaps them. Matching only the first word lets a repeated
+/// phrase anchor a deletion note to the wrong occurrence.
+fn old_phrase_matches(candidate: usize, count: usize, ch: &pdfcraft_compare::Change, old_words: &[pdfcraft_compare::Word]) -> bool {
+    let expected: Vec<&str> = ch.old.text.split_whitespace().collect();
+    if expected.len() != count || candidate + count > old_words.len() {
+        return false;
+    }
+    for (i, word) in old_words[candidate..candidate + count].iter().enumerate() {
+        if word.page != ch.old.page || word.text != expected[i] {
+            return false;
+        }
+        if !ch.old.rects.is_empty() {
+            if !ch.old.rects.iter().any(|rect| rects_overlap(word.rect, *rect)) {
+                return false;
+            }
+        } else if let Some(near) = ch.old.near {
+            if !rects_overlap(word.rect, near) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 impl crate::Document {
     /// Standards ▸ Verify PDF/A: the rules the document breaks for `level`.
     pub fn pdfa_verify(&self, level: pdfcraft_preflight::Level) -> Vec<pdfcraft_preflight::Issue> {
