@@ -306,11 +306,14 @@ pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
 /// subject ("Jane Smith · Company A"), so certificates that one issuer made for several
 /// employers — the same subject for all — stay apart (issue #7232). Without a Friendly
 /// Name, or when it says the subject again, the name is the subject's, as before.
+/// The name is trimmed once and compared trimmed: a middleware that pads the property
+/// ("PostSignum ") must not duplicate the subject or leak the padding into the picker.
 /// The helper runs everywhere so the naming can be tested without a store.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn display_name_for(c: &Certificate, friendly_name: Option<&str>) -> String {
     let subject = c.display_name();
-    match friendly_name.filter(|n| !n.trim().is_empty() && *n != subject) {
+    let friendly = friendly_name.map(str::trim).filter(|n| !n.is_empty() && *n != subject);
+    match friendly {
         Some(name) => format!("{name} · {subject}"),
         None => subject,
     }
@@ -1198,6 +1201,13 @@ mod tests {
     fn a_friendly_name_that_says_the_subject_again_adds_nothing() {
         let cert = one_cert("Grace Hopper", "");
         assert_eq!(display_name_for(&cert, Some("Grace Hopper")), "Grace Hopper", "no \"Grace Hopper · Grace Hopper\"");
+        // Padded or line-broken by the middleware that set the property: trimmed once, so it
+        // neither duplicates the subject nor leaks the padding into the picker.
+        assert_eq!(display_name_for(&cert, Some("Grace Hopper ")), "Grace Hopper", "no trailing-space duplication");
+        assert_eq!(display_name_for(&cert, Some("  Grace Hopper\n")), "Grace Hopper");
+        assert_eq!(display_name_for(&cert, Some("  ")), "Grace Hopper", "a padded blank Friendly Name is none");
+        // A real name keeps its inner spacing but loses the padding around it.
+        assert_eq!(display_name_for(&cert, Some(" Jane Smith ")), "Jane Smith · Grace Hopper");
         assert_eq!(display_name_for(&cert, Some(" ")), "Grace Hopper", "an empty Friendly Name is none");
         assert_eq!(display_name_for(&cert, None), "Grace Hopper");
     }
@@ -1240,7 +1250,8 @@ mod tests {
         assert_ne!(a.rect(), b.rect(), "two rows, not one");
 
         // The long name is cut at the row's edge; the tooltip says it whole, beside the subject.
-        let long = format!("{long_friendly} · PostSignum");
+        // (The name is trimmed once, so the label comes from the same helper the app uses.)
+        let long = display_name_for(&cert, Some(long_friendly.as_str()));
         let row = h.get_by_label_contains(long.as_str()).rect();
         h.hover_at(row.center());
         // Well past egui's tooltip delay (0.5 s; a kittest step simulates 0.25 s).
