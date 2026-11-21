@@ -233,47 +233,71 @@ impl Session {
                 Kind::Inserted => format!("Inserted: \"{}\"", ch.new.text),
                 Kind::Deleted => format!("Deleted: \"{}\"", ch.old.text),
             };
-            let new_word_count = ch.new.text.split_whitespace().count();
-            let new_slice = if new_word_count == 0 || new_word_count > new_words.len() {
+            let new_changed: Vec<&str> = ch.new.text.split_whitespace().collect();
+            let new_slice = if new_changed.is_empty() || new_changed.len() > new_words.len() {
                 &new_words[0..0]
             } else {
+                let new_word_count = new_changed.len();
                 // Find this change's words in document order. Searching from the previous
                 // change's end skips the unchanged words between changes; falling back to
-                // the whole list keeps a match when the first search misses.
+                // the whole list keeps a match when the first search misses. Match every
+                // word's text, not just the first one, and keep the search page- and
+                // rectangle-aware so an earlier occurrence of the same text cannot be
+                // mistaken for the words the diff actually changed.
                 let mut start = None;
-                for candidate in new_search_from..=new_words.len() - new_word_count {
+                for candidate in new_search_from..=new_words.len().saturating_sub(new_word_count) {
+                    if !new_words[candidate..candidate + new_word_count].iter().zip(&new_changed).all(|(word, text)| word.text == *text) {
+                        continue;
+                    }
+                    if new_words[candidate].page != ch.new.page {
+                        continue;
+                    }
                     let positional = !ch.new.rects.is_empty() || ch.new.near.is_some();
-                    let matches = if positional {
-                        change_matches_position(&new_words[candidate], ch.new.page, &ch.new.rects, ch.new.near)
-                    } else {
-                        new_words[candidate..candidate + new_word_count]
+                    if positional {
+                        if ch.new.rects.is_empty() {
+                            if let Some(near) = ch.new.near {
+                                if !rects_overlap(new_words[candidate].rect, near) {
+                                    continue;
+                                }
+                            }
+                        } else if !new_words[candidate..candidate + new_word_count]
                             .iter()
-                            .zip(ch.new.text.split_whitespace())
-                            .all(|(word, text)| word.text == text)
-                    };
-                    if matches {
+                            .all(|word| ch.new.rects.iter().any(|rect| rects_overlap(word.rect, *rect)))
+                        {
+                            continue;
+                        }
+                    }
+                    start = Some(candidate);
+                    break;
+                }
+                if start.is_none() {
+                    for candidate in 0..=new_words.len().saturating_sub(new_word_count) {
+                        if !new_words[candidate..candidate + new_word_count].iter().zip(&new_changed).all(|(word, text)| word.text == *text) {
+                            continue;
+                        }
+                        if new_words[candidate].page != ch.new.page {
+                            continue;
+                        }
+                        let positional = !ch.new.rects.is_empty() || ch.new.near.is_some();
+                        if positional {
+                            if ch.new.rects.is_empty() {
+                                if let Some(near) = ch.new.near {
+                                    if !rects_overlap(new_words[candidate].rect, near) {
+                                        continue;
+                                    }
+                                }
+                            } else if !new_words[candidate..candidate + new_word_count]
+                                .iter()
+                                .all(|word| ch.new.rects.iter().any(|rect| rects_overlap(word.rect, *rect)))
+                            {
+                                continue;
+                            }
+                        }
                         start = Some(candidate);
                         break;
                     }
                 }
-                if start.is_none() {
-                    for candidate in 0..=new_words.len() - new_word_count {
-                        let positional = !ch.new.rects.is_empty() || ch.new.near.is_some();
-                        let matches = if positional {
-                            change_matches_position(&new_words[candidate], ch.new.page, &ch.new.rects, ch.new.near)
-                        } else {
-                            new_words[candidate..candidate + new_word_count]
-                                .iter()
-                                .zip(ch.new.text.split_whitespace())
-                                .all(|(word, text)| word.text == text)
-                        };
-                        if matches {
-                            start = Some(candidate);
-                            break;
-                        }
-                    }
-                }
-                let start = start.unwrap_or_else(|| new_search_from.min(new_words.len() - new_word_count));
+                let start = start.unwrap_or_else(|| new_search_from.min(new_words.len().saturating_sub(new_word_count)));
                 new_search_from = (start + new_word_count).min(new_words.len());
                 &new_words[start..start + new_word_count]
             };
