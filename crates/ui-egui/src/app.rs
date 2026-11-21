@@ -508,12 +508,20 @@ impl PdfCraftApp {
     /// The app's root values for this frame: appearance mode, motion, interface scale and the
     /// interface language's direction. The one place the app's `RootEnv` is built.
     pub(crate) fn root_env(&self, ctx: &egui::Context) -> RootEnv {
+        static SIZES: std::sync::OnceLock<Arc<craft::theme::AppSizes>> = std::sync::OnceLock::new();
+        let sizes = SIZES.get_or_init(|| {
+            let mut sizes = craft::theme::AppSizes::default();
+            sizes.all.insert("typography.display.size".into(), craft::theme::SizeValue::Number(24.0));
+            sizes.all.insert("typography.display.line_height".into(), craft::theme::SizeValue::Number(29.0));
+            Arc::new(sizes)
+        });
         let lang = i18n::Lang::from_pref(&self.language);
         let direction = if lang.rtl() { craft_i18n::Direction::Rtl } else { craft_i18n::Direction::Ltr };
         let system = craft::ui::runtime::env::system_text_scale(ctx).unwrap_or(1.0);
         let native = ctx.native_pixels_per_point().unwrap_or(1.0);
         let mut root =
-            RootEnv::new().mode(self.theme_preference).direction(direction).scale(Scale::new(crate::ui_scale::zoom(self.ui_scale, system, native)));
+            RootEnv::new().mode(self.theme_preference).density(craft::theme::Size::Comfortable).direction(direction).scale(Scale::new(crate::ui_scale::zoom(self.ui_scale, system, native)));
+        root.sizes = Arc::clone(sizes);
         root.motion = self.animation_effects;
         // Today is the session's day, the one its date formats and Fill & Sign's Date tool use: the calendars ring it
         // and pick it.
