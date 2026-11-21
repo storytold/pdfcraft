@@ -117,3 +117,39 @@ fn an_inherited_soft_mask_state_does_not_keep_the_original_group() {
     let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
     assert!(bytes.windows(11).any(|w| w == b"SMASKSECRET"), "the second page's mask lost its group");
 }
+
+/// A form the page draws shifted clear of the mark, whose own resources list a state naming the
+/// original group: `again` makes the form select it.
+fn a_form_naming_the_mask(again: bool) -> Document {
+    let group = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >> /Resources << /Font << /F1 5 0 R >> >>",
+        b"1 g BT /F1 10 Tf 10 100 Td (SMASKSECRET) Tj ET",
+    );
+    let body: &[u8] = if again { b"q /GSF gs 0 0 0.6 rg 200 200 20 20 re f Q" } else { b"0 0 0.6 rg 200 200 20 20 re f" };
+    let form = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Matrix [1 0 0 1 150 0] /Resources << /ExtGState << /GSF << /SMask << /S /Luminosity /G 7 0 R >> >> >> >>",
+        body,
+    );
+    one_page(
+        b"q /GS0 gs 0 0 0.6 rg 0 0 300 300 re f Q /Fm1 Do",
+        "/ExtGState << /GS0 << /SMask << /S /Luminosity /G 7 0 R >> >> >> /XObject << /Fm1 8 0 R >>",
+        vec![group, form],
+    )
+}
+
+#[test]
+fn a_form_resource_state_does_not_keep_the_original_group() {
+    let mut doc = a_form_naming_the_mask(false);
+    mark(&mut doc, 0, &[MARK], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.glyphs, 11, "{r:?}");
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!bytes.windows(11).any(|w| w == b"SMASKSECRET"), "the original group survived through a form's own resources");
+
+    // A form that still paints through the original keeps it.
+    let mut doc = a_form_naming_the_mask(true);
+    mark(&mut doc, 0, &[MARK], "");
+    apply(&mut doc, None).unwrap();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(bytes.windows(11).any(|w| w == b"SMASKSECRET"), "the form's mask lost its group");
+}

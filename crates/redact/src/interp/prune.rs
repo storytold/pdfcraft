@@ -423,16 +423,24 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
             let mut xo = res_dict(doc, &res, b"XObject");
             let doomed_names: Vec<Vec<u8>> =
                 xo.iter().filter(|(_, v)| v.as_ref().is_some_and(|r| doomed.contains(&r))).map(|(n, _)| n.to_vec()).collect();
-            if names.is_empty() && doomed_names.is_empty() {
+            // A state in the form's own resources whose soft mask's group was rewritten still
+            // reaches the original, as on a page (#7884).
+            let masks = res_dict(doc, &res, b"ExtGState").iter().any(|(_, v)| masks_with(doc, v, doomed));
+            if names.is_empty() && doomed_names.is_empty() && !masks {
                 pending.push(res);
                 continue;
             }
             let data = doc.with_direct_parms(form).decoded()?;
+            // A form whose content cannot be read may still select the state: fail closed.
+            let selected = if masks { selected_states(doc, &mut DecodeBudget::page(), &res, std::slice::from_ref(&data))? } else { HashSet::new() };
             let mut pruned = prune_doomed_xobjects(doc, std::slice::from_ref(&data), &mut xo, &doomed_names)?;
             if pruned {
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
             }
             pruned |= prune_retired_properties(doc, &mut res, &names, &[vec![data]])?;
+            if masks {
+                pruned |= drop_doomed_states(doc, &mut res, doomed, &selected);
+            }
             if pruned {
                 doc.update_dict(reference, |d| d.set(b"Resources".to_vec(), Object::Dict(res.clone())))?;
             }
