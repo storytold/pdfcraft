@@ -830,16 +830,33 @@ pub(crate) fn has_password_flag(doc: &Document) -> bool {
 /// at: what the opened file already holds is in it already. Nothing reads such a value any more,
 /// so it goes whole, `/DV` or not.
 fn unlinked_password_values(doc: &Document) -> Vec<ObjRef> {
+    let edited = doc.modified_objects();
+    // A kid with no `/Parent` of its own still inherits from the field that lists it in `/Kids`,
+    // as the field reader reads it. Unlinking it edits that listing, so the edited objects as the
+    // opened file had them say which field listed it (#7979).
+    let mut listed_by: std::collections::HashMap<ObjRef, (ObjRef, Dict)> = std::collections::HashMap::new();
+    for (parent, original) in doc.scan_original_objects_subset(edited.clone()) {
+        let Some(d) = original.ok().and_then(|o| o.as_dict().cloned()) else { continue };
+        let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+        for kid in kids.iter().filter_map(Object::as_ref) {
+            listed_by.entry(kid).or_insert_with(|| (parent, d.clone()));
+        }
+    }
     let is_password_text = |r: ObjRef| {
         let chain = field_chain(doc, r);
+        let mut dicts: Vec<Dict> = chain.iter().filter_map(|c| doc.get(*c).as_dict().cloned()).collect();
+        // The top of the chain has no `/Parent`: go on from the field that listed it, as it was.
+        if let Some((parent, original)) = chain.last().and_then(|top| listed_by.get(top)).filter(|(p, _)| !chain.contains(p)) {
+            dicts.push(original.clone());
+            dicts.extend(field_chain(doc, *parent).iter().skip(1).filter_map(|c| doc.get(*c).as_dict().cloned()));
+        }
         // Inherited as the field reader inherits them: a `/FT` that isn't a name, or an `/Ff`
         // that isn't a valid number (`null` included), is skipped and the parent's value applies.
-        let text = chain.iter().find_map(|c| doc.get(*c).as_dict().and_then(|d| d.name(b"FT").map(<[u8]>::to_vec))).is_some_and(|ft| ft == b"Tx");
-        let password = chain.iter().find_map(|c| doc.get(*c).as_dict().and_then(|d| field_flags(doc, d))).is_some_and(|ff| ff & flags::PASSWORD != 0);
+        let text = dicts.iter().find_map(|d| d.name(b"FT").map(<[u8]>::to_vec)).is_some_and(|ft| ft == b"Tx");
+        let password = dicts.iter().find_map(|d| field_flags(doc, d)).is_some_and(|ff| ff & flags::PASSWORD != 0);
         text && password
     };
-    let mut found: Vec<ObjRef> = doc
-        .modified_objects()
+    let mut found: Vec<ObjRef> = edited
         .into_iter()
         .map(|num| ObjRef::new(num, doc.generation(num)))
         .filter(|r| doc.get(*r).as_dict().is_some_and(|d| d.get(b"V").is_some()) && is_password_text(*r))

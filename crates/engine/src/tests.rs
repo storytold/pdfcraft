@@ -3312,6 +3312,38 @@ fn a_password_value_inherited_past_a_null_entry_is_not_saved_after_its_field_lea
     }
 }
 
+/// #7891 review: a kid that a Password text field lists in `/Kids` but that has no `/Parent` of
+/// its own inherits `/FT` and `/Ff` through that listing, as the field reader reads it. Once
+/// Flatten has taken it out of the form the listing is gone too, and its value still goes in no
+/// file.
+#[test]
+fn a_password_value_inherited_through_kids_alone_is_not_saved_after_its_field_leaves_the_form() {
+    const SECRET: &str = "SECRET-MARKER-3";
+    let fixture = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /T (kid) /Rect [20 20 180 50] /P 3 0 R /DA (/Helv 10 Tf 0 g) >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /FT /Tx /T (pw) /Ff 8192 /Kids [4 0 R] >>".into(),
+    ]);
+    // Only Flatten: Delete Field leaves such a kid in the form, where its value is read and
+    // cleared as any linked Password field's is.
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, Arc::new(fixture), None).unwrap();
+    // Named from its own `/T` (no `/Parent` to prefix), typed and flagged through the listing.
+    let kid = s.get(id).unwrap().form.iter().find(|f| f.name == "kid").cloned().expect("the kid is a field");
+    assert!(kid.flags & (1 << 13) != 0, "the kid inherits the Password flag through /Kids");
+    s.apply(id, Edit::SetFieldValue { name: "kid".into(), value: FieldValue::Text(SECRET.into()) }).unwrap();
+    s.apply(id, Edit::Flatten { comments: false, fields: true }).unwrap();
+    assert!(s.get(id).unwrap().form.iter().all(|f| f.name != "kid"), "the field has left the form");
+    assert!(!appears_in_pdf(&s.save_bytes(id).unwrap(), SECRET), "Save");
+    assert!(!appears_in_pdf(&s.save_full_bytes(id).unwrap(), SECRET), "a full rewrite");
+    for snap in s.autosave_snapshots() {
+        assert!(!appears_in_pdf(&snap.bytes, SECRET), "the recovery snapshot");
+    }
+}
+
 /// #3926 / #3943 review: signing writes the signed file from the same copy a save does, so a
 /// typed Password-field value is not signed into the file either.
 #[test]
