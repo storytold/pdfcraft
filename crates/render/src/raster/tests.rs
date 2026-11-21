@@ -567,16 +567,16 @@ fn function_limits_public_construction_work_and_depth() {
     use hayro_syntax::object::{FromBytes, Object};
 
     let mut data = "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>".to_owned();
-    for _ in 1..64 {
+    for _ in 1..31 {
         data = format!("<< /FunctionType 3 /Domain [0 1] /Functions [{data}] /Bounds [] /Encode [0 1] >>");
     }
     let object = Object::from_bytes(data.as_bytes()).unwrap();
     assert_eq!(Function::new(&object).unwrap().eval([0.5].into_iter().collect()).unwrap().as_slice(), &[0.5]);
-    let over = format!("<< /FunctionType 3 /Domain [0 1] /Functions [{data}] /Bounds [] /Encode [0 1] >>");
-    // The 64 functions above nest exactly 128 levels (each dictionary and its /Functions
-    // array, then the leaf's /Domain array), the parser's nesting cap. 65 nest 130, so the
-    // parser refuses them before the function-depth guard sees them (a refusal either way).
-    // `function_limits_depth_guard_refuses_a_chain_of_references` tests the guard itself.
+    let mut over = data;
+    for _ in 0..2 {
+        over = format!("<< /FunctionType 3 /Domain [0 1] /Functions [{over}] /Bounds [] /Encode [0 1] >>");
+    }
+    // `craft-libs` hayro-syntax caps direct container nesting at 64 levels.
     assert!(Object::from_bytes(over.as_bytes()).is_none(), "the parser refuses direct nesting past its cap");
 
     // One root plus 10,000 leaves is one node past the common budget. This input remains
@@ -2741,6 +2741,58 @@ trailer << /Root 1 0 R >>
     assert_eq!(px(&hidden, 20, 80), vec![255, 0, 0, 255], "fields stay");
 }
 
+/// The viewer's overrides (patches 105 and 106) show a hidden widget, hide a shown one and draw
+/// one with another form, by object; an entry of `/Annots` that isn't a dictionary is skipped.
+#[test]
+fn annotation_and_appearance_overrides_change_only_the_view() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 50] /Annots [42 5 0 R 6 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (a) /F 2 /Rect [0 0 50 50] /AP << /N 7 0 R >> >> endobj
+6 0 obj << /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (b) /Rect [50 0 100 50] /AP << /N 8 0 R >> >> endobj
+7 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 50 50] /Length 24 >> stream
+1 0 0 rg 0 0 50 50 re f
+endstream endobj
+8 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 50 50] /Length 24 >> stream
+0 0 1 rg 0 0 50 50 re f
+endstream endobj
+9 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 24 >> stream
+0 1 0 rg 0 0 10 10 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let render = |config: RenderConfig| {
+        let mut r = PageRenderer::new(Arc::new(pdf.to_vec()), config);
+        r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() })
+    };
+    let px = |p: &RenderedPage, x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
+    let (white, red, blue, green) = (vec![255, 255, 255, 255], vec![255, 0, 0, 255], vec![0, 0, 255, 255], vec![0, 255, 0, 255]);
+    let plain = render(RenderConfig::default());
+    assert_eq!((px(&plain, 25, 25), px(&plain, 75, 25)), (white.clone(), blue), "the hidden widget isn't drawn");
+    let flipped = render(RenderConfig { annotations: Arc::new(vec![(5, 0, true), (6, 0, false)]), ..RenderConfig::default() });
+    assert_eq!((px(&flipped, 25, 25), px(&flipped, 75, 25)), (red, white.clone()), "shown and hidden by object");
+    let face = render(RenderConfig { appearances: Arc::new(vec![(6, 0, 9, 0), (5, 0, 99, 0)]), ..RenderConfig::default() });
+    assert_eq!((px(&face, 25, 25), px(&face, 75, 25)), (white.clone(), green), "drawn with the other form, scaled to its own rectangle");
+    let cleared = render(RenderConfig { appearances: Arc::new(vec![(6, 0, 0, 0)]), ..RenderConfig::default() });
+    assert_eq!(px(&cleared, 75, 25), white, "an override naming no form draws nothing (a cleared icon), not the button's own face");
+    // A print preview draws the page as it prints, without what the scripts show.
+    let config = RenderConfig {
+        annotations: Arc::new(vec![(5, 0, true), (6, 0, false)]),
+        appearances: Arc::new(vec![(6, 0, 9, 0)]),
+        ..RenderConfig::default()
+    };
+    let preview = PageRenderer::new(Arc::new(pdf.to_vec()), config).render(RenderRequest {
+        page: 0,
+        kind: RequestKind::Pixels,
+        tile: None,
+        scale: 1.0,
+        tag: PRINT_TAG,
+        ..Default::default()
+    });
+    assert_eq!((px(&preview, 25, 25), px(&preview, 75, 25)), (vec![255, 255, 255, 255], vec![0, 0, 255, 255]), "the print preview");
+}
+
 /// ISO 32000-2 Table 167: Invisible hides an annotation of a type that isn't standard and
 /// nothing else; §12.5.6.14: a popup has no appearance of its own, so its `/AP` isn't painted.
 #[test]
@@ -3112,7 +3164,7 @@ fn tiling_pattern_form_cycles_are_bounded_and_finite_nesting_paints() {
                  2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 40 40] >> endobj\n\
                  3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Pattern << /P1 5 0 R /P2 6 0 R >> /XObject << /F 7 0 R >> >> >> endobj\n\
                  4 0 obj << /Length {} >> stream\n{page_content}\nendstream endobj\n\
-                 5 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Length {} >> stream\n{pattern_a}\nendstream endobj\n\
+                 5 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << /Pattern << /P1 5 0 R /P2 6 0 R >> /XObject << /F 7 0 R >> >> /Length {} >> stream\n{pattern_a}\nendstream endobj\n\
                  6 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Length {} >> stream\n{pattern_b}\nendstream endobj\n\
                  7 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length {} >> stream\n{form}\nendstream endobj\n\
                  trailer << /Root 1 0 R >>\n%%EOF",
@@ -3378,6 +3430,26 @@ fn a_large_step_still_tiles_where_the_next_cell_shows() {
 /// no decomposition, reversible wavelet, and one empty packet per component. Empty
 /// coefficients decode to the midpoint (128) after the unsigned DC level shift.
 fn jpx_midpoint_pdf(bpc: u8, components: u16) -> Vec<u8> {
+    let codestream = jpx_midpoint_codestream(components);
+    let content = "q 20 0 0 20 5 5 cm /Im1 Do Q 1 0 0 rg 0 0 4 4 re f";
+    let mut pdf = format!(
+        "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n\
+4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent {bpc} /Filter /JPXDecode /Length {} >> stream\n",
+        content.len(),
+        codestream.len()
+    )
+    .into_bytes();
+    pdf.extend_from_slice(&codestream);
+    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
+    pdf
+}
+
+/// [`jpx_midpoint_pdf`]'s one-pixel codestream on its own.
+fn jpx_midpoint_codestream(components: u16) -> Vec<u8> {
     let mut codestream = vec![0xff, 0x4f, 0xff, 0x51]; // SOC, SIZ.
     codestream.extend_from_slice(&(38 + 3 * components).to_be_bytes());
     codestream.extend_from_slice(&0_u16.to_be_bytes()); // Rsiz.
@@ -3397,22 +3469,7 @@ fn jpx_midpoint_pdf(bpc: u8, components: u16) -> Vec<u8> {
     codestream.extend_from_slice(&[0, 1, 0xff, 0x93]); // One tile part, SOD.
     codestream.extend(std::iter::repeat_n(0, usize::from(components)));
     codestream.extend_from_slice(&[0xff, 0xd9]); // EOC.
-
-    let content = "q 20 0 0 20 5 5 cm /Im1 Do Q 1 0 0 rg 0 0 4 4 re f";
-    let mut pdf = format!(
-        "%PDF-1.7\n\
-1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
-2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
-3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n\
-4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
-5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent {bpc} /Filter /JPXDecode /Length {} >> stream\n",
-        content.len(),
-        codestream.len()
-    )
-    .into_bytes();
-    pdf.extend_from_slice(&codestream);
-    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
-    pdf
+    codestream
 }
 
 /// [`jpx_midpoint_pdf`]'s codestream (every sample 128) wrapped in a JP2 file whose header
@@ -3576,6 +3633,40 @@ fn jpx_32_bit_image_does_not_prevent_other_page_content_from_rendering() {
         assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "other page content draws");
         if bpc == 8 {
             assert_eq!(&page.rgba[((25 * 40 + 15) * 4)..][..4], &[128, 128, 128, 255], "the valid image paints gray");
+        }
+    }
+}
+
+/// #3884: a JPX image filling a `/Rotate 90` page (Acrobat Paper Capture scans) crashed the page
+/// with "attempt to divide by zero". The decode-size hint mapped the image's corners as points,
+/// so it took in the translation, and on a rotated page one corner lands on the device origin:
+/// a hint side of 0, which `hayro-jpeg2000` divides the image size by. The hint now comes from
+/// the transform's linear part and is never below one pixel. Negative, past-360 and
+/// non-multiple-of-90 `/Rotate` values (invalid, ISO 32000-2 §7.7.3.3) must not panic either.
+#[test]
+fn jpx_image_on_a_rotated_page_draws_instead_of_crashing() {
+    let codestream = jpx_midpoint_codestream(1);
+    for rotate in [0, 90, 180, 270, -90, 450, 45] {
+        let content = "q 40 0 0 40 0 0 cm /Im1 Do Q";
+        let mut bytes = format!(
+            "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Rotate {rotate} /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n\
+4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /JPXDecode /Length {} >> stream\n",
+            content.len(),
+            codestream.len()
+        )
+        .into_bytes();
+        bytes.extend_from_slice(&codestream);
+        bytes.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
+        let mut renderer = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
+        for scale in [0.5, 1.0, 1.5] {
+            let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale, tag: 0, ..Default::default() });
+            assert!(page.error.is_none(), "/Rotate {rotate} at {scale}x: {:?}", page.error);
+            let centre = (page.height / 2 * page.width + page.width / 2) as usize * 4;
+            assert_eq!(page.rgba.get(centre..centre + 4), Some(&[128, 128, 128, 255][..]), "/Rotate {rotate} at {scale}x paints the image");
         }
     }
 }
@@ -4066,12 +4157,12 @@ fn deeply_nested_direct_objects_do_not_overflow_the_stack() {
         // Run the crash reproducer first, so the unpatched red state is a stack overflow.
         let page = nesting_render(pdf(&nested(100_000, kind), paint));
         assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "{kind}: repaired trailer");
-        for depth in [20, 128, 129] {
+        for depth in [20, 64, 65] {
             let value = nested(depth, kind);
             let siblings = format!("{value} [] []");
             let mut reader = Reader::new(siblings.as_bytes());
-            assert_eq!(reader.skip::<Object<'_>>(false).is_some(), depth <= 128, "{kind}: depth {depth}");
-            if depth > 128 {
+            assert_eq!(reader.skip::<Object<'_>>(false).is_some(), depth <= 64, "{kind}: depth {depth}");
+            if depth > 64 {
                 assert_eq!(reader.offset(), 0, "failed skips restore the offset");
                 reader.jump(value.len());
             }
@@ -4092,13 +4183,13 @@ fn deeply_nested_direct_objects_do_not_overflow_the_stack() {
         }
     }
     // Content-stream arrays take the Object path, rather than MaybeRef<Object>.
-    for depth in [100_000, 20, 128, 129] {
+    for depth in [100_000, 20, 64, 65] {
         let value = nested(depth, "array");
         let mut reader = Reader::new(value.as_bytes());
-        assert_eq!(reader.skip::<Object<'_>>(true).is_some(), depth <= 128, "content: depth {depth}");
+        assert_eq!(reader.skip::<Object<'_>>(true).is_some(), depth <= 64, "content: depth {depth}");
         let content = format!("{value} discard {paint}");
         let page = nesting_render(pdf("null", &content));
-        if depth <= 128 {
+        if depth <= 64 {
             assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "content: depth {depth}");
         }
     }
@@ -4144,8 +4235,8 @@ fn dictionaries_nested_without_keys_are_read_up_to_the_nesting_cap() {
     use hayro_syntax::object::{FromBytes, Object};
     use hayro_syntax::reader::{Reader, ReaderExt};
     let (red, blue, white) = ([255, 0, 0, 255], [0, 0, 255, 255], [255, 255, 255, 255]);
-    for depth in [128, 129] {
-        let within = depth <= 128;
+    for depth in [64, 65] {
+        let within = depth <= 64;
         let value = keyless(depth, true);
         assert_eq!(Object::from_bytes(value.as_bytes()).is_some(), within, "object: {depth}");
         assert_eq!(Reader::new(value.as_bytes()).read_without_context::<Object<'_>>().is_some(), within, "operand: {depth}");
@@ -4178,12 +4269,12 @@ fn nesting_at_the_cap_fits_a_512_kib_stack() {
     use hayro_syntax::reader::{Reader, ReaderExt};
     let worker = std::thread::Builder::new().stack_size(512 * 1024).spawn(|| {
         // (kind, arrays and dictionaries `{:?}` shows, levels walked down to the end)
-        for (kind, arrays, dicts, levels) in [("array", 128, 0, 129), ("dict", 0, 128, 129), ("mixed", 64, 64, 129), ("keyless", 0, 1, 1)] {
-            let value = if kind == "keyless" { keyless(128, true) } else { nested(128, kind) };
+        for (kind, arrays, dicts, levels) in [("array", 64, 0, 65), ("dict", 0, 64, 65), ("mixed", 32, 32, 65), ("keyless", 0, 1, 1)] {
+            let value = if kind == "keyless" { keyless(64, true) } else { nested(64, kind) };
             assert!(Reader::new(value.as_bytes()).skip::<Object<'_>>(false).is_some(), "{kind}: skip");
             assert!(Reader::new(value.as_bytes()).skip::<Object<'_>>(true).is_some(), "{kind}: skip in content");
             assert!(Reader::new(value.as_bytes()).read_without_context::<Object<'_>>().is_some(), "{kind}: operand");
-            let object = Object::from_bytes(value.as_bytes()).expect("the cap admits 128 levels");
+            let object = Object::from_bytes(value.as_bytes()).expect("the cap admits 64 levels");
             let shown = format!("{object:?}");
             assert_eq!((shown.matches("Array(").count(), shown.matches("Dict(").count()), (arrays, dicts), "{kind}: {{:?}}");
             let (mut walked, mut next) = (0, Some(object));
@@ -6678,7 +6769,6 @@ fn a_form_that_draws_itself_is_drawn_once() {
         let second = if extra.is_empty() { [255, 255, 255] } else { [255, 0, 0] };
         assert_eq!(rgb_at(&page.rgba, 200, 25, 35), second, "{what}: the form one level in");
         assert_eq!(rgb_at(&page.rgba, 200, 45, 35), [255, 255, 255], "{what}: the form is not drawn inside itself");
-        assert!(page.warnings.contains(&RenderWarning::ContentTruncated), "{what}: the skipped drawing is reported");
     }
 }
 
@@ -6720,7 +6810,6 @@ fn a_form_that_reaches_itself_through_a_pattern_or_a_glyph_is_drawn_once() {
         assert!(page.error.is_none(), "{what}: {:?}", page.error);
         assert_eq!(rgb_at(&page.rgba, 200, 5, 35), [0, 0, 255], "{what}: the form draws");
         assert_eq!(rgb_at(&page.rgba, 200, 25, 35), [255, 255, 255], "{what}: the form is not drawn inside itself");
-        assert!(page.warnings.contains(&RenderWarning::ContentTruncated), "{what}: the skipped drawing is reported");
     }
 }
 
@@ -9457,6 +9546,121 @@ fn decoded_images_under_a_transfer_function_are_not_shared() {
     assert_eq!(rgb_at(&out.rgba, w, 100, 35), [255, 0, 0]);
 }
 
+/// A 4x4 one-component 8-bit JPX codestream with one decomposition level and an empty packet
+/// per resolution (every sample 128), so a size hint of 2x2 decodes it at its reduced level.
+fn jpx_one_level_codestream() -> Vec<u8> {
+    let mut out = vec![0xff, 0x4f, 0xff, 0x51, 0, 41, 0, 0]; // SOC, SIZ, Lsiz, Rsiz.
+    for value in [4_u32, 4, 0, 0, 4, 4, 0, 0] {
+        out.extend_from_slice(&value.to_be_bytes());
+    }
+    out.extend_from_slice(&[0, 1, 7, 1, 1]); // One component: eight bits, no subsampling.
+    // COD: one decomposition level, reversible wavelet. QCD: no quantization, four subbands.
+    out.extend_from_slice(&[0xff, 0x52, 0, 12, 0, 0, 0, 1, 0, 1, 4, 4, 0, 1]);
+    out.extend_from_slice(&[0xff, 0x5c, 0, 7, 0x40, 0x40, 0x48, 0x48, 0x50]);
+    // SOT for tile zero, one 16-byte tile part, SOD, two empty packets, EOC.
+    out.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0, 0, 0, 0, 16, 0, 1, 0xff, 0x93, 0, 0, 0xff, 0xd9]);
+    out
+}
+
+/// Review on #3884: a colour-key `/Mask` (ISO 32000-2 §8.9.6.4) is matched against the decoded
+/// samples, and a JPX image decoded at a reduced resolution has averaged ones, so keyed pixels
+/// next to unkeyed ones turned opaque (or unkeyed averages fell in the key range). Such an
+/// image is decoded at full size, like every other filter, and resampled with its mask; a
+/// `/SMask`, which takes precedence over `/Mask`, keeps the reduced decode.
+#[test]
+fn jpx_with_a_colour_key_mask_is_decoded_at_full_size() {
+    use hayro::hayro_interpret::font::Glyph;
+    use hayro::hayro_interpret::hayro_syntax::Pdf;
+    use hayro::hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, ImageData, InterpreterCache, Paint, PathDrawMode, SoftMask, TransformExt,
+        interpret_page,
+    };
+    use kurbo::{Affine, BezPath, Rect};
+
+    /// Asks for every raster image at 2x2 and records the size it was decoded at.
+    #[derive(Default)]
+    struct Decoded(Vec<(u32, u32)>);
+    impl<'a> Device<'a> for Decoded {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'a>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'a>, _: &PathDrawMode) {}
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'a>, _: Affine, _: Affine, _: &Paint<'a>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, image: Image<'a, '_>, _: Affine) {
+            if let Image::Raster(r) = image {
+                r.with_rgba(
+                    |image, _| {
+                        self.0.push(match image {
+                            ImageData::Rgb(d) => (d.width, d.height),
+                            ImageData::Luma(d) => (d.width, d.height),
+                        })
+                    },
+                    Some((2, 2)),
+                );
+            }
+        }
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+
+    let codestream = jpx_one_level_codestream();
+    let image = |extra: &str| {
+        format!(
+            "<< /Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /JPXDecode {extra}/Length {} >>",
+            codestream.len()
+        )
+    };
+    let soft_mask = "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>";
+    for (extra, expected) in [("", (2, 2)), ("/Mask [0 0] ", (4, 4)), ("/Mask [0 0] /SMask 6 0 R ", (2, 2))] {
+        let bytes =
+            image_cache_pdf("q 20 0 0 20 0 0 cm /A Do Q", "<< /XObject << /A 5 0 R >> >>", &[(&image(extra), &codestream), (soft_mask, b"\xff")]);
+        let parsed = Pdf::new(Arc::new(bytes)).expect("parses");
+        let page = &parsed.pages()[0];
+        let cache = InterpreterCache::new();
+        let initial = page.initial_transform(true).to_kurbo();
+        let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, 40.0, 40.0), &cache, page.xref(), InterpreterSettings::default());
+        let mut device = Decoded::default();
+        interpret_page(page, &mut ctx, &mut device);
+        assert_eq!(device.0, [expected], "{extra:?}");
+    }
+}
+
+/// The codestream of the 4x2 JP2 in vendored hayro-syntax's `filter::jpx` tests (written for
+/// them): one 8-bit component, one decomposition level, samples 0 1 0 1 / 1 0 1 0.
+const JPX_CHECKERBOARD: &[u8] = &[
+    0xff, 0x4f, 0xff, 0x51, 0x00, 0x29, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x07, 0x01, 0x01, 0xff, 0x52, 0x00,
+    0x0c, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x04, 0x04, 0x00, 0x01, 0xff, 0x5c, 0x00, 0x07, 0x40, 0x40, 0x48, 0x48, 0x50, 0xff, 0x64, 0x00, 0x25,
+    0x00, 0x01, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x64, 0x20, 0x62, 0x79, 0x20, 0x4f, 0x70, 0x65, 0x6e, 0x4a, 0x50, 0x45, 0x47, 0x20, 0x76, 0x65,
+    0x72, 0x73, 0x69, 0x6f, 0x6e, 0x20, 0x32, 0x2e, 0x35, 0x2e, 0x34, 0xff, 0x90, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x17, 0x00, 0x01, 0xff,
+    0x93, 0xcf, 0xb4, 0x08, 0x08, 0x67, 0x90, 0x07, 0x41, 0x08, 0xff, 0xd9,
+];
+
+/// Review on #3884, as drawn: a 4x2 JPX checkerboard of samples 0 and 1 whose colour key
+/// `/Mask [0 0]` hides the 0s, drawn over red at 2x1 pixels, where the size hint skips a
+/// resolution level. Half of each pixel's samples are keyed, so the red shows through half of
+/// it. Decoded at the reduced level, the samples were averages the key no longer matched, and
+/// the image covered the red.
+#[test]
+fn jpx_colour_key_mask_keeps_its_transparency_when_drawn_small() {
+    let image = format!(
+        "<< /Type /XObject /Subtype /Image /Width 4 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /JPXDecode /Mask [0 0] /Length {} >>",
+        JPX_CHECKERBOARD.len()
+    );
+    let pdf = image_cache_pdf("1 0 0 rg 0 0 130 70 re f q 2 0 0 1 10 10 cm /A Do Q", "<< /XObject << /A 5 0 R >> >>", &[(&image, JPX_CHECKERBOARD)]);
+    let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    let out = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+    assert!(out.error.is_none(), "{:?}", out.error);
+    let w = out.width as usize;
+    for x in [10, 11] {
+        let [r, g, b] = rgb_at(&out.rgba, w, x, 59);
+        assert!((100..=156).contains(&r) && g < 8 && b < 8, "half of pixel {x} shows the red under it: {:?}", [r, g, b]);
+    }
+    assert_eq!(rgb_at(&out.rgba, w, 9, 59), [255, 0, 0], "left of the image");
+    assert_eq!(rgb_at(&out.rgba, w, 12, 59), [255, 0, 0], "right of the image");
+}
+
 /// The decoded-image cache keyed every decode by the size the image is drawn at, but only
 /// a JPX stream decodes differently for a size: a scan was decoded again at every zoom step
 /// and kept once per zoom level (vendored hayro-interpret patch 32). An image drawn at five
@@ -10521,12 +10725,10 @@ trailer << /Root 1 0 R >>
     for glyph in ["1 0 0 0 1 1 d1 0.12 0.12 0.71 0.71 re f", "1 0 d0 0.12 0.12 0.71 0.71 re f"] {
         let filled = render(glyph, 0);
         assert!(filled.as_chunks::<4>().0.iter().any(|p| p[0] < 128), "{glyph}: the glyph paints");
-        for mode in [1, 2, 4, 5, 6] {
+        for mode in [1, 2, 4, 5, 6, 7] {
             assert!(render(glyph, mode) == filled, "{glyph}: {mode} Tr draws as 0 Tr");
         }
-        for mode in [3, 7] {
-            assert!(render(glyph, mode).as_chunks::<4>().0.iter().all(|p| p[..3] == [255, 255, 255]), "{glyph}: {mode} Tr hides the glyph");
-        }
+        assert!(render(glyph, 3).as_chunks::<4>().0.iter().all(|p| p[..3] == [255, 255, 255]), "{glyph}: 3 Tr hides the glyph");
     }
 }
 
@@ -10917,7 +11119,7 @@ trailer << /Root 1 0 R >>
         let shown = ink(RenderConfig { system_fonts: true, ..RenderConfig::default() });
         assert!(shown > 300, "{base_font}: the text is drawn ({shown} dark pixels)");
         // Off by default: exports, printing and OCR render without an installed font, so
-        // nothing drawn with one can be saved (AGENTS.md §1.2, §1.4).
+        // nothing drawn with one can be saved (licences.md; docs/development.md "Fonts and attribution").
         let saved = ink(RenderConfig::default());
         assert!(saved < 50, "{base_font}: not drawn without system_fonts ({saved} dark pixels)");
         if encoding == "GBK-EUC-H" {
@@ -11275,7 +11477,7 @@ fn a_filters_parameters_are_read_in_either_form() {
 
     let plain = format!("4 0 obj << /Length {} >> stream\n{}\nendstream endobj", content.len(), String::from_utf8_lossy(content));
     let mut doc = Document::open(Arc::new(page(plain.as_bytes()))).unwrap();
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm: Algorithm::Aes128,
         user_password: "",
         owner_password: "owner",
@@ -11352,7 +11554,7 @@ fn a_stream_with_a_crypt_filter_of_its_own_is_drawn() {
     };
     for (algorithm, filters) in [(Algorithm::Rc4_128, false), (Algorithm::Aes128, true), (Algorithm::Aes256, true)] {
         let mut doc = Document::open(Arc::new(page.clone().into_bytes())).unwrap();
-        doc.set_encryption(&NewEncryption {
+        doc.set_encryption_legacy(&NewEncryption {
             algorithm,
             user_password: "",
             owner_password: "owner",
@@ -11485,7 +11687,7 @@ endobj
 fn an_encrypted_file_with_a_cut_off_update_still_needs_its_password() {
     use pdfcraft_cos::{Algorithm, Document, NewEncryption, SaveOptions, write_full};
     let mut doc = Document::open(Arc::new(one_page_file())).unwrap();
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm: Algorithm::Aes128,
         user_password: "user",
         owner_password: "owner",
@@ -11524,7 +11726,7 @@ trailer << /Root 1 0 R >>
 %%EOF"
         .to_vec();
     let mut doc = Document::open(Arc::new(plain)).unwrap();
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm: Algorithm::Aes128,
         user_password: "user",
         owner_password: "owner",

@@ -1127,6 +1127,58 @@ fn arrow_keys_nudge_the_selected_comment() {
     assert_eq!(h.state().views[0].current, 1, "and the view goes to the next page");
 }
 
+#[test]
+fn arrow_keys_nudge_all_selected_comments_as_one_undo_step() {
+    use egui::Key;
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (30.0, 110.0), (80.0, 70.0));
+    drag_pt(&mut h, (130.0, 110.0), (180.0, 70.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    let before: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
+    assert_eq!(before.len(), 2);
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.state_mut().views[0].comments.also = vec![(0, 1)];
+    h.key_press(Key::ArrowRight);
+    h.run_steps(3);
+    let moved: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
+    for (old, new) in before.iter().zip(&moved) {
+        assert!(new[0] > old[0], "each selected comment moves: {before:?} -> {moved:?}");
+    }
+    h.state_mut().undo();
+    h.run_steps(2);
+    let undone: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
+    assert_eq!(undone, before, "one undo restores the whole selection");
+}
+
+#[test]
+fn arrow_nudge_skips_locked_comments_and_duplicate_selection_entries() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    for (a, b) in [((20.0, 20.0), (60.0, 60.0)), ((100.0, 20.0), (140.0, 60.0)), ((180.0, 20.0), (220.0, 60.0))] {
+        drag_pt(&mut h, a, b);
+    }
+    h.state_mut().set_option("quick", "select").unwrap();
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::LockAnnotation { page: 0, index: 1, locked: true }));
+    h.run_steps(2);
+    let before = comments(&h);
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.state_mut().views[0].comments.also = vec![(0, 1), (0, 2), (0, 2), (0, 0)];
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    let after = comments(&h);
+    let left = |list: &[Annotation], i: usize| list.iter().find(|a| a.index == i).expect("comment still exists").rect[0];
+    let primary_delta = left(&after, 0) - left(&before, 0);
+    let secondary_delta = left(&after, 2) - left(&before, 2);
+    assert!(primary_delta > 0.0, "primary comment moves");
+    assert!((secondary_delta - primary_delta).abs() < 0.01, "duplicate entries must not move the second comment twice");
+    assert_eq!(left(&after, 1), left(&before, 1), "locked comment stays in place");
+    h.state_mut().undo();
+    h.run_steps(2);
+    let undone = comments(&h);
+    for i in 0..3 {
+        assert_eq!(left(&undone, i), left(&before, i), "one undo restores comment {i}");
+    }
+}
+
 /// #3632: with a comment selected, Alt+← / Alt+→ still go back and forward through the view
 /// history instead of nudging it (egui's key patterns let an extra Alt through).
 #[test]
@@ -4641,14 +4693,18 @@ fn hotbar_picker_searches_translated_tool_labels() {
     if crate::support::skip_without_catalogs("hotbar_picker_searches_translated_tool_labels") {
         return;
     }
+    use pdfcraft_ui_egui::i18n::{Lang, tr};
+    let french = Lang::from_code("fr").unwrap();
     let mut h = harness(|app| {
         app.set_option("language", "fr").unwrap();
     });
-    h.get_by_label("Hotbar settings").click();
+    // The button and the search field are in French too, in the catalog's words.
+    h.get_by_label(tr(french, "Hotbar settings")).click();
     h.run_steps(3);
-    field(&h, "Search all tools…").click();
+    let search = tr(french, "Search all tools…");
+    field(&h, search).click();
     h.run_steps(2);
-    field(&h, "Search all tools…").type_text("Dessiner");
+    field(&h, search).type_text("Dessiner");
     h.run_steps(3);
     h.get_by_role_and_label(Role::CheckBox, "Dessiner à main levée").click();
     h.run_steps(3);
@@ -5531,6 +5587,62 @@ fn edit_delete_with_a_popup_open_removes_the_selected_comment() {
     assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
 }
 
+/// Edit ▸ Copy and Paste take a selected drawn comment as ⌘C and ⌘V do (#7123). Both were
+/// greyed out, as the menu only counted selected text, pictures and objects.
+#[test]
+fn edit_copy_and_paste_are_enabled_for_a_selected_comment() {
+    let mut h = selected_square();
+    let state = |h: &Harness<'static, PdfCraftApp>, id: &str| h.state().menu_state(&h.ctx, &craft_menu::CommandRef::new(id)).enabled;
+    assert!(state(&h, "edit.copy"), "Edit ▸ Copy is enabled with a comment selected");
+    assert!(!state(&h, "edit.paste"), "nothing is copied yet");
+
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.copy"));
+    h.run_steps(4);
+    assert!(h.state().comment_clipboard.is_some(), "Edit ▸ Copy copied the comment");
+    assert!(state(&h, "edit.paste"), "Edit ▸ Paste is enabled with a comment copied");
+
+    // Edit ▸ Paste asks the platform for the clipboard; its answer, the XFDF Copy put there,
+    // arrives as a paste (the harness has no platform, so the test delivers it). The copy hangs
+    // on the pointer, as with ⌘V, and a click places it there.
+    let id = h.state().views[0].id;
+    let annotations = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.annotations.clone();
+    let before = annotations(&h).len();
+    let xfdf = h.state().comment_clipboard.as_ref().map(|c| c.xfdf.clone()).expect("copied");
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
+    h.step();
+    assert!(crate::support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
+    h.step();
+    h.event(egui::Event::Paste(xfdf));
+    h.run_steps(2);
+    assert!(h.state().views[0].comments.gesture.is_some(), "Edit ▸ Paste waits for a click to place the copy");
+    let at = (200.0, 160.0);
+    click_pt(&mut h, at);
+    let after = annotations(&h);
+    assert_eq!(after.len(), before + 1, "Edit ▸ Paste placed one copy: {after:?}");
+    let placed = after.iter().max_by_key(|a| a.index).map(|a| a.rect).expect("placed");
+    assert!(((placed[0] + placed[2]) / 2.0 - at.0).abs() < 1.0, "centred on the click: {placed:?}");
+    assert!(h.state().views[0].comments.gesture.is_none(), "the copy is placed");
+    assert!(h.state().views[0].comments.selected.is_some(), "the copy is selected");
+
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(2);
+    assert!(!state(&h, "edit.copy"), "with nothing selected, Copy is greyed out again");
+}
+
+/// Prepare Form keeps ⌘C off the selected comments, so Edit ▸ Copy, which sends the same Copy,
+/// is greyed out there too rather than enabled and doing nothing (#7123).
+#[test]
+fn edit_copy_is_off_for_a_selected_comment_while_preparing_a_form() {
+    let mut h = selected_square();
+    assert!(h.state_mut().execute("form.prepare"));
+    h.run_steps(2);
+    assert!(h.state().is_preparing());
+    assert!(h.state().views[0].comments.selected.is_some(), "the comment stays selected");
+    let copy = h.state().menu_state(&h.ctx, &craft_menu::CommandRef::new("edit.copy"));
+    assert!(!copy.enabled, "Edit ▸ Copy is greyed out while preparing a form");
+}
+
 /// A native menu's click never reaches the window, so Edit ▸ Delete closes the Hotbar tools window,
 /// as it closes egui's popups, and removes the selected comment. The window held the Delete.
 #[test]
@@ -5847,4 +5959,29 @@ fn properties_dialog_makes_the_text_box_font_size_default() {
         post_text(&mut fresh, "Third");
         assert_eq!(font_size_of_last(&fresh).font_size, Some(size), "{quick}: the default font size persisted");
     }
+}
+
+#[test]
+fn ctrl_selected_lines_nudge_together_and_undo() {
+    let mut h = harness(|app| app.set_option("quick", "line").unwrap());
+    for y in [40.0, 80.0, 120.0] {
+        drag_pt(&mut h, (40.0, y), (160.0, y));
+    }
+    assert_eq!(comments(&h).len(), 3);
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    click_pt(&mut h, (100.0, 40.0));
+    click_pt_with(&mut h, (100.0, 80.0), egui::Modifiers::COMMAND);
+    click_pt_with(&mut h, (100.0, 120.0), egui::Modifiers::COMMAND);
+    assert_eq!(h.state().views[0].comments.selection().len(), 3);
+    let before: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    let moved: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
+    for (old, new) in before.iter().zip(&moved) {
+        assert!(new[0] > old[0], "each selected line moves: {before:?} -> {moved:?}");
+    }
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(comments(&h).iter().map(|a| a.rect).collect::<Vec<_>>(), before);
 }
