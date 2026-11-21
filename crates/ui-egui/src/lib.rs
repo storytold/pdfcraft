@@ -372,6 +372,10 @@ pub struct PdfCraftApp {
     space_hand: Option<QuickTool>,
     /// The tool before full screen, given back on leaving it (see [`Self::apply_full_screen`]).
     full_screen_tool: Option<QuickTool>,
+    /// Whether the window was maximized immediately before entering full screen, kept so saving
+    /// during full screen on Windows preserves `maximized` without persisting `fullscreen:true`
+    /// (#8010).
+    full_screen_maximized: Option<bool>,
     /// Comment author, per-tool colours and widths, pin.
     pub comment_prefs: comments::CommentPrefs,
     pub(crate) hotbar: hotbar::Hotbar,

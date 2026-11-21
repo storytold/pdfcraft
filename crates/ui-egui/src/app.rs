@@ -98,6 +98,7 @@ impl PdfCraftApp {
             quick_tool: QuickTool::Select,
             space_hand: None,
             full_screen_tool: None,
+            full_screen_maximized: None,
             comment_prefs: Default::default(),
             hotbar: Default::default(),
             theme: ThemeKind::Light,
@@ -562,6 +563,9 @@ impl eframe::App for PdfCraftApp {
         {
             let minimized = self.ctx.as_ref().is_some_and(|c| c.input(|i| i.viewport().minimized == Some(true)));
             self.window_state.keep(storage, minimized);
+            if cfg!(target_os = "windows") {
+                self.window_state.clear_saved_fullscreen(storage, self.full_screen_maximized);
+            }
         }
         storage.set_string("pdfcraft", self.persist());
     }
@@ -813,6 +817,8 @@ impl PdfCraftApp {
         self.settle_presign();
         // Last, after everything that can open or answer the "save changes?" question.
         self.attend_save_prompt(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.sync_full_screen(ctx);
         self.sync_native_menu(ctx);
         self.sync_titles(ctx);
     }
