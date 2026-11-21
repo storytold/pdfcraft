@@ -458,6 +458,8 @@ pub struct Batch {
     pub notes: Vec<String>,
     /// After a cancel: how many files were not run.
     pub not_run: Option<usize>,
+    /// What downsampling did, counted only for files whose copy downloaded.
+    pub images: crate::ocr_ui::BatchImages,
 }
 
 impl Batch {
@@ -475,6 +477,7 @@ impl Batch {
             failed: Vec::new(),
             notes: Vec::new(),
             not_run: None,
+            images: crate::ocr_ui::BatchImages::default(),
         }
     }
 
@@ -516,6 +519,7 @@ impl Batch {
                 if let Some(note) = crate::ocr_ui::low_confidence_note(&name, &r, self.settings.low_confidence_threshold) {
                     self.notes.push(note);
                 }
+                self.images.add(&r);
             }
             Err(e) => self.failed.push(format!("{name}: {e}")),
         }
