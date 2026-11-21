@@ -91,12 +91,9 @@ fn harness(panel: &'static str) -> Harness<'static, PdfCraftApp> {
     h
 }
 
-/// The side panel's contents: the node after the pane's own focus stop, named "Inspector".
-fn panel<'h>(h: &'h Harness<'static, PdfCraftApp>) -> Node<'h> {
-    let stop = h.get_by(|n| n.role() != Role::Label && n.label().as_deref() == Some("Inspector"));
-    let pane = stop.parent().expect("the side panel's focus stop sits in its pane");
-    let mut after = pane.children().skip_while(|n| n.accesskit_node().id() != stop.accesskit_node().id()).skip(1);
-    after.next().expect("the panel follows its focus stop")
+/// The dock names the active panel by its title.
+fn panel<'h>(h: &'h Harness<'static, PdfCraftApp>, label: &'static str) -> Node<'h> {
+    h.get_by_role_and_label(Role::TabPanel, label)
 }
 
 /// One line per node that says something: layout containers are skipped (their children move up a
@@ -139,9 +136,9 @@ fn describe(node: &Node<'_>, depth: usize, out: &mut String) {
 }
 
 /// Compares the panel with `tests/snapshots/panel_<name>.txt`, or writes it with `UPDATE_SNAPSHOTS`.
-fn check(h: &Harness<'static, PdfCraftApp>, name: &str) -> Result<(), String> {
+fn check(h: &Harness<'static, PdfCraftApp>, name: &str, label: &'static str) -> Result<(), String> {
     let mut got = String::new();
-    describe(&panel(h), 0, &mut got);
+    describe(&panel(h, label), 0, &mut got);
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/snapshots").join(format!("panel_{name}.txt"));
     if std::env::var_os("UPDATE_SNAPSHOTS").is_some() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -249,7 +246,20 @@ fn every_panel_matches_its_snapshot() {
     for p in ALL {
         let (h, name) = open(p);
         assert_eq!(crate::support::right(h.state()), Some(p), "{name} opens its own panel");
-        if let Err(e) = check(&h, name) {
+        let label = match p {
+            RightPanel::Comments => "Comments",
+            RightPanel::Bookmarks => "Bookmarks",
+            RightPanel::Pages => "Page thumbnails",
+            RightPanel::Fields => "Form fields",
+            RightPanel::Layers => "Layers",
+            RightPanel::Attachments => "Attachments",
+            RightPanel::Signatures => "Signatures",
+            RightPanel::Accessibility => "Accessibility Checker",
+            RightPanel::Tags => "Tags",
+            RightPanel::Search => "Search",
+            RightPanel::Compare => "Compare",
+        };
+        if let Err(e) = check(&h, name, label) {
             failures.push(e);
         }
     }
