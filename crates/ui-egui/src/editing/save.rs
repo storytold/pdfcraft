@@ -49,6 +49,11 @@ impl PdfCraftApp {
     /// [`Self::save_view`], then `after` once the document is written: now, or on a later frame
     /// when the user had to choose where. `after` never runs when the save fails or is cancelled.
     pub(crate) fn save_then(&mut self, index: usize, target: SaveTarget, after: impl FnOnce(&mut Self) + Send + 'static) -> bool {
+        // A portfolio's tab with unsaved changes to the portfolio saves the portfolio, which it
+        // may keep aside while showing one of its files: its own pages come back first.
+        if self.hides_unsaved_work(index) {
+            self.show_in_portfolio_tab(index, None);
+        }
         // What's typed in a field is part of what's saved (#166).
         if let Some(id) = self.views.get(index).map(|v| v.id)
             && !self.commit_typing_in(id)

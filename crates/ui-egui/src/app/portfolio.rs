@@ -59,6 +59,12 @@ impl PdfCraftApp {
         Some(view.portfolio.as_ref().map_or(view.id, |p| p.host))
     }
 
+    /// The first tab that stands for document `id` ([`Self::tab_doc`]): its own, or the tab of
+    /// the portfolio `id` is, whichever file that tab shows.
+    pub(crate) fn tab_of_doc(&self, id: DocId) -> Option<usize> {
+        (0..self.views.len()).find(|&i| self.tab_doc(i) == Some(id))
+    }
+
     /// The active tab and its portfolio, when it is a portfolio's tab.
     pub(crate) fn active_portfolio(&self) -> Option<(usize, DocId)> {
         let index = self.active?;
@@ -119,6 +125,14 @@ impl PdfCraftApp {
         if tab.shown.as_deref() == key {
             return Err(Unshown::Nothing);
         }
+        // What is typed on the pages shown is committed before they are put aside, as before a
+        // save, so a view put aside holds no typing that closing could drop; a commit refused
+        // (and said why) keeps them shown.
+        let current = self.views[index].id;
+        if !self.commit_typing_in(current) {
+            return Err(Unshown::Nothing);
+        }
+        let Some(tab) = self.views.get(index).and_then(|v| v.portfolio.as_ref()) else { return Err(Unshown::Nothing) };
         let host = tab.host;
         let next = match (tab.parked.iter().position(|(k, _)| k.as_deref() == key), key) {
             (Some(i), _) => Next::Parked(i),
@@ -126,6 +140,7 @@ impl PdfCraftApp {
             // The portfolio's own view is put aside whenever a file is shown.
             (None, None) => return Err(Unshown::Nothing),
         };
+        let opened = matches!(next, Next::Opened(_));
         let Some(mut tab) = self.views.get_mut(index).and_then(|v| v.portfolio.take()) else { return Err(Unshown::Nothing) };
         let mut view = match next {
             Next::Parked(i) => tab.parked.remove(i).1,
@@ -141,6 +156,14 @@ impl PdfCraftApp {
         tab.parked.push((tab.shown.take(), old));
         tab.shown = key.map(str::to_owned);
         self.views[index].portfolio = Some(tab);
+        // A file shown for the first time opens the way it asks to (its layout, magnification
+        // and page), as it would in a tab of its own; one shown before keeps where the reader
+        // left it. The tab keeps its file list, whatever panel the file asks for.
+        if opened && let Some(initial) = self.session.get(self.views[index].id).map(|d| d.initial_view()) {
+            let right = self.right;
+            self.apply_initial_view(index, &initial);
+            self.right = right;
+        }
         Ok(())
     }
 

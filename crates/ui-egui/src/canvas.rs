@@ -1311,6 +1311,8 @@ impl DocView {
         fresh.viewport_h = self.viewport_h;
         fresh.viewport_screen = self.viewport_screen;
         fresh.pane = self.pane.clone();
+        // A portfolio's tab keeps its files and the views it put aside.
+        fresh.portfolio = self.portfolio.take();
         *self = fresh;
         // Marks the kept images out of date and clamps the page to the new page count.
         self.document_changed(info);

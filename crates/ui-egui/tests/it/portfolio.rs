@@ -410,3 +410,85 @@ fn a_files_menu_opens_from_the_keyboard_and_opens_a_copy_in_a_new_tab() {
     assert!(s.session.get(s.views[1].id).is_some_and(|d| d.allows_modification()), "the copy can be edited");
     assert_eq!(shown(&h, 0).as_deref(), Some("one.pdf"), "the portfolio's tab keeps its file");
 }
+
+/// The app with `pdf` written to a file of test `test`'s own and opened from it, as a portfolio
+/// on disk is; the file's path.
+fn opened_from_file(pdf: Vec<u8>, test: &str) -> (Harness<'static, PdfCraftApp>, String) {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-portfolio-{test}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("portfolio.pdf");
+    std::fs::write(&path, &pdf).unwrap();
+    let path = path.to_string_lossy().into_owned();
+    let open = path.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.right_panel_closed = true;
+        app.open_bytes("portfolio.pdf", Some(open.clone()), pdf.clone()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    (h, path)
+}
+
+/// Save on a portfolio's tab showing one of its files writes the portfolio's unsaved changes,
+/// on the portfolio's own pages, not the file shown.
+#[test]
+fn save_on_a_portfolios_tab_writes_the_portfolio() {
+    let pdf = portfolio("/Collection << /View /D >>", &[("one.pdf", PAGE), ("two.pdf", PAGE), ("three.pdf", PAGE)]);
+    let (mut h, path) = opened_from_file(pdf.clone(), "save");
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::DeleteAttachment { key: "three.pdf".into() }));
+    row(&h, "one.pdf").click();
+    h.run_steps(2);
+    assert_eq!(shown(&h, 0).as_deref(), Some("one.pdf"));
+    h.state_mut().save_view(0, pdfcraft_ui_egui::SaveTarget::InPlace);
+    crate::support::wait_until(&mut h, "the portfolio saved", |app| app.tab_doc(0).and_then(|id| app.session.get(id)).is_some_and(|d| !d.dirty));
+    assert_eq!(shown(&h, 0).as_deref(), Some("portfolio.pdf"), "saved on its own pages");
+    assert_ne!(std::fs::read(&path).unwrap(), pdf, "the portfolio's file was written");
+}
+
+/// Opening a portfolio already open, from Open Recent, comes back to its tab, whichever of its
+/// files it shows.
+#[test]
+fn opening_an_open_portfolio_again_comes_back_to_its_tab() {
+    let (mut h, path) = opened_from_file(portfolio("/Collection << /D (one.pdf) >>", &[("one.pdf", PAGE), ("two.pdf", PAGE)]), "recent");
+    assert_eq!(shown(&h, 0).as_deref(), Some("one.pdf"));
+    h.state_mut().open_recent(&path);
+    h.run_steps(4);
+    assert_eq!(h.state().views.len(), 1, "no second copy of the portfolio");
+    assert_eq!(h.state().active, Some(0));
+}
+
+/// A portfolio's tab keeps its files when its document is replaced (the file changed on disk).
+#[test]
+fn a_portfolios_tab_keeps_its_files_when_its_document_is_replaced() {
+    let mut h = opened(portfolio("/Collection << /View /D >>", &[("one.pdf", PAGE), ("two.pdf", PAGE)]), true);
+    let info = {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().info.clone()
+    };
+    h.state_mut().views[0].document_replaced(&info);
+    h.run_steps(2);
+    row(&h, "two.pdf").click();
+    h.run_steps(2);
+    assert_eq!(shown(&h, 0).as_deref(), Some("two.pdf"), "the tab still shows the portfolio's files");
+}
+
+/// A two-page PDF that opens on its second page (`/OpenAction`).
+const OPENS_ON_TWO: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OpenAction [4 0 R /Fit] >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// A file shown for the first time opens the way it asks to, here on its second page, and the
+/// tab keeps its file list.
+#[test]
+fn a_file_shown_opens_at_its_own_initial_view() {
+    let h = opened(portfolio("/Collection << /D (two.pdf) >>", &[("one.pdf", PAGE), ("two.pdf", OPENS_ON_TWO)]), true);
+    assert_eq!(shown(&h, 0).as_deref(), Some("two.pdf"));
+    assert_eq!(h.state().views[0].current, 1, "on the page its /OpenAction names");
+    assert_eq!(h.state().right, Some(RightPanel::PortfolioFiles));
+}

@@ -23,7 +23,7 @@ impl PdfCraftApp {
     /// page and the place on it (Document Properties ▸ Initial View, `/OpenAction`). With Always
     /// use my default zoom and page layout on, the layout and magnification stay at the defaults
     /// the view opened with, and the view goes to the opening page's top.
-    fn apply_initial_view(&mut self, index: usize, v: &pdfcraft_engine::InitialView) {
+    pub(super) fn apply_initial_view(&mut self, index: usize, v: &pdfcraft_engine::InitialView) {
         use pdfcraft_engine::{InitialLayout as L, Magnification as M, Navigation as N};
         let pages = self.session.get(self.views[index].id).map_or(0, |d| d.info.pages.len());
         // A right panel the user closed stays closed, whatever the document asks for (#2884).
@@ -783,7 +783,9 @@ impl PdfCraftApp {
     /// The tab already showing the file at `path` (the same path, or one that names the same
     /// file once made absolute).
     pub(crate) fn tab_showing(&self, path: &str) -> Option<usize> {
-        self.views.iter().position(|v| self.session.get(v.id).and_then(|d| d.path.as_deref()).is_some_and(|p| same_file(p, path)))
+        // A portfolio's tab shows its file whichever of the portfolio's files it shows.
+        (0..self.views.len())
+            .find(|&i| self.tab_doc(i).and_then(|id| self.session.get(id)).and_then(|d| d.path.as_deref()).is_some_and(|p| same_file(p, path)))
     }
 
     /// Open a file from a recent list: focus the tab already showing it, else open it (File ▸

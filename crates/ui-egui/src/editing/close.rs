@@ -61,10 +61,13 @@ impl PdfCraftApp {
     /// to (#6485). The document comes to the front with its review, and a notice says what to
     /// do. Whether the close was held.
     pub(crate) fn hold_close_for_ocr_review(&mut self, index: usize) -> bool {
-        let Some(id) = self.views.get(index).map(|v| v.id) else { return false };
+        // A portfolio's tab stands for the portfolio, which it may keep aside: it comes back to
+        // the portfolio's own pages, where the review is.
+        let Some(id) = self.tab_doc(index) else { return false };
         if !self.ocr_verify.holds_reading_of(id) {
             return false;
         }
+        self.show_in_portfolio_tab(index, None);
         self.active = Some(index);
         self.ocr_verify.open = true;
         self.notify_tr("Accept or reject the OCR review before closing this document");
@@ -80,7 +83,7 @@ impl PdfCraftApp {
 
     /// The tab of the document whose OCR review is still open, if any.
     fn ocr_review_index(&self) -> Option<usize> {
-        self.views.iter().position(|v| self.ocr_verify.holds_reading_of(v.id))
+        (0..self.views.len()).find(|&i| self.tab_doc(i).is_some_and(|id| self.ocr_verify.holds_reading_of(id)))
     }
 
     /// File ▸ Revert (after the confirmation).

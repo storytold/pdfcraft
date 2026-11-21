@@ -218,7 +218,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 response.context_menu(|ui| tab_menu(app, ui, i, &mut action));
                                 // Double-clicking the tab's name renames its file, as in Finder and File Explorer.
                                 if response.double_clicked() && cfg!(not(target_arch = "wasm32")) && doc.path.is_some() {
-                                    action = Some(crate::tab_context::Action::Rename(app.views[i].id));
+                                    action = Some(crate::tab_context::Action::Rename(tab_doc));
                                 }
                                 if response.clicked() {
                                     app.active = Some(i);
@@ -384,7 +384,9 @@ fn appearance_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 /// A document tab's right-click menu, in any strip: the choice is left in `action`.
 fn tab_menu(app: &PdfCraftApp, ui: &mut egui::Ui, index: usize, action: &mut Option<Action>) {
     let Some(view) = app.views.get(index) else { return };
-    let (tab, id) = (view.view_key(), view.id);
+    // A portfolio's tab stands for the portfolio, whichever file it shows: Reveal and Rename
+    // act on the portfolio's file.
+    let (tab, id) = (view.view_key(), app.tab_doc(index).unwrap_or(view.id));
     if ui.button(tl!("Close Tab")).clicked() {
         *action = Some(Action::Close(tab));
         ui.close();
