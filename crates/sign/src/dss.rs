@@ -37,9 +37,12 @@ pub fn embed(doc: &Document, evidence: &Evidence) -> Result<Vec<u8>, SignError> 
     let mut ocsps: Vec<Vec<u8>> = Vec::new();
     let mut crls: Vec<Vec<u8>> = Vec::new();
     if let Some(d) = &existing {
-        pull(&doc, d, b"Certs", &mut certs)?;
-        pull(&doc, d, b"OCSPs", &mut ocsps)?;
-        pull(&doc, d, b"CRLs", &mut crls)?;
+        let mut budget = MAX_EXISTING_EVIDENCE;
+        // Shared by the three reads: a stream listed under two keys is decoded and charged once.
+        let mut decoded = std::collections::HashMap::new();
+        pull(&doc, d, b"Certs", &mut certs, &mut budget, &mut decoded)?;
+        pull(&doc, d, b"OCSPs", &mut ocsps, &mut budget, &mut decoded)?;
+        pull(&doc, d, b"CRLs", &mut crls, &mut budget, &mut decoded)?;
     }
     let add = |list: &mut Vec<Vec<u8>>, blob: &[u8]| {
         if !list.iter().any(|b| b.as_slice() == blob) {
@@ -66,12 +69,17 @@ pub fn embed(doc: &Document, evidence: &Evidence) -> Result<Vec<u8>, SignError> 
     let mut dss = Dict::new();
     dss.set(b"Type".to_vec(), Object::name("DSS"));
     dss.set(b"Filter".to_vec(), Object::name("Adobe.PPKLite"));
-    dss.set(b"Certs".to_vec(), Object::Ref(doc.add(Object::Array(cert_refs.clone()))));
-    if !ocsp_refs.is_empty() {
-        dss.set(b"OCSPs".to_vec(), Object::Ref(doc.add(Object::Array(ocsp_refs.clone()))));
+    // Each list is one indirect array the store and every signature's VRI entry point to, so the
+    // output does not grow with signatures times evidence.
+    let cert_list = Object::Ref(doc.add(Object::Array(cert_refs)));
+    let ocsp_list = (!ocsp_refs.is_empty()).then(|| Object::Ref(doc.add(Object::Array(ocsp_refs))));
+    let crl_list = (!crl_refs.is_empty()).then(|| Object::Ref(doc.add(Object::Array(crl_refs))));
+    dss.set(b"Certs".to_vec(), cert_list.clone());
+    if let Some(l) = &ocsp_list {
+        dss.set(b"OCSPs".to_vec(), l.clone());
     }
-    if !crl_refs.is_empty() {
-        dss.set(b"CRLs".to_vec(), Object::Ref(doc.add(Object::Array(crl_refs.clone()))));
+    if let Some(l) = &crl_list {
+        dss.set(b"CRLs".to_vec(), l.clone());
     }
     // Keep any existing /VRI entries, then cover every signature in the file.
     let mut vri =
@@ -79,12 +87,12 @@ pub fn embed(doc: &Document, evidence: &Evidence) -> Result<Vec<u8>, SignError> 
     for contents in crate::pdf::signature_contents(&doc) {
         let mut e = Dict::new();
         e.set(b"Type".to_vec(), Object::name("VRI"));
-        e.set(b"Cert".to_vec(), Object::Array(cert_refs.clone()));
-        if !ocsp_refs.is_empty() {
-            e.set(b"OCSP".to_vec(), Object::Array(ocsp_refs.clone()));
+        e.set(b"Cert".to_vec(), cert_list.clone());
+        if let Some(l) = &ocsp_list {
+            e.set(b"OCSP".to_vec(), l.clone());
         }
-        if !crl_refs.is_empty() {
-            e.set(b"CRL".to_vec(), Object::Array(crl_refs.clone()));
+        if let Some(l) = &crl_list {
+            e.set(b"CRL".to_vec(), l.clone());
         }
         vri.set(vri_key(&contents).into_bytes(), Object::Dict(e));
     }
@@ -105,19 +113,83 @@ fn embed_stream(doc: &mut Document, blob: &[u8]) -> pdfcraft_cos::ObjRef {
     doc.add(Object::Stream(Stream::from_raw(d, blob.to_vec())))
 }
 
-/// Pull the raw bytes of an existing DSS array into `into`.
-fn pull(doc: &Document, dss: &Dict, key: &[u8], into: &mut Vec<Vec<u8>>) -> Result<(), SignError> {
+/// Most decoded bytes of the store's existing evidence one [`embed`] reads. The store is rewritten
+/// as a union, so what is there has to be read; a file whose evidence is larger than this is
+/// refused rather than extended, never silently trimmed.
+const MAX_EXISTING_EVIDENCE: usize = 256 << 20;
+
+/// Pull the raw bytes of an existing DSS array into `into`, each stream once (however often the
+/// array lists it) and each distinct content once, spending the decoded size from `budget`.
+fn pull(
+    doc: &Document,
+    dss: &Dict,
+    key: &[u8],
+    into: &mut Vec<Vec<u8>>,
+    budget: &mut usize,
+    decoded: &mut std::collections::HashMap<pdfcraft_cos::ObjRef, Vec<u8>>,
+) -> Result<(), SignError> {
     let Some(a) = dss.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()) else {
         return Ok(());
     };
+    let mut seen_refs = std::collections::HashSet::new();
+    let mut seen_content: std::collections::HashSet<Vec<u8>> = into.iter().map(|b| crate::keys::DigestAlg::Sha256.digest(&[b.as_slice()])).collect();
     for item in a {
-        let o = doc.resolve(&item);
-        let Object::Stream(s) = &*o else { continue };
-        if let Ok(bytes) = s.decoded()
-            && !into.iter().any(|b| b == &bytes)
-        {
+        if item.as_ref().is_some_and(|r| !seen_refs.insert(r)) {
+            continue;
+        }
+        // A stream another DSS array already read is reused: it is neither decoded again nor
+        // charged twice, so a store that lists the same evidence under two keys still fits.
+        let bytes = match item.as_ref().and_then(|r| decoded.get(&r).cloned()) {
+            Some(bytes) => bytes,
+            None => {
+                let o = doc.resolve(&item);
+                let Object::Stream(s) = &*o else { continue };
+                let too_big = || SignError::Pdf("the document's existing validation data is too large to extend".into());
+                match s.decoded_within(*budget) {
+                    Ok(bytes) => {
+                        *budget = budget.checked_sub(bytes.len()).ok_or_else(too_big)?;
+                        if let Some(r) = item.as_ref() {
+                            decoded.insert(r, bytes.clone());
+                        }
+                        bytes
+                    }
+                    // The allowance is spent: refuse, rather than drop evidence the store holds.
+                    Err(e) if e.to_string().contains("exceeds the limit") => return Err(too_big()),
+                    // Not decodable at all: skipped, as before.
+                    Err(_) => continue,
+                }
+            }
+        };
+        if seen_content.insert(crate::keys::DigestAlg::Sha256.digest(&[bytes.as_slice()])) {
             into.push(bytes);
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn store(blobs: &[&[u8]], listed: &[usize]) -> (Document, Dict) {
+        let mut doc = Document::new_empty();
+        let refs: Vec<_> = blobs.iter().map(|b| doc.add(Object::Stream(Stream::from_raw(Dict::new(), b.to_vec())))).collect();
+        let mut dss = Dict::new();
+        dss.set(b"Certs".to_vec(), Object::Array(listed.iter().map(|i| Object::Ref(refs[*i])).collect()));
+        (doc, dss)
+    }
+
+    #[test]
+    fn a_stream_listed_many_times_is_read_once_and_the_decoded_size_is_spent() {
+        let (doc, dss) = store(&[&[1; 100], &[1; 100], &[2; 50]], &[0, 0, 0, 1, 2, 2]);
+        let mut out = Vec::new();
+        let mut budget = 1000;
+        pull(&doc, &dss, b"Certs", &mut out, &mut budget, &mut std::collections::HashMap::new()).unwrap();
+        // Two distinct streams are listed with the same bytes: one copy; the repeats were not read.
+        assert_eq!(out, [vec![1; 100], vec![2; 50]]);
+        assert_eq!(budget, 1000 - 100 - 100 - 50);
+        // Past the allowance the store is refused, not trimmed.
+        let mut budget = 120;
+        assert!(pull(&doc, &dss, b"Certs", &mut Vec::new(), &mut budget, &mut std::collections::HashMap::new()).is_err());
+    }
 }

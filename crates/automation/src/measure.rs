@@ -147,7 +147,7 @@ impl Automation {
                 Ok(json!({"point":point,"kind":s.kind,"distance":measure::distance(at,point)}))
             })
             .transpose()?;
-        Ok(json!({"snap":snap,"truncated":geometry.truncated,"intersection_limited":intersection_limited,"segments":geometry.segments.len()}))
+        Ok(json!({"snap":snap,"truncated":geometry.truncated,"intersection_limited":intersection_limited,"segments":geometry.segment_count()}))
     }
     pub(crate) fn measurement_export(&self, a: &Args) -> Result<Value> {
         let all = self.doc(a)?.measurements().map_err(failed)?;

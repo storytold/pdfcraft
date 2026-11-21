@@ -3,6 +3,7 @@
 //! Files are picked asynchronously and used on a later frame: desktop builds through `pickers`
 //! (a blocking picker crashes the app on macOS), browsers through `requests`.
 
+use crate::file_filter::AddFilterAnyCase as _;
 use std::sync::Arc;
 
 use pdfcraft_engine::{DocId, Edit, SplitBy};
@@ -93,16 +94,16 @@ pub(crate) fn installed_font_files(ctx: &egui::Context, reload: bool) -> Option<
 fn files_picker(purpose: FilePurpose) -> rfd::AsyncFileDialog {
     let dialog = rfd::AsyncFileDialog::new();
     if matches!(purpose, FilePurpose::TextFont { .. }) {
-        return dialog.add_filter("TrueType / OpenType font", &["ttf", "otf"]);
+        return dialog.add_filter_any_case("TrueType / OpenType font", &["ttf", "otf"]);
     }
     if purpose == FilePurpose::RedactWords {
-        return dialog.add_filter(tl!("Text"), &["txt"]);
+        return dialog.add_filter_any_case(tl!("Text"), &["txt"]);
     }
     if !matches!(purpose, FilePurpose::CreateMultiple | FilePurpose::CreateMultipleSeparate | FilePurpose::InsertPages | FilePurpose::Combine) {
-        return dialog.add_filter("PDF", &["pdf"]);
+        return dialog.add_filter_any_case("PDF", &["pdf"]);
     }
     let all: Vec<&str> = std::iter::once("pdf").chain(pdfcraft_engine::CONVERTIBLE).collect();
-    dialog.add_filter(tl!("PDF, images and text"), &all).add_filter("PDF", &["pdf"])
+    dialog.add_filter_any_case(tl!("PDF, images and text"), &all).add_filter_any_case("PDF", &["pdf"])
 }
 
 /// The Replace Pages dialog: the chosen file and the ranges (1-based, inclusive).
@@ -148,6 +149,8 @@ pub struct FileRequest {
     purpose: FilePurpose,
     target: Option<PickTarget>,
     files: Vec<(String, Vec<u8>)>,
+    /// Dropped on the Combine files tab rather than picked: what Combine can't take is left out.
+    dropped: bool,
 }
 
 /// Files picked asynchronously (web), waiting to be used.
@@ -309,6 +312,11 @@ fn read_named(path: &std::path::Path) -> Result<(String, Vec<u8>), (String, Stri
     }
 }
 
+/// The name of a file dropped on the window ("dropped.pdf" when it has none).
+pub(crate) fn dropped_name(f: &egui::DroppedFileHandle) -> String {
+    f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into())
+}
+
 impl PdfCraftApp {
     /// Ask for files to add to the Combine files list (its Add files… button).
     pub fn combine_dialog(&mut self) {
@@ -454,111 +462,48 @@ impl PdfCraftApp {
         }
     }
 
-    /// Files dropped on the Combine files tab: added to its list in batch, preserving drop order.
+    /// Files dropped on the Combine files tab join its list in the order dropped (see
+    /// [`Self::add_dropped_to_combine`]); a folder adds the files in it and its subfolders.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn drop_into_combine(&mut self, dropped: &[egui::DroppedFileHandle], _ctx: &egui::Context) {
-        if dropped.is_empty() {
-            return;
-        }
-        let total_dropped = dropped.len();
-        let dropped = if dropped.len() > MAX_DROPPED_FILES { &dropped[..MAX_DROPPED_FILES] } else { dropped };
-        let mut incoming = Vec::new();
-        let mut hit_limit = total_dropped > MAX_DROPPED_FILES;
-        let mut omitted_count = total_dropped.saturating_sub(MAX_DROPPED_FILES);
+    pub(crate) fn drop_into_combine(&mut self, dropped: Vec<egui::DroppedFileHandle>, _ctx: &egui::Context) {
+        let mut files = Vec::new();
         for f in dropped {
-            if incoming.len() >= MAX_DROPPED_FILES {
-                hit_limit = true;
-                break;
-            }
-            if let Some(clean_path) = clean_dropped_path(f.path()) {
-                if clean_path.is_dir() {
-                    let (folder_paths, more) = crate::workflows::combine_ui::combinable_in(&clean_path, true);
-                    let folder =
-                        clean_path.file_name().map_or_else(|| clean_path.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned());
-                    if folder_paths.is_empty() {
-                        self.notify_fmt("No PDFs, images or text files found in {folder}", &[("folder", &folder)]);
-                    } else {
-                        let remaining = MAX_DROPPED_FILES.saturating_sub(incoming.len());
-                        let to_take = folder_paths.len().min(remaining);
-                        if to_take < folder_paths.len() {
-                            hit_limit = true;
-                            omitted_count += folder_paths.len() - to_take;
-                        }
-                        for p in &folder_paths[..to_take] {
-                            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file.pdf".into());
-                            match std::fs::read(p) {
-                                Ok(bytes) => {
-                                    let modified = std::fs::metadata(p).and_then(|m| m.modified()).ok();
-                                    incoming.push(crate::combine_ui::Incoming { name, bytes: Arc::new(bytes), modified, note: None, open_doc: None });
-                                }
-                                Err(e) => {
-                                    self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
-                                }
-                            }
-                        }
-                        if more && to_take == folder_paths.len() {
-                            self.notify_fmt(
-                                "Added the first {n} files in {folder}",
-                                &[("n", &crate::workflows::combine_ui::MAX_FOLDER_FILES.to_string()), ("folder", &folder)],
-                            );
-                        }
-                    }
-                } else {
-                    let name = clean_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file.pdf".into());
-                    match std::fs::read(&clean_path) {
-                        Ok(bytes) => {
-                            let modified = std::fs::metadata(&clean_path).and_then(|m| m.modified()).ok();
-                            incoming.push(crate::combine_ui::Incoming { name, bytes: Arc::new(bytes), modified, note: None, open_doc: None });
-                        }
-                        Err(e) => {
-                            self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
-                        }
-                    }
-                }
+            let uri_path = file_uri_path(f.path());
+            let path = uri_path.as_deref().unwrap_or(f.path());
+            if path.is_absolute() && path.is_dir() {
+                // After the files dropped before it.
+                self.add_dropped_to_combine(std::mem::take(&mut files));
+                self.add_folder_to_combine(path, true);
                 continue;
             }
-            let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
-            match f.bytes() {
-                Ok(bytes) => incoming.push(crate::combine_ui::Incoming { name, bytes: Arc::new(bytes), modified: None, note: None, open_doc: None }),
-                Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
+            let name = uri_path.as_ref().and_then(|p| p.file_name()).map_or_else(|| dropped_name(&f), |n| n.to_string_lossy().into_owned());
+            // A file on disk is read from there, with when it was last modified; a drop that
+            // carries only bytes (no path) as it is.
+            let (read, modified) = if path.is_absolute() {
+                (std::fs::read(path).map_err(|e| e.to_string()), std::fs::metadata(path).and_then(|m| m.modified()).ok())
+            } else {
+                (f.bytes(), None)
+            };
+            match read {
+                Ok(bytes) => files.push(crate::combine_ui::Incoming { modified, ..crate::combine_ui::Incoming::new(name, bytes) }),
+                Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e)]),
             }
         }
-        if hit_limit {
-            self.notify_fmt(
-                "Added the first {n} files ({omitted} omitted)",
-                &[("n", &MAX_DROPPED_FILES.to_string()), ("omitted", &omitted_count.to_string())],
-            );
-        }
-        if !incoming.is_empty() {
-            self.stage_combine_with(incoming);
-        }
+        self.add_dropped_to_combine(files);
     }
 
     /// Browsers read dropped files asynchronously; they join the Combine files list next frame.
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn drop_into_combine(&mut self, dropped: &[egui::DroppedFileHandle], ctx: &egui::Context) {
-        if dropped.is_empty() {
-            return;
-        }
-        let total_dropped = dropped.len();
-        let hit_limit = total_dropped > MAX_DROPPED_FILES;
-        let dropped = dropped[..dropped.len().min(MAX_DROPPED_FILES)].to_vec();
-        if hit_limit {
-            let omitted = total_dropped - MAX_DROPPED_FILES;
-            self.notify_fmt(
-                "Added the first {n} files ({omitted} omitted)",
-                &[("n", &MAX_DROPPED_FILES.to_string()), ("omitted", &omitted.to_string())],
-            );
-        }
+    pub(crate) fn drop_into_combine(&mut self, dropped: Vec<egui::DroppedFileHandle>, ctx: &egui::Context) {
         let requests = self.requests.clone();
-        let request = self.file_request(FilePurpose::Combine, Vec::new());
+        let request = FileRequest { dropped: true, ..self.file_request(FilePurpose::Combine, Vec::new()) };
         let ctx = ctx.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let mut files = Vec::with_capacity(dropped.len());
+            // One after another, so they join the list in the order dropped.
+            let mut files = Vec::new();
             for f in dropped {
-                let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
                 if let Ok(bytes) = f.bytes_async().await {
-                    files.push((name, bytes));
+                    files.push((dropped_name(&f), bytes));
                 }
             }
             if !files.is_empty()
@@ -575,7 +520,7 @@ impl PdfCraftApp {
     /// `requests` once the files are read; it is used on a later frame.
     pub fn file_request(&self, purpose: FilePurpose, files: Vec<(String, Vec<u8>)>) -> FileRequest {
         let target = if purpose.edits_active_document() { self.pick_target(self.active_ids().map(|(_, id)| id)) } else { None };
-        FileRequest { purpose, target, files }
+        FileRequest { purpose, target, files, dropped: false }
     }
 
     /// `doc` as it is now, for a pick that will edit it.
@@ -599,12 +544,19 @@ impl PdfCraftApp {
     /// Handle files picked asynchronously.
     pub(crate) fn process_file_requests(&mut self) {
         let pending: Vec<_> = self.requests.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
-        for FileRequest { purpose, target, files } in pending {
+        for FileRequest { purpose, target, files, dropped } in pending {
             if !self.still_pick_target(target) {
                 continue;
             }
-            // Last-resort guard (AGENTS.md §4), as for desktop picks and commands.
-            if let Err(m) = pdfcraft_engine::guard(|| self.use_files(purpose, files)) {
+            // Last-resort guard (app-agents.md rule 13), as for desktop picks and commands.
+            let used = pdfcraft_engine::guard(|| {
+                if dropped {
+                    self.add_dropped_to_combine(files.into_iter().map(|(name, bytes)| crate::combine_ui::Incoming::new(name, bytes)).collect());
+                } else {
+                    self.use_files(purpose, files);
+                }
+            });
+            if let Err(m) = used {
                 self.notify_fmt("That didn't work: an internal error stopped it ({m}).", &[("m", m.as_str())]);
             }
         }
@@ -672,9 +624,9 @@ impl PdfCraftApp {
 
     /// Open the Replace Pages dialog for `bytes`, replacing the selection (or the current page).
     pub fn start_replace(&mut self, name: String, bytes: Vec<u8>) {
-        let Some(i) = self.active else { return };
+        let Some((i, id)) = self.active_ids() else { return };
         let bytes = Arc::new(bytes);
-        let src_pages = match self.session.page_count_of(&name, &bytes) {
+        let src_pages = match self.session.replace_source(id, &name, &bytes) {
             Ok(n) => n,
             Err(e) => {
                 self.notify_fmt("Couldn't use {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
@@ -719,9 +671,7 @@ impl PdfCraftApp {
                     continue;
                 }
             };
-            let converted =
-                self.session.convert_to_pdf(&name, &Arc::new(bytes)).and_then(|(_, pdf)| Ok((self.session.page_count_of(&name, &pdf)?, pdf)));
-            match converted {
+            match self.session.insert_source_inline(id, &name, &Arc::new(bytes)) {
                 Ok((pages, bytes)) => {
                     if self.apply_edit(Edit::InsertPagesFrom {
                         name,
@@ -1014,7 +964,7 @@ impl PdfCraftApp {
                 Some(_) => {}
                 None => {
                     let dialog = rfd::AsyncFileDialog::new()
-                        .add_filter(tl!("Comment and form data").to_string(), &extensions)
+                        .add_filter_any_case(tl!("Comment and form data").to_string(), &extensions)
                         .set_title(tl!("Import data").to_string());
                     let target = self.active_ids().map(|(_, id)| id);
                     self.ask_one(crate::pickers::Ask::File(dialog), target, import);
@@ -1055,7 +1005,7 @@ impl PdfCraftApp {
                 None => {
                     let dialog = rfd::AsyncFileDialog::new()
                         .set_title(tl!("Export").to_string())
-                        .add_filter(ext.to_uppercase(), &[ext])
+                        .add_filter_any_case(ext.to_uppercase(), &[ext])
                         .set_file_name(format!("{stem}.{ext}"));
                     let dialog = crate::editing::in_document_folder(dialog, folder.as_deref());
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, write);
@@ -1075,7 +1025,7 @@ impl PdfCraftApp {
         {
             let dialog = rfd::AsyncFileDialog::new()
                 .set_title(tl!("Select data files to merge").to_string())
-                .add_filter(tl!("Form data and PDF forms").to_string(), &["fdf", "xfdf", "pdf"]);
+                .add_filter_any_case(tl!("Form data and PDF forms").to_string(), &["fdf", "xfdf", "pdf"]);
             self.ask(crate::pickers::Ask::Files(dialog), None, |app, paths| {
                 let mut files = Vec::new();
                 for p in paths {
@@ -1120,7 +1070,7 @@ impl PdfCraftApp {
                 None => {
                     let dialog = rfd::AsyncFileDialog::new()
                         .set_title(tl!("Save the spreadsheet").to_string())
-                        .add_filter("CSV", &["csv"])
+                        .add_filter_any_case("CSV", &["csv"])
                         .set_file_name("report.csv");
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, write);
                 }
@@ -1163,22 +1113,22 @@ impl PdfCraftApp {
                     let title = if comments { tl!("Export comments") } else { tl!("Export form data") };
                     let d = rfd::AsyncFileDialog::new().set_title(title).set_file_name(format!("{stem}.xfdf"));
                     let d = if comments {
-                        d.add_filter("XFDF", &["xfdf"]).add_filter("FDF", &["fdf"])
+                        d.add_filter_any_case("XFDF", &["xfdf"]).add_filter_any_case("FDF", &["fdf"])
                     } else if xfa {
                         // An XFA form's data, as Acrobat exports it, first.
                         d.set_file_name(format!("{stem}.xml"))
-                            .add_filter("XML", &["xml"])
-                            .add_filter("XDP", &["xdp"])
-                            .add_filter("XFDF", &["xfdf"])
-                            .add_filter("FDF", &["fdf"])
-                            .add_filter("CSV", &["csv"])
-                            .add_filter(tl!("Text").to_string(), &["txt"])
+                            .add_filter_any_case("XML", &["xml"])
+                            .add_filter_any_case("XDP", &["xdp"])
+                            .add_filter_any_case("XFDF", &["xfdf"])
+                            .add_filter_any_case("FDF", &["fdf"])
+                            .add_filter_any_case("CSV", &["csv"])
+                            .add_filter_any_case(tl!("Text").to_string(), &["txt"])
                     } else {
-                        d.add_filter("XFDF", &["xfdf"])
-                            .add_filter("FDF", &["fdf"])
-                            .add_filter("XML", &["xml"])
-                            .add_filter("CSV", &["csv"])
-                            .add_filter(tl!("Text").to_string(), &["txt"])
+                        d.add_filter_any_case("XFDF", &["xfdf"])
+                            .add_filter_any_case("FDF", &["fdf"])
+                            .add_filter_any_case("XML", &["xml"])
+                            .add_filter_any_case("CSV", &["csv"])
+                            .add_filter_any_case(tl!("Text").to_string(), &["txt"])
                     };
                     let d = crate::editing::in_document_folder(d, folder.as_deref());
                     self.ask_one(crate::pickers::Ask::Save(d), None, write);
@@ -1195,8 +1145,12 @@ impl PdfCraftApp {
     }
 }
 
-/// Maximum number of files processed from a single drag and drop action (#4985).
-pub(crate) const MAX_DROPPED_FILES: usize = 200;
+/// The local path a dropped `file:` URI names (as some Linux file managers drop them), or `None`
+/// when `raw` is not a `file:` URI or names a remote host. Other paths are used as dropped (#4985).
+pub(crate) fn file_uri_path(raw: &std::path::Path) -> Option<std::path::PathBuf> {
+    let is_uri = raw.to_str().and_then(|s| s.get(..5)).is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"));
+    if is_uri { clean_dropped_path(raw) } else { None }
+}
 
 /// Resolve a dropped file path, stripping `file://` URI schemes and percent-decoding
 /// paths sent by Linux desktop environments (e.g. KDE Plasma / Dolphin) and other file managers.

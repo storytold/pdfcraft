@@ -15,13 +15,14 @@ impl PdfCraftApp {
     /// Open a file dropped onto the application window outside of special drop targets.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn open_dropped(&mut self, f: egui::DroppedFileHandle, _ctx: &egui::Context) {
-        if !f.path().as_os_str().is_empty() {
-            if let Some(clean_path) = crate::workflows::files::clean_dropped_path(f.path()) {
-                self.open_path(&clean_path.to_string_lossy());
-            }
+        let uri_path = crate::workflows::files::file_uri_path(f.path());
+        let path = uri_path.as_deref().unwrap_or(f.path());
+        let p = path.to_string_lossy().into_owned();
+        if !p.is_empty() && path.is_absolute() {
+            self.open_path(&p);
             return;
         }
-        let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
+        let name = crate::files::dropped_name(&f);
         match f.bytes() {
             Ok(bytes) => {
                 if self.ctx.is_some() && !self.run_inline {
@@ -78,7 +79,7 @@ impl PdfCraftApp {
         };
         let mut files = Vec::new();
         for f in &dropped {
-            let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
+            let name = crate::files::dropped_name(f);
             if f.path().is_absolute() {
                 files.push((name, Err(f.path().to_path_buf())));
                 continue;
@@ -131,8 +132,10 @@ impl PdfCraftApp {
         self.startup_superseded = true;
         let inbox = self.inbox.clone();
         let ctx = ctx.clone();
+        let read = WebRead::start(&self.web_reads);
         wasm_bindgen_futures::spawn_local(async move {
-            let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
+            let _read = read;
+            let name = crate::files::dropped_name(&f);
             if let Ok(bytes) = f.bytes_async().await
                 && let Ok(mut q) = inbox.lock()
             {
@@ -140,5 +143,27 @@ impl PdfCraftApp {
                 ctx.request_repaint();
             }
         });
+    }
+}
+
+/// One browser file read counted in `PdfCraftApp::web_reads` for as long as it lives, so the
+/// count falls however the read ends.
+#[cfg(target_arch = "wasm32")]
+pub(super) struct WebRead(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+#[cfg(target_arch = "wasm32")]
+impl WebRead {
+    /// Count a read starting in `reads`.
+    pub(super) fn start(reads: &std::sync::Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self(reads.clone())
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Drop for WebRead {
+    /// The read is over, whether its file arrived or not.
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
