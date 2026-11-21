@@ -51,6 +51,7 @@ pub fn office_to_pdf(name: &str, _bytes: &[u8]) -> Result<Vec<u8>, CreateError> 
 /// Convert the Office document `bytes` named `name` to PDF bytes with LibreOffice.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn office_to_pdf(name: &str, bytes: &[u8]) -> Result<Vec<u8>, CreateError> {
+    native::check_override(name, std::env::var_os("PDFCRAFT_SOFFICE").as_deref())?;
     let program = native::libreoffice().ok_or_else(|| {
         CreateError::Office(format!(
             "{name}: opening Word, Excel and PowerPoint files needs LibreOffice, which isn't installed (get it free from libreoffice.org)"
@@ -84,6 +85,19 @@ mod native {
     pub(super) fn libreoffice() -> Option<PathBuf> {
         let defaults = default_locations(&|key| std::env::var_os(key));
         candidates(std::env::var_os("PDFCRAFT_SOFFICE"), std::env::var_os("PATH"), defaults).into_iter().find(|p| p.is_file())
+    }
+
+    /// Refuse a relative `PDFCRAFT_SOFFICE` with an error that says what to fix, rather than
+    /// skipping it and reporting that LibreOffice is missing. (A relative `PATH` entry is still
+    /// skipped silently: it is common and not something the user set for PdfCraft.)
+    pub(super) fn check_override(name: &str, override_path: Option<&std::ffi::OsStr>) -> Result<(), CreateError> {
+        match override_path {
+            Some(p) if !p.is_empty() && !Path::new(p).is_absolute() => Err(CreateError::Office(format!(
+                "{name}: PDFCRAFT_SOFFICE is \"{}\", a relative path. Set it to the full path of soffice, which starts at the drive or root folder",
+                p.to_string_lossy()
+            ))),
+            _ => Ok(()),
+        }
     }
 
     /// Where to look, in order: the override, each `PATH` folder, then `defaults`. A relative
@@ -410,6 +424,18 @@ mod tests {
             let found = candidates(Some(OsString::from("./soffice")), Some(path), Vec::new());
             assert!(!found.is_empty() && found.iter().all(|p| p.is_absolute()), "{found:?}");
             assert!(found.iter().all(|p| p.starts_with(&abs)), "{found:?}");
+        }
+
+        #[test]
+        fn a_relative_override_is_an_error_that_names_the_fix() {
+            use std::ffi::OsStr;
+            let Err(crate::CreateError::Office(msg)) = check_override("a.docx", Some(OsStr::new("./soffice"))) else {
+                panic!("a relative override must be refused");
+            };
+            assert!(msg.contains("PDFCRAFT_SOFFICE") && msg.contains("relative") && msg.contains("full path"), "{msg}");
+            assert!(check_override("a.docx", Some(std::env::temp_dir().as_os_str())).is_ok());
+            assert!(check_override("a.docx", Some(OsStr::new(""))).is_ok());
+            assert!(check_override("a.docx", None).is_ok());
         }
 
         #[test]
