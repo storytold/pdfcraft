@@ -1,7 +1,7 @@
 //! End to end: a synthetic PRC stream parsed, assembled and rendered to pixels.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use pdfcraft_prc::PrcFile;
+use craft_prc::PrcFile;
 use pdfcraft_prc_render::{Camera, Image, RenderOptions, assemble, render};
 use std::io::Write as _;
 

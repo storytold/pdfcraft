@@ -258,7 +258,7 @@ fn prototype_children_that_write_nothing_still_count_against_a_budget() {
 
 /// The template of `xml` written again by `expand`, parsed.
 fn expanded(xml: &str) -> String {
-    let doc = roxmltree::Document::parse(xml).unwrap();
+    let doc = crate::xml::Document::parse(xml).unwrap();
     let template = doc.descendants().find(|n| n.tag_name().name() == "template").unwrap();
     let (out, warnings) = crate::proto::expand(template);
     assert!(warnings.is_empty(), "{warnings:?}");
@@ -276,7 +276,7 @@ fn namespaces_bound_again_inside_the_template_keep_their_own_uri() {
   <draw name="none" x="0mm" y="40mm" w="40mm"><extras><free xmlns=""/></extras></draw>"##;
     let xml = form(styles, body);
     let out = expanded(&xml);
-    let doc = roxmltree::Document::parse(&out).unwrap();
+    let doc = crate::xml::Document::parse(&out).unwrap();
     let bodies: Vec<_> = doc.descendants().filter(|n| n.tag_name().name() == "body").collect();
     assert_eq!(bodies.len(), 2, "{out}");
     for b in &bodies {
@@ -306,7 +306,7 @@ fn inherited_attributes_keep_their_namespace_where_the_prefix_is_bound_again() {
     let styles = r#"<field id="P" xmlns:q="urn:prototype" q:kind="k" q:own="2" xml:lang="en" w="1in"/>"#;
     let body = r##"<field name="f" xmlns:q="urn:instance" q:own="1" use="#P"/>"##;
     let out = expanded(&form(styles, body));
-    let doc = roxmltree::Document::parse(&out).unwrap();
+    let doc = crate::xml::Document::parse(&out).unwrap();
     let f = doc.descendants().find(|n| n.attribute("name") == Some("f")).unwrap();
     assert_eq!(f.attribute(("urn:instance", "own")), Some("1"), "{out}");
     assert_eq!(f.attribute(("urn:prototype", "own")), Some("2"), "{out}");
@@ -318,7 +318,7 @@ fn inherited_attributes_keep_their_namespace_where_the_prefix_is_bound_again() {
 
 /// `expand` on the template of `xml`, timed.
 fn expand_timed(xml: &str) -> (Option<String>, Vec<String>, std::time::Duration) {
-    let doc = roxmltree::Document::parse(xml).unwrap();
+    let doc = crate::xml::Document::parse(xml).unwrap();
     let template = doc.descendants().find(|n| n.tag_name().name() == "template").unwrap();
     let started = std::time::Instant::now();
     let (out, warnings) = crate::proto::expand(template);
@@ -398,4 +398,64 @@ fn a_som_expression_past_its_length_limit_is_not_followed() {
     assert!(warnings.iter().any(|w| w.contains("names nothing")), "{warnings:?}");
     assert_eq!(field(&t, "long").common.h, None);
     assert!(close(field(&t, "short").common.h, 2.0 * MM));
+}
+
+#[test]
+fn cached_child_counts_preserve_truncation_and_charge_when_budget_shrinks() {
+    let doc = crate::xml::Document::parse("<root><a/><b/><c/></root>").unwrap();
+    let node = doc.root_element();
+    let mut cache = std::collections::HashMap::new();
+    assert_eq!(super::child_count(node, 1, &mut cache), 2);
+    assert!(cache.is_empty(), "truncated counts are not reusable");
+    assert_eq!(super::child_count(node, 10, &mut cache), 3);
+    assert_eq!(cache.get(&node.id()), Some(&3));
+    for remaining in 0..=5 {
+        assert_eq!(super::child_count(node, remaining, &mut cache), node.children().take(remaining + 1).count());
+    }
+    assert_eq!(super::child_count(node, 10, &mut cache), 3, "a cached use is still charged");
+}
+
+#[test]
+fn child_count_memoization_has_a_fixed_entry_limit() {
+    let doc = crate::xml::Document::parse(&format!("<root>{}</root>", "<a/>".repeat(5_000))).unwrap();
+    let mut cache = std::collections::HashMap::new();
+    for node in doc.root_element().children() {
+        assert_eq!(super::child_count(node, 1, &mut cache), 0);
+    }
+    assert_eq!(cache.len(), 4_096);
+}
+
+#[test]
+fn cached_layers_still_subtract_work_and_stop_at_the_budget() {
+    let doc = crate::xml::Document::parse("<root><a/><b/><c/></root>").unwrap();
+    let node = doc.root_element();
+    let mut writer = super::Writer {
+        template: node,
+        out: String::new(),
+        limit: super::MAX_OUTPUT,
+        failed: None,
+        ids: None,
+        refs: std::collections::HashMap::new(),
+        soms: std::collections::HashMap::new(),
+        search: super::MAX_SEARCH,
+        work: 100,
+        child_counts: std::collections::HashMap::new(),
+        active: std::collections::HashMap::new(),
+        missing: false,
+        external: false,
+        looped: false,
+        layers_cut: false,
+    };
+    writer.element(&[node], &super::Scope::new(), 0);
+    assert!(writer.failed.is_none());
+    let first_cost = 100 - writer.work;
+    assert!(first_cost > 0);
+    assert!(!writer.child_counts.is_empty());
+    let before = writer.work;
+    writer.element(&[node], &super::Scope::new(), 0);
+    assert!(writer.failed.is_none());
+    assert_eq!(before - writer.work, first_cost, "cached layers pay the same work charge");
+    writer.work = 0;
+    writer.element(&[node], &super::Scope::new(), 0);
+    assert!(writer.failed.as_ref().is_some_and(|why| why.contains("children, attributes and namespaces")));
 }
