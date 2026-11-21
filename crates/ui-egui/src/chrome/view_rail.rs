@@ -71,7 +71,9 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut Ui) {
     IconButton::command(IconId::new("chevron_up"), "view.previous_page").show(ui);
     IconButton::command(IconId::new("chevron_down"), "view.next_page").show(ui);
 
-    let (zoom_rect, _) = ui.allocate_exact_size(field_size, egui::Sense::hover());
+    // The percent suffix and three digits need the rail's full width, not an icon button's width.
+    let zoom_size = egui::vec2(ui.available_width(), field_size.y);
+    let (zoom_rect, _) = ui.allocate_exact_size(zoom_size, egui::Sense::hover());
     let field = ZoomField::new("Zoom", view.canvas_view(), page_size).scale(ZoomScale::Points).show_at(ui, zoom_rect);
     if let Some(edited) = field.view.committed() {
         view.apply_canvas_view(edited);
