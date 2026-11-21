@@ -342,7 +342,9 @@ impl Session {
         if editor.undo.len() > MAX_UNDO {
             editor.undo.remove(0);
         }
-        editor.redo.clear();
+        // Kept aside, not dropped: an edit that cannot be shown is rolled back below, and the
+        // steps that were there to redo come back with it.
+        let redo = std::mem::take(&mut editor.redo);
         Self::adopt_keys(doc);
         let refreshed = guard(|| if scope == Scope::Content { Self::refresh_content(doc, Some(&edit)) } else { Self::refresh_scoped(doc, scope) })
             .unwrap_or_else(|m| Err(EditError::Reopen(m)));
@@ -354,6 +356,7 @@ impl Session {
             {
                 ed.cos = prev;
                 ed.keys = keys;
+                ed.redo = redo;
             }
             Self::adopt_keys(doc);
             if !matches!(guard(|| Self::refresh(doc)), Ok(Ok(()))) {

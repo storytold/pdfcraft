@@ -11800,6 +11800,33 @@ fn undo_and_redo_roll_back_on_a_refresh_panic_or_error() {
     rolls_back_protection_keys(&mut s, id);
 }
 
+#[test]
+fn an_edit_rolled_back_on_a_refresh_panic_keeps_what_there_was_to_redo() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().editor.as_ref().unwrap().redo.len(), 1);
+
+    // The new edit cannot be shown, so it is rolled back, and the undone rotation stays redoable.
+    panic_on_refresh(1);
+    let err = s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 180 }).unwrap_err();
+    assert_eq!(err, EditError::Reopen("injected refresh panic".into()));
+    {
+        let d = s.get(id).unwrap();
+        let ed = d.editor.as_ref().unwrap();
+        assert_eq!(d.info.pages[0].rotation, 0);
+        assert!(ed.undo.is_empty());
+        assert_eq!(ed.redo.len(), 1);
+    }
+    assert_eq!(s.redo(id).unwrap().as_str(), "Rotate page");
+    assert_eq!(s.get(id).unwrap().info.pages[0].rotation, 90);
+
+    // An edit that is shown still clears what there was to redo.
+    s.undo(id).unwrap();
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 180 }).unwrap();
+    assert!(s.get(id).unwrap().editor.as_ref().unwrap().redo.is_empty());
+}
+
 /// Undo/redo of a metadata edit rolled back after a refresh panic.
 fn rolls_back_metadata_scope(s: &mut Session, id: DocId) {
     // 5. Metadata scope: a panic after `doc.info.title` was written rolls back `info.title` and keeps `edit_notices`.
