@@ -2788,7 +2788,7 @@ fn the_security_notice_wraps_beside_its_buttons_and_lines_up_with_them() {
         }
     }
     // Wide: one line. Narrower: wrapped. Narrowest: actions stack below the message.
-    for (width, wraps) in [(1700.0, false), (1250.0, true), (900.0, false)] {
+    for (width, wraps) in [(1700.0, false), (1600.0, true), (1250.0, false), (900.0, false)] {
         let mut h = Harness::builder().with_size(egui::vec2(width, 800.0)).build_eframe(|cc| {
             crate::support::install_runtime(&cc.egui_ctx);
             {
@@ -2804,7 +2804,7 @@ fn the_security_notice_wraps_beside_its_buttons_and_lines_up_with_them() {
             h.output().shapes.iter().find_map(|shape| message_rect(&shape.shape)).expect("the security message is painted");
         let button = h.get_by_label("Security settings").rect();
         let dismiss = h.get_by_label("Dismiss").rect();
-        if width == 900.0 {
+        if width <= 1250.0 {
             assert!(button.top() >= msg.bottom(), "{width}: stacked actions stay below the message: {msg:?} vs {button:?}");
             assert!(!button.intersects(dismiss), "{width}: the actions stay apart: {button:?} vs {dismiss:?}");
             continue;
