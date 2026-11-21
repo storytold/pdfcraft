@@ -427,3 +427,35 @@ fn a_tiling_cell_whose_last_fill_is_left_out_says_so() {
     assert!(fills > held.saturating_sub(4), "the cell with the fewest fills, {fills}, draws its last one");
     assert!(cut, "the cell's last fill, the {fills}th, is left out and the page says so");
 }
+
+#[test]
+fn shared_raster_options_enforces_max_coverage() {
+    let pdf = doubling_forms(10);
+    let parsed = Pdf::new(Arc::new(pdf)).unwrap();
+    let render_with = |max_coverage: Option<usize>| {
+        let truncated = Arc::new(Mutex::new(false));
+        let seen = truncated.clone();
+        let settings = InterpreterSettings {
+            warning_sink: Arc::new(move |w| {
+                if matches!(w, InterpreterWarning::ContentTruncated) {
+                    *seen.lock().unwrap() = true;
+                }
+            }),
+            ..Default::default()
+        };
+        let options = RasterOptions { max_coverage, ..Default::default() };
+        let [w, h] = shared_raster::dimensions(&parsed.pages()[0], &options).unwrap();
+        let mut buf = vec![0u8; (w as usize) * (h as usize) * 4];
+        shared_raster::render_into(&parsed.pages()[0], &RenderCache::new(), &settings, &options, &mut buf).unwrap();
+        let cut = *truncated.lock().unwrap();
+        (buf, cut)
+    };
+
+    let (whole, whole_cut) = render_with(None);
+    assert!(!whole_cut, "unlimited render leaves nothing out");
+    let (kept, kept_cut) = render_with(Some(200_000));
+    assert!(kept_cut, "shared RasterOptions::max_coverage truncates and warns");
+    assert_eq!(kept.len(), whole.len());
+    let blue = |px: &[u8]| px.as_chunks::<4>().0.iter().filter(|p| p[2] > 200 && p[0] < 50).count();
+    assert!(blue(&kept) > 10_000, "circles drawn before the limit stay: {}", blue(&kept));
+}
