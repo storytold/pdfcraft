@@ -1291,6 +1291,11 @@ fn editor_session(
     let frame = [rect_path(doc_rect(&body.view, live.expand(2.0)))];
     let _ = SelectionOutline::solid(tl!("Text editing line").to_string(), &frame).show_at(ui, page_clip);
     ed.overflow = laid.overflow;
+    // An editor entirely outside its page has no visible or interactive area.
+    let editor_rect = live.intersect(page_clip);
+    if !editor_rect.is_positive() {
+        return None;
+    }
     let len = ed.text.chars().count();
     let mut selection = ed.selection.map_or_else(|| TextSelection::caret_at(len), |s| TextSelection::new(s.anchor.min(len), s.caret.min(len)));
     let origin = ed.rect.min;
@@ -1302,7 +1307,8 @@ fn editor_session(
         // Escape cancels and selects the paragraph's box (Acrobat); ⌘Enter and a press on the page
         // background apply.
         let editor = TextEditor::new(tl!("Text editing line").to_string(), &mut host, Bind::bound(&mut selection)).esc_commits(false);
-        let output = if fresh { editor.request_focus(FocusRequest::Take) } else { editor }.show_at(ui, live);
+        // The focus reveal and hit area must stay on this page, even when the paragraph extends beyond it.
+        let output = if fresh { editor.request_focus(FocusRequest::Take) } else { editor }.show_at(ui, editor_rect);
         (output, host.galley())
     };
     ed.selection = Some(selection);
