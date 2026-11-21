@@ -6,7 +6,7 @@ Today it holds what generated appearances need without a font program:
 
 - `helvetica_width`: the **exact** standard-14 advance widths, via `Std14::Helvetica`. It was an
   estimate by character class until the generated tables landed; those tables are Adobe-authored
-  non-visual technical data, the item `AGENTS.md` §1.1 permits, carried in `std14_metrics.rs` with
+  non-visual technical data, the item clean-room.md permits, carried in `std14_metrics.rs` with
   `adobe_data = true` in `ATTRIBUTION.toml`. **No font program or typeface from any vendor is
   bundled** — widths and encodings only. Reach for `Std14` directly for any other face.
 - `wrap`: greedy line breaking with that measure (paragraphs on newlines, long words split).
@@ -80,7 +80,7 @@ needed.
 wasm32 builds embed only BIZ UDPGothic Regular and any `Arab`, `Telu`, `Hebr` or `Thai` face, to keep the web build small: the web build
 currently has no Chinese face, so Chinese there still shows the replacement glyph.
 Font files are never
-committed here (`AGENTS.md` §1.4).
+committed here (docs/development.md "Fonts and attribution").
 
 The full font subsystem (parsing, shaping, subsetting and embedding) arrives with M2.2/M7.
 
