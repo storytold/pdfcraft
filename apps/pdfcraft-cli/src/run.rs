@@ -74,6 +74,14 @@ fn output_values(
     Ok(values)
 }
 
+fn script_output_path(step: &serde_json::Value) -> Result<Option<&str>, String> {
+    match &step["out"] {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::String(path) => Ok(Some(path)),
+        _ => Err("\"out\" must be a path string".into()),
+    }
+}
+
 /// Run a script and print one JSON document: per step its number, tool and `ok`/`error`/`skipped`
 /// with the result or the message. The first failing step ends the run, as without `--report`;
 /// the steps after it are listed as skipped and the exit status is the same.
@@ -89,10 +97,11 @@ fn run_script_report(auto: &mut pdfcraft_automation::Automation, steps: &[serde_
         }
         let outcome = match tool {
             None => Err(format!("step {n}: missing \"tool\"")),
-            Some(t) => auto
-                .call(t, &step["args"])
-                .map_err(|e| e.to_string())
-                .and_then(|content| output_values(auto, content, step["out"].as_str()))
+            Some(t) => script_output_path(step)
+                .and_then(|out| {
+                    let content = auto.call(t, &step["args"]).map_err(|e| e.to_string())?;
+                    output_values(auto, content, out)
+                })
                 .map_err(|e| format!("step {n} ({t}): {e}")),
         };
         match outcome {
@@ -123,8 +132,9 @@ pub(crate) fn run(args: &[String]) -> Result<(), CliError> {
         }
         for (i, step) in steps.iter().enumerate() {
             let tool = step["tool"].as_str().ok_or(format!("step {}: missing \"tool\"", i + 1))?;
+            let out = script_output_path(step).map_err(|e| format!("step {} ({tool}): {e}", i + 1))?;
             let content = auto.call(tool, &step["args"]).map_err(|e| format!("step {} ({tool}): {e}", i + 1))?;
-            print_output(&auto, content, step["out"].as_str()).map_err(|e| match e {
+            print_output(&auto, content, out).map_err(|e| match e {
                 CliError::Message(message) => CliError::Message(format!("step {} ({tool}): {message}", i + 1)),
                 stdout => stdout,
             })?;
