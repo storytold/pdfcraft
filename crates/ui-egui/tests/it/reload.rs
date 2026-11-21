@@ -366,3 +366,76 @@ fn opening_a_file_that_is_open_focuses_its_tab() {
     let app = h.state();
     assert_eq!((app.views.len(), app.active, app.views[0].id), (2, Some(0), id), "focused, not opened again");
 }
+
+#[test]
+fn a_file_rebuilt_under_an_open_dialog_reloads_when_the_dialog_closes() {
+    // #3917: a dialog's OK acts on the active document. Reloading it in place while the dialog is
+    // open would apply the dialog (Rotate, Protect, Comment Properties…) to the new version.
+    let file = TempPdf::new("under-dialog", &fixture(2));
+    let mut h = harness(&file.path);
+    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::RotatePages);
+    h.run_steps(2);
+    file.rebuild(&fixture(4));
+    h.run_steps(4);
+    assert_eq!(pages(&h), 2, "not replaced under the dialog");
+    file.rebuild(&fixture(5));
+    h.run_steps(4);
+    assert_eq!(pages(&h), 2, "still not replaced under the dialog");
+    h.state_mut().dialog = None;
+    h.run_steps(3);
+    assert_eq!((pages(&h), dirty(&h)), (5, false), "the newest version is applied once the dialog closes");
+}
+
+#[test]
+fn a_version_held_under_preferences_is_dropped_when_reloading_is_turned_off_there() {
+    // #3917 review: closing Preferences after unticking "Reload documents when their files
+    // change on disk" must not still apply the version found while it was open.
+    let file = TempPdf::new("held-pref-off", &fixture(2));
+    let mut h = harness(&file.path);
+    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::RotatePages);
+    h.run_steps(2);
+    file.rebuild(&fixture(4));
+    h.run_steps(4);
+    h.state_mut().reload_changed_files = false;
+    h.state_mut().dialog = None;
+    h.run_steps(4);
+    assert_eq!(pages(&h), 2, "reloading was turned off before the dialog closed");
+}
+
+#[test]
+fn a_newer_version_found_as_the_dialog_closes_replaces_the_held_one() {
+    // #3917 review: only the newest version is applied, not the held one first (which would run
+    // its scripts, and whose dialogs could hold the newest one back again). Each reload is a new
+    // edit generation: one is expected.
+    let file = TempPdf::new("held-coalesced", &fixture(2));
+    let mut h = harness(&file.path);
+    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::RotatePages);
+    h.run_steps(2);
+    file.rebuild(&fixture(4));
+    h.run_steps(4);
+    // The watcher reads a changed file at its second look: one frame sees the change, and the
+    // frame that closes the dialog reads it, together with the held version.
+    file.rebuild(&fixture(5));
+    h.step();
+    let generation = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().edit_generation();
+    let before = generation(&h);
+    h.state_mut().dialog = None;
+    h.step();
+    assert_eq!((pages(&h), generation(&h) - before), (5, 1), "the held version is not loaded on the way");
+}
+
+#[test]
+fn a_file_rebuilt_under_the_full_screen_prompt_reloads_once_it_is_answered() {
+    // #3917 review: the full-screen prompt is about the document's current version.
+    let file = TempPdf::new("under-full-screen", &fixture(2));
+    let mut h = harness(&file.path);
+    let id = h.state().views[0].id;
+    h.state_mut().pending_full_screen = Some(id);
+    h.run_steps(2);
+    file.rebuild(&fixture(4));
+    h.run_steps(4);
+    assert_eq!(pages(&h), 2, "not replaced under the prompt");
+    h.state_mut().pending_full_screen = None;
+    h.run_steps(3);
+    assert_eq!(pages(&h), 4, "applied once the prompt is gone");
+}
