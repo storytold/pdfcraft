@@ -17,7 +17,7 @@ use craft::ui::notices::Notice;
 use craft::ui::runtime::env::Env;
 use craft::ui::shell::{RecentFile, StartAction, StartPlace, StartScreen};
 use craft::ui::style::{DataColor, SurfaceKind};
-use craft::ui::tile_grid::{Tile, TileGrid, TilePartEvent};
+use craft::ui::tile_grid::{CaptionPlace, GridZoom, Tile, TileGrid, TilePartEvent};
 use pdfcraft_engine::catalog::{self, ToolGroup};
 
 use crate::{PdfCraftApp, brand, panels::human_size};
@@ -29,10 +29,39 @@ const RECOMMENDED: [&str; 5] = ["organize", "comment", "form", "edit", "protect"
 /// What a section of the page asked for; the page runs it once the screen has been shown.
 enum Asked {
     Select(&'static str),
+    Open,
     Unpin(&'static str),
     PinTools,
     CloseCommunityCard,
     Link(&'static str),
+}
+
+/// Recommended actions use the compact cards, followed by the file picker.
+fn recommended_grid(ui: &mut egui::Ui, groups: &[&'static ToolGroup], asked: &RefCell<Vec<Asked>>) {
+    let out = TileGrid::<usize>::new(tl!("Recommended tools").to_string())
+        .activate(ActivateOn::Click)
+        .natural_height(true)
+        .card()
+        .caption(CaptionPlace::None)
+        .aspect(2.0)
+        .zoom(GridZoom::Fixed(1.05))
+        .show_items(ui, &Tools(groups.len() + 1), &mut |key, _| {
+            if let Some(g) = groups.get(*key) {
+                let description = g.sections.first().map(|s| s.items.iter().take(3).map(|i| tl!(i.label)).collect::<Vec<_>>().join(" · ")).unwrap_or_default();
+                tool_tile(g, false).accessible_name(tl!(g.label).to_string()).detail(description).summary_action(tl!("Use now").to_string())
+            } else {
+                Tile::new(tl!("Open file").to_string()).icon(IconId::new("folder_open")).summary_action("")
+            }
+        });
+    for event in out.response.events {
+        if let CollectionEvent::Activate(key) = event {
+            if let Some(g) = groups.get(key) {
+                asked.borrow_mut().push(Asked::Select(g.id));
+            } else if key == groups.len() {
+                asked.borrow_mut().push(Asked::Open);
+            }
+        }
+    }
 }
 
 /// Tool tiles keyed by their position in the shown list.
@@ -144,8 +173,10 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     },
                 );
             }
-            let _ = Text::new(tl!("Recommended tools").to_string()).role(TypeRole::Heading).show(ui);
-            tool_grid(ui, tl!("Recommended tools"), &recommended, false, &asked);
+            Stack::new().label(tl!("Recommended tools")).fill_width().surface(SurfaceKind::Raised).pad(Pad::Regular).show(ui, |ui, _| {
+                let _ = Text::new(tl!("Recommended tools").to_string()).role(TypeRole::Heading).show(ui);
+                recommended_grid(ui, &recommended, &asked);
+            });
             let _ = Text::new(tl!("Pinned Tools").to_string()).role(TypeRole::Heading).show(ui);
             if Button::new(tl!("Pin a tool…").to_string()).id_salt("pin-a-tool").show(ui).clicks > 0 {
                 asked.borrow_mut().push(Asked::PinTools);
@@ -193,6 +224,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     for ask in asked.into_inner() {
         match ask {
             Asked::Select(id) => app.select_tool(ui.ctx(), id),
+            Asked::Open => app.open_dialog(),
             Asked::Unpin(id) => app.unpin_tool(id),
             // PLAN: assumed `PdfCraftApp::open_pin_tools(&mut self)` (pdf-dialogs-w9).
             Asked::PinTools => app.open_pin_tools(),
