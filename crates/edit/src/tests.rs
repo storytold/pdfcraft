@@ -16677,10 +16677,13 @@ fn a_shading_painted_through_scn_does_not_keep_the_image() {
     let (mut doc, _target) = private_page(PRIVATE);
     let shading =
         doc.add(Object::Dict(Dict::from_iter([(b"ShadingType".to_vec(), Object::Int(2)), (b"ColorSpace".to_vec(), Object::name("DeviceGray"))])));
+    // /Pattern names a Type 2 pattern, not the shading dictionary itself. Its shading has no
+    // ExtGState and cannot consume an XObject, so the positive cleanup assertion stays unchanged.
+    let pattern = doc.add(Object::Dict(Dict::from_iter([(b"PatternType".to_vec(), Object::Int(2)), (b"Shading".to_vec(), Object::Ref(shading))])));
     let page = pdfcraft_model::pages(&doc)[0].obj;
     doc.update_dict(page, |d| {
         let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
-        resources.set(b"Pattern".to_vec(), Object::Dict(Dict::from_iter([(b"P1".to_vec(), Object::Ref(shading))])));
+        resources.set(b"Pattern".to_vec(), Object::Dict(Dict::from_iter([(b"P1".to_vec(), Object::Ref(pattern))])));
         d.set(b"Resources".to_vec(), Object::Dict(resources));
     })
     .unwrap();
@@ -16900,4 +16903,136 @@ fn another_page_with_contents_that_are_not_a_stream_keeps_the_image() {
     let second = pdfcraft_model::pages(&doc)[1].obj;
     doc.update_dict(second, |d| d.set(b"Contents".to_vec(), Object::Ref(not_a_stream))).unwrap();
     assert!(payload_after_delete(&mut doc, PRIVATE), "a page with unreadable /Contents must keep the image");
+}
+
+#[test]
+fn census_retains_images_drawn_by_each_widget_icon() {
+    const PRIVATE: &[u8] = b"PRIVATE_WIDGET_ICON_IMAGE";
+    for key in [b"I".as_slice(), b"RI", b"IX"] {
+        let (mut doc, target) = private_page(PRIVATE);
+        let form = add_form(&mut doc, b"Icon", b"/IconImg Do", Dict::from_iter([(b"IconImg".to_vec(), Object::Ref(target))]));
+        let mk = doc.add(Object::Dict(Dict::from_iter([(key.to_vec(), Object::Ref(form))])));
+        let annotation = Object::Dict(Dict::from_iter([
+            (b"Subtype".to_vec(), Object::name("Widget")),
+            (b"FT".to_vec(), Object::name("Btn")),
+            (b"MK".to_vec(), Object::Ref(mk)),
+        ]));
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(vec![annotation]))).unwrap();
+        assert!(payload_after_delete(&mut doc, PRIVATE), "widget icon {key:?} lost its image");
+        let saved = reopen(&doc);
+        let bytes = write_full(&saved, &SaveOptions::default()).unwrap();
+        assert!(bytes.windows(PRIVATE.len()).any(|b| b == PRIVATE));
+    }
+}
+
+#[test]
+fn census_retains_images_in_shading_pattern_soft_masks() {
+    const PRIVATE: &[u8] = b"PRIVATE_SHADING_PATTERN_MASK";
+    for type_spelling in ["direct", "indirect", "missing", "invalid"] {
+        let (mut doc, target) = private_page(PRIVATE);
+        let form = add_form(&mut doc, b"MaskForm", b"/MaskImg Do", Dict::from_iter([(b"MaskImg".to_vec(), Object::Ref(target))]));
+        let state =
+            doc.add(Object::Dict(Dict::from_iter([(b"SMask".to_vec(), Object::Dict(Dict::from_iter([(b"G".to_vec(), Object::Ref(form))])))])));
+        let mut pattern = Dict::from_iter([(b"ExtGState".to_vec(), Object::Ref(state))]);
+        let kind = match type_spelling {
+            "direct" => Some(Object::Int(2)),
+            "indirect" => Some(Object::Ref(doc.add(Object::Int(2)))),
+            "missing" => None,
+            _ => Some(Object::name("Unknown")),
+        };
+        if let Some(kind) = kind {
+            pattern.set(b"PatternType".to_vec(), kind);
+        }
+        let pattern = Object::Dict(pattern);
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| {
+            let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+            resources.set(b"Pattern".to_vec(), Object::Dict(Dict::from_iter([(b"P".to_vec(), pattern)])));
+            d.set(b"Resources".to_vec(), Object::Dict(resources));
+        })
+        .unwrap();
+        set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /Pattern cs /P scn 0 0 10 10 re f"]);
+        assert!(payload_after_delete(&mut doc, PRIVATE), "the shading pattern's mask still draws the image");
+    }
+}
+
+#[test]
+fn census_keeps_inherited_type3_glyph_scope_but_prunes_with_a_private_font_scope() {
+    const PRIVATE: &[u8] = b"PRIVATE_INHERITED_TYPE3_IMAGE";
+    for (own_scope, indirect_subtype) in [(false, false), (false, true), (true, false), (true, true)] {
+        let (mut doc, target) = private_page(PRIVATE);
+        let other = doc.add(Object::Stream(identifiable_test_image(b"OTHER_TYPE3_IMAGE")));
+        let glyph = doc.add(Object::Stream(Stream::flate(Dict::new(), b"/GlyphImg Do")));
+        let mut font = Dict::from_iter([
+            (b"Subtype".to_vec(), Object::name("Type3")),
+            (b"CharProcs".to_vec(), Object::Dict(Dict::from_iter([(b"A".to_vec(), Object::Ref(glyph))]))),
+        ]);
+        let glyph_scope = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"GlyphImg".to_vec(), Object::Ref(other))])))]);
+        if own_scope {
+            font.set(b"Resources".to_vec(), Object::Dict(glyph_scope));
+        }
+        if indirect_subtype {
+            let subtype = doc.add(Object::name("Type3"));
+            font.set(b"Subtype".to_vec(), Object::Ref(subtype));
+        }
+        let font = doc.add(Object::Dict(font));
+        let form = add_form(&mut doc, b"TextForm", b"BT (A) Tj ET", Dict::from_iter([(b"GlyphImg".to_vec(), Object::Ref(target))]));
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| {
+            let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+            resources.set(b"Font".to_vec(), Object::Dict(Dict::from_iter([(b"T3".to_vec(), Object::Ref(font))])));
+            let mut names = resources.get(b"XObject").and_then(Object::as_dict).cloned().unwrap();
+            names.set(b"GlyphImg".to_vec(), Object::Ref(other));
+            names.set(b"TextForm".to_vec(), Object::Ref(form));
+            resources.set(b"XObject".to_vec(), Object::Dict(names));
+            d.set(b"Resources".to_vec(), Object::Dict(resources));
+        })
+        .unwrap();
+        set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q BT /T3 10 Tf ET /TextForm Do"]);
+        assert_eq!(payload_after_delete(&mut doc, PRIVATE), !own_scope, "private font resources: {own_scope}");
+    }
+}
+
+#[test]
+fn census_does_not_use_a_corrupt_streams_tolerated_prefix_as_a_nonuse_proof() {
+    const PRIVATE: &[u8] = b"PRIVATE_CORRUPT_CENSUS_IMAGE";
+    let (mut doc, _target) = private_page(PRIVATE);
+    add_blank_page(&mut doc, None);
+    // A nonfinal stored DEFLATE block yields valid content, then an invalid block type fails.
+    // A corrupt Adler checksum alone is intentionally accepted by the shared PDF decoder.
+    let stream =
+        Stream::from_raw(Dict::from_iter([(b"Filter".to_vec(), Object::name("FlateDecode"))]), b"\x78\x01\x00\x04\x00\xfb\xffq Q\n\x07".to_vec());
+    assert_eq!(stream.decoded().unwrap(), b"q Q\n");
+    assert!(stream.decoded_strict().is_err());
+    let content = doc.add(Object::Stream(stream));
+    let page = pdfcraft_model::pages(&doc)[1].obj;
+    doc.update_dict(page, |d| d.set(b"Contents".to_vec(), Object::Ref(content))).unwrap();
+    assert!(payload_after_delete(&mut doc, PRIVATE), "corruption cannot authorize destructive cleanup");
+}
+
+#[test]
+fn census_retains_images_drawn_by_tiling_patterns_with_indirect_types() {
+    const PRIVATE: &[u8] = b"PRIVATE_INDIRECT_TILING_PATTERN";
+    let (mut doc, target) = private_page(PRIVATE);
+    let kind = doc.add(Object::Int(1));
+    let pattern = doc.add(Object::Stream(Stream::flate(
+        Dict::from_iter([
+            (b"PatternType".to_vec(), Object::Ref(kind)),
+            (
+                b"Resources".to_vec(),
+                Object::Dict(Dict::from_iter([(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"TileImg".to_vec(), Object::Ref(target))])))])),
+            ),
+        ]),
+        b"/TileImg Do",
+    )));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+        resources.set(b"Pattern".to_vec(), Object::Dict(Dict::from_iter([(b"P".to_vec(), Object::Ref(pattern))])));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /Pattern cs /P scn 0 0 10 10 re f"]);
+    assert!(payload_after_delete(&mut doc, PRIVATE), "an indirect pattern type still draws its image");
 }

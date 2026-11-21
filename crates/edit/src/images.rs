@@ -189,7 +189,10 @@ impl ImageUseCensus<'_> {
         if !self.charge_visit() {
             return None;
         }
-        let data = match stream.decoded() {
+        // A tolerated prefix cannot prove nonuse. Bound allocation by the document's remaining
+        // census allowance, and reject corrupt filters before any destructive cleanup is staged.
+        let remaining = IMAGE_CENSUS_MAX_BYTES.saturating_sub(self.bytes);
+        let data = match self.doc.with_direct_parms(stream).decoded_strict_within(remaining) {
             Ok(data) => data,
             Err(_) => {
                 self.incomplete = true;
@@ -281,7 +284,7 @@ impl ImageUseCensus<'_> {
         }
 
         let subtype = stream.dict.name(b"Subtype");
-        let pattern = stream.dict.int(b"PatternType") == Some(1);
+        let pattern = stream.dict.get(b"PatternType").map(|o| self.doc.resolve(o)).as_deref().and_then(Object::as_int) == Some(1);
         if subtype != Some(b"Form") && !pattern {
             self.incomplete = true;
             if let Some(reference) = reference {
@@ -303,7 +306,7 @@ impl ImageUseCensus<'_> {
         }
     }
 
-    fn walk_type3(&mut self, font: &Object, inherited: &Dict, depth: usize, path: &mut std::collections::HashSet<ObjRef>) {
+    fn walk_type3(&mut self, font: &Object, _inherited: &Dict, depth: usize, path: &mut std::collections::HashSet<ObjRef>) {
         if !self.charge_visit() {
             return;
         }
@@ -312,10 +315,15 @@ impl ImageUseCensus<'_> {
             self.incomplete = true;
             return;
         };
-        if dict.name(b"Subtype") != Some(b"Type3") {
+        if dict.get(b"Subtype").map(|o| self.doc.resolve(o)).as_deref().and_then(Object::as_name) != Some(b"Type3") {
             return;
         }
-        let resources = dict.get(b"Resources").map(|o| self.doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_else(|| inherited.clone());
+        let Some(resources) = dict.get(b"Resources").map(|o| self.doc.resolve(o)).and_then(|o| o.as_dict().cloned()) else {
+            // The selected font survives Form calls, but its glyphs then resolve names in the
+            // text-showing Form's scope. Without tracking that graphics state, nonuse is unproven.
+            self.incomplete = true;
+            return;
+        };
         let Some(charprocs) = dict.get(b"CharProcs").map(|o| self.doc.resolve(o)).and_then(|o| o.as_dict().cloned()) else {
             self.incomplete = true;
             return;
@@ -422,8 +430,17 @@ impl ImageUseCensus<'_> {
             let patterns = resources.get(b"Pattern").map(|o| self.doc.resolve(o)).and_then(|o| o.as_dict().cloned());
             if let Some(pattern) = patterns.as_ref().and_then(|d| d.get(name)) {
                 let resolved = self.doc.resolve(pattern);
-                if resolved.as_dict().is_some_and(|d| d.int(b"PatternType") == Some(1)) {
-                    self.walk_stream(pattern, resources, depth + 1, path);
+                if let Some(dict) = resolved.as_dict() {
+                    let kind = dict.get(b"PatternType").map(|o| self.doc.resolve(o));
+                    match kind.as_deref().and_then(Object::as_int) {
+                        Some(1) => self.walk_stream(pattern, resources, depth + 1, path),
+                        Some(2) if !dict.contains(b"ExtGState") => {}
+                        // A shading pattern's state can select a soft-mask Form. Unknown types
+                        // are consumers too: neither case proves image nonuse.
+                        _ => self.incomplete = true,
+                    }
+                } else {
+                    self.incomplete = true;
                 }
             }
         }
@@ -473,6 +490,24 @@ impl ImageUseCensus<'_> {
             self.walk_stream(xobject, resources, depth + 1, path);
             if self.incomplete || self.used {
                 return;
+            }
+        }
+    }
+
+    fn walk_annotation(&mut self, annotation: &Dict, resources: &Dict, path: &mut std::collections::HashSet<ObjRef>) {
+        if let Some(ap) = annotation.get(b"AP") {
+            self.walk_appearances(ap, resources, 0, path);
+        }
+        if let Some(mk) = annotation.get(b"MK").map(|o| self.doc.resolve(o)) {
+            if let Some(characteristics) = mk.as_dict() {
+                // Button icons are Form consumers independently of the /AP states.
+                for key in [b"I".as_slice(), b"RI", b"IX"] {
+                    if let Some(icon) = characteristics.get(key) {
+                        self.walk_stream(icon, resources, 0, path);
+                    }
+                }
+            } else if !matches!(&*mk, Object::Null) {
+                self.incomplete = true;
             }
         }
     }
@@ -602,8 +637,8 @@ fn prune_unused_image(doc: &mut Document, target: ObjRef) {
                     break;
                 }
                 let resolved = doc.resolve(item);
-                let Some(ap) = resolved.as_dict().and_then(|d| d.get(b"AP")) else { continue };
-                census.walk_appearances(ap, &resources, 0, &mut path);
+                let Some(annotation) = resolved.as_dict() else { continue };
+                census.walk_annotation(annotation, &resources, &mut path);
                 if census.incomplete || census.used {
                     break;
                 }
