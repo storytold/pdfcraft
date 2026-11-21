@@ -74,6 +74,12 @@ fn select_after_edit(
             }
             view.select_pages(&[]);
         }
+        Edit::ReversePages { pages } => {
+            if let Some(&first) = pages.iter().min() {
+                clear_shifted_page_comment_state(view, first);
+            }
+            view.select_pages(pages);
+        }
         // A stroke drawn with the pen stays unselected, so the selection box and
         // author popup don't sit over the next stroke (#429).
         Edit::AddAnnotation(a)
@@ -604,6 +610,9 @@ impl PdfCraftApp {
             }
             Some(crate::canvas::ViewAction::CameraNext(command)) => {
                 self.leave_camera(i);
+                self.execute(command);
+            }
+            Some(crate::canvas::ViewAction::Command(command)) => {
                 self.execute(command);
             }
             Some(crate::canvas::ViewAction::Replace { all }) => self.replace_found(i, all),
