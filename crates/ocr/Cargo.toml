@@ -1,6 +1,6 @@
 [package]
 name = "pdfcraft-ocr"
-description = "Scan & OCR: recognise text in page images (ocrs) and write it as an invisible, searchable text layer"
+description = "Scan & OCR: recognise text in page images (ocrs), write it as an invisible, searchable text layer, and flatten photographed pages (UVDoc)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -15,6 +15,7 @@ pdfcraft-fonts = { workspace = true }
 ocrs = { version = "0.13.1", default-features = false, features = ["rten"] }
 rten = { version = "0.26.0", default-features = false, features = ["onnx_format", "rten_format"] }
 rten-imageproc = "0.26.0"
+rten-tensor = "0.26.0"
 serde_json.workspace = true
 sha2 = "0.11"
 thiserror.workspace = true
@@ -24,4 +25,5 @@ thiserror.workspace = true
 craft-image-codecs = { workspace = true }
 
 [dev-dependencies]
+pdfcraft-testkit = { workspace = true }
 tempfile = "3.27"
