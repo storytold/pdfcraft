@@ -21,7 +21,7 @@ pub struct Name {
 }
 
 impl Name {
-    fn parse(t: &Tlv<'_>) -> Result<Name, SignError> {
+    pub(crate) fn parse(t: &Tlv<'_>) -> Result<Name, SignError> {
         let mut attrs = Vec::new();
         for rdn in t.expect(tag::SEQUENCE, "Name")?.children()? {
             for atv in rdn.children()? {

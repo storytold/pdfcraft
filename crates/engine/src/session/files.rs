@@ -231,7 +231,10 @@ impl Session {
     pub fn print_pdf(&self, id: DocId, settings: &print::Settings) -> Result<Vec<u8>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         if !doc.allows_printing() {
-            return Err(EditError::NotPermitted("printing"));
+            return Err(doc
+                .editor
+                .as_ref()
+                .map_or(EditError::NotPermitted("printing"), |e| crate::protection::note_certificate(EditError::NotPermitted("printing"), &e.cos)));
         }
         // Table 22, bit 12 clear: only a low-level representation may be printed, so the pages
         // always go as pictures, at no more than the low resolution.
@@ -470,7 +473,7 @@ impl Session {
     pub fn extract(&self, id: DocId, pages: &[usize]) -> Result<Arc<Vec<u8>>, EditError> {
         let src = self.cos(id)?;
         if src.permissions().is_some_and(|p| !p.extract_pages()) {
-            return Err(EditError::NotPermitted("extracting pages"));
+            return Err(crate::protection::note_certificate(EditError::NotPermitted("extracting pages"), src));
         }
         let out = pdfcraft_organize::extract_pages(src, pages)?;
         self.write_new(&out)
@@ -480,7 +483,7 @@ impl Session {
     pub fn split(&self, id: DocId, by: &pdfcraft_organize::SplitBy) -> Result<Vec<SplitPart>, EditError> {
         let src = self.cos(id)?;
         if src.permissions().is_some_and(|p| !p.extract_pages()) {
-            return Err(EditError::NotPermitted("splitting the document"));
+            return Err(crate::protection::note_certificate(EditError::NotPermitted("splitting the document"), src));
         }
         let n = pdfcraft_organize::page_count(src)?;
         pdfcraft_organize::split_ranges(n, by)
@@ -498,7 +501,7 @@ impl Session {
     pub fn split_by_size(&self, id: DocId, max_bytes: usize) -> Result<Vec<SplitPart>, EditError> {
         let src = self.cos(id)?;
         if src.permissions().is_some_and(|p| !p.extract_pages()) {
-            return Err(EditError::NotPermitted("splitting the document"));
+            return Err(crate::protection::note_certificate(EditError::NotPermitted("splitting the document"), src));
         }
         let n = pdfcraft_organize::page_count(src)?;
         let mut cuts = Vec::new();

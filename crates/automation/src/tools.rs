@@ -171,6 +171,25 @@ pub fn tools() -> Vec<ToolDef> {
         t("attachment_delete", "Delete an attachment", "Remove the document-level attachment with this name (as doc_info lists it). Undoable.")
             .destructive()
             .with(schema(json!({"doc": doc(), "name": {"type": "string"}}), &["doc", "name"])),
+        t("doc_protect_certificates", "Encrypt with certificates", "Encrypt the document for the holders of certificates (Acrobat: Protect ▸ Encrypt with certificate): `certificates` are files (.cer/.crt/.pem/.der, or the certificates in a .p12 with `password`), RSA ones; every holder gets the same permissions (printing none/low/high, changes none/pages/fill-sign/comment-fill-sign/any-except-extract, copy, accessibility; omit all for everything). `owners` are certificate files whose holders get everything whatever the restrictions (yourself, so you can still open and change the file). Permissions are advisory: conforming software honours them, but every holder can decrypt the whole file. Takes effect on the next save (a full rewrite); the open session keeps everything. compatibility aes-256 (default) or aes-128.")
+            .cmd("protect.certificate")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "certificates": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+                    "owners": { "type": "array", "items": { "type": "string" } },
+                    "password": { "type": "string", "description": "For a .p12 among the certificates." },
+                    "printing": { "type": "string", "enum": ["none", "low", "high"], "description": "Default high when another restriction is given; omit all four for everything allowed." },
+                    "changes": { "type": "string", "enum": ["none", "pages", "fill-sign", "comment-fill-sign", "any-except-extract"], "description": "Default none when another restriction is given; omit all four for everything allowed." },
+                    "copy": { "type": "boolean", "description": "Allow copying text and images (default false when another restriction is given; omit all four for everything allowed)." },
+                    "accessibility": { "type": "boolean", "description": "Allow screen readers to read the text (default true when another restriction is given; omit all four for everything allowed)." },
+                    "compatibility": { "type": "string", "enum": ["aes-256", "aes-128"], "description": "Default aes-256." },
+                    "encrypt_metadata": { "type": "boolean" },
+                }),
+                &["doc", "certificates"],
+            )),
+        t("identity_add", "Add a digital identity", "Add a digital ID (.p12/.pfx with its password) to the session's identities, which open documents encrypted with certificates (doc_open tries them on the file's envelopes). The private key is held decrypted in this process's memory only, with no protection there beyond the process's own, until `clear` or the end of the session; the key and the password are never written to a PDF, a settings file or a log, and the .p12 stays the only stored copy. Returns the identities' certificates.")
+            .with(schema(json!({ "path": { "type": "string" }, "password": { "type": "string" }, "clear": { "type": "boolean" } }), &[])),
         t("doc_convert_colours", "Convert colours", "Print production: every colour operator in the pages' content and the artwork it draws rewritten in the target space (to: gray, rgb or cmyk) by the standard device formulas (device spaces, ICC by component count, Lab, Indexed, Separation and DeviceN tints; patterns, shadings and inline images stay). Not a prepress separation: no ICC profile and no output intent is used. Spot colours are converted, not kept: exact through a Type 2 tint, otherwise a gray of their darkness; /None stays. preserve_black (default true) keeps pure black as 100% K / gray 0; images (default true) re-encodes 8-bit gray and RGB pictures (JPEG stays JPEG, compressed again at quality 80; CMYK written lossless; soft masks kept), and leaves indexed, CMYK, masked and other pictures as they are; annotations also converts the pages' comment and field appearances. Returns how many colours and pictures changed on how many pages, images_left (pictures not in the target that stayed), and loses_conformance (the PDF/A level and output intents the file declared: it may no longer meet them, and still declares them; standards_remove_id takes that off). Undoable.")
             .cmd("prepress.convert_colors")
             .with(schema(
