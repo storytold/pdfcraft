@@ -12604,7 +12604,6 @@ fn transfer_document_preserves_process_unique_ids_and_both_histories() {
     assert_eq!(a.get(back).unwrap().bytes, before);
 }
 
-
 /// A date typed in another of an XFA date field's edit patterns is kept in its first: yymmdd and
 /// yyyymd are rewritten as yyyymmdd, and the data holds the date. Text none of them reads is kept
 /// as typed, in the field and the data, as another viewer keeps it.
