@@ -103,7 +103,7 @@ fn matches(a: &Annotation, q: &str) -> bool {
 
 /// Whether one of `fields` contains `q` in any case, Turkish dotted and dotless i included.
 fn any_contains<'a>(fields: impl IntoIterator<Item = &'a str>, q: &str) -> bool {
-    let q = pdfcraft_render::text::fold_case(q);
+    let q = pdfcraft_render::text::fold_case(q.trim());
     fields.into_iter().any(|s| pdfcraft_render::text::fold_case(s).contains(&q))
 }
 
@@ -890,6 +890,13 @@ pub(crate) fn header_controls(ui: &mut egui::Ui, info: &DocInfo, view: &mut DocV
 #[cfg(test)]
 mod filter {
     use super::any_contains;
+
+    #[test]
+    fn comment_search_trims_outer_whitespace() {
+        assert!(any_contains(["Signed copy"], "  signed copy\t"));
+        assert!(any_contains(["Lütfen İMZALAYIN"], "\u{a0}imzalayın\u{2003}"));
+        assert!(!any_contains(["Signed copy"], "  signed  copy "));
+    }
 
     #[test]
     fn comments_match_in_any_case_with_turkish_i() {
