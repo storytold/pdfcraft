@@ -123,6 +123,7 @@ impl PdfCraftApp {
             "fill_text_border": self.fill_text_default.width,
             "fill_text_border_color": self.fill_text_default.color,
             "fill_text_border_shape": self.fill_text_default.shape.name(),
+            "bates_token": self.bates_token,
             "date_format": self.session.date_format(),
             // Null follows the interface language.
             "date_language": self.session.date_language(),
@@ -249,6 +250,7 @@ impl PdfCraftApp {
         self.restore_view_prefs(&v);
         self.restore_comment_prefs(&v);
         self.restore_signature_prefs(&v);
+        self.bates_token = v["bates_token"].as_str().filter(|token| marks_ui::bates_token(token) == Some(*token)).map(str::to_owned);
     }
 
     /// The panels, combine view, zoom and recent files.

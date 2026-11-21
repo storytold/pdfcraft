@@ -3,7 +3,7 @@
 use egui::{Align, Layout};
 
 use crate::theme::{self, Tokens};
-use pdfcraft_engine::Edit;
+use pdfcraft_engine::{Edit, MarkKind};
 
 use crate::{CloseRequest, Dialog, PdfCraftApp, PropsTab, panels::human_size, widgets};
 
@@ -2171,7 +2171,12 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
     {
         let count = app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
         let edit = crate::marks_ui::edit(&app.marks_draft, kind, count);
-        app.apply_edit(edit);
+        if app.apply_edit(edit)
+            && kind == MarkKind::HeaderFooter
+            && let Some(token) = app.marks_draft.hf.text.iter().find_map(|text| crate::marks_ui::bates_token(text))
+        {
+            app.bates_token = Some(token.to_owned());
+        }
     }
     if req.boxes_now
         && let Some((i, id)) = app.active_ids()

@@ -821,6 +821,8 @@ pub struct PdfCraftApp {
     pub boxes_draft: pageboxes::BoxesDraft,
     /// Header & footer / watermark / background dialog state.
     pub marks_draft: marks_ui::MarksDraft,
+    /// The Bates number token from the last applied Bates header or footer.
+    pub(crate) bates_token: Option<String>,
     /// The Update dialogs' preview page without the marks they replace.
     pub(crate) unmarked_page: marks_ui::UnmarkedPage,
     /// Export dialog settings.

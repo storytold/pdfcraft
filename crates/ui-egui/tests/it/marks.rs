@@ -106,6 +106,62 @@ fn header_and_footer_dialog_can_shrink_the_page_content() {
 }
 
 #[test]
+fn bates_settings_survive_restarting_the_app() {
+    const DEFAULT: &str = "<<Bates Number#6#1##>>";
+    const CUSTOM: &str = "<<Bates Number#8#101#CASE-#-END>>";
+
+    let replace_footer = |h: &mut Harness<'static, PdfCraftApp>, previous: &str, next: &str| {
+        h.query_by(|n| n.role() == egui::accesskit::Role::MultilineTextInput && n.value().as_deref() == Some(previous))
+            .expect("the Bates footer field")
+            .click();
+        h.run_steps(2);
+        h.input_mut().events.extend([
+            egui::Event::Key { key: egui::Key::A, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND },
+            egui::Event::Text(next.into()),
+        ]);
+        let ctx = h.ctx.clone();
+        let mut raw = std::mem::take(h.input_mut());
+        h.state_mut().prepare_raw_input(&ctx, &mut raw);
+        *h.input_mut() = raw;
+        h.step();
+        assert_eq!(h.state().marks_draft.hf.text[5], next);
+    };
+
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.bates"));
+    h.run_steps(3);
+    assert_eq!(h.state().marks_draft.hf.text[5], DEFAULT, "first use keeps the current default");
+    let with_footer = format!("Filing {CUSTOM}");
+    replace_footer(&mut h, DEFAULT, &with_footer);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(marks(&h), [MarkKind::HeaderFooter]);
+
+    // Apply a plain footer on a second document. Only a Bates apply remembers a token.
+    h.state_mut().open_bytes("plain.pdf", None, FIXTURE.to_vec()).unwrap();
+    h.run_steps(3);
+    assert!(h.state_mut().execute("edit.header_footer"));
+    h.run_steps(3);
+    replace_footer(&mut h, &with_footer, "Plain footer");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let view = &h.state().views[1];
+    assert_eq!(h.state().session.get(view.id).unwrap().marks(), [MarkKind::HeaderFooter]);
+
+    let settings = h.state().persist();
+    let mut restarted = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.restore(&settings);
+        app.open_bytes("next.pdf", None, FIXTURE.to_vec()).unwrap();
+        app
+    });
+    restarted.run_steps(3);
+    assert!(restarted.state_mut().execute("edit.bates"));
+    restarted.run_steps(3);
+    assert_eq!(restarted.state().marks_draft.hf.text[5], CUSTOM, "the new app keeps the preferred Bates settings");
+}
+
+#[test]
 fn watermark_and_background_dialogs() {
     let mut h = harness();
     h.state_mut().execute("edit.watermark");
