@@ -23,7 +23,11 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   `/JBIG2Globals`; `/DecodeParms` given by reference, numbers inside included, count). The copy
   is Flate, or for a one-bit image of one component (a scan as a rule) CCITT Group 4, or JBIG2
   when it was JBIG2, whichever is smallest as stored, coded from the cleared samples; it refers to
-  no globals. Globals hold the shapes of every image that shares them (a scan's pages, often),
+  no globals. Supported single-filter DCT/JPEG copies instead stay JPEG: plain 8-bit device
+  gray/RGB images with an identity `/Decode`, matching encoded dimensions and component count,
+  no separate mask or external `/F` data, and no explicit `/ColorTransform`. The shared image
+  allowance is charged before parsing the JPEG header. Intersected sample boxes are cleared,
+  then the whole image is recompressed at quality 90, so unmarked pixels can also change. Globals hold the shapes of every image that shares them (a scan's pages, often),
   those of marks under the area included, so whatever left the document, by any route, takes its
   globals with it on the full rewrite: anything else the save would keep that names them, or a
   copy of them (the same bytes once decoded), is stored again without them, as a copy is (Flate, Group 4 or JBIG2,
@@ -47,7 +51,7 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   run's image allowance, every filter stage and the JBIG2 decoder's own work included, after what
   clearing spent: past it `apply` is refused as one clearing too many images is
   (`RedactError::ImagesPastAllowance`), and `remove_hidden`, which chose no pages, as one past the
-  run's budget. Codecs redaction doesn't decode (DCT, JPX) are
+  run's budget. JPX and DCT/JPEG cases outside the supported path above are
   removed whole (fail-closed), and so is a JBIG2 image whose page isn't its size (the renderer
   draws the whole page into the image, so the rows cleared wouldn't be the ones shown) or of more
   than one bit or component, and Group 3 on bytes (`/K` 0 or more, `/EncodedByteAlign`): PdfCraft's
@@ -210,5 +214,5 @@ Patterns are heuristic: dates, protocol identifiers and longer number runs are r
 `CodeSet::from_id("foia")?.overlay(&["(b)(6)"])` gives the overlay text for the picked codes.
 Custom code sets aren't supported yet.
 
-Not yet: pattern locales, struct-tree/alt-text cleanup, re-encoding of DCT images (they are removed
-instead).
+Not yet: pattern locales, struct-tree/alt-text cleanup, and more general DCT/JPX pixel clearing
+(unsupported image placements are removed whole instead).
