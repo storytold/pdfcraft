@@ -689,22 +689,34 @@ fn bidi_class(text: &str) -> Bidi {
     }
 }
 
-/// Whether a line of the glyphs `line` is right-to-left: it has more right-to-left letters than left-to-right ones.
-/// Letters are counted one by one, so a ligature glyph ("ffi") counts each of its letters. Punctuation of a
-/// right-to-left script (a maqaf, an Arabic comma) is not a letter and counts toward neither direction, nor do
-/// nonspacing marks: a mark has the direction of the letter it sits on.
+/// Whether a line of the glyphs `line`, in visual order, is right-to-left: its leftmost and rightmost letters are both
+/// right-to-left, or it has more right-to-left letters than left-to-right ones. A paragraph's first letter decides its
+/// direction (UAX #9 P2) and sits at its left end when it reads left to right, so a line that starts on the left with a
+/// right-to-left letter reads right to left however many Latin letters follow (#8014). A wrapped line or a paragraph
+/// whose direction was set explicitly can break that, so the rule also asks for a right-to-left letter at the right end;
+/// Latin at both ends still goes by the count, as a right-to-left paragraph can start and end with a Latin word. Letters
+/// are counted one by one, so a ligature glyph ("ffi") counts each of its letters. Punctuation of a right-to-left script
+/// (a maqaf, an Arabic comma) is not a letter and counts toward neither direction, nor do nonspacing marks: a mark has
+/// the direction of the letter it sits on.
 fn is_rtl_line(glyphs: &[&TextGlyph], line: impl Iterator<Item = usize>) -> bool {
     let (mut rtl, mut ltr) = (0usize, 0usize);
+    let (mut leftmost, mut rightmost) = (None, None);
     for g in line.filter_map(|i| glyphs.get(i)) {
         for c in g.text.chars().filter(|&c| unicode_bidi::bidi_class(c) != unicode_bidi::BidiClass::NSM) {
-            if is_rtl(c) && c.is_alphabetic() {
+            if !c.is_alphabetic() {
+                continue;
+            }
+            let right_to_left = is_rtl(c);
+            if right_to_left {
                 rtl = rtl.saturating_add(1);
-            } else if c.is_alphabetic() && !is_rtl(c) {
+            } else {
                 ltr = ltr.saturating_add(1);
             }
+            leftmost.get_or_insert(right_to_left);
+            rightmost = Some(right_to_left);
         }
     }
-    rtl > ltr
+    (leftmost == Some(true) && rightmost == Some(true)) || rtl > ltr
 }
 
 /// Whether `text` is only nonspacing marks (bidi class NSM). Such a glyph counts toward neither direction of a line:
@@ -735,8 +747,8 @@ fn resolve_marks(glyphs: &[&TextGlyph], anchor: &[usize], items: &mut [(Option<u
 }
 
 /// Reorders a line of `idx` from visual to logical order with a simplified bidi level pass (#2667), carrying the
-/// word gaps along: `spaces[w]` is a gap left of `idx[w]` (#1062). The paragraph is right-to-left when it has
-/// more right-to-left than left-to-right letters ([`is_rtl_line`]); numbers keep their left-to-right order, and neutrals
+/// word gaps along: `spaces[w]` is a gap left of `idx[w]` (#1062). The paragraph is right-to-left when both its ends
+/// or most of its letters are ([`is_rtl_line`]); numbers keep their left-to-right order, and neutrals
 /// (punctuation, gaps) take the direction of their neighbours, or the paragraph's between opposite ones.
 pub(super) fn reverse_rtl(glyphs: &[&TextGlyph], anchor: &[usize], idx: &mut [usize], spaces: &mut [bool]) {
     // Glyphs and word gaps (None) in visual order.

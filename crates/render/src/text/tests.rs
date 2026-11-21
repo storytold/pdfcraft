@@ -2215,6 +2215,24 @@ fn rtl_line_with_number_and_punctuation_reads_in_logical_order() {
     assert_eq!(line(&["Total", "םולש", "price"]), "Total שלום price");
 }
 
+/// #8014: a line whose outermost letters on both sides are right-to-left reads right to left even when the Latin words
+/// inside it have more letters; a right-to-left line with Latin at both edges still goes by its letter count.
+#[test]
+fn rtl_line_with_more_latin_letters_reads_right_to_left_between_rtl_edges() {
+    let line = |words: &[&str]| {
+        let mut v = Vec::new();
+        let mut x = 10.0;
+        for w in words {
+            word(&mut v, w, x, 10.0, 6.0);
+            x += w.chars().count() as f32 * 6.0 + 6.0;
+        }
+        layout(v).plain_text()
+    };
+    // Each line as drawn, left to right. The first has 7 Hebrew letters and 17 Latin ones.
+    assert_eq!(line(&["םויה", "WordCraft", "PdfCraft", "ואר"]), "ראו WordCraft PdfCraft היום");
+    assert_eq!(line(&["cd", "םלוע", "םולש", "ab"]), "ab שלום עולם cd");
+}
+
 /// Two lines, "ab cd" and "e fg": words stop at blank glyphs, word gaps and line ends.
 #[test]
 fn words_and_lines_around_a_glyph() {
