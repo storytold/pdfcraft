@@ -168,8 +168,8 @@ const PAGE_SHARE: f32 = 0.8;
 /// The Tools pane's default width, as production opened it.
 const TOOLS_WIDTH: f32 = 272.0;
 
-/// The arrangement of a new install: Tools at the start edge, the toolbar at the rail's edge, the page area between
-/// the docks, and the side panels as one group in a column inward of the toolbar's, collapsed to their icons.
+/// The arrangement of a new install: Tools at the start edge, the side-panel rail at the window edge, the toolbar inward of it, and the page area between
+/// the docks. The side panels form one group, collapsed to their icons.
 pub fn default_workspace(rail_side: DockSide) -> Workspace<PanelId> {
     let single = |panel| Column::new(vec![Group::new(vec![panel], 0)]);
     // The rail is one tool column wide: its column keeps the toolbar's grid, never the theme's column width.
@@ -177,7 +177,7 @@ pub fn default_workspace(rail_side: DockSide) -> Workspace<PanelId> {
     let (tools, toolbar) = (single(PanelId::Tools).with_width(TOOLS_WIDTH), single(PanelId::Toolbar).with_steps(1));
     let side = Column::new(vec![Group::new(SIDE.to_vec(), 0)]).with_iconic(true);
     let (start, end) =
-        if rail_edge(rail_side) == DockEdge::Start { (vec![toolbar, side, tools], Vec::new()) } else { (vec![tools], vec![toolbar, side]) };
+        if rail_edge(rail_side) == DockEdge::Start { (vec![side, toolbar, tools], Vec::new()) } else { (vec![tools], vec![side, toolbar]) };
     let page = Node::split(Axis::X, SplitSize::Ratio(PAGE_SHARE), Node::tabs(vec![PanelId::Document], 0), Node::dock(DockEdge::End, end));
     let root = Node::split(Axis::X, SplitSize::Ratio(START_SHARE), Node::dock(DockEdge::Start, start), page);
     Workspace::new(Layout::new(Some(root), Vec::new()))
@@ -325,6 +325,10 @@ impl DockPanels<PanelId> for Panels<'_> {
         }
     }
 
+    fn rail_footer(&mut self, _: &PanelId, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        crate::chrome::view_rail::show(self.app, ui);
+    }
+
     fn permissions(&self, panel: &PanelId) -> Permissions {
         permissions(panel)
     }
@@ -441,6 +445,24 @@ impl DockPanels<PanelId> for Rules {
     fn body(&mut self, _panel: &PanelId, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
 }
 
+/// A visible panel in the navigation rail anchors the fixed view controls. If all panels have
+/// moved away or are hidden, the shell keeps the controls available on its own rail.
+pub(crate) fn rail_anchor(app: &PdfCraftApp) -> Option<PanelId> {
+    if app.active.is_none() || app.full_screen_document() || app.hidden_interface().window_ui || (app.mode == Mode::AllTools && app.all_tools_full) {
+        return None;
+    }
+    let open = open_side(&app.dock);
+    let checked = app.active_ids().is_some_and(|(_, id)| app.a11y.report.as_ref().is_some_and(|(d, _)| *d == id));
+    dock_columns(&app.dock, rail_edge(app.rail_side)).iter().flat_map(|column| column.panels()).copied().find(|panel| {
+        SIDE.contains(panel)
+            && match panel {
+                PanelId::Accessibility => checked || open == Some(*panel),
+                PanelId::Search | PanelId::Compare => open == Some(*panel),
+                _ => true,
+            }
+    })
+}
+
 /// Draws the dock. Call after the top bars and before the central panel.
 ///
 /// The area gets a copy of the workspace and reports every change of the pass; they are applied to `app.dock` here,
@@ -454,6 +476,7 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
     // in its tab (ISO 32000-2 Table 147); the tab strip stays, and F8 brings the rest back (`viewer_prefs`).
     let bare = app.full_screen_document() || app.hidden_interface().window_ui;
     let toolbar = active && !app.hotbar_hidden();
+    let anchor = rail_anchor(app);
     let workspace = app.dock.clone();
     // The rail lists the Accessibility Checker once the document has a report, and Search and Compare only while
     // they show; their commands open them.
@@ -477,7 +500,11 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
     // The side panels' icons are production's rail: they stay beside the expanded column, a click on one opens its
     // panel docked, and a click on the open panel's icon closes it.
     let config = DockConfig::default().native_windows(false).iconic_mode(IconicMode::Rail);
-    let output = DockArea::new("Dock", Bind::given(workspace), &mut panels, config).hide(HidePanels::Except(&shown)).show(ui);
+    let area = DockArea::new("Dock", Bind::given(workspace), &mut panels, config).hide(HidePanels::Except(&shown));
+    let output = match anchor {
+        Some(panel) => area.rail_footer(panel).show(ui),
+        None => area.show(ui),
+    };
     let before = right_of(&app.dock);
     for action in output.actions.into_iter().chain(output.requested) {
         // The area drops what the workspace refuses; one refused here is stale, not the user's mistake.
@@ -557,7 +584,11 @@ fn move_to_edge(app: &mut PdfCraftApp, panel: PanelId, edge: DockEdge) -> Result
     if edge_of(&app.dock, panel) == Some(edge) {
         return Ok(());
     }
-    let to = edge_target(&app.dock, edge);
+    let to = if SIDE.contains(&panel) && edge_of(&app.dock, PanelId::Toolbar) == Some(edge) {
+        Target::at(PanelId::Toolbar, DockPlacement::column(false))
+    } else {
+        edge_target(&app.dock, edge)
+    };
     app.dock.apply(Action::move_column(panel, to), false, permissions).map(drop).map_err(|_| refused())
 }
 

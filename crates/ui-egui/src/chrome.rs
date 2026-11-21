@@ -27,13 +27,21 @@ pub(crate) fn shell(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let hidden = app.hidden_interface();
     let modes_visible = !hidden.mode_bar(app.native_menu.is_some());
     let window_ui = !hidden.window_ui;
+    let fallback_rail = window_ui && side_panels::rail_anchor(app).is_none();
     let out = AppShell::new(WindowKey::main())
+        .toast_alignment(egui::Align2::CENTER_BOTTOM)
         .screen_mode(Bind::given(app.screen_mode))
         // A presentation shows the page and nothing else, so no reveal brings the bars back.
         .allow_reveal(false)
         .title_bar(|ui, _, app: &mut PdfCraftApp| title_bar(app, ui))
         .top(Slot::new("modes").visible(modes_visible), |ui, _, app: &mut PdfCraftApp| mode_bar::show(app, ui))
-        .end(Slot::new("view-rail").visible(window_ui), |ui, _, app: &mut PdfCraftApp| view_rail::show(app, ui))
+        .start(
+            Slot::new("view-rail-start").visible(fallback_rail && app.rail_side == craft::behavior::DockSide::Start),
+            |ui, _, app: &mut PdfCraftApp| view_rail::show(app, ui),
+        )
+        .end(Slot::new("view-rail").visible(fallback_rail && app.rail_side == craft::behavior::DockSide::End), |ui, _, app: &mut PdfCraftApp| {
+            view_rail::show(app, ui)
+        })
         .body(|ui, _, app: &mut PdfCraftApp| window_body(app, ui))
         .show(ui, app);
     // PLAN: assumed `set_screen_mode(&mut self, ScreenMode)` (pdf-shell-w8)
