@@ -308,6 +308,14 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
                 return false;
             }
         }
+        Dialog::SendEmail => {
+            req.close = crate::send_email_ui::problem_body(ui, app, &t);
+            return false;
+        }
+        Dialog::SendEmailMarks => {
+            req.close = crate::send_email_ui::marks_body(ui, app);
+            return false;
+        }
         Dialog::RenameFile => {
             let (shut, go) = crate::rename_ui::body(app, ui);
             req.close |= shut;

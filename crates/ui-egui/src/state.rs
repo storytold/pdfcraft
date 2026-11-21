@@ -150,6 +150,10 @@ pub enum Dialog {
     Revert,
     /// Save over a file that changed on disk since the document came from it (#2166).
     OverwriteChanged,
+    /// File ▸ Attach to email: the file couldn't be attached.
+    SendEmail,
+    /// File ▸ Attach to email: the document has redaction marks that aren't applied.
+    SendEmailMarks,
     /// Saving a document with a signature just placed by Fill & Sign: lock it into the page
     /// first? (#2149)
     LockSignatures,

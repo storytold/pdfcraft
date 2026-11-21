@@ -1,0 +1,2029 @@
+//! Attach to email: a new message in the computer's default email program with a file attached,
+//! the way Acrobat's *Attach to Email* works. Nothing is sent from here and nothing goes over the
+//! network: the message opens in the person's own email program for them to address and send.
+//!
+//! Each system is asked through programs it already has (no unsafe code, no new dependencies):
+//!
+//! * **macOS:** the default handler for `mailto:` links (Launch Services, read through
+//!   `osascript -l JavaScript`). Apple Mail and Microsoft Outlook are scriptable, so the file is
+//!   attached with AppleScript; any other default gets the fallback.
+//! * **Windows:** when the default for `mailto:` links is the new Outlook (`olk.exe`), which does
+//!   not take Simple MAPI requests, an unsent message (`.eml` with `X-Unsent: 1`, the file inside)
+//!   that it opens as a new one. Otherwise Simple MAPI's `MAPISendMailW`, which reaches whichever
+//!   program is set as the default MAPI client (classic Outlook, Thunderbird, eM Client…), through
+//!   a PowerShell script that watches for the compose window. No MAPI client: the fallback.
+//! * **Linux and the BSDs:** `xdg-email --attach`, which asks the desktop's default email
+//!   program (Thunderbird, Evolution, KMail…). No `xdg-email`: the fallback.
+//! * **The web build:** [`MailError::Unsupported`].
+//!
+//! The **fallback**, for a default that can't be handed a file (a webmail site in a browser, an
+//! unknown program, no MAPI client) or a program that didn't open a message: a `mailto:` address
+//! with the recipients, subject and body, to open, and the file to show in its folder so the person
+//! can attach it themselves. [`send`] never opens it by itself; it reports it in
+//! [`Answer::NotAttached`] for the caller to offer, so nothing fails without a word.
+//!
+//! A `mailto:` address without a file (a document's email link, the fallback's message) opens
+//! through the same programs' handler with [`open_address`]: Launch Services on macOS, the shell on
+//! Windows, `xdg-open` elsewhere. A web browser's command, which is what opening it as a web link
+//! runs on macOS and Windows, would hand the address to the browser instead of the email program.
+//!
+//! [`detect`] reads the default (it runs the system's own tools); [`plan_for`] turns a default into
+//! what would run and is pure, so every system's plans are tested on any machine; [`send`] does
+//! both on a thread and runs the plan.
+
+use std::io::{BufRead, Read};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
+use std::time::{Duration, Instant};
+
+/// How long a scripted request (AppleScript, Simple MAPI) may take before it counts as no answer.
+/// The first AppleScript request waits on the system's "control Mail?" prompt, and PowerShell
+/// compiles its MAPI helper before asking.
+pub const ANSWER_SECONDS: u64 = 60;
+
+/// How long a Simple MAPI request may take to show a compose window. A MAPI client started
+/// without a window for a profile nobody uses can stay logging on for ever.
+pub const MAPI_SECONDS: u32 = 30;
+
+/// How long the Simple MAPI helper waits for its request to finish after the message's window has
+/// closed. Classic Outlook started for the request never finishes it when the message is closed
+/// unsent, so the helper ends then instead of waiting for ever (which also lets that Outlook quit).
+pub const MAPI_CLOSED_SECONDS: u32 = 10;
+
+/// How long `xdg-email` is watched for an early failure. It can stay running for as long as the
+/// email program it started (Thunderbird, when it wasn't running yet), so still running then
+/// counts as opened.
+const SETTLE_SECONDS: u64 = 5;
+
+/// The waits [`run`] applies; tests give shorter ones.
+#[derive(Clone, Copy)]
+struct Limits {
+    /// For a scripted helper's answer or exit ([`ANSWER_SECONDS`]).
+    answer: Duration,
+    /// For `xdg-email`'s and the new Outlook's early failure ([`SETTLE_SECONDS`]).
+    settle: Duration,
+    /// For a system tool asked which email program is the default ([`DETECT_SECONDS`]).
+    detect: Duration,
+}
+
+/// How long the system's own tools may take to name the default email program. They answer in
+/// well under a second; one that stalls must not keep the request pending, so it counts as none.
+const DETECT_SECONDS: u64 = 15;
+
+const LIMITS: Limits =
+    Limits { answer: Duration::from_secs(ANSWER_SECONDS), settle: Duration::from_secs(SETTLE_SECONDS), detect: Duration::from_secs(DETECT_SECONDS) };
+
+/// The largest file put inside a message file for the new Outlook (it is read into memory and
+/// encoded). Mail services refuse much smaller attachments anyway.
+pub const MAX_MESSAGE_FILE_BYTES: u64 = 150 * 1024 * 1024;
+
+/// What to put in the message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Compose {
+    /// The file to attach.
+    pub path: PathBuf,
+    pub subject: String,
+    pub body: String,
+    /// Recipients' addresses; empty leaves the To line blank.
+    pub to: Vec<String>,
+}
+
+/// The computer's default email program, as [`detect`] found it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DefaultMail {
+    /// macOS: Apple Mail.
+    AppleMail,
+    /// macOS: Microsoft Outlook.
+    Outlook,
+    /// Windows: the new Outlook, started through this `olk.exe`.
+    NewOutlook(PathBuf),
+    /// Windows: a Simple MAPI client, by the name it is registered under.
+    Mapi(String),
+    /// Linux and the BSDs: this `xdg-email`.
+    XdgEmail(PathBuf),
+    /// A program that can't be handed a file from here (a browser for a webmail site, an
+    /// unknown email program), by its name when the system gives one.
+    Other(Option<String>),
+    /// None is set up.
+    Nothing,
+}
+
+/// What [`send`] would do for a default ([`plan_for`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Plan {
+    /// The email program's name, when it is known ("Mail", "Mozilla Thunderbird").
+    pub program: Option<String>,
+    pub route: Route,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Route {
+    /// Run a helper that puts the file in a new message.
+    Run {
+        command: PathBuf,
+        args: Vec<String>,
+        /// Written to the helper's standard input (an AppleScript; the Simple MAPI script's values).
+        stdin: Option<String>,
+        watch: Watch,
+    },
+    /// Write an unsent message with the file inside to `message`, and open it with `program`
+    /// (the new Outlook).
+    MessageFile { program: PathBuf, message: PathBuf },
+    /// The file can't be handed over: offer the fallback.
+    Fallback { why: Why, fallback: Fallback },
+}
+
+/// How a helper says it worked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Watch {
+    /// Its exit status (osascript), within [`ANSWER_SECONDS`].
+    Exit,
+    /// One answer line on its standard output (the Simple MAPI script), within [`ANSWER_SECONDS`].
+    Answers,
+    /// A failure shows as an early exit; still running after a few seconds is success
+    /// (xdg-email, which may run for as long as the email program it started).
+    Started,
+}
+
+/// A message without the file, and the file to attach by hand.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fallback {
+    /// A `mailto:` address with the recipients, subject and body ([`mailto`]).
+    pub mailto: String,
+    /// The file, to show in its folder.
+    pub reveal: PathBuf,
+}
+
+/// What came of [`send`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Answer {
+    /// A new message is open in the email program with the file attached (or the person has
+    /// already sent or closed it).
+    Opened { program: Option<String> },
+    /// The file wasn't attached; the fallback is what can be offered instead.
+    NotAttached { program: Option<String>, why: Why, fallback: Fallback },
+}
+
+/// Why the file wasn't attached.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Why {
+    /// The default email program can't be handed a file from here.
+    CantAttach,
+    /// No email program is set up.
+    NoProgram,
+    /// The program didn't open a message in time.
+    NoAnswer,
+    /// The program couldn't log on to its mailbox (Simple MAPI's `MAPI_E_LOGIN_FAILURE`).
+    LogonFailed,
+    /// The program is still showing the message of an earlier request (a Simple MAPI client
+    /// such as classic Outlook takes one at a time; a second waits unseen until the first closes).
+    Busy,
+    /// Anything else, in the program's or the system's words.
+    Failed(String),
+}
+
+/// Why [`send`] refused before anything ran.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MailError {
+    /// The file to attach is not a file that exists.
+    NoFile(PathBuf),
+    /// A recipient is empty, starts with `-` or `mailto:`, or contains a control character.
+    BadRecipient(String),
+    /// No email program can be asked on this system (the web build).
+    Unsupported,
+    /// The thread that asks could not be started.
+    CouldNotStart(String),
+}
+
+impl std::fmt::Display for MailError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoFile(p) => write!(f, "the file to attach is missing: {}", p.display()),
+            Self::BadRecipient(a) => write!(f, "“{}” isn't an email address", a.escape_debug()),
+            Self::Unsupported => write!(f, "sending by email isn't available on this system"),
+            Self::CouldNotStart(why) => write!(f, "the email program could not be asked: {why}"),
+        }
+    }
+}
+
+impl std::error::Error for MailError {}
+
+/// Refuse what can't be sent before anything runs: a file that isn't there, a recipient that
+/// isn't an address a command line or a message header can carry as it is. A `mailto:` link is not
+/// an address either: `xdg-email` reads one as the whole message (its `bcc` and `attach` included).
+pub fn check(compose: &Compose) -> Result<(), MailError> {
+    if !compose.path.is_file() {
+        return Err(MailError::NoFile(compose.path.clone()));
+    }
+    let is_mailto = |a: &str| a.trim_start().get(.."mailto:".len()).is_some_and(|head| head.eq_ignore_ascii_case("mailto:"));
+    if let Some(bad) = compose.to.iter().find(|a| a.trim().is_empty() || a.starts_with('-') || is_mailto(a) || a.chars().any(char::is_control)) {
+        return Err(MailError::BadRecipient(bad.clone()));
+    }
+    Ok(())
+}
+
+/// Attach `compose`'s file to a new message in the default email program, on a thread: the
+/// receiver gets one [`Answer`], and `wake` is called once it is there. A missing file or a bad
+/// recipient is refused here, before anything runs.
+pub fn send(compose: Compose, wake: impl FnOnce() + Send + 'static) -> Result<Receiver<Answer>, MailError> {
+    if cfg!(target_arch = "wasm32") {
+        return Err(MailError::Unsupported);
+    }
+    check(&compose)?;
+    let mut compose = compose;
+    // Absolute, so a helper can't read a file name that starts with '-' as an option.
+    compose.path = std::path::absolute(&compose.path).map_err(|_| MailError::NoFile(compose.path.clone()))?;
+    let os = std::env::consts::OS;
+    // Unsupported systems are refused here rather than on the thread.
+    plan_for(os, &DefaultMail::Nothing, &compose)?;
+    let (tx, rx) = channel();
+    std::thread::Builder::new()
+        .name("pdfcraft-mail".into())
+        .spawn(move || {
+            let answer = match plan_for(os, &detect(), &compose) {
+                Ok(plan) => execute(plan, &compose),
+                // Not reached: the system was checked above.
+                Err(e) => not_attached(None, Why::Failed(e.to_string()), &compose),
+            };
+            let _ = tx.send(answer);
+            wake();
+        })
+        .map_err(|e| MailError::CouldNotStart(e.to_string()))?;
+    Ok(rx)
+}
+
+/// The plan for `compose` on system `os` ("macos", "windows", "linux", …, as
+/// [`std::env::consts::OS`] names them) when its default email program is `default`. A default
+/// that doesn't belong to `os` is treated as one that can't be handed a file.
+pub fn plan_for(os: &str, default: &DefaultMail, compose: &Compose) -> Result<Plan, MailError> {
+    plan_with_root(os, default, compose, std::env::var_os("SystemRoot").as_deref())
+}
+
+/// [`plan_for`] with Windows' `SystemRoot` given, so a test needn't set it.
+pub fn plan_with_root(os: &str, default: &DefaultMail, compose: &Compose, system_root: Option<&std::ffi::OsStr>) -> Result<Plan, MailError> {
+    let path = compose.path.to_string_lossy().into_owned();
+    let offer = |program: Option<String>, why: Why| Plan { program, route: Route::Fallback { why, fallback: fallback(compose) } };
+    match (os, default) {
+        ("macos" | "windows" | "linux" | "freebsd" | "openbsd" | "netbsd" | "dragonfly", DefaultMail::Nothing) => Ok(offer(None, Why::NoProgram)),
+        // A path that isn't valid text can't be handed to a helper as it is (it would name another
+        // file, or none): the person attaches the file by hand.
+        ("macos" | "windows" | "linux" | "freebsd" | "openbsd" | "netbsd" | "dragonfly", _) if compose.path.to_str().is_none() => {
+            Ok(offer(None, Why::CantAttach))
+        }
+        ("macos", DefaultMail::AppleMail | DefaultMail::Outlook) => {
+            let (program, script) = if *default == DefaultMail::Outlook { ("Microsoft Outlook", OUTLOOK_SCRIPT) } else { ("Mail", MAIL_APP_SCRIPT) };
+            // The script is fixed text: the subject, body, file and recipients reach it as
+            // arguments (`on run argv`), never inside its source.
+            // Line breaks as AppleScript writes them.
+            let body = compose.body.replace("\r\n", "\n").replace('\r', "\n");
+            let mut args = vec!["-".to_string(), compose.subject.clone(), body, path];
+            args.extend(compose.to.iter().map(|a| a.trim().to_string()));
+            Ok(Plan {
+                program: Some(program.into()),
+                route: Route::Run { command: "/usr/bin/osascript".into(), args, stdin: Some(script.into()), watch: Watch::Exit },
+            })
+        }
+        ("windows", DefaultMail::NewOutlook(olk)) => Ok(Plan {
+            program: Some("Outlook".into()),
+            route: Route::MessageFile { program: olk.clone(), message: message_dir().join(message_name(&compose.path)) },
+        }),
+        ("windows", DefaultMail::Mapi(name)) => match system_program(system_root, "WindowsPowerShell\\v1.0\\powershell.exe") {
+            Some(command) => Ok(Plan {
+                program: Some(name.clone()),
+                route: Route::Run {
+                    command,
+                    args: powershell_args(&mapi_script(std::process::id())),
+                    stdin: Some(mapi_input(compose, name)),
+                    watch: Watch::Answers,
+                },
+            }),
+            // No System32 to name, and no search of PATH for a stand-in: the person is told instead.
+            None => Ok(offer(Some(name.clone()), Why::CantAttach)),
+        },
+        ("linux" | "freebsd" | "openbsd" | "netbsd" | "dragonfly", DefaultMail::XdgEmail(xdg)) => {
+            let mut args = vec!["--utf8".into(), "--subject".into(), compose.subject.clone(), "--body".into(), compose.body.clone()];
+            args.extend(["--attach".into(), path]);
+            args.extend(compose.to.iter().cloned());
+            Ok(Plan { program: None, route: Route::Run { command: xdg.clone(), args, stdin: None, watch: Watch::Started } })
+        }
+        ("macos" | "windows" | "linux" | "freebsd" | "openbsd" | "netbsd" | "dragonfly", other) => {
+            let name = match other {
+                DefaultMail::Other(name) => name.clone(),
+                _ => None,
+            };
+            Ok(offer(name, Why::CantAttach))
+        }
+        _ => Err(MailError::Unsupported),
+    }
+}
+
+/// The fallback for `compose`: a message without the file, and the file to show.
+pub fn fallback(compose: &Compose) -> Fallback {
+    Fallback { mailto: mailto(&compose.to, &compose.subject, &compose.body), reveal: compose.path.clone() }
+}
+
+fn not_attached(program: Option<String>, why: Why, compose: &Compose) -> Answer {
+    Answer::NotAttached { program, why, fallback: fallback(compose) }
+}
+
+/// A `mailto:` address (RFC 6068): the recipients comma-separated, then `subject` and `body` when
+/// they aren't empty. Everything but letters, digits and `-._~` (and `@` in an address) is
+/// percent-encoded as UTF-8, so commas, `&`, `=`, `+`, spaces and non-ASCII text arrive as typed;
+/// line breaks in the body are sent as CR LF.
+pub fn mailto(to: &[String], subject: &str, body: &str) -> String {
+    let mut url = String::from("mailto:");
+    let addresses: Vec<String> = to.iter().map(|a| percent_encode(a.trim(), "@")).collect();
+    url.push_str(&addresses.join(","));
+    let body = body.replace("\r\n", "\n").replace('\r', "\n").replace('\n', "\r\n");
+    let mut separator = '?';
+    for (key, value) in [("subject", subject), ("body", body.as_str())] {
+        if !value.is_empty() {
+            url.push(separator);
+            url.push_str(key);
+            url.push('=');
+            url.push_str(&percent_encode(value, ""));
+            separator = '&';
+        }
+    }
+    url
+}
+
+fn percent_encode(text: &str, also_keep: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for b in text.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') || also_keep.as_bytes().contains(&b) {
+            out.push(char::from(b));
+        } else {
+            use std::fmt::Write as _;
+            // Writing to a String can't fail.
+            let _ = write!(out, "%{b:02X}");
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------------------------
+// Opening a `mailto:` address
+// ---------------------------------------------------------------------------------------------
+
+/// What runs [`open_address`]'s script on Windows: the address, read from standard input so no
+/// command line has to quote it, handed to the shell's handler for `mailto:` links.
+const WINDOWS_OPEN_ADDRESS: &str = "$ErrorActionPreference = 'Stop'\nStart-Process -FilePath ([Console]::In.ReadLine())\nexit 0\n";
+
+/// How [`open_address`] opens `url` on system `os` ([`std::env::consts::OS`]'s names): through
+/// the system's own handler for `mailto:` links, the program the person set for email, never a
+/// web browser's command. macOS asks Launch Services (`open`), Windows the shell (`Start-Process`,
+/// in PowerShell, the address on standard input), Linux and the BSDs `xdg-open` from `PATH`.
+/// `None` where there is no such handler to ask (another system, no `xdg-open`, no
+/// `SystemRoot`), or when `url` isn't a `mailto:` address a command can carry as it is (a line
+/// break, a control character).
+pub fn address_route(os: &str, url: &str, system_root: Option<&std::ffi::OsStr>, path: Option<&std::ffi::OsStr>) -> Option<Route> {
+    let is_mailto = url.get(.."mailto:".len()).is_some_and(|head| head.eq_ignore_ascii_case("mailto:"));
+    if !is_mailto || url.chars().any(char::is_control) {
+        return None;
+    }
+    let (command, args, stdin, watch) = match os {
+        "macos" => (PathBuf::from("/usr/bin/open"), vec![url.to_string()], None, Watch::Exit),
+        "windows" => (
+            system_program(system_root, "WindowsPowerShell\\v1.0\\powershell.exe")?,
+            powershell_args(WINDOWS_OPEN_ADDRESS),
+            Some(format!("{url}\n")),
+            Watch::Exit,
+        ),
+        // `xdg-open` may stay for as long as the program it started.
+        "linux" | "freebsd" | "openbsd" | "netbsd" | "dragonfly" => (find_program(path?, "xdg-open")?, vec![url.to_string()], None, Watch::Started),
+        _ => return None,
+    };
+    Some(Route::Run { command, args, stdin, watch })
+}
+
+/// Open the `mailto:` address `url` in the default email program on a thread, as
+/// [`address_route`] says: the receiver gets `None` when it opened, or why not, and `wake` is
+/// called once it is there. [`MailError::Unsupported`] when this system has no handler to ask;
+/// the caller then opens the address as any other link.
+pub fn open_address(url: &str, wake: impl FnOnce() + Send + 'static) -> Result<Receiver<Option<Why>>, MailError> {
+    if cfg!(target_arch = "wasm32") {
+        return Err(MailError::Unsupported);
+    }
+    let route = address_route(std::env::consts::OS, url, std::env::var_os("SystemRoot").as_deref(), std::env::var_os("PATH").as_deref());
+    let Some(Route::Run { command, args, stdin, watch }) = route else { return Err(MailError::Unsupported) };
+    let (tx, rx) = channel();
+    std::thread::Builder::new()
+        .name("pdfcraft-mail-address".into())
+        .spawn(move || {
+            let _ = tx.send(run(&command, &args, stdin.as_deref(), watch));
+            wake();
+        })
+        .map_err(|e| MailError::CouldNotStart(e.to_string()))?;
+    Ok(rx)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Finding the default
+// ---------------------------------------------------------------------------------------------
+
+/// Find this computer's default email program. Runs the system's own tools (osascript on macOS,
+/// reg on Windows); on Linux and the BSDs it looks for `xdg-email` on `PATH` and reads the `mailto:` handler
+/// with `xdg-mime`.
+pub fn detect() -> DefaultMail {
+    match std::env::consts::OS {
+        "macos" => {
+            let out = output(Command::new("/usr/bin/osascript").args(["-l", "JavaScript", "-e", MACOS_DEFAULT]));
+            out.map_or(DefaultMail::Nothing, |text| macos_default(&text))
+        }
+        "windows" => detect_windows(),
+        "linux" | "freebsd" | "openbsd" | "netbsd" | "dragonfly" => {
+            let path = std::env::var_os("PATH");
+            let Some(xdg) = path.as_deref().and_then(|p| find_program(p, "xdg-email")) else { return DefaultMail::Nothing };
+            let handler = path
+                .as_deref()
+                .and_then(|p| find_program(p, "xdg-mime"))
+                .and_then(|m| output(Command::new(m).args(["query", "default", "x-scheme-handler/mailto"])));
+            linux_default(xdg, handler.as_deref())
+        }
+        _ => DefaultMail::Nothing,
+    }
+}
+
+/// Mail programs whose `mailto:` handler keeps `attach=`. A browser or a webmail site opens a message
+/// without the file while `xdg-email` still exits cleanly, so anything else is offered the fallback.
+const LINUX_ATTACHING: [&str; 8] = ["thunderbird", "betterbird", "evolution", "kmail", "claws", "geary", "sylpheed", "mailspring"];
+
+/// `xdg-email` is used when the desktop's `mailto:` handler (`xdg-mime query default`) is a mail program
+/// that attaches files, or when the handler can't be read; any other handler is named instead.
+fn linux_default(xdg: PathBuf, handler: Option<&str>) -> DefaultMail {
+    let handler = handler.map(|h| h.trim().trim_end_matches(".desktop")).filter(|h| !h.is_empty());
+    match handler {
+        Some(h) if !LINUX_ATTACHING.iter().any(|known| h.to_ascii_lowercase().contains(known)) => DefaultMail::Other(Some(h.to_string())),
+        _ => DefaultMail::XdgEmail(xdg),
+    }
+}
+
+/// JavaScript for Automation: the application Launch Services opens `mailto:` links with, as
+/// `id=`, `name=` and `path=` lines (nothing when there is none).
+const MACOS_DEFAULT: &str = "ObjC.import('AppKit');
+var url = $.NSWorkspace.sharedWorkspace.URLForApplicationToOpenURL($.NSURL.URLWithString('mailto:'));
+var out = '';
+if (!url.isNil()) {
+  var bundle = $.NSBundle.bundleWithURL(url);
+  var id = bundle.isNil() ? '' : (ObjC.unwrap(bundle.bundleIdentifier) || '');
+  var name = bundle.isNil() ? '' : (ObjC.unwrap(bundle.objectForInfoDictionaryKey('CFBundleDisplayName')) || ObjC.unwrap(bundle.objectForInfoDictionaryKey('CFBundleName')) || '');
+  out = 'id=' + id + '\\nname=' + name + '\\npath=' + ObjC.unwrap(url.path);
+}
+out;";
+
+/// [`MACOS_DEFAULT`]'s answer as a default.
+fn macos_default(text: &str) -> DefaultMail {
+    let field = |key: &str| text.lines().find_map(|l| l.trim().strip_prefix(key)).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+    let (id, name, path) = (field("id="), field("name="), field("path="));
+    match id.as_deref().map(str::to_ascii_lowercase).as_deref() {
+        Some("com.apple.mail") => DefaultMail::AppleMail,
+        Some("com.microsoft.outlook") => DefaultMail::Outlook,
+        _ if id.is_none() && path.is_none() => DefaultMail::Nothing,
+        _ => DefaultMail::Other(name.or(id)),
+    }
+}
+
+fn detect_windows() -> DefaultMail {
+    let Some(reg) = system_program(std::env::var_os("SystemRoot").as_deref(), "reg.exe") else { return DefaultMail::Nothing };
+    let query = |args: &[&str]| output(Command::new(&reg).arg("query").args(args));
+    let key = "HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\mailto";
+    let prog_id = query(&[&format!("{key}\\UserChoiceLatest\\ProgId"), "/v", "ProgId"])
+        .or_else(|| query(&[&format!("{key}\\UserChoice"), "/v", "ProgId"]))
+        .and_then(|out| reg_value(&out));
+    // Everything registered under the ProgId: a packaged app names itself in its AppUserModelID,
+    // a desktop app in its open command.
+    let handler = prog_id.as_deref().filter(|p| !p.is_empty() && !p.contains(['\\', '"'])).and_then(|p| query(&[&format!("HKCR\\{p}"), "/s"]));
+    let mut mapi = None;
+    for hive in ["HKCU", "HKLM"] {
+        let Some(name) = query(&[&format!("{hive}\\Software\\Clients\\Mail"), "/ve"]).and_then(|out| reg_value(&out)) else { continue };
+        // A name that isn't the name of a registered client is a leftover or "(value not set)".
+        if !name.contains('\\') && query(&[&format!("{hive}\\Software\\Clients\\Mail\\{name}"), "/ve"]).is_some() {
+            mapi = Some(name);
+            break;
+        }
+    }
+    let olk = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Microsoft\\WindowsApps\\olk.exe")).filter(|p| p.exists());
+    // Classic Outlook's "New Outlook" switch: on, classic Outlook hands over to the new one.
+    let moved = query(&["HKCU\\Software\\Microsoft\\Office\\16.0\\Outlook\\Preferences", "/v", "UseNewOutlook"]).is_some_and(|out| reg_flag(&out));
+    windows_default(prog_id.as_deref(), handler.as_deref(), mapi, olk, moved)
+}
+
+/// Windows' default from what the registry says: the `mailto:` handler's ProgId and what is
+/// registered under it, the default Simple MAPI client, and the new Outlook's `olk.exe` if it is
+/// installed, and whether classic Outlook's "New Outlook" switch is on (`moved`). The new Outlook
+/// first when it handles `mailto:` (it takes no MAPI requests); else the MAPI client, which is the
+/// program Windows hands a file to send; else the handler, which can't be handed a file from here.
+///
+/// A choice whose ProgId has nothing registered under it (an app since updated or removed: Windows
+/// itself then asks which app to use) names no program. It decides nothing, so the person's
+/// switch to the new Outlook does: with it on, a MAPI request would go to the classic Outlook they
+/// left.
+fn windows_default(prog_id: Option<&str>, handler: Option<&str>, mapi: Option<String>, olk: Option<PathBuf>, moved: bool) -> DefaultMail {
+    let names_new_outlook = |text: &str| {
+        let text = text.to_ascii_lowercase();
+        text.contains("outlookforwindows")
+            || text
+                .match_indices("olk.exe")
+                .any(|(i, _)| i.checked_sub(1).and_then(|j| text.as_bytes().get(j)).is_none_or(|b| !b.is_ascii_alphanumeric()))
+    };
+    let unregistered = prog_id.is_some_and(|p| !p.trim().is_empty()) && handler.is_none();
+    if ([prog_id, handler].into_iter().flatten().any(names_new_outlook) || (unregistered && moved))
+        && let Some(olk) = olk
+    {
+        return DefaultMail::NewOutlook(olk);
+    }
+    if let Some(name) = mapi.filter(|n| !n.trim().is_empty()) {
+        return DefaultMail::Mapi(name.trim().to_string());
+    }
+    if prog_id.is_some_and(|p| !p.trim().is_empty()) { DefaultMail::Other(None) } else { DefaultMail::Nothing }
+}
+
+/// The value in `reg query`'s answer for one value: the text after its type on the first line
+/// that has one. The value's own name is in the system's language ("(Default)"), so it isn't read.
+fn reg_value(out: &str) -> Option<String> {
+    out.lines().find_map(|line| {
+        let (_, after) = line.split_once("REG_SZ").or_else(|| line.split_once("REG_EXPAND_SZ"))?;
+        let value = after.trim();
+        (!value.is_empty()).then(|| value.to_string())
+    })
+}
+
+/// Whether `reg query`'s answer for one `REG_DWORD` value says it is set (not zero).
+fn reg_flag(out: &str) -> bool {
+    out.lines().find_map(|line| line.split_once("REG_DWORD").map(|(_, v)| v.trim().to_string())).is_some_and(|v| {
+        let digits = v.strip_prefix("0x").or_else(|| v.strip_prefix("0X")).unwrap_or(&v);
+        u32::from_str_radix(digits, 16).is_ok_and(|n| n != 0)
+    })
+}
+
+/// `name` in one of `path`'s folders (`PATH`'s form), if it is a file there that can be run.
+fn find_program(path: &std::ffi::OsStr, name: &str) -> Option<PathBuf> {
+    std::env::split_paths(path).filter(|dir| dir.is_absolute()).map(|dir| dir.join(name)).find(|p| p.is_file() && runnable(p))
+}
+
+/// Whether anyone may run the file (on Unix its execute bits; elsewhere a file is enough).
+fn runnable(file: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        file.metadata().is_ok_and(|m| std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+        true
+    }
+}
+
+/// A program in Windows' System32 folder, by full path, so one beside PdfCraft can't stand in.
+/// Without `SystemRoot` there is no such folder to name, and the program is not looked for on `PATH`.
+fn system_program(system_root: Option<&std::ffi::OsStr>, name: &str) -> Option<PathBuf> {
+    system_root.map(|root| PathBuf::from(root).join("System32").join(name))
+}
+
+/// A command's standard output when it ran and succeeded.
+fn output(command: &mut Command) -> Option<String> {
+    output_within(command, LIMITS.detect)
+}
+
+/// What a tool prints when it succeeds within `limit`; `None` when it fails, can't be started, or
+/// is still running then (it is killed).
+fn output_within(command: &mut Command, limit: Duration) -> Option<String> {
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    hide_console(command);
+    let mut child = command.spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    // Read on a thread: a tool that fills the pipe must not stop itself from finishing.
+    let reader = std::thread::spawn(move || {
+        let mut text = Vec::new();
+        let _ = stdout.read_to_end(&mut text);
+        text
+    });
+    match wait(&mut child, limit) {
+        Some(true) => reader.join().ok().map(|text| String::from_utf8_lossy(&text).into_owned()),
+        Some(false) => None,
+        None => {
+            // Killing it closes the pipe, which ends the reader.
+            let _ = child.kill();
+            reap(child);
+            None
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Running a plan
+// ---------------------------------------------------------------------------------------------
+
+fn execute(plan: Plan, compose: &Compose) -> Answer {
+    let Plan { program, route } = plan;
+    let why = match route {
+        Route::Fallback { why, fallback } => return Answer::NotAttached { program, why, fallback },
+        Route::MessageFile { program: olk, message } => open_message_file(&olk, &message, compose),
+        Route::Run { watch: Watch::Answers, .. } if MAPI_SHOWING.load(Ordering::SeqCst) > 0 => Some(Why::Busy),
+        Route::Run { command, args, stdin, watch } => run(&command, &args, stdin.as_deref(), watch),
+    };
+    match why {
+        None => Answer::Opened { program },
+        Some(why) => not_attached(program, why, compose),
+    }
+}
+
+/// Run a helper and watch it as `watch` says. `None` when it worked.
+fn run(program: &Path, args: &[String], stdin: Option<&str>, watch: Watch) -> Option<Why> {
+    run_within(program, args, stdin, watch, LIMITS)
+}
+
+fn run_within(program: &Path, args: &[String], stdin: Option<&str>, watch: Watch, limits: Limits) -> Option<Why> {
+    let mut command = Command::new(program);
+    command.args(args).stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() });
+    command.stdout(if watch == Watch::Answers { Stdio::piped() } else { Stdio::null() });
+    command.stderr(if watch == Watch::Exit { Stdio::piped() } else { Stdio::null() });
+    hide_console(&mut command);
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(e) => return Some(Why::Failed(format!("{} could not be started: {e}", program.display()))),
+    };
+    if let (Some(script), Some(mut input)) = (stdin, child.stdin.take()) {
+        use std::io::Write;
+        // A script the helper doesn't read shows as its exit status. The write runs on its own
+        // thread: a helper that stalls before reading would fill the pipe and block a write made
+        // here, before the answer timeout below could kill it; the kill closes the pipe and
+        // ends the write.
+        let script = script.to_owned();
+        std::thread::spawn(move || {
+            let _ = input.write_all(script.as_bytes());
+        });
+    }
+    match watch {
+        Watch::Exit => match wait(&mut child, limits.answer) {
+            Some(true) => None,
+            Some(false) => {
+                let mut said = String::new();
+                if let Some(err) = child.stderr.take() {
+                    let _ = err.take(4096).read_to_string(&mut said);
+                }
+                let said = said.lines().map(str::trim).rfind(|l| !l.is_empty()).unwrap_or("it stopped with an error");
+                Some(Why::Failed(said.to_string()))
+            }
+            None => {
+                let _ = child.kill();
+                reap(child);
+                Some(Why::NoAnswer)
+            }
+        },
+        Watch::Started => match wait(&mut child, limits.settle) {
+            Some(true) => None,
+            Some(false) => Some(Why::Failed(format!("{} stopped with an error", program.display()))),
+            None => {
+                reap(child);
+                None
+            }
+        },
+        Watch::Answers => watch_answers(child, limits.answer),
+    }
+}
+
+/// Wait up to `limit` for `child` to stop: whether it succeeded, or `None` while it still runs.
+fn wait(child: &mut Child, limit: Duration) -> Option<bool> {
+    let until = Instant::now() + limit;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status.success()),
+            Ok(None) if Instant::now() < until => std::thread::sleep(Duration::from_millis(100)),
+            Ok(None) => return None,
+            Err(_) => return Some(false),
+        }
+    }
+}
+
+/// Reap a child left running on a thread, so it never lingers as a zombie.
+fn reap(child: Child) {
+    reap_then(child, || {});
+}
+
+/// [`reap`], then `done` once the child has stopped.
+fn reap_then(mut child: Child, done: impl FnOnce() + Send + 'static) {
+    let _ = std::thread::Builder::new().name("pdfcraft-mail-reap".into()).spawn(move || {
+        let _ = child.wait();
+        done();
+    });
+}
+
+/// How many Simple MAPI helpers of this process answered that a message opened and are still
+/// running: the email program still holds that request, as long as its message is open. A client
+/// that takes one request at a time (classic Outlook) keeps a second one waiting, unseen, until the
+/// first message closes, so a second request is answered [`Why::Busy`] instead of being sent.
+static MAPI_SHOWING: AtomicUsize = AtomicUsize::new(0);
+
+/// The Simple MAPI script's first answer line, within `limit` ([`ANSWER_SECONDS`]).
+fn watch_answers(mut child: Child, limit: Duration) -> Option<Why> {
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        reap(child);
+        return Some(Why::Failed("the email helper's answer could not be read".into()));
+    };
+    let (line_tx, line_rx) = channel();
+    let reader = std::thread::Builder::new().name("pdfcraft-mail-read".into()).spawn(move || {
+        // Read by bytes: PowerShell writes in the console's code page, and a line that isn't
+        // UTF-8 (a localized error message) must not end the reading.
+        let mut lines = std::io::BufReader::new(stdout);
+        let mut raw = Vec::new();
+        loop {
+            raw.clear();
+            if !matches!(lines.read_until(b'\n', &mut raw), Ok(n) if n > 0) {
+                break;
+            }
+            if let Some(answer) = mapi_answer(&String::from_utf8_lossy(&raw)) {
+                let _ = line_tx.send(answer);
+                return;
+            }
+        }
+    });
+    if reader.is_err() {
+        let _ = child.kill();
+        reap(child);
+        return Some(Why::Failed("the email helper's answer could not be read".into()));
+    }
+    let answer = match line_rx.recv_timeout(limit) {
+        Ok(answer) => answer,
+        Err(RecvTimeoutError::Timeout) => {
+            let _ = child.kill();
+            Some(Why::NoAnswer)
+        }
+        Err(RecvTimeoutError::Disconnected) => Some(Why::Failed("the email helper stopped without an answer".into())),
+    };
+    // A MAPI compose window keeps the script running until it is closed (the script ends then).
+    if answer.is_none() && matches!(child.try_wait(), Ok(None)) {
+        MAPI_SHOWING.fetch_add(1, Ordering::SeqCst);
+        reap_then(child, || {
+            MAPI_SHOWING.fetch_sub(1, Ordering::SeqCst);
+        });
+    } else {
+        reap(child);
+    }
+    answer
+}
+
+/// The MAPI script's line as an answer: `opened`, `hung`, `code <MAPI result>` or
+/// `failed <why>` (`Some(None)` is opened); anything else (PowerShell's own noise) is not one.
+fn mapi_answer(line: &str) -> Option<Option<Why>> {
+    let line = line.trim();
+    match line {
+        "opened" => return Some(None),
+        "hung" => return Some(Some(Why::NoAnswer)),
+        _ => {}
+    }
+    if let Some(code) = line.strip_prefix("code ") {
+        let code: i64 = code.trim().parse().ok()?;
+        return Some(match code {
+            // SUCCESS_SUCCESS and MAPI_USER_ABORT: the message was shown (and sent or closed).
+            0 | 1 => None,
+            3 => Some(Why::LogonFailed),
+            11 => Some(Why::Failed("the file to attach was not found".into())),
+            n => Some(Why::Failed(format!("the email program answered MAPI error {n}"))),
+        });
+    }
+    line.strip_prefix("failed ").map(|why| Some(Why::Failed(why.trim().to_string())))
+}
+
+/// Write the unsent message for the new Outlook and open it there.
+fn open_message_file(olk: &Path, message: &Path, compose: &Compose) -> Option<Why> {
+    open_message_file_within(olk, message, compose, LIMITS)
+}
+
+fn open_message_file_within(olk: &Path, message: &Path, compose: &Compose, limits: Limits) -> Option<Why> {
+    let bytes = match std::fs::metadata(&compose.path) {
+        Ok(m) if m.len() > MAX_MESSAGE_FILE_BYTES => {
+            return Some(Why::Failed(format!("the file is larger than {} MB", MAX_MESSAGE_FILE_BYTES / (1024 * 1024))));
+        }
+        Ok(_) => match std::fs::read(&compose.path) {
+            Ok(bytes) => bytes,
+            Err(e) => return Some(Why::Failed(e.to_string())),
+        },
+        Err(e) => return Some(Why::Failed(e.to_string())),
+    };
+    let message = match write_message(message, unsent_message(compose, &file_name(&compose.path), &bytes).as_bytes()) {
+        Ok(message) => message,
+        Err(e) => return Some(Why::Failed(format!("the message could not be written: {e}"))),
+    };
+    let mut command = Command::new(olk);
+    command.arg(&message).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(e) => return Some(Why::Failed(format!("{} could not be started: {e}", olk.display()))),
+    };
+    // Outlook that stops with an error at once did not open the message; one still running at the
+    // settle time (starting up) or stopped without one (handed to a running Outlook) did.
+    match wait(&mut child, limits.settle) {
+        Some(false) => Some(Why::Failed(format!("{} stopped with an error", olk.display()))),
+        Some(true) => None,
+        None => {
+            reap(child);
+            None
+        }
+    }
+}
+
+/// Write the message under a folder of its own beside `message` (its name is kept, so the new
+/// Outlook shows it): one folder per send, made private ([`create_private_dir`]) with `create_dir`'s
+/// failure on anything already there, and the file made new, so a send never overwrites another's and a planted file or link is
+/// never followed. Folders from earlier sends over a day old are removed. Where the file is.
+fn write_message(message: &Path, contents: &[u8]) -> std::io::Result<PathBuf> {
+    use std::hash::BuildHasher;
+    use std::io::Write;
+    let root = message.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(root)?;
+    prune(root, "", LEFT_FOR);
+    let name = message.file_name().unwrap_or_default();
+    let mut last = None;
+    for attempt in 0..8u32 {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let unique = std::hash::RandomState::new().hash_one((std::process::id(), nanos, attempt));
+        let folder = root.join(format!("{unique:016x}"));
+        // Private from the start: the message holds the whole document, so the folder is made for
+        // the current user alone before anything is written, and a send whose folder can't be
+        // protected fails instead of writing it where others may read.
+        match create_private_dir(&folder) {
+            Ok(()) => {
+                let file = folder.join(name);
+                let written = std::fs::OpenOptions::new().write(true).create_new(true).open(&file).and_then(|mut f| f.write_all(contents));
+                if let Err(e) = written {
+                    let _ = std::fs::remove_dir_all(&folder);
+                    return Err(e);
+                }
+                return Ok(file);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("no free folder")))
+}
+
+/// Create `dir` (which must not exist yet) so that only the current user can use it, before anything
+/// is put in it: mode 0700 on Unix; on Windows an access list of the current user and SYSTEM only
+/// (`owner_only`), which every file created in it inherits, so a file is private from the moment
+/// it exists. It fails, and leaves no folder, when that protection can't be set up: a copy of a
+/// document is never written to a folder that other users may read. Where there are no owners
+/// (the web build) the folder is simply created.
+pub fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut builder = std::fs::DirBuilder::new();
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder.create(dir)
+    }
+    #[cfg(windows)]
+    {
+        create_private_dir_with(dir, crate::owner_only::current_user_sid, crate::owner_only::create_private_dir)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        std::fs::create_dir(dir)
+    }
+}
+
+/// [`create_private_dir`] on Windows, with its two steps given so a test can run it anywhere: who
+/// the current user is, then creating the folder restricted to that user. Not knowing the user
+/// fails before any folder exists, and so does a folder that can't be restricted (the step removes
+/// it again).
+#[cfg(any(test, windows))]
+fn create_private_dir_with(
+    dir: &Path,
+    user: impl FnOnce() -> std::io::Result<String>,
+    create: impl FnOnce(&Path, &str) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let me = user()
+        .map_err(|e| std::io::Error::other(format!("the current user could not be determined, so the folder could not be restricted to it: {e}")))?;
+    create(dir, &me)
+}
+
+/// How long a file made for an email program is kept: it has long been read by then (an email
+/// program takes the file into the message when the message opens), and Windows clears no temp
+/// folder by itself, so the next send removes it.
+pub(crate) const LEFT_FOR: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Remove the folders in `root` whose names start with `prefix` and that were last changed more
+/// than `age` ago (best effort: one in use, or another user's, stays). A link is not followed.
+pub(crate) fn prune(root: &Path, prefix: &str, age: Duration) {
+    let Ok(entries) = std::fs::read_dir(root) else { return };
+    for entry in entries.flatten() {
+        if !entry.file_name().to_string_lossy().starts_with(prefix) {
+            continue;
+        }
+        let old = entry.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|e| e > age);
+        if old && entry.file_type().is_ok_and(|t| t.is_dir()) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// Where unsent messages for the new Outlook are written.
+fn message_dir() -> PathBuf {
+    std::env::temp_dir().join("pdfcraft-send-email")
+}
+
+/// The message file's name: the attachment's, ending in `.eml`.
+fn message_name(path: &Path) -> String {
+    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let stem = if stem.trim().is_empty() { "message".to_string() } else { stem };
+    format!("{stem}.eml")
+}
+
+/// A file's name, splitting on both separators so the result is the same wherever this is built.
+fn file_name(path: &Path) -> String {
+    path.to_string_lossy().rsplit(['\\', '/']).next().unwrap_or_default().to_string()
+}
+
+/// The most bytes of text one encoded word holds. RFC 2047 caps a word at 75 characters and a
+/// header line at 78; 36 bytes make 48 base64 characters, a 60-character word, which leaves
+/// room for `Subject: ` before the first and a space before each folded one.
+const WORD_BYTES: usize = 36;
+
+/// `subject` as UTF-8 encoded words, one per [`WORD_BYTES`] bytes at most (never splitting a
+/// character), joined by a folded line break so no header line passes 78 characters.
+fn subject_words(subject: &str) -> String {
+    let mut words = Vec::new();
+    let mut start = 0;
+    while start < subject.len() {
+        let mut end = (start + WORD_BYTES).min(subject.len());
+        while !subject.is_char_boundary(end) {
+            end -= 1;
+        }
+        words.push(format!("=?UTF-8?B?{}?=", base64(&subject.as_bytes()[start..end])));
+        start = end;
+    }
+    words.join("\r\n ")
+}
+
+/// An unsent message (RFC 5322 with MIME, `X-Unsent: 1` so it opens as a new one): the
+/// recipients, the subject and the file's name as UTF-8 encoded words, the body and the file in
+/// base64. Recipients were checked for control characters ([`check`]).
+fn unsent_message(compose: &Compose, name: &str, file: &[u8]) -> String {
+    let word = |t: &str| format!("=?UTF-8?B?{}?=", base64(t.as_bytes()));
+    let boundary = format!("pdfcraft-{:016x}", {
+        use std::hash::BuildHasher;
+        std::hash::RandomState::new().hash_one(name)
+    });
+    let kind = if name.to_ascii_lowercase().ends_with(".pdf") { "application/pdf" } else { "application/octet-stream" };
+    let mut lines = Vec::new();
+    if !compose.to.is_empty() {
+        lines.push(format!("To: {}", compose.to.iter().map(|a| a.trim()).collect::<Vec<_>>().join(", ")));
+    }
+    // An empty subject has no encoded-word (RFC 2047 wants at least one character in it).
+    lines.push(if compose.subject.is_empty() { "Subject:".to_string() } else { format!("Subject: {}", subject_words(&compose.subject)) });
+    lines.extend(["X-Unsent: 1".into(), "MIME-Version: 1.0".into(), format!("Content-Type: multipart/mixed; boundary=\"{boundary}\"")]);
+    lines.extend([String::new(), format!("--{boundary}")]);
+    lines.extend(["Content-Type: text/plain; charset=utf-8".into(), "Content-Transfer-Encoding: base64".into(), String::new()]);
+    lines.push(base64_lines(compose.body.as_bytes()));
+    lines.push(format!("--{boundary}"));
+    lines.push(format!("Content-Type: {kind}; name=\"{}\"", word(name)));
+    lines.push("Content-Transfer-Encoding: base64".into());
+    lines.push(format!("Content-Disposition: attachment; filename=\"{}\"; filename*=UTF-8''{}", word(name), percent_encode(name, "")));
+    lines.extend([String::new(), base64_lines(file), format!("--{boundary}--"), String::new()]);
+    lines.join("\r\n")
+}
+
+// ---------------------------------------------------------------------------------------------
+// The scripts
+// ---------------------------------------------------------------------------------------------
+
+#[cfg(windows)]
+fn hide_console(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_console(_command: &mut Command) {}
+
+/// Mail's AppleScript. Its values arrive as `argv`: 1 the subject, 2 the body, 3 the file's path,
+/// then one item per recipient.
+const MAIL_APP_SCRIPT: &str = "on run argv
+	set theSubject to item 1 of argv
+	set theBody to item 2 of argv
+	set thePath to item 3 of argv
+	tell application \"Mail\"
+		set msg to make new outgoing message with properties {subject:theSubject, content:theBody, visible:true}
+		repeat with i from 4 to count of argv
+			tell msg to make new to recipient at end of to recipients with properties {address:(item i of argv)}
+		end repeat
+		tell msg to make new attachment with properties {file name:(POSIX file thePath)} at after the last paragraph
+		activate
+	end tell
+end run
+";
+
+/// Outlook's AppleScript, with the same `argv` as [`MAIL_APP_SCRIPT`].
+const OUTLOOK_SCRIPT: &str = "on run argv
+	set theSubject to item 1 of argv
+	set theBody to item 2 of argv
+	set thePath to item 3 of argv
+	tell application \"Microsoft Outlook\"
+		set msg to make new outgoing message with properties {subject:theSubject, content:theBody}
+		repeat with i from 4 to count of argv
+			make new recipient at msg with properties {email address:{address:(item i of argv)}}
+		end repeat
+		make new attachment at msg with properties {file:(POSIX file thePath)}
+		open msg
+		activate
+	end tell
+end run
+";
+
+/// The Simple MAPI script. It holds no text of the message: the values come in on its standard
+/// input ([`mapi_input`]), so a long body never lengthens the command line (Windows refuses one
+/// over 32 767 characters, and the script travels encoded on it). `caller` is this program's
+/// process: its own windows (whose title can carry the subject too) never count as the compose
+/// window.
+fn mapi_script(caller: u32) -> String {
+    fill(MAPI_SCRIPT, &[("CALLER", caller.to_string()), ("SECONDS", MAPI_SECONDS.to_string()), ("CLOSED", MAPI_CLOSED_SECONDS.to_string())])
+}
+
+/// What the Simple MAPI script reads from its standard input, one value per line in the order it
+/// reads them: the file's path, its name, the subject, the body, the recipients (one per line
+/// inside the value) and the name the email client is registered under. Every value is base64 of its UTF-8, so no text (line breaks, quotes of any
+/// kind) can end a line early or reach the script as anything but data.
+fn mapi_input(compose: &Compose, client: &str) -> String {
+    let path = compose.path.to_string_lossy();
+    let to = compose.to.iter().map(|a| a.trim()).collect::<Vec<_>>().join("\n");
+    [&*path, file_name(&compose.path).as_str(), compose.subject.as_str(), compose.body.as_str(), to.as_str(), client]
+        .iter()
+        .map(|value| format!("{}\n", base64(value.as_bytes())))
+        .collect()
+}
+
+/// `template` with each `@@KEY@@` replaced by its value, in one pass, so a value that happens to
+/// contain `@@…@@` is never filled again. An unknown key is left as it is.
+fn fill(template: &str, values: &[(&str, String)]) -> String {
+    let mut out = String::with_capacity(template.len() + 256);
+    let mut rest = template;
+    while let Some(start) = rest.find("@@") {
+        let (before, after) = rest.split_at(start);
+        out.push_str(before);
+        let tail = after.get(2..).unwrap_or("");
+        let found = tail.find("@@").and_then(|end| {
+            let key = tail.get(..end)?;
+            values.iter().find(|(k, _)| *k == key).map(|(_, value)| (value, end))
+        });
+        match found {
+            Some((value, end)) => {
+                out.push_str(value);
+                rest = tail.get(end + 2..).unwrap_or("");
+            }
+            None => {
+                out.push_str("@@");
+                rest = tail;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// What runs on Windows for a Simple MAPI client. It prints one answer line: `opened`, `hung`,
+/// `code <MAPI result>` or `failed <why>`. The MAPI part is C# compiled by PowerShell itself
+/// (`Add-Type`), which every Windows has: `MAPISendMailW` runs on a thread of its own while the
+/// script looks for a new window, not this program's, whose title carries the subject (Outlook's
+/// "<subject> - Message", Thunderbird's "Write: <subject>"; with no subject, any new window of the
+/// client's own program). A client that answers without a
+/// window (an error) is reported by its code. A window counts only when it belongs to the email
+/// client's own program (its file name from the client's registration under
+/// `Software\Clients\Mail`), so another application whose window holds the subject never says a
+/// message opened. The message's values are read from standard input, one base64 line each, in the
+/// order [`mapi_input`] writes them.
+const MAPI_SCRIPT: &str = r##"$ErrorActionPreference = 'Stop'
+trap { 'failed ' + $_.Exception.Message; exit 0 }
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+# Answers go out as UTF-8, not the console's code page (a localized error message is not ASCII).
+[Console]::OutputEncoding = $utf8
+$text = { param($b) $utf8.GetString([Convert]::FromBase64String($b)) }
+$path = & $text ([Console]::In.ReadLine()); $name = & $text ([Console]::In.ReadLine()); $subject = & $text ([Console]::In.ReadLine()); $body = & $text ([Console]::In.ReadLine())
+$to = [string[]]@((& $text ([Console]::In.ReadLine())) -split "`n" | Where-Object { $_ -ne '' })
+$client = & $text ([Console]::In.ReadLine())
+# The client's own program, as it registered it (Software\Clients\Mail\<client>\shell\open\command):
+# only one of its windows can say a message opened. Unknown, a window is judged by its title alone.
+$program = ''
+try {
+	foreach ($hive in 'HKCU', 'HKLM') {
+		if ($program -ne '') { break }
+		$key = "Registry::$hive\Software\Clients\Mail\$client\shell\open\command"
+		if (-not (Test-Path -LiteralPath $key)) { continue }
+		$command = [Environment]::ExpandEnvironmentVariables([string](Get-Item -LiteralPath $key).GetValue(''))
+		if ($command -match '^\s*"([^"]+)"') { $program = [IO.Path]::GetFileName($Matches[1]) }
+		elseif ($command -match '^\s*(.+?\.exe)') { $program = [IO.Path]::GetFileName($Matches[1]) }
+	}
+} catch { $program = '' }
+$caller = @@CALLER@@
+$src = @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+public static class PdfCraftMapi {
+	[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+	public struct MapiFileDesc { public uint ulReserved; public uint flFlags; public uint nPosition; public string lpszPathName; public string lpszFileName; public IntPtr lpFileType; }
+	[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+	public struct MapiMessage { public uint ulReserved; public string lpszSubject; public string lpszNoteText; public string lpszMessageType; public string lpszDateReceived; public string lpszConversationID; public uint flFlags; public IntPtr lpOriginator; public uint nRecipCount; public IntPtr lpRecips; public uint nFileCount; public IntPtr lpFiles; }
+	[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+	public struct MapiRecipDesc { public uint ulReserved; public uint ulRecipClass; public string lpszName; public string lpszAddress; public uint ulEIDSize; public IntPtr lpEntryID; }
+	[DllImport("mapi32.dll", CharSet = CharSet.Unicode)]
+	static extern uint MAPISendMailW(IntPtr session, IntPtr window, ref MapiMessage message, uint flags, uint reserved);
+	delegate bool EnumProc(IntPtr window, IntPtr data);
+	[DllImport("user32.dll")] static extern bool EnumWindows(EnumProc proc, IntPtr data);
+	[DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+	[DllImport("user32.dll")] static extern bool IsWindow(IntPtr window);
+	[DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr window, StringBuilder text, int max);
+	[DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+	[DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, uint process);
+	[DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+	[DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder name, ref uint size);
+	// Whether the program running as `process` is the email client's own (its file name, as the
+	// client registered it). A process that can't be looked at is not it.
+	static bool Runs(uint process, string program) {
+		var handle = OpenProcess(0x1000, false, process);
+		if (handle == IntPtr.Zero) return false;
+		try {
+			var name = new StringBuilder(1024);
+			uint size = 1024;
+			return QueryFullProcessImageName(handle, 0, name, ref size) && string.Equals(System.IO.Path.GetFileName(name.ToString()), program, StringComparison.OrdinalIgnoreCase);
+		} finally { CloseHandle(handle); }
+	}
+	static List<IntPtr> Titled(string title, uint caller, string program) {
+		var found = new List<IntPtr>();
+		var self = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+		EnumWindows(delegate(IntPtr w, IntPtr d) {
+			if (!IsWindowVisible(w)) return true;
+			uint process;
+			GetWindowThreadProcessId(w, out process);
+			if (process == caller || process == self) return true;
+			// A title that holds the subject is not enough (a web page, a document viewer, an
+			// error box can hold it too): the window must be the email client's own.
+			if (program.Length > 0 && !Runs(process, program)) return true;
+			var text = new StringBuilder(512);
+			GetWindowText(w, text, 512);
+			if (text.ToString().IndexOf(title, StringComparison.OrdinalIgnoreCase) >= 0) found.Add(w);
+			return true;
+		}, IntPtr.Zero);
+		return found;
+	}
+	static uint Send(string path, string name, string subject, string body, string[] to) {
+		var file = new MapiFileDesc { nPosition = 0xFFFFFFFF, lpszPathName = path, lpszFileName = name };
+		var size = Marshal.SizeOf(typeof(MapiFileDesc));
+		var files = Marshal.AllocHGlobal(size);
+		var rsize = Marshal.SizeOf(typeof(MapiRecipDesc));
+		var recips = to.Length > 0 ? Marshal.AllocHGlobal(rsize * to.Length) : IntPtr.Zero;
+		try {
+			Marshal.StructureToPtr(file, files, false);
+			for (int i = 0; i < to.Length; i++) {
+				var r = new MapiRecipDesc { ulRecipClass = 1, lpszName = to[i], lpszAddress = "SMTP:" + to[i] };
+				Marshal.StructureToPtr(r, new IntPtr(recips.ToInt64() + i * rsize), false);
+			}
+			var message = new MapiMessage { lpszSubject = subject, lpszNoteText = body, nFileCount = 1, lpFiles = files, nRecipCount = (uint)to.Length, lpRecips = recips };
+			return MAPISendMailW(IntPtr.Zero, IntPtr.Zero, ref message, 0x00000008 | 0x00000001, 0);
+		} finally { Marshal.FreeHGlobal(files); if (recips != IntPtr.Zero) Marshal.FreeHGlobal(recips); }
+	}
+	public static void Run(string path, string name, string subject, string body, string[] to, uint caller, string program, int seconds, int closed) {
+		var before = Titled(subject, caller, program);
+		uint result = 0;
+		string failure = null;
+		// An exception on this thread would end the process with no answer, so it is caught here.
+		var worker = new Thread(delegate() {
+			try { result = Send(path, name, subject, body, to); }
+			catch (Exception e) { failure = e.Message.Replace("\r", " ").Replace("\n", " "); }
+		});
+		worker.SetApartmentState(ApartmentState.STA);
+		worker.IsBackground = true;
+		worker.Start();
+		var until = DateTime.UtcNow.AddSeconds(seconds);
+		bool told = false;
+		var shown = IntPtr.Zero;
+		DateTime? gone = null;
+		while (!worker.Join(250)) {
+			if (told) {
+				// The request lasts as long as its message: classic Outlook started for it never
+				// finishes the call once the message is closed unsent, so the window's end is the end.
+				if (IsWindow(shown)) { gone = null; continue; }
+				if (gone == null) gone = DateTime.UtcNow;
+				else if (DateTime.UtcNow > gone.Value.AddSeconds(closed)) return;
+				continue;
+			}
+			// An empty subject is in every window's title, so it can't tell them apart: a new window of
+			// the email client's own program says the message opened (the client is known by then).
+			if (subject.Length > 0 || program.Length > 0) foreach (var w in Titled(subject, caller, program)) { if (!before.Contains(w)) { told = true; shown = w; break; } }
+			if (told) { Console.WriteLine("opened"); Console.Out.Flush(); }
+			else if (DateTime.UtcNow > until) { Console.WriteLine("hung"); Console.Out.Flush(); return; }
+		}
+		if (failure != null) { Console.WriteLine("failed " + failure); Console.Out.Flush(); }
+		else if (!told) { Console.WriteLine("code " + result); Console.Out.Flush(); }
+	}
+}
+'@
+Add-Type -TypeDefinition $src -Language CSharp
+[PdfCraftMapi]::Run($path, $name, $subject, $body, $to, [uint32]$caller, $program, @@SECONDS@@, @@CLOSED@@)
+exit 0
+"##;
+
+/// PowerShell's arguments for a script: no profile, no window, no prompt, the script encoded.
+fn powershell_args(script: &str) -> Vec<String> {
+    ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand"]
+        .iter()
+        .map(|a| a.to_string())
+        .chain(std::iter::once(encode_powershell(script)))
+        .collect()
+}
+
+/// `-EncodedCommand` takes the script as base64 of its UTF-16LE bytes.
+fn encode_powershell(script: &str) -> String {
+    let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    base64(&bytes)
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3).saturating_mul(4));
+    for chunk in bytes.chunks(3) {
+        let n = chunk.iter().enumerate().fold(0u32, |acc, (i, b)| acc | (u32::from(*b) << (16 - 8 * i)));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                // Masked to six bits, so always inside the 64-entry table.
+                let index = ((n >> (18 - 6 * i)) & 63) as usize;
+                out.push(char::from(TABLE.get(index).copied().unwrap_or(b'A')));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// Base64 in lines of 76 characters, as MIME wants it.
+fn base64_lines(bytes: &[u8]) -> String {
+    let encoded = base64(bytes);
+    // Base64 is ASCII, so every 76-byte cut is a character boundary.
+    encoded.as_bytes().chunks(76).map(|line| String::from_utf8_lossy(line).into_owned()).collect::<Vec<_>>().join("\r\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn compose() -> Compose {
+        Compose { path: PathBuf::from("/tmp/Invoice \"26340\".pdf"), subject: "Invoice 26340".into(), body: String::new(), to: Vec::new() }
+    }
+
+    fn run_of(plan: &Plan) -> (&Path, &[String], Option<&str>, Watch) {
+        match &plan.route {
+            Route::Run { command, args, stdin, watch } => (command.as_path(), args.as_slice(), stdin.as_deref(), *watch),
+            other => panic!("not a run: {other:?}"),
+        }
+    }
+
+    fn fallback_of(plan: &Plan) -> (&Why, &Fallback) {
+        match &plan.route {
+            Route::Fallback { why, fallback } => (why, fallback),
+            other => panic!("not the fallback: {other:?}"),
+        }
+    }
+
+    /// A file name and a subject are data on every route: quotes and `$(...)` stay in their string
+    /// in AppleScript, base64 on PowerShell's standard input, one argument each for `xdg-email`.
+    #[test]
+    fn a_hostile_file_name_stays_data() {
+        let (path, subject) = ("/tmp/a\"b$(x).pdf", "s\"; do shell script \"x");
+        let c = Compose { path: PathBuf::from(path), subject: subject.into(), body: String::new(), to: Vec::new() };
+
+        for default in [DefaultMail::AppleMail, DefaultMail::Outlook] {
+            let p = plan_for("macos", &default, &c).unwrap();
+            let (_, args, script, _) = run_of(&p);
+            let script = script.unwrap();
+            // Fixed script text; the values are separate arguments after the `-` that names stdin.
+            assert!(!script.contains("$(x)") && !script.contains("do shell script") && !script.contains(subject), "{script}");
+            assert_eq!(args, ["-", subject, "", path], "{args:?}");
+        }
+        // A newline in the subject and a recipient list go one item each.
+        let multi = Compose { subject: "one\ntwo".into(), to: vec![" a@example.org ".into(), "b@example.org".into()], ..c.clone() };
+        let p = plan_for("macos", &DefaultMail::AppleMail, &multi).unwrap();
+        assert_eq!(run_of(&p).1, ["-", "one\ntwo", "", path, "a@example.org", "b@example.org"]);
+        let p = plan_for("windows", &DefaultMail::Mapi("Outlook".into()), &multi).unwrap();
+        let (_, args, input, _) = run_of(&p);
+        assert!(!args.concat().contains("one") && input.unwrap().lines().nth(2) == Some(base64(b"one\ntwo").as_str()));
+        let p = plan_for("linux", &DefaultMail::XdgEmail("/usr/bin/xdg-email".into()), &multi).unwrap();
+        assert!(run_of(&p).1.iter().any(|a| a == "one\ntwo"));
+
+        let p = plan_for("windows", &DefaultMail::Mapi("Outlook".into()), &c).unwrap();
+        let (_, args, input, _) = run_of(&p);
+        let input = input.unwrap();
+        assert!(!args.concat().contains("$(x)") && !input.contains("$(x)"), "{args:?} {input}");
+        assert_eq!(input.lines().next(), Some(base64(path.as_bytes()).as_str()));
+        assert_eq!(input.lines().nth(2), Some(base64(subject.as_bytes()).as_str()));
+
+        let p = plan_for("linux", &DefaultMail::XdgEmail("/usr/bin/xdg-email".into()), &c).unwrap();
+        let args = run_of(&p).1;
+        assert!(args.iter().any(|a| a == path) && args.iter().any(|a| a == subject), "{args:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_that_is_not_valid_text_is_left_for_the_person_to_attach() {
+        use std::os::unix::ffi::OsStringExt;
+        let mut c = compose();
+        c.path = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/bad\xff.pdf".to_vec()));
+        for (os, default) in [("macos", DefaultMail::AppleMail), ("linux", DefaultMail::XdgEmail("/usr/bin/xdg-email".into()))] {
+            let p = plan_for(os, &default, &c).unwrap();
+            assert_eq!(fallback_of(&p).0, &Why::CantAttach, "{os}");
+            assert_eq!(fallback_of(&p).1.reveal, c.path);
+        }
+    }
+
+    #[test]
+    fn macos_scripts_mail_and_outlook_and_falls_back_for_any_other_default() {
+        let p = plan_for("macos", &DefaultMail::Outlook, &compose()).unwrap();
+        assert_eq!(p.program.as_deref(), Some("Microsoft Outlook"));
+        let (command, args, script, watch) = run_of(&p);
+        assert_eq!((command, watch), (Path::new("/usr/bin/osascript"), Watch::Exit));
+        assert_eq!(args, ["-", "Invoice 26340", "", "/tmp/Invoice \"26340\".pdf"]);
+        let script = script.unwrap();
+        assert!(script.contains("tell application \"Microsoft Outlook\""));
+
+        let p = plan_for("macos", &DefaultMail::AppleMail, &compose()).unwrap();
+        assert_eq!(p.program.as_deref(), Some("Mail"));
+        assert!(run_of(&p).2.unwrap().contains("tell application \"Mail\""));
+
+        // A browser (a webmail site) or any other program: the message without the file, and the file shown.
+        let p = plan_for("macos", &DefaultMail::Other(Some("Firefox".into())), &compose()).unwrap();
+        assert_eq!(p.program.as_deref(), Some("Firefox"));
+        let (why, fallback) = fallback_of(&p);
+        assert_eq!(why, &Why::CantAttach);
+        assert_eq!(fallback.mailto, "mailto:?subject=Invoice%2026340");
+        assert_eq!(fallback.reveal, compose().path);
+        let p = plan_for("macos", &DefaultMail::Nothing, &compose()).unwrap();
+        assert_eq!(fallback_of(&p).0, &Why::NoProgram);
+        // Another system's default can't be used here.
+        assert_eq!(fallback_of(&plan_for("macos", &DefaultMail::Mapi("Mozilla Thunderbird".into()), &compose()).unwrap()).0, &Why::CantAttach);
+    }
+
+    #[test]
+    fn the_linux_default_is_the_handler_when_it_cannot_attach() {
+        let xdg = || PathBuf::from("/usr/bin/xdg-email");
+        assert_eq!(linux_default(xdg(), Some("org.mozilla.Thunderbird.desktop\n")), DefaultMail::XdgEmail(xdg()));
+        assert_eq!(linux_default(xdg(), Some("org.gnome.Evolution.desktop")), DefaultMail::XdgEmail(xdg()));
+        assert_eq!(linux_default(xdg(), Some("firefox.desktop\n")), DefaultMail::Other(Some("firefox".into())));
+        assert_eq!(linux_default(xdg(), Some("google-chrome.desktop")), DefaultMail::Other(Some("google-chrome".into())));
+        // Unreadable or unset: keep trying xdg-email.
+        assert_eq!(linux_default(xdg(), None), DefaultMail::XdgEmail(xdg()));
+        assert_eq!(linux_default(xdg(), Some("  \n")), DefaultMail::XdgEmail(xdg()));
+        let p = plan_for("linux", &linux_default(xdg(), Some("firefox.desktop")), &compose()).unwrap();
+        assert_eq!(fallback_of(&p).0, &Why::CantAttach);
+    }
+
+    #[test]
+    fn the_macos_default_is_read_from_launch_services_answer() {
+        assert_eq!(macos_default("id=com.apple.mail\nname=Mail\npath=/System/Applications/Mail.app\n"), DefaultMail::AppleMail);
+        assert_eq!(macos_default("id=com.microsoft.Outlook\nname=Microsoft Outlook\npath=/Applications/Microsoft Outlook.app"), DefaultMail::Outlook);
+        assert_eq!(macos_default("id=org.mozilla.firefox\nname=Firefox\npath=/Applications/Firefox.app"), DefaultMail::Other(Some("Firefox".into())));
+        assert_eq!(macos_default("id=com.example.mail\nname=\npath=/Applications/X.app"), DefaultMail::Other(Some("com.example.mail".into())));
+        assert_eq!(macos_default("\n"), DefaultMail::Nothing);
+        assert_eq!(macos_default(""), DefaultMail::Nothing);
+    }
+
+    #[test]
+    fn windows_uses_the_new_outlook_then_simple_mapi_then_falls_back() {
+        let olk = PathBuf::from("C:\\Users\\a\\AppData\\Local\\Microsoft\\WindowsApps\\olk.exe");
+        let p = plan_for("windows", &DefaultMail::NewOutlook(olk.clone()), &compose()).unwrap();
+        match &p.route {
+            Route::MessageFile { program, message } => {
+                assert_eq!(program, &olk);
+                assert!(message.ends_with("Invoice \"26340\".eml") && message.starts_with(std::env::temp_dir()), "{}", message.display());
+            }
+            other => panic!("{other:?}"),
+        }
+
+        let p = plan_for("windows", &DefaultMail::Mapi("Mozilla Thunderbird".into()), &compose()).unwrap();
+        assert_eq!(p.program.as_deref(), Some("Mozilla Thunderbird"));
+        let (command, args, stdin, watch) = run_of(&p);
+        assert!(command.to_string_lossy().ends_with("powershell.exe") && stdin.is_some_and(|s| s.lines().count() == 6) && watch == Watch::Answers);
+        assert_eq!(args[args.len() - 2], "-EncodedCommand");
+        let encoded = &args[args.len() - 1];
+        assert!(encoded.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='));
+        // Well under Windows' 32 767-character command line.
+        assert!(encoded.len() < 24_000, "{} characters", encoded.len());
+
+        assert_eq!(fallback_of(&plan_for("windows", &DefaultMail::Other(None), &compose()).unwrap()).0, &Why::CantAttach);
+        assert_eq!(fallback_of(&plan_for("windows", &DefaultMail::Nothing, &compose()).unwrap()).0, &Why::NoProgram);
+    }
+
+    #[test]
+    fn the_windows_default_is_read_from_the_registry() {
+        let olk = Some(PathBuf::from("C:\\olk.exe"));
+        let packaged = "HKEY_CLASSES_ROOT\\AppXabc\\Application\n    AppUserModelID    REG_SZ    Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows\n";
+        let new_outlook = DefaultMail::NewOutlook(PathBuf::from("C:\\olk.exe"));
+        assert_eq!(windows_default(Some("AppXabc"), Some(packaged), Some("Microsoft Outlook".into()), olk.clone(), false), new_outlook);
+        let desktop = "    (Default)    REG_SZ    \"C:\\Program Files\\WindowsApps\\olk.exe\" %1";
+        assert_eq!(windows_default(Some("olk.mailto"), Some(desktop), None, olk.clone(), false), new_outlook);
+        // Classic Outlook's command names OUTLOOK.EXE, which is not olk.exe.
+        let classic = "    (Default)    REG_SZ    \"C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE\" -c IPM.Note /m \"%1\"";
+        assert_eq!(
+            windows_default(Some("Outlook.URL.mailto.15"), Some(classic), Some("Microsoft Outlook".into()), olk.clone(), false),
+            DefaultMail::Mapi("Microsoft Outlook".into())
+        );
+        // The new Outlook named but not installed: the MAPI client, or the fallback.
+        assert_eq!(windows_default(Some("AppXabc"), Some(packaged), None, None, false), DefaultMail::Other(None));
+        // A browser for webmail, and a MAPI client set up: the MAPI client takes the file.
+        assert_eq!(
+            windows_default(Some("ChromeHTML"), None, Some("Mozilla Thunderbird".into()), olk.clone(), false),
+            DefaultMail::Mapi("Mozilla Thunderbird".into())
+        );
+        assert_eq!(windows_default(Some("ChromeHTML"), None, None, olk.clone(), false), DefaultMail::Other(None));
+        assert_eq!(windows_default(None, None, None, olk.clone(), false), DefaultMail::Nothing);
+        // A choice with nothing registered under its ProgId (an app since updated or removed) names
+        // no program: classic Outlook's switch to the new Outlook decides, else the MAPI client.
+        let stale = Some("AppXydk58wgm44se4b399557yyyj1w7mbmvd");
+        assert_eq!(windows_default(stale, None, Some("Microsoft Outlook".into()), olk.clone(), true), new_outlook);
+        assert_eq!(windows_default(stale, None, Some("Microsoft Outlook".into()), olk.clone(), false), DefaultMail::Mapi("Microsoft Outlook".into()));
+        assert_eq!(windows_default(stale, None, Some("Microsoft Outlook".into()), None, true), DefaultMail::Mapi("Microsoft Outlook".into()));
+        // A choice that names a program is the person's, whatever the switch says.
+        assert_eq!(
+            windows_default(Some("Outlook.URL.mailto.15"), Some(classic), Some("Microsoft Outlook".into()), olk, true),
+            DefaultMail::Mapi("Microsoft Outlook".into())
+        );
+        assert!(reg_flag("HKEY_CURRENT_USER\\x\r\n    UseNewOutlook    REG_DWORD    0x1\r\n"));
+        assert!(!reg_flag("    UseNewOutlook    REG_DWORD    0x0\r\n"));
+        assert!(!reg_flag("    UseNewOutlook    REG_SZ    1\r\n"));
+
+        let out = "\r\nHKEY_LOCAL_MACHINE\\Software\\Clients\\Mail\r\n    (Predeterminado)    REG_SZ    Mozilla Thunderbird\r\n\r\n";
+        assert_eq!(reg_value(out).as_deref(), Some("Mozilla Thunderbird"));
+        assert_eq!(reg_value("HKEY_CURRENT_USER\\x\r\n    ProgId    REG_SZ    \r\n"), None);
+        assert_eq!(reg_value("ERROR: The system was unable to find the specified registry key or value."), None);
+    }
+
+    #[test]
+    fn the_mapi_script_carries_every_value_as_base64() {
+        let mut c = compose();
+        c.path = PathBuf::from("C:\\Temp\\Núñez’s 'x'.pdf");
+        c.subject = "Núñez’s 'invoice'".into();
+        c.body = "Hola\nadiós".into();
+        c.to = vec!["ap@example.org".into(), "b@example.org".into()];
+        let script = mapi_script(4242);
+        assert!(!script.contains("@@"), "every value filled: {script}");
+        assert!(!script.contains("Núñez") && !script.contains("invoice"), "no text goes in as text: {script}");
+        assert_eq!(script.matches("[Console]::In.ReadLine()").count(), 6);
+        let lines: Vec<String> = mapi_input(&c, "Mozilla Thunderbird").lines().map(str::to_string).collect();
+        assert_eq!(
+            lines,
+            [
+                base64("C:\\Temp\\Núñez’s 'x'.pdf".as_bytes()),
+                base64("Núñez’s 'x'.pdf".as_bytes()),
+                base64("Núñez’s 'invoice'".as_bytes()),
+                base64("Hola\nadiós".as_bytes()),
+                base64(b"ap@example.org\nb@example.org"),
+                base64(b"Mozilla Thunderbird"),
+            ]
+        );
+        assert!(script.contains("$caller = 4242") && script.contains(&format!("[uint32]$caller, $program, {MAPI_SECONDS}, {MAPI_CLOSED_SECONDS})")));
+        assert!(script.contains("MAPISendMailW"));
+        // A window counts only when it is the email client's own: its program is asked of the
+        // registry and each candidate window's process is checked against it.
+        assert!(script.contains("Clients\\Mail\\$client\\shell\\open\\command") && script.contains("QueryFullProcessImageName"), "{script}");
+        assert!(script.contains("program.Length > 0 && !Runs(process, program)"));
+        assert!(script.contains("$caller, $program, "));
+        let bytes: Vec<u8> = script.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+        assert_eq!(base64(&bytes), encode_powershell(&script));
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_restricted_is_never_used() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-private-dir-{}", std::process::id()));
+        // The user can't be told: nothing is created, and the caller gets the error.
+        let made = std::cell::Cell::new(false);
+        let err = create_private_dir_with(
+            &dir,
+            || Err(std::io::Error::other("whoami failed")),
+            |_, _| {
+                made.set(true);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(!made.get() && err.to_string().contains("whoami failed"), "{err}");
+        // The restriction fails: the error is the caller's, not swallowed.
+        let err = create_private_dir_with(&dir, || Ok("S-1-5-21-1".into()), |_, _| Err(std::io::Error::other("icacls failed"))).unwrap_err();
+        assert!(err.to_string().contains("icacls failed"));
+        // It is asked for this user's SID and this folder.
+        create_private_dir_with(
+            &dir,
+            || Ok("S-1-5-21-1".into()),
+            |d, me| {
+                assert_eq!((d, me), (dir.as_path(), "S-1-5-21-1"));
+                Ok(())
+            },
+        )
+        .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unsent_message_folder_is_for_its_owner_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("pdfcraft-mail-private-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let file = write_message(&root.join("Invoice.eml"), b"x").unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(file.parent().unwrap()), 0o700, "the folder is private before the file is written");
+        assert_eq!(create_private_dir(file.parent().unwrap()).unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_mapi_scripts_answers_are_read() {
+        assert_eq!(mapi_answer("opened"), Some(None));
+        assert_eq!(mapi_answer("hung"), Some(Some(Why::NoAnswer)));
+        assert_eq!(mapi_answer("code 0"), Some(None));
+        assert_eq!(mapi_answer(" code 1 \r"), Some(None), "closed by the person: shown, so not a failure");
+        assert_eq!(mapi_answer("code 3"), Some(Some(Why::LogonFailed)));
+        assert!(matches!(mapi_answer("code 2"), Some(Some(Why::Failed(_)))));
+        assert_eq!(mapi_answer("failed Access denied"), Some(Some(Why::Failed("Access denied".into()))));
+        assert_eq!(mapi_answer("code x"), None);
+        assert_eq!(mapi_answer("WARNING: something"), None);
+    }
+
+    /// The tests' plans, as on a Windows machine whose `SystemRoot` is `C:\\Windows`.
+    fn plan_for(os: &str, default: &DefaultMail, compose: &Compose) -> Result<Plan, MailError> {
+        plan_with_root(os, default, compose, Some("C:\\Windows".as_ref()))
+    }
+
+    #[test]
+    fn without_a_system_folder_the_mapi_route_is_not_taken_from_the_path() {
+        let p = plan_with_root("windows", &DefaultMail::Mapi("Outlook".into()), &compose(), None).unwrap();
+        assert_eq!(fallback_of(&p).0, &Why::CantAttach);
+        let p = plan_with_root("windows", &DefaultMail::Mapi("Outlook".into()), &compose(), Some("C:\\Windows".as_ref())).unwrap();
+        assert!(run_of(&p).0.to_string_lossy().starts_with("C:\\Windows"));
+    }
+
+    #[test]
+    fn powershell_is_not_asked_to_bypass_the_execution_policy() {
+        // `-EncodedCommand` is not a script file, so the policy does not apply; the flag only widens the call.
+        let args = powershell_args("exit 0");
+        assert!(!args.iter().any(|a| a.eq_ignore_ascii_case("-ExecutionPolicy") || a.eq_ignore_ascii_case("Bypass")), "{args:?}");
+        assert_eq!(args.last().map(String::as_str), Some(encode_powershell("exit 0").as_str()));
+    }
+
+    #[test]
+    fn an_empty_subject_has_no_encoded_word() {
+        let mut c = compose();
+        c.subject = String::new();
+        c.to = vec!["ap@example.org".into()];
+        let message = unsent_message(&c, "a.pdf", &[0u8; 20]);
+        let lines: Vec<&str> = message.split("\r\n").collect();
+        assert_eq!(lines[1], "Subject:");
+        assert!(!message.contains("=?UTF-8?B??="));
+    }
+
+    /// Decode standard base64 (what `base64` writes), for reading a subject back.
+    fn unbase64(text: &str) -> Vec<u8> {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = Vec::new();
+        let (mut bits, mut count) = (0u32, 0);
+        for byte in text.bytes().filter(|b| *b != b'=') {
+            bits = bits << 6 | ALPHABET.iter().position(|a| *a == byte).expect("a base64 character") as u32;
+            count += 6;
+            if count >= 8 {
+                count -= 8;
+                out.push((bits >> count) as u8);
+                bits &= (1 << count) - 1;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_long_subject_is_split_into_encoded_words_that_fit_a_header_line() {
+        let mut c = compose();
+        // Several hundred characters, two- and three-byte ones among them, so a split lands next to a
+        // character that must not be cut.
+        c.subject = "Informe de inspección — 检查报告 ".repeat(20);
+        let message = unsent_message(&c, "a.pdf", &[0u8; 20]);
+        let header = message
+            .split("\r\n")
+            .skip_while(|l| !l.starts_with("Subject:"))
+            .take_while(|l| l.starts_with("Subject:") || l.starts_with(' '))
+            .collect::<Vec<_>>();
+        assert!(header.len() > 1, "the subject is folded over several lines");
+        let mut decoded = Vec::new();
+        for line in &header {
+            assert!(line.len() <= 78, "a header line of {} characters: {line}", line.len());
+            let word = line.trim_start_matches("Subject:").trim();
+            assert!(word.len() <= 75, "an encoded word of {} characters", word.len());
+            let b64 = word.strip_prefix("=?UTF-8?B?").and_then(|w| w.strip_suffix("?=")).expect("an encoded word");
+            let piece = unbase64(b64);
+            assert!(std::str::from_utf8(&piece).is_ok(), "a word is whole characters");
+            decoded.extend(piece);
+        }
+        assert_eq!(String::from_utf8(decoded).unwrap(), c.subject);
+    }
+
+    /// #6552 review (ioman2): a `mailto:` address opens through the system's handler for
+    /// `mailto:` links, never a browser's command; each system's route, on any machine.
+    #[test]
+    fn a_mailto_address_opens_through_the_systems_email_handler() {
+        let url = "mailto:ap@example.org?subject=Invoice%2026340";
+        let root = std::ffi::OsStr::new(r"C:\Windows");
+        let route = |os: &str, path: Option<&std::ffi::OsStr>| address_route(os, url, Some(root), path);
+        let Some(Route::Run { command, args, stdin, watch }) = route("macos", None) else { panic!("macOS opens it") };
+        assert_eq!((command, args, stdin, watch), (PathBuf::from("/usr/bin/open"), vec![url.to_string()], None, Watch::Exit));
+        // Windows: the address goes on standard input, never on a command line to be quoted.
+        let Some(Route::Run { command, args, stdin, watch }) = route("windows", None) else { panic!("Windows opens it") };
+        assert!(command.to_string_lossy().ends_with(r"WindowsPowerShell\v1.0\powershell.exe"), "{}", command.display());
+        assert_eq!(args, powershell_args(WINDOWS_OPEN_ADDRESS));
+        assert!(!args.iter().any(|a| a.contains("example.org")));
+        assert_eq!((stdin.as_deref(), watch), (Some("mailto:ap@example.org?subject=Invoice%2026340\n"), Watch::Exit));
+        assert!(WINDOWS_OPEN_ADDRESS.contains("Start-Process -FilePath ([Console]::In.ReadLine())"));
+        assert!(address_route("windows", url, None, None).is_none(), "no SystemRoot, no PowerShell to ask");
+        // Linux and the BSDs: xdg-open from PATH, or nothing to ask.
+        let dir = std::env::temp_dir().join(format!("pdfcraft-mail-open-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("xdg-open"), b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(dir.join("xdg-open"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let path = std::env::join_paths([dir.clone()]).unwrap();
+        for os in ["linux", "freebsd", "openbsd"] {
+            let Some(Route::Run { command, args, stdin, watch }) = route(os, Some(&path)) else { panic!("{os} opens it") };
+            assert_eq!((command, args, stdin, watch), (dir.join("xdg-open"), vec![url.to_string()], None, Watch::Started), "{os}");
+            assert!(route(os, Some(std::ffi::OsStr::new("/definitely/not/here"))).is_none(), "{os} without xdg-open");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        // Another system, or something that isn't a mailto: address a command can carry.
+        assert!(route("ios", None).is_none());
+        for bad in ["https://example.org", "file:///etc/passwd", "mailto:a@example.org\nb", "-mailto:a@example.org", "mail"] {
+            assert!(address_route("macos", bad, Some(root), None).is_none(), "{bad}");
+        }
+        assert!(address_route("macos", "MAILTO:a@example.org", Some(root), None).is_some(), "the scheme in any case");
+    }
+
+    /// With no subject and no known program nothing can tell the message's window apart, so none
+    /// is taken as it: only the request's own answer says how it went.
+    #[test]
+    fn the_mapi_script_counts_a_new_window_of_the_client_when_the_subject_is_empty() {
+        assert!(MAPI_SCRIPT.contains("if (subject.Length > 0 || program.Length > 0) foreach"));
+    }
+
+    /// The helper lasts as long as the message's window, plus a short wait for the request to
+    /// finish: classic Outlook started for it never finishes the request once the message is
+    /// closed unsent, and the helper must not wait for that for ever.
+    #[test]
+    fn the_mapi_script_ends_once_the_messages_window_has_closed() {
+        let script = mapi_script(1);
+        assert!(script.contains("told = true; shown = w;"));
+        assert!(script.contains("if (IsWindow(shown)) { gone = null; continue; }"));
+        assert!(script.contains("else if (DateTime.UtcNow > gone.Value.AddSeconds(closed)) return;"));
+    }
+
+    /// While a Simple MAPI helper of this process still holds the message it opened, a second
+    /// request is not sent (a client such as classic Outlook would keep it waiting, unseen): it is
+    /// answered busy, and the next one after the message closes is sent.
+    #[test]
+    #[cfg(unix)]
+    fn a_second_mapi_request_while_a_message_is_open_is_answered_busy() {
+        let c = compose();
+        let mapi = |script: &str| Plan {
+            program: Some("Microsoft Outlook".into()),
+            route: Route::Run { command: "/bin/sh".into(), args: vec!["-c".into(), script.into()], stdin: None, watch: Watch::Answers },
+        };
+        // The answer comes as soon as the message is open; the helper is left to run on its own.
+        let started = Instant::now();
+        assert_eq!(execute(mapi("echo opened; sleep 3"), &c), Answer::Opened { program: Some("Microsoft Outlook".into()) });
+        assert!(started.elapsed() < Duration::from_secs(2), "not waited for: {:?}", started.elapsed());
+        assert!(matches!(execute(mapi("echo opened"), &c), Answer::NotAttached { why: Why::Busy, .. }));
+        // Other routes are not held up.
+        let other = Plan {
+            program: None,
+            route: Route::Run { command: "/bin/sh".into(), args: vec!["-c".into(), "exit 0".into()], stdin: None, watch: Watch::Exit },
+        };
+        assert_eq!(execute(other, &c), Answer::Opened { program: None });
+        let until = Instant::now() + Duration::from_secs(10);
+        while MAPI_SHOWING.load(Ordering::SeqCst) > 0 && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(execute(mapi("echo opened"), &c), Answer::Opened { program: Some("Microsoft Outlook".into()) });
+    }
+
+    #[test]
+    fn the_new_outlook_gets_an_unsent_message_with_the_file_inside() {
+        let mut c = compose();
+        c.subject = "Factura de Núñez".into();
+        c.body = "Adjunta.".into();
+        c.to = vec!["ap@example.org".into()];
+        let message = unsent_message(&c, "Núñez.pdf", &[0u8; 200]);
+        let lines: Vec<&str> = message.split("\r\n").collect();
+        assert_eq!(lines[0], "To: ap@example.org");
+        assert_eq!(lines[1], format!("Subject: =?UTF-8?B?{}?=", base64("Factura de Núñez".as_bytes())));
+        assert_eq!(lines[2], "X-Unsent: 1");
+        assert!(message.contains("Content-Type: application/pdf; name=\"=?UTF-8?B?"));
+        assert!(message.contains("filename*=UTF-8''N%C3%BA%C3%B1ez.pdf"));
+        assert!(message.contains(&base64(b"Adjunta.")));
+        // The file in lines of 76 characters.
+        assert!(lines.iter().filter(|l| l.starts_with("AAAA")).all(|l| l.len() <= 76));
+        assert_eq!(lines.iter().filter(|l| l.starts_with("AAAA")).map(|l| l.len()).sum::<usize>(), base64(&[0u8; 200]).len());
+        assert!(message.ends_with("--\r\n"));
+        assert_eq!(message_name(Path::new("/x/a.b.pdf")), "a.b.eml");
+        assert_eq!(message_name(Path::new("/")), "message.eml");
+    }
+
+    #[test]
+    fn linux_and_the_bsds_use_xdg_email_and_fall_back_without_it() {
+        let mut c = compose();
+        c.to = vec!["ap@example.org".into(), "billing@example.org".into()];
+        let xdg = DefaultMail::XdgEmail("/usr/bin/xdg-email".into());
+        for os in ["linux", "freebsd", "openbsd"] {
+            let p = plan_for(os, &xdg, &c).unwrap();
+            let (command, args, stdin, watch) = run_of(&p);
+            assert_eq!((command, stdin, watch), (Path::new("/usr/bin/xdg-email"), None, Watch::Started));
+            let attach = args.iter().position(|a| a == "--attach").unwrap();
+            assert_eq!(args[attach + 1], "/tmp/Invoice \"26340\".pdf");
+            assert_eq!(&args[args.len() - 2..], ["ap@example.org", "billing@example.org"]);
+            assert_eq!(fallback_of(&plan_for(os, &DefaultMail::Nothing, &c).unwrap()).0, &Why::NoProgram);
+        }
+        let dir = std::env::temp_dir().join(format!("pdfcraft-mail-path-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("xdg-email"), b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(dir.join("xdg-email"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let path = std::env::join_paths([PathBuf::from("/definitely/not/here"), dir.clone()]).unwrap();
+        assert_eq!(find_program(&path, "xdg-email"), Some(dir.join("xdg-email")));
+        assert_eq!(find_program(&path, "missing-tool"), None);
+        // A relative folder on PATH is never searched.
+        assert_eq!(find_program(std::ffi::OsStr::new("."), "Cargo.toml"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_web_build_and_unknown_systems_are_unsupported() {
+        assert_eq!(plan_for("unknown", &DefaultMail::Nothing, &compose()), Err(MailError::Unsupported));
+        assert_eq!(plan_for("", &DefaultMail::AppleMail, &compose()), Err(MailError::Unsupported));
+    }
+
+    #[test]
+    fn a_missing_file_or_a_bad_recipient_is_refused_before_anything_runs() {
+        let woke = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = woke.clone();
+        let c = Compose { path: PathBuf::from("/definitely/not/here.pdf"), subject: String::new(), body: String::new(), to: Vec::new() };
+        assert!(matches!(send(c, move || flag.store(true, std::sync::atomic::Ordering::SeqCst)), Err(MailError::NoFile(_))));
+        assert!(!woke.load(std::sync::atomic::Ordering::SeqCst), "nothing started");
+
+        let file = std::env::temp_dir().join(format!("pdfcraft-mail-check-{}.pdf", std::process::id()));
+        std::fs::write(&file, b"%PDF-1.7\n").unwrap();
+        for bad in ["", "  ", "--attach", "a@example.org\r\nBcc: b@example.org", "a\u{0}@example.org"] {
+            let c = Compose { path: file.clone(), subject: String::new(), body: String::new(), to: vec![bad.into()] };
+            assert_eq!(send(c, || {}).err(), Some(MailError::BadRecipient(bad.into())), "{bad:?}");
+        }
+        let c = Compose { path: file.clone(), subject: String::new(), body: String::new(), to: vec!["a@example.org".into()] };
+        assert_eq!(check(&c), Ok(()));
+        let _ = std::fs::remove_file(&file);
+    }
+
+    #[test]
+    fn mailto_addresses_encode_everything_but_the_plain_characters() {
+        assert_eq!(mailto(&[], "", ""), "mailto:");
+        assert_eq!(
+            mailto(&["ap@example.org".into(), " b+c@example.org ".into()], "Q3, final", ""),
+            "mailto:ap@example.org,b%2Bc@example.org?subject=Q3%2C%20final"
+        );
+        assert_eq!(mailto(&[], "Año ñ & = ?", "a\nb"), "mailto:?subject=A%C3%B1o%20%C3%B1%20%26%20%3D%20%3F&body=a%0D%0Ab");
+        assert_eq!(mailto(&[], "", "x\r\ny\rz"), "mailto:?body=x%0D%0Ay%0D%0Az");
+        // A name that reads like a parameter stays text.
+        assert_eq!(mailto(&[], "x&attach=/etc/passwd", ""), "mailto:?subject=x%26attach%3D%2Fetc%2Fpasswd");
+    }
+
+    #[test]
+    fn recipients_reach_every_system() {
+        let mut c = compose();
+        c.to = vec!["ap@example.org".into(), "billing@example.org".into()];
+        let mac = plan_for("macos", &DefaultMail::AppleMail, &c).unwrap();
+        let tail = |plan: &Plan| run_of(plan).1[4..].to_vec();
+        assert_eq!(tail(&mac), ["ap@example.org", "billing@example.org"]);
+        let outlook = plan_for("macos", &DefaultMail::Outlook, &c).unwrap();
+        assert_eq!(tail(&outlook), ["ap@example.org", "billing@example.org"]);
+        let plan = plan_for("windows", &DefaultMail::Nothing, &c).unwrap();
+        let (_, fallback) = fallback_of(&plan);
+        assert!(fallback.mailto.starts_with("mailto:ap@example.org,billing@example.org?"));
+    }
+
+    #[test]
+    fn filling_the_template_is_one_pass() {
+        let filled = fill("a @@X@@ b @@Y@@ c @@Z@@", &[("X", "@@Y@@".into()), ("Y", "y".into())]);
+        assert_eq!(filled, "a @@Y@@ b y c @@Z@@");
+        assert_eq!(fill("@@", &[]), "@@");
+        assert_eq!(fill("x@@X", &[("X", "1".into())]), "x@@X");
+    }
+
+    #[test]
+    fn base64_matches_the_standard_alphabet_and_padding() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+        assert_eq!(base64_lines(&[0u8; 120]).split("\r\n").map(str::len).collect::<Vec<_>>(), [76, 76, 8]);
+    }
+
+    /// The helper's exit, or its answer line, decides; an early failure is reported in its own
+    /// words. (Shell commands stand in for osascript, xdg-email and the MAPI script.)
+    #[cfg(unix)]
+    #[test]
+    fn a_helpers_exit_or_answer_decides_and_failures_are_reported() {
+        let sh = |script: &str| vec!["-c".to_string(), script.to_string()];
+        let shell = Path::new("/bin/sh");
+        assert_eq!(run(shell, &sh("exit 0"), None, Watch::Exit), None);
+        assert_eq!(
+            run(shell, &sh("echo noise >&2; echo 'Mail got an error: denied' >&2; exit 1"), None, Watch::Exit),
+            Some(Why::Failed("Mail got an error: denied".into()))
+        );
+        // The script goes in on standard input.
+        assert_eq!(run(shell, &[], Some("exit 0\n"), Watch::Exit), None);
+        assert_eq!(run(shell, &[], Some("exit 3\n"), Watch::Exit), Some(Why::Failed("it stopped with an error".into())));
+        assert!(matches!(run(shell, &sh("exit 4"), None, Watch::Started), Some(Why::Failed(_))));
+        assert_eq!(run(shell, &sh("exit 0"), None, Watch::Started), None);
+        assert_eq!(run(shell, &sh("echo WARNING: x; echo 'code 3'"), None, Watch::Answers), Some(Why::LogonFailed));
+        assert_eq!(run(shell, &sh("echo opened; sleep 1"), None, Watch::Answers), None);
+        assert_eq!(run(shell, &sh("echo nothing"), None, Watch::Answers), Some(Why::Failed("the email helper stopped without an answer".into())));
+        assert!(matches!(run(Path::new("/definitely/not/here"), &[], None, Watch::Exit), Some(Why::Failed(_))));
+
+        // The fallback runs nothing: it comes back for the caller to offer.
+        let c = compose();
+        let plan = plan_for("linux", &DefaultMail::Nothing, &c).unwrap();
+        assert_eq!(execute(plan, &c), Answer::NotAttached { program: None, why: Why::NoProgram, fallback: fallback(&c) });
+        let plan =
+            Plan { program: Some("Mail".into()), route: Route::Run { command: shell.into(), args: sh("exit 1"), stdin: None, watch: Watch::Exit } };
+        assert!(matches!(execute(plan, &c), Answer::NotAttached { program: Some(_), why: Why::Failed(_), .. }));
+    }
+
+    /// The waits are the caller's: a helper that never answers, or never stops, is killed and reported.
+    #[test]
+    #[cfg(unix)]
+    fn a_helper_that_does_not_answer_in_time_is_reported() {
+        let sh = |script: &str| vec!["-c".to_string(), script.to_string()];
+        let shell = Path::new("/bin/sh");
+        let quick = Limits { answer: Duration::from_millis(300), settle: Duration::from_millis(300), detect: Duration::from_millis(300) };
+        assert_eq!(run_within(shell, &sh("sleep 5"), None, Watch::Exit, quick), Some(Why::NoAnswer));
+        assert_eq!(run_within(shell, &sh("sleep 5"), None, Watch::Answers, quick), Some(Why::NoAnswer));
+        // Still running at the settle time counts as opened.
+        assert_eq!(run_within(shell, &sh("sleep 2"), None, Watch::Started, quick), None);
+        // A helper that stops without a line, or whose line isn't one of ours, gives no answer.
+        assert_eq!(
+            run_within(shell, &sh("echo hello"), None, Watch::Answers, quick),
+            Some(Why::Failed("the email helper stopped without an answer".into()))
+        );
+        // A script that stalls before reading its input is still cut off at the limit.
+        let big = "x".repeat(1 << 20);
+        assert_eq!(run_within(shell, &sh("sleep 5"), Some(&big), Watch::Exit, quick), Some(Why::NoAnswer));
+    }
+
+    /// A line in the console's code page (not UTF-8) must not hide the answer after it.
+    #[test]
+    #[cfg(unix)]
+    fn an_answer_line_that_is_not_utf8_does_not_end_the_reading() {
+        let sh = |script: &str| vec!["-c".to_string(), script.to_string()];
+        let limits = Limits { answer: Duration::from_secs(10), settle: Duration::from_secs(1), detect: Duration::from_secs(1) };
+        let reason = run_within(Path::new("/bin/sh"), &sh("printf 'failed \\202chec\\n'"), None, Watch::Answers, limits);
+        assert!(matches!(&reason, Some(Why::Failed(why)) if why.ends_with("chec")), "{reason:?}");
+        let reason = run_within(Path::new("/bin/sh"), &sh("printf 'noise \\202\\ncode 3\\n'"), None, Watch::Answers, limits);
+        assert_eq!(reason, Some(Why::LogonFailed));
+    }
+
+    #[test]
+    fn the_mapi_script_answers_in_utf8_and_catches_its_worker_threads_exceptions() {
+        let script = mapi_script(1);
+        assert!(script.contains("[Console]::OutputEncoding = $utf8"));
+        assert!(script.contains("catch (Exception e) { failure ="));
+        assert!(script.contains("Console.WriteLine(\"failed \" + failure)"));
+    }
+
+    /// Each send's message gets a folder and a file of its own; nothing already there is touched.
+    /// A tool that stalls while naming the default email program counts as naming none.
+    #[test]
+    #[cfg(unix)]
+    fn a_tool_that_stalls_in_detection_is_cut_off() {
+        let sh = |script: &str| {
+            let mut c = Command::new("/bin/sh");
+            c.args(["-c", script]);
+            c
+        };
+        let limit = Duration::from_millis(300);
+        assert_eq!(output_within(&mut sh("echo found"), Duration::from_secs(10)).as_deref(), Some("found\n"));
+        assert_eq!(output_within(&mut sh("exit 1"), Duration::from_secs(10)), None);
+        let started = Instant::now();
+        assert_eq!(output_within(&mut sh("echo started; sleep 5"), limit), None);
+        assert!(started.elapsed() < Duration::from_secs(3), "it is not waited for");
+        // Plenty of output is read while the tool runs, not after.
+        let big = output_within(&mut sh("head -c 1000000 /dev/zero | tr '\\0' x"), Duration::from_secs(10)).unwrap();
+        assert_eq!(big.len(), 1_000_000);
+    }
+
+    /// The new Outlook that stops with an error did not open the message; one that is still
+    /// starting, or that hands the message to a running Outlook and stops, did.
+    #[test]
+    #[cfg(unix)]
+    fn the_new_outlook_failing_at_startup_is_reported() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("pdfcraft-mail-olk-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = |name: &str, body: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+        let file = dir.join("Invoice.pdf");
+        std::fs::write(&file, b"%PDF-1.4").unwrap();
+        let mut c = compose();
+        c.path = file;
+        let limits = Limits { answer: Duration::from_secs(10), settle: Duration::from_millis(400), detect: Duration::from_secs(1) };
+        let message = dir.join("sent").join("Invoice.eml");
+        assert!(matches!(open_message_file_within(&fake("fails", "exit 3"), &message, &c, limits), Some(Why::Failed(_))));
+        assert_eq!(open_message_file_within(&fake("hands-over", "exit 0"), &message, &c, limits), None);
+        assert_eq!(open_message_file_within(&fake("starting", "sleep 3"), &message, &c, limits), None);
+        assert!(matches!(open_message_file_within(&dir.join("missing"), &message, &c, limits), Some(Why::Failed(_))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_file_that_cannot_be_run_is_not_the_program() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("pdfcraft-mail-runnable-{}", std::process::id()));
+        let (first, second) = (base.join("a"), base.join("b"));
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(first.join("xdg-email"), "#!/bin/sh\n").unwrap();
+        std::fs::write(second.join("xdg-email"), "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(first.join("xdg-email"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(second.join("xdg-email"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::join_paths([&first, &second]).unwrap();
+        assert_eq!(find_program(&path, "xdg-email"), Some(second.join("xdg-email")), "the one that can't run is skipped");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn unsent_messages_never_share_or_overwrite_a_path() {
+        let root = std::env::temp_dir().join(format!("pdfcraft-mail-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let wanted = root.join("Invoice.eml");
+        let first = write_message(&wanted, b"one").unwrap();
+        let second = write_message(&wanted, b"two").unwrap();
+        assert_ne!(first, second);
+        assert_eq!(first.file_name(), wanted.file_name(), "the name is kept");
+        assert_eq!(std::fs::read(&first).unwrap(), b"one");
+        assert_eq!(std::fs::read(&second).unwrap(), b"two");
+        // A file planted at the wanted name is left alone.
+        std::fs::write(&wanted, b"planted").unwrap();
+        write_message(&wanted, b"three").unwrap();
+        assert_eq!(std::fs::read(&wanted).unwrap(), b"planted");
+        // Folders over a day old go; new ones stay.
+        let other = root.join("someone-else");
+        std::fs::create_dir(&other).unwrap();
+        prune(&root, "", LEFT_FOR);
+        assert!(first.exists() && second.exists(), "new folders stay");
+        prune(&root, "pdfcraft-", Duration::ZERO);
+        assert!(first.exists() && other.exists(), "only names with the prefix");
+        prune(&root, "", Duration::ZERO);
+        assert!(!first.exists() && !second.exists() && !other.exists());
+        assert!(wanted.exists(), "a file, not a folder, is not pruned");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The AppleScript for Mail compiles (`osacompile` reads Mail's dictionary without starting it).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_mail_script_compiles() {
+        use std::io::Write;
+        let mut c = compose();
+        c.to = vec!["ap@example.org".into()];
+        c.body = "Line one\nLine \"two\"".into();
+        let plan = plan_for("macos", &DefaultMail::AppleMail, &c).unwrap();
+        let script = run_of(&plan).2.unwrap().to_string();
+        let out = std::env::temp_dir().join(format!("pdfcraft-mail-{}.scpt", std::process::id()));
+        let mut child = Command::new("/usr/bin/osacompile").arg("-o").arg(&out).stdin(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+        let done = child.wait_with_output().unwrap();
+        let _ = std::fs::remove_file(&out);
+        assert!(done.status.success(), "{script}\n{}", String::from_utf8_lossy(&done.stderr));
+    }
+
+    /// Finding the default runs the system's own tools and never fails: whatever it finds (or
+    /// not) is a default. `--no-capture` prints it.
+    #[test]
+    fn this_computers_default_is_found_without_failing() {
+        let found = detect();
+        println!("default email program here: {found:?}");
+        let c = compose();
+        let os = std::env::consts::OS;
+        if matches!(os, "macos" | "windows" | "linux" | "freebsd" | "openbsd" | "netbsd" | "dragonfly") {
+            println!("plan here: {:?}", plan_for(os, &found, &c).map(|p| p.program));
+        }
+    }
+}

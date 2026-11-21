@@ -5,8 +5,10 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod attachment;
 pub mod crypto_env;
 pub mod desktop_theme;
+pub mod mail;
 pub mod owner_only;
 pub mod staging;
 pub mod zone;
