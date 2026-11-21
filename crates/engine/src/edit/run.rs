@@ -573,6 +573,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_organize::duplicate_pages(doc, pages, *at)?
         }
         Edit::SpawnTemplate { name, at, rename } => {
+            // A spawned page is a copy as Duplicate Pages makes one (#7919).
+            if !cx.redaction_marks.is_empty() {
+                return Err(EditError::Invalid(
+                    "a batch that applies redactions can't also add pages from a template: the new pages can't be checked against the marks; the document was not changed"
+                        .into(),
+                ));
+            }
             pdfcraft_organize::spawn_template(doc, name, *at, *rename)?;
         }
         Edit::SetTemplateHidden { name, hidden } => pdfcraft_organize::set_template_hidden(doc, name, *hidden)?,
