@@ -260,6 +260,36 @@ fn find_can_jump_from_the_fiftieth_match_to_the_first() {
     assert!(h.ctx.memory(|memory| memory.has_focus(h.state().views[0].find_input_id())));
 }
 
+#[test]
+fn escape_closes_the_palette_opened_from_the_find_match_number() {
+    let mut h = harness();
+    h.ctx.set_os(egui::os::OperatingSystem::Nix);
+    h.state_mut().active = Some(0);
+    h.state_mut().set_option("find", "PAGE").unwrap();
+    crate::support::wait_until(&mut h, "all 15 Find matches", |app| app.views[0].find.as_ref().is_some_and(|find| find.matches.len() == 15));
+
+    let press = |h: &mut Harness<'static, PdfCraftApp>, key, modifiers| {
+        for pressed in [true, false] {
+            h.input_mut().events.push(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers });
+        }
+        let ctx = h.ctx.clone();
+        let mut raw = std::mem::take(h.input_mut());
+        h.state_mut().prepare_raw_input(&ctx, &mut raw);
+        *h.input_mut() = raw;
+        h.step();
+    };
+    let query_id = h.state().views[0].find_input_id();
+    let number_id = query_id.with("match-number");
+    press(&mut h, egui::Key::Tab, egui::Modifiers::NONE);
+    assert!(h.ctx.memory(|memory| memory.has_focus(number_id)));
+    press(&mut h, egui::Key::K, egui::Modifiers { ctrl: true, command: true, ..egui::Modifiers::NONE });
+    assert!(h.state().palette_open, "Ctrl+K opens the palette from the match number");
+    press(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
+    assert!(!h.state().palette_open, "Escape closes the palette on the next frame");
+    assert!(!h.ctx.memory(|memory| memory.has_focus(query_id)), "Find did not take focus from the palette");
+    assert!(h.state().views[0].find.is_some(), "Escape leaves the Find bar open");
+}
+
 /// #2669: ⌘G and ⇧⌘G step through the matches while the find field still has the focus.
 #[test]
 fn find_shortcuts_work_from_the_find_field() {

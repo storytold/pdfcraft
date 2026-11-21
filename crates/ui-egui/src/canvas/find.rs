@@ -1,5 +1,7 @@
 use super::{Align2, Color32, CornerRadius, DocView, Range, Rect, Stroke, Tokens, ViewAction, icons, theme, vec2, widgets};
 
+use crate::page_keys::PageKeys;
+
 /// The find bar (⌘F): query, matches across the document, current match.
 #[derive(Default)]
 pub struct Find {
@@ -272,7 +274,7 @@ impl DocView {
 /// Acrobat-style floating find bar at the top-right of the document area. In Edit text mode
 /// (`editing`) it offers a Replace row: Replace changes the highlighted match, Replace all every
 /// match, each inside its own paragraph.
-pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bool, ui: &mut egui::Ui, t: &Tokens) {
+pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bool, keys: PageKeys, ui: &mut egui::Ui, t: &Tokens) {
     let Some(find) = view.find.as_mut() else { return };
     // The Search panel shows this search.
     if find.in_panel {
@@ -299,7 +301,12 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bo
                     ui.horizontal(|ui| {
                         ui.add(icons::image("search", 16.0, t.text_muted));
                         let query_id = find_input_id(view.pane.key);
-                        let editing_number = find.match_number.is_some();
+                        let number_id = query_id.with("match-number");
+                        // Escape can clear egui's focus before widgets draw. Keep the draft only
+                        // if the number field still owns these keys, including that Escape frame.
+                        let editing_number = find.match_number.is_some()
+                            && !keys.over()
+                            && ui.memory(|m| m.focused().map_or_else(|| m.had_focus_last_frame(number_id), |id| id == number_id));
                         let edit = egui::TextEdit::singleline(&mut find.query)
                             .id(query_id)
                             .hint_text(tl!("Find text"))
@@ -341,12 +348,12 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bo
                                     if !left.is_empty() {
                                         ui.label(status_text(crate::i18n::fmt(left, &args)));
                                     }
-                                    let mut draft = find.match_number.take().unwrap_or(current);
+                                    let mut draft = find.match_number.take().filter(|_| editing_number).unwrap_or(current);
                                     let width = ui.fonts_mut(|fonts| fonts.glyph_width(&status_font, '0') * total.len() as f32 + 4.0);
                                     let r = ui
                                         .add(
                                             egui::TextEdit::singleline(&mut draft)
-                                                .id(query_id.with("match-number"))
+                                                .id(number_id)
                                                 .font(status_font.clone())
                                                 .text_color(t.text_muted)
                                                 .align(Align2::RIGHT_CENTER)
@@ -356,9 +363,9 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bo
                                                 .frame(egui::Frame::NONE),
                                         )
                                         .accessible_name(tl!("Match number"));
-                                    let mut select = r.gained_focus();
+                                    let mut select = !keys.over() && r.gained_focus();
                                     widgets::focus_selecting_all(ui, &r, &draft, &mut select);
-                                    if editing_number && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                                    if editing_number && keys.take(ui.ctx(), egui::Key::Escape) {
                                         ui.memory_mut(|memory| memory.request_focus(query_id));
                                     } else if editing_number && r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                                         jump = draft
@@ -366,7 +373,7 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bo
                                             .ok()
                                             .filter(|_| draft.bytes().all(|byte| byte.is_ascii_digit()))
                                             .and_then(|number| number.checked_sub(1));
-                                    } else if r.has_focus() {
+                                    } else if !keys.over() && r.has_focus() {
                                         find.match_number = Some(draft);
                                     }
                                     if !right.is_empty() {
