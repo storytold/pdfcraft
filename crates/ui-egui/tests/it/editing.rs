@@ -7594,6 +7594,8 @@ fn private_new_chinese_keyboard_input_preserves_font_layout_and_saved_pixels() {
 #[test]
 fn moving_text_offers_the_four_way_arrow() {
     let mut h = harness(2, |_| {});
+    // Keep the moved paragraph clear of the window's lower edge.
+    h.set_option("zoom", "75").unwrap();
     assert!(h.execute("edit.edit_text"));
     h.run_steps(2);
     let id = h.state().views[0].id;
@@ -8901,6 +8903,8 @@ fn paste_press_and_release_delivers_single_image() {
 #[test]
 fn paste_at_context_menu_point_centers_on_cursor() {
     let (mut h, _copies) = clipboard_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec());
+    // Keep the context-menu point clear of the window's lower edge.
+    h.set_option("zoom", "75").unwrap();
     assert!(h.execute("edit.edit_text"));
     h.run_steps(2);
 
