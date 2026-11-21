@@ -3250,6 +3250,112 @@ fn a_typed_password_value_survives_save_and_mark_saved() {
     assert!(!appears_in_pdf(&s.save_bytes(id).unwrap(), "hunter2"), "the next save still omits it");
 }
 
+/// #7891: a filled Password field that Flatten or Delete Field takes out of the form is still an
+/// edited object, which an incremental save writes whether or not the form reaches it. Its value
+/// goes in no file all the same: Save, a full rewrite or a recovery snapshot.
+#[test]
+fn a_password_value_is_not_saved_after_its_field_leaves_the_form() {
+    const SECRET: &str = "SECRET-MARKER-1";
+    let fixture = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (pw) /Ff 8192 /Rect [20 20 180 50] /P 3 0 R /DA (/Helv 10 Tf 0 g) >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ]);
+    for (what, unlink) in [("Flatten", Edit::Flatten { comments: false, fields: true }), ("Delete Field", Edit::DeleteField { name: "pw".into() })] {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("form.pdf", None, Arc::new(fixture.clone()), None).unwrap();
+        s.apply(id, Edit::SetFieldValue { name: "pw".into(), value: FieldValue::Text(SECRET.into()) }).unwrap();
+        s.apply(id, unlink).unwrap();
+        assert!(s.get(id).unwrap().form.iter().all(|f| f.name != "pw"), "{what}: the field has left the form");
+        let saved = s.save_bytes(id).unwrap();
+        assert!(saved.starts_with(&fixture), "{what}: an incremental save");
+        assert!(!appears_in_pdf(&saved, SECRET), "{what}: Save");
+        assert!(!appears_in_pdf(&s.save_full_bytes(id).unwrap(), SECRET), "{what}: a full rewrite");
+        for snap in s.autosave_snapshots() {
+            assert!(!appears_in_pdf(&snap.bytes, SECRET), "{what}: the recovery snapshot");
+        }
+    }
+}
+
+/// #7891 review: a kid whose own `/FT` or `/Ff` is `null` inherits its parent's, as the field
+/// reader reads it, so a Password text field built that way is still found once it has left the
+/// form, and its value goes in no file.
+#[test]
+fn a_password_value_inherited_past_a_null_entry_is_not_saved_after_its_field_leaves_the_form() {
+    const SECRET: &str = "SECRET-MARKER-2";
+    for (case, kid_key) in [("/FT null", "/FT null"), ("/Ff null", "/Ff null")] {
+        let fixture = pdf_of(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".into(),
+            format!("<< /Type /Annot /Subtype /Widget /Parent 6 0 R /T (kid) {kid_key} /Rect [20 20 180 50] /P 3 0 R /DA (/Helv 10 Tf 0 g) >>"),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+            "<< /FT /Tx /T (pw) /Ff 8192 /Kids [4 0 R] >>".into(),
+        ]);
+        for (what, unlink) in
+            [("Flatten", Edit::Flatten { comments: false, fields: true }), ("Delete Field", Edit::DeleteField { name: "pw.kid".into() })]
+        {
+            let mut s = Session::new().with_clock(|| 1_700_000_000);
+            let id = s.open("form.pdf", None, Arc::new(fixture.clone()), None).unwrap();
+            assert!(s.get(id).unwrap().form.iter().any(|f| f.name == "pw.kid"), "{case}: the kid is a field");
+            s.apply(id, Edit::SetFieldValue { name: "pw.kid".into(), value: FieldValue::Text(SECRET.into()) }).unwrap();
+            s.apply(id, unlink).unwrap();
+            assert!(s.get(id).unwrap().form.iter().all(|f| f.name != "pw.kid"), "{case}, {what}: the field has left the form");
+            assert!(!appears_in_pdf(&s.save_bytes(id).unwrap(), SECRET), "{case}, {what}: Save");
+            assert!(!appears_in_pdf(&s.save_full_bytes(id).unwrap(), SECRET), "{case}, {what}: a full rewrite");
+            for snap in s.autosave_snapshots() {
+                assert!(!appears_in_pdf(&snap.bytes, SECRET), "{case}, {what}: the recovery snapshot");
+            }
+        }
+    }
+}
+
+/// #7891 review: a kid that a Password text field lists in `/Kids` but that has no `/Parent` of
+/// its own inherits `/FT` and `/Ff` through that listing, as the field reader reads it. Once
+/// Flatten has taken it out of the form the listing is gone too, and its value still goes in no
+/// file.
+#[test]
+fn a_password_value_inherited_through_kids_alone_is_not_saved_after_its_field_leaves_the_form() {
+    const SECRET: &str = "SECRET-MARKER-3";
+    let widget = "<< /Type /Annot /Subtype /Widget /T (kid) /Rect [20 20 180 50] /P 3 0 R /DA (/Helv 10 Tf 0 g) >>";
+    // One listing, and two: the Password field lists a field with no `/Parent` that lists the kid
+    // (review on #7943). Only the lower listing is edited when the kid leaves the form.
+    let shapes: [(&str, Vec<String>); 2] = [
+        ("one /Kids step", vec!["<< /FT /Tx /T (pw) /Ff 8192 /Kids [4 0 R] >>".into()]),
+        ("two /Kids steps", vec!["<< /FT /Tx /T (pw) /Ff 8192 /Kids [7 0 R] >>".into(), "<< /T (mid) /Kids [4 0 R] >>".into()]),
+    ];
+    for (case, fields) in shapes {
+        let mut objects: Vec<String> = vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".into(),
+            widget.into(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        ];
+        objects.extend(fields);
+        // Only Flatten: Delete Field leaves such a kid in the form (#8027), where its value is
+        // read and cleared as any linked Password field's is.
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("form.pdf", None, Arc::new(pdf_of(&objects)), None).unwrap();
+        // Named from its own `/T` (no `/Parent` to prefix), typed and flagged through the listing.
+        let kid = s.get(id).unwrap().form.iter().find(|f| f.name == "kid").cloned().expect("the kid is a field");
+        assert!(kid.flags & (1 << 13) != 0, "{case}: the kid inherits the Password flag through /Kids");
+        s.apply(id, Edit::SetFieldValue { name: "kid".into(), value: FieldValue::Text(SECRET.into()) }).unwrap();
+        s.apply(id, Edit::Flatten { comments: false, fields: true }).unwrap();
+        assert!(s.get(id).unwrap().form.iter().all(|f| f.name != "kid"), "{case}: the field has left the form");
+        // Taken while the edits are unsaved, so there is one to read.
+        let snapshots = s.autosave_snapshots();
+        assert!(!snapshots.is_empty(), "{case}: an unsaved document has a recovery snapshot");
+        for snap in snapshots {
+            assert!(!appears_in_pdf(&snap.bytes, SECRET), "{case}: the recovery snapshot");
+        }
+        assert!(!appears_in_pdf(&s.save_bytes(id).unwrap(), SECRET), "{case}: Save");
+        assert!(!appears_in_pdf(&s.save_full_bytes(id).unwrap(), SECRET), "{case}: a full rewrite");
+    }
+}
+
 /// #3926 / #3943 review: signing writes the signed file from the same copy a save does, so a
 /// typed Password-field value is not signed into the file either.
 #[test]

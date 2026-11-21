@@ -823,9 +823,101 @@ pub(crate) fn has_password_flag(doc: &Document) -> bool {
     false
 }
 
-/// Whether any text field with the Password flag holds a value in `doc`.
+/// Edited dictionaries that are text fields with the Password flag (inherited or their own), or
+/// widgets of one, and hold a `/V` of their own, but that [`fields`] no longer reaches (#7891):
+/// a field flattened into its page or deleted leaves the form, yet the edit that filled it stays,
+/// and an incremental save writes every edited object, reachable or not. Only edits are looked
+/// at: what the opened file already holds is in it already. Nothing reads such a value any more,
+/// so it goes whole, `/DV` or not.
+fn unlinked_password_values(doc: &Document) -> Vec<ObjRef> {
+    const MAX_FIELD_DEPTH: usize = 64;
+    let edited = doc.modified_objects();
+    let candidates: Vec<ObjRef> = edited
+        .iter()
+        .map(|num| ObjRef::new(*num, doc.generation(*num)))
+        .filter(|r| doc.get(*r).as_dict().is_some_and(|d| d.get(b"V").is_some()))
+        .collect();
+    if candidates.is_empty() {
+        return candidates;
+    }
+    let kids_in = |d: &Dict| d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+    // A kid with no `/Parent` of its own still inherits from the field that lists it in `/Kids`,
+    // as the field reader reads it (#7979). Unlinking it edits that listing, so the edited objects
+    // as the opened file had them say which field listed it; a listing further up that nothing
+    // edited is in the form's tree as it is now. The opened file's listing comes first; it only
+    // says which field listed the kid, and that field's flags are read as they are now.
+    let mut listed_by: std::collections::HashMap<ObjRef, (ObjRef, Dict)> = std::collections::HashMap::new();
+    for (parent, original) in doc.scan_original_objects_subset(edited) {
+        let Some(d) = original.ok().and_then(|o| o.as_dict().cloned()) else { continue };
+        for kid in kids_in(&d).iter().filter_map(Object::as_ref) {
+            listed_by.entry(kid).or_insert_with(|| (parent, d.clone()));
+        }
+    }
+    let top = acroform(doc).and_then(|af| af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned())).unwrap_or_default();
+    let mut stack: Vec<(ObjRef, usize)> = top.iter().filter_map(Object::as_ref).map(|r| (r, 0)).collect();
+    let mut seen = std::collections::HashSet::new();
+    while let Some((r, depth)) = stack.pop() {
+        if depth > MAX_FIELD_DEPTH || !seen.insert(r) {
+            continue;
+        }
+        let Some(d) = doc.get(r).as_dict().cloned() else { continue };
+        for kid in kids_in(&d).iter().filter_map(Object::as_ref) {
+            listed_by.entry(kid).or_insert_with(|| (r, d.clone()));
+            stack.push((kid, depth + 1));
+        }
+    }
+    let is_password_text = |r: ObjRef| {
+        // Up the `/Parent` chain; where it ends, on from the field that listed its top, and so on,
+        // never through a dictionary twice. The field reader reads fields at depths 0 to
+        // MAX_FIELD_DEPTH and their widgets one below, so no path it inherits along holds more
+        // than MAX_CHAIN dictionaries; the walk stops there in total, whatever mix of `/Parent`
+        // and `/Kids` steps it took.
+        const MAX_CHAIN: usize = MAX_FIELD_DEPTH + 2;
+        let mut dicts: Vec<Dict> = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        let mut next = Some((r, None::<Dict>));
+        'walk: while let Some((start, listed)) = next.take() {
+            let chain = field_chain(doc, start);
+            for (i, c) in chain.iter().enumerate() {
+                if visited.len() >= MAX_CHAIN {
+                    break 'walk;
+                }
+                if !visited.insert(*c) {
+                    break;
+                }
+                // Flags as they are now, the way the field reader inherits them: a listing field
+                // that gained the Password flag in this session has it. Only a listing field that
+                // is no longer a dictionary (deleted with its kid) is read as it listed the kid.
+                let d = doc.get(*c).as_dict().cloned().or_else(|| if i == 0 { listed.clone() } else { None });
+                dicts.extend(d);
+            }
+            next = chain.last().and_then(|top| listed_by.get(top)).filter(|(p, _)| !visited.contains(p)).map(|(p, d)| (*p, Some(d.clone())));
+        }
+        // Inherited as the field reader inherits them: a `/FT` that isn't a name, or an `/Ff`
+        // that isn't a valid number (`null` included), is skipped and the parent's value applies.
+        let text = dicts.iter().find_map(|d| d.name(b"FT").map(<[u8]>::to_vec)).is_some_and(|ft| ft == b"Tx");
+        let password = dicts.iter().find_map(|d| field_flags(doc, d)).is_some_and(|ff| ff & flags::PASSWORD != 0);
+        text && password
+    };
+    let mut found: Vec<ObjRef> = candidates.into_iter().filter(|r| is_password_text(*r)).collect();
+    if found.is_empty() {
+        return found;
+    }
+    // The fields still in the form, their ancestors and their widgets: `password_fields` and
+    // `clear_password_values` decide for those (a value at its default stays, a shared one too).
+    let mut linked = std::collections::HashSet::new();
+    for f in fields(doc) {
+        linked.extend(field_chain(doc, f.obj));
+        linked.extend(f.widgets.iter().map(|w| w.obj));
+    }
+    found.retain(|r| !linked.contains(r));
+    found
+}
+
+/// Whether any text field with the Password flag holds a value in `doc`, including one an edit
+/// left outside the form (#7891).
 pub fn has_password_values(doc: &Document) -> bool {
-    !password_fields(doc).is_empty()
+    !password_fields(doc).is_empty() || !unlinked_password_values(doc).is_empty()
 }
 
 /// The typed values of the text fields with the Password flag, as (name, text) pairs, for
@@ -878,12 +970,19 @@ fn field_chain(doc: &Document, r: ObjRef) -> Vec<ObjRef> {
 /// A value can sit on the field, on one of its widgets, or on an ancestor it inherits from
 /// (`/V` is inheritable). Each is removed; an ancestor's only when every field inheriting from it
 /// is such a password field. Where an ancestor's value is shared with other fields and stays, the
-/// password field gets an empty value of its own so it no longer inherits it. Returns how many
-/// fields were cleared.
+/// password field gets an empty value of its own so it no longer inherits it. An edited password
+/// field or widget the form no longer reaches (flattened or deleted, #7891) loses its `/V`.
+/// Returns how many fields and such dictionaries were cleared.
 pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
+    let unlinked = unlinked_password_values(doc);
+    for r in &unlinked {
+        doc.update_dict(*r, |d| {
+            d.remove(b"V");
+        })?;
+    }
     let targets = password_fields(doc);
     if targets.is_empty() {
-        return Ok(0);
+        return Ok(unlinked.len());
     }
     let is_password = |f: &Field| f.kind == FieldKind::Text && f.has(flags::PASSWORD);
     // Each field's ancestors, found once: only values change below, never `/Parent` (#3943
@@ -923,7 +1022,7 @@ pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
         }
         redraw(doc, f, &restored, &mut NoScripts)?;
     }
-    Ok(targets.len())
+    Ok(targets.len().saturating_add(unlinked.len()))
 }
 
 /// Whether `field`'s `key` (`/V` or `/DV`, its own or inherited) is a stream with data, which

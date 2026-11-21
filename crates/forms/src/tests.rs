@@ -5774,6 +5774,89 @@ fn a_password_field_nested_beyond_depth_32_is_recognized() {
     assert!(!has_password_values(&doc));
 }
 
+/// A kid that only its parent's `/Kids` lists inherits the Password flag the parent gained in
+/// this session, so its value is scrubbed once it leaves the form (#7891): the flags come from
+/// the parent as it is now, not as the opened file had it.
+#[test]
+fn an_unlinked_kid_inherits_the_password_flag_its_lister_gained_in_the_session() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /FT /Tx /T (account) /Kids [6 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /T (pin) /Rect [50 600 150 620] /P 3 0 R >>".into(),
+    ]);
+    let (parent, kid) = (ObjRef::new(5, 0), ObjRef::new(6, 0));
+    doc.update_dict(parent, |d| {
+        d.set(b"Ff".to_vec(), Object::Int(i64::from(flags::PASSWORD)));
+        d.remove(b"Kids");
+    })
+    .unwrap();
+    doc.update_dict(kid, |d| d.set(b"V".to_vec(), PdfString::text("secret"))).unwrap();
+    assert!(has_password_values(&doc), "the kid's value was not seen as a password");
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert!(doc.get(kid).as_dict().is_some_and(|d| d.get(b"V").is_none()), "the kid kept its value");
+    assert!(!has_password_values(&doc));
+}
+
+/// A widget `depth` levels below a Password field `/FT /Tx /Ff 8192` in `/Fields`, through fields
+/// that point at their parent with `/Parent`, except two steps that only the parent's `/Kids`
+/// make: the widget's own and the one at level 40. Objects: 5 is the Password field, 5 + i the
+/// field at level i, 5 + `depth` the widget.
+fn password_widget_below(depth: u32) -> Document {
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /FT /Tx /Ff 8192 /T (g) /Kids [6 0 R] >>".into(),
+    ];
+    for i in 1..depth {
+        let parent = if i == 40 { String::new() } else { format!(" /Parent {} 0 R", 4 + i) };
+        objs.push(format!("<< /T (n{i}) /Kids [{} 0 R]{parent} >>", 6 + i));
+    }
+    objs.push("<< /Type /Annot /Subtype /Widget /Rect [50 600 150 620] /P 3 0 R >>".into());
+    document(&objs)
+}
+
+/// Unlink the widget [`password_widget_below`] made from its field and give it a value of its
+/// own, as a Delete Field or Flatten edit leaves it.
+fn unlink_with_a_value(doc: &mut Document, depth: u32) {
+    doc.update_dict(ObjRef::new(4 + depth, 0), |d| {
+        d.remove(b"Kids");
+    })
+    .unwrap();
+    doc.update_dict(ObjRef::new(5 + depth, 0), |d| d.set(b"V".to_vec(), PdfString::text("secret"))).unwrap();
+}
+
+/// The walk up from an unlinked widget, through `/Parent` and `/Kids` steps alike, reaches as far
+/// as the field reader inherits (#7891): the deepest widget the reader reads as a Password
+/// field's widget is scrubbed, and one a level deeper, which the reader doesn't read, isn't taken
+/// for a password, however the steps above it mix.
+#[test]
+fn the_walk_to_an_unlinked_widgets_password_flag_stops_where_the_field_reader_does() {
+    // Fields at depths 0 to 64 and their widgets one below: the widget at 65 is a Password
+    // field's, through 66 dictionaries.
+    let deepest = 65;
+    let mut doc = password_widget_below(deepest);
+    let widget = ObjRef::new(5 + deepest, 0);
+    let read = fields(&doc);
+    let field = read.iter().find(|f| f.widgets.iter().any(|w| w.obj == widget));
+    assert!(field.is_some_and(|f| f.flags & flags::PASSWORD != 0), "the reader no longer reads the widget at {deepest}: {read:?}");
+    unlink_with_a_value(&mut doc, deepest);
+    assert!(has_password_values(&doc), "the widget at {deepest} was not seen as a password's");
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert!(doc.get(widget).as_dict().is_some_and(|d| d.get(b"V").is_none()), "the widget at {deepest} kept its value");
+
+    let past = deepest + 1;
+    let mut doc = password_widget_below(past);
+    let widget = ObjRef::new(5 + past, 0);
+    assert!(fields(&doc).iter().all(|f| f.widgets.iter().all(|w| w.obj != widget)), "the reader reads the widget at {past}");
+    unlink_with_a_value(&mut doc, past);
+    assert!(!has_password_values(&doc), "the walk went past the {} dictionaries the reader inherits along", deepest + 1);
+}
+
 /// A password field whose widget is reachable through a page's Annots and whose inherited Password
 /// flag is deeper than 32 levels is recognized by `has_password_flag`.
 #[test]
