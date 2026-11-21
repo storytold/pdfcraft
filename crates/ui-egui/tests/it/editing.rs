@@ -7100,7 +7100,6 @@ fn cropped_image_corner_resize_keeps_opposite_corner_and_scales_crop() {
 
 /// While a corner is dragged, the image's pixels are drawn in the blue frame, not left at their
 /// old size until release (#1671).
-#[ignore = "known gap of the egui-to-craft port: see docs/port-known-gaps.md"]
 #[test]
 fn image_pixels_follow_the_frame_while_a_corner_is_dragged() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|cc| {
