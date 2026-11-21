@@ -59,28 +59,37 @@ fn a_zero_width_line_is_one_device_pixel() {
 }
 
 /// Under `160 0 0 400 cm` (the report's synthetic page) a horizontal line is `400 w` pixels
-/// thick and a vertical one `160 w` wide, each from the device minimum up. The minimum is one
-/// pixel along the larger scale; a vertical line thinner than that on the smaller one is still
-/// drawn.
+/// thick and a vertical one `160 w` wide, each from the device minimum up. The minimum is taken
+/// along the direction the matrix shrinks most, so a vertical line is at least one pixel wide,
+/// and a horizontal one at least 400 / 160 = 2.5 pixels thick: the same width in user space.
 #[test]
 fn a_thin_line_under_a_squeezed_matrix_scales_with_its_width() {
     for w in WIDTHS {
         let got = thickness_across(&format!("q 160 0 0 400 0 0 cm {w} w 0.025 0.05 m 0.225 0.05 l S Q"), 20);
-        let want = (w * 400.0).max(1.0);
+        let want = (w * 400.0).max(2.5);
         assert!(near(got, want), "horizontal, width {w}: {got} px thick, want {want}");
     }
     // Device x = 160 × 0.125 = 20, from y = 4 to 36.
     let along = |w: f32| thickness_along(&format!("q 160 0 0 400 0 0 cm {w} w 0.125 0.01 m 0.125 0.09 l S Q"), 20);
-    for w in [0.005, 0.0099, 0.02] {
-        let (got, want) = (along(w), w * 160.0);
+    for w in WIDTHS {
+        let (got, want) = (along(w), (w * 160.0).max(1.0));
         assert!(near(got, want), "vertical, width {w}: {got} px wide, want {want}");
     }
-    // Zero and 0.001 are drawn, at least as wide as the larger scale's one pixel shrunk to the
-    // smaller (0.4 px), and no wider than a pixel.
-    for w in [0.0, 0.001] {
-        let got = along(w);
-        assert!((0.3..=1.3).contains(&got), "vertical, width {w}: {got} px wide");
-    }
+}
+
+/// ISO 32000-2 §8.4.3.2: a width of 0 is "the thinnest line that can be rendered at device
+/// resolution: 1 device pixel wide", whichever way the line runs. Under `400 0 0 100 cm` a
+/// minimum taken along the larger scale alone drew a horizontal zero-width line
+/// (1 / 400) × 100 = 0.25 pixels thick, so faint it could vanish; it is one pixel thick, and a
+/// vertical one is as wide as the same user-space width is on that axis, 4 pixels.
+#[test]
+fn a_zero_width_line_is_one_pixel_across_under_an_uneven_matrix() {
+    // Device y = 100 × 0.2 = 20, from x = 4 to 36.
+    let got = thickness_across("q 400 0 0 100 0 0 cm 0 w 0.01 0.2 m 0.09 0.2 l S Q", 20);
+    assert!(near(got, 1.0), "horizontal: {got} px thick, want 1");
+    // Device x = 400 × 0.05 = 20, from y = 4 to 36.
+    let got = thickness_along("q 400 0 0 100 0 0 cm 0 w 0.05 0.04 m 0.05 0.36 l S Q", 20);
+    assert!(near(got, 4.0), "vertical: {got} px wide, want 4");
 }
 
 /// Widths at and above the old floor's reach draw as before: one pixel up to a pixel, the width
