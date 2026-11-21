@@ -7,6 +7,7 @@ use craft::behavior::IconId;
 use craft::behavior::{DisplayOrder, ItemSource, SizeHint};
 use craft::keymap::CommandRef;
 use craft::theme::variant::Tone;
+use craft::theme::TypeRole;
 use craft::ui::buttons::{Button, IconButton};
 use craft::ui::contract::{ActivateOn, CollectionEvent, Pad, Props as _, Show as _, ShowCollection as _, ShowContainer as _, clicked};
 use craft::ui::display::{PictureSize, Text};
@@ -118,7 +119,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .offers_new(false)
         .drop_hint(tl!("Files you open in PdfCraft appear here").to_string())
         .section(StartPlace::BeforeRecent, |ui, _| {
-            let _ = Text::new(tl!("Welcome to PdfCraft").to_string()).show(ui);
+            let _ = Text::new(tl!("Welcome to PdfCraft").to_string()).role(TypeRole::Display).show(ui);
             let _ = Text::new(tl!("An open-source PDF workbench — local, private, and scriptable.").to_string()).show(ui);
             if community_card {
                 Stack::new().label(tl!("Join the ArtCraft community")).fill_width().surface(SurfaceKind::Raised).pad(Pad::Regular).show(
@@ -126,7 +127,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     |ui, _| {
                         Row::new().show(ui, |ui, _| {
                             brand::mark(ui, PictureSize::Thumb(ThumbSize::Medium));
-                            let _ = Text::new(tl!("Join the ArtCraft community").to_string()).show(ui);
+                            let _ = Text::new(tl!("Join the ArtCraft community").to_string()).role(TypeRole::Heading).show(ui);
                             if clicked(&IconButton::new(IconId::new("x")).id_salt("community-close").label(tl!("Close")).show(ui)) {
                                 asked.borrow_mut().push(Asked::CloseCommunityCard);
                             }
@@ -143,9 +144,9 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     },
                 );
             }
-            let _ = Text::new(tl!("Recommended tools").to_string()).show(ui);
+            let _ = Text::new(tl!("Recommended tools").to_string()).role(TypeRole::Heading).show(ui);
             tool_grid(ui, tl!("Recommended tools"), &recommended, false, &asked);
-            let _ = Text::new(tl!("Pinned Tools").to_string()).show(ui);
+            let _ = Text::new(tl!("Pinned Tools").to_string()).role(TypeRole::Heading).show(ui);
             if Button::new(tl!("Pin a tool…").to_string()).id_salt("pin-a-tool").show(ui).clicks > 0 {
                 asked.borrow_mut().push(Asked::PinTools);
             }
@@ -156,7 +157,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             }
         })
         .section(StartPlace::AfterSections, |ui, _| {
-            let _ = Text::new(tl!("Privacy").to_string()).show(ui);
+            let _ = Text::new(tl!("Privacy").to_string()).role(TypeRole::Heading).show(ui);
             let _ =
                 Text::new(tl!("PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.").to_string())
                     .show(ui);

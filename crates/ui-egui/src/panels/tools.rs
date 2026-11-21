@@ -2,6 +2,8 @@ use craft::behavior::{DisplayOrder, IconId, ItemSource, Selection};
 use craft::ui::buttons::Button;
 use craft::ui::choice::{Checkbox, Segmented};
 use craft::ui::contract::{ActivateOn, Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, Sizing};
+use craft::ui::display::Badge;
+use craft::theme::{Variant, variant::{Emphasis, Tone}};
 use craft::ui::list::{HueTarget, List, ListRow, RowEvent, RowInk, TrailingFace, TrailingPart};
 use craft::ui::primitives::IconSpec;
 use craft::ui::style::DataColor;
@@ -140,7 +142,8 @@ fn item_row(g: &'static ToolGroup, item: &'static ToolItem) -> ListRow<'static> 
         Availability::Planned(m) => m,
         Availability::Provider => "AI",
     };
-    let row = ListRow::new(tl!(item.label).to_owned()).icon(IconSpec::svg(IconId::new(item.icon))).trailing(tl!(chip).to_owned());
+    let badge = Badge::new(tl!(chip).to_owned()).variant(Variant::look(Emphasis::Soft, if ready { Tone::Good } else { Tone::Neutral }));
+    let row = ListRow::new(tl!(item.label).to_owned()).icon(IconSpec::svg(IconId::new(item.icon))).trailing_field(badge, |_| {});
     if ready {
         row.hue(data_hue(g), HueTarget::Icon).tooltip(format!("{} — {}", tl!(item.label), item.command))
     } else {

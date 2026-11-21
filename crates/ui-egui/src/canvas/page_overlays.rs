@@ -524,8 +524,8 @@ impl Component for PageOverlays<'_> {
             [Tone::Neutral, Tone::Accent, Tone::Info, Tone::Good, Tone::Warn, Tone::Bad].into_iter().map(|tone| (tone, cx.tone(tone))).collect();
         PageOverlaysStyle {
             metrics: Metrics::new(),
-            field_fill: cx.color(colors.status.info.bg),
-            field_edge: cx.color(colors.status.info.border),
+            field_fill: cx.color(colors.status.info.solid),
+            field_edge: cx.color(colors.status.info.solid),
             required_edge: cx.color(colors.status.bad.solid),
             flash: cx.color(colors.accent.solid),
             tab_fill: cx.color(colors.accent.solid),
@@ -595,7 +595,7 @@ impl PageOverlays<'_> {
                 } else {
                     (PaintShape::Rect(rect, CornerRadius::ZERO), PaintShape::Rect(rect, CornerRadius::ZERO))
                 };
-                draw.fill(&shape, style.field_fill);
+                draw.faded(48.0 / 255.0, |draw| draw.fill(&shape, style.field_fill));
                 draw.stroke(&outline, width, edge);
             }
         }

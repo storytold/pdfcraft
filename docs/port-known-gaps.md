@@ -7,7 +7,6 @@ fixed. Framework items (F-n) are in the port workspace's follow-up list.
 |---|---|---|
 | `comments::a_double_click_on_a_replace_text_opens_its_one_window` | the group's window doesn't open on the double-click | the comment part receives the first press and release; the second press reaches the comment canvas tool with click count two |
 | `content::added_picture_resizes_repeatedly_and_drags_back_from_out_of_bounds_without_smear` | edge texels smear across the out-of-bounds half | texture sampling/clamping of the cached picture while dragged out of the page |
-| `editing::image_pixels_follow_the_frame_while_a_corner_is_dragged` | the frame does not follow the grip during a corner drag | F-126: frame and pixels read different passes; the frame assertion currently fails first |
 | `editing::paragraph_edges_and_frames_are_caught_without_aiming_for_the_hairline` | a click off the text doesn't apply the typing | F-115 follow-up: the edge band and the click-off rule overlap |
 | `marks::the_preview_shows_the_page_the_range_selects_under_the_marks` | the stamp preview doesn't show the selected page | F-161: the preview overlay's clip is inverted and its geometry a pass behind |
 | `panel_snapshots::every_panel_matches_its_snapshot` | all 11 accessibility-tree snapshots differ after updating the dock queries | L-298 defers pixel snapshots; these text snapshots need separate review |
