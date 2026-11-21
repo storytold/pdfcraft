@@ -844,7 +844,8 @@ fn unlinked_password_values(doc: &Document) -> Vec<ObjRef> {
     // A kid with no `/Parent` of its own still inherits from the field that lists it in `/Kids`,
     // as the field reader reads it (#7979). Unlinking it edits that listing, so the edited objects
     // as the opened file had them say which field listed it; a listing further up that nothing
-    // edited is in the form's tree as it is now. The opened file's listing comes first.
+    // edited is in the form's tree as it is now. The opened file's listing comes first; it only
+    // says which field listed the kid, and that field's flags are read as they are now.
     let mut listed_by: std::collections::HashMap<ObjRef, (ObjRef, Dict)> = std::collections::HashMap::new();
     for (parent, original) in doc.scan_original_objects_subset(edited) {
         let Some(d) = original.ok().and_then(|o| o.as_dict().cloned()) else { continue };
@@ -867,21 +868,27 @@ fn unlinked_password_values(doc: &Document) -> Vec<ObjRef> {
     }
     let is_password_text = |r: ObjRef| {
         // Up the `/Parent` chain; where it ends, on from the field that listed its top, and so on,
-        // as far as the field walk goes and never through a dictionary twice.
+        // never through a dictionary twice. The field reader reads fields at depths 0 to
+        // MAX_FIELD_DEPTH and their widgets one below, so no path it inherits along holds more
+        // than MAX_CHAIN dictionaries; the walk stops there in total, whatever mix of `/Parent`
+        // and `/Kids` steps it took.
+        const MAX_CHAIN: usize = MAX_FIELD_DEPTH + 2;
         let mut dicts: Vec<Dict> = Vec::new();
         let mut visited = std::collections::HashSet::new();
         let mut next = Some((r, None::<Dict>));
-        while let Some((start, listed)) = next.take() {
-            if visited.len() > MAX_FIELD_DEPTH {
-                break;
-            }
+        'walk: while let Some((start, listed)) = next.take() {
             let chain = field_chain(doc, start);
             for (i, c) in chain.iter().enumerate() {
+                if visited.len() >= MAX_CHAIN {
+                    break 'walk;
+                }
                 if !visited.insert(*c) {
                     break;
                 }
-                // A listing field comes as it was when it listed the kid.
-                let d = if i == 0 { listed.clone().or_else(|| doc.get(*c).as_dict().cloned()) } else { doc.get(*c).as_dict().cloned() };
+                // Flags as they are now, the way the field reader inherits them: a listing field
+                // that gained the Password flag in this session has it. Only a listing field that
+                // is no longer a dictionary (deleted with its kid) is read as it listed the kid.
+                let d = doc.get(*c).as_dict().cloned().or_else(|| if i == 0 { listed.clone() } else { None });
                 dicts.extend(d);
             }
             next = chain.last().and_then(|top| listed_by.get(top)).filter(|(p, _)| !visited.contains(p)).map(|(p, d)| (*p, Some(d.clone())));
