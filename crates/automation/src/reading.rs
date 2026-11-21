@@ -1,4 +1,4 @@
-//! Reading colours: Acrobat's Replace Document Colors as a tool (#897, AGENTS.md §3).
+//! Reading colours: Acrobat's Replace Document Colors as a tool (#897, app-agents.md rule 14).
 //!
 //! A per-document view setting: solid text and line-art paints remap for readability and the
 //! page clears to the setting's background when rendering. The file itself never changes.
