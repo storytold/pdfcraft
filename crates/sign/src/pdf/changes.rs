@@ -257,8 +257,10 @@ fn only_validation_data(allowed: &mut Vec<&'static str>, disallowed: &mut Vec<&'
 /// or the Hidden or NoView flag set. An approval signature, an empty signature widget, or a
 /// visible one fails, whatever `/Type` or `/SubFilter` it claims. Judged on the objects
 /// themselves, not on the `/AcroForm /Fields` listing, so a widget with no `/T` or one reached
-/// only through a page's `/Annots` is covered too.
+/// only through a page's `/Annots` is covered too. At least one must have been added: a change
+/// labelled signing that adds none (a lone `/SigFlags` change) signs nothing (review of #6771).
 fn only_invisible_timestamps_added(doc: &Document, old: &Document) -> bool {
+    let mut added = false;
     /// A widget shows nothing: no `/Rect` enclosing a positive area, or Hidden (2) / NoView (32).
     fn invisible(doc: &Document, w: &Dict) -> bool {
         let flags = w.get(b"F").and_then(|o| doc.resolve(o).as_int()).unwrap_or(0);
@@ -286,8 +288,9 @@ fn only_invisible_timestamps_added(doc: &Document, old: &Document) -> bool {
         if !timestamp || (is_field && !invisible(doc, d)) {
             return false;
         }
+        added = true;
     }
-    true
+    added
 }
 
 struct ChangedObjectClassifier<'a> {

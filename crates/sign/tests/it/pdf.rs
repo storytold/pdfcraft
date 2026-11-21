@@ -593,6 +593,32 @@ fn a_document_timestamp_keeps_a_no_changes_certification_valid() {
     assert!(matches!(&s.modification, Modification::Allowed(k) if k.contains(&kind::SIGNATURE)), "{:?}", s.modification);
 }
 
+/// From review on #6771: a later save that changes only the form's `/SigFlags` adds no
+/// signature and no document timestamp, so a "no changes allowed" certification does not permit
+/// it. Flags set by a document timestamp's own save stay permitted
+/// (`a_document_timestamp_keeps_a_no_changes_certification_valid`).
+#[test]
+fn a_lone_sigflags_change_breaks_a_no_changes_certification() {
+    let (_, trust, signed) = certified_p1();
+    let flagged = edit_after(&signed, |doc| {
+        let form = doc.get(doc.root().unwrap()).as_dict().and_then(|c| c.get(b"AcroForm").cloned()).unwrap();
+        let set = |f: &mut pdfcraft_cos::Dict| f.set(b"SigFlags".to_vec(), Object::Int(1));
+        match form {
+            Object::Ref(r) => doc.update_dict(r, set).unwrap(),
+            _ => doc
+                .update_dict(doc.root().unwrap(), |c| {
+                    if let Some(Object::Dict(f)) = c.get_mut(b"AcroForm") {
+                        set(f);
+                    }
+                })
+                .unwrap(),
+        }
+    });
+    let s = signatures(&open(&flagged), &flagged, &trust).into_iter().find(|s| s.certify == Some(1)).unwrap();
+    assert!(matches!(&s.modification, Modification::Disallowed(_)), "{:?}", s.modification);
+    assert_ne!(s.status, Status::Valid);
+}
+
 /// A new form XObject that paints the whole 300 × 300 page white.
 fn opaque_appearance(doc: &mut Document) -> ObjRef {
     let mut d = Dict::new();
