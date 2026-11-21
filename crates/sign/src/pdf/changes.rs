@@ -39,6 +39,10 @@ pub(super) struct Snapshot {
     /// What the signed pages' annotations draw: the appearance streams their `/AP` names, the
     /// appearance-state dictionaries that are objects of their own, and what those streams reach.
     pub(super) appearances: HashSet<u32>,
+    /// The signed form's fields and widgets: what its `/Fields` reach through `/Kids`, and the
+    /// `/Parent` chains of the annotations the signed pages placed. Only these may change as a
+    /// field does; field labels anywhere else grant nothing.
+    pub(super) fields: HashSet<u32>,
     pub(super) annot_budget: Cell<usize>,
 }
 
@@ -103,6 +107,7 @@ impl Snapshot {
         let old_info = old.trailer().get(b"Info").and_then(Object::as_ref).map(|r| r.num);
         let old_form = old.root().and_then(|c| old.get(c).as_dict().and_then(|c| c.get(b"AcroForm").and_then(Object::as_ref))).map(|r| r.num);
         let appearances = signed_appearances(old, &placed_annots, &signed_pages);
+        let fields = signed_fields(old, &placed_annots);
         Snapshot {
             old_content,
             old_metadata,
@@ -118,6 +123,7 @@ impl Snapshot {
             old_info,
             old_form,
             appearances,
+            fields,
             annot_budget,
         }
     }
@@ -186,6 +192,38 @@ fn signed_appearances(old: &Document, placed: &HashSet<u32>, pages: &HashSet<u32
         reach(old, &ap, 0, &stop, &mut found);
     }
     found
+}
+
+/// The signed form's fields and widgets (ISO 32000-2 §12.7.4): everything the form's `/Fields`
+/// reach through `/Kids`, and the `/Parent` chain of each annotation `placed` on the signed pages
+/// (a writer may leave a field out of `/Fields`; its widgets still show it). Bounded: past the
+/// bound the rest is left out, and a change to it is refused rather than judged as a field's.
+fn signed_fields(old: &Document, placed: &HashSet<u32>) -> HashSet<u32> {
+    const MAX_FIELDS: usize = 100_000;
+    let mut fields = HashSet::new();
+    let mut stack: Vec<ObjRef> = acroform(old).map(|form| refs(old, form.get(b"Fields"))).unwrap_or_default();
+    while let Some(r) = stack.pop() {
+        if fields.len() >= MAX_FIELDS {
+            return fields;
+        }
+        if !fields.insert(r.num) {
+            continue;
+        }
+        stack.extend(refs(old, old.get(r).as_dict().and_then(|d| d.get(b"Kids"))));
+    }
+    for num in placed {
+        let mut cur =
+            old.get(ObjRef { num: *num, generation: old.generation(*num) }).as_dict().and_then(|d| d.get(b"Parent").and_then(Object::as_ref));
+        let mut depth = 0;
+        while let Some(r) = cur.filter(|_| depth < MAX_FIELD_DEPTH && fields.len() < MAX_FIELDS) {
+            depth += 1;
+            if !fields.insert(r.num) {
+                break;
+            }
+            cur = old.get(r).as_dict().and_then(|d| d.get(b"Parent").and_then(Object::as_ref));
+        }
+    }
+    fields
 }
 
 /// One object a later revision changed or added, with what it was when signed (`None` for a new
@@ -384,6 +422,12 @@ impl ChangedObjectClassifier<'_> {
         if let Some(kind) = self.resource_kind(r, new, before) {
             return Some(kind);
         }
+        // What a signed annotation draws (its /AP, appearance states and what those streams
+        // reach) is shown on the page, whatever field or annotation labels it carries: a field's
+        // /V that is also an appearance state repaints the annotation when it changes.
+        if self.snapshot.appearances.contains(&r.num) {
+            return Some(kind::PAGE_CONTENT);
+        }
         if self.dss.contains(&r.num) {
             return Some(kind::SECURITY_STORE);
         }
@@ -481,7 +525,7 @@ impl ChangedObjectClassifier<'_> {
             Some(kind::METADATA)
         } else {
             // A new dictionary is not labelled by its shape: an operation claims it or it is refused.
-            previous.map(|previous| change_kind(self.doc, self.old, self.ends, r.num, dict, previous))
+            previous.map(|previous| change_kind(self.doc, self.old, self.ends, self.snapshot, r.num, dict, previous))
         }
     }
 
@@ -1260,7 +1304,7 @@ pub(super) fn lost_entries(doc: &Document, old: &Document, was: Option<&Object>,
 /// object had when signed: signing, form fill, comments, page content or another change. A new
 /// object has no role yet, and is not labelled: an operation claims it or it is refused
 /// ([`super::operations`]).
-fn change_kind(doc: &Document, old: &Document, ends: &RevisionEnds, num: u32, d: &Dict, b: &Dict) -> &'static str {
+fn change_kind(doc: &Document, old: &Document, ends: &RevisionEnds, snapshot: &Snapshot, num: u32, d: &Dict, b: &Dict) -> &'static str {
     // A signature widget that already held a signature is what the signature shows: moving it or
     // swapping its appearance can hide the signed page under it. Judged by the signed revision,
     // so relabelling the widget now does not change that.
@@ -1303,7 +1347,14 @@ fn change_kind(doc: &Document, old: &Document, ends: &RevisionEnds, num: u32, d:
     if b.name(b"Subtype") != d.name(b"Subtype") {
         return kind::OTHER;
     }
+    // The labels the signed version carried say which role to judge it by, but grant only a
+    // role the signed revision gave it: an annotation is one a signed page lists, a field one
+    // the signed form reaches. A dictionary that merely carries those labels (the catalog's
+    // /OCProperties written as a comment, its configuration as a text widget) plays another
+    // role, and changing it is no comment or form fill (#7918).
+    let (placed, field) = (snapshot.placed_annots.contains(&num), snapshot.fields.contains(&num));
     match b.name(b"Subtype") {
+        Some(b"Widget") if !placed && !field => return kind::OTHER,
         // A signature field's widget, when signed and still: signing only when its field gains a
         // signature. A restyled empty one signs nothing (#6755).
         Some(b"Widget") if is_signature_field(old, b) => {
@@ -1311,18 +1362,21 @@ fn change_kind(doc: &Document, old: &Document, ends: &RevisionEnds, num: u32, d:
         }
         Some(b"Widget") => return widget_change(doc, old, d, b),
         Some(b"Link") => return kind::LINKS,
-        Some(_) if b.name(b"Type") == Some(b"Annot") || b.contains(b"Rect") => return kind::COMMENTS,
+        // A field is shown by widgets only: one that is also another kind of annotation is not
+        // a comment either.
+        Some(_) if b.name(b"Type") == Some(b"Annot") || b.contains(b"Rect") => return if placed && !field { kind::COMMENTS } else { kind::OTHER },
         _ => {}
     }
+    let form = snapshot.old_form == Some(num);
     // A later revision cannot make an existing object a signature by relabelling it: only one
     // that was a signature field when signed is judged as one.
     if b.name(b"FT") == Some(b"Sig") {
-        return kind::SIGNATURE;
+        return if field { kind::SIGNATURE } else { kind::OTHER };
     }
     if b.contains(b"Fields") {
-        return acroform_kind(doc, old, ends, d, Some(b));
+        return if form { acroform_kind(doc, old, ends, d, Some(b)) } else { kind::OTHER };
     }
-    if b.contains(b"FT") || (b.contains(b"T") && b.contains(b"Kids")) || b.contains(b"DR") {
+    if ((b.contains(b"FT") || (b.contains(b"T") && b.contains(b"Kids"))) && field) || (b.contains(b"DR") && form) {
         return kind::FORM_FILL;
     }
     kind::OTHER
@@ -1333,10 +1387,9 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    /// A signed page's change, judged by [`ChangedObjectClassifier::page_change_kind`] with no
-    /// other signed roles in play; `None` when nothing the page shows changed.
-    fn page_change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) -> Option<&'static str> {
-        let snapshot = Snapshot {
+    /// A signed revision in which no object plays any role.
+    fn empty_snapshot() -> Snapshot {
+        Snapshot {
             old_content: HashSet::new(),
             old_metadata: None,
             old_xfa_data: HashSet::new(),
@@ -1351,8 +1404,15 @@ mod tests {
             old_info: None,
             old_form: None,
             appearances: HashSet::new(),
+            fields: HashSet::new(),
             annot_budget: Cell::new(MAX_ANNOT_ENTRIES),
-        };
+        }
+    }
+
+    /// A signed page's change, judged by [`ChangedObjectClassifier::page_change_kind`] with no
+    /// other signed roles in play; `None` when nothing the page shows changed.
+    fn page_change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) -> Option<&'static str> {
+        let snapshot = empty_snapshot();
         let (none, ends, object_refs) = (HashSet::new(), RevisionEnds::new(), OnceCell::new());
         let classifier = ChangedObjectClassifier { doc, old, snapshot: &snapshot, dss: &none, ends: &ends, object_refs: &object_refs };
         classifier.page_change_kind(d, before)
@@ -1402,12 +1462,15 @@ mod tests {
             vec![],
         );
         assert_eq!(page_change_kind(&doc, &doc, &reordered, Some(&before)), unchanged);
-        assert_eq!(change_kind(&doc, &doc, &OnceCell::new(), 0, &reordered, &before), change_kind(&doc, &doc, &OnceCell::new(), 0, &before, &before));
+        assert_eq!(
+            change_kind(&doc, &doc, &OnceCell::new(), &empty_snapshot(), 0, &reordered, &before),
+            change_kind(&doc, &doc, &OnceCell::new(), &empty_snapshot(), 0, &before, &before)
+        );
 
         // A changed value inside the nested dictionary still is a page content change.
         let changed = page(vec![("F2", font(&order, "Helvetica")), ("F1", font(&order, "Courier"))], vec![]);
         assert_eq!(page_change_kind(&doc, &doc, &changed, Some(&before)), Some(kind::PAGE_CONTENT));
-        assert_eq!(change_kind(&doc, &doc, &OnceCell::new(), 0, &changed, &before), kind::PAGE_CONTENT);
+        assert_eq!(change_kind(&doc, &doc, &OnceCell::new(), &empty_snapshot(), 0, &changed, &before), kind::PAGE_CONTENT);
     }
 
     /// The page as signed and the same page with its inline resources reordered are each no
@@ -1468,7 +1531,7 @@ mod tests {
         let swapped = page(vec![("F1", font(&["Type", "Encoding", "BaseFont"], "Times-Roman"))], vec![]);
         for (now, then) in [(&swapped, &signed), (&signed, &swapped)] {
             assert_eq!(page_change_kind(&doc, &doc, now, Some(then)), Some(kind::PAGE_CONTENT));
-            assert_eq!(change_kind(&doc, &doc, &OnceCell::new(), 0, now, then), kind::PAGE_CONTENT);
+            assert_eq!(change_kind(&doc, &doc, &OnceCell::new(), &empty_snapshot(), 0, now, then), kind::PAGE_CONTENT);
         }
     }
 

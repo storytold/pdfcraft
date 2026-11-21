@@ -39,6 +39,8 @@
 //!   `pdf::an_appearance_labelled_file_plumbing_when_signed_is_still_judged`, `pdf::a_contents_array_the_signed_store_also_lists_is_page_content`,
 //!   `pdf::an_info_dictionary_with_another_role_is_judged_by_that_role`, `pdf::an_annotation_that_is_also_the_form_dictionary_is_not_a_form_fill`
 //!   (and, staying Valid, `pdf::a_plain_info_dictionary_may_still_be_rewritten_after_signing`)
+//! - labels that grant no role the signed revision gave: `pdf::an_appearance_state_dictionary_labelled_a_field_is_not_a_form_fill`,
+//!   `pdf::a_dictionary_labelled_a_comment_off_the_pages_is_not_a_comment`, `pdf::a_dictionary_labelled_a_widget_off_the_pages_and_form_is_not_a_form_fill`
 //! - the document security store: `pdf::a_dss_entry_does_not_make_the_object_it_names_part_of_the_store`,
 //!   `pdf::an_existing_dictionary_is_not_a_store_part_because_the_store_names_it`, `pdf::an_existing_array_stays_what_it_is_when_the_store_points_at_it`,
 //!   `pdf::a_signed_store_may_grow_but_not_lose_or_swap_entries`

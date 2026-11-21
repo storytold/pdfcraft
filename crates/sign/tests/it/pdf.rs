@@ -4094,3 +4094,59 @@ fn an_annotation_that_is_also_the_form_dictionary_is_not_a_form_fill() {
     let base = fixture_with_appearance("", "7 0 R", "4 0 R", "/Fields [6 0 R]", "/Subtype /Form /BBox [0 0 300 150]", &[]);
     assert_not_excused(&base, &[Some(1), Some(2)], kind::FORM_FILL, repaint_annotation);
 }
+
+// ── A label grants no role the signed revision did not give (#7918) ──────────────────────────
+
+#[test]
+fn an_appearance_state_dictionary_labelled_a_field_is_not_a_form_fill() {
+    // The annotation draws its /AP /N appearance-state dictionary (9) under the state /V, and 9
+    // also carries a field's /FT, whether or not the form lists it. Pointing its /V at a white
+    // box repaints the annotation: page content, not a form fill, at any level.
+    for form in ["<< /Fields [6 0 R] >>", "<< /Fields [6 0 R 9 0 R] >>"] {
+        let base = fixture_with_appearance("", form, "4 0 R", "/AS /V", "/Subtype /Form /BBox [0 0 300 150]", &["<< /FT /Tx /T (x) /V 8 0 R >>"]);
+        let base = edit_after(&base, |doc| doc.update_dict(obj(7), |d| d.set(b"AP".to_vec(), Object::Dict(dict_of(vec![("N", oref(9))])))).unwrap());
+        assert_not_excused(&base, &LEVELS, kind::FORM_FILL, |doc| {
+            let cover = doc.add(white_box(None));
+            doc.update_dict(obj(9), |d| d.set(b"V".to_vec(), Object::Ref(cover))).unwrap();
+        });
+    }
+}
+
+#[test]
+fn a_dictionary_labelled_a_comment_off_the_pages_is_not_a_comment() {
+    // The catalog's /OCProperties (9) carries a comment's /Subtype and /Rect, but no signed page
+    // lists it. Turning every layer off is no comment change, at P=3 or under approval either.
+    let base = fixture_with_appearance(
+        "/OCProperties 9 0 R",
+        "<< /Fields [6 0 R] >>",
+        "4 0 R",
+        "",
+        "/Subtype /Form /BBox [0 0 300 150]",
+        &["<< /Subtype /Square /Rect [0 0 1 1] /OCGs [] /D << /Order [] >> >>"],
+    );
+    assert_not_excused(&base, &LEVELS, kind::COMMENTS, |doc| {
+        doc.update_dict(obj(9), |d| d.set(b"D".to_vec(), Object::Dict(dict_of(vec![("BaseState", Object::name("OFF"))])))).unwrap();
+    });
+}
+
+#[test]
+fn a_dictionary_labelled_a_widget_off_the_pages_and_form_is_not_a_form_fill() {
+    // The catalog's /OCProperties /D configuration (10) carries a text widget's labels, but no
+    // signed page lists it and the form does not reach it. Giving it a new /V and an /AS (which
+    // there sets layers' states automatically) is no form fill.
+    let base = fixture_with_appearance(
+        "/OCProperties 9 0 R",
+        "<< /Fields [6 0 R] >>",
+        "4 0 R",
+        "",
+        "/Subtype /Form /BBox [0 0 300 150]",
+        &["<< /OCGs [] /D 10 0 R >>", "<< /Order [] /Type /Annot /Subtype /Widget /FT /Tx /T (y) /Rect [0 0 1 1] /V (a) >>"],
+    );
+    assert_not_excused(&base, &LEVELS, kind::FORM_FILL, |doc| {
+        doc.update_dict(obj(10), |d| {
+            d.set(b"V".to_vec(), Object::String(PdfString::text("b")));
+            d.set(b"AS".to_vec(), Object::Array(vec![Object::Dict(dict_of(vec![("Event", Object::name("View"))]))]));
+        })
+        .unwrap();
+    });
+}
