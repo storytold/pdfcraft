@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::time::SystemTime;
 
-use craft::behavior::{Codec, ColumnKey, ColumnWidth, DisplayOrder, EditEvent, IconId, ItemSource, NotAValue, ReorderKeys};
+use craft::behavior::{ColumnKey, ColumnWidth, DisplayOrder, EditEvent, IconId, ItemSource, ReorderKeys};
 use craft::theme::variant::Tone;
 use craft::ui::contract::{
     Bind, CollectionEvent, ColumnEvent, ColumnLayout, ColumnSort, ColumnSpec, Entry, Props as _, ReorderMove, ReorderRule, ShowCollection as _,
@@ -13,7 +13,7 @@ use craft::ui::table::Table;
 use craft::ui::text::TextField;
 
 // PLAN: assumed `CombineKey::{File(u64), Page(u64, usize)}` in `files` (pdf-workflows-w5)
-use super::files::{CombineFile, CombineKey, Lock, RowAction, SortKey, takes_range};
+use super::files::{CombineFile, CombineKey, Lock, RowAction, SortKey};
 use super::parts::utc_stamp;
 use crate::PdfCraftApp;
 
@@ -67,26 +67,6 @@ pub(crate) fn columns_from_legacy(value: &serde_json::Value) -> Option<ColumnLay
     Some(ColumnLayout { order: order.into_iter().map(column_of).collect(), widths, hidden: Vec::new() })
 }
 
-/// A Pages cell's text: kept as typed (Combine takes pages in the order given, with repeats), refused when the
-/// range can't be taken from a file of `count` pages.
-#[derive(Clone)]
-struct RangeText {
-    count: usize,
-}
-
-impl Codec for RangeText {
-    type Value = String;
-
-    fn format(&self, v: &String) -> String {
-        v.clone()
-    }
-
-    fn parse(&self, text: &str, _: &String) -> Result<String, NotAValue> {
-        // The row's Pages tip shows the reason (`range_tip`); the codec can only refuse.
-        takes_range(self.count, text).map(|_| text.to_owned()).map_err(|_| NotAValue)
-    }
-}
-
 /// The files as a collection source, keyed by id, in the order of the list.
 struct Files<'a> {
     ids: &'a [u64],
@@ -120,9 +100,9 @@ impl ItemSource<CombineKey> for Files<'_> {}
 struct RowData {
     name: String,
     range: String,
-    pages: usize,
     editable: bool,
     range_tip: String,
+    range_count: String,
     size: String,
     modified: Option<(u64, String)>,
     status: Option<(Tone, String, String)>,
@@ -172,12 +152,18 @@ fn row_data(app: &mut PdfCraftApp, checks: &[Result<usize, String>]) -> Vec<RowD
                     format!("{what} ({of})")
                 }
             };
+            let range_count = if f.problem.is_some() {
+                "—".to_string()
+            } else {
+                let k = check.as_ref().map_or_else(|_| "?".to_string(), usize::to_string);
+                crate::i18n::fmt(tl!("{k} of {n}"), &[("k", &k), ("n", &f.pages.to_string())])
+            };
             RowData {
                 name: f.name.clone(),
                 range: f.range.clone(),
-                pages: f.pages,
                 editable: f.problem.is_none(),
                 range_tip,
+                range_count,
                 size: crate::panels::human_size(f.bytes.len()),
                 modified: f.modified.map(|m| (now.duration_since(m).map_or(0, |d| d.as_secs()), utc_stamp(m))),
                 status,
@@ -242,14 +228,17 @@ pub(super) fn table(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> Option<RowActio
             let at = icx.at;
             let Some(row) = rows.get(at) else { return ListRow::new("") };
             let mut list = ListRow::new(row.name.clone()).cells(icx.cells()).striped(icx.row.striped);
-            let field = TextField::with_codec(tl!("Pages"), Bind::given(row.range.clone()), RangeText { count: row.pages })
-                .placeholder(tl!("All pages"))
-                .enabled(row.editable);
+            // Keep every draft, including invalid ranges, so the row can show its validation error as the user types.
+            let field = TextField::new(tl!("Pages"), Bind::given(row.range.clone())).placeholder(tl!("All pages")).enabled(row.editable);
             let edits = &edits;
             list = list.cell_field(PAGES, field, move |output| {
                 edits.borrow_mut().extend(output.events.into_iter().map(|event| (at, event)));
             });
-            list = list.cell_tip(PAGES, row.range_tip.clone()).cell(SIZE, row.size.clone());
+            list = list
+                .cell_field_suffix(PAGES, row.range_count.clone())
+                .cell_muted(PAGES)
+                .cell_tip(PAGES, row.range_tip.clone())
+                .cell(SIZE, row.size.clone());
             list = match &row.modified {
                 Some((age, stamp)) => list.cell(MODIFIED, icx.env.relative_age(*age, craft::i18n::AgeStyle::Short)).cell_tip(MODIFIED, stamp.clone()),
                 None => list.cell(MODIFIED, "—"),
