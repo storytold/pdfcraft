@@ -1133,7 +1133,27 @@ fn dynamic_zoom_drags_up_to_zoom_in_and_down_to_zoom_out() {
     let after_shift_click = h.state().views[i].zoom;
     assert!((after_shift_click - before_click).abs() < 0.05, "shift-click zooms back out: {after_click} -> {after_shift_click}");
 
-    // 6. Escape clears an active drag
+    // 6. Escape mid-drag puts back the zoom and fit mode the drag started from
+    h.state_mut().views[i].fit = pdfcraft_ui_egui::canvas::Fit::Width;
+    h.run_steps(2);
+    let start_zoom = h.state().views[i].zoom;
+    h.hover_at(center);
+    h.run_steps(1);
+    h.drag_at(center);
+    h.run_steps(1);
+    h.hover_at(center - egui::vec2(0.0, 60.0));
+    h.run_steps(2);
+    assert!(h.state().views[i].dynamic_zoom.is_some());
+    assert!(h.state().views[i].zoom > start_zoom * 1.2, "the drag zoomed in before Escape");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().views[i].dynamic_zoom, None);
+    assert!((h.state().views[i].zoom - start_zoom).abs() < 0.01, "Escape restores the starting zoom");
+    assert_eq!(h.state().views[i].fit, pdfcraft_ui_egui::canvas::Fit::Width, "and the starting fit mode");
+    h.drop_at(center - egui::vec2(0.0, 60.0));
+    h.run_steps(1);
+
+    // 7. Switching tools mid-drag ends the gesture
     h.hover_at(center);
     h.run_steps(1);
     h.drag_at(center);
@@ -1141,9 +1161,9 @@ fn dynamic_zoom_drags_up_to_zoom_in_and_down_to_zoom_out() {
     h.hover_at(center - egui::vec2(0.0, 20.0));
     h.run_steps(1);
     assert!(h.state().views[i].dynamic_zoom.is_some());
-    h.key_press(egui::Key::Escape);
+    assert!(h.state_mut().execute("view.marquee_zoom"));
     h.run_steps(2);
-    assert_eq!(h.state().views[i].dynamic_zoom, None);
+    assert_eq!(h.state().views[i].dynamic_zoom, None, "another tool clears the Dynamic Zoom drag");
     h.drop_at(center - egui::vec2(0.0, 20.0));
     h.run_steps(1);
 }

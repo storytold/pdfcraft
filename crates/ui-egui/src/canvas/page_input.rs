@@ -414,6 +414,9 @@ fn tool_input(
     }
     if tool == QuickTool::DynamicZoom {
         crate::zoom_snap::dynamic_zoom_input(ui, resp, &xf, ptr, i, free, view);
+    } else {
+        // Switching tools mid-drag ends the gesture, so it can't resume under another tool.
+        view.dynamic_zoom = None;
     }
     if tool == QuickTool::EnhanceCamera {
         crate::camera_ui::page_input(resp, &xf, ptr, i, view, can_modify, press);

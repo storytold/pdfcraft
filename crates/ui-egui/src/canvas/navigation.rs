@@ -494,8 +494,13 @@ fn view_keys(
     // An open menu takes Escape first and closes; the selection stays for the next one (#3535).
     // So does an open field, whose list closes.
     if key(Key::Escape) && !egui::Popup::is_any_open(ctx) && !field_open {
-        view.dynamic_zoom = None;
-        escape_closes_one(view);
+        // Escape mid-drag cancels Dynamic Zoom: the zoom and fit mode go back to where it started.
+        if let Some((_, start_pos, start_zoom, start_fit)) = view.dynamic_zoom.take() {
+            view.zoom_at(start_zoom, start_pos);
+            view.fit = start_fit;
+        } else {
+            escape_closes_one(view);
+        }
     }
     // The open field's keys leave the page under it where it is.
     if field_open {

@@ -779,8 +779,9 @@ pub struct DocView {
     /// Marquee Zoom / Snapshot: the rectangle being dragged (page, start), and a finished one.
     pub marquee: Option<(usize, Pos2)>,
     pub marquee_done: Option<crate::zoom_snap::Marquee>,
-    /// Dynamic Zoom: (page under initial press, press origin on screen, initial zoom level when drag started).
-    pub dynamic_zoom: Option<(usize, Pos2, f32)>,
+    /// Dynamic Zoom: (page under the press, press origin on screen, zoom and fit mode when the drag
+    /// started), so Escape mid-drag can put both back.
+    pub dynamic_zoom: Option<(usize, Pos2, f32, Fit)>,
     /// Snapshot: the area just copied (page, view-space rect), kept with a small menu under it
     /// (Print area…, Save as image…), and what was chosen there.
     pub area_pick: Option<(usize, [f32; 4])>,
@@ -1033,6 +1034,7 @@ impl DocView {
         self.sign.drag = None;
         self.redact_drag = None;
         self.crop_drag = None;
+        self.dynamic_zoom = None;
         if let Some(q) = &mut self.camera {
             q.grab = None;
         }

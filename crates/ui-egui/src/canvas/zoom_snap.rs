@@ -101,9 +101,9 @@ pub(crate) fn dynamic_zoom_input(
         && free
         && let Some(o) = origin.filter(|o| xf.rect.contains(*o))
     {
-        view.dynamic_zoom = Some((page, o, view.zoom));
+        view.dynamic_zoom = Some((page, o, view.zoom, view.fit));
     }
-    if let Some((p, start_pos, start_zoom)) = view.dynamic_zoom
+    if let Some((p, start_pos, start_zoom, _)) = view.dynamic_zoom
         && p == page
     {
         if resp.dragged()
