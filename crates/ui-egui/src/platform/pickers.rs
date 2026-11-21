@@ -270,6 +270,12 @@ impl PdfCraftApp {
                 ctx.request_repaint();
             }
             if paths.is_empty() {
+                if let Some(target) = target
+                    && let Some(view) = self.views.iter_mut().find(|v| v.id == target.doc)
+                    && view.insert_at == target.gap
+                {
+                    view.insert_at = None;
+                }
                 continue;
             }
             if !self.still_pick_target(target) {
