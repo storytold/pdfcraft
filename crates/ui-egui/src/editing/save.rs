@@ -146,13 +146,18 @@ impl PdfCraftApp {
             match delivered {
                 Ok(()) => {
                     // As the native save does: what was saved isn't asked about again (#2149).
-                    if self.session.mark_saved(id, bytes, None).is_ok() {
+                    let marked_saved = self.session.mark_saved(id, bytes, None).is_ok();
+                    if marked_saved {
                         self.placed_signatures.remove(&id);
                     }
                     if let Some(doc) = self.session.get(id)
                         && let Some(view) = self.views.get_mut(index)
                     {
                         view.document_changed(&doc.info);
+                        if marked_saved {
+                            view.imported_image_baseline = None;
+                            view.imported_image_dirty.set(None);
+                        }
                         // `redactions_applied` stays set: the document keeps its name here, so
                         // later downloads are named after the redacted copy too.
                         view.redactions_downloaded = view.redactions_applied;
@@ -322,6 +327,8 @@ impl PdfCraftApp {
                 // Saving over a version that changed on disk keeps this one: nothing to ask.
                 for view in self.views.iter_mut().filter(|v| v.id == id) {
                     view.disk_changed = false;
+                    view.imported_image_baseline = None;
+                    view.imported_image_dirty.set(None);
                     view.redactions_applied = 0;
                     view.redactions_undone_after_save = 0;
                     view.saved_redactions_cut_off = false;

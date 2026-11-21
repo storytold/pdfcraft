@@ -102,26 +102,31 @@ impl PdfCraftApp {
     /// worker instead ([`Self::open_converted_pdf`]), leaving this for startup and inline opens.
     pub(crate) fn open_converted(&mut self, name: &str, bytes: &[u8]) -> Option<Result<(), String>> {
         use pdfcraft_engine::SourceKind;
-        if !matches!(pdfcraft_engine::source_kind(name, bytes), Some(SourceKind::Image | SourceKind::Text | SourceKind::Office)) {
+        let kind = pdfcraft_engine::source_kind(name, bytes);
+        if !matches!(kind, Some(SourceKind::Image | SourceKind::Text | SourceKind::Office)) {
             return None;
         }
+        let is_image = matches!(kind, Some(SourceKind::Image));
         let created = self.session.convert_to_pdf(name, &Arc::new(bytes.to_vec())).map(|(_, pdf)| pdf);
-        Some(self.open_converted_pdf(name, created.map_err(|e| e.to_string())))
+        Some(self.open_converted_pdf(name, created.map_err(|e| e.to_string()), is_image))
     }
 
     /// Open `created`, the PDF converted from the file `name`, as a new, unsaved tab named after
     /// it (`Report.docx` → `Report.pdf`).
-    pub(crate) fn open_converted_pdf(&mut self, name: &str, created: Result<Arc<Vec<u8>>, String>) -> Result<(), String> {
-        self.open_created_bytes(&format!("{}.pdf", stem(name)), created)
+    pub(crate) fn open_converted_pdf(&mut self, name: &str, created: Result<Arc<Vec<u8>>, String>, is_image: bool) -> Result<(), String> {
+        self.open_created_bytes(&format!("{}.pdf", stem(name)), created, is_image)
     }
 
-    fn open_created_bytes(&mut self, name: &str, created: Result<Arc<Vec<u8>>, String>) -> Result<(), String> {
+    fn open_created_bytes(&mut self, name: &str, created: Result<Arc<Vec<u8>>, String>, is_image: bool) -> Result<(), String> {
         let bytes = created?;
         let id = self.session.open_new(name, bytes).map_err(|e| e.to_string())?;
         // The reading-colours preference is app-wide: the newly created document starts with it.
         self.session.set_reading_colors(id, self.reading_colors);
         let info = &self.session.get(id).ok_or("the new document could not be opened")?.info;
         let mut view = crate::DocView::new(id, info, self.view_defaults);
+        if is_image {
+            view.imported_image_baseline = self.session.get(id).map(|d| d.bytes.clone());
+        }
         if self.full_screen {
             view.enter_presentation();
         }
@@ -156,14 +161,14 @@ impl PdfCraftApp {
             }
             Clip::Text(t) => self.session.create_from_text("Clipboard", &t),
         };
-        self.open_created_bytes("Clipboard.pdf", created.map_err(|e| e.to_string()))
+        self.open_created_bytes("Clipboard.pdf", created.map_err(|e| e.to_string()), false)
     }
 
     /// Create ▸ Blank page: a new untitled document on the system region's paper (#5644).
     pub(crate) fn create_blank(&mut self) {
         let (w, h) = self.blank_paper.points();
         let created = self.session.create_blank(w, h, 1).map_err(|e| e.to_string());
-        if let Err(e) = self.open_created_bytes("Untitled.pdf", created) {
+        if let Err(e) = self.open_created_bytes("Untitled.pdf", created, false) {
             self.notify_fmt("Couldn't create a PDF: {e}", &[("e", &e.to_string())]);
         }
     }
@@ -241,7 +246,7 @@ impl PdfCraftApp {
         let name =
             if let Some((name, _)) = images.first().filter(|_| images.len() == 1) { format!("{}.pdf", stem(name)) } else { "Images.pdf".to_string() };
         let created = self.session.create_from_images_with_resolution(&images, resolution).map_err(|e| e.to_string());
-        if let Err(e) = self.open_created_bytes(&name, created) {
+        if let Err(e) = self.open_created_bytes(&name, created, false) {
             self.notify_fmt("Couldn't create a PDF: {e}", &[("e", &e.to_string())]);
         }
     }
