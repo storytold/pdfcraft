@@ -22,7 +22,9 @@ pub(crate) fn parse(text: &str, count: usize) -> Result<Vec<usize>, PrintError> 
     let mut pages = BTreeSet::new();
     let mut budget = 1_000_000usize;
     let number = |token: &str| {
-        let n = token.trim().parse::<usize>().map_err(|_| PrintError::NotAPage(token.into()))?;
+        let t = token.trim();
+        let n =
+            if t.bytes().all(|b| b.is_ascii_digit()) { t.parse::<usize>().ok() } else { None }.ok_or_else(|| PrintError::NotAPage(token.into()))?;
         if n == 0 || n > count { Err(PrintError::OutOfRange(n, count)) } else { Ok(n - 1) }
     };
     for part in text.split([',', ';']).map(str::trim) {
@@ -131,6 +133,13 @@ impl PageSelectionInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plus_sign_is_not_a_page_number() {
+        for text in ["+3", "+2-4", "2-+4"] {
+            assert!(matches!(parse(text, 100), Err(PrintError::NotAPage(_))), "{text}");
+        }
+    }
 
     #[test]
     fn selection_ranges_are_sorted_unique_and_bounded() {

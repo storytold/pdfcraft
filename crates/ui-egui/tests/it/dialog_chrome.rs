@@ -236,25 +236,76 @@ fn page_hover_cursors_stay_off_while_a_dialog_is_open() {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
-        // Small enough that the check box sits above the dialog card.
-        app.set_option("zoom", "100").unwrap();
+        // Large enough that the drop-down sits below the dialog card.
+        app.set_option("zoom", "300").unwrap();
         app
     });
     for _ in 0..30 {
         h.run_steps(2);
     }
-    // The middle of the "agree" check box (/Rect [20 310 36 326] on a 300 × 400 page).
+    // The middle of the "country" drop-down (/Rect [20 220 200 240] on a 300 × 400 page).
     let page = h.state().views[0].page_screen_rect(0).expect("on screen");
     let k = page.width() / 300.0;
-    let check = page.min + egui::vec2(28.0 * k, (400.0 - 318.0) * k);
-    h.hover_at(check);
+    let field = page.min + egui::vec2(110.0 * k, (400.0 - 230.0) * k);
+    h.hover_at(field);
     h.run_steps(2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand, "the check box takes clicks");
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand, "the drop-down takes clicks");
     h.state_mut().set_option("dialog", "security").unwrap();
     h.run_steps(4);
     let card = card(&h, "dialog");
-    assert!(!card.contains(check), "the check box {check:?} is beside the dialog {card:?}, under its backdrop");
-    h.hover_at(check + egui::vec2(1.0, 0.0));
+    assert!(!card.contains(field), "the drop-down {field:?} is beside the dialog {card:?}, under its backdrop");
+    h.hover_at(field + egui::vec2(1.0, 0.0));
     h.run_steps(2);
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "nothing under the dialog's backdrop can be clicked");
+}
+
+#[test]
+fn a_dialog_keeps_its_own_height_after_a_taller_one() {
+    // #5118: Print opened after Preferences was as tall as Preferences, with blank space below
+    // its buttons. Every dialog shares one modal, which kept the last dialog's size.
+    use pdfcraft_ui_egui::Dialog;
+    for dialog in [Dialog::Print, Dialog::RotatePages] {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("doc.pdf", None, fixture()).unwrap();
+            app
+        });
+        let show = |h: &mut Harness<'_, PdfCraftApp>, d: Dialog| {
+            h.state_mut().dialog = None;
+            h.run_steps(2);
+            h.state_mut().dialog = Some(d);
+            h.run_steps(6);
+            card(h, "dialog")
+        };
+        let fresh = show(&mut h, dialog);
+        let prefs = show(&mut h, Dialog::Preferences);
+        assert!(prefs.height() > fresh.height() + 20.0, "{dialog:?} {fresh:?} isn't shorter than Preferences {prefs:?}");
+        let after = show(&mut h, dialog);
+        assert!((after.height() - fresh.height()).abs() < 1.0, "{dialog:?} {fresh:?}, after Preferences {after:?}");
+    }
+}
+
+#[test]
+fn each_kind_of_marks_dialog_keeps_its_own_height() {
+    // #5118: Header & Footer, Watermark and Background are one `Dialog::Marks` with different
+    // contents. Background opened after Header & Footer kept the taller dialog's height.
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("doc.pdf", None, fixture()).unwrap();
+        app
+    });
+    let show = |h: &mut Harness<'_, PdfCraftApp>, d: &str| {
+        h.state_mut().dialog = None;
+        h.run_steps(2);
+        h.state_mut().set_option("dialog", d).unwrap();
+        h.run_steps(6);
+        card(h, "dialog")
+    };
+    let fresh = show(&mut h, "background");
+    let header = show(&mut h, "header-footer");
+    assert!(header.height() > fresh.height() + 20.0, "Background {fresh:?} isn't shorter than Header & Footer {header:?}");
+    let after = show(&mut h, "background");
+    assert!((after.height() - fresh.height()).abs() < 1.0, "Background {fresh:?}, after Header & Footer {after:?}");
 }

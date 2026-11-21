@@ -43,7 +43,7 @@ impl PdfCraftApp {
                     continue;
                 }
             };
-            let (kind, pdf) = match self.session.convert_to_pdf(&name, &Arc::new(bytes)) {
+            let (kind, pdf) = match self.session.convert_to_pdf_inline(&name, &Arc::new(bytes)) {
                 Ok(converted) => converted,
                 Err(error) => {
                     refused.push(format!("{name} ({error})"));
@@ -111,7 +111,7 @@ impl PdfCraftApp {
         let sources = std::iter::from_fn(|| {
             loop {
                 match files.next()? {
-                    Ok((name, bytes)) => match session.convert_to_pdf(&name, &Arc::new(bytes)) {
+                    Ok((name, bytes)) => match session.convert_to_pdf_inline(&name, &Arc::new(bytes)) {
                         Ok((_, pdf)) => {
                             converted += 1;
                             return Some(Ok((stem(&name).to_string(), pdf, None)));
