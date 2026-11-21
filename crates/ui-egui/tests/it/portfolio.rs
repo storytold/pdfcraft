@@ -424,6 +424,8 @@ fn opened_from_file(pdf: Vec<u8>, test: &str) -> (Harness<'static, PdfCraftApp>,
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         app.right_panel_closed = true;
+        // The file watcher looks once per frame on the test's thread, as in `reload.rs`.
+        app.run_inline = true;
         app.open_bytes("portfolio.pdf", Some(open.clone()), pdf.clone()).unwrap();
         app
     });
@@ -491,4 +493,49 @@ fn a_file_shown_opens_at_its_own_initial_view() {
     assert_eq!(shown(&h, 0).as_deref(), Some("two.pdf"));
     assert_eq!(h.state().views[0].current, 1, "on the page its /OpenAction names");
     assert_eq!(h.state().right, Some(RightPanel::PortfolioFiles));
+}
+
+/// Save on a portfolio's tab showing one of its files saves the portfolio even when it has no
+/// changes, on its own pages: Save As writes the portfolio, not the file shown.
+#[test]
+fn save_on_a_portfolios_tab_is_for_the_portfolio_even_without_changes() {
+    let (mut h, _path) = opened_from_file(portfolio("/Collection << /D (one.pdf) >>", &[("one.pdf", PAGE), ("two.pdf", PAGE)]), "save-clean");
+    assert_eq!(shown(&h, 0).as_deref(), Some("one.pdf"));
+    h.state_mut().save_view(0, pdfcraft_ui_egui::SaveTarget::InPlace);
+    h.run_steps(2);
+    assert_eq!(shown(&h, 0).as_deref(), Some("portfolio.pdf"));
+}
+
+/// Opening a portfolio already open with a display asked for (as a launch with a page layout
+/// does) applies it to the portfolio's own pages, not to the file its tab shows.
+#[test]
+fn opening_an_open_portfolio_with_a_display_applies_it_to_the_portfolio() {
+    let (mut h, path) = opened_from_file(portfolio("/Collection << /D (one.pdf) >>", &[("one.pdf", PAGE), ("two.pdf", PAGE)]), "display");
+    assert_eq!(shown(&h, 0).as_deref(), Some("one.pdf"));
+    h.state_mut().open_path_with_display(&path, pdfcraft_ui_egui::canvas::PageLayout::TwoUp, true);
+    h.run_steps(4);
+    assert_eq!(h.state().views.len(), 1);
+    assert_eq!(shown(&h, 0).as_deref(), Some("portfolio.pdf"));
+    assert_eq!(h.state().views[0].layout, pdfcraft_ui_egui::canvas::PageLayout::TwoUp);
+}
+
+/// The portfolio's file is watched while its tab shows one of its files: a new version on disk
+/// reloads the portfolio, on its own pages, and a file picked again comes from the new version.
+#[test]
+fn a_portfolio_rewritten_on_disk_reloads_while_its_tab_shows_a_file() {
+    let (mut h, path) = opened_from_file(portfolio("/Collection << /D (one.pdf) >>", &[("one.pdf", PAGE), ("two.pdf", PAGE)]), "reload");
+    assert_eq!(shown(&h, 0).as_deref(), Some("one.pdf"));
+    row(&h, "two.pdf").click();
+    h.run_steps(2);
+    // A build rewrites it: one.pdf now has two pages; a later modification time.
+    std::fs::write(&path, portfolio("/Collection << /D (one.pdf) >>", &[("one.pdf", PAGES), ("two.pdf", PAGE)])).unwrap();
+    let file = std::fs::File::options().write(true).open(&path).unwrap();
+    file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60)).unwrap();
+    drop(file);
+    crate::support::wait_until(&mut h, "the portfolio reloaded", |app| app.views[0].id == app.tab_doc(0).unwrap());
+    row(&h, "one.pdf").click();
+    h.run_steps(2);
+    let s = h.state();
+    assert_eq!(shown(&h, 0).as_deref(), Some("one.pdf"));
+    assert_eq!(s.session.get(s.views[0].id).unwrap().info.pages.len(), 2, "from the new version, not the one shown before");
 }

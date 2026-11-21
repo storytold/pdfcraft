@@ -200,7 +200,22 @@ impl PdfCraftApp {
     /// The documents a closing portfolio tab put aside, closed with it unless another tab
     /// shows them (split view).
     pub(crate) fn close_parked(&mut self, tab: PortfolioTab) {
-        for id in tab.parked_docs().collect::<Vec<_>>() {
+        self.close_docs_left(tab.parked_docs().collect());
+    }
+
+    /// Portfolio tab `index`, showing the portfolio's own pages, drops the views of the files it
+    /// showed and closes their documents: the portfolio was replaced (its file changed on disk),
+    /// so a file picked again opens from the new version.
+    pub(crate) fn forget_portfolio_files(&mut self, index: usize) {
+        let Some(tab) = self.views.get_mut(index).and_then(|v| v.portfolio.as_mut()) else { return };
+        let (own, files): (Vec<_>, Vec<_>) = std::mem::take(&mut tab.parked).into_iter().partition(|(key, _)| key.is_none());
+        tab.parked = own;
+        self.close_docs_left(files.into_iter().map(|(_, view)| view.id).collect());
+    }
+
+    /// Close each of `ids` that no tab shows or keeps aside any more.
+    fn close_docs_left(&mut self, ids: Vec<DocId>) {
+        for id in ids {
             if !self.doc_in_a_tab(id) {
                 self.placed_signatures.remove(&id);
                 self.forget_recovery(id);

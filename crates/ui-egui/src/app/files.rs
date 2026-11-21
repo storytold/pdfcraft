@@ -839,6 +839,12 @@ impl PdfCraftApp {
         if let Some(i) = self.tab_showing(path) {
             self.startup_superseded = true;
             self.active = Some(i);
+            // A portfolio's tab showing one of its files: what was asked of the portfolio (a
+            // destination, a display, a tool) is done on the portfolio's own pages. Only coming
+            // to the front leaves the file shown.
+            if after_open.is_some() || then.is_some() || display_override.is_some() {
+                self.show_in_portfolio_tab(i, None);
+            }
             if let Some((layout, continuous)) = display_override
                 && let Some(view) = self.views.get_mut(i)
             {
