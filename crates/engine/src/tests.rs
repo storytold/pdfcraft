@@ -14079,6 +14079,28 @@ fn a_batch_that_applies_redactions_and_copies_a_page_is_refused() {
     assert!(page_texts(&s, id).iter().all(|t| !t.contains("SECRET42")), "{:?}", page_texts(&s, id));
 }
 
+/// Adding a page from a template after applying redactions in the same batch is refused as
+/// copying a page is (#7919): the new page can't be tied to the marks either.
+#[test]
+fn a_batch_that_applies_redactions_and_spawns_a_template_is_refused() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let body = "BT /F1 16 Tf 20 150 Td (Public words then SECRET42) Tj ET";
+    let page = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /Names << /Pages << /Names [(Sheet) 3 0 R] >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 300] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_string(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
+    ]);
+    let id = s.open("batch.pdf", None, Arc::new(page), None).unwrap();
+    mark_shown_text(&mut s, id, "SECRET42");
+    let spawn = Edit::SpawnTemplate { name: "Sheet".into(), at: 1, rename: false };
+    let refused = s.apply(id, Edit::Batch { label: "x".into(), edits: vec![Edit::ApplyRedactions { pages: None }, spawn] });
+    assert!(matches!(&refused, Err(EditError::Invalid(m)) if m.contains("template")), "{refused:?}");
+    assert!(page_texts(&s, id)[0].contains("SECRET42"), "nothing changed");
+    assert_eq!(s.get(id).unwrap().redaction_marks(), 1);
+}
+
 /// A reset in an opening script reaches a field of a row an earlier opening script added, before
 /// the form is laid out again with the row's widgets: its data goes back to its default and stays
 /// so when the form is saved.

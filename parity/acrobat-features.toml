@@ -6002,8 +6002,8 @@ milestone = "M8"
 status = "shipped"
 commands = ["redact.apply"]
 tools = ["redact_apply"]
-evidence = ["crates/redact/src/tests.rs::unreadable_content_fails_closed", "crates/engine/src/tests.rs::redaction_marks_apply_for_good_and_undo"]
-notes = "re-reads redacted pages; residue or unreadable content fails the whole operation"
+evidence = ["crates/redact/src/tests.rs::unreadable_content_fails_closed", "crates/engine/src/tests.rs::redaction_marks_apply_for_good_and_undo", "crates/redact/src/tests/templates.rs::apply_refuses_a_term_a_hidden_template_repeats"]
+notes = "re-reads redacted pages; residue or unreadable content fails the whole operation. A document with page templates kept off its pages (/Names /Templates, or /Names /Pages naming a page outside the page tree), which redaction does not reach, is refused until Remove hidden information (Form fields) removes them (#7919)"
 
 [[feature]]
 id = "protect.redact-filename-suffix"
@@ -6038,8 +6038,8 @@ milestone = "M8"
 status = "shipped"
 commands = ["protect.remove_hidden"]
 tools = ["doc_hidden_info", "doc_remove_hidden"]
-evidence = ["crates/redact/src/tests.rs::hidden_information_is_counted_and_removed", "crates/ui-egui/tests/it/redact.rs::removing_hidden_information_and_sanitizing", "crates/automation/tests/it/automation.rs::removing_hidden_information_through_tools", "crates/redact/src/tests.rs::removed_links_and_comments_leave_the_structure_tree_and_the_saved_file"]
-notes = "metadata, attachments, comments, form fields (flattened), hidden text, hidden layers, bookmarks, links/actions/scripts (with the structure tree's references to removed links and comments, #2447), private data; overlapping objects and cropped content pending"
+evidence = ["crates/redact/src/tests.rs::hidden_information_is_counted_and_removed", "crates/ui-egui/tests/it/redact.rs::removing_hidden_information_and_sanitizing", "crates/automation/tests/it/automation.rs::removing_hidden_information_through_tools", "crates/redact/src/tests.rs::removed_links_and_comments_leave_the_structure_tree_and_the_saved_file", "crates/redact/src/tests/templates.rs::form_fields_removes_a_hidden_template_and_its_text", "crates/redact/src/tests/templates.rs::a_password_on_a_hidden_template_leaves_with_form_fields"]
+notes = "metadata, attachments, comments, form fields (flattened, with the page templates a form keeps off its pages and the field values on them, #7919), hidden text, hidden layers, bookmarks, links/actions/scripts (with the structure tree's references to removed links and comments, #2447), private data; overlapping objects and cropped content pending"
 
 [[feature]]
 id = "protect.sanitize"

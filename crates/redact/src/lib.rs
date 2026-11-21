@@ -83,6 +83,13 @@ pub enum RedactError {
     Pattern { page: usize, reason: PatternProblem },
     #[error("{0}")]
     Undrawable(String),
+    /// The document keeps pages out of the page tree as page templates (`/Names /Templates`, or
+    /// `/Names /Pages` naming a page the tree doesn't hold). Redaction reaches only the page
+    /// tree, so text a mark removes could stay on a template and in the saved file (#7919).
+    #[error(
+        "the document has {0} page template(s) kept off its pages, which redaction can't reach, so what the marks remove could stay in the file on them; nothing was changed. Remove hidden information (Form fields) removes them; then apply again"
+    )]
+    HiddenTemplates(usize),
     #[error(
         "page {0} has vertical-writing text while a redaction mark is pending, and PdfCraft cannot tell whether that text lies under the mark yet, so nothing was changed"
     )]
@@ -578,6 +585,12 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
             "{}; change or clear that mark's overlay text, then apply again (nothing was redacted)",
             pdfcraft_fonts::undrawable_message(&format!("the overlay text of a redaction mark on page {}", m.page + 1), c)
         )));
+    }
+    // Pages kept off the page tree are not redacted below, yet a full save writes them: one can
+    // repeat what a mark removes, or share the content stream a marked page had.
+    let templates = sanitize::hidden_templates(doc).0;
+    if templates > 0 {
+        return Err(RedactError::HiddenTemplates(templates));
     }
     let kept_before = globals::kept(doc)?;
     let mut report = Report { marks: chosen.len(), ..Report::default() };
