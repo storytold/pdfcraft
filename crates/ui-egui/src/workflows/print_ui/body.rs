@@ -670,6 +670,11 @@ pub(crate) fn body(
                     for pl in &sheet.placed {
                         let (dw, dh) = sizes[pl.page];
                         let [x0, y0, x1, y1] = pl.clip;
+                        // Poster tiles can extend past the artwork. Leave the unused paper white.
+                        let (x0, y0, x1, y1) = (x0.max(0.0), y0.max(0.0), x1.min(dw), y1.min(dh));
+                        if x1 <= x0 || y1 <= y0 {
+                            continue;
+                        }
                         let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| {
                             let (sx, sy) = pl.matrix.apply(x, y);
                             to_screen(sx, sy)
@@ -810,6 +815,30 @@ mod tests {
     /// The row the settings column really gives the header: `body` sets it to 470 px, less the
     /// frame's 10 px margins.
     const PANEL_ROW: f32 = 450.0;
+
+    #[test]
+    fn poster_preview_clips_the_mesh_to_the_source_page() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(theme::font_definitions());
+        let tex = egui::TextureId::User(7952);
+        let mut draft = PrintDraft { handling: Handling::Poster, ..Default::default() };
+        let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1100.0, 800.0))), ..Default::default() };
+        let output = ctx.run_ui(input, |ui| {
+            let tokens = Tokens::get(ui.ctx());
+            let _ = body(ui, &mut draft, &tokens, &[(100.0, 200.0)], &["1".into()], &mut |_| Some(tex));
+        });
+        let mesh = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Mesh(mesh) if mesh.texture_id == tex => Some(mesh),
+                _ => None,
+            })
+            .expect("page preview mesh");
+        assert!(mesh.vertices.iter().all(|v| (0.0..=1.0).contains(&v.uv.x) && (0.0..=1.0).contains(&v.uv.y)));
+        let bounds = mesh.calc_bounds();
+        assert!((2.0 * bounds.width() - bounds.height()).abs() < 0.01, "{bounds:?}");
+    }
 
     /// One frame of the header at `width`, drawn in the app's own fonts; with `hover`, the pointer
     /// is parked on the title and the frames after the first are run so that a tooltip can come up.
