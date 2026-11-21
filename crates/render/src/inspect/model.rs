@@ -814,6 +814,99 @@ pub enum AttachmentSource {
     Annotation { page: usize, index: usize },
 }
 
+/// A PDF 2.0 associated file (ISO 32000-2 §14.13): a file specification an owner lists in its
+/// `/AF` array, with the file embedded under its `/EF`. One reachable from several owners (by
+/// the same object) is listed once, with each owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssociatedFile {
+    /// The owners whose `/AF` arrays list it, in reading order (the document, then each page
+    /// followed by its annotations), at most [`MAX_ASSOCIATED_FILE_OWNERS`]. Never empty: the
+    /// file's bytes are read through the first.
+    pub owners: Vec<AssociatedFileOwner>,
+    /// The entry's position in the first owner's `/AF` array.
+    pub index: usize,
+    /// The file name: `/UF`, else `/F`.
+    pub name: Option<String>,
+    pub relationship: AssociatedFileRelationship,
+    /// `/Desc`.
+    pub description: Option<String>,
+    /// The embedded file stream's `/Subtype`, a media type such as `text/xml`.
+    pub mime: Option<String>,
+    /// The size in bytes its `/Params /Size` gives, when it gives one that is not negative.
+    pub size: Option<u64>,
+}
+
+/// At most this many owners are kept for one associated file.
+pub const MAX_ASSOCIATED_FILE_OWNERS: usize = 64;
+
+/// What lists an associated file in its `/AF` array. Pages and annotations are 0-based; an
+/// annotation is its position in the page's `/Annots`, as in [`AttachmentSource::Annotation`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AssociatedFileOwner {
+    /// The document catalog.
+    Document,
+    Page {
+        page: usize,
+    },
+    Annotation {
+        page: usize,
+        index: usize,
+    },
+}
+
+/// How an associated file relates to its owner (`/AFRelationship`, ISO 32000-2 Table 43). A name
+/// the standard doesn't define is kept as given; the default is `Unspecified`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AssociatedFileRelationship {
+    Source,
+    Data,
+    Alternative,
+    Supplement,
+    EncryptedPayload,
+    FormData,
+    Schema,
+    Unspecified,
+    /// Another name, as the file wrote it.
+    Other(String),
+}
+
+impl AssociatedFileRelationship {
+    /// The relationship a name gives.
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "Source" => Self::Source,
+            "Data" => Self::Data,
+            "Alternative" => Self::Alternative,
+            "Supplement" => Self::Supplement,
+            "EncryptedPayload" => Self::EncryptedPayload,
+            "FormData" => Self::FormData,
+            "Schema" => Self::Schema,
+            "Unspecified" => Self::Unspecified,
+            other => Self::Other(other.to_owned()),
+        }
+    }
+
+    /// The name, as `/AFRelationship` writes it.
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Source => "Source",
+            Self::Data => "Data",
+            Self::Alternative => "Alternative",
+            Self::Supplement => "Supplement",
+            Self::EncryptedPayload => "EncryptedPayload",
+            Self::FormData => "FormData",
+            Self::Schema => "Schema",
+            Self::Unspecified => "Unspecified",
+            Self::Other(name) => name,
+        }
+    }
+
+    /// Whether the standard defines it.
+    pub fn is_standard(&self) -> bool {
+        !matches!(self, Self::Other(_))
+    }
+}
+
 /// A PDF portfolio: a catalog with a `/Collection` (ISO 32000-2 §7.11.6, Table 153). Its pages
 /// are a cover sheet for viewers that show no file list; its documents are its attachments.
 #[derive(Clone, Debug, PartialEq, Eq)]

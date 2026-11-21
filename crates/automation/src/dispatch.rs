@@ -829,6 +829,21 @@ impl Automation {
                 let edit = Edit::EditAttachmentDescription { key, description: Some(a.str("description")?.into()) };
                 self.apply(&a, edit)?
             }
+            "associated_file_save" => {
+                // The path first: a refusal by the roots doesn't depend on the document.
+                let path = self.resolve(a.str("path")?, true)?;
+                let n = a.int("file")?;
+                let doc = self.doc(&a)?;
+                let count = doc.info.associated_files.len();
+                let file =
+                    usize::try_from(n).ok().and_then(|n| n.checked_sub(1)).and_then(|i| doc.info.associated_files.get(i)).ok_or_else(|| {
+                        ToolError::InvalidArgs(format!("file {n} is out of range: the document lists {count} associated files (doc_info)"))
+                    })?;
+                let bytes = pdfcraft_render::associated_file_data(&doc.bytes, doc.password.as_deref(), file).map_err(failed)?;
+                let (name, relationship) = (file.name.clone(), file.relationship.name().to_owned());
+                write_atomic(&path, &bytes)?;
+                json!({ "path": path.to_string_lossy(), "file": n, "name": name, "relationship": relationship, "bytes": bytes.len() })
+            }
             "doc_remove_hidden" => self.doc_remove_hidden(&a)?,
             "doc_audit_redactions" => self.doc_audit_redactions(&a)?,
             "fill_sign_add" => self.fill_sign_add(&a)?,

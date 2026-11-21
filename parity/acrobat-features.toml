@@ -438,11 +438,11 @@ title = "PDF 2.0 associated files (/AF)"
 area = "A"
 tier = "P1"
 milestone = "M2"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["doc_info", "associated_file_save"]
+evidence = ["crates/render/src/inspect/associated_tests.rs::associated_files_of_the_document_pages_and_annotations_are_listed_and_extracted", "crates/render/src/inspect/associated_tests.rs::malformed_and_cyclic_associated_files_are_skipped_with_a_reason", "crates/render/src/inspect/associated_tests.rs::the_associated_file_list_and_its_notes_are_capped", "crates/automation/tests/it/associated_files.rs::associated_files_are_listed_and_saved_through_the_tools", "crates/automation/tests/it/associated_files.rs::cyclic_associated_file_arrays_are_read_once"]
+notes = "Read-only (ISO 32000-2 14.13, 7.11.3-7.11.4): the /AF arrays of the catalog, of pages and of annotations are listed in doc_info's associated_files with their owners, file name (/UF, then /F), /AFRelationship (default Unspecified; a name the standard doesn't define is kept as given), /Desc, /Subtype and /Params /Size; associated_file_save writes one, decoded, inside the write root. An entry several owners reach by the same object is listed once with each owner; references are followed with a bound, at most 4096 files and 65536 entries are read, and entries that aren't file specifications or have no embedded file stream under /EF are left out, each with a note in associated_file_notes. A stream that can't be decoded is listed and its save fails with the reason (it isn't decoded to list it). Not yet: adding, editing and removing associated files and writing /AFRelationship; /AF on form XObjects, structure elements and marked content; showing them in the app's Attachments panel."
 
 [[feature]]
 id = "core.pdf20-dpart"

@@ -249,6 +249,7 @@ fn tools_that_write_a_path_are_held_to_the_write_root() {
             ("doc_export_images", json!({"doc": 1, "folder": file("renders")})),
             ("doc_export_all_images", json!({"doc": 1, "folder": file("images")})),
             ("image_save", json!({"doc": 1, "page": 1, "image": 1, "path": file("image.png")})),
+            ("associated_file_save", json!({"doc": 1, "file": 1, "path": file("associated.xml")})),
             ("measure_export", json!({"doc": 1, "out": file("measurements.csv")})),
             ("comments_summarize", json!({"doc": 1, "out": file("summary.pdf")})),
             ("accessibility_report", json!({"doc": 1, "path": file("report.html")})),
