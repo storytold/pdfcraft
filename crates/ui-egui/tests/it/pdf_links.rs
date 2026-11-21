@@ -134,7 +134,6 @@ const POSITIONED: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
-#[ignore = "known gap of the egui-to-craft port: see docs/port-known-gaps.md"]
 #[test]
 fn an_appearance_edit_keeps_the_destination_as_written() {
     use pdfcraft_render::{DestView, LinkTarget};
@@ -144,6 +143,7 @@ fn an_appearance_edit_keeps_the_destination_as_written() {
             let mut app = crate::control::new_app();
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.open_bytes(&egui::Context::default(), "positioned.pdf", None, POSITIONED.to_vec()).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
             app
         }
     });
@@ -160,8 +160,17 @@ fn an_appearance_edit_keeps_the_destination_as_written() {
     let c = at(&h, 100.0, 350.0);
     double_click(&mut h, c);
     h.get_by_role_and_label(Role::Dialog, "Link Properties");
-    h.get_by_label("Red").click();
-    h.run_steps(3);
+    h.get_by_role_and_label(Role::ComboBox, "Link Type").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::ListBoxOption, "Visible Rectangle").click();
+    h.run_steps(2);
+    h.get_by_label("Other colour…").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::TextInput, "Hex color").click();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.get_by_role_and_label(Role::TextInput, "Hex color").type_text("FF0000");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
     assert_eq!(links(&h)[0].style.color, [1.0, 0.0, 0.0], "the edit applied");
