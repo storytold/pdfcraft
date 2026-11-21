@@ -20,13 +20,20 @@ pub(super) fn load_options(password: Option<&str>) -> LoadOptions {
 /// but must still catch an edit that produced something the viewer cannot display, so the
 /// caller can roll it back. Never panics: parser crashes are caught and reported.
 pub fn check_pages(bytes: Arc<Vec<u8>>, password: Option<&str>, expected: usize) -> Result<(), OpenError> {
-    let pdf = crate::backend::open(bytes, password)?;
-    let pages = catch_unwind(AssertUnwindSafe(|| pdf.pages().len()))
-        .map_err(|p| OpenError::Invalid(format!("the page tree could not be read: {}", crate::raster::panic_message(&p))))?;
+    let pages = page_count(bytes, password)?;
     if pages != expected {
         return Err(OpenError::Invalid(format!("the edit changed the page count from {expected} to {pages}")));
     }
     Ok(())
+}
+
+/// How many pages the viewer reads from `bytes`, for a caller that tells a page count other than
+/// the one it expects apart from a file that doesn't open ([`check_pages`] reports both as
+/// [`OpenError::Invalid`]). Never panics: parser crashes are caught and reported.
+pub fn page_count(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<usize, OpenError> {
+    let pdf = crate::backend::open(bytes, password)?;
+    catch_unwind(AssertUnwindSafe(|| pdf.pages().len()))
+        .map_err(|p| OpenError::Invalid(format!("the page tree could not be read: {}", crate::raster::panic_message(&p))))
 }
 
 /// Inspect a document. Fails only if the renderer itself cannot open the file (or needs a

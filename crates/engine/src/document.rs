@@ -483,6 +483,23 @@ impl Document {
         self.editor.as_ref().map(|e| pdfcraft_organize::initial_view(&e.cos)).unwrap_or_default()
     }
 
+    /// Refuses when the pages shown are not the pages the editor's page-tree walk finds
+    /// (`pdfcraft_model::pages`): a damaged page tree that the viewer reads one way and the
+    /// object model another. A page edit, Extract or Split names pages as they are shown and acts
+    /// on the tree the editor walks, so it would rotate, delete or copy another page than the one
+    /// picked, or save a document with pages missing. Nothing is changed.
+    pub(crate) fn check_page_tree(&self) -> Result<(), EditError> {
+        let Some(editor) = self.editor.as_ref() else { return Ok(()) };
+        let shown = self.info.pages.len();
+        let walked = pdfcraft_model::pages(&editor.cos).len();
+        if shown == walked {
+            return Ok(());
+        }
+        Err(EditError::Invalid(format!(
+            "this document's page tree is damaged: it shows {shown} page(s), but its page tree leads to {walked}, so this change could act on another page than the one picked or leave pages out (nothing was changed)"
+        )))
+    }
+
     /// Signed: at least one signature field holds a signature.
     pub fn is_signed(&self) -> bool {
         self.signatures.iter().any(|s| s.signed)
