@@ -275,7 +275,7 @@ impl PdfCraftApp {
             if !self.still_pick_target(target) {
                 continue;
             }
-            // Last-resort guard (AGENTS.md §4), as for commands: this work used to run inside
+            // Last-resort guard (app-agents.md rule 13), as for commands: this work used to run inside
             // the command that asked, and a panic in it must not take the app down.
             if let Err(m) = pdfcraft_engine::guard(|| then(self, paths)) {
                 self.notify_fmt("That didn't work: an internal error stopped it ({m}).", &[("m", m.as_str())]);
