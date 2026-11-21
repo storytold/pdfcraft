@@ -109,7 +109,11 @@ fn title_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             doc_tabs::strip(app, ui, Place::Main);
         },
         |ui, _| {
-            IconButton::command(IconId::new("messages-square"), "help.discord").show(ui);
+            Button::command("help.discord")
+                .label("Discord")
+                .icon(IconId::new("messages-square"))
+                .tooltip(tl!("Join the ArtCraft Discord"))
+                .show(ui);
             IconButton::command(IconId::new("circle-help"), "help.shortcuts").show(ui);
             let theme_button = IconButton::command(IconId::new(theme_icon), ThemeChoice::NextMode.command()).label(theme_label.clone()).show(ui);
             let opener = theme_button.response().clone();
