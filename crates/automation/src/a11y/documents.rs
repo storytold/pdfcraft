@@ -173,10 +173,31 @@ impl Automation {
         Ok((old, new))
     }
 
+    fn compare_pages_arg(&self, a: &Args) -> Result<Vec<usize>> {
+        let Some(raw) = a.opt_ints("pages")? else { return Ok(Vec::new()) };
+        if raw.is_empty() {
+            return Err(ToolError::InvalidArgs("pages must list at least one page".into()));
+        }
+        let new = self.doc(a)?.id;
+        let other = a.int("other")?;
+        let max_pages = [new, u64::try_from(other).ok().and_then(|o| self.session.get(pdfcraft_engine::DocId(o))).map(|d| d.id).unwrap_or(new)]
+            .iter()
+            .filter_map(|id| self.session.get(*id))
+            .map(|d| d.info.pages.len())
+            .max()
+            .unwrap_or(0);
+        let pages = crate::json::one_based(&raw)?;
+        if let Some(p) = pages.iter().find(|p| **p >= max_pages) {
+            return Err(ToolError::InvalidArgs(format!("page {} is out of range: the document has {max_pages} pages", p + 1)));
+        }
+        Ok(pages)
+    }
+
     pub(crate) fn doc_compare(&self, a: &Args) -> Result<Value> {
         use pdfcraft_engine::compare::Kind;
         let (old, new) = self.compare_ids(a)?;
-        let c = self.session.compare(old, new).map_err(failed)?;
+        let pages = self.compare_pages_arg(a)?;
+        let c = self.session.compare_pages(old, new, &pages).map_err(failed)?;
         let limit = a.opt_int("limit")?.unwrap_or(500).max(1) as usize;
         let r2 = |r: &[f64; 4]| r.map(|v| (v * 100.0).round() / 100.0);
         let side =
@@ -188,7 +209,12 @@ impl Automation {
             .map(|ch| json!({ "kind": ch.kind.label().to_lowercase(), "old": side(&ch.old), "new": side(&ch.new) }))
             .collect();
         let visual: Vec<Value> = if a.opt_bool("visual")?.unwrap_or(false) {
-            self.session.compare_visual(old, new, 72.0).map_err(failed)?.iter().map(|(p, r)| json!({ "page": p + 1, "rect": r2(r) })).collect()
+            self.session
+                .compare_visual_on_pages(old, new, 72.0, &pages)
+                .map_err(failed)?
+                .iter()
+                .map(|(p, r)| json!({ "page": p + 1, "rect": r2(r) }))
+                .collect()
         } else {
             Vec::new()
         };
@@ -206,7 +232,8 @@ impl Automation {
 
     pub(crate) fn doc_compare_report(&self, a: &Args) -> Result<Value> {
         let (old, new) = self.compare_ids(a)?;
-        let bytes = self.session.compare_report(old, new).map_err(failed)?;
+        let pages = self.compare_pages_arg(a)?;
+        let bytes = self.session.compare_report_of(old, new, &pages).map_err(failed)?;
         let path = self.resolve(a.str("path")?, true)?;
         write_atomic(&path, &bytes)?;
         Ok(json!({ "path": path.to_string_lossy(), "bytes": bytes.len() }))
@@ -214,7 +241,19 @@ impl Automation {
 
     pub(crate) fn doc_compare_mark(&mut self, a: &Args) -> Result<Value> {
         let (old, new) = self.compare_ids(a)?;
-        let (n, out) = self.session.with_own_js_output(new, |s| s.mark_differences(old, new)).map_err(failed)?;
-        Ok(with_warnings(json!({ "comments": n }), out.errors))
+        let pages = self.compare_pages_arg(a)?;
+        // Mark one page at a time so words that repeat on an earlier page cannot be
+        // mistaken for the changed words on the page the diff actually touches.
+        let page_count =
+            self.session.get(new).map(|d| d.info.pages.len()).unwrap_or(0).max(self.session.get(old).map(|d| d.info.pages.len()).unwrap_or(0));
+        let targets: Vec<usize> = if pages.is_empty() { (0..page_count).collect() } else { pages };
+        let mut total = 0usize;
+        let mut all_errors: Vec<String> = Vec::new();
+        for page in targets {
+            let (n, out) = self.session.with_own_js_output(new, |s| s.mark_differences_of(old, new, &[page])).map_err(failed)?;
+            total += n;
+            all_errors.extend(out.errors);
+        }
+        Ok(with_warnings(json!({ "comments": total }), all_errors))
     }
 }

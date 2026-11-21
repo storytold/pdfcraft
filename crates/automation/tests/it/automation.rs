@@ -9903,6 +9903,50 @@ fn comparing_documents_through_tools() {
 /// `action_list` and `action_run`: built-in actions by name and ad-hoc steps run on files,
 /// missing inputs are reported per file, and an unknown step is refused.
 #[test]
+fn compare_pages_limits_text_comparison() {
+    let dir = workdir("compare-pages");
+    let mut a = auto(&dir);
+    let v1 = ok(&mut a, "doc_create", json!({ "from": "text", "text": "First page alpha\u{c}Second page 900" }))["doc"].as_u64().unwrap();
+    let v2 = ok(&mut a, "doc_create", json!({ "from": "text", "text": "First page beta\u{c}Second page 950" }))["doc"].as_u64().unwrap();
+    let pages = page_text(&mut a, v2);
+    assert_eq!(pages.len(), 2, "{pages:?}");
+    // Scoping the comparison to page 2 alone must report only the 950 change on page 2,
+    // not the page 1 alpha/beta change. old_words/new_words are the scoped
+    // counts for page 2 alone ("Second page 900" / "Second page 950" = 3 words each).
+    let r = ok(&mut a, "doc_compare", json!({ "doc": v2, "other": v1, "pages": [2], "visual": true }));
+    assert_eq!((r["replaced"].as_u64(), r["inserted"].as_u64(), r["deleted"].as_u64()), (Some(1), Some(0), Some(0)), "{r}");
+    assert_eq!(r["changes"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(r["changes"][0]["old"]["text"], "900", "{r}");
+    assert_eq!(r["changes"][0]["new"]["text"], "950", "{r}");
+    assert_eq!(r["changes"][0]["new"]["page"], 2, "{r}");
+    assert_eq!((r["old_words"].as_u64(), r["new_words"].as_u64()), (Some(3), Some(3)), "{r}");
+    assert!(r["visual"].as_array().unwrap().iter().all(|v| v["page"] == 2), "{r}");
+    // Scoping to page 1 alone must report only the alpha/beta change, with the
+    // page 1 word counts ("First page alpha" / "First page beta").
+    let r = ok(&mut a, "doc_compare", json!({ "doc": v2, "other": v1, "pages": [1] }));
+    assert_eq!(r["changes"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(r["changes"][0]["new"]["page"], 1, "{r}");
+    assert_eq!((r["old_words"].as_u64(), r["new_words"].as_u64()), (Some(3), Some(3)), "{r}");
+    // A deletion present only on the old document's page 2 keeps that page on
+    // both sides, so it can be marked in the new document.
+    let v3 = ok(&mut a, "doc_create", json!({ "from": "text", "text": "First page alpha\u{c}Second page 900" }))["doc"].as_u64().unwrap();
+    let v4 = ok(&mut a, "doc_create", json!({ "from": "text", "text": "First page alpha\u{c}" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_compare", json!({ "doc": v4, "other": v3, "pages": [2] }));
+    assert!(!r["changes"].as_array().unwrap().is_empty(), "{r}");
+    assert!(r["changes"].as_array().unwrap().iter().all(|ch| ch["old"]["page"] == 2 && ch["new"]["page"] == 2), "{r}");
+}
+
+#[test]
+fn doc_compare_mark_rejects_an_empty_pages_array() {
+    let dir = workdir("compare-mark-empty-pages");
+    let mut a = auto(&dir);
+    let v1 = ok(&mut a, "doc_create", json!({ "from": "text", "text": "Rent is 900 per month." }))["doc"].as_u64().unwrap();
+    let v2 = ok(&mut a, "doc_create", json!({ "from": "text", "text": "Rent is 950 per month." }))["doc"].as_u64().unwrap();
+    let refused = a.call("doc_compare_mark", &json!({ "doc": v2, "other": v1, "pages": [] }));
+    assert!(matches!(refused, Err(ToolError::InvalidArgs(_))), "{refused:?}");
+}
+
+#[test]
 fn actions_through_tools() {
     let dir = workdir("actions");
     let mut a = auto(&dir);
@@ -14745,6 +14789,36 @@ fn explicit_bundled_thai_font_choice_layout_edit_undo_and_reopen() {
     assert_eq!(page_text(&mut a, reopened), edited);
     let image = a.call("page_render", &json!({"doc":reopened,"page":1,"dpi":144})).unwrap();
     assert!(image.iter().any(|c| matches!(c, Content::Png { .. })));
+}
+
+#[test]
+fn doc_compare_mark_places_marks_on_their_pages() {
+    let dir = workdir("compare-mark-pages");
+    let mut a = auto(&dir);
+    let v1 = ok(&mut a, "doc_create", json!({ "from": "text", "text": "alpha beta\x0Cgamma delta" }))["doc"].as_u64().unwrap();
+    let v2 = ok(&mut a, "doc_create", json!({ "from": "text", "text": "alpha one\x0Ctwo delta" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_compare_mark", json!({ "doc": v2, "other": v1 }));
+    assert_eq!(r["comments"], 2, "{r}");
+    let list = ok(&mut a, "comment_list", json!({ "doc": v2 }));
+    let comments = list["comments"].as_array().unwrap();
+    assert_eq!(comments.len(), 2, "{list}");
+    let pages: Vec<u64> = comments.iter().map(|c| c["page"].as_u64().unwrap()).collect();
+    assert!(pages.contains(&1) && pages.contains(&2), "{list}");
+}
+
+#[test]
+fn doc_compare_mark_does_not_place_repeated_text_on_an_earlier_page() {
+    let dir = workdir("compare-mark-repeated-text");
+    let mut a = auto(&dir);
+    let v1 = ok(&mut a, "doc_create", json!({ "from": "text", "text": "same\x0Cother" }))["doc"].as_u64().unwrap();
+    let v2 = ok(&mut a, "doc_create", json!({ "from": "text", "text": "same\x0Csame" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_compare_mark", json!({ "doc": v2, "other": v1 }));
+    assert_eq!(r["comments"], 1, "{r}");
+    let list = ok(&mut a, "comment_list", json!({ "doc": v2 }));
+    let comments = list["comments"].as_array().unwrap();
+    assert_eq!(comments.len(), 1, "{list}");
+    let pages: Vec<u64> = comments.iter().map(|c| c["page"].as_u64().unwrap()).collect();
+    assert_eq!(pages, vec![2], "{list}");
 }
 
 /// `text_prepare` refuses what it can't act on, changing nothing: a page with no grouped text
