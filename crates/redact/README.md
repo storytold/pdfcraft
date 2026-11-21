@@ -161,10 +161,16 @@ This limits appearance generation; it is not a limit on the input PDF or the who
 
 Structure cleanup resolves named MCIDs and indirect content references. Form content
 references are updated to the cleaned copy; unchanged sibling descriptions remain. The structure
-tree's object references (`/OBJR`) to the annotations and form fields `apply` removes are dropped,
-as Sanitize drops them, so a full rewrite of a tagged PDF can't keep a removed comment or field value.
-A tree where that can't be done (an element written in place, or one too large to walk) makes
-`apply` fail with `RedactError::Tags` rather than leave the annotation reachable.
+tree's object references (`/OBJR`) to the annotations, form fields, images and forms `apply` removes
+are dropped, as Sanitize drops them, so a full rewrite of a tagged PDF can't keep a removed comment,
+field value or image. A tree where that can't be done (an element written in place, or one too large
+to walk) makes `apply` fail with `RedactError::Tags` rather than leave the annotation reachable.
+
+Form actions name what they act on by reference: a ResetForm or SubmitForm action's `/Fields` and a
+Hide action's `/T` lose the annotations and fields `apply` removes, wherever the action is (an
+annotation's `/A` or `/AA`, a page or the document, a `/Next` chain). Any other reference that would
+still keep a removed annotation or field in a full save makes `apply` fail with
+`RedactError::StillReferred`, which names the object holding it.
 
 Replacement descriptions (`/Alt`, `/ActualText`, `/E`) are removed from marked-content spans
 changed by cleanup, from every structure element above them (found through both `/P` and `/K`),

@@ -957,3 +957,103 @@ fn many_names_of_a_redacted_image_are_unlinked_reading_inherited_forms_once() {
     assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
     assert!(!full_save_holds(&doc, b"IMAGESECRET"), "an alias kept the removed image reachable");
 }
+
+/// One page drawing `content` with font /F1 and `resources`, the page keys `page`, the catalog
+/// keys `catalog`, and `extra` from object 7 on.
+fn page_with(content: &[u8], catalog: &str, resources: &str, page: &str, extra: Vec<Vec<u8>>) -> Document {
+    let mut objs = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R {catalog} >>").into_bytes(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> {resources} >> {page} >>")
+            .into_bytes(),
+        stream("", content),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+    ];
+    objs.extend(extra);
+    pdf(objs)
+}
+
+/// A reset button the mark misses lists the redacted field in its action's `/Fields` (#7885): that
+/// reference must not keep the field and its value in the saved file.
+#[test]
+fn a_redacted_field_a_reset_button_names_leaves_the_saved_file() {
+    let mut doc = page_with(
+        b"",
+        "/AcroForm << /Fields [7 0 R 8 0 R] >>",
+        "",
+        "/Annots [7 0 R 8 0 R]",
+        vec![
+            b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (ssn) /V (SSNSECRETV06) /Rect [10 50 100 70] /P 3 0 R >>".to_vec(),
+            b"<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (reset) /Rect [200 200 250 220] /P 3 0 R /A << /S /ResetForm /Fields [7 0 R] >> >>"
+                .to_vec(),
+        ],
+    );
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().fields, 1);
+    assert!(pdfcraft_forms::fields(&doc).iter().any(|f| f.name == "reset"), "the button the mark misses stays");
+    assert!(!full_save_holds(&doc, b"SSNSECRETV06"), "the reset action kept the redacted field");
+}
+
+/// A link the mark misses hides a comment under it (a Hide action's `/T`, #7885): the comment and
+/// its text must not stay in the saved file.
+#[test]
+fn a_redacted_comment_a_hide_action_names_leaves_the_saved_file() {
+    let mut doc = page_with(
+        b"",
+        "",
+        "",
+        "/Annots [7 0 R 8 0 R]",
+        vec![
+            b"<< /Type /Annot /Subtype /FreeText /Rect [10 50 100 70] /Contents (HIDESECRETNOTE) /DA (/Helv 10 Tf 0 g) >>".to_vec(),
+            b"<< /Type /Annot /Subtype /Link /Rect [200 200 250 220] /A << /S /Hide /T 7 0 R >> >>".to_vec(),
+        ],
+    );
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    apply(&mut doc, None).unwrap();
+    assert!(!full_save_holds(&doc, b"HIDESECRETNOTE"), "the hide action kept the redacted comment");
+}
+
+/// A figure tags the form the mark covers through an object reference (`/OBJR`, #7885): the
+/// original form, its text included, must not stay in the saved file.
+#[test]
+fn a_redacted_form_a_figure_tags_leaves_the_saved_file() {
+    let mut doc = page_with(
+        b"/Fm Do",
+        "/StructTreeRoot 9 0 R /MarkInfo << /Marked true >>",
+        "/XObject << /Fm 7 0 R >>",
+        "",
+        vec![
+            stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >>",
+                b"BT /F1 10 Tf 20 60 Td (OBJRFORMSECRET) Tj ET",
+            ),
+            b"<< /Type /StructElem /S /Figure /P 9 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 7 0 R /Pg 3 0 R >> >>".to_vec(),
+            b"<< /Type /StructTreeRoot /K [8 0 R] >>".to_vec(),
+        ],
+    );
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    apply(&mut doc, None).unwrap();
+    assert!(!full_save_holds(&doc, b"OBJRFORMSECRET"), "the figure's object reference kept the original form");
+}
+
+/// Any other reference that keeps a removed comment, here a rendition action's `/AN`, refuses the
+/// redaction, naming the object that holds it, and leaves the document as it was.
+#[test]
+fn a_removed_comment_another_reference_keeps_refuses_the_redaction() {
+    let mut doc = page_with(
+        b"",
+        "",
+        "",
+        "/Annots [7 0 R 8 0 R]",
+        vec![
+            b"<< /Type /Annot /Subtype /FreeText /Rect [10 50 100 70] /Contents (KEPTSECRETNOTE) /DA (/Helv 10 Tf 0 g) >>".to_vec(),
+            b"<< /Type /Annot /Subtype /Link /Rect [200 200 250 220] /A << /S /Rendition /OP 0 /AN 7 0 R >> >>".to_vec(),
+        ],
+    );
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    let before = marks(&doc).len();
+    let refused = apply(&mut doc, None);
+    assert!(matches!(refused, Err(RedactError::StillReferred { removed: 7, by: Some(8) })), "{refused:?}");
+    assert_eq!(marks(&doc).len(), before, "a refused redaction changes nothing");
+}
