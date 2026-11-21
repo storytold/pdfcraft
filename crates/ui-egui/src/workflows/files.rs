@@ -252,27 +252,7 @@ pub(crate) fn file_stem_from_user(name: &str) -> String {
     if reserved { format!("_{stem}") } else { stem.to_string() }
 }
 
-/// A plain file name for a PDF-supplied attachment name: the Save suggestion, and the tab name
-/// (which later names files written from that tab). It never changes the stored name or a
-/// destination the user selected.
-pub(crate) fn attachment_file_name(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .filter(|c| !c.is_control() && !matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
-        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
-        .collect();
-    let name = cleaned.trim_start().trim_end_matches(|c: char| c == '.' || c.is_whitespace());
-    if name.is_empty() {
-        return "attachment".into();
-    }
-    let device = name.split('.').next().unwrap_or_default().trim_end().to_ascii_uppercase();
-    let reserved = matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || device
-            .strip_prefix("COM")
-            .or_else(|| device.strip_prefix("LPT"))
-            .is_some_and(|number| matches!(number, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"));
-    if reserved { format!("_{name}") } else { name.to_string() }
-}
+pub(crate) use pdfcraft_engine::attachment_files::attachment_file_name;
 
 /// Whether `name` names a file directly inside a folder: not empty, with no `/` or `\\`, no drive
 /// (`C:`), and not ending in `.` or a space (which also rules out `.` and `..`): Windows drops a
@@ -1142,7 +1122,7 @@ impl PdfCraftApp {
 
 #[cfg(test)]
 mod stem_tests {
-    use super::{attachment_file_name, file_stem_from_user, is_plain_file_name};
+    use super::{file_stem_from_user, is_plain_file_name};
 
     #[test]
     fn user_file_names_stay_inside_the_folder_and_writable_everywhere() {
@@ -1159,43 +1139,6 @@ mod stem_tests {
         let long = file_stem_from_user(&"文".repeat(300));
         assert!(long.len() <= 200 && long.chars().all(|c| c == '文'), "{}", long.len());
     }
-    #[test]
-    fn attachment_save_name_removes_bidi_without_hiding_the_extension() {
-        assert_eq!(attachment_file_name("invoice\u{202e}fdp.exe"), "invoicefdp.exe");
-        for c in [
-            '\u{061c}', '\u{200e}', '\u{200f}', '\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}', '\u{202e}', '\u{2066}', '\u{2067}', '\u{2068}',
-            '\u{2069}',
-        ] {
-            assert_eq!(attachment_file_name(&format!("a{c}b.pdf")), "ab.pdf");
-        }
-    }
-    #[test]
-    fn attachment_save_name_preserves_ordinary_unicode_and_extensions() {
-        for name in ["report.pdf", "archive.tar.gz", "مرحبا.pdf", "שלום.txt", "資料.pdf", "می\u{200c}روم.txt", "👩\u{200d}💻.png", "COM10.txt"]
-        {
-            assert_eq!(attachment_file_name(name), name);
-        }
-    }
-    #[test]
-    fn attachment_save_name_handles_controls_paths_and_device_names() {
-        assert_eq!(attachment_file_name("a\u{0}\n\u{85}b.pdf"), "ab.pdf");
-        assert_eq!(attachment_file_name("../a\\b:c*?\"<>|.pdf"), ".._a_b_c______.pdf");
-        for name in ["NUL.tar.gz", "con.txt", "COM1.exe", "LPT9.txt", "COM¹.txt", "LPT³.pdf"] {
-            assert_eq!(attachment_file_name(name), format!("_{name}"));
-        }
-    }
-    #[test]
-    fn attachment_save_name_has_a_stable_nonempty_fallback() {
-        for name in ["", " ", ".", "..", " . . ", "\u{202e}", "\u{0}\n"] {
-            assert_eq!(attachment_file_name(name), "attachment");
-        }
-        assert_eq!(attachment_file_name(" report.pdf . \u{2003}."), "report.pdf");
-        for name in ["invoice\u{202e}fdp.exe", "../a.pdf", "NUL.txt", " . . ", "report.pdf . ", "資料.pdf"] {
-            let once = attachment_file_name(name);
-            assert_eq!(attachment_file_name(&once), once);
-        }
-    }
-
     #[test]
     fn plain_file_names_do_not_end_in_a_dot_or_a_space() {
         for good in ["report.pdf", "report", ".hidden", "a b.pdf", "資料.pdf"] {

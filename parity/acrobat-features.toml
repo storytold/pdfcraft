@@ -3534,11 +3534,11 @@ title = "Extract files from a portfolio"
 area = "D"
 tier = "P2"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["file.save_attachments"]
+tools = ["attachments_extract"]
+evidence = ["crates/automation/tests/it/attachments_extract.rs::every_file_lands_in_the_folder_without_replacing_one_and_an_unembedded_one_is_reported", "crates/automation/tests/it/attachments_extract.rs::chosen_keys_only_and_an_unknown_key_writes_nothing", "crates/ui-egui/tests/it/attachment_row.rs::save_all_files_writes_every_attachment_into_the_folder_and_keeps_what_was_there", "crates/engine/src/attachment_files.rs::a_long_attachment_name_fits_a_file_name_and_keeps_its_number_and_extension"]
+notes = "Save all files… in the Attachments panel (a portfolio's file list) and attachments_extract write the document's own attachments into a folder, each named after its attachment and made safe as a file name; a name already taken there gets \" (2)\", \" (3)\"…, so no file is replaced. Files that can't be read (still encrypted, not embedded) are reported with the reason and the others are still written. attachments_extract can take a chosen set of keys. Not yet: a portfolio's /Folders are not recreated as subfolders (every file lands in the chosen folder), choosing a subset in the panel, and saving on the web."
 
 [[feature]]
 id = "organize.portfolio-create"
