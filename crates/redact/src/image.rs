@@ -228,14 +228,32 @@ fn dct_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], w: us
     if matches!(s.dict.get(b"ImageMask"), Some(Object::Bool(true))) {
         return None;
     }
+    // With /F, readers draw another file instead of these inline bytes. Clearing the inline
+    // JPEG would leave the external picture unredacted, so remove this placement whole.
+    if data_elsewhere(doc, s) {
+        return None;
+    }
     if s.dict.get(b"BitsPerComponent").is_some_and(|b| b.as_int() != Some(8)) {
         return None;
     }
     // One or three components only: a CMYK or YCCK JPEG's samples would be written back in a space
     // its `/ColorSpace` doesn't name, so the cleared and kept pixels could paint somewhere else.
-    let ncomp = components(doc, s)?;
-    if !matches!(ncomp, 1 | 3) || !identity_decode(doc, s, ncomp) {
+    let ncomp = match &*doc.resolve(s.dict.get(b"ColorSpace")?) {
+        Object::Name(name) if matches!(name.as_slice(), b"DeviceGray" | b"G") => 1,
+        Object::Name(name) if matches!(name.as_slice(), b"DeviceRGB" | b"RGB") => 3,
+        // The decoder produces device samples, not palette indices or calibrated-space values.
+        _ => return None,
+    };
+    if !identity_decode(doc, s, ncomp) {
         return None;
+    }
+    // An explicit transform can disagree with the JPEG's markers, which control this decoder.
+    // Unsupported parameters must remove the image whole rather than shift the unmarked colours.
+    if let Some(params) = s.dict.get(b"DecodeParms").or_else(|| s.dict.get(b"DP")).map(|o| doc.resolve(o)) {
+        let entries = params.as_array().map(Vec::as_slice).unwrap_or_else(|| std::slice::from_ref(params.as_ref()));
+        if entries.iter().any(|o| doc.resolve(o).as_dict().is_some_and(|d| d.contains(b"ColorTransform"))) {
+            return None;
+        }
     }
     let (w32, h32) = (u32::try_from(w).ok()?, u32::try_from(h).ok()?);
     // The document's allowance pays for the JPEG's samples and the bytes that hold them, before its
@@ -250,7 +268,8 @@ fn dct_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], w: us
     // image can't make the decoder allocate a large one. A header that disagrees with the
     // dictionary is not an image this can clear: a mark's pixels would be at other samples.
     let read = |s: &Stream| image::ImageReader::with_format(std::io::Cursor::new(s.raw.clone()), image::ImageFormat::Jpeg);
-    if read(s).into_dimensions().ok()? != (w32, h32) {
+    let header = craft_image_codecs::jpeg_probe::probe_jpeg(&s.raw).ok()?;
+    if (header.width, header.height, usize::from(header.components)) != (w32, h32, ncomp) {
         return None;
     }
     let decoded = read(s).decode().ok()?;

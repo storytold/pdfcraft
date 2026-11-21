@@ -7551,3 +7551,58 @@ fn a_cmyk_jpeg_scan_is_still_removed_whole() {
     assert_eq!(r.images_removed, 1, "the CMYK scan is removed whole: {r:?}");
     assert!(!content(&doc, 0).contains("/Im0"));
 }
+
+#[test]
+fn jpeg_external_data_is_removed_whole_while_null_file_entries_still_clear() {
+    for spelling in ["absent", "null", "indirect null", "dangling", "file", "indirect file"] {
+        let img = stream(
+            "/Type /XObject /Subtype /Image /Width 40 /Height 40 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode",
+            jpeg_white(40, 40),
+        );
+        let mut doc = one_page(b"q 100 0 0 100 10 10 cm /Im0 Do Q", "/XObject << /Im0 7 0 R >>", vec![img]);
+        let file = match spelling {
+            "absent" => None,
+            "null" => Some(Object::Null),
+            "indirect null" => Some(Object::Ref(doc.add(Object::Null))),
+            "dangling" => Some(Object::Ref(ObjRef::new(9999, 0))),
+            "file" => Some(Object::String(pdfcraft_cos::PdfString::literal(b"outside.jpg".to_vec()))),
+            _ => Some(Object::Ref(doc.add(Object::String(pdfcraft_cos::PdfString::literal(b"outside.jpg".to_vec()))))),
+        };
+        if let Some(file) = file {
+            let Object::Stream(s) = &*doc.get(ObjRef::new(7, 0)) else { panic!("image stream") };
+            let mut copy = s.clone();
+            copy.dict.set(b"F".to_vec(), file);
+            doc.set(ObjRef::new(7, 0), Object::Stream(copy));
+        }
+        mark(&mut doc, 0, &[[40.0, 40.0, 60.0, 60.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        if matches!(spelling, "file" | "indirect file") {
+            assert_eq!((report.images_removed, report.images_cleared), (1, 0), "{spelling}");
+            assert!(!content(&doc, 0).contains(" Do"), "external picture must no longer be drawn");
+        } else {
+            assert_eq!((report.images_removed, report.images_cleared), (0, 1), "{spelling}");
+        }
+    }
+}
+
+#[test]
+fn jpeg_sample_layout_must_match_the_declared_device_space() {
+    for (space, width, params) in [
+        ("/DeviceRGB", 40, ""),
+        ("/CalGray", 40, ""),
+        ("[/Indexed /DeviceRGB 1 <000000ffffff>]", 40, ""),
+        ("/DeviceGray", 41, ""),
+        ("/DeviceGray", 40, "/DecodeParms << /ColorTransform 0 >>"),
+        ("/DeviceGray", 40, "/DecodeParms [<< /ColorTransform 1 >>]"),
+    ] {
+        let img = stream(
+            &format!("/Type /XObject /Subtype /Image /Width {width} /Height 40 /ColorSpace {space} /BitsPerComponent 8 /Filter /DCTDecode {params}"),
+            jpeg_gray(&vec![200; 40 * 40], 40, 40),
+        );
+        let mut doc = one_page(b"q 100 0 0 100 10 10 cm /Im0 Do Q", "/XObject << /Im0 7 0 R >>", vec![img]);
+        mark(&mut doc, 0, &[[40.0, 40.0, 60.0, 60.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!((report.images_removed, report.images_cleared), (1, 0), "{space}, width {width}, {params}");
+        assert!(!content(&doc, 0).contains(" Do"));
+    }
+}

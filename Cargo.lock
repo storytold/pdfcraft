@@ -5341,6 +5341,7 @@ name = "pdfcraft-redact"
 version = "0.21.1"
 dependencies = [
  "aho-corasick",
+ "craft-image-codecs",
  "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=1546550b0d4b79b8156a1fefaac8b3b317a4aee0)",
  "image",
  "pdfcraft-annot",

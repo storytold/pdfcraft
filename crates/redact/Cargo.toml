@@ -9,6 +9,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+# Reuse the workspace JPEG header probe; do not let decoder colour conversion hide a mismatch.
+craft-image-codecs = { workspace = true }
 aho-corasick = "1"
 pdfcraft-cos = { workspace = true }
 pdfcraft-content = { workspace = true }
