@@ -412,7 +412,16 @@ pub fn each_attachment_data(bytes: &[u8], password: Option<&str>, atts: &[Attach
             return;
         }
     };
-    let insp = Inspector::new(&doc);
+    let insp = match catch_unwind(AssertUnwindSafe(|| Inspector::new(&doc))) {
+        Ok(insp) => insp,
+        Err(p) => {
+            let e = crashed(p);
+            for i in 0..atts.len() {
+                each(i, Err(e.clone()));
+            }
+            return;
+        }
+    };
     for (i, att) in atts.iter().enumerate() {
         each(i, catch_unwind(AssertUnwindSafe(|| embedded_bytes(&doc, &insp, att))).unwrap_or_else(|p| Err(crashed(p))));
     }
