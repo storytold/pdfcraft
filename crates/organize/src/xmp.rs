@@ -94,8 +94,10 @@ pub(crate) fn sync_info(doc: &mut Document, key: &str, value: &str) -> Result<()
 /// [`sync_info`] can't keep the packet right. It leaves a packet it can't read (not UTF-8, a
 /// filter it can't decode, past [`MAX_XMP`]) as it was, and a property it can't rewrite in place
 /// (an attribute with no `rdf:RDF` end tag to add an element before), and adds the new `dc:`
-/// property beside the old one where the packet declares Dublin Core under another prefix.
-/// Asked before the change, while the old value can still be read.
+/// property beside the old one where the packet declares Dublin Core under another prefix. A
+/// packet that binds `dc` to another namespace anywhere goes too: its first `dc:title` may be that
+/// schema's, with Dublin Core's further on. Asked before the change, while the old value can still
+/// be read.
 ///
 /// Only Title and Author: they are what viewers that read XMP first show in their title bar and
 /// file lists, and dropping the packet also drops everything else it states.
@@ -109,7 +111,9 @@ pub(crate) fn would_go_stale(doc: &Document, key: &str, value: &str) -> bool {
     // Only a metadata stream is a packet; anything else there is left alone, as `edit_packet` does.
     matches!(&*obj, Object::Stream(_))
         && decoded_packet(&obj).is_none_or(|xmp| {
-            binds_namespace_elsewhere(&xmp, DC, name) || (has_property(&xmp, name) && set_property(&xmp, name, ns, shape, value).is_none())
+            binds_namespace_elsewhere(&xmp, DC, name)
+                || binds_prefix_elsewhere(&xmp, "dc", DC)
+                || (has_property(&xmp, name) && set_property(&xmp, name, ns, shape, value).is_none())
         })
 }
 

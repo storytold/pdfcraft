@@ -820,6 +820,24 @@ fn a_title_change_keeps_what_the_packet_holds() {
     assert_eq!(own, Some(Object::Ref(producer)), "a value /Info has of its own stays as it is");
 }
 
+/// A packet that binds `dc` to another schema on one description can hold Dublin Core's title on
+/// the next. The first `dc:title` is not the one viewers show, so the packet goes rather than keep
+/// the old title.
+#[test]
+fn a_title_change_drops_a_packet_that_binds_dc_to_another_schema() {
+    let other = LIBREOFFICE_XMP.replace(
+        "<rdf:Description rdf:about=\"\" xmlns:dc=",
+        "<rdf:Description rdf:about=\"\" xmlns:dc=\"http://ns.example.org/shelf/\"><dc:title>Shelf 4</dc:title></rdf:Description>\n<rdf:Description rdf:about=\"\" xmlns:dc=",
+    );
+    assert_ne!(other, LIBREOFFICE_XMP);
+    let mut doc = doc_with_xmp(other.as_bytes());
+    set_info(&mut doc, "Title", "New").unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(info(&doc, "Title").as_deref(), Some("New"));
+    let xmp = xmp_text(&doc);
+    assert!(xmp.as_deref().is_none_or(|x| !x.contains("Untitled 1")), "the packet still shows the old title: {xmp:?}");
+}
+
 /// Acrobat keeps each custom property in the XMP packet too, as `pdfx:<name>` (the
 /// http://ns.adobe.com/pdfx/1.3/ schema), so tools that read XMP see the same properties as
 /// Document Properties ▸ Custom.
