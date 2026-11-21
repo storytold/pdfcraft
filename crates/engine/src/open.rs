@@ -385,6 +385,7 @@ impl Session {
             js_runtime: Default::default(),
             js_zoom: 100.0,
             js_page: 0,
+            live: Default::default(),
             xfa,
             xfa_template: None,
             xfa_scripts_off: false,

@@ -94,6 +94,23 @@ fn redacted_paint_loses_the_actual_text_that_names_it() {
     assert!(!c.contains("CLIPS"), "{c}");
 }
 
+/// A CMap with a codespace range the font parser can't keep (five bytes) makes the page's text a
+/// guess: apply refuses while a mark is pending.
+#[test]
+fn a_cmap_with_a_dropped_codespace_range_fails_closed() {
+    let program = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap 2 begincodespacerange <0000> <FFFF> <0000000000> <FFFFFFFFFF> endcodespacerange 1 begincidrange <0000> <FFFF> 0 endcidrange endcmap CMapName currentdict /CMap defineresource pop end end";
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F2 5 0 R >> >> >>".to_vec(),
+        stream("", b"BT /F2 10 Tf 100 50 Td <0001000200030004> Tj ET"),
+        b"<< /Type /Font /Subtype /Type0 /BaseFont /X /Encoding 6 0 R /DescendantFonts [<< /Type /Font /Subtype /CIDFontType2 /BaseFont /X /DW 1000 >>] >>".to_vec(),
+        stream("/Type /CMap /CMapName /Custom", program.as_bytes()),
+    ]);
+    mark(&mut doc, 0, &[[95.0, 40.0, 140.0, 70.0]], "");
+    assert_eq!(apply(&mut doc, None), Err(RedactError::DroppedCodespace(1)));
+}
+
 /// Nested names around redacted paint all go, the innermost too, whichever scope was cut first.
 #[test]
 fn redacted_paint_loses_every_name_around_it() {
@@ -800,6 +817,16 @@ fn vertical_writing_text_under_a_mark_fails_closed() {
     mark(&mut hdoc, 0, &[[85.0, 55.5, 105.0, 61.0]], "");
     let r = apply(&mut hdoc, None).unwrap();
     assert_eq!(r.glyphs, 2, "the horizontal control is redacted: {r:?}");
+
+    // A Type0 font whose /Subtype is a reference still writes vertically (#6750).
+    let mut rdoc = make("Identity-V");
+    let page = pdfcraft_model::pages(&rdoc)[0].obj;
+    let res = rdoc.get(page).as_dict().and_then(|d| d.get(b"Resources")).and_then(Object::as_dict).cloned().unwrap();
+    let font_ref = res.get(b"Font").and_then(Object::as_dict).and_then(|f| f.get(b"F2")).and_then(Object::as_ref).unwrap();
+    let name_ref = rdoc.add(Object::Name(b"Type0".to_vec()));
+    rdoc.update_dict(font_ref, |d| d.set(b"Subtype".to_vec(), Object::Ref(name_ref))).unwrap();
+    mark(&mut rdoc, 0, &[[85.0, 55.5, 105.0, 61.0]], "");
+    assert_eq!(apply(&mut rdoc, None).unwrap_err(), RedactError::VerticalText(1), "a referenced /Subtype /Type0 is still vertical");
 }
 
 #[test]
@@ -821,6 +848,99 @@ fn images_are_removed_or_have_their_pixels_cleared() {
     assert_eq!(s.decoded().unwrap(), [0, 0, 255, 255], "pixels 1–2 (x 100–120) cleared");
     let Object::Stream(orig) = &*doc.get(ObjRef::new(7, 0)) else { panic!() };
     assert_eq!(orig.decoded().unwrap(), [255; 4], "the shared original is untouched");
+}
+
+/// `/Subtype 8 0 R` naming `/Image` is still an image, and the renderer draws it. Redaction read
+/// only a direct name, so it kept the `Do` and the samples under the box (#6750). The direct
+/// `/Subtype /Image` is the control.
+#[test]
+fn an_image_whose_subtype_is_a_reference_is_redacted() {
+    const MARKER: &[u8; 16] = b"F9-SECRET-PIXELS";
+    for subtype in ["/Image", "8 0 R"] {
+        let img = stream(&format!("/Type /XObject /Subtype {subtype} /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8"), MARKER);
+        let mut doc = one_page(b"q 10 0 0 10 10 10 cm /Im1 Do Q", "/XObject << /Im1 7 0 R >>", vec![img, b"/Image".to_vec()]);
+        mark(&mut doc, 0, &[[5.0, 5.0, 25.0, 25.0]], "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!(r.images_removed, 1, "{subtype}: {r:?}");
+        let c = content(&doc, 0);
+        assert!(!c.contains("/Im1 Do"), "{subtype}: {c}");
+        let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+        assert!(!bytes.windows(MARKER.len()).any(|w| w == MARKER), "{subtype}: the image samples stay in the saved file");
+    }
+}
+
+/// An XObject the redactor cannot classify (no `/Subtype`, or one it does not know) may still draw
+/// something under a mark. Apply removes it there and verification counts it; one elsewhere stays.
+#[test]
+fn an_xobject_of_unknown_subtype_under_a_mark_goes() {
+    for subtype in ["", "/Subtype /PS", "/Subtype 42"] {
+        let x = stream(&format!("/Type /XObject {subtype} /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8"), [0]);
+        let src = b"q 10 0 0 10 10 10 cm /X1 Do Q q 10 0 0 10 200 200 cm /X1 Do Q";
+        let mut doc = one_page(src, "/XObject << /X1 7 0 R >>", vec![x]);
+        let rects = [[5.0, 5.0, 25.0, 25.0]];
+        assert_eq!(under(&mut doc, 0, &rects), 1, "{subtype:?}: verification counts it");
+        mark(&mut doc, 0, &rects, "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!(r.forms_removed, 1, "{subtype:?}: {r:?}");
+        let c = content(&doc, 0);
+        assert_eq!(c.matches("/X1 Do").count(), 1, "{subtype:?}: only the placement outside the mark stays: {c}");
+        assert!(c.contains("200 200 cm"), "{subtype:?}: {c}");
+    }
+}
+
+/// An unclassifiable XObject's `/Matrix` and `/BBox` are read with their entries by reference, as
+/// the proof reads a form's. Read only directly, a box moved onto the mark was taken for the
+/// identity or for no box, and the placement was kept and not counted. Present but malformed, its
+/// place can't be told, so it counts. The direct entries are the control.
+#[test]
+fn an_xobject_of_unknown_subtype_is_placed_by_referenced_geometry() {
+    for geometry in [
+        "/Matrix [1 0 0 1 100 100] /BBox [0 0 10 10]",
+        "/Matrix [1 0 0 1 8 0 R 9 0 R] /BBox [0 0 10 10]",
+        "/BBox [100 100 10 0 R 10 0 R]",
+        "/Matrix [1 0 0 1 100] /BBox [0 0 10 10]",
+        "/BBox [0 0 10]",
+    ] {
+        let x = stream(&format!("/Type /XObject /Subtype /PS {geometry}"), [0]);
+        let mut doc = one_page(b"/X1 Do", "/XObject << /X1 7 0 R >>", vec![x, b"100".to_vec(), b"100".to_vec(), b"110".to_vec()]);
+        let rects = [[105.0, 105.0, 110.0, 110.0]];
+        assert_eq!(under(&mut doc, 0, &rects), 1, "{geometry}: verification counts it");
+        mark(&mut doc, 0, &rects, "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!(r.forms_removed, 1, "{geometry}: {r:?}");
+        let c = content(&doc, 0);
+        assert!(!c.contains("/X1 Do"), "{geometry}: {c}");
+    }
+}
+
+/// A `/BBox` of null is no entry (ISO 32000-2 §7.3.9), directly or by reference. It was read as a
+/// malformed box, so an unclassifiable XObject placed outside every mark was removed and counted.
+/// No `/BBox` at all is the control.
+#[test]
+fn an_xobject_of_unknown_subtype_with_a_null_bbox_is_placed_as_without_one() {
+    for bbox in ["", "/BBox null", "/BBox 8 0 R"] {
+        let x = stream(&format!("/Type /XObject /Subtype /PS {bbox}"), [0]);
+        let src = b"q 10 0 0 10 200 200 cm /X1 Do Q";
+        let mut doc = one_page(src, "/XObject << /X1 7 0 R >>", vec![x, b"null".to_vec()]);
+        let rects = [[5.0, 5.0, 25.0, 25.0]];
+        assert_eq!(under(&mut doc, 0, &rects), 0, "{bbox:?}: verification leaves it out");
+        mark(&mut doc, 0, &rects, "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!(r.forms_removed, 0, "{bbox:?}: {r:?}");
+        let c = content(&doc, 0);
+        assert!(c.contains("/X1 Do"), "{bbox:?}: the placement outside the mark stays: {c}");
+    }
+}
+
+/// A `/BBox` is read only when it has four entries; any other length is malformed whatever its
+/// entries, so the placement's place can't be told and it counts as under a mark.
+#[test]
+fn an_xobject_of_unknown_subtype_with_a_bbox_of_the_wrong_length_counts() {
+    for bbox in ["/BBox []", "/BBox [0 0 10 10 10]", "/BBox [0 0 10 10 8 0 R]"] {
+        let x = stream(&format!("/Type /XObject /Subtype /PS {bbox}"), [0]);
+        let mut doc = one_page(b"q 10 0 0 10 200 200 cm /X1 Do Q", "/XObject << /X1 7 0 R >>", vec![x, b"10".to_vec()]);
+        assert_eq!(under(&mut doc, 0, &[[5.0, 5.0, 25.0, 25.0]]), 1, "{bbox:?}: verification counts it");
+    }
 }
 
 #[test]
@@ -6274,6 +6394,7 @@ fn unused_descriptions_in_shared_or_inherited_resources_are_retired() {
     }
 }
 
+mod annotation_geometry;
 mod descriptions;
 mod elsewhere;
 mod form_matrix;
