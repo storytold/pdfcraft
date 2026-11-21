@@ -1063,9 +1063,14 @@ impl PdfCraftApp {
     }
 
     pub fn close_tab(&mut self, index: usize) {
-        if index >= self.views.len() {
-            return;
+        let Some((key, id)) = self.views.get(index).map(|v| (v.view_key(), v.id)) else { return };
+        // A form's Will Close actions run as the document's last tab closes, while the tab still
+        // shows what they ask for. They can't keep it open: what they change closes with it.
+        if self.views.iter().filter(|v| v.id == id).count() == 1 {
+            self.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillClose);
         }
+        // The tab is found again by its key, not trusted to keep its index across the scripts.
+        let Some(index) = self.tab_with_key(key) else { return };
         self.remember_view(index);
         let view = self.views.remove(index);
         let (id, place) = (view.id, view.place());
