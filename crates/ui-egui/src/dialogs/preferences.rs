@@ -684,6 +684,7 @@ fn card_appearance(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &m
     if ctx.checkbox(ui, &mut app.show_page_edge_shadows, tl!("Show Page Edge Shadows"), t).changed() {
         ui.ctx().request_repaint();
     }
+    ctx.checkbox(ui, &mut app.show_page_indicator, tl!("Always show page number indicator"), t);
     ui.add_space(4.0);
     crate::appearance::preferences_section_with_context(ui, app, t, ctx);
     ui.add_space(8.0);

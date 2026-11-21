@@ -188,6 +188,7 @@ impl PdfCraftApp {
         v["hotbar"] = serde_json::to_value(&self.hotbar).unwrap_or_default();
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
+        v["show_page_indicator"] = serde_json::Value::Bool(self.show_page_indicator);
         v["text_links"] = serde_json::Value::Bool(self.text_links);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language;
@@ -272,6 +273,9 @@ impl PdfCraftApp {
         }
         if let Some(on) = v["show_secured_notice"].as_bool() {
             self.show_secured_notice = on;
+        }
+        if let Some(on) = v["show_page_indicator"].as_bool() {
+            self.show_page_indicator = on;
         }
         if let Some(on) = v["text_links"].as_bool() {
             self.text_links = on;
@@ -585,5 +589,15 @@ impl PdfCraftApp {
             let certs = pems.iter().filter_map(|p| pdfcraft_engine::sign::x509::load_certificates(p.as_bytes()).ok()).flatten().collect();
             self.apply_trusted_certificates(certs);
         }
+    }
+
+    /// Serialize the user's persistent settings as JSON (alias for [`Self::persist`]).
+    pub fn save_settings(&self) -> String {
+        self.persist()
+    }
+
+    /// Restore the user's persistent settings from JSON (alias for [`Self::restore`]).
+    pub fn load_settings(&mut self, json: &str) {
+        self.restore(json);
     }
 }
