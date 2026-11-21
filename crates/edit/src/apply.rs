@@ -1,8 +1,7 @@
 use pdfcraft_fonts::shaped_text::{is_thai, thai_refusal, thai_width};
 
 use super::marks::{
-    Background, Context, HeaderFooter, MarkKind, MarkText, Watermark, add_picture_resource, bates_start, expand, matrix_number, n, picture, rgb,
-    shrink_matrix,
+    Background, Context, HeaderFooter, MarkKind, MarkText, Watermark, add_picture_resource, expand, matrix_number, n, picture, rgb, shrink_matrix,
 };
 use super::place::{
     END, Isolation, add_page_resources, add_resources, begin, check, check_on_top, contents, free_font_name, isolation, page_fonts, page_list, place,
@@ -43,29 +42,9 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
     if !(hf.font_size.is_finite() && hf.font_size > 0.0 && hf.font_size <= 200.0 && hf.margins.iter().all(|m| m.is_finite() && *m >= 0.0)) {
         return Err(EditError::Invalid("invalid font size or margins".into()));
     }
-    // Page numbers count up from start_number, so the last selected page needs the most room.
-    // Refuse the whole run before drawing anything: headers applied to some pages and then a
-    // failed page number would leave the document half changed.
-    let last_number = u64::from(hf.start_number)
-        .checked_add(pages.len().saturating_sub(1) as u64)
-        .ok_or_else(|| EditError::Invalid("the header page numbers are too large".into()))?;
-    if last_number > u64::from(u32::MAX) {
-        return Err(EditError::Invalid(format!(
-            "the header start number {} leaves no room for {} pages (page numbers stop at {})",
-            hf.start_number,
-            pages.len(),
-            u32::MAX
-        )));
-    }
-    // The same goes for Bates numbers: the last selected page must still fit in a u64.
-    let bates0 = hf.text.iter().find_map(|t| bates_start(t)).unwrap_or(1);
-    if bates0.checked_add(pages.len().saturating_sub(1) as u64).is_none() {
-        return Err(EditError::Invalid(format!(
-            "the Bates start number {bates0} leaves no room for {} pages (Bates numbers stop at {})",
-            pages.len(),
-            u64::MAX
-        )));
-    }
+    let numbering = hf.numbering();
+    // Refuse the whole run before drawing if either sequence overflows on the last page.
+    numbering.check(pages.len())?;
     // Shrinking needs room on every page: refuse before anything is drawn or replaced.
     let shrinks = pages
         .iter()
@@ -79,15 +58,11 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
     }
     let all = page_list(doc);
     let count = all.len();
-    let number_of = |k: usize| {
-        u32::try_from(u64::from(hf.start_number) + k as u64).map_err(|_| EditError::Invalid("the header page numbers are too large".into()))
-    };
-    let bates_of = |k: usize| bates0.checked_add(k as u64).ok_or_else(|| EditError::Invalid("the Bates numbers are too large".into()));
     // Every Thai line drawn on any page (a Bates prefix may join a template's Thai), for its fonts.
     let mut thai_lines = std::collections::BTreeSet::new();
     if hf.text.iter().any(|t| t.chars().any(is_thai)) {
         for k in 0..pages.len() {
-            let (number, bates) = (number_of(k)?, bates_of(k)?);
+            let (number, bates) = numbering.at(k)?;
             thai_lines.extend(hf.text.iter().flat_map(|t| expand(t, number, count, bates, cx).lines().map(str::to_owned).collect::<Vec<_>>()));
         }
     }
@@ -95,7 +70,7 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
     for (k, &i) in pages.iter().enumerate() {
         let page = &all[i];
         let (w, h) = page.display_size(doc);
-        let (number, bates) = (number_of(k)?, bates_of(k)?);
+        let (number, bates) = numbering.at(k)?;
         let size = hf.font_size;
         let [top, bottom, left, right] = hf.margins;
         // The page resource the face is added under: the usual name, unless the page already
