@@ -7379,7 +7379,7 @@ status = "shipped"
 commands = ["export.text"]
 tools = ["doc_export_text", "text_extract"]
 evidence = ["crates/ui-egui/tests/it/export.rs::export_dialogs_write_images_and_text", "crates/automation/tests/it/automation.rs::exporting_images_and_text_through_tools"]
-notes = "plain reading-order text; accessible text (tags) comes with M12"
+notes = "plain reading-order text; text in tag order is create.export-accessible-text"
 
 [[feature]]
 id = "create.export-accessible-text"
@@ -7387,11 +7387,11 @@ title = "Export accessible text (from tags)"
 area = "J"
 tier = "P1"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["export.tagged_text"]
+tools = ["doc_export_tagged_text"]
+evidence = ["crates/a11y/src/tests.rs::tagged_text_follows_tag_order_and_leaves_out_untagged_text", "crates/automation/tests/it/automation.rs::exporting_text_from_tags_through_tools", "crates/ui-egui/tests/it/export.rs::export_text_from_tags_writes_tag_order_and_refuses_untagged_files"]
+notes = "Export ▸ Text from tags writes the whole document's text to one .txt file in the order the structure tree lists it. Each tag's /K is read in order, so its own marked content and its child tags interleave. Text in no tag (artifacts, untagged content) is left out. /ActualText on a tag replaces its text; /Alt stands for a Figure, Formula or Form, and for any other tag that marks no text. Block tags start a line, and the cells of a table row are separated by tabs. Untagged documents, and tags that mark no text, are refused with the reason and no file. Not yet: marked content inside form XObjects (MCR /Stm) and form field values (OBJR to a widget) are counted and reported as not read rather than exported; /ActualText on a marked-content sequence in the page content is not applied; an empty table cell writes no tab, so later cells shift left."
 
 [[feature]]
 id = "create.export-xml"

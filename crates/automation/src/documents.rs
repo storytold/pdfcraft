@@ -718,6 +718,12 @@ impl Automation {
 
     pub(crate) fn export(&mut self, tool: &str, a: &Args) -> Result<Value> {
         let doc = self.doc_to_copy(a)?;
+        if tool == "doc_export_tagged_text" {
+            let path = self.resolve(a.str("path")?, true)?;
+            let out = pdfcraft_engine::export::tagged_text(&doc.export_source()).map_err(failed)?;
+            write_atomic(&path, out.text.as_bytes())?;
+            return Ok(json!({ "path": path.to_string_lossy(), "bytes": out.text.len(), "unread": out.unread, "truncated": out.truncated }));
+        }
         let pages = match a.opt_ints("pages")? {
             Some(_) => self.pages(a, "pages")?,
             None => (0..doc.info.pages.len()).collect(),

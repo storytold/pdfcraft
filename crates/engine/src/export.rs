@@ -88,6 +88,18 @@ pub fn extract_images(src: &ExportSource, pages: &[usize], min_side: u32) -> Res
     Ok(pdfcraft_create::extract_images(&doc, pages, min_side))
 }
 
+/// Export ▸ Text from tags: the document's text in tag order (see [`pdfcraft_a11y::tagged_text`]).
+/// A document without tags, or whose tags mark no text, is refused with the reason, so no empty
+/// file is written.
+pub fn tagged_text(src: &ExportSource) -> Result<pdfcraft_a11y::TaggedText, String> {
+    let doc = pdfcraft_cos::Document::open_with_password(src.bytes.clone(), src.config.password.as_deref()).map_err(|e| e.to_string())?;
+    let out = pdfcraft_a11y::tagged_text(&doc).map_err(|e| format!("{e}; Export to Text reads its text in layout order"))?;
+    if out.text.is_empty() {
+        return Err("the document's tags mark no text".into());
+    }
+    Ok(out)
+}
+
 /// The file name for the `index`-th (1-based) exported image: `<stem>_Page_<n>_Image_<index>.<ext>`.
 /// The page number has leading zeros for as many digits as the document's `page_count` has, so the
 /// files sort in page order (#2208): page 7 of 120 is `Page_007`.

@@ -560,6 +560,7 @@ impl PdfCraftApp {
             }
             "export.image" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Image)),
             "export.text" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Text)),
+            "export.tagged_text" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::TaggedText)),
             "ocr.recognize" => self.dialog = Some(Dialog::RecognizeText),
             "ocr.enhance" => self.dialog = Some(Dialog::EnhanceScan),
             "ocr.recognize_batch" => self.ocr_files_dialog(),
