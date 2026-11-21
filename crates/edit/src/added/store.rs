@@ -1,5 +1,5 @@
 use super::draw::{draw, params};
-use super::layout::{first_undrawable, is_thai, nums, shaped_arabic, thai_error};
+use super::layout::{first_undrawable, is_invisible, is_thai, nums, shaped_arabic, thai_error, without_invisible};
 use super::types::{Added, AddedImage, AddedText, CHAR_SPACING_LIMIT, Family, Ink, MarkerScan, TAG};
 use super::{Content, Dict, Document, EditError, GlyphError, MarkKind, ObjRef, Object, Stream, align_from, check, contents, page_list, place_tagged};
 
@@ -208,6 +208,11 @@ fn validate(c: &Content) -> Result<(), EditError> {
 
 /// Write an item's stream (new, or replacing `obj`) and make its resources available to the page.
 fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> Result<ObjRef, EditError> {
+    let cleaned = match c {
+        Content::Text(t) if t.text.chars().any(is_invisible) => Some(Content::Text(without_invisible(t))),
+        _ => None,
+    };
+    let c = cleaned.as_ref().unwrap_or(c);
     validate(c)?;
     let all = page_list(doc);
     check(&[page], all.len())?;
