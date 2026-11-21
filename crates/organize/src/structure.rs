@@ -141,7 +141,8 @@ impl Pruner<'_> {
     }
 
     /// Remove from the number or name tree `node` (`list` is `Nums` or `Names`) the entries keyed
-    /// by one of `keys` and those naming only dropped elements.
+    /// by one of `keys` and those naming only dropped elements; elsewhere a dropped element's array
+    /// slot becomes null.
     fn tree(&mut self, doc: &mut Document, node: &Object, list: &[u8], keys: &HashSet<i64>, depth: usize) -> Result<(), OrganizeError> {
         check_depth(depth)?;
         let r = node.as_ref();
@@ -156,17 +157,28 @@ impl Pruner<'_> {
         let Some(r) = r else { return Ok(()) };
         let Some(pairs) = d.get(list).map(|n| doc.resolve(n)).and_then(|n| n.as_array().cloned()) else { return Ok(()) };
         let dropped = |o: &Object| o.as_ref().is_some_and(|r| self.dropped.contains(&r));
-        let names_dropped = |v: &Object| match doc.resolve(v).as_array() {
-            Some(a) => !a.is_empty() && a.iter().all(dropped),
-            None => dropped(v),
-        };
-        let kept: Vec<Object> = pairs
-            .chunks(2)
-            .filter(|pair| matches!(pair, [k, v] if !doc.resolve(k).as_int().is_some_and(|k| keys.contains(&k)) && !names_dropped(v)))
-            .flatten()
-            .cloned()
-            .collect();
-        if kept.len() != pairs.len() {
+        let mut kept = Vec::with_capacity(pairs.len());
+        for pair in pairs.chunks(2) {
+            let [k, v] = pair else { continue };
+            if doc.resolve(k).as_int().is_some_and(|k| keys.contains(&k)) {
+                continue;
+            }
+            // In an array each slot is an MCID: a dropped element's slot becomes null, as an unused
+            // one is, so the later MCIDs keep their place. The entry goes once no slot names an element.
+            let v = match doc.resolve(v).as_array() {
+                Some(a) if a.iter().any(dropped) => {
+                    let left: Vec<Object> = a.iter().map(|o| if dropped(o) { Object::Null } else { o.clone() }).collect();
+                    if left.iter().all(|o| matches!(o, Object::Null)) {
+                        continue;
+                    }
+                    Object::Array(left)
+                }
+                None if dropped(v) => continue,
+                _ => v.clone(),
+            };
+            kept.extend([k.clone(), v]);
+        }
+        if kept != pairs {
             doc.update_dict(r, |n| n.set(list.to_vec(), Object::Array(kept)))?;
         }
         Ok(())

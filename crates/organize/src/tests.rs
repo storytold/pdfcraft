@@ -280,6 +280,32 @@ fn deleting_a_page_drops_tags_a_bookmark_or_a_direct_parent_tree_names() {
     assert!(dicts.iter().any(|d| d.contains(b"Title") && !d.contains(b"SE")), "the bookmark is gone");
 }
 
+/// A parent-tree array whose other slots are null or name kept elements (a form XObject's, keyed
+/// by no page) doesn't keep the deleted page's tags. The dropped slot becomes null in place, so
+/// the MCIDs after it keep their elements.
+#[test]
+fn deleting_a_page_drops_tags_a_parent_tree_array_names_beside_others() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /StructParents 0 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /StructParents 1 >>".into(),
+        "<< /Type /StructTreeRoot /K [7 0 R 8 0 R] /ParentTree 6 0 R >>".into(),
+        "<< /Nums [0 [7 0 R] 1 [8 0 R] 2 [null 8 0 R] 3 [8 0 R 7 0 R]] >>".into(),
+        "<< /Type /StructElem /S /P /P 5 0 R /Pg 3 0 R /K 0 >>".into(),
+        "<< /Type /StructElem /S /Note /P 5 0 R /Pg 4 0 R /K 0 /ActualText (SECRET note) >>".into(),
+    ];
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    delete_pages(&mut doc, &[1]).unwrap();
+    let saved = open(write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap());
+    let dicts: Vec<Dict> = saved.scan_objects().filter_map(|(_, o)| o.as_dict().cloned()).collect();
+    assert!(!dicts.iter().any(|d| d.name(b"S") == Some(b"Note")), "the deleted page's note is still in the file");
+    let tree = dicts.iter().find(|d| d.name(b"Type") == Some(b"StructTreeRoot")).unwrap();
+    let nums = saved.resolve(tree.get(b"ParentTree").unwrap()).as_dict().and_then(|t| t.get(b"Nums").and_then(Object::as_array).cloned()).unwrap();
+    let slots = |i: usize| nums.get(i).map(|v| saved.resolve(v).as_array().map(|a| a.iter().map(|o| matches!(o, Object::Null)).collect::<Vec<_>>()));
+    assert_eq!((nums.len(), nums.get(2), slots(3)), (4, Some(&Object::Int(3)), Some(Some(vec![true, false]))), "{nums:?}");
+}
+
 /// A structure tree nested deeper than Delete Pages follows is refused rather than left with the
 /// deleted page's tags below that depth.
 #[test]
