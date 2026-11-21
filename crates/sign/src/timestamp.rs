@@ -166,6 +166,9 @@ pub fn parse_token(raw: &[u8]) -> Result<TimestampToken, SignError> {
         return Err(bad("token signed message digest does not match TSTInfo"));
     }
     let cert = token.signer_certificate().ok_or_else(|| bad("TSA certificate is missing"))?;
+    if !token.signed_attrs_name(cert) {
+        return Err(bad("TSA certificate is not the one the token's signed attributes name"));
+    }
     // An algorithm that can't be checked stays `Unsupported` rather than reading as invalid.
     if !token.verify_signature(cert, &content_digest)? {
         return Err(bad("TSA signature is invalid"));
