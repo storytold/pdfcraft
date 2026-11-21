@@ -158,6 +158,10 @@ copies retain their current preferences locations.
 | `FONTCONFIG_FILE` | On Linux/Unix, the Fontconfig configuration file used to discover installed UI fallback fonts (default: `/etc/fonts/fonts.conf`); relative filenames are resolved under `FONTCONFIG_PATH` |
 | `FONTCONFIG_PATH` | Directory for a relative `FONTCONFIG_FILE` (default: `/etc/fonts`; the first entry of a search path is used) |
 
+On KDE Plasma, the integrated window buttons can be clicked across the height of the tab strip,
+including at the top corner when maximized. In a normal window the outer edges still resize it.
+The buttons' hover and press transitions follow **Preferences → Animation effects**.
+
 On Linux/Unix, the UI's existing fallback filenames are also searched in Fontconfig's configured
 directories and their subdirectories. This finds fonts in Nix store paths and user font directories
 without invoking `fc-match` or linking libfontconfig. The scan is cached and bounded; missing or

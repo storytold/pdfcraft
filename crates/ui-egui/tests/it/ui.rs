@@ -1625,6 +1625,35 @@ fn use_system_title_bar_swaps_the_header_bar_for_the_window_frame() {
     assert_eq!(decorations(&h), None);
 }
 
+#[test]
+fn breeze_caption_buttons_hit_the_top_edge_and_maximized_corner() {
+    use egui::{Event, Modifiers, PointerButton, ViewportCommand, ViewportId, pos2};
+    use pdfcraft_ui_egui::window_controls::{Layout, Style};
+
+    let click = |style, maximized, pos| {
+        let mut h = harness(move |app| app.window_controls = Some(Layout { style, ..Layout::default() }));
+        h.input_mut().viewports.entry(ViewportId::ROOT).or_default().maximized = Some(maximized);
+        h.event(Event::PointerMoved(pos));
+        h.run_steps(2);
+        let mut commands = Vec::new();
+        for pressed in [true, false] {
+            h.event(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            h.step();
+            commands.extend(h.output().viewport_output.values().flat_map(|v| v.commands.iter().cloned()));
+        }
+        commands
+    };
+    let corner = pos2(1399.0, 1.0);
+    assert!(click(Style::Breeze, true, corner).contains(&ViewportCommand::Close));
+    // The boundary between neighboring targets is clickable too, not an inert gap.
+    assert!(click(Style::Breeze, true, pos2(1370.0, 1.0)).contains(&ViewportCommand::Close));
+    // The same corner must still resize an ordinary window and not close it.
+    let windowed = click(Style::Breeze, false, corner);
+    assert!(windowed.contains(&ViewportCommand::BeginResize(egui::ResizeDirection::NorthEast)));
+    assert!(!windowed.contains(&ViewportCommand::Close));
+    assert!(!click(Style::Adwaita, true, corner).contains(&ViewportCommand::Close));
+}
+
 /// Preferences ▸ Animation effects: the system's animation setting until the user chooses On or
 /// Off. The choice is saved, and settings holding anything else leave it alone.
 #[test]
