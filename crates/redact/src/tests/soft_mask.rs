@@ -153,3 +153,27 @@ fn a_form_resource_state_does_not_keep_the_original_group() {
     let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
     assert!(bytes.windows(11).any(|w| w == b"SMASKSECRET"), "the form's mask lost its group");
 }
+
+#[test]
+fn a_state_inside_a_surviving_soft_mask_group_does_not_keep_the_original_group() {
+    // GS1's group (object 8) holds no text, so it survives as it is; its own resources list an
+    // unused state naming the original group (object 7).
+    let other = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >> /Resources << /ExtGState << /GSI << /SMask << /S /Luminosity /G 7 0 R >> >> >> >>",
+        b"1 g 0 0 300 300 re f",
+    );
+    let group = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >> /Resources << /Font << /F1 5 0 R >> >>",
+        b"1 g BT /F1 10 Tf 10 100 Td (SMASKSECRET) Tj ET",
+    );
+    let mut doc = one_page(
+        b"q /GS0 gs 0 0 0.6 rg 0 0 300 300 re f Q q /GS1 gs 0 0 0.6 rg 200 200 20 20 re f Q",
+        "/ExtGState << /GS0 << /SMask << /S /Luminosity /G 7 0 R >> >> /GS1 << /SMask << /S /Luminosity /G 8 0 R >> >> >>",
+        vec![group, other],
+    );
+    mark(&mut doc, 0, &[MARK], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.glyphs, 11, "{r:?}");
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!bytes.windows(11).any(|w| w == b"SMASKSECRET"), "the original group survived through another soft-mask group's resources");
+}

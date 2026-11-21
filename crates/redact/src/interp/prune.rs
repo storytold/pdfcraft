@@ -391,8 +391,8 @@ fn prune_retired_properties(doc: &Document, res: &mut Dict, names: &[Vec<u8>], c
     Ok(pruned)
 }
 
-/// Unlink retired properties and `doomed` XObjects from the resources of the forms reachable from
-/// the page-tree `holders`, each unless the form's own content (or a form inheriting its
+/// Unlink retired properties, `doomed` XObjects and states masking with a doomed group from the
+/// resources of the forms (soft-mask groups included) reachable from the page-tree `holders`, each unless the form's own content (or a form inheriting its
 /// resources) still uses the name. Fails closed when that cannot be determined.
 fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<ObjRef>, retired: &[Object]) -> Result<(), CosError> {
     if retired.is_empty() && doomed.is_empty() {
@@ -404,8 +404,7 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
         .collect();
     let mut seen = HashSet::new();
     while let Some(resources) = pending.pop() {
-        for (_, value) in res_dict(doc, &resources, b"XObject").iter() {
-            let Some(reference) = value.as_ref() else { continue };
+        for reference in forms_in(doc, &resources, doomed) {
             if !seen.insert(reference) {
                 continue;
             }
@@ -448,6 +447,24 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
         }
     }
     Ok(())
+}
+
+/// The forms a resource dictionary reaches: its XObjects, and the groups of the soft masks its
+/// graphics states keep (#7884). A doomed group is not among them: it is being unlinked, so its
+/// own resources reach nothing that survives.
+fn forms_in(doc: &Document, res: &Dict, doomed: &HashSet<ObjRef>) -> Vec<ObjRef> {
+    let mut forms: Vec<ObjRef> = res_dict(doc, res, b"XObject").iter().filter_map(|(_, v)| v.as_ref()).collect();
+    for (_, state) in res_dict(doc, res, b"ExtGState").iter() {
+        let group = doc
+            .resolve(state)
+            .as_dict()
+            .and_then(|s| s.get(b"SMask").map(|m| doc.resolve(m)))
+            .and_then(|m| m.as_dict().and_then(|m| m.get(b"G")).and_then(Object::as_ref));
+        if let Some(group) = group.filter(|g| !doomed.contains(g)) {
+            forms.push(group);
+        }
+    }
+    forms
 }
 
 fn prune_doomed_xobjects(doc: &Document, content: &[Vec<u8>], xo: &mut Dict, doomed_names: &[Vec<u8>]) -> Result<bool, CosError> {
