@@ -112,14 +112,16 @@ impl PdfCraftApp {
         let pages = doc.info.pages.len();
         let Some(last) = self.last_views.iter().find(|l| l.path == path).cloned() else { return };
         let Some(view) = self.views.get_mut(index) else { return };
-        if let Some((layout, continuous)) = canvas::parse_display_token(&last.display) {
-            view.set_display(layout, continuous);
-        }
-        view.set_cover(last.cover);
-        if let Some(defaults) = ViewDefaults::default().with_zoom(&last.zoom) {
-            match defaults.fit {
-                canvas::Fit::None => view.set_zoom(defaults.zoom),
-                fit => view.set_fit(fit),
+        if !self.always_default_view {
+            if let Some((layout, continuous)) = canvas::parse_display_token(&last.display) {
+                view.set_display(layout, continuous);
+            }
+            view.set_cover(last.cover);
+            if let Some(defaults) = ViewDefaults::default().with_zoom(&last.zoom) {
+                match defaults.fit {
+                    canvas::Fit::None => view.set_zoom(defaults.zoom),
+                    fit => view.set_fit(fit),
+                }
             }
         }
         if last.page < pages {
