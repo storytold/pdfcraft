@@ -899,7 +899,9 @@ impl PdfCraftApp {
             if let Some(Ok(mut s)) = progress.as_ref().map(|b| b.lock()) {
                 s.done = batch.done();
                 if finished {
-                    s.message = Some(batch_summary(batch.ok, batch.words, batch.skipped, &batch.failed, &batch.notes, batch.not_run));
+                    let mut msg = batch_summary(batch.ok, batch.words, batch.skipped, &batch.failed, &batch.notes, batch.not_run);
+                    msg.push_str(&batch.images.summary());
+                    s.message = Some(msg);
                 }
             }
             if finished {
@@ -1078,7 +1080,7 @@ pub(crate) fn run_batch_files(
 ) -> String {
     let total = files.len();
     let (mut ok, mut skipped, mut words, mut failed, mut notes) = (0usize, 0usize, 0usize, Vec::new(), Vec::new());
-    let (mut resampled, mut left_alone, mut signed) = (0usize, 0usize, 0usize);
+    let mut images = BatchImages::default();
     let mut not_run: Option<usize> = None;
     for (i, (name, bytes)) in files.into_iter().enumerate() {
         if progress.lock().map(|s| s.cancel).unwrap_or(false) {
@@ -1098,13 +1100,7 @@ pub(crate) fn run_batch_files(
                     if let Some(note) = low_confidence_note(&name, &res, settings.low_confidence_threshold) {
                         notes.push(note);
                     }
-                    if let Some(i) = &res.images {
-                        resampled += i.resampled;
-                        left_alone += i.skipped.len();
-                        if i.refused.is_some() {
-                            signed += 1;
-                        }
-                    }
+                    images.add(&res);
                 }
                 Err(e) => failed.push(format!("{name}: {e}")),
             },
@@ -1112,15 +1108,44 @@ pub(crate) fn run_batch_files(
         }
     }
     let mut msg = batch_summary(ok, words, skipped, &failed, &notes, not_run);
-    if resampled > 0 || left_alone > 0 {
-        msg.push_str(&images_part(resampled, left_alone));
-    }
-    if signed == 1 {
-        msg.push_str(tl!("; 1 signed file kept its images"));
-    } else if signed > 1 {
-        msg.push_str(&crate::i18n::fmt(tl!("; {n} signed files kept their images"), &[("n", &signed.to_string())]));
-    }
+    msg.push_str(&images.summary());
     msg
+}
+
+/// What downsampling did over a batch, counted from each file that was written (a file whose
+/// copy failed to save or download is not counted). The native batch and the web one both
+/// report it after [`batch_summary`].
+#[derive(Default)]
+pub(crate) struct BatchImages {
+    resampled: usize,
+    left_alone: usize,
+    signed: usize,
+}
+
+impl BatchImages {
+    pub(crate) fn add(&mut self, res: &pdfcraft_engine::ocr::FileResult) {
+        if let Some(i) = &res.images {
+            self.resampled += i.resampled;
+            self.left_alone += i.skipped.len();
+            if i.refused.is_some() {
+                self.signed += 1;
+            }
+        }
+    }
+
+    /// The part of the summary after the files; empty when no image was looked at.
+    pub(crate) fn summary(&self) -> String {
+        let mut msg = String::new();
+        if self.resampled > 0 || self.left_alone > 0 {
+            msg.push_str(&images_part(self.resampled, self.left_alone));
+        }
+        if self.signed == 1 {
+            msg.push_str(tl!("; 1 signed file kept its images"));
+        } else if self.signed > 1 {
+            msg.push_str(&crate::i18n::fmt(tl!("; {n} signed files kept their images"), &[("n", &self.signed.to_string())]));
+        }
+        msg
+    }
 }
 
 /// The batch's low-confidence note for one file: its words at or under `threshold` (60 by
@@ -1194,6 +1219,35 @@ mod tests {
         let img = craft_image_codecs::Image::from_u8(8, 8, craft_image_codecs::ChannelLayout::Rgba, [250, 250, 250, 255].repeat(64)).unwrap();
         let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
         Session::new().create_from_images(&[("scan.png".into(), png)]).unwrap().to_vec()
+    }
+
+    /// The image counts after the files, which the web batch reports too: they add up over the
+    /// written files, and a batch that looked at no image says nothing about images.
+    #[test]
+    fn batch_images_add_up_over_the_written_files() {
+        let file = |resampled: usize, left_alone: usize, signed: bool| {
+            let mut res = pdfcraft_engine::ocr::FileResult {
+                bytes: Arc::new(Vec::new()),
+                pages: Vec::new(),
+                file_skipped: None,
+                images: Some(Default::default()),
+            };
+            if let Some(i) = res.images.as_mut() {
+                i.resampled = resampled;
+                i.skipped = vec!["CMYK".into(); left_alone];
+                i.refused = signed.then(|| "signed".into());
+            }
+            res
+        };
+        let mut images = BatchImages::default();
+        images.add(&pdfcraft_engine::ocr::FileResult { images: None, ..file(0, 0, false) });
+        assert_eq!(images.summary(), "");
+        images.add(&file(2, 1, false));
+        images.add(&file(1, 0, false));
+        images.add(&file(0, 0, true));
+        assert_eq!(images.summary(), "; 3 images downsampled (1 left as they are); 1 signed file kept its images");
+        images.add(&file(0, 0, true));
+        assert!(images.summary().ends_with("; 2 signed files kept their images"), "{}", images.summary());
     }
 
     /// One recognised word on page 1, as a finished run would hand it over.
