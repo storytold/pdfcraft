@@ -53,8 +53,9 @@ fn doc_info_names_the_document_a_portfolio_presents_first() {
     assert_eq!(info("plain.pdf"), Value::Null);
 }
 
-/// A one-page portfolio of `notes.txt` and `form.pdf`, a two-page PDF, with a cross-reference
-/// table, so the PDF inside isn't read as the portfolio's own objects.
+/// A one-page portfolio of `notes.txt`, `form.pdf` (a two-page PDF) and `data.bin` (a kind of
+/// file PdfCraft doesn't open), with a cross-reference table, so the PDF inside isn't read as
+/// the portfolio's own objects.
 fn portfolio_of_files() -> Vec<u8> {
     let form = "%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -65,7 +66,7 @@ trailer << /Root 1 0 R >>
 %%EOF";
     let objs = [
         "<< /Type /Catalog /Pages 2 0 R /Collection << /Type /Collection /D (form.pdf) >> \
-         /Names << /EmbeddedFiles << /Names [(form.pdf) 7 0 R (notes.txt) 5 0 R] >> >> >>"
+         /Names << /EmbeddedFiles << /Names [(data.bin) 9 0 R (form.pdf) 7 0 R (notes.txt) 5 0 R] >> >> >>"
             .to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".into(),
@@ -73,6 +74,8 @@ trailer << /Root 1 0 R >>
         "<< /Type /Filespec /F (notes.txt) /UF (notes.txt) /EF << /F 4 0 R >> >>".into(),
         format!("<< /Type /EmbeddedFile /Length {} >>\nstream\n{form}\nendstream", form.len()),
         "<< /Type /Filespec /F (form.pdf) /UF (form.pdf) /EF << /F 6 0 R >> >>".into(),
+        "<< /Type /EmbeddedFile /Length 4 >>\nstream\n\x01\x02\x03\x04\nendstream".into(),
+        "<< /Type /Filespec /F (data.bin) /UF (data.bin) /EF << /F 8 0 R >> >>".into(),
     ];
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
@@ -89,8 +92,9 @@ trailer << /Root 1 0 R >>
     out
 }
 
-/// `attachment_open` opens a portfolio's PDF as a document of its own, by key or by name, and
-/// refuses a file that isn't a PDF; the portfolio is left as it was.
+/// `attachment_open` opens a portfolio's PDF as a document of its own, by key or by name, a text
+/// file as the PDF Open makes of it, and refuses a kind of file PdfCraft doesn't open; the
+/// portfolio is left as it was.
 #[test]
 fn attachment_open_reads_a_portfolios_pdf_as_a_document_of_its_own() {
     let dir = tempfile::tempdir().unwrap();
@@ -103,9 +107,14 @@ fn attachment_open_reads_a_portfolios_pdf_as_a_document_of_its_own() {
         assert_ne!(opened["doc"], json!(doc), "a document of its own");
         assert_eq!(opened["pages"], json!(2), "the attached PDF's pages, not the cover's");
         assert_eq!(opened["from"], json!({ "doc": doc, "key": "form.pdf" }));
+        assert_eq!(opened["converted"], json!(false));
     }
-    let refused = auto.call("attachment_open", &json!({ "doc": doc, "key": "notes.txt" })).unwrap_err().to_string();
-    assert!(refused.contains("not a PDF"), "{refused}");
+    let notes = tool(&mut auto, "attachment_open", json!({ "doc": doc, "key": "notes.txt" }));
+    assert_eq!(notes["converted"], json!(true), "text opens as a conversion");
+    assert_eq!(notes["name"], json!("notes.pdf"), "named as Open names a conversion");
+    assert!(notes["pages"].as_u64().is_some_and(|p| p >= 1));
+    let refused = auto.call("attachment_open", &json!({ "doc": doc, "key": "data.bin" })).unwrap_err().to_string();
+    assert!(refused.contains("data.bin"), "{refused}");
     assert!(auto.call("attachment_open", &json!({ "doc": doc })).is_err(), "a key or a name is needed");
     assert_eq!(portfolio["pages"], json!(1), "the portfolio's own page is its cover sheet");
     let list = tool(&mut auto, "doc_list", json!({}));

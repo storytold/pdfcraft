@@ -272,10 +272,10 @@ fn a_portfolio_that_keeps_its_list_hidden_still_presents_its_initial_document() 
 /// Without a PDF to present, the portfolio stays in front with its files listed.
 #[test]
 fn a_portfolio_without_an_initial_document_shows_its_files_over_the_cover() {
-    // Without `/D` the cover is the initial document; a `/D` naming a file that isn't a PDF
-    // opens nothing either.
-    for collection in ["/Collection << /View /D >>", "/Collection << /D (notes.txt) >>"] {
-        let h = opened(portfolio(collection, &[("notes.txt", b"hello"), ("form.pdf", PAGE)]), true);
+    // Without `/D` the cover is the initial document; a `/D` naming a kind of file PdfCraft
+    // doesn't open shows nothing either.
+    for collection in ["/Collection << /View /D >>", "/Collection << /D (data.bin) >>"] {
+        let h = opened(portfolio(collection, &[("data.bin", b"\x01\x02\x03\x04"), ("form.pdf", PAGE)]), true);
         assert_eq!(tabs(&h), (vec!["portfolio.pdf".into()], Some("portfolio.pdf".into())), "{collection}");
         assert_eq!(shown(&h, 0).as_deref(), Some("portfolio.pdf"), "{collection}");
         assert_eq!(h.state().right, Some(RightPanel::PortfolioFiles), "{collection}");
@@ -362,15 +362,55 @@ fn closing_the_portfolios_tab_closes_the_files_it_showed() {
     assert!(h.state().session.docs().is_empty(), "no file of the portfolio stays open");
 }
 
-/// A file that isn't a PDF stays in the list: picking it says why it isn't shown.
+/// A kind of file PdfCraft doesn't open stays in the list: picking it says why it isn't shown.
 #[test]
-fn a_file_that_isnt_a_pdf_says_why_it_isnt_shown() {
-    let mut h = opened(portfolio("/Collection << /D (one.pdf) >>", &[("notes.txt", b"hello"), ("one.pdf", PAGE)]), true);
-    row(&h, "notes.txt").click();
+fn a_file_pdfcraft_cant_open_says_why_it_isnt_shown() {
+    let mut h = opened(portfolio("/Collection << /D (one.pdf) >>", &[("data.bin", b"\x01\x02\x03\x04"), ("one.pdf", PAGE)]), true);
+    row(&h, "data.bin").click();
     h.run_steps(2);
     assert_eq!(shown(&h, 0).as_deref(), Some("one.pdf"));
     let toast = h.state().toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
-    assert!(toast.contains("notes.txt"), "the reader is told why: {toast:?}");
+    assert!(toast.contains("data.bin"), "the reader is told why: {toast:?}");
+}
+
+/// A small PNG.
+fn png() -> Vec<u8> {
+    let img = craft_image_codecs::Image::from_u8(8, 4, craft_image_codecs::ChannelLayout::Rgb, vec![120u8; 8 * 4 * 3]).unwrap();
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap()
+}
+
+/// An image or a text file is shown in the portfolio's tab as the PDF Open makes of it,
+/// read-only, and its row says it is a converted preview; the file in the portfolio stays as it
+/// is. A text file named by `/D` is presented so too.
+#[test]
+fn an_image_or_text_file_is_shown_as_a_converted_preview() {
+    let image = png();
+    let mut h = opened(portfolio("/Collection << /D (notes.txt) >>", &[("notes.txt", b"Hearing on 15 May"), ("photo.png", &image)]), true);
+    assert_eq!(shown(&h, 0).as_deref(), Some("notes.pdf"), "the initial text file is shown converted");
+    row(&h, "photo.png").click();
+    h.run_steps(2);
+    assert_eq!(tabs(&h), (vec!["portfolio.pdf".into()], Some("portfolio.pdf".into())));
+    assert_eq!(shown(&h, 0).as_deref(), Some("photo.pdf"));
+    {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        assert!(!doc.allows_modification() && !doc.dirty, "a read-only preview, nothing to save");
+        let host = s.session.get(s.tab_doc(0).unwrap()).unwrap();
+        assert!(!host.dirty, "the portfolio is unchanged");
+    }
+    // Both rows say they are previews, the one shown and the one shown before.
+    assert_eq!(h.query_all_by_label_contains("Converted preview").count(), 2);
+}
+
+/// An Office document is converted off the frame thread; when the conversion can't be done
+/// (here the file isn't really one), the reader is told why and the file stays listed.
+#[test]
+fn an_office_file_that_cant_be_converted_says_why() {
+    let mut h = opened(portfolio("/Collection << /D (one.pdf) >>", &[("one.pdf", PAGE), ("report.docx", b"PK\x03\x04not really a document")]), true);
+    row(&h, "report.docx").click();
+    crate::support::wait_until(&mut h, "the conversion's answer", |app| app.toast.as_ref().is_some_and(|(m, _)| m.contains("report.docx")));
+    assert_eq!(shown(&h, 0).as_deref(), Some("one.pdf"), "the file shown stays");
+    assert!(h.query_by_label_contains("Preparing preview").is_none(), "nothing is left preparing");
 }
 
 /// Unsaved changes to the portfolio, made before one of its files was shown, are asked about

@@ -572,6 +572,8 @@ impl PdfCraftApp {
     /// list hidden (`/View /H`). Leaving the tab gives back the panel the list replaced, unless
     /// the reader changed panels meanwhile. Called every frame.
     pub(crate) fn present_portfolios(&mut self) {
+        // An Office document converted off the frame thread is shown once it is ready.
+        self.poll_portfolio_conversions();
         // A prompt or picker over the window belongs to the document it was raised for (the
         // password of a file opened together with the portfolio, say): the initial document
         // waits for its answer, and opening it then would close the prompt. A file still

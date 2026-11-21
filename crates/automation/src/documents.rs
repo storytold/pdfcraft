@@ -168,15 +168,23 @@ impl Automation {
             }
         };
         let bytes = pdfcraft_render::attachment_data(&source.bytes, source.password.as_deref(), &att).map_err(failed)?;
-        // A PDF by its bytes, whatever its name, as the app decides.
-        if pdfcraft_engine::source_kind(&att.name, &bytes) != Some(pdfcraft_engine::SourceKind::Pdf) {
-            return Err(failed(format!("{} is not a PDF: only a PDF attachment opens as a document", att.name)));
-        }
         let from = source.id;
-        let id = self.session.open(att.name.clone(), None, Arc::new(bytes), a.opt_str("password")?).map_err(failed)?;
+        // A PDF by its bytes, whatever its name, as the app decides; an image, text or an Office
+        // document opens as the PDF Open makes of it, as the app's portfolio tab shows it.
+        let (name, bytes, converted) = match pdfcraft_engine::source_kind(&att.name, &bytes) {
+            Some(pdfcraft_engine::SourceKind::Pdf) => (att.name.clone(), Arc::new(bytes), false),
+            Some(_) => {
+                let (_, pdf) = self.session.convert_to_pdf(&att.name, &Arc::new(bytes)).map_err(failed)?;
+                let stem = att.name.rsplit_once('.').map_or(att.name.as_str(), |(s, _)| s);
+                (format!("{stem}.pdf"), pdf, true)
+            }
+            None => return Err(failed(format!("{}: this kind of file can't be opened as a document", att.name))),
+        };
+        let id = self.session.open(name, None, bytes, a.opt_str("password")?).map_err(failed)?;
         let doc = self.session.get(id).ok_or_else(|| failed("the document vanished"))?;
         let mut value = summary(doc);
         value["from"] = json!({ "doc": from.0, "key": file_key });
+        value["converted"] = json!(converted);
         Ok(value)
     }
 

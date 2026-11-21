@@ -17,10 +17,20 @@ pub(crate) enum FileAction {
 /// only sign of it.
 const MARK_WIDTH: f32 = 3.0;
 
-/// Draw portfolio `files`, marking the one shown (its name tree key, `None` for the portfolio's
-/// own pages). ↑ and ↓ move the keyboard between rows, Enter or Space shows the file of the
-/// row that has it.
-pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, files: &[Attachment], shown: Option<&str>) -> Option<FileAction> {
+/// What the portfolio's tab shows of its files, by name-tree key.
+pub(crate) struct Shown<'a> {
+    /// The file shown; `None` for the portfolio's own pages.
+    pub(crate) file: Option<&'a str>,
+    /// The files shown as a conversion of another kind of file.
+    pub(crate) converted: &'a [String],
+    /// The file being converted to be shown.
+    pub(crate) preparing: Option<&'a str>,
+}
+
+/// Draw portfolio `files`, marking the one shown and saying which are shown converted or being
+/// prepared. ↑ and ↓ move the keyboard between rows, Enter or Space shows the file of the row
+/// that has it.
+pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, files: &[Attachment], shown: Shown<'_>) -> Option<FileAction> {
     let mut action = None;
     // Only the portfolio's own files: a file attached to a comment on its cover sheet isn't one.
     let rows: Vec<(usize, &Attachment, &str)> = files
@@ -43,8 +53,15 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, files: &[Attachment], shown: 
     let mut responses = Vec::with_capacity(rows.len());
     let mut focus_to = None;
     for (n, &(index, file, key)) in rows.iter().enumerate() {
-        let selected = shown == Some(key);
+        let selected = shown.file == Some(key);
         let is_pdf = file.name.to_lowercase().ends_with(".pdf");
+        let status = if shown.preparing == Some(key) {
+            Some(tl!("Preparing preview…"))
+        } else if shown.converted.iter().any(|k| k == key) {
+            Some(tl!("Converted preview"))
+        } else {
+            None
+        };
         let row = ui.scope_builder(egui::UiBuilder::new().sense(Sense::click()), |ui| {
             egui::Frame::NONE
                 .fill(if selected { t.selected } else { egui::Color32::TRANSPARENT })
@@ -58,7 +75,7 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, files: &[Attachment], shown: 
                             // Not selectable, so a click on the name or the details reaches the row.
                             let font = if selected { theme::semibold(13.0) } else { theme::medium(13.0) };
                             ui.add(egui::Label::new(egui::RichText::new(&file.name).font(font)).truncate().selectable(false));
-                            let meta = [file.size.map(human_size), file.description.clone().filter(|d| !d.is_empty())]
+                            let meta = [status.map(str::to_owned), file.size.map(human_size), file.description.clone().filter(|d| !d.is_empty())]
                                 .into_iter()
                                 .flatten()
                                 .collect::<Vec<_>>()
