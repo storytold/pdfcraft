@@ -8,6 +8,7 @@ use egui::epaint::text::{Fonts, TextOptions};
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::{PdfCraftApp, i18n, theme};
 
+pub mod fixtures;
 pub mod input;
 
 /// Step frames until `ready` holds or 30 seconds pass, and say whether it held. For background work
@@ -56,6 +57,11 @@ pub fn open_menu(h: &mut Harness<'static, PdfCraftApp>, title: &str) {
     use egui_kittest::kittest::Queryable;
     h.get_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some(title)).click();
     h.run_steps(2);
+}
+
+/// Whether the last frame asked the platform for the clipboard (`RequestPaste`, Edit ▸ Paste's).
+pub fn asked_for_the_clipboard(h: &Harness<'static, PdfCraftApp>) -> bool {
+    h.output().viewport_output.values().any(|v| v.commands.contains(&egui::ViewportCommand::RequestPaste))
 }
 
 /// The menu row labelled `label` in an open menu.
@@ -111,4 +117,14 @@ pub fn skip_without_catalogs(name: &str) -> bool {
         eprintln!("skipping {name}: built without craft-i18n (set CRAFT_I18N_DIR to a craft-i18n checkout)");
     }
     skip
+}
+
+/// Open Help ▸ Keyboard shortcuts with a click, as a user would, so whatever had the keyboard loses
+/// it as it does then.
+pub fn open_shortcuts_from_the_help_menu(h: &mut Harness<'static, PdfCraftApp>) {
+    use egui_kittest::kittest::Queryable;
+    open_menu(h, "Help");
+    h.get_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().is_some_and(|l| l.starts_with("Keyboard shortcuts"))).click();
+    h.run_steps(4);
+    assert!(h.state().dialog.is_some(), "Keyboard shortcuts is open");
 }
