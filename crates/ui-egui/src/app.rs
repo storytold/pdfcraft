@@ -564,7 +564,7 @@ impl eframe::App for PdfCraftApp {
             let minimized = self.ctx.as_ref().is_some_and(|c| c.input(|i| i.viewport().minimized == Some(true)));
             self.window_state.keep(storage, minimized);
             if cfg!(target_os = "windows") {
-                self.window_state.clear_saved_fullscreen(storage, self.full_screen_maximized);
+                self.window_state.clear_saved_fullscreen(storage, minimized, self.full_screen_maximized);
             }
         }
         storage.set_string("pdfcraft", self.persist());

@@ -41,16 +41,24 @@ impl WindowState {
     }
 
     /// Clear a persisted `fullscreen:true` flag from eframe's `"window"` entry while preserving
-    /// `normal_geometry` and restoring `maximized:true` when the window was maximized before
-    /// entering full screen (#8010).
-    pub fn clear_saved_fullscreen(&mut self, storage: &mut dyn eframe::Storage, restore_maximized: Option<bool>) {
+    /// `normal_geometry` and applying the captured pre-fullscreen `maximized` state (#8010).
+    ///
+    /// When `minimized` is true, [`Self::keep`] may have restored an older shown snapshot that
+    /// already carries `fullscreen:false`; if a pre-fullscreen maximize state was captured, apply
+    /// it to that fallback snapshot too without touching ordinary non-fullscreen saves.
+    pub fn clear_saved_fullscreen(&mut self, storage: &mut dyn eframe::Storage, minimized: bool, restore_maximized: Option<bool>) {
         let Some(saved) = storage.get_string(WINDOW_KEY) else { return };
-        let Some(mut cleaned) = set_ron_bool_field(&saved, "fullscreen", false) else { return };
-        if restore_maximized == Some(true)
-            && let Some(restored) = set_ron_bool_field(&cleaned, "maximized", true)
+        let cleared_fullscreen = set_ron_bool_field(&saved, "fullscreen", false);
+        let mut updated = cleared_fullscreen.clone();
+        if let Some(maximized) = restore_maximized
+            && (cleared_fullscreen.is_some() || minimized)
         {
-            cleaned = restored;
+            let base = updated.as_deref().unwrap_or(&saved);
+            if let Some(with_max) = set_ron_bool_field(base, "maximized", maximized) {
+                updated = Some(with_max);
+            }
         }
+        let Some(cleaned) = updated else { return };
         storage.set_string(WINDOW_KEY, cleaned.clone());
         if self.shown.as_deref() == Some(saved.as_str()) {
             self.shown = Some(cleaned);
@@ -227,7 +235,7 @@ mod tests {
         store.set_string(WINDOW_KEY, normal_fs.into());
         let mut state = WindowState::started_with(Some(&store));
         state.keep(&mut store, false);
-        state.clear_saved_fullscreen(&mut store, Some(false));
+        state.clear_saved_fullscreen(&mut store, false, Some(false));
         let cleaned = store.get_string(WINDOW_KEY).unwrap_or_default();
         assert!(cleaned.contains("fullscreen:false"), "fullscreen cleared: {cleaned}");
         assert!(cleaned.contains("maximized:false"), "normal window stays unmaximized: {cleaned}");
@@ -241,16 +249,16 @@ mod tests {
         // A maximized window closed during full screen preserves `maximized:true`.
         store.set_string(WINDOW_KEY, normal_fs.into());
         state.keep(&mut store, false);
-        state.clear_saved_fullscreen(&mut store, Some(true));
+        state.clear_saved_fullscreen(&mut store, false, Some(true));
         let max_cleaned = store.get_string(WINDOW_KEY).unwrap_or_default();
         assert!(max_cleaned.contains("fullscreen:false"), "fullscreen cleared: {max_cleaned}");
         assert!(max_cleaned.contains("maximized:true"), "pre-fullscreen maximize preserved: {max_cleaned}");
         assert!(max_cleaned.contains("inner_size_points:(x:1440.0,y:864.0)"), "normal geometry kept: {max_cleaned}");
 
-        // A non-fullscreen save is never altered, even if `restore_maximized` were set.
+        // A non-minimized, non-fullscreen save is never altered, even if `restore_maximized` were set.
         let untouched = "(normal_geometry:(outer_position_pixels:Some((x:96.0,y:96.0)),scale_factor:1.25,inner_size_points:(x:1440.0,y:864.0)),fullscreen:false,maximized:false)";
         store.set_string(WINDOW_KEY, untouched.into());
-        state.clear_saved_fullscreen(&mut store, Some(true));
+        state.clear_saved_fullscreen(&mut store, false, Some(true));
         assert_eq!(store.get_string(WINDOW_KEY).as_deref(), Some(untouched));
 
         // Optional whitespace / pretty-printed multiline RON is handled; similarly named fields and
@@ -258,28 +266,66 @@ mod tests {
         let pretty = "(\n    not_fullscreen: true,\n    fullscreen : true,\n    maximized: false,\n)";
         store.set_string("pdfcraft", r#"{"theme":"Dark"}"#.into());
         store.set_string(WINDOW_KEY, pretty.into());
-        state.clear_saved_fullscreen(&mut store, Some(true));
+        state.clear_saved_fullscreen(&mut store, false, Some(true));
         assert_eq!(store.get_string(WINDOW_KEY).as_deref(), Some("(\n    not_fullscreen: true,\n    fullscreen : false,\n    maximized: true,\n)"));
         assert_eq!(store.get_string("pdfcraft").as_deref(), Some(r#"{"theme":"Dark"}"#));
 
         // Matches inside quoted strings or nested RON values are skipped; only top-level fields change.
         let nested_and_string = "(note:\"(fullscreen:true)\",nested:(fullscreen:true),fullscreen:true,maximized:false)";
         store.set_string(WINDOW_KEY, nested_and_string.into());
-        state.clear_saved_fullscreen(&mut store, Some(false));
+        state.clear_saved_fullscreen(&mut store, false, Some(false));
         assert_eq!(
             store.get_string(WINDOW_KEY).as_deref(),
             Some("(note:\"(fullscreen:true)\",nested:(fullscreen:true),fullscreen:false,maximized:false)")
         );
         let only_nested = "(note:\"(fullscreen:true)\",nested:(fullscreen:true),fullscreen:false,maximized:false)";
         store.set_string(WINDOW_KEY, only_nested.into());
-        state.clear_saved_fullscreen(&mut store, Some(true));
+        state.clear_saved_fullscreen(&mut store, false, Some(true));
         assert_eq!(store.get_string(WINDOW_KEY).as_deref(), Some(only_nested));
 
         // Malformed, truncated, quoted, or non-boolean RON never panics and leaves storage intact.
         for malformed in ["", "(fullscreen:", "(fullscreen:123)", "\"fullscreen:true\"", "(fullscreen:true!)", "🔥fullscreen:tru"] {
             store.set_string(WINDOW_KEY, malformed.into());
-            state.clear_saved_fullscreen(&mut store, Some(true));
+            state.clear_saved_fullscreen(&mut store, false, Some(true));
             assert_eq!(store.get_string(WINDOW_KEY).as_deref(), Some(malformed), "malformed input left alone: {malformed}");
         }
+    }
+
+    /// Regression (PR #8021 review): if the last shown snapshot had `fullscreen:false,maximized:false`,
+    /// then the user maximized, entered full screen, and minimized before the next save, `keep(..., true)`
+    /// restores that older snapshot; the captured pre-fullscreen maximize state must still be applied
+    /// while preserving `normal_geometry` and unrelated keys.
+    #[test]
+    fn minimized_save_during_full_screen_applies_captured_maximize_to_restored_snapshot() {
+        let initial = "(normal_geometry:(outer_position_pixels:Some((x:96.0,y:96.0)),scale_factor:1.25,inner_size_points:(x:1440.0,y:864.0)),fullscreen:false,maximized:false)";
+        let mut store = Store::default();
+        store.set_string("pdfcraft", r#"{"theme":"Dark"}"#.into());
+        store.set_string(WINDOW_KEY, initial.into());
+        let mut state = WindowState::started_with(Some(&store));
+
+        // Ordinary minimized save with no captured full-screen state leaves the snapshot untouched.
+        store.set_string(WINDOW_KEY, MINIMIZED.into());
+        state.keep(&mut store, true);
+        state.clear_saved_fullscreen(&mut store, true, None);
+        assert_eq!(store.get_string(WINDOW_KEY).as_deref(), Some(initial));
+
+        // User maximizes, enters full screen (captured Some(true)), then minimizes before the next save.
+        store.set_string(WINDOW_KEY, MINIMIZED.into());
+        state.keep(&mut store, true);
+        state.clear_saved_fullscreen(&mut store, true, Some(true));
+        let saved = store.get_string(WINDOW_KEY).unwrap_or_default();
+        assert!(saved.contains("fullscreen:false"), "fullscreen remains false: {saved}");
+        assert!(saved.contains("maximized:true"), "captured pre-fullscreen maximize applied: {saved}");
+        assert!(saved.contains("outer_position_pixels:Some((x:96.0,y:96.0))"), "normal geometry kept: {saved}");
+        assert_eq!(store.get_string("pdfcraft").as_deref(), Some(r#"{"theme":"Dark"}"#));
+
+        // Reverse transition: restored down before entering full screen (Some(false)), then minimized.
+        store.set_string(WINDOW_KEY, MINIMIZED.into());
+        state.keep(&mut store, true);
+        state.clear_saved_fullscreen(&mut store, true, Some(false));
+        let unmaxed = store.get_string(WINDOW_KEY).unwrap_or_default();
+        assert!(unmaxed.contains("fullscreen:false"), "fullscreen remains false: {unmaxed}");
+        assert!(unmaxed.contains("maximized:false"), "captured pre-fullscreen unmaximize applied: {unmaxed}");
+        assert!(unmaxed.contains("inner_size_points:(x:1440.0,y:864.0)"), "normal geometry kept: {unmaxed}");
     }
 }
