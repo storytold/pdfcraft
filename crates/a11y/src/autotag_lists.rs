@@ -13,11 +13,12 @@
 //! Anything else ends the list, and a run of one item stays a paragraph.
 //!
 //! A marker shown by its own operator, before the item's text in the same text object, is tagged
-//! `Lbl` there (see `Evidence::label_op`). Otherwise only whole text objects are grouped. These are
-//! not recognised, and end the list or stay paragraphs as they were tagged before:
+//! `Lbl` there (see `Evidence::label_op`). A marker in the same show as its item's text gets no `Lbl`
+//! of its own: the item is still found, and the marker stays in its `LBody`. Otherwise only whole
+//! text objects are grouped. These are not recognised, and end the list or stay paragraphs as they
+//! were tagged before:
 //! - a list drawn in one text object: an object with a later line that continues its first line's
 //!   marker, at the same indent, stays a paragraph;
-//! - a marker in the same show as its item's text (it stays in `LBody`);
 //! - nested lists.
 
 use crate::autotag_roles::Evidence;
@@ -31,8 +32,7 @@ const SAME_LINE: f64 = 0.5;
 const MAX_DIGITS: usize = 3;
 /// An item's wrapped line starts at most this many text sizes right of its marker.
 const MAX_HANG: f64 = 4.0;
-/// An item's wrapped line starts at most this many text sizes below the line before it, per line
-/// that line's object shows.
+/// An item's wrapped line starts at most this many text sizes below the last line before it.
 const MAX_LINE_STEP: f64 = 1.6;
 /// A line is full, so the text after it may wrap, when it ends at least this fraction of the way
 /// across its column; a column's edge is where at least two of its lines end that far.
@@ -300,8 +300,7 @@ fn wraps_after(evidence: &[Evidence], roles: &[&str], item: &Item, x: f64, edge:
     let mut above = evidence.get(item.body).copied();
     while let (Some(prev), Some(e)) = (above, evidence.get(j)) {
         let size = prev.size.max(1.0);
-        let step = prev.y - e.y;
-        let lines = prev.lines.max(1) as f64;
+        let step = prev.last_y - e.y;
         let flush = (e.x - x).abs() <= INDENT_TOLERANCE;
         let hanging = e.x > x + INDENT_TOLERANCE && e.x <= x + MAX_HANG * size;
         let full = prev.end >= x + (edge - x) * FULL_LINE && edge > x;
@@ -313,7 +312,7 @@ fn wraps_after(evidence: &[Evidence], roles: &[&str], item: &Item, x: f64, edge:
             && full
             && !fitted
             && step > 0.0
-            && step <= MAX_LINE_STEP * size * lines;
+            && step <= MAX_LINE_STEP * size;
         if !wraps {
             break;
         }
@@ -337,11 +336,11 @@ fn column_edge(evidence: &[Evidence], i: usize, x: f64) -> Option<f64> {
     let mut above: Option<&Evidence> = None;
     for e in evidence.iter().skip(i) {
         let size = e.size.max(1.0);
-        let beside = above.is_some_and(|prev| (prev.y - e.y).abs() <= prev.size.max(1.0) * SAME_LINE && e.x > prev.x);
+        let beside = above.is_some_and(|prev| (prev.last_y - e.y).abs() <= prev.size.max(1.0) * SAME_LINE && e.x > prev.x);
         let indented = e.x >= x - INDENT_TOLERANCE && e.x <= x + MAX_HANG * size;
         let below = above.is_none_or(|prev| {
-            let step = prev.y - e.y;
-            step > 0.0 && step <= MAX_LINE_STEP * prev.size.max(1.0) * prev.lines.max(1) as f64
+            let step = prev.last_y - e.y;
+            step > 0.0 && step <= MAX_LINE_STEP * prev.size.max(1.0)
         });
         if !beside && !(indented && below) {
             break;
@@ -413,7 +412,20 @@ mod tests {
     fn line(text: &str, x: f64, y: f64) -> Evidence {
         let end = x + 6.0 * text.chars().count() as f64;
         let word = 6.0 * text.split_whitespace().next().map_or(0, |w| w.chars().count()) as f64;
-        Evidence { size: 12.0, lines: 1, chars: text.len(), letters: true, marker: marker(text), x, y, end, right: end, word, ..Evidence::default() }
+        Evidence {
+            size: 12.0,
+            lines: 1,
+            chars: text.len(),
+            letters: true,
+            marker: marker(text),
+            x,
+            y,
+            end,
+            right: end,
+            word,
+            last_y: y,
+            ..Evidence::default()
+        }
     }
 
     fn grouped(lines: &[Evidence]) -> Vec<Block> {
@@ -478,6 +490,15 @@ mod tests {
         // A full line does not reach across a gap of more than a line and a half.
         let spaced = [line(long, 20.0, 400.0), line("this voucher.", 20.0, 370.0), line(long, 20.0, 358.0)];
         assert_eq!(grouped(&spaced), [Block::Text(0), Block::Text(1), Block::Text(2)]);
+        // The next line is measured from an object's last line, not from its first: a paragraph
+        // two lines below a three-line item is not its wrapped line.
+        let below = |gap: f64| {
+            let item = Evidence { lines: 3, last_y: 376.0, ..line(long, 20.0, 400.0) };
+            let next = 376.0 - gap;
+            grouped(&[item, line("this voucher.", 20.0, next), line(long, 20.0, next - 12.0)])
+        };
+        assert!(matches!(below(12.0).as_slice(), [Block::List { items, .. }] if items[0].wrapped == [1]), "{:?}", below(12.0));
+        assert!(matches!(below(26.0).as_slice(), [Block::Text(0), Block::Text(1), Block::Text(2)]), "{:?}", below(26.0));
         // With bullets drawn apart, the items' text beside them makes the column.
         let apart = [
             line("•", 20.0, 352.0),

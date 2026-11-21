@@ -60,6 +60,9 @@ pub(crate) struct Evidence {
     /// How wide the first word of the object's text is, in default user space, or 0 when unknown:
     /// whether it would have fitted at the end of the line before, which then did not wrap.
     pub word: f64,
+    /// The baseline of the object's last line, in default user space: the next line is measured
+    /// from there.
+    pub last_y: f64,
 }
 
 /// The structure type for each text object, in document order: `H1`–`H6` or `P`.
@@ -189,6 +192,8 @@ struct Shown {
     /// Where the first word of the first line ends, once it has started, and whether it has ended.
     word_end: Option<f64>,
     word_done: bool,
+    /// The baseline of the last line shown so far.
+    last_y: f64,
 }
 
 impl Shown {
@@ -217,8 +222,9 @@ impl Shown {
         let [.., x, y] = Matrix::translate(lead, 0.0).then(&state.tm).then(&state.ctm).0;
         if self.start.is_none() {
             self.start = Some((x, y));
-            self.end = x;
+            (self.end, self.right) = (x, x);
         }
+        self.last_y = y;
         if self.shown && self.moved {
             self.close_line();
             self.line = Some((String::new(), x));
@@ -327,6 +333,7 @@ impl Shown {
             end,
             right,
             word: self.word_end.map_or(0.0, |w| (w - x).max(0.0)),
+            last_y: self.last_y,
         }
     }
 }
@@ -668,6 +675,11 @@ mod tests {
         assert!(found[1].end > found[0].end, "{found:?}");
         // The last line ends where its own text does; the furthest line end is kept apart.
         assert!(found[2].end < found[2].right && found[2].right == found[0].end, "{found:?}");
+        // The last line's baseline is kept apart from the first's.
+        assert!(found[2].last_y < found[2].y && found[1].last_y == found[1].y, "{found:?}");
+        // Left of the page origin, a line still ends right of where it starts.
+        let left = walk(b"BT /F1 12 Tf -200 100 Td (Apples) Tj ET");
+        assert!(left[0].right > left[0].x && left[0].right < 0.0, "{left:?}");
     }
 
     #[test]
