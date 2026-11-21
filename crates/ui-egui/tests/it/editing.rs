@@ -3955,7 +3955,7 @@ fn a_paragraph_editor_opens_at_full_opacity() {
     h.drag_at(top.center());
     h.run_steps(1);
     h.drop_at(top.center());
-    let theme = craft::theme::builtins().iter().find(|theme| theme.id.as_str() == craft::theme::SUITE_DEFAULT).unwrap();
+    let theme = craft::theme::builtins().iter().find(|theme| theme.id.as_str() == "craft.graphite").unwrap();
     let appearance = craft::theme::Appearance {
         mode: craft::theme::Mode::Light,
         contrast: craft::theme::Contrast::Standard,
