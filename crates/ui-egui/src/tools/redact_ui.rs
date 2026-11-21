@@ -15,6 +15,44 @@ use crate::{PdfCraftApp, widgets};
 
 const MARK_RED: Color32 = Color32::from_rgb(0xE3, 0x22, 0x22);
 
+/// Redaction Tool Properties lists a set's codes as rows of the dialog up to this many rows (the
+/// built-in sets fit); a longer set scrolls in a box [`CODE_LIST_HEIGHT`] high, so the dialog's
+/// OK and Cancel stay on screen in a small window.
+const MAX_UNSCROLLED_CODE_ROWS: usize = 6;
+const CODE_LIST_HEIGHT: f32 = 180.0;
+
+/// One code's checkbox in Redaction Tool Properties: picking it adds it to `picked`, clearing it
+/// takes it out. The overlay is drawn in the standard fonts, and Apply refuses text they can't
+/// draw, so such a code can't be picked (one picked already can still be cleared) and says why.
+fn code_checkbox(ui: &mut egui::Ui, picked: &mut Vec<String>, code: &str, built_in: bool) {
+    let mut on = picked.iter().any(|c| c == code);
+    let undrawable = pdfcraft_fonts::first_undrawable(code);
+    let enabled = undrawable.is_none() || on;
+    let check = widgets::checkbox(&mut on, code);
+    // Built-in codes are short and line up; custom ones take their width.
+    let response = if built_in { ui.add_sized([62.0, 18.0], check) } else { ui.add_enabled(enabled, check) };
+    let response = match undrawable {
+        Some(c) => response.on_disabled_hover_text(pdfcraft_fonts::undrawable_message("this code", c)),
+        None => response,
+    };
+    if response.changed() {
+        picked.retain(|c| c != code);
+        if on {
+            picked.push(code.to_string());
+        }
+    }
+}
+
+/// The saved code choice kept aside while the saved code sets can't be read
+/// ([`PdfCraftApp::redaction_choice_unread`]).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RedactChoiceUnread {
+    /// `code_set` and `codes` as the settings held them.
+    pub saved: (serde_json::Value, serde_json::Value),
+    /// What they were read as (the default set, no codes), which the defaults keep until changed.
+    pub fallback: (String, Vec<String>),
+}
+
 /// Redaction Tool Properties: what new marks look like once applied.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RedactPrefs {
@@ -537,24 +575,45 @@ pub(crate) fn props_body(ui: &mut egui::Ui, d: &mut RedactPrefs, codes: &CodeLib
                 let set_codes = chosen.map(|s| s.codes()).unwrap_or_default();
                 let built_in = chosen.is_none_or(|s| s.built_in());
                 // Built-in codes are short: four to a row. Custom ones may be longer: two.
-                for row in set_codes.chunks(if built_in { 4 } else { 2 }) {
-                    ui.label("");
-                    ui.add_enabled_ui(codes_on, |ui| {
-                        ui.horizontal(|ui| {
-                            for &code in row {
-                                let mut picked = d.codes.iter().any(|c| c == code);
-                                let check = widgets::checkbox(&mut picked, code);
-                                // Built-in codes are short and line up; custom ones take their width.
-                                let changed = if built_in { ui.add_sized([62.0, 18.0], check) } else { ui.add(check) }.changed();
-                                if changed {
-                                    d.codes.retain(|c| c != code);
-                                    if picked {
-                                        d.codes.push(code.to_string());
-                                    }
+                let rows: Vec<&[&str]> = set_codes.chunks(if built_in { 4 } else { 2 }).collect();
+                if rows.len() <= MAX_UNSCROLLED_CODE_ROWS {
+                    for row in rows {
+                        ui.label("");
+                        ui.add_enabled_ui(codes_on, |ui| {
+                            ui.horizontal(|ui| {
+                                for &code in row {
+                                    code_checkbox(ui, &mut d.codes, code, built_in);
                                 }
-                            }
+                            });
                         });
-                    });
+                        ui.end_row();
+                    }
+                } else {
+                    // A set holds up to 200 codes and the dialog doesn't scroll: a long list
+                    // scrolls in a box of its own, so every code can be reached and OK and Cancel
+                    // stay in view.
+                    ui.label("");
+                    egui::ScrollArea::vertical()
+                        .id_salt("redaction-code-list")
+                        .max_height(CODE_LIST_HEIGHT)
+                        // A grid cell offers only the row's last height: the list gets the whole
+                        // box, so no code is hidden under the clip.
+                        .min_scrolled_height(CODE_LIST_HEIGHT)
+                        .show(ui, |ui| {
+                            // A grid cell lays out left to right: the rows go one under the other.
+                            ui.vertical(|ui| {
+                                if !codes_on {
+                                    ui.disable();
+                                }
+                                for row in rows {
+                                    ui.horizontal(|ui| {
+                                        for &code in row {
+                                            code_checkbox(ui, &mut d.codes, code, built_in);
+                                        }
+                                    });
+                                }
+                            });
+                        });
                     ui.end_row();
                 }
                 let look = &mut d.look;
@@ -843,21 +902,31 @@ impl PdfCraftApp {
         true
     }
 
-    /// Edit Codes ▸ Import: add the sets of a code set file, all of them or none.
-    pub fn import_redaction_codes(&mut self, name: &str, bytes: &[u8]) -> bool {
+    /// Edit Codes ▸ Import: add the sets of a code set file, all of them or none. `replace` is
+    /// the editor's replace choice as it was when Import was clicked.
+    pub fn import_redaction_codes(&mut self, name: &str, bytes: &[u8], replace: bool) -> bool {
         if self.redaction_codes_unread.is_some() {
             self.code_editor.message = Some((tl!("Discard the saved code sets that could not be read first.").to_string(), true));
             return false;
         }
-        let read = CodeLibrary::read_file(bytes).and_then(|sets| self.redaction_codes.import(sets, self.code_editor.replace));
+        let read = CodeLibrary::read_file(bytes).and_then(|sets| self.redaction_codes.import(sets, replace));
         match read {
             Ok(names) => {
                 for prefs in [&mut self.redact_prefs, &mut self.redact_defaults].into_iter().chain(self.redact_before.as_mut()) {
+                    // A set replaced under another letter case (the file's spelling wins) stays
+                    // chosen under its new name, with the codes it still has.
+                    if let Some(name) = names.iter().find(|n| *n != &prefs.code_set && n.to_lowercase() == prefs.code_set.to_lowercase()) {
+                        prefs.code_set = name.clone();
+                    }
                     prefs.settle(&self.redaction_codes);
                 }
                 if let Some(first) = names.first() {
+                    // As choosing the set by hand does: its name to edit, and no code or code
+                    // text left over from the set that was selected.
                     self.code_editor.set = first.clone();
+                    self.code_editor.set_name = first.clone();
                     self.code_editor.code = None;
+                    self.code_editor.code_text.clear();
                 }
                 let msg = match names.as_slice() {
                     [one] => crate::i18n::fmt(tl!("Imported the code set {set} from {name}."), &[("set", one), ("name", name)]),
@@ -916,6 +985,8 @@ impl PdfCraftApp {
     /// Forget saved code sets that could not be read, so new ones can be made and saved.
     pub fn discard_unread_redaction_codes(&mut self) {
         self.redaction_codes_unread = None;
+        // The choice that named one of those sets goes with them.
+        self.redaction_choice_unread = None;
         self.redaction_codes = CodeLibrary::default();
         self.code_editor.message = Some((tl!("The saved code sets were discarded.").to_string(), false));
     }

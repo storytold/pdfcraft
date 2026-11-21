@@ -3,7 +3,7 @@
 
 use egui::Pos2;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp, SaveTarget};
 
 fn harness() -> Harness<'static, PdfCraftApp> {
@@ -927,6 +927,119 @@ fn custom_code_sets_from_edit_codes() {
     assert!(h.state().code_editor.message.as_ref().is_some_and(|(m, _)| m.contains("bad.json was not imported") && m.contains("control character")));
     assert_eq!(h.state().redaction_codes.custom().len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// CodeRabbit on #7992. A set of 200 codes keeps OK on screen (the codes scroll); Escape on Edit
+/// Codes goes back to the properties; Import uses the replace choice of the click, not one made
+/// while the file was on its way; a replacing import spelled in another case keeps the set chosen
+/// and resets the editor's fields; and a code the standard fonts can't draw can't be picked.
+#[test]
+fn edit_codes_import_dismissal_long_sets_and_undrawable_codes() {
+    use pdfcraft_engine::redaction_codes::CodeEdit;
+    let dir = std::env::temp_dir().join(format!("pdfcraft-redaction-codes-review-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = harness();
+    let s = h.state_mut();
+    assert!(s.edit_redaction_codes(CodeEdit::CreateSet { name: "Bench".into() }));
+    for code in ["Sealed", "Jury", "Ωmega"] {
+        assert!(s.edit_redaction_codes(CodeEdit::AddCode { set: "Bench".into(), code: code.into() }));
+    }
+    assert!(s.edit_redaction_codes(CodeEdit::CreateSet { name: "Long".into() }));
+    for n in 0..200 {
+        assert!(s.edit_redaction_codes(CodeEdit::AddCode { set: "Long".into(), code: format!("Code {n}") }));
+    }
+
+    // 200 codes: OK and Cancel stay on screen.
+    s.redact_prefs.use_overlay = true;
+    s.redact_prefs.use_code = true;
+    s.redact_prefs.code_set = "Long".into();
+    assert!(s.execute("redact.properties"));
+    h.run_steps(3);
+    let screen = h.ctx.content_rect();
+    assert!(screen.contains_rect(h.get_by_label("OK").rect()), "OK is on screen");
+    let (first, second) = (h.get_by_label("Code 0").rect(), h.get_by_label("Code 2").rect());
+    assert!(second.top() > first.top(), "the codes go in rows, one under the other");
+    // A code in the scrolled list takes a click.
+    click(&mut h, "Code 1");
+    h.run_steps(2);
+    click(&mut h, "OK");
+    h.run_steps(2);
+    assert_eq!(h.state().redact_prefs.codes, ["Code 1"]);
+    h.state_mut().redact_prefs.codes.clear();
+
+    // An undrawable code is shown but can't be picked; the others can.
+    h.state_mut().redact_prefs.code_set = "Bench".into();
+    assert!(h.state_mut().execute("redact.properties"));
+    h.run_steps(3);
+    assert!(h.get_by_label("Ωmega").accesskit_node().is_disabled(), "the standard fonts can't draw it");
+    assert!(!h.get_by_label("Sealed").accesskit_node().is_disabled());
+    click(&mut h, "Sealed");
+    h.run_steps(2);
+
+    // Escape on Edit Codes goes back to the properties, whose draft still waits.
+    click(&mut h, "Edit Codes…");
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::RedactCodes));
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::RedactProps), "back to the properties");
+    click(&mut h, "OK");
+    h.run_steps(2);
+    assert_eq!(h.state().redact_prefs.codes, ["Sealed"]);
+
+    // A file holding "BENCH": Import clicked with replace off refuses it, even if replace is
+    // turned on before the file arrives.
+    let file = dir.join("bench.json");
+    std::fs::write(&file, r#"{"format":"pdfcraft-redaction-codes","version":1,"sets":[{"name":"BENCH","codes":["Sealed","Minor"]}]}"#).unwrap();
+    assert!(h.state_mut().execute("redact.properties"));
+    h.run_steps(3);
+    click(&mut h, "Edit Codes…");
+    h.run_steps(3);
+    h.state_mut().code_editor.replace = false;
+    h.state_mut().pick_override = Some(vec![file.to_string_lossy().into_owned()]);
+    click(&mut h, "Import…");
+    // The click's frame asks for the file; it arrives on a later one.
+    h.run_steps(1);
+    h.state_mut().code_editor.replace = true;
+    h.run_steps(4);
+    assert!(
+        h.state().code_editor.message.as_ref().is_some_and(|(m, refused)| *refused && m.contains("already a code set named")),
+        "{:?}",
+        h.state().code_editor.message
+    );
+    assert_eq!(h.state().redaction_codes.find("Bench").unwrap().codes(), ["Sealed", "Jury", "Ωmega"]);
+
+    // With replace on when clicked, it replaces the set under the file's spelling, which stays
+    // chosen with the codes it still has; the editor shows that set with no code or text left
+    // from before.
+    h.state_mut().code_editor.set_name = "Long".into();
+    h.state_mut().code_editor.code_text = "Leftover".into();
+    h.state_mut().pick_override = Some(vec![file.to_string_lossy().into_owned()]);
+    click(&mut h, "Import…");
+    h.run_steps(4);
+    let s = h.state();
+    assert_eq!(s.redaction_codes.find("BENCH").map(|b| b.codes()), Some(vec!["Sealed", "Minor"]), "{:?}", s.code_editor.message);
+    assert_eq!((s.redact_prefs.code_set.as_str(), s.redact_prefs.codes.as_slice()), ("BENCH", &["Sealed".to_string()][..]));
+    assert_eq!((s.code_editor.set_name.as_str(), s.code_editor.code_text.as_str()), ("BENCH", ""));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// CodeRabbit on #7992: while the saved code sets can't be read, the saved choice of set and
+/// codes is written back too, until the user chooses other defaults.
+#[test]
+fn an_unreadable_library_keeps_the_saved_code_choice() {
+    let damaged = r#"{"redaction_code_sets":{"format":"pdfcraft-redaction-codes","version":2,"sets":[]},"redact_prefs":{"use_code":true,"code_set":"Court","codes":["Sealed"]}}"#;
+    let mut odd = PdfCraftApp::new();
+    odd.restore(damaged);
+    assert!(odd.redaction_codes_unread.is_some(), "the newer library isn't read");
+    let saved: serde_json::Value = serde_json::from_str(&odd.persist()).unwrap();
+    assert_eq!((&saved["redact_prefs"]["code_set"], &saved["redact_prefs"]["codes"]), (&serde_json::json!("Court"), &serde_json::json!(["Sealed"])));
+    // Defaults the user chooses replace it.
+    odd.redact_defaults.code_set = "foia".into();
+    odd.redact_defaults.codes = vec!["(b)(1)".into()];
+    let saved: serde_json::Value = serde_json::from_str(&odd.persist()).unwrap();
+    assert_eq!(saved["redact_prefs"]["code_set"], "foia");
 }
 
 /// Saved code sets that can't be read are neither dropped nor overwritten: the user is told, the

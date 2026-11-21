@@ -176,6 +176,15 @@ impl PdfCraftApp {
         v["full_screen_fill"] = serde_json::Value::Bool(self.view_defaults.full_screen_fill);
         v["full_screen_escape_exits"] = serde_json::Value::Bool(self.full_screen_escape_exits);
         v["redact_prefs"] = self.redact_defaults.to_json();
+        // The saved sets can't be read, and the defaults still hold the choice they were read
+        // as: the choice saved before goes back, not that fallback.
+        if self.redaction_codes_unread.is_some()
+            && let Some(kept) = &self.redaction_choice_unread
+            && (self.redact_defaults.code_set.as_str(), &self.redact_defaults.codes) == (kept.fallback.0.as_str(), &kept.fallback.1)
+        {
+            v["redact_prefs"]["code_set"] = kept.saved.0.clone();
+            v["redact_prefs"]["codes"] = kept.saved.1.clone();
+        }
         // Saved code sets that could not be read go back as they were, until the user discards them.
         v["redaction_code_sets"] = match &self.redaction_codes_unread {
             Some((saved, _)) => saved.clone(),
@@ -488,6 +497,12 @@ impl PdfCraftApp {
             },
         }
         if let Some(prefs) = RedactPrefs::from_json(&v["redact_prefs"], &self.redaction_codes) {
+            // With the sets unreadable, a choice naming one of them reads as the default set:
+            // keep the saved one aside, to write back until the user chooses another.
+            self.redaction_choice_unread = self.redaction_codes_unread.is_some().then(|| crate::redact_ui::RedactChoiceUnread {
+                saved: (v["redact_prefs"]["code_set"].clone(), v["redact_prefs"]["codes"].clone()),
+                fallback: (prefs.code_set.clone(), prefs.codes.clone()),
+            });
             self.redact_prefs = prefs.clone();
             self.redact_defaults = prefs;
         }

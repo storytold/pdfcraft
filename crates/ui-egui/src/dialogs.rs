@@ -1889,7 +1889,13 @@ fn dialog_footer(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: 
 }
 
 /// Acts on what the dialog asked for, once the modal is drawn.
-fn finish_dialog(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: &mut Pending) {
+fn finish_dialog(app: &mut PdfCraftApp, dialog: Dialog, mut modal_closed: bool, req: &mut Pending) {
+    // Edit Codes dismissed (Escape, the window's close) goes back to the Redaction Properties
+    // that opened it, as its Close button does: their draft is still waiting for OK or Cancel.
+    if dialog == Dialog::RedactCodes && modal_closed {
+        modal_closed = false;
+        req.next = Some(Dialog::RedactProps);
+    }
     finish_requests(app, dialog, modal_closed, req);
     finish_actions(app, req);
     finish_redactions_and_fields(app, req);
@@ -1997,7 +2003,9 @@ fn finish_actions(app: &mut PdfCraftApp, req: &mut Pending) {
         app.pick_files(crate::files::FilePurpose::RedactWords, false);
     }
     if req.import_codes {
-        app.pick_files(crate::files::FilePurpose::RedactionCodes, false);
+        // The replace choice as it is now, when Import is clicked.
+        let replace = app.code_editor.replace;
+        app.pick_files(crate::files::FilePurpose::RedactionCodes { replace }, false);
     }
     if req.export_codes {
         app.export_redaction_codes();

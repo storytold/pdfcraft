@@ -859,6 +859,11 @@ pub struct PdfCraftApp {
     /// was, written back unchanged, and why it was refused. Edit Codes shows the reason and lets
     /// the user discard them; until then no custom set can be made, so nothing overwrites them.
     pub redaction_codes_unread: Option<(serde_json::Value, String)>,
+    /// While the saved code sets can't be read: the saved properties' own `code_set` and `codes`
+    /// (which may name one of those sets), and the fallback choice they were read as. Saving
+    /// writes the saved choice back as long as the defaults still hold the fallback, so a build
+    /// that can read the sets again finds the codes that were chosen.
+    pub(crate) redaction_choice_unread: Option<redact_ui::RedactChoiceUnread>,
     /// The Edit Codes dialog's state.
     pub code_editor: redact_ui::CodeEditor,
     pub redact_pages_draft: RedactPagesDraft,

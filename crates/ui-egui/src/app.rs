@@ -357,6 +357,7 @@ impl PdfCraftApp {
             redact_before: None,
             redaction_codes: Default::default(),
             redaction_codes_unread: None,
+            redaction_choice_unread: None,
             code_editor: Default::default(),
             redact_pages_draft: RedactPagesDraft::default(),
             redact_search: RedactSearchDraft::default(),

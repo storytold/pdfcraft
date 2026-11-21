@@ -767,8 +767,9 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "redact_code_sets_export",
             "Export redaction code sets",
-            "Edit Codes ▸ Export: atomically write this session's custom code sets (all, or those named in sets) to path as a code set file that redact_code_sets_import and the app read. Built-in sets aren't exported (every copy has them). Returns the path, the number of sets and the bytes written.",
+            "Edit Codes ▸ Export: atomically write this session's custom code sets (all, or those named in sets) to path as a code set file that redact_code_sets_import and the app read. Built-in sets aren't exported (every copy has them). Returns the path, the number of sets and the bytes written. A file already at path is replaced.",
         )
+        .destructive()
         .with(schema(
             json!({
                 "path": { "type": "string", "minLength": 1 },

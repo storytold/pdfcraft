@@ -27,8 +27,12 @@ pub enum FilePurpose {
     CreateMultipleSeparate,
     /// Find text and redact ▸ Import list: a text file with one word or phrase per line.
     RedactWords,
-    /// Redaction Properties ▸ Edit Codes ▸ Import: a code set file.
-    RedactionCodes,
+    /// Redaction Properties ▸ Edit Codes ▸ Import: a code set file. `replace` is the editor's
+    /// "Replace sets with the same name" as it was when Import was clicked, not when the file
+    /// arrives (the picker and the browser's read finish on a later frame).
+    RedactionCodes {
+        replace: bool,
+    },
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -101,7 +105,7 @@ fn files_picker(purpose: FilePurpose) -> rfd::AsyncFileDialog {
     if purpose == FilePurpose::RedactWords {
         return dialog.add_filter_any_case(tl!("Text"), &["txt"]);
     }
-    if purpose == FilePurpose::RedactionCodes {
+    if matches!(purpose, FilePurpose::RedactionCodes { .. }) {
         return dialog.add_filter_any_case(tl!("Redaction codes"), &["json"]);
     }
     if !matches!(purpose, FilePurpose::CreateMultiple | FilePurpose::CreateMultipleSeparate | FilePurpose::InsertPages | FilePurpose::Combine) {
@@ -429,13 +433,13 @@ impl PdfCraftApp {
                 return;
             }
             // Read no further than the code set file's own limit, which then says what is wrong.
-            if purpose == FilePurpose::RedactionCodes {
+            if let FilePurpose::RedactionCodes { replace } = purpose {
                 use std::io::Read;
                 let mut bytes = Vec::new();
                 match std::fs::File::open(p).and_then(|f| f.take(pdfcraft_engine::redaction_codes::MAX_FILE_BYTES as u64 + 1).read_to_end(&mut bytes))
                 {
                     Ok(_) => {
-                        self.import_redaction_codes(&name, &bytes);
+                        self.import_redaction_codes(&name, &bytes, replace);
                     }
                     Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
                 }
@@ -615,9 +619,9 @@ impl PdfCraftApp {
                 let dir = self.export_dir_override.as_ref().map(std::path::PathBuf::from);
                 self.stage_create_separate(files.into_iter().map(Ok), dir);
             }
-            FilePurpose::RedactionCodes => {
+            FilePurpose::RedactionCodes { replace } => {
                 if let Some((name, bytes)) = files.into_iter().next() {
-                    self.import_redaction_codes(&name, &bytes);
+                    self.import_redaction_codes(&name, &bytes, replace);
                 }
             }
             FilePurpose::RedactWords => {
