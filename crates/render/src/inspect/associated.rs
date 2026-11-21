@@ -25,6 +25,9 @@ pub(super) const MAX_ASSOCIATED_FILE_NOTES: usize = 64;
 /// stops here.
 const MAX_ASSOCIATED_FILE_BYTES: usize = 1 << 30;
 
+/// The longest name a PDF may hold (ISO 32000-2 Annex C): a longer `/AFRelationship` isn't kept.
+const MAX_RELATIONSHIP_NAME: usize = 127;
+
 /// What makes two `/AF` entries the same file: the object an indirect entry resolves to, or, for a
 /// direct entry, its place in an indirect `/AF` array (which several owners can share).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -201,7 +204,22 @@ impl<'a> Inspector<'a> {
     fn associated_file(&self, entry: &'a Object, text_budget: &mut usize) -> Result<(AssociatedFile, Option<&'static str>), &'static str> {
         let (spec, stream) = self.associated_stream(entry)?;
         let (relationship, note) = match spec.get(b"AFRelationship").map(|o| self.resolve(o)) {
-            Ok(Object::Name(name)) => (AssociatedFileRelationship::from_name(&String::from_utf8_lossy(name)), None),
+            // A standard name costs nothing; a name of the producer's own is text kept for each
+            // file, so it is charged against the shared allowance, and a name longer than a PDF
+            // name may be (127 bytes, ISO 32000-2 Annex C) is not kept at all.
+            Ok(Object::Name(name)) if name.len() > MAX_RELATIONSHIP_NAME => {
+                (AssociatedFileRelationship::Unspecified, Some("/AFRelationship is longer than a PDF name may be, so it was read as Unspecified."))
+            }
+            Ok(Object::Name(name)) => match AssociatedFileRelationship::from_name(&String::from_utf8_lossy(name)) {
+                AssociatedFileRelationship::Other(_) => match super::core::spend(name, text_budget, |b| String::from_utf8_lossy(b).into_owned()) {
+                    Some(own) => (AssociatedFileRelationship::Other(own), None),
+                    None => (
+                        AssociatedFileRelationship::Unspecified,
+                        Some("/AFRelationship did not fit the text read from the document, so it was read as Unspecified."),
+                    ),
+                },
+                standard => (standard, None),
+            },
             Err(_) | Ok(Object::Null) => (AssociatedFileRelationship::Unspecified, None),
             Ok(_) => (AssociatedFileRelationship::Unspecified, Some("/AFRelationship is not a name, so it was read as Unspecified.")),
         };
@@ -280,6 +298,9 @@ pub fn associated_file_data(bytes: &[u8], password: Option<&str>, file: &Associa
         let (_, stream) = insp.associated_stream(entry)?;
         if stream.dict.get(b"Filter").is_ok() {
             stream.decompressed_content_with_limit(MAX_ASSOCIATED_FILE_BYTES).map_err(|e| format!("the associated file could not be decoded: {e}"))
+        } else if stream.content.len() > MAX_ASSOCIATED_FILE_BYTES {
+            // The same cap as a filtered file's, so no file is handed over past it.
+            Err(format!("the associated file is larger than {} MiB", MAX_ASSOCIATED_FILE_BYTES >> 20))
         } else {
             Ok(stream.content.clone())
         }

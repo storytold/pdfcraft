@@ -156,3 +156,17 @@ trailer << /Root 1 0 R >>
     // The cap's own note is kept even when the others are full.
     assert_eq!(notes.last().map(String::as_str), Some(format!("Only the first {MAX_ASSOCIATED_FILES} associated files are listed.").as_str()));
 }
+
+/// CodeRabbit on #7993: a relationship name of the producer's own is kept as text for every file
+/// that has it, so one longer than a PDF name may be is read as Unspecified with a note, while a
+/// standard name and a short name of its own (C2PA_Manifest, in the test above) are kept.
+#[test]
+fn an_overlong_relationship_name_is_not_kept() {
+    let long = "X".repeat(4096);
+    let pdf = String::from_utf8_lossy(ASSOCIATED).replace("/C2PA_Manifest", &format!("/{long}"));
+    let info = inspect(Arc::new(pdf.into_bytes()), None).expect("opens");
+    let manifest = info.associated_files.iter().find(|f| f.name.as_deref() == Some("manifest.c2pa")).expect("still listed");
+    assert_eq!(manifest.relationship, Rel::Unspecified);
+    assert!(info.associated_file_notes.iter().any(|n| n.contains("longer than a PDF name")), "{:?}", info.associated_file_notes);
+    assert_eq!(info.associated_files[0].relationship, Rel::Data, "a standard name is untouched");
+}
