@@ -22,7 +22,10 @@ fn info() -> AboutInfo {
     .mark(AboutImage::svg("ArtCraft", MARK))
     .part_of(AboutImage::svg("ArtCraft", LOGO).dark(LOGO_WHITE))
     .built_with("Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)");
-    info.links(pdfcraft_engine::links::LINKS.iter().map(|l| AboutLink::new(tl!(l.label).to_string(), l.url).icon(IconId::new(l.icon))))
+    info.links(pdfcraft_engine::links::LINKS.iter().enumerate().map(|(i, l)| {
+        let label = if i == 0 { tl!("Join our Discord") } else { tl!(l.label) };
+        AboutLink::new(label.to_string(), l.url).icon(IconId::new(l.icon))
+    }))
 }
 
 impl PdfCraftApp {
