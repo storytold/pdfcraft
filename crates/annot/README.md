@@ -10,7 +10,9 @@ Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends on `pdfcraft-cos`,
   (`FreeText`), polygon (including cloudy borders), polyline, caret, rubber and custom stamp,
   and file attachment.
 - **Appearance streams** (`appearance::build`) generated from the annotation dictionary, so new
-  and restyled comments look the same in every viewer. Highlights multiply (`/BM /Multiply`).
+  and restyled comments look the same in every viewer. Highlights multiply (`/BM /Multiply`);
+  highlights support optional rounded corners (`/PCRoundCorners`, default square) which draws
+  smooth Bézier end caps across QuadPoints.
   A line's leader lines (`/LL`, `/LLE`, `/LLO`) and caption (`/Cap`, `/CP`, `/CO`) are drawn as
   ISO 32000-2 Table 178 places them, the caption in black Helvetica 10.
   Note icons are PdfCraft's own drawings. Text boxes use standard Helvetica (WinAnsi), with

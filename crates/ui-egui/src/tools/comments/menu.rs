@@ -357,7 +357,7 @@ pub(crate) fn quick_bar_colour(ui: &mut egui::Ui, current: Rgb) -> Option<Rgb> {
     picked
 }
 
-/// The comment tools' extra quick-bar controls: pin, colour, fill, opacity and thickness.
+/// The comment tools' extra quick-bar controls: pin, colour, fill, opacity, thickness and corner rounding.
 pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &mut CommentPrefs) -> Option<Rgb> {
     let style = prefs.style(tool);
     if icons::button(ui, "pin", 32.0, prefs.pinned, if prefs.pinned { tl!("Keep tool selected: on") } else { tl!("Keep tool selected") }).clicked() {
@@ -398,6 +398,12 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
                 prefs.set_width(tool, w);
             }
         });
+    }
+    if tool == CommentTool::Highlight {
+        let label = if style.round_corners { tl!("Round corners: on") } else { tl!("Round corners") };
+        if icons::button(ui, "circle", 32.0, style.round_corners, label).clicked() {
+            prefs.set_round_corners(tool, !style.round_corners);
+        }
     }
     selected_color
 }
