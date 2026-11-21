@@ -190,6 +190,7 @@ impl PdfCraftApp {
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
         v["text_links"] = serde_json::Value::Bool(self.text_links);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
+        v["print_eco_mode"] = serde_json::Value::Bool(self.print_draft.eco_mode);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language;
         // a custom paper is stored by the name it was given.
         let d = &self.print_draft;
@@ -407,6 +408,17 @@ impl PdfCraftApp {
             self.always_default_view = on;
         }
         self.restore_print_prefs(v);
+        if let Some(on) = v.get("print_eco_mode").and_then(serde_json::Value::as_bool) {
+            let was_eco = self.print_draft.eco_mode;
+            self.print_draft.eco_mode = on;
+            if on {
+                self.print_draft.grayscale = true;
+                self.print_draft.duplex = Some(pdfcraft_engine::print::spool::Duplex::LongEdge);
+            } else if was_eco {
+                self.print_draft.grayscale = false;
+                self.print_draft.duplex = None;
+            }
+        }
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;
         }
