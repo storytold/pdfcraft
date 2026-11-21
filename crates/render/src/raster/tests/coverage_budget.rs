@@ -70,7 +70,6 @@ fn render_kept_to(pdf: Vec<u8>, max_coverage: Option<usize>) -> (Vec<u8>, bool) 
 }
 
 #[test]
-#[ignore = "craft-libs uses unvendored vello_cpu 0.0.8 where RenderSettings::max_coverage is a no-op"]
 fn a_page_past_its_coverage_leaves_the_rest_out_and_says_so() {
     // 2^10 circles, each storing its edge tiles' coverage.
     let pdf = doubling_forms(10);
@@ -107,7 +106,6 @@ fn leaves_out_past_the_limit(leaf: &str, marker: &str) {
 }
 
 #[test]
-#[ignore = "craft-libs uses unvendored vello_cpu 0.0.8 where RenderSettings::max_coverage is a no-op"]
 fn strokes_past_the_coverage_are_left_out() {
     // A stroked circle and a stroked curve: neither is a rectangle, so both go through
     // `stroke_path`, and the page's only coverage is strokes.
@@ -118,7 +116,6 @@ fn strokes_past_the_coverage_are_left_out() {
 }
 
 #[test]
-#[ignore = "craft-libs uses unvendored vello_cpu 0.0.8 where RenderSettings::max_coverage is a no-op"]
 fn fast_rectangles_past_the_coverage_are_left_out() {
     // Axis-aligned rectangles fill through `fill_rect_fast`, and are the page's only coverage.
     leaves_out_past_the_limit("0 0 1 rg 40.5 40.5 119 119 re f", "1 0 0 rg 170.5 10.5 20 20 re f");
@@ -183,4 +180,36 @@ fn a_layer_clip_past_the_coverage_is_itself_left_out() {
     ctx.push_clip_layer(&Circle::new((50.0, 50.0), 40.0).to_path(0.1));
     assert!(ctx.coverage_full(), "the clip, past the limit, is left out and that is said");
     ctx.pop_layer();
+}
+
+#[test]
+fn shared_raster_options_enforces_max_coverage() {
+    let pdf = doubling_forms(10);
+    let parsed = Pdf::new(Arc::new(pdf)).unwrap();
+    let render_with = |max_coverage: Option<usize>| {
+        let truncated = Arc::new(Mutex::new(false));
+        let seen = truncated.clone();
+        let settings = InterpreterSettings {
+            warning_sink: Arc::new(move |w| {
+                if matches!(w, InterpreterWarning::ContentTruncated) {
+                    *seen.lock().unwrap() = true;
+                }
+            }),
+            ..Default::default()
+        };
+        let options = RasterOptions { max_coverage, ..Default::default() };
+        let [w, h] = shared_raster::dimensions(&parsed.pages()[0], &options).unwrap();
+        let mut buf = vec![0u8; (w as usize) * (h as usize) * 4];
+        shared_raster::render_into(&parsed.pages()[0], &RenderCache::new(), &settings, &options, &mut buf).unwrap();
+        let cut = *truncated.lock().unwrap();
+        (buf, cut)
+    };
+
+    let (whole, whole_cut) = render_with(None);
+    assert!(!whole_cut, "unlimited render leaves nothing out");
+    let (kept, kept_cut) = render_with(Some(200_000));
+    assert!(kept_cut, "shared RasterOptions::max_coverage truncates and warns");
+    assert_eq!(kept.len(), whole.len());
+    let blue = |px: &[u8]| px.as_chunks::<4>().0.iter().filter(|p| p[2] > 200 && p[0] < 50).count();
+    assert!(blue(&kept) > 10_000, "circles drawn before the limit stay: {}", blue(&kept));
 }

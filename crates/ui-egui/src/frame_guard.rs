@@ -1,4 +1,4 @@
-//! The last-resort guard around each frame (AGENTS.md §4, #3914). Commands, opens and file use
+//! The last-resort guard around each frame (app-agents.md rule 13, #3914). Commands, opens and file use
 //! already catch panics; a frame's logic and drawing (dialog buttons, panel actions, canvas
 //! gestures, reloads) did not, so a panic anywhere in them ended the app with every open tab and
 //! up to a minute of unsaved edits. Now it is reported, the app is put back in a state the next
