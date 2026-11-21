@@ -696,7 +696,7 @@ fn expanding_is_a_view_kept_across_views_and_zoom_and_never_an_undo_step() {
 
 #[test]
 fn dragging_a_page_moves_that_page_even_between_another_files_pages() {
-    let mut h = grid_of_pages(&[("a.pdf", 1), ("b.pdf", 4), ("c.pdf", 1)]);
+    let mut h = grid_of(vec![("a.pdf", fixture(1)), ("b.pdf", fixture(4)), ("c.pdf", fixture(1))], vec2(2600.0, 1600.0));
     expand(&mut h, "b.pdf");
     // b's page 2 dragged after c: that page alone moves; b is now in two parts.
     let (p2, c) = (card(&h, &page_card(2, "b.pdf")), card(&h, "c.pdf"));
