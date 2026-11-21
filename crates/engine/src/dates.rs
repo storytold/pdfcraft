@@ -63,7 +63,7 @@ const CKB_DAYS: [&str; 7] = ["یەکشەممە", "دووشەممە", "سێشەم
 
 /// The languages month and weekday names can be written in (Preferences ▸ Date format ▸ Language):
 /// the interface languages, in the same order and with the same names.
-pub static DATE_LANGUAGES: [DateLanguage; 36] = [
+pub static DATE_LANGUAGES: [DateLanguage; 37] = [
     DateLanguage {
         code: "en",
         name: "English",
@@ -584,6 +584,30 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         days: ["søndag", "mandag", "tirsdag", "onsdag", "torsdag", "fredag", "lørdag"],
         days_short: ["søn.", "man.", "tir.", "ons.", "tor.", "fre.", "lør."],
     },
+    // Hebrew (Gregorian month and weekday names); after a day number the month takes the
+    // prefix `ב` (`7 במרץ 2026`), whereas standing alone it has no prefix (`מרץ 2026`).
+    DateLanguage {
+        code: "he",
+        name: "עברית",
+        months: ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"],
+        months_with_day: Some([
+            "בינואר",
+            "בפברואר",
+            "במרץ",
+            "באפריל",
+            "במאי",
+            "ביוני",
+            "ביולי",
+            "באוגוסט",
+            "בספטמבר",
+            "באוקטובר",
+            "בנובמבר",
+            "בדצמבר",
+        ]),
+        months_short: ["ינו׳", "פבר׳", "מרץ", "אפר׳", "מאי", "יוני", "יולי", "אוג׳", "ספט׳", "אוק׳", "נוב׳", "דצמ׳"],
+        days: ["יום ראשון", "יום שני", "יום שלישי", "יום רביעי", "יום חמישי", "יום שישי", "יום שבת"],
+        days_short: ["יום א׳", "יום ב׳", "יום ג׳", "יום ד׳", "יום ה׳", "יום ו׳", "שבת"],
+    },
 ];
 
 /// The date language for `code` (any case), or `None` when there's none.
@@ -905,6 +929,8 @@ mod tests {
         assert_eq!(in_lang("ddd d mmm", "sq"), "sht 7 mar");
         assert_eq!(in_lang("dddd d. mmmm yyyy", "nb"), "lørdag 7. mars 2026");
         assert_eq!(in_lang("ddd d. mmm", "nb"), "lør. 7. mar.");
+        assert_eq!(in_lang("d mmmm yyyy", "he"), "7 במרץ 2026");
+        assert_eq!(in_lang("mmmm yyyy", "he"), "מרץ 2026");
         assert_eq!(date_language("PT-BR").map(|l| l.code), Some("pt-br"));
         assert!(date_language("xx").is_none());
         for l in &DATE_LANGUAGES {
