@@ -127,6 +127,8 @@ fn click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
     h.run_steps(4);
 }
 
+/// Clicking an XFA button in the app runs its click script: one adds a row, another shows its
+/// message as a notice.
 #[test]
 fn xfa_buttons_run_their_scripts_in_the_app() {
     let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template()));
@@ -143,6 +145,87 @@ fn xfa_buttons_run_their_scripts_in_the_app() {
     assert!(h.query_by_label_contains("Hello 2").is_some(), "script console: {:?}", h.state().js_console.log);
 }
 
+/// Every way the focus moves (a click, Tab, Shift+Tab, Escape) runs the field it left's exit
+/// script and the field it reached's enter script, changed or not; typing a change and tabbing
+/// out runs the exit once, not twice. A script's message shows as a notice.
+#[test]
+fn xfa_enter_and_exit_scripts_run_whenever_the_focus_moves() {
+    use egui::{Key, Modifiers};
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::focus_template()));
+    crate::support::settle(&mut h);
+    let counts = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let v = |n: &str| doc.form.iter().find(|f| f.name == n).and_then(|f| f.value.first().cloned()).unwrap_or_default();
+        (v("enters"), v("exits"))
+    };
+    let focus = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].forms.focus.as_ref().map(|f| f.name.clone());
+    let press = |h: &mut Harness<'static, PdfCraftApp>, modifiers, key| {
+        h.key_press_modifiers(modifiers, key);
+        h.run_steps(4);
+    };
+    click_field(&mut h, "probe");
+    assert_eq!(counts(&h), ("1".into(), "0".into()), "a click in runs the enter");
+    for _ in 0..2 {
+        press(&mut h, Modifiers::NONE, Key::Tab);
+        assert_eq!(focus(&h).as_deref(), Some("quiet"));
+        press(&mut h, Modifiers::SHIFT, Key::Tab);
+        assert_eq!(focus(&h).as_deref(), Some("probe"));
+    }
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    assert_eq!(focus(&h), None);
+    assert_eq!(counts(&h), ("3".into(), "3".into()), "three unchanged visits, three exits; console: {:?}", h.state().js_console.log);
+    // A change typed in: tabbing out runs the exit once.
+    click_field(&mut h, "probe");
+    h.event(egui::Event::Text("typed".into()));
+    h.run_steps(2);
+    press(&mut h, Modifiers::NONE, Key::Tab);
+    assert_eq!(counts(&h), ("4".into(), "4".into()));
+    // Leaving `quiet` shows its message.
+    assert_eq!(focus(&h).as_deref(), Some("quiet"));
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    assert!(h.query_by_label_contains("left quiet").is_some(), "console: {:?}", h.state().js_console.log);
+}
+
+/// An enter script that changes the field it enters (clearing a "Type here") shows in the editor,
+/// so leaving the field keeps the script's value rather than writing the old one back; typing
+/// after it is kept as usual. When the exit of the field left changed it first (`relay` puts the
+/// "Type here" back), the editor follows both scripts and ends on the enter script's value.
+#[test]
+fn an_enter_script_that_changes_its_field_shows_in_the_editor() {
+    use egui::{Key, Modifiers};
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::focus_template()));
+    crate::support::settle(&mut h);
+    let value = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "hint").and_then(|f| f.value.first().cloned()).unwrap_or_default()
+    };
+    assert_eq!(value(&h), "Type here");
+    click_field(&mut h, "hint");
+    assert_eq!(value(&h), "", "the enter script cleared it");
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.text.clone()).as_deref(), Some(""), "and the editor shows that");
+    h.key_press_modifiers(Modifiers::NONE, Key::Tab);
+    h.run_steps(4);
+    assert_eq!(value(&h), "", "leaving it doesn't write \"Type here\" back");
+    click_field(&mut h, "hint");
+    h.event(egui::Event::Text("Ann".into()));
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::NONE, Key::Tab);
+    h.run_steps(4);
+    assert_eq!(value(&h), "Ann");
+    // From `relay` back to `hint`: relay's exit puts "Type here" back over "Ann", then hint's enter
+    // clears it. The editor follows both, so it holds the last value, and Tab keeps it.
+    click_field(&mut h, "relay");
+    click_field(&mut h, "hint");
+    assert_eq!(value(&h), "", "relay's exit, then hint's enter");
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.text.clone()).as_deref(), Some(""), "the editor holds the enter script's value");
+    h.key_press_modifiers(Modifiers::NONE, Key::Tab);
+    h.run_steps(4);
+    assert_eq!(value(&h), "");
+}
+
+/// A message an initialize script shows on opening appears at once, and a print request from it
+/// is refused (only a click may print).
 #[test]
 fn messages_from_scripts_run_on_open_show_right_away() {
     let tpl = pdfcraft_xfa::fixtures::scripted_template()
@@ -210,6 +293,8 @@ fn scripts_turned_off_by_a_click_bring_a_closed_notice_bar_back() {
     assert!(!says_scripts_are_off(&h.state().toast), "{:?}", h.state().toast);
 }
 
+/// On an encrypted dynamic XFA form that allows filling, the notice bar shows the layout note and
+/// the security sentence together, with both the field-highlight and Security settings buttons.
 #[test]
 fn a_secured_dynamic_xfa_form_shows_its_layout_and_its_security() {
     // Changing and assembling withheld, filling allowed.
@@ -227,4 +312,52 @@ fn a_secured_dynamic_xfa_form_shows_its_layout_and_its_security() {
     h.get_by_label_contains("laid out from its template: 2 pages, 11 fields. This document is secured.");
     h.get_by_label("Hide field highlights");
     h.get_by_label("Security settings");
+}
+
+/// Opening another document doesn't change the field highlight the document in front's scripts
+/// read: the new one opens with the remembered Highlight fields in its own open context. Before,
+/// the open set the session's value, so an edit of the first document handled before the next
+/// frame read the new document's default as `app.runtimeHighlight`.
+#[test]
+fn opening_another_document_keeps_the_highlight_the_one_in_front_reads() {
+    let script = |js: &str| format!(r#"<event activity="click"><script contentType="application/x-javascript">{js}</script></event>"#);
+    let xdp = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="look" w="1in" h="0.3in"><ui><button/></ui>{look}</field>
+ <field name="seen" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+</subform>
+</template>
+</xdp:xdp>
+"##,
+        look = script("xfa.form.form.seen.rawValue = String(app.runtimeHighlight);"),
+    );
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&xdp));
+    let app = h.state_mut();
+    // The document in front has Highlight fields on; the remembered setting is off.
+    app.view_defaults.highlight_fields = false;
+    app.views[0].highlight_fields = true;
+    h.run_steps(2);
+    let app = h.state_mut();
+    let first = app.views[0].id;
+    app.open_bytes("next.pdf", None, pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template(1))).unwrap();
+    // Before the next frame, the first document's script reads its own setting.
+    app.session.apply(first, pdfcraft_engine::Edit::XfaEvent { som: "form[0].look[0]".into(), activity: "click".into() }).unwrap();
+    let seen = app.session.get(first).unwrap().form.iter().find(|f| f.name == "seen").map(|f| f.value.clone()).unwrap_or_default();
+    assert_eq!(seen, vec!["true".to_string()], "the first document's script reads its own Highlight fields");
+}
+
+/// A form that turns field highlighting on (`app.runtimeHighlight = true` in a `layout:ready`
+/// script) gets it, and so does the next document, as with the Highlight fields button.
+#[test]
+fn a_form_that_turns_field_highlighting_on_gets_it() {
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::layout_ready_template()));
+    h.run_steps(4);
+    assert!(h.state().views[0].highlight_fields, "the form's fields are highlighted");
+    h.state_mut().open_bytes("next.pdf", None, pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template(1))).unwrap();
+    h.run_steps(4);
+    assert!(h.state().views[1].highlight_fields, "the next document opens highlighted");
 }

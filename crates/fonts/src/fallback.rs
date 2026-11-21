@@ -172,8 +172,8 @@ pub fn substitute(req: &Request<'_>) -> Substitution {
     }
     if let Some((f, how)) = Std14::recognise(req.base_font) {
         return match how {
-            crate::std14::Match::Alias => at(Face::Standard14(f), Why::NamedStandard14),
-            crate::std14::Match::FamilyHint => at(Face::Standard14(f), Why::NameHintedStandard14),
+            crate::Std14Match::Alias => at(Face::Standard14(f), Why::NamedStandard14),
+            crate::Std14Match::FamilyHint => at(Face::Standard14(f), Why::NameHintedStandard14),
         };
     }
     if let Some(f) = crate::embedding::matching_faces(req.base_font).first() {

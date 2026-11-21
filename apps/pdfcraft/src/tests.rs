@@ -138,6 +138,31 @@ fn the_desktop_frame_is_turned_off_only_when_the_app_draws_one() {
 }
 
 #[test]
+fn the_window_and_windows_taskbar_icons_load_from_the_bundled_png() {
+    let icon = eframe::icon_data::from_png_bytes(super::APP_ICON_PNG).expect("the bundled PNG decodes as the window icon");
+    assert!(icon.width > 0 && icon.height > 0);
+    assert_eq!(icon.rgba.len(), (icon.width as usize) * (icon.height as usize) * 4);
+    #[cfg(not(target_os = "windows"))]
+    assert_eq!(super::native_options(false, false, eframe::Renderer::Glow).viewport.icon.as_deref(), Some(&icon));
+    #[cfg(target_os = "windows")]
+    {
+        // None would load eframe's default icon; only the explicit empty sentinel prevents
+        // its first-frame setter from overwriting our full-resolution ICON_BIG.
+        for renderer in [eframe::Renderer::Glow, eframe::Renderer::Wgpu] {
+            let viewport = super::native_options(false, false, renderer).viewport;
+            assert_eq!(viewport.icon.as_deref(), Some(&egui::IconData::default()));
+        }
+        assert_eq!((icon.width, icon.height), (256, 256));
+        let mut installed = None;
+        super::install_taskbar_icon(super::APP_ICON_PNG, |icon| installed = Some(icon));
+        assert!(installed.is_some(), "issue #3818: ICON_BIG loads and installs from APP_ICON_PNG");
+        let mut bad = None;
+        super::install_taskbar_icon(b"not a png", |icon| bad = Some(icon));
+        assert!(bad.is_none());
+    }
+}
+
+#[test]
 fn a_software_renderer_is_shown_to_the_user() {
     use eframe::wgpu::DeviceType;
     // Issue #519: WARP or llvmpipe is announced in the app, not just in pdfcraft.log.
@@ -651,6 +676,42 @@ fn the_control_file_replaces_the_one_a_previous_run_left() {
         let mode = std::fs::metadata(dir.join("ctl.json")).unwrap().permissions().mode();
         assert_eq!(mode & 0o077, 0, "only the owner can read the token: {mode:o}");
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #3922: a control file created in a folder that lets every user read what's in it is still
+/// readable by its user and SYSTEM only, like mode 0600 on Unix.
+#[cfg(windows)]
+#[test]
+fn the_control_file_is_owner_only_in_a_folder_other_users_can_read() {
+    use pdfcraft_platform::owner_only;
+    let dir = scratch();
+    let users = std::process::Command::new("icacls").arg(&dir).arg("/grant").arg("*S-1-5-32-545:(OI)(CI)R").output().unwrap();
+    assert!(users.status.success());
+    // What the folder hands down, for comparison: a plain file there is readable by Users.
+    std::fs::write(dir.join("plain.txt"), "x").unwrap();
+    let me = owner_only::current_user_sid().unwrap();
+    assert!(owner_only::foreign_access(&owner_only::sddl_of(&dir.join("plain.txt")).unwrap(), &me).is_some());
+    super::write_control_file(&dir.join("ctl.json").to_string_lossy(), 4242, "t0ken").unwrap();
+    let sddl = owner_only::sddl_of(&dir.join("ctl.json")).unwrap();
+    assert_eq!(owner_only::foreign_access(&sddl, &me), None, "{sddl}");
+    let (json, names) = written(&dir);
+    assert_eq!(json["token"].as_str(), Some("t0ken"));
+    assert_eq!(names, ["ctl.json", "plain.txt"], "no private staging folder left behind");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review on #3956: writing the control file reads the user's SID once, for both the private
+/// folder and the file in it, rather than starting `whoami` for each.
+#[cfg(windows)]
+#[test]
+fn writing_the_control_file_looks_up_the_users_sid_once() {
+    use pdfcraft_platform::owner_only::sid_lookups_on_this_thread;
+    let dir = scratch();
+    let before = sid_lookups_on_this_thread();
+    super::write_control_file(&dir.join("ctl.json").to_string_lossy(), 4242, "t0ken").unwrap();
+    assert_eq!(sid_lookups_on_this_thread().saturating_sub(before), 1, "whoami runs once per control file");
+    assert_eq!(written(&dir).0["token"].as_str(), Some("t0ken"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

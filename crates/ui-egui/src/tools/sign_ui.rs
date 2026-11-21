@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Stroke, vec2};
 use pdfcraft_engine::sign::{self, Appearance, AppearanceLabels, Certificate, DigitalId, Name, PrivateKey};
-use pdfcraft_engine::{SignOptions, SignatureImage, SignatureInfo, SignatureStatus};
+use pdfcraft_engine::{SignOptions, SignatureImage, SignatureInfo, SignatureStatus, StatusCaptions};
 
 use crate::canvas::{DocView, PageToolContext, Snapshot, SnapshotKind};
 use crate::fill_sign::SavedSig;
@@ -22,7 +22,7 @@ mod panel;
 #[cfg(test)]
 use dialog::detail_lines;
 use dialog::graphic_of;
-pub(crate) use dialog::{appearance_labels, dialog};
+pub(crate) use dialog::{appearance_labels, dialog, status_captions};
 pub(crate) use panel::{CertAction, banner, cert_viewer, panel, signature_status_style};
 pub use panel::{CertTab, CertViewer, PanelAction, certificate_pem};
 
@@ -90,6 +90,15 @@ impl Default for NewIdDraft {
     }
 }
 
+impl Drop for NewIdDraft {
+    fn drop(&mut self) {
+        use zeroize::Zeroize as _;
+        self.password.zeroize();
+        self.confirm.zeroize();
+        self.file_password.zeroize();
+    }
+}
+
 /// What a visible signature shows on its left (Acrobat: Configure Signature Appearance ▸ Text,
 /// Draw or Image). The one last signed with is remembered.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -149,6 +158,13 @@ impl SignDraft {
             error: None,
             confirm_remove: None,
         }
+    }
+}
+
+impl Drop for SignDraft {
+    fn drop(&mut self) {
+        use zeroize::Zeroize as _;
+        self.password.zeroize();
     }
 }
 
@@ -289,10 +305,11 @@ impl PdfCraftApp {
         self.write_files(&[(name, std::sync::Arc::new(certificate_pem(c).into_bytes()))], "Export certificate");
     }
 
-    /// Start signing: the rectangle (or field) is known; show Sign with a Digital ID.
+    /// Start signing: the rectangle (or field) is known; show Sign with a Digital ID, after a
+    /// dynamic form's preSign scripts for the field.
     pub fn start_signing(&mut self, page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>) {
         self.refresh_os_key_store_ids();
-        let mut draft = SignDraft::new(page, rect, field, certify, &self.digital_ids);
+        let mut draft = SignDraft::new(page, rect, field.clone(), certify, &self.digital_ids);
         draft.graphic = match &self.sign_graphic {
             SignGraphic::FillSign if self.signature.is_none() => SignGraphic::Name,
             g => g.clone(),
@@ -302,6 +319,55 @@ impl PdfCraftApp {
         }
         self.sign_draft = Some(draft);
         self.dialog = Some(crate::Dialog::Sign);
+        // A dynamic form's preSign scripts run now, as signing the field begins, so what they
+        // change and say shows before the signer confirms (DA 31's date the signature and lock the
+        // date). Signing ended without a signature takes them back ([`Self::settle_presign`]).
+        if let Some(f) = &field
+            && let Some((_, doc)) = self.active_ids()
+        {
+            self.run_presign(doc, f);
+        }
+    }
+
+    /// Run signature field `field`'s preSign scripts in document `doc` and keep the step pending.
+    fn run_presign(&mut self, doc: pdfcraft_engine::DocId, field: &str) {
+        match self.session.run_sign_event(doc, field, pdfcraft_engine::js::SignEvent::Before) {
+            Ok(true) => {
+                self.presign = self.session.get(doc).map(|d| (doc, d.undo_depth()));
+                self.refresh_view_of(doc);
+                let out = self.session.take_js_output(doc);
+                self.handle_js(doc, out);
+            }
+            Ok(false) => {}
+            Err(e) => self.notify_error(e),
+        }
+    }
+
+    /// Take back a pending preSign step once signing has ended without a signature: the Sign
+    /// dialog closed and no save picker is open for it. Only a step still the last one is taken
+    /// back. Called every frame.
+    pub(crate) fn settle_presign(&mut self) {
+        let Some((doc, depth)) = self.presign else { return };
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.pickers.pending() {
+            return;
+        }
+        if self.dialog == Some(crate::Dialog::Sign) {
+            return;
+        }
+        self.presign = None;
+        if self.session.get(doc).is_some_and(|d| d.undo_depth() == depth) && self.session.undo(doc).is_ok() {
+            self.refresh_view_of(doc);
+        }
+    }
+
+    /// Show document `doc`'s changed form in its view.
+    fn refresh_view_of(&mut self, doc: pdfcraft_engine::DocId) {
+        if let Some(i) = self.views.iter().position(|v| v.id == doc)
+            && let Some(info) = self.session.get(doc).map(|d| d.info.clone())
+        {
+            self.views[i].document_changed(&info);
+        }
     }
 
     /// List OS key store signing identities (after the file-based IDs).
@@ -376,51 +442,57 @@ impl PdfCraftApp {
     /// Configure New Digital ID ▸ Create: a self-signed ID saved as a .p12 next to the app data
     /// (or in `export_dir_override`). Returns its list index.
     fn create_digital_id(&mut self) -> Result<usize, String> {
-        let Some(d) = self.sign_draft.as_ref().map(|d| d.new_id.clone()) else { return Err("nothing to create".into()) };
-        if d.name.trim().is_empty() {
-            return Err("Enter a name.".into());
-        }
-        // The message is a catalogue key, so it spells the number out; keep the two in step.
-        const _: () = assert!(sign::pkcs12::MIN_PASSWORD_CHARS == 8);
-        if d.password.chars().count() < sign::pkcs12::MIN_PASSWORD_CHARS {
-            return Err("The password must have at least 8 characters.".into());
-        }
-        if d.password != d.confirm {
-            return Err("The passwords do not match.".into());
-        }
-        let key = match KEY_ALGORITHMS[d.key.min(KEY_ALGORITHMS.len() - 1)].1 {
-            "rsa3072" => PrivateKey::generate_rsa(3072),
-            "rsa4096" => PrivateKey::generate_rsa(4096),
-            "p256" => PrivateKey::generate_p256(),
-            _ => PrivateKey::generate_rsa(2048),
-        }
-        .map_err(|e| e.to_string())?;
-        let now = self.session.now_secs();
-        let dn = Name::build(&d.name, &d.unit, &d.organization, &d.email, &d.country);
-        let serial = sign::keys::DigestAlg::Sha256.digest(&[d.name.as_bytes(), &now.to_be_bytes()])[..8].to_vec();
-        let cert = Certificate::self_signed(&dn, &key, sign::Time::from_unix(now), 5, &serial).map_err(|e| e.to_string())?;
-        let id = DigitalId { key, certificate: cert.clone(), chain: Vec::new(), friendly_name: Some(d.name.trim().to_string()) };
-        let p12 = sign::pkcs12::write(&id, &d.password).map_err(|e| e.to_string())?;
-        let dir = match &self.export_dir_override {
-            Some(p) => Some(PathBuf::from(p)),
-            None => id_dir(),
-        }
-        .ok_or("There is no folder to save the digital ID in.")?;
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let stem: String = d.name.trim().chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
-        let path = save_new_id_file(&dir, &stem, &p12).map_err(|e| e.to_string())?;
+        let (path, cert) = {
+            let Some(d) = self.sign_draft.as_ref().map(|d| &d.new_id) else { return Err("nothing to create".into()) };
+            if d.name.trim().is_empty() {
+                return Err("Enter a name.".into());
+            }
+            // The message is a catalogue key, so it spells the number out; keep the two in step.
+            const _: () = assert!(sign::pkcs12::MIN_PASSWORD_CHARS == 8);
+            if d.password.chars().count() < sign::pkcs12::MIN_PASSWORD_CHARS {
+                return Err("The password must have at least 8 characters.".into());
+            }
+            if d.password != d.confirm {
+                return Err("The passwords do not match.".into());
+            }
+            let key = match KEY_ALGORITHMS[d.key.min(KEY_ALGORITHMS.len() - 1)].1 {
+                "rsa3072" => PrivateKey::generate_rsa(3072),
+                "rsa4096" => PrivateKey::generate_rsa(4096),
+                "p256" => PrivateKey::generate_p256(),
+                _ => PrivateKey::generate_rsa(2048),
+            }
+            .map_err(|e| e.to_string())?;
+            let now = self.session.now_secs();
+            let dn = Name::build(&d.name, &d.unit, &d.organization, &d.email, &d.country);
+            let serial = sign::keys::DigestAlg::Sha256.digest(&[d.name.as_bytes(), &now.to_be_bytes()])[..8].to_vec();
+            let cert = Certificate::self_signed(&dn, &key, sign::Time::from_unix(now), 5, &serial).map_err(|e| e.to_string())?;
+            let id = DigitalId { key, certificate: cert.clone(), chain: Vec::new(), friendly_name: Some(d.name.trim().to_string()) };
+            let p12 = sign::pkcs12::write(&id, &d.password).map_err(|e| e.to_string())?;
+            let dir = match &self.export_dir_override {
+                Some(p) => Some(PathBuf::from(p)),
+                None => id_dir(),
+            }
+            .ok_or("There is no folder to save the digital ID in.")?;
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let stem: String = d.name.trim().chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
+            let path = save_new_id_file(&dir, &stem, &p12).map_err(|e| e.to_string())?;
+            (path, cert)
+        };
         Ok(self.add_digital_id(&path.to_string_lossy(), &cert))
     }
 
     /// Configure New Digital ID ▸ Use a Digital ID from a file.
     fn import_digital_id(&mut self) -> Result<usize, String> {
-        let Some(d) = self.sign_draft.as_ref().map(|d| d.new_id.clone()) else { return Err("nothing to import".into()) };
-        let bytes = std::fs::read(&d.file).map_err(|e| format!("{}: {e}", d.file))?;
-        let id = sign::pkcs12::open(&bytes, &d.file_password).map_err(|e| match e {
-            sign::SignError::WrongPassword => "The password is incorrect.".to_string(),
-            e => e.to_string(),
-        })?;
-        Ok(self.add_digital_id(&d.file, &id.certificate))
+        let (file, cert) = {
+            let Some(d) = self.sign_draft.as_ref().map(|d| &d.new_id) else { return Err("nothing to import".into()) };
+            let bytes = std::fs::read(&d.file).map_err(|e| format!("{}: {e}", d.file))?;
+            let id = sign::pkcs12::open(&bytes, &d.file_password).map_err(|e| match e {
+                sign::SignError::WrongPassword => "The password is incorrect.".to_string(),
+                e => e.to_string(),
+            })?;
+            (d.file.clone(), id.certificate)
+        };
+        Ok(self.add_digital_id(&file, &cert))
     }
 
     /// Sign as …: open the ID, sign, save the signed file (Save As), and show it.
@@ -431,7 +503,7 @@ impl PdfCraftApp {
             return Err(String::new());
         }
         let Some((_, doc_id)) = self.active_ids() else { return Err("no document".into()) };
-        let d = self.sign_draft.clone().ok_or("nothing to sign")?;
+        let d = self.sign_draft.as_ref().ok_or("nothing to sign")?;
         let entry = d.selected.and_then(|i| self.digital_ids.get(i)).filter(|e| e.unusable.is_none()).cloned().ok_or("Choose a digital ID.")?;
         let id = if entry.path.starts_with("keychain:") {
             keychain_id(&entry.path)?
@@ -476,12 +548,31 @@ impl PdfCraftApp {
             if !app.commit_typing_in(doc_id) {
                 return Err(String::new());
             }
-            let signed = app.session.sign(doc_id, &id, opts).map_err(|e| e.to_string())?;
-            crate::editing::write_atomically(&path.to_string_lossy(), signed.as_slice()).map_err(|e| format!("Could not save: {e}"))?;
+            // The form's preSign step (run when signing began) is signed with it; if signing fails
+            // the step stays pending, and is taken back if signing ends without a signature.
+            let field = opts.field.clone();
+            let pending = app.presign.take();
+            let signed = match app.session.sign(doc_id, &id, opts) {
+                Ok(s) => s,
+                Err(e) => {
+                    app.presign = pending;
+                    return Err(e.to_string());
+                }
+            };
+            if let Err(e) = crate::editing::write_atomically(&path.to_string_lossy(), signed.as_slice()) {
+                // Not saved, so not signed: the preSign step stays pending as well.
+                app.presign = pending;
+                return Err(format!("Could not save: {e}"));
+            }
             // Our own write is not a change on disk to reload (#431).
             #[cfg(not(target_arch = "wasm32"))]
             app.watch.known_now(doc_id, &path.to_string_lossy());
             app.session.mark_signed(doc_id, signed, Some(path.to_string_lossy().into_owned())).map_err(|e| e.to_string())?;
+            // Then its postSign scripts; what they change is a change after signing, to save.
+            // What they say shows once signing is done, after the notice that it was saved.
+            // The file is signed and saved by now: a postSign step that fails is said, not a failure.
+            let after = field.as_deref().and_then(|f| app.session.run_sign_event(doc_id, f, pdfcraft_engine::js::SignEvent::After).err());
+            let said = app.session.take_js_output(doc_id);
             #[cfg(target_os = "macos")]
             crate::macos_association::repair(&path);
             app.sign_graphic = choice;
@@ -490,6 +581,10 @@ impl PdfCraftApp {
             }
             app.right = Some(crate::RightPanel::Signatures);
             app.notify_fmt("Signed and saved to {path}", &[("path", &path.display().to_string())]);
+            app.handle_js(doc_id, said);
+            if let Some(e) = after {
+                app.notify_fmt("Signed and saved, but the form's postSign script couldn't finish: {e}", &[("e", &e.to_string())]);
+            }
             Ok(())
         };
         match self.save_override.clone() {
@@ -567,6 +662,29 @@ impl PdfCraftApp {
     pub fn apply_trusted_certificates(&mut self, certs: Vec<Certificate>) {
         self.session.set_trusted_certificates(certs);
         for view in &mut self.views {
+            view.invalidate_content();
+        }
+    }
+
+    /// Draw signature status captions in `lang` ([`status_captions`]) and redraw the pages, once
+    /// per language change: the session rebuilds the documents whose captions it draws.
+    pub(crate) fn apply_status_captions(&mut self, lang: crate::i18n::Lang) {
+        if self.status_captions_lang == Some(lang) {
+            return;
+        }
+        self.status_captions_lang = Some(lang);
+        // Only a document that draws a signature state shows the words: the others keep their
+        // pages, selection and search results.
+        let drawing: Vec<pdfcraft_engine::DocId> = self
+            .views
+            .iter()
+            .map(|v| v.id)
+            .filter(|id| self.session.get(*id).is_some_and(|d| d.signatures.iter().any(|s| s.verdict_shown)))
+            .collect();
+        if !self.session.set_signature_captions(status_captions(lang)) {
+            return;
+        }
+        for view in self.views.iter_mut().filter(|v| drawing.contains(&v.id)) {
             view.invalidate_content();
         }
     }
@@ -685,8 +803,10 @@ mod tests {
         let mut draft = SignDraft::new(0, None, None, None, &[]);
         // P-256 keeps the test fast.
         let key = KEY_ALGORITHMS.iter().position(|k| k.1 == "p256").unwrap();
-        draft.new_id =
-            NewIdDraft { name: "Grace Hopper".into(), key, password: "secret12".into(), confirm: "secret12".into(), ..NewIdDraft::default() };
+        draft.new_id.name = "Grace Hopper".into();
+        draft.new_id.key = key;
+        draft.new_id.password = "secret12".into();
+        draft.new_id.confirm = "secret12".into();
         app.sign_draft = Some(draft);
         let i = app.create_digital_id()?;
         Ok(PathBuf::from(&app.digital_ids[i].path))
@@ -714,6 +834,44 @@ mod tests {
         assert_eq!(signature_status_style(SignatureStatus::Valid).0, "circle-check");
         assert_eq!(signature_status_style(SignatureStatus::Unknown).0, "triangle-alert");
         assert_eq!(signature_status_style(SignatureStatus::Invalid).0, "circle-x");
+    }
+
+    #[test]
+    fn a_language_change_leaves_documents_without_a_drawn_state_alone() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
+        let mut app = PdfCraftApp::new();
+        let plain = app.session.create_from_text("t", "No signatures here.").unwrap();
+        app.open_bytes("plain.pdf", None, plain.as_ref().clone()).unwrap();
+        app.views[0].texts.insert(0, std::sync::Arc::new(pdfcraft_render::PageText::default()));
+        app.apply_status_captions(crate::i18n::Lang::from_code("de").unwrap());
+        assert!(!app.views[0].texts.is_empty(), "its text, selection and search results stay");
+    }
+
+    #[test]
+    fn status_captions_come_whole_from_one_language() {
+        // All three in a language that has them, else all three in English: never a mix. Whether
+        // a face draws them is the sign crate's call.
+        use crate::i18n::{Lang, has};
+        let english = StatusCaptions::default();
+        assert_eq!(status_captions(Lang::EN), english);
+        for lang in Lang::all().filter(|&l| l != Lang::EN) {
+            let whole = [&english.valid, &english.unknown, &english.invalid].into_iter().all(|s| has(lang, s));
+            let said = status_captions(lang);
+            assert_eq!(said != english, whole, "{}: {said:?}", lang.code());
+        }
+    }
+
+    #[test]
+    fn status_captions_reach_the_sign_crate_in_logical_order() {
+        // The sign crate receives the catalogue's logical order and shapes the words itself, so
+        // they are never reversed a second time.
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
+        let ar = status_captions(crate::i18n::Lang::from_code("ar").unwrap());
+        assert_eq!([ar.valid.as_str(), ar.unknown.as_str(), ar.invalid.as_str()], ["التوقيع صالح", "الصلاحية غير معروفة", "التوقيع غير صالح"]);
     }
 
     #[test]
@@ -882,6 +1040,7 @@ mod tests {
             timestamp_time: None,
             status,
             modification: sign::Modification::None,
+            verdict_shown: false,
             details: Vec::new(),
         }
     }
@@ -900,5 +1059,75 @@ mod tests {
         assert_eq!(bar(&[signature(Some(2), Unknown), signature(None, Valid)]), Some(("triangle-alert", "At least one signature has problems.")));
         assert_eq!(bar(&[signature(None, Valid)]), Some(("circle-check", "Signed and all signatures are valid.")));
         assert_eq!(bar(&[SignatureInfo { signed: false, ..signature(None, Invalid) }]), None);
+    }
+
+    #[test]
+    fn dismissing_or_stepping_back_in_the_sign_dialog_clears_passwords() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.digital_ids = vec![listed("/ids/grace.p12", "Grace Hopper")];
+            let mut draft = SignDraft::new(0, None, None, None, &app.digital_ids);
+            draft.step = SignStep::SignAs;
+            draft.password = "secret12".into();
+            app.sign_draft = Some(draft);
+            app.dialog = Some(crate::Dialog::Sign);
+            app
+        });
+        h.run_steps(2);
+
+        // Stepping back from SignAs to Choose clears the typed digital ID password.
+        h.get_by_label("Back").click();
+        h.run_steps(2);
+        assert_eq!(h.state().sign_draft.as_ref().unwrap().step, SignStep::Choose);
+        assert!(h.state().sign_draft.as_ref().unwrap().password.is_empty(), "Back from SignAs must clear password");
+
+        // Stepping back from Configure to Choose resets the new-ID password fields.
+        {
+            let d = h.state_mut().sign_draft.as_mut().unwrap();
+            d.step = SignStep::Configure;
+            d.new_id.password = "newsecret12".into();
+            d.new_id.confirm = "newsecret12".into();
+            d.new_id.file_password = "filesecret12".into();
+        }
+        h.run_steps(2);
+        h.get_by_label("Back").click();
+        h.run_steps(2);
+        let d = h.state().sign_draft.as_ref().unwrap();
+        assert_eq!(d.step, SignStep::Choose);
+        assert!(d.new_id.password.is_empty() && d.new_id.confirm.is_empty() && d.new_id.file_password.is_empty());
+
+        // Dismissing the modal with Escape clears sign_draft completely.
+        h.state_mut().sign_draft.as_mut().unwrap().password = "secret12".into();
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert_eq!(h.state().dialog, None);
+        assert!(h.state().sign_draft.is_none(), "sign_draft must be cleared when Dialog::Sign is dismissed");
+
+        // Importing a digital ID file and signing work by borrowing the draft in place.
+        let dir = scratch();
+        let saved = create_in(&dir).unwrap();
+        let mut import_app = PdfCraftApp::new();
+        let mut import_draft = SignDraft::new(0, None, None, None, &[]);
+        import_draft.new_id.create = false;
+        import_draft.new_id.file = saved.to_string_lossy().into_owned();
+        import_draft.new_id.file_password = "secret12".into();
+        import_app.sign_draft = Some(import_draft);
+        assert_eq!(import_app.import_digital_id(), Ok(0));
+        assert_eq!(import_app.digital_ids[0].name, "Grace Hopper");
+
+        let bytes = pdfcraft_engine::Session::new().create_blank(200.0, 200.0, 1).unwrap();
+        import_app.open_bytes("unsigned.pdf", None, bytes.as_ref().clone()).unwrap();
+        let out_pdf = dir.join("signed.pdf");
+        import_app.save_override = Some(out_pdf.to_string_lossy().into_owned());
+        let mut sign_draft = SignDraft::new(0, None, None, None, &import_app.digital_ids);
+        sign_draft.step = SignStep::SignAs;
+        sign_draft.password = "secret12".into();
+        import_app.sign_draft = Some(sign_draft);
+        assert_eq!(import_app.finish_signing(), Ok(()));
+        assert!(out_pdf.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

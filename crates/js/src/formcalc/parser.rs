@@ -341,10 +341,7 @@ impl Parser {
             Ok(Expr::Neg(Box::new(self.unary()?)))
         } else if self.eat_op("+") {
             self.unary()
-        } else if self.eat_kw("not") || matches!(self.peek(), Tok::Ident(w) if w == "!") {
-            if matches!(self.peek(), Tok::Ident(w) if w == "!") {
-                self.at += 1;
-            }
+        } else if self.eat_kw("not") || self.eat_kw("!") {
             Ok(Expr::Not(Box::new(self.unary()?)))
         } else {
             self.postfix()
@@ -447,5 +444,33 @@ pub(super) fn parse(src: &str) -> Result<Vec<Stmt>, String> {
     match p.peek() {
         Tok::Eof => Ok(body),
         t => Err(format!("line {}: unexpected {}", p.line(), describe(t))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unary_not_does_not_swallow_following_bang() {
+        assert_eq!(parse("not !1"), Ok(vec![Stmt::Expr(Expr::Not(Box::new(Expr::Not(Box::new(Expr::Num(1.0))))))]));
+        assert_eq!(parse("not !flag"), Ok(vec![Stmt::Expr(Expr::Not(Box::new(Expr::Not(Box::new(Expr::Ident("flag".into()))))))]));
+        assert_eq!(parse("!!1"), Ok(vec![Stmt::Expr(Expr::Not(Box::new(Expr::Not(Box::new(Expr::Num(1.0))))))]));
+    }
+
+    #[test]
+    fn string_literals_decode_xfa_unicode_escapes_and_keep_other_backslashes() {
+        assert_eq!(parse(r#""\u0041\u20ac\U00000042\U0001F600""#), Ok(vec![Stmt::Expr(Expr::Str("A\u{20ac}B\u{1F600}".into()))]));
+        assert_eq!(parse(r#""\uD83D\uDE00""#), Ok(vec![Stmt::Expr(Expr::Str("\u{1F600}".into()))]));
+        assert_eq!(parse(r#""C:\temp\new\u12""#), Ok(vec![Stmt::Expr(Expr::Str(r"C:\temp\new\u12".into()))]));
+    }
+
+    #[test]
+    fn number_literals_stop_before_second_dot_for_member_access() {
+        assert_eq!(parse("1.5.rawValue"), Ok(vec![Stmt::Expr(Expr::Member(Box::new(Expr::Num(1.5)), "rawValue".into()))]));
+        assert_eq!(parse("1.rawValue"), Ok(vec![Stmt::Expr(Expr::Member(Box::new(Expr::Num(1.0)), "rawValue".into()))]));
+        assert_eq!(parse("1.e2foo"), Ok(vec![Stmt::Expr(Expr::Member(Box::new(Expr::Num(1.0)), "e2foo".into()))]));
+        assert_eq!(parse("1.e2"), Ok(vec![Stmt::Expr(Expr::Num(100.0))]));
+        assert!(parse("1.2.3").is_err(), "a second decimal point followed by digits is a bad number");
     }
 }
