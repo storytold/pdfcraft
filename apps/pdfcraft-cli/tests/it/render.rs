@@ -79,6 +79,24 @@ fn a_pam_name_still_gets_the_netpbm_stream() {
 }
 
 #[test]
+fn a_second_render_input_is_refused_before_reading_a_file() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-cli-render-surplus-{}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let result = Command::new(BIN).current_dir(&dir).args(["render", "--dpi", "36", "missing.pdf", "--out", "out.png", "other.pdf"]).output();
+    let out = dir.join("out.png");
+    let wrote_output = out.exists();
+    if wrote_output {
+        std::fs::remove_file(&out).unwrap();
+    }
+    std::fs::remove_dir(&dir).unwrap();
+
+    let r = result.unwrap();
+    assert_eq!(r.status.code(), Some(1));
+    assert_eq!(r.stderr, b"pdfcraft-cli: render: unexpected argument \"other.pdf\" (one input file)\n");
+    assert!(!wrote_output, "no image may be written");
+}
+
+#[test]
 fn an_unknown_extension_fails_and_writes_nothing() {
     let pdf = fixture("bmp");
     let out = tmp("bmp", "p1.bmp");
