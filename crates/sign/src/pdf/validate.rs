@@ -250,7 +250,7 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
 fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignature<'_>) {
     let SignatureValidation { doc, bytes, trust, info, cache } = context;
     let VerifiedSignature { covered, certificate: cert, embedded, cms_time, unverified_time } = verified;
-    info.signing_time = cms_time.or_else(|| info.date.as_deref().and_then(Time::from_pdf));
+    info.signing_time = cms_time.or_else(|| info.date.as_deref().and_then(crate::der::time_from_pdf));
     let mut pool = embedded.to_vec();
     pool.extend(trust.certs.iter().cloned());
     // The time the chain is judged at: trusted timestamp, else the signer's claimed time.

@@ -87,6 +87,19 @@ impl<'a> Tlv<'a> {
     }
 }
 
+/// A PDF date (`D:YYYYMMDDHHmmSS±HH'mm'`) as UTC, or `None` when a field is out of range
+/// (month 13, day 31 in April, hour 24...).
+pub fn time_from_pdf(s: &str) -> Option<Time> {
+    let digits = s.strip_prefix("D:").unwrap_or(s);
+    let field = |r: std::ops::Range<usize>, default: u32| digits.get(r).map_or(Some(default), |x| x.parse::<u32>().ok());
+    let (year, month, day) = (field(0..4, 0)?, field(4..6, 1)?, field(6..8, 1)?);
+    let (hour, minute, second) = (field(8..10, 0)?, field(10..12, 0)?, field(12..14, 0)?);
+    let valid_date = i32::try_from(year).ok().and_then(|y| chrono::NaiveDate::from_ymd_opt(y, month, day));
+    valid_date?;
+    chrono::NaiveTime::from_hms_opt(hour, minute, second)?;
+    Time::from_pdf(s)
+}
+
 pub fn try_oid(dotted: &str) -> Result<Vec<u8>, SignError> {
     shared::try_oid(dotted).map_err(app_error)
 }
@@ -179,6 +192,22 @@ mod tests {
         // Nesting is bounded, so a file made of nothing but wrappers fails instead of crashing.
         let deep = [[0x30u8, 0x80].repeat(400), [0u8, 0].repeat(400)].concat();
         assert!(Tlv::parse_all_ber(&deep).is_err());
+    }
+
+    #[test]
+    fn from_pdf_rejects_out_of_range_fields() {
+        for s in [
+            "D:20241399000000+01'00'",
+            "D:20241399250000Z",
+            "D:20241301000000Z",
+            "D:20240431000000Z",
+            "D:20241001240000Z",
+            "D:20241001006000Z",
+            "D:20241001000060Z",
+        ] {
+            assert_eq!(time_from_pdf(s), None, "{s}");
+        }
+        assert_eq!(time_from_pdf("D:20240430235959Z"), Some(Time { year: 2024, month: 4, day: 30, hour: 23, minute: 59, second: 59 }));
     }
 
     #[test]
