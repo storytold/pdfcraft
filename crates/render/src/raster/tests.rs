@@ -4430,19 +4430,7 @@ fn jbig2_image_draws_in(stream: &[u8], space: &str) -> bool {
 
 /// [`jbig2_image_draws_in`], with entries for the image's dictionary and more objects, from 6 up.
 fn jbig2_image_draws_with(stream: &[u8], space: &str, entries: &str, objects: &[u8]) -> bool {
-    let content = b"q 20 0 0 20 5 5 cm /Im1 Do Q 1 0 0 rg 0 0 4 4 re f";
-    let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n".to_vec();
-    pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes());
-    pdf.extend_from_slice(content);
-    pdf.extend_from_slice(b"\nendstream endobj\n");
-    pdf.extend_from_slice(
-        format!("5 0 obj << /Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 /ColorSpace {space} {entries} /Filter /JBIG2Decode /Length {} >> stream\n", stream.len())
-            .as_bytes(),
-    );
-    pdf.extend_from_slice(stream);
-    pdf.extend_from_slice(b"\nendstream endobj\n");
-    pdf.extend_from_slice(objects);
-    pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+    let pdf = jbig2_image_pdf_with(stream, space, entries, objects);
     // What one image may take, which the page's allowance, tested on its own, would otherwise reach
     // first: it is the same size, and the page itself comes out of it.
     let config = RenderConfig { jbig2_work: Some(u64::MAX), ..RenderConfig::default() };
@@ -4456,6 +4444,25 @@ fn jbig2_image_draws_with(stream: &[u8], space: &str, entries: &str, objects: &[
         [255, 255, 255, 255] => false,
         other => panic!("neither the image nor the page: {other:?}"),
     }
+}
+
+/// The page [`jbig2_image_draws_with`] draws: the 16 × 2 image at 5..25 both ways, and a red
+/// square at the page's corner.
+fn jbig2_image_pdf_with(stream: &[u8], space: &str, entries: &str, objects: &[u8]) -> Vec<u8> {
+    let content = b"q 20 0 0 20 5 5 cm /Im1 Do Q 1 0 0 rg 0 0 4 4 re f";
+    let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n".to_vec();
+    pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes());
+    pdf.extend_from_slice(content);
+    pdf.extend_from_slice(b"\nendstream endobj\n");
+    pdf.extend_from_slice(
+        format!("5 0 obj << /Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 /ColorSpace {space} {entries} /Filter /JBIG2Decode /Length {} >> stream\n", stream.len())
+            .as_bytes(),
+    );
+    pdf.extend_from_slice(stream);
+    pdf.extend_from_slice(b"\nendstream endobj\n");
+    pdf.extend_from_slice(objects);
+    pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+    pdf
 }
 
 /// A `JBIG2Decode` image whose data starts with a JBIG2 file header (ISO 14492 D.4) draws, in
@@ -4591,11 +4598,13 @@ fn a_picture_whose_jbig2_mask_is_past_the_pages_allowance_is_not_drawn() {
     assert_eq!(other, (true, false), "and a page with nothing left says nothing of a mask that isn't JBIG2");
 }
 
-/// A symbol dictionary may hold as many pixels as the largest page bitmap. It was held to a
-/// quarter of that, and the soft mask of a scanned drawing, one dictionary of 7,559 symbols, passed
-/// it: refused, the mask left its picture drawn whole, which covered the page in noise (#6722).
+/// A symbol dictionary's pixels have no bound of their own: the decoding work and the words a page
+/// retains bound it. It was held to 2^26 pixels, and the soft mask of a scanned drawing, one
+/// dictionary of 7,559 symbols, passed it: refused, the mask left its picture drawn whole, which
+/// covered the page in noise (#6722). Then to 2^28, and a book's shared dictionary of 173,132
+/// symbols passed that, and every page drew white.
 #[test]
-fn a_symbol_dictionary_holds_as_many_pixels_as_a_page() {
+fn a_symbol_dictionary_holds_as_many_pixels_as_its_work_and_words_allow() {
     let stream = |heights: &[u32]| {
         let mut stream = black_jbig2_page();
         jbig2_segment(&mut stream, 1, 0, &[], &wide_jbig2_dictionary(65535, heights));
@@ -4603,7 +4612,57 @@ fn a_symbol_dictionary_holds_as_many_pixels_as_a_page() {
     };
     assert!(jbig2_image_draws(&stream(&[1100])), "72,088,500 pixels, past 2^26");
     assert!(jbig2_image_draws(&stream(&[2047, 2048])), "268,365,825 pixels, within 2^28");
-    assert!(!jbig2_image_draws(&stream(&[2048, 2049])), "268,496,895 pixels, past 2^28");
+    assert!(jbig2_image_draws(&stream(&[2048, 2049])), "268,496,895 pixels, past 2^28");
+}
+
+/// A symbol dictionary may hold more than 65,535 symbols: T.88 gives its counts 32 bits
+/// (7.4.2.1.4, 7.4.2.1.5), and a Huffman-coded dictionary of 262,144 symbols (PDFBOX-6263) and a
+/// book's shared one of 173,132 were refused, their pages drawn white. These are 70,000 symbols
+/// without pixels, all exported, which the page's words still hold.
+#[test]
+fn a_symbol_dictionary_holds_more_than_65535_symbols() {
+    let mut stream = black_jbig2_page();
+    jbig2_segment(&mut stream, 1, 0, &[], &zero_width_jbig2_dictionary(70_000, true));
+    assert!(jbig2_image_draws(&stream));
+}
+
+/// A height class's collective bitmap (6.5.9) is as wide as its symbols together, which T.88 gives
+/// 32 bits: it is bounded by its pixels, not by the bound on a bitmap's side. PDFBOX-6263's
+/// dictionary has one class of 262,144 symbols 9 × 2, a collective bitmap of 2,359,296 × 2, and was
+/// refused for it. These are 40,000 symbols 2 wide, 80,000 columns together.
+#[test]
+fn a_collective_bitmap_is_as_wide_as_its_symbols_together() {
+    let mut stream = black_jbig2_page();
+    jbig2_segment(&mut stream, 1, 0, &[], &narrow_jbig2_dictionary_of(40_000, 2, 76));
+    assert!(jbig2_image_draws(&stream));
+}
+
+/// A symbol dictionary whose counts can't fit what the page retains, each symbol taking a
+/// bitmap's header at least, is refused before anything is reserved for them, as a decoder limit:
+/// alone on its page, the image isn't drawn and the page says so. One that exports more symbols
+/// than it has is damaged, and says nothing.
+#[test]
+fn a_symbol_dictionary_past_what_a_page_retains_is_refused_before_it_is_read() {
+    let image = |exported: u32, new: u32| {
+        let mut stream = black_jbig2_page();
+        jbig2_segment(&mut stream, 1, 0, &[], &jbig2_dictionary_counting(exported, new));
+        let pdf = jbig2_image_pdf_with(&stream, "/DeviceGray", "", b"");
+        let config = RenderConfig { jbig2_work: Some(u64::MAX), ..RenderConfig::default() };
+        let page = PageRenderer::new(Arc::new(pdf), config).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            ..Default::default()
+        });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        let drawn = page.rgba[((25 * 40 + 15) * 4)..][..4] == [0, 0, 0, 255];
+        (drawn, page.warnings.contains(&RenderWarning::ContentTruncated))
+    };
+    assert_eq!(image(0, u32::MAX), (false, true), "4,294,967,295 new symbols");
+    assert_eq!(image(u32::MAX, 0), (false, true), "4,294,967,295 exported");
+    assert_eq!(image(2, 1), (false, false), "two exported of one");
 }
 
 /// A JBIG2 mask one of the decoder's limits refuses takes its picture with it, as one left out for
@@ -4657,9 +4716,9 @@ fn a_picture_whose_jbig2_mask_a_decoder_limit_refuses_is_not_drawn() {
     let large = black_jbig2_page_of(65535, 65535);
     assert_eq!(draws("/SMask", (65535, 65535), &large), out, "a soft mask past the renderer's bound on pixels");
     assert_eq!(draws("/Mask", (65535, 65535), &large), out, "a stencil mask past it");
-    // A dictionary of more symbol pixels than a page holds.
+    // A dictionary of more symbols than a page holds.
     let mut dictionary = black_jbig2_page();
-    jbig2_segment(&mut dictionary, 1, 0, &[], &wide_jbig2_dictionary(65535, &[2048, 2049]));
+    jbig2_segment(&mut dictionary, 1, 0, &[], &jbig2_dictionary_counting(0, u32::MAX));
     assert_eq!(draws("/SMask", (16, 2), &dictionary), out, "a soft mask whose dictionary is past its bound");
     // Cut short in its dictionary: the file's damage, not a limit.
     let mut damaged = black_jbig2_page();
@@ -4671,8 +4730,8 @@ fn a_picture_whose_jbig2_mask_a_decoder_limit_refuses_is_not_drawn() {
     let disagreeing = black_jbig2_page_of(65535, 65535);
     assert_eq!(draws("/SMask", (16, 2), &disagreeing), out, "a size damaged past a limit is taken for one");
 
-    // A stencil mask a limit refused is drawn on its own: it takes nothing else out, and is a
-    // failed image, not content left out (`a_jbig2_image_drawn_on_its_own_that_a_limit_refuses_is_a_failed_image`).
+    // A stencil mask a limit refused is drawn on its own: it takes nothing else out, though it is
+    // content left out itself (`a_jbig2_image_drawn_on_its_own_that_a_decoder_limit_refuses_is_content_left_out`).
     // Nor does it leave anything behind for the next picture: one whose mask is never decoded (it
     // has no /Width) is drawn whole, as upstream draws it.
     let content = b"q 4 0 0 4 30 30 cm /St Do Q q 20 0 0 20 5 5 cm /Im1 Do Q";
@@ -4696,16 +4755,13 @@ fn a_picture_whose_jbig2_mask_a_decoder_limit_refuses_is_not_drawn() {
     });
     assert!(page.error.is_none(), "{:?}", page.error);
     assert_eq!(&page.rgba[((25 * 40 + 15) * 4)..][..4], [0, 0, 0, 255], "the picture after the stencil is drawn whole");
-    assert!(page.warnings.is_empty(), "the stencil left nothing out: {:?}", page.warnings);
+    assert_eq!(page.warnings, [RenderWarning::ContentTruncated], "only the stencil was left out");
 }
 
-/// A JBIG2 image drawn on its own that a limit refuses, a stencil mask included, takes nothing else
-/// out, so it is a failed image, as it was before #6722: only a picture's mask refused by a limit
-/// is reported as content left out, with the picture it takes along (patch 73). Refused by the
-/// decoder's bound on a side or by the renderer's bound on pixels, each image's `/Width` and
-/// `/Height` those of its JBIG2 page.
-#[test]
-fn a_jbig2_image_drawn_on_its_own_that_a_limit_refuses_is_a_failed_image() {
+/// The warnings the interpreter reports for each page of `pdf`, in the order it reports them and
+/// each time, the pages interpreted one after another on this thread through one cache, every
+/// image asked for its pixels (which decodes it) and nothing drawn.
+fn interpreter_warnings(pdf: Vec<u8>) -> Vec<Vec<String>> {
     use hayro::hayro_interpret::font::Glyph;
     use hayro::hayro_interpret::hayro_syntax::Pdf;
     use hayro::hayro_interpret::{
@@ -4733,6 +4789,34 @@ fn a_jbig2_image_drawn_on_its_own_that_a_limit_refuses_is_a_failed_image() {
         fn pop_transparency_group(&mut self) {}
     }
 
+    let pdf = Pdf::new(Arc::new(pdf)).expect("parses");
+    let cache = InterpreterCache::new();
+    pdf.pages()
+        .iter()
+        .map(|page| {
+            let reported = Arc::new(Mutex::new(Vec::new()));
+            let settings = InterpreterSettings {
+                warning_sink: {
+                    let reported = reported.clone();
+                    Arc::new(move |warning| reported.lock().unwrap().push(format!("{warning:?}")))
+                },
+                ..InterpreterSettings::default()
+            };
+            let mut ctx = Context::new(page.initial_transform(true).to_kurbo(), Rect::new(0.0, 0.0, 40.0, 40.0), &cache, page.xref(), settings);
+            interpret_page(page, &mut ctx, &mut Pixels);
+            reported.lock().unwrap().clone()
+        })
+        .collect()
+}
+
+/// A JBIG2 image drawn on its own, a stencil mask included, that one of the decoder's limits
+/// refuses is reported as content left out (patch 73), as a picture's mask so refused is: as a
+/// failed image, which the renderer doesn't show, the page drew white where it is with nothing said
+/// (PDFBOX-6263). It takes nothing else out. One past the renderer's bound on an image's pixels,
+/// which holds for any image, is still a failed image. Each image's `/Width` and `/Height` are
+/// those of its JBIG2 page.
+#[test]
+fn a_jbig2_image_drawn_on_its_own_that_a_decoder_limit_refuses_is_content_left_out() {
     // The warnings drawing one image reports.
     let warnings = |kind: &str, (width, height): (u32, u32)| {
         let stream = black_jbig2_page_of(width, height);
@@ -4745,27 +4829,15 @@ fn a_jbig2_image_drawn_on_its_own_that_a_limit_refuses_is_a_failed_image() {
         .into_bytes();
         pdf.extend_from_slice(&stream);
         pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
-        let pdf = Pdf::new(Arc::new(pdf)).expect("parses");
-        let page = &pdf.pages()[0];
-        let cache = InterpreterCache::new();
-        let reported = Arc::new(Mutex::new(Vec::new()));
-        let settings = InterpreterSettings {
-            warning_sink: {
-                let reported = reported.clone();
-                Arc::new(move |warning| reported.lock().unwrap().push(format!("{warning:?}")))
-            },
-            ..InterpreterSettings::default()
-        };
-        let mut ctx = Context::new(page.initial_transform(true).to_kurbo(), Rect::new(0.0, 0.0, 40.0, 40.0), &cache, page.xref(), settings);
-        interpret_page(page, &mut ctx, &mut Pixels);
-        reported.lock().unwrap().clone()
+        interpreter_warnings(pdf).concat()
     };
     let stencil = "/ImageMask true";
     let raster = "/BitsPerComponent 1 /ColorSpace /DeviceGray";
     let failed = ["ImageDecodeFailure"];
-    assert_eq!(warnings(stencil, (65536, 2)), failed, "a stencil mask past the decoder's bound on a side");
+    let left_out = ["ContentTruncated"];
+    assert_eq!(warnings(stencil, (65536, 2)), left_out, "a stencil mask past the decoder's bound on a side");
     assert_eq!(warnings(stencil, (65535, 65535)), failed, "a stencil mask past the renderer's bound on pixels");
-    assert_eq!(warnings(raster, (65536, 2)), failed, "an image past the decoder's bound on a side");
+    assert_eq!(warnings(raster, (65536, 2)), left_out, "an image past the decoder's bound on a side");
     assert_eq!(warnings(raster, (65535, 65535)), failed, "an image past the renderer's bound on pixels");
 }
 
@@ -4773,7 +4845,8 @@ fn a_jbig2_image_drawn_on_its_own_that_a_limit_refuses_is_a_failed_image() {
 /// refused, a stencil mask and a soft mask whose filters fail before JBIG2 is reached (LZW data that
 /// doesn't decode) are bad, not refused by a limit, on that page and on the next. The decoder's
 /// note of the refusal was read before a decode had set it, and outlived its page: the stencil
-/// said content was left out, and the picture under the soft mask wasn't drawn.
+/// said content was left out, and the picture under the soft mask wasn't drawn. The refused
+/// picture says so itself, once.
 #[test]
 fn a_limit_refusal_says_nothing_of_the_next_image() {
     let refused = black_jbig2_page_of(65536, 2);
@@ -4807,18 +4880,23 @@ fn a_limit_refusal_says_nothing_of_the_next_image() {
         &bad,
     ));
     pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
-    // Both pages from one renderer, on one thread.
-    let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    // Both pages, each time from one renderer and on one thread.
+    let mut renderer = PageRenderer::new(Arc::new(pdf.clone()), RenderConfig::default());
     let [first, second] =
         [0, 1].map(|page| renderer.render(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }));
     let drawn = |page: &RenderedPage| {
         assert!(page.error.is_none(), "{:?}", page.error);
-        (page.rgba[((25 * 40 + 15) * 4)..][..4] == [0, 0, 0, 255], page.warnings.contains(&RenderWarning::ContentTruncated))
+        page.rgba[((25 * 40 + 15) * 4)..][..4] == [0, 0, 0, 255]
     };
     // The next page first: on the page of the refusal, the stale note shows whether or not it
     // outlives the page.
-    assert_eq!(drawn(&second), (true, false), "on the next page, the picture is drawn and nothing was left out");
-    assert_eq!(drawn(&first), (true, false), "on its page, the picture is drawn and nothing was left out");
+    assert!(drawn(&second), "on the next page, the picture is drawn");
+    assert!(drawn(&first), "on its page, the picture is drawn");
+    // The renderer says once per page that content was left out, so count what the interpreter says.
+    let left_out = |warnings: &[String]| warnings.iter().filter(|warning| *warning == "ContentTruncated").count();
+    let reported = interpreter_warnings(pdf);
+    assert_eq!(left_out(&reported[1]), 0, "on the next page nothing was left out: {:?}", reported[1]);
+    assert_eq!(left_out(&reported[0]), 1, "on its page only the refused picture was: {:?}", reported[0]);
 }
 
 /// A JPX picture is decoded again for each size a page draws it at, while a soft mask far larger
@@ -5016,6 +5094,15 @@ impl Bits {
     }
 }
 
+/// The header of a Huffman-coded symbol dictionary that says it exports `exported` symbols and has
+/// `new` new ones, and nothing after it.
+fn jbig2_dictionary_counting(exported: u32, new: u32) -> Vec<u8> {
+    let mut dictionary = vec![0x00, 0x01]; // Huffman, tables B.4, B.2, B.1, B.1
+    dictionary.extend_from_slice(&exported.to_be_bytes());
+    dictionary.extend_from_slice(&new.to_be_bytes());
+    dictionary
+}
+
 /// A Huffman-coded symbol dictionary of `symbols` symbols of width 0 and height 1, exported or not:
 /// each holds no pixels, and costs a bitmap's header all the same.
 fn zero_width_jbig2_dictionary(symbols: u32, exported: bool) -> Vec<u8> {
@@ -5104,10 +5191,18 @@ fn empty_class_jbig2_dictionary(classes: u32, height: u32) -> Vec<u8> {
 /// A Huffman-coded symbol dictionary of `symbols` white symbols of width 1 and `height` rows, none
 /// exported, for `height` from 76 up.
 fn narrow_jbig2_dictionary(symbols: u32, height: u32) -> Vec<u8> {
+    narrow_jbig2_dictionary_of(symbols, 1, height)
+}
+
+/// [`narrow_jbig2_dictionary`], its symbols `width` columns wide, from 1 to 2.
+fn narrow_jbig2_dictionary_of(symbols: u32, width: u32, height: u32) -> Vec<u8> {
     let mut bits = Bits::default();
     bits.put(0b11111, 5); // height class delta, the upper line of table B.4
     bits.put(height - 76, 32);
-    bits.put(0b10, 2); // width delta 1 (B.2)
+    match width {
+        1 => bits.put(0b10, 2),  // width delta 1 (B.2)
+        _ => bits.put(0b110, 3), // width delta 2 (B.2)
+    }
     for _ in 1..symbols {
         bits.put(0, 1); // width delta 0 (B.2)
     }
@@ -5280,22 +5375,29 @@ fn jbig2_new_symbols_count_towards_a_pages_bound() {
     assert!(!jbig2_image_draws(&stream(300)), "of 300 rows they don't");
 }
 
-/// New symbols are held to what the page has left, headers included, not to the whole bound. These
-/// two regions leave it 512 words, and the dictionary after them exports nothing, so only that
-/// check can refuse it.
+/// New symbols are held to what the page has left, headers included, not to the whole bound. A page
+/// may hold two bitmaps of 2^28 pixels, each with the padding of up to 65,535 rows of 31 bits
+/// (storytold/craft-libs#2177): (2^28 + 65,535 × 31) / 32 rounded up, 8,452,096 words, and 44 more
+/// for the bitmap and its entry (12 and 32 on a 64-bit target). These three regions of 16,384
+/// columns, 512 words a row, have 16,384, 16,383 and 248 rows: 16,903,680 words and 44 each, which
+/// leaves 2 × (8,452,096 + 44) − 16,903,680 − 3 × 44 = 468. A symbol of one column takes a word a
+/// row and 12 for itself, so one of 456 rows fits and one of 457 doesn't, and one of no width takes
+/// 12, so 39 headers fit and 40 don't. The dictionary exports nothing, so only that check can
+/// refuse it.
 #[test]
 fn jbig2_new_symbols_are_held_to_what_a_page_has_left() {
     let stream = |dictionary: &[u8]| {
         let mut stream = black_jbig2_page();
         jbig2_segment(&mut stream, 1, 36, &[], &jbig2_white_region(16384, 16384));
         jbig2_segment(&mut stream, 2, 36, &[], &jbig2_white_region(16384, 16383));
-        jbig2_segment(&mut stream, 3, 0, &[], dictionary);
+        jbig2_segment(&mut stream, 3, 36, &[], &jbig2_white_region(16384, 248));
+        jbig2_segment(&mut stream, 4, 0, &[], dictionary);
         stream
     };
-    assert!(jbig2_image_draws(&stream(&narrow_jbig2_dictionary(1, 100))), "100 rows fit");
-    assert!(!jbig2_image_draws(&stream(&narrow_jbig2_dictionary(1, 1000))), "1,000 rows don't");
-    assert!(jbig2_image_draws(&stream(&zero_width_jbig2_dictionary(10, false))), "10 headers fit");
-    assert!(!jbig2_image_draws(&stream(&zero_width_jbig2_dictionary(100, false))), "100 headers don't");
+    assert!(jbig2_image_draws(&stream(&narrow_jbig2_dictionary(1, 456))), "456 rows fit");
+    assert!(!jbig2_image_draws(&stream(&narrow_jbig2_dictionary(1, 457))), "457 rows don't");
+    assert!(jbig2_image_draws(&stream(&zero_width_jbig2_dictionary(39, false))), "39 headers fit");
+    assert!(!jbig2_image_draws(&stream(&zero_width_jbig2_dictionary(40, false))), "40 headers don't");
 }
 
 /// Pattern dictionaries count towards the bound, with no shifted copies to do it for them: at 44
@@ -5383,7 +5485,8 @@ fn square_jbig2_dictionary(side: u32, exported: bool) -> Vec<u8> {
     dictionary
 }
 
-/// A text region of `width` × `height` placing symbol 0 of one, Huffman-coded, `instances` of 0 or 1.
+/// A text region of `width` × `height` placing symbol 0 of one, Huffman-coded, `instances` times,
+/// each in a strip of its own one row below the last.
 fn jbig2_text_region(width: u32, height: u32, instances: u32) -> Vec<u8> {
     let mut text = jbig2_region_info(width, height);
     text.extend_from_slice(&[0x00, 0x11, 0, 0]); // Huffman, top left; tables B.6, B.8, B.11
@@ -5395,7 +5498,7 @@ fn jbig2_text_region(width: u32, height: u32, instances: u32) -> Vec<u8> {
     bits.put(0, 1); // symbol 0 is one bit long
     bits.align();
     bits.put(0, 1); // the first strip's T (B.11)
-    if instances > 0 {
+    for _ in 0..instances {
         bits.put(0, 1); // delta T 1 (B.11)
         bits.put(0, 9); // first S 0 (B.6)
         bits.put(0, 1); // symbol 0
@@ -5403,6 +5506,42 @@ fn jbig2_text_region(width: u32, height: u32, instances: u32) -> Vec<u8> {
     }
     text.extend_from_slice(&bits.bytes);
     text
+}
+
+/// A text region may place more than 10,000 instances: its instances are bounded by the decoding
+/// work they take, and a scanned page of 10,508 characters (PDFBOX-1439) was refused and drew
+/// white. A count that work could never pay for is refused before anything is read, as a decoder
+/// limit: alone on its page, the image isn't drawn and the page says so.
+#[test]
+fn a_jbig2_text_region_places_as_many_instances_as_its_work_allows() {
+    let stream = |text: &[u8]| {
+        let mut stream = black_jbig2_page();
+        jbig2_segment(&mut stream, 1, 0, &[], &zero_width_jbig2_dictionary(1, true));
+        jbig2_segment(&mut stream, 2, 6, &[1], text);
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(&jbig2_text_region(16, 2, 12_000))), "12,000 instances");
+    // A region that says it has `count` instances and holds none of them.
+    let warnings = |count: u32| {
+        let mut text = jbig2_text_region(16, 2, 0);
+        text.splice(21..25, count.to_be_bytes());
+        let pdf = jbig2_image_pdf_with(&stream(&text), "/DeviceGray", "", b"");
+        let config = RenderConfig { jbig2_work: Some(u64::MAX), ..RenderConfig::default() };
+        let page = PageRenderer::new(Arc::new(pdf), config).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            ..Default::default()
+        });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!(page.rgba[((25 * 40 + 15) * 4)..][..4], [255, 255, 255, 255], "{count}: the image isn't drawn");
+        page.warnings
+    };
+    // At 152 each, 7,064,091 instances are past 2^30; 7,064,090 aren't, and run out of data.
+    assert_eq!(warnings(7_064_091), [RenderWarning::ContentTruncated], "past what work pays for: a limit");
+    assert_eq!(warnings(7_064_090), [], "within it: the data ends, damage");
 }
 
 /// A 1 × 1 text region placing one instance of symbol 0 of one, refined, Huffman-coded.

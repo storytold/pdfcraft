@@ -311,9 +311,9 @@ fn draw_under_jbig2_masks(mask: &[u8], size: (u32, u32), draws: &[(&str, u32)], 
 /// another picture's mask was refused for its work, which isn't kept.
 #[test]
 fn a_picture_whose_jbig2_mask_a_limit_refuses_is_decoded_once_however_often_it_is_drawn() {
-    use super::{black_jbig2_page, black_jbig2_page_of, jbig2_segment, wide_jbig2_dictionary};
+    use super::{black_jbig2_page, black_jbig2_page_of, jbig2_dictionary_counting, jbig2_segment};
     let mut dictionary = black_jbig2_page();
-    jbig2_segment(&mut dictionary, 1, 0, &[], &wide_jbig2_dictionary(65535, &[2048, 2049]));
+    jbig2_segment(&mut dictionary, 1, 0, &[], &jbig2_dictionary_counting(0, u32::MAX));
     let masks = [
         ("past the decoder's bound on a side", black_jbig2_page_of(65536, 2), (65536, 2)),
         ("past the renderer's bound on pixels", black_jbig2_page_of(65535, 65535), (65535, 65535)),
@@ -347,4 +347,48 @@ fn a_picture_whose_jbig2_mask_is_refused_for_its_work_is_decoded_at_every_draw()
     assert_eq!(draws.rasters, 0, "the picture is left out");
     assert_eq!(decodes, 3 * once, "decoded at every draw");
     assert_eq!(truncated, 3, "every draw says content was left out");
+}
+
+/// A JBIG2 image drawn on its own, a stencil mask included, that one of the decoder's limits
+/// refuses is content left out (patch 73), and the limit is its stream's own, so the refusal is
+/// kept as one (patch 91): a page drawing it a hundred times decodes it once, and every draw still
+/// says content was left out. Reported so but not kept, it was decoded again at every draw.
+#[test]
+fn a_jbig2_image_a_limit_refuses_is_decoded_once_however_often_it_is_drawn() {
+    use super::{black_jbig2_page, jbig2_dictionary_counting, jbig2_segment};
+    let mut stream = black_jbig2_page();
+    jbig2_segment(&mut stream, 1, 0, &[], &jbig2_dictionary_counting(0, u32::MAX));
+    let draw = |kind: &str, times: usize| {
+        let image = format!("<< /Type /XObject /Subtype /Image /Width 16 /Height 2 {kind} /Filter /JBIG2Decode /Length {} >>", stream.len());
+        let content = vec!["q 20 0 0 20 10 10 cm /I Do Q"; times].join(" ");
+        let bytes = image_cache_pdf(&content, "<< /XObject << /I 5 0 R >> >>", &[(&image, &stream)]);
+        let parsed = Pdf::new(Arc::new(bytes)).expect("parses");
+        let page = &parsed.pages()[0];
+        let cache = InterpreterCache::new();
+        let truncated = Arc::new(AtomicUsize::new(0));
+        let others = Arc::new(Mutex::new(Vec::new()));
+        let settings = InterpreterSettings {
+            warning_sink: {
+                let (truncated, others) = (truncated.clone(), others.clone());
+                Arc::new(move |warning| match warning {
+                    InterpreterWarning::ContentTruncated => {
+                        truncated.fetch_add(1, Ordering::Relaxed);
+                    }
+                    other => others.lock().unwrap().push(format!("{other:?}")),
+                })
+            },
+            ..InterpreterSettings::default()
+        };
+        let initial = page.initial_transform(true).to_kurbo();
+        let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, 130.0, 70.0), &cache, page.xref(), settings);
+        let mut device = Draws::default();
+        interpret_page(page, &mut ctx, &mut device);
+        assert!(others.lock().unwrap().is_empty(), "reported {:?}", others.lock().unwrap());
+        assert_eq!((device.rasters, device.stencils), (0, 0), "{kind}: nothing is drawn");
+        (cache.decoded_image_decodes(), truncated.load(Ordering::Relaxed))
+    };
+    for kind in ["/BitsPerComponent 1 /ColorSpace /DeviceGray", "/ImageMask true"] {
+        let (once, _) = draw(kind, 1);
+        assert_eq!(draw(kind, 100), (once, 100), "{kind}: a hundred draws decode as one does, and each says so");
+    }
 }
