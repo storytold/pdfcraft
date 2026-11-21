@@ -44,6 +44,9 @@ pub enum Edit {
     DuplicatePages {
         pages: Vec<usize>,
         at: Option<usize>,
+        /// The copies' form fields: `Merge` keeps their names, so each copy is one field with
+        /// its original (Duplicate pages); `Rename` gives each its own (#2228).
+        field_conflicts: pdfcraft_organize::FieldConflicts,
     },
     /// A copy of page template `name` inserted at `at` (clamped to the end), as JavaScript's
     /// `Template.spawn` adds it (#1429). `rename` puts the copy's fields under `P<at>.<name>`;
