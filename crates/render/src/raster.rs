@@ -79,6 +79,10 @@ pub struct RenderConfig {
     /// and timers gave another icon (`buttonSetIcon`, an animation's frames). Display only; the
     /// document never changes.
     pub appearances: Arc<Vec<(i32, i32, i32, i32)>>,
+    /// Comment types hidden by the viewer's filter (the Comments panel's type names: `Oval`,
+    /// `Callout`, `Replace text`). Empty shows every type. Fields and links still draw.
+    /// [`crate::normalize_hidden_comment_types`] is the accepted spelling.
+    pub hidden_comment_types: Arc<Vec<String>>,
     /// Refuse a whole-page raster that would be reduced by the renderer's hard size caps.
     /// Tiled requests remain available for pages that exceed those caps. Both modes refuse
     /// a raster whose rounded integer dimensions exceed the final pixel-allocation budget.
@@ -121,15 +125,34 @@ impl RenderConfig {
     /// tries bundled Japanese faces, then opt-in installed CJK faces, then standard substitutes.
     /// Passwords belong to parser construction; request-specific preview overrides are applied
     /// by `render_page`, which also preserves the caller's warning and cancellation hooks.
+    ///
+    /// When `pdf` is set, comment types in [`Self::hidden_comment_types`] become
+    /// `annotation_overrides` (shown = false) so the shared interpreter skips them.
     fn settings(&self) -> InterpreterSettings {
+        self.settings_with_pdf(None)
+    }
+
+    fn settings_with_pdf(&self, pdf: Option<&Pdf>) -> InterpreterSettings {
         let defaults = InterpreterSettings::default();
         let standard = defaults.font_resolver.clone();
         let system_fonts = self.system_fonts;
+        let annotation_overrides = match pdf {
+            Some(pdf) if !self.hidden_comment_types.is_empty() => {
+                let mut overrides = crate::comment_hide::hidden_type_overrides(pdf, &self.hidden_comment_types);
+                for entry in self.annotations.iter() {
+                    if !overrides.iter().any(|(num, generation, _)| *num == entry.0 && *generation == entry.1) {
+                        overrides.push(*entry);
+                    }
+                }
+                Arc::new(overrides)
+            }
+            _ => self.annotations.clone(),
+        };
         InterpreterSettings {
             ocg_overrides: self.layers.clone(),
             view_auto_state: !self.for_print,
             hide_comments: self.hide_comments,
-            annotation_overrides: self.annotations.clone(),
+            annotation_overrides,
             appearance_overrides: self.appearances.clone(),
             font_resolver: Arc::new(move |query| {
                 japanese_fallback(query).or_else(|| system_fonts.then(|| system_fallback(query)).flatten()).or_else(|| standard(query))
@@ -562,7 +585,7 @@ pub struct PageRenderer {
 impl PageRenderer {
     pub fn new(bytes: Arc<Vec<u8>>, config: RenderConfig) -> Self {
         let pdf = parse(&bytes, config.password.as_deref());
-        let settings = config.settings();
+        let settings = config.settings_with_pdf(pdf.as_ref());
         Self { bytes, config, pdf, settings, stats: RenderStats { parser_builds: 1, ..RenderStats::default() } }
     }
 
