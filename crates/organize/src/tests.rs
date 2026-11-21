@@ -1944,6 +1944,42 @@ fn move_bookmark_to_missing_parent_keeps_outline() {
     assert_eq!(titles(&crate::bookmarks(&d)), ["Intro", "Results"]);
 }
 
+/// A one-page file whose catalog's `/Outlines` points at object 3, which is `stray`; with `free`,
+/// object 3's cross-reference entry says it is free.
+fn stray_outlines(stray: &str, free: bool) -> Document {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 3 0 R >>".into(),
+        "<< /Type /Pages /Kids [4 0 R] /Count 1 >>".into(),
+        stray.into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".into(),
+    ];
+    let mut bytes = build(&b, "/Root 1 0 R");
+    if free {
+        // Each cross-reference entry is 20 bytes; object 3's is the fourth after the subsection header.
+        let start = bytes.windows(9).position(|w| w == b"xref\n0 5\n").unwrap() + 9 + 3 * 20;
+        bytes.splice(start..start + 20, b"0000000000 00001 f \n".iter().copied());
+    }
+    open(bytes)
+}
+
+#[test]
+fn a_bookmark_is_added_when_outlines_points_at_no_dictionary() {
+    let stray = ObjRef::new(3, 0);
+    for (body, free) in [("null", false), ("[1 2 3]", false), ("null", true)] {
+        let mut d = stray_outlines(body, free);
+        let before = d.get(stray);
+        assert!(crate::bookmarks(&d).is_empty(), "{body} free={free}");
+        crate::add_bookmark(&mut d, &[], 0, "Intro", 0).unwrap_or_else(|e| panic!("{body} free={free}: {e}"));
+        let out = save_and_reopen(&d);
+        assert_eq!(titles(&crate::bookmarks(&out)), ["Intro"], "{body} free={free}");
+        let root = catalog(&out).reference(b"Outlines").unwrap();
+        assert_ne!(root, stray, "{body} free={free}: the catalog points at a new outline root");
+        let first = out.get(root).as_dict().and_then(|o| o.reference(b"First"));
+        assert!(first.is_some_and(|f| f != root), "{body} free={free}: the root is not the bookmark itself");
+        assert_eq!(d.get(stray), before, "{body} free={free}: the stray object is left alone");
+    }
+}
+
 #[test]
 fn bookmarks_add_rename_move_delete() {
     let mut d = doc_a();
