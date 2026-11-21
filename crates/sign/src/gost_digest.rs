@@ -32,18 +32,22 @@ const TAU: [usize; 64] = [
     52, 60, 5, 13, 21, 29, 37, 45, 53, 61, 6, 14, 22, 30, 38, 46, 54, 62, 7, 15, 23, 31, 39, 47, 55, 63,
 ];
 
-/// A hexadecimal digit; anything else reads as 0 (the inputs below are fixed).
+/// A hexadecimal digit. Anything else is a typo in a constant below, and a typo here would
+/// silently produce a wrong Streebog constant — wrong digests and signatures with no error
+/// anywhere — so it refuses instead of reading as 0 (a const assertion fails the build).
 const fn nib(c: u8) -> u64 {
+    assert!(matches!(c, b'0'..=b'9' | b'a'..=b'f'), "a Streebog constant has a non-lowercase-hex digit",);
     match c {
         b'0'..=b'9' => (c - b'0') as u64,
-        b'a'..=b'f' => (c - b'a' + 10) as u64,
-        _ => 0,
+        _ => (c - b'a' + 10) as u64,
     }
 }
 
-/// One row of the linear-transform matrix A (RFC 6986 §6.4), read big-endian.
+/// One row of the linear-transform matrix A (RFC 6986 §6.4), read big-endian. The length is
+/// checked: a truncated or overlong string must not shift the whole matrix.
 const fn a_row(s: &str) -> u64 {
     let b = s.as_bytes();
+    assert!(b.len() == 16, "an A row is 16 hex digits");
     let mut v = 0;
     let mut i = 0;
     while i < 16 {
@@ -127,6 +131,9 @@ const A: [u64; 64] = [
 /// keep them the other way round, so the string is read in from the right.
 const fn c_block(s: &str) -> [u8; 64] {
     let b = s.as_bytes();
+    // The indices below walk the string from the right over exactly 128 hex digits; a
+    // different length must not shift or silently truncate the constant.
+    assert!(b.len() == 128, "a C block is 128 hex digits");
     let mut out = [0u8; 64];
     let mut i = 0;
     while i < 64 {
