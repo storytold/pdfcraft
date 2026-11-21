@@ -242,7 +242,16 @@ fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, r
         let mut current = None;
         for (li, line) in lines.iter().enumerate() {
             let tw = thai_width(line, size, face);
-            thai.show(&mut content, line, -tw / 2.0, total / 2.0 - li as f64 * line_h - size * 0.35, size, &resource, |s| face(s, size), &mut current);
+            thai.show(
+                &mut content,
+                line,
+                -tw / 2.0,
+                total / 2.0 - li as f64 * line_h - size * 0.35,
+                size,
+                &resource,
+                |s| face(s, size),
+                &mut current,
+            );
         }
         content.extend_from_slice(b"ET\n");
         content.extend_from_slice(END.as_bytes());
