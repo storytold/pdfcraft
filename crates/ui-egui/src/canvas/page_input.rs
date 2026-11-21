@@ -130,10 +130,12 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         let objects = adds.then(|| view.objects.inventory(doc, i));
         let at = hits.at(view, o, objects.as_ref());
         // A press is the page's it lies on, or past its edge the one whose selected picture has its
-        // rotate knob or a grip there (crop mode's grips too).
+        // rotate knob or a grip there (crop mode's grips too), or whose selected comment has a
+        // resize handle there (#4825).
         let past_edge = |h: &crate::page_router::Hit| {
             use crate::page_router::PicturePart;
             matches!(h.owner, Owner::Picture { part: PicturePart::Knob | PicturePart::Corner(_) | PicturePart::Crop(_), .. })
+                || matches!(h.layer, crate::page_cursor::Layer::Handle)
         };
         if xf.rect.contains(o) || at.iter().any(past_edge) {
             view.router.press(i, at, tool);
