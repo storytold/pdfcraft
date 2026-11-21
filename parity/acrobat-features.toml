@@ -3707,10 +3707,10 @@ area = "E"
 tier = "P0"
 milestone = "M5"
 status = "shipped"
-commands = ["comment.highlight"]
+commands = ["comment.highlight", "comment.highlight_selection"]
 tools = ["comment_add"]
-evidence = ["crates/ui-egui/tests/it/comments.rs::dragging_over_text_with_the_highlighter_highlights_it", "crates/ui-egui/tests/it/comments.rs::a_new_highlight_opens_its_note_for_typing", "crates/engine/src/tests.rs::highlight_multiplies_over_text"]
-notes = "drag over text, or pick the tool with text selected; a new highlight opens its note for typing in the Comments panel; agents can highlight by text search"
+evidence = ["crates/ui-egui/tests/it/comments.rs::highlight_selection_once_preserves_the_tool_and_is_undoable", "crates/ui-egui/tests/it/comments.rs::highlight_selection_once_shortcut_keeps_select_active", "crates/ui-egui/tests/it/comments.rs::dragging_over_text_with_the_highlighter_highlights_it", "crates/ui-egui/tests/it/comments.rs::a_new_highlight_opens_its_note_for_typing", "crates/engine/src/tests.rs::highlight_multiplies_over_text"]
+notes = "Edit > Highlight selected text (once), Cmd+Shift+K on macOS or Ctrl+Shift+K elsewhere, marks the fully loaded selection across pages in one undo step without changing tools or opening a panel. drag over text, or pick the tool with text selected; a new highlight opens its note for typing in the Comments panel; agents can highlight by text search"
 
 [[feature]]
 id = "comment.underline"
