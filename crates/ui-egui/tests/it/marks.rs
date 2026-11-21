@@ -458,7 +458,9 @@ fn frame_shapes(h: &Rig) -> Vec<&egui::Shape> {
 /// The picture of the preview pane: the largest uploaded texture painted over the pager, the pane being
 /// the pager's neighbour above.
 fn preview_picture(h: &Rig) -> Option<Picture> {
-    let pager_rect = h.query_by(is_pager)?.rect();
+    let caption = h.query_by(is_pager)?;
+    let row = caption.parent()?;
+    let pager_rect = caption.rect().union(row.query_by_label("Previous")?.rect()).union(row.query_by_label("Next")?.rect());
     let uploads = h.uploads.0.lock().unwrap();
     frame_shapes(h)
         .into_iter()
