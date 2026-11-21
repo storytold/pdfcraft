@@ -333,6 +333,7 @@ impl Automation {
                 },
             )?,
             "page_set_box" => self.page_set_box(&a)?,
+            "page_remove_white_margins" => self.page_remove_white_margins(&a)?,
             "page_transition_set" => self.page_transition_set(&a)?,
             "doc_create" => self.doc_create(&a)?,
             "xfa_to_static" => self.apply(&a, Edit::XfaToStatic)?,

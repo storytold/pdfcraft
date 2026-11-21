@@ -178,6 +178,7 @@ pub const BATCH_LABELS: &[&str] = &[
     "Recognize text",
     field_table::LABEL,
     "Style",
+    "Remove white margins",
     crate::find_replace::REPLACE_ALL,
 ];
 

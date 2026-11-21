@@ -67,6 +67,7 @@ pub mod text_links;
 mod text_preview;
 pub mod text_script;
 pub mod text_style_bookmarks;
+pub mod white_margins;
 pub mod word_count;
 pub mod xfa;
 mod xfa_form;
