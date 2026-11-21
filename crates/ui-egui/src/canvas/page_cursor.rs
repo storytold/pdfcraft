@@ -109,6 +109,16 @@ impl PageCursor {
         }
     }
 
+    /// Whether the pointer is over something a press with `tool` acts on in its own right: a
+    /// link, a comment, a field, or what is placed on the page and its grips and editors. Not the
+    /// page and its text, nor a drag, whose layer also hides the pointer in full screen.
+    pub(crate) fn over_object(&self, tool: QuickTool) -> bool {
+        LAYERS
+            .into_iter()
+            .zip(&self.claims)
+            .any(|(layer, claim)| claim.is_some() && (Layer::Link..Layer::Drag).contains(&layer) && layer.reached_by(tool))
+    }
+
     /// The claim on the highest layer `tool` reaches.
     fn winner(claims: [Option<Claim>; LAYERS.len()], tool: QuickTool) -> Option<Claim> {
         LAYERS.into_iter().zip(claims).rev().find_map(|(layer, claim)| claim.filter(|_| layer.reached_by(tool)))
