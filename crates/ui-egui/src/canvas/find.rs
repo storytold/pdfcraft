@@ -185,7 +185,7 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bo
     // One id per pane, so two panes' bars do not share a field id (and so the focus).
     let shown = ui
         .push_id(("find-bar", key), |ui| {
-            TaskBar::at_edge(tl!("Find"), Align::End).show(ui, area, |ui, _cx| {
+            TaskBar::at_edge(tl!("Find"), Align::End).show(ui, area.shrink2(egui::vec2(6.0, 12.0)), |ui, _cx| {
                 let Find { query, options, matches, bar, replacement, replacing, .. } = &mut *find;
                 let mut find_bar = FindBar::new(query, options, matches).state(bar).progress(searched, pages);
                 if editing {
