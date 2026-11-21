@@ -2904,6 +2904,18 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
             None => e,
         });
     }
+    // The selected comment's colour and opacity, in place; Properties keeps the rest. Not with
+    // a drawing tool: the bar sits just above the selected comment, where the next shape, line
+    // or callout often starts, and a press on it would never reach the page.
+    let keeps_selection = matches!(tool, QuickTool::Select | QuickTool::Hand) || matches!(tool, QuickTool::Comment(t) if t.markup().is_some());
+    let off = comments_hidden || !keeps_selection;
+    if let Some(e) = comments::style_bar(ui.ctx(), view, doc, prefs, allowed && !off && env.unobstructed, env.unobstructed) {
+        // A toolbar click can also commit a pop-up editor that just lost focus. Keep both.
+        view.pending_edit = Some(match view.pending_edit.take() {
+            Some(first) => Edit::Batch { label: "Change comment properties".into(), edits: vec![first, e] },
+            None => e,
+        });
+    }
     if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), keys, view, info) {
         view.pending_edit = Some(e);
     }
@@ -3718,6 +3730,10 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     }
     if let Some(c) = recolour {
         app.colour_selected_comments(c);
+    }
+    if std::mem::take(&mut app.views[index].comments.palette_request) {
+        app.comment_prefs.begin_palette_edit();
+        app.dialog = Some(crate::Dialog::HighlightPalette);
     }
     if let Some((p, i)) = app.views[index].comments.default_request.take() {
         app.make_comment_default(p, i);

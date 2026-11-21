@@ -79,7 +79,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
         QuickTool::Comment(CommentTool::Attach) => gestures.attach(view),
         QuickTool::Comment(CommentTool::Caret) => gestures.caret(view, caret_text.as_deref()),
         QuickTool::Comment(tool @ (CommentTool::Note | CommentTool::TextBox)) => gestures.note_or_box(view, tool),
-        QuickTool::Select => select_input(ui, resp, cx, view, press, pointer, origin),
+        QuickTool::Select | QuickTool::Hand => select_input(ui, resp, cx, view, press, pointer, origin),
         _ => false,
     }
 }
@@ -92,7 +92,8 @@ pub(crate) fn moving_on(view: &DocView, page: usize) -> bool {
 
 /// What of the comments lies under `p`, for the cursor, the tip and the press: the one hit test
 /// of this module. With the Select tool, the selected comment's point handles, then its resize
-/// handles, then the topmost comment. With a Fill & Sign tool, the same over Fill & Sign's marks
+/// handles, then the topmost comment. Hand selects bodies on a click and leaves all drags
+/// to page panning. With a Fill & Sign tool, the same over Fill & Sign's marks
 /// only, as Acrobat picks them up: a press anywhere else places the tool's mark. With a shape
 /// tool (rectangle, oval, line, polygon…), only the selected comment's handles, so the shape just
 /// drawn can be resized straight away (#2338); a press anywhere else, the shape itself included,
@@ -103,7 +104,7 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2, on_link: bool) -> Op
         return None;
     }
     let pick: fn(&Annotation) -> bool = match cx.tool {
-        QuickTool::Select => |_| true,
+        QuickTool::Select | QuickTool::Hand => |_| true,
         QuickTool::Fill(_) => |a| a.fill_sign,
         QuickTool::Comment(tool) if (tool.draws() || tool.clicks_points()) && tool != CommentTool::Eraser => {
             // A polygon being clicked out keeps its clicks, even near an old shape's handle.
@@ -114,8 +115,15 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2, on_link: bool) -> Op
         }
         _ => return None,
     };
-    let bodies = matches!(cx.tool, QuickTool::Select | QuickTool::Fill(_));
-    if let Some(a) = view.comments.selected.filter(|(page, _)| *page == cx.page).and_then(|(_, i)| cx.get(i)).filter(|a| pick(a) && cx.allowed) {
+    let bodies = matches!(cx.tool, QuickTool::Select | QuickTool::Hand | QuickTool::Fill(_));
+    // Hand selects comments on a click, but every drag remains a page pan, even on handles.
+    if let Some(a) = view
+        .comments
+        .selected
+        .filter(|(page, _)| *page == cx.page)
+        .and_then(|(_, i)| cx.get(i))
+        .filter(|a| pick(a) && cx.allowed && cx.tool != QuickTool::Hand)
+    {
         if reaches_points(cx.tool)
             && reshapable(a)
             && let Some(point) = point_handle(cx, a, p)
@@ -146,9 +154,12 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2, on_link: bool) -> Op
         return None;
     }
     let markup = on_text(a);
-    let icon = if cx.allowed && !markup { egui::CursorIcon::Move } else { egui::CursorIcon::PointingHand };
+    let icon = if cx.allowed && !markup && cx.tool != QuickTool::Hand { egui::CursorIcon::Move } else { egui::CursorIcon::PointingHand };
     // Text markup does not move: a click selects it, a drag across it selects the text.
-    Some(Hit { declines_drag: markup || member, ..Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer(a), icon) })
+    Some(Hit {
+        declines_drag: markup || member || cx.tool == QuickTool::Hand,
+        ..Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer(a), icon)
+    })
 }
 
 /// The layer a comment's body lies on: what a drag moves whole (a note, a shape, a signature, a

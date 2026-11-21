@@ -185,6 +185,8 @@ pub enum Dialog {
     DocumentJs,
     /// Preferences.
     Preferences,
+    /// Colors and opacity presets for the highlight toolbar.
+    HighlightPalette,
     /// Compare files: choose the older version.
     CompareFiles,
     /// Action Wizard.

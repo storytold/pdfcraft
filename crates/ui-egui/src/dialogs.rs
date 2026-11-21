@@ -442,6 +442,10 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.close = crate::js_ui::document_js_body(ui, app, &t);
             return false;
         }
+        Dialog::HighlightPalette => {
+            req.close = crate::comments::palette::editor(ui, &mut app.comment_prefs);
+            return false;
+        }
         Dialog::Preferences => {
             if !dialog_preferences(ui, app, req) {
                 return false;
@@ -1486,6 +1490,9 @@ fn dialog_preferences(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pendin
     // A scrollbar of its own: the floating one lies over the right edge of the theme
     // cards and other full-width rows (#3557).
     preferences_scroll(ui, max, |ui| preferences::preferences_body(ui, app, &t));
+    if app.dialog == Some(Dialog::HighlightPalette) {
+        req.next = Some(Dialog::HighlightPalette);
+    }
     req.close = preferences::preferences_buttons(ui);
     false
 }
@@ -2219,6 +2226,9 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
         // disk asks about that): it stays.
         if app.dialog == Some(dialog) {
             app.dialog = None;
+        }
+        if dialog == Dialog::HighlightPalette {
+            app.comment_prefs.palette_draft = None;
         }
         if dialog == Dialog::AttachmentDescription {
             app.attachment_description_draft = None;

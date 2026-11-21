@@ -1,9 +1,11 @@
 use super::input::delete_selected;
 use super::paint::edit_anchor;
 use super::state::{Composer, ComposerKind, Gesture};
+use pdfcraft_engine::CommentProps;
+
 use super::{
-    Annotation, Color32, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Rect, ReviewState, Rgb, SELECT_BLUE, SWATCHES, Sense, Stroke, color32,
-    defaultable, icons, theme, vec2,
+    Annotation, Color32, CommentPrefs, CommentTool, CornerRadius, DocInfo, DocView, Edit, PageCx, PagePointer, QuickTool, Rect, ReviewState, Rgb,
+    SELECT_BLUE, SWATCHES, Sense, Stroke, color32, defaultable, icons, pos2, theme, vec2,
 };
 
 /// Save attachment… and, for a PDF, Open in a new tab, first in a file attachment comment's
@@ -239,7 +241,13 @@ fn rgb_of(c: Color32) -> Rgb {
 
 /// One round swatch; `on` rings it as the current colour.
 fn swatch(ui: &mut egui::Ui, c: Rgb, on: bool, tooltip: &str) -> egui::Response {
-    let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+    swatch_sized(ui, c, on, tooltip, 22.0)
+}
+
+/// [`swatch`] with a `hit` px square to press: the dot stays 18 px, the style bar gives it a
+/// finger's worth of room.
+fn swatch_sized(ui: &mut egui::Ui, c: Rgb, on: bool, tooltip: &str, hit: f32) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(hit, hit), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tooltip));
     ui.painter().circle_filled(r.center(), 9.0, color32(c));
     ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, Color32::from_black_alpha(40)));
@@ -427,6 +435,165 @@ pub(crate) fn border_colour_button(ui: &mut egui::Ui, current: Option<Rgb>, text
         }
     });
     picked
+}
+
+/// The floating bar over the selected comment (Acrobat shows a mini toolbar on a selected
+/// comment): its colour and opacity, changed in place without opening Properties. Only for a
+/// comment whose appearance can be redrawn and that isn't locked, never while a comment is
+/// being drawn, moved or typed, and not while `off` (comments hidden, or a drawing tool on).
+/// Several selected: the choice goes to every selected comment that can take it, as one step
+/// (the context menu's Colour does the same). Uses the document's properties and deletion
+/// rights, and returns the edit to apply.
+pub(crate) fn style_bar(
+    ctx: &egui::Context,
+    view: &mut DocView,
+    doc: &pdfcraft_engine::Document,
+    prefs: &CommentPrefs,
+    visible: bool,
+    unobstructed: bool,
+) -> Option<Edit> {
+    let info = &doc.info;
+    let props_of = |p, i| doc.comment_props(p, i);
+    if !unobstructed && prefs.palette_draft.is_none() {
+        view.comments.style_bar_dismissed = true;
+    }
+    if view.comments.style_bar_dismissed {
+        return None;
+    }
+    let epoch_id = egui::Id::unique(("comment-style-bar-epoch", view.view_key()));
+    let epoch = view.comments.selection_epoch;
+    let just_selected = ctx.data(|d| d.get_temp::<u64>(epoch_id)) != Some(epoch);
+    ctx.data_mut(|d| d.insert_temp(epoch_id, epoch));
+    let (page, index, props, bounds) = bar_placement(view, info, &props_of, prefs, visible)?;
+    let targets = if view.comments.also.is_empty() { view.comments.target().into_iter().collect() } else { view.comments.selection() };
+    let can_delete = !targets.is_empty() && targets.iter().all(|&(p, i)| doc.annotation_deletable(p, i));
+    // One pass over the annotations against a set of the selection's keys: a scan per selected
+    // comment was quadratic per frame with Select All on a large document.
+    let also: std::collections::HashSet<(usize, usize)> = view.comments.also.iter().copied().collect();
+    let others: Vec<(usize, usize)> = info
+        .annotations
+        .iter()
+        .filter(|a| !a.is_reply() && (a.page, a.index) != (page, index) && also.contains(&(a.page, a.index)))
+        .map(|a| (a.page, a.index))
+        .filter(|&(p, i)| props_of(p, i).is_some_and(|c| c.restylable && !c.locked))
+        .collect();
+    let viewport = view.viewport_rect();
+    let mut edit = None;
+    // Centred just above the comment; `constrain_to` keeps it inside the document area when the
+    // comment touches the top.
+    let area = egui::Area::new(egui::Id::unique(("comment-style-bar", view.view_key())))
+        .order(egui::Order::Foreground)
+        .pivot(egui::Align2::CENTER_BOTTOM)
+        .constrain_to(viewport);
+    let shown = area.fixed_pos(pos2(bounds.center().x, bounds.top() - 6.0)).show(ctx, |ui| {
+        // No wider than the pane: in a narrower one (a split pane can be 15 % of the page area)
+        // the controls wrap into rows, where past the pane's edge they could not be pressed.
+        ui.set_max_width(viewport.width());
+        egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(6, 4)).corner_radius(CornerRadius::same(8)).show(ui, |ui| {
+            edit = style_controls(ui, &props, prefs.highlight_palette(), 1 + others.len(), can_delete);
+        });
+    });
+    // Use the area's semantic outside-click response (including clicks on chrome), not raw
+    // page pointer state. The click that selected a comment must not dismiss its new bar.
+    // Palette dialogs keep their own input and may return to the toolbar after Save/Cancel.
+    if edit.is_none() && unobstructed && !just_selected && shown.response.clicked_elsewhere() {
+        view.comments.style_bar_dismissed = true;
+        ctx.request_repaint();
+        return None;
+    }
+    let edit = match edit? {
+        StyleAction::Preset { color, opacity } => {
+            Edit::StyleAnnotation { page, index, color: Some(color), opacity: Some(opacity), width: None, endings: None }
+        }
+        StyleAction::Palette => {
+            view.comments.palette_request = true;
+            return None;
+        }
+        StyleAction::Delete => return delete_selected(&mut view.comments, info),
+    };
+    let (Edit::StyleAnnotation { color, opacity, .. }, false) = (&edit, others.is_empty()) else { return Some(edit) };
+    let (color, opacity) = (*color, *opacity);
+    let mut edits = vec![edit];
+    edits.extend(others.into_iter().map(|(page, index)| Edit::StyleAnnotation { page, index, color, opacity, width: None, endings: None }));
+    Some(Edit::Batch { label: "Change comment properties".into(), edits })
+}
+
+/// Where the bar goes: the comment with the handles (page, index), its properties and its
+/// screen bounds, when the bar is shown at all (see [`style_bar`]).
+fn bar_placement(
+    view: &DocView,
+    info: &DocInfo,
+    props_of: &dyn Fn(usize, usize) -> Option<CommentProps>,
+    prefs: &CommentPrefs,
+    allowed: bool,
+) -> Option<(usize, usize, CommentProps, Rect)> {
+    let cv = &view.comments;
+    if !allowed || cv.composer.is_some() || cv.gesture.is_some() {
+        return None;
+    }
+    let (page, index) = cv.selected?;
+    let props = props_of(page, index).filter(|p| p.restylable && !p.locked)?;
+    let a = info.annotations.iter().find(|a| a.page == page && a.index == index && !a.is_reply())?;
+    let xf = view.page_xform(page)?;
+    // Only converts the comment's rectangles: the pointer, the keys (none) and the redaction look
+    // are unused.
+    let cx = PageCx {
+        page,
+        xf: &xf,
+        ptr: &PagePointer::default(),
+        info,
+        tool: QuickTool::Select,
+        prefs,
+        allowed,
+        hidden: false,
+        redact_mark: ([0.89, 0.13, 0.13], 1.0),
+        keys: crate::page_keys::PageKeys::new(true),
+    };
+    let bounds = cx.screen_rects(a).reduce(|u, r| u.union(r))?;
+    view.viewport_rect().intersects(bounds).then_some((page, index, props, bounds))
+}
+
+/// The selected-comment toolbar uses saved color/opacity pairs. Settings and Delete are
+/// separate actions so opening the editor never changes the PDF or its undo history.
+pub(super) enum StyleAction {
+    Preset { color: Rgb, opacity: f64 },
+    Palette,
+    Delete,
+}
+
+pub(super) fn style_controls(
+    ui: &mut egui::Ui,
+    props: &CommentProps,
+    presets: &[super::palette::HighlightPreset],
+    applies_to: usize,
+    can_delete: bool,
+) -> Option<StyleAction> {
+    let mut action = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 5.0;
+        for (i, preset) in presets.iter().enumerate() {
+            let name = preset.name();
+            let name = if presets.iter().filter(|p| p.name() == name).count() > 1 { format!("{name} ({})", i + 1) } else { name };
+            let label = if applies_to > 1 {
+                crate::i18n::fmt(tl!("Comment colour: {name} ({n} selected)"), &[("name", &name), ("n", &applies_to.to_string())])
+            } else {
+                crate::i18n::fmt(tl!("Comment colour: {name}"), &[("name", &name)])
+            };
+            let on = props.color.is_some_and(|c| same_colour(&c, &preset.color)) && (props.opacity - preset.opacity).abs() < 0.005;
+            if swatch_sized(ui, preset.color, on, &label, 32.0).clicked() {
+                action = Some(StyleAction::Preset { color: preset.color, opacity: preset.opacity });
+            }
+        }
+        if icons::button(ui, "palette", 32.0, false, tl!("Edit highlight palette")).clicked() {
+            action = Some(StyleAction::Palette);
+        }
+        // The bin is always the final control, and uses the engine's deletion rights (including
+        // locked replies), just like the comment context menu.
+        if ui.add_enabled_ui(can_delete, |ui| icons::button(ui, "trash-2", 32.0, false, tl!("Delete selected comments"))).inner.clicked() {
+            action = Some(StyleAction::Delete);
+        }
+    });
+    action
 }
 
 /// The quick bar's fill button: a filled square in the fill colour, or a crossed-out outline

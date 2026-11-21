@@ -16,6 +16,13 @@ impl PdfCraftApp {
     pub fn set_option(&mut self, key: &str, value: &str) -> Result<(), String> {
         let view = self.active.and_then(|i| self.views.get_mut(i));
         match (key, view) {
+            ("highlight-palette", _) => {
+                if value.len() > 16_384 {
+                    return Err("Highlight palette is too large".into());
+                }
+                let json = serde_json::from_str(value).map_err(|e| format!("Invalid palette: {e}"))?;
+                self.comment_prefs.set_highlight_palette(crate::comments::palette::from_json(&json)?)?;
+            }
             ("hotbar-size", _) => {
                 let size: f32 = value.parse().map_err(|_| "hotbar-size must be 24–64 pixels")?;
                 if !size.is_finite() || !(24.0..=64.0).contains(&size) {
@@ -127,6 +134,10 @@ impl PdfCraftApp {
                     "js-console" => Some(Dialog::JsConsole),
                     "document-js" => Some(Dialog::DocumentJs),
                     "preferences" => Some(Dialog::Preferences),
+                    "highlight-palette" => {
+                        self.comment_prefs.begin_palette_edit();
+                        Some(Dialog::HighlightPalette)
+                    }
                     "compare-files" => Some(Dialog::CompareFiles),
                     "action-wizard" => Some(Dialog::ActionWizard),
                     "pdfa" => Some(Dialog::PdfA),

@@ -127,6 +127,7 @@ impl PdfCraftApp {
             // Null follows the interface language.
             "date_language": self.session.date_language(),
             "author": self.comment_prefs.author,
+            "highlight_palette": self.comment_prefs.highlight_palette(),
             // Per-tool comment defaults (colours, opacity, widths), so Make Current
             // Properties Default survives a restart (#340).
             "comment_styles": self
@@ -542,6 +543,11 @@ impl PdfCraftApp {
                     self.comment_prefs.set_border_shape(tool, shape);
                 }
             }
+        }
+        if let Some(palette) = v.get("highlight_palette")
+            && let Ok(presets) = crate::comments::palette::from_json(palette)
+        {
+            let _ = self.comment_prefs.set_highlight_palette(presets);
         }
         // Default font sizes (#5767), clamped by the setter; a missing or malformed size keeps
         // the tool's own.
