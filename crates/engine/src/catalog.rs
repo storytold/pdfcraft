@@ -198,6 +198,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                     item("Insert", "file-plus-2", "page.insert", Ready),
                     item("Replace", "replace", "page.replace", Ready),
                     item("Split", "scissors", "page.split", Ready),
+                    item("Split pages", "columns-2", "page.split_parts", Ready),
                 ],
             },
             ToolSection {
