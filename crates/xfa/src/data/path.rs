@@ -1,6 +1,6 @@
 use super::{DataNode, DataPath, Field, MAX_DEPTH, MAX_NODES, Node, SomIndices, Template, XFA_DATA_NS};
 
-fn to_node(n: roxmltree::Node, depth: usize) -> DataNode {
+fn to_node(n: crate::xml::Node, depth: usize) -> DataNode {
     let name = n.tag_name().name().to_string();
     let children: Vec<DataNode> =
         if depth < MAX_DEPTH { n.children().filter(|c| c.is_element()).map(|c| to_node(c, depth + 1)).collect() } else { Vec::new() };
@@ -17,10 +17,37 @@ pub fn parse_datasets(xdp: &str) -> Option<DataNode> {
     if crate::xml_nesting_depth(xdp) > crate::MAX_XML_DEPTH {
         return None;
     }
-    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
-    let doc = roxmltree::Document::parse_with_options(xdp, opts).ok()?;
+    let opts = crate::xml::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
+    let doc = crate::xml::Document::parse_with_options(xdp, opts).ok()?;
     let datasets = doc.descendants().find(|n| n.is_element() && n.tag_name().name() == "datasets")?;
     let data = datasets.children().find(|n| n.is_element() && n.tag_name().name() == "data")?;
+    Some(to_node(data, 0))
+}
+
+/// The `xfa:data` element of a datasets packet as the datasets writer reads it before changing it:
+/// a packet of an array may use the `xfa` and `xdp` prefixes its XDP envelope declares, so it is
+/// read inside an element declaring them when it doesn't parse alone, and the datasets element in
+/// the XFA data namespace is preferred over another with the same local name. Reading the packet
+/// any other way could miss the values the writer put in it.
+pub(super) fn parse_datasets_packet(text: &str) -> Option<DataNode> {
+    if crate::xml_nesting_depth(text) > crate::MAX_XML_DEPTH {
+        return None;
+    }
+    let opts = || crate::xml::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
+    let wrapped;
+    let doc = match crate::xml::Document::parse_with_options(text, opts()) {
+        Ok(d) => d,
+        Err(_) => {
+            wrapped = format!("{}{text}{}", super::merge::WRAP_OPEN, super::merge::WRAP_CLOSE);
+            crate::xml::Document::parse_with_options(&wrapped, opts()).ok()?
+        }
+    };
+    let is = |n: &crate::xml::Node, name: &str| n.is_element() && n.tag_name().name() == name;
+    let datasets = doc
+        .descendants()
+        .find(|n| is(n, "datasets") && n.tag_name().namespace() == Some(super::XFA_DATA_NS))
+        .or_else(|| doc.descendants().find(|n| is(n, "datasets")))?;
+    let data = datasets.children().find(|n| is(n, "data"))?;
     Some(to_node(data, 0))
 }
 

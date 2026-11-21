@@ -161,6 +161,7 @@ impl PdfCraftApp {
                 if let Some(Dialog::Marks(kind)) = self.dialog {
                     self.marks_draft.opened(kind);
                 }
+                dialogs::discard_inactive_password_drafts(self);
             }
             ("tools", _) if value == "full" => self.expand_all_tools(),
             ("tools", _) => {
@@ -189,6 +190,20 @@ impl PdfCraftApp {
                     _ => return Err("page-gaps must be on or off".into()),
                 };
                 self.set_active_page_gaps(show);
+            }
+            ("full-screen-escape", _) => {
+                self.full_screen_escape_exits = match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("full-screen-escape must be on or off".into()),
+                };
+            }
+            ("full-screen-fill", _) => {
+                self.view_defaults.full_screen_fill = match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("full-screen-fill must be on or off".into()),
+                };
             }
             ("default-page-gaps", _) => {
                 self.view_defaults.show_page_gaps = match value {

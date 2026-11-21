@@ -3,11 +3,14 @@
 //! This is the geometric half of the faux-redaction audit: a rectangle filled with an opaque
 //! color (`re` + `f`) is the classic way a "redaction" is faked. A single closed `m`/`l` subpath
 //! whose four corners form an axis-aligned rectangle in user space is the same shape and counts
-//! too (#1510). Graphics state tracked here is deliberately small: the CTM stack (`q`/`Q`/`cm`),
-//! the non-stroking color (`g`/`rg`/`k`) and the non-stroking alpha from ExtGState (`gs` reading
-//! `/ca`). Form XObjects are followed read-only with a depth cap. Anything fancier (other filled paths, shadings, patterns) is
-//! out of scope and documented as such. Image-specific state and sample geometry live in
-//! `image`; their clipping/opacity checks deliberately do not change path-fill detection.
+//! too (#1510). A single `m`/`l` segment along an axis, stroked (`S`) wide enough to blot the text
+//! out ("marker" style), counts as the rectangle the stroke paints (#2385). Graphics state tracked
+//! here is deliberately small: the CTM stack (`q`/`Q`/`cm`), the colors (`g`/`rg`/`k` and
+//! `G`/`RG`/`K`), the line width (`w`) and what ExtGState sets of them (`gs` reading `/ca`,
+//! `/CA` and `/LW`). Form XObjects are followed read-only with a depth cap. Anything fancier
+//! (other filled paths, slanted or bent strokes, shadings, patterns) is out of scope and
+//! documented as such.
+//! Image-specific state and sample geometry live in `image`.
 //!
 //! Paint order: a page's content streams are one stream in pieces (ISO 32000-2 §7.8.2), so they
 //! are parsed joined and walked once with a single graphics state — state set in an earlier
@@ -15,6 +18,8 @@
 //! position of the fill operator that painted it, as `(content-stream index, operator index in
 //! the joined stream)`; rectangles inside a form XObject carry the `Do` operator's position.
 //! Positions compare lexicographically in paint order.
+
+use std::sync::Arc;
 
 use pdfcraft_content::{Matrix, Op, Pieces, ops};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, Object};
@@ -28,12 +33,12 @@ const MAX_DEPTH: usize = 32;
 /// Hitting it fails the audit: a truncated walk must never report "clean".
 const MAX_OPS: usize = 2_000_000;
 
-/// One opaque filled rectangle, in page user space.
+/// One opaque filled rectangle (or a stroke that paints one), in page user space.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FilledRect {
     /// `[x0, y0, x1, y1]`, normalized so `x0 <= x1` and `y0 <= y1`.
     pub rect: [f64; 4],
-    /// The fill color as sRGB-ish `[r, g, b]` (CMYK is converted approximately).
+    /// The paint color as sRGB-ish `[r, g, b]` (CMYK is converted approximately).
     pub rgb: [f64; 3],
     /// Paint position: `(content-stream index, operator index in the joined stream)`.
     /// Rectangles inside a form XObject carry the `Do` operator's position.
@@ -46,6 +51,12 @@ struct Gs {
     ctm: Matrix,
     fill: [f64; 3],
     alpha: f64,
+    stroke: [f64; 3],
+    stroke_alpha: f64,
+    /// Line width, in the space the path is drawn in.
+    width: f64,
+    /// Line cap (`J`, `/LC`): 0 butt, 1 round, 2 projecting square.
+    cap: i64,
     image: image::State,
 }
 
@@ -67,6 +78,36 @@ impl Path {
             Path::Rect(r) => Some(r),
             Path::Lines(pts, _) => lines_rect(pts),
             Path::Empty | Path::Other => None,
+        }
+    }
+
+    /// The rectangle a stroke of this path paints, if the path is one segment along an axis: the
+    /// segment widened by half the line width each side, and lengthened by as much at each end
+    /// under a round or projecting square cap (a round cap is counted by its box). Both are
+    /// measured after the CTM: the pen is a disc of the line width in the space the path is
+    /// drawn in, and its extent along a page direction is that direction's length under the
+    /// transposed matrix, so a non-uniform scale widens only the strokes it stretches across.
+    fn stroked_rect(&self, gs: &Gs) -> Option<[f64; 4]> {
+        const EPS: f64 = 1e-6;
+        let Path::Lines(pts, _) = self else { return None };
+        let [a, b] = <[[f64; 2]; 2]>::try_from(pts.as_slice()).ok()?;
+        let [m0, m1, m2, m3, ..] = gs.ctm.0;
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let len = dx.hypot(dy);
+        let half = gs.width * (m3 * dx - m2 * dy).hypot(m0 * dy - m1 * dx) / len / 2.0;
+        if half.is_nan() || half <= EPS {
+            return None;
+        }
+        let cap = if gs.cap == 0 { 0.0 } else { gs.width * (m0 * dx + m1 * dy).hypot(m2 * dx + m3 * dy) / len / 2.0 };
+        if cap.is_nan() {
+            return None;
+        }
+        if (a[1] - b[1]).abs() <= EPS && (a[0] - b[0]).abs() > EPS {
+            Some([a[0].min(b[0]) - cap, a[1] - half, a[0].max(b[0]) + cap, a[1] + half])
+        } else if (a[0] - b[0]).abs() <= EPS && (a[1] - b[1]).abs() > EPS {
+            Some([a[0] - half, a[1].min(b[1]) - cap, a[0] + half, a[1].max(b[1]) + cap])
+        } else {
+            None
         }
     }
 }
@@ -102,9 +143,18 @@ fn lines_rect(mut pts: Vec<[f64; 2]>) -> Option<[f64; 4]> {
 }
 
 impl Default for Gs {
-    /// Start with an identity transform, opaque black fill and no image-specific restrictions.
+    /// Start with an identity transform, opaque black fill and stroke and no image-specific restrictions.
     fn default() -> Self {
-        Gs { ctm: Matrix::IDENTITY, fill: [0.0, 0.0, 0.0], alpha: 1.0, image: image::State::default() }
+        Gs {
+            ctm: Matrix::IDENTITY,
+            fill: [0.0, 0.0, 0.0],
+            alpha: 1.0,
+            stroke: [0.0, 0.0, 0.0],
+            stroke_alpha: 1.0,
+            width: 1.0,
+            cap: 0,
+            image: image::State::default(),
+        }
     }
 }
 
@@ -212,31 +262,41 @@ impl<'a> Walker<'a> {
                         path = Path::Other;
                     }
                 }
-                b"g" => {
+                b"g" | b"G" => {
                     if let Some(v) = op.num(0).filter(|v| v.is_finite()) {
                         let v = v.clamp(0.0, 1.0);
-                        gs.fill = [v, v, v];
+                        *gs.color(op.op[0] == b'G') = [v, v, v];
                     }
                 }
-                b"rg" => {
+                b"rg" | b"RG" => {
                     if let Some([r, g, b]) = op.nums::<3>()
                         && [r, g, b].iter().all(|v| v.is_finite())
                     {
-                        gs.fill = [r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0)];
+                        *gs.color(op.op[0] == b'R') = [r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0)];
                     }
                 }
-                b"k" => {
+                b"k" | b"K" => {
                     if let Some([c, m, y, k]) = op.nums::<4>()
                         && [c, m, y, k].iter().all(|v| v.is_finite())
                     {
                         // Naive CMYK -> RGB; good enough to tell black from white.
                         let (c, m, y, k) = (c.clamp(0.0, 1.0), m.clamp(0.0, 1.0), y.clamp(0.0, 1.0), k.clamp(0.0, 1.0));
-                        gs.fill = [(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)];
+                        *gs.color(op.op[0] == b'K') = [(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)];
+                    }
+                }
+                b"w" => {
+                    if let Some(v) = op.num(0).filter(|v| v.is_finite() && *v >= 0.0) {
+                        gs.width = v;
+                    }
+                }
+                b"J" => {
+                    if let Some(v) = op.num(0).filter(|v| [0.0, 1.0, 2.0].contains(v)) {
+                        gs.cap = v as i64;
                     }
                 }
                 b"gs" => {
                     if let Some(name) = op.name(0) {
-                        gs.alpha = ext_alpha(self.doc, resources, name);
+                        ext_state(self.doc, resources, name, gs);
                         gs.image.ext(self.doc, resources, name);
                     }
                 }
@@ -277,13 +337,27 @@ impl<'a> Walker<'a> {
                 }
                 // `b`/`b*` close the path before filling it, which the fill does anyway.
                 b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" => {
-                    if let Some(r) = std::mem::replace(&mut path, Path::Empty).rect()
+                    let done = std::mem::replace(&mut path, Path::Empty);
+                    if matches!(op.op.as_slice(), b"B" | b"B*" | b"b" | b"b*")
+                        && let Some(r) = done.stroked_rect(gs)
+                        && gs.stroke_alpha >= 1.0
+                    {
+                        self.out.push(FilledRect { rect: r, rgb: gs.stroke, pos, image: None });
+                    }
+                    if let Some(r) = done.rect()
                         && gs.alpha >= 1.0
                     {
                         self.out.push(FilledRect { rect: r, rgb: gs.fill, pos, image: None });
                     }
                 }
-                b"S" | b"s" | b"n" => path = Path::Empty,
+                b"S" | b"s" => {
+                    if let Some(r) = std::mem::replace(&mut path, Path::Empty).stroked_rect(gs)
+                        && gs.stroke_alpha >= 1.0
+                    {
+                        self.out.push(FilledRect { rect: r, rgb: gs.stroke, pos, image: None });
+                    }
+                }
+                b"n" => path = Path::Empty,
                 b"c" | b"v" | b"y" | b"W" | b"W*" => path = Path::Other,
                 b"Do" => {
                     if let Some(name) = op.name(0) {
@@ -389,13 +463,51 @@ fn user_point(gs: &Gs, op: &Op) -> Option<[f64; 2]> {
     Some([x, y])
 }
 
-/// The non-stroking alpha (`/ca`) of a named ExtGState, defaulting to opaque.
-fn ext_alpha(doc: &Document, resources: &Dict, name: &[u8]) -> f64 {
+impl Gs {
+    /// The stroking or the non-stroking color.
+    fn color(&mut self, stroking: bool) -> &mut [f64; 3] {
+        if stroking { &mut self.stroke } else { &mut self.fill }
+    }
+}
+
+/// Apply what a named ExtGState sets of the state tracked here: the non-stroking and stroking
+/// alphas (`/ca`, `/CA`), the line width (`/LW`) and the line cap (`/LC`). A key it leaves out
+/// keeps its value.
+fn ext_state(doc: &Document, resources: &Dict, name: &[u8], gs: &mut Gs) {
     // Borrowed, not copied: a `gs` must not cost the size of the whole ExtGState table.
     let states = resources.get(b"ExtGState").map(|o| doc.resolve(o));
     let state = states.as_deref().and_then(Object::as_dict).and_then(|d| d.get(name)).map(|o| doc.resolve(o));
-    let alpha = state.as_deref().and_then(Object::as_dict).and_then(|d| d.get(b"ca").map(|o| doc.resolve(o)).and_then(|o| o.as_f64()));
-    alpha.filter(|a| a.is_finite()).map(|a| a.clamp(0.0, 1.0)).unwrap_or(1.0)
+    let Some(state) = state.as_deref().and_then(Object::as_dict) else { return };
+    let num = |key: &[u8]| state.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_f64()).filter(|v| v.is_finite());
+    if let Some(a) = num(b"ca") {
+        gs.alpha = a.clamp(0.0, 1.0);
+    }
+    if let Some(a) = num(b"CA") {
+        gs.stroke_alpha = a.clamp(0.0, 1.0);
+    }
+    if let Some(w) = num(b"LW").filter(|w| *w >= 0.0) {
+        gs.width = w;
+    }
+    if let Some(c) = num(b"LC").filter(|c| [0.0, 1.0, 2.0].contains(c)) {
+        gs.cap = c as i64;
+    }
+}
+
+/// Follow content references like `Document::resolve`, while propagating failed object reads.
+fn resolve_content(doc: &Document, entry: &Object) -> Result<Arc<Object>, AuditError> {
+    let mut object = Arc::new(entry.clone());
+    // Match the COS reader's limit of one initial lookup and up to 32 further hops.
+    for _ in 0..=32 {
+        let Object::Ref(reference) = &*object else { return Ok(object) };
+        if !doc.accepted_generations(reference.num).contains(&reference.generation) {
+            return Ok(Arc::new(Object::Null));
+        }
+        object = doc.try_get(reference.num)?;
+    }
+    if matches!(&*object, Object::Ref(_)) {
+        return Err(AuditError::Image("page content reference chain is too deep".into()));
+    }
+    Ok(object)
 }
 
 /// Every opaque path or image cover drawn by a page's content (and its form XObjects), with paint
@@ -406,21 +518,24 @@ fn ext_alpha(doc: &Document, resources: &Dict, name: &[u8]) -> f64 {
 /// and its sample/geometry bounds; images combined with unaudited form text fail closed.
 pub fn filled_rects(doc: &Document, page: &Dict) -> Result<Vec<FilledRect>, AuditError> {
     let resources = page.get(b"Resources").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
-    let contents: Vec<Object> = match page.get(b"Contents") {
-        None => Vec::new(),
-        Some(c) => match &*doc.resolve(c) {
-            Object::Array(a) => a.clone(),
-            _ => vec![c.clone()],
-        },
-    };
+    let contents = page.get(b"Contents").map(|entry| resolve_content(doc, entry)).transpose()?;
     let mut budget = DecodeBudget::page();
-    let mut streams = Vec::with_capacity(contents.len());
-    for c in &contents {
-        if let Object::Stream(s) = &*doc.resolve(c) {
-            streams.push(budget.decode_strict(doc, s)?);
-        } else {
-            return Err(AuditError::Image("unreadable page content entry".into()));
+    let mut streams = Vec::new();
+    match contents.as_deref() {
+        None | Some(Object::Null) => {}
+        Some(Object::Stream(stream)) => streams.push(budget.decode_strict(doc, stream)?),
+        Some(Object::Array(entries)) => {
+            streams.reserve(entries.len());
+            for entry in entries {
+                match &*resolve_content(doc, entry)? {
+                    Object::Stream(stream) => streams.push(budget.decode_strict(doc, stream)?),
+                    // Text extraction leaves an empty piece here. Keep the same piece indices.
+                    Object::Null => streams.push(Vec::new()),
+                    _ => return Err(AuditError::Image("unreadable page content entry".into())),
+                }
+            }
         }
+        Some(_) => return Err(AuditError::Image("unreadable page content entry".into())),
     }
     let pieces = Pieces::join(&streams);
     let mut w = Walker {
