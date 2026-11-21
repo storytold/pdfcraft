@@ -292,7 +292,8 @@ fn organize_opens_on_the_current_page() {
     let in_view = |h: &Harness<'static, PdfCraftApp>, page: usize| {
         let viewport = h.state().views[0].viewport_rect();
         let label = format!("Page {}", page + 1);
-        h.query_by_label(&label).is_some_and(|n| viewport.contains_rect(n.rect()))
+        // A tile aligned with the viewport edge can differ by a fraction of a pixel after layout rounding.
+        h.query_by_label(&label).is_some_and(|n| viewport.expand(0.001).contains_rect(n.rect()))
     };
     // From a middle page.
     h.state_mut().views[0].go_to_page(30);
