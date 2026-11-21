@@ -3,11 +3,45 @@ use super::imposition::decoded_contents;
 use super::settings::{Binding, BookletSubset, Layout, Orientation, PAPERS, PageOrder, Settings, SizeMode};
 use super::{DecodeBudget, Dict, Document, Matrix, Object};
 
+/// The CUPS job option that keeps landscape sheets landscape (`orientation-requested` 4).
+///
+/// The print-ready PDF's sheets are already laid out on their paper, but the paper is named
+/// portrait (`Letter`), and without this option CUPS leaves a landscape sheet unrotated and
+/// shrinks it into the portrait paper instead of turning it to fill it (#2713). It is a property
+/// of the whole job, so it is given only when *every* sheet is landscape; a job that mixes
+/// orientations is left to the spooler, as portrait sheets would be turned wrongly.
+pub fn cups_orientation(sheets: &[Sheet]) -> Option<(String, String)> {
+    let landscape = !sheets.is_empty() && sheets.iter().all(|s| s.size.0 > s.size.1);
+    landscape.then(|| ("orientation-requested".to_string(), "4".to_string()))
+}
+
+/// Add [`cups_orientation`] to a CUPS job's `options`, for the Print dialog's jobs and
+/// `doc_print`'s alike, unless they already name an orientation (a driver choice, or one a
+/// caller passed, in any case: CUPS reads option names without regard to case): `lp` must not be
+/// given the option twice. Nothing on Windows, whose print ticket sets each sheet's orientation
+/// itself.
+pub fn add_cups_orientation(options: &mut Vec<(String, String)>, sheets: &[Sheet]) {
+    if cfg!(windows) || options.iter().any(|(k, _)| k.eq_ignore_ascii_case("orientation-requested")) {
+        return;
+    }
+    options.extend(cups_orientation(sheets));
+}
+
 /// Whether most of page `index`'s text runs bottom-to-top as the page displays (a label laid
 /// sideways on a letter or A4 sheet), counting each text-showing operator once; form XObjects
 /// are followed a few levels deep.
 pub fn text_reads_up(doc: &Document, index: usize) -> bool {
-    let Some(page) = pdfcraft_model::pages(doc).into_iter().nth(index) else { return false };
+    texts_read_up(doc, &[index]).first().copied().unwrap_or(false)
+}
+
+/// [`text_reads_up`] for each of `indices`, reading the page tree once: once per page, the
+/// whole tree would be walked for every page asked about.
+pub fn texts_read_up(doc: &Document, indices: &[usize]) -> Vec<bool> {
+    let pages = pdfcraft_model::pages(doc);
+    indices.iter().map(|&i| pages.get(i).is_some_and(|page| page_reads_up(doc, page))).collect()
+}
+
+fn page_reads_up(doc: &Document, page: &pdfcraft_model::Page) -> bool {
     let to_display = Matrix(page.view_matrix(doc)).invert().unwrap_or_default();
     let res = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let mut score = 0i64;
@@ -20,7 +54,8 @@ pub fn text_reads_up(doc: &Document, index: usize) -> bool {
 
 pub(crate) fn text_direction(doc: &Document, data: &[u8], res: &Dict, base: Matrix, depth: usize, score: &mut i64, budget: &mut DecodeBudget) {
     let (mut ctm, mut tm, mut stack) = (base, Matrix::IDENTITY, Vec::new());
-    for op in pdfcraft_content::parse(data).ops {
+    // One operator at a time: only the running score is kept, never the stream's operators.
+    for op in pdfcraft_content::ops(data) {
         match op.op.as_slice() {
             // Bounded like the renderer's graphics-state stack: deeper saves are ignored.
             b"q" if stack.len() < 256 => stack.push(ctm),
@@ -39,13 +74,16 @@ pub(crate) fn text_direction(doc: &Document, data: &[u8], res: &Dict, base: Matr
                 if form.dict.get(b"Subtype").and_then(|s| doc.resolve(s).as_name().map(<[u8]>::to_vec)).as_deref() != Some(b"Form".as_slice()) {
                     continue;
                 }
-                let m = form.dict.get(b"Matrix").and_then(|m| doc.resolve(m).as_array().and_then(|a| Matrix::from_operands(a))).unwrap_or_default();
-                let inner = form.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_else(|| res.clone());
+                // The visit is paid for before anything else is read, and the form's resources
+                // (or the inherited ones) are borrowed, not copied for each invocation.
                 if !budget.enter_form() {
                     continue;
                 }
+                let m = form.dict.get(b"Matrix").and_then(|m| doc.resolve(m).as_array().and_then(|a| Matrix::from_operands(a))).unwrap_or_default();
+                let own = form.dict.get(b"Resources").map(|r| doc.resolve(r));
+                let inner = own.as_deref().and_then(Object::as_dict).unwrap_or(res);
                 if let Ok(body) = budget.decode(form) {
-                    text_direction(doc, &body, &inner, m.then(&ctm), depth + 1, score, budget);
+                    text_direction(doc, &body, inner, m.then(&ctm), depth + 1, score, budget);
                 }
             }
             _ => {}
@@ -130,8 +168,73 @@ fn place_in(page: usize, (dw, dh): (f64, f64), cell: [f64; 4], s: f64, rotate: b
     Placement { page, matrix, clip: [0.0, 0.0, dw, dh] }
 }
 
+/// The most creep per sheet, in points. Paper adds a fraction of a point per sheet; more is a mistake.
+pub const MAX_CREEP: f64 = 10.0;
+
+/// `placed` moved `shift` points across the sheet (positive is rightward) and clipped at the fold
+/// at `fold`, so a page moved toward it never prints on the facing page.
+fn creep_toward_fold(mut placed: Placement, shift: f64, fold: f64, s: f64) -> Placement {
+    if shift == 0.0 || s <= 0.0 {
+        return placed;
+    }
+    placed.matrix.0[4] += shift;
+    let at_fold = (fold - placed.matrix.0[4]) / s;
+    if shift > 0.0 {
+        placed.clip[2] = placed.clip[2].min(at_fold);
+    } else {
+        placed.clip[0] = placed.clip[0].max(at_fold);
+    }
+    placed
+}
+
 fn fit_scale((dw, dh): (f64, f64), (cw, ch): (f64, f64)) -> f64 {
     if dw <= 0.0 || dh <= 0.0 { 1.0 } else { (cw / dw).min(ch / dh) }
+}
+
+/// A selected area: one page, within it, printed as if it were a page of that size.
+fn selected_area(sizes: &[(f64, f64)], pages: &[usize], settings: &Settings) -> Result<Option<[f64; 4]>, PrintError> {
+    let Some(a) = settings.area else { return Ok(None) };
+    if !matches!(settings.layout, Layout::Size(_)) {
+        return Err(PrintError::Invalid("an area prints with Fit, Actual size, Shrink or a custom scale".into()));
+    }
+    let refused = || PrintError::Invalid("the selected area is empty or not on one page".into());
+    let [p] = pages else { return Err(refused()) };
+    let d = sizes.get(*p).copied().ok_or_else(refused)?;
+    // `min` and `max` pass over NaN, which would make an all-NaN area the whole page.
+    if a.iter().any(|v| !v.is_finite()) {
+        return Err(refused());
+    }
+    // Cut to the page; what is left must be a point wide.
+    let [x0, y0, x1, y1] = [a[0].min(a[2]).max(0.0), a[1].min(a[3]).max(0.0), a[0].max(a[2]).min(d.0), a[1].max(a[3]).min(d.1)];
+    if !(x1 - x0 >= 1.0 && y1 - y0 >= 1.0) {
+        return Err(refused());
+    }
+    Ok(Some([x0, y0, x1, y1]))
+}
+
+/// One sheet per page (or per selected area), scaled by `mode`.
+fn layout_size(sizes: &[(f64, f64)], pages: &[usize], settings: &Settings, mode: SizeMode, area: Option<[f64; 4]>) -> Result<Vec<Sheet>, PrintError> {
+    let mut sheets = Vec::new();
+    for &p in pages {
+        let d = area.map_or(sizes[p], |a| (a[2] - a[0], a[3] - a[1]));
+        let size = oriented(settings.paper, settings.orientation, d.0 > d.1);
+        let fit = fit_scale(d, (size.0 - 2.0 * MARGIN, size.1 - 2.0 * MARGIN));
+        let s = match mode {
+            SizeMode::Fit => fit,
+            SizeMode::Actual => 1.0,
+            SizeMode::Shrink => fit.min(1.0),
+            SizeMode::Custom(pct) if pct.is_finite() && pct > 0.0 => pct / 100.0,
+            SizeMode::Custom(_) => return Err(PrintError::Invalid("the scale must be more than 0%".into())),
+        };
+        let sheet = [0.0, 0.0, size.0, size.1];
+        // An area is placed as a page of its size would be, and clipped to it.
+        let placed = match area {
+            Some(a) => place_crop(p, a, sheet, s, 0),
+            None => place_in(p, d, sheet, s, false),
+        };
+        sheets.push(Sheet { size, placed: vec![placed], ..Sheet::default() });
+    }
+    Ok(sheets)
 }
 
 /// Lay out the sheets for `settings` given each source page's display size.
@@ -144,28 +247,17 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
     if !(paper.0 >= 72.0 && paper.1 >= 72.0 && paper.0.is_finite() && paper.1.is_finite()) {
         return Err(PrintError::Invalid("invalid paper size".into()));
     }
+    let area = selected_area(sizes, &pages, settings)?;
     let mut sheets = Vec::new();
     match settings.layout {
-        Layout::Size(mode) => {
-            for &p in &pages {
-                let d = sizes[p];
-                let size = oriented(paper, settings.orientation, d.0 > d.1);
-                let fit = fit_scale(d, (size.0 - 2.0 * MARGIN, size.1 - 2.0 * MARGIN));
-                let s = match mode {
-                    SizeMode::Fit => fit,
-                    SizeMode::Actual => 1.0,
-                    SizeMode::Shrink => fit.min(1.0),
-                    SizeMode::Custom(pct) if pct.is_finite() && pct > 0.0 => pct / 100.0,
-                    SizeMode::Custom(_) => return Err(PrintError::Invalid("the scale must be more than 0%".into())),
-                };
-                sheets.push(Sheet { size, placed: vec![place_in(p, d, [0.0, 0.0, size.0, size.1], s, false)], ..Sheet::default() });
-            }
-        }
+        Layout::Size(mode) => sheets = layout_size(sizes, &pages, settings, mode, area)?,
         Layout::Label { flip } => {
             sheets.extend(layout_labels(sizes, &pages, paper, settings.orientation, settings, flip));
         }
-        Layout::Multiple { cols, rows, per_sheet, order, border, auto_rotate } => {
-            let cells = cols.checked_mul(rows).filter(|&n| n > 0 && n <= 256);
+        Layout::Multiple { cols, rows, per_sheet, order, border, auto_rotate, custom } => {
+            // A predefined count has at most 16 × 16 cells; a custom grid up to 99 each way.
+            let fits = if custom { cols <= crate::MAX_GRID && rows <= crate::MAX_GRID } else { cols.checked_mul(rows).is_some_and(|n| n <= 256) };
+            let cells = cols.checked_mul(rows).filter(|&n| n > 0 && fits);
             let Some(cells) = cells else {
                 return Err(PrintError::Invalid("invalid number of pages per sheet".into()));
             };
@@ -177,7 +269,10 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
             // A grid with more columns than rows wants a landscape sheet, and the reverse.
             let first = pages.first().and_then(|&p| sizes.get(p)).copied().ok_or(PrintError::NoPages)?;
             let page_landscape = first.0 > first.1;
-            let (gc, gr, sheet_landscape) = if cols == rows {
+            let (gc, gr, sheet_landscape) = if custom {
+                // A custom grid is laid out as given, on the sheet as chosen (Auto: portrait).
+                (cols, rows, false)
+            } else if cols == rows {
                 (cols, rows, page_landscape)
             } else if settings.orientation == Orientation::Landscape || (settings.orientation == Orientation::Auto && cols < rows) {
                 // 2 per sheet (1 × 2 on portrait) prints side by side on landscape paper.
@@ -245,13 +340,19 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                 sheets.push(sheet);
             }
         }
-        Layout::Booklet { subset, binding } => {
+        Layout::Booklet { subset, binding, creep } => {
             // Pad to a multiple of 4 with blank pages (None).
             let n4 = pages.len().div_ceil(4) * 4;
             let at = |i: usize| pages.get(i).copied();
             let size = oriented(paper, Orientation::Landscape, true);
             let half = (size.0 - 2.0 * MARGIN) / 2.0;
             let cells = [[MARGIN, MARGIN, MARGIN + half, size.1 - MARGIN], [MARGIN + half, MARGIN, size.0 - MARGIN, size.1 - MARGIN]];
+            // The innermost sheet moves furthest; it must stay within half its cell. `pages` is not
+            // empty (checked above), so there is at least one sheet.
+            let innermost = creep * (n4 / 4 - 1) as f64;
+            if !((0.0..=MAX_CREEP).contains(&creep) && innermost < half / 2.0) {
+                return Err(PrintError::Invalid("invalid booklet creep".into()));
+            }
             for k in 0..n4 / 4 {
                 let front = (at(n4 - 1 - 2 * k), at(2 * k));
                 let back = (at(2 * k + 1), at(n4 - 2 - 2 * k));
@@ -265,11 +366,12 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                 for (l, r) in sides {
                     let (l, r) = if binding == Binding::Right { (r, l) } else { (l, r) };
                     let mut sheet = Sheet { size, ..Sheet::default() };
-                    for (p, cell) in [(l, cells[0]), (r, cells[1])] {
+                    for (p, cell, toward) in [(l, cells[0], 1.0), (r, cells[1], -1.0)] {
                         if let Some(p) = p {
                             let d = sizes[p];
                             let s = fit_scale(d, (cell[2] - cell[0], cell[3] - cell[1]));
-                            sheet.placed.push(place_in(p, d, cell, s, false));
+                            let placed = place_in(p, d, cell, s, false);
+                            sheet.placed.push(creep_toward_fold(placed, toward * creep * k as f64, MARGIN + half, s));
                         }
                     }
                     sheets.push(sheet);

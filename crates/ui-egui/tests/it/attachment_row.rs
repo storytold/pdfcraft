@@ -22,7 +22,7 @@ fn attachments_pdf() -> Vec<u8> {
         [format!("<< /Type /EmbeddedFile /Length {} >>\nstream\n", INNER.len()).as_bytes(), INNER, b"\nendstream"].concat(),
         b"<< /Type /Filespec /F (inner.pdf) /UF (inner.pdf) /EF << /F 4 0 R >> >>".to_vec(),
         b"<< /Type /EmbeddedFile /Length 11 >>\nstream\nhello notes\nendstream".to_vec(),
-        b"<< /Type /Filespec /F (notes.txt) /UF (notes.txt) /EF << /F 6 0 R >> >>".to_vec(),
+        b"<< /Type /Filespec /F (notes.txt) /UF (notes.txt) /Desc (Original) /EF << /F 6 0 R >> >>".to_vec(),
     ];
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
@@ -44,15 +44,53 @@ fn attachments_pdf() -> Vec<u8> {
 /// The app with [`attachments_pdf`] open and the Attachments panel showing, at 60 frames a
 /// second so two clicks a frame apart make a double-click.
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|_cc| {
+    harness_with_pdf(attachments_pdf())
+}
+
+fn harness_with_pdf(pdf: Vec<u8>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, attachments_pdf()).unwrap();
+        app.open_bytes("doc.pdf", None, pdf).unwrap();
         app.set_option("panel", "attachments").unwrap();
         app
     });
     h.run_steps(4);
     h
+}
+
+#[test]
+fn submitting_blank_removes_an_existing_whitespace_description() {
+    let mut pdf = attachments_pdf();
+    let desc = pdf.windows(b"(Original)".len()).position(|window| window == b"(Original)").unwrap();
+    pdf[desc..desc + b"(Original)".len()].copy_from_slice(b"(        )");
+    let mut h = harness_with_pdf(pdf);
+    let doc_id = h.state().views[0].id;
+    assert!(h.state().session.get(doc_id).unwrap().info.attachments.iter().find(|a| a.name == "notes.txt").unwrap().has_description);
+    right_click(&mut h, "notes.txt");
+    h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Edit description").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let doc = h.state().session.get(doc_id).unwrap();
+    let attachment = doc.info.attachments.iter().find(|a| a.name == "notes.txt").unwrap();
+    assert!(!attachment.has_description);
+    assert!(doc.dirty);
+}
+
+#[test]
+fn submitting_blank_leaves_an_absent_description_untouched() {
+    let mut h = harness();
+    right_click(&mut h, "inner.pdf");
+    h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Edit description").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    let attachment = doc.info.attachments.iter().find(|a| a.name == "inner.pdf").unwrap();
+    assert!(!attachment.has_description);
+    assert!(!doc.dirty);
+    assert_eq!(doc.can_undo(), None);
 }
 
 /// A folder of its own for one test's saved file, removed afterwards.
@@ -149,6 +187,58 @@ fn the_right_click_menu_opens_saves_and_deletes() {
     let doc = s.session.get(s.views[0].id).unwrap();
     assert_eq!(doc.info.attachments.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["notes.txt"], "Delete from the menu");
     assert!(doc.can_undo().is_some_and(|l| l.starts_with("Delete attachment")), "as one undoable edit");
+}
+
+#[test]
+fn the_description_can_be_edited_from_the_row_menu() {
+    let mut h = harness();
+    right_click(&mut h, "notes.txt");
+    h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Edit description").click();
+    h.run_steps(2);
+    let description = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Description");
+    description.click();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    description.type_text("Edited in the panel");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let state = h.state();
+    let doc = state.session.get(state.views[0].id).unwrap();
+    let attachment = doc.info.attachments.iter().find(|a| a.name == "notes.txt").unwrap();
+    assert_eq!(attachment.description.as_deref(), Some("Edited in the panel"));
+    assert!(doc.can_undo().is_some_and(|label| label == "Edit attachment description"));
+}
+
+#[test]
+fn keeping_the_attachment_description_does_not_create_an_edit() {
+    let mut h = harness();
+    right_click(&mut h, "notes.txt");
+    h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Edit description").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let state = h.state();
+    let doc = state.session.get(state.views[0].id).unwrap();
+    assert_eq!(doc.info.attachments.iter().find(|a| a.name == "notes.txt").unwrap().description.as_deref(), Some("Original"));
+    assert!(!doc.dirty, "confirming the unchanged description does not dirty the document");
+    assert_eq!(doc.can_undo(), None, "confirming the unchanged description does not add undo history");
+}
+
+#[test]
+fn editing_the_document_while_description_dialog_is_open_discards_its_stale_draft() {
+    let mut h = harness();
+    right_click(&mut h, "notes.txt");
+    h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Edit description").click();
+    h.run_steps(2);
+    assert!(
+        h.state_mut()
+            .apply_edit(pdfcraft_engine::Edit::EditAttachmentDescription { key: "notes.txt".into(), description: Some("Changed elsewhere".into()) })
+    );
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let state = h.state();
+    let doc = state.session.get(state.views[0].id).unwrap();
+    assert_eq!(doc.info.attachments.iter().find(|a| a.name == "notes.txt").unwrap().description.as_deref(), Some("Changed elsewhere"));
+    assert_eq!(doc.can_undo(), Some("Edit attachment description"));
 }
 
 #[test]
