@@ -4022,9 +4022,9 @@ fn dash_patterns_that_cut_a_stroke_into_billions_of_pieces_render() {
     many.push_str("S 0 0 1 rg 0 0 4 4 re f");
     let page = render_with_gs1(&many, "<< >>");
     assert_eq!(px40(&page, 1, 38), &[0, 0, 255, 255], "a pattern restarted on many subpaths finishes");
-    // A fine pattern below the cap still dashes: 200,000 pieces of 0.0001 pt cover about
-    // half of each pixel, so the line is neither solid red nor missing.
-    let page = render_with_gs1("1 0 0 RG 4 w [0.0001] 0 d 10 20 m 30 20 l S", "<< >>");
+    // A fine pattern below the cap still dashes: 200 pieces of 0.1 pt (a period of 0.2 px)
+    // cover about half of each pixel, so the line is neither solid red nor missing.
+    let page = render_with_gs1("1 0 0 RG 4 w [0.1] 0 d 10 20 m 30 20 l S", "<< >>");
     let p = px40(&page, 20, 20);
     assert!(p[0] == 255 && (40..=215).contains(&p[1]), "a fine dash below the cap is drawn dashed: {p:?}");
     // An ordinary dash pattern still dashes: butt-capped 4 pt dashes from x 0.
@@ -4032,6 +4032,37 @@ fn dash_patterns_that_cut_a_stroke_into_billions_of_pieces_render() {
     assert_eq!(px40(&page, 2, 20), &red, "inside the first dash");
     assert_eq!(px40(&page, 6, 20), &[255, 255, 255, 255], "inside the first gap");
     assert_eq!(px40(&page, 10, 20), &red, "inside the second dash");
+}
+
+/// PDFBOX-5397's plans stroke 157,000 short segments dashed `[.001 .001]`, a period of 0.0027
+/// device pixels at 96 dpi: each stroke stayed under `MAX_DASHES_PER_STROKE`, yet the page cut
+/// some 10^8 pieces and took 17 s. ISO 32000-2 §8.4.3.6 measures dashes in user space; a
+/// pattern whose period is under a tenth of a device pixel is drawn solid, as PDFium and MuPDF
+/// draw it, so the stroke is never cut. Expanded, those dashes average to about half the ink.
+#[test]
+fn dash_patterns_finer_than_a_tenth_of_a_pixel_are_drawn_solid() {
+    let red = [255, 0, 0, 255];
+    for (what, content) in [
+        ("[.001 .001]", "1 0 0 RG 4 w [.001 .001] 0 d 10 20 m 30 20 l S"),
+        ("[.001 .003] with a phase", "1 0 0 RG 4 w [.001 .003] .002 d 10 20 m 30 20 l S"),
+        ("[.04], a period of 0.08 px", "1 0 0 RG 4 w [.04] 0 d 10 20 m 30 20 l S"),
+        ("many short strokes", &"1 0 0 RG 4 w [.001 .001] 0 d 10 20 m 30 20 l S ".repeat(200)),
+    ] {
+        let page = render_with_gs1(content, "<< >>");
+        for x in [12, 20, 28] {
+            assert_eq!(px40(&page, x, 20), &red, "{what}: ({x}, 20) is drawn solid");
+        }
+    }
+    // A period of a tenth of a pixel or more keeps its dashes: `[.001 .001]` under a 100x
+    // matrix is 0.2 px, half ink; `[.06]` is 0.12 px.
+    for (what, content) in [
+        ("[.001 .001] enlarged", "1 0 0 RG 100 0 0 100 0 0 cm 0.04 w [.001 .001] 0 d .1 .2 m .3 .2 l S"),
+        ("[.06]", "1 0 0 RG 4 w [.06] 0 d 10 20 m 30 20 l S"),
+    ] {
+        let page = render_with_gs1(content, "<< >>");
+        let p = px40(&page, 20, 20);
+        assert!(p[0] == 255 && (40..=215).contains(&p[1]), "{what}: still dashed, about half ink: {p:?}");
+    }
 }
 
 /// From `cargo xtask fuzz` triage: a dash array whose entries sum to less than zero made
