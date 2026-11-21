@@ -151,6 +151,8 @@ fn images_refused_note(images: usize) -> Option<String> {
     (images > 0).then(|| format!("Reduce file size: {images} image(s) stayed as they were, past what one run may decode"))
 }
 
+/// Apply one action step to document `id`, adding what it did to `log`; returns the new
+/// document when the step replaced it.
 fn apply_step(s: &mut Session, id: DocId, step: &Step, log: &mut Vec<String>) -> Result<Option<DocId>, EditError> {
     let pages = s.get(id).map_or(0, |d| d.info.pages.len());
     let all: Vec<usize> = (0..pages).collect();
@@ -197,21 +199,31 @@ fn apply_step(s: &mut Session, id: DocId, step: &Step, log: &mut Vec<String>) ->
             return Ok(None);
         }
     };
-    // Steps that find nothing to do (no comments to flatten, …) aren't failures. A removal step
-    // that didn't remove is: the file would be passed on as cleaned with the data still in it.
+    // A step that finds nothing to do is not a failure. Any other error fails the file, so nothing is
+    // published for it: the file would otherwise be passed on without the step it was asked to apply.
     let removes = matches!(step, Step::RemoveHiddenInformation | Step::Sanitize);
     match s.apply(id, edit) {
         Ok(()) => log.push(step.label().to_string()),
         Err(EditError::Redact(pdfcraft_redact::RedactError::NothingToApply)) if removes => log.push(format!("{}: nothing to remove", step.label())),
-        Err(e) if removes => return Err(e),
-        Err(e) => log.push(format!("{}: {e}", step.label())),
+        Err(EditError::Redact(pdfcraft_redact::RedactError::NothingToApply)) => log.push(format!("{}: nothing to do", step.label())),
+        Err(e) => return Err(e),
     }
     Ok(None)
 }
 
-/// Run `action` on one file. `progress(step, steps)` is called before each step.
-pub fn run_on(action: &Action, name: &str, bytes: Arc<Vec<u8>>, mut progress: impl FnMut(usize, usize)) -> Result<FileResult, String> {
+/// Run `action` on one file. `javascript` is the caller's [`Session::javascript`] preference:
+/// when off, neither open-time scripts nor "Run a JavaScript" steps run. `progress(step, steps)`
+/// is called before each step.
+pub fn run_on(
+    action: &Action,
+    name: &str,
+    bytes: Arc<Vec<u8>>,
+    javascript: bool,
+    mut progress: impl FnMut(usize, usize),
+) -> Result<FileResult, String> {
     let mut s = Session::new();
+    // Before the open: open-time (XFA) scripts read it there.
+    s.set_javascript(javascript);
     let mut id = s.open(name, None, bytes, None).map_err(|e| e.to_string())?;
     if let Some(why) = s.get(id).and_then(|d| d.read_only_reason.clone()) {
         return Err(why);
