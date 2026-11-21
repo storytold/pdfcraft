@@ -9,7 +9,7 @@ use craft::ui::contract::{Bind, Outcome as _, Props as _, Show as _, ShowContain
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::popover::DropVeil;
 use craft::ui::runtime::env::WindowKey;
-use craft::ui::shell::{AppShell, Slot, Title, TitleBar};
+use craft::ui::shell::{AppShell, Slot, TitleBar};
 
 use crate::panes::Place;
 use crate::{PdfCraftApp, side_panels};
@@ -85,11 +85,6 @@ fn window_body(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 /// Preferences buttons. The window's caption buttons are the bar's own.
 fn title_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
-    let title = match app.active_ids().and_then(|(_, id)| app.session.get(id)) {
-        Some(doc) if doc.dirty => Title::unsaved(doc.name.clone()),
-        Some(doc) => Title::new(doc.name.clone()),
-        None => Title::new("PdfCraft"),
-    };
     let (theme_icon, theme_label) = match app.theme_preference {
         ModeChoice::System => ("monitor", tl!("Use system setting")),
         ModeChoice::Light => ("sun", tl!("Light gray")),
@@ -97,18 +92,8 @@ fn title_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     };
     // The button names the choice it shows; a click steps to the next one.
     let theme_label = format!("{}: {theme_label}", tl!("Display theme"));
-    let out = TitleBar::new().show_titled(
-        ui,
-        title,
-        |ui, _| {
-            let home = app.active.is_none() && !app.combine_showing();
-            if IconButton::new(IconId::new(HOME_ICON)).label(tl!("Home")).selected(home).show(ui).clicked() {
-                app.active = None;
-                app.combine_tab.focused = false;
-            }
-            doc_tabs::strip(app, ui, Place::Main);
-        },
-        |ui, _| {
+    let out = TitleBar::new()
+        .trailing(|ui, _| {
             Button::command("help.discord")
                 .label("Discord")
                 .icon(IconId::new("messages-square"))
@@ -122,8 +107,16 @@ fn title_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 MenuItem::command(appearance).label(tl!("Appearance settings…")).show(ui);
             });
             IconButton::command(IconId::new("settings"), "app.preferences").show(ui);
-        },
-    );
+        })
+        .show(ui, |ui, _| {
+            let home = app.active.is_none() && !app.combine_showing();
+            if IconButton::new(IconId::new(HOME_ICON)).label(tl!("Home")).selected(home).show(ui).clicked() {
+                app.active = None;
+                app.combine_tab.focused = false;
+            }
+            doc_tabs::strip(app, ui, Place::Main);
+        })
+        .output;
     if out.close_requested {
         app.request_quit(&ctx);
     }
