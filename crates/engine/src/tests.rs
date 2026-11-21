@@ -8057,6 +8057,38 @@ fn office_exports_take_the_documents_language() {
     assert!(String::from_utf8(d.export_office(compare::OfficeFormat::HtmlSimple)).unwrap().contains("<html>\n"));
 }
 
+/// Excel reads a page's numbers in the document's language (`/Lang`): `1.234` is a thousand and
+/// more on a German page, just over one on an English one, and stays text when no language says.
+#[test]
+fn the_excel_export_reads_numbers_in_the_documents_language() {
+    let pdf = |catalog: &str| {
+        pdfcraft_testkit::Pdf::new()
+            .obj(catalog)
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+            .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> >>")
+            .stream("", b"BT /F1 12 Tf 20 200 Td (1.234) Tj ET")
+            .build()
+    };
+    let mut s = Session::new();
+    for (name, catalog, language) in [
+        ("de.pdf", "<< /Type /Catalog /Pages 2 0 R /Lang (de-DE) >>", Some("de-DE")),
+        ("en.pdf", "<< /Type /Catalog /Pages 2 0 R /Lang (en-US) >>", Some("en-US")),
+        ("plain.pdf", "<< /Type /Catalog /Pages 2 0 R >>", None),
+    ] {
+        let id = s.open(name, None, Arc::new(pdf(catalog)), None).unwrap();
+        let d = s.get(id).unwrap();
+        let title = name.trim_end_matches(".pdf");
+        let want = pdfcraft_export::xlsx_with_language(&d.export_pages(), title, pdfcraft_export::XlsxSheets::default(), language);
+        assert!(d.export_office(compare::OfficeFormat::Xlsx) == want, "{name}: Export to Office");
+        assert!(d.export_xlsx(pdfcraft_export::XlsxSheets::default(), None) == want, "{name}: Export to Excel");
+    }
+    let page = pdfcraft_export::cells::classify_in;
+    let reads = |tag| page("1.234", pdfcraft_export::cells::Separators::for_language(tag));
+    assert_eq!(reads(Some("de-DE")), pdfcraft_export::cells::Value::Number { value: 1234.0, format: "#,##0".into() });
+    assert_eq!(reads(Some("en-US")), pdfcraft_export::cells::Value::Number { value: 1.234, format: "0.000".into() });
+    assert_eq!(reads(None), pdfcraft_export::cells::Value::Text);
+}
+
 #[test]
 fn exporting_office_files_keeps_images() {
     let mut s = Session::new();
@@ -12932,6 +12964,85 @@ fn a_page_truncated_for_forms_and_pictures_is_listed_once() {
     let (pages, truncated) = doc.export_pages_checked(true, 0);
     assert!(pages[0].images.is_empty(), "the picture is past the budget");
     assert_eq!(truncated, [0]);
+}
+
+/// A two-page PDF: page 0 says "Hello"; page 1 draws one picture and forms nested past the reading
+/// limit, so reading it costs image work and lists it as truncated.
+fn text_page_then_deep_forms_page() -> Vec<u8> {
+    let depth = compare::MAX_FORM_DEPTH + 1;
+    let xobjects: String = (1..=depth).map(|i| format!("/D{i} {} 0 R ", 7 + i)).collect();
+    let resources = format!("<< /XObject << /Im 7 0 R {xobjects}>> >>");
+    let text = "BT /F1 12 Tf 20 100 Td (Hello) Tj ET";
+    let draw = "q 10 0 0 10 0 0 cm /Im Do Q /D1 Do";
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources {resources} >>"),
+        format!("<< /Length {} >>\nstream\n{text}\nendstream", text.len()),
+        format!("<< /Length {} >>\nstream\n{draw}\nendstream", draw.len()),
+        "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\n\0\x20\x40\x7f\nendstream".into(),
+        String::new(),
+    ];
+    objs.pop();
+    for i in 1..=depth {
+        let body = if i == depth { "q Q".to_string() } else { format!("/D{} Do", i + 1) };
+        objs.push(format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 200 200] /Resources {resources} /Length {} >>\nstream\n{body}\nendstream",
+            body.len()
+        ));
+    }
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    bytes
+}
+
+/// A page not chosen for export is not read: its forms are not walked (so it is not listed as
+/// truncated) and its pictures cost no image work; the chosen pages come out as they do in a
+/// whole-document export.
+#[test]
+fn export_reads_only_the_chosen_pages() {
+    let mut s = Session::new();
+    let id = s.open("two.pdf", None, Arc::new(text_page_then_deep_forms_page()), None).unwrap();
+    let doc = s.get(id).unwrap();
+    let work = || pdfcraft_cos::ImageBudget::with_work(u64::MAX);
+
+    let (all, all_truncated) = doc.export_pages_checked(true, 1 << 20);
+    assert_eq!(all.len(), 2);
+    assert_eq!(all_truncated, [1], "reading the second page is what truncates");
+    assert_eq!(all[1].images.len(), 1);
+
+    let mut first = work();
+    let (pages, truncated) = doc.export_selected_pages_within(true, 1 << 20, &mut first, Some(&[0]));
+    assert_eq!(pages.len(), 1);
+    assert!(pages[0] == all[0], "the chosen page is the same as in the whole export");
+    assert!(truncated.is_empty(), "the unchosen page's forms are not walked");
+    assert_eq!(first.work_left(), u64::MAX, "the unchosen page's picture is not decoded");
+
+    let mut second = work();
+    let (pages, truncated) = doc.export_selected_pages_within(true, 1 << 20, &mut second, Some(&[1]));
+    assert_eq!(pages.len(), 1);
+    assert!(pages[0] == all[1]);
+    assert_eq!(truncated, [1], "a truncated page keeps its document index");
+    assert!(second.work_left() < u64::MAX);
+
+    // Excel: the same bytes as filtering a whole read, and only the chosen page's truncation.
+    for keep in [&[0usize][..], &[1], &[0, 1], &[]] {
+        let whole: Vec<_> = doc.export_pages_checked(false, 0).0.into_iter().enumerate().filter(|(i, _)| keep.contains(i)).map(|(_, p)| p).collect();
+        let got = doc.export_xlsx_checked(pdfcraft_export::XlsxSheets::default(), Some(keep));
+        assert_eq!(got.bytes, pdfcraft_export::xlsx(&whole, "two", pdfcraft_export::XlsxSheets::default()), "{keep:?}");
+        assert_eq!(got.truncated_pages, if keep.contains(&1) { vec![1] } else { vec![] }, "{keep:?}");
+    }
 }
 
 /// Moving an added image, then rotating it, must keep the moved position.
