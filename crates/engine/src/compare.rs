@@ -255,10 +255,10 @@ impl Session {
                     let positional = !ch.new.rects.is_empty() || ch.new.near.is_some();
                     if positional {
                         if ch.new.rects.is_empty() {
-                            if let Some(near) = ch.new.near {
-                                if !rects_overlap(new_words[candidate].rect, near) {
-                                    continue;
-                                }
+                            if let Some(near) = ch.new.near
+                                && !rects_overlap(new_words[candidate].rect, near)
+                            {
+                                continue;
                             }
                         } else if !new_words[candidate..candidate + new_word_count]
                             .iter()
