@@ -6,7 +6,7 @@
 
 use craft::automation::dock as dock_rpc;
 use craft::behavior::dock::{
-    Action, Column, DockEdge, DockError, DockPlacement, Group, Layout, Node, PanelState, Permissions, SplitSize, Target, Workspace,
+    Action, Column, DockEdge, DockError, DockPlacement, Floating, Group, Layout, Node, PanelState, Permissions, SplitSize, Target, Workspace,
 };
 use craft::behavior::{Axis, DockSide, IconId};
 use craft::keymap::CommandRef;
@@ -168,19 +168,20 @@ const PAGE_SHARE: f32 = 0.8;
 /// The Tools pane's default width, as production opened it.
 const TOOLS_WIDTH: f32 = 272.0;
 
-/// The arrangement of a new install: Tools at the start edge, the side-panel rail at the window edge, the toolbar inward of it, and the page area between
-/// the docks. The side panels form one group, collapsed to their icons.
+/// The arrangement of a new install: Tools at the start edge, the side-panel rail at the window edge,
+/// and the toolbar floating at the start of the page area. The side panels form one collapsed group.
 pub fn default_workspace(rail_side: DockSide) -> Workspace<PanelId> {
     let single = |panel| Column::new(vec![Group::new(vec![panel], 0)]);
     // The rail is one tool column wide: its column keeps the toolbar's grid, never the theme's column width.
     // The Tools pane opens at production's width (272 points, the old `TOOLS_WIDTH`), not the theme's column width.
     let (tools, toolbar) = (single(PanelId::Tools).with_width(TOOLS_WIDTH), single(PanelId::Toolbar).with_steps(1));
     let side = Column::new(vec![Group::new(SIDE.to_vec(), 0)]).with_iconic(true);
-    let (start, end) =
-        if rail_edge(rail_side) == DockEdge::Start { (vec![side, toolbar, tools], Vec::new()) } else { (vec![tools], vec![side, toolbar]) };
+    let (start, end) = if rail_edge(rail_side) == DockEdge::Start { (vec![side, tools], Vec::new()) } else { (vec![tools], vec![side]) };
     let page = Node::split(Axis::X, SplitSize::Ratio(PAGE_SHARE), Node::tabs(vec![PanelId::Document], 0), Node::dock(DockEdge::End, end));
     let root = Node::split(Axis::X, SplitSize::Ratio(START_SHARE), Node::dock(DockEdge::Start, start), page);
-    Workspace::new(Layout::new(Some(root), Vec::new()))
+    let rect = egui::Rect::from_min_size(egui::pos2(TOOLS_WIDTH + 3.0, 96.0), egui::vec2(48.0, 400.0));
+    let floating = Floating::new(toolbar, rect).with_id(1);
+    Workspace::new(Layout::new(Some(root), vec![floating]))
 }
 
 /// The window edge whose dock holds `panel`, `None` when it is closed or floating.
@@ -475,7 +476,8 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
     // Full screen shows the document alone, and a document can hide the toolbars, the menu and the panels around it
     // in its tab (ISO 32000-2 Table 147); the tab strip stays, and F8 brings the rest back (`viewer_prefs`).
     let bare = app.full_screen_document() || app.hidden_interface().window_ui;
-    let toolbar = active && !app.hotbar_hidden();
+    let organizing = app.active_ids().and_then(|(index, _)| app.views.get(index)).is_some_and(|view| view.organize);
+    let toolbar = active && !app.hotbar_hidden() && !organizing;
     let anchor = rail_anchor(app);
     let workspace = app.dock.clone();
     // The rail lists the Accessibility Checker once the document has a report, and Search and Compare only while
@@ -887,6 +889,16 @@ mod tests {
     use egui_kittest::kittest::Queryable;
 
     use super::*;
+
+    #[test]
+    fn new_workspace_floats_the_toolbar() {
+        for side in [DockSide::Start, DockSide::End] {
+            let workspace = default_workspace(side);
+            assert!(workspace.layout.validate().is_ok());
+            assert_eq!(edge_of(&workspace, PanelId::Toolbar), None);
+            assert!(workspace.layout.floating.iter().any(|window| window.contains(&PanelId::Toolbar)));
+        }
+    }
 
     fn tabs(panels: &[&str]) -> Value {
         json!({"Tabs": {"panels": panels, "active": 0}})
