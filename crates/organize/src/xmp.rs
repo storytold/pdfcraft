@@ -14,12 +14,13 @@
 //! The packet is edited as text, touching only the property that changed: everything else in it
 //! (other schemas, padding, unknown properties) stays byte for byte. A file without XMP gets
 //! none, and a packet this can't edit safely (not UTF-8, no `rdf:RDF`, too large to decode) is
-//! left as it was.
+//! left as it was, unless Title or Author changes: then it would go on showing the old value, so
+//! it is dropped (see [`would_go_stale`]).
 
 use std::cell::RefCell;
 use std::sync::{Arc, Weak};
 
-use pdfcraft_cos::{Document, Object, Stream};
+use pdfcraft_cos::{Document, Object, PdfString, Stream};
 
 use crate::OrganizeError;
 use crate::pdfx::esc;
@@ -88,6 +89,49 @@ pub(crate) fn sync_info(doc: &mut Document, key: &str, value: &str) -> Result<()
     .map(|_| ())
 }
 
+/// Whether setting the information entry `key` to `value` would leave the catalog's XMP packet
+/// stating the old value, so it must go ([`drop_packet`]): Title or Author changes, and
+/// [`sync_info`] can't keep the packet right. It leaves a packet it can't read (not UTF-8, a
+/// filter it can't decode, past [`MAX_XMP`]) as it was, and a property it can't rewrite in place
+/// (an attribute with no `rdf:RDF` end tag to add an element before), and adds the new `dc:`
+/// property beside the old one where the packet declares Dublin Core under another prefix. A
+/// packet that binds `dc` to another namespace anywhere goes too: its first `dc:title` may be that
+/// schema's, with Dublin Core's further on. Asked before the change, while the old value can still
+/// be read.
+///
+/// Only Title and Author: they are what viewers that read XMP first show in their title bar and
+/// file lists, and dropping the packet also drops everything else it states.
+pub(crate) fn would_go_stale(doc: &Document, key: &str, value: &str) -> bool {
+    let Some((name, ns, shape)) = property(key).filter(|_| matches!(key, "Title" | "Author")) else { return false };
+    if crate::info(doc, key).unwrap_or_default().trim() == value {
+        return false;
+    }
+    let Some(r) = doc.root().and_then(|root| doc.get(root).as_dict().and_then(|c| c.reference(b"Metadata"))) else { return false };
+    let obj = doc.get(r);
+    // Only a metadata stream is a packet; anything else there is left alone, as `edit_packet` does.
+    matches!(&*obj, Object::Stream(_))
+        && decoded_packet(&obj).is_none_or(|xmp| {
+            binds_namespace_elsewhere(&xmp, DC, name)
+                || binds_prefix_elsewhere(&xmp, "dc", DC)
+                || (has_property(&xmp, name) && set_property(&xmp, name, ns, shape, value).is_none())
+        })
+}
+
+/// Remove the catalog's XMP packet (see [`would_go_stale`]), after `key` changed in `/Info`. What
+/// [`crate::info`] reads from the packet for the other keys it mirrors moves to `/Info` first, so
+/// it isn't lost; the values `/Info` has of its own stay as they are.
+pub(crate) fn drop_packet(doc: &mut Document, key: &str) -> Result<(), OrganizeError> {
+    for k in crate::STANDARD_INFO_KEYS.into_iter().filter(|k| *k != key) {
+        let Some(v) = info_value(doc, k).filter(|_| crate::info_entry(doc, k).is_none()) else { continue };
+        crate::set_info_entry(doc, k.as_bytes(), Some(Object::String(PdfString::text(&v))))?;
+    }
+    let Some(root) = doc.root() else { return Ok(()) };
+    doc.update_dict(root, |c| {
+        c.remove(b"Metadata");
+    })?;
+    Ok(())
+}
+
 /// Remove the `pdfx:` copies of the custom properties `keys` (see [`sync_info`]), unless the packet
 /// binds `pdfx` to another namespace, whose properties are its own; whether any was there.
 pub(crate) fn remove_custom_properties(doc: &mut Document, keys: &[&str]) -> Result<bool, OrganizeError> {
@@ -114,6 +158,27 @@ fn binds_prefix_elsewhere(xmp: &str, prefix: &str, ns: &str) -> bool {
         };
         let Some(quote) = rest.chars().next().filter(|c| matches!(c, '"' | '\'')) else { return false };
         rest.get(1..).and_then(|v| v.get(..v.find(quote)?)).is_none_or(|value| value != ns)
+    })
+}
+
+/// Whether `xmp` declares the namespace `ns` of the property `name` (`prefix:local`) anywhere with
+/// another prefix, or as the default namespace in a packet with an unprefixed `local` element or
+/// attribute, so writing `name` would not replace the value there. Older Adobe tools declare Dublin
+/// Core both ways on one description and write every property with `dc:`; that alone doesn't count.
+fn binds_namespace_elsewhere(xmp: &str, ns: &str, name: &str) -> bool {
+    let Some((prefix, local)) = name.split_once(':') else { return false };
+    let unprefixed = has_property(xmp, local);
+    // The attribute name is read back from each quoted value only to the first character a name
+    // can't hold, and a quote ends every earlier value, so this is linear in the packet.
+    xmp.match_indices(ns).any(|(i, _)| {
+        let Some(before) = xmp.get(..i) else { return false };
+        let Some(quote) = before.chars().next_back().filter(|c| matches!(c, '"' | '\'')) else { return false };
+        if !xmp.get(i..).and_then(|rest| rest.strip_prefix(ns)).is_some_and(|rest| rest.starts_with(quote)) {
+            return false;
+        }
+        let Some(attr) = before.strip_suffix(quote).and_then(|b| b.trim_end().strip_suffix('=')) else { return false };
+        let decl = attr.trim_end().rsplit(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\'' | '=')).next().unwrap_or_default();
+        (decl == "xmlns" && unprefixed) || decl.strip_prefix("xmlns:").is_some_and(|p| p != prefix)
     })
 }
 
@@ -226,7 +291,9 @@ fn get_property(xmp: &str, name: &str, shape: Shape) -> Option<String> {
         if element.get(..open_end)?.ends_with('/') {
             return None;
         }
-        let inner = element.get(open_end + 1..)?.strip_suffix(&format!("</{name}>"))?;
+        let inner = element.get(open_end + 1..)?;
+        // Up to the end tag, which `element_span` lets have white space before its `>`.
+        let inner = inner.get(..inner.rfind(&format!("</{name}"))?)?;
         let items = list_items(inner);
         if items.is_empty() {
             // An empty `<rdf:Alt/>` or `<rdf:Seq></rdf:Seq>` has no value, not its markup.
@@ -394,9 +461,16 @@ fn element_span(xmp: &str, name: &str) -> Option<(usize, usize)> {
         if xmp.get(..tag_end)?.ends_with('/') {
             return Some((i, tag_end + 1));
         }
-        let close = format!("</{name}>");
-        let end = tag_end + xmp.get(tag_end..)?.find(&close)? + close.len();
-        return Some((i, end));
+        // The end tag may have white space before its `>` (XML 1.0 3.1).
+        let close = format!("</{name}");
+        let mut at = tag_end;
+        while let Some(j) = xmp.get(at..).and_then(|s| s.find(&close)).map(|j| at + j + close.len()) {
+            if let Some(rest) = xmp.get(j..)?.trim_start().strip_prefix('>') {
+                return Some((i, xmp.len() - rest.len()));
+            }
+            at = j;
+        }
+        return None;
     }
     None
 }
@@ -563,6 +637,24 @@ mod tests {
             ("", false),
         ] {
             assert_eq!(binds_prefix_elsewhere(xmp, "pdfx", PDFX), other, "{xmp}");
+        }
+    }
+
+    #[test]
+    fn a_namespace_under_another_prefix_is_found() {
+        for (xmp, other) in [
+            ("<d xmlns:dc=\"http://purl.org/dc/elements/1.1/\"/>", false),
+            ("<d xmlns:purl = 'http://purl.org/dc/elements/1.1/'/>", true),
+            ("<title xmlns='http://purl.org/dc/elements/1.1/'/>", true),
+            ("<d xmlns='http://purl.org/dc/elements/1.1/' xmlns:dc='http://purl.org/dc/elements/1.1/'><dc:title/></d>", false),
+            // The address as text, in another attribute, or as the start of another value is no
+            // declaration.
+            ("<a>http://purl.org/dc/elements/1.1/</a><b src=\"http://purl.org/dc/elements/1.1/\"/>", false),
+            ("<d xmlns:x=\"http://purl.org/dc/elements/1.1/terms\"/>", false),
+            ("http://purl.org/dc/elements/1.1/", false),
+            ("", false),
+        ] {
+            assert_eq!(binds_namespace_elsewhere(xmp, DC, "dc:title"), other, "{xmp}");
         }
     }
 

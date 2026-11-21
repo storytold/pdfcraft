@@ -675,13 +675,17 @@ pub fn check_custom_key(name: &str) -> Result<(), OrganizeError> {
 /// Read a document-information entry as text: `/Info`, else the XMP packet (Title, Author,
 /// Subject, Keywords, Creator and Producer, see `xmp`).
 pub fn info(doc: &Document, key: &str) -> Option<String> {
-    let in_info = doc
-        .trailer()
+    // Files that state it only in their XMP packet (#2373).
+    info_entry(doc, key).or_else(|| xmp::info_value(doc, key))
+}
+
+/// The document information's own text for `key`: `None` without an entry, or with only blanks.
+fn info_entry(doc: &Document, key: &str) -> Option<String> {
+    doc.trailer()
         .get(b"Info")
         .map(|o| doc.resolve(o))
-        .and_then(|info| info.as_dict()?.get(key.as_bytes()).and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text())));
-    // Files that state it only in their XMP packet (#2373).
-    in_info.filter(|v| !v.trim_matches('\0').trim().is_empty()).or_else(|| xmp::info_value(doc, key))
+        .and_then(|info| info.as_dict()?.get(key.as_bytes()).and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text())))
+        .filter(|v| !v.trim_matches('\0').trim().is_empty())
 }
 
 /// Whether the document information has an entry `key`, of any type.
@@ -694,15 +698,17 @@ pub fn has_info(doc: &Document, key: &str) -> bool {
 /// Documents with XMP metadata also carry Title, Author, Subject, Keywords, Creator and Producer
 /// in the XMP packet, and viewers that read XMP first show its value: the packet's property is
 /// changed (or removed) to match, and a custom property is kept there as `pdfx:<key>` as Acrobat
-/// keeps it (see `xmp`).
+/// keeps it (see `xmp`). A packet that can't be edited that way is dropped when Title or Author
+/// changes, so it doesn't go on showing the old value.
 pub fn set_info(doc: &mut Document, key: &str, value: &str) -> Result<(), OrganizeError> {
     if !STANDARD_INFO_KEYS.contains(&key) {
         check_custom_key(key)?;
     }
     let value = value.trim();
+    let stale_xmp = xmp::would_go_stale(doc, key, value);
     let entry = (!value.is_empty()).then(|| Object::String(PdfString::text(value)));
     set_info_entry(doc, key.as_bytes(), entry)?;
-    xmp::sync_info(doc, key, value)
+    if stale_xmp { xmp::drop_packet(doc, key) } else { xmp::sync_info(doc, key, value) }
 }
 
 /// Set (or remove, with `None`) a document-information entry of any type.
