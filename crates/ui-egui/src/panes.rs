@@ -18,7 +18,7 @@
 use std::collections::{HashMap, HashSet};
 
 use craft::quit::CloseScope;
-use craft::ui::canvas::{SplitAt, SplitLayout, SplitViews, TabDropTarget};
+use craft::ui::canvas::{PanePress, SplitAt, SplitLayout, SplitViews, TabDropTarget};
 use craft::ui::contract::Bind; // PLAN: assumed path of `Bind` through the facade
 use pdfcraft_engine::DocId;
 
@@ -446,6 +446,7 @@ pub(crate) fn page_area(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let views = SplitViews::new(tl!("Pages").to_string(), layout, Bind::bound(&mut at))
         .count(1)
         .active(active)
+        .pane_press(PanePress::Interact)
         .takes_tabs::<StripTab>(|documents, _| {
             !documents.is_empty() && documents.iter().all(|d| matches!(d, StripTab::View(key) if open.contains(key)))
         })
