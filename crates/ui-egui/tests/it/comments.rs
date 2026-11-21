@@ -4172,7 +4172,6 @@ fn a_pop_ups_unsaved_work_follows_its_comment_or_is_dropped() {
 
 /// #2137 review: text typed into a pop-up and not yet saved is saved when × closes the window:
 /// the click takes the focus from the box and closes it in one frame, one undo step for both.
-#[ignore = "known gap of the egui-to-craft port: see docs/port-known-gaps.md"]
 #[test]
 fn closing_a_pop_up_saves_its_typed_text() {
     let mut h = harness_with_bytes(BLUE_NOTE_WITH_OPEN_POP_UP.to_vec(), |_| {});
