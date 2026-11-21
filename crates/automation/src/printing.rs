@@ -421,6 +421,11 @@ impl Automation {
             if !did.is_empty() {
                 out["did_print"] = crate::a11y::form_tools::js_output_json(&did);
             }
+            // A Did Print script may change the document without saying anything: the summary
+            // shows it (`dirty`, `undo`), as doc_save's does after Did Save.
+            if let Some(doc) = self.session.get(id) {
+                out["document"] = crate::json::summary(doc);
+            }
         }
         Ok(out)
     }

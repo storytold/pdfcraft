@@ -772,6 +772,10 @@ pub struct PdfCraftApp {
     allow_quit: bool,
     /// The documents' Will Close actions have run for the window closing: they run once.
     will_close_ran: bool,
+    /// Each document Will Close changed when the window closed, with its edit generation right
+    /// after: while it is still at that generation, what is unsaved is only what Will Close did,
+    /// which doesn't hold a close. An edit made since (the platform kept the window open) does.
+    will_close_left: Vec<(DocId, u64)>,
     /// Shortcuts pressed while a text field had the keyboard, run on the next frame (see
     /// `registry_shortcuts`).
     deferred_commands: Vec<(&'static str, Option<DocId>)>,

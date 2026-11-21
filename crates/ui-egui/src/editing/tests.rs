@@ -581,5 +581,11 @@ fn closing_the_window_runs_will_close_once_for_each_document() {
     let ran = app.js_console.log.iter().filter(|l| *l == "WillClose").count();
     assert_eq!(ran, 2, "{:?}", app.js_console.log);
     assert_eq!(app.views.len(), 2);
-    assert!(app.first_dirty().is_some() && app.allow_quit, "what they changed doesn't hold the quit");
+    assert!(app.first_dirty().is_some() && app.first_dirty_beyond_will_close().is_none(), "what they changed doesn't hold the quit");
+    // CodeRabbit on #7991: nothing lets a later close skip the question. The platform kept the
+    // window open, and an edit made since asks to be saved as any other does.
+    assert!(!app.allow_quit, "no override is left set");
+    let id = app.active_ids().map(|(_, id)| id).expect("a document is active");
+    assert!(app.apply_edit(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Edited after".into() }));
+    assert_eq!(app.first_dirty_beyond_will_close(), app.views.iter().position(|v| v.id == id), "the later edit holds the close");
 }

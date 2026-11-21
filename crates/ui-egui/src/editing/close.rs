@@ -207,7 +207,7 @@ impl PdfCraftApp {
         if self.hold_for_any_ocr_review() {
             ctx.request_repaint();
             false
-        } else if self.first_dirty().is_some() {
+        } else if self.first_dirty_beyond_will_close().is_some() {
             self.close_request = Some(CloseRequest::Quit);
             ctx.request_repaint();
             false
@@ -262,8 +262,8 @@ impl PdfCraftApp {
         }
         if !self.allow_quit && self.hold_for_any_ocr_review() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-        } else if !self.allow_quit && self.first_dirty().is_some() {
-            // `first_dirty` counts text typed into a field as an unsaved change.
+        } else if !self.allow_quit && self.first_dirty_beyond_will_close().is_some() {
+            // It counts text typed into a field as an unsaved change.
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.close_request = Some(CloseRequest::Quit);
         } else {
@@ -287,19 +287,32 @@ impl PdfCraftApp {
                 ids.push(id);
             }
         }
-        let mut changed = false;
         for id in ids {
             let before = self.session.get(id).map(|d| d.edit_generation());
             self.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillClose);
-            changed |= self.session.get(id).map(|d| d.edit_generation()) != before;
-        }
-        // What they changed must not hold the quit: where the platform quits its own way (macOS
-        // cancels the window's close and asks again), the next close request would otherwise
-        // ask to save those changes and keep the window open.
-        if changed {
-            self.allow_quit = true;
+            // What they changed must not hold the quit: where the platform quits its own way
+            // (macOS cancels the window's close and asks again), the next close request would
+            // otherwise ask to save those changes and keep the window open. Only those changes:
+            // an edit made after a close that didn't happen asks as any other does.
+            if let Some(after) = self.session.get(id).map(|d| d.edit_generation())
+                && Some(after) != before
+            {
+                self.will_close_left.push((id, after));
+            }
         }
         self.last_autosave = Some(web_time::Instant::now());
+    }
+
+    /// [`Self::first_dirty`], leaving out a document whose only unsaved changes are those its
+    /// Will Close actions made when the window closed ([`Self::run_will_close_on_quit`]).
+    pub(crate) fn first_dirty_beyond_will_close(&self) -> Option<usize> {
+        (0..self.views.len()).find(|&i| {
+            let only_will_close = self.views.get(i).is_some_and(|v| {
+                !self.has_unsaved_typing(i)
+                    && self.will_close_left.iter().any(|(id, at)| *id == v.id && self.session.get(v.id).map(|d| d.edit_generation()) == Some(*at))
+            });
+            self.has_unsaved_work(i) && !only_will_close
+        })
     }
 
     /// Ask for the user's attention when the "save changes?" question opens while PdfCraft is in

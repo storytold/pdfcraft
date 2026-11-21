@@ -136,6 +136,8 @@ fn did_save_did_print_and_will_close_run_after_saving_printing_and_before_closin
 
     let printed = tool(&mut a, "doc_print", json!({ "doc": doc, "path": "printed.pdf" }));
     assert_eq!(printed["did_print"]["console"], json!(["did print"]), "{printed}");
+    // What Did Print changed shows in the summary it returns (CodeRabbit on #7991).
+    assert_eq!(printed["document"]["dirty"], true, "{printed}");
     assert_eq!(log(&mut a, doc), "saved1;printed2;");
     // A print with nowhere to go fails before anything prints: Did Print doesn't run.
     assert!(a.call("doc_print", &json!({ "doc": doc })).is_err());

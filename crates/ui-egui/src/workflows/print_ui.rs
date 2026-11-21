@@ -110,9 +110,13 @@ pub(crate) struct PrintTasks {
     /// The last browser print's PDF and name, for that fallback.
     #[cfg(target_arch = "wasm32")]
     web_last: Option<(String, std::sync::Arc<Vec<u8>>)>,
-    /// The document the browser print being drawn is of, for its Did Print actions.
+    /// The document the browser print being drawn is of, for its Did Print actions, kept until
+    /// the browser has taken the print (`web_printed`) or it failed.
     #[cfg(target_arch = "wasm32")]
     web_doc: Option<pdfcraft_engine::DocId>,
+    /// Set by the print page once `window.print()` returned: the print was handed over.
+    #[cfg(target_arch = "wasm32")]
+    web_printed: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// The printers to offer when no [`PrinterSource`] is set: the spooler's, or in a browser its
@@ -788,7 +792,15 @@ impl PdfCraftApp {
     fn poll_web_print(&mut self) {
         let failed: Vec<String> = self.print_tasks.web_failed.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
         if let Some(e) = failed.into_iter().next() {
+            // The print never reached the browser's dialog: no Did Print.
+            self.print_tasks.web_doc = None;
             self.web_print_failed(&e);
+        }
+        // The browser took the print (`window.print()` returned): its Did Print actions run now.
+        if self.print_tasks.web_printed.swap(false, std::sync::atomic::Ordering::SeqCst)
+            && let Some(id) = self.print_tasks.web_doc.take()
+        {
+            self.did_print(id);
         }
         let Some(job) = self.print_tasks.web_job.as_mut() else { return };
         if !job.finished() {
@@ -808,14 +820,20 @@ impl PdfCraftApp {
         let html = job.html();
         let urls = job.take_urls();
         self.print_tasks.web_last = Some((job.name.clone(), job.pdf.clone()));
-        match crate::web_print::print_in_iframe(&html, urls, self.print_tasks.web_failed.clone(), self.ctx.clone()) {
-            Ok(()) => {
-                self.notify_tr("Opening the browser's print dialog…");
-                if let Some(id) = self.print_tasks.web_doc.take() {
-                    self.did_print(id);
-                }
+        self.print_tasks.web_printed.store(false, std::sync::atomic::Ordering::SeqCst);
+        match crate::web_print::print_in_iframe(
+            &html,
+            urls,
+            self.print_tasks.web_failed.clone(),
+            self.print_tasks.web_printed.clone(),
+            self.ctx.clone(),
+        ) {
+            // Did Print waits for the page to hand the print to the browser (polled above).
+            Ok(()) => self.notify_tr("Opening the browser's print dialog…"),
+            Err(e) => {
+                self.print_tasks.web_doc = None;
+                self.web_print_failed(&e);
             }
-            Err(e) => self.web_print_failed(&e),
         }
     }
 

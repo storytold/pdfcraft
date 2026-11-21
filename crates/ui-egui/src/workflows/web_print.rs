@@ -261,12 +261,14 @@ fn clear_last_frame() {
 
 /// Open the browser's print dialog on `html` in a hidden iframe once its pictures (`urls`) are
 /// decoded. What goes wrong after this returns (a picture that won't decode, a browser that
-/// refuses to print from a frame) is pushed to `failed`, for the app to report.
+/// refuses to print from a frame) is pushed to `failed`, for the app to report; `printed` is set
+/// once `window.print()` has returned, the print handed to the browser.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn print_in_iframe(
     html: &str,
     urls: Vec<String>,
     failed: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    printed: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ctx: Option<egui::Context>,
 ) -> Result<(), String> {
     use wasm_bindgen::JsCast;
@@ -307,8 +309,14 @@ pub(crate) fn print_in_iframe(
                 // the next print.
                 let after = wasm_bindgen::closure::Closure::once_into_js(clear_last_frame);
                 let _ = window.add_event_listener_with_callback("afterprint", after.unchecked_ref());
-                if let Err(e) = window.print() {
-                    report(format!("the browser wouldn't open its print dialog: {}", err(e)));
+                match window.print() {
+                    Ok(()) => {
+                        printed.store(true, std::sync::atomic::Ordering::SeqCst);
+                        if let Some(ctx) = &ctx {
+                            ctx.request_repaint();
+                        }
+                    }
+                    Err(e) => report(format!("the browser wouldn't open its print dialog: {}", err(e))),
                 }
             });
         })
