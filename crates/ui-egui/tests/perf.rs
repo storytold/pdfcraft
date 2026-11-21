@@ -1,6 +1,6 @@
-//! Frame-time budget on a 500-page document (parity view.large-document-performance): scrolling
-//! continuously must keep the UI's own per-frame work far below a 60 fps frame. Rendering runs on
-//! worker threads and is not part of the measurement.
+//! The frame-time budget applies to a 500-page document (parity view.large-document-performance).
+//! The budget scales with the measured duration of a fixed integer workload on slow machines.
+//! Rendering runs on worker threads and is not part of the measurement.
 
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
@@ -32,15 +32,54 @@ fn overloaded() -> bool {
 /// runs would charge it for the other's work on a small CI machine.
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Generous for debug builds and shared CI machines; release builds are ~10× faster.
+/// Base budget for debug builds. Calibration can increase it by at most three times.
 const BUDGET: std::time::Duration = std::time::Duration::from_millis(40);
+const CALIBRATION_REFERENCE: std::time::Duration = std::time::Duration::from_millis(17);
 
-/// The average frame over `frames` steps, best of up to three rounds: another process taking the
-/// CPU only ever adds time, so the fastest round is the closest to the UI's own cost, and a real
-/// regression is over budget in every round. Later rounds run only when a round is over budget.
-fn best_average(label: &str, frames: usize, mut step: impl FnMut(usize)) -> std::time::Duration {
+fn budget_scale(calibration: std::time::Duration) -> f64 {
+    (calibration.as_secs_f64() / CALIBRATION_REFERENCE.as_secs_f64()).clamp(1.0, 3.0)
+}
+
+#[test]
+fn calibration_scales_slow_machines_without_exceeding_the_cap() {
+    assert_eq!(budget_scale(std::time::Duration::from_millis(8)), 1.0);
+    assert_eq!(budget_scale(std::time::Duration::from_millis(17)), 1.0);
+    assert_eq!(budget_scale(std::time::Duration::from_micros(42_500)), 2.5);
+    assert_eq!(budget_scale(std::time::Duration::from_millis(64)), 3.0);
+}
+
+/// Measure 18 million integer updates, taking the fastest of three trials.
+fn calibration_average() -> std::time::Duration {
     let mut best = std::time::Duration::MAX;
-    for round in 1..=3 {
+    for _ in 0..3 {
+        let mut value = std::hint::black_box(0x9e3779b97f4a7c15_u64);
+        let start = std::time::Instant::now();
+        for _ in 0..18_000_000 {
+            value = value.wrapping_mul(0xd1342543de82ef95).rotate_left(17).wrapping_add(0x94d049bb133111eb);
+        }
+        std::hint::black_box(value);
+        best = best.min(start.elapsed());
+    }
+    best
+}
+
+/// A round's calibration: the faster of the runs before and after its frames.
+fn round_calibration(before: std::time::Duration, after: std::time::Duration) -> std::time::Duration {
+    before.min(after)
+}
+
+#[test]
+fn contention_during_one_calibration_does_not_raise_the_budget() {
+    let quiet = std::time::Duration::from_millis(17);
+    let contended = std::time::Duration::from_millis(60);
+    assert_eq!(budget_scale(round_calibration(contended, quiet)), 1.0);
+    assert_eq!(budget_scale(round_calibration(quiet, contended)), 1.0);
+    assert_eq!(budget_scale(round_calibration(contended, contended)), 3.0);
+}
+
+/// Run `step` for `frames` frames per round, with the integer workload as calibration.
+fn best_average(label: &str, frames: usize, mut step: impl FnMut(usize)) -> (std::time::Duration, std::time::Duration) {
+    calibrated_rounds(label, calibration_average, || {
         let start = std::time::Instant::now();
         let mut worst = std::time::Duration::ZERO;
         for f in 0..frames {
@@ -48,14 +87,65 @@ fn best_average(label: &str, frames: usize, mut step: impl FnMut(usize)) -> std:
             step(f);
             worst = worst.max(t.elapsed());
         }
-        let avg = start.elapsed() / frames as u32;
-        eprintln!("PERF {label} round {round}: avg frame {avg:?}, worst {worst:?}");
-        best = best.min(avg);
-        if best < BUDGET {
+        (start.elapsed() / frames as u32, worst)
+    })
+}
+
+/// Run `calibrate` just before and just after each round of frames, and set that round's budget from
+/// the faster of the two. `frames` returns the round's average and worst frame. The lowest
+/// average-to-budget ratio determines the result. Later rounds run only when the measured average
+/// exceeds that round's calibrated budget.
+fn calibrated_rounds(
+    label: &str,
+    mut calibrate: impl FnMut() -> std::time::Duration,
+    mut frames: impl FnMut() -> (std::time::Duration, std::time::Duration),
+) -> (std::time::Duration, std::time::Duration) {
+    let mut best = std::time::Duration::MAX;
+    let mut best_budget = BUDGET;
+    let mut best_ratio = f64::INFINITY;
+    for round in 1..=3 {
+        let before = calibrate();
+        let (avg, worst) = frames();
+        let after = calibrate();
+        let calibration = round_calibration(before, after);
+        let scale = budget_scale(calibration);
+        let budget = BUDGET.mul_f64(scale);
+        eprintln!(
+            "PERF {label} round {round}: calibration {before:?} before, {after:?} after, factor {scale:.2}, budget {budget:?}, avg frame {avg:?}, worst {worst:?}"
+        );
+        let ratio = avg.as_secs_f64() / budget.as_secs_f64();
+        if ratio < best_ratio {
+            best = avg;
+            best_budget = budget;
+            best_ratio = ratio;
+        }
+        if avg < budget {
             break;
         }
     }
-    best
+    (best, best_budget)
+}
+
+#[test]
+fn the_returned_budget_is_the_selected_rounds_faster_calibration() {
+    let ms = std::time::Duration::from_millis;
+    let run = |calibrations: &[u64], averages: &[u64]| {
+        let mut calibrations = calibrations.iter().map(|&c| ms(c));
+        let mut averages = averages.iter().map(|&a| ms(a));
+        let result = calibrated_rounds(
+            "fixed",
+            || calibrations.next().expect("a calibration for each run"),
+            || (averages.next().expect("an average for each round"), ms(0)),
+        );
+        assert!(calibrations.next().is_none() && averages.next().is_none(), "every planned round ran");
+        result
+    };
+    // Round 2 has the lowest ratio; contention after its frames, or before round 3's, leaves both at 40 ms.
+    assert_eq!(run(&[60, 60, 17, 60, 60, 17], &[130, 41, 50]), (ms(41), ms(40)));
+    // Every round contended: the selected round keeps its own raised budget.
+    assert_eq!(run(&[60, 60, 60, 60, 60, 60], &[130, 125, 140]), (ms(125), ms(120)));
+    // A round within its budget ends the run.
+    assert_eq!(run(&[60, 17], &[30]), (ms(30), ms(40)));
 }
 
 /// `n` text pages with a few comments each, so panels and overlays have work to do.
@@ -140,8 +230,8 @@ fn collapsed_comments_with_ten_thousand_named_roots_stay_within_the_frame_budget
         assert_eq!(state.views[0].comments.collapsed_pages, [0]);
     }
     // Folding removes card layout cost, so this measures filtering and thread lookup work.
-    let avg = best_average("collapsed named comments", 30, |_| h.step());
-    assert!(avg < BUDGET, "collapsed comments: average frame {avg:?}");
+    let (avg, budget) = best_average("collapsed named comments", 30, |_| h.step());
+    assert!(avg < budget, "collapsed comments: average frame {avg:?}, budget {budget:?}");
 }
 
 #[test]
@@ -161,11 +251,11 @@ fn scrolling_a_500_page_document_stays_within_the_frame_budget() {
     h.run_steps(4);
     eprintln!("PERF open {:?}", t0.elapsed());
     // Scroll through the document: 200 frames, jumping ~2 pages per frame.
-    let avg = best_average("scroll", 200, |f| {
+    let (avg, budget) = best_average("scroll", 200, |f| {
         h.state_mut().views[0].goto = Some(((f * 5) / 2 % 500, 0.3));
         h.step();
     });
-    assert!(avg < BUDGET, "average frame {avg:?}");
+    assert!(avg < budget, "average frame {avg:?}, budget {budget:?}");
 }
 
 /// Measures real wheel events and their idle frames, separately from page-jump scheduling.
@@ -189,7 +279,7 @@ fn regular_wheel_input_on_500_pages_stays_within_the_frame_budget() {
     h.hover_at(h.state().views[0].viewport_rect().center());
     h.run_steps(2);
     let start = h.state().views[0].current;
-    let average = best_average("wheel input", 200, |frame| {
+    let (average, budget) = best_average("wheel input", 200, |frame| {
         if frame % 3 == 0 {
             h.event(egui::Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Line,
@@ -202,7 +292,7 @@ fn regular_wheel_input_on_500_pages_stays_within_the_frame_budget() {
         h.step();
     });
     assert!(h.state().views[0].current > start, "wheel events must actually move through the document");
-    assert!(average < BUDGET, "wheel input: average frame {average:?}");
+    assert!(average < budget, "wheel input: average frame {average:?}, budget {budget:?}");
 }
 
 #[test]
@@ -222,10 +312,10 @@ fn panels_with_hundreds_of_items_stay_within_the_frame_budget() {
             app
         });
         h.run_steps(4);
-        let avg = best_average(panel, 100, |f| {
+        let (avg, budget) = best_average(panel, 100, |f| {
             h.state_mut().views[0].goto = Some(((f * 5) % 500, 0.3));
             h.step();
         });
-        assert!(avg < BUDGET, "{panel}: average frame {avg:?}");
+        assert!(avg < budget, "{panel}: average frame {avg:?}, budget {budget:?}");
     }
 }

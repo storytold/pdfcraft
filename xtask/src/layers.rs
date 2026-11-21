@@ -90,6 +90,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("pdfcraft", Class::Exempt),
     ("cli", Class::Exempt),
     ("web", Class::Exempt),
+    ("ocr-worker", Class::Exempt),
     ("xtask", Class::Exempt),
 ];
 
@@ -286,7 +287,7 @@ mod tests {
     fn current_graph_shape_passes() {
         let g = [
             c("pdfcraft-geom", &[]),
-            c("pdfcraft-render", &[("hayro", Normal, false), ("lopdf", Normal, false)]),
+            c("pdfcraft-render", &[("craft-pdf", Normal, false), ("lopdf", Normal, false)]),
             c("pdfcraft-engine", &[("pdfcraft-render", Normal, true)]),
             c("pdfcraft-ui-egui", &[("pdfcraft-engine", Normal, true), ("egui", Normal, false), ("egui_kittest", Dev, false)]),
             c("pdfcraft", &[("pdfcraft-ui-egui", Normal, true)]),
@@ -356,7 +357,7 @@ mod tests {
 
     #[test]
     fn apps_exempt() {
-        for app in ["pdfcraft", "pdfcraft-cli", "pdfcraft-web", "xtask"] {
+        for app in ["pdfcraft", "pdfcraft-cli", "pdfcraft-web", "pdfcraft-ocr-worker", "xtask"] {
             assert!(check(&[c(app, &[("egui", Normal, false), ("pdfcraft-ui-egui", Normal, true)])]).is_empty());
         }
     }

@@ -73,7 +73,8 @@ impl Walk<'_> {
         // Marked-content stack: whether each level is tagged or an artifact.
         let mut stack: Vec<bool> = Vec::new();
         let mut untagged = 0;
-        for op in pdfcraft_content::parse(data).ops {
+        // One operator at a time: the walk keeps counts, never the stream's operators.
+        for op in pdfcraft_content::ops(data) {
             let inside = covered || stack.last().copied().unwrap_or(false);
             match op.op.as_slice() {
                 b"BMC" => stack.push(inside || op.name(0) == Some(b"Artifact")),
@@ -261,11 +262,13 @@ fn annotation_rect(doc: &Document, annot: &Dict) -> Option<[f64; 4]> {
 
 pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usize], scan: &Scan, tagged: bool) -> Vec<Finding> {
     let mut out = Vec::new();
-    let annots = |p: &Page| -> Vec<(ObjRef, Dict)> {
+    // The annotation objects are shared, never deep-copied: a reference repeated across a page's
+    // Annots array (or its pages) must not copy the dictionary each time.
+    let annots = |p: &Page| -> Vec<(ObjRef, std::sync::Arc<Object>)> {
         let a = p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
         a.iter()
-            .filter_map(|x| x.as_ref().and_then(|r| doc.get(r).as_dict().cloned().map(|d| (r, d))))
-            .filter(|(_, d)| d.name(b"Subtype") != Some(b"Popup"))
+            .filter_map(|x| x.as_ref().map(|r| (r, doc.get(r))))
+            .filter(|(_, o)| o.as_dict().is_some_and(|d| d.name(b"Subtype") != Some(b"Popup")))
             .collect()
     };
     match rule {
@@ -283,7 +286,8 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
         Rule::TaggedAnnotations | Rule::TaggedMultimedia | Rule::TaggedFormFields => {
             for &p in list {
                 let Some(page) = pages.get(p) else { continue };
-                for (_, a) in annots(page) {
+                for (_, obj) in annots(page) {
+                    let Some(a) = obj.as_dict() else { continue };
                     let st = a.name(b"Subtype").unwrap_or(b"");
                     let applies = match rule {
                         Rule::TaggedFormFields => st == b"Widget",
@@ -298,11 +302,11 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
                         let pattern = if st == b"Widget" {
                             "Form field on page {p} isn't tagged"
                         } else {
-                            values.push(("{}", subtype_name(&a)));
+                            values.push(("{}", subtype_name(a)));
                             "{} annotation on page {p} isn't tagged"
                         };
                         let mut finding = Finding::worded(Some(p), pattern, values);
-                        finding.bbox = annotation_rect(doc, &a);
+                        finding.bbox = annotation_rect(doc, a);
                         out.push(finding);
                     }
                 }
@@ -344,7 +348,8 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
             let mut seen = HashSet::new();
             for &p in list {
                 let Some(page) = pages.get(p) else { continue };
-                for (r, a) in annots(page) {
+                for (r, obj) in annots(page) {
+                    let Some(a) = obj.as_dict() else { continue };
                     if a.name(b"Subtype") != Some(b"Widget") {
                         continue;
                     }
@@ -361,7 +366,7 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
                             "Field \"{}\" on page {p} has no description (tooltip)",
                             vec![("{}", full_name(doc, field)), ("{p}", (p + 1).to_string())],
                         );
-                        finding.bbox = annotation_rect(doc, &a);
+                        finding.bbox = annotation_rect(doc, a);
                         out.push(finding);
                     }
                 }
