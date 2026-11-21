@@ -130,7 +130,6 @@ fn right_click(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
 /// A row event of the Attachments list becomes an attachment action: a double click saves a file that
 /// is not a PDF and opens one that is; the row menu offers Open only for the PDF, and its Save, Open and
 /// Delete act on the row it was opened on.
-#[ignore = "known gap of the egui-to-craft port: see docs/port-known-gaps.md"]
 #[test]
 fn attachment_rows_turn_their_events_into_attachment_actions() {
     let saved = Path::new("out/saved notes.txt");
@@ -143,6 +142,12 @@ fn attachment_rows_turn_their_events_into_attachment_actions() {
     assert_eq!(h.state().views.len(), 1, "nothing opens");
     double_click(&mut h, "inner.pdf");
     assert_eq!(h.state().views.len(), 2, "the attached PDF opens in a tab of its own");
+    // Opening the same attachment again selects its existing tab. Close it and keep a different
+    // document open so the menu action must create a third tab.
+    h.state_mut().close_tab(1);
+    let ctx = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx, "other.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+    h.run_steps(3);
     h.get_by_role_and_label(egui::accesskit::Role::Tab, "doc.pdf").click();
     h.run_steps(3);
     // The menu of a text file has no Open; the PDF's has.

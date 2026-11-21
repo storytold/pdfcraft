@@ -1,12 +1,10 @@
 # Known gaps of the egui-to-craft port
 
-Status: 12 app tests are ignored at the end of the port's test phase (2026-11-20), so the suite can move on to the
-look-and-behaviour phase. Each still describes behaviour production had; each is a real gap to close, not a test to
-drop. Remove the `#[ignore]` when its gap is fixed. Framework items (F-n) are in the port workspace's follow-up list.
+Status: 11 app tests remain ignored after the port's test phase (2026-11-20). Remove the `#[ignore]` when its gap is
+fixed. Framework items (F-n) are in the port workspace's follow-up list.
 
 | Test | How it fails | Likely cause |
 |---|---|---|
-| `attachment_row::attachment_rows_turn_their_events_into_attachment_actions` | Open from the row menu runs twice | the row menu and the row's own activation both answer one click |
 | `comments::a_double_click_on_a_replace_text_opens_its_one_window` | the group's window doesn't open on the double-click | the second press goes to the canvas tool, not the comment part |
 | `comments::closing_a_pop_up_saves_its_typed_text` | typing and closing aren't one undo step | the pop-up's close commits the text as a separate edit |
 | `content::added_picture_resizes_repeatedly_and_drags_back_from_out_of_bounds_without_smear` | edge texels smear across the out-of-bounds half | texture sampling/clamping of the cached picture while dragged out of the page |
