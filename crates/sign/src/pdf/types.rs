@@ -189,6 +189,7 @@ pub const WORDINGS: &[&str] = &[
     "The document has been altered since this signature was applied in ways it does not permit ({}).",
     // Who signed, and when.
     "The signer's certificate was not valid at the time of signing.",
+    "The signer's certificate is not valid now, and no timestamp from a trusted authority shows that it was valid when the document was signed.",
     "The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation).",
     "The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).",
     "The signer's certificate has critical extensions PdfCraft does not recognize ({}).",
@@ -205,7 +206,7 @@ pub const WORDINGS: &[&str] = &[
     "The signature's timestamp token does not cover the signature value.",
     "The signature's timestamp token could not be verified ({}).",
     "The embedded timestamp token is valid and its authority is trusted; trusted time is {}.",
-    "The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the signing time claimed by the signer is used instead.",
+    "The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the certificates are checked at the current time instead.",
     // What the document's own revocation evidence says about the signer.
     "The signer's certificate has been revoked ({}).",
     "The document's embedded revocation information shows that the signer's certificate has not been revoked.",

@@ -71,7 +71,8 @@ pub struct SignatureInfo {
     pub certificate: Option<Certificate>,
     /// The chain as built (signer first).
     pub chain: Vec<Certificate>,
-    /// `/M` as written, and the signing time used for checks.
+    /// `/M` as written, and the signing time the signer claims (signingTime, else `/M`): shown,
+    /// but not what the certificate is checked at, which is a trusted timestamp's time, else now.
     pub date: Option<String>,
     pub signing_time: Option<Time>,
     pub reason: Option<String>,
