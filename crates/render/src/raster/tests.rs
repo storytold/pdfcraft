@@ -236,6 +236,29 @@ fn page_panic_retires_shared_generation_and_healthy_pages_use_private_parsers() 
     assert_eq!(pool.shared.parses.load(Ordering::Relaxed), before, "a failed page does not trigger repeated parsing");
 }
 
+/// Review finding: a panic in Copy with formatting's document survey, which runs before the
+/// page's own guarded render, doesn't take the worker with it: the request is answered and the
+/// worker answers the next one. A survey that panics every time (again when the page's own
+/// extraction runs it) costs the page only its recovered layer: the page keeps its strict text,
+/// the shared parser stays, and no request is marked as one that crashes the renderer.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_survey_panic_leaves_the_worker_running() {
+    let pool = RenderPool::new(Arc::new(ONE_PAGE.to_vec()), 1, RenderConfig::default());
+    pool.shared.recovery.panic_in_survey_for_tests();
+    pool.set_queue(vec![RenderRequest { kind: RequestKind::RecoveredText, scale: 1.0, ..Default::default() }]);
+    let page = receive_before_deadline(&pool);
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert!(page.text.is_some());
+    assert!(page.recovered.is_none());
+    assert!(lock(&pool.shared.stuck).is_empty());
+    assert!(pool.shared.parser.valid.load(Ordering::Acquire));
+    // The same worker answers the next request.
+    pool.set_queue(vec![RenderRequest { kind: RequestKind::RecoveredText, scale: 1.0, tag: 1, ..Default::default() }]);
+    assert!(receive_before_deadline(&pool).text.is_some());
+    assert_eq!(pool.threads(), 1);
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn results_queued_before_invalidation_are_retried_privately() {
@@ -468,7 +491,7 @@ fn worker_reuses_parser_and_releases_source_after_rendering() {
         assert_eq!(page.request.tag, tag as u64);
         match kind {
             RequestKind::Pixels => assert_eq!((page.width, page.height), (100, 50)),
-            RequestKind::Text => assert!(page.text.is_some()),
+            RequestKind::Text | RequestKind::RecoveredText => assert!(page.text.is_some()),
         }
         assert_eq!(pool.shared.parses.load(std::sync::atomic::Ordering::Relaxed), 1, "requests reuse one parser");
     }
@@ -9520,9 +9543,9 @@ fn decoded_images_with_identical_dictionaries_keep_their_own_pixels() {
     let pdf = parse(&Arc::new(pdf), None).expect("parses");
     let cache = RenderCache::new();
     let settings = InterpreterSettings::default();
-    let preview = render_page(&pdf, &cache, &settings, &RenderConfig::default(), req(true)).expect("preview renders");
-    let fin = render_page(&pdf, &cache, &settings, &RenderConfig::default(), req(false)).expect("final renders");
-    let fresh = render_page(&pdf, &RenderCache::new(), &settings, &RenderConfig::default(), req(false)).expect("final renders");
+    let preview = render_page(&pdf, &cache, &settings, None, &RenderConfig::default(), req(true)).expect("preview renders");
+    let fin = render_page(&pdf, &cache, &settings, None, &RenderConfig::default(), req(false)).expect("final renders");
+    let fresh = render_page(&pdf, &RenderCache::new(), &settings, None, &RenderConfig::default(), req(false)).expect("final renders");
     assert_eq!(rgb_at(&preview.2, w, 35, 35), [0, 0, 255]);
     assert_eq!(&fin.2[..], &fresh.2[..], "a final render after a preview matches one with a fresh cache");
 }
@@ -11918,4 +11941,14 @@ fn a_to_unicode_cmap_reads_its_mappings_past_a_token_it_cannot_parse() {
     // hayro-postscript's `parse_object_or_skip_does_not_read_a_failed_read_again`.)
     let unclosed = format!("{body}{}{}", "(".repeat(4096), "x".repeat(1 << 16));
     assert!(CMap::parse(unclosed.as_bytes(), |_| None).is_some_and(|c| c.lookup_bf_string(0x48).is_some()));
+}
+
+/// Review finding: a recovered-text request that crashed or overran the watchdog is remembered
+/// as a text request of the page, so the page's text request fails at once instead of costing
+/// a second crash or watchdog; a pixel request of the page is another matter.
+#[test]
+fn a_failed_recovered_text_request_is_remembered_as_the_pages_text() {
+    let key = |kind| RequestFailureKey::from(RenderRequest { page: 3, kind, ..Default::default() });
+    assert!(key(RequestKind::RecoveredText) == key(RequestKind::Text));
+    assert!(key(RequestKind::RecoveredText) != key(RequestKind::Pixels));
 }
