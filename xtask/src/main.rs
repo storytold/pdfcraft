@@ -12,6 +12,7 @@ mod license_check;
 mod macos_integration;
 mod netcheck;
 mod parity;
+mod pdf_deps;
 mod screenshots;
 mod version;
 mod web;
@@ -22,6 +23,9 @@ type Command = fn(&[String]) -> anyhow::Result<()>;
 const COMMANDS: &[(&str, &str, Command)] = &[
     ("version", "Print the workspace version, or `version set X.Y.Z[-pre]` to change it and refresh Cargo.lock", version_cmd),
     ("layers", "Enforce the crate dependency layering (plan/architecture.md §3)", gates::layers),
+    ("pdf-deps", "Check the pinned shared PDF reader, its backend and the local inspector", |_| {
+        pdf_deps::run(&gates::root()).map_err(anyhow::Error::msg)
+    }),
     ("wasm", "cargo check --target wasm32-unknown-unknown for every crate below L8, in one call", gates::wasm),
     ("deny", "Dependency licences, bans, sources and advisories (deny.toml; needs cargo-deny)", gates::deny),
     (
