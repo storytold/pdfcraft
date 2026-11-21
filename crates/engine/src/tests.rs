@@ -923,6 +923,7 @@ fn a_repaired_file_is_rewritten_by_save_even_without_edits() {
         let id = s.open("broken.pdf", Some("/tmp/broken.pdf".into()), Arc::new(damaged.clone()), None).unwrap();
         let doc = s.get(id).unwrap();
         assert!(doc.repair_log().iter().any(|l| l.contains("rebuilt cross-reference index")), "{name}: {:?}", doc.repair_log());
+        assert!(doc.structure_repaired(), "{name}");
         assert_eq!(doc.info.pages.len(), 2, "{name}");
         assert!(!doc.dirty, "{name}: a repair is not an edit");
         let saved = s.save_bytes(id).unwrap();
@@ -933,6 +934,7 @@ fn a_repaired_file_is_rewritten_by_save_even_without_edits() {
         s.mark_saved(id, saved.clone(), None).unwrap();
         let doc = s.get(id).unwrap();
         assert!(doc.repair_log().is_empty(), "{name}: {:?}", doc.repair_log());
+        assert!(!doc.structure_repaired(), "{name}");
         assert_eq!(doc.info.pages.len(), 2, "{name}");
         // Sound now: saving again without edits writes the same bytes.
         assert_eq!(s.save_bytes(id).unwrap(), saved, "{name}");
