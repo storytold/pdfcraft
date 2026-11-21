@@ -32,16 +32,15 @@ mod layout;
 use as_docx::MAX_MEDIA;
 pub(crate) use as_docx::hex;
 pub use as_docx::{docx, docx_with_language};
-pub(crate) use as_html::allowed;
-#[cfg(test)]
-use as_html::base64;
-pub(crate) use as_html::esc;
 pub use as_html::{html, html_simple, html_simple_with_language, html_with_language};
 pub use as_markdown::markdown;
 #[cfg(test)]
 use as_markdown::{emphasis, paragraph};
 pub use as_rtf::{rtf, rtf_with_title, rtf_with_title_checked};
 pub use clip::{ClipBuilder, ClipSpan, ClipStyle, ClipText, MAX_CLIP_HTML_BYTES, MAX_CLIP_SPANS, MAX_CLIP_TEXT_BYTES, clip_html, font_family};
+#[cfg(test)]
+use craft_html::standalone::base64;
+pub(crate) use craft_html::standalone::{allowed, esc};
 #[cfg(test)]
 use flow::list_item;
 pub use layout::{Block, Cell, Image, Page, Table};
