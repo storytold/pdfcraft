@@ -151,8 +151,8 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
                     info.details.push(Detail::plain("The signature's timestamp token does not cover the signature value."));
                 } else {
                     // Only a token from a trusted authority (valid when it stamped) is trusted
-                    // time; otherwise its time is reported but validation uses the signer's
-                    // own claimed time, as without a timestamp.
+                    // time; otherwise its time is reported but validation uses the current
+                    // time, as without a timestamp.
                     let mut pool = crate::timestamp::token_certs(raw);
                     pool.extend(trust.certs.iter().cloned());
                     let tsa = t.signer_certificate();
@@ -253,9 +253,11 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
     info.signing_time = cms_time.or_else(|| info.date.as_deref().and_then(Time::from_pdf));
     let mut pool = embedded.to_vec();
     pool.extend(trust.certs.iter().cloned());
-    // The time the chain is judged at: trusted timestamp, else the signer's claimed time.
-    let at = info.timestamp_time.or(info.signing_time);
-    let (chain, refused) = build_chain_noted(&cert, &pool, at);
+    // The time the chain and the revocation evidence are judged at: a trusted timestamp, else
+    // now. The signer's claimed time (signingTime, else `/M`) is the signer's own word, so it is
+    // shown but never moves the judging time, and without it the checks still run (#7929).
+    let at = info.timestamp_time.unwrap_or_else(current_time);
+    let (chain, refused) = build_chain_noted(&cert, &pool, Some(at));
     let chain: Vec<Certificate> = chain.into_iter().cloned().collect();
     let trusted = chain.iter().any(|c| trust.trusts(c));
     info.chain = chain;
@@ -268,7 +270,7 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
     // Revocation evidence embedded in the document security store, if any. A verified
     // revocation is final: later blocks must not soften the verdict.
     let signer = info.chain.first().cloned();
-    let revocation = check_dss_revocation(doc, signer.as_ref(), &at, info);
+    let revocation = check_dss_revocation(doc, signer.as_ref(), at, info);
     let revoked = revocation == DssRevocation::Revoked;
     // Changes after signing.
     let mut locks = Locked::Kept;
@@ -362,10 +364,13 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
         }
         problems = true;
     }
-    if let Some(t) = info.timestamp_time.or(info.signing_time)
-        && !cert.valid_at(t)
-    {
-        info.details.push(Detail::plain("The signer's certificate was not valid at the time of signing."));
+    if !cert.valid_at(at) {
+        info.details.push(match info.timestamp_time {
+            Some(_) => Detail::plain("The signer's certificate was not valid at the time of signing."),
+            None => Detail::plain(
+                "The signer's certificate is not valid now, and no timestamp from a trusted authority shows that it was valid when the document was signed.",
+            ),
+        });
         // A verified revocation already made the signature invalid; keep it that way.
         if !problems && !revoked {
             info.status = Status::Unknown;
@@ -402,7 +407,7 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
             .push(Detail::of("The embedded timestamp token is valid and its authority is trusted; trusted time is {}.", Fill::Value(t.to_string())));
     } else if let Some(t) = unverified_time {
         info.details.push(Detail::of(
-            "The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the signing time claimed by the signer is used instead.",
+            "The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the certificates are checked at the current time instead.",
             Fill::Value(t.to_string()),
         ));
     }
@@ -493,13 +498,22 @@ enum DssRevocation {
     NotRevoked,
 }
 
+/// Now, by the system clock: when a signature without a trusted timestamp is judged.
+fn current_time() -> Time {
+    let secs = match web_time::SystemTime::now().duration_since(web_time::SystemTime::UNIX_EPOCH) {
+        Ok(after) => i64::try_from(after.as_secs()).unwrap_or(i64::MAX),
+        Err(before) => i64::try_from(before.duration().as_secs()).map_or(i64::MIN, |s| -s),
+    };
+    Time::from_unix(secs)
+}
+
 /// Check the revocation evidence in the catalog's `/DSS` against the signer's chain at `at`.
 /// Only evidence whose signature verifies against the issuer counts; returns whether the
 /// certificate is revoked (which invalidates the signature), or whether a cap kept the check from
 /// reading all of the evidence.
-fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: &Option<Time>, info: &mut SignatureInfo) -> DssRevocation {
+fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: Time, info: &mut SignatureInfo) -> DssRevocation {
     use crate::revocation::{CertificateList, OcspResponse, RevocationStatus};
-    let (Some(signer), Some(at)) = (signer, *at) else { return DssRevocation::NotRevoked };
+    let Some(signer) = signer else { return DssRevocation::NotRevoked };
     let Some(root) = doc.root() else { return DssRevocation::NotRevoked };
     let Some(dss) = doc.get(root).as_dict().and_then(|c| c.get(b"DSS").cloned()).map(|d| doc.resolve(&d)).and_then(|d| d.as_dict().cloned()) else {
         return DssRevocation::NotRevoked;

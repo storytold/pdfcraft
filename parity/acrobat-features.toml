@@ -6438,8 +6438,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.validate"]
 tools = ["sign_list"]
-evidence = ["crates/sign/tests/it/pdf.rs::signing_then_validating_with_and_without_trust", "crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/sign/tests/it/chain.rs::a_trusted_signer_whose_certificate_may_not_sign_is_not_valid"]
-notes = "The signer's key usage, extended key usage and critical extensions are checked; name constraints are not"
+evidence = ["crates/sign/tests/it/pdf.rs::signing_then_validating_with_and_without_trust", "crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/sign/tests/it/chain.rs::a_trusted_signer_whose_certificate_may_not_sign_is_not_valid", "crates/sign/tests/it/pdf.rs::the_signers_claimed_time_does_not_save_an_expired_or_revoked_certificate"]
+notes = "The signer's key usage, extended key usage and critical extensions are checked; name constraints are not. Certificate validity and the document's revocation evidence are judged at a trusted timestamp's time, else at the current time; the signer's own claimed time (signingTime or /M) is shown but not relied on (#7929)"
 
 [[feature]]
 id = "sign.signatures-panel"

@@ -1167,9 +1167,9 @@ fn an_embedded_verified_revocation_invalidates_the_signature() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
     let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
     // The signer's own CRL (self-signed test identity) revokes its certificate, in a window
-    // that covers the signing date (October 2026).
+    // that covers now: without a trusted timestamp, that is when the evidence is judged.
     let (this, next) =
-        (Time { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0 }, Time { year: 2027, month: 1, day: 1, hour: 0, minute: 0, second: 0 });
+        (Time { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0 }, Time { year: 9999, month: 1, day: 1, hour: 0, minute: 0, second: 0 });
     let alg = id.key.signature_algorithm(pdfcraft_sign::DigestAlg::Sha256);
     let tbs = der::seq(&[
         &der::int(1),
@@ -2263,17 +2263,16 @@ fn self_crl(id: &pkcs12::DigitalId, this: Time, next: Time, revoked_at: Time) ->
 #[test]
 fn a_revoked_certificate_stays_invalid_when_it_was_also_expired_at_signing() {
     use pdfcraft_sign::dss::{self, Evidence};
-    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
-    // Signed in 2040, after the test certificate expired (2036).
-    let late = SignOptions { date: "D:20400101120000Z".into(), ..opts() };
-    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &late).unwrap();
     let t = |year| Time { year, month: 1, day: 1, hour: 0, minute: 0, second: 0 };
-    let crl = self_crl(&id, t(2039), t(2041), t(2039));
+    // Expired in 2021, so without a trusted timestamp it is not valid when it is judged (now),
+    // and revoked by a CRL that is current now.
+    let id = signer_id(t(2020), t(2021));
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { date: "D:20200601120000Z".into(), ..opts() }).unwrap();
+    let crl = self_crl(&id, t(2020), t(9999), Time { month: 6, ..t(2020) });
     let ltv = dss::embed(&open(&signed), &Evidence { certs: Vec::new(), ocsps: Vec::new(), crls: vec![crl] }).unwrap();
-    let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
-    for trust in [TrustStore::default(), TrustStore { certs: vec![anchor] }] {
+    for trust in [TrustStore::default(), TrustStore { certs: vec![id.certificate.clone()] }] {
         let s = signatures(&open(&ltv), &ltv, &trust).into_iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
-        assert!(s.details.iter().any(|d| d.message.contains("not valid at the time of signing")), "{:?}", s.details);
+        assert!(s.details.iter().any(|d| d.message.contains("is not valid now")), "{:?}", s.details);
         assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
         assert!(s.details.iter().any(|d| d.message.contains("revoked")), "{:?}", s.details);
     }
@@ -2284,7 +2283,7 @@ fn a_revocation_behind_many_dss_entries_is_not_reported_valid() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
     let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
     let t = |year| Time { year, month: 1, day: 1, hour: 0, minute: 0, second: 0 };
-    let crl = self_crl(&id, t(2026), t(2027), Time { year: 2026, month: 6, day: 1, hour: 8, minute: 0, second: 0 });
+    let crl = self_crl(&id, t(2026), t(9999), Time { year: 2026, month: 6, day: 1, hour: 8, minute: 0, second: 0 });
     let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
     let trust = TrustStore { certs: vec![anchor] };
     // `/CRLs`: the revoking CRL after `benign` other entries; `repeated` lists one stream for all of them.
@@ -2310,19 +2309,70 @@ fn a_revocation_behind_many_dss_entries_is_not_reported_valid() {
     assert_eq!(found, Status::Unknown, "{details:?}");
 }
 
+/// A self-signed digital ID with no extensions, valid from `from` to `until`.
+fn signer_id(from: Time, until: Time) -> DigitalId {
+    let key = pdfcraft_sign::PrivateKey::generate_p256().unwrap();
+    let name = Name::build("Test Signer", "", "PdfCraft Tests", "", "US");
+    let alg = key.preferred_digest();
+    let sig_alg = key.signature_algorithm(alg);
+    let tbs = der::seq(&[
+        &der::explicit(0, &der::int(2)),
+        &der::uint(&[0x29]),
+        &sig_alg,
+        &name.raw,
+        &der::seq(&[&from.encode(), &until.encode()]),
+        &name.raw,
+        &key.public_key().spki(),
+    ]);
+    let signature = key.sign(alg, &tbs).unwrap();
+    let certificate = Certificate::parse(&der::seq(&[&tbs, &sig_alg, &der::bit_string(&signature)])).unwrap();
+    DigitalId { key, certificate, chain: Vec::new(), friendly_name: None }
+}
+
+/// Without a trusted timestamp, the signer's own claimed time (`/M`) does not move the time the
+/// certificate and the `/DSS` evidence are judged at, and a `/M` that is missing or not a date
+/// does not turn those checks off (#7929).
+#[test]
+fn the_signers_claimed_time_does_not_save_an_expired_or_revoked_certificate() {
+    use pdfcraft_sign::dss::{self, Evidence};
+    let t = |year| Time { year, month: 1, day: 1, hour: 0, minute: 0, second: 0 };
+    let sign_at = |id: &DigitalId, date: &str| pdfcraft_sign::sign(&open(&fixture()), id, &SignOptions { date: date.into(), ..opts() }).unwrap();
+    let judged = |bytes: &[u8], trust: &TrustStore| signatures(&open(bytes), bytes, trust).into_iter().find(|s| s.signed).unwrap();
+    // Expired in 2021: a `/M` back inside its validity, one that is not a date, and an empty one.
+    let expired = signer_id(t(2020), t(2021));
+    let trust = TrustStore { certs: vec![expired.certificate.clone()] };
+    for date in ["D:20200601120000Z", "D:2026garbage", ""] {
+        let s = judged(&sign_at(&expired, date), &trust);
+        assert_ne!(s.status, Status::Valid, "{date:?}: {:?}", s.details);
+    }
+    // Revoked in 2024 by a CRL in the `/DSS` that is current now: a `/M` before the revocation,
+    // and an empty one.
+    let revoked = signer_id(t(2020), t(9999));
+    let trust = TrustStore { certs: vec![revoked.certificate.clone()] };
+    let crl = self_crl(&revoked, t(2024), t(9999), Time { year: 2024, month: 6, ..t(2024) });
+    for date in ["D:20230101120000Z", ""] {
+        let signed = sign_at(&revoked, date);
+        let ltv = dss::embed(&open(&signed), &Evidence { certs: Vec::new(), ocsps: Vec::new(), crls: vec![crl.clone()] }).unwrap();
+        let s = judged(&ltv, &trust);
+        assert_eq!(s.status, Status::Invalid, "{date:?}: {:?}", s.details);
+        assert!(s.details.iter().any(|d| d.message.contains("revoked")), "{date:?}: {:?}", s.details);
+    }
+}
+
 #[test]
 fn an_untrusted_timestamp_does_not_set_the_validation_time() {
-    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
-    // The TSA claims 2027 (inside the signer's validity) but is not trusted; the signer's own
-    // clock says 2040, after the certificate expired.
-    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2027, month: 1, day: 1, hour: 0, minute: 0, second: 0 } };
-    let late = SignOptions { date: "D:20400101120000Z".into(), ..opts() };
-    let signed = pdfcraft_sign::sign_with_timestamp(&open(&fixture()), &id, &late, &tsa).unwrap();
-    let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
+    // The signer's certificate expired on 1 November 2026. The TSA claims a time inside its
+    // validity but is not trusted, so the certificate is judged now, after it expired.
+    let from = Time { year: 2026, month: 10, day: 3, hour: 0, minute: 0, second: 0 };
+    let id = signer_id(from, Time { month: 11, day: 1, ..from });
+    let tsa = TestTsa { id: tsa_id(), time: Time { day: 15, ..from } };
+    let signed =
+        pdfcraft_sign::sign_with_timestamp(&open(&fixture()), &id, &SignOptions { date: "D:20261015120000Z".into(), ..opts() }, &tsa).unwrap();
+    let anchor = id.certificate.clone();
     let s = signatures(&open(&signed), &signed, &TrustStore { certs: vec![anchor.clone()] }).into_iter().find(|s| s.signed).unwrap();
     assert_ne!(s.status, Status::Valid, "{:?}", s.details);
     assert_eq!(s.timestamp_time, None, "an untrusted token's time is not a trusted time");
-    assert!(s.details.iter().any(|d| d.message.contains("not valid at the time of signing")), "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.message.contains("is not valid now")), "{:?}", s.details);
     assert!(!s.details.iter().any(|d| d.message.contains("trusted time")), "{:?}", s.details);
     assert!(s.details.iter().any(|d| d.message.contains("unverified timestamp")), "{:?}", s.details);
     // Trusting the TSA makes its time authoritative: the certificate was valid then.
