@@ -386,6 +386,43 @@ pub(super) fn detach(doc: &mut Document, field: ObjRef) -> Result<(), FormError>
                 }
                 _ => {}
             }
+            remove_stray_kids(doc, field)?;
+        }
+    }
+    Ok(())
+}
+
+/// Take `field` out of every `/Kids` that still lists it. A damaged file can name a kid without
+/// giving it the matching `/Parent` back-pointer (ISO 32000-2 §12.7.4), so the owner never came
+/// up as the parent above: without this the reader would keep listing the kid and Delete Field
+/// would report success while the field stayed in the form (#8027).
+fn remove_stray_kids(doc: &mut Document, field: ObjRef) -> Result<(), FormError> {
+    let Some(root) = doc.root() else { return Ok(()) };
+    let Some(af) = doc.get(root).as_dict().and_then(|d| d.get(b"AcroForm").cloned()) else { return Ok(()) };
+    let mut stack: Vec<Object> = doc
+        .resolve(&af)
+        .as_dict()
+        .and_then(|d| d.get(b"Fields").cloned())
+        .map(|f| doc.resolve(&f).as_array().cloned().unwrap_or_default())
+        .unwrap_or_default();
+    let mut seen = std::collections::HashSet::new();
+    while let Some(o) = stack.pop() {
+        let Some(r) = o.as_ref() else { continue };
+        if !seen.insert(r) || seen.len() > 4096 {
+            continue;
+        }
+        let mut d = match doc.get(r).as_dict().cloned() {
+            Some(d) => d,
+            None => continue,
+        };
+        if let Some(kids_obj) = d.get(b"Kids").cloned() {
+            let kids = doc.resolve(&kids_obj).as_array().cloned().unwrap_or_default();
+            if kids.iter().any(|k| k.as_ref() == Some(field)) {
+                let kept: Vec<Object> = kids.iter().filter(|k| k.as_ref() != Some(field)).cloned().collect();
+                d.set(b"Kids".to_vec(), Object::Array(kept));
+                doc.set(r, Object::Dict(d));
+            }
+            stack.extend(kids);
         }
     }
     Ok(())
