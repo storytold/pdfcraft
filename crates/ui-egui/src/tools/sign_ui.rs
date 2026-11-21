@@ -779,6 +779,26 @@ impl PdfCraftApp {
             Err(e) => self.notify_fmt("Couldn't open the signed version: {e}", &[("e", &e.to_string())]),
         }
     }
+
+    /// Compare signed version: open the version signature `index` signed (reusing its tab, as View
+    /// signed version does) and compare it with the active document in the Compare panel, side by
+    /// side when there is room. A signature without a usable byte range is refused with the
+    /// engine's reason, and nothing opens.
+    pub fn compare_signed_version(&mut self, index: usize) {
+        let Some((current, id)) = self.active_ids() else { return };
+        let version = match self.session.get(id).map(|d| d.signed_version(index)) {
+            Some(Ok(v)) => v,
+            Some(Err(e)) => return self.notify_fmt("Couldn't compare the signed version: {e}", &[("e", &e.to_string())]),
+            None => return,
+        };
+        self.view_signed_version(version.len, version.revision);
+        // Opening failed (and said so) when the original is still the active tab.
+        let Some((_, old)) = self.active_ids().filter(|(_, old)| *old != id) else { return };
+        self.active = Some(current);
+        self.compare_old = Some(old);
+        self.compare_pages.clear();
+        self.run_compare();
+    }
 }
 
 #[cfg(test)]

@@ -102,6 +102,7 @@ fn drawing_a_signature_creating_an_id_signing_and_trusting() {
     trust_signer_and_inspect_certificate(&mut h);
     verify_signed_snapshot_reuse(&mut h);
     verify_dirty_snapshot_close(&mut h);
+    verify_compare_signed_version(&mut h);
     assert_trust_and_id_persist(&h);
 }
 
@@ -274,6 +275,32 @@ fn verify_dirty_snapshot_close(h: &mut Harness<'static, PdfCraftApp>) {
     h.get_by_label("Don't save").click();
     h.run_steps(2);
     assert_eq!(h.state().views.len(), 1);
+}
+
+fn verify_compare_signed_version(h: &mut Harness<'static, PdfCraftApp>) {
+    // Text added after signing is what Compare signed version finds, with the signed version
+    // open beside the document and the document still the one in front.
+    let id = h.state().views[0].id;
+    let note = pdfcraft_engine::AddedText { rect: [20.0, 150.0, 200.0, 180.0], text: "Added later".into(), ..Default::default() };
+    h.state_mut().session.apply(id, pdfcraft_engine::Edit::AddText { page: 0, text: note }).unwrap();
+    h.run_steps(2);
+    h.get_by_label("Compare signed version").click();
+    h.run_steps(3);
+    let s = h.state();
+    assert_eq!((s.views.len(), s.active, s.right), (2, Some(0), Some(RightPanel::Compare)));
+    assert!(s.views[1].snapshot.as_ref().is_some_and(|snap| snap.kind == pdfcraft_ui_egui::canvas::SnapshotKind::SignedVersion));
+    let compare = s.compare.as_ref();
+    assert_eq!(compare.map(|c| (c.old, c.new)), Some((s.views[1].id, id)), "the signed version is the old file");
+    let changes: Vec<(&str, &str)> =
+        compare.map(|c| c.result.changes.iter().map(|ch| (ch.kind.label(), ch.new.text.as_str())).collect()).unwrap_or_default();
+    assert_eq!(changes, [("Inserted", "Added later")]);
+    // A repeat from the Signatures panel reuses the signed version's tab.
+    h.state_mut().right = Some(RightPanel::Signatures);
+    h.run_steps(2);
+    h.get_by_label("Compare signed version").click();
+    h.run_steps(3);
+    let s = h.state();
+    assert_eq!((s.views.len(), s.active, s.right), (2, Some(0), Some(RightPanel::Compare)));
 }
 
 fn assert_trust_and_id_persist(h: &Harness<'static, PdfCraftApp>) {

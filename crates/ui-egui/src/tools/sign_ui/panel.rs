@@ -64,6 +64,10 @@ pub enum PanelAction {
         len: usize,
         revision: usize,
     },
+    /// Compare signed version: signature `index` (into the panel's list as given, not as sorted).
+    CompareSigned {
+        index: usize,
+    },
     Sign(String),
     ExportCertificate(Box<Certificate>),
     /// Certificate Viewer for the signer's chain (signer first).
@@ -197,6 +201,11 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], expan
                 }
                 if ui.button(tl!("View signed version")).clicked() {
                     action = Some(PanelAction::ViewSigned { len: s.signed_len, revision: s.revision });
+                }
+                if let Some(index) = sigs.iter().position(|x| std::ptr::eq(x, s))
+                    && ui.button(tl!("Compare signed version")).clicked()
+                {
+                    action = Some(PanelAction::CompareSigned { index });
                 }
                 if let Some(c) = &s.certificate
                     && ui.button(tl!("Show certificate…")).clicked()
