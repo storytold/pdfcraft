@@ -63,7 +63,7 @@ fn change_matches_position(word: &pdfcraft_compare::Word, page: usize, rects: &[
         return false;
     }
     if !rects.is_empty() {
-        rects_overlap(word.rect, rects[0])
+        rects.iter().any(|r| rects_overlap(word.rect, *r))
     } else if let Some(rect) = near {
         rects_overlap(word.rect, rect)
     } else {
@@ -242,24 +242,32 @@ impl Session {
                 // the whole list keeps a match when the first search misses.
                 let mut start = None;
                 for candidate in new_search_from..=new_words.len() - new_word_count {
-                    if new_words[candidate..candidate + new_word_count]
-                        .iter()
-                        .zip(ch.new.text.split_whitespace())
-                        .all(|(word, text)| word.text == text)
-                        && change_matches_position(&new_words[candidate], ch.new.page, &ch.new.rects, ch.new.near)
-                    {
+                    let positional = !ch.new.rects.is_empty() || ch.new.near.is_some();
+                    let matches = if positional {
+                        change_matches_position(&new_words[candidate], ch.new.page, &ch.new.rects, ch.new.near)
+                    } else {
+                        new_words[candidate..candidate + new_word_count]
+                            .iter()
+                            .zip(ch.new.text.split_whitespace())
+                            .all(|(word, text)| word.text == text)
+                    };
+                    if matches {
                         start = Some(candidate);
                         break;
                     }
                 }
                 if start.is_none() {
                     for candidate in 0..=new_words.len() - new_word_count {
-                        if new_words[candidate..candidate + new_word_count]
-                            .iter()
-                            .zip(ch.new.text.split_whitespace())
-                            .all(|(word, text)| word.text == text)
-                            && change_matches_position(&new_words[candidate], ch.new.page, &ch.new.rects, ch.new.near)
-                        {
+                        let positional = !ch.new.rects.is_empty() || ch.new.near.is_some();
+                        let matches = if positional {
+                            change_matches_position(&new_words[candidate], ch.new.page, &ch.new.rects, ch.new.near)
+                        } else {
+                            new_words[candidate..candidate + new_word_count]
+                                .iter()
+                                .zip(ch.new.text.split_whitespace())
+                                .all(|(word, text)| word.text == text)
+                        };
+                        if matches {
                             start = Some(candidate);
                             break;
                         }
@@ -274,24 +282,32 @@ impl Session {
             let old_slice = if ch.kind == Kind::Deleted && old_word_count > 0 && old_word_count <= old_words.len() {
                 let mut start = None;
                 for candidate in old_search_from..=old_words.len().saturating_sub(old_word_count) {
-                    if old_words[candidate..candidate + old_word_count]
-                        .iter()
-                        .zip(ch.old.text.split_whitespace())
-                        .all(|(word, text)| word.text == text)
-                        && change_matches_position(&old_words[candidate], ch.old.page, &ch.old.rects, ch.old.near)
-                    {
+                    let positional = !ch.old.rects.is_empty() || ch.old.near.is_some();
+                    let matches = if positional {
+                        change_matches_position(&old_words[candidate], ch.old.page, &ch.old.rects, ch.old.near)
+                    } else {
+                        old_words[candidate..candidate + old_word_count]
+                            .iter()
+                            .zip(ch.old.text.split_whitespace())
+                            .all(|(word, text)| word.text == text)
+                    };
+                    if matches {
                         start = Some(candidate);
                         break;
                     }
                 }
                 if start.is_none() {
                     for candidate in 0..=old_words.len().saturating_sub(old_word_count) {
-                        if old_words[candidate..candidate + old_word_count]
-                            .iter()
-                            .zip(ch.old.text.split_whitespace())
-                            .all(|(word, text)| word.text == text)
-                            && change_matches_position(&old_words[candidate], ch.old.page, &ch.old.rects, ch.old.near)
-                        {
+                        let positional = !ch.old.rects.is_empty() || ch.old.near.is_some();
+                        let matches = if positional {
+                            change_matches_position(&old_words[candidate], ch.old.page, &ch.old.rects, ch.old.near)
+                        } else {
+                            old_words[candidate..candidate + old_word_count]
+                                .iter()
+                                .zip(ch.old.text.split_whitespace())
+                                .all(|(word, text)| word.text == text)
+                        };
+                        if matches {
                             start = Some(candidate);
                             break;
                         }
@@ -309,24 +325,32 @@ impl Session {
                 if old_word_count > 0 && old_word_count <= old_words.len() {
                     let mut start = None;
                     for candidate in old_search_from..=old_words.len().saturating_sub(old_word_count) {
-                        if old_words[candidate..candidate + old_word_count]
-                            .iter()
-                            .zip(ch.old.text.split_whitespace())
-                            .all(|(word, text)| word.text == text)
-                            && change_matches_position(&old_words[candidate], ch.old.page, &ch.old.rects, ch.old.near)
-                        {
+                        let positional = !ch.old.rects.is_empty() || ch.old.near.is_some();
+                        let matches = if positional {
+                            change_matches_position(&old_words[candidate], ch.old.page, &ch.old.rects, ch.old.near)
+                        } else {
+                            old_words[candidate..candidate + old_word_count]
+                                .iter()
+                                .zip(ch.old.text.split_whitespace())
+                                .all(|(word, text)| word.text == text)
+                        };
+                        if matches {
                             start = Some(candidate);
                             break;
                         }
                     }
                     if start.is_none() {
                         for candidate in 0..=old_words.len().saturating_sub(old_word_count) {
-                            if old_words[candidate..candidate + old_word_count]
-                                .iter()
-                                .zip(ch.old.text.split_whitespace())
-                                .all(|(word, text)| word.text == text)
-                                && change_matches_position(&old_words[candidate], ch.old.page, &ch.old.rects, ch.old.near)
-                            {
+                            let positional = !ch.old.rects.is_empty() || ch.old.near.is_some();
+                            let matches = if positional {
+                                change_matches_position(&old_words[candidate], ch.old.page, &ch.old.rects, ch.old.near)
+                            } else {
+                                old_words[candidate..candidate + old_word_count]
+                                    .iter()
+                                    .zip(ch.old.text.split_whitespace())
+                                    .all(|(word, text)| word.text == text)
+                            };
+                            if matches {
                                 start = Some(candidate);
                                 break;
                             }
