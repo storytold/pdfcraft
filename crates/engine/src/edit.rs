@@ -45,6 +45,13 @@ pub enum Edit {
         pages: Vec<usize>,
         at: Option<usize>,
     },
+    /// Split Pages: each of `pages` becomes `columns × rows` pages, one per cell of what it shows,
+    /// in reading order (see [`pdfcraft_organize::split_pages`]).
+    SplitPages {
+        pages: Vec<usize>,
+        columns: u32,
+        rows: u32,
+    },
     /// A copy of page template `name` inserted at `at` (clamped to the end), as JavaScript's
     /// `Template.spawn` adds it (#1429). `rename` puts the copy's fields under `P<at>.<name>`;
     /// without it they are more widgets of the template's fields.

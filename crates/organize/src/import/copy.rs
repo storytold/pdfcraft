@@ -58,6 +58,10 @@ pub(crate) struct Copier<'a> {
     pub(super) fields: Vec<ObjRef>,
     /// Optional content groups copied: (source, destination).
     pub(crate) ocgs: Vec<(ObjRef, ObjRef)>,
+    /// Copying within one document (`dst` is a copy of `src`, object for object): a
+    /// destination keeps the page it names, which is still there, rather than being mapped to
+    /// a copy or dropped (Split Pages, jpeskov on #5587).
+    pub(super) same_document: bool,
     /// When only some pages are copied: the annotations on them and the fields above each, the
     /// only kids a copied field keeps (see `fields_on`). `None` keeps every kid. Shared, so the
     /// copiers made for a repeated page or an action don't each copy it.
@@ -66,13 +70,20 @@ pub(crate) struct Copier<'a> {
 
 impl<'a> Copier<'a> {
     pub(crate) fn new(src: &'a Document, map: HashMap<ObjRef, ObjRef>, pages: HashMap<ObjRef, ObjRef>) -> Self {
-        Copier { src, depth: 0, map, pages, annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new(), kept: None }
+        Copier { src, depth: 0, map, pages, annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new(), same_document: false, kept: None }
     }
 
     /// Copy an indirect object (once), returning its destination reference.
     pub(super) fn copy_ref(&mut self, dst: &mut Document, r: ObjRef) -> Result<ObjRef, OrganizeError> {
         if let Some(d) = self.map.get(&r) {
             return Ok(*d);
+        }
+        // Within one document a layer (optional content group) is the same layer on a copy:
+        // showing or hiding it shows or hides every copy's content, not only the original's
+        // (CodeRabbit on #5587).
+        if self.same_document && self.src.get(r).as_dict().is_some_and(|d| d.name(b"Type") == Some(b"OCG")) {
+            self.map.insert(r, r);
+            return Ok(r);
         }
         // Reserve the number first so cycles (field ↔ widget) terminate.
         let new = dst.add(Object::Null);
@@ -225,6 +236,9 @@ impl<'a> Copier<'a> {
             Object::Dict(d) => self.map_dest_depth(d.get(b"D")?, depth + 1),
             Object::Array(a) => {
                 let page = a.first()?.as_ref()?;
+                if self.same_document {
+                    return Some(Object::Array(a.clone()));
+                }
                 let new_page = *self.pages.get(&page)?;
                 let mut a = a.clone();
                 a[0] = Object::Ref(new_page);
