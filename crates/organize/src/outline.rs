@@ -88,9 +88,13 @@ pub enum OutlineError {
 
 type Result<T> = std::result::Result<T, OutlineError>;
 
+/// The outline root the catalog's `/Outlines` points at. One that is not a plain dictionary (a
+/// `null`, an array, a stream, or an object the file does not define) counts as no outline, so
+/// adding a bookmark starts a new root instead of failing on it (#8009).
 fn outline_root(doc: &Document) -> Option<ObjRef> {
     let root = doc.root()?;
-    doc.get(root).as_dict()?.reference(b"Outlines")
+    let r = doc.get(root).as_dict()?.reference(b"Outlines")?;
+    matches!(*doc.get(r), Object::Dict(_)).then_some(r)
 }
 
 /// The children of `parent` (an item or the outline root), in order. Cycle-safe.
