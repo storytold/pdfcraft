@@ -346,6 +346,9 @@ impl PdfCraftApp {
                 }
             }
             "view.read_mode" => self.switch_mode(if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false),
+            "view.rulers" => {
+                self.show_rulers = !self.show_rulers;
+            }
             "view.split" => self.toggle_split(),
             crate::viewer_prefs::TOGGLE => self.toggle_interface(),
             "view.previous_view" | "view.next_view" => {

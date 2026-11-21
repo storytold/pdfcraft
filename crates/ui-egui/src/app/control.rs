@@ -10,6 +10,13 @@ impl PdfCraftApp {
         client
     }
 
+    /// Return the full JSON state of the application for UI automation and tests.
+    #[must_use]
+    pub fn ui_state(&self) -> serde_json::Value {
+        use control::Host;
+        self.state()
+    }
+
     /// Apply a named view option (`--page 3`, `--panel bookmarks`, `--theme dark`, …).
     ///
     /// This is the seed of the UI control channel (M3.9): the same verbs become `ui.set` calls.
@@ -46,6 +53,13 @@ impl PdfCraftApp {
             }
             ("show_page_edge_shadows", _) => {
                 self.show_page_edge_shadows = value.parse::<bool>().map_err(|_| "show_page_edge_shadows must be true or false")?;
+            }
+            ("rulers", _) => {
+                self.show_rulers = match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("rulers must be on or off".into()),
+                };
             }
             ("update_check_at_start", _) => {
                 self.update_check_at_start = value.parse::<bool>().map_err(|_| "update_check_at_start must be true or false")?;

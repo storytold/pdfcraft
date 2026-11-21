@@ -182,6 +182,7 @@ impl PdfCraftApp {
         // The Print dialog's own paper sizes (print.page-setup).
         v["print_custom_papers"] = serde_json::json!(self.print_draft.custom_papers);
         v["show_page_edge_shadows"] = self.show_page_edge_shadows.into();
+        v["show_rulers"] = serde_json::Value::Bool(self.show_rulers);
         // Not `check_updates_at_start`: that key was an opt-in of its own, off unless chosen, and
         // settings written then would turn this off unasked.
         v["update_check_at_start"] = self.update_check_at_start.into();
@@ -441,6 +442,9 @@ impl PdfCraftApp {
         }
         if let Some(show) = v["show_page_edge_shadows"].as_bool() {
             self.show_page_edge_shadows = show;
+        }
+        if let Some(show) = v.get("show_rulers").and_then(serde_json::Value::as_bool) {
+            self.show_rulers = show;
         }
         if let Some(width) = v["fill_text_border"].as_f64().and_then(fill_sign::valid_text_border) {
             self.fill_text_default.width = width;
