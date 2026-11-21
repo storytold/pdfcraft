@@ -5200,6 +5200,52 @@ fn dragging_a_paragraph_onto_the_next_page_keeps_it_on_its_own() {
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Move object"));
 }
 
+/// A paragraph dragged past the page's left edge and back inside before release ends up where
+/// the pointer's displacement from the drag start puts it, not offset by the time at the edge (#5264).
+#[test]
+fn a_paragraph_dragged_past_the_edge_and_back_follows_the_pointer() {
+    let mut h = harness(1, |_| {});
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let block = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_blocks(0)[0].clone()
+    };
+    // User space (200 × 300 page) → screen.
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    assert!(r.left() > 60.0, "room left of the page for the pointer: {r:?}");
+    let k = r.width() / 200.0;
+    let screen = |x: f64, y: f64| egui::pos2(r.left() + x as f32 * k, r.top() + (300.0 - y as f32) * k);
+    let before = block(&h);
+    let mid = screen((before.rect[0] + before.rect[2]) / 2.0, (before.rect[1] + before.rect[3]) / 2.0);
+    // Out past the left edge, where the paragraph is held at the edge, then back inside and
+    // dropped 30 pt right and 50 pt up of where the drag started.
+    let out = egui::pos2(r.left() - 40.0, mid.y);
+    let to = mid + egui::vec2(30.0 * k, -50.0 * k);
+    h.hover_at(mid);
+    h.run_steps(1);
+    h.drag_at(mid);
+    h.run_steps(1);
+    for (from, end) in [(mid, out), (out, to)] {
+        for step in 1..=5 {
+            h.hover_at(from + (end - from) * (step as f32 / 5.0));
+            h.run_steps(1);
+        }
+    }
+    h.drop_at(to);
+    h.run_steps(4);
+    let moved = block(&h);
+    assert_eq!(moved.text, before.text);
+    let near = |a: f64, b: f64| (a - b).abs() < 1.5;
+    assert!(
+        near(moved.rect[0], before.rect[0] + 30.0) && near(moved.rect[1], before.rect[1] + 50.0),
+        "follows the pointer from the drag start: {:?} → {:?}",
+        before.rect,
+        moved.rect
+    );
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Move object"));
+}
+
 /// Dragging a picture far past the page's corner moves it only up to the page edge (#5264).
 #[test]
 fn dragging_a_picture_past_the_page_edge_keeps_it_on_the_page() {
