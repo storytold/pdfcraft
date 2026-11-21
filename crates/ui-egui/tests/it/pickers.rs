@@ -1090,6 +1090,40 @@ fn files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 }
 
 #[test]
+fn split_never_replaces_a_file_already_in_the_folder() {
+    let dir = AttachmentDir::new();
+    std::fs::write(dir.0.join("doc0 (page 1).pdf"), b"unrelated").unwrap();
+    std::fs::create_dir(dir.0.join("doc0 (page 1) (2).pdf")).unwrap();
+    let mut h = harness(&[2]);
+    h.state_mut().export_dir_override = Some(dir.0.to_string_lossy().into_owned());
+    let split = |h: &mut Harness<'static, PdfCraftApp>| {
+        let before = files_under(&dir.0);
+        h.state_mut().split_active(&pdfcraft_ui_egui::SplitPlan::By(pdfcraft_engine::SplitBy::PageCount(1)));
+        let toast = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(toast.contains("no file was replaced"), "the notice says names changed: {toast:?}");
+        let new: Vec<_> = files_under(&dir.0).into_iter().filter(|p| !before.contains(p)).collect();
+        // Each file written under a number is named in the notice (CodeRabbit on #7999).
+        for numbered in new.iter().filter_map(|p| p.file_name()).map(|n| n.to_string_lossy()).filter(|n| n.contains(") (")) {
+            assert!(toast.contains(numbered.as_ref()), "{numbered} is named in {toast:?}");
+        }
+        new
+    };
+    let first = split(&mut h);
+    assert_eq!(first.len(), 2, "{first:?}");
+    let kept: Vec<Vec<u8>> = first.iter().map(|p| std::fs::read(p).unwrap()).collect();
+    let second = split(&mut h);
+    assert_eq!(second.len(), 2, "a second split into the same folder adds two files: {second:?}");
+    for (path, bytes) in first.iter().zip(&kept) {
+        assert_eq!(&std::fs::read(path).unwrap(), bytes, "{path:?} was replaced by the second split");
+    }
+    assert_eq!(std::fs::read(dir.0.join("doc0 (page 1).pdf")).unwrap(), b"unrelated");
+    assert!(dir.0.join("doc0 (page 1) (2).pdf").is_dir());
+    for path in first.iter().chain(&second) {
+        assert!(path.file_name().unwrap().to_string_lossy().ends_with(".pdf"), "{path:?}");
+    }
+}
+
+#[test]
 fn files_written_from_an_attachment_tab_stay_inside_the_chosen_folder() {
     let dir = AttachmentDir::new();
     let absolute = dir.0.join("elsewhere").join("x.pdf").to_string_lossy().into_owned();

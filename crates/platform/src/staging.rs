@@ -128,6 +128,34 @@ pub fn staging_suffixes() -> impl Iterator<Item = u64> {
     (0u64..).map(move |i| state.hash_one(i))
 }
 
+/// How many names [`reserve_new_name`] tries before it gives up.
+pub const RESERVE_ATTEMPTS: usize = 10_000;
+
+/// Reserve the first of `names` that nothing in `dir` has yet, for a new file that must not
+/// replace one already there (Split's parts). An empty file is created at that name with
+/// `create_new`, which fails if anything already has it (a file, a hard link, a symbolic link
+/// even when dangling, a folder, a name differing only in case on a case-insensitive volume), so
+/// a file that appears between the check and the write is not replaced either. Write the file
+/// over the returned path (for example with [`write_atomically`]), and remove it if that fails.
+/// Every name must be a single file name. When the first [`RESERVE_ATTEMPTS`] names are all
+/// taken, the error is `AlreadyExists`.
+pub fn reserve_new_name(dir: &Path, names: impl IntoIterator<Item = String>) -> std::io::Result<PathBuf> {
+    for name in names.into_iter().take(RESERVE_ATTEMPTS) {
+        if name.is_empty() || name.chars().any(std::path::is_separator) || name == "." || name == ".." {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "the file name is not a single name"));
+        }
+        let path = dir.join(&name);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(_) => return Ok(path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            // Windows reports a folder at the name as "access denied"; it is taken all the same.
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && path.symlink_metadata().is_ok() => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "every name tried is already taken in the folder"))
+}
+
 /// Write `bytes` to `path` through a staging file beside it (see [`create_staging`]; `form`
 /// names it as the caller always has), flushed to the disk and then renamed over the target: a
 /// crash, a full disk or a refused flush never leaves a half-written file where a good one was,

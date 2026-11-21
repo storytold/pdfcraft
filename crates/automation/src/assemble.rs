@@ -441,16 +441,19 @@ impl Automation {
             if let Some((end, _)) = base.char_indices().find(|(at, c)| at + c.len_utf8() > 200) {
                 base.truncate(end);
             }
-            let file = format!("{base}.pdf");
-            // Equal titles (or titles that sanitize alike) get -2, -3, ... so no part overwrites another; compared case-insensitively.
-            let mut unique = file;
-            let mut n = 1;
-            while !used.insert(unique.to_lowercase()) {
-                n += 1;
-                unique = format!("{base}-{n}.pdf");
+            // Equal titles (or titles that sanitize alike) get -2, -3, ... so no part overwrites another, compared
+            // case-insensitively; nor does a part replace a file already in the folder (organize.split-naming): the
+            // name is reserved there before the part is written.
+            let names = (1..)
+                .map(|n| if n == 1 { format!("{base}.pdf") } else { format!("{base}-{n}.pdf") })
+                .map(|name| child(&dir, &name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(name))
+                .filter(|name| !used.contains(&name.to_lowercase()));
+            let path = pdfcraft_platform::staging::reserve_new_name(&dir, names).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
+            used.insert(path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default());
+            if let Err(e) = write_atomic(&path, bytes) {
+                let _ = std::fs::remove_file(&path);
+                return Err(e);
             }
-            let path = child(&dir, &unique);
-            write_atomic(&path, bytes)?;
             files.push(json!({ "path": path.to_string_lossy(), "first_page": first, "last_page": last }));
         }
         Ok(json!({ "files": files }))
