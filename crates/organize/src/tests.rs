@@ -5024,7 +5024,7 @@ fn refs(nums: &[u32]) -> Vec<Option<ObjRef>> {
 fn pages_shown_under_an_unreadable_page_tree_node_are_gathered_in_the_order_shown() {
     let mut doc = open(tree_with_an_unreadable_node());
     assert_eq!(page_count(&doc).unwrap(), 1, "the walk stops at the unreadable node");
-    assert_eq!(recover_unreadable_page_tree_nodes(&mut doc, &refs(&[3, 4, 5])).unwrap(), 2);
+    assert_eq!(recover_unreadable_page_tree_nodes(&mut doc, &refs(&[3, 4, 5]), &|_| Some(Dict::new())).unwrap(), 2);
     assert_eq!(pages(&doc).unwrap().iter().map(|p| p.obj.num).collect::<Vec<_>>(), [3, 4, 5]);
     assert_eq!(page_rotations(&doc).unwrap(), [0, 0, 90]);
     for page in pages(&doc).unwrap() {
@@ -5043,7 +5043,7 @@ fn pages_shown_otherwise_leave_a_tree_with_an_unreadable_node_alone() {
     // without an object and a walk page left out are not this damage either.
     for shown in [refs(&[3, 4, 7]), refs(&[3, 4, 4]), vec![Some(ObjRef::new(3, 0)), None, Some(ObjRef::new(4, 0))], refs(&[4, 5]), refs(&[3])] {
         let mut doc = open(tree_with_an_unreadable_node());
-        assert_eq!(recover_unreadable_page_tree_nodes(&mut doc, &shown).unwrap(), 0, "{shown:?}");
+        assert_eq!(recover_unreadable_page_tree_nodes(&mut doc, &shown, &|_| Some(Dict::new())).unwrap(), 0, "{shown:?}");
         assert!(!doc.is_modified(), "{shown:?}");
         assert_eq!(page_count(&doc).unwrap(), 1);
     }
@@ -5055,6 +5055,38 @@ fn a_readable_tree_is_left_alone_whatever_is_shown() {
     let walked: Vec<u32> = pages(&doc).unwrap().iter().map(|p| p.obj.num).collect();
     let mut shown = walked.clone();
     shown.push(walked[0] + 1000);
-    assert_eq!(recover_unreadable_page_tree_nodes(&mut doc, &refs(&shown)).unwrap(), 0);
+    assert_eq!(recover_unreadable_page_tree_nodes(&mut doc, &refs(&shown), &|_| Some(Dict::new())).unwrap(), 0);
     assert!(!doc.is_modified());
+}
+
+#[test]
+fn pages_gathered_from_an_unreadable_node_carry_what_the_renderer_inherits_from_it() {
+    // The renderer reads node 6 as setting its own crop box, rotation and resources: the pages
+    // taken out from under it keep them (page 5 its own /Rotate), and page 3 keeps what it had.
+    let mut doc = open(tree_with_an_unreadable_node());
+    let node = |r: ObjRef| {
+        assert_eq!(r, ObjRef::new(6, 0), "only the unreadable node is asked about");
+        let mut d = Dict::new();
+        d.set(b"CropBox".to_vec(), Object::Array([10, 20, 110, 220].into_iter().map(Object::Int).collect()));
+        d.set(b"Rotate".to_vec(), Object::Int(180));
+        d.set(b"Resources".to_vec(), Object::Ref(ObjRef::new(7, 0)));
+        Some(d)
+    };
+    assert_eq!(recover_unreadable_page_tree_nodes(&mut doc, &refs(&[3, 4, 5]), &node).unwrap(), 2);
+    assert_eq!(page_rotations(&doc).unwrap(), [0, 180, 90]);
+    let entry = |page: u32, key: &[u8]| doc.get(ObjRef::new(page, 0)).as_dict().and_then(|d| d.get(key).cloned());
+    assert_eq!(entry(3, b"CropBox"), None);
+    for page in [4, 5] {
+        assert_eq!(entry(page, b"CropBox"), Some(Object::Array([10, 20, 110, 220].into_iter().map(Object::Int).collect())), "page {page}");
+        assert_eq!(entry(page, b"Resources"), Some(Object::Ref(ObjRef::new(7, 0))), "page {page}");
+        assert_eq!(entry(page, b"MediaBox").and_then(|m| m.as_array().map(Vec::len)), Some(4), "page {page} keeps the root's media box");
+    }
+}
+
+#[test]
+fn pages_under_an_unreadable_node_whose_attributes_cannot_be_carried_stay_where_they_are() {
+    let mut doc = open(tree_with_an_unreadable_node());
+    assert_eq!(recover_unreadable_page_tree_nodes(&mut doc, &refs(&[3, 4, 5]), &|_| None).unwrap(), 0);
+    assert!(!doc.is_modified());
+    assert_eq!(page_count(&doc).unwrap(), 1);
 }

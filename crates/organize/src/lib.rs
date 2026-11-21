@@ -257,9 +257,16 @@ const MAX_PARENT_CLIMB: usize = 256;
 /// reaches is shown, in the walk's order, and every other shown page is a `/Type /Page` whose
 /// `/Parent` chain leads to a `/Kids` entry the walk could not read. Then the tree is rebuilt flat
 /// in `shown` order (ISO 32000-2 §7.7.3.2: a processor need not keep the tree's structure), each
-/// page keeping what it inherits (§7.7.3.4) from the nodes the document can read. Returns how many
-/// pages were added; 0 leaves the document unchanged.
-pub fn recover_unreadable_page_tree_nodes(doc: &mut Document, shown: &[Option<ObjRef>]) -> Result<usize, OrganizeError> {
+/// page keeping what it inherits (§7.7.3.4) from the nodes above it: the nodes the document can
+/// read, and each unreadable node as `node_attributes` gives what the renderer inherits from it
+/// (the renderer reads the node leniently). Where `node_attributes` cannot give that (`None`), the
+/// pages would render differently out from under the node, and the tree is left alone. Returns how
+/// many pages were added; 0 leaves the document unchanged.
+pub fn recover_unreadable_page_tree_nodes(
+    doc: &mut Document,
+    shown: &[Option<ObjRef>],
+    node_attributes: &dyn Fn(ObjRef) -> Option<Dict>,
+) -> Result<usize, OrganizeError> {
     let mut tree = PageWalk::new(doc, pages_root(doc)?);
     let walked: Vec<(ObjRef, Dict)> = tree.by_ref().collect();
     let unreadable = tree.unreadable;
@@ -270,6 +277,7 @@ pub fn recover_unreadable_page_tree_nodes(doc: &mut Document, shown: &[Option<Ob
     let mut order: Vec<(ObjRef, Dict)> = Vec::with_capacity(shown.len());
     let mut listed = std::collections::HashSet::new();
     let mut next = walked.iter().peekable();
+    let mut nodes = std::collections::HashMap::new();
     for page in shown {
         let Some(page) = *page else { return Ok(0) };
         if !listed.insert(page) {
@@ -283,7 +291,14 @@ pub fn recover_unreadable_page_tree_nodes(doc: &mut Document, shown: &[Option<Ob
         if walked_set.contains(&page) {
             return Ok(0);
         }
-        let Some(inherited) = inherited_through_unreadable(doc, page, &unreadable) else { return Ok(0) };
+        let Some(inherited) = inherited_through_unreadable(doc, page, &unreadable, &mut |node| {
+            if !nodes.contains_key(&node) && nodes.len() >= MAX_UNREADABLE_NODES_READ {
+                return None;
+            }
+            nodes.entry(node).or_insert_with(|| node_attributes(node)).clone()
+        }) else {
+            return Ok(0);
+        };
         order.push((page, inherited));
     }
     if next.next().is_some() {
@@ -296,20 +311,34 @@ pub fn recover_unreadable_page_tree_nodes(doc: &mut Document, shown: &[Option<Ob
     Ok(added)
 }
 
+/// How many unreadable nodes [`recover_unreadable_page_tree_nodes`] asks the renderer about: each
+/// question reads the file again, and real damage is one node or a few.
+const MAX_UNREADABLE_NODES_READ: usize = 16;
+
 /// What `page`, a `/Type /Page` the walk did not reach, inherits on the way up its `/Parent` chain
-/// to an `unreadable` node: from the readable nodes between, nearest first, then from the nodes
-/// above the unreadable one. `None` when the chain reaches no unreadable node.
-fn inherited_through_unreadable(doc: &Document, page: ObjRef, unreadable: &std::collections::HashMap<ObjRef, Owners>) -> Option<Dict> {
+/// to an `unreadable` node: from the readable nodes between, nearest first, then from the
+/// unreadable node as `node_attributes` reads it, then from the nodes above it. `None` when the
+/// chain reaches no unreadable node or `node_attributes` cannot read the one it reaches.
+fn inherited_through_unreadable(
+    doc: &Document,
+    page: ObjRef,
+    unreadable: &std::collections::HashMap<ObjRef, Owners>,
+    node_attributes: &mut dyn FnMut(ObjRef) -> Option<Dict>,
+) -> Option<Dict> {
     let leaf = doc.get(page);
     let leaf = leaf.as_dict().filter(|d| d.name(b"Type") == Some(b"Page"))?;
     let mut at = leaf.reference(b"Parent")?;
     let mut attrs = Dict::new();
     for _ in 0..MAX_PARENT_CLIMB {
         if let Some(owners) = unreadable.get(&at) {
+            let own = node_attributes(at)?;
             for (k, owner) in INHERITABLE.iter().zip(owners) {
-                if !attrs.contains(k)
-                    && let Some(v) = owner.as_ref().and_then(|o| o.as_dict()).and_then(|o| o.get(k))
-                {
+                if attrs.contains(k) {
+                    continue;
+                }
+                if let Some(v) = own.get(k) {
+                    attrs.set(k.to_vec(), v.clone());
+                } else if let Some(v) = owner.as_ref().and_then(|o| o.as_dict()).and_then(|o| o.get(k)) {
                     attrs.set(k.to_vec(), v.clone());
                 }
             }
