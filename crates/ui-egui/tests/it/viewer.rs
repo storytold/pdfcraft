@@ -199,6 +199,67 @@ fn find_shortcuts_advance_and_retreat_matches() {
     assert_eq!(h.state().views[0].find.as_ref().unwrap().current, Some((start + n - 1) % n));
 }
 
+#[test]
+fn find_can_jump_from_the_fiftieth_match_to_the_first() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("matches.pdf", None, fixture(50)).unwrap();
+        app.views[0].open_find();
+        app
+    });
+    let production_step = |h: &mut Harness<'static, PdfCraftApp>| {
+        let ctx = h.ctx.clone();
+        let mut raw = std::mem::take(h.input_mut());
+        h.state_mut().prepare_raw_input(&ctx, &mut raw);
+        *h.input_mut() = raw;
+        h.step();
+    };
+    h.run_steps(3);
+    h.input_mut().events.push(egui::Event::Text("PAGE".into()));
+    production_step(&mut h);
+    crate::support::wait_until(&mut h, "all 150 Find matches", |app| app.views[0].find.as_ref().is_some_and(|find| find.matches.len() == 150));
+    h.state_mut().views[0].go_to_match(49);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].find.as_ref().unwrap().current, Some(49));
+
+    let press = |h: &mut Harness<'static, PdfCraftApp>, key| {
+        for pressed in [true, false] {
+            h.input_mut().events.push(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE });
+        }
+        production_step(h);
+    };
+    // Tab from the search field reaches the match number and selects its contents.
+    h.query_by_label("Match number").expect("Find offers an editable match number");
+    press(&mut h, egui::Key::Tab);
+    h.run_steps(2);
+    let number_id = h.state().views[0].find_input_id().with("match-number");
+    assert!(h.ctx.memory(|memory| memory.has_focus(number_id)));
+
+    for input in ["0", "999", "abc", "1"] {
+        if input != "0" {
+            h.get_by_label("Match number").click();
+            h.run_steps(2);
+        }
+        h.input_mut().events.push(egui::Event::Text(input.into()));
+        production_step(&mut h);
+        press(&mut h, egui::Key::Enter);
+        h.run_steps(2);
+        let expected = if input == "1" { 0 } else { 49 };
+        assert_eq!(h.state().views[0].find.as_ref().unwrap().current, Some(expected), "submitted {input:?}");
+    }
+    assert_eq!(h.state().views[0].current, 0);
+
+    h.get_by_label("Match number").click();
+    h.run_steps(2);
+    h.input_mut().events.push(egui::Event::Text("50".into()));
+    production_step(&mut h);
+    press(&mut h, egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].find.as_ref().expect("Find stays open").current, Some(0));
+    assert!(h.ctx.memory(|memory| memory.has_focus(h.state().views[0].find_input_id())));
+}
+
 /// #2669: ⌘G and ⇧⌘G step through the matches while the find field still has the focus.
 #[test]
 fn find_shortcuts_work_from_the_find_field() {

@@ -492,8 +492,10 @@ fn view_keys(
     use egui::Key;
     let key = |k| (arrows || !matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)) && keys.pressed(ctx, k);
     // An open menu takes Escape first and closes; the selection stays for the next one (#3535).
-    // So does an open field, whose list closes.
-    if key(Key::Escape) && !egui::Popup::is_any_open(ctx) && !field_open {
+    // So does an open field, whose list closes. Egui clears the match number's focus at the
+    // start of the frame, but its draft still owns Escape until the Find bar discards it.
+    let editing_match_number = view.find.as_ref().is_some_and(|find| find.match_number.is_some());
+    if key(Key::Escape) && !egui::Popup::is_any_open(ctx) && !field_open && !editing_match_number {
         escape_closes_one(view);
     }
     // The open field's keys leave the page under it where it is.
