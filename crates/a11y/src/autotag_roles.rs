@@ -109,7 +109,7 @@ pub(crate) struct Fonts {
 }
 
 impl Fonts {
-    fn get(&mut self, doc: &Document, font: &Object) -> Option<Rc<Metrics>> {
+    pub(crate) fn get(&mut self, doc: &Document, font: &Object) -> Option<Rc<Metrics>> {
         let key = match font {
             Object::Ref(r) => Some(*r),
             _ => None,
