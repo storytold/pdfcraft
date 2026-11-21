@@ -6400,6 +6400,7 @@ mod elsewhere;
 mod form_matrix;
 mod hidden_scope;
 mod identification;
+mod image_xmp;
 mod inline_images;
 mod limits;
 mod metadata_fail_closed;

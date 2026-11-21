@@ -171,7 +171,10 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
         return Some(None);
     }
     let mut dict = s.dict.clone();
-    for key in [b"Length".as_slice(), b"DecodeParms", b"DP", b"Alternates"] {
+    // The image's own XMP packet describes the image as it was, and may carry a thumbnail of it
+    // (`xmp:Thumbnails`): the copy doesn't keep it, so a full save leaves it out with the
+    // original, as when the image is removed whole (#7981).
+    for key in [b"Length".as_slice(), b"DecodeParms", b"DP", b"Alternates", b"Metadata"] {
         dict.remove(key);
     }
     if !data_elsewhere(doc, s) {

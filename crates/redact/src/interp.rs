@@ -1298,6 +1298,9 @@ fn xobject(
             }
             let mut dict = s.dict.clone();
             dict.remove(b"Length");
+            // The form's own XMP packet describes it as it drew before, and may carry a thumbnail
+            // of it (`xmp:Thumbnails`), as an image's may (#7981).
+            dict.remove(b"Metadata");
             if new_data.is_some() {
                 // As for page content streams: the source text of an added item (Edit ▸ Add
                 // content) would keep what the rewrite removed.
