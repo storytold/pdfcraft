@@ -498,6 +498,11 @@ fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> s
 /// How many references [`font_object`] follows, as the document's own `resolve` does.
 const MAX_REFERENCE_HOPS: usize = 32;
 
+/// The object `o` resolves to at the end of a reference chain, if `o` is a reference.
+fn terminal_ref(doc: &Document, o: &Object) -> Option<ObjRef> {
+    o.as_ref().map(|r| font_object(doc, r))
+}
+
 /// The object a font entry's reference `r` ends at: an object can be nothing but a reference to
 /// another (ISO 32000-1 7.3.10), and the font dictionary is the last one in that chain.
 fn font_object(doc: &Document, mut r: ObjRef) -> ObjRef {
@@ -695,6 +700,7 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     check_transparency(doc, &pages, &mut issue);
     let drawing = drawing_fonts(doc, &objs);
     check_objects(doc, level, &objs, &drawing, &page_of, &mut issue);
+    check_direct_resource_fonts(doc, &pages, &mut issue);
     check_limits(doc, &objs, &pages, &mut issue);
     check_spots(doc, &objs, &mut issue);
     check_graphics_states(doc, &mut issue);
@@ -1203,13 +1209,280 @@ fn check_embedded_file(level: Level, dict: &Dict, issue: &mut impl FnMut(&'stati
     }
 }
 
+/// Bound on nested Form XObject, Pattern, and Type 3 glyph traversal when finding drawn direct fonts.
+const MAX_DIRECT_FONT_DEPTH: usize = 32;
+/// Bound on content streams scanned when finding drawn direct fonts.
+const MAX_DIRECT_FONT_VISITS: usize = 4096;
+
+/// A resolved `/Resources` dictionary paired with its terminal object reference, if indirect.
+#[derive(Clone)]
+struct ResourceScope {
+    dict: std::sync::Arc<Object>,
+    id: Option<ObjRef>,
+}
+
+/// Identifies a direct or indirect `/Font` resource table to avoid re-checking shared fonts.
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+enum FontTableKey {
+    Resources(ObjRef),
+    FontDict(ObjRef),
+}
+
+/// Walks reachable page, Form XObject, Pattern, Type 3, and annotation `/AP` streams to check only
+/// direct resource font dictionaries selected by `Tf`.
+struct DirectFontWalk<'a, F> {
+    doc: &'a Document,
+    issue: &'a mut F,
+    stack: Vec<ObjRef>,
+    seen_self: std::collections::HashSet<ObjRef>,
+    seen_inherited: std::collections::HashSet<(ObjRef, ObjRef)>,
+    seen_type3: std::collections::HashSet<ObjRef>,
+    checked_fonts: std::collections::HashSet<(FontTableKey, Vec<u8>)>,
+    visits: usize,
+}
+
+impl<'a, F> DirectFontWalk<'a, F>
+where
+    F: FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+{
+    fn scope_of(&self, o: &Object) -> Option<ResourceScope> {
+        let id = terminal_ref(self.doc, o);
+        let dict = self.doc.resolve(o);
+        dict.as_dict()?;
+        Some(ResourceScope { dict, id })
+    }
+
+    fn scan_ref_object(&mut self, obj: &Object, inherited: Option<&ResourceScope>, depth: usize) {
+        let stream_ref = terminal_ref(self.doc, obj);
+        if let Object::Stream(stream) = &*self.doc.resolve(obj) {
+            self.scan_stream(stream_ref, stream, inherited, depth);
+        }
+    }
+
+    fn scan_stream(&mut self, stream_ref: Option<ObjRef>, stream: &pdfcraft_cos::Stream, inherited: Option<&ResourceScope>, depth: usize) {
+        if depth > MAX_DIRECT_FONT_DEPTH || self.visits >= MAX_DIRECT_FONT_VISITS {
+            return;
+        }
+        let own_scope = stream.dict.get(b"Resources").and_then(|r| self.scope_of(r));
+        let has_own = own_scope.is_some();
+        let active_scope = own_scope.or_else(|| inherited.cloned());
+        if let Some(r) = stream_ref {
+            if self.stack.contains(&r) {
+                return;
+            }
+            if has_own {
+                if !self.seen_self.insert(r) {
+                    return;
+                }
+            } else if let Some(scope_id) = active_scope.as_ref().and_then(|s| s.id)
+                && !self.seen_inherited.insert((r, scope_id))
+            {
+                return;
+            }
+            self.stack.push(r);
+        }
+        self.visits += 1;
+
+        if let Some(scope) = active_scope
+            && let Ok(data) = stream.decoded()
+        {
+            self.scan_stream_ops(&data, &scope, depth);
+        }
+
+        if stream_ref.is_some() {
+            self.stack.pop();
+        }
+    }
+
+    fn scan_stream_ops(&mut self, data: &[u8], scope: &ResourceScope, depth: usize) {
+        let mut used_fonts: std::collections::BTreeSet<Vec<u8>> = std::collections::BTreeSet::new();
+        let mut used_xobjects: std::collections::BTreeSet<Vec<u8>> = std::collections::BTreeSet::new();
+        let mut used_patterns: std::collections::BTreeSet<Vec<u8>> = std::collections::BTreeSet::new();
+        let mut used_gstates: std::collections::BTreeSet<Vec<u8>> = std::collections::BTreeSet::new();
+
+        for op in pdfcraft_content::ops(data) {
+            match op.op.as_slice() {
+                b"Tf" => {
+                    if let Some(name) = op.operands.len().checked_sub(2).and_then(|i| op.name(i)) {
+                        used_fonts.insert(name.to_vec());
+                    }
+                }
+                b"Do" => {
+                    if let Some(name) = op.last_name() {
+                        used_xobjects.insert(name.to_vec());
+                    }
+                }
+                b"scn" | b"SCN" => {
+                    if let Some(name) = op.last_name() {
+                        used_patterns.insert(name.to_vec());
+                    }
+                }
+                b"gs" => {
+                    if let Some(name) = op.last_name() {
+                        used_gstates.insert(name.to_vec());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let Some(res_dict) = scope.dict.as_dict() else { return };
+        self.check_used_fonts(res_dict, scope, &used_fonts, depth);
+        self.follow_used_xobjects(res_dict, scope, &used_xobjects, depth);
+        self.follow_used_patterns(res_dict, scope, &used_patterns, depth);
+        self.follow_used_gstates(res_dict, scope, &used_gstates, depth);
+    }
+
+    fn check_used_fonts(&mut self, res_dict: &Dict, scope: &ResourceScope, used_fonts: &std::collections::BTreeSet<Vec<u8>>, depth: usize) {
+        if used_fonts.is_empty() {
+            return;
+        }
+        let Some(fonts_raw) = res_dict.get(b"Font") else { return };
+        let font_table_key = terminal_ref(self.doc, fonts_raw).map(FontTableKey::FontDict).or_else(|| scope.id.map(FontTableKey::Resources));
+        let fonts_obj = self.doc.resolve(fonts_raw);
+        let Some(fonts) = fonts_obj.as_dict() else { return };
+
+        for name in used_fonts {
+            let Some(entry) = fonts.get(name) else { continue };
+            let entry_ref = terminal_ref(self.doc, entry);
+            if let Object::Dict(fd) = entry {
+                let first_check = font_table_key.is_none_or(|k| self.checked_fonts.insert((k, name.clone())));
+                if first_check && is_font_dict(self.doc, fd) {
+                    check_font(self.doc, fd, self.issue);
+                }
+            }
+            if entry_ref.is_none_or(|r| self.seen_type3.insert(r)) {
+                let resolved = self.doc.resolve(entry);
+                if let Some(fd) = resolved.as_dict()
+                    && fd.get(b"Subtype").and_then(|s| self.doc.resolve(s).as_name().map(<[u8]>::to_vec)).as_deref() == Some(b"Type3")
+                    && let Some(procs) = fd.get(b"CharProcs").map(|c| self.doc.resolve(c))
+                    && let Some(procs) = procs.as_dict()
+                {
+                    let child_scope = fd.get(b"Resources").and_then(|r| self.scope_of(r)).unwrap_or_else(|| scope.clone());
+                    for (_, proc_obj) in procs.iter() {
+                        self.scan_ref_object(proc_obj, Some(&child_scope), depth + 1);
+                    }
+                }
+            }
+        }
+    }
+
+    fn follow_used_xobjects(&mut self, res_dict: &Dict, scope: &ResourceScope, used_xobjects: &std::collections::BTreeSet<Vec<u8>>, depth: usize) {
+        if used_xobjects.is_empty() {
+            return;
+        }
+        let Some(xobjs) = res_dict.get(b"XObject").map(|x| self.doc.resolve(x)) else { return };
+        let Some(xobjs) = xobjs.as_dict() else { return };
+        for name in used_xobjects {
+            let Some(entry) = xobjs.get(name) else { continue };
+            let r = terminal_ref(self.doc, entry);
+            if let Object::Stream(stream) = &*self.doc.resolve(entry)
+                && is_content(&stream.dict)
+            {
+                self.scan_stream(r, stream, Some(scope), depth + 1);
+            }
+        }
+    }
+
+    fn follow_used_patterns(&mut self, res_dict: &Dict, scope: &ResourceScope, used_patterns: &std::collections::BTreeSet<Vec<u8>>, depth: usize) {
+        if used_patterns.is_empty() {
+            return;
+        }
+        let Some(pats) = res_dict.get(b"Pattern").map(|p| self.doc.resolve(p)) else { return };
+        let Some(pats) = pats.as_dict() else { return };
+        for name in used_patterns {
+            let Some(entry) = pats.get(name) else { continue };
+            let r = terminal_ref(self.doc, entry);
+            if let Object::Stream(stream) = &*self.doc.resolve(entry)
+                && stream.dict.get(b"PatternType").and_then(|v| self.doc.resolve(v).as_int()) == Some(1)
+            {
+                self.scan_stream(r, stream, Some(scope), depth + 1);
+            }
+        }
+    }
+
+    fn follow_used_gstates(&mut self, res_dict: &Dict, scope: &ResourceScope, used_gstates: &std::collections::BTreeSet<Vec<u8>>, depth: usize) {
+        if used_gstates.is_empty() {
+            return;
+        }
+        let Some(gstates) = res_dict.get(b"ExtGState").map(|g| self.doc.resolve(g)) else { return };
+        let Some(gstates) = gstates.as_dict() else { return };
+        for name in used_gstates {
+            let Some(gs_obj) = gstates.get(name).map(|g| self.doc.resolve(g)) else { continue };
+            let Some(smask) = gs_obj.as_dict().and_then(|d| d.get(b"SMask")).map(|m| self.doc.resolve(m)) else { continue };
+            let Some(group) = smask.as_dict().and_then(|m| m.get(b"G")) else { continue };
+            self.scan_ref_object(group, Some(scope), depth + 1);
+        }
+    }
+}
+
+/// Whether `fd` is a PDF font dictionary.
+fn is_font_dict(doc: &Document, fd: &Dict) -> bool {
+    fd.get(b"Type").is_some_and(|t| doc.resolve(t).as_name() == Some(b"Font")) || fd.get(b"Subtype").is_some() || fd.get(b"BaseFont").is_some()
+}
+
+/// Checks direct font dictionaries in `/Resources /Font` tables only when selected by `Tf` in a
+/// reachable page content stream, Form XObject, Pattern, Type 3 glyph stream, or annotation `/AP`.
+fn check_direct_resource_fonts(
+    doc: &Document,
+    pages: &[pdfcraft_model::Page],
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    let mut walk = DirectFontWalk {
+        doc,
+        issue,
+        stack: Vec::new(),
+        seen_self: std::collections::HashSet::new(),
+        seen_inherited: std::collections::HashSet::new(),
+        seen_type3: std::collections::HashSet::new(),
+        checked_fonts: std::collections::HashSet::new(),
+        visits: 0,
+    };
+    for page in pages {
+        let page_scope = page.dict.get(b"Resources").and_then(|r| walk.scope_of(r));
+        if let Some(contents) = page.dict.get(b"Contents") {
+            let resolved = doc.resolve(contents);
+            match &*resolved {
+                Object::Stream(stream) => walk.scan_stream(terminal_ref(doc, contents), stream, page_scope.as_ref(), 0),
+                Object::Array(items) => {
+                    for item in items {
+                        walk.scan_ref_object(item, page_scope.as_ref(), 0);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(annots) = page.dict.get(b"Annots").map(|a| doc.resolve(a))
+            && let Some(annots) = annots.as_array()
+        {
+            for entry in annots {
+                let resolved_annot = doc.resolve(entry);
+                let Some(ap) = resolved_annot.as_dict().and_then(|d| d.get(b"AP")).map(|ap| doc.resolve(ap)) else { continue };
+                let Some(ap) = ap.as_dict() else { continue };
+                for (_, appearance) in ap.iter() {
+                    let app_ref = terminal_ref(doc, appearance);
+                    match &*doc.resolve(appearance) {
+                        Object::Stream(stream) => walk.scan_stream(app_ref, stream, None, 0),
+                        Object::Dict(states) => {
+                            for (_, state) in states.iter() {
+                                walk.scan_ref_object(state, None, 0);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn check_font(doc: &Document, d: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
-    let sub = d.name(b"Subtype");
-    if sub == Some(b"Type3") {
+    let sub = d.get(b"Subtype").and_then(|s| doc.resolve(s).as_name().map(<[u8]>::to_vec));
+    if sub.as_deref() == Some(b"Type3") {
         return;
     }
-    let name = d.name(b"BaseFont").map(|n| String::from_utf8_lossy(n).into_owned());
-    let descriptor = if sub == Some(b"Type0") {
+    let name = d.get(b"BaseFont").and_then(|n| doc.resolve(n).as_name().map(|n| String::from_utf8_lossy(n).into_owned()));
+    let descriptor = if sub.as_deref() == Some(b"Type0") {
         d.get(b"DescendantFonts")
             .map(|x| doc.resolve(x))
             .and_then(|a| a.as_array().and_then(|a| a.first().cloned()))
