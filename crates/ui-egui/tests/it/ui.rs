@@ -2329,7 +2329,7 @@ fn home_recent_context_menu_reveals_the_target_without_opening_or_removing_it() 
         // fixed frame count below on a busy runner.
         app.run_inline = true;
         for (name, path) in [("first.pdf", ".".to_owned()), ("target.pdf", target)] {
-            app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path, pages: 1, size: 0 });
+            app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path, pages: 1, size: 0, pinned: false });
         }
         app
     });

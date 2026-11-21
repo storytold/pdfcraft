@@ -371,7 +371,8 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         for chord in [(egui::Modifiers::NONE, egui::Key::Menu), (egui::Modifiers::SHIFT, egui::Key::F10)] {
             let mut h = review_home_harness();
-            h.state_mut().recent = vec![crate::RecentFile { name: "notes.pdf".into(), path: "/nowhere/notes.pdf".into(), pages: 2, size: 2048, pinned: false }];
+            h.state_mut().recent =
+                vec![crate::RecentFile { name: "notes.pdf".into(), path: "/nowhere/notes.pdf".into(), pages: 2, size: 2048, pinned: false }];
             h.run_steps(3);
             assert!(!egui::Popup::is_any_open(&h.ctx));
             h.get_by_label("notes.pdf").focus();
