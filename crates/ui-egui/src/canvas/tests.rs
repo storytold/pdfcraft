@@ -627,6 +627,7 @@ fn find_text_result(page: usize, text: &str) -> pdfcraft_render::RenderedPage {
         rgba: Default::default(),
         error: None,
         text: Some(Arc::new(find_test_text(text))),
+        recovered: None,
         warnings: Vec::new(),
         millis: 0,
     }
@@ -652,6 +653,7 @@ fn automatic_search_match_follows_the_viewed_page_when_text_arrives_out_of_order
         rgba: Default::default(),
         error: None,
         text: Some(Arc::new(find_test_text(text))),
+        recovered: None,
         warnings: Vec::new(),
         millis: 0,
     };
@@ -801,6 +803,7 @@ fn a_failed_text_layer_keeps_the_automatic_anchor_without_jitter() {
             rgba: Default::default(),
             error: Some("extraction failed".into()),
             text: None,
+            recovered: None,
             warnings: Vec::new(),
             millis: 0,
         },
@@ -845,6 +848,7 @@ fn a_failed_text_layer_after_navigation_does_not_reveal_a_late_match() {
             rgba: Default::default(),
             error: Some("extraction failed".into()),
             text: None,
+            recovered: None,
             warnings: Vec::new(),
             millis: 0,
         },
@@ -1175,7 +1179,7 @@ fn a_later_copy_cancels_a_document_copy_still_reading() {
     app.views[0].select_all();
     assert!(app.copy_selected_text(0, &ctx) && app.document_copy.is_some());
     app.views[0].select_text(0, 0, 5);
-    app.views[0].selection = Some(Selection { page: 0, span: Span::Run { anchor: 0, head: 0, head_page: 1, head_x: None } });
+    app.views[0].selection = Some(Selection::new(0, Span::Run { anchor: 0, head: 0, head_page: 1, head_x: None }));
     assert!(app.copy_selected_text(0, &ctx) && app.document_copy.is_some(), "the selection's own copy");
 }
 
@@ -1295,7 +1299,7 @@ fn text_layers_keep_the_selection_page() {
     for p in 0..100 {
         v.texts.insert(p, Arc::new(text.clone()));
     }
-    v.selection = Some(Selection { page: 0, span: Span::Run { anchor: 0, head: 0, head_page: 40, head_x: None } });
+    v.selection = Some(Selection::new(0, Span::Run { anchor: 0, head: 0, head_page: 40, head_x: None }));
     let _ = v.prepare_render_queue(&info, 1.0);
     assert!((0..=40).all(|p| v.texts.contains_key(&p)), "the selection's pages are kept");
     assert_eq!(v.selected_text().map(|t| t.lines().count()), Some(41));
@@ -1332,13 +1336,13 @@ fn two_line_text() -> PageText {
 #[test]
 fn the_selection_bar_sits_where_the_drag_ended() {
     let text = Arc::new(two_line_text());
-    let texts: Vec<(usize, &Arc<PageText>)> = (1..=3).map(|p| (p, &text)).collect();
-    let anchor = |s: Selection| super::selection::bar_anchor(&s, &texts).map(|(page, r)| (page, r[1]));
+    let texts: Vec<(usize, Arc<PageText>)> = (1..=3).map(|p| (p, text.clone())).collect();
+    let anchor = |s: Selection| super::selection::bar_anchor(&s, &texts, |p, t| s.rects_on(p, t)).map(|(page, r)| (page, r[1]));
     // Backward: page 1, its top line (the first rectangle there).
-    let back = Selection { page: 3, span: Span::Run { anchor: 1, head: 0, head_page: 1, head_x: None } };
+    let back = Selection::new(3, Span::Run { anchor: 1, head: 0, head_page: 1, head_x: None });
     assert_eq!(anchor(back), Some((1, 0.0)));
     // Forward: page 3, the last line selected there.
-    let forward = Selection { page: 1, span: Span::Run { anchor: 0, head: 3, head_page: 3, head_x: None } };
+    let forward = Selection::new(1, Span::Run { anchor: 0, head: 3, head_page: 3, head_x: None });
     assert_eq!(anchor(forward), Some((3, 20.0)));
     // On one page, as before: the end of the selection, whichever way it was dragged.
     assert_eq!(anchor(Selection::run(2, 3, 0)), Some((2, 20.0)));
@@ -1347,13 +1351,13 @@ fn the_selection_bar_sits_where_the_drag_ended() {
 
 #[test]
 fn a_selection_across_pages_takes_the_rest_of_the_first_and_the_start_of_the_last() {
-    let s = Selection { page: 1, span: Span::Run { anchor: 2, head: 1, head_page: 3, head_x: None } };
+    let s = Selection::new(1, Span::Run { anchor: 2, head: 1, head_page: 3, head_x: None });
     assert_eq!(s.pages(), 1..=3);
     assert!(s.spans_pages());
     let on = |s: &Selection| (0..5).map(|p| s.run_on(p, 5)).collect::<Vec<_>>();
     assert_eq!(on(&s), [None, Some(2..5), Some(0..5), Some(0..2), None]);
     // Anchored on the last page and dragged back: the same glyphs.
-    let back = Selection { page: 3, span: Span::Run { anchor: 1, head: 2, head_page: 1, head_x: None } };
+    let back = Selection::new(3, Span::Run { anchor: 1, head: 2, head_page: 1, head_x: None });
     assert_eq!(on(&back), on(&s));
     assert_eq!(back.pages(), 1..=3);
     // On one page, as before: either way round, both ends included.
@@ -1361,7 +1365,7 @@ fn a_selection_across_pages_takes_the_rest_of_the_first_and_the_start_of_the_las
     assert!(!one.spans_pages());
     assert_eq!(on(&one), [None, None, Some(1..5), None, None]);
     // A column selection stays on its page and has no reading-order run.
-    let column = Selection { page: 2, span: Span::Column { rect: [0.0, 0.0, 100.0, 100.0] } };
+    let column = Selection::new(2, Span::Column { rect: [0.0, 0.0, 100.0, 100.0] });
     assert_eq!(column.pages(), 2..=2);
     assert_eq!(column.run_on(2, 5), None);
     let t = line_text("abcde");
@@ -1369,16 +1373,16 @@ fn a_selection_across_pages_takes_the_rest_of_the_first_and_the_start_of_the_las
     // Extending moves the head, onto another page too; a column selection has none to move.
     let mut ext = Selection::run(0, 3, 3);
     ext.extend_to_at(2, 1, None);
-    assert_eq!(ext, Selection { page: 0, span: Span::Run { anchor: 3, head: 1, head_page: 2, head_x: None } });
+    assert_eq!(ext, Selection::new(0, Span::Run { anchor: 3, head: 1, head_page: 2, head_x: None }));
     let mut col = column;
     col.extend_to_at(4, 0, None);
     assert_eq!(col, column);
     // Hostile indices: no overflow, no inverted range.
-    let edge = Selection { page: usize::MAX, span: Span::Run { anchor: usize::MAX, head: usize::MAX, head_page: usize::MAX, head_x: None } };
+    let edge = Selection::new(usize::MAX, Span::Run { anchor: usize::MAX, head: usize::MAX, head_page: usize::MAX, head_x: None });
     assert_eq!(edge.run_on(usize::MAX, 3), Some(usize::MAX..usize::MAX));
     assert_eq!(edge.text_on(usize::MAX, &t), "");
     // Glyph indices past a page's end (a stale selection) select only what is there.
-    let stale = Selection { page: 0, span: Span::Run { anchor: 3, head: 99, head_page: 1, head_x: None } };
+    let stale = Selection::new(0, Span::Run { anchor: 3, head: 99, head_page: 1, head_x: None });
     assert_eq!(stale.text_on(0, &t), "de");
     assert_eq!(stale.text_on(1, &t), "abcde");
 }
@@ -1390,7 +1394,7 @@ fn a_selection_across_pages_copies_each_page_on_its_own_line_once_all_are_read()
     v.texts.insert(0, Arc::new(line_text("abc")));
     v.texts.insert(2, Arc::new(line_text("ghi")));
     v.texts.insert(3, Arc::new(line_text("jkl")));
-    v.selection = Some(Selection { page: 2, span: Span::Run { anchor: 0, head: 1, head_page: 0, head_x: None } });
+    v.selection = Some(Selection::new(2, Span::Run { anchor: 0, head: 1, head_page: 0, head_x: None }));
     assert_eq!(v.selected_text(), None, "page 2 is not read yet: no short copy");
     assert!(v.selection_quads(&info).is_empty(), "nor a short markup");
     v.texts.insert(1, Arc::new(line_text("def")));
@@ -1421,7 +1425,7 @@ fn copy_with_formatting_takes_a_selection_on_one_page_only() {
     // Glyphs past a stale selection's page end are left out.
     v.selection = Some(Selection::run(0, 1, 99));
     assert_eq!(v.selected_glyphs().map(|(_, _, glyphs)| glyphs), Some(vec![1, 2]));
-    v.selection = Some(Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 1, head_x: None } });
+    v.selection = Some(Selection::new(0, Span::Run { anchor: 1, head: 1, head_page: 1, head_x: None }));
     assert!(v.selected_glyphs().is_none(), "across pages: plain text");
     assert_eq!(v.selected_text().as_deref(), Some("bc\nde"), "which has every page's part");
 }
@@ -1532,6 +1536,7 @@ fn solid_result(request: RenderRequest, w: u32, h: u32) -> pdfcraft_render::Rend
         height: h,
         rgba: pdfcraft_render::Pixels::from(vec![u32::MAX; rgba_bytes(w as usize, h as usize) / 4]),
         text: None,
+        recovered: None,
         error: None,
         warnings: Vec::new(),
         millis: 0,
@@ -2757,6 +2762,7 @@ fn page_text_failure_preserves_valid_search_match_without_jitter() {
             rgba: Default::default(),
             error: Some("extraction failed".into()),
             text: None,
+            recovered: None,
             warnings: Vec::new(),
             millis: 0,
         },
@@ -3440,6 +3446,604 @@ fn only_pixel_snapping_passes_for_fitting_the_view() {
     }
 }
 
+/// A recovery as a rule reads it, taken from a real page of glyph ids in the Macintosh glyph
+/// order (selection only cares that a glyph has one).
+fn some_recovery() -> pdfcraft_render::Recovery {
+    use pdfcraft_testkit::truetype::{Cmap, mac_gid, subset};
+    let gids: Vec<u16> = "Articles of Amendment".chars().map(mac_gid).collect();
+    let shown: String = gids.iter().map(|g| format!("{g:04X}")).collect();
+    let pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 300] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>")
+        .stream("", format!("BT /F1 20 Tf 20 250 Td <{shown}> Tj ET"))
+        .obj("<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+ArialMT /Encoding /Identity-H /DescendantFonts [6 0 R] >>")
+        .obj("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /ABCDEF+ArialMT /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /CIDToGIDMap /Identity /DW 600 /FontDescriptor 7 0 R >>")
+        .obj("<< /Type /FontDescriptor /FontName /ABCDEF+ArialMT /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 8 0 R >>")
+        .stream("", subset(300, &gids, Cmap::None, None))
+        .build();
+    let mut r = pdfcraft_render::PageRenderer::new(Arc::new(pdf), Default::default());
+    let out = r.render(RenderRequest { page: 0, kind: RequestKind::RecoveredText, ..Default::default() });
+    out.recovered.and_then(|l| l.recovery.iter().flatten().next().cloned()).expect("a recovered glyph")
+}
+
+/// A text layer of `glyphs`: (text, x, y, line), 10 points square each.
+fn layer_text(glyphs: &[(&str, f32, f32, u32)]) -> PageText {
+    PageText {
+        glyphs: glyphs
+            .iter()
+            .map(|&(t, x, y, _)| pdfcraft_render::TextGlyph {
+                text: t.into(),
+                rect: [x, y, x + 10.0, y + 10.0],
+                quad: [[x, y]; 4],
+                direction: [1.0, 0.0],
+            })
+            .collect(),
+        line_of: glyphs.iter().map(|g| g.3).collect(),
+        space_before: glyphs.iter().map(|_| false).collect(),
+        truncated: false,
+    }
+}
+
+/// An app showing `strict` as page 0's text, with `layer` (its glyphs, and for each its strict
+/// index or `None` for a recovered glyph) as the page's recovered layer.
+fn app_with_layer(strict: PageText, layer: PageText, strict_index: Vec<Option<usize>>) -> PdfCraftApp {
+    app_with_layer_in(text_pages_pdf(&["placeholder"]), strict, layer, strict_index)
+}
+
+/// [`app_with_layer`] over the document `pdf` (with password `pw` if it asks for one).
+fn app_with_layer_in(pdf: Vec<u8>, strict: PageText, layer: PageText, strict_index: Vec<Option<usize>>) -> PdfCraftApp {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("one.pdf", None, pdf).unwrap();
+    if app.views.is_empty() {
+        app.submit_password(Some("pw".into()));
+    }
+    let recovery = strict_index.iter().map(|k| k.is_none().then(some_recovery)).collect();
+    let style = strict_index.iter().map(|_| None).collect();
+    let layer = pdfcraft_render::RecoveredText::new(Arc::new(layer), recovery, strict_index, style, strict.glyphs.len());
+    let v = &mut app.views[0];
+    v.texts.insert(0, Arc::new(strict));
+    v.recovered.insert(0, Some(Arc::new(layer)));
+    app.system_clipboard = false;
+    app
+}
+
+/// What Copy put on the clipboard as plain text, asserting it copied something.
+fn copy_now(app: &mut PdfCraftApp) -> Vec<String> {
+    let (copied, texts) = try_copy(app);
+    assert!(copied, "Copy copied something");
+    texts
+}
+
+/// What Copy with formatting put on the clipboard as plain text (its fallback), asserting it
+/// copied something.
+fn copy_formatted_now(app: &mut PdfCraftApp) -> Vec<String> {
+    let (copied, texts) = try_copy_with(app, true);
+    assert!(copied, "Copy with formatting copied something");
+    texts
+}
+
+/// Whether Copy copied, and what it put on the clipboard as plain text.
+fn try_copy(app: &mut PdfCraftApp) -> (bool, Vec<String>) {
+    try_copy_with(app, false)
+}
+
+/// Whether Copy (`formatted`: Copy with formatting) copied, and what it put on the clipboard as
+/// plain text.
+fn try_copy_with(app: &mut PdfCraftApp, formatted: bool) -> (bool, Vec<String>) {
+    let ctx = egui::Context::default();
+    let mut copied = false;
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        copied = if formatted { app.copy_selected_text_with_formatting(0, ui.ctx()) } else { app.copy_selected_text(0, ui.ctx()) };
+    });
+    out.textures_delta.clear();
+    let texts = out
+        .platform_output
+        .commands
+        .iter()
+        .filter_map(|c| match c {
+            egui::OutputCommand::CopyText(t) => Some(t.clone()),
+            _ => None,
+        })
+        .collect();
+    (copied, texts)
+}
+
+/// Copy with formatting (a clipboard that takes HTML) whose clipboard refuses the HTML.
+fn refuse_html(app: &mut PdfCraftApp) {
+    app.system_clipboard = true;
+    app.html_clipboard_override = Some(Box::new(|_, _| false));
+}
+
+/// Review finding: laid out together with recovered glyphs, the recovered layer can order the
+/// strict glyphs otherwise than the strict layer does. Plain Copy of a run on it copies exactly
+/// the strict glyphs the run holds (`A` and `C`), not every strict glyph between the first and
+/// the last of them (`B` too).
+#[test]
+fn plain_copy_of_a_recovered_layer_run_takes_only_its_strict_glyphs() {
+    let strict = layer_text(&[("A", 0.0, 0.0, 0), ("B", 20.0, 0.0, 0), ("C", 0.0, 30.0, 1), ("D", 20.0, 30.0, 1)]);
+    let layer = layer_text(&[("A", 0.0, 0.0, 0), ("C", 0.0, 30.0, 1), ("X", 10.0, 30.0, 1), ("B", 20.0, 0.0, 2), ("D", 20.0, 30.0, 2)]);
+    let mut app = app_with_layer(strict, layer, vec![Some(0), Some(2), None, Some(1), Some(3)]);
+    app.views[0].select_layer_text(0, 0, 2);
+    assert_eq!(app.views[0].selected_text().as_deref(), Some("A\nC"));
+    assert_eq!(copy_now(&mut app), ["A\nC"]);
+    // `select_text` counts strict glyphs: strict `B` is the layer's glyph 3.
+    app.views[0].select_text(0, 1, 1);
+    assert_eq!(app.views[0].selected_layer_glyphs().map(|(_, _, g)| g), Some(vec![3]));
+    assert_eq!(app.views[0].selected_text().as_deref(), Some("B"));
+}
+
+/// Review finding: a column drawn over text only the recovered layer reads is painted, but
+/// plain Copy is strict: without a clipboard for HTML it has nothing to copy. Copy with
+/// formatting copies the column as its own plain text (a column copies no formatting), row by
+/// row, recovered glyphs included.
+#[test]
+fn a_column_over_recovered_text_copies_with_formatting_only() {
+    let layer = layer_text(&[("X", 100.0, 100.0, 0), ("Y", 112.0, 100.0, 0)]);
+    let mut app = app_with_layer(PageText::default(), layer, vec![None, None]);
+    app.views[0].selection = Some(selection::Selection::column(0, [90.0, 90.0, 130.0, 120.0]));
+    assert!(!app.views[0].selection_copies(false) && app.views[0].selection_copies(true));
+    assert_eq!(try_copy(&mut app), (false, Vec::new()), "plain Copy is strict");
+    refuse_html(&mut app);
+    assert_eq!(copy_formatted_now(&mut app), ["XY"]);
+}
+
+/// Review finding: plain Copy of a run of recovered text only, which has no strict text, is
+/// disabled and copies nothing; Copy with formatting whose HTML the clipboard refuses falls
+/// back to its own plain text, the recovered text.
+#[test]
+fn a_run_of_recovered_text_copies_with_formatting_only() {
+    let layer = layer_text(&[("X", 100.0, 100.0, 0), ("Y", 112.0, 100.0, 0)]);
+    let mut app = app_with_layer(PageText::default(), layer, vec![None, None]);
+    app.views[0].select_layer_text(0, 0, 1);
+    assert_eq!(app.views[0].selected_text(), None);
+    assert!(!app.views[0].selection_copies(false));
+    assert_eq!(try_copy(&mut app), (false, Vec::new()), "plain Copy is strict");
+    refuse_html(&mut app);
+    assert_eq!(copy_formatted_now(&mut app), ["XY"]);
+}
+
+/// Review finding: Copy with formatting of a selection mixing strict and recovered glyphs,
+/// whose HTML the clipboard refuses, keeps every character in its plain fallback; plain Copy
+/// of the same selection takes the strict glyphs only.
+#[test]
+fn a_mixed_selection_keeps_its_recovered_glyphs_when_the_html_is_refused() {
+    let strict = layer_text(&[("A", 0.0, 0.0, 0), ("B", 24.0, 0.0, 0)]);
+    let layer = layer_text(&[("A", 0.0, 0.0, 0), ("X", 12.0, 0.0, 0), ("B", 24.0, 0.0, 0)]);
+    let mut app = app_with_layer(strict, layer, vec![Some(0), None, Some(1)]);
+    app.views[0].select_layer_text(0, 0, 2);
+    assert_eq!(copy_now(&mut app), ["AB"]);
+    refuse_html(&mut app);
+    assert_eq!(copy_formatted_now(&mut app), ["AXB"]);
+}
+
+/// A run selected on the strict layer before the page's recovered layer arrives keeps its
+/// glyphs: its indices move onto the new layer.
+#[test]
+fn a_strict_selection_moves_onto_a_recovered_layer_that_arrives_later() {
+    let strict = layer_text(&[("A", 0.0, 0.0, 0), ("B", 20.0, 0.0, 0)]);
+    let layer = layer_text(&[("X", 0.0, 0.0, 0), ("A", 10.0, 0.0, 0), ("B", 20.0, 0.0, 0)]);
+    let mut app = app_with_layer(strict.clone(), layer, vec![None, Some(0), Some(1)]);
+    let arrived = app.views[0].recovered.remove(&0).flatten().expect("layer");
+    app.views[0].select_text(0, 1, 1);
+    let request = RenderRequest { page: 0, kind: RequestKind::RecoveredText, tag: TEXT_TAG, ..Default::default() };
+    app.views[0].last_queue = vec![request];
+    let result = pdfcraft_render::RenderedPage {
+        request,
+        width: 0,
+        height: 0,
+        rgba: Default::default(),
+        error: None,
+        text: Some(Arc::new(strict)),
+        recovered: Some(arrived),
+        warnings: Vec::new(),
+        millis: 0,
+    };
+    app.views[0].receive_result(&egui::Context::default(), result);
+    assert_eq!(app.views[0].selected_text().as_deref(), Some("B"));
+    assert_eq!(app.views[0].selected_layer_glyphs().map(|(_, _, g)| g), Some(vec![2]));
+}
+
+/// Review finding: a page whose recovered-text request failed (a crash, the watchdog) fails its
+/// text, as a failed text request does: it isn't asked again for the strict text alone, which
+/// would cost the same interpretation, or another watchdog.
+#[test]
+fn a_failed_recovered_text_request_fails_the_pages_text() {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("one.pdf", None, text_pages_pdf(&["placeholder"])).unwrap();
+    let request = RenderRequest { page: 0, kind: RequestKind::RecoveredText, tag: TEXT_TAG, ..Default::default() };
+    app.views[0].last_queue = vec![request];
+    let result = pdfcraft_render::RenderedPage {
+        request,
+        width: 0,
+        height: 0,
+        rgba: Default::default(),
+        error: Some("page 1 took longer than 20 s".into()),
+        text: None,
+        recovered: None,
+        warnings: Vec::new(),
+        millis: 0,
+    };
+    app.views[0].receive_result(&egui::Context::default(), result);
+    assert!(app.views[0].text_failed.contains(&0), "the page's text failed");
+}
+
+/// Review finding: a recovered-text request that fails for a page whose strict text Find already
+/// read fails only the recovery: the page keeps its text and its Find matches, records nothing
+/// recovered (so it isn't asked again), and isn't counted as failed.
+#[test]
+fn a_failed_recovered_text_request_keeps_strict_text_already_read() {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("one.pdf", None, text_pages_pdf(&["placeholder"])).unwrap();
+    let strict = layer_text(&[("A", 0.0, 0.0, 0), ("B", 20.0, 0.0, 0)]);
+    let v = &mut app.views[0];
+    v.texts.insert(0, Arc::new(strict));
+    v.find = Some(Find { query: "ab".into(), matches: vec![(0, 0..2)], current: Some(0), ..Default::default() });
+    let request = RenderRequest { page: 0, kind: RequestKind::RecoveredText, tag: TEXT_TAG, ..Default::default() };
+    v.last_queue = vec![request];
+    let result = pdfcraft_render::RenderedPage {
+        request,
+        width: 0,
+        height: 0,
+        rgba: Default::default(),
+        error: Some("page 1 took longer than 20 s".into()),
+        text: None,
+        recovered: None,
+        warnings: Vec::new(),
+        millis: 0,
+    };
+    v.receive_result(&egui::Context::default(), result);
+    assert!(!v.text_failed.contains(&0), "only the recovery failed");
+    assert!(v.has_page_text(0), "the strict text stays");
+    assert!(matches!(v.recovered.get(&0), Some(None)), "nothing recovered, not asked again");
+    let find = v.find.as_ref().expect("find");
+    assert_eq!((find.matches.clone(), find.current), (vec![(0, 0..2)], Some(0)), "Find keeps its matches");
+}
+
+/// Review finding: Copy with formatting whose copy a cap cut falls back to the whole selection,
+/// recovered glyphs included, uncapped as the strict text is, not to the capped copy's text.
+#[test]
+fn a_capped_copy_with_formatting_falls_back_to_the_whole_selection() {
+    let mut layer = layer_text(&[("X", 100.0, 100.0, 0), ("b", 112.0, 100.0, 0)]);
+    layer.glyphs[0].text = "a".repeat(2 << 20);
+    let mut app = app_with_layer(PageText::default(), layer, vec![None, None]);
+    app.system_clipboard = true;
+    app.html_clipboard_override = Some(Box::new(|_, _| true));
+    app.views[0].select_layer_text(0, 0, 1);
+    let copied = copy_formatted_now(&mut app);
+    assert_eq!(copied.len(), 1);
+    assert_eq!(copied[0].len(), (2 << 20) + 1, "the whole selection");
+    assert!(copied[0].ends_with('b'));
+}
+
+/// Review finding: `select_text` on a page with a recovered layer selects exactly the strict
+/// glyphs asked for and the recovered ones between them in the layer's order. The layer orders
+/// the strict glyphs A C X B D (C is strict glyph 2): strict glyphs 0 to 1 are A and B, with X
+/// between them, and never C; plain Copy and the highlight cover only those.
+#[test]
+fn select_text_on_a_recovered_layer_selects_exactly_its_strict_glyphs() {
+    let strict = layer_text(&[("A", 0.0, 0.0, 0), ("B", 20.0, 0.0, 0), ("C", 0.0, 30.0, 1), ("D", 20.0, 30.0, 1)]);
+    let layer = layer_text(&[("A", 0.0, 0.0, 0), ("C", 0.0, 30.0, 1), ("X", 10.0, 30.0, 1), ("B", 20.0, 0.0, 2), ("D", 20.0, 30.0, 2)]);
+    let mut app = app_with_layer(strict, layer, vec![Some(0), Some(2), None, Some(1), Some(3)]);
+    app.views[0].select_text(0, 0, 1);
+    assert_eq!(app.views[0].selected_layer_glyphs().map(|(_, _, g)| g), Some(vec![0, 2, 3]));
+    assert_eq!(app.views[0].selected_text().as_deref(), Some("AB"));
+    let s = app.views[0].selection.expect("a selection");
+    let text = app.views[0].selection_layer(0).expect("the layer");
+    assert_eq!(app.views[0].selection_rects_on(&s, 0, &text).len(), 3, "A, X and B, not C");
+}
+
+/// Review finding: Select All of a page before its recovered layer arrives takes the whole
+/// layer once it does, recovered glyphs at its ends included.
+#[test]
+fn select_all_before_the_recovered_layer_takes_all_of_it() {
+    let strict = layer_text(&[("A", 10.0, 0.0, 0), ("B", 20.0, 0.0, 0)]);
+    let layer = layer_text(&[("X", 0.0, 0.0, 0), ("A", 10.0, 0.0, 0), ("B", 20.0, 0.0, 0), ("Y", 30.0, 0.0, 0)]);
+    let mut app = app_with_layer(strict, layer, vec![None, Some(0), Some(1), None]);
+    let arrived = app.views[0].recovered.remove(&0).flatten().expect("layer");
+    app.views[0].current = 0;
+    assert!(app.views[0].select_all());
+    app.views[0].move_selection_onto(0, &arrived);
+    app.views[0].recovered.insert(0, Some(arrived));
+    assert_eq!(app.views[0].selected_layer_glyphs().map(|(_, _, g)| g), Some(vec![0, 1, 2, 3]));
+}
+
+/// Review finding: a drag that goes on after the page's recovered layer arrived extends the
+/// run over every glyph it crosses, not only the strict glyphs selected before the layer came.
+#[test]
+fn a_drag_continuing_after_the_recovered_layer_arrives_takes_everything_it_crosses() {
+    let strict = layer_text(&[("A", 10.0, 0.0, 0), ("B", 20.0, 0.0, 0), ("C", 30.0, 0.0, 0)]);
+    let layer = layer_text(&[("X", 0.0, 0.0, 0), ("A", 10.0, 0.0, 0), ("B", 20.0, 0.0, 0), ("C", 30.0, 0.0, 0)]);
+    let mut app = app_with_layer(strict, layer, vec![None, Some(0), Some(1), Some(2)]);
+    let arrived = app.views[0].recovered.remove(&0).flatten().expect("layer");
+    // The press started a run on strict glyph A; then the layer arrives mid-drag.
+    app.views[0].select_text(0, 0, 0);
+    app.views[0].move_selection_onto(0, &arrived);
+    app.views[0].recovered.insert(0, Some(arrived));
+    // The drag goes on to C (the layer's glyph 3), as `update_dragged_selection` moves it.
+    let s = app.views[0].selection.as_mut().expect("a selection");
+    let selection::Span::Run { anchor, .. } = s.span else { panic!("a run") };
+    s.set_run(anchor, 3, None);
+    assert_eq!(app.views[0].selected_text().as_deref(), Some("ABC"));
+}
+
+/// A drag along one table row on a page with a recovered layer selects that row there too, as on
+/// the strict layer (#3669): plain Copy gives its strict cells tab-separated, not reading order's
+/// detour down the first column, the row takes the recovered glyph in it, and Copy with
+/// formatting copies plain text, as for a column.
+#[test]
+fn a_drag_along_a_table_row_on_a_recovered_layer_selects_the_row() {
+    // A table read column by column: "Name" over "Apple", then "Qty" over "12".
+    let cells = [("Name", 0.0, 0.0, 0), ("Apple", 0.0, 20.0, 1), ("Qty", 100.0, 0.0, 2), ("12", 100.0, 20.0, 3)];
+    let strict = layer_text(&cells);
+    let mut on_layer = cells.to_vec();
+    on_layer.push(("R", 130.0, 20.0, 4));
+    let mut app = app_with_layer(strict, layer_text(&on_layer), vec![Some(0), Some(1), Some(2), Some(3), None]);
+    app.views[0].select_layer_text(0, 1, 1);
+    let s = app.views[0].selection.as_mut().expect("a selection");
+    // The drag ends past "12", beside the recovered glyph's row.
+    s.set_run(1, 4, Some(145.0));
+    assert_eq!(app.views[0].selected_text().as_deref(), Some("Apple\t12"));
+    assert_eq!(app.views[0].selected_layer_glyphs().map(|(_, _, g)| g), Some(vec![1, 3, 4]));
+    assert!(app.views[0].selected_recovered().is_some_and(|(.., in_order)| !in_order), "rows copy plain text");
+    assert!(app.views[0].selected_glyphs().is_none(), "no rich copy of rows");
+}
+
+/// Review finding: Shift+click after `select_text` extends the run over every glyph up to the
+/// click, not only the strict glyphs `select_text` named.
+#[test]
+fn shift_click_after_select_text_takes_everything_up_to_the_click() {
+    let strict = layer_text(&[("A", 10.0, 0.0, 0), ("B", 20.0, 0.0, 0), ("C", 30.0, 0.0, 0)]);
+    let layer = layer_text(&[("X", 0.0, 0.0, 0), ("A", 10.0, 0.0, 0), ("B", 20.0, 0.0, 0), ("C", 30.0, 0.0, 0)]);
+    let mut app = app_with_layer(strict, layer, vec![None, Some(0), Some(1), Some(2)]);
+    app.views[0].select_text(0, 0, 0);
+    assert!(app.views[0].extend_selection(0, 3, None));
+    assert_eq!(app.views[0].selected_text().as_deref(), Some("ABC"));
+    assert_eq!(app.views[0].selected_layer_glyphs().map(|(_, _, g)| g), Some(vec![1, 2, 3]));
+}
+
+/// Review finding: a click on the only strict glyph of a page (a run from strict glyph 0 to
+/// the last) stays that glyph when the recovered layer arrives; only Select All takes the whole
+/// layer. A backward run keeps its direction.
+#[test]
+fn only_select_all_grows_to_the_whole_recovered_layer() {
+    let strict = layer_text(&[("A", 10.0, 0.0, 0)]);
+    let layer = layer_text(&[("X", 0.0, 0.0, 0), ("A", 10.0, 0.0, 0), ("Y", 20.0, 0.0, 0)]);
+    let mut app = app_with_layer(strict, layer, vec![None, Some(0), None]);
+    let arrived = app.views[0].recovered.remove(&0).flatten().expect("layer");
+    app.views[0].select_text(0, 0, 0);
+    app.views[0].move_selection_onto(0, &arrived);
+    app.views[0].recovered.insert(0, Some(arrived.clone()));
+    assert_eq!(app.views[0].selected_layer_glyphs().map(|(_, _, g)| g), Some(vec![1]), "a click stays a click");
+    app.views[0].recovered.remove(&0);
+    app.views[0].current = 0;
+    assert!(app.views[0].select_all());
+    app.views[0].move_selection_onto(0, &arrived);
+    app.views[0].recovered.insert(0, Some(arrived));
+    assert_eq!(app.views[0].selected_layer_glyphs().map(|(_, _, g)| g), Some(vec![0, 1, 2]), "Select All takes it all");
+
+    let strict = layer_text(&[("A", 10.0, 0.0, 0), ("B", 20.0, 0.0, 0)]);
+    let layer = layer_text(&[("X", 0.0, 0.0, 0), ("A", 10.0, 0.0, 0), ("B", 20.0, 0.0, 0)]);
+    let mut app = app_with_layer(strict, layer, vec![None, Some(0), Some(1)]);
+    let arrived = app.views[0].recovered.remove(&0).flatten().expect("layer");
+    app.views[0].select_text(0, 1, 0);
+    app.views[0].move_selection_onto(0, &arrived);
+    let span = app.views[0].selection.map(|s| s.span);
+    assert_eq!(span, Some(selection::Span::Run { anchor: 2, head: 1, head_page: 0, head_x: None }), "backward stays backward");
+}
+
+/// Review finding: with nothing recovered selected, Copy with formatting is Copy, byte for byte,
+/// on a page with a recovered layer too: the strict glyphs in the strict layer's order and
+/// main's rich copy, not the recovered layer's order (where A and B of one strict line sit on
+/// two lines).
+#[test]
+fn copy_with_formatting_of_strict_glyphs_is_copy_on_a_page_with_a_layer() {
+    let strict = layer_text(&[("A", 0.0, 0.0, 0), ("B", 20.0, 0.0, 0), ("C", 0.0, 30.0, 1), ("D", 20.0, 30.0, 1)]);
+    let layer = layer_text(&[("A", 0.0, 0.0, 0), ("C", 0.0, 30.0, 1), ("B", 20.0, 0.0, 2), ("X", 10.0, 30.0, 3), ("D", 20.0, 30.0, 3)]);
+    let mut app = app_with_layer(strict, layer, vec![Some(0), Some(2), Some(1), None, Some(3)]);
+    let sets: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>> = Default::default();
+    let seen = sets.clone();
+    app.system_clipboard = true;
+    app.html_clipboard_override = Some(Box::new(move |html, text| {
+        seen.lock().unwrap().push((html.to_owned(), text.to_owned()));
+        true
+    }));
+    app.views[0].select_text(0, 0, 1);
+    assert!(try_copy(&mut app).0 && try_copy_with(&mut app, true).0);
+    let sets = sets.lock().unwrap().clone();
+    assert_eq!(sets.len(), 2, "{sets:?}");
+    assert_eq!(sets[0], sets[1], "Copy and Copy with formatting");
+    assert_eq!(sets[0].1, "AB");
+}
+
+/// Review finding: Copy with formatting refuses a document that withholds copying itself, not
+/// only through its command: called directly, it copies nothing.
+#[test]
+fn copy_with_formatting_itself_honours_the_copy_permission() {
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(text_pages_pdf(&["placeholder"]))).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "pw",
+        owner_password: "owner",
+        permissions: -1 ^ 0b1_0000,
+        encrypt_metadata: true,
+        seed: [4; 32],
+    })
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let layer = layer_text(&[("X", 100.0, 100.0, 0), ("Y", 112.0, 100.0, 0)]);
+    let strict = layer_text(&[("A", 0.0, 0.0, 0)]);
+    let mut app = app_with_layer_in(bytes, strict, layer, vec![None, None]);
+    app.views[0].select_layer_text(0, 0, 1);
+    assert_eq!(try_copy_with(&mut app, true), (false, Vec::new()));
+}
+
+mod recovery_props;
+
+/// One 600×300 page: `before` in Helvetica, then `text` in a Type 0 font over a TrueType
+/// subset that kept its original glyph ids (only the recovered layer reads it), then `after`
+/// in Helvetica on the next line.
+fn mac_order_page(before: &str, text: &str, after: &str) -> Vec<u8> {
+    use pdfcraft_testkit::truetype::{Cmap, mac_gid, subset};
+    let gids: Vec<u16> = text.chars().map(mac_gid).collect();
+    let shown: String = gids.iter().map(|g| format!("{g:04X}")).collect();
+    let mut content = format!("BT /F1 20 Tf 120 250 Td <{shown}> Tj ET");
+    if !before.is_empty() {
+        content = format!("BT /F2 20 Tf 20 250 Td ({before}) Tj ET {content}");
+    }
+    if !after.is_empty() {
+        content = format!("{content} BT /F2 20 Tf 20 220 Td ({after}) Tj ET");
+    }
+    pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 300] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 9 0 R >> >> >>")
+        .stream("", content)
+        .obj("<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+ArialMT /Encoding /Identity-H /DescendantFonts [6 0 R] >>")
+        .obj("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /ABCDEF+ArialMT /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /CIDToGIDMap /Identity /DW 600 /FontDescriptor 7 0 R >>")
+        .obj("<< /Type /FontDescriptor /FontName /ABCDEF+ArialMT /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 8 0 R >>")
+        .stream("", subset(300, &gids, Cmap::None, None))
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+        .build()
+}
+
+/// The app showing `pdf` with its page's text and recovered layer loaded; the layer is taken
+/// out again (the page reads as if it hadn't arrived yet) and returned.
+fn pointer_harness(pdf: Vec<u8>) -> (egui_kittest::Harness<'static, PdfCraftApp>, Arc<RecoveredText>) {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").ok();
+        app.open_bytes("p.pdf", None, pdf).unwrap();
+        app.set_option("left", "closed").ok();
+        app
+    });
+    for _ in 0..600 {
+        h.run_steps(2);
+        if h.state().views[0].recovered_layer(0).is_some() && h.state().views[0].glyph_screen_pos(0, 0).is_some() && !h.state().render_pending() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    // Checked, nothing recovered: no request is made again, and selection is on the strict layer.
+    let layer = h.state_mut().views[0].recovered.insert(0, None).flatten().expect("the recovered layer");
+    h.run_steps(1);
+    (h, layer)
+}
+
+fn press(h: &mut egui_kittest::Harness<'static, PdfCraftApp>, at: egui::Pos2, pressed: bool, modifiers: egui::Modifiers) {
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers });
+}
+
+/// The layer arrives, as `receive_result` takes it.
+fn arrives(h: &mut egui_kittest::Harness<'static, PdfCraftApp>, layer: &Arc<RecoveredText>) {
+    let v = &mut h.state_mut().views[0];
+    v.move_selection_onto(0, layer);
+    v.recovered.insert(0, Some(layer.clone()));
+}
+
+/// Review finding, through the pointer: a drag on the strict text that goes on after the
+/// recovered layer arrived takes every glyph it crosses (`update_dragged_selection`).
+#[test]
+fn a_pointer_drag_continuing_after_the_layer_arrives_takes_everything() {
+    let (mut h, layer) = pointer_harness(mac_order_page("Form 4", "Clauses modificatrices", "end"));
+    let from = h.state().views[0].glyph_screen_pos(0, 0).expect("F");
+    let start = h.state().views[0].glyph_screen_pos(0, 1).expect("o");
+    h.event(egui::Event::PointerMoved(from));
+    press(&mut h, from, true, egui::Modifiers::NONE);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.event(egui::Event::PointerMoved(from + (start - from) * (k as f32 / 4.0)));
+        h.run_steps(1);
+    }
+    // The drag has selected on the strict layer before the layer comes.
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("Fo"));
+    arrives(&mut h, &layer);
+    let n = layer.text.glyphs.len();
+    let to = h.state().views[0].layer_glyph_screen_pos(0, n - 1).expect("the last glyph");
+    h.event(egui::Event::PointerMoved(to));
+    h.run_steps(2);
+    press(&mut h, to, false, egui::Modifiers::NONE);
+    h.run_steps(2);
+    let v = &h.state().views[0];
+    assert_eq!(v.selected_text().as_deref(), Some("Form 4\nend"));
+    assert!(v.selection_has_recovered(), "the recovered words between are selected too");
+}
+
+/// Review finding, through the pointer: Shift+click after `select_text` extends the run over
+/// everything up to the click (`finish_text_pointer_gesture`).
+#[test]
+fn a_pointer_shift_click_after_select_text_takes_everything() {
+    let (mut h, layer) = pointer_harness(mac_order_page("Form 4", "Clauses modificatrices", "end"));
+    arrives(&mut h, &layer);
+    h.run_steps(2);
+    h.state_mut().views[0].select_text(0, 0, 0);
+    let n = layer.text.glyphs.len();
+    // The last recovered glyph, on the first line (the selection bar sits over the second).
+    let to = h.state().views[0].layer_glyph_screen_pos(0, n - 4).expect("the last glyph of the first line");
+    h.event(egui::Event::PointerMoved(to));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event_modifiers(
+            egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::SHIFT },
+            egui::Modifiers::SHIFT,
+        );
+        h.run_steps(1);
+    }
+    h.run_steps(1);
+    let v = &h.state().views[0];
+    assert_eq!(v.selected_text().as_deref(), Some("Form 4"));
+    assert!(v.selection_has_recovered(), "the recovered words up to the click are selected");
+}
+
+/// Review finding, through the pointer: four quick clicks select the page, as Select All does,
+/// so when the recovered layer arrives the selection takes all of it, the recovered words before
+/// the strict text included.
+#[test]
+fn a_quadruple_click_before_the_layer_arrives_takes_the_whole_layer() {
+    let (mut h, layer) = pointer_harness(mac_order_page("", "Articles of Amendment", "end"));
+    let at = h.state().views[0].glyph_screen_pos(0, 1).expect("n of end");
+    h.event(egui::Event::PointerMoved(at));
+    h.run_steps(1);
+    for _ in 0..4 {
+        press(&mut h, at, true, egui::Modifiers::NONE);
+        press(&mut h, at, false, egui::Modifiers::NONE);
+        h.run_steps(1);
+    }
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("end"));
+    arrives(&mut h, &layer);
+    let all: Vec<usize> = (0..layer.text.glyphs.len()).collect();
+    assert_eq!(h.state().views[0].selected_layer_glyphs().map(|(_, _, g)| g), Some(all));
+}
+
+/// Review finding, through the pointer: four quick clicks with the fourth held and dragged (a
+/// drag by pages) still select the page as Select All does, so the recovered layer arriving
+/// afterwards is taken whole.
+#[test]
+fn a_drag_by_pages_before_the_layer_arrives_takes_the_whole_layer() {
+    let (mut h, layer) = pointer_harness(mac_order_page("", "Articles of Amendment", "end"));
+    let at = h.state().views[0].glyph_screen_pos(0, 1).expect("n of end");
+    h.event(egui::Event::PointerMoved(at));
+    h.run_steps(1);
+    for _ in 0..3 {
+        press(&mut h, at, true, egui::Modifiers::NONE);
+        press(&mut h, at, false, egui::Modifiers::NONE);
+        h.run_steps(1);
+    }
+    press(&mut h, at, true, egui::Modifiers::NONE);
+    h.run_steps(1);
+    let to = h.state().views[0].glyph_screen_pos(0, 2).expect("d of end") + egui::vec2(12.0, 0.0);
+    for k in 1..=4 {
+        h.event(egui::Event::PointerMoved(at + (to - at) * (k as f32 / 4.0)));
+        h.run_steps(1);
+    }
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("end"));
+    arrives(&mut h, &layer);
+    press(&mut h, to, false, egui::Modifiers::NONE);
+    h.run_steps(1);
+    let all: Vec<usize> = (0..layer.text.glyphs.len()).collect();
+    assert_eq!(h.state().views[0].selected_layer_glyphs().map(|(_, _, g)| g), Some(all));
+}
+
 /// Review of #5017: a selection across pages copied before every page it covers is read is not
 /// dropped. Copy stays on and reads those pages off the UI thread, taking only the part each
 /// page has selected.
@@ -3448,7 +4052,7 @@ fn a_selection_across_pages_still_to_be_read_is_copied_once_read() {
     let mut app = PdfCraftApp::new();
     app.open_bytes("three.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two", "Charlie three"])).unwrap();
     // From the second glyph of page 1 to the first of page 3, no page read yet.
-    app.views[0].selection = Some(Selection { page: 0, span: Span::Run { anchor: 1, head: 0, head_page: 2, head_x: None } });
+    app.views[0].selection = Some(Selection::new(0, Span::Run { anchor: 1, head: 0, head_page: 2, head_x: None }));
     let span = app.views[0].selection_waits_for_text().expect("waits for its pages");
     assert_eq!(span, TextSpan { start: (0, 1), end: (2, 0) });
     assert!(app.views[0].selected_text().is_none(), "nothing to copy on this thread yet");
@@ -3490,7 +4094,7 @@ fn redaction_refuses_a_selection_over_an_unreadable_page() {
     v.texts.insert(0, Arc::new(line_text("abc")));
     v.texts.insert(2, Arc::new(line_text("ghi")));
     v.text_failed.insert(1);
-    let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2, head_x: None } };
+    let sel = Selection::new(0, Span::Run { anchor: 1, head: 1, head_page: 2, head_x: None });
     v.selection = Some(sel);
     assert!(v.selection_has_unreadable_page());
     assert_eq!(v.tool_marks(QuickTool::Redact, true, None, true, &info), ToolMarks::Unreadable);
@@ -3518,7 +4122,7 @@ fn a_marking_tool_waits_for_the_selections_pages() {
     let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
     v.texts.insert(0, Arc::new(line_text("abc")));
     v.texts.insert(2, Arc::new(line_text("ghi")));
-    let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2, head_x: None } };
+    let sel = Selection::new(0, Span::Run { anchor: 1, head: 1, head_page: 2, head_x: None });
     v.selection = Some(sel);
     let tool = QuickTool::Comment(comments::CommentTool::Underline);
     assert_eq!(v.tool_marks(tool, true, Some(0), false, &info), ToolMarks::None, "page 2 is not read yet");
@@ -3557,7 +4161,7 @@ fn a_wait_ends_when_the_selection_changes() {
     let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
     v.texts.insert(0, Arc::new(line_text("abc")));
     v.texts.insert(2, Arc::new(line_text("ghi")));
-    let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2, head_x: None } };
+    let sel = Selection::new(0, Span::Run { anchor: 1, head: 1, head_page: 2, head_x: None });
     v.selection = Some(sel);
     let tool = QuickTool::Comment(comments::CommentTool::Underline);
     assert_eq!(v.tool_marks(tool, true, Some(0), false, &info), ToolMarks::None, "page 2 is not read yet");
@@ -3578,7 +4182,7 @@ fn waiting_marks_are_dropped_when_their_pages_change() {
     app.open_bytes("three.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two", "Charlie three"])).unwrap();
     let id = app.views[0].id;
     let info = |app: &PdfCraftApp| app.session.get(id).unwrap().info.clone();
-    let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2, head_x: None } };
+    let sel = Selection::new(0, Span::Run { anchor: 1, head: 1, head_page: 2, head_x: None });
     let wait = |app: &mut PdfCraftApp| {
         let info = info(app);
         let v = &mut app.views[0];
@@ -3600,7 +4204,7 @@ fn waiting_marks_are_dropped_when_their_pages_change() {
     }
     // The old selection's glyph positions now name other pages: even made again, nothing is
     // marked unless the tool finishes it again.
-    v.selection = Some(Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 1, head_x: None } });
+    v.selection = Some(Selection::new(0, Span::Run { anchor: 1, head: 1, head_page: 1, head_x: None }));
     assert_eq!(v.tool_marks(QuickTool::Redact, false, Some(0), true, &after), ToolMarks::None, "the wait went with the selection");
     let redactions = app.session.get(id).unwrap().redaction_marks();
     assert_eq!(redactions, 0);
@@ -3625,4 +4229,38 @@ fn waiting_marks_are_dropped_when_their_pages_change() {
     v.selection = Some(sel);
     assert_eq!(v.tool_marks(QuickTool::Redact, false, Some(0), true, &now), ToolMarks::None, "nothing marked");
     assert_eq!(app.session.get(id).unwrap().redaction_marks(), 0);
+}
+
+/// A selection across pages that starts on a page with a recovered layer reads that page's
+/// glyphs in the layer's index space, as the pointer selected them: Copy takes the strict text
+/// of the strict glyphs the run holds there (not the strict layer's glyphs at the same indices),
+/// a copy read off the UI thread takes the same, the highlight covers the layer, and a run made
+/// on the strict layer moves its end onto the layer when the layer arrives.
+#[test]
+fn a_selection_across_pages_reads_a_recovered_page_on_its_layer() {
+    let strict = layer_text(&[("A", 10.0, 0.0, 0), ("B", 20.0, 0.0, 0)]);
+    // The layer orders B first, then a recovered X, then A.
+    let layer = layer_text(&[("B", 20.0, 0.0, 0), ("X", 30.0, 0.0, 0), ("A", 10.0, 0.0, 0)]);
+    let pdf = text_pages_pdf(&["placeholder", "second"]);
+    let mut app = app_with_layer_in(pdf, strict, layer, vec![Some(1), None, Some(0)]);
+    app.views[0].texts.insert(1, Arc::new(line_text("cd")));
+    // From the layer's X (index 1) on page 0 to "c" on page 1: X and A on page 0.
+    app.views[0].selection = Some(Selection::new(0, Span::Run { anchor: 1, head: 0, head_page: 1, head_x: None }));
+    assert_eq!(app.views[0].selected_text().as_deref(), Some("A\nc"), "the strict A, not the strict layer's B at index 1");
+    let info = app.session.get(app.views[0].id).unwrap().info.clone();
+    let marks = app.views[0].selection_quads(&info);
+    assert_eq!(marks.iter().map(|(p, _)| *p).collect::<Vec<_>>(), vec![0, 1], "marked on both pages");
+    // Copy before page 1 is read: page 0's part is taken as the view reads it.
+    app.views[0].texts.remove(&1);
+    let span = app.views[0].selection_waits_for_text().expect("waits for page 1");
+    let job = crate::DocumentCopyJob::of_selection(&app.views[0], app.session.get(app.views[0].id).unwrap(), span);
+    assert!(matches!(&job.pages[0], crate::CopyPage::Selected(t) if t == "A"), "page 0 copied off its layer");
+    assert!(matches!(job.pages[1], crate::CopyPage::ToRead));
+
+    // Made on the strict layer (B, strict index 1, to page 1), the run's end on page 0 moves to
+    // B's place in the layer when it arrives; the end on page 1 stays.
+    let arrived = app.views[0].recovered.remove(&0).flatten().expect("layer");
+    app.views[0].selection = Some(Selection::new(0, Span::Run { anchor: 1, head: 1, head_page: 1, head_x: None }));
+    app.views[0].move_selection_onto(0, &arrived);
+    assert_eq!(app.views[0].selection.map(|s| s.span), Some(Span::Run { anchor: 0, head: 1, head_page: 1, head_x: None }));
 }

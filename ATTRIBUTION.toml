@@ -2170,6 +2170,17 @@ kind = "data"
 usage = "Default CMYK colour conversion (shared hayro-interpret, pinned by Cargo.lock)"
 sha256 = "73e1ba37d2bad5bab2a964f40a9eed96209666efc067c3322626214bbef234a0"
 
+[[asset]]
+path = "crates/render/src/text/recovery/common_traditional.rs"
+title = "Common Traditional Chinese characters (750, ranked by frequency in Taiwan's laws and regulations, as a Rust table)"
+author = "PdfCraft contributors; source data by the Ministry of Justice, Taiwan (法務部)"
+source = "全國法規資料庫 中文法規 法律資料檔 and 命令資料檔 (data.gov.tw datasets 18289 and 18290), snapshot UpdateDate 2026-10-30 (ChLaw_CF.zip sha256 bf710bb9836b7a5e717799660bb5155d95eebec87f78fc0adcaec25fc33dfa53, MingLing.zip sha256 37941aa051213457abf5fcf4c0a5b7a45fffe47e09dbfa341c99e49e9401fd0c); character counts made by the recipe in the file's header (all text nodes of FalV.xml and MingLing.xml, characters from U+3000 except U+FFFD, the 750 most frequent, ties by code point). The source files are not in the repository."
+licence = "CC-BY-4.0"
+licence_file = "licenses/CC-BY-4.0.txt"
+kind = "data"
+usage = "Frequent-character evidence for the standard CJK glyph order rule of Copy with formatting (crates/render/src/text/recovery/cjk_order.rs): scoring the orders and offsets of Identity-H subsets without ToUnicode. Source released under the Open Government Data License, version 1.0 (SPDX OGDL-Taiwan-1.0), whose section 4.2 declares it compatible with CC BY 4.0; the law texts themselves are not copyright subject matter (Taiwan Copyright Act art. 9). Attribution in NOTICE."
+sha256 = "7cb3d6acbd4c173635fc9e0d08f779cba89a6b6a6821d69dcd044cc69b8c947a"
+
 [[bundled]]
 crate = "craft-prc"
 version = "0.1.0"

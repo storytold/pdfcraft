@@ -1579,7 +1579,7 @@ dependencies = [
 [[package]]
 name = "craft-pdf"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=9eb02be84f21898e247daeb2af5827c9fe85a3a0#9eb02be84f21898e247daeb2af5827c9fe85a3a0"
+source = "git+https://github.com/storytold/craft-libs?rev=d134558356524c712565d02eb56f70bbb181cdb0#d134558356524c712565d02eb56f70bbb181cdb0"
 dependencies = [
  "aes",
  "bytemuck",
@@ -1695,7 +1695,7 @@ dependencies = [
 [[package]]
 name = "craft-stream-codecs"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=9eb02be84f21898e247daeb2af5827c9fe85a3a0#9eb02be84f21898e247daeb2af5827c9fe85a3a0"
+source = "git+https://github.com/storytold/craft-libs?rev=d134558356524c712565d02eb56f70bbb181cdb0#d134558356524c712565d02eb56f70bbb181cdb0"
 dependencies = [
  "fax",
  "hayro-ccitt",
@@ -3319,7 +3319,7 @@ dependencies = [
 [[package]]
 name = "hayro"
 version = "0.7.1"
-source = "git+https://github.com/storytold/craft-libs?rev=9eb02be84f21898e247daeb2af5827c9fe85a3a0#9eb02be84f21898e247daeb2af5827c9fe85a3a0"
+source = "git+https://github.com/storytold/craft-libs?rev=d134558356524c712565d02eb56f70bbb181cdb0#d134558356524c712565d02eb56f70bbb181cdb0"
 dependencies = [
  "bytemuck",
  "hayro-interpret",
@@ -3339,7 +3339,7 @@ checksum = "9f4d0e94ddd48749f06bbe4e5389fb9799a0c45bcaf00495042076ef05e3241a"
 [[package]]
 name = "hayro-cmap"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=9eb02be84f21898e247daeb2af5827c9fe85a3a0#9eb02be84f21898e247daeb2af5827c9fe85a3a0"
+source = "git+https://github.com/storytold/craft-libs?rev=d134558356524c712565d02eb56f70bbb181cdb0#d134558356524c712565d02eb56f70bbb181cdb0"
 dependencies = [
  "brotli",
  "hayro-postscript",
@@ -3348,7 +3348,7 @@ dependencies = [
 [[package]]
 name = "hayro-interpret"
 version = "0.7.0"
-source = "git+https://github.com/storytold/craft-libs?rev=9eb02be84f21898e247daeb2af5827c9fe85a3a0#9eb02be84f21898e247daeb2af5827c9fe85a3a0"
+source = "git+https://github.com/storytold/craft-libs?rev=d134558356524c712565d02eb56f70bbb181cdb0#d134558356524c712565d02eb56f70bbb181cdb0"
 dependencies = [
  "bitflags 2.13.2",
  "hayro-cmap",
@@ -3366,7 +3366,7 @@ dependencies = [
 [[package]]
 name = "hayro-jbig2"
 version = "0.3.0"
-source = "git+https://github.com/storytold/craft-libs?rev=9eb02be84f21898e247daeb2af5827c9fe85a3a0#9eb02be84f21898e247daeb2af5827c9fe85a3a0"
+source = "git+https://github.com/storytold/craft-libs?rev=d134558356524c712565d02eb56f70bbb181cdb0#d134558356524c712565d02eb56f70bbb181cdb0"
 dependencies = [
  "fearless_simd",
  "hayro-ccitt",
@@ -3389,7 +3389,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=e7873217287876f76a0455
 [[package]]
 name = "hayro-syntax"
 version = "0.7.2"
-source = "git+https://github.com/storytold/craft-libs?rev=9eb02be84f21898e247daeb2af5827c9fe85a3a0#9eb02be84f21898e247daeb2af5827c9fe85a3a0"
+source = "git+https://github.com/storytold/craft-libs?rev=d134558356524c712565d02eb56f70bbb181cdb0#d134558356524c712565d02eb56f70bbb181cdb0"
 dependencies = [
  "flate2",
  "hayro-ccitt",
@@ -5004,6 +5004,7 @@ dependencies = [
  "pdfcraft-platform",
  "pdfcraft-prc-render",
  "pdfcraft-render",
+ "pdfcraft-testkit",
  "pdfcraft-xfa",
  "rustix 1.1.6",
  "serde_json",
@@ -5110,6 +5111,7 @@ dependencies = [
  "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "craft-docpath",
  "craft-image-codecs",
+ "craft-pdf",
  "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "getrandom 0.4.3",
  "icu_properties",
@@ -5442,6 +5444,7 @@ dependencies = [
  "craft-image-codecs",
  "craft-keymap",
  "craft-menu",
+ "craft-pdf",
  "craft-quit",
  "craft-ui",
  "craft-update",
@@ -5467,6 +5470,7 @@ dependencies = [
  "pdfcraft-ocr",
  "pdfcraft-platform",
  "pdfcraft-render",
+ "pdfcraft-testkit",
  "pdfcraft-xfa",
  "plist",
  "pollster 1.0.1",

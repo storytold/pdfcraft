@@ -96,6 +96,11 @@ impl PdfCraftApp {
                 || self.active.and_then(|i| self.views.get(i)).is_some_and(|v| {
                     !v.organize && (v.all_text || v.selection_waits_for_text().is_some() || v.selected_text().is_some_and(|t| !t.is_empty()))
                 }))
+            && (spec.id != "edit.copy-with-formatting"
+                || self
+                    .active
+                    .and_then(|i| self.views.get(i))
+                    .is_some_and(|v| !v.organize && (v.all_text || v.selection_waits_for_text().is_some() || v.selection_copies(true))))
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
             && match spec.id {
                 "comment.copy" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.comments.selected.is_some()),
@@ -607,6 +612,12 @@ impl PdfCraftApp {
             "edit.copy" => {
                 if let (Some(i), Some(ctx)) = (active, self.ctx.clone()) {
                     return Some(self.copy_selected_text(i, &ctx));
+                }
+                return Some(false);
+            }
+            "edit.copy-with-formatting" => {
+                if let (Some(i), Some(ctx)) = (active, self.ctx.clone()) {
+                    return Some(self.copy_selected_text_with_formatting(i, &ctx));
                 }
                 return Some(false);
             }
