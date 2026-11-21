@@ -305,11 +305,14 @@ Every engine feature is reachable without the GUI, through one table of JSON-Sch
 
   ```sh
   pdfcraft-cli tools                                        # every tool and its JSON Schema
-  pdfcraft-cli run text_find doc=1 query=invoice            # key=value; values parse as JSON
+  pdfcraft-cli run doc_open path=report.pdf                 # accepts key=value with JSON or plain strings
   pdfcraft-cli run --script review.json                     # e.g. comment_add {"type": "highlight", "find": "total due"}
   pdfcraft-cli run --script steps.json --root ./work        # several steps in one session
   pdfcraft-cli run --script steps.json --report             # one JSON document: per step its number, tool, status, result or error
   ```
+
+  Each one-off call starts a new session. To search or edit a document, put `doc_open` and the
+  subsequent calls in the same script.
 
   With `--root`, every file the script's steps read or write stays in that directory, including the PNG a step saves with `"out"` (the script itself is read from wherever you name it).
 
