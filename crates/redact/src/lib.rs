@@ -30,6 +30,7 @@ mod identification;
 mod image;
 mod interp;
 mod metadata;
+mod originals;
 mod overlay;
 mod pattern_guard;
 pub mod patterns;
@@ -620,6 +621,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         removed_appearances: HashSet::new(),
         appearance_scan_limit: false,
         pruned_patterns: Vec::new(),
+        replaced_contents: Vec::new(),
     };
     for &(pi, page_marks) in &groups {
         let page = pdfcraft_model::pages(doc).swap_remove(pi);
@@ -642,6 +644,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         mut removed_appearances,
         mut appearance_scan_limit,
         pruned_patterns,
+        replaced_contents,
         ..
     } = applying;
 
@@ -788,6 +791,9 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     interp::unlink_doomed(doc, &doomed_xobjects, &retired_properties)?;
     // Likewise a pruned pattern: a /Pages node above the page can still name its cell.
     interp::unlink_pruned_patterns(doc, &pruned_patterns)?;
+    // And a page's original content stream: no page draws it now, but a private key, a structure
+    // element's /Stm or a resource name nothing draws would keep the unredacted bytes (#7922).
+    originals::release(doc, &replaced_contents)?;
 
     // 5. Verify: nothing readable may remain under a region.
     let mut residue = 0;
@@ -873,6 +879,8 @@ struct Applying {
     appearance_scan_limit: bool,
     /// Pattern objects pruned from a page's resources, which page-tree nodes may still name.
     pruned_patterns: Vec<ObjRef>,
+    /// Each original content stream of a redacted page, with the redacted copy that replaced it.
+    replaced_contents: Vec<(ObjRef, ObjRef)>,
 }
 
 /// Step 1 for one page: rewrites its content so nothing readable stays under a mark, and cleans the tags it no longer shows.
@@ -883,7 +891,18 @@ fn redact_page_content(
     page: &pdfcraft_model::Page,
     rects: &[[f64; 4]],
 ) -> Result<(), RedactError> {
-    let Applying { report, doomed_xobjects, retired_properties, removed_text, removed_cut, removed_room, images, pruned_patterns, .. } = applying;
+    let Applying {
+        report,
+        doomed_xobjects,
+        retired_properties,
+        removed_text,
+        removed_cut,
+        removed_room,
+        images,
+        pruned_patterns,
+        replaced_contents,
+        ..
+    } = applying;
     // 1. Content.
     let mut budget = pdfcraft_cos::DecodeBudget::page();
     let (list, data) = page_streams_within(doc, &page.dict, pi, &mut budget)?;
@@ -936,7 +955,11 @@ fn redact_page_content(
         // as plain drawn content but is no longer editable.
         dict.remove(b"PCAdded");
         // A new object: the original may be shared with other pages.
-        new_list[i] = Object::Ref(doc.add(Object::Stream(Stream::flate(dict, &bytes))));
+        let copy = doc.add(Object::Stream(Stream::flate(dict, &bytes)));
+        if let Some(original) = list[i].as_ref() {
+            replaced_contents.push((original, copy));
+        }
+        new_list[i] = Object::Ref(copy);
         changed = true;
     }
     if changed || !out.xobjects.is_empty() || !out.replaced.is_empty() {
