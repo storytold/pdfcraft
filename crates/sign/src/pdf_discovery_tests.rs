@@ -172,8 +172,9 @@ fn reconstructed_and_unreadable_objects_are_not_cached_as_complete() {
         assert_eq!(cache.timestamp_candidates(&repaired), vec![ObjRef::new(3, 0)]);
     }
     // A single invalid keyword immediately before endobj is deliberately recovered as
-    // Null by parse_indirect. Use a stream without endstream to exercise a real read error.
-    let unreadable = fixture(&[STAMP, "<< /Length 0 >>\nstream\nunterminated"]);
+    // Null by parse_indirect. Use a stream with neither endstream nor /Length to exercise a real
+    // read error (with a /Length that fits, the stream is that many bytes).
+    let unreadable = fixture(&[STAMP, "<< >>\nstream\nunterminated"]);
     assert!(unreadable.repair_log().is_empty());
     assert!(unreadable.try_get(4).is_err());
     assert!(unreadable.scan_objects_checked().any(|(r, object)| r.num == 4 && object.is_err()));
@@ -370,6 +371,19 @@ fn only_grew_compares_huge_arrays_without_quadratic_work() {
     assert!(only_grew(&doc, &doc, &ints(100), &ints(101), 0));
     assert!(!only_grew(&doc, &doc, &ints(20_000), &ints(20_001), 0));
     assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+}
+
+/// A reference to a generation the object doesn't have reads as null: it is no repeat of the valid
+/// reference to the same object number that follows it.
+#[test]
+fn dss_evidence_skips_a_dead_reference_without_hiding_the_live_one() {
+    let mut doc = fixture(&[]);
+    let live = doc.add(Object::Stream(Stream::flate(Dict::new(), b"evidence")));
+    let dead = ObjRef::new(live.num, live.generation + 1);
+    let mut dss = Dict::new();
+    dss.set(b"CRLs".to_vec(), Object::Array(vec![Object::Ref(dead), Object::Ref(live)]));
+    let read: Vec<Vec<u8>> = DssEvidence::new(&doc, &dss, b"CRLs").collect();
+    assert_eq!(read, vec![b"evidence".to_vec()]);
 }
 
 #[test]

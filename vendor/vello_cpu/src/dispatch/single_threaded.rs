@@ -42,6 +42,11 @@ pub(crate) struct SingleThreadedDispatcher {
     layer_id_next: u32,
     /// Dependency graph tracking layer relationships and filter effects.
     render_graph: RenderGraph,
+    /// PdfCraft patch (1): a path was left out because the scene's coverage was full.
+    coverage_full: bool,
+    /// PdfCraft patch (1): the most coverage values the scene keeps
+    /// ([`Dispatcher::set_max_coverage`]).
+    max_coverage: usize,
 }
 
 impl SingleThreadedDispatcher {
@@ -79,7 +84,23 @@ impl SingleThreadedDispatcher {
             level,
             layer_id_next: 0,
             render_graph,
+            coverage_full: false,
+            max_coverage: usize::MAX,
         }
+    }
+
+    /// PdfCraft patch (1): whether the scene has room for the coverage of one more path
+    /// ([`StripStorage::room_for_path`]). Once it hasn't, the path and every later one are left
+    /// out, and [`Dispatcher::coverage_full`] says so.
+    fn room_for_path(&mut self) -> bool {
+        let (width, height) = (self.strip_generator.width(), self.strip_generator.height());
+        let room = self
+            .strip_storage
+            .room_for_path_within(width, height, self.max_coverage);
+        if !room {
+            self.coverage_full = true;
+        }
+        room
     }
 
     /// Rasterizes the scene using f32 precision (high quality).
@@ -539,6 +560,9 @@ impl Dispatcher for SingleThreadedDispatcher {
         mask: Option<Mask>,
         encoded_paints: &[EncodedPaint],
     ) {
+        if !self.room_for_path() {
+            return;
+        }
         let wide = &mut self.wide;
 
         // Convert path to coverage strips.
@@ -573,6 +597,9 @@ impl Dispatcher for SingleThreadedDispatcher {
         mask: Option<Mask>,
         encoded_paints: &[EncodedPaint],
     ) {
+        if !self.room_for_path() {
+            return;
+        }
         let wide = &mut self.wide;
 
         // Convert stroked path to coverage strips.
@@ -604,6 +631,9 @@ impl Dispatcher for SingleThreadedDispatcher {
         mask: Option<Mask>,
         encoded_paints: &[EncodedPaint],
     ) {
+        if !self.room_for_path() {
+            return;
+        }
         let wide = &mut self.wide;
 
         // Generate strips directly for the rectangle (bypasses path processing).
@@ -638,8 +668,9 @@ impl Dispatcher for SingleThreadedDispatcher {
         // Allocate a new unique layer ID.
         self.layer_id_next += 1;
 
-        // Generate clip coverage if a clip path is provided.
-        let clip = if let Some(c) = clip_path {
+        // Generate clip coverage if a clip path is provided. PdfCraft patch (1): without room for
+        // it the layer goes unclipped, as nothing can be drawn into it any more either.
+        let clip = if let Some(c) = clip_path.filter(|_| self.room_for_path()) {
             self.strip_generator.generate_filled_path(
                 c,
                 fill_rule,
@@ -681,6 +712,7 @@ impl Dispatcher for SingleThreadedDispatcher {
         self.strip_storage.clear();
         self.render_graph.clear();
         self.layer_id_next = 0;
+        self.coverage_full = false;
 
         // Recreate root node as node 0 (required for proper execution order).
         let root_node = self.render_graph.add_node(RenderNodeKind::RootLayer {
@@ -695,6 +727,14 @@ impl Dispatcher for SingleThreadedDispatcher {
 
     fn flush(&mut self, _encoded_paints: &[EncodedPaint]) {
         // No-op for single-threaded dispatcher (no work queue to flush).
+    }
+
+    fn coverage_full(&self) -> bool {
+        self.coverage_full
+    }
+
+    fn set_max_coverage(&mut self, max: usize) {
+        self.max_coverage = max;
     }
 
     fn rasterize(

@@ -102,14 +102,14 @@ pub(crate) fn page_input(resp: &egui::Response, xf: &PageXform, ptr: &PagePointe
     // began, a click where it came up (egui has cleared the press's origin by its release, and the
     // pointer may have moved on in the same frame).
     let at = if resp.clicked() { ptr.released } else { origin };
-    if (resp.drag_started() || resp.clicked())
+    if (ptr.drag_started || resp.clicked())
         && press == PagePress::Free
         && at.is_some_and(|p| xf.rect.contains(p))
         && view.camera.is_none_or(|q| q.page != page)
     {
         view.camera = Some(CameraQuad::inset(page, xf.pw, xf.ph));
     }
-    if resp.drag_started()
+    if ptr.drag_started
         && let PagePress::Mine(Owner::CameraCorner { corner }) = press
         && let Some(q) = view.camera.as_mut().filter(|q| q.page == page)
     {
