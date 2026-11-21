@@ -1,13 +1,12 @@
-//! `cargo xtask assets`: enforce the asset policy (AGENTS.md §1).
+//! `cargo xtask assets`: enforce the asset policy (clean-room.md and licences.md).
 //!
 //! `ATTRIBUTION.toml` lists every asset: committed or vendored files (`[[asset]]`), files that
 //! Cargo dependencies compile into PdfCraft (`[[bundled]]`), and files xtask downloads at build
 //! time (`[[fetched]]`). This gate fails when:
-//! - an asset-like file in the repository has no entry, or its SHA-256 is missing or differs
-//!   (translation catalogs are project files and carry none);
+//! - an asset-like file in the repository has no entry, or its SHA-256 is missing or differs;
 //! - a licence is not on the allowlist, or a declared licence file is missing;
 //! - an icon, image or font names Adobe as author or source, or an `adobe_data` entry is not on
-//!   the closed list approved in AGENTS.md §1.1;
+//!   the closed list approved in clean-room.md;
 //! - a `[[bundled]]` crate version is not the one in Cargo.lock;
 //! - `ATTRIBUTION.md` is out of date (`--write` regenerates it).
 
@@ -20,7 +19,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-/// Licences allowed by AGENTS.md §1.2 (SPDX identifiers).
+/// Licences allowed by licences.md (SPDX identifiers).
 pub const ALLOWED_LICENCES: &[&str] = &[
     "ISC",
     "MIT",
@@ -30,16 +29,17 @@ pub const ALLOWED_LICENCES: &[&str] = &[
     "OFL-1.1",
     "Ubuntu-font-1.0",
     "Bitstream-Vera",
+    "Unicode-3.0",
     "CC0-1.0",
     "CC-BY-4.0",
     "CC-BY-SA-4.0",
     "LicenseRef-Public-Domain",
 ];
 
-/// The closed list of Adobe-authored, non-visual technical data (AGENTS.md §1.1): (crate, path).
+/// The closed list of Adobe-authored, non-visual technical data (clean-room.md): (crate, path).
 /// Storyteller's own brand marks (the ArtCraft name and logos): shipped in the app and docs, but
 /// not licensed for reuse by forks. Allowed only for `kind = "logo"` entries under `docs/brand/`
-/// (AGENTS.md §1.2).
+/// (licences.md).
 pub const BRAND_LICENCE: &str = "LicenseRef-Storyteller-Trademark";
 
 pub const ADOBE_DATA_ALLOWED: &[(&str, &str)] = &[("hayro-cmap", "assets/cmaps.brotli"), ("hayro-interpret", "src/font/generated/metrics.rs")];
@@ -48,12 +48,7 @@ pub const ADOBE_DATA_ALLOWED: &[(&str, &str)] = &[("hayro-cmap", "assets/cmaps.b
 /// technical data we hold ourselves rather than through a dependency. Each still needs an
 /// `[[asset]]` entry with `adobe_data = true`, so its SHA-256 is checked and any change to the
 /// table has to be re-attested deliberately.
-pub const ADOBE_DATA_FILES: &[&str] = &["crates/fonts/src/std14_metrics.rs", "vendor/hayro-cmap/assets/cmaps.brotli"];
-
-/// Where the UI translation catalogs live. `kind = "translation"` entries for `.tsv` files here
-/// are project files under the project licence: they carry no `sha256`, because git history
-/// already records their provenance (AGENTS.md §1.3).
-pub const TRANSLATION_DIR: &str = "crates/ui-egui/src/i18n/";
+pub const ADOBE_DATA_FILES: &[&str] = &[];
 
 /// File extensions that count as assets wherever they appear in the repository.
 const ASSET_EXTENSIONS: &[&str] = &[
@@ -103,18 +98,11 @@ pub struct Asset {
     pub licence_file: String,
     pub kind: String,
     pub usage: String,
-    /// Required for every entry except a translation catalog ([`Asset::is_translation_catalog`]).
+    /// Required for every entry.
     #[serde(default)]
     pub sha256: Option<String>,
     #[serde(default)]
     pub adobe_data: bool,
-}
-
-impl Asset {
-    /// A UI translation catalog: a project file whose entry carries no hash.
-    pub fn is_translation_catalog(&self) -> bool {
-        self.kind == "translation" && self.path.starts_with(TRANSLATION_DIR) && self.path.ends_with(".tsv")
-    }
 }
 
 #[derive(Deserialize)]
@@ -176,9 +164,6 @@ pub fn run(args: &[String]) -> Result<()> {
     if args.iter().any(|a| a == "--write") {
         std::fs::write(root.join("ATTRIBUTION.md"), &markdown)?;
         println!("assets: wrote ATTRIBUTION.md");
-    }
-    for a in manifest.asset.iter().filter(|a| a.is_translation_catalog() && a.sha256.is_some()) {
-        println!("assets: note: {}: translation catalogs aren't hashed; its sha256 line can be deleted", a.path);
     }
     let mut problems = check(&root, &manifest, &repo_files(&root)?, &cargo_lock_versions(&root)?);
     match std::fs::read_to_string(root.join("ATTRIBUTION.md")) {
@@ -245,10 +230,10 @@ fn mentions_adobe(s: &str) -> bool {
 pub fn check(root: &Path, m: &Manifest, repo_files: &[String], lock: &BTreeSet<(String, String)>) -> Vec<String> {
     let mut problems = Vec::new();
     let mut seen = BTreeSet::new();
-    // Kinds that may never come from Adobe (AGENTS.md §1.1): visual design, and UI translations
+    // Kinds that may never come from Adobe (clean-room.md): visual design, and UI translations
     // (which must be clean-room, never taken from a product's string tables).
     let visual = |kind: &str| matches!(kind, "icon" | "image" | "font" | "logo" | "cursor" | "video" | "translation");
-    // Typefaces under the SIL Open Font License are allowed whoever designed them (AGENTS.md §1.1).
+    // Typefaces under the SIL Open Font License are allowed whoever designed them (clean-room.md).
     let ofl_font =
         |kind: &str, licence: &str| kind == "font" && licence_ids(licence).next().is_some() && licence_ids(licence).all(|id| id == "OFL-1.1");
     let licence_ok = |what: &str, licence: &str, problems: &mut Vec<String>| {
@@ -275,12 +260,9 @@ pub fn check(root: &Path, m: &Manifest, repo_files: &[String], lock: &BTreeSet<(
         if a.adobe_data && !(ADOBE_DATA_FILES.contains(&a.path.as_str()) && a.kind == "data") {
             problems.push(format!("{}: adobe_data is only allowed for the closed list in AGENTS.md §1.1", a.path));
         }
-        let catalog = a.is_translation_catalog();
         match (std::fs::read(root.join(&a.path)), &a.sha256) {
             (Err(_), _) => problems.push(format!("{}: listed but missing", a.path)),
-            // A leftover hash line (e.g. kept while resolving a rebase) is not checked; `run` notes it.
-            (Ok(_), _) if catalog => {}
-            (Ok(_), None) => problems.push(format!("{}: sha256 is missing (only translation catalogs go without one)", a.path)),
+            (Ok(_), None) => problems.push(format!("{}: sha256 is missing", a.path)),
             (Ok(bytes), Some(hash)) if sha256_hex(&bytes) == *hash => {}
             (Ok(_), Some(_)) => {
                 problems.push(format!("{}: SHA-256 does not match ATTRIBUTION.toml (re-verify provenance, then update the entry)", a.path))
@@ -402,7 +384,7 @@ pub fn render_markdown(m: &Manifest) -> String {
     s.push_str("<!-- Generated from ATTRIBUTION.toml by `cargo xtask assets --write`. Do not edit by hand. -->\n\n");
     s.push_str("Every asset PdfCraft includes, bundles or uses to build its published material, with its author, source and licence. ");
     s.push_str(
-        "The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with the SHA-256 of every asset but the translation catalogs, is [ATTRIBUTION.toml](ATTRIBUTION.toml). ",
+        "The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with the SHA-256 of every asset, is [ATTRIBUTION.toml](ATTRIBUTION.toml). ",
     );
     s.push_str("Licence texts are kept beside the assets and summarised in [NOTICE](NOTICE).\n\n");
     let esc = |t: &str| t.replace('|', "\\|");
@@ -546,37 +528,6 @@ mod tests {
     }
 
     #[test]
-    fn translation_catalogs_require_attribution() {
-        assert!(is_asset_path("crates/ui-egui/src/i18n/ja.tsv"));
-        let p = check(&root(), &Manifest::default(), &["crates/ui-egui/src/i18n/ja.tsv".into()], &lock(&[]));
-        assert!(p.iter().any(|p| p.contains("no ATTRIBUTION.toml entry")), "{p:?}");
-        let m = Manifest { asset: vec![asset("crates/ui-egui/src/i18n/ja.tsv", "Adobe", "translation", "MIT")], ..Default::default() };
-        assert!(check(&root(), &m, &[], &lock(&[])).iter().any(|p| p.contains("from Adobe is forbidden")));
-    }
-
-    /// One `[[asset]]` entry as ATTRIBUTION.toml spells it, with `extra` lines appended.
-    fn parsed(path: &str, kind: &str, extra: &str) -> Manifest {
-        let text = format!(
-            "[[asset]]\npath = \"{path}\"\ntitle = \"t\"\nauthor = \"a\"\nsource = \"s\"\nlicence = \"MIT\"\nlicence_file = \"Cargo.toml\"\nkind = \"{kind}\"\nusage = \"u\"\n{extra}"
-        );
-        toml::from_str(&text).unwrap()
-    }
-
-    /// Catalogs change in most UI PRs; a pinned hash would make every pair of them conflict.
-    #[test]
-    fn translation_catalogs_carry_no_hash_and_everything_else_does() {
-        let check_one = |m: Manifest| check(&root(), &m, &[], &lock(&[]));
-        let ja = "crates/ui-egui/src/i18n/ja.tsv";
-        assert_eq!(check_one(parsed(ja, "translation", "")), Vec::<String>::new());
-        let stale = format!("sha256 = \"{}\"\n", "0".repeat(64));
-        assert_eq!(check_one(parsed(ja, "translation", &stale)), Vec::<String>::new(), "a leftover hash is not checked");
-        for (path, kind) in [("assets/fonts/Inter-Regular.ttf", "font"), (ja, "data"), ("Cargo.toml", "translation")] {
-            let p = check_one(parsed(path, kind, ""));
-            assert!(p.iter().any(|p| p.contains("sha256 is missing")), "{path} {kind}: {p:?}");
-        }
-    }
-
-    #[test]
     fn adobe_ofl_fonts_are_allowed_and_other_adobe_fonts_rejected() {
         let l = lock(&[("noto", "1.0.0")]);
         let noto = |licence: &str| {
@@ -643,23 +594,21 @@ mod tests {
     #[test]
     fn first_party_adobe_data_only_on_the_closed_list() {
         let l = lock(&[]);
-        // The generated standard-14 table is on the list, as `kind = "data"`.
-        let mut ok = asset("crates/fonts/src/std14_metrics.rs", "Adobe (Core14 AFM metrics); tables by the PdfCraft contributors", "data", "MIT");
-        ok.adobe_data = true;
-        let m = Manifest { asset: vec![ok], ..Default::default() };
-        assert!(check(&root(), &m, &[], &l).is_empty(), "{:?}", check(&root(), &m, &[], &l));
+        assert!(ADOBE_DATA_FILES.is_empty());
 
-        // Any other first-party file claiming it is refused.
+        // Any first-party file claiming adobe_data is refused now that the closed list is empty.
         let mut sneaky = asset("Cargo.toml", "Adobe", "data", "MIT");
         sneaky.adobe_data = true;
         let m = Manifest { asset: vec![sneaky], ..Default::default() };
         assert!(check(&root(), &m, &[], &l).iter().any(|p| p.contains("closed list")));
 
-        // Even on the list, it may only be data — never a typeface.
-        let mut wrong_kind = asset("crates/fonts/src/std14_metrics.rs", "Adobe", "font", "MIT");
+        // A visual asset from Adobe is also forbidden.
+        let mut wrong_kind = asset("Cargo.toml", "Adobe", "font", "MIT");
         wrong_kind.adobe_data = true;
         let m = Manifest { asset: vec![wrong_kind], ..Default::default() };
-        assert!(!check(&root(), &m, &[], &l).is_empty());
+        let problems = check(&root(), &m, &[], &l);
+        assert!(problems.iter().any(|p| p.contains("forbidden")));
+        assert!(problems.iter().any(|p| p.contains("closed list")));
     }
 
     #[test]
