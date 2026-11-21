@@ -220,6 +220,12 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
     let Some(cert) = sd.signer_certificate().cloned() else {
         return invalid(info, Detail::plain("The signer's certificate is not in the signature."));
     };
+    // The SID and the carried certificates are outside the signature: only the signed attributes
+    // say which certificate the signer signed with. Another certificate for the same key, put in
+    // its place, must not lend the signature its name.
+    if !sd.signed_attrs_name(&cert) {
+        return invalid(info, Detail::plain("The signer's certificate is not the one the signature names."));
+    }
     info.algorithm = Some(format!("{} with {}", cert.public_key.describe(), s.scheme_digest.unwrap_or(s.digest).name()));
     info.signer = Some(cert.display_name());
     let mut notes = Vec::new();

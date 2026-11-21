@@ -152,7 +152,7 @@ fn signatures_round_trip_for_every_key_type() {
         let signer = sd.signer_certificate().expect("the signer's certificate is embedded");
         assert_eq!(signer, &id.certificate);
         assert_eq!(sd.signer.message_digest.as_deref(), Some(&digest[..]));
-        assert!(sd.signer.signing_certificate, "CAdES signing-certificate-v2");
+        assert!(sd.signer.signing_certificate.iter().any(|id| id.names(signer)), "CAdES signing-certificate-v2");
         assert!(sd.verify_signature(signer, &digest).unwrap(), "{file}");
         assert_eq!(sd.certificates.len(), 1 + id.chain.len());
         // Tampering with the signature breaks it.
