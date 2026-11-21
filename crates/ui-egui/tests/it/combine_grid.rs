@@ -810,7 +810,7 @@ fn a_split_file_counts_once_and_combines_with_one_bookmark() {
 fn pages_picked_out_of_sight_or_before_an_undo_are_let_go_of() {
     // Regression: a page picked, then hidden (its file collapsed, or the list shown) or undone,
     // stayed picked, and the trash or Delete took it.
-    let mut h = grid_of_pages(&[("a.pdf", 1), ("b.pdf", 4), ("c.pdf", 1)]);
+    let mut h = grid_of(vec![("a.pdf", fixture(1)), ("b.pdf", fixture(4)), ("c.pdf", fixture(1))], vec2(2000.0, 1200.0));
     let parts =
         |h: &Harness<'static, PdfCraftApp>| h.state().combine_parts_shown().into_iter().map(|(n, p)| format!("{n}:{p:?}")).collect::<Vec<_>>();
     expand(&mut h, "b.pdf");
