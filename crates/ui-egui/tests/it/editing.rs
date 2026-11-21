@@ -6281,13 +6281,13 @@ fn print_shortcut_offers_the_pages_picked_in_the_pages_panel() {
 
 #[test]
 fn dragging_pages_panel_thumbnails_reorders_pages() {
-    let mut h = harness(4, |app| app.set_option(&egui::Context::default(), "panel", "pages").unwrap());
+    let mut h = pages_panel(4);
     let before = page_texts(h.state());
     // The Pages panel is on the right; the document view may label its pages too.
     let thumb = |h: &Harness<'static, PdfCraftApp>, label: &str| {
         h.get_all_by_label(label).map(|n| n.rect()).max_by(|a, b| a.left().total_cmp(&b.left())).expect("the thumbnail")
     };
-    // Grab page 3 (page 4 is below the window) and drop it before page 1.
+    // Grab page 3 and drop it before page 1.
     let (from, to) = (thumb(&h, "Page 3").center(), thumb(&h, "Page 1").left_top() + egui::vec2(4.0, 4.0));
     drag(&mut h, from, to);
     h.run_steps(4);
@@ -6322,7 +6322,7 @@ fn resized_pages_panel_thumbnails_reorder_multiple_pages_and_undo() {
 
 #[test]
 fn a_thumbnail_drag_that_ends_off_the_panel_or_outlives_the_pages_is_dropped() {
-    let mut h = harness(4, |app| app.set_option(&egui::Context::default(), "panel", "pages").unwrap());
+    let mut h = pages_panel(4);
     h.run_steps(2);
     let before = page_texts(h.state());
     // Presses a thumbnail and drags it halfway towards the first one, leaving the button down.
