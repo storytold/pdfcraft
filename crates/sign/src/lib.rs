@@ -12,6 +12,7 @@ pub mod der;
 pub mod dss;
 #[cfg(test)]
 mod ec512;
+pub mod gost_digest;
 pub mod graphic;
 #[cfg(target_os = "macos")]
 pub mod keychain;
