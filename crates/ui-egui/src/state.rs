@@ -52,6 +52,8 @@ pub enum RightPanel {
     Search,
     /// Compare files: the differences.
     Compare,
+    /// A portfolio's files, shown one at a time in the portfolio's tab.
+    PortfolioFiles,
 }
 
 /// Quick-action bar tools (the vertical floating strip).

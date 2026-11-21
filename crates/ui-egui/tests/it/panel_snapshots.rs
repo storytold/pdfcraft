@@ -164,7 +164,7 @@ fn check(h: &Harness<'static, PdfCraftApp>, name: &str) -> Result<(), String> {
 }
 
 /// Every panel, in the order of the rail.
-const ALL: [RightPanel; 11] = [
+const ALL: [RightPanel; 12] = [
     RightPanel::Comments,
     RightPanel::Bookmarks,
     RightPanel::Pages,
@@ -176,7 +176,45 @@ const ALL: [RightPanel; 11] = [
     RightPanel::Tags,
     RightPanel::Search,
     RightPanel::Compare,
+    RightPanel::PortfolioFiles,
 ];
+
+/// A one-page portfolio of two PDFs, presenting the second (`/D`), each with a description.
+fn portfolio() -> Vec<u8> {
+    let page = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let file =
+        |name: &str, desc: &str, stream: usize| format!("<< /Type /Filespec /F ({name}) /UF ({name}) /Desc ({desc}) /EF << /F {stream} 0 R >> >>");
+    let embedded = format!("<< /Type /EmbeddedFile /Length {} >>\nstream\n{}\nendstream", page.len(), String::from_utf8_lossy(page));
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Collection << /D (report.pdf) /View /D >> \
+         /Names << /EmbeddedFiles << /Names [(invoice.pdf) 5 0 R (report.pdf) 7 0 R] >> >> >>"
+            .into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> >>".into(),
+        embedded.clone(),
+        file("invoice.pdf", "March invoice", 4),
+        embedded,
+        file("report.pdf", "Yearly report", 6),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
 
 /// Opens `p` with something in it and names its snapshot. No wildcard on purpose: a new
 /// `RightPanel` stops this file compiling until it is set up here (and listed in [`ALL`]).
@@ -228,6 +266,17 @@ fn open(p: RightPanel) -> (Harness<'static, PdfCraftApp>, &'static str) {
             h.get_by_label("Compare").click();
             h.run_steps(3);
             return (h, "compare");
+        }
+        RightPanel::PortfolioFiles => {
+            let bytes = portfolio();
+            let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_os(egui::os::OperatingSystem::Nix).build_eframe(move |_cc| {
+                let mut app = PdfCraftApp::new();
+                app.set_option("language", "en").unwrap();
+                app.open_bytes("portfolio.pdf", None, bytes.clone()).expect("opens");
+                app
+            });
+            h.run_steps(6);
+            return (h, "portfolio");
         }
     };
     (harness(name), name)

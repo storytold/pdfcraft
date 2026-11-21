@@ -20,6 +20,10 @@ impl PdfCraftApp {
         if self.hold_close_for_ocr_review(index) {
             return;
         }
+        // A portfolio's tab asks about the portfolio, which it may keep aside.
+        if self.hides_unsaved_work(index) {
+            self.show_in_portfolio_tab(index, None);
+        }
         // Text typed into a field counts as an unsaved change. Another tab of the document (split
         // view) keeps the document's changes open, so closing this one asks only about its own.
         if self.asks_before_closing(index)
@@ -41,6 +45,7 @@ impl PdfCraftApp {
         if self.hold_for_any_ocr_review() {
             return;
         }
+        self.show_unsaved_portfolios();
         for i in (0..self.views.len()).rev() {
             if !self.has_unsaved_work(i) {
                 self.close_tab(i);
@@ -208,6 +213,7 @@ impl PdfCraftApp {
             ctx.request_repaint();
             false
         } else if self.first_dirty().is_some() {
+            self.show_unsaved_portfolios();
             self.close_request = Some(CloseRequest::Quit);
             ctx.request_repaint();
             false
@@ -265,6 +271,7 @@ impl PdfCraftApp {
         } else if !self.allow_quit && self.first_dirty().is_some() {
             // `first_dirty` counts text typed into a field as an unsaved change.
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.show_unsaved_portfolios();
             self.close_request = Some(CloseRequest::Quit);
         } else {
             // A clean quit: nothing is left to recover.

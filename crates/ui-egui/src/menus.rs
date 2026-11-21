@@ -77,6 +77,7 @@ const PANELS: &[(RightPanel, &str, &str)] = &[
     (RightPanel::Tags, "tags", "Tags"),
     (RightPanel::Search, "search", "Search"),
     (RightPanel::Compare, "compare", "Compare"),
+    (RightPanel::PortfolioFiles, "portfolio", "Portfolio files"),
 ];
 
 /// The English titles of the menus and submenus, for the bar's mnemonics in languages whose
@@ -512,7 +513,8 @@ impl PdfCraftApp {
                 PASTE => organize && self.page_clipboard.is_some() && enabled_id("page.paste"),
                 SELECT_ALL | DELETE => has_doc,
                 ACTUAL_SIZE | PAGE_LEVEL | FIT_WIDTH | FIT_HEIGHT | ZOOM_IN | ZOOM_OUT | ROTATE_CW | ROTATE_CCW => has_doc,
-                PANEL => panel(command).is_some(),
+                // A portfolio's files are listed in its own tab only.
+                PANEL => panel(command).is_some_and(|p| p != RightPanel::PortfolioFiles || self.active_portfolio().is_some()),
                 id => enabled_id(id),
             };
         let checked = match command.id.as_str() {

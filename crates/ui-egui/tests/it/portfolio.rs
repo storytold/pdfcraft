@@ -1,8 +1,11 @@
 //! A PDF portfolio (`/Collection`, ISO 32000-2 §7.11.6) opens on its documents, not on the cover
-//! sheet its pages are (#1652): the document `/D` names opens in a tab of its own, and the
-//! portfolio's tab shows its file list even with the right panel closed.
+//! sheet its pages are (#1652): its tab shows its file list, the Portfolio files panel, even with
+//! the right panel closed, and shows the file picked there, starting with the one `/D` names,
+//! in place of the cover, read-only.
 
+use egui::accesskit::Role;
 use egui_kittest::Harness;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::{PdfCraftApp, RightPanel};
 
 /// A one-page PDF.
@@ -80,11 +83,22 @@ fn opened(pdf: Vec<u8>, panel_closed: bool) -> Harness<'static, PdfCraftApp> {
     h
 }
 
-/// The open tabs' names, and the active one's.
+/// The open tabs' documents' names (a portfolio's tab's is the portfolio's), and the active one's.
 fn tabs(h: &Harness<'static, PdfCraftApp>) -> (Vec<String>, Option<String>) {
     let s = h.state();
-    let name = |i: usize| s.views.get(i).and_then(|v| s.session.get(v.id)).map(|d| d.name.clone());
+    let name = |i: usize| s.tab_doc(i).and_then(|id| s.session.get(id)).map(|d| d.name.clone());
     ((0..s.views.len()).filter_map(name).collect(), s.active.and_then(name))
+}
+
+/// The name of the document tab `index` shows: a portfolio's file, or the portfolio's own pages.
+fn shown(h: &Harness<'static, PdfCraftApp>, index: usize) -> Option<String> {
+    let s = h.state();
+    s.views.get(index).and_then(|v| s.session.get(v.id)).map(|d| d.name.clone())
+}
+
+/// The Portfolio files panel's row for `name`.
+fn row<'a>(h: &'a Harness<'static, PdfCraftApp>, name: &'a str) -> egui_kittest::Node<'a> {
+    h.get_by_role_and_label(Role::ListBoxOption, name)
 }
 
 /// Make tab `index` the active one.
@@ -93,23 +107,23 @@ fn select(h: &mut Harness<'static, PdfCraftApp>, index: usize) {
     h.run_steps(2);
 }
 
-/// The initial document opens in front, and the portfolio's tab lists its files whatever the
+/// The initial document is shown in the portfolio's own tab, which lists its files whatever the
 /// reader's panel preference, giving the panel back when left.
 #[test]
-fn a_portfolio_opens_its_initial_document_and_shows_its_files_with_the_panel_closed() {
+fn a_portfolio_presents_its_initial_document_in_its_tab_and_shows_its_files_with_the_panel_closed() {
     let mut h = opened(portfolio("/Collection << /D (form.pdf) /View /T >>", &[("intro.pdf", PAGE), ("form.pdf", PAGE)]), true);
-    // The document `/D` names is presented, in a tab of its own, with the reader's own panels.
-    assert_eq!(tabs(&h), (vec!["portfolio.pdf".into(), "form.pdf".into()], Some("form.pdf".into())));
-    assert_eq!(h.state().right, None);
-    // The portfolio's tab shows its files, without changing the reader's preference.
-    select(&mut h, 0);
-    assert_eq!(h.state().right, Some(RightPanel::Attachments));
+    // The document `/D` names is presented in the portfolio's tab, not a tab of its own.
+    assert_eq!(tabs(&h), (vec!["portfolio.pdf".into()], Some("portfolio.pdf".into())));
+    assert_eq!(shown(&h, 0).as_deref(), Some("form.pdf"));
+    // The tab shows its files, without changing the reader's preference.
+    assert_eq!(h.state().right, Some(RightPanel::PortfolioFiles));
     assert!(h.state().right_panel_closed);
     // Leaving it gives back the closed panel; coming back shows the files again.
-    select(&mut h, 1);
+    h.state_mut().open_bytes("other.pdf", None, PAGE.to_vec()).unwrap();
+    h.run_steps(2);
     assert_eq!(h.state().right, None);
     select(&mut h, 0);
-    assert_eq!(h.state().right, Some(RightPanel::Attachments));
+    assert_eq!(h.state().right, Some(RightPanel::PortfolioFiles));
     // The reader can still close the list on the portfolio's tab.
     h.state_mut().choose_right_panel(None);
     h.run_steps(2);
@@ -118,22 +132,19 @@ fn a_portfolio_opens_its_initial_document_and_shows_its_files_with_the_panel_clo
     select(&mut h, 1);
     h.state_mut().choose_right_panel(Some(RightPanel::Bookmarks));
     select(&mut h, 0);
-    assert_eq!(h.state().right, Some(RightPanel::Attachments));
+    assert_eq!(h.state().right, Some(RightPanel::PortfolioFiles));
     select(&mut h, 1);
     assert_eq!(h.state().right, Some(RightPanel::Bookmarks));
 }
 
-/// The initial document opens on its own panels, not on the portfolio's file list.
+/// The file list shows over the initial document, whatever panel the portfolio asks for.
 #[test]
-fn the_initial_document_opens_without_the_portfolios_file_list() {
-    // The portfolio asks for the Attachments panel too (`/PageMode /UseAttachments`), and the
-    // reader keeps the right panel open: the document it presents opens with the panels any other
-    // would, here on its comments, not with the portfolio's file list.
-    let mut h = opened(portfolio("/PageMode /UseAttachments /Collection << /D (form.pdf) >>", &[("intro.pdf", PAGE), ("form.pdf", NOTED)]), false);
-    assert_eq!(tabs(&h).1.as_deref(), Some("form.pdf"));
-    assert_eq!(h.state().right, Some(RightPanel::Comments));
-    select(&mut h, 0);
-    assert_eq!(h.state().right, Some(RightPanel::Attachments));
+fn the_initial_document_shows_with_the_portfolios_file_list() {
+    // The portfolio asks for the Attachments panel (`/PageMode /UseAttachments`), the reader keeps
+    // the right panel open and the document it presents has comments: its tab shows its files.
+    let h = opened(portfolio("/PageMode /UseAttachments /Collection << /D (form.pdf) >>", &[("intro.pdf", PAGE), ("form.pdf", NOTED)]), false);
+    assert_eq!(shown(&h, 0).as_deref(), Some("form.pdf"));
+    assert_eq!(h.state().right, Some(RightPanel::PortfolioFiles));
 }
 
 /// A file opened together with a portfolio, after it, stays in front.
@@ -154,7 +165,7 @@ fn a_file_opened_after_the_portfolio_keeps_the_front() {
     assert_eq!(tabs(&h), (vec!["portfolio.pdf".into(), "other.pdf".into()], Some("other.pdf".into())));
     assert_eq!(h.state().right, None);
     select(&mut h, 0);
-    assert_eq!(h.state().right, Some(RightPanel::Attachments));
+    assert_eq!(h.state().right, Some(RightPanel::PortfolioFiles));
 }
 
 /// A password asked for a file opened together with the portfolio stays asked: the initial
@@ -174,12 +185,20 @@ fn a_password_asked_for_a_file_opened_with_the_portfolio_stays_asked() {
         h.run_steps(4);
         assert!(h.state().password_prompt.is_some(), "the prompt for locked.pdf is still up");
         assert_eq!(tabs(&h).0, ["portfolio.pdf"]);
-        let opened = if answer.is_some() { "locked.pdf" } else { "form.pdf" };
-        // The answered file opens in the background worker.
+        assert_eq!(shown(&h, 0).as_deref(), Some("portfolio.pdf"), "the initial document waits");
+        let cancelled = answer.is_none();
         h.state_mut().submit_password(answer);
-        crate::support::wait_until(&mut h, "a second tab", |app| app.views.len() == 2);
-        h.run_steps(4);
-        assert_eq!(tabs(&h), (vec!["portfolio.pdf".into(), opened.into()], Some(opened.into())));
+        if cancelled {
+            // Nothing else opens: the portfolio presents its initial document in its tab.
+            h.run_steps(4);
+            assert_eq!(tabs(&h), (vec!["portfolio.pdf".into()], Some("portfolio.pdf".into())));
+            assert_eq!(shown(&h, 0).as_deref(), Some("form.pdf"));
+        } else {
+            // The answered file opens in the background worker, in front.
+            crate::support::wait_until(&mut h, "a second tab", |app| app.views.len() == 2);
+            h.run_steps(4);
+            assert_eq!(tabs(&h), (vec!["portfolio.pdf".into(), "locked.pdf".into()], Some("locked.pdf".into())));
+        }
     }
 }
 
@@ -199,7 +218,7 @@ fn a_deleted_attachment_doesnt_change_which_document_opens() {
     assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::DeleteAttachment { key: "intro.pdf".into() }));
     h.state_mut().submit_password(None);
     h.run_steps(4);
-    assert_eq!(tabs(&h), (vec!["portfolio.pdf".into(), "form.pdf".into()], Some("form.pdf".into())));
+    assert_eq!(shown(&h, 0).as_deref(), Some("form.pdf"));
 }
 
 /// Leaving the portfolio's tab in Read mode: Read mode gives back the panel the file list
@@ -210,7 +229,7 @@ fn read_mode_gives_back_the_panel_the_file_list_replaced() {
     h.state_mut().open_bytes("other.pdf", None, PAGE.to_vec()).unwrap();
     h.run_steps(2);
     select(&mut h, 0);
-    assert_eq!(h.state().right, Some(RightPanel::Attachments));
+    assert_eq!(h.state().right, Some(RightPanel::PortfolioFiles));
     assert!(h.state_mut().execute("view.read_mode"));
     h.run_steps(2);
     assert_eq!(h.state().right, None);
@@ -224,9 +243,8 @@ fn read_mode_gives_back_the_panel_the_file_list_replaced() {
 #[test]
 fn an_initial_pdf_named_without_pdf_opens() {
     let h = opened(portfolio("/Collection << /D (Form) >>", &[("Form", PAGE)]), true);
-    let (names, active) = tabs(&h);
-    assert_eq!(names.len(), 2, "{names:?}");
-    assert_ne!(active.as_deref(), Some("portfolio.pdf"));
+    assert_eq!(tabs(&h).0.len(), 1);
+    assert_ne!(shown(&h, 0).as_deref(), Some("portfolio.pdf"));
 }
 
 /// A panel the reader picks in Read mode on the portfolio's tab stays when they switch tabs.
@@ -246,9 +264,8 @@ fn a_panel_picked_in_read_mode_stays_when_the_tab_changes() {
 /// `/View /H` presents the initial document but leaves the file list to the reader.
 #[test]
 fn a_portfolio_that_keeps_its_list_hidden_still_presents_its_initial_document() {
-    let mut h = opened(portfolio("/Collection << /D (form.pdf) /View /H >>", &[("intro.pdf", PAGE), ("form.pdf", PAGE)]), true);
-    assert_eq!(tabs(&h).1.as_deref(), Some("form.pdf"));
-    select(&mut h, 0);
+    let h = opened(portfolio("/Collection << /D (form.pdf) /View /H >>", &[("intro.pdf", PAGE), ("form.pdf", PAGE)]), true);
+    assert_eq!(shown(&h, 0).as_deref(), Some("form.pdf"));
     assert_eq!(h.state().right, None, "/View /H: the list shows when the reader asks for it");
 }
 
@@ -260,7 +277,9 @@ fn a_portfolio_without_an_initial_document_shows_its_files_over_the_cover() {
     for collection in ["/Collection << /View /D >>", "/Collection << /D (notes.txt) >>"] {
         let h = opened(portfolio(collection, &[("notes.txt", b"hello"), ("form.pdf", PAGE)]), true);
         assert_eq!(tabs(&h), (vec!["portfolio.pdf".into()], Some("portfolio.pdf".into())), "{collection}");
-        assert_eq!(h.state().right, Some(RightPanel::Attachments), "{collection}");
+        assert_eq!(shown(&h, 0).as_deref(), Some("portfolio.pdf"), "{collection}");
+        assert_eq!(h.state().right, Some(RightPanel::PortfolioFiles), "{collection}");
+        assert!(h.state().toast.is_none(), "an initial document that can't be shown stays quiet: {collection}");
     }
 }
 
@@ -271,7 +290,103 @@ fn a_portfolio_inside_the_initial_document_waits_for_the_reader() {
     // one opens one tab, not a chain of them.
     let inner = portfolio("/Collection << /D (deep.pdf) >>", &[("deep.pdf", PAGE)]);
     let h = opened(portfolio("/Collection << /D (inner.pdf) >>", &[("inner.pdf", &inner)]), true);
-    assert_eq!(tabs(&h), (vec!["portfolio.pdf".into(), "inner.pdf".into()], Some("inner.pdf".into())));
-    // Its own tab still shows its files.
-    assert_eq!(h.state().right, Some(RightPanel::Attachments));
+    assert_eq!(tabs(&h), (vec!["portfolio.pdf".into()], Some("portfolio.pdf".into())));
+    assert_eq!(shown(&h, 0).as_deref(), Some("inner.pdf"));
+    // The tab still lists the outer portfolio's files.
+    assert_eq!(h.state().right, Some(RightPanel::PortfolioFiles));
+    row(&h, "inner.pdf");
+}
+
+/// A two-page PDF.
+const PAGES: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// A file picked in the list is shown in the portfolio's tab, read-only, its row marked as the
+/// one shown; going back to a file comes back to the view the reader left it in.
+#[test]
+fn a_file_picked_in_the_list_is_shown_read_only_in_the_portfolios_tab() {
+    let mut h = opened(portfolio("/Collection << /D (one.pdf) >>", &[("one.pdf", PAGES), ("two.pdf", PAGE)]), true);
+    assert_eq!(shown(&h, 0).as_deref(), Some("one.pdf"));
+    assert_eq!(row(&h, "one.pdf").accesskit_node().is_selected(), Some(true));
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(2);
+    row(&h, "two.pdf").click();
+    h.run_steps(2);
+    // Still one tab, the portfolio's, now showing the other file, which can't be changed.
+    assert_eq!(tabs(&h), (vec!["portfolio.pdf".into()], Some("portfolio.pdf".into())));
+    assert_eq!(shown(&h, 0).as_deref(), Some("two.pdf"));
+    assert_eq!(row(&h, "two.pdf").accesskit_node().is_selected(), Some(true));
+    assert_ne!(row(&h, "one.pdf").accesskit_node().is_selected(), Some(true));
+    {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        assert!(!doc.allows_modification() && doc.read_only_reason.is_some(), "a portfolio's file is read-only in its tab");
+    }
+    // Back to the first file: on the page the reader left it at.
+    row(&h, "one.pdf").click();
+    h.run_steps(2);
+    assert_eq!(shown(&h, 0).as_deref(), Some("one.pdf"));
+    assert_eq!(h.state().views[0].current, 1);
+}
+
+/// ↑ and ↓ move the keyboard between the files, and Enter shows the one that has it.
+#[test]
+fn the_keyboard_moves_between_files_and_shows_one() {
+    let mut h = opened(portfolio("/Collection << /View /D >>", &[("one.pdf", PAGE), ("two.pdf", PAGE)]), true);
+    row(&h, "one.pdf").focus();
+    // The row has the keyboard from the next frame, and keeps ↑ and ↓ from the one after.
+    h.run_steps(2);
+    assert!(row(&h, "one.pdf").accesskit_node().is_focused());
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(1);
+    assert!(row(&h, "two.pdf").accesskit_node().is_focused(), "↓ moves the keyboard to the next file");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(shown(&h, 0).as_deref(), Some("two.pdf"));
+}
+
+/// Closing the portfolio's tab closes the files it showed.
+#[test]
+fn closing_the_portfolios_tab_closes_the_files_it_showed() {
+    let mut h = opened(portfolio("/Collection << /D (one.pdf) >>", &[("one.pdf", PAGE), ("two.pdf", PAGE)]), true);
+    row(&h, "two.pdf").click();
+    h.run_steps(2);
+    h.state_mut().close_tab(0);
+    h.run_steps(2);
+    assert!(h.state().views.is_empty());
+    assert!(h.state().session.docs().is_empty(), "no file of the portfolio stays open");
+}
+
+/// A file that isn't a PDF stays in the list: picking it says why it isn't shown.
+#[test]
+fn a_file_that_isnt_a_pdf_says_why_it_isnt_shown() {
+    let mut h = opened(portfolio("/Collection << /D (one.pdf) >>", &[("notes.txt", b"hello"), ("one.pdf", PAGE)]), true);
+    row(&h, "notes.txt").click();
+    h.run_steps(2);
+    assert_eq!(shown(&h, 0).as_deref(), Some("one.pdf"));
+    let toast = h.state().toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    assert!(toast.contains("notes.txt"), "the reader is told why: {toast:?}");
+}
+
+/// Unsaved changes to the portfolio, made before one of its files was shown, are asked about
+/// when its tab closes, on the portfolio's own pages.
+#[test]
+fn unsaved_changes_to_the_portfolio_are_asked_about_when_its_tab_closes() {
+    let mut h = opened(portfolio("/Collection << /View /D >>", &[("one.pdf", PAGE), ("two.pdf", PAGE), ("three.pdf", PAGE)]), true);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::DeleteAttachment { key: "three.pdf".into() }));
+    h.run_steps(2);
+    row(&h, "one.pdf").click();
+    h.run_steps(2);
+    assert_eq!(shown(&h, 0).as_deref(), Some("one.pdf"));
+    h.state_mut().request_close_tab(0);
+    h.run_steps(1);
+    let s = h.state();
+    assert!(s.close_request.is_some(), "closing asks about the unsaved portfolio");
+    assert_eq!(s.views.len(), 1);
+    assert_eq!(shown(&h, 0).as_deref(), Some("portfolio.pdf"));
 }

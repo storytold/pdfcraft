@@ -474,6 +474,13 @@ fn verdict_mark_rect(widget: Rect, page: Rect, anchor: Pos2) -> Option<Rect> {
 pub(crate) fn tab_label(app: &PdfCraftApp, index: usize) -> Option<String> {
     let view = app.views.get(index)?;
     let doc = app.session.get(view.id)?;
+    // A portfolio's tab names the portfolio and the file of it shown.
+    if let Some(tab) = view.portfolio.as_ref()
+        && tab.shown.is_some()
+        && let Some(host) = app.session.get(tab.host)
+    {
+        return Some(crate::i18n::fmt(tl!("{portfolio} — {file}"), &[("portfolio", &host.display_name()), ("file", &doc.display_name())]));
+    }
     let Some(snap) = view.snapshot.as_ref() else { return Some(doc.display_name()) };
     Some(snapshot_tab_name(&doc.display_name(), &doc.name, snap))
 }
@@ -502,6 +509,9 @@ pub struct DocView {
     /// The document and attached file this tab was opened from, when a form or the Attachments
     /// panel opened it: asking for that attachment again comes back to this tab.
     pub from_attachment: Option<(DocId, String)>,
+    /// A portfolio's own tab: the portfolio, which of its files this view shows, and the views
+    /// of the others put aside (`crate::app::portfolio`). `None` for any other tab.
+    pub(crate) portfolio: Option<crate::app::portfolio::PortfolioTab>,
     pub zoom: f32,
     pub fit: Fit,
     pub layout: PageLayout,
@@ -1063,6 +1073,7 @@ impl DocView {
             pane: Default::default(),
             id,
             from_attachment: None,
+            portfolio: None,
             zoom: defaults.zoom,
             fit: defaults.fit,
             layout: defaults.layout,

@@ -1115,7 +1115,9 @@ impl PdfCraftApp {
 
     /// Whether tab `index` has work that isn't saved: edits, or form typing not committed yet.
     pub(crate) fn has_unsaved_work(&self, index: usize) -> bool {
-        self.views.get(index).and_then(|v| self.session.get(v.id)).is_some_and(|doc| doc.dirty) || self.has_unsaved_typing(index)
+        self.views.get(index).and_then(|v| self.session.get(v.id)).is_some_and(|doc| doc.dirty)
+            || self.has_unsaved_typing(index)
+            || self.hides_unsaved_work(index)
     }
 
     /// Whether tab `index` holds work of its own that isn't in its document yet: form typing not

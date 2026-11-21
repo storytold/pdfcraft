@@ -1,0 +1,11 @@
+Label = "Portfolio files"
+Label = "2"
+Button "Close" [off]
+ListBoxOption "invoice.pdf"
+  Image
+  Label = "invoice.pdf"
+  Label = "217 bytes  ·  March invoice"
+ListBoxOption "report.pdf" [selected]
+  Image
+  Label = "report.pdf"
+  Label = "217 bytes  ·  Yearly report"
