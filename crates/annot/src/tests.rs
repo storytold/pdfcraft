@@ -616,6 +616,56 @@ fn a_circle_goes_snug_around_its_text_and_follows_it() {
     assert!(close(frame(&doc).0, (40.0, 40.0)) && close(frame(&doc).1, centre), "{:?}", frame(&doc));
 }
 
+fn courier_circle_fixture(contents: &str, style: &str, wide: bool) -> Document {
+    let left = if wide { 70 } else { 145 };
+    let right = 590 - left;
+    let annot = format!("<< /Type /Annot /Subtype /FreeText /Rect [{left} 610 {right} 690] {style} /BS << /W 1 >> /Contents ({contents}) >>");
+    document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [] /DR << /Font << /F1 5 0 R >> >> >> >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        annot.as_bytes(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>",
+    ])
+}
+
+fn assert_courier_lines_fit(doc: &Document, size: u32) {
+    let doc = reopen(doc);
+    let ap = ap_content(&doc, &list(&doc, 0)[0]);
+    assert!(ap.contains(&format!("/Cour {size} Tf")), "the appearance draws the chosen face and size: {ap}");
+    let clip = ap.lines().find_map(|line| line.strip_suffix(" re W n")).expect("text clip");
+    let bottom: f64 = clip.split_whitespace().nth(1).unwrap().parse().unwrap();
+    let rows = baselines(&ap);
+    assert!(rows.iter().all(|&y| y >= bottom), "Courier baselines {rows:?} cross the text clip bottom {bottom}");
+    assert_eq!(rows.len(), 2, "both lines fit without rewrapping or disappearing");
+}
+
+#[test]
+fn a_circle_fits_the_rows_drawn_in_courier() {
+    let contents = format!("ab\n{}", "i".repeat(40));
+    for style in ["/DA (0 g /Cour 12 Tf)", "/DA (0 g /F1 12 Tf)"] {
+        let mut doc = courier_circle_fixture(&contents, style, false);
+        set_border_shape(&mut doc, 0, 0, BorderShape::Circle, &meta("")).unwrap();
+        assert_courier_lines_fit(&doc, 12);
+    }
+}
+
+#[test]
+fn a_circle_fits_the_rows_drawn_in_courier_from_default_style() {
+    let contents = format!("ab\n{}", "i".repeat(40));
+    let mut doc = courier_circle_fixture(&contents, "/DA (0 g /Helv 12 Tf) /DS (font: Courier 18pt)", true);
+    set_border_shape(&mut doc, 0, 0, BorderShape::Circle, &meta("")).unwrap();
+    assert_courier_lines_fit(&doc, 18);
+}
+
+#[test]
+fn a_circle_fits_the_rows_drawn_in_courier_after_editing() {
+    let mut doc = courier_circle_fixture("ab", "/DA (0 g /Cour 12 Tf)", false);
+    set_border_shape(&mut doc, 0, 0, BorderShape::Circle, &meta("")).unwrap();
+    set_contents(&mut doc, 0, 0, &format!("ab\n{}", "i".repeat(40)), &meta("")).unwrap();
+    assert_courier_lines_fit(&doc, 12);
+}
+
 /// A circle around a line wider than it is tall touches its text box's sides: `/RD` is 0 there,
 /// not a rounding error below it, and a hair below 0 still reads. (A text box that couldn't be
 /// read stopped following its text, and its text wrapped in a narrower one.) The circle keeps its

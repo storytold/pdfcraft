@@ -1,6 +1,6 @@
 use super::draw::draw_appearance;
 use super::lookup::{annot_dict, annot_ref, annots, change_annots, fill_sign_shape, page_ref};
-use super::modify::{free_text_da, n, refuse_undrawable_thai, rich_text, set_part_keys, shape_text_box};
+use super::modify::{circle_text_style, free_text_da, n, refuse_undrawable_thai, rich_text, set_part_keys, shape_text_box};
 use super::types::{
     FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, OverlayLook, Rgb, Shape, StampGroup, Style,
 };
@@ -511,7 +511,8 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
                 let rect = fit_thai_ink(rect, turn, &new.contents, size, 2.0 + appearance::border_width(&d));
                 // An oval or a circle goes around the text box, its text wrapped as displayed:
                 // after `/PCTextRotate`, which swaps the box's sides on a quarter-turned page.
-                shape_text_box(&mut d, rect, style.border_shape, style.width);
+                let text_style = circle_text_style(doc, &d, style.border_shape);
+                shape_text_box(&mut d, rect, style.border_shape, style.width, text_style);
             }
         }
         _ => {}
