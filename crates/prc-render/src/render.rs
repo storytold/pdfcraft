@@ -6,7 +6,7 @@
 use crate::WorldMesh;
 use crate::raster::{Corner, Target, View, ViewCorner, at};
 use crate::vec3::{cross, dot, length, normalize, scale, span, sub, unit_cross};
-use pdfcraft_prc::TriangleMesh;
+use craft_prc::TriangleMesh;
 
 /// The largest image [`render`] draws, in pixels (width × height).
 pub const MAX_RENDER_PIXELS: u64 = 16 * 1024 * 1024;
@@ -248,7 +248,7 @@ pub enum RenderError {
     Camera(&'static str),
     /// The model could not be read.
     #[error("unreadable model: {0}")]
-    Model(#[from] pdfcraft_prc::PrcError),
+    Model(#[from] craft_prc::PrcError),
     /// The placed model has more than [`crate::MAX_ASSEMBLED_TRIANGLES`] triangles.
     #[error("the placed model has more triangles than the assembly ceiling")]
     TooManyTriangles,
