@@ -31,8 +31,8 @@ pub use author::{
 };
 pub use calc_order::{CalculatedField, CalculationIssue, CalculationOrder, calculation_order, set_calculation_order};
 pub use scripting::{
-    DocumentTrigger, FieldChange, FieldEvent, NoScripts, ScriptResult, Scripts, apply_script_changes, document_action_scripts, document_scripts,
-    document_scripts_named, set_document_script, set_field_script,
+    DocumentTrigger, FieldChange, FieldEvent, NoScripts, PageEvent, PageScript, ScriptResult, Scripts, apply_script_changes, document_action_scripts,
+    document_scripts, document_scripts_named, page_scripts, set_document_script, set_field_script,
 };
 
 mod appearances;
@@ -43,10 +43,10 @@ mod values;
 pub use appearances::{FieldAppearanceCache, declares_pdfa, need_appearances, undrawn_fields, with_field_appearances, with_field_appearances_cached};
 pub(crate) use read::page_refs;
 pub use read::selected_options;
-pub use read::{Fields, acroform, adopted_page_fields, fields, fields_with_adopted};
+pub use read::{Fields, acroform, adopted_page_fields, fields, fields_with_adopted, form_reads_on_this_thread};
 #[cfg(test)]
-use read::{MAX_SCRIPT_BYTES, PageWalk, enumerate, form_reads};
-use read::{first_by_export, script, script_budget};
+use read::{MAX_SCRIPT_BYTES, PageWalk, enumerate, form_reads_on_this_thread as form_reads};
+use read::{first_by_export, qualified_name, script, script_budget};
 pub use tab_order::{TabOrder, move_in_tab_order, set_tab_order, tab_orders};
 #[cfg(test)]
 use values::has_password_flag;
@@ -140,6 +140,9 @@ pub struct Widget {
     pub caption: Option<String>,
     /// Text widget JavaScript to run on a mouse-up click.
     pub mouse_up_script: Option<String>,
+    /// The widget has a mouse-down action (`/AA /D`): a press runs it (the LaTeX `animate`
+    /// package's controls act on mouse down), so a push button with only that still takes a press.
+    pub mouse_down: bool,
     /// List boxes: where the options are drawn, so a click can pick the one under the pointer.
     pub list: Option<appearance::ListRows>,
     /// Drawn round: a radio button, or a check box laid out for a round XFA check button
