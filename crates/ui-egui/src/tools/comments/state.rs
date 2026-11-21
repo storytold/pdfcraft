@@ -144,6 +144,11 @@ pub struct CommentView {
     pub also: Vec<(usize, usize)>,
     /// Copy the selected comments (set by the menus; the app has the clipboard).
     pub copy_request: bool,
+    /// Open the shared highlight palette editor.
+    pub palette_request: bool,
+    /// An outside click hides the bar until a comment is selected again.
+    pub(crate) style_bar_dismissed: bool,
+    pub(crate) selection_epoch: u64,
     /// Paste the copied comments onto this page, centred at this user-space point (set by the
     /// page's menu, which knows where it was opened).
     pub paste_request: Option<(usize, [f64; 2])>,
@@ -323,6 +328,8 @@ impl CommentView {
 
     /// Select `key` alone.
     pub fn select_only(&mut self, key: (usize, usize)) {
+        self.style_bar_dismissed = false;
+        self.selection_epoch = self.selection_epoch.wrapping_add(1);
         self.selected = Some(key);
         self.also.clear();
         self.member = None;
@@ -333,6 +340,8 @@ impl CommentView {
     /// range. Without a comment with the handles, or with either end not in the list, `key` is
     /// added as by ⌘/Ctrl-click.
     pub fn select_range(&mut self, order: &[(usize, usize)], key: (usize, usize)) {
+        self.style_bar_dismissed = false;
+        self.selection_epoch = self.selection_epoch.wrapping_add(1);
         let ends = self.selected.and_then(|anchor| Some((order.iter().position(|k| *k == anchor)?, order.iter().position(|k| *k == key)?)));
         let Some((a, b)) = ends else { return self.toggle(key) };
         let anchor = self.selected;
@@ -342,6 +351,8 @@ impl CommentView {
     /// ⌘/Ctrl-click: add `key` to the selection, or take it out again. The handles go to the
     /// comment clicked last.
     pub fn toggle(&mut self, key: (usize, usize)) {
+        self.style_bar_dismissed = false;
+        self.selection_epoch = self.selection_epoch.wrapping_add(1);
         self.member = None;
         if self.selected == Some(key) {
             self.selected = self.also.pop();
@@ -356,6 +367,8 @@ impl CommentView {
 
     /// Nothing selected.
     pub fn clear_selection(&mut self) {
+        self.style_bar_dismissed = false;
+        self.selection_epoch = self.selection_epoch.wrapping_add(1);
         self.selected = None;
         self.also.clear();
         self.member = None;

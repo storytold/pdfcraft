@@ -8,6 +8,8 @@
 //!   text boxes), edited (double-click) and deleted (⌫ / Delete); a context menu offers Edit,
 //!   Reply, Set status, Colour and Delete.
 //! - **Composer:** the floating "Add a comment" card used for new notes, text boxes and edits.
+//! - **Style bar:** the floating bar over the selected comment (Select, Hand or a text-markup tool):
+//!   saved color/opacity presets, a palette editor and undoable deletion.
 //!
 //! Everything is turned into `pdfcraft_engine::Edit`s, queued on the view as `pending_edit` and
 //! applied by the app, so each change is one undo step.
@@ -26,6 +28,7 @@ mod geometry;
 mod input;
 mod menu;
 mod paint;
+pub mod palette;
 mod popups;
 mod state;
 
@@ -40,7 +43,7 @@ pub use geometry::{drawn_text_box_rect, snug_text_box_rect, text_box_rect};
 use input::hover_tip;
 pub(crate) use input::{anchor, context, context_hit, describe, hit, keys, moving_on, nudge_keys, page_after_text, page_input, tips_shown};
 pub use menu::{CanvasAction, fill_picker, recent_custom_colours, remember_custom_colour, status_badge, swatch_grid};
-pub(crate) use menu::{MenuRights, attachment_items, border_colour_button, context_menu, quick_bar_colour, quick_bar_controls};
+pub(crate) use menu::{MenuRights, attachment_items, border_colour_button, context_menu, quick_bar_colour, quick_bar_controls, style_bar};
 #[cfg(test)]
 use menu::{RECENT_CUSTOM, same_colour};
 pub(crate) use paint::paint_page;
@@ -322,6 +325,8 @@ pub struct CommentPrefs {
     /// `/T` of new comments (Acrobat: Preferences ▸ Identity, default the login name).
     pub author: String,
     styles: Vec<(CommentTool, Style)>,
+    highlight_palette: Vec<palette::HighlightPreset>,
+    pub(crate) palette_draft: Option<palette::PaletteDraft>,
     /// The font size of new text boxes and callouts (Make Properties Default).
     font_sizes: Vec<(CommentTool, f64)>,
     /// Keep the tool selected after use (the pin).
@@ -336,6 +341,8 @@ impl Default for CommentPrefs {
     fn default() -> Self {
         Self {
             author: login_name(),
+            highlight_palette: palette::defaults(),
+            palette_draft: None,
             styles: ALL.iter().map(|t| (*t, Style::default_for(&t.sample()))).collect(),
             font_sizes: ALL.iter().filter_map(|t| t.default_font_size().map(|s| (*t, s))).collect(),
             pinned: false,
@@ -358,6 +365,11 @@ impl CommentPrefs {
     pub fn set_color(&mut self, tool: CommentTool, c: Rgb) {
         if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
             s.color = c;
+            if tool == CommentTool::Highlight
+                && let Some(first) = self.highlight_palette.first_mut()
+            {
+                first.color = c;
+            }
         }
     }
 
@@ -372,6 +384,11 @@ impl CommentPrefs {
     pub fn set_opacity(&mut self, tool: CommentTool, o: f64) {
         if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
             s.opacity = if o.is_finite() { o.clamp(0.1, 1.0) } else { 1.0 };
+            if tool == CommentTool::Highlight
+                && let Some(first) = self.highlight_palette.first_mut()
+            {
+                first.opacity = s.opacity;
+            }
         }
     }
 
@@ -428,6 +445,12 @@ impl CommentPrefs {
 
     pub fn set_style(&mut self, tool: CommentTool, style: Style) {
         if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
+            if tool == CommentTool::Highlight
+                && let Some(first) = self.highlight_palette.first_mut()
+            {
+                first.color = style.color;
+                first.opacity = style.opacity;
+            }
             *s = style;
         }
     }

@@ -46,14 +46,14 @@ const LAYERS: [Layer; 9] =
 
 impl Layer {
     /// Whether a press with `tool` acts on what lies on this layer, so that the layer's claims
-    /// count. Only the Select tool follows links (the Link tool edits them) and selects text
-    /// markup: every other tool draws, places or selects text over them. The other layers are
+    /// count. Only the Select tool follows links (the Link tool edits them). Select and Hand select
+    /// text markup; the other tools draw, place or select text over it. The other layers are
     /// claimed only by the modules of the tools that act on them (each module's hit test filters
     /// by tool), so they count for every tool.
     pub(crate) fn reached_by(self, tool: QuickTool) -> bool {
         match self {
             Layer::Link => matches!(tool, QuickTool::Select | QuickTool::Link),
-            Layer::Comment => tool == QuickTool::Select,
+            Layer::Comment => matches!(tool, QuickTool::Select | QuickTool::Hand),
             Layer::ToolArea | Layer::Text | Layer::Field | Layer::Placed | Layer::Handle | Layer::Editor | Layer::Drag => true,
         }
     }
@@ -209,9 +209,9 @@ mod tests {
     }
 
     #[test]
-    fn comments_count_for_the_select_tool_only() {
+    fn comments_count_for_select_and_hand() {
         for tool in tools() {
-            assert_eq!(Layer::Comment.reached_by(tool), tool == QuickTool::Select, "{tool:?}");
+            assert_eq!(Layer::Comment.reached_by(tool), matches!(tool, QuickTool::Select | QuickTool::Hand), "{tool:?}");
         }
     }
 

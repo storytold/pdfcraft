@@ -114,7 +114,10 @@ fn select_after_edit(
         }
         // A group moved together stays selected (its positions don't change), so it
         // can be moved or copied again; anything else in a batch clears the selection.
-        Edit::Batch { edits, .. } if edits.iter().all(|e| matches!(e, Edit::MoveAnnotation { .. })) => {}
+        // A restyled selection too: a batch of style changes moves no keys either (the bar's
+        // swatches and slider, and the context menu's Colour, over several comments).
+        Edit::Batch { edits, .. }
+            if edits.iter().all(|e| matches!(e, Edit::MoveAnnotation { .. })) || edits.iter().all(|e| matches!(e, Edit::StyleAnnotation { .. })) => {}
         // Set Page Boxes over pages with different /UserUnit is a batch too; like one SetPageBox it keeps the selection.
         Edit::Batch { edits, .. } if edits.iter().all(|e| matches!(e, Edit::SetPageBox { .. })) => {}
         Edit::Batch { .. } => view.comments.clear_selection(),

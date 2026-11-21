@@ -191,3 +191,28 @@ to 16 and directory entries to 32,768. Cyclic includes are skipped.
   embeds a font that is not an `ATTRIBUTION.toml` entry.
 - The ArtCraft name, wordmark and logos in `docs/brand/` are trademarks of the ArtCraft Team, not open
   source (terms in `docs/brand/LICENSE-brand.txt`); they stay in PdfCraft, unmodified.
+
+## Saved highlight palette
+
+Preferences > Comment > Edit highlight palette edits 1–12 color/opacity presets shared by all
+open documents. The first preset is the default for new highlights. Save changes app preferences;
+Cancel or Escape discards the draft without changing a PDF. Preferences persist `highlight_palette`
+as a bounded array of RGB/opacity pairs; invalid arrays leave the current palette unchanged.
+
+Selecting a restylable, unlocked comment shows a floating toolbar with the saved presets, palette
+settings and Delete. Each preset applies its color and opacity as one undo step. A multi-selection
+restyles only unlocked comments; Delete is disabled if any selected comment or reply is locked.
+Hand clicks can select comments, while Hand drags still pan the page. Clicking outside dismisses
+the toolbar until a comment is selected again.
+
+The opt-in UI control channel exposes the same settings:
+
+```sh
+pdfcraft-cli ui --control /path/to/control.json set key=highlight-palette 'value=[{"color":"#EFA0BB","opacity":0.5},{"color":"#76B5E8","opacity":0.6}]'
+pdfcraft-cli ui --control /path/to/control.json set key=dialog value=highlight-palette
+pdfcraft-cli ui --control /path/to/control.json state
+```
+
+`ui.state.highlight_palette` reports the saved presets. Colors accept `#RRGGBB` or three finite
+RGB values from 0 to 1; opacity must be between 0.1 and 1. Existing `comment_edit` automation can
+apply annotation color and opacity without a GUI. The separate Recent colours row is unchanged.
