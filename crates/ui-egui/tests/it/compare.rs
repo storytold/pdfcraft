@@ -160,6 +160,43 @@ fn compare_filters_hide_text_or_visual_changes() {
     assert_eq!(kinds(&h, old_i), (text_old, 0));
 }
 
+/// The Compare Files dialog's Pages field rejects an out-of-range page: the
+/// comparison does not run and the dialog stays open with the typed range kept.
+#[test]
+fn compare_dialog_pages_field_rejects_out_of_range() {
+    let s = Session::new();
+    let v1 = s.create_from_text("t", "Delivery within five days. Returns accepted.").unwrap().to_vec();
+    let v2 = s.create_from_text("t", "Delivery within three days. Returns accepted for a week.").unwrap().to_vec();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("v1.pdf", None, v1.clone()).unwrap();
+        app.open_bytes("v2.pdf", None, v2.clone()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("doc.compare"));
+    h.run_steps(2);
+    h.get_by_label("Compare Files");
+    let pages = h.query_by_role_and_label(egui::accesskit::Role::TextInput, "Pages");
+    assert!(pages.is_some(), "the dialog has a Pages text input");
+    assert!(h.query_by_label("Pages:").is_some(), "the dialog has a Pages field");
+    let Some(pages) = pages else { return };
+    pages.focus();
+    pages.type_text("99");
+    h.run_steps(2);
+    assert_eq!(
+        h.query_by_role_and_label(egui::accesskit::Role::TextInput, "Pages").and_then(|n| n.value()),
+        Some("99".to_string()),
+        "the typed range is kept"
+    );
+    h.get_by_label("Compare").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Compare Files").is_some(), "the dialog stays open for an out-of-range page");
+    assert!(h.state().compare.is_none(), "the comparison did not run");
+    assert_ne!(h.state().right, Some(RightPanel::Compare));
+}
+
 /// Writes a screenshot of the Compare panel when PDFCRAFT_SHOT is set (for review).
 #[test]
 fn compare_panel_screenshot() {
