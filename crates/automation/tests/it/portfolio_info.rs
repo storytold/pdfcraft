@@ -64,70 +64,28 @@ fn portfolio_of_files() -> Vec<u8> {
 trailer << /Root 1 0 R >>
 %%EOF";
     let objs = [
-        "<< /Type /Catalog /Pages 2 0 R /Collection << /Type /Collection /D (form.pdf) >>          /Names << /EmbeddedFiles << /Names [(form.pdf) 7 0 R (notes.txt) 5 0 R] >> >> >>"
+        "<< /Type /Catalog /Pages 2 0 R /Collection << /Type /Collection /D (form.pdf) >> \
+         /Names << /EmbeddedFiles << /Names [(form.pdf) 7 0 R (notes.txt) 5 0 R] >> >> >>"
             .to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".into(),
-        "<< /Type /EmbeddedFile /Length 5 >>
-stream
-hello
-endstream".into(),
+        "<< /Type /EmbeddedFile /Length 5 >>\nstream\nhello\nendstream".into(),
         "<< /Type /Filespec /F (notes.txt) /UF (notes.txt) /EF << /F 4 0 R >> >>".into(),
-        format!("<< /Type /EmbeddedFile /Length {} >>
-stream
-{form}
-endstream", form.len()),
+        format!("<< /Type /EmbeddedFile /Length {} >>\nstream\n{form}\nendstream", form.len()),
         "<< /Type /Filespec /F (form.pdf) /UF (form.pdf) /EF << /F 6 0 R >> >>".into(),
     ];
-    let mut out = b"%PDF-1.7
-"
-    .to_vec();
+    let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
         offsets.push(out.len());
-        out.extend_from_slice(
-            format!(
-                "{} 0 obj
-{o}
-endobj
-",
-                i + 1
-            )
-            .as_bytes(),
-        );
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
     }
     let xref = out.len();
-    out.extend_from_slice(
-        format!(
-            "xref
-0 {}
-0000000000 65535 f 
-",
-            objs.len() + 1
-        )
-        .as_bytes(),
-    );
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
     for o in offsets {
-        out.extend_from_slice(
-            format!(
-                "{o:010} 00000 n 
-"
-            )
-            .as_bytes(),
-        );
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
     }
-    out.extend_from_slice(
-        format!(
-            "trailer
-<< /Size {} /Root 1 0 R >>
-startxref
-{xref}
-%%EOF
-",
-            objs.len() + 1
-        )
-        .as_bytes(),
-    );
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     out
 }
 
