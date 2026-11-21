@@ -5,20 +5,28 @@
 //! are one block (a heading that wraps is one bookmark), the body style is the size carrying the
 //! most characters, a short block larger than the body (or bold where the body is not) is a
 //! heading, and levels rank the heading styles over the document without skipping a level.
-//! Captions (`Figure 3`, `Table 2`) are not headings. Each inferred bookmark goes to the top of
-//! its heading as displayed (ISO 32000-2 §12.3.2.2 `/XYZ`); tagged ones go to their page.
+//! Captions (`Figure 3`, `Table 2`) are not headings, nor are bold words inside a sentence. Each
+//! inferred bookmark goes to the top of its heading as displayed (ISO 32000-2 §12.3.2.2 `/XYZ`);
+//! tagged ones go to their page.
 
 use pdfcraft_a11y::TextBlock;
 use pdfcraft_cos::Document;
 use pdfcraft_organize::{OutlineEntry, OutlineNode};
 
-use crate::text_style_bookmarks::{Line, MAX_BOOKMARKS, MAX_TITLE_CHARS, read_lines};
+use crate::text_style_bookmarks::{Line, MAX_BOOKMARKS, MAX_TITLE_CHARS, SIZE_TOLERANCE, read_lines};
 
 /// Blocks looked back over for one a line continues: a heading's next line can come after lines
 /// of other columns on the same row.
 const LOOKBACK: usize = 8;
 /// The deepest a suggested tree nests: bookmark_import takes 33 levels, counting a parent.
 const MAX_DEPTH: usize = 32;
+/// How far, in ems, text may sit beside a line and still be in the same sentence: a word space is
+/// about a quarter of an em and a justified one rarely passes half. A gutter between columns can
+/// be under an em, so this stays below it.
+const BESIDE_GAP: f64 = 0.5;
+/// The most lines looked at on either side of a line for text beside it, which bounds the work on
+/// a page with many runs on one row.
+const MAX_BESIDE: usize = 64;
 
 /// Where the suggested headings come from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,16 +116,19 @@ struct Block {
     lines: usize,
     chars: usize,
     letters: bool,
+    /// Whether any of its lines is set inside a sentence ([`set_inline`]).
+    inline: bool,
 }
 
 impl Block {
-    fn new(line: Line) -> Block {
-        let mut b = Block { first: line.clone(), last: line, title: String::new(), lines: 0, chars: 0, letters: false };
+    fn new(line: Line, inline: bool) -> Block {
+        let mut b = Block { first: line.clone(), last: line, title: String::new(), lines: 0, chars: 0, letters: false, inline };
         b.count(&b.first.text.clone());
         b
     }
 
-    fn add(&mut self, line: Line) {
+    fn add(&mut self, line: Line, inline: bool) {
+        self.inline |= inline;
         if self.title.chars().count() < MAX_TITLE_CHARS {
             self.title.push(' ');
         }
@@ -142,18 +153,55 @@ impl Block {
 /// `lines`, in reading order, grouped into blocks: a line joins the most recent of the last
 /// [`LOOKBACK`] blocks in its style that it continues ([`Line::continues`]).
 fn blocks(lines: Vec<Line>) -> Vec<Block> {
+    let flags = set_inline(&lines);
     let mut out: Vec<Block> = Vec::new();
-    for line in lines {
+    for (line, inline) in lines.into_iter().zip(flags) {
         let start = out.len().saturating_sub(LOOKBACK);
         let found = out.get_mut(start..).and_then(|recent| {
             recent.iter_mut().rev().find(|b| b.last.page == line.page && b.first.style.matches(&line.style) && line.continues(&b.last))
         });
         match found {
-            Some(b) => b.add(line),
-            None => out.push(Block::new(line)),
+            Some(b) => b.add(line, inline),
+            None => out.push(Block::new(line, inline)),
         }
     }
     out
+}
+
+/// For each of `lines` (in reading order), whether it is set inside a sentence: prose in another
+/// style at the same size sits right beside it on its row. A bold word in a paragraph (a
+/// requirement keyword, a defined term) is emphasis, not a heading. Text beside it is prose only
+/// when it has a lower-case letter, so a section number set apart from its bold title (`2.3`)
+/// leaves the title a heading.
+fn set_inline(lines: &[Line]) -> Vec<bool> {
+    lines
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            // Lines are sorted down each page, so those on its row are next to it.
+            let near = |o: &&Line| o.page == l.page && (o.top - l.top).abs() < l.style.size;
+            let before = lines.get(..i).unwrap_or_default().iter().rev().take(MAX_BESIDE).take_while(near);
+            let after = lines.get(i.saturating_add(1)..).unwrap_or_default().iter().take(MAX_BESIDE).take_while(near);
+            before.chain(after).any(|o| beside(l, o))
+        })
+        .collect()
+}
+
+/// Whether prose `o` sits beside `l` in the same sentence: on the same row (their boxes share at
+/// least half the shorter one's height, since a box runs from the font's ascent to its descent
+/// and tight leading makes stacked lines' boxes touch), side by side rather than one over the
+/// other, at the same size, in another style, at most [`BESIDE_GAP`] ems apart.
+fn beside(l: &Line, o: &Line) -> bool {
+    let size = l.style.size;
+    let shared = l.top.min(o.top) - l.bottom.max(o.bottom);
+    let shorter = (l.top - l.bottom).min(o.top - o.bottom);
+    let gap = l.left.max(o.left) - l.right.min(o.right);
+    shared >= shorter * 0.5
+        && gap >= -size * 0.25
+        && gap <= size * BESIDE_GAP
+        && (o.style.size - size).abs() <= SIZE_TOLERANCE
+        && !o.style.matches(&l.style)
+        && o.text.chars().any(char::is_lowercase)
 }
 
 /// A caption's lead in any case: `Figure`, `Fig.`, `Table`, `Chart`, `Exhibit` or `Plate`, then a
@@ -169,7 +217,7 @@ fn is_caption(text: &str) -> bool {
 /// The headings among `lines`, as outline entries: the first [`MAX_BOOKMARKS`], and whether there
 /// were more.
 fn inferred(lines: Vec<Line>) -> (Vec<OutlineEntry>, bool) {
-    let blocks: Vec<Block> = blocks(lines).into_iter().filter(|b| !is_caption(&b.title)).collect();
+    let blocks: Vec<Block> = blocks(lines).into_iter().filter(|b| !b.inline && !is_caption(&b.title)).collect();
     let evidence: Vec<TextBlock> = blocks.iter().map(Block::evidence).collect();
     let mut entries: Vec<OutlineEntry> = blocks
         .iter()
@@ -239,6 +287,44 @@ mod tests {
         let lines = vec![line(0, 760.0, 16.0, true, "Figure 3: The toolkit"), line(0, 730.0, 16.0, true, "42"), body(0, 700.0), body(0, 686.0)];
         assert!(inferred(lines).0.is_empty());
         assert!(is_caption("Table 12 Results") && is_caption("Fig. 2") && !is_caption("Tables are useful"));
+    }
+
+    /// A line of `text` in `style` from `left` to `right` at `top`.
+    fn run(top: f64, bold: bool, text: &str, left: f64, right: f64) -> Line {
+        Line { left, right, ..line(0, top, 11.0, bold, text) }
+    }
+
+    #[test]
+    fn a_bold_word_inside_a_sentence_is_not_a_heading() {
+        let lines = vec![
+            line(0, 760.0, 11.0, true, "MUST"),
+            body(0, 740.0),
+            run(726.0, false, "A recipient", 72.0, 130.0),
+            run(726.0, true, "MUST", 133.0, 165.0),
+            run(726.0, false, "ignore the field.", 168.0, 400.0),
+            body(0, 712.0),
+            run(690.0, false, "2.3", 72.0, 88.0),
+            run(690.0, true, "Numbered title", 96.0, 180.0),
+            body(0, 670.0),
+            body(0, 656.0),
+        ];
+        assert_eq!(titles(&inferred(lines).0), [(1, "MUST", 0), (1, "Numbered title", 0)]);
+    }
+
+    #[test]
+    fn a_heading_over_tightly_set_text_or_across_a_narrow_gutter_stays_a_heading() {
+        let lines = vec![
+            // Its box overlaps the first body line's by 1.5 pt.
+            run(760.0, true, "Tight heading", 72.0, 180.0),
+            body(0, 752.7),
+            body(0, 740.0),
+            // A gutter of 9 pt, under an em: prose ends the left column on the heading's row.
+            run(700.0, false, "ends the left column here", 72.0, 291.0),
+            run(700.0, true, "Right column heading", 300.0, 520.0),
+            body(0, 686.0),
+            body(0, 672.0),
+        ];
+        assert_eq!(titles(&inferred(lines).0), [(1, "Tight heading", 0), (1, "Right column heading", 0)]);
     }
 
     #[test]

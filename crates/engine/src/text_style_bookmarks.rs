@@ -30,7 +30,7 @@ impl TextStyle {
 }
 
 /// How far apart two sizes may be and still be one style.
-const SIZE_TOLERANCE: f64 = 0.25;
+pub(crate) const SIZE_TOLERANCE: f64 = 0.25;
 
 /// A style and how much text is set in it.
 #[derive(Clone, Debug, PartialEq)]
