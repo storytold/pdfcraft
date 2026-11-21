@@ -3,8 +3,9 @@
 //! A text object starts with a list marker when its text begins with a bullet, or with a number,
 //! letter or roman numeral followed by `.` or `)` or enclosed in `( )`, and then white space or
 //! nothing. Two or more consecutive paragraph objects whose markers have the same kind and
-//! punctuation, start at the same indent and, when ordered, count up by one, form a list: `L` ›
-//! `LI` › `LBody`. An object that shows only a marker, followed by the item's text on the same
+//! punctuation, start at the same indent, each within [`MAX_ITEM_STEP`] text sizes below the last
+//! line of the item before and, when ordered, count up by one, form a list: `L` › `LI` › `LBody`.
+//! An object that shows only a marker, followed by the item's text on the same
 //! line, is the item's `Lbl`. A paragraph without a marker right below an item's full line, flush
 //! with its marker or at a hanging indent, is the item's wrapped line and joins its `LBody` when its
 //! first word would not have fitted at the end of that line. A line that stops short of its column
@@ -34,6 +35,9 @@ const MAX_DIGITS: usize = 3;
 const MAX_HANG: f64 = 4.0;
 /// An item's wrapped line starts at most this many text sizes below the last line before it.
 const MAX_LINE_STEP: f64 = 1.6;
+/// A list's next item starts at most this many text sizes below the last line of the item before:
+/// a blank line between items still joins them, markers far apart on the page do not.
+const MAX_ITEM_STEP: f64 = 3.0;
 /// A line is full, so the text after it may wrap, when it ends at least this fraction of the way
 /// across its column; a column's edge is where at least two of its lines end that far.
 const FULL_LINE: f64 = 0.75;
@@ -364,9 +368,16 @@ fn run(evidence: &[Evidence], roles: &[&str], i: usize, numbering: Numbering, va
     used += first.wrapped.len();
     let (mut items, mut previous) = (vec![first], value);
     while let Some((mut item, next, n)) = item_at(evidence, roles, i + used) {
+        // The item before ends at its last wrapped line, or at its body.
+        let close =
+            items.last().and_then(|p| evidence.get(*p.wrapped.last().unwrap_or(&p.body))).zip(evidence.get(i + used)).is_some_and(|(above, e)| {
+                let step = above.last_y - e.y;
+                step > 0.0 && step <= MAX_ITEM_STEP * above.size.max(1.0)
+            });
         let reading = [Some((next.numbering, next.value)), next.alternative].into_iter().flatten().find(|(kind, _)| *kind == numbering);
         let counts = |v: u32| !numbering.ordered() || v == previous.saturating_add(1);
-        let continues = next.punctuation == marker.punctuation
+        let continues = close
+            && next.punctuation == marker.punctuation
             && evidence.get(i + used).is_some_and(|e| (e.x - x).abs() <= INDENT_TOLERANCE)
             && reading.is_some_and(|(_, v)| counts(v));
         let Some((_, v)) = reading.filter(|_| continues) else { break };
@@ -452,18 +463,24 @@ mod tests {
     }
 
     #[test]
-    fn a_list_ends_where_the_kind_indent_count_or_role_changes() {
-        // Kind, punctuation, indent and count each split the run.
+    fn a_list_ends_where_the_kind_indent_spacing_count_or_role_changes() {
+        // Kind, punctuation, indent, spacing and count each split the run.
         let splits = [
             [line("1. a", 20.0, 240.0), line("b) b", 20.0, 225.0)],
             [line("1. a", 20.0, 240.0), line("2) b", 20.0, 225.0)],
             [line("• a", 20.0, 240.0), line("• b", 40.0, 225.0)],
             [line("1. a", 20.0, 240.0), line("3. b", 20.0, 225.0)],
             [line("• a", 20.0, 240.0), line("◦ b", 20.0, 225.0)],
+            // Far down the page, or back up it.
+            [line("• a", 20.0, 700.0), line("• b", 20.0, 100.0)],
+            [line("1. a", 20.0, 100.0), line("2. b", 20.0, 700.0)],
         ];
         for pair in splits {
             assert_eq!(grouped(&pair), [Block::Text(0), Block::Text(1)], "{pair:?}");
         }
+        // A blank line between items still joins them.
+        let spaced = [line("1. a", 20.0, 240.0), line("2. b", 20.0, 210.0)];
+        assert!(matches!(grouped(&spaced).as_slice(), [Block::List { items, .. }] if items.len() == 2), "{:?}", grouped(&spaced));
         // A heading is never a list item.
         let headed = [line("1. Scope", 20.0, 240.0), line("2. Terms", 20.0, 225.0)];
         assert_eq!(blocks(&headed, &["H1", "P"]), [Block::Text(0), Block::Text(1)]);
