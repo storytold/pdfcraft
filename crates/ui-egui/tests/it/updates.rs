@@ -49,6 +49,31 @@ fn settle(h: &mut Harness<'static, PdfCraftApp>) {
 
 #[test]
 fn a_newer_release_is_offered_for_download() {
+    #[cfg(target_os = "linux")]
+    {
+        const FIXTURE: &str = "PDFCRAFT_TEST_UPDATE_DOWNLOAD_FIXTURE";
+        if craft_update::self_update::is_self_updating(&pdfcraft_ui_egui::UPDATE_APP) {
+            assert!(std::env::var_os(FIXTURE).is_none(), "the fixture must be detected as a Cargo build");
+            // nextest's extracted archive can omit Cargo's metadata. Give the child a
+            // private build directory with the marker the updater uses to identify it.
+            let current = std::env::current_exe().unwrap();
+            let build = tempfile::tempdir_in(current.parent().unwrap()).unwrap();
+            std::fs::write(build.path().join(".rustc_info.json"), "{}").unwrap();
+            let exe = build.path().join("update-download-test");
+            if std::fs::hard_link(&current, &exe).is_err() {
+                std::fs::copy(&current, &exe).unwrap();
+            }
+            let output = std::process::Command::new(exe)
+                .args(["--exact", "updates::a_newer_release_is_offered_for_download", "--nocapture"])
+                .env(FIXTURE, "1")
+                .env_remove(craft_update::self_update::DEV_VAR)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+            return;
+        }
+    }
     let mut h = harness(Ok(Some("v99.0.0")));
     h.state_mut().execute("help.check_updates");
     settle(&mut h);
@@ -169,6 +194,8 @@ fn turning_the_check_at_start_on_waits_for_the_next_start() {
 #[test]
 fn preferences_turn_the_check_at_start_off() {
     let (mut h, _calls) = started_with(r#"{"update_check_at_start": true}"#);
+    // The check at start answers on its own thread; its prompt would take the click below.
+    later_on_the_startup_prompt(&mut h);
     h.state_mut().execute("app.preferences");
     h.run_steps(3);
     h.get_by_label("Check for updates when PdfCraft starts").click();
@@ -196,6 +223,12 @@ fn the_check_at_start_offers_the_prompt_and_later_dismisses_it() {
         app.set_startup_update_check(true);
         app
     });
+    later_on_the_startup_prompt(&mut h);
+    assert!(h.query_by_label_contains("is available").is_none(), "Later closes the prompt");
+}
+
+/// Waits for the check at start to offer its prompt, then answers Later.
+fn later_on_the_startup_prompt(h: &mut Harness<'static, PdfCraftApp>) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while h.query_by_label_contains("is available").is_none() {
         h.run_steps(2);
@@ -204,5 +237,4 @@ fn the_check_at_start_offers_the_prompt_and_later_dismisses_it() {
     }
     h.get_by_label("LATER").click();
     h.run_steps(3);
-    assert!(h.query_by_label_contains("is available").is_none(), "Later closes the prompt");
 }

@@ -288,6 +288,9 @@ pub struct FileWatch {
     epoch: HashMap<DocId, u64>,
     /// The notice bar's Reload was pressed for this document.
     pub reload_request: Option<DocId>,
+    /// The newest version found for the active document while a dialog was open over it,
+    /// applied when the dialog closes (#3917).
+    held: Option<Changed>,
 }
 
 impl FileWatch {
@@ -363,10 +366,25 @@ impl PdfCraftApp {
             let (found, _) = self.watch.inline.tick();
             self.watch.found.lock().unwrap_or_else(PoisonError::into_inner).extend(found);
         }
-        let found = std::mem::take(&mut *self.watch.found.lock().unwrap_or_else(PoisonError::into_inner));
+        let mut found = std::mem::take(&mut *self.watch.found.lock().unwrap_or_else(PoisonError::into_inner));
+        if !self.holds_reload()
+            && let Some(held) = self.watch.held.take()
+        {
+            // Dropped when reloading was turned off meanwhile (in Preferences, the dialog itself)
+            // or when a newer version of the same document was just found: only that one loads.
+            if self.reload_changed_files && !found.iter().any(|c| c.doc == held.doc) {
+                found.insert(0, held);
+            }
+        }
         for c in found {
             self.file_changed(c);
         }
+    }
+
+    /// A dialog or prompt about the active document is open: its new version waits (#3917). The
+    /// full-screen prompt is not modal elsewhere, but it is about the version on screen.
+    fn holds_reload(&self) -> bool {
+        self.modal_open() || self.pending_full_screen.is_some()
     }
 
     /// Hand `list` to the watcher, starting it when needed. `false`: not delivered (no context
@@ -400,6 +418,13 @@ impl PdfCraftApp {
     /// changes.
     fn file_changed(&mut self, c: Changed) {
         let Some(i) = self.views.iter().position(|v| v.id == c.doc) else { return };
+        // A dialog acts on the active document when its OK is pressed: replacing the document
+        // under it would apply the dialog to another version (#3917). Keep the newest version
+        // found until the dialog closes; the checks below run then.
+        if self.holds_reload() && self.active == Some(i) {
+            self.watch.held = Some(c);
+            return;
+        }
         // Found for an earlier reading or writing of the file, or for another file than the
         // document's now (a save, Save As or a reopen came between): older than the document in
         // memory, so it is not applied over it (#1802). The watcher was told the newer version.
@@ -451,8 +476,10 @@ impl PdfCraftApp {
         let Some(id) = self.views.get(i).map(|v| v.id) else { return };
         match self.session.reload(id, bytes) {
             Ok(()) => {
-                // Whatever was unsaved is gone, so there is nothing left to recover.
+                // Whatever was unsaved is gone, so there is nothing left to recover, and no
+                // signature placed since the last save is left to ask about locking (#2149).
                 self.forget_recovery(id);
+                self.placed_signatures.remove(&id);
                 if let (Some(view), Some(doc)) = (self.views.get_mut(i), self.session.get(id)) {
                     view.document_replaced(&doc.info);
                 }
@@ -556,6 +583,22 @@ mod tests {
         app.session.get(app.views[0].id).unwrap()
     }
 
+    /// #2348 review (CodeRabbit): a reload from disk replaces the document, so a signature
+    /// placed since the last save is gone and the next save doesn't ask to lock it. A reload
+    /// that fails keeps the document, and the mark with it.
+    #[test]
+    fn reloading_from_disk_forgets_a_signature_just_placed() {
+        let (_dir, path) = TempDir::new("lock-reload", &fixture(1));
+        let mut h = harness(&path);
+        h.run_steps(3);
+        let id = h.state().views[0].id;
+        h.state_mut().placed_signatures.insert(id);
+        h.state_mut().reload_view(0, Arc::new(b"not a pdf".to_vec()));
+        assert!(h.state().placed_signatures.contains(&id), "a failed reload keeps the mark");
+        h.state_mut().reload_view(0, Arc::new(fixture(2)));
+        assert!(!h.state().placed_signatures.contains(&id), "the reloaded document has no placed signature");
+    }
+
     /// Association recovery changes ctime without replacing PDF contents. It must neither
     /// discard undo history nor make the next Save ask to overwrite our own metadata change.
     #[cfg(target_os = "macos")]
@@ -580,14 +623,18 @@ mod tests {
     #[test]
     fn a_large_binding_does_not_block_a_document_save() {
         let (_dir, path) = TempDir::new("large-binding-save", &fixture(2));
-        xattr::set(&path, "com.apple.LaunchServices.OpenWith", &vec![b'x'; 65537]).unwrap();
+        let binding = vec![b'x'; 65537];
+        xattr::set(&path, "com.apple.LaunchServices.OpenWith", &binding).unwrap();
         xattr::set(&path, "com.apple.quarantine", b"0082;1234;Preview;").unwrap();
         let mut h = harness(&path);
         let app = h.state_mut();
         app.views[0].select_pages(&[0]);
         app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
         assert!(app.save_active(SaveTarget::InPlace), "the document save uses upstream preservation limits");
-        assert_eq!(xattr::get(&path, "com.apple.LaunchServices.OpenWith").unwrap().unwrap().len(), 65537);
+        let mut saved = vec![0; binding.len()];
+        let count = rustix::fs::lgetxattr(&path, "com.apple.LaunchServices.OpenWith", saved.as_mut_slice()).unwrap();
+        assert_eq!(count, binding.len());
+        assert_eq!(saved, binding);
         assert_eq!(xattr::get(&path, "com.apple.quarantine").unwrap(), Some(b"0082;1234;Preview;".to_vec()));
     }
 
