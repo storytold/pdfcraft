@@ -10705,6 +10705,9 @@ fn undo_after_a_round_trip_through_another_tab_takes_back_the_typing() {
     let open_in = |h: &mut Harness<'static, PdfCraftApp>, tab: usize| {
         h.state_mut().active = Some(tab);
         h.run_steps(2);
+        // Each tab keeps its own zoom; keep its paragraph clear of the lower edge.
+        h.set_option("zoom", "75").unwrap();
+        h.run_steps(2);
         if h.state().views[tab].session.line_editor.is_none() {
             assert!(h.execute("edit.edit_text"));
             h.run_steps(2);
@@ -10821,6 +10824,9 @@ fn redo_in_the_frame_of_a_tab_switch_never_brings_another_tabs_typing() {
     let open_in = |h: &mut Harness<'static, PdfCraftApp>, tab: usize| {
         h.state_mut().active = Some(tab);
         h.run_steps(2);
+        // Each tab keeps its own zoom; keep its paragraph clear of the lower edge.
+        h.set_option("zoom", "75").unwrap();
+        h.run_steps(2);
         assert!(h.execute("edit.edit_text"));
         h.run_steps(2);
         let r = h.state().views[tab].page_screen_rect(0).expect("on screen");
@@ -10857,6 +10863,9 @@ fn typing_in_one_tab_never_reaches_another_tabs_paragraph() {
     });
     let open_in = |h: &mut Harness<'static, PdfCraftApp>, tab: usize| {
         h.state_mut().active = Some(tab);
+        h.run_steps(2);
+        // Each tab keeps its own zoom; keep its paragraph clear of the lower edge.
+        h.set_option("zoom", "75").unwrap();
         h.run_steps(2);
         assert!(h.execute("edit.edit_text"));
         h.run_steps(2);
