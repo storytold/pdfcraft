@@ -138,7 +138,7 @@ pub fn staging_suffixes() -> impl Iterator<Item = u64> {
 /// usual mode for a new file. On Windows a replaced file stays hidden or system if it was, and
 /// plain if it was plain, even where a server hides the dot-named staging file (#5001, #4593, #6029, #6119).
 /// On Windows and macOS a replaced file keeps its creation date, where
-/// the volume stores one.
+/// the volume stores one. On Windows a replaced file keeps its Mark-of-the-Web (#7887).
 /// On macOS, accessible extended attributes of an existing regular destination are copied
 /// before flushing; a copy failure refuses the save rather than losing metadata (#2658).
 pub fn write_atomically(path: &Path, bytes: &[u8], form: StagingName) -> std::io::Result<()> {
@@ -176,6 +176,11 @@ pub fn write_atomically_with(
     // A saved file is the same document: it keeps its creation date (#2658).
     #[cfg(any(windows, target_os = "macos"))]
     let created = std::fs::metadata(path).ok().filter(|m| m.is_file()).and_then(|m| m.created().ok());
+    // It keeps its Mark-of-the-Web on Windows, as the extended attributes on macOS (#7887): the
+    // `Zone.Identifier` stream goes with the file the rename replaces. A symbolic link is replaced,
+    // not read through, so it passes on none.
+    #[cfg(windows)]
+    let zone = keep.as_ref().filter(|m| m.is_file()).and_then(|_| crate::zone::read_zone(path));
     let (tmp, file) = create_staging_as(dir, name, form, suffixes, keep.as_ref())?;
     let result = (|| {
         // Closed at the end of the block, before the rename (required on Windows).
@@ -188,6 +193,14 @@ pub fn write_atomically_with(
             })?;
             #[cfg(any(windows, target_os = "macos"))]
             keep_created(&file, created);
+            // Best effort, as the creation date. The staging file is on the target's volume, which
+            // keeps streams: the target had one.
+            #[cfg(windows)]
+            if let Some(zone) = &zone
+                && let Err(e) = crate::zone::write_zone(&tmp, zone)
+            {
+                log::warn!("could not keep the Mark-of-the-Web of {}: {e}", path.display());
+            }
             sync_staged(&file, sync_all)?;
         }
         let rename_result = std::fs::rename(&tmp, path);

@@ -22,13 +22,37 @@ pub fn mark_from(target: &Path, source: Option<&Path>) -> std::io::Result<()> {
     #[cfg(windows)]
     {
         let zone = source.and_then(read_zone).unwrap_or_else(|| INTERNET_ZONE.as_bytes().to_vec());
-        std::fs::write(zone_stream(target), zone)
+        write_zone(target, &zone)
     }
     #[cfg(not(windows))]
     {
         let _ = (target, source);
         Ok(())
     }
+}
+
+/// Give `target` the zone of `source` when `source` has one, and leave `target` as it is when
+/// not: a Save As copy of a document from the internet is that same document (#7887), while a
+/// copy of a local one stays local. Windows only; best effort, as [`mark_from`].
+pub fn copy_zone(target: &Path, source: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        match read_zone(source) {
+            Some(zone) => write_zone(target, &zone),
+            None => Ok(()),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (target, source);
+        Ok(())
+    }
+}
+
+/// Write `zone` as `path`'s `Zone.Identifier` stream.
+#[cfg(windows)]
+pub(crate) fn write_zone(path: &Path, zone: &[u8]) -> std::io::Result<()> {
+    std::fs::write(zone_stream(path), zone)
 }
 
 /// `path`'s `Zone.Identifier` stream, when it has one that reads as a zone.
@@ -120,6 +144,27 @@ mod tests {
         std::fs::write(&target, b"PK").unwrap();
         mark_from(&target, Some(&source)).unwrap();
         assert_eq!(read_zone(&target).unwrap(), zone.as_bytes());
+    }
+
+    /// A Save As copy takes the zone of a document from the internet (#7887), and a copy of a
+    /// local document stays as it was: unlike [`mark_from`], no Internet zone is made up.
+    #[test]
+    fn a_copy_takes_only_a_zone_the_source_has() {
+        let dir = Dir::new("save-as");
+        let source = dir.0.join("from mail.pdf");
+        std::fs::write(&source, b"%PDF").unwrap();
+        let zone = "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=https://mail.example/a.pdf\r\n";
+        std::fs::write(zone_stream(&source), zone).unwrap();
+        let copy = dir.0.join("copy.pdf");
+        std::fs::write(&copy, b"%PDF").unwrap();
+        copy_zone(&copy, &source).unwrap();
+        assert_eq!(read_zone(&copy).unwrap(), zone.as_bytes());
+        let local = dir.0.join("local.pdf");
+        std::fs::write(&local, b"%PDF").unwrap();
+        let local_copy = dir.0.join("local copy.pdf");
+        std::fs::write(&local_copy, b"%PDF").unwrap();
+        copy_zone(&local_copy, &local).unwrap();
+        assert_eq!(read_zone(&local_copy), None);
     }
 
     #[test]

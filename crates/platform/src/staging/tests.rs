@@ -434,6 +434,31 @@ fn a_replaced_file_keeps_its_hidden_and_system_attributes() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #7887: a file from the internet keeps its Mark-of-the-Web (`Zone.Identifier`) through a save
+/// in place, though the rename replaces the file the stream belonged to; a file without one
+/// doesn't gain one.
+#[cfg(windows)]
+#[test]
+fn a_replaced_file_keeps_its_zone() {
+    use crate::zone::read_zone;
+    let dir = test_dir("zone");
+    let target = dir.join("from mail.pdf");
+    std::fs::write(&target, b"OLD").unwrap();
+    let zone = "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=https://example.test/x.pdf\r\n";
+    std::fs::write(format!("{}:Zone.Identifier", target.display()), zone).unwrap();
+    assert_eq!(read_zone(&target).as_deref(), Some(zone.as_bytes()), "the fixture has a zone");
+    for (i, form) in [StagingName::TagThenSuffix, StagingName::SuffixThenTag].into_iter().enumerate() {
+        write_atomically_with(&target, b"NEW", form, [i as u64], std::fs::File::sync_all).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"NEW");
+        assert_eq!(read_zone(&target).as_deref(), Some(zone.as_bytes()), "the saved file keeps its zone ({form:?})");
+    }
+    let local = dir.join("local.pdf");
+    std::fs::write(&local, b"OLD").unwrap();
+    write_atomically(&local, b"NEW", StagingName::TagThenSuffix).unwrap();
+    assert_eq!(read_zone(&local), None, "a local file stays local");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A save replaces a symbolic link, not the file it points to, so the saved file takes the
 /// link's own attributes: a plain link to a hidden file saves as a plain file, and the file
 /// it pointed to is left as it was.
