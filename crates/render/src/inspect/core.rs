@@ -29,6 +29,24 @@ pub fn check_pages(bytes: Arc<Vec<u8>>, password: Option<&str>, expected: usize)
     Ok(())
 }
 
+/// The page objects the viewer shows, in its order; `None` for a page that has no object number
+/// of its own (or one out of range). The engine lines the document model's page tree up with these
+/// where the model cannot read part of the tree. Never panics: parser crashes are caught and
+/// reported.
+pub fn page_objects(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<Vec<Option<pdfcraft_cos::ObjRef>>, OpenError> {
+    let pdf = crate::backend::open(bytes, password)?;
+    catch_unwind(AssertUnwindSafe(|| {
+        pdf.pages()
+            .iter()
+            .map(|page| {
+                let id = page.raw().obj_id()?;
+                Some(pdfcraft_cos::ObjRef::new(u32::try_from(id.obj_number).ok()?, u16::try_from(id.gen_number).ok()?))
+            })
+            .collect()
+    }))
+    .map_err(|p| OpenError::Invalid(format!("the page tree could not be read: {}", crate::raster::panic_message(&p))))
+}
+
 /// Inspect a document. Fails only if the renderer itself cannot open the file (or needs a
 /// password). Never panics: parser crashes are caught and reported.
 pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, OpenError> {

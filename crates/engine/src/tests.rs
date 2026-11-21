@@ -11322,6 +11322,66 @@ fn a_recovered_page_tree_opens_unmodified_and_edits_the_pages_shown() {
     assert_eq!(s.get(id).unwrap().info.pages.iter().map(|p| p.rotation).collect::<Vec<_>>(), [0, 90]);
 }
 
+/// Three pages, 200 × 300, the last two under a page tree node (object 6) whose `/Kids` holds an
+/// entry that is no object (`9`, a NUL, then `\xff0`), as in a damaged file: the document model
+/// reads that node as no dictionary, while the reader skips the entry and shows all three pages.
+/// With `broken_startxref`, the file opens only by rebuilding it from object headers, so every
+/// save of it is a full rewrite.
+fn fixture_with_an_unreadable_page_tree_node(broken_startxref: bool) -> Vec<u8> {
+    let bodies: [&[u8]; 6] = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 3 /MediaBox [0 0 200 300] >>",
+        b"<< /Type /Page /Parent 2 0 R >>",
+        b"<< /Type /Page /Parent 6 0 R >>",
+        b"<< /Type /Page /Parent 6 0 R /Rotate 90 >>",
+        b"<< /Type /Pages /Parent 2 0 R /Kids [4 0 R 9\x00\xff0 R 5 0 R] /Count 2 >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, b) in bodies.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(b);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = if broken_startxref { 1 } else { out.len() };
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", bodies.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", bodies.len() + 1).as_bytes());
+    out
+}
+
+/// The pages the reader shows and the pages the document model walks, for `bytes`.
+fn shown_and_walked(bytes: Arc<Vec<u8>>) -> (usize, usize) {
+    let mut s = Session::new();
+    let id = s.open("x.pdf", None, bytes, None).unwrap();
+    let d = s.get(id).unwrap();
+    (d.info.pages.len(), pdfcraft_organize::page_count(&d.editor.as_ref().unwrap().cos).unwrap())
+}
+
+#[test]
+fn pages_under_an_unreadable_page_tree_node_are_the_pages_edited_and_saved() {
+    for broken_startxref in [false, true] {
+        let bytes = Arc::new(fixture_with_an_unreadable_page_tree_node(broken_startxref));
+        let mut s = Session::new();
+        let id = s.open("damaged.pdf", None, bytes, None).unwrap();
+        let doc = s.get(id).unwrap();
+        assert_eq!(doc.info.pages.iter().map(|p| p.rotation).collect::<Vec<_>>(), [0, 0, 90]);
+        assert_eq!(pdfcraft_organize::page_count(&doc.editor.as_ref().unwrap().cos).unwrap(), 3, "the model edits the pages shown");
+        assert!(!doc.editor.as_ref().unwrap().cos.is_modified(), "the repair is a revision of the opened file, not an unsaved edit");
+        assert!(doc.repair_log().iter().any(|l| l.contains("page tree node could not be read")), "{:?}", doc.repair_log());
+        // A save after an edit that touches no page keeps every page.
+        s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Report".into() }).unwrap();
+        assert_eq!(shown_and_walked(s.save_bytes(id).unwrap()), (3, 3), "broken startxref: {broken_startxref}");
+        // A page edit addresses the page shown at that position.
+        s.apply(id, Edit::RotatePages { pages: vec![1], degrees: 90 }).unwrap();
+        assert_eq!(s.get(id).unwrap().info.pages.iter().map(|p| p.rotation).collect::<Vec<_>>(), [0, 90, 90]);
+        assert_eq!(shown_and_walked(s.save_bytes(id).unwrap()), (3, 3), "broken startxref: {broken_startxref}");
+    }
+}
+
 #[test]
 fn a_signed_document_rebuilt_from_object_headers_refuses_edits() {
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
