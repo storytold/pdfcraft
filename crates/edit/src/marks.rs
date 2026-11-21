@@ -141,7 +141,11 @@ impl HeaderFooter {
     /// `expand`'s output is, covers every page (and a `\r` that would be drawn is refused too).
     /// The dialog asks this too, so its preview never offers text that applying refuses (#2013).
     pub fn first_undrawable(&self) -> Option<char> {
-        self.text.iter().flat_map(|t| t.lines()).find_map(first_undrawable_in_line)
+        use unicode_normalization::UnicodeNormalization;
+        self.text.iter().flat_map(|t| t.lines()).find_map(|l| {
+            let nfc: String = l.nfc().collect();
+            first_undrawable_in_line(&nfc)
+        })
     }
 
     /// The room the header and the footer take at the top and the bottom of a page, in points:
@@ -217,9 +221,13 @@ impl Watermark {
     /// the standard fonts nor (for Thai) the Thai face can draw it (#125). A picture watermark
     /// draws no text.
     pub fn first_undrawable(&self) -> Option<char> {
+        use unicode_normalization::UnicodeNormalization;
         match self.source {
             Some(_) => None,
-            None => self.text.trim().lines().find_map(first_undrawable_in_line),
+            None => self.text.trim().lines().find_map(|l| {
+                let nfc: String = l.nfc().collect();
+                first_undrawable_in_line(&nfc)
+            }),
         }
     }
 }
@@ -393,5 +401,47 @@ mod expand_tests {
         assert_eq!(expand("<<<1>>>", 3, 9, 1, &cx), "<3>");
         assert_eq!(expand("<< <<1>>", 3, 9, 1, &cx), "<< 3");
         assert_eq!(expand("<<x>> <<1>>", 3, 9, 1, &cx), "<<x>> 3");
+    }
+
+    #[test]
+    fn nfd_text_in_added_text_header_footer_and_watermark_is_composed_to_nfc() -> Result<(), Box<dyn std::error::Error>> {
+        let mut doc = Document::new_empty();
+        let tree = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).ok_or("missing Pages")?;
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Parent".to_vec(), Object::Ref(tree));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]));
+        let p_ref = doc.add(page);
+        doc.update_dict(tree, |d| {
+            d.set(b"Count".to_vec(), Object::Int(1));
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(p_ref)]));
+        })?;
+
+        let nfd = "Cafe\u{0301} Mu\u{0308}ller";
+        let t = added::AddedText { text: nfd.into(), rect: [72.0, 700.0, 300.0, 720.0], ..Default::default() };
+        assert_eq!(added::first_undrawable(&t), None);
+        let idx = added::add_content(&mut doc, 0, &added::Content::Text(t))?;
+        let items = added::list_added(&doc);
+        let item = items.get(idx).ok_or("missing added item")?;
+        match &item.content {
+            added::Content::Text(stored) => assert_eq!(stored.text, "Café Müller"),
+            added::Content::Image(_) => return Err("expected text item".into()),
+        }
+
+        let mut hf = HeaderFooter::default();
+        if let Some(first) = hf.text.first_mut() {
+            *first = nfd.into();
+        }
+        assert_eq!(hf.first_undrawable(), None);
+        crate::add_header_footer(&mut doc, &[0], &hf, false, &Context::default())?;
+
+        let wm = Watermark { text: nfd.into(), ..Default::default() };
+        assert_eq!(wm.first_undrawable(), None);
+        crate::add_watermark(&mut doc, &[0], &wm, false)?;
+
+        // Uncomposable combining marks (i + U+0307) are still refused with U+0307.
+        let uncomposable = Watermark { text: "i\u{0307}".into(), ..Default::default() };
+        assert_eq!(uncomposable.first_undrawable(), Some('\u{0307}'));
+        Ok(())
     }
 }
