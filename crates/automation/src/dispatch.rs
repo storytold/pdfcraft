@@ -786,6 +786,29 @@ impl Automation {
                 let edit = Edit::DeleteAttachment { key: a.str("name")?.into() };
                 self.apply(&a, edit)?
             }
+            "attachments_extract" => {
+                let keys: Option<Vec<String>> = match a.get("keys") {
+                    Some(_) => Some(a.strs("keys")?.into_iter().map(str::to_string).collect()),
+                    None => None,
+                };
+                let folder = self.resolve(a.str("folder")?, true)?;
+                let doc = self.doc(&a)?;
+                // Refuse an unknown key before the folder is made.
+                if let Some(missing) = keys.iter().flatten().find(|k| !document_attachment_keys(doc).contains(k)) {
+                    return Err(ToolError::InvalidArgs(format!("there is no document attachment with key {missing:?}")));
+                }
+                std::fs::create_dir_all(&folder).map_err(|e| failed(format!("{}: {e}", folder.display())))?;
+                let saved = pdfcraft_engine::attachment_files::save_attachments(doc, keys.as_deref(), &folder).map_err(failed)?;
+                let files: Vec<Value> = saved
+                    .iter()
+                    .map(|s| match &s.outcome {
+                        Ok(path) => json!({ "key": s.key, "name": s.name, "path": path.to_string_lossy() }),
+                        Err(e) => json!({ "key": s.key, "name": s.name, "error": e }),
+                    })
+                    .collect();
+                let written = saved.iter().filter(|s| s.outcome.is_ok()).count();
+                json!({ "saved": written, "failed": saved.len() - written, "files": files })
+            }
             "doc_convert_colours" => self.convert_colours(&a)?,
             "attachment_edit" => {
                 let key = a.opt_str("key")?;

@@ -308,11 +308,18 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare, id),
                     RightPanel::Attachments => {
                         let attachable = doc.allows_modification() && doc.read_only_reason.is_none();
-                        if attachable {
+                        let savable = info.attachments.iter().any(|a| matches!(a.source, pdfcraft_render::AttachmentSource::Document { .. }));
+                        if attachable || savable {
                             egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 6)).show(ui, |ui| {
-                                if ui.add(egui::Button::new(tl!("Attach a file…"))).clicked() {
-                                    panel_command = Some("edit.attach");
-                                }
+                                ui.horizontal_wrapped(|ui| {
+                                    if attachable && ui.add(egui::Button::new(tl!("Attach a file…"))).clicked() {
+                                        panel_command = Some("edit.attach");
+                                    }
+                                    // A portfolio's files, or any document's, all at once into a folder.
+                                    if savable && ui.add(egui::Button::new(tl!("Save all files…"))).clicked() {
+                                        panel_command = Some("file.save_attachments");
+                                    }
+                                });
                             });
                         }
                         if info.attachments.is_empty() {

@@ -273,6 +273,27 @@ fn a_right_click_on_a_row_button_opens_the_row_menu() {
     assert_eq!(count(&h, "Save attachment…"), 3);
 }
 
+/// Save all files… (organize.portfolio-extract) writes every attachment into the chosen folder,
+/// beside a file of the same name already there, which it keeps, and says what it saved.
+#[test]
+fn save_all_files_writes_every_attachment_into_the_folder_and_keeps_what_was_there() {
+    let dir = Dir::new("save-all");
+    std::fs::write(dir.0.join("notes.txt"), b"already here").unwrap();
+    let mut h = harness();
+    h.state_mut().pick_override = Some(vec![dir.0.to_string_lossy().into_owned()]);
+    h.get_by_label("Save all files…").click();
+    h.run_steps(3);
+    let files: Vec<(String, Vec<u8>)> = std::fs::read_dir(&dir.0)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .map(|p| (p.file_name().unwrap().to_string_lossy().into_owned(), std::fs::read(&p).unwrap()))
+        .collect();
+    assert!(files.contains(&("notes.txt".into(), b"already here".to_vec())), "the file already there is kept: {files:?}");
+    assert!(files.iter().any(|(name, bytes)| name != "notes.txt" && bytes == b"hello notes"), "notes.txt is saved beside it: {files:?}");
+    assert!(files.iter().any(|(_, bytes)| bytes.starts_with(b"%PDF")), "inner.pdf is saved: {files:?}");
+    assert_eq!(files.len(), 3, "{files:?}");
+}
+
 /// Where the attachment named `label` shows in the panel: the lowest text with that name, below
 /// a tab of the same name once the attachment is open.
 fn row_name(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Pos2 {

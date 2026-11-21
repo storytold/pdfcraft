@@ -386,38 +386,62 @@ impl<'a> Inspector<'a> {
 /// document opened without the password its embedded files need (`/AuthEvent /EFOpen`, ISO
 /// 32000-2 §7.6.6) holds them encrypted: asking for one is an error, never its encrypted bytes.
 pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -> Result<Vec<u8>, String> {
-    let run = || -> Result<Vec<u8>, String> {
+    let mut out = Err("the attachment was not read".to_string());
+    each_attachment_data(bytes, password, std::slice::from_ref(att), |_, data| out = data);
+    out
+}
+
+/// [`attachment_data`] for each of `atts`, reading the document once: `each` gets each one's
+/// index in `atts` with its bytes or why they can't be read, in order and one at a time, so only
+/// one file's bytes are held at once.
+pub fn each_attachment_data(bytes: &[u8], password: Option<&str>, atts: &[Attachment], mut each: impl FnMut(usize, Result<Vec<u8>, String>)) {
+    let crashed = |p: Box<dyn std::any::Any + Send>| format!("reading the attachment crashed: {}", crate::raster::panic_message(&p));
+    let open = || -> Result<Document, String> {
         // Read through lopdf, which can't read a document opened without its key at all.
         if pdfcraft_cos::Document::open_with_password(std::sync::Arc::new(bytes.to_vec()), password).is_ok_and(|d| d.embedded_files_locked()) {
             return Err("the attachment is encrypted: open the document with its password to read it".into());
         }
-        let options = load_options(password);
-        let doc = Document::load_mem_with_options(bytes, options).map_err(|e| e.to_string())?;
-        let insp = Inspector::new(&doc);
-        let spec: &Object = match &att.source {
-            AttachmentSource::Document { key } => {
-                let names = doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| insp.dict(o)).ok_or("no /Names")?;
-                let ef = names.get(b"EmbeddedFiles").ok().and_then(|o| insp.dict(o)).ok_or("no /EmbeddedFiles")?;
-                insp.name_tree_find(ef, key, &mut NameTreeSeen::default(), 0).ok_or("attachment not found")?
+        Document::load_mem_with_options(bytes, load_options(password)).map_err(|e| e.to_string())
+    };
+    let doc = match catch_unwind(AssertUnwindSafe(open)).unwrap_or_else(|p| Err(crashed(p))) {
+        Ok(doc) => doc,
+        Err(e) => {
+            for i in 0..atts.len() {
+                each(i, Err(e.clone()));
             }
-            AttachmentSource::Annotation { page, index } => {
-                let (&pid, _) = insp.page_index.iter().find(|(_, i)| **i == *page).ok_or("page not found")?;
-                let annots = doc.get_dictionary(pid).map_err(|e| e.to_string())?.get(b"Annots").map_err(|e| e.to_string())?;
-                let a = insp.resolve(annots).as_array().map_err(|e| e.to_string())?.get(*index).ok_or("annotation not found")?;
-                insp.dict(a).and_then(|d| d.get(b"FS").ok()).ok_or("annotation has no file")?
-            }
-        };
-        let fs = insp.dict(spec).ok_or("bad file specification")?;
-        let ef = fs.get(b"EF").ok().and_then(|o| insp.dict(o)).ok_or("the file is not embedded (external reference)")?;
-        let stream = ef.get(b"UF").ok().or_else(|| ef.get(b"F").ok()).map(|o| insp.resolve(o)).ok_or("no embedded stream")?;
-        let stream = stream.as_stream().map_err(|e| e.to_string())?;
-        if stream.dict.get(b"Filter").is_ok() {
-            stream.decompressed_content_with_limit(1 << 30).map_err(|e| e.to_string())
-        } else {
-            Ok(stream.content.clone())
+            return;
         }
     };
-    catch_unwind(AssertUnwindSafe(run)).unwrap_or_else(|p| Err(format!("reading the attachment crashed: {}", crate::raster::panic_message(&p))))
+    let insp = Inspector::new(&doc);
+    for (i, att) in atts.iter().enumerate() {
+        each(i, catch_unwind(AssertUnwindSafe(|| embedded_bytes(&doc, &insp, att))).unwrap_or_else(|p| Err(crashed(p))));
+    }
+}
+
+/// The decoded bytes of `att`'s embedded file in `doc`.
+fn embedded_bytes(doc: &Document, insp: &Inspector, att: &Attachment) -> Result<Vec<u8>, String> {
+    let spec: &Object = match &att.source {
+        AttachmentSource::Document { key } => {
+            let names = doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| insp.dict(o)).ok_or("no /Names")?;
+            let ef = names.get(b"EmbeddedFiles").ok().and_then(|o| insp.dict(o)).ok_or("no /EmbeddedFiles")?;
+            insp.name_tree_find(ef, key, &mut NameTreeSeen::default(), 0).ok_or("attachment not found")?
+        }
+        AttachmentSource::Annotation { page, index } => {
+            let (&pid, _) = insp.page_index.iter().find(|(_, i)| **i == *page).ok_or("page not found")?;
+            let annots = doc.get_dictionary(pid).map_err(|e| e.to_string())?.get(b"Annots").map_err(|e| e.to_string())?;
+            let a = insp.resolve(annots).as_array().map_err(|e| e.to_string())?.get(*index).ok_or("annotation not found")?;
+            insp.dict(a).and_then(|d| d.get(b"FS").ok()).ok_or("annotation has no file")?
+        }
+    };
+    let fs = insp.dict(spec).ok_or("bad file specification")?;
+    let ef = fs.get(b"EF").ok().and_then(|o| insp.dict(o)).ok_or("the file is not embedded (external reference)")?;
+    let stream = ef.get(b"UF").ok().or_else(|| ef.get(b"F").ok()).map(|o| insp.resolve(o)).ok_or("no embedded stream")?;
+    let stream = stream.as_stream().map_err(|e| e.to_string())?;
+    if stream.dict.get(b"Filter").is_ok() {
+        stream.decompressed_content_with_limit(1 << 30).map_err(|e| e.to_string())
+    } else {
+        Ok(stream.content.clone())
+    }
 }
 
 /// An XFA packet's bytes as text: UTF-16 (little- or big-endian, told by a byte order mark or by

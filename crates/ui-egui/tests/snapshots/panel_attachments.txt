@@ -2,6 +2,7 @@ Label = "Attachments"
 Label = "1"
 Button "Close" [off]
 Button "Attach a file…"
+Button "Save all files…"
 Image
 Label = "notes.txt"
 Label = "5 bytes"

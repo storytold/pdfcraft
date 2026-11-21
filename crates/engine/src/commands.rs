@@ -333,6 +333,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("edit.edit_text", "Edit text & images", None, None, Modification, "text-cursor-input"),
     c("edit.link", "Add or edit links", None, None, Modification, "link-2"),
     c("edit.attach", "Attach a file…", EDIT, None, Modification, "paperclip"),
+    c("file.save_attachments", "Save all attachments to a folder…", None, None, Document, "folder"),
     c("edit.links_from_urls", "Create links from URLs", None, None, Modification, "link-2"),
     c("edit.remove_links", "Remove all links", None, None, Modification, "trash-2"),
     c("edit.bates", "Add Bates numbering…", None, None, Modification, "hash"),

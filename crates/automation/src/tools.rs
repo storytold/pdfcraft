@@ -183,6 +183,12 @@ pub fn tools() -> Vec<ToolDef> {
             )),
         t("attachment_edit", "Edit an attachment description", "Change the description of a document attachment by its exact key from doc_info, or by a unique displayed name. An empty description clears it. The file and other attachment data are preserved. Undoable.")
             .with(schema(json!({"doc": doc(), "key": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}}), &["doc", "description"])),
+        t("attachments_extract", "Save attachments to a folder", "Write the document's own attachments (all of them, or those whose keys from doc_info are in keys) into folder: the files of a PDF portfolio, or any document's attachment list; paper-clip comments on pages are not included. Each file is named after its attachment, made safe as a file name; a name already taken in the folder gets \" (2)\", \" (3)\"… before its extension, so no file is ever replaced. files lists each attachment's key, name and the path written, or the error that kept it from being written (still encrypted, not embedded, or unreadable); the others are still written. saved and failed count them. A key that names no attachment refuses the call before anything is written. A portfolio's folders (/Folders) are not recreated: every file lands in folder itself. The document is unchanged.")
+            .cmd("file.save_attachments")
+            .with(schema(
+                json!({"doc": doc(), "folder": {"type": "string"}, "keys": {"type": "array", "items": {"type": "string"}, "description": "Attachment keys as doc_info lists them (default: all)."}}),
+                &["doc", "folder"],
+            )),
         t("doc_open", "Open a PDF", "Open a PDF file and return its document id, page count and whether it can be edited. A path that ends in open parameters, as help systems pass them (`manual.pdf#page=12`, `#nameddest=Intro` or `#Intro`), opens the file and reports its destination as link_open does; a path that names a file opens as it is.")
             .cmd("file.open")
             .with(schema(json!({ "path": { "type": "string" }, "password": { "type": "string", "description": "User or owner password for encrypted files." } }), &["path"])),

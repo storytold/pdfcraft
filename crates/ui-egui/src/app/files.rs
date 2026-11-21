@@ -561,6 +561,63 @@ impl PdfCraftApp {
         }
     }
 
+    /// Attachments panel ▸ Save all files…: every document-level attachment of the active
+    /// document (a portfolio's files) saved into a folder the reader picks.
+    pub fn save_attachments_dialog(&mut self) {
+        let Some((_, id)) = self.active_ids() else { return };
+        let any = self
+            .session
+            .get(id)
+            .is_some_and(|d| d.info.attachments.iter().any(|a| matches!(a.source, pdfcraft_render::AttachmentSource::Document { .. })));
+        if !any {
+            self.notify_tr("This document has no attachments to save");
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Choose a folder for the attachments").to_string());
+            self.ask_one(pickers::Ask::Folder(dialog), Some(id), move |app, dir| app.save_attachments_into(id, &dir));
+        }
+        #[cfg(target_arch = "wasm32")]
+        self.notify_tr("Saving attachments to a folder is not available on the web yet");
+    }
+
+    /// Save every document-level attachment of `doc` into `dir`, never replacing a file there,
+    /// and say how many were saved and which weren't, and why.
+    pub fn save_attachments_into(&mut self, doc: DocId, dir: &std::path::Path) {
+        let Some(d) = self.session.get(doc) else { return };
+        #[cfg(not(target_arch = "wasm32"))]
+        let source = d.path.clone();
+        let saved = match pdfcraft_engine::attachment_files::save_attachments(d, None, dir) {
+            Ok(saved) => saved,
+            Err(e) => {
+                self.notify_fmt("Couldn't save the attachments: {e}", &[("e", &e)]);
+                return;
+            }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        for path in saved.iter().filter_map(|s| s.outcome.as_ref().ok()) {
+            // Windows: each file keeps the document's Mark-of-the-Web (#3990), as a file saved
+            // from its row does. Best effort: a volume without alternate data streams can't.
+            let _ = pdfcraft_platform::zone::mark_from(path, source.as_deref().map(std::path::Path::new));
+        }
+        let written = saved.iter().filter(|s| s.outcome.is_ok()).count();
+        let folder = dir.display().to_string();
+        // The first few, so a portfolio of hundreds that can't be read keeps the notice readable.
+        let mut failures: Vec<String> = saved.iter().filter_map(|s| s.outcome.as_ref().err().map(|e| format!("{} ({e})", s.name))).take(4).collect();
+        if saved.len() - written > failures.len() {
+            failures.push("…".into());
+        }
+        if failures.is_empty() {
+            self.notify_fmt("Saved {n} attachments to {folder}", &[("n", &written.to_string()), ("folder", &folder)]);
+        } else {
+            self.notify_fmt(
+                "Saved {n} of {total} attachments to {folder}. Not saved: {failed}",
+                &[("n", &written.to_string()), ("total", &saved.len().to_string()), ("folder", &folder), ("failed", &failures.join("; "))],
+            );
+        }
+    }
+
     /// A PDF portfolio (ISO 32000-2 §7.11.6) shows its documents, not the cover sheet that its
     /// pages are. The document a portfolio that just opened presents first (`/D`) opens in a
     /// tab of its own, and a portfolio's tab shows its file list, the Attachments panel, even
