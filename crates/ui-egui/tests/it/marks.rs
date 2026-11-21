@@ -418,6 +418,9 @@ fn header_footer_preview_expands_tokens_for_the_page_shown() {
     use pdfcraft_ui_egui::marks::{PageRange, Subset};
 
     let mut h = harness_with(content_fixture());
+    let session = &mut h.state_mut().session;
+    *session = std::mem::take(session).with_clock(|| 1_700_000_000);
+    let (year, month, day) = h.state().session.today();
     assert!(h.state_mut().execute("edit.bates"));
     h.state_mut().marks_draft.hf.text[0] = "Page <<1>> of <<n>>".into();
     h.state_mut().marks_draft.hf.text[2] = "Date <<m/d/yyyy>>".into();
@@ -434,7 +437,7 @@ fn header_footer_preview_expands_tokens_for_the_page_shown() {
         })
         .collect();
     assert!(!text_on_preview.contains(&"Bates Number#6#1##"));
-    assert!(text_on_preview.iter().any(|text| text.starts_with("Date ") && !text.contains("m/d/yyyy")));
+    painted(&h, &format!("Date {month}/{day}/{year}"), page);
 
     preview_step(&mut h, "Next page", "Preview: page 1 of 2");
     let (_, page, _) = wait_for_picture(&mut h, 1);
