@@ -1485,6 +1485,51 @@ fn headings_are_found_with_their_levels_titles_and_pages() {
 }
 
 #[test]
+fn tagged_text_follows_tag_order_and_leaves_out_untagged_text() {
+    // Drawn in another order than the tags list it, with an artifact and untagged text between.
+    let content = stream(
+        "/Artifact BMC BT /F1 12 Tf 20 190 Td (Running header) Tj ET EMC \
+         /P << /MCID 0 >> BDC BT /F1 12 Tf 20 170 Td (Second) Tj ET EMC \
+         /H1 << /MCID 1 >> BDC BT /F1 12 Tf 20 150 Td (Title) Tj ET EMC \
+         BT /F1 12 Tf 20 130 Td (Loose words) Tj ET \
+         /Span << /MCID 2 >> BDC BT /F1 12 Tf 20 110 Td (alpha) Tj ET EMC \
+         /Span << /MCID 3 >> BDC BT /F1 12 Tf 20 100 Td (beta) Tj ET EMC \
+         /Span << /MCID 4 >> BDC BT /F1 12 Tf 20 90 Td (gamma) Tj ET EMC \
+         /Span << /MCID 5 >> BDC BT /F1 12 Tf 20 80 Td (garbled) Tj ET EMC \
+         /TD << /MCID 7 >> BDC BT /F1 12 Tf 20 60 Td (Name) Tj ET EMC \
+         /TD << /MCID 8 >> BDC BT /F1 12 Tf 90 60 Td (Value) Tj ET EMC",
+    );
+    let bodies = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        content,
+        FONT.into(),
+        "<< /Type /StructTreeRoot /K 7 0 R /RoleMap << /Heading /H1 >> >>".into(),
+        "<< /S /Document /Pg 3 0 R /K [\
+            << /S /Heading /K 1 >> \
+            << /S /P /K [2 << /S /Span /K 3 >> 4] >> \
+            << /S /P /K 0 >> \
+            << /S /Span /ActualText (replaced) /K 5 >> \
+            << /S /Figure /Alt (A chart) /K 6 >> \
+            << /S /Table /K << /S /TR /K [<< /S /TD /K 7 >> << /S /TD /K 8 >>] >> >> \
+            << /S /P /K << /Type /MCR /Stm 99 0 R /MCID 0 >> >>\
+         ] >>"
+            .into(),
+    ];
+    let out = tagged_text(&pdf(&bodies, "")).unwrap();
+    // The heading first (tag order, not drawing order); a paragraph's own marks and its child
+    // tag interleave as /K lists them; artifact and untagged text are not in it.
+    assert_eq!(out.text, "Title\nalpha beta gamma\nSecond\nreplaced\nA chart\nName\tValue\n");
+    assert!(!out.text.contains("garbled") && !out.text.contains("Loose") && !out.text.contains("Running"));
+    // The marked content in a form XObject is counted, not silently dropped.
+    assert_eq!((out.unread, out.truncated), (1, false));
+
+    let untagged = pdf(&bodies[..5].iter().map(|b| b.replace(" /StructTreeRoot 6 0 R", "")).collect::<Vec<_>>(), "");
+    assert_eq!(tagged_text(&untagged), Err(TaggedTextError::Untagged));
+}
+
+#[test]
 fn tag_content_reads_the_text_of_each_marked_content_reference() {
     let doc = pdf(&headings_doc(), "");
     let items = |n| tag_content(&doc, ref_(n).unwrap()).unwrap().into_iter().map(|i| (i.page, i.mcid, i.text)).collect::<Vec<_>>();

@@ -21,6 +21,7 @@ mod headings;
 mod layout_table;
 mod report;
 mod structure;
+mod tagged_text;
 mod tags;
 
 #[cfg(test)]
@@ -45,6 +46,7 @@ pub use autotag_fields::tag_form_fields;
 pub use headings::{Heading, headings};
 pub use layout_table::{LayoutTableError, layout_table_to_blocks};
 pub use report::{REPORT_WORDS, report_html};
+pub use tagged_text::{TaggedText, TaggedTextError, tagged_text};
 pub use tags::{TagContentItem, TagError, TagInfo, TagPlacement, TagProperty, move_tag, set_tag_property, tag_content, tags};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

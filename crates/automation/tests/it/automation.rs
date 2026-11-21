@@ -3120,6 +3120,7 @@ fn protecting_through_tools() {
         ("text_word_count", json!({ "doc": re })),
         ("text_paragraphs", json!({ "doc": re, "page": 1 })),
         ("doc_export_text", json!({ "doc": re, "path": "out.txt" })),
+        ("doc_export_tagged_text", json!({ "doc": re, "path": "out.txt" })),
         ("doc_export_images", json!({ "doc": re, "folder": "pages" })),
         ("doc_export_all_images", json!({ "doc": re, "folder": "images" })),
         ("doc_export_office", json!({ "doc": re, "path": "out.docx" })),
@@ -4045,6 +4046,50 @@ fn exporting_images_and_text_through_tools() {
     ok(&mut a, "doc_export_text", json!({ "doc": doc, "path": "a.txt" }));
     assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "Page 1\n\u{c}Page 2\n\u{c}Page 3\n");
     assert!(a.call("doc_export_text", &json!({ "doc": doc, "path": "/etc/x.txt" })).is_err(), "confined to the root");
+}
+
+#[test]
+fn exporting_text_from_tags_through_tools() {
+    let dir = workdir("export-tagged-text");
+    // Drawn top to bottom as header, body, heading; tagged as heading then body, the header an artifact.
+    let content = "/Artifact BMC BT /F1 12 Tf 20 180 Td (Running header) Tj ET EMC \
+                   /P << /MCID 0 >> BDC BT /F1 12 Tf 20 150 Td (Body text) Tj ET EMC \
+                   /H1 << /MCID 1 >> BDC BT /F1 12 Tf 20 120 Td (Heading) Tj ET EMC";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 7 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /StructTreeRoot /K 6 0 R >> endobj
+6 0 obj << /S /Document /Pg 3 0 R /K [<< /S /H1 /K 1 >> << /S /P /K 0 >>] >> endobj
+7 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len()
+    );
+    std::fs::write(dir.join("tagged.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "tagged.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_export_tagged_text", json!({ "doc": doc, "path": "tagged.txt" }));
+    assert_eq!((r["unread"].as_u64(), r["truncated"].as_bool()), (Some(0), Some(false)));
+    let tagged = std::fs::read_to_string(dir.join("tagged.txt")).unwrap();
+    ok(&mut a, "doc_export_text", json!({ "doc": doc, "path": "plain.txt" }));
+    let plain = std::fs::read_to_string(dir.join("plain.txt")).unwrap();
+    let at = |text: &str, word: &str| text.find(word);
+    // Layout order puts the body first and keeps the header; tag order puts the heading first
+    // and leaves the artifact out.
+    assert!(at(&plain, "Body") < at(&plain, "Heading") && plain.contains("Running header"), "{plain:?}");
+    assert!(at(&tagged, "Heading") < at(&tagged, "Body") && !tagged.contains("Running"), "{tagged:?}");
+    assert_eq!(tagged.lines().count(), 2, "a line per block tag: {tagged:?}");
+    // An untagged document is refused, and no file is written.
+    let plain_doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let refused = a.call("doc_export_tagged_text", &json!({ "doc": plain_doc, "path": "none.txt" }));
+    assert!(matches!(&refused, Err(ToolError::Failed(m)) if m.contains("no tags")), "{refused:?}");
+    assert!(!dir.join("none.txt").exists());
+    assert!(a.call("doc_export_tagged_text", &json!({ "doc": doc, "path": "/etc/x.txt" })).is_err(), "confined to the root");
 }
 
 #[test]

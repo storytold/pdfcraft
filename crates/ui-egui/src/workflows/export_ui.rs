@@ -16,6 +16,8 @@ use crate::{PdfCraftApp, widgets};
 pub enum ExportKind {
     Image,
     Text,
+    /// Export text from tags: the whole document's text in tag order.
+    TaggedText,
     /// Export all images: the images pages use, as files.
     AllImages,
 }
@@ -45,6 +47,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: E
         egui::RichText::new(match kind {
             ExportKind::Image => tl!("Export to Image"),
             ExportKind::Text => tl!("Export to Text"),
+            ExportKind::TaggedText => tl!("Export Text from Tags"),
             ExportKind::AllImages => tl!("Export All Images"),
         })
         .font(theme::semibold(18.0)),
@@ -104,16 +107,27 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: E
                 .small()
                 .color(t.text_faint),
         );
+    } else if kind == ExportKind::TaggedText {
+        ui.label(
+            egui::RichText::new(tl!(
+                "The whole document's text in the order its tags give, as a screen reader reads it. Text that isn't tagged, such as running headers, is left out."
+            ))
+            .small()
+            .color(t.text_faint),
+        );
     } else {
         ui.label(egui::RichText::new(tl!("Plain text in reading order; pages are separated by form feeds.")).small().color(t.text_faint));
     }
-    ui.add_space(6.0);
-    ui.label(egui::RichText::new(tl!("Pages")).font(theme::semibold(12.5)));
-    d.range.ui(ui, count);
+    // Tag order doesn't follow pages: the tagged text is always the whole document's.
+    if kind != ExportKind::TaggedText {
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new(tl!("Pages")).font(theme::semibold(12.5)));
+        d.range.ui(ui, count);
+    }
     ui.add_space(12.0);
     let (mut apply, mut cancel) = (false, false);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        let ok = !d.range.pages(count).is_empty();
+        let ok = kind == ExportKind::TaggedText || !d.range.pages(count).is_empty();
         if ui.add_enabled_ui(ok, |ui| widgets::pill_button(ui, tl!("Export"), true)).inner.clicked() {
             apply = true;
         }
@@ -172,10 +186,33 @@ fn run(task: ExportTask<'_>, mut sink: impl FnMut(&str, Vec<u8>) -> Result<(), S
         }
         return msg;
     }
+    if kind == ExportKind::TaggedText {
+        set(0, None);
+        let out = match pdfcraft_engine::export::tagged_text(&src) {
+            Ok(o) => o,
+            Err(e) => return crate::i18n::fmt(tl!("Export stopped: {e}"), &[("e", &e)]),
+        };
+        if let Err(e) = sink(&format!("{stem}.txt"), out.text.into_bytes()) {
+            return crate::i18n::fmt(tl!("Export stopped: {e}"), &[("e", &e)]);
+        }
+        let mut msg = tl!("Exported the text of the document's tags").to_string();
+        if out.unread > 0 {
+            msg.push_str(&crate::i18n::trn(
+                crate::i18n::current(),
+                out.unread as u64,
+                " ({n} tagged item not read yet, such as content inside a form XObject or a form field)",
+                " ({n} tagged items not read yet, such as content inside form XObjects or form fields)",
+            ));
+        }
+        if out.truncated {
+            msg.push_str(tl!(" (stopped early: the tags hold more than one export reads)"));
+        }
+        return msg;
+    }
     let mut ex = Exporter::from_source(src);
     match kind {
         // Handled above.
-        ExportKind::AllImages => String::new(),
+        ExportKind::AllImages | ExportKind::TaggedText => String::new(),
         ExportKind::Image => {
             set(0, None);
             // Pages are drawn several at once and handed over in order: the progress counts the
