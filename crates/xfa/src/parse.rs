@@ -905,7 +905,7 @@ fn parse_occur(n: Option<XmlNode>) -> Occur {
     Occur { min, max, initial: max.map_or(initial, |m| initial.min(m)) }
 }
 
-fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageSet {
+fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize, complete: &mut bool) -> PageSet {
     let mut areas = Vec::new();
     for pa in children(n, "pageArea") {
         let medium = child(pa, "medium");
@@ -937,7 +937,8 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
         if content.is_empty() {
             content.push(Rect::new(0.0, 0.0, width, height));
         }
-        let items = pa.children().filter(|c| c.is_element()).filter_map(|c| parse_node(c, warnings, depth + 1, Layout::Positioned)).collect();
+        let items =
+            pa.children().filter(|c| c.is_element()).filter_map(|c| parse_node(c, warnings, depth + 1, Layout::Positioned, complete)).collect();
         // A page area with no `<occur>` has no limit and no minimum (a subform's default of one
         // would exhaust it, and demand a page for every master).
         let occur = child(pa, "occur").map(|o| parse_occur(Some(o)));
@@ -947,7 +948,9 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
     // Nested page sets: take their areas too.
     for ps in children(n, "pageSet") {
         if depth < MAX_DEPTH {
-            areas.extend(parse_page_set(ps, warnings, depth + 1).areas);
+            areas.extend(parse_page_set(ps, warnings, depth + 1, complete).areas);
+        } else {
+            *complete = false;
         }
     }
     PageSet { areas }
@@ -956,16 +959,16 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
 /// A `subform` element: its own attributes, its page set if it has one, and the nodes it holds,
 /// `depth` levels down (for the nesting limit). `set_layout` is the layout a `subformSet` takes
 /// on from its container, in place of its own.
-fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize, set_layout: Option<Layout>) -> Subform {
+fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize, set_layout: Option<Layout>, complete: &mut bool) -> Subform {
     let common = parse_common(n, warnings);
     let layout = set_layout.unwrap_or_else(|| Layout::parse(n.attribute("layout")));
     let mut children_out = Vec::new();
     let mut page_set = None;
     for c in n.children().filter(|c| c.is_element()) {
         match c.tag_name().name() {
-            "pageSet" => page_set = Some(parse_page_set(c, warnings, depth + 1)),
+            "pageSet" => page_set = Some(parse_page_set(c, warnings, depth + 1, complete)),
             _ => {
-                if let Some(node) = parse_node(c, warnings, depth + 1, layout) {
+                if let Some(node) = parse_node(c, warnings, depth + 1, layout, complete) {
                     children_out.push(node);
                 }
             }
@@ -996,24 +999,29 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize, set_layou
 /// with what it holds), or `None` for anything else and past [`MAX_DEPTH`] levels. What can't be
 /// read faithfully is noted in `warnings`. `parent`: the layout of the container `c` is in, which
 /// a `subformSet` takes on.
-fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize, parent: Layout) -> Option<Node> {
+fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize, parent: Layout, complete: &mut bool) -> Option<Node> {
     if depth > MAX_DEPTH {
+        *complete = false;
         return None;
     }
     Some(match c.tag_name().name() {
-        "subform" => Node::Subform(Box::new(parse_subform(c, warnings, depth, None))),
+        "subform" => Node::Subform(Box::new(parse_subform(c, warnings, depth, None, complete))),
         // A set of related subforms is transparent to layout (XFA 3.3 p. 357): its members are laid out
         // as its container lays out its own children, at their own positions in a positioned one. In a
         // table or a row they go one under another.
         "subformSet" => {
             let layout = if matches!(parent, Layout::Table | Layout::Row) { Layout::Tb } else { parent };
-            let mut set = parse_subform(c, warnings, depth, Some(layout));
+            let mut set = parse_subform(c, warnings, depth, Some(layout), complete);
             set.set = true;
             Node::Subform(Box::new(set))
         }
         "area" => Node::Area(Box::new(Area {
             common: parse_common(c, warnings),
-            children: c.children().filter(|k| k.is_element()).filter_map(|k| parse_node(k, warnings, depth + 1, Layout::Positioned)).collect(),
+            children: c
+                .children()
+                .filter(|k| k.is_element())
+                .filter_map(|k| parse_node(k, warnings, depth + 1, Layout::Positioned, complete))
+                .collect(),
         })),
         "field" => Node::Field(Box::new(parse_field(c, warnings))),
         "draw" => Node::Draw(Box::new(Draw { common: parse_common(c, warnings), value: parse_value(child(c, "value"), warnings) })),
@@ -1252,6 +1260,11 @@ fn collect_page_roles(nodes: &[Node], out: &mut Vec<(String, PageRole)>, depth: 
 
 /// Parse a template packet. Returns the template and the warnings met on the way.
 pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
+    parse_complete(xml).map(|(template, warnings, _)| (template, warnings))
+}
+
+/// Also report when a bounded template walk omitted declarations needed by a security scan.
+pub(crate) fn parse_complete(xml: &str) -> Result<(Template, Vec<String>, bool), XfaError> {
     // No bigger than a packet the reader accepts can come to as text ([`crate::read_packets`]), so
     // what parsing keeps of it (item lists are held by the field and its properties) stays within
     // a few times that, whoever calls it.
@@ -1281,7 +1294,10 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
     let template = if is_template(&root) {
         root
     } else {
-        root.children().find(is_template).ok_or_else(|| XfaError::Malformed("no <template> element".into()))?
+        root.children()
+            .find(is_template)
+            .or_else(|| root.children().filter(|n| n.is_element() && n.tag_name().name() == "xdp").flat_map(|n| n.children()).find(is_template))
+            .ok_or_else(|| XfaError::Malformed("no <template> element".into()))?
     };
     // Prototype references (`use`, `usehref`) are resolved first: the parser reads the template
     // written again with them merged in. The saved state below still comes from `doc`.
@@ -1299,10 +1315,11 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
         None => template,
     };
     let sf = children(template, "subform").next().ok_or_else(|| XfaError::Malformed("the template has no root subform".into()))?;
-    let mut root_sf = parse_subform(sf, &mut warnings, 0, None);
+    let mut complete = true;
+    let mut root_sf = parse_subform(sf, &mut warnings, 0, None, &mut complete);
     if root_sf.page_set.is_none() {
         // A page set may sit beside the root subform.
-        root_sf.page_set = child(template, "pageSet").map(|ps| parse_page_set(ps, &mut warnings, 0));
+        root_sf.page_set = child(template, "pageSet").map(|ps| parse_page_set(ps, &mut warnings, 0, &mut complete));
     }
     // The form packet beside the template holds the state the form was saved in.
     let saved = root
@@ -1326,7 +1343,7 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
         .map(|(_, som, _)| crate::data::data_path(&tpl, &som).into_iter().map(|(name, _)| name).collect())
         .collect();
     tpl.embedded_paths = paths;
-    Ok((tpl, warnings))
+    Ok((tpl, warnings, complete))
 }
 
 fn parse_access(a: Option<&str>) -> Option<Access> {
