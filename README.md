@@ -94,7 +94,7 @@ Real-world typography: world scripts, vertical Japanese, colour emoji, gradients
 <td width="33%" valign="top">
 
 ### Fearless
-Every save appends your changes and leaves the original bytes untouched. Writes are atomic, undo runs deep, and nothing is lost if you close by mistake.
+Ordinary saves append your changes and leave the original bytes untouched. Edits to damaged objects whose xref and header generations disagree use a full rewrite, keeping both accepted references connected to the same repaired object. Writes are atomic, undo runs deep, and nothing is lost if you close by mistake.
 
 </td>
 <td width="33%" valign="top">
@@ -253,6 +253,18 @@ Documents restricted by their author show a clear notice, and PdfCraft honours t
 </tr>
 </table>
 
+## Scan pages, then read the words back before trusting them
+
+**Scan & OCR ▸ Recognize text** turns a scan into searchable text — the current page, a range, or a folder of files written as searchable copies — with optional cleanup before reading (auto-rotate, deskew, denoise, binarize; word boxes map back to the original scan) and a second engine: an installed Tesseract joins the built-in one, merged per your strategy. A searchable result applies as one undoable step; the **Editable text** output opens the **OCR Verify screen** instead, where each word carries the engine's confidence as a colour, suspects are one keypress away, and corrections, a user dictionary and Re-OCR of a region or a page happen before Accept writes the new document. **Scan & OCR ▸ Correct recognized text** reviews any recognition there before it is applied.
+
+<p align="center">
+  <img src="docs/images/pdfcraft-ocr-verify.png" alt="The OCR Verify screen: a scanned note with each recognized word boxed in its confidence colour, the info strip reporting a 95% average confidence and one low-confidence word, and the confidence legend with its thresholds below" width="100%">
+  <br>
+  <sub>The OCR Verify screen: words coloured by confidence — the legend spells the thresholds out — reviewed and corrected before anything is applied.</sub>
+</p>
+
+---
+
 ## Every tool, one keystroke away
 
 Press <kbd>⌘K</kbd> to search every tool and command, or browse the **All tools** catalogue. Tools that are still in development are marked with the milestone that will ship them.
@@ -319,7 +331,7 @@ Edits stay in memory, undoable, until `doc_save`. Saving to the same file append
 
 Start the desktop app with `pdfcraft --control ~/.pdfcraft-control.json` and an agent can see and operate the real interface: the widget tree with labels and positions (from the accessibility tree), clicks, typing, keys, commands, view options and screenshots. This is also off by default. It listens only on loopback, and every connection must present the random token written to that file, which only you can read.
 
-Keep the control file in a folder only you can write, not a shared one such as `/tmp`: another user could create the file there first and receive your commands. `pdfcraft-cli ui` refuses a control file that is a symbolic link, and on macOS, Linux and FreeBSD one that another user owns or can read or write. The app doesn't start if it can't write the file.
+Keep the control file in a folder only you can write, not a shared one such as `/tmp`: another user could create the file there first and receive your commands. `pdfcraft-cli ui` refuses a control file that is a symbolic link, or one that another user owns, or that another user or a group such as Administrators can read or write: on macOS, Linux and FreeBSD by its owner and mode (the app writes it with mode 600), on Windows by its owner and access list (the app gives it one with only you and SYSTEM on it). The app doesn't start if it can't write the file. On Windows, cmd.exe doesn't expand `~`: use `%USERPROFILE%\.pdfcraft-control.json` there.
 
 ```sh
 pdfcraft-cli ui --control ~/.pdfcraft-control.json inspect query=rotate      # find widgets
@@ -460,11 +472,14 @@ Installers and executables are code-signed.
 The portable zip runs from any folder, a USB stick included. Its `portable.txt` keeps the settings,
 logs and crash recovery in a `PdfCraftData` folder next to `pdfcraft.exe`, so nothing is written to
 `%APPDATA%`; delete that file to use the normal per-user folders.
+Windows doesn't offer the portable copy as a default PDF app on its own, since it registers nothing;
+`portable.txt` has the PowerShell lines that register it for your user only, and how to undo them.
 
 The MSI installs for your account only by default, without administrator privileges. Choose
 "Everyone on this computer" on its first page, or pass `ALLUSERS=1` from an elevated terminal, to install
 for all users. It adds "Edit with PdfCraft"
-to the right-click menu of PDF files and "Create PDF with PdfCraft…" to the right-click menu of
+and "Combine files in PdfCraft" (select several PDFs: they land in the Combine files tab of the
+running PdfCraft) to the right-click menu of PDF files and "Create PDF with PdfCraft…" to the right-click menu of
 images (.png .jpg .jpeg .tif .tiff .gif .bmp .jp2 .j2k .jpx) in File Explorer (on Windows 11, under
 "Show more options"), without changing which app opens them by default. For unattended deployment
 without a desktop shortcut (add `ALLUSERS=1`, from an elevated terminal, for an all-users install):
@@ -476,7 +491,7 @@ msiexec /i "pdfcraft-<ver>-windows-x64.msi" /qn /norestart INSTALLDESKTOPSHORTCU
 | Property | `=0` leaves out |
 |---|---|
 | `INSTALLDESKTOPSHORTCUT` | the desktop shortcut |
-| `INSTALLPDFCONTEXTMENU` | "Edit with PdfCraft" on PDF files |
+| `INSTALLPDFCONTEXTMENU` | "Edit with PdfCraft" and "Combine files in PdfCraft" on PDF files |
 | `INSTALLIMAGECONTEXTMENU` | "Create PDF with PdfCraft…" on images |
 
 All three are on for a first install. An upgrade keeps what the installed version has: a shortcut
@@ -486,6 +501,12 @@ command line always wins: `=1` puts one back and `=0` removes it. Upgrading from
 didn't have a menu yet (0.6.0 and earlier for the PDF menu, 0.2.1 and earlier for the image menu)
 adds it, as a first install would. Use the MSI for your architecture. Per-user installation
 overrides are not supported.
+
+To install somewhere other than the default `ArtCraft\PdfCraft` folder, change the folder on the
+welcome screen (type it, or Browse…) or pass it on the command line:
+`INSTALLFOLDER="D:\Apps\PdfCraft"`. It is installed for whoever the first screen chose (`ALLUSERS=1`
+on the command line for everyone). An upgrade keeps the folder the installed version uses unless
+the command line gives another one.
 
 **Pin the checksum, not just the version.** Release candidates of a version share its MSI version
 (MSI versions are numbers only, so 1.2.3-rc.1 and 1.2.3 are both 1.2.3), and the installer lets an
