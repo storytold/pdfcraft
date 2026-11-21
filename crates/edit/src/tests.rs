@@ -1665,6 +1665,35 @@ fn added_hebrew_text_is_drawn_right_to_left_and_stays_searchable() {
     assert!(mapped.contains("<05E905"), "{mapped}");
 }
 
+/// #8013: a shekel sign beside a number in Hebrew text is drawn with the Hebrew face, which has it, though the bidi
+/// algorithm puts it in the number's run or in a run of its own rather than after the Hebrew letters.
+#[test]
+fn a_shekel_sign_beside_a_number_in_hebrew_text_uses_the_hebrew_face() {
+    if !pdfcraft_fonts::hebrew_has('₪') {
+        eprintln!("skipping the shekel checks: built without a craft-fonts Hebr face (set CRAFT_FONTS_DIR)");
+        return;
+    }
+    let mut doc = fixture();
+    for (k, typed) in ["המחיר ₪120", "המחיר 120 ₪"].into_iter().enumerate() {
+        let top = 700.0 - 40.0 * k as f64;
+        let text = AddedText { rect: [72.0, top - 30.0, 400.0, top], text: typed.into(), size: 14.0, align: Align::Right, ..AddedText::default() };
+        assert_eq!(first_undrawable(&text), None, "{typed}");
+        add_content(&mut doc, 0, &Content::Text(text)).unwrap();
+    }
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap()).as_dict().unwrap().clone();
+    let mut mapped = String::new();
+    for (_, f) in fonts.iter().filter(|(k, _)| k.starts_with(b"PCAr")) {
+        mapped += &String::from_utf8_lossy(&stream_bytes(&doc, doc.resolve(f).as_dict().unwrap().get(b"ToUnicode").unwrap()).unwrap());
+    }
+    assert!(mapped.contains("<20AA>"), "the sign is a glyph of the face that copies back as ₪: {mapped}");
+    // A Latin combining accent the face also has stays refused: drawn with the face it would leave its letter.
+    let accent = AddedText { text: "המחיר e\u{301}".into(), rect: [72.0, 500.0, 400.0, 530.0], size: 14.0, ..AddedText::default() };
+    assert_eq!(first_undrawable(&accent), Some('\u{301}'));
+}
+
 #[test]
 fn odd_hebrew_text_never_panics() {
     let mut doc = fixture();
