@@ -6897,6 +6897,54 @@ fn hebrew_edits_are_drawn_right_to_left_and_keep_their_right_edge() {
     assert!((line.rect[0] - before[0]).abs() < 0.5, "left-aligned: {:?} vs {before:?}", line.rect);
 }
 
+/// #8012: replacing one right-to-left line keeps its right edge, where it starts, whether the new text is shorter or
+/// longer; a line the text object positions after it stays where it was.
+#[test]
+fn a_replaced_hebrew_line_keeps_its_right_edge() {
+    let page = "BT /F1 12 Tf 14 TL 300 700 Td (EDCBA) Tj T* (HDGF) Tj ET";
+    // Scaled, with horizontal scaling and character spacing: the move is in text space.
+    let scaled = "q 1.5 0 0 1.5 0 0 cm BT /F1 10 Tf 80 Tz 0.5 Tc 14 TL 200 400 Td (EDCBA) Tj T* (HDGF) Tj ET Q";
+    // Wrapped in an `/ActualText` span (בדיוק), as some writers mark right-to-left text.
+    let spanned = "BT /F1 12 Tf 14 TL 300 700 Td /Span <</ActualText <FEFF05D105D305D905D505E7>>> BDC (EDCBA) Tj EMC T* (HDGF) Tj ET";
+    // A line in a `/PCEdLine` sequence of its own with a numeric `TJ` before its text: the rewrite drops the `TJ`
+    // with the sequence, so the replacement is measured from where it then starts (review on #8025).
+    let edited = "BT /F1 12 Tf 14 TL 300 700 Td /PCEdLine BMC [-1000] TJ (EDCBA) Tj EMC T* (HDGF) Tj ET";
+    // The text, and whether it is shorter than the line it replaces.
+    let mut cases = vec![("דוב", Some(true)), ("שלום בדיוק שלום", Some(false))];
+    if pdfcraft_fonts::document_hebrew_font(false).is_some() {
+        // ע isn't in the page's font, so the line is drawn with the Hebrew face.
+        cases.push(("עולם", None));
+    }
+    let check = |before: &[text::TextLine], after: &[text::TextLine], typed: &str, shorter: Option<bool>| {
+        assert_eq!(after[0].text, typed);
+        assert!((after[0].rect[2] - before[0].rect[2]).abs() < 0.5, "{typed}: right edge {:?} → {:?}", before[0].rect, after[0].rect);
+        match shorter {
+            Some(true) => {
+                assert!(after[0].rect[0] > before[0].rect[0] + 1.0, "{typed}: starts further right: {:?} → {:?}", before[0].rect, after[0].rect)
+            }
+            Some(false) => assert!(after[0].rect[0] < before[0].rect[0] - 1.0, "{typed}: grows left: {:?} → {:?}", before[0].rect, after[0].rect),
+            None => {}
+        }
+        assert_eq!(after[1].text, before[1].text);
+        assert!((after[1].rect[0] - before[1].rect[0]).abs() < 0.01, "{typed}: the next line moved: {:?} → {:?}", before[1].rect, after[1].rect);
+    };
+    for content in [page, scaled, spanned, edited] {
+        for &(typed, shorter) in &cases {
+            let mut doc = hebrew_page(content);
+            let before = text::text_lines(&doc, 0).unwrap();
+            text::replace_line(&mut doc, 0, 0, typed).unwrap();
+            check(&before, &text::text_lines(&reopen(&doc), 0).unwrap(), typed, shorter);
+        }
+    }
+    // Edited again: the move the first edit wrote stays, and the second is measured from there.
+    let mut doc = hebrew_page(page);
+    let before = text::text_lines(&doc, 0).unwrap();
+    text::replace_line(&mut doc, 0, 0, "דוב").unwrap();
+    let mut doc = reopen(&doc);
+    text::replace_line(&mut doc, 0, 0, "שלום בדיוק שלום").unwrap();
+    check(&before, &text::text_lines(&reopen(&doc), 0).unwrap(), "שלום בדיוק שלום", Some(false));
+}
+
 /// A generated Type 3 font numbers its glyphs from 1, so code 32 is a character, not the space:
 /// justified rows are stretched after each space, never with word spacing.
 #[test]
