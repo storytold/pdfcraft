@@ -189,11 +189,25 @@ pub(super) fn is_hebrew(c: char) -> bool {
     matches!(u32::from(c), 0x0591..=0x05F4 | 0xFB1D..=0xFB4F)
 }
 
+/// Zero-width space, word joiner and byte order mark: text copied from a web page or another PDF
+/// often carries them, nothing draws them and WinAnsiEncoding has no code for them (#7971).
+pub(super) fn is_invisible(c: char) -> bool {
+    matches!(c, '\u{200B}' | '\u{2060}' | '\u{FEFF}')
+}
+
+/// `t` without its [`is_invisible`] characters: what is drawn and stored.
+pub(super) fn without_invisible(t: &AddedText) -> AddedText {
+    AddedText { text: t.text.chars().filter(|c| !is_invisible(*c)).collect(), ..t.clone() }
+}
+
 /// The first character of `t` that would be drawn as `?`: outside WinAnsiEncoding and not drawn
 /// with the craft-fonts Arabic (#125) or Hebrew (#128) face, or Arabic or Hebrew that the face can't
 /// draw (or that has no face to draw it). Page-content tools refuse such text; the Add-text editor
 /// keeps it open.
 pub fn first_undrawable(t: &AddedText) -> Option<char> {
+    if t.text.chars().any(is_invisible) {
+        return first_undrawable(&without_invisible(t));
+    }
     if t.text.chars().any(is_thai) {
         if let Some(c) = t.text.chars().find(|c| is_thai(*c) && !pdfcraft_fonts::thai_has(*c)) {
             return Some(c);

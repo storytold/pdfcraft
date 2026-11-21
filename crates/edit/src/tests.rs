@@ -1599,6 +1599,22 @@ fn added_arabic_text_is_shaped_in_display_order_and_stays_searchable() {
     }
 }
 
+/// #7971: text pasted from a web page or another PDF carries zero-width characters. They are
+/// accepted and dropped rather than refused as undrawable, and nothing is stored for them.
+#[test]
+fn added_text_drops_zero_width_characters_instead_of_refusing_them() {
+    let mut doc = fixture();
+    let text = AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "a\u{200B}b\u{2060}c\u{FEFF}".into(), size: 14.0, ..AddedText::default() };
+    assert_eq!(first_undrawable(&text), None);
+    add_content(&mut doc, 0, &Content::Text(text)).unwrap();
+    let doc = reopen(&doc);
+    let added = list_added(&doc);
+    assert!(matches!(&added[..], [a] if matches!(&a.content, Content::Text(t) if t.text == "abc")), "{} items", added.len());
+    // Nothing but zero-width characters is still empty text.
+    let blank = AddedText { rect: [72.0, 500.0, 400.0, 520.0], text: "\u{200B}".into(), size: 14.0, ..AddedText::default() };
+    assert!(add_content(&mut fixture(), 0, &Content::Text(blank)).is_err());
+}
+
 #[test]
 fn added_hebrew_text_is_drawn_right_to_left_and_stays_searchable() {
     let mut doc = fixture();
