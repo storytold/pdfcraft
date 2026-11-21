@@ -51,14 +51,12 @@ fn result_bytes(page: &RenderedPage) -> usize {
         bytes = bytes.saturating_add(error.capacity());
     }
     if let Some(text) = &page.text {
-        bytes = bytes
-            .saturating_add(std::mem::size_of_val(&**text))
-            .saturating_add(text.glyphs.capacity().saturating_mul(std::mem::size_of::<crate::TextGlyph>()))
-            .saturating_add(text.line_of.capacity().saturating_mul(std::mem::size_of::<u32>()))
-            .saturating_add(text.space_before.capacity());
-        for glyph in &text.glyphs {
-            bytes = bytes.saturating_add(glyph.text.capacity());
-        }
+        bytes = bytes.saturating_add(std::mem::size_of_val(&**text)).saturating_add(text.heap_bytes());
+    }
+    // Copy with formatting's layer is a second copy of the page's text with its readings: it
+    // counts toward the allowance as the strict text does.
+    if let Some(recovered) = &page.recovered {
+        bytes = bytes.saturating_add(std::mem::size_of_val(&**recovered)).saturating_add(recovered.heap_bytes());
     }
     bytes
 }
@@ -317,6 +315,7 @@ mod tests {
             rgba: Pixels::from(vec![0u32; bytes / 4]),
             error: None,
             text: None,
+            recovered: None,
             warnings: Vec::new(),
             millis: 0,
         }
@@ -479,6 +478,29 @@ mod tests {
         drop(recv);
         assert!(rx.recv_timeout(Duration::from_secs(2)).unwrap().is_err());
         worker.join().unwrap();
+    }
+
+    /// A recovered-text result's second text layer counts toward the byte allowance, as the
+    /// strict text does: otherwise results carrying large recovered layers queue past it.
+    #[test]
+    fn the_recovered_layer_counts_toward_the_result_bytes() {
+        let glyphs = 10_000;
+        let glyph = |c: char| crate::TextGlyph { text: c.to_string(), rect: [0.0; 4], quad: [[0.0; 2]; 4], direction: [1.0, 0.0] };
+        let text = Arc::new(crate::text::PageText {
+            glyphs: (0..glyphs).map(|_| glyph('a')).collect(),
+            line_of: vec![0; glyphs],
+            space_before: vec![false; glyphs],
+            truncated: false,
+        });
+        let layer = crate::text::RecoveredText::new(text.clone(), vec![None; glyphs], vec![None; glyphs], vec![None; glyphs], glyphs);
+        let mut with = page(req(0), 4);
+        with.text = Some(text.clone());
+        let mut without = page(req(0), 4);
+        without.text = Some(text);
+        with.recovered = Some(Arc::new(layer));
+        let extra = result_bytes(&with) - result_bytes(&without);
+        // The layer's own glyph text and its four per-glyph vectors, at least.
+        assert!(extra >= glyphs * (std::mem::size_of::<crate::TextGlyph>() + std::mem::size_of::<Option<usize>>() * 2), "{extra}");
     }
 
     #[test]

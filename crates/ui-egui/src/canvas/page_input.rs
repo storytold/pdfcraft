@@ -675,7 +675,10 @@ pub(super) fn text_layer(ui: &mut egui::Ui, view: &mut DocView, frame: &mut Page
     let PageSlot { i, r, xf } = *slot;
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     if let Some(text) = view.texts.get(&i).cloned() {
-        paint_text_marks(ui, view, &text, i, xf, resp.dragged());
+        // Selection works on the page's recovered layer where it has one; Find keeps to the
+        // strict text.
+        let layer = view.selection_layer(i).unwrap_or_else(|| text.clone());
+        paint_text_marks(ui, view, &text, &layer, i, xf, resp.dragged());
         if selects_text
             && !input.consumed
             && let Some(p) = pointer.filter(|p| r.contains(*p))
@@ -684,7 +687,7 @@ pub(super) fn text_layer(ui: &mut egui::Ui, view: &mut DocView, frame: &mut Page
             // included (#4207) (ruling E: the tools that select a link's text show it there).
             let over_link = input.hover.as_ref().is_some_and(|h| matches!(h.owner, Owner::Link { .. } | Owner::TextLink { .. }));
             let pointer = TextPointer { page: i, xf, rect: r, tool, resp, ptr: ptr.clone(), pointer: p, over_link, text_drag: input.text_drag };
-            text_pointer_input(ui, view, &text, pointer);
+            text_pointer_input(ui, view, &layer, pointer);
         } else if selects_text
             && !input.consumed
             && input.text_drag
@@ -698,12 +701,14 @@ pub(super) fn text_layer(ui: &mut egui::Ui, view: &mut DocView, frame: &mut Page
             // something on the page keeps (a link, a comment) selects nothing.
             let column = tool == QuickTool::ColumnSelect || ui.input(|input| input.modifiers.alt);
             let clicks = selection_click_count(view.clicks, tool);
-            start_selection_drag(view, i, &text, clicks, column, xf.screen_to_view(origin), xf.screen_to_view(p));
+            start_selection_drag(view, i, &layer, clicks, column, xf.screen_to_view(origin), xf.screen_to_view(p));
         }
     }
 }
 
-fn paint_text_marks(ui: &egui::Ui, view: &DocView, text: &PageText, page: usize, xf: PageXform, dragging: bool) {
+/// Find matches and Select All of the document on the strict `text`, the selection on `layer`
+/// (the strict text, or the page's recovered layer).
+fn paint_text_marks(ui: &egui::Ui, view: &DocView, text: &PageText, layer: &PageText, page: usize, xf: PageXform, dragging: bool) {
     let painter = ui.painter();
     let to_screen = |g: [f32; 4]| xf.view_rect(g);
     if let Some(find) = &view.find {
@@ -727,7 +732,7 @@ fn paint_text_marks(ui: &egui::Ui, view: &DocView, text: &PageText, page: usize,
         }
     }
     if let Some(selection) = view.selection.filter(|selection| selection.pages().contains(&page)) {
-        for line_rect in selection.rects_on(page, text) {
+        for line_rect in view.selection_rects_on(&selection, page, layer) {
             painter.rect_filled(to_screen(line_rect), CornerRadius::same(1), Color32::from_rgba_unmultiplied(0x3A, 0x7B, 0xF0, 70));
         }
         if let Span::Column { rect } = selection.span
@@ -806,7 +811,7 @@ fn update_selection_on_press(ui: &egui::Ui, view: &mut DocView, text: &PageText,
             && gesture.over_text
             && let Some((first, last)) = text.nearest(gesture.vx, gesture.vy).and_then(|anchor| click_unit(text, clicks, anchor))
         {
-            view.selection = Some(Selection::run(gesture.page, first, last));
+            view.selection = Some(Selection::clicked(gesture.page, clicks, first, last));
         }
     }
     if gesture.ptr.drag_started && press_here && gesture.text_drag {
@@ -866,7 +871,8 @@ fn update_dragged_selection(view: &mut DocView, text: &PageText, gesture: &TextG
 fn extend_by_unit(view: &DocView, selection: &mut Selection, text: &PageText, clicks: u32, (page, hit): (usize, usize)) {
     let Span::Run { anchor, .. } = selection.span else { return };
     let start_page = selection.page;
-    let other = if start_page == page { None } else { view.texts.get(&start_page).cloned() };
+    // The clicked unit's glyphs are its page's selection layer's.
+    let other = if start_page == page { None } else { view.selection_layer(start_page) };
     let anchor_text = match other.as_deref() {
         Some(t) => t,
         None if start_page == page => text,
@@ -883,6 +889,9 @@ fn extend_by_unit(view: &DocView, selection: &mut Selection, text: &PageText, cl
         (first, to_last)
     };
     selection.span = Span::Run { anchor, head, head_page: page, head_x: None };
+    // Everything between the ends, and not the clicked page alone.
+    selection.strict = None;
+    selection.whole_page = false;
 }
 
 /// After a multi-click, a same-page drag extends by its unit and, over a table, by visual rows
@@ -898,6 +907,9 @@ fn extend_by_unit_on_page(selection: &mut Selection, text: &PageText, clicks: u3
     let rows = head_x.is_some() && text.visual_between(by_rows.0, by_rows.1, *head_x).is_some();
     (*anchor, *head) = if rows { by_rows } else { in_order };
     *head_page = selection.page;
+    // Everything between the ends; a drag by pages still covers the whole page.
+    selection.strict = None;
+    selection.whole_page = clicks >= 4;
 }
 
 fn finish_text_pointer_gesture(ui: &egui::Ui, view: &mut DocView, text: &PageText, gesture: &TextGesture<'_>) {
@@ -918,18 +930,16 @@ fn finish_text_pointer_gesture(ui: &egui::Ui, view: &mut DocView, text: &PageTex
         && view.selection.is_none()
         && let Some((first, last)) = text.nearest(gesture.vx, gesture.vy).and_then(|anchor| click_unit(text, clicks, anchor))
     {
-        view.selection = Some(Selection::run(gesture.page, first, last));
+        view.selection = Some(Selection::clicked(gesture.page, clicks, first, last));
     } else if gesture.resp.clicked() && view.clicks < 2 && gesture.text_drag {
         // ⇧-click extends a reading-order selection to the click, on its page or another,
         // keeping its anchor (#527). Otherwise (no shift, no selection, or a column selection,
         // which has no anchor glyph) a click clears the selection.
         let shift = ui.input(|input| input.modifiers.shift);
-        match (view.selection.as_mut().filter(|selection| shift && matches!(selection.span, Span::Run { .. })), text.nearest(gesture.vx, gesture.vy))
-        {
-            (Some(selection), Some(hit)) => {
-                selection.extend_to_at(gesture.page, hit, Some(gesture.vx).filter(|x| x.is_finite()));
-            }
-            _ => view.selection = None,
+        let head_x = Some(gesture.vx).filter(|x| x.is_finite());
+        let extended = shift && text.nearest(gesture.vx, gesture.vy).is_some_and(|hit| view.extend_selection(gesture.page, hit, head_x));
+        if !extended {
+            view.selection = None;
         }
     }
 }
