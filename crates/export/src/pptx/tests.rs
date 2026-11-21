@@ -2,6 +2,25 @@ use super::*;
 use crate::Block;
 use crate::tests::part;
 
+fn xml(text: &str) -> craft_xml::El {
+    craft_xml::parse(text.as_bytes()).expect("valid package XML")
+}
+
+fn relationship_target<'a>(rels: &'a craft_xml::El, id: &str) -> &'a str {
+    rels.children("Relationship").find(|r| r.attr("Id") == Some(id)).and_then(|r| r.attr("Target")).expect("referenced relationship")
+}
+
+fn assert_slide_targets(bytes: &[u8], targets: &[&str]) {
+    let pres = xml(&part(bytes, "ppt/presentation.xml"));
+    let rels = xml(&part(bytes, "ppt/_rels/presentation.xml.rels"));
+    let ids: Vec<_> = pres.find("p:sldIdLst").expect("slide list").children("p:sldId").collect();
+    assert_eq!(ids.len(), targets.len());
+    for (slide, target) in ids.iter().zip(targets) {
+        assert!(slide.attr_u32("id").expect("numeric slide id") >= 256);
+        assert_eq!(relationship_target(&rels, slide.attr("r:id").expect("slide relationship")), *target);
+    }
+}
+
 fn sample_page() -> Page {
     Page {
         width: 720.0,
@@ -85,7 +104,10 @@ pub fn pptx_slide_has_title_body_and_images_in_order() {
     assert!(slide_xml.contains("name=\"TextBox 3\""));
     assert!(slide_xml.contains("Revenue grew 25%"));
     assert!(slide_xml.contains("<p:pic>"));
-    assert!(slide_xml.contains("<a:blip r:embed=\"rIdImg1\"/>"));
+    let slide = xml(&slide_xml);
+    let rels = xml(&part(&bytes, "ppt/slides/_rels/slide1.xml.rels"));
+    let id = slide.find("a:blip").and_then(|n| n.attr("r:embed")).expect("embedded picture");
+    assert_eq!(relationship_target(&rels, id), "../media/image1.png");
     assert!(!slide_xml.contains("<p:ph"), "pure text boxes avoid placeholder inheritance repair warnings: {slide_xml}");
 
     let rels_xml = part(&bytes, "ppt/slides/_rels/slide1.xml.rels");
@@ -250,7 +272,7 @@ fn pptx_package_parts_are_complete_and_consistent() {
         let inner = theme.split(&format!("<a:{font}>")).nth(1).and_then(|r| r.split(&format!("</a:{font}>")).next()).unwrap_or_default();
         assert!(inner.contains("<a:latin ") && inner.contains("<a:ea ") && inner.contains("<a:cs "), "{font}: {inner}");
     }
-    assert!(text("ppt/presentation.xml").contains("r:id=\"rIdSld2\""));
+    assert_slide_targets(&bytes, &["slides/slide1.xml", "slides/slide2.xml"]);
 }
 
 #[test]
@@ -292,8 +314,7 @@ fn hostile_sizes_do_not_overflow_the_slide_position() {
 pub fn pptx_empty_pages_produce_valid_slide() {
     let bytes = pptx(&[], "Blank");
     assert!(bytes.starts_with(b"PK"));
-    let pres_xml = part(&bytes, "ppt/presentation.xml");
-    assert!(pres_xml.contains("<p:sldId id=\"256\" r:id=\"rIdSld1\"/>"));
+    assert_slide_targets(&bytes, &["slides/slide1.xml"]);
     let slide_xml = part(&bytes, "ppt/slides/slide1.xml");
     assert!(slide_xml.contains("<p:spTree>"));
 }
@@ -372,16 +393,38 @@ fn pptx_table_cell_with_largest_font_stays_in_table_and_not_in_title() {
     // The table must contain both the cell and explicit borders
     assert!(slide_xml.contains("<a:tbl>"));
     assert!(slide_xml.contains("+99%"));
-    assert!(slide_xml.contains("<a:tcPr><a:lnL w=\"12700\" cmpd=\"s\">"));
+    let slide = xml(&slide_xml);
+    let table = slide.find("a:tbl").expect("table");
+    let props = table.child("a:tblPr").expect("table properties");
+    assert_eq!(props.child_text("a:tableStyleId").as_deref(), Some("{2D5ABB26-0587-4C30-8999-92F81FD0307C}"));
+    assert!(!props.flag("firstRow", false) && !props.flag("bandRow", false), "no invented header/banding");
+    let cells: Vec<_> = table.descendants().filter(|n| n.is("a:tcPr")).collect();
+    assert_eq!(cells.len(), 6);
+    for cell in cells {
+        for edge in ["a:lnL", "a:lnR", "a:lnT", "a:lnB"] {
+            let line = cell.child(edge).expect("explicit border");
+            assert_eq!(line.attr_u32("w"), Some(12700));
+            assert_eq!(line.find("a:srgbClr").and_then(|n| n.attr("val")), Some("999999"));
+        }
+    }
 }
 
 #[test]
 fn pptx_opens_in_libreoffice() {
     let p = sample_page();
     let bytes = pptx(&[p], "LibreOffice Check");
-    let dir = std::env::temp_dir().join(format!("pdfcraft-pptx-lo-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::create_dir_all(&dir);
+    // A new folder of our own, never one left (or planted) at a guessable name.
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let dir = std::env::temp_dir().join(format!("pdfcraft-pptx-lo-{}-{nanos:x}", std::process::id()));
+    // Only Unix sets a mode on it, so elsewhere `made` is never changed.
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut made = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        made.mode(0o700);
+    }
+    made.create(&dir).expect("a fresh test folder");
     let pptx_path = dir.join("test.pptx");
     std::fs::write(&pptx_path, &bytes).unwrap();
 
@@ -393,4 +436,47 @@ fn pptx_opens_in_libreoffice() {
         }
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A picture drawn in many places is one media part, referred to from each place; the package
+/// stays within the media limits however many places there are.
+#[test]
+fn pptx_packages_a_repeated_picture_once() {
+    let mut p = sample_page();
+    let one = p.images[0].clone();
+    p.images = std::iter::repeat_n(one, 2 * crate::as_docx::MAX_MEDIA).collect();
+    let bytes = pptx(&[p], "Deck");
+    let rels = part(&bytes, "ppt/slides/_rels/slide1.xml.rels");
+    let relationships = xml(&rels);
+    let slide = xml(&part(&bytes, "ppt/slides/slide1.xml"));
+    let blips: Vec<_> = slide.descendants().filter(|n| n.is("a:blip")).collect();
+    assert_eq!(blips.len(), 2 * crate::as_docx::MAX_MEDIA, "every placement has an image reference");
+    for blip in blips {
+        assert_eq!(relationship_target(&relationships, blip.attr("r:embed").expect("picture relationship")), "../media/image1.png");
+    }
+    assert!(rels.contains("Target=\"../media/image1.png\"") && !rels.contains("image2."), "one media part");
+    assert_eq!(part(&bytes, "ppt/slides/slide1.xml").matches("<p:pic>").count(), 2 * crate::as_docx::MAX_MEDIA);
+    assert_eq!(bytes.windows(20).filter(|w| *w == b"ppt/media/image1.png").count(), 2, "its local header and central directory entry");
+}
+
+/// Distinct allocations remain distinct media, even when their bytes match. Once the media
+/// budget is full, an existing picture remains usable on a later slide, but a new one is omitted.
+#[test]
+fn pptx_bounds_distinct_pictures_and_reuses_media_across_slides() {
+    let mut first = sample_page();
+    let one = first.images[0].clone();
+    first.images = (0..crate::as_docx::MAX_MEDIA).map(|_| Image { bytes: one.bytes.as_ref().to_vec().into(), ..one.clone() }).collect();
+    // Media names follow reading order, not the input vector. Give the reused picture a
+    // distinct top edge so it is unambiguously image1 rather than tying every rectangle.
+    first.images[0].rect[3] += 1.0;
+    let mut second = sample_page();
+    second.images =
+        vec![first.images[0].clone(), Image { bytes: one.bytes.as_ref().to_vec().into(), ..one.clone() }, Image { bytes: Vec::new().into(), ..one }];
+    let bytes = pptx(&[first, second], "Deck");
+    assert_eq!(part(&bytes, "ppt/slides/slide1.xml").matches("<p:pic>").count(), crate::as_docx::MAX_MEDIA);
+    assert_eq!(part(&bytes, "ppt/slides/slide2.xml").matches("<p:pic>").count(), 1);
+    let rels = part(&bytes, "ppt/slides/_rels/slide2.xml.rels");
+    assert_eq!(rels.matches("relationships/image\"").count(), 1);
+    assert!(rels.contains("Target=\"../media/image1.png\""));
+    assert!(part(&bytes, "ppt/slides/_rels/slide1.xml.rels").contains("../media/image1000.png"));
 }
