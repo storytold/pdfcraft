@@ -42,6 +42,7 @@ fn repeat_line(text: &str, across: f64, down: f64, remaining: usize) -> Result<(
     Ok((line, down))
 }
 
+/// Generate content stream bytes for redaction overlays.
 pub(super) fn content(marks: &[&Mark], remaining: &mut usize) -> Result<Vec<u8>, RedactError> {
     let n = |v: f64| {
         let s = format!("{:.3}", v);

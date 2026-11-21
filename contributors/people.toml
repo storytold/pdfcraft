@@ -197,3 +197,8 @@ sync_github_name = true
 
 [people.Yousef-Dev921]
 sync_github_name = true
+
+[people.MarekSNowakowski]
+real_name = "Marek Nowakowski"
+display_name = "Marek Nowakowski"
+sync_github_name = false

@@ -1,7 +1,7 @@
 use super::create::{finite, num_array};
 use super::lookup::{annot_dict, annots, page_refs};
 use super::modify::refuse_foreign_text;
-use super::types::NOTE_SIZE;
+use super::types::{AnnotFont, NOTE_SIZE};
 use super::{AnnotError, Dict, Document, ObjRef, Object, Stream, appearance};
 
 /// (Re)generate `/AP /N` for the annotation `r` from its dictionary, for an edit that keeps its
@@ -33,6 +33,9 @@ pub(crate) fn redraw_or_restore(doc: &mut Document, r: ObjRef, before: Dict) -> 
 pub(crate) fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), AnnotError> {
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
+    if d.name(b"Subtype") == Some(b"FreeText") && appearance::parse_da(&d).2 == AnnotFont::Inter {
+        pdfcraft_fonts::embedding::ensure_fallback_font(doc).map_err(AnnotError::Invalid)?;
+    }
     let page = appearance::is_drawn_from_points(&d).then(|| page_box_listing(doc, r)).flatten();
     let direct = with_direct_values(doc, &d);
     let Some(stream) = build_appearance(doc, &d, &direct, page) else { return Err(AnnotError::Unsupported(subtype)) };
