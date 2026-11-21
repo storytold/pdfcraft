@@ -46,3 +46,74 @@ fn applying_removes_text_in_a_soft_mask_group_and_keeps_the_mask() {
     let text = String::from_utf8_lossy(&group.decoded().unwrap()).into_owned();
     assert!(text.contains("BT") && !text.contains("SMASK"), "{text}");
 }
+
+#[test]
+fn verification_counts_an_unreadable_soft_mask_group_under_a_mark() {
+    // A group whose stream does not decode: apply refuses the page, so verification must not
+    // report it clean.
+    let group = stream("/Type /XObject /Subtype /Form /BBox [0 0 150 150] /Filter /FlateDecode", b"not deflate data SMASKSECRET");
+    let mut doc =
+        one_page(b"q /GS0 gs 0 0 0.6 rg 0 0 300 300 re f Q", "/ExtGState << /GS0 << /SMask << /S /Luminosity /G 7 0 R >> >> >>", vec![group]);
+    assert!(under(&mut doc, 0, &[MARK]) > 0, "an unreadable group under a mark counts as what may remain");
+    assert_eq!(under(&mut doc, 0, &[[200.0, 200.0, 250.0, 250.0]]), 0, "a group no mark meets is not counted");
+    mark(&mut doc, 0, &[MARK], "");
+    assert!(apply(&mut doc, None).is_err(), "apply refuses the page");
+}
+
+#[test]
+fn a_soft_mask_group_without_resources_does_not_keep_the_original_through_the_copied_ones() {
+    // The group draws with the page's resources, which list the state naming the original group,
+    // and an image the group does not draw, so the rewritten group gets a pruned copy of them.
+    let group = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >>",
+        b"1 g BT /F1 10 Tf 10 100 Td (SMASKSECRET) Tj ET",
+    );
+    let image = stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"\x00");
+    let mut doc = one_page(
+        b"q /GS0 gs 0 0 0.6 rg 0 0 300 300 re f Q q 10 0 0 10 250 250 cm /Im0 Do Q",
+        "/ExtGState << /GS0 << /SMask << /S /Luminosity /G 7 0 R >> >> >> /XObject << /Im0 8 0 R >>",
+        vec![group, image],
+    );
+    mark(&mut doc, 0, &[MARK], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.glyphs, 11, "{r:?}");
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!bytes.windows(11).any(|w| w == b"SMASKSECRET"), "the original group survived through the rewritten group's resources");
+}
+
+/// `masked_page` and a second page, both inheriting the font and the soft-mask state from the
+/// page tree; the second page paints through the mask too when `again`.
+fn two_pages_inheriting_the_mask(again: bool) -> Document {
+    let second: &[u8] = if again { b"q /GS0 gs 0 0 0.6 rg 0 0 300 300 re f Q" } else { b"0 0 0.6 rg 0 0 10 10 re f" };
+    pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 8 0 R] /Count 2 /Resources << /Font << /F1 5 0 R >> /ExtGState << /GS0 << /SMask << /S /Luminosity /G 7 0 R >> >> >> >> >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>".to_vec(),
+        stream("", b"q /GS0 gs 0 0 0.6 rg 0 0 300 300 re f Q"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >> /Resources << /Font << /F1 5 0 R >> >>",
+            b"1 g BT /F1 10 Tf 10 100 Td (SMASKSECRET) Tj ET",
+        ),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 9 0 R >>".to_vec(),
+        stream("", second),
+    ])
+}
+
+#[test]
+fn an_inherited_soft_mask_state_does_not_keep_the_original_group() {
+    let mut doc = two_pages_inheriting_the_mask(false);
+    mark(&mut doc, 0, &[MARK], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.glyphs, 11, "{r:?}");
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!bytes.windows(11).any(|w| w == b"SMASKSECRET"), "the original group survived through the shared resources");
+
+    // A page that still paints through the original keeps it: nothing of it lies under a mark there.
+    let mut doc = two_pages_inheriting_the_mask(true);
+    mark(&mut doc, 0, &[MARK], "");
+    apply(&mut doc, None).unwrap();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(bytes.windows(11).any(|w| w == b"SMASKSECRET"), "the second page's mask lost its group");
+}

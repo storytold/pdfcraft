@@ -133,6 +133,11 @@ pub(crate) struct Output {
     /// The ExtGState names a `gs` now selects a copy in place of: the original's group still holds
     /// what was removed, so the caller drops it where nothing else selects it.
     pub replaced_gstates: Vec<Vec<u8>>,
+    /// Verifying: the form a `Do` names lies under a mark but can't be read (it doesn't decode,
+    /// or is nested too deep), so apply would drop it unread. A `Do` needs nothing more, as what
+    /// is dropped can't remain; a soft mask's group can't be dropped and refuses the page, so its
+    /// walk counts this as what may remain (#7884).
+    pub unread_form: bool,
     /// Pattern resource names a painting operator that survived the rewrite still uses. A name
     /// this scope saw selected but never painted with afterwards is pruned from the page's
     /// `/Resources /Pattern`, so a cell whose only drawing was redacted does not stay in the
@@ -966,6 +971,10 @@ impl Walk {
         self.out.retired_properties.extend(inner.retired_properties);
         self.out.tag_changes.extend(inner.tag_changes);
         self.out.error = inner.error.or(self.out.error.take());
+        // A group under a mark that can't be read refuses the page below; verifying, it may remain.
+        if inner.unread_form {
+            self.out.residue += 1;
+        }
         // Untouched: no mark meets the group, nothing in it changed, or only verifying.
         let Some(drawn) = walked else { return op };
         let Some(rewritten) = drawn.as_ref().and_then(Op::last_name).and_then(|n| held.get(n)).and_then(Object::as_ref) else {
@@ -990,31 +999,42 @@ impl Walk {
     }
 }
 
-/// Lists in `res` the ExtGState copies a rewrite made (`added`), and drops the originals they
-/// replaced (`replaced`) that `content`, and the forms without resources of their own it draws,
-/// no longer select: an original's soft-mask group still holds what was removed (#7884), and a
-/// full save keeps whatever is still listed.
+/// What a rewrite replaced among the ExtGStates of one scope (#7884).
+pub(crate) struct Replaced<'a> {
+    /// The copies it made, whose soft mask's group is the rewritten one, as (name, state).
+    pub added: &'a [(Vec<u8>, Object)],
+    /// The names a `gs` now selects a copy in place of.
+    pub names: &'a [Vec<u8>],
+    /// Original groups and forms the rewrite replaced: a state any of them is the soft mask's group
+    /// of goes too, under whatever name, when nothing selects it.
+    pub originals: &'a HashSet<ObjRef>,
+}
+
+/// Lists in `res` the ExtGState copies a rewrite made, and drops the originals they replaced, and
+/// any other state whose soft mask's group is one of `originals`, that `content`, and the forms
+/// without resources of their own it draws, no longer select: an original's soft-mask group still
+/// holds what was removed (#7884), and a full save keeps whatever is still listed.
 pub(crate) fn install_ext_gstates(
     doc: &Document,
     budget: &mut DecodeBudget,
     res: &mut Dict,
-    added: &[(Vec<u8>, Object)],
-    replaced: &[Vec<u8>],
+    replaced: &Replaced<'_>,
     content: &[Vec<u8>],
 ) -> Result<(), CosError> {
-    if added.is_empty() {
+    let masked = res_dict(doc, res, b"ExtGState").iter().any(|(_, v)| prune::masks_with(doc, v, replaced.originals));
+    if replaced.added.is_empty() && !masked {
         return Ok(());
     }
+    let selected = prune::selected_states(doc, budget, res, content)?;
     let mut states = res_dict(doc, res, b"ExtGState");
-    for (name, state) in added {
+    for (name, state) in replaced.added {
         states.set(name.clone(), state.clone());
     }
-    let selected: HashSet<Vec<u8>> =
-        resource_ops(doc, budget, res, content)?.iter().filter(|op| op.is("gs")).filter_map(Op::last_name).map(<[u8]>::to_vec).collect();
-    for name in replaced.iter().filter(|n| !selected.contains(*n)) {
+    for name in replaced.names.iter().filter(|n| !selected.contains(*n)) {
         states.remove(name);
     }
     res.set(b"ExtGState".to_vec(), Object::Dict(states));
+    prune::drop_doomed_states(doc, res, replaced.originals, &selected);
     Ok(())
 }
 
@@ -1310,6 +1330,7 @@ fn xobject(
                 if scope.mode == Mode::Verify {
                     // Sanitization removes a Form it cannot enter, so the verification scan
                     // must count that conservative removal or it may decide to skip the pass.
+                    out.unread_form = !scope.everywhere();
                     if scope.everywhere() {
                         scope.layer_blocks += 1;
                     }
@@ -1354,6 +1375,7 @@ fn xobject(
                 Err(_) => {
                     // Apply drops an undecodable Form while sanitizing. Count it during Verify
                     // so a zero-count preflight cannot leave its potentially hidden bytes behind.
+                    out.unread_form = !scope.everywhere();
                     if scope.everywhere() {
                         scope.layer_blocks += 1;
                     }
@@ -1426,9 +1448,12 @@ fn xobject(
                     out.error = Some(error);
                     return None;
                 }
-                if let Err(error) =
-                    install_ext_gstates(doc, &mut scope.budget, &mut cleaned_res, &inner.ext_gstates, &inner.replaced_gstates, content)
-                {
+                // Without /Resources of its own the form is given a copy of its caller's, which may
+                // list the state whose soft mask's group is this very form, or another original
+                // this walk replaced (#7884): the copy must not keep the original reachable.
+                let originals: HashSet<ObjRef> = inner.doomed.iter().copied().chain([r]).collect();
+                let states = Replaced { added: &inner.ext_gstates, names: &inner.replaced_gstates, originals: &originals };
+                if let Err(error) = install_ext_gstates(doc, &mut scope.budget, &mut cleaned_res, &states, content) {
                     out.error = Some(error);
                     return None;
                 }

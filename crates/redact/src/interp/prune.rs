@@ -309,7 +309,9 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
         let names: Vec<Vec<u8>> = xo.iter().filter(|(_, v)| v.as_ref().is_some_and(|r| doomed.contains(&r))).map(|(n, _)| n.to_vec()).collect();
         let properties = res_dict(doc, &res, b"Properties");
         let property_names: Vec<Vec<u8>> = properties.iter().filter(|(_, v)| retired_properties.contains(v)).map(|(n, _)| n.to_vec()).collect();
-        if names.is_empty() && property_names.is_empty() {
+        // A state whose soft mask's group was rewritten still reaches the original (#7884).
+        let masks = res_dict(doc, &res, b"ExtGState").iter().any(|(_, v)| masks_with(doc, v, &doomed));
+        if names.is_empty() && property_names.is_empty() && !masks {
             continue;
         }
         let mut contents = Vec::with_capacity(users.len());
@@ -336,6 +338,14 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
             res.set(b"XObject".to_vec(), Object::Dict(xo));
         }
         pruned |= prune_retired_properties(doc, &mut res, &property_names, &contents)?;
+        if masks {
+            let mut selected = HashSet::new();
+            for content in &contents {
+                // Each page's content with the allowance of a page, as for the properties above.
+                selected.extend(selected_states(doc, &mut DecodeBudget::page(), &res, content)?);
+            }
+            pruned |= drop_doomed_states(doc, &mut res, &doomed, &selected);
+        }
         if pruned {
             doc.update_dict(node, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
         }
@@ -547,6 +557,39 @@ pub(super) fn prune_form_resources(doc: &Document, budget: &mut DecodeBudget, re
     }
     res.set(b"XObject".to_vec(), Object::Dict(xo));
     Ok(())
+}
+
+/// Drop from `res` the ExtGStates whose soft mask's group is one of `doomed`, an original a rewrite
+/// replaced, that the content drawing through `res` doesn't select. A full save keeps whatever is
+/// still listed, so the group's removed text would survive through such a state (#7884): one in a
+/// page-tree
+/// dictionary the rewritten page no longer inherits, or in the copy of its caller's resources a
+/// rewritten form without its own is given. A state still selected stays, as the same group shown
+/// outside a mark does. `selected` is what [`selected_states`] found. Returns whether any went.
+pub(crate) fn drop_doomed_states(doc: &Document, res: &mut Dict, doomed: &HashSet<ObjRef>, selected: &HashSet<Vec<u8>>) -> bool {
+    let mut states = res_dict(doc, res, b"ExtGState");
+    let names: Vec<Vec<u8>> = states.iter().filter(|(n, v)| !selected.contains(*n) && masks_with(doc, v, doomed)).map(|(n, _)| n.to_vec()).collect();
+    if names.is_empty() {
+        return false;
+    }
+    for name in &names {
+        states.remove(name);
+    }
+    res.set(b"ExtGState".to_vec(), Object::Dict(states));
+    true
+}
+
+/// The ExtGState names `content` (with the forms without resources of their own it draws, read
+/// within `budget`) selects with `gs`; an error when that can't all be read ([`resource_ops`]).
+pub(crate) fn selected_states(doc: &Document, budget: &mut DecodeBudget, res: &Dict, content: &[Vec<u8>]) -> Result<HashSet<Vec<u8>>, CosError> {
+    Ok(resource_ops(doc, budget, res, content)?.iter().filter(|op| op.is("gs")).filter_map(Op::last_name).map(<[u8]>::to_vec).collect())
+}
+
+/// Whether the ExtGState `state` has a soft mask whose group is one of `groups`.
+pub(crate) fn masks_with(doc: &Document, state: &Object, groups: &HashSet<ObjRef>) -> bool {
+    let state = doc.resolve(state);
+    let Some(mask) = state.as_dict().and_then(|s| s.get(b"SMask")).map(|m| doc.resolve(m)) else { return false };
+    mask.as_dict().and_then(|m| m.get(b"G")).and_then(Object::as_ref).is_some_and(|g| groups.contains(&g))
 }
 
 /// The font, writing direction and size an ExtGState's `/Font [font size]` entry sets, as `Tf`
