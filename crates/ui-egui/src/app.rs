@@ -520,6 +520,9 @@ impl PdfCraftApp {
         let native = ctx.native_pixels_per_point().unwrap_or(1.0);
         let mut root =
             RootEnv::new().mode(self.theme_preference).density(craft::theme::Size::Comfortable).direction(direction).scale(Scale::new(crate::ui_scale::zoom(self.ui_scale, system, native)));
+        if let Ok(theme) = craft::theme::ThemeId::parse("craft.graphite") {
+            root.set_theme(theme);
+        }
         root.sizes = Arc::clone(sizes);
         root.motion = self.animation_effects;
         // Today is the session's day, the one its date formats and Fill & Sign's Date tool use: the calendars ring it
