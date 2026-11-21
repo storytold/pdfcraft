@@ -548,6 +548,36 @@ fn invalid_save_bytes_never_reach_publication_or_mark_saved() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// #7887: a document from the internet keeps its Mark-of-the-Web through doc_save in place, with
+/// no edits and with one, and a copy saved under another name gets the same zone; a local
+/// document's copy gets none.
+#[cfg(windows)]
+#[test]
+fn doc_save_keeps_the_documents_zone() {
+    use pdfcraft_platform::zone::read_zone;
+    let dir = staging_dir("zone");
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let root = dir.canonicalize().unwrap();
+    let zone = "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=https://example.test/x.pdf\r\n";
+    let mail = root.join("from mail.pdf");
+    std::fs::write(&mail, numbered_pages(2)).unwrap();
+    std::fs::write(format!("{}:Zone.Identifier", mail.display()), zone).unwrap();
+    let id = a.session.open("from mail.pdf", Some(mail.to_string_lossy().into_owned()), Arc::new(numbered_pages(2)), None).unwrap();
+    json(&mut a, "doc_save", json!({"doc": id.0}));
+    assert_eq!(read_zone(&mail).as_deref(), Some(zone.as_bytes()), "a save with no edits keeps the zone");
+    json(&mut a, "page_rotate", json!({"doc": id.0, "pages": [1], "degrees": 90}));
+    json(&mut a, "doc_save", json!({"doc": id.0}));
+    assert_eq!(read_zone(&mail).as_deref(), Some(zone.as_bytes()), "a save with an edit keeps the zone");
+    json(&mut a, "doc_save", json!({"doc": id.0, "path": "copy.pdf"}));
+    assert_eq!(read_zone(&root.join("copy.pdf")).as_deref(), Some(zone.as_bytes()), "a copy carries the zone");
+    let local = root.join("local.pdf");
+    std::fs::write(&local, numbered_pages(1)).unwrap();
+    let id = a.session.open("local.pdf", Some(local.to_string_lossy().into_owned()), Arc::new(numbered_pages(1)), None).unwrap();
+    json(&mut a, "doc_save", json!({"doc": id.0, "path": "local copy.pdf"}));
+    assert_eq!(read_zone(&root.join("local copy.pdf")), None, "a local document's copy stays local");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn doc_rename_moves_the_file_and_refuses_with_reasons() {
     let dir = staging_dir("rename");

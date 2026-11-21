@@ -559,6 +559,34 @@ fn save_as_to_a_new_file_drops_earlier_revisions() {
     let _ = std::fs::remove_file(out);
 }
 
+/// #7887: a document from the internet keeps its Mark-of-the-Web when saved in place, and its
+/// Save As copy gets the same zone.
+#[cfg(windows)]
+#[test]
+fn save_and_save_as_keep_the_documents_zone() {
+    use pdfcraft_platform::zone::read_zone;
+    let mail = temp_path("zone-from-mail.pdf");
+    let copy = temp_path("zone-copy.pdf");
+    let _ = std::fs::remove_file(&copy);
+    std::fs::write(&mail, fixture(2)).unwrap();
+    let zone = "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=https://example.test/x.pdf\r\n";
+    std::fs::write(format!("{}:Zone.Identifier", mail.display()), zone).unwrap();
+    let opened = mail.to_string_lossy().into_owned();
+    let mut h = harness(2, move |app| {
+        app.open_bytes("zone-from-mail.pdf", Some(opened), fixture(2)).expect("fixture opens");
+        app.set_option("organize", "on").unwrap();
+    });
+    h.get_by_label("Rotate clockwise").click();
+    h.run_steps(3);
+    assert!(h.state_mut().save_active(pdfcraft_ui_egui::SaveTarget::InPlace));
+    assert_eq!(read_zone(&mail).as_deref(), Some(zone.as_bytes()), "the saved file keeps its zone");
+    h.state_mut().save_override = Some(copy.to_string_lossy().into_owned());
+    assert!(h.state_mut().save_active(pdfcraft_ui_egui::SaveTarget::As));
+    assert_eq!(read_zone(&copy).as_deref(), Some(zone.as_bytes()), "the copy carries the document's zone");
+    let _ = std::fs::remove_file(mail);
+    let _ = std::fs::remove_file(copy);
+}
+
 #[test]
 fn closing_a_dirty_tab_asks_and_cancel_keeps_it() {
     let mut h = organize(2);
