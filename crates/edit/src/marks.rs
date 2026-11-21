@@ -195,12 +195,17 @@ pub struct MarkSource {
 /// A watermark: text, or a picture from a file (`source`; the text is then ignored).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Watermark {
+    /// Text drawn when there is no picture source.
     pub text: String,
+    /// The standard font family used for text watermarks (default Helvetica).
+    pub font: added::Family,
+    /// Optional picture from a file or another page; when present, text is ignored.
     pub source: Option<MarkSource>,
     /// Pictures: size relative to the page (1.0 fits the page).
     pub scale: f64,
     /// 0 = fit: about half the page diagonal.
     pub font_size: f64,
+    /// Colour for text watermarks.
     pub color: Rgb,
     /// 0–1.
     pub opacity: f64,
@@ -228,6 +233,7 @@ impl Default for Watermark {
     fn default() -> Self {
         Self {
             text: String::new(),
+            font: added::Family::Helvetica,
             source: None,
             scale: 0.5,
             font_size: 0.0,

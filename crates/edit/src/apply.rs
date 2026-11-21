@@ -8,7 +8,7 @@ use super::place::{
     END, Isolation, add_page_resources, add_resources, begin, check, check_on_top, contents, free_font_name, isolation, page_fonts, page_list, place,
     place_inside_wrapper, stream_tag, undrawable, wrapper_role,
 };
-use super::{Document, EditError, Object, added, backdrop, helvetica_width};
+use super::{Document, EditError, Object, added, backdrop};
 
 /// Commit one complete mark operation only after every selected page succeeds. The snapshot
 /// shares original bytes, cross-references, caches and unchanged objects; only the overlay table
@@ -209,14 +209,22 @@ fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, r
             place(doc, page, MarkKind::Watermark, content.into_bytes(), wm.behind)?;
             continue;
         }
-        let widest = lines.iter().map(|l| thai_width(l, 1.0, helvetica_width)).fold(0.0, f64::max).max(0.01);
+        let preferred = match wm.font {
+            added::Family::Helvetica => "PCHelv",
+            added::Family::Times => "PCTimes",
+            added::Family::Courier => "PCCour",
+        };
+        let base = wm.font.base_font(false, false);
+        let resource = free_font_name(doc, &page_fonts(doc, &page), preferred, base);
+        let face = |s: &str, size: f64| wm.font.width(s, size, false, false);
+        let widest = lines.iter().map(|l| thai_width(l, 1.0, face)).fold(0.0, f64::max).max(0.01);
         let size = if wm.font_size > 0.0 { wm.font_size } else { ((w * w + h * h).sqrt() * 0.5 / widest).clamp(6.0, 300.0) };
         let (s, c) = wm.rotation.to_radians().sin_cos();
         let (cx, cy) = (w / 2.0 + wm.offset[0], h / 2.0 + wm.offset[1]);
         let mut content = begin(MarkKind::Watermark, "Watermark", page.view_matrix(doc)).into_bytes();
         content.extend(
             format!(
-                "/PCGS{} gs\n{} {} {} {} {} {} cm\nBT\n/PCHelv {} Tf\n{}\n",
+                "/PCGS{} gs\n{} {} {} {} {} {} cm\nBT\n/{resource} {} Tf\n{}\n",
                 (opacity * 100.0).round() as i64,
                 n(c),
                 n(s),
@@ -233,21 +241,22 @@ fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, r
         let total = line_h * (lines.len() as f64 - 1.0);
         let mut current = None;
         for (li, line) in lines.iter().enumerate() {
-            let tw = thai_width(line, size, helvetica_width);
+            let tw = thai_width(line, size, face);
             thai.show(
                 &mut content,
                 line,
                 -tw / 2.0,
                 total / 2.0 - li as f64 * line_h - size * 0.35,
                 size,
-                "PCHelv",
-                |s| helvetica_width(s, size),
+                &resource,
+                |s| face(s, size),
                 &mut current,
             );
         }
         content.extend_from_slice(b"ET\n");
         content.extend_from_slice(END.as_bytes());
-        add_resources(doc, &page, Some(opacity), None)?;
+        let faces = if !page_fonts(doc, &page).contains(resource.as_bytes()) { vec![(resource.into_bytes(), base)] } else { Vec::new() };
+        add_page_resources(doc, &page, Some(opacity), &faces)?;
         thai.add_to(doc, &page_list(doc)[i])?;
         let page = &page_list(doc)[i];
         place(doc, page, MarkKind::Watermark, content, wm.behind)?;

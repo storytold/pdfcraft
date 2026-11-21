@@ -124,6 +124,31 @@ fn watermark_and_background_dialogs() {
 }
 
 #[test]
+fn watermark_dialog_draws_in_the_chosen_face() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.watermark"));
+    h.run_steps(3);
+    h.get_by_label("Font");
+    h.get_by_value("Helvetica").click();
+    h.run_steps(2);
+    h.get_by_label("Times").click();
+    h.run_steps(2);
+    assert_eq!(h.state().marks_draft.wm.font, pdfcraft_engine::FontFamily::Times);
+    h.state_mut().marks_draft.wm.text = "Serif Watermark".into();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    assert_eq!(marks(&h), [MarkKind::Watermark]);
+    let s = h.state();
+    let doc = pdfcraft_cos::Document::open(s.session.get(s.views[0].id).unwrap().bytes.clone()).unwrap();
+    let page = &pdfcraft_model::pages(&doc)[0];
+    let res = doc.resolve(page.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap()).as_dict().cloned().unwrap();
+    let face = doc.resolve(fonts.get(b"PCTimes").expect("Times is added")).as_dict().cloned().unwrap();
+    assert_eq!(face.name(b"BaseFont"), Some(&b"Times-Roman"[..]));
+}
+
+#[test]
 fn backgrounds_and_watermarks_from_a_file() {
     let mut h = harness();
     h.state_mut().execute("edit.background");
