@@ -476,7 +476,8 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
     // Full screen shows the document alone, and a document can hide the toolbars, the menu and the panels around it
     // in its tab (ISO 32000-2 Table 147); the tab strip stays, and F8 brings the rest back (`viewer_prefs`).
     let bare = app.full_screen_document() || app.hidden_interface().window_ui;
-    let toolbar = active && !app.hotbar_hidden();
+    let organizing = app.active_ids().and_then(|(index, _)| app.views.get(index)).is_some_and(|view| view.organize);
+    let toolbar = active && !app.hotbar_hidden() && !organizing;
     let anchor = rail_anchor(app);
     let workspace = app.dock.clone();
     // The rail lists the Accessibility Checker once the document has a report, and Search and Compare only while
