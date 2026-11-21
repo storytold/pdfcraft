@@ -3030,11 +3030,11 @@ title = "Name split parts after bookmarks; never overwrite"
 area = "D"
 tier = "P2"
 milestone = "M4"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["page.split"]
+tools = ["doc_split"]
+evidence = ["crates/automation/tests/it/automation.rs::split_never_replaces_a_file_already_in_the_folder", "crates/automation/tests/it/automation.rs::bookmark_split_with_equal_titles_keeps_every_part", "crates/ui-egui/tests/it/pickers.rs::split_never_replaces_a_file_already_in_the_folder"]
+notes = "Split by bookmarks names each part after the top-level bookmark that starts it. In the Split dialog and the doc_split tool a name already taken in the output folder, or by an earlier part of the same run, gets the next number (\" (2)\" in the app, \"-2\" from the tool), reserved with an exclusive create before the part is written, so no file there is replaced; the app's notice says when a name got a number. Missing: the plain pdfcraft-cli split command still replaces a file of the same name, and on the web the browser names the downloads (#7997)"
 
 [[feature]]
 id = "organize.split-multiple-files"

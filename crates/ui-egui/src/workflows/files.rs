@@ -785,6 +785,20 @@ impl PdfCraftApp {
     /// when the user chooses the folder. `after` never runs when writing fails or is cancelled.
     /// Every name must be a plain file name ([`is_plain_file_name`]); otherwise nothing is written.
     pub(crate) fn write_files_then(&mut self, named: Vec<(String, Arc<Vec<u8>>)>, title: &str, after: impl FnOnce(&mut Self) + Send + 'static) {
+        self.write_files_as(named, title, Overwrite::Replace, after);
+    }
+
+    /// [`Self::write_files_then`], replacing a file of the same name in the folder or, with
+    /// [`Overwrite::Never`], never: a name already taken there (or by an earlier file of the same
+    /// batch, compared case-insensitively) gets " (2)", " (3)", ... before ".pdf", and the notice
+    /// says so. Downloads (web) are named by the browser.
+    pub(crate) fn write_files_as(
+        &mut self,
+        named: Vec<(String, Arc<Vec<u8>>)>,
+        title: &str,
+        overwrite: Overwrite,
+        after: impl FnOnce(&mut Self) + Send + 'static,
+    ) {
         if let Some((name, _)) = named.iter().find(|(name, _)| !is_plain_file_name(name)) {
             self.notify_fmt("Couldn't write {name}: {e}", &[("name", name), ("e", tl!("the name is not a plain file name"))]);
             return;
@@ -792,16 +806,34 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let write = move |app: &mut Self, dir: std::path::PathBuf| {
+                let mut used = std::collections::HashSet::new();
+                let mut numbered = false;
                 for (name, bytes) in &named {
-                    if let Err(e) = crate::editing::write_atomically(&dir.join(name).to_string_lossy(), bytes) {
-                        app.notify_fmt("Couldn't write {name}: {e}", &[("name", name), ("e", &e.to_string())]);
-                        return;
+                    let written = match overwrite {
+                        Overwrite::Replace => {
+                            let path = dir.join(name);
+                            crate::editing::write_atomically(&path.to_string_lossy(), bytes).map(|()| path)
+                        }
+                        Overwrite::Never => write_new_file(&dir, name, bytes, &mut used),
+                    };
+                    match written {
+                        Ok(path) => numbered |= path.file_name().is_some_and(|n| n != name.as_str()),
+                        Err(e) => {
+                            app.notify_fmt("Couldn't write {name}: {e}", &[("name", name), ("e", &e.to_string())]);
+                            return;
+                        }
                     }
                 }
-                if named.len() == 1 {
-                    app.notify_fmt("Wrote 1 file to {dir}", &[("dir", &dir.display().to_string())]);
-                } else {
-                    app.notify_fmt("Wrote {n} files to {dir}", &[("n", &named.len().to_string()), ("dir", &dir.display().to_string())]);
+                let dir_text = dir.display().to_string();
+                match (named.len(), numbered) {
+                    (1, false) => app.notify_fmt("Wrote 1 file to {dir}", &[("dir", &dir_text)]),
+                    (1, true) => app
+                        .notify_fmt("Wrote 1 file to {dir}. Its name was taken, so it got a number and no file was replaced.", &[("dir", &dir_text)]),
+                    (n, false) => app.notify_fmt("Wrote {n} files to {dir}", &[("n", &n.to_string()), ("dir", &dir_text)]),
+                    (n, true) => app.notify_fmt(
+                        "Wrote {n} files to {dir}. Some names were taken, so those files got a number and no file was replaced.",
+                        &[("n", &n.to_string()), ("dir", &dir_text)],
+                    ),
                 }
                 after(app);
             };
@@ -814,7 +846,7 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = title;
+            let _ = (title, overwrite);
             for (name, bytes) in &named {
                 if let Err(e) = crate::editing::download(name, bytes) {
                     self.notify_fmt("Couldn't download {name}: {e}", &[("name", name), ("e", &e.to_string())]);
@@ -870,7 +902,6 @@ impl PdfCraftApp {
             }
         };
         let safe = |t: &str| t.chars().map(|c| if c.is_alphanumeric() || " -_.,()".contains(c) { c } else { '_' }).collect::<String>();
-        let mut used = std::collections::HashSet::new();
         let named: Vec<(String, Arc<Vec<u8>>)> = parts
             .into_iter()
             .map(|(a, b, bytes)| {
@@ -881,17 +912,12 @@ impl PdfCraftApp {
                     None if a == b => format!("{stem} (page {a}).pdf"),
                     None => format!("{stem} (pages {a}-{b}).pdf"),
                 };
-                // Equal titles (or titles that sanitize alike) get (2), (3), ... so no part overwrites another; compared case-insensitively.
-                let mut unique = name.clone();
-                let mut n = 1;
-                while !used.insert(unique.to_lowercase()) {
-                    n += 1;
-                    unique = format!("{} ({n}).pdf", name.trim_end_matches(".pdf"));
-                }
-                (unique, bytes)
+                (name, bytes)
             })
             .collect();
-        self.write_files(&named, "Choose a folder for the split files");
+        // Equal titles get (2), (3), ... as they are written, and so does a name already taken in
+        // the folder: no part replaces another or a file that was there (organize.split-naming).
+        self.write_files_as(named, "Choose a folder for the split files", Overwrite::Never, |_| {});
     }
 
     /// Summarize Comments: make the summary and open it as a new document.
@@ -922,6 +948,40 @@ impl PdfCraftApp {
             Err(e) => self.notify_fmt("Couldn't open the result: {e}", &[("e", &e.to_string())]),
         }
     }
+}
+
+/// What [`PdfCraftApp::write_files_as`] does with a name already taken in the folder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Overwrite {
+    /// The new file replaces it.
+    Replace,
+    /// The new file gets the next free " (N)" name instead.
+    Never,
+}
+
+/// Write `bytes` into `dir` as `name`, or as `<stem> (2).pdf`, `<stem> (3).pdf`, ... when that
+/// is taken in `dir` or in `used` (names written earlier in the batch, lowercased): the name is
+/// reserved with an exclusive create, so a file that appears meanwhile is not replaced either.
+/// Returns the path written.
+#[cfg(not(target_arch = "wasm32"))]
+fn write_new_file(
+    dir: &std::path::Path,
+    name: &str,
+    bytes: &[u8],
+    used: &mut std::collections::HashSet<String>,
+) -> std::io::Result<std::path::PathBuf> {
+    let stem = strip_pdf(name).to_string();
+    let first = name.to_string();
+    let names = (1..)
+        .map(move |n| if n == 1 { first.clone() } else { format!("{stem} ({n}).pdf") })
+        .filter(|candidate| !used.contains(&candidate.to_lowercase()));
+    let path = pdfcraft_platform::staging::reserve_new_name(dir, names)?;
+    if let Err(e) = crate::editing::write_atomically(&path.to_string_lossy(), bytes) {
+        let _ = std::fs::remove_file(&path);
+        return Err(e);
+    }
+    used.insert(path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default());
+    Ok(path)
 }
 
 pub(crate) fn strip_pdf(name: &str) -> &str {

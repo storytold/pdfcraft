@@ -7323,6 +7323,39 @@ fn bookmark_split_with_equal_titles_keeps_every_part() {
 }
 
 #[test]
+fn split_never_replaces_a_file_already_in_the_folder() {
+    let dir = workdir("organize_split_no_replace");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "bookmark_add", json!({ "doc": doc, "title": "Intro", "page": 1 }));
+    ok(&mut a, "bookmark_add", json!({ "doc": doc, "title": "End", "page": 3 }));
+    let parts = dir.join("parts");
+    std::fs::create_dir_all(parts.join("a-End.pdf")).unwrap();
+    // An unrelated file where a later part could go (in another case, which a case-insensitive volume counts as taken).
+    std::fs::write(parts.join("A-INTRO-2.PDF"), b"unrelated").unwrap();
+    let names = |r: &serde_json::Value| -> Vec<std::path::PathBuf> {
+        r["files"].as_array().unwrap().iter().map(|f| std::path::PathBuf::from(f["path"].as_str().unwrap())).collect()
+    };
+    let first = names(&ok(&mut a, "doc_split", json!({ "doc": doc, "bookmarks": true, "out_dir": "parts" })));
+    let kept: Vec<Vec<u8>> = first.iter().map(|p| std::fs::read(p).unwrap()).collect();
+    let second = names(&ok(&mut a, "doc_split", json!({ "doc": doc, "bookmarks": true, "out_dir": "parts" })));
+    let by_page = names(&ok(&mut a, "doc_split", json!({ "doc": doc, "every": 1, "out_dir": "parts" })));
+    let again = names(&ok(&mut a, "doc_split", json!({ "doc": doc, "every": 1, "out_dir": "parts" })));
+    let all: Vec<_> = first.iter().chain(&second).chain(&by_page).chain(&again).collect();
+    let distinct: std::collections::HashSet<_> = all.iter().map(|p| p.to_string_lossy().to_lowercase()).collect();
+    assert_eq!(distinct.len(), all.len(), "every part has a name of its own: {all:?}");
+    for path in &all {
+        assert!(path.is_file(), "{path:?} was written");
+        assert_eq!(path.parent(), Some(parts.as_path()), "{path:?}");
+    }
+    for (path, bytes) in first.iter().zip(&kept) {
+        assert_eq!(&std::fs::read(path).unwrap(), bytes, "{path:?} was replaced by a later split");
+    }
+    assert_eq!(std::fs::read(parts.join("A-INTRO-2.PDF")).unwrap(), b"unrelated");
+    assert!(parts.join("a-End.pdf").is_dir(), "the folder at a part's name is left alone");
+}
+
+#[test]
 fn bookmark_split_with_long_titles_shortens_the_file_names() {
     let dir = workdir("organize_long_titles");
     let mut a = auto(&dir);
