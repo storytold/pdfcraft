@@ -1614,14 +1614,23 @@ fn column_headings_sort_the_list_and_flip_on_the_second_click() {
 #[test]
 fn ctrl_and_shift_clicks_select_several_files_that_move_and_go_together() {
     let mut h = combine_of(&[("a.pdf", 1), ("b.pdf", 1), ("c.pdf", 1), ("d.pdf", 1), ("e.pdf", 1)]);
-    // The rows, not their name cells.
-    h.get_by_role_and_label(Role::ListItem, "b.pdf").click();
-    h.run_steps(1);
-    h.get_by_role_and_label(Role::ListItem, "d.pdf").click_modifiers(Modifiers::SHIFT);
-    h.run_steps(1);
+    // The widened Pages editor covers the row's center; click the row outside that editor.
+    let click_row = |h: &mut Harness<'static, PdfCraftApp>, label: &str, modifiers: Modifiers| {
+        let rect = h.get_by_role_and_label(Role::ListItem, label).rect();
+        let at = egui::pos2(rect.left() + 20.0, rect.center().y);
+        h.input_mut().events.extend([
+            egui::Event::PointerMoved(at),
+            egui::Event::ModifiersChanged(modifiers),
+            egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers },
+            egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers },
+            egui::Event::ModifiersChanged(Modifiers::NONE),
+        ]);
+        h.run_steps(2);
+    };
+    click_row(&mut h, "b.pdf", Modifiers::NONE);
+    click_row(&mut h, "d.pdf", Modifiers::SHIFT);
     assert_eq!(h.state().combine_selection(), [1, 2, 3]);
-    h.get_by_role_and_label(Role::ListItem, "c.pdf").click_modifiers(Modifiers::COMMAND);
-    h.run_steps(1);
+    click_row(&mut h, "c.pdf", Modifiers::COMMAND);
     assert_eq!(h.state().combine_selection(), [1, 3], "Ctrl/⌘ toggles one file");
     h.get_by_label("2 selected");
     h.get_by_label("Move up").click();
