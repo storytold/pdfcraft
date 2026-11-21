@@ -1758,8 +1758,8 @@ fn a_jbig2_image_past_the_runs_allowance_stops_the_run() {
 }
 
 /// A Flate image past the run's allowance stops the run as a JBIG2 image does: removed whole, it
-/// would take what no mark covers with it, unreported. A JPEG, which clearing doesn't read, is
-/// removed whole as it always was, and spends nothing.
+/// would take what no mark covers with it, unreported. An unsupported JPX image, which clearing
+/// doesn't read, is removed whole and spends nothing. Eligible JPEGs now pay the run's allowance.
 #[test]
 fn a_flate_image_past_the_runs_allowance_stops_the_run() {
     let dict = "/Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /FlateDecode";
@@ -1772,7 +1772,7 @@ fn a_flate_image_past_the_runs_allowance_stops_the_run() {
     mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
     assert!(crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(u64::MAX)).is_ok());
 
-    let dict = "/Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /DCTDecode";
+    let dict = "/Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /JPXDecode";
     let mut doc = one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(dict, b"not read")]);
     mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
     let report = crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(0)).unwrap();
@@ -6212,6 +6212,24 @@ fn a_cleared_copy_keeps_parameters_for_data_in_another_file_only_with_one() {
     }
 }
 
+/// Hostile dimensions must be rejected before multiplying them or allocating a raster.
+#[test]
+fn hostile_image_dimensions_are_removed_without_wrapping_or_panicking() {
+    for filter in ["DCTDecode", "FlateDecode"] {
+        let image = stream(
+            &format!(
+                "/Type /XObject /Subtype /Image /Width 4294967296 /Height 4294967296 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /{filter}"
+            ),
+            b"not decoded",
+        );
+        let mut doc = one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![image]);
+        mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!((report.images_removed, report.images_cleared), (1, 0), "{filter}");
+        assert!(!content(&doc, 0).contains(" Do"), "oversized {filter} image must no longer be drawn");
+    }
+}
+
 #[test]
 fn a_hostile_icc_component_count_is_refused_not_multiplied_into_a_crash() {
     // /N comes from the file. 2^60 × 8 bpc × width 2 overflows the row size; a negative /N wrapped
@@ -7361,4 +7379,248 @@ fn a_layer_a_view_rule_turns_off_is_hidden() {
     remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
     let c = content(&doc, 0);
     assert!(!c.contains("ScreenOff") && c.contains("(PrintOff)"), "{c}");
+}
+
+/// A white `/DCTDecode` image `w`×`h`, 8 bits RGB.
+fn jpeg_white(w: u32, h: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    let px = vec![255u8; (w as usize) * (h as usize) * 3];
+    ::image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90).encode(&px, w, h, ::image::ExtendedColorType::Rgb8).unwrap();
+    out
+}
+
+/// A gray JPEG, `gray` samples, 8 bits.
+fn jpeg_gray(px: &[u8], w: u32, h: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    ::image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90).encode(px, w, h, ::image::ExtendedColorType::L8).unwrap();
+    out
+}
+
+/// The page's one image, decoded: (width, height, RGB samples).
+fn page_image(doc: &Document, page: usize) -> Option<(u32, u32, Vec<u8>)> {
+    let p = pdfcraft_model::pages(doc).swap_remove(page);
+    let res = doc.resolve(p.dict.get(b"Resources")?).as_dict()?.clone();
+    let xo = doc.resolve(res.get(b"XObject")?).as_dict()?.clone();
+    for (_, v) in xo.iter() {
+        let Some(r) = v.as_ref() else { continue };
+        let Object::Stream(s) = &*doc.get(r) else { continue };
+        if s.dict.name(b"Subtype") != Some(b"Image") {
+            continue;
+        }
+        let img = ::image::load_from_memory(s.raw.as_ref()).ok()?;
+        let rgb = img.to_rgb8();
+        return Some((rgb.width(), rgb.height(), rgb.into_raw()));
+    }
+    None
+}
+
+/// Issue #2246. A scanned page — the output of a Brother printer/scanner, or of any OCR tool — is
+/// one full-page JPEG with an invisible OCR text layer on top. Redacting a small area used to drop
+/// the page's whole image (`/DCTDecode` was a codec the image path could not clear in place), so
+/// the page came back blank. Only the marked pixels may go: the scan stays, cleared where the mark
+/// is, and the OCR text under it dies with it.
+#[test]
+fn a_scanned_page_keeps_its_image_and_loses_the_text_under_the_mark() {
+    // A 300×300 page: a 40×40 white JPEG shown 100×100 at (10,10), and "OCR1234" (the OCR layer)
+    // from x = 10 at 10 pt, each glyph 5 pt wide. The mark (50,50)-(70,70) is the middle of the
+    // image — pixels 16–23 on both axes; the text mark covers R1234, x 20–40.
+    let img = stream(
+        "/Type /XObject /Subtype /Image /Width 40 /Height 40 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode",
+        jpeg_white(40, 40),
+    );
+    let src = b"q 100 0 0 100 10 10 cm /Im1 Do Q BT /F1 10 Tf 10 200 Td (OCR1234) Tj ET";
+    let mut doc = one_page(src, "/XObject << /Im1 7 0 R >>", vec![img]);
+    assert_eq!(page_image(&doc, 0).map(|(w, h, _)| (w, h)), Some((40, 40)), "the scan is drawn to begin with");
+
+    mark(&mut doc, 0, &[[20.0, 195.0, 40.0, 210.0], [50.0, 50.0, 70.0, 70.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.images_removed, r.images_cleared), (0, 1), "the one page image is cleared in place, never removed: {r:?}");
+    assert_eq!(r.glyphs, 4, "the OCR text under the mark dies with it");
+
+    // The page still draws an image, and the text under the mark is gone from the content stream.
+    let c = content(&doc, 0);
+    assert!(c.contains("PCRedacted"), "the page is still drawn: {c}");
+    assert!(!c.contains("0031") && !c.contains("0032") && !c.contains("0033"), "the marked glyphs' codes are gone: {c}");
+    assert!(c.contains("(OC)") && c.contains("(4)"), "the text past the mark stays: {c}");
+
+    // Pixels: still 40×40, white everywhere except the marked block in the middle.
+    let (w, h, px) = page_image(&doc, 0).expect("the cleared image copy is there");
+    assert_eq!((w, h), (40, 40), "the scan keeps its size");
+    let at = |i: u32, j: u32| &px[((j * 40 + i) * 3) as usize..][..3];
+    for (i, j) in [(0, 0), (39, 0), (0, 39), (39, 39), (2, 20), (37, 20)] {
+        assert!(at(i, j).iter().all(|&b| b > 160), "the rest of the scan is still drawn at ({i},{j}): {:?}", at(i, j));
+    }
+    for (i, j) in [(16, 16), (20, 20), (23, 23), (18, 21)] {
+        assert!(at(i, j).iter().all(|&b| b < 96), "the marked pixels are black at ({i},{j}): {:?}", at(i, j));
+    }
+
+    // Saving and reopening keeps every bit of that.
+    let saved = reopen(&doc);
+    assert_eq!(page_image(&saved, 0).map(|(w, h, _)| (w, h)), Some((40, 40)));
+    assert!(!content(&saved, 0).contains("0031"));
+}
+
+/// A redaction mark over a **rotated** scan must still clear the covered pixels: the clearing test
+/// is conservative for degenerate rows (a 90° `cm` makes every row vertical) and must never skip a
+/// pixel the mark covers, leaving the original JPEG under the overlay untouched.
+#[test]
+fn a_rotated_scan_is_still_cleared_under_the_mark() {
+    // The same 40×40 white JPEG, drawn 100×100 at (10,10) but rotated 90°:
+    // `q 0 100 -100 0 110 10 cm` maps the image square to (10,10)-(110,110) sideways.
+    let img = stream(
+        "/Type /XObject /Subtype /Image /Width 40 /Height 40 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode",
+        jpeg_white(40, 40),
+    );
+    let src = b"q 0 100 -100 0 110 10 cm /Im1 Do Q";
+    let mut doc = one_page(src, "/XObject << /Im1 7 0 R >>", vec![img]);
+    mark(&mut doc, 0, &[[50.0, 50.0, 70.0, 70.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.images_removed, r.images_cleared), (0, 1), "the rotated scan is cleared in place, never removed: {r:?}");
+
+    let (w, h, px) = page_image(&doc, 0).expect("the cleared image copy is there");
+    assert_eq!((w, h), (40, 40));
+    let at = |i: u32, j: u32| &px[((j * 40 + i) * 3) as usize..][..3];
+    // The mark covers 20 pt = 8 image pixels; the rotation is about the square's centre, so the
+    // covered sample block is still the middle 8×8.
+    for (i, j) in [(16, 16), (20, 20), (23, 23), (18, 21)] {
+        assert!(at(i, j).iter().all(|&b| b < 96), "the marked pixels are black at ({i},{j}): {:?}", at(i, j));
+    }
+    for (i, j) in [(0, 0), (39, 0), (0, 39), (39, 39), (2, 20), (37, 20)] {
+        assert!(at(i, j).iter().all(|&b| b > 160), "the rest of the scan survives at ({i},{j}): {:?}", at(i, j));
+    }
+}
+
+/// A grayscale scan with an explicit identity `/Decode [0 1]` is cleared in place too — the
+/// component count of the `/Decode` check must be the image's own (one), not three, or every
+/// explicit-declaration gray scan would be removed whole and the page blanked again.
+/// A 20×20 gray scan drawn 100×100 at (10,10), marked over its middle: the document and the report
+/// applying the mark gave. The one shape the gray cases differ in is the `/Decode` they declare.
+fn marked_gray_scan(decode: &str) -> (Document, Report) {
+    let mut gray = vec![200u8; 20 * 20];
+    gray[..20].fill(20);
+    let img = stream(
+        &format!("/Type /XObject /Subtype /Image /Width 20 /Height 20 /ColorSpace /DeviceGray /BitsPerComponent 8 {decode} /Filter /DCTDecode"),
+        jpeg_gray(&gray, 20, 20),
+    );
+    let mut doc = one_page(b"q 100 0 0 100 10 10 cm /Im0 Do Q", "/XObject << /Im0 7 0 R >>", vec![img]);
+    mark(&mut doc, 0, &[[40.0, 40.0, 60.0, 60.0]], "");
+    let report = apply(&mut doc, None).unwrap();
+    (doc, report)
+}
+
+#[test]
+fn a_gray_scan_with_an_identity_decode_is_cleared_not_removed() {
+    let (doc, r) = marked_gray_scan("/Decode [0 1]");
+    assert_eq!((r.images_removed, r.images_cleared), (0, 1), "the gray scan is cleared, not removed: {r:?}");
+    // The cleared copy is drawn under a fresh name, as every cleared image is.
+    assert!(content(&doc, 0).contains("PCRedacted"), "the cleared scan is still drawn: {}", content(&doc, 0));
+}
+
+/// The JPEG path spends the document's allowance, not just its own per-image cap: with no work left
+/// the scan is refused (the caller removes it, fail-closed), and one finite allowance cannot pay for
+/// the same clear twice — the second is refused and the refusal is counted. The work is shared across
+/// a run, not reset per image.
+#[test]
+fn a_jpeg_scan_clears_only_out_of_the_documents_allowance() {
+    let img = stream(
+        "/Type /XObject /Subtype /Image /Width 40 /Height 40 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode",
+        jpeg_white(40, 40),
+    );
+    let doc = one_page(b"q 100 0 0 100 10 10 cm /Im1 Do Q", "/XObject << /Im1 7 0 R >>", vec![img]);
+    let Object::Stream(s) = &*doc.get(ObjRef::new(7, 0)) else { panic!("object 7 is the image") };
+    // `clear` is handed the image's unit square through the transform it is drawn with, so a region
+    // in that space covers the left half here.
+    let left = [[0.0, 0.0, 0.5, 1.0]];
+    let clear_with = |budget: &mut pdfcraft_cos::ImageBudget| crate::image::clear(&doc, s, &pdfcraft_content::Matrix::IDENTITY, &left, budget);
+    assert!(matches!(clear_with(&mut pdfcraft_cos::ImageBudget::with_work(0)), Err(())), "no allowance left: the scan must fail closed, not clear");
+    assert!(matches!(clear_with(&mut pdfcraft_cos::ImageBudget::with_work(u64::MAX)), Ok(Some(_))), "a whole allowance clears it");
+
+    // The smallest allowance that pays for one clear, found by doubling rather than by spelling out
+    // the crate's private pricing: exactly one clear fits in it, and only one.
+    let mut allowance = 1u64;
+    while !matches!(clear_with(&mut pdfcraft_cos::ImageBudget::with_work(allowance)), Ok(Some(_))) {
+        allowance = allowance.checked_mul(2).expect("a clear is paid for in a finite allowance");
+    }
+    let mut shared = pdfcraft_cos::ImageBudget::with_work(allowance);
+    assert!(matches!(clear_with(&mut shared), Ok(Some(_))), "one clear fits the allowance measured for it");
+    assert!(matches!(clear_with(&mut shared), Err(())), "the same allowance cannot pay for a second clear");
+    assert!(shared.refused() > 0, "the refused clear is counted, so a run can report it");
+}
+
+/// A gray scan with an *inverted* `/Decode [1 0]` still fails closed: the cleared copy would keep
+/// the inverted mapping, so the whole image goes instead.
+#[test]
+fn a_gray_scan_with_an_inverted_decode_still_fails_closed() {
+    let (doc, r) = marked_gray_scan("/Decode [1 0]");
+    assert_eq!(r.images_removed, 1, "the inverted scan is removed whole: {r:?}");
+    assert!(!content(&doc, 0).contains("/Im0"), "the removed scan is no longer drawn: {}", content(&doc, 0));
+}
+
+/// A CMYK JPEG still fails closed: its samples would be written back in a space its
+/// `/ColorSpace` doesn't name. The colour space is refused before the stream is decoded, so the
+/// bytes here are never read as a JPEG (the encoder in this build cannot write a CMYK one).
+#[test]
+fn a_cmyk_jpeg_scan_is_still_removed_whole() {
+    let img =
+        stream("/Type /XObject /Subtype /Image /Width 20 /Height 20 /ColorSpace /DeviceCMYK /BitsPerComponent 8 /Filter /DCTDecode", vec![0u8; 64]);
+    let mut doc = one_page(b"q 100 0 0 100 10 10 cm /Im0 Do Q", "/XObject << /Im0 7 0 R >>", vec![img]);
+    mark(&mut doc, 0, &[[40.0, 40.0, 60.0, 60.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.images_removed, 1, "the CMYK scan is removed whole: {r:?}");
+    assert!(!content(&doc, 0).contains("/Im0"));
+}
+
+#[test]
+fn jpeg_external_data_is_removed_whole_while_null_file_entries_still_clear() {
+    for spelling in ["absent", "null", "indirect null", "dangling", "file", "indirect file"] {
+        let img = stream(
+            "/Type /XObject /Subtype /Image /Width 40 /Height 40 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode",
+            jpeg_white(40, 40),
+        );
+        let mut doc = one_page(b"q 100 0 0 100 10 10 cm /Im0 Do Q", "/XObject << /Im0 7 0 R >>", vec![img]);
+        let file = match spelling {
+            "absent" => None,
+            "null" => Some(Object::Null),
+            "indirect null" => Some(Object::Ref(doc.add(Object::Null))),
+            "dangling" => Some(Object::Ref(ObjRef::new(9999, 0))),
+            "file" => Some(Object::String(pdfcraft_cos::PdfString::literal(b"outside.jpg".to_vec()))),
+            _ => Some(Object::Ref(doc.add(Object::String(pdfcraft_cos::PdfString::literal(b"outside.jpg".to_vec()))))),
+        };
+        if let Some(file) = file {
+            let Object::Stream(s) = &*doc.get(ObjRef::new(7, 0)) else { panic!("image stream") };
+            let mut copy = s.clone();
+            copy.dict.set(b"F".to_vec(), file);
+            doc.set(ObjRef::new(7, 0), Object::Stream(copy));
+        }
+        mark(&mut doc, 0, &[[40.0, 40.0, 60.0, 60.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        if matches!(spelling, "file" | "indirect file") {
+            assert_eq!((report.images_removed, report.images_cleared), (1, 0), "{spelling}");
+            assert!(!content(&doc, 0).contains(" Do"), "external picture must no longer be drawn");
+        } else {
+            assert_eq!((report.images_removed, report.images_cleared), (0, 1), "{spelling}");
+        }
+    }
+}
+
+#[test]
+fn jpeg_sample_layout_must_match_the_declared_device_space() {
+    for (space, width, params) in [
+        ("/DeviceRGB", 40, ""),
+        ("/CalGray", 40, ""),
+        ("[/Indexed /DeviceRGB 1 <000000ffffff>]", 40, ""),
+        ("/DeviceGray", 41, ""),
+        ("/DeviceGray", 40, "/DecodeParms << /ColorTransform 0 >>"),
+        ("/DeviceGray", 40, "/DecodeParms [<< /ColorTransform 1 >>]"),
+    ] {
+        let img = stream(
+            &format!("/Type /XObject /Subtype /Image /Width {width} /Height 40 /ColorSpace {space} /BitsPerComponent 8 /Filter /DCTDecode {params}"),
+            jpeg_gray(&vec![200; 40 * 40], 40, 40),
+        );
+        let mut doc = one_page(b"q 100 0 0 100 10 10 cm /Im0 Do Q", "/XObject << /Im0 7 0 R >>", vec![img]);
+        mark(&mut doc, 0, &[[40.0, 40.0, 60.0, 60.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!((report.images_removed, report.images_cleared), (1, 0), "{space}, width {width}, {params}");
+        assert!(!content(&doc, 0).contains(" Do"));
+    }
 }
