@@ -6150,6 +6150,101 @@ fn redacting_with_codes_through_tools() {
     assert!(!text.contains("Jane") && text.contains("(b)(6), (b)(7)(C)"), "{text}");
 }
 
+/// Edit Codes headlessly: custom code sets are made and edited, used by redact_mark, exported
+/// and imported again (inside --root only), and a damaged file is refused with the reason.
+#[test]
+fn custom_redaction_code_sets_through_tools() {
+    let dir = workdir("redact-custom-codes");
+    std::fs::write(dir.join("memo.txt"), "Witness Jane Roe saw it\nPublic line").unwrap();
+    let mut a = auto(&dir);
+    let listed = ok(&mut a, "redact_code_sets", json!({}));
+    let ids: Vec<_> = listed["sets"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap().to_string()).collect();
+    assert_eq!(ids, ["foia", "privacy-act"]);
+    assert_eq!(listed["sets"][0]["built_in"], true);
+    let edit = |a: &mut Automation, args: Value| a.call("redact_code_set_edit", &args);
+    let invalid = |r: Result<Vec<Content>, ToolError>| match r {
+        Err(ToolError::InvalidArgs(m)) => m,
+        other => panic!("expected InvalidArgs, got {other:?}"),
+    };
+    ok(&mut a, "redact_code_set_edit", json!({ "action": "create", "set": "Court" }));
+    for code in ["Sealed", "Minor", "Juror"] {
+        ok(&mut a, "redact_code_set_edit", json!({ "action": "add_code", "set": "Court", "code": code }));
+    }
+    let r = ok(&mut a, "redact_code_set_edit", json!({ "action": "rename_code", "set": "Court", "code": "Juror", "to": "Jury" }));
+    assert_eq!(r["set"]["codes"], json!(["Sealed", "Minor", "Jury"]));
+    // Refused edits say what was wrong and change nothing.
+    assert!(invalid(edit(&mut a, json!({ "action": "add_code", "set": "foia", "code": "(b)(10)" }))).contains("built-in"));
+    assert!(invalid(edit(&mut a, json!({ "action": "create", "set": "court" }))).contains("already a code set"));
+    assert!(invalid(edit(&mut a, json!({ "action": "add_code", "set": "Court", "code": "Tab\there" }))).contains("control character"));
+    assert!(invalid(edit(&mut a, json!({ "action": "add_code", "set": "Court", "code": "Minor" }))).contains("already has"));
+    assert!(invalid(edit(&mut a, json!({ "action": "rename", "set": "Court" }))).contains("to"));
+    assert!(invalid(edit(&mut a, json!({ "action": "shuffle", "set": "Court" }))).contains("allowed"));
+
+    // redact_mark takes the custom set by name; the overlay lists its codes in the set's order.
+    let doc = ok(&mut a, "doc_create", json!({ "from": "text", "path": "memo.txt" }))["doc"].as_u64().unwrap();
+    let msg = invalid(a.call("redact_mark", &json!({ "doc": doc, "find": "Jane Roe", "code_set": "Court", "codes": ["(b)(6)"] })));
+    assert!(msg.contains("Sealed, Minor, Jury"), "the error lists the set's codes: {msg}");
+    assert!(invalid(a.call("redact_mark", &json!({ "doc": doc, "find": "Jane Roe", "code_set": "Bench", "codes": ["X"] }))).contains("\"Court\""));
+    ok(&mut a, "redact_mark", json!({ "doc": doc, "find": "Jane Roe", "code_set": "Court", "codes": ["Jury", "Sealed"] }));
+    ok(&mut a, "redact_apply", json!({ "doc": doc }));
+    let text = page_text(&mut a, doc)[0].clone();
+    assert!(!text.contains("Jane") && text.contains("Sealed, Jury"), "{text}");
+
+    // Export, then import into a fresh session.
+    let r = ok(&mut a, "redact_code_sets_export", json!({ "path": "court-codes.json" }));
+    assert_eq!(r["sets"], 1);
+    let file = std::fs::read_to_string(dir.join("court-codes.json")).unwrap();
+    assert!(file.contains("\"pdfcraft-redaction-codes\"") && file.contains("\"Jury\""), "{file}");
+    assert!(matches!(a.call("redact_code_sets_export", &json!({ "path": "../outside.json" })), Err(ToolError::Failed(m)) if m.contains("outside")));
+    assert!(invalid(a.call("redact_code_sets_export", &json!({ "path": "x.json", "sets": ["foia"] }))).contains("built-in"));
+}
+
+/// Code set files headlessly: an exported file imports into another session, a name already
+/// in use is refused unless replace is on, and damaged or hostile files are refused whole.
+#[test]
+fn redaction_code_set_files_through_tools() {
+    let dir = workdir("redact-code-files");
+    let mut a = auto(&dir);
+    ok(&mut a, "redact_code_set_edit", json!({ "action": "create", "set": "Court" }));
+    for code in ["Sealed", "Minor", "Jury"] {
+        ok(&mut a, "redact_code_set_edit", json!({ "action": "add_code", "set": "Court", "code": code }));
+    }
+    ok(&mut a, "redact_code_sets_export", json!({ "path": "court-codes.json" }));
+    let mut b = auto(&dir);
+    assert!(
+        matches!(b.call("redact_code_sets_export", &json!({ "path": "none.json" })), Err(ToolError::Failed(m)) if m.contains("no custom code sets"))
+    );
+    assert_eq!(ok(&mut b, "redact_code_sets_import", json!({ "path": "court-codes.json" }))["imported"], json!(["Court"]));
+    assert_eq!(
+        ok(&mut b, "redact_code_sets", json!({}))["sets"][2],
+        json!({ "id": "Court", "name": "Court", "built_in": false, "codes": ["Sealed", "Minor", "Jury"] })
+    );
+    // Again: the name is taken, so the file is refused unless it replaces the set.
+    assert!(
+        matches!(b.call("redact_code_sets_import", &json!({ "path": "court-codes.json" })), Err(ToolError::Failed(m)) if m.contains("already") && m.contains("nothing was imported"))
+    );
+    ok(&mut b, "redact_code_set_edit", json!({ "action": "remove_code", "set": "Court", "code": "Minor" }));
+    ok(&mut b, "redact_code_sets_import", json!({ "path": "court-codes.json", "replace": true }));
+    assert_eq!(ok(&mut b, "redact_code_sets", json!({}))["sets"][2]["codes"], json!(["Sealed", "Minor", "Jury"]));
+    // Damaged and hostile files are refused whole, with the reason.
+    let files = [
+        ("not-json.json", "{ nope".to_string(), "isn't JSON"),
+        ("newer.json", r#"{"format":"pdfcraft-redaction-codes","version":9,"sets":[]}"#.to_string(), "newer"),
+        ("dup.json", r#"{"format":"pdfcraft-redaction-codes","version":1,"sets":[{"name":"A","codes":["x","x"]}]}"#.to_string(), "already has"),
+        ("huge.json", " ".repeat(pdfcraft_engine::redaction_codes::MAX_FILE_BYTES + 10), "larger than"),
+    ];
+    for (name, body, why) in files {
+        std::fs::write(dir.join(name), body).unwrap();
+        match b.call("redact_code_sets_import", &json!({ "path": name })) {
+            Err(ToolError::Failed(m)) => assert!(m.contains(why) && m.contains(name), "{name}: {m}"),
+            other => panic!("{name}: expected a refusal, got {other:?}"),
+        }
+    }
+    assert_eq!(ok(&mut b, "redact_code_sets", json!({}))["sets"].as_array().unwrap().len(), 3, "nothing was added");
+    ok(&mut b, "redact_code_set_edit", json!({ "action": "delete", "set": "Court" }));
+    assert_eq!(ok(&mut b, "redact_code_sets", json!({}))["sets"].as_array().unwrap().len(), 2);
+}
+
 #[test]
 fn redacting_word_lists_through_tools() {
     let dir = workdir("redact-words");

@@ -64,7 +64,10 @@ pub use print_ui::{
     DefaultPaperSource, Handling as PrintHandling, OptionsSource, PrintDraft, PrinterPapersSource, PrinterSetup, PrinterSource, Spooler,
     TwoSidedSource, Which as PrintWhich, system_printers, system_two_sided,
 };
-pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
+pub use redact_ui::{
+    CodeEditor as RedactCodeEditor, HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft,
+    SearchMode as RedactSearchMode,
+};
 pub mod i18n;
 pub mod theme;
 pub mod viewer_prefs;
@@ -850,6 +853,19 @@ pub struct PdfCraftApp {
     /// properties default" ticked left), and the values before the dialog opened, for Cancel.
     pub redact_defaults: RedactPrefs,
     pub redact_before: Option<RedactPrefs>,
+    /// The custom redaction code sets (Redaction Properties ▸ Edit Codes), kept in the settings.
+    pub redaction_codes: pdfcraft_engine::redaction_codes::CodeLibrary,
+    /// The saved code sets when the settings held some that could not be read: the entry as it
+    /// was, written back unchanged, and why it was refused. Edit Codes shows the reason and lets
+    /// the user discard them; until then no custom set can be made, so nothing overwrites them.
+    pub redaction_codes_unread: Option<(serde_json::Value, String)>,
+    /// While the saved code sets can't be read: the saved properties' own `code_set` and `codes`
+    /// (which may name one of those sets), and the fallback choice they were read as. Saving
+    /// writes the saved choice back as long as the defaults still hold the fallback, so a build
+    /// that can read the sets again finds the codes that were chosen.
+    pub(crate) redaction_choice_unread: Option<redact_ui::RedactChoiceUnread>,
+    /// The Edit Codes dialog's state.
+    pub code_editor: redact_ui::CodeEditor,
     pub redact_pages_draft: RedactPagesDraft,
     pub redact_search: RedactSearchDraft,
     pub hidden_draft: HiddenDraft,

@@ -2,8 +2,8 @@
 //! (removing what they cover for good) or clear them.
 
 use pdfcraft_engine::{
-    Edit, HIDDEN, Hidden, NewAnnotation, REDACT_MAX_WORDS, REDACT_VALIDATORS, REDACTION_CODE_SETS, RedactPattern, RedactRegex, RedactValidator,
-    RedactionCodeSet, Shape, Style, find_pattern, rect_quad, redact_word_list, redacted_file_name,
+    Edit, HIDDEN, Hidden, NewAnnotation, REDACT_MAX_WORDS, REDACT_VALIDATORS, RedactPattern, RedactRegex, RedactValidator, Shape, Style,
+    find_pattern, rect_quad, redact_word_list, redacted_file_name, redaction_codes,
 };
 use serde_json::{Value, json};
 
@@ -31,13 +31,14 @@ impl Automation {
         let overlay = match (a.opt_str("overlay")?, a.opt_str("code_set")?) {
             (Some(_), Some(_)) => return Err(ToolError::InvalidArgs("pass overlay or code_set with codes, not both".into())),
             (Some(o), None) => o.to_string(),
-            (None, Some(id)) => {
-                let set = RedactionCodeSet::from_id(id).ok_or_else(|| {
-                    let ids: Vec<_> = REDACTION_CODE_SETS.iter().map(|s| s.id).collect();
-                    ToolError::InvalidArgs(format!("unknown code_set {id:?}; allowed: {}", ids.join(", ")))
+            (None, Some(key)) => {
+                // A built-in set's id or a custom set's name (redact_code_sets lists them).
+                let set = self.redaction_codes.find(key).ok_or_else(|| {
+                    let keys: Vec<_> = self.redaction_codes.all().map(|s| format!("{:?}", s.key())).collect();
+                    ToolError::InvalidArgs(format!("unknown code_set {key:?}; allowed: {}", keys.join(", ")))
                 })?;
                 let picked = a.strs("codes")?;
-                let allowed = || format!("allowed in {}: {}", set.id, set.codes.join(", "));
+                let allowed = || format!("allowed in {}: {}", set.key(), set.codes().join(", "));
                 match set.overlay(&picked) {
                     Ok(o) if !o.is_empty() => o,
                     Ok(_) => return Err(ToolError::InvalidArgs(format!("codes is empty; {}", allowed()))),
@@ -295,5 +296,81 @@ impl Automation {
         let after: usize = self.doc(a)?.hidden_info_of(&listed).iter().map(|c| c.1).sum();
         out["removed"] = json!(before.saturating_sub(after));
         Ok(out)
+    }
+}
+
+impl Automation {
+    /// The code sets redact_mark's code_set can name: the built-in ones, then this session's own.
+    pub(crate) fn redact_code_sets(&self) -> Value {
+        let sets: Vec<Value> =
+            self.redaction_codes.all().map(|s| json!({ "id": s.key(), "name": s.name(), "built_in": s.built_in(), "codes": s.codes() })).collect();
+        json!({ "sets": sets })
+    }
+
+    /// Edit Codes: change one custom code set.
+    pub(crate) fn redact_code_set_edit(&mut self, a: &Args) -> Result<Value> {
+        use redaction_codes::CodeEdit;
+        let set = a.str("set")?.to_string();
+        let to = || a.str("to").map(str::to_string);
+        let code = || a.str("code").map(str::to_string);
+        let edit = match a.str("action")? {
+            "create" => CodeEdit::CreateSet { name: set.clone() },
+            "rename" => CodeEdit::RenameSet { from: set.clone(), to: to()? },
+            "delete" => CodeEdit::DeleteSet { name: set.clone() },
+            "add_code" => CodeEdit::AddCode { set: set.clone(), code: code()? },
+            "rename_code" => CodeEdit::RenameCode { set: set.clone(), from: code()?, to: to()? },
+            "remove_code" => CodeEdit::RemoveCode { set: set.clone(), code: code()? },
+            other => {
+                return Err(ToolError::InvalidArgs(format!(
+                    "unknown action {other:?}; allowed: create, rename, delete, add_code, rename_code, remove_code"
+                )));
+            }
+        };
+        self.redaction_codes.apply(&edit).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
+        let now = match &edit {
+            CodeEdit::RenameSet { to, .. } => Some(to.as_str()),
+            CodeEdit::DeleteSet { .. } => None,
+            _ => Some(set.as_str()),
+        };
+        let set = now.and_then(|name| self.redaction_codes.find(name)).map(|s| json!({ "id": s.key(), "name": s.name(), "codes": s.codes() }));
+        Ok(json!({ "set": set, "custom_sets": self.redaction_codes.custom().len() }))
+    }
+
+    /// Read a code set file into this session's custom sets: all of its sets or none.
+    pub(crate) fn redact_code_sets_import(&mut self, a: &Args) -> Result<Value> {
+        let shown = a.str("path")?;
+        let path = self.resolve(shown, false)?;
+        // Read one byte past the limit at most, so the file's own size check says what is wrong.
+        let bytes = {
+            use std::io::Read as _;
+            let mut bytes = Vec::new();
+            std::fs::File::open(&path)
+                .and_then(|f| f.take(redaction_codes::MAX_FILE_BYTES as u64 + 1).read_to_end(&mut bytes))
+                .map_err(|e| failed(format!("{shown}: {e}")))?;
+            bytes
+        };
+        let sets = redaction_codes::CodeLibrary::read_file(&bytes).map_err(|e| failed(format!("{shown}: {e}")))?;
+        let replace = a.opt_bool("replace")?.unwrap_or(false);
+        let imported = self.redaction_codes.import(sets, replace).map_err(|e| failed(format!("{shown}: {e}; nothing was imported")))?;
+        Ok(json!({ "imported": imported, "custom_sets": self.redaction_codes.custom().len() }))
+    }
+
+    /// Write custom code sets (all, or those named) to a code set file.
+    pub(crate) fn redact_code_sets_export(&self, a: &Args) -> Result<Value> {
+        let only = match a.get("sets") {
+            Some(_) => Some(a.strs("sets")?),
+            None => None,
+        };
+        if self.redaction_codes.custom().is_empty() {
+            return Err(failed("there are no custom code sets to export; create one with redact_code_set_edit or import a file"));
+        }
+        let bytes = self.redaction_codes.export(only.as_deref()).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
+        let count = match &only {
+            Some(names) => self.redaction_codes.custom().iter().filter(|s| names.contains(&s.name())).count(),
+            None => self.redaction_codes.custom().len(),
+        };
+        let target = self.resolve(a.str("path")?, true)?;
+        crate::write_atomic(&target, &bytes)?;
+        Ok(json!({ "path": target, "sets": count, "bytes": bytes.len() }))
     }
 }

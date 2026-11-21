@@ -104,6 +104,9 @@ pub struct Automation {
     next_ocr_review: u64,
     /// What object_copy copied, for object_paste into any open document.
     objects_clipboard: Option<pdfcraft_engine::ObjectClipboard>,
+    /// This session's custom redaction code sets (redact_code_set_edit, redact_code_sets_import),
+    /// beside the built-in ones.
+    redaction_codes: pdfcraft_engine::redaction_codes::CodeLibrary,
 }
 
 impl Default for Automation {
@@ -125,6 +128,7 @@ impl Automation {
             ocr_reviews: HashMap::new(),
             next_ocr_review: 0,
             objects_clipboard: None,
+            redaction_codes: Default::default(),
         }
     }
 
