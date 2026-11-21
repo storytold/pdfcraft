@@ -2990,6 +2990,34 @@ fn a_document_press_releases_pages_keyboard_focus_without_escape() {
     assert!(h.state().views[0].selected.is_empty(), "Ctrl+A now belongs to the viewer, not page thumbnails");
 }
 
+/// Cursor coordinates floating window (View ▸ Show/Hide ▸ Cursor Coordinates, `Ctrl+Y` / `⌘Y`)
+/// toggles on and off, stays visible across frames, and formats pointer coordinates.
+#[test]
+fn cursor_coordinates_floating_window_toggles_and_renders() {
+    let mut h = harness(&[]);
+    h.run_steps(4);
+    assert!(!h.state().show_cursor_coordinates);
+
+    // Toggle on via command.
+    assert!(h.state_mut().execute("view.cursor_coordinates"));
+    h.run_steps(4);
+    assert!(h.state().show_cursor_coordinates);
+
+    // The floating window title is visible.
+    h.get_by_label("Cursor Coordinates");
+
+    // Toggle off via command.
+    assert!(h.state_mut().execute("view.cursor_coordinates"));
+    h.run_steps(4);
+    assert!(!h.state().show_cursor_coordinates);
+
+    // Toggle on via shortcut ⌘Y / Ctrl+Y.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Y);
+    h.run_steps(4);
+    assert!(h.state().show_cursor_coordinates);
+    h.get_by_label("Cursor Coordinates");
+}
+
 /// #576: full screen fills the screen with the page: a portrait page fits the screen's height
 /// edge to edge, with no margin above or below it, and sits centred across.
 #[test]
