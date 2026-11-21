@@ -8,13 +8,12 @@
 //! On top of the glyph list: line grouping (baseline clustering), word gaps, plain-text output,
 //! case-insensitive search and reading-order selection.
 
-use hayro::hayro_interpret::font::Glyph;
-pub use hayro::hayro_interpret::font::{Recovery, RecoveryMode, RecoveryRule, recovery_policy};
-use hayro::hayro_interpret::hayro_syntax::Pdf;
-use hayro::hayro_interpret::{
+use craft_pdf::interpret::font::Glyph;
+use craft_pdf::interpret::{
     BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, InterpreterWarning, Paint, PathDrawMode,
     SoftMask, interpret_page,
 };
+use craft_pdf::syntax::Pdf;
 use kurbo::{Affine, BezPath, Rect, Shape};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -209,7 +208,7 @@ impl RecoveredText {
             .saturating_add(per(self.layer_index.capacity(), std::mem::size_of::<Option<usize>>()))
             .saturating_add(per(self.style.capacity(), std::mem::size_of::<Option<GlyphStyle>>()));
         for r in self.recovery.iter().flatten() {
-            if let hayro::hayro_interpret::hayro_cmap::BfString::String(s) = &r.text {
+            if let craft_pdf::interpret::hayro_cmap::BfString::String(s) = &r.text {
                 bytes = bytes.saturating_add(s.capacity());
             }
         }
@@ -947,11 +946,15 @@ const RUNNING_TEXT_RAG: f32 = 0.2;
 /// Lines a selection compares pairwise to tell a table from running text.
 const SIDE_BY_SIDE_LINES: usize = 256;
 
-use hayro::hayro_interpret::TransformExt;
+use craft_pdf::interpret::TransformExt;
 
 mod device;
 mod layout;
 mod order;
+mod recovery;
+
+use recovery::{PageRecovery, is_control_only};
+pub use recovery::{RecoveredFontStyle, Recovery, RecoveryDocument, RecoveryMode, RecoveryRule, recovery_policy};
 
 use device::{CELL_GAP, WORD_GAP};
 #[cfg(test)]

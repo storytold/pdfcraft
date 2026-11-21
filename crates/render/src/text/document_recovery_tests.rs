@@ -1,10 +1,9 @@
-//! Copy with formatting's document-wide recovery state (hayro-interpret patch 107,
-//! `RecoveryDocument`): each font's rule decisions are made once for the document, whichever
+//! Copy with formatting's document-wide recovery state (`RecoveryDocument`): each font's rule decisions are made once for the document, whichever
 //! page asks first and on whichever thread, and read every page as a decision made on that page
 //! would.
 
 use super::*;
-use hayro::hayro_interpret::font::{RecoveryDocument, recovery_counters};
+use crate::text::recovery::{RecoveryDocument, recovery_counters};
 use std::sync::Arc;
 
 fn parse(bytes: Vec<u8>) -> Pdf {
@@ -14,7 +13,9 @@ fn parse(bytes: Vec<u8>) -> Pdf {
 /// `pages` pages, each showing `C83 C111 C99` (`Soc`) in a simple Type 1 font whose
 /// `/Differences` name its glyphs `/C83 /C111 /C99`: a font the numbered-names rule reads.
 fn numbered_names_pages(pages: usize) -> Vec<u8> {
-    const CFF: &[u8] = include_bytes!("../../../../vendor/hayro-interpret/assets/FoxitFixed.pfb");
+    // The bundled Courier stand-in, a Type 1 program.
+    let cff_program = craft_pdf::interpret::font::StandardFont::Courier.get_font_data().0;
+    let cff: &[u8] = (*cff_program).as_ref();
     let first_page = 6;
     let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", first_page + 2 * i)).collect();
     let mut pdf = pdfcraft_testkit::Pdf::new()
@@ -28,7 +29,7 @@ fn numbered_names_pages(pages: usize) -> Vec<u8> {
             "<< /Type /FontDescriptor /FontName /Numbered /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 \
              /CapHeight 700 /StemV 80 /FontFile3 5 0 R >>",
         )
-        .stream("/Subtype /Type1C", CFF);
+        .stream("/Subtype /Type1C", cff);
     for _ in 0..pages {
         let contents = pdf.next_obj() + 1;
         pdf = pdf
@@ -38,12 +39,31 @@ fn numbered_names_pages(pages: usize) -> Vec<u8> {
     pdf.build()
 }
 
-fn settings(document: Option<Arc<RecoveryDocument>>) -> InterpreterSettings {
-    InterpreterSettings { recovery_document: document, ..InterpreterSettings::default() }
+/// Interpreter settings and, when the page is read with one, the document's recovery state.
+struct Reading {
+    settings: InterpreterSettings,
+    document: Option<Arc<RecoveryDocument>>,
+}
+
+impl std::ops::Deref for Reading {
+    type Target = InterpreterSettings;
+
+    fn deref(&self) -> &InterpreterSettings {
+        &self.settings
+    }
+}
+
+fn settings(document: Option<Arc<RecoveryDocument>>) -> Reading {
+    Reading { settings: InterpreterSettings::default(), document }
+}
+
+/// Both layers of `page`, read as `reading` says.
+fn extract_page_recovering(pdf: &Pdf, page: usize, reading: &Reading) -> Option<(PageText, Option<RecoveredText>)> {
+    super::extract_page_recovering(pdf, page, &reading.settings, reading.document.as_ref())
 }
 
 /// The recovered text of `page`.
-fn recovered(pdf: &Pdf, page: usize, settings: &InterpreterSettings) -> String {
+fn recovered(pdf: &Pdf, page: usize, settings: &Reading) -> String {
     extract_page_recovering(pdf, page, settings).unwrap().1.map(|r| r.text.plain_text()).unwrap_or_default()
 }
 
@@ -185,7 +205,7 @@ fn surveyed(doc: &Doc) -> Arc<RecoveryDocument> {
 #[test]
 fn a_survey_never_counts_a_stream_cut_at_its_byte_cap() {
     use super::cjk_fixture::Streams;
-    use hayro::hayro_interpret::font::test_hooks::set_survey_byte_cap;
+    use crate::text::recovery::test_hooks::set_survey_byte_cap;
     let doc = Doc {
         fonts: vec![Font::truetype("ABCDEF+Kai", 20)],
         pages: vec![vec![Show::Text(0, vec![1, 2]), Show::Text(0, vec![3]), Show::Form(vec![Show::Text(0, vec![4, 5])], 1), Show::Text(0, vec![6])]],
@@ -351,7 +371,7 @@ fn the_survey_reads_the_first_400_pages() {
 /// read: counts, not time, decide.
 #[test]
 fn a_survey_past_its_cap_leaves_the_document_without_evidence() {
-    use hayro::hayro_interpret::font::test_hooks::set_survey_glyph_cap;
+    use crate::text::recovery::test_hooks::set_survey_glyph_cap;
     let doc = Doc { fonts: vec![Font::truetype("ABCDEF+Kai", 20)], pages: vec![vec![Show::Text(0, vec![1, 2, 3, 4])]] };
     set_survey_glyph_cap(Some(4));
     let within = surveyed(&doc);
@@ -369,7 +389,7 @@ fn a_survey_past_its_cap_leaves_the_document_without_evidence() {
 fn a_cancelled_survey_keeps_nothing() {
     let pdf = parse(Doc { fonts: vec![Font::truetype("ABCDEF+Kai", 20)], pages: vec![vec![Show::Text(0, vec![1])]] }.build());
     let document = Arc::new(RecoveryDocument::needing_usage_for_tests());
-    let cancelled = InterpreterSettings { cancelled: Some(Arc::new(std::sync::atomic::AtomicBool::new(true))), ..settings(Some(document.clone())) };
+    let cancelled = InterpreterSettings { cancelled: Some(Arc::new(std::sync::atomic::AtomicBool::new(true))), ..InterpreterSettings::default() };
     document.prepare(&pdf, &cancelled);
     assert!(!document.prepared());
     document.prepare(&pdf, &settings(Some(document.clone())));
@@ -471,8 +491,10 @@ fn a_document_is_surveyed_only_for_a_rule_that_needs_its_usage() {
 #[test]
 fn the_survey_reads_each_font_as_the_built_font_does() {
     use super::cjk_fixture::Program;
-    use hayro::hayro_interpret::font::test_hooks::survey_classifications;
-    const TYPE1: &[u8] = include_bytes!("../../../../vendor/hayro-interpret/assets/FoxitFixed.pfb");
+    use crate::text::recovery::test_hooks::survey_classifications;
+    // The bundled Courier stand-in, a Type 1 program.
+    let type1_program = craft_pdf::interpret::font::StandardFont::Courier.get_font_data().0;
+    let type1: &[u8] = (*type1_program).as_ref();
     let with = |base: &str, program: Program| Font { program, ..Font::truetype(base, 1) };
     let mut mapped = Font::truetype("AAAAAA+Mapped", 40);
     mapped.cid_to_gid = Some((0..40).map(|cid| 39 - cid).collect());
@@ -499,7 +521,7 @@ fn the_survey_reads_each_font_as_the_built_font_does() {
         Font::cff("ABCDEI+Cff", vec![3, 9, 12]),
         cff_mapped,
         with("ABCDEJ+Bare", Program::Raw(super::recovery_tests::cff_with_names(&["A", "B"]))),
-        with("ABCDEK+Type1", Program::Raw(TYPE1.to_vec())),
+        with("ABCDEK+Type1", Program::Raw(type1.to_vec())),
         with("ABCDEL+Junk", Program::Raw(b"no font program".to_vec())),
         adobe,
         named,
@@ -553,7 +575,9 @@ fn the_survey_reads_each_font_as_the_built_font_does() {
 #[test]
 fn font_objects_with_the_same_dictionary_each_count_toward_the_page_font_budget() {
     const FONTS_ASKED: usize = 1 << 10;
-    const CFF: &[u8] = include_bytes!("../../../../vendor/hayro-interpret/assets/FoxitFixed.pfb");
+    // The bundled Courier stand-in, a Type 1 program.
+    let cff_program = craft_pdf::interpret::font::StandardFont::Courier.get_font_data().0;
+    let cff: &[u8] = (*cff_program).as_ref();
     // Objects: 3 the page, 4 its content, 5 the descriptor, 6 the program, 7 onwards the fonts.
     let page = |fonts: usize| {
         let resources: String = (0..fonts).map(|i| format!("/F{i} {} 0 R ", 7 + i)).collect();
@@ -569,7 +593,7 @@ fn font_objects_with_the_same_dictionary_each_count_toward_the_page_font_budget(
                 "<< /Type /FontDescriptor /FontName /Numbered /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 \
                  /CapHeight 700 /StemV 80 /FontFile3 6 0 R >>",
             )
-            .stream("/Subtype /Type1C", CFF);
+            .stream("/Subtype /Type1C", cff);
         for _ in 0..fonts {
             pdf = pdf.obj(
                 "<< /Type /Font /Subtype /Type1 /BaseFont /Numbered /FirstChar 1 /LastChar 3 /Widths [600 600 600] /FontDescriptor 5 0 R \

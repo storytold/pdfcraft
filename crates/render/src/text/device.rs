@@ -4,6 +4,8 @@ use super::{
     InterpreterSettings, InterpreterWarning, PageText, Paint, PathDrawMode, Pdf, RecoveredText, Recovery, Rect, Shape, SoftMask, TextFilter,
     TextGlyph, TransformExt, interpret_page,
 };
+use super::{PageRecovery, RecoveredFontStyle, RecoveryDocument, is_control_only};
+use std::sync::Arc;
 
 /// Largest sine of the angle between a glyph's writing direction and a flow's for the glyph to be
 /// laid out in that flow's frame. Turning an em box by θ moves its edges along the line by up to
@@ -49,10 +51,11 @@ pub(super) struct TextDevice {
     actual_filtered: bool,
     actual_cropped: bool,
     partial_replacement: bool,
-    /// Copy with formatting: also take the recovery rules' readings
-    /// (`Glyph::unicode_and_recovery`). Off for every other reader, and then nothing below is
-    /// ever filled.
+    /// Copy with formatting: also take the recovery rules' readings ([`PageRecovery::recover`]).
+    /// Off for every other reader, and then nothing below is ever filled.
     pub(super) recover: bool,
+    /// The recovery rules' decisions and font styles for the page, and the document's.
+    pub(super) recovery: PageRecovery,
     /// Glyphs without strict text that a rule reads (fills), each with the number of strict
     /// glyphs in `glyphs` before it, in content order.
     pub(super) filled: Vec<(usize, Drawn, Read)>,
@@ -355,6 +358,7 @@ impl TextDevice {
             actual_cropped: false,
             partial_replacement: false,
             recover: false,
+            recovery: PageRecovery::default(),
             filled: Vec::new(),
             overrides: Vec::new(),
             recovery_failed: false,
@@ -609,18 +613,12 @@ impl TextDevice {
     /// panic in the rules or a page past their budgets ([`MAX_RECOVERY_FONTS`],
     /// [`MAX_RECOVERED_GLYPHS`], [`RECOVERY_DEADLINE`]) stops recovering for the page and marks
     /// it failed.
-    fn recover_glyph(
-        &mut self,
-        glyph: &Glyph<'_>,
-    ) -> (Option<hayro::hayro_interpret::hayro_cmap::BfString>, Option<Recovery>, hayro::hayro_interpret::font::RecoveredFontStyle) {
+    fn recover_glyph(&mut self, glyph: &Glyph<'_>) -> (Option<craft_pdf::interpret::hayro_cmap::BfString>, Option<Recovery>, RecoveredFontStyle) {
         let over_budget = self.filled.len().saturating_add(self.overrides.len()) >= recovered_glyphs() || self.started.past_recovery_deadline() || {
             // Outline and Type 3 fonts count alike: each runs the rules' font-level guards. Fonts
             // are told apart as the rules decide them: font objects with the same dictionary are
             // fonts of their own.
-            let font = match glyph {
-                Glyph::Outline(g) => g.recovery_font_key(),
-                Glyph::Type3(g) => g.recovery_font_key(),
-            };
+            let font = glyph.font_key();
             if self.last_recovery_font == Some(font) {
                 false
             } else {
@@ -637,8 +635,13 @@ impl TextDevice {
                         panic!("recovery panics in this test");
                     }
                 }
-                let (strict, recovery) = glyph.unicode_and_recovery();
-                let style = recovery.as_ref().and_then(|_| glyph.recovery_style()).unwrap_or_default();
+                let strict = glyph.as_unicode();
+                let shown = strict.as_ref().filter(|s| !is_control_only(s));
+                let recovery = self.recovery.recover(glyph, shown);
+                let style = match recovery {
+                    Some(_) => self.recovery.style(glyph),
+                    None => RecoveredFontStyle::default(),
+                };
                 (strict, recovery, style)
             }));
             if let Ok(read) = read {
@@ -689,10 +692,10 @@ impl MergedRun {
 }
 
 /// A glyph's text as a string.
-fn bf_text(text: hayro::hayro_interpret::hayro_cmap::BfString) -> String {
+fn bf_text(text: craft_pdf::interpret::hayro_cmap::BfString) -> String {
     match text {
-        hayro::hayro_interpret::hayro_cmap::BfString::Char(c) => c.to_string(),
-        hayro::hayro_interpret::hayro_cmap::BfString::String(s) => s,
+        craft_pdf::interpret::hayro_cmap::BfString::Char(c) => c.to_string(),
+        craft_pdf::interpret::hayro_cmap::BfString::String(s) => s,
     }
 }
 
@@ -942,33 +945,39 @@ pub(crate) fn extract_page(pdf: &Pdf, page: usize, settings: &InterpreterSetting
 }
 
 pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &InterpreterSettings, filter: TextFilter) -> Result<PageText, String> {
-    extract_page_with(pdf, page, settings, filter, false).map(|(text, _)| text)
+    extract_page_with(pdf, page, settings, filter, None).map(|(text, _)| text)
 }
 
 /// The text of one page in one interpretation: the strict text layer, exactly as
 /// [`extract_page`] reads it, and, when a recovery rule read any glyph, Copy with formatting's
-/// layer ([`RecoveredText`]). Panics inside the interpreter are the caller's to catch.
-pub(crate) fn extract_page_recovering(pdf: &Pdf, page: usize, settings: &InterpreterSettings) -> Option<(PageText, Option<RecoveredText>)> {
-    extract_page_with(pdf, page, settings, TextFilter::default(), true).ok()
+/// layer ([`RecoveredText`]). `document` keeps each font's rule decisions for the whole
+/// document (one per document version, shared by its pages and threads); without one, the page
+/// decides its fonts itself. Panics inside the interpreter are the caller's to catch.
+pub(crate) fn extract_page_recovering(
+    pdf: &Pdf,
+    page: usize,
+    settings: &InterpreterSettings,
+    document: Option<&Arc<RecoveryDocument>>,
+) -> Option<(PageText, Option<RecoveredText>)> {
+    extract_page_with(pdf, page, settings, TextFilter::default(), Some(document)).ok()
 }
 
-/// One page's text, and with `recover` the recovered layer when some glyph has a reading.
+/// One page's text, and with `recover` (`Some`, with the document's recovery state if there is
+/// one) the recovered layer when some glyph has a reading.
 fn extract_page_with(
     pdf: &Pdf,
     page: usize,
     settings: &InterpreterSettings,
     filter: TextFilter,
-    recover: bool,
+    recover: Option<Option<&Arc<RecoveryDocument>>>,
 ) -> Result<(PageText, Option<RecoveredText>), String> {
     // The rules that read the whole document's text need its survey before any of the page's
     // fonts is decided: once per document, and not counted against the page's own time. A
     // survey that panics leaves the document unprepared and costs the page only its recovered
     // layer: the page is read without recovery, its strict text as a text request reads it.
-    let recover = recover
-        && settings
-            .recovery_document
-            .as_ref()
-            .is_none_or(|document| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| document.prepare(pdf, settings))).is_ok());
+    let document = recover.flatten();
+    let recover = recover.is_some()
+        && document.is_none_or(|document| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| document.prepare(pdf, settings))).is_ok());
     let started = Started::now();
     let pages = pdf.pages();
     let p = pages.get(page).ok_or("the page could not be read")?;
@@ -989,6 +998,9 @@ fn extract_page_with(
                 }
                 inner(warning);
             }),
+            // A page read with the document's decisions keeps a font per font object: the
+            // decisions are kept by object (`recovery::document::font_key`).
+            font_per_object: settings.font_per_object || (recover && document.is_some()),
             ..settings.clone()
         }
     };
@@ -999,6 +1011,7 @@ fn extract_page_with(
     dev.page = initial.transform_rect_bbox(Rect::new(c.x0, c.y0, c.x1, c.y1));
     dev.filter = filter;
     dev.recover = recover;
+    dev.recovery = PageRecovery::new(document.filter(|_| recover).cloned());
     dev.started = started;
     interpret_page(p, &mut ctx, &mut dev);
     // A replacement the content never closed ends with the page.
