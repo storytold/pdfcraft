@@ -4,7 +4,7 @@
 //! base letter and the accent the test needs (a caron, a double acute, a macron …).
 
 use super::*;
-use hayro::hayro_interpret::font::{RecoveryCounters, recovery_counters};
+use crate::text::recovery::{RecoveryCounters, recovery_counters};
 use pdfcraft_testkit::truetype::{Cmap, mac_gid, with_outlines};
 
 type Contour = &'static [(i16, i16)];
@@ -85,7 +85,7 @@ fn parse(bytes: Vec<u8>) -> Pdf {
 fn layers(pdf: &Pdf) -> (PageText, Option<RecoveredText>, PageText, RecoveryCounters) {
     let settings = InterpreterSettings::default();
     let before = recovery_counters();
-    let (strict, recovered) = extract_page_recovering(pdf, 0, &settings).unwrap();
+    let (strict, recovered) = extract_page_recovering(pdf, 0, &settings, None).unwrap();
     let cost = recovery_counters().since(&before);
     (strict, recovered, extract_page(pdf, 0, &settings).unwrap(), cost)
 }
@@ -313,7 +313,7 @@ fn widths_of_the_winansi_letters_keep_the_strict_text() {
 /// The accent classifier names each mark of the test's glyphs as a reader would.
 #[test]
 fn the_accent_classifier_names_each_mark() {
-    use hayro::hayro_interpret::font::test_hooks::accent_of;
+    use crate::text::recovery::test_hooks::accent_of;
     let path = |contours: &[Contour]| {
         let mut p = kurbo::BezPath::new();
         for c in contours {
@@ -639,7 +639,7 @@ fn a_font_whose_outlines_are_too_large_is_not_read() {
 /// font before.
 #[test]
 fn font_objects_with_the_same_dictionary_each_count_toward_the_rules_time() {
-    use hayro::hayro_interpret::font::RecoveryDocument;
+    use crate::text::recovery::RecoveryDocument;
     let glyphs = [(0xE8, 'č'), (0xF5, 'ő'), (0xFB, 'ű')];
     let outlines: Vec<(u16, &[Contour])> = glyphs.iter().enumerate().map(|(i, (_, c))| (u16::try_from(i + 1).unwrap(), drawing(*c))).collect();
     let cmap: Vec<(char, u16)> = glyphs.iter().enumerate().map(|(i, (code, _))| (win_ansi(*code), u16::try_from(i + 1).unwrap())).collect();
@@ -662,10 +662,10 @@ fn font_objects_with_the_same_dictionary_each_count_toward_the_rules_time() {
     }
     let pdf = parse(pdf.build());
     let read = || {
-        let settings =
-            InterpreterSettings { recovery_document: Some(std::sync::Arc::new(RecoveryDocument::default())), ..InterpreterSettings::default() };
+        let settings = InterpreterSettings::default();
+        let document = std::sync::Arc::new(RecoveryDocument::new());
         let before = recovery_counters();
-        let (strict, recovered) = extract_page_recovering(&pdf, 0, &settings).unwrap();
+        let (strict, recovered) = extract_page_recovering(&pdf, 0, &settings, Some(&document)).unwrap();
         (strict, recovered, recovery_counters().since(&before))
     };
     let (strict, recovered, cost) = read();

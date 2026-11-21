@@ -16,7 +16,7 @@ sha256 = "cd7032ea33b71427f188e34ffb4aee9d6868a57fd196037c5c8b2be03a2a0352"
 [[document]]
 source = "NOTICE"
 destination = "NOTICE"
-sha256 = "a7620386409bc691c7e223917db186ec447362f655fd81a1196d9853dcac1330"
+sha256 = "ac29fe01fc951570ebda159bc84b17f12129e3f0800c36759e2f4829c10d8685"
 
 [[document]]
 source = "vendor/edit-session/LICENSE-MIT"
@@ -115,31 +115,33 @@ sha256 = "ddb846513d92153d8fa16b18ed3e7c86953a582f0d2f49f02b29f1bd569dac58"
 origin = "https://raw.githubusercontent.com/ralovich/prc-rs/287b671bb5b31b05efb5ec1b98f7c359b9e4dd7d/LICENSE"
 
 [[document]]
-source = "vendor/hayro-interpret/LICENSE-APACHE"
+source = "licenses/pdf-backend/hayro-interpret/LICENSE-APACHE"
 licences = ["Apache-2.0"]
-destination = "vendor/hayro-interpret/LICENSE-APACHE"
+destination = "licenses/pdf-backend/hayro-interpret/LICENSE-APACHE"
 sha256 = "0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9"
 
 [[document]]
-source = "vendor/hayro-interpret/LICENSE-MIT"
+source = "licenses/pdf-backend/hayro-interpret/LICENSE-MIT"
 licences = ["MIT"]
-destination = "vendor/hayro-interpret/LICENSE-MIT"
+destination = "licenses/pdf-backend/hayro-interpret/LICENSE-MIT"
 sha256 = "51b50e6120c344dcc146bbd6375ca1c78e079d97c8bea76e67a53d6ff0efebac"
 
 [[document]]
-source = "vendor/hayro-interpret/assets/CGATS_LICENSE.txt"
-destination = "vendor/hayro-interpret/assets/CGATS_LICENSE.txt"
+source = "licenses/pdf-backend/hayro-interpret/assets/CGATS_LICENSE.txt"
+licences = ["CC0-1.0"]
+destination = "licenses/pdf-backend/hayro-interpret/assets/CGATS_LICENSE.txt"
 sha256 = "469d87b5fa48f8aaf69e25f4fcac3a309c97dbb7d561b917638abdb640e004d9"
 
 [[document]]
-source = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
-destination = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
+source = "licenses/pdf-backend/hayro-interpret/assets/LICENSE_FOXIT"
+licences = ["BSD-3-Clause"]
+destination = "licenses/pdf-backend/hayro-interpret/assets/LICENSE_FOXIT"
 sha256 = "b578cdd2345840ada550bd12519533812320d5f1d21cf4c1c7e1b1b0a31c98b7"
 
 [[document]]
-source = "vendor/hayro-cmap/assets/LICENSE.txt"
+source = "licenses/pdf-backend/hayro-cmap/LICENSE.txt"
 licences = ["BSD-3-Clause"]
-destination = "vendor/hayro-cmap/assets/LICENSE.txt"
+destination = "licenses/pdf-backend/hayro-cmap/LICENSE.txt"
 sha256 = "742665db9c8e1bc72603c6d319ca3e90b83bd6d95202f0cd4ef11068a07a9c29"
 
 [[document]]
@@ -182,7 +184,103 @@ documents = ["licenses/egui-emoji-icon-font-mit-license.txt"]
 crate = "hayro-interpret"
 path = "src/font/generated/metrics.rs"
 licence = "MIT OR Apache-2.0"
-documents = ["vendor/hayro-interpret/LICENSE-MIT", "vendor/hayro-interpret/LICENSE-APACHE"]
+documents = ["licenses/pdf-backend/hayro-interpret/LICENSE-MIT", "licenses/pdf-backend/hayro-interpret/LICENSE-APACHE"]
+
+[[bundled]]
+crate = "hayro-interpret"
+path = "assets/FoxitDingbats.pfb"
+licence = "BSD-3-Clause"
+documents = ["licenses/pdf-backend/hayro-interpret/assets/LICENSE_FOXIT"]
+
+[[bundled]]
+crate = "hayro-interpret"
+path = "assets/FoxitFixed.pfb"
+licence = "BSD-3-Clause"
+documents = ["licenses/pdf-backend/hayro-interpret/assets/LICENSE_FOXIT"]
+
+[[bundled]]
+crate = "hayro-interpret"
+path = "assets/FoxitFixedBold.pfb"
+licence = "BSD-3-Clause"
+documents = ["licenses/pdf-backend/hayro-interpret/assets/LICENSE_FOXIT"]
+
+[[bundled]]
+crate = "hayro-interpret"
+path = "assets/FoxitFixedBoldItalic.pfb"
+licence = "BSD-3-Clause"
+documents = ["licenses/pdf-backend/hayro-interpret/assets/LICENSE_FOXIT"]
+
+[[bundled]]
+crate = "hayro-interpret"
+path = "assets/FoxitFixedItalic.pfb"
+licence = "BSD-3-Clause"
+documents = ["licenses/pdf-backend/hayro-interpret/assets/LICENSE_FOXIT"]
+
+[[bundled]]
+crate = "hayro-interpret"
+path = "assets/FoxitSans.pfb"
+licence = "BSD-3-Clause"
+documents = ["licenses/pdf-backend/hayro-interpret/assets/LICENSE_FOXIT"]
+
+[[bundled]]
+crate = "hayro-interpret"
+path = "assets/FoxitSansBold.pfb"
+licence = "BSD-3-Clause"
+documents = ["licenses/pdf-backend/hayro-interpret/assets/LICENSE_FOXIT"]
+
+[[bundled]]
+crate = "hayro-interpret"
+path = "assets/FoxitSansBoldItalic.pfb"
+licence = "BSD-3-Clause"
+documents = ["licenses/pdf-backend/hayro-interpret/assets/LICENSE_FOXIT"]
+
+[[bundled]]
+crate = "hayro-interpret"
+path = "assets/FoxitSansItalic.pfb"
+licence = "BSD-3-Clause"
+documents = ["licenses/pdf-backend/hayro-interpret/assets/LICENSE_FOXIT"]
+
+[[bundled]]
+crate = "hayro-interpret"
+path = "assets/FoxitSerif.pfb"
+licence = "BSD-3-Clause"
+documents = ["licenses/pdf-backend/hayro-interpret/assets/LICENSE_FOXIT"]
+
+[[bundled]]
+crate = "hayro-interpret"
+path = "assets/FoxitSerifBold.pfb"
+licence = "BSD-3-Clause"
+documents = ["licenses/pdf-backend/hayro-interpret/assets/LICENSE_FOXIT"]
+
+[[bundled]]
+crate = "hayro-interpret"
+path = "assets/FoxitSerifBoldItalic.pfb"
+licence = "BSD-3-Clause"
+documents = ["licenses/pdf-backend/hayro-interpret/assets/LICENSE_FOXIT"]
+
+[[bundled]]
+crate = "hayro-interpret"
+path = "assets/FoxitSerifItalic.pfb"
+licence = "BSD-3-Clause"
+documents = ["licenses/pdf-backend/hayro-interpret/assets/LICENSE_FOXIT"]
+
+[[bundled]]
+crate = "hayro-interpret"
+path = "assets/FoxitSymbol.pfb"
+licence = "BSD-3-Clause"
+documents = ["licenses/pdf-backend/hayro-interpret/assets/LICENSE_FOXIT"]
+
+[[bundled]]
+crate = "hayro-interpret"
+path = "assets/CGATS001Compat-v2-micro.icc"
+licence = "CC0-1.0"
+documents = ["licenses/pdf-backend/hayro-interpret/assets/CGATS_LICENSE.txt"]
+
+[[bundled]]
+crate = "hayro-cmap"
+path = "assets/cmaps.brotli"
+licence = "BSD-3-Clause"
+documents = ["licenses/pdf-backend/hayro-cmap/LICENSE.txt"]
 
 [[bundled]]
 crate = "icu_segmenter_data"

@@ -70,7 +70,7 @@ pub(super) struct Shared {
     stats: AtomicRenderStats,
     /// Copy with formatting's recovery state for the pool's document (one pool per document
     /// version): every worker's pages share each font's rule decisions.
-    pub(super) recovery: Arc<hayro::hayro_interpret::font::RecoveryDocument>,
+    pub(super) recovery: Arc<crate::text::RecoveryDocument>,
     /// Per worker id: set to stop that worker's render at its next content operator once nobody
     /// can receive its answer (the pool was dropped, or the watchdog gave up on the render).
     /// Lock `busy` first when holding both.
@@ -525,12 +525,8 @@ impl Drop for RenderPool {
 
 /// A worker's interpreter settings: the document's, stopping once the request is cancelled.
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) fn worker_settings(
-    config: &RenderConfig,
-    stop: &Arc<std::sync::atomic::AtomicBool>,
-    recovery: &Arc<hayro::hayro_interpret::font::RecoveryDocument>,
-) -> InterpreterSettings {
-    InterpreterSettings { cancelled: Some(stop.clone()), recovery_document: Some(recovery.clone()), ..config.settings() }
+pub(super) fn worker_settings(config: &RenderConfig, stop: &Arc<std::sync::atomic::AtomicBool>) -> InterpreterSettings {
+    InterpreterSettings { cancelled: Some(stop.clone()), ..config.settings() }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -689,7 +685,7 @@ pub(super) fn worker(
                     // surveys again) and this worker running, its slot cleared as usual; the
                     // page's own extraction surveys again, and if that panics too the page keeps
                     // its strict text (`extract_page_with`).
-                    let settings = worker_settings(&config, &request_cancelled, &shared.recovery);
+                    let settings = worker_settings(&config, &request_cancelled);
                     let _ = catch_unwind(AssertUnwindSafe(|| shared.recovery.prepare(pdf, &settings)));
                 }
                 let stage = if *shared_generation { BusyStage::SharedRender } else { BusyStage::Private };
@@ -743,7 +739,7 @@ pub(super) fn worker(
                     gate.entered.wait();
                     gate.release.wait();
                 }
-                let settings = warning_settings(&worker_settings(&config, &request_cancelled, &shared.recovery), warnings.clone());
+                let settings = warning_settings(&worker_settings(&config, &request_cancelled), warnings.clone());
                 lock(&warnings).clear();
                 let r = catch_unwind(AssertUnwindSafe(|| {
                     #[cfg(test)]
@@ -751,7 +747,7 @@ pub(super) fn worker(
                         panic!("injected page panic");
                     }
                     match pdf {
-                        Some(pdf) => render_page(pdf, cache, &settings, &config, req),
+                        Some(pdf) => render_page(pdf, cache, &settings, Some(&shared.recovery), &config, req),
                         None => Err(("the document could not be parsed".into(), false)),
                     }
                 }))

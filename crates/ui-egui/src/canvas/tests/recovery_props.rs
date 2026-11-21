@@ -72,7 +72,9 @@ fn op() -> impl Strategy<Value = Op> {
 /// The page: `lines` of words. Codes 1–26 of `F3` draw `a`–`z` named `/a`…`/z` (strict),
 /// codes 27–52 the same letters named `/C97`…`/C122` (rule 1 only).
 fn page(lines: &[Vec<Word>]) -> Vec<u8> {
-    const CFF: &[u8] = include_bytes!("../../../../../vendor/hayro-interpret/assets/FoxitFixed.pfb");
+    // The bundled Courier stand-in, a Type 1 program.
+    let cff_program = craft_pdf::interpret::font::StandardFont::Courier.get_font_data().0;
+    let cff: &[u8] = (*cff_program).as_ref();
     let mut content = String::new();
     for (l, words) in lines.iter().enumerate() {
         let y = 760 - 24 * l;
@@ -108,7 +110,7 @@ fn page(lines: &[Vec<Word>]) -> Vec<u8> {
             numbered.join(" ")
         ))
         .obj("<< /Type /FontDescriptor /FontName /ABCDEF+AdvTTSynthetic /Flags 32 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 8 0 R >>")
-        .stream("/Subtype /Type1C", CFF)
+        .stream("/Subtype /Type1C", cff)
         .build()
 }
 
