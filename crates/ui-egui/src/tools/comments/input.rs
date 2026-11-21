@@ -1,6 +1,6 @@
 use super::geometry::{
-    CARET_SIZE, HANDLE_HIT_RADIUS, HANDLES, clamp_to, corner_ratio, drawn_box, frame, handle_pos, held, is_callout, is_markup, on_text, point_handle, reaches_points,
-    reshapable, reshape_for, resizable, resized, snapped_caret,
+    CARET_SIZE, HANDLE_HIT_RADIUS, HANDLES, clamp_to, corner_ratio, drawn_box, frame, handle_pos, held, is_callout, is_markup, on_text, point_handle,
+    reaches_points, reshapable, reshape_for, resizable, resized, snapped_caret,
 };
 use super::paint::{closes_at, drawn_shape, edit_anchor, erase, moves_box_only, new_comment};
 use super::popups::has_popup;
