@@ -681,7 +681,7 @@ fn expanding_is_a_view_kept_across_views_and_zoom_and_never_an_undo_step() {
     // back as its tile.
     h.get_by_label("a.pdf").click();
     h.run_steps(1);
-    h.key_press(Key::ArrowRight);
+    h.key_press(Key::ArrowDown);
     h.run_steps(1);
     assert_eq!(h.state().combine_selection(), [1]);
     h.key_press(Key::Delete);
