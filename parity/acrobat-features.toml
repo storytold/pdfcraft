@@ -817,8 +817,8 @@ milestone = "M2"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/render/src/raster/tests.rs::group4_fax_with_rows_zero_decodes_to_the_image_height", "crates/render/src/raster/tests.rs::group4_fax_with_rows_below_its_height_decodes_to_the_image_height", "crates/render/src/raster/tests.rs::group4_fax_with_rows_past_its_height_decodes_to_the_image_height"]
-notes = "hayro bootstrap; a CCITT fax image is decoded to its /Height whatever its /DecodeParms /Rows says (0, fewer or more rows)"
+evidence = ["crates/render/src/raster/tests.rs::group4_fax_with_rows_zero_decodes_to_the_image_height", "crates/render/src/raster/tests.rs::group4_fax_with_rows_below_its_height_decodes_to_the_image_height", "crates/render/src/raster/tests.rs::group4_fax_with_rows_past_its_height_decodes_to_the_image_height", "crates/render/src/raster/tests/jbig2_past_full_size.rs::jbig2_images_past_the_full_size_bound_are_drawn_reduced", "crates/render/src/raster/tests/jbig2_past_full_size.rs::a_reduced_jbig2_image_averages_each_block_of_pixels", "crates/render/src/raster/tests/jbig2_past_full_size.rs::images_too_large_to_decode_are_reported_as_content_left_out"]
+notes = "hayro bootstrap; a CCITT fax image is decoded to its /Height whatever its /DecodeParms /Rows says (0, fewer or more rows); a JBIG2 image past 2^28 pixels, up to 2^29, is drawn averaged down to at most 2^25 pixels (a 1,200 dpi newspaper page at 300 dpi), the same decode at every zoom; an image past those bounds is not drawn and the page reports content left out"
 
 [[feature]]
 id = "view.render-annotation-appearances"
