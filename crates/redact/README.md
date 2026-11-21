@@ -182,6 +182,13 @@ neither their own content nor a form without resources of its own drawn through 
 for the same reason, and a redacted page keeps a name under that rule too. Pages that aren't
 redacted are left untouched.
 
+A redacted page's content goes into new stream objects; the original stays only while another
+page lists it in `/Contents`. Any other reference to it that a full save would follow (a private
+catalog key, a structure element's `/Stm`, `/PieceInfo`, a resource name, the trailer) is pointed
+at the redacted copy, so a form XObject that is also a redacted page's content shows the redacted
+copy wherever it is drawn. A walk of what a full save writes then proves no such original is
+left, or `apply` fails with `RedactError::Residue` (#7922).
+
 ## Remove hidden information / Sanitize
 
 ```rust
