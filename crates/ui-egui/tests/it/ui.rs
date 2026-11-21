@@ -1844,7 +1844,9 @@ fn short_window_rail_buttons_scroll_clear_of_page_navigation() {
             h.get_by_label("Dock navigation rail on Left").click();
             crate::support::settle(&mut h);
         }
-        let in_rail = |r: egui::Rect| if on_left { r.right() <= 48.0 } else { r.left() >= width - 48.0 };
+        // The comfortable-density rail is 50 points wide.
+        let rail_width = 50.0;
+        let in_rail = |r: egui::Rect| if on_left { r.right() <= rail_width } else { r.left() >= width - rail_width };
         let rail = |h: &Harness<'static, PdfCraftApp>, label: &str| {
             h.query_all_by_label(label).map(|n| n.rect()).find(|r| in_rail(*r)).unwrap_or_else(|| panic!("{label} in the rail"))
         };
