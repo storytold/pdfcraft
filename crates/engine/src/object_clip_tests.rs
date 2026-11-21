@@ -255,3 +255,138 @@ fn several_objects_delete_last_first() {
     .unwrap();
     assert_eq!(order, [('t', 3), ('t', 1), ('i', 0), ('a', 2), ('a', 0)]);
 }
+
+/// #4648: Copy/Paste and Cut/Undo of objects on pages with live layer toggles follow the active
+fn layered_clip_fixture(initially_on: bool, marked: bool, form: bool) -> Arc<Vec<u8>> {
+    let state = if initially_on { "ON" } else { "OFF" };
+    let wrapped = if marked { "/OC /L BDC q 20 0 0 20 10 10 cm /First Do Q EMC" } else { "q 20 0 0 20 10 10 cm /First Do Q" };
+    let oc = if marked { "" } else { "/OC 7 0 R" };
+    let first_obj = if form {
+        let body = "1 0 0 rg 0 0 1 1 re f";
+        format!("<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >> {oc} /Length {} >>\nstream\n{body}\nendstream", body.len())
+    } else {
+        format!(
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 {oc} /Length 3 >>\nstream\n\u{7f}\u{0}\u{0}\nendstream"
+        )
+    };
+    let second_obj = "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\n\u{0}\u{7f}\u{0}\nendstream";
+    let bytes = pdf(
+        &[
+            (&format!("{wrapped} q 20 0 0 20 60 60 cm /Second Do Q"), "<< /Properties << /L 7 0 R >> /XObject << /First 8 0 R /Second 9 0 R >> >>"),
+            ("", "<< >>"),
+        ],
+        &["<< /Type /OCG /Name (Switchable) >>".into(), first_obj, second_obj.into()],
+    );
+    // Attach /OCProperties to the catalog (object 1).
+    let mut cos = pdfcraft_cos::Document::open(bytes).unwrap();
+    cos.update_dict(pdfcraft_cos::ObjRef::new(1, 0), |cat| {
+        let ocg = pdfcraft_cos::Object::Ref(pdfcraft_cos::ObjRef::new(7, 0));
+        let d = pdfcraft_cos::Dict::from_iter([
+            (state.as_bytes().to_vec(), pdfcraft_cos::Object::Array(vec![ocg.clone()])),
+            (b"Order".to_vec(), pdfcraft_cos::Object::Array(vec![ocg.clone()])),
+        ]);
+        let ocp = pdfcraft_cos::Dict::from_iter([
+            (b"OCGs".to_vec(), pdfcraft_cos::Object::Array(vec![ocg])),
+            (b"D".to_vec(), pdfcraft_cos::Object::Dict(d)),
+        ]);
+        cat.set(b"OCProperties".to_vec(), pdfcraft_cos::Object::Dict(ocp));
+    })
+    .unwrap();
+    Arc::new(pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap())
+}
+
+fn verify_initially_on_hidden_clip(marked: bool, form: bool) {
+    let raw = layered_clip_fixture(true, marked, form);
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("layers.pdf", None, raw, None).unwrap();
+    let initial_p0 = s.get(id).unwrap().page_images(0);
+    assert_eq!(initial_p0.len(), 2);
+    let second_ref = initial_p0[1].object.unwrap();
+    assert!(s.set_layer_visible(id, 0, false));
+
+    // Preceding layer was turned OFF: index 0 is /Second, index 1 does not exist.
+    let img0 = ObjectTarget { kind: ObjectKind::Image, index: 0 };
+    let img1 = ObjectTarget { kind: ObjectKind::Image, index: 1 };
+    let objects = s.get(id).unwrap().editable_objects(0).unwrap();
+    assert_eq!(objects.len(), 1);
+    let clip = s.get(id).unwrap().copy_objects(0, &[img0]).unwrap();
+    assert_eq!(clip.rect(), [60.0, 60.0, 80.0, 80.0]);
+    assert!(s.get(id).unwrap().copy_objects(0, &[img1]).is_err());
+
+    // Copy/Paste captures /Second onto blank page 1.
+    let mut cb = ObjectClipboard::new(clip);
+    let paste_edit = cb.paste(s.get(id).unwrap(), 1).unwrap();
+    s.apply(id, paste_edit).unwrap();
+    let p1_imgs: Vec<_> = s.get(id).unwrap().page_images(1).into_iter().map(|i| (i.object, i.rect)).collect();
+    assert_eq!(p1_imgs, [(Some(second_ref), [60.0, 60.0, 80.0, 80.0])]);
+
+    // Cut (/Second) + Undo must remove /Second and keep hidden /First untouched.
+    s.apply(id, Edit::delete_objects(0, vec![img0]).unwrap()).unwrap();
+    assert!(s.get(id).unwrap().page_images(0).is_empty());
+    assert!(s.set_layer_visible(id, 0, true));
+    assert_eq!(s.get(id).unwrap().page_images(0).into_iter().map(|i| i.name).collect::<Vec<_>>(), ["First"]);
+    assert!(s.set_layer_visible(id, 0, false));
+    s.undo(id).unwrap();
+    assert!(s.reset_layers(id));
+    assert_eq!(s.get(id).unwrap().page_images(0).into_iter().map(|i| i.name).collect::<Vec<_>>(), ["First", "Second"]);
+}
+
+fn verify_initially_off_shown_clip(marked: bool, form: bool) {
+    let raw = layered_clip_fixture(false, marked, form);
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("layers.pdf", None, raw, None).unwrap();
+    assert!(s.set_layer_visible(id, 0, true));
+    let initial_p0 = s.get(id).unwrap().page_images(0);
+    assert_eq!(initial_p0.len(), 2);
+    let first_ref = initial_p0[0].object.unwrap();
+    let second_ref = initial_p0[1].object.unwrap();
+
+    // Initially-off layer was turned ON: index 0 is /First, index 1 is /Second.
+    let img0 = ObjectTarget { kind: ObjectKind::Image, index: 0 };
+    let img1 = ObjectTarget { kind: ObjectKind::Image, index: 1 };
+    let objects = s.get(id).unwrap().editable_objects(0).unwrap();
+    assert_eq!(objects.len(), 2);
+    let clip0 = s.get(id).unwrap().copy_objects(0, &[img0]).unwrap();
+    assert_eq!(clip0.rect(), [10.0, 10.0, 30.0, 30.0]);
+    let clip1 = s.get(id).unwrap().copy_objects(0, &[img1]).unwrap();
+    assert_eq!(clip1.rect(), [60.0, 60.0, 80.0, 80.0]);
+
+    // Copy/Paste /First onto blank page 1 draws red artwork at [10, 10, 30, 30], while /Second pastes /Second.
+    let mut cb0 = ObjectClipboard::new(clip0);
+    let paste0 = cb0.paste(s.get(id).unwrap(), 1).unwrap();
+    s.apply(id, paste0).unwrap();
+    let p1_imgs: Vec<_> = s.get(id).unwrap().page_images(1).into_iter().map(|i| (i.object, i.rect)).collect();
+    assert_eq!(p1_imgs, [(Some(first_ref), [10.0, 10.0, 30.0, 30.0])]);
+    if form {
+        let doc = s.get(id).unwrap();
+        let mut renderer = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
+        let page1 = renderer.render(pdfcraft_render::RenderRequest { page: 1, scale: 1.0, ..Default::default() });
+        assert!(pixels(&page1, [15.0, 15.0, 25.0, 25.0]).as_chunks::<4>().0.iter().all(|p| p[0] > 200 && p[1] < 30 && p[2] < 30));
+    }
+    let mut cb1 = ObjectClipboard::new(clip1);
+    let paste1 = cb1.paste(s.get(id).unwrap(), 1).unwrap();
+    s.apply(id, paste1).unwrap();
+    assert_eq!(
+        s.get(id).unwrap().page_images(1).into_iter().map(|i| (i.object, i.rect)).collect::<Vec<_>>(),
+        [(Some(first_ref), [10.0, 10.0, 30.0, 30.0]), (Some(second_ref), [60.0, 60.0, 80.0, 80.0])]
+    );
+
+    // Cut /First (index 0) leaves /Second intact, and Undo restores /First before /Second.
+    s.apply(id, Edit::delete_objects(0, vec![img0]).unwrap()).unwrap();
+    assert_eq!(s.get(id).unwrap().page_images(0).into_iter().map(|i| i.name).collect::<Vec<_>>(), ["Second"]);
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().page_images(0).into_iter().map(|i| i.name).collect::<Vec<_>>(), ["First", "Second"]);
+}
+
+/// Regression: copy, paste, and cut/undo preserve live-index targeting according to the active
+/// session layer visibility (not stale `/OCProperties /D`), across BDC and XObject `/OC` as well
+/// as raster images and Form artwork.
+#[test]
+fn copy_paste_and_cut_undo_follow_live_layer_visibility() {
+    for marked in [false, true] {
+        for form in [false, true] {
+            verify_initially_on_hidden_clip(marked, form);
+            verify_initially_off_shown_clip(marked, form);
+        }
+    }
+}

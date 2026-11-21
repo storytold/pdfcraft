@@ -23,8 +23,8 @@ pub fn picture_at(pictures: &[PagePicture], at: [f64; 2]) -> Option<&PagePicture
 }
 
 /// The pictures on `page`, bottom first: raster images, and Form artwork that holds one.
-fn pictures(cos: &Cos, page: usize) -> Vec<PagePicture> {
-    let images = pdfcraft_edit::page_images(cos, page).unwrap_or_default();
+fn pictures(cos: &Cos, page: usize, layers: &[(i32, i32, bool)]) -> Vec<PagePicture> {
+    let images = pdfcraft_edit::page_images_with_layers(cos, page, layers).unwrap_or_default();
     // Artwork drawn many times is searched once.
     let mut holds_one: HashMap<ObjRef, bool> = HashMap::new();
     images
@@ -62,7 +62,8 @@ impl Document {
     /// for a page that doesn't exist or can't be read.
     pub fn page_pictures_job(&self, page: usize) -> Option<impl FnOnce() -> Vec<PagePicture> + Send + 'static> {
         let cos = self.editor.as_ref()?.cos.clone();
-        Some(move || crate::guard(|| pictures(&cos, page)).unwrap_or_default())
+        let layers = std::sync::Arc::clone(&self.config.layers);
+        Some(move || crate::guard(|| pictures(&cos, page, &layers)).unwrap_or_default())
     }
 
     /// Copy Image in Original Format: picture `index` on `page` as a file (extension, bytes):

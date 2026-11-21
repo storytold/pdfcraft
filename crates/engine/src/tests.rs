@@ -13632,6 +13632,54 @@ fn pasting_copied_comments_adds_copies_that_undo_as_one_step() {
 }
 
 #[test]
+fn live_layer_choices_control_image_discovery_and_edit_targeting() {
+    for marked in [false, true] {
+        for form in [false, true] {
+            let wrapped = if marked { "/OC /L BDC q 20 0 0 20 10 10 cm /Hidden Do Q EMC" } else { "q 20 0 0 20 10 10 cm /Hidden Do Q" };
+            let oc = if marked { "" } else { "/OC 5 0 R" };
+            let hidden = if form {
+                format!("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >> {oc}")
+            } else {
+                format!("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 {oc}")
+            };
+            let bytes = pdfcraft_testkit::Pdf::new()
+                .obj("<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] /D << /OFF [5 0 R] /Order [5 0 R] >> >> >>")
+                .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+                .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /Properties << /L 5 0 R >> /XObject << /Hidden 6 0 R /Visible 7 0 R >> >> >>")
+                .stream("", format!("{wrapped} q 20 0 0 20 60 60 cm /Visible Do Q"))
+                .obj("<< /Type /OCG /Name (Switchable) >>")
+                .stream(&hidden, if form { "0 0 1 1 re f" } else { "x" })
+                .stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", "x")
+                .build();
+            let mut s = Session::new();
+            let id = s.open("layers.pdf", None, Arc::new(bytes), None).unwrap();
+            let names = |s: &Session| s.get(id).unwrap().page_images(0).into_iter().map(|i| i.name).collect::<Vec<_>>();
+            assert_eq!(names(&s), ["Visible"]);
+            let generation = s.get(id).unwrap().edit_generation();
+            assert!(s.set_layer_visible(id, 0, true));
+            assert_ne!(generation, s.get(id).unwrap().edit_generation());
+            assert_eq!(names(&s), ["Hidden", "Visible"]);
+            assert_eq!(s.get(id).unwrap().editable_objects(0).unwrap().len(), 2);
+            // The live inventory index selects the newly revealed operator, not its neighbour.
+            s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Delete }).unwrap();
+            assert_eq!(names(&s), ["Visible"]);
+            s.undo(id).unwrap();
+            assert_eq!(names(&s), ["Hidden", "Visible"]);
+            assert!(s.reset_layers(id));
+            assert_eq!(names(&s), ["Visible"]);
+            assert_eq!(s.get(id).unwrap().editable_objects(0).unwrap().len(), 1);
+            // A preceding hidden operator must not steal the visible inventory's index zero.
+            s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Delete }).unwrap();
+            assert!(names(&s).is_empty());
+            assert!(s.set_layer_visible(id, 0, true));
+            assert_eq!(names(&s), ["Hidden"]);
+            assert!(s.set_layer_visible(id, 0, false));
+            assert!(names(&s).is_empty());
+        }
+    }
+}
+
+#[test]
 fn repeated_backdrop_artwork_survives_background_undo_redo_and_both_save_modes() {
     let white = "1 g";
     let rectangle = "0 0 100 100 re f";
@@ -15764,4 +15812,77 @@ fn inline_conversions_refuse_office_documents_without_running_libreoffice() {
     }
     assert_eq!(s.convert_to_pdf_inline("notes.txt", &Arc::new(b"hello".to_vec())).unwrap().0, SourceKind::Text);
     assert!(s.as_pdf_inline("scan.jpg", &Arc::new(jpeg_bytes())).unwrap().starts_with(b"%PDF-"));
+}
+
+/// Regression: `Document::grouped_text_at` and `Session::prepare_text` follow active live layer
+/// visibility (`Session::set_layer_visible`) across offset shifts in both directions as well as
+/// grouped text placed inside an initially-OFF layer.
+#[test]
+fn live_layer_choices_control_grouped_text_at_and_prepare_text() {
+    let build_pdf = |initially_on: bool, marked: bool, first_body: &str, second_body: &str| {
+        let state = if initially_on { "ON" } else { "OFF" };
+        let first_draw = if marked { "/OC /L BDC /First Do EMC" } else { "/First Do" };
+        let first_oc = if marked { "" } else { "/OC 7 0 R" };
+        let page_content = format!("{first_draw} /Second Do");
+        let page_res = "<< /Font << /F1 5 0 R >> /Properties << /L 7 0 R >> /XObject << /Im 6 0 R /First 8 0 R /Second 9 0 R >> >>";
+        let form_res = "<< /Font << /F1 5 0 R >> /XObject << /Im 6 0 R >> >>";
+        let objs = [
+            format!("<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [7 0 R] /D << /{state} [7 0 R] /Order [7 0 R] >> >> >>"),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources {page_res} /Contents 4 0 R >>"),
+            format!("<< /Length {} >>\nstream\n{page_content}\nendstream", page_content.len()),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\nx\nendstream"
+                .into(),
+            "<< /Type /OCG /Name (Switchable) >>".into(),
+            format!(
+                "<< /Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources {form_res} {first_oc} /Length {} >>\nstream\n{first_body}\nendstream",
+                first_body.len()
+            ),
+            format!(
+                "<< /Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources {form_res} /Length {} >>\nstream\n{second_body}\nendstream",
+                second_body.len()
+            ),
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offs = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offs.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let x = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offs {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+        Arc::new(out)
+    };
+    let text_form = "BT /F1 14 Tf 40 500 Td (Live group) Tj ET";
+    let logo_form = "q 10 0 0 10 0 0 cm /Im Do Q";
+
+    for marked in [false, true] {
+        let mut s = Session::new();
+        // 1. Preceding initially-OFF logo turned ON shifts text Form /Second from index 0 to index 1.
+        let id = s.open("shift-up.pdf", None, build_pdf(false, marked, logo_form, text_form), None).unwrap();
+        assert!(s.get(id).unwrap().grouped_text_at(0, 0));
+        assert!(s.set_layer_visible(id, 0, true));
+        assert!(!s.get(id).unwrap().grouped_text_at(0, 0));
+        assert!(s.get(id).unwrap().grouped_text_at(0, 1));
+
+        // 2. Preceding initially-ON text Form turned OFF shifts logo /Second to index 0 (refuses prepare).
+        let id = s.open("shift-down.pdf", None, build_pdf(true, marked, text_form, logo_form), None).unwrap();
+        assert!(s.get(id).unwrap().grouped_text_at(0, 0));
+        assert!(s.set_layer_visible(id, 0, false));
+        assert!(!s.get(id).unwrap().grouped_text_at(0, 0));
+        assert!(s.prepare_text(id, 0).is_err());
+
+        // 3. Initially-OFF text Form turned ON becomes both discoverable (`grouped_text_at`) and preparable (`prepare_text`).
+        let id = s.open("hidden-text.pdf", None, build_pdf(false, marked, text_form, logo_form), None).unwrap();
+        assert!(!s.get(id).unwrap().grouped_text_at(0, 0));
+        assert!(s.prepare_text(id, 0).is_err());
+        assert!(s.set_layer_visible(id, 0, true));
+        assert!(s.get(id).unwrap().grouped_text_at(0, 0));
+        assert_eq!(s.prepare_text(id, 0).unwrap().expanded, 1);
+    }
 }

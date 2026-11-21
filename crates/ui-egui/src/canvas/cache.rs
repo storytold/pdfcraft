@@ -210,6 +210,17 @@ impl DocView {
         }
     }
 
+    /// Re-render page layers without an edit: also drop live-layer image selections and queued
+    /// grouped-text clicks whose indexes shift when layers toggle, while `invalidate_content`
+    /// keeps `image_selection` intact for edit/undo re-resolution.
+    pub fn invalidate_layers(&mut self) {
+        self.invalidate_content();
+        self.image_selection = None;
+        self.grouped_text_click = None;
+        self.picked_image = None;
+        self.pending_pick = None;
+    }
+
     /// Only `page` changed (a comment was added, edited or removed): re-render that page and
     /// re-read its text, keep everything else. Out-of-date tiles stay on screen until replacements arrive.
     pub fn page_changed(&mut self, page: usize) {
