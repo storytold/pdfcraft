@@ -244,24 +244,13 @@ impl Automation {
         let pages = self.compare_pages_arg(a)?;
         // Mark one page at a time so words that repeat on an earlier page cannot be
         // mistaken for the changed words on the page the diff actually touches.
-        let page_count = self
-            .session
-            .get(new)
-            .map(|d| d.info.pages.len())
-            .unwrap_or(0)
-            .max(self.session.get(old).map(|d| d.info.pages.len()).unwrap_or(0));
-        let targets: Vec<usize> = if pages.is_empty() {
-            (0..page_count).collect()
-        } else {
-            pages
-        };
+        let page_count =
+            self.session.get(new).map(|d| d.info.pages.len()).unwrap_or(0).max(self.session.get(old).map(|d| d.info.pages.len()).unwrap_or(0));
+        let targets: Vec<usize> = if pages.is_empty() { (0..page_count).collect() } else { pages };
         let mut total = 0usize;
         let mut all_errors: Vec<String> = Vec::new();
         for page in targets {
-            let (n, out) = self
-                .session
-                .with_own_js_output(new, |s| s.mark_differences_of(old, new, &[page]))
-                .map_err(failed)?;
+            let (n, out) = self.session.with_own_js_output(new, |s| s.mark_differences_of(old, new, &[page])).map_err(failed)?;
             total += n;
             all_errors.extend(out.errors);
         }
