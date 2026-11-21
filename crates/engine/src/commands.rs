@@ -288,6 +288,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec { shortcut_on_mac: false, ..c("comment.list", "Comments panel", VIEW, Some(Shortcut::cmd("M")), Document, "message-square-text") },
     c("comment.note", "Add a sticky note", None, None, Annotate, "sticky-note"),
     c("comment.freetext", "Add a text box", None, None, Annotate, "type"),
+    ct("comment.highlight_selection", "Highlight selected text (once)", EDIT, Some(Shortcut::cmd_shift("K")), Annotate, "highlighter"),
     c("comment.highlight", "Highlight text", None, None, Annotate, "highlighter"),
     c("comment.underline", "Underline text", None, None, Annotate, "underline"),
     c("comment.strikeout", "Strikethrough text", None, None, Annotate, "strikethrough"),

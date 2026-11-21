@@ -71,6 +71,14 @@ const PICKERS: &[&str] = &[
 #[test]
 fn every_registered_command_is_implemented() {
     for spec in COMMANDS {
+        // One-shot highlighting needs the text layers a rendered view supplies.
+        if spec.id == "comment.highlight_selection" {
+            let mut h = harness();
+            support::settle(&mut h);
+            h.state_mut().views[0].select_text(0, 0, 3);
+            assert!(h.state_mut().execute(spec.id), "the loaded selection can be highlighted");
+            continue;
+        }
         // Page-text Copy needs a loaded view and egui context, covered by text_select.
         if PICKERS.contains(&spec.id) || spec.id == "edit.copy" {
             continue;

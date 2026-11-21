@@ -141,6 +141,7 @@ const EDIT: &[&str] = &[
     PASTE,
     DELETE,
     SEP,
+    "comment.highlight_selection",
     "comment.copy",
     "comment.paste",
     SEP,

@@ -98,6 +98,12 @@ impl PdfCraftApp {
                 }))
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
             && match spec.id {
+                "comment.highlight_selection" => self.active_ids().is_some_and(|(i, id)| {
+                    let view = &self.views[i];
+                    !view.organize
+                        && !view.selection_has_unreadable_page()
+                        && self.session.get(id).is_some_and(|doc| !view.selection_quads(&doc.info).is_empty())
+                }),
                 "comment.copy" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.comments.selected.is_some()),
                 "comment.paste" => self.comment_clipboard.is_some(),
                 "view.previous_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.back.is_empty()),
@@ -128,6 +134,11 @@ impl PdfCraftApp {
 
     /// Why the command can't run right now, for the user.
     fn disabled_reason(&self, spec: &CommandSpec) -> String {
+        if spec.id == "comment.highlight_selection"
+            && self.active_ids().is_some_and(|(_, id)| self.session.get(id).is_some_and(|doc| doc.allows_annotation()))
+        {
+            return tl!("Select readable text to highlight first").to_string();
+        }
         match spec.needs {
             commands::Needs::Undo => tl!("Nothing to undo").to_string(),
             commands::Needs::Redo => tl!("Nothing to redo").to_string(),
@@ -471,6 +482,35 @@ impl PdfCraftApp {
         Some(true)
     }
 
+    /// Highlight the loaded selection once, keeping the reading tool and panels unchanged.
+    fn highlight_selected_text_once(&mut self) -> bool {
+        let Some((i, id)) = self.active_ids() else { return false };
+        let Some(doc) = self.session.get(id) else { return false };
+        let tool = crate::comments::CommentTool::Highlight;
+        let crate::canvas::ToolMarks::Marks(marks, head) = self.views[i].tool_marks(crate::QuickTool::Comment(tool), true, None, true, &doc.info)
+        else {
+            return false;
+        };
+        let edits = marks
+            .into_iter()
+            .map(|(page, quads)| {
+                Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+                    page,
+                    shape: pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, quads },
+                    style: self.comment_prefs.style(tool),
+                    contents: String::new(),
+                    author: self.comment_prefs.author.clone(),
+                })
+            })
+            .collect();
+        let Some(edit) = self.views[i].selection_marks_edit(edits, head) else { return false };
+        if !self.apply_edit(edit) {
+            return false;
+        }
+        self.views[i].clear_selection();
+        true
+    }
+
     fn run_edit_command(&mut self, id: &str, active: Option<usize>) -> Option<bool> {
         match id {
             "edit.attach" => self.attach_file_dialog(),
@@ -482,6 +522,7 @@ impl PdfCraftApp {
                 }
             }
             "comment.list" => self.choose_right_panel(Some(RightPanel::Comments)),
+            "comment.highlight_selection" => return Some(self.highlight_selected_text_once()),
             tool if crate::comments::CommentTool::from_command(tool).is_some() => {
                 let Some(tool) = crate::comments::CommentTool::from_command(tool) else { return Some(false) };
                 self.comment_prefs.group_tool[tool.group()] = tool;
@@ -882,6 +923,11 @@ impl PdfCraftApp {
                 && !(spec.id == "edit.redo" && self.page_box_can_redo(ctx))
                 && !(spec.id == "edit.undo" && ctx.input(|i| i.modifiers.shift));
             if typing && !spec.in_text && !page_box {
+                continue;
+            }
+            // Shift+Cmd/Ctrl+K belongs to one-shot highlighting, including when a text field
+            // keeps it. Do not let the less-specific Cmd/Ctrl+K open the command palette then.
+            if typing && spec.id == "view.palette" && ctx.input(|i| i.modifiers.shift) {
                 continue;
             }
             let Some(key) = Key::from_name(s.key) else { continue };
