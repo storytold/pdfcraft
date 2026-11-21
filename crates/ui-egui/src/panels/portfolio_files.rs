@@ -94,7 +94,24 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, files: &[Attachment], shown: 
                 focus_to = Some(n - 1);
             }
         }
-        response.context_menu(|ui| {
+        // The Menu key or Shift+F10 on the focused row opens the same menu a secondary click does,
+        // under the row. A menu opened so stays under the row while it is open: there is no
+        // pointer to place it at.
+        let keyed = response.id.with("menu-by-key");
+        let by_key = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Menu) || (i.modifiers.shift && i.key_pressed(egui::Key::F10)));
+        if by_key {
+            ui.data_mut(|d| d.insert_temp(keyed, true));
+        } else if response.secondary_clicked() {
+            ui.data_mut(|d| d.remove::<bool>(keyed));
+        }
+        let mut menu = egui::Popup::context_menu(&response);
+        if by_key {
+            menu = menu.open_memory(egui::SetOpenCommand::Bool(true));
+        }
+        if ui.data(|d| d.get_temp::<bool>(keyed)).unwrap_or(false) {
+            menu = menu.anchor(response.rect).align(egui::RectAlign::BOTTOM_START);
+        }
+        let shown_menu = menu.show(|ui| {
             if is_pdf && ui.button(tl!("Open in a new tab")).clicked() {
                 action = Some(FileAction::Attachment(index, true));
                 ui.close();
@@ -104,6 +121,9 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, files: &[Attachment], shown: 
                 ui.close();
             }
         });
+        if shown_menu.is_none() {
+            ui.data_mut(|d| d.remove::<bool>(keyed));
+        }
         responses.push(response);
     }
     if let Some(r) = focus_to.and_then(|n| responses.get(n)) {

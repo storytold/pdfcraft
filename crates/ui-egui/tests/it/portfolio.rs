@@ -390,3 +390,23 @@ fn unsaved_changes_to_the_portfolio_are_asked_about_when_its_tab_closes() {
     assert_eq!(s.views.len(), 1);
     assert_eq!(shown(&h, 0).as_deref(), Some("portfolio.pdf"));
 }
+
+/// The Menu key on a file's row opens its menu, whose Open in a new tab opens a copy to edit in a
+/// tab of its own, beside the portfolio's. (Shift+F10 is asked for too, but the menu bar takes
+/// F10 with an extra Shift before the panel reads it.)
+#[test]
+fn a_files_menu_opens_from_the_keyboard_and_opens_a_copy_in_a_new_tab() {
+    let mut h = opened(portfolio("/Collection << /D (one.pdf) >>", &[("one.pdf", PAGE), ("two.pdf", PAGE)]), true);
+    assert!(!egui::Popup::is_any_open(&h.ctx));
+    row(&h, "two.pdf").focus();
+    h.run_steps(2);
+    h.key_press(egui::Key::Menu);
+    h.run_steps(3);
+    // Its entries are drawn, under the row: there is no pointer to place the menu at.
+    h.get_by_label("Open in a new tab").click();
+    h.run_steps(3);
+    assert_eq!(tabs(&h), (vec!["portfolio.pdf".into(), "two.pdf".into()], Some("two.pdf".into())));
+    let s = h.state();
+    assert!(s.session.get(s.views[1].id).is_some_and(|d| d.allows_modification()), "the copy can be edited");
+    assert_eq!(shown(&h, 0).as_deref(), Some("one.pdf"), "the portfolio's tab keeps its file");
+}
