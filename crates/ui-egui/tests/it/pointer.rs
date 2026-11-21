@@ -335,7 +335,8 @@ fn edit_text_over_a_linked_word_offers_the_move_arrow() {
 
 #[test]
 fn select_tool_over_a_comment_on_text_offers_the_move_arrow() {
-    let mut h = open(comment_on_text_pdf(), "150", false);
+    // Keep the text clear of the floating quick toolbar.
+    let mut h = open(comment_on_text_pdf(), "100", false);
     // Inside the rectangle where there is no text, and inside it over a word.
     let blank = at(&h, 120.0, 315.0);
     let on_text = at(&h, 60.0, 303.0);
@@ -429,7 +430,8 @@ fn a_click_on_stacked_comments_selects_the_one_drawn_on_top() {
 
 #[test]
 fn a_comments_tip_shows_with_every_tool_beside_its_cursor() {
-    let mut h = open(comment_on_text_pdf(), "150", false);
+    // Keep the text clear of the floating quick toolbar.
+    let mut h = open(comment_on_text_pdf(), "100", false);
     // Inside the rectangle comment by "Reviewer": where there is no text, and over a word.
     let (blank, on_text) = (at(&h, 120.0, 315.0), at(&h, 60.0, 303.0));
     let hover = |h: &mut Harness<'static, PdfCraftApp>, tool: QuickTool, p: egui::Pos2, want: egui::CursorIcon| {
