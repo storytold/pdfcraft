@@ -476,6 +476,7 @@ impl PdfCraftApp {
     pub(crate) fn add_recent(&mut self, name: &str, path: String, pages: usize, size: usize) {
         let pinned = self.recent.iter().find(|r| same_file(&r.path, &path)).is_some_and(|r| r.pinned);
         self.recent.retain(|r| !same_file(&r.path, &path));
+        self.last_recent = Some(path.clone());
         self.recent.insert(0, RecentFile { name: name.to_string(), path, pages, size, pinned });
         self.recent.sort_by_key(|r| !r.pinned);
         self.recent.truncate(self.recent_limit);

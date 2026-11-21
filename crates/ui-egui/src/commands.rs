@@ -189,8 +189,14 @@ impl PdfCraftApp {
     fn run_file_command(&mut self, id: &str, active: Option<usize>) -> Option<bool> {
         match id {
             "file.open" => self.open_dialog(),
-            "file.open_recent" => match self.recent.first().map(|r| r.path.clone()) {
-                // The palette runs commands without a submenu: open the most recent file.
+            "file.open_recent" => match self
+                .last_recent
+                .clone()
+                .filter(|p| self.recent.iter().any(|r| &r.path == p))
+                .or_else(|| self.recent.first().map(|r| r.path.clone()))
+            {
+                // The palette runs commands without a submenu: open the most recent file, not a
+                // pinned one sorted above it (#4772).
                 Some(p) => self.open_recent(&p),
                 None => self.notify_tr("No recent files"),
             },

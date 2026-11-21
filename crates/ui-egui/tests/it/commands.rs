@@ -449,6 +449,20 @@ fn clear_recent_files_at_the_foot_of_open_recent_empties_the_list() {
     assert!(h.query_by(|n| n.label().as_deref() == Some("Open Recent") && n.is_disabled()).is_some(), "and Open Recent is disabled");
 }
 
+/// The palette's Open Recent opens the file opened last, not a pinned one sorted above it (#4772).
+#[test]
+fn palette_open_recent_skips_a_pinned_file_sorted_above_the_newest() {
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.open_bytes("a.pdf", Some("/nowhere/a.pdf".into()), fixture(1)).unwrap();
+    app.recent.iter_mut().for_each(|r| r.pinned = true);
+    app.open_bytes("b.pdf", Some("/nowhere/b.pdf".into()), fixture(1)).unwrap();
+    assert_eq!(app.recent.first().map(|r| r.path.as_str()), Some("/nowhere/a.pdf"), "the pinned file stays on top");
+    app.active = Some(0);
+    assert!(app.execute("file.open_recent"));
+    assert_eq!(app.active, Some(1), "the palette brings back b.pdf, the file opened last");
+}
+
 /// Verify that `file.clear_recent` clears unpinned entries, persists, and reports an empty list.
 #[test]
 fn clear_recent_files_runs_from_the_palette_and_is_saved() {
