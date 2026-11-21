@@ -543,7 +543,7 @@ fn figure_picture(ctx: &egui::Context, doc: &pdfcraft_engine::Document, f: &pdfc
         h: (h * scale).ceil().max(1.0) as u32,
     };
     // The picture is only shown in the panel, so it draws like the viewer (installed CJK faces
-    // for fonts the PDF doesn't embed); nothing is saved from it (AGENTS.md §1.4).
+    // for fonts the PDF doesn't embed); nothing is saved from it (docs/development.md "Fonts and attribution").
     let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() }.on_screen();
     let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
     let out = r.render(pdfcraft_render::RenderRequest {
