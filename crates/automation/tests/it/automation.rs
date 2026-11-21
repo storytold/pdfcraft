@@ -7334,6 +7334,8 @@ fn split_never_replaces_a_file_already_in_the_folder() {
     // repeated split's second part would take.
     std::fs::create_dir_all(parts.join("a-End-2.pdf")).unwrap();
     std::fs::write(parts.join("a-Intro.pdf"), b"unrelated").unwrap();
+    // The tool reports paths under the canonical root (`\\?\C:\…` on Windows, links resolved).
+    let canonical_parts = parts.canonicalize().unwrap();
     let names = |r: &serde_json::Value| -> Vec<std::path::PathBuf> {
         r["files"].as_array().unwrap().iter().map(|f| std::path::PathBuf::from(f["path"].as_str().unwrap())).collect()
     };
@@ -7347,7 +7349,7 @@ fn split_never_replaces_a_file_already_in_the_folder() {
     assert_eq!(distinct.len(), all.len(), "every part has a name of its own: {all:?}");
     for path in &all {
         assert!(path.is_file(), "{path:?} was written");
-        assert_eq!(path.parent(), Some(parts.as_path()), "{path:?}");
+        assert_eq!(path.parent(), Some(canonical_parts.as_path()), "{path:?}");
     }
     for (path, bytes) in first.iter().zip(&kept) {
         assert_eq!(&std::fs::read(path).unwrap(), bytes, "{path:?} was replaced by a later split");

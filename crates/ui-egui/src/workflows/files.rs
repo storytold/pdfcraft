@@ -807,7 +807,8 @@ impl PdfCraftApp {
         {
             let write = move |app: &mut Self, dir: std::path::PathBuf| {
                 let mut used = std::collections::HashSet::new();
-                let mut numbered = false;
+                // The names written in place of a taken one, as written.
+                let mut numbered: Vec<String> = Vec::new();
                 for (name, bytes) in &named {
                     let written = match overwrite {
                         Overwrite::Replace => {
@@ -817,7 +818,11 @@ impl PdfCraftApp {
                         Overwrite::Never => write_new_file(&dir, name, bytes, &mut used),
                     };
                     match written {
-                        Ok(path) => numbered |= path.file_name().is_some_and(|n| n != name.as_str()),
+                        Ok(path) => {
+                            if let Some(written) = path.file_name().map(|n| n.to_string_lossy()).filter(|n| n != name.as_str()) {
+                                numbered.push(written.into_owned());
+                            }
+                        }
                         Err(e) => {
                             app.notify_fmt("Couldn't write {name}: {e}", &[("name", name), ("e", &e.to_string())]);
                             return;
@@ -825,14 +830,23 @@ impl PdfCraftApp {
                     }
                 }
                 let dir_text = dir.display().to_string();
-                match (named.len(), numbered) {
-                    (1, false) => app.notify_fmt("Wrote 1 file to {dir}", &[("dir", &dir_text)]),
-                    (1, true) => app
-                        .notify_fmt("Wrote 1 file to {dir}. Its name was taken, so it got a number and no file was replaced.", &[("dir", &dir_text)]),
-                    (n, false) => app.notify_fmt("Wrote {n} files to {dir}", &[("n", &n.to_string()), ("dir", &dir_text)]),
-                    (n, true) => app.notify_fmt(
-                        "Wrote {n} files to {dir}. Some names were taken, so those files got a number and no file was replaced.",
-                        &[("n", &n.to_string()), ("dir", &dir_text)],
+                // The numbered names, the first few of them, so the reader can tell them from
+                // the files that were already there.
+                let mut shown: Vec<&str> = numbered.iter().take(5).map(String::as_str).collect();
+                if numbered.len() > shown.len() {
+                    shown.push("…");
+                }
+                let shown = shown.join(", ");
+                match (named.len(), numbered.is_empty()) {
+                    (1, true) => app.notify_fmt("Wrote 1 file to {dir}", &[("dir", &dir_text)]),
+                    (1, false) => app.notify_fmt(
+                        "Wrote 1 file to {dir}. Its name was taken, so it was written as {names} and no file was replaced.",
+                        &[("dir", &dir_text), ("names", &shown)],
+                    ),
+                    (n, true) => app.notify_fmt("Wrote {n} files to {dir}", &[("n", &n.to_string()), ("dir", &dir_text)]),
+                    (n, false) => app.notify_fmt(
+                        "Wrote {n} files to {dir}. Some names were taken, so those files were written as {names} and no file was replaced.",
+                        &[("n", &n.to_string()), ("dir", &dir_text), ("names", &shown)],
                     ),
                 }
                 after(app);
@@ -973,7 +987,7 @@ fn write_new_file(
     let stem = strip_pdf(name).to_string();
     let first = name.to_string();
     let names = (1..)
-        .map(move |n| if n == 1 { first.clone() } else { format!("{stem} ({n}).pdf") })
+        .map(move |n| if n == 1 { first.clone() } else { numbered_name(&stem, n) })
         .filter(|candidate| !used.contains(&candidate.to_lowercase()));
     let path = pdfcraft_platform::staging::reserve_new_name(dir, names)?;
     if let Err(e) = crate::editing::write_atomically(&path.to_string_lossy(), bytes) {
@@ -982,6 +996,23 @@ fn write_new_file(
     }
     used.insert(path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default());
     Ok(path)
+}
+
+/// `<stem> (n).pdf`, with `stem` cut between characters so the name fits in the 255 bytes ext4
+/// and APFS allow (NTFS's 255 UTF-16 units are never fewer), and no dot or space left where the
+/// cut ends it. A name that fits keeps its whole stem.
+#[cfg(not(target_arch = "wasm32"))]
+fn numbered_name(stem: &str, n: u32) -> String {
+    const MAX_NAME_BYTES: usize = 255;
+    let suffix = format!(" ({n}).pdf");
+    let room = MAX_NAME_BYTES.saturating_sub(suffix.len());
+    let stem = if stem.len() <= room {
+        stem
+    } else {
+        let end = stem.char_indices().map(|(at, c)| at + c.len_utf8()).take_while(|end| *end <= room).last().unwrap_or(0);
+        stem.get(..end).unwrap_or_default().trim_end_matches(|c: char| c == '.' || c.is_whitespace())
+    };
+    format!("{stem}{suffix}")
 }
 
 pub(crate) fn strip_pdf(name: &str) -> &str {
@@ -1203,6 +1234,23 @@ impl PdfCraftApp {
 #[cfg(test)]
 mod stem_tests {
     use super::{attachment_file_name, file_stem_from_user, is_plain_file_name};
+
+    /// CodeRabbit on #7999: a stem that fills a file name still leaves room for " (N).pdf", cut
+    /// between characters, while a short stem is kept whole.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_numbered_name_fits_a_file_name() {
+        for stem in ["a".repeat(240) + " (page 1)", "文".repeat(84), format!("{}. x", "b".repeat(247))] {
+            for n in [2, 10, 9999] {
+                let name = super::numbered_name(&stem, n);
+                let suffix = format!(" ({n}).pdf");
+                assert!(name.len() <= 255 && name.ends_with(&suffix), "{} bytes: {name}", name.len());
+                let kept = name.strip_suffix(&suffix).unwrap_or_default();
+                assert!(stem.starts_with(kept) && !kept.ends_with(['.', ' ']), "{kept:?}");
+            }
+        }
+        assert_eq!(super::numbered_name("doc0 (page 1)", 2), "doc0 (page 1) (2).pdf");
+    }
 
     #[test]
     fn user_file_names_stay_inside_the_folder_and_writable_everywhere() {

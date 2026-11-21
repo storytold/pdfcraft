@@ -1099,8 +1099,14 @@ fn split_never_replaces_a_file_already_in_the_folder() {
     let split = |h: &mut Harness<'static, PdfCraftApp>| {
         let before = files_under(&dir.0);
         h.state_mut().split_active(&pdfcraft_ui_egui::SplitPlan::By(pdfcraft_engine::SplitBy::PageCount(1)));
-        assert!(h.state().toast.as_ref().is_some_and(|t| t.0.contains("got a number")), "the notice says names changed: {:?}", h.state().toast);
-        files_under(&dir.0).into_iter().filter(|p| !before.contains(p)).collect::<Vec<_>>()
+        let toast = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(toast.contains("no file was replaced"), "the notice says names changed: {toast:?}");
+        let new: Vec<_> = files_under(&dir.0).into_iter().filter(|p| !before.contains(p)).collect();
+        // Each file written under a number is named in the notice (CodeRabbit on #7999).
+        for numbered in new.iter().filter_map(|p| p.file_name()).map(|n| n.to_string_lossy()).filter(|n| n.contains(") (")) {
+            assert!(toast.contains(numbered.as_ref()), "{numbered} is named in {toast:?}");
+        }
+        new
     };
     let first = split(&mut h);
     assert_eq!(first.len(), 2, "{first:?}");
