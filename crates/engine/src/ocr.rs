@@ -7,6 +7,7 @@
 //! while the document is still the one that was read — [`Session::apply_ocr_checked`] refuses a
 //! stale result with a named reason instead of writing into a changed document.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{Duration, Instant};
@@ -108,7 +109,8 @@ impl OutputMode {
 pub struct OcrSettings {
     /// Resolution pages are rendered at for recognition (Acrobat's "Downsample to" choices).
     pub dpi: f32,
-    /// Language code from [`LANGUAGES`] (the models read the Latin alphabet, whatever this says).
+    /// Language code from [`LANGUAGES`]; `zh` reads Simplified Chinese and mixed English text,
+    /// other codes use the Latin-script ocrs recogniser.
     pub language: String,
     /// Leave pages that already have text alone (Acrobat reports "page contains renderable
     /// text" and skips them). When `false`, such pages are read too (a picture on a page that
@@ -255,7 +257,15 @@ pub struct Recognizers {
 }
 
 struct EngineCache {
-    ocrs: Option<Arc<dyn Recognizer>>,
+    /// The built-in engine per language it was loaded for (`en` also serves other Latin-script
+    /// languages).
+    ocrs: BTreeMap<String, Option<Arc<dyn Recognizer>>>,
+}
+
+/// The key [`EngineCache`] remembers an ocrs recogniser under: `zh` needs PP-OCRv4, every other
+/// language reads the Latin script.
+fn ocr_language(language: &str) -> &'static str {
+    if language.trim().eq_ignore_ascii_case("zh") { "zh" } else { "en" }
 }
 
 /// The engines built so far (see [`recognizers`] and [`install`]).
@@ -266,13 +276,25 @@ static ENGINES: Mutex<Option<EngineCache>> = Mutex::new(None);
 /// then on [`recognizers`] hands it out and the engine counts as available.
 pub fn install(ocr: Ocr) -> Arc<dyn Recognizer> {
     let ocrs: Arc<dyn Recognizer> = Arc::new(pdfcraft_ocr::OcrsRecognizer::from_ocr(ocr));
-    ENGINES.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(|| EngineCache { ocrs: None }).ocrs = Some(ocrs.clone());
+    let mut engines = ENGINES.lock().unwrap_or_else(|e| e.into_inner());
+    let cache = engines.get_or_insert_with(|| EngineCache { ocrs: BTreeMap::new() });
+    // [`Ocr::from_bytes`] loads the pair the web build downloads, which is the English one: it
+    // takes no Chinese dictionary.
+    cache.ocrs.insert(ocr_language("en").to_string(), Some(ocrs.clone()));
     ocrs
 }
 
-/// Whether an ocrs recogniser has been loaded (from the model files, or by [`install`]).
+/// Whether an ocrs recogniser has been loaded for any language (from the model files, or by
+/// [`install`]).
 fn ocrs_loaded() -> bool {
-    ENGINES.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|c| c.ocrs.is_some())
+    ENGINES.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|c| c.ocrs.values().any(|found| found.is_some()))
+}
+
+/// Whether the cached ocrs recogniser for `language` was loaded (from the model files, or by
+/// [`install`]).
+fn ocrs_loaded_for(language: &str) -> bool {
+    let engines = ENGINES.lock().unwrap_or_else(|e| e.into_inner());
+    engines.as_ref().is_some_and(|c| c.ocrs.get(ocr_language(language)).is_some_and(|found| found.is_some()))
 }
 
 /// How long a negative engine probe (no program there) is remembered. A short TTL, not
@@ -410,27 +432,30 @@ fn cache_lookup(slot: Option<&CachedTesseract>, configured: Option<&str>, now: I
     }
 }
 
-/// Whether the ocrs models are installed, remembered like the Tesseract probe (found: for the
-/// session; missing: for [`NEGATIVE_TTL`]), so per-frame UI checks do not search the disk.
+/// Whether `language`'s ocrs models are installed, remembered like the Tesseract probe (found:
+/// for the session; missing: for [`NEGATIVE_TTL`]), so per-frame UI checks do not search the
+/// disk.
 #[cfg(not(target_arch = "wasm32"))]
-fn models_installed_cached() -> bool {
-    static MODELS: Mutex<Option<(bool, Instant)>> = Mutex::new(None);
+fn models_installed_cached_for(language: &str) -> bool {
+    static MODELS: Mutex<Vec<(String, bool, Instant)>> = Mutex::new(Vec::new());
     let mut slot = MODELS.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((found, at)) = *slot
-        && probe_fresh(found, at, Instant::now())
+    if let Some((_, found, at)) = slot.iter().find(|(l, _, _)| l == language)
+        && probe_fresh(*found, *at, Instant::now())
     {
-        return found;
+        return *found;
     }
-    let found = Models::find().is_some();
-    *slot = Some((found, Instant::now()));
+    let found = Models::find_for(language).is_some();
+    slot.retain(|(l, _, _)| l != language);
+    slot.push((language.to_string(), found, Instant::now()));
     found
 }
 
 /// The web build has no model files: the models count as installed once [`install`] has
-/// loaded the ones it downloaded.
+/// loaded the ones it downloaded. Only the English pair is downloadable there, because
+/// [`Ocr::from_bytes`] takes no Chinese dictionary.
 #[cfg(target_arch = "wasm32")]
-fn models_installed_cached() -> bool {
-    ocrs_loaded()
+fn models_installed_cached_for(language: &str) -> bool {
+    ocrs_loaded_for(language)
 }
 
 /// The program's `--version` line, remembered per program path for the session (`ocr_status`
@@ -492,7 +517,7 @@ pub fn engines_status() -> Vec<EngineStatus> {
 /// takes a location, because an agent must not choose which program runs; the tools report the
 /// default settings.)
 pub fn engines_status_for(settings: &OcrSettings) -> Vec<EngineStatus> {
-    let ocrs = ocrs_loaded() || Models::find().is_some();
+    let ocrs = ocrs_loaded_for(&settings.language) || Models::find_for(&settings.language).is_some();
     let mut out = vec![EngineStatus { id: "ocrs", available: ocrs, why_not: (!ocrs).then(models_missing), program: None, version: None }];
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -544,12 +569,19 @@ pub fn recognizers(settings: &OcrSettings) -> Result<Recognizers, String> {
     let tesseract =
         if matches!(settings.engine, EngineChoice::Tesseract | EngineChoice::Auto) { tesseract_engine(configured.as_deref()) } else { None };
     let mut slot = ENGINES.lock().unwrap_or_else(|e| e.into_inner());
-    let cache = slot.get_or_insert_with(|| EngineCache { ocrs: None });
-    if cache.ocrs.is_none() {
-        // Cheap to re-attempt while the models are missing; expensive work is cached forever.
-        cache.ocrs = pdfcraft_ocr::OcrsRecognizer::find().ok().map(|r| Arc::new(r) as Arc<dyn Recognizer>);
-    }
-    let ocrs = cache.ocrs.clone();
+    let cache = slot.get_or_insert_with(|| EngineCache { ocrs: BTreeMap::new() });
+    let language = ocr_language(&settings.language);
+    // Cheap to re-attempt while the models are missing; a loaded engine is cached forever.
+    let ocrs = match cache.ocrs.get(language).and_then(|found| found.clone()) {
+        Some(found) => Some(found),
+        None => {
+            let found = pdfcraft_ocr::OcrsRecognizer::find_for(language).ok().map(|r| Arc::new(r) as Arc<dyn Recognizer>);
+            if found.is_some() {
+                cache.ocrs.insert(language.to_string(), found.clone());
+            }
+            found
+        }
+    };
     match settings.engine {
         EngineChoice::Ocrs => Ok(Recognizers { primary: ocrs.ok_or_else(models_missing)?, secondary: None }),
         EngineChoice::Tesseract => Ok(Recognizers { primary: tesseract.ok_or_else(tesseract_unavailable)?, secondary: None }),
@@ -588,6 +620,20 @@ pub fn available() -> bool {
     ocrs_loaded() || Models::find().is_some() || tesseract_engine(configured.as_deref()).is_some()
 }
 
+/// Whether the built-in engine can read `language` right now: its models for that language are
+/// installed. (Tesseract's language packs are reported under [`engines_status`], not here.)
+#[cfg(not(target_arch = "wasm32"))]
+pub fn available_for(language: &str) -> bool {
+    Models::find_for(language).is_some()
+}
+
+/// [`available_for`] for the web build: there are no model files, so the downloaded pair counts
+/// once [`install`] has loaded it, and only English is downloadable there.
+#[cfg(target_arch = "wasm32")]
+pub fn available_for(language: &str) -> bool {
+    ocrs_loaded_for(language)
+}
+
 /// Why `engine` cannot run right now, named for the UI's tooltips (the Engine dropdown
 /// disables the choice with this text); `None` when it can. The app UI has no Tesseract
 /// location field of its own, so this judges the environment variable, exactly like
@@ -599,7 +645,13 @@ pub fn available() -> bool {
 /// first Tesseract probe lands the choice reads as "still checking" (see
 /// [`engine_probe_running`], to ask for another frame meanwhile).
 pub fn engine_unavailable_reason(engine: EngineChoice) -> Option<String> {
-    let ocrs = models_installed_cached();
+    engine_unavailable_reason_for(engine, "en")
+}
+
+/// [`engine_unavailable_reason`] for a job in `language`: the built-in engine needs that
+/// language's models (English and Chinese are installed separately).
+pub fn engine_unavailable_reason_for(engine: EngineChoice, language: &str) -> Option<String> {
+    let ocrs = models_installed_cached_for(language);
     #[cfg(not(target_arch = "wasm32"))]
     let tesseract = {
         let configured = std::env::var_os("PDFCRAFT_TESSERACT").map(|v| v.to_string_lossy().into_owned());

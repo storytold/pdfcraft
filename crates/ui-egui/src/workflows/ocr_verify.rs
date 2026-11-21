@@ -333,12 +333,19 @@ impl OcrVerify {
     /// Begin a review of `found` for `doc`: ReviewReady even when nothing was found (the
     /// status then says so), with the guard remembered for Accept.
     pub fn load(&mut self, doc: DocId, guard: OcrGuard, found: Vec<OcrPage>) {
+        self.load_with_language(doc, guard, found, "en");
+    }
+
+    /// Begin a review of `found` for `doc` with the run's recognized `language` preserved for
+    /// dictionaries and region re-reads.
+    pub fn load_with_language(&mut self, doc: DocId, guard: OcrGuard, found: Vec<OcrPage>, language: &str) {
         self.doc = Some(doc);
         self.guard = Some(guard);
         self.pages = found;
         self.review = Review::default();
         self.selected = None;
         self.region = None;
+        self.dictionary_language = if language.is_empty() { "en".to_string() } else { language.to_string() };
         self.show_a_read_page();
         self.phase = Phase::ReviewReady;
         self.load_dictionary_pref();
@@ -932,7 +939,7 @@ impl OcrVerify {
         let Some(doc) = self.doc else { return };
         let settings = self.reread_settings(&app.ocr_draft);
         #[cfg(target_arch = "wasm32")]
-        if app.web_models_missing(settings.engine) {
+        if app.web_models_missing(settings.engine, &settings.language) {
             self.wait_for_models(AwaitingModels::Reread { page, region });
             return;
         }
@@ -1005,11 +1012,12 @@ impl OcrVerify {
         if self.awaiting_models.is_none() {
             return;
         }
-        use pdfcraft_engine::ocr::{EngineChoice, engine_unavailable_reason};
-        if engine_unavailable_reason(EngineChoice::Ocrs).is_none() {
-            // The models are in. An engine the browser can never run (Tesseract) says why
-            // rather than waiting for ever.
-            let outcome = engine_unavailable_reason(app.ocr_draft.engine).map_or(Ok(()), Err);
+        use pdfcraft_engine::ocr::{EngineChoice, engine_unavailable_reason_for};
+        let lang = &app.ocr_draft.language;
+        if engine_unavailable_reason_for(EngineChoice::Ocrs, "en").is_none() {
+            // The models are in. An engine or language the browser can never run (Tesseract or
+            // non-English built-in models) says why rather than waiting for ever.
+            let outcome = engine_unavailable_reason_for(app.ocr_draft.engine, lang).map_or(Ok(()), Err);
             self.models_landed(app, outcome);
         } else if let crate::ocr_web::State::Failed(e) = crate::ocr_web::state() {
             self.models_landed(app, Err(e));
@@ -1221,7 +1229,7 @@ impl OcrVerify {
         };
         let settings = d.settings();
         #[cfg(target_arch = "wasm32")]
-        if app.web_models_missing(settings.engine) {
+        if app.web_models_missing(settings.engine, &settings.language) {
             self.wait_for_models(AwaitingModels::Run);
             return;
         }
@@ -1456,10 +1464,10 @@ fn toolbar(app: &mut PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
     ui.horizontal_wrapped(|ui| {
         craft_ui::ComboBox::from_id_salt("ocr-verify-language").width(150.0).selected_text(language_name(&d.language)).show_ui(ui, |ui| {
             for (code, name) in pdfcraft_engine::ocr::LANGUAGES {
-                ui.selectable_value(&mut d.language, (*code).to_string(), *name);
+                ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name));
             }
         });
-        engine_combo(ui, &mut d.engine, &mut d.strategy);
+        engine_combo(ui, &mut d.engine, &mut d.strategy, &d.language);
         strategy_combo(ui, &mut d.strategy);
         output_combo(ui, &mut d.output_mode);
         for (flag, label, why) in [
@@ -1531,9 +1539,9 @@ fn toolbar(app: &mut PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
     });
 }
 
-/// A language code's dropdown text: its name and its code ("English (en)").
+/// A language code's dropdown text: its translated name and its code ("English (en)").
 fn language_name(code: &str) -> String {
-    pdfcraft_engine::ocr::LANGUAGES.iter().find(|l| l.0 == code).map_or_else(|| code.to_owned(), |l| format!("{} ({})", l.1, l.0))
+    pdfcraft_engine::ocr::LANGUAGES.iter().find(|l| l.0 == code).map_or_else(|| code.to_owned(), |l| format!("{} ({})", tl!(l.1), l.0))
 }
 
 /// The Engine dropdown's text.
@@ -1558,11 +1566,11 @@ fn strategy_label(strategy: MergeStrategy) -> &'static str {
 /// says why (a tooltip names the missing models or program). The choice feeds the next run.
 /// Choosing Automatic while the strategy is "Primary only" (which would never run the second
 /// engine) moves the strategy to Automatic's own default, Confidence weighted.
-fn engine_combo(ui: &mut egui::Ui, engine: &mut EngineChoice, strategy: &mut MergeStrategy) {
+fn engine_combo(ui: &mut egui::Ui, engine: &mut EngineChoice, strategy: &mut MergeStrategy, language: &str) {
     ocr_ui::keep_asking_while_probing(ui.ctx());
     craft_ui::ComboBox::from_id_salt("ocr-verify-engine").width(120.0).selected_text(engine_label(*engine)).show_ui(ui, |ui| {
         for (choice, label) in [(EngineChoice::Auto, tl!("Automatic")), (EngineChoice::Ocrs, "ocrs"), (EngineChoice::Tesseract, "Tesseract")] {
-            let why = pdfcraft_engine::ocr::engine_unavailable_reason(choice);
+            let why = pdfcraft_engine::ocr::engine_unavailable_reason_for(choice, language);
             let resp = ui.add_enabled(why.is_none(), egui::Button::selectable(*engine == choice, label));
             let clicked = resp.clicked();
             match why {
@@ -3445,5 +3453,24 @@ mod tests {
         ensure_preview(&mut app, 0);
         assert!(app.ocr_verify.preview.is_some());
         assert!(app.ocr_verify.preview_failed.is_none());
+    }
+
+    #[test]
+    fn load_with_language_preserves_language_for_dictionary_and_reread() {
+        let mut session = Session::new();
+        let bytes = session.create_from_text("t", "Chinese OCR fixture").expect("fixture");
+        let id = session.open("t.pdf", None, bytes, None).expect("fixture");
+        let guard = session.ocr_guard(id).expect("guard");
+        let dir = std::env::temp_dir().join(format!("pdfcraft-ocr-verify-zh-lang-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ocr-dictionary-zh.txt"), "专有名词\n").unwrap();
+
+        let mut verify = OcrVerify { dictionary_dir: Some(dir), ..Default::default() };
+        verify.load_with_language(id, guard, Vec::new(), "zh");
+
+        assert_eq!(verify.dictionary_language, "zh");
+        assert!(verify.review.dictionary.contains("专有名词"));
+        let draft = super::ocr_ui::OcrDraft { language: "en".into(), ..Default::default() };
+        assert_eq!(verify.reread_settings(&draft).language, "zh");
     }
 }

@@ -67,6 +67,12 @@ ignore = [
     # craft-pkcs7, craft-mime, craft-update) depend on it, so a successor is chosen in
     # craft-contrib's standards/house-rules-rust.md first. Revisit when that names one (#7647).
     { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; required by the Rust house rules and craft-libs (#7647)" },
+    # ttf-parser is unmaintained (no vulnerability). The advisory names skrifa, which reads and
+    # draws outlines but does not rasterise them, so replacing it means pairing skrifa with a
+    # rasteriser (tiny-skia) in the Chinese OCR test's dev-dependencies. ttf-parser reaches the
+    # tree only through ab_glyph, which renders that test's synthetic scan, and is in no shipped
+    # binary: pdfcraft-engine is its only dependent, as a dev-dependency.
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained; dev-only fixture rasteriser for the Chinese OCR test" },
 ]
 
 # egui's default UI fonts (Ubuntu-Light, Hack, emoji-icon-font): font licences on the AGENTS.md

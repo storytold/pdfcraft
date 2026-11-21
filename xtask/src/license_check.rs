@@ -49,31 +49,56 @@ pub fn run(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Every OCR asset filename constant the application loads at runtime, paired with the source file
+/// that declares it. A language is only supported once its model and dictionary are listed here, so
+/// a new recogniser cannot ship without a licensing record for what it downloads.
+const REQUIRED_OCR_ASSETS: &[(&str, &str)] = &[
+    ("crates/ocr/src/ocrs.rs", "DETECTION_MODEL"),
+    ("crates/ocr/src/ocrs.rs", "RECOGNITION_MODEL"),
+    ("crates/ocr/src/chinese.rs", "CHINESE_MODEL"),
+    ("crates/ocr/src/chinese.rs", "CHINESE_DICTIONARY"),
+];
+
 fn validate(root: &Path) -> Result<()> {
     let text = std::fs::read_to_string(root.join("LICENSES.toml")).context("reading LICENSES.toml")?;
     let docs: Documents = toml::from_str(&text).context("parsing LICENSES.toml")?;
     let attribution = assets::load(root)?;
     let mut problems = check(root, &docs, &attribution);
-    let ocr_source = std::fs::read_to_string(root.join("crates/ocr/src/ocrs.rs")).context("reading OCR model filename constants")?;
-    problems.extend(check_required_ocr_metadata(&ocr_source, &attribution)?);
+    problems.extend(check_required_ocr_metadata(&ocr_asset_sources(root)?, &attribution)?);
     if !problems.is_empty() {
         bail!("source licensing errors:\n{}", problems.join("\n"));
     }
     Ok(())
 }
 
-/// Read only the two filename constants consumed by the OCR application. Fail closed if their
-/// declaration format changes; do not guess filenames or add a dependency on the OCR engine.
-fn check_required_ocr_metadata(source: &str, attribution: &assets::Manifest) -> Result<Vec<String>> {
+/// Read every source file that declares a required OCR asset constant. Fail closed on an unreadable
+/// file rather than checking only the constants whose source happened to load.
+fn ocr_asset_sources(root: &Path) -> Result<Vec<(String, String)>> {
+    let mut sources: Vec<(String, String)> = Vec::new();
+    for &(path, _) in REQUIRED_OCR_ASSETS {
+        if sources.iter().any(|(known, _)| known == path) {
+            continue;
+        }
+        let text = std::fs::read_to_string(root.join(path)).with_context(|| format!("reading OCR asset filename constants from {path}"))?;
+        sources.push((path.to_string(), text));
+    }
+    Ok(sources)
+}
+
+/// Check every required OCR asset constant against ATTRIBUTION.toml. Fail closed if a declaration
+/// format changes or its source text is absent; do not guess filenames or add a dependency on the
+/// OCR engine.
+fn check_required_ocr_metadata(sources: &[(String, String)], attribution: &assets::Manifest) -> Result<Vec<String>> {
     let mut problems = Vec::new();
-    for name in ["DETECTION_MODEL", "RECOGNITION_MODEL"] {
+    for &(path, name) in REQUIRED_OCR_ASSETS {
+        let Some((_, source)) = sources.iter().find(|(known, _)| known == path) else {
+            bail!("OCR constant {name}: no source text was read for {path}; update the source validator if the file moved");
+        };
         let prefix = format!("pub const {name}: &str = \"");
         let declarations: Vec<_> = source.lines().map(str::trim).filter_map(|line| line.strip_prefix(&prefix)).collect();
         let file = declarations.first().and_then(|value| value.strip_suffix("\";"));
         let Some(file) = file.filter(|file| declarations.len() == 1 && safe_path(file) && !file.contains('/')) else {
-            bail!(
-                "OCR constant {name}: expected one literal filename declaration in crates/ocr/src/ocrs.rs; update the source validator if its syntax changed"
-            );
+            bail!("OCR constant {name}: expected one literal filename declaration in {path}; update the source validator if its syntax changed");
         };
         let entries: Vec<_> = attribution.fetched.iter().filter(|f| f.file == file).collect();
         if entries.is_empty() {
@@ -405,29 +430,76 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// The source text of every file that declares a required OCR asset constant, read the same way
+    /// the validator reads it.
+    fn ocr_source_text() -> Vec<(String, String)> {
+        ocr_asset_sources(&assets::root()).unwrap()
+    }
+
+    /// The filename each required OCR constant declares, in declaration order. Derived from the
+    /// sources so that adding a language cannot leave a stale expectation behind in these tests.
+    fn required_ocr_files() -> Vec<(&'static str, String)> {
+        let sources = ocr_source_text();
+        REQUIRED_OCR_ASSETS
+            .iter()
+            .map(|&(path, name)| {
+                let source = &sources.iter().find(|(known, _)| known == path).expect("every required asset has a source").1;
+                let prefix = format!("pub const {name}: &str = \"");
+                let value = source.lines().map(str::trim).find_map(|line| line.strip_prefix(&prefix)).expect("the constant is declared as a literal");
+                (name, value.strip_suffix("\";").expect("the literal is terminated").to_string())
+            })
+            .collect()
+    }
+
     #[test]
     fn required_ocr_models_cannot_be_missing() {
-        let source = include_str!("../../crates/ocr/src/ocrs.rs");
         let original = assets::load(&assets::root()).unwrap();
-        assert_eq!(original.fetched.iter().filter(|f| f.kind == "model").count(), 2);
-        assert!(check_required_ocr_metadata(source, &original).unwrap().is_empty());
-        for model in original.fetched.iter().filter(|f| f.kind == "model") {
+        let sources = ocr_source_text();
+        assert!(check_required_ocr_metadata(&sources, &original).unwrap().is_empty());
+        // Each required asset owns exactly one model record; the set comes from the constants, so a
+        // new recogniser is covered here without editing a count.
+        for (name, file) in required_ocr_files() {
+            let entries: Vec<_> = original.fetched.iter().filter(|f| f.file == file).collect();
+            assert_eq!(entries.len(), 1, "{name} ({file}) needs exactly one ATTRIBUTION.toml entry");
+            assert_eq!(entries[0].kind, "model", "{name} ({file}) must be kind = \"model\"");
             let mut m = assets::load(&assets::root()).unwrap();
-            m.fetched.retain(|f| f.file != model.file);
-            assert!(check_required_ocr_metadata(source, &m).unwrap().iter().any(|p| p.contains(&model.file) && p.contains("missing")));
+            m.fetched.retain(|f| f.file != file);
+            assert!(
+                check_required_ocr_metadata(&sources, &m).unwrap().iter().any(|p| p.contains(&file) && p.contains("missing")),
+                "{name} ({file}) was accepted after its metadata was removed"
+            );
         }
     }
 
     #[test]
     fn required_ocr_models_cannot_be_misclassified() {
-        let source = include_str!("../../crates/ocr/src/ocrs.rs");
-        let original = assets::load(&assets::root()).unwrap();
-        assert_eq!(original.fetched.iter().filter(|f| f.kind == "model").count(), 2);
-        for model in original.fetched.iter().filter(|f| f.kind == "model") {
+        let sources = ocr_source_text();
+        for (name, file) in required_ocr_files() {
             let mut m = assets::load(&assets::root()).unwrap();
-            m.fetched.iter_mut().find(|f| f.file == model.file).unwrap().kind = "font".into();
-            assert!(check_required_ocr_metadata(source, &m).unwrap().iter().any(|p| p.contains(&model.file) && p.contains("kind")));
+            m.fetched.iter_mut().find(|f| f.file == file).unwrap().kind = "font".into();
+            assert!(
+                check_required_ocr_metadata(&sources, &m).unwrap().iter().any(|p| p.contains(&file) && p.contains("kind")),
+                "{name} ({file}) was accepted after its kind was changed"
+            );
         }
+    }
+
+    /// The required set and the manifest must agree in both directions: a fetched model that no
+    /// constant names would lose its removal check, and this is the case that a test derived from
+    /// REQUIRED_OCR_ASSETS alone cannot see. Replace the old `count() == 2` assertion with this
+    /// equivalence so a new language cannot silently expand either side.
+    #[test]
+    fn every_fetched_model_is_a_required_ocr_asset() {
+        let original = assets::load(&assets::root()).unwrap();
+        let required: BTreeSet<String> = required_ocr_files().into_iter().map(|(_, file)| file).collect();
+        for model in original.fetched.iter().filter(|f| f.kind == "model") {
+            assert!(
+                required.contains(&model.file),
+                "{} is fetched as a model but no required OCR constant names it, so nothing would notice its removal",
+                model.file
+            );
+        }
+        assert_eq!(required.len(), REQUIRED_OCR_ASSETS.len(), "each required constant must declare its own file");
     }
 
     #[test]
@@ -445,7 +517,16 @@ mod tests {
 
     #[test]
     fn changed_ocr_constant_syntax_fails_closed() {
-        assert!(check_required_ocr_metadata("", &assets::Manifest::default()).is_err());
+        // A source that was not read refuses, instead of silently skipping the constants it declares.
+        for &(path, _) in REQUIRED_OCR_ASSETS {
+            let mut sources = ocr_source_text();
+            sources.retain(|(known, _)| known.as_str() != path);
+            let error = check_required_ocr_metadata(&sources, &assets::Manifest::default()).unwrap_err().to_string();
+            assert!(error.contains(path), "{path}: {error}");
+        }
+        // So does a changed or emptied declaration.
+        let emptied: Vec<(String, String)> = ocr_source_text().into_iter().map(|(path, _)| (path, String::new())).collect();
+        assert!(check_required_ocr_metadata(&emptied, &assets::Manifest::default()).is_err());
     }
 
     #[test]
