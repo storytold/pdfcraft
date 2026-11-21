@@ -85,6 +85,7 @@ pub use editing::{CloseRequest, SaveTarget};
 pub use files::{ExtractDraft, FilePurpose, FileRequest, RotateDraft, SplitDraft, SplitMode, SplitPlan};
 pub use recovery::{AUTOSAVE_SECS, RecoveryMeta, RecoveryStore, default_dictionary_dir};
 use theme::{ThemeKind, ThemePreference};
+pub use widgets::ignore_system_text_clipboard;
 pub use workflows::ocr_verify::{OcrVerify, Phase};
 
 mod app;

@@ -212,6 +212,8 @@ pub struct CommentView {
     pub tool_done: bool,
     /// What the inline editor (`editing`) does with the keyboard the next time it is drawn.
     pub(crate) editor_focus: Option<EditorFocus>,
+    /// In-process text clipboard fallback for comment boxes.
+    pub clipboard: String,
     /// Snapshot of `(page, index)` comment slot identity from the last `DocInfo`, used to detect
     /// when an edit removes or shifts `/Annots` entries under an active selection or editor.
     pub(crate) slots: std::collections::HashMap<(usize, usize), CommentSlot>,
