@@ -3972,8 +3972,8 @@ fn hebrew_points_drawn_before_their_letter_read_after_it() {
 }
 
 /// A right-to-left mark drawn after its letter never rides on the letter drawn after it, however close it starts to
-/// that letter: on a line drawn right to left in logical order, or on a line drawn left to right that ends a word with
-/// a mark drawn after its letter (UAX #9 L3).
+/// that letter: on a line drawn right to left in logical order, on a line drawn left to right that ends a word with
+/// a mark drawn after its letter (UAX #9 L3), or on one where no mark starts on the letter drawn after it.
 #[test]
 fn hebrew_points_drawn_after_their_letter_do_not_ride_on_the_next_one() {
     // Drawn right to left: "שָל" with the qamats near the left edge of its shin.
@@ -3988,6 +3988,10 @@ fn hebrew_points_drawn_after_their_letter_do_not_ride_on_the_next_one() {
         em_box("\u{5B8}", 18.0, 0.0, 24.0, 12.0),
     ];
     assert!(!layout(v).plain_text().contains("ש\u{5B7}"));
+    // No point ends the word, and the patach starts left of both letters: no point of the line starts on the letter
+    // drawn after it, so nothing says the points are drawn before their letters, and the patach stays on the mem.
+    let v = vec![em_box("מ", 10.0, 0.0, 17.0, 12.0), em_box("\u{5B7}", 9.5, 0.0, 15.5, 12.0), em_box("ש", 13.0, 0.0, 19.0, 12.0)];
+    assert_eq!(layout(v).plain_text(), "שמ\u{5B7}");
 }
 
 /// Nonspacing marks count toward neither direction of a line: a line of four Latin letters and a

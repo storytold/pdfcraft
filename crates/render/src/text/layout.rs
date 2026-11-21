@@ -165,6 +165,11 @@ fn is_rtl_letter(text: &str) -> bool {
 /// [`MARK_REACH`] of that letter's box and the segment is drawn left to right there (the glyph drawn before the marks
 /// starts left of the letter). A segment that ends a word with marks drawn after its letter puts marks after their
 /// letters (L3), so none of its marks rides on the letter after it.
+///
+/// Reach does not tell the two orders apart: a mark drawn after its letter can start within that reach of the letter
+/// drawn next. The marks of a segment ride on the letters after them only when one of them starts at or right of the
+/// start of the letter after it, as a mark drawn before its letter usually does. A segment without such a mark is
+/// placed by position, as before.
 fn anchor_marks_drawn_before_letters(glyphs: &[&TextGlyph], segs: &[Seg], anchor: &mut [usize]) {
     let text = |i: usize| glyphs.get(i).map_or("", |g| g.text.as_str());
     let reaches = |m: usize, b: usize| {
@@ -180,7 +185,7 @@ fn anchor_marks_drawn_before_letters(glyphs: &[&TextGlyph], segs: &[Seg], anchor
         members.extend(s.runs().flat_map(|r| r.start..r.end));
         members.sort_unstable();
         found.clear();
-        let mut after_letters = false;
+        let (mut after_letters, mut before_letters) = (false, false);
         let mut k = 0;
         while k < members.len() {
             let Some(&first) = members.get(k) else { break };
@@ -206,13 +211,14 @@ fn anchor_marks_drawn_before_letters(glyphs: &[&TextGlyph], segs: &[Seg], anchor
                 (b, Some(n)) if is_rtl_letter(text(n)) && all_reach(n) => {
                     let x0 = |i: usize| glyphs.get(i).map_or(0.0, |g| g.rect[0]);
                     if b.is_none_or(|b| x0(b) < x0(n)) {
+                        before_letters |= (first..=last).any(|m| x0(m) >= x0(n));
                         found.push((first, last, n));
                     }
                 }
                 _ => {}
             }
         }
-        if after_letters {
+        if after_letters || !before_letters {
             continue;
         }
         for &(first, last, letter) in &found {
