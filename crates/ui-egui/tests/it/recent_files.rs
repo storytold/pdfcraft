@@ -221,6 +221,39 @@ fn the_limit_is_saved_and_restored_and_cuts_a_longer_list() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// #5682: restoring settings never asks the file system about recent files, which can block on a
+/// mount that has stopped answering. A gone file leaves the list once frames run, and a file that
+/// is there stays.
+#[test]
+fn restoring_settings_does_not_check_recent_files_and_a_frame_drops_the_gone_ones() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-recent-restore-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let here = dir.join("here.pdf");
+    std::fs::write(&here, PDF).unwrap();
+    let here = here.to_string_lossy().into_owned();
+    let gone = dir.join("gone.pdf").to_string_lossy().into_owned();
+    let entries: Vec<RecentFile> =
+        [&here, &gone].iter().map(|p| RecentFile { name: "x.pdf".into(), path: (*p).clone(), pages: 1, size: 0 }).collect();
+    let json = serde_json::json!({ "recent": entries }).to_string();
+
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&json);
+    let paths: Vec<&str> = restored.recent.iter().map(|r| r.path.as_str()).collect();
+    assert_eq!(paths, [here.as_str(), gone.as_str()], "restoring keeps every entry without asking whether its file exists");
+
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.run_inline = true;
+        app.restore(&json);
+        app
+    });
+    h.run_steps(2);
+    let paths: Vec<&str> = h.state().recent.iter().map(|r| r.path.as_str()).collect();
+    assert_eq!(paths, [here.as_str()], "the gone file leaves once the window is up");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn a_settings_file_can_not_ask_for_a_limit_that_is_not_one() {
     for (saved, want) in [
