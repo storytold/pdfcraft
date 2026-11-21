@@ -1532,6 +1532,40 @@ fn tagged_text_follows_tag_order_and_leaves_out_untagged_text() {
 /// CodeRabbit on #8008: a long paragraph is exported whole (not at the heading reader's length),
 /// cells holding paragraphs stay apart by tabs, an empty /ActualText reads as nothing, and a
 /// comment the tags reference is counted as unread while a link is not.
+/// CodeRabbit on #8008 (second pass): a row whose first cell is empty keeps the line break
+/// before it, and a table nested in a cell doesn't take the tab before that cell's text.
+#[test]
+fn tagged_text_tabs_follow_each_rows_own_cells() {
+    let content = stream(
+        "/P << /MCID 0 >> BDC BT /F1 12 Tf 20 190 Td (A) Tj ET EMC \
+         /P << /MCID 1 >> BDC BT /F1 12 Tf 60 190 Td (B) Tj ET EMC \
+         /P << /MCID 2 >> BDC BT /F1 12 Tf 60 170 Td (C) Tj ET EMC \
+         /P << /MCID 3 >> BDC BT /F1 12 Tf 20 150 Td (D) Tj ET EMC \
+         /P << /MCID 4 >> BDC BT /F1 12 Tf 60 150 Td (E) Tj ET EMC",
+    );
+    let bodies = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        content,
+        FONT.into(),
+        "<< /Type /StructTreeRoot /K 7 0 R >>".into(),
+        "<< /S /Document /Pg 3 0 R /K [\
+            << /S /Table /K [\
+                << /S /TR /K [<< /S /TD /K << /S /P /K 0 >> >> << /S /TD /K << /S /P /K 1 >> >>] >> \
+                << /S /TR /K [<< /S /TD /K [] >> << /S /TD /K << /S /P /K 2 >> >>] >>\
+            ] >> \
+            << /S /Table /K << /S /TR /K [\
+                << /S /TD /K << /S /P /K 3 >> >> \
+                << /S /TD /K [<< /S /Table /K << /S /TR /K << /S /TD /ActualText () >> >> >> << /S /P /K 4 >>] >>\
+            ] >> >>\
+         ] >>"
+            .into(),
+    ];
+    let out = tagged_text(&pdf(&bodies, "")).unwrap();
+    assert_eq!(out.text, "A\tB\nC\nD\tE\n");
+}
+
 #[test]
 fn tagged_text_keeps_long_text_cell_tabs_empty_replacements_and_counts_comments() {
     let long = "word ".repeat(600);

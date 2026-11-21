@@ -55,16 +55,29 @@ struct Reader<'a> {
     page_index: HashMap<ObjRef, usize>,
     seen: HashSet<ObjRef>,
     visits: usize,
-    /// Per page: the text each MCID shows (read once per page).
+    /// Per page: the text each MCID shows (read once per page, while [`MAX_CACHED`] allows).
     texts: HashMap<usize, HashMap<i64, String>>,
+    /// Bytes of text `texts` holds.
+    cached: usize,
     gap: Gap,
-    /// For each open table row, how many cells it has started.
-    rows: Vec<usize>,
-    /// A cell after the first in its row started and has put no text yet: its first text follows
-    /// a tab, even after a block inside the cell asked for a line.
-    cell_tab: bool,
+    /// The open table rows, innermost last.
+    rows: Vec<Row>,
     out: TaggedText,
 }
+
+/// A table row being read.
+#[derive(Default)]
+struct Row {
+    /// The row has put text already.
+    emitted: bool,
+    /// A cell after one with text started: the next text follows a tab, even after a block
+    /// inside the cell asked for a line, or a table nested in it.
+    tab: bool,
+}
+
+/// Bytes of page text kept for the pages read so far. A page's text beyond this is read again
+/// when another of its marks comes: the tags may name only a little of what pages hold.
+const MAX_CACHED: usize = MAX_TEXT;
 
 /// The document's text in tag order (see the module documentation).
 pub fn tagged_text(doc: &Document) -> Result<TaggedText, TaggedTextError> {
@@ -78,9 +91,9 @@ pub fn tagged_text(doc: &Document) -> Result<TaggedText, TaggedTextError> {
         seen: HashSet::new(),
         visits: 0,
         texts: HashMap::new(),
+        cached: 0,
         gap: Gap::Space,
         rows: Vec::new(),
-        cell_tab: false,
         out: TaggedText::default(),
     };
     if let Some(k) = root.get(b"K") {
@@ -187,13 +200,13 @@ impl Reader<'_> {
             self.gap(Gap::Line);
         } else if matches!(ty.as_slice(), b"TD" | b"TH") {
             self.gap(Gap::Tab);
-            if let Some(cells) = self.rows.last_mut() {
-                *cells += 1;
-                self.cell_tab = *cells > 1;
+            // A tab only once the row has text: an empty first cell keeps the row's line break.
+            if let Some(r) = self.rows.last_mut() {
+                r.tab = r.emitted;
             }
         }
         if row {
-            self.rows.push(0);
+            self.rows.push(Row::default());
         }
         // An empty /ActualText is still a replacement: the element reads as nothing.
         if let Some(t) = self.attr(d, b"ActualText") {
@@ -216,8 +229,8 @@ impl Reader<'_> {
             }
         }
         if row {
+            // Only this row's state goes: the cell around a nested table keeps its tab.
             self.rows.pop();
-            self.cell_tab = false;
         }
         if block {
             self.gap(Gap::Line);
@@ -229,17 +242,27 @@ impl Reader<'_> {
             self.out.unread += 1;
             return;
         };
-        let (doc, pages) = (self.doc, self.pages);
-        let texts = match self.texts.entry(page) {
-            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-            std::collections::hash_map::Entry::Vacant(e) => {
+        let text = match self.texts.get(&page) {
+            Some(texts) => texts.get(&mcid).cloned(),
+            None => {
                 // Each id's whole text, up to what one export gathers; more is reported.
-                let (texts, cut) = pages.get(page).map(|p| mcid_texts_up_to(doc, &p.dict, MAX_TEXT)).unwrap_or_default();
+                let (texts, cut) = self.pages.get(page).map(|p| mcid_texts_up_to(self.doc, &p.dict, MAX_TEXT)).unwrap_or_default();
                 self.out.truncated |= cut;
-                e.insert(texts)
+                let text = texts.get(&mcid).cloned();
+                // The pages read are kept up to MAX_CACHED bytes of text in all: past that the
+                // cache starts again, and a page too large for it alone is not kept.
+                let size: usize = texts.values().map(String::len).sum();
+                if self.cached.saturating_add(size) > MAX_CACHED {
+                    self.texts.clear();
+                    self.cached = 0;
+                }
+                if size <= MAX_CACHED {
+                    self.cached += size;
+                    self.texts.insert(page, texts);
+                }
+                text
             }
         };
-        let text = texts.get(&mcid).cloned();
         if let Some(text) = text {
             self.put(&text);
         }
@@ -255,9 +278,10 @@ impl Reader<'_> {
         if text.is_empty() {
             return;
         }
+        let tab = self.rows.iter().any(|r| r.tab);
         if !self.out.text.is_empty() {
             self.out.text.push(match self.gap {
-                _ if self.cell_tab => '\t',
+                _ if tab => '\t',
                 Gap::Space => ' ',
                 Gap::Tab => '\t',
                 Gap::Line => '\n',
@@ -265,7 +289,11 @@ impl Reader<'_> {
         }
         self.out.text.push_str(text);
         self.gap = Gap::Space;
-        self.cell_tab = false;
+        // The text is in every open row now, and the tab it waited for is spent.
+        for r in &mut self.rows {
+            r.emitted = true;
+            r.tab = false;
+        }
     }
 
     /// The text of the string `key` holds, unless it would not fit what is left of [`MAX_TEXT`]
