@@ -17,6 +17,10 @@ this object using its `BBox` and optional `Matrix` and edits it as a whole. Its 
 content, resources, clipping box, and transparency settings remain intact. Moving or
 deleting one use of a shared figure does not alter its other placements or pages.
 
+To crop an existing raster image, right-click it and choose **Crop**. Drag the crop handles to
+frame the area you want to keep, then click **Done**. To undo a crop added in PdfCraft,
+right-click the image and choose **Remove crop**. Any clipping from the original PDF stays in place.
+
 **Replace Image** and **Save Image As** apply only to raster Image XObjects; these menu
 items are disabled for grouped Form artwork. **Ungroup** (right-click) draws one placement's
 content in place so its text and pictures can be edited; while grouped, the tool does not edit
