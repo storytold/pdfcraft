@@ -377,6 +377,11 @@ pub struct Annotation {
     /// (their corners, `/Vertices`), or a callout (its arrow point and knee: `/CL` without its
     /// end, which follows the text box), in user space; empty for other comments.
     pub points: Vec<[f32; 2]>,
+    /// The comment keeps its size on the screen whatever the zoom, pinned at the upper-left
+    /// corner of `rect` (ISO 32000-2 §12.5.3): it has the NoZoom flag (`/F` bit 4), or it is a
+    /// note (`/Text`), which behaves as if it had (§12.5.6.4). Never a form field or a link.
+    /// The renderer draws it so at a [`crate::RenderRequest::magnification`].
+    pub no_zoom: bool,
     /// A callout's text box (`/Rect` inset by `/RD`), in user space; `None` for other comments.
     pub text_box: Option<[f32; 4]>,
     /// The comment's pop-up window (`/Popup`): where it sits and whether it is open.
@@ -906,6 +911,7 @@ mod review_state_tests {
                 fill_sign: false,
                 no_rotate: false,
                 points: Vec::new(),
+                no_zoom: false,
                 text_box: None,
                 popup: None,
             })

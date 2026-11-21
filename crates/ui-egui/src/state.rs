@@ -345,6 +345,7 @@ impl DocumentCopyJob {
                         scale: 1.0,
                         tag: 0,
                         preview: false,
+                        magnification: None,
                     };
                     if let Some(t) = r.render(req).text {
                         push(part(page, &t));

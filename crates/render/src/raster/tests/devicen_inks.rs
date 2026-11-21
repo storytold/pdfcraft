@@ -41,7 +41,8 @@ fn render_with(content: &str, cs1: &str, objects: &str) -> RenderedPage {
         content.len()
     );
     let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
-    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    let page =
+        renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
     assert!(page.error.is_none(), "{:?}", page.error);
     assert_eq!((page.width, page.height), (SIDE as u32, SIDE as u32));
     page

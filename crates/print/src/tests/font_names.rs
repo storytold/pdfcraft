@@ -76,6 +76,7 @@ fn pixels(pdf: &[u8]) -> Vec<u8> {
         scale: 1.0,
         tag: 0,
         preview: false,
+        magnification: None,
     });
     assert_eq!(page.error, None);
     page.rgba[..].to_vec()

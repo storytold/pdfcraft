@@ -470,6 +470,7 @@ fn no_rotate_comments_are_shown_upright_from_their_corner_and_back() {
         fill_sign: false,
         no_rotate: true,
         points: Vec::new(),
+        no_zoom: false,
         text_box: None,
         popup: None,
     };
@@ -2536,6 +2537,7 @@ mod group_tests {
             points: Vec::new(),
             text_box: None,
             popup: None,
+            no_zoom: false,
         }
     }
 

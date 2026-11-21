@@ -462,7 +462,15 @@ fn the_renderer_draws_a_last_sample_that_is_white_space() {
         content.extend_from_slice(b"\nEI Q");
         let pdf = std::sync::Arc::new(one_page_pdf(&content));
         let mut renderer = PageRenderer::new(pdf, RenderConfig::default());
-        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+        let page = renderer.render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+            magnification: None,
+        });
         assert!(page.error.is_none(), "{samples:02x?}: {:?}", page.error);
         // Block centres: x = 150 + 100 i, raster y = 792 - 350 = 442.
         let drawn: Vec<u8> = (0..4u32)
