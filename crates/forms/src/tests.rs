@@ -1773,6 +1773,26 @@ fn deleting_the_last_kid_removes_the_emptied_ancestors_and_their_values() {
     assert!(fields(&doc).iter().any(|f| f.name == "outer.inner.b"));
 }
 
+/// A field a parent lists in `/Kids` but that carries no `/Parent` of its own is not conforming
+/// (ISO 32000-2 §12.7.4), yet the reader accepts it and lists it under its own `/T`. Delete Field
+/// used to report success while the listing `/Kids` kept it in the form (#8027).
+#[test]
+fn delete_field_removes_a_kid_that_has_no_parent_from_the_kids_that_list_it() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 5 0 R >>".into(),                          // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),          // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".into(),                            // 3
+        "<< /Type /Annot /Subtype /Widget /T (kid) /Rect [20 20 180 50] /P 3 0 R >>".into(), // 4
+        "<< /Fields [6 0 R] >>".into(),                                                      // 5
+        "<< /FT /Tx /T (pw) /Kids [4 0 R] >>".into(),                                        // 6
+    ]);
+    assert!(fields(&doc).iter().any(|f| f.name == "kid"), "the reader lists the parentless kid");
+    delete_field(&mut doc, "kid").unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    assert!(!all.iter().any(|f| f.name == "kid"), "the kid is gone from the form");
+}
+
 /// A parent `MASTER` with kids `a` and `b` (each a field merged with its widget) and `e` (a field
 /// with two widget kids), and the top-level fields `c` and `d`.
 fn dotted_form() -> Document {
