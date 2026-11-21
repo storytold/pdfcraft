@@ -3919,6 +3919,77 @@ fn a_hebrew_mark_after_a_latin_letter_stays_with_the_hebrew_word() {
     assert_eq!(text, "שלום\u{5B8}ab");
 }
 
+/// A right-to-left cluster: its letter, the letter's width, and its marks with their start relative to the letter's.
+type Cluster<'a> = (&'a str, f32, &'a [(&'a str, f32)]);
+
+/// Glyphs of right-to-left clusters drawn left to right as reverse-order show strings draw them: each cluster's marks
+/// in the order given, as half-em boxes, then its letter, `x` moving on by the letter's width.
+fn reversed_clusters(v: &mut Vec<TextGlyph>, x: &mut f32, clusters: &[Cluster]) {
+    for &(letter, width, marks) in clusters {
+        for &(mark, dx) in marks {
+            v.push(em_box(mark, *x + dx, 0.0, *x + dx + 6.0, 12.0));
+        }
+        v.push(em_box(letter, *x, 0.0, *x + width, 12.0));
+        *x += width;
+    }
+}
+
+/// Points drawn right before their letter, as reverse-order show strings set by a shaper draw them (UAX #9 L2), follow
+/// that letter in reading order and in the letter's own order: two and three points on one letter, a holam starting
+/// over the letter before its own, and a word gap with no space glyph before a cluster that starts with a point.
+/// The boxes are a word processor's export of Genesis 1:1 in Noto Sans Hebrew at 12 pt.
+#[test]
+fn hebrew_points_drawn_before_their_letter_read_after_it() {
+    let mut v = Vec::new();
+    let mut x = 0.0;
+    // "הַשָּׁמַיִם", left to right: the dagesh is drawn lowered, in a show string of its own.
+    reversed_clusters(&mut v, &mut x, &[("ם", 8.21, &[]), ("י", 3.54, &[("\u{5B4}", 1.03)]), ("מ", 7.92, &[("\u{5B7}", 2.58)])]);
+    v.push(em_box("\u{5C1}", x + 6.46, 0.0, x + 12.46, 12.0));
+    v.push(em_box("\u{5BC}", x + 4.35, 0.85, x + 10.35, 12.85));
+    reversed_clusters(&mut v, &mut x, &[("ש", 8.76, &[("\u{5B8}", 2.72)]), ("ה", 7.52, &[("\u{5B7}", 1.89)])]);
+    // "תֹהוּ" after a word gap: its first cluster in x order is a vav with a dagesh drawn before it.
+    x += 4.0;
+    reversed_clusters(&mut v, &mut x, &[("ו", 3.61, &[("\u{5BC}", 0.9)]), ("ה", 7.53, &[]), ("ת", 8.22, &[("\u{5B9}", -1.58)])]);
+    x += 3.24;
+    // "אֱלֹהִים": the holam starts 1.58 pt left of its lamed, inside the he.
+    reversed_clusters(
+        &mut v,
+        &mut x,
+        &[
+            ("ם", 8.21, &[]),
+            ("י", 3.54, &[]),
+            ("ה", 7.53, &[("\u{5B4}", 2.58)]),
+            ("ל", 6.26, &[("\u{5B9}", -1.58)]),
+            ("א", 7.58, &[("\u{5B1}", 1.44)]),
+        ],
+    );
+    x += 3.24;
+    // "בְּרֵא": the sheva and the dagesh of the bet, drawn in reverse order.
+    reversed_clusters(&mut v, &mut x, &[("א", 7.58, &[]), ("ר", 6.27, &[("\u{5B5}", 3.22)]), ("ב", 6.86, &[("\u{5BC}", 1.51), ("\u{5B0}", 2.30)])]);
+    let text = layout(v);
+    assert_eq!(text.plain_text(), "בְּרֵא אֱלֹהִים תֹהוּ הַשָּׁמַיִם");
+    assert_eq!(text.find("אֱלֹהִים").len(), 1);
+}
+
+/// A right-to-left mark drawn after its letter never rides on the letter drawn after it, however close it starts to
+/// that letter: on a line drawn right to left in logical order, or on a line drawn left to right that ends a word with
+/// a mark drawn after its letter (UAX #9 L3).
+#[test]
+fn hebrew_points_drawn_after_their_letter_do_not_ride_on_the_next_one() {
+    // Drawn right to left: "שָל" with the qamats near the left edge of its shin.
+    let v = vec![em_box("ש", 20.0, 0.0, 26.0, 12.0), em_box("\u{5B8}", 21.0, 0.0, 27.0, 12.0), em_box("ל", 14.0, 0.0, 20.0, 12.0)];
+    assert!(!layout(v).plain_text().contains("ל\u{5B8}"));
+    // Drawn left to right, each point after its letter: the patach of the mem starts past the shin's start, where the
+    // shin overlaps the mem, and the word's last glyph is a qamats on the shin.
+    let v = vec![
+        em_box("מ", 10.0, 0.0, 17.0, 12.0),
+        em_box("\u{5B7}", 16.5, 0.0, 22.5, 12.0),
+        em_box("ש", 16.0, 0.0, 22.0, 12.0),
+        em_box("\u{5B8}", 18.0, 0.0, 24.0, 12.0),
+    ];
+    assert!(!layout(v).plain_text().contains("ש\u{5B7}"));
+}
+
 /// Nonspacing marks count toward neither direction of a line: a line of four Latin letters and a
 /// three-letter Hebrew word whose letters each carry two points reads in the same order as without
 /// the points.
