@@ -9,7 +9,7 @@ use craft::ui::buttons::IconButton;
 use craft::ui::contract::{Bind, PopupKind, Props as _, Show as _, ShowContainer as _, Trigger};
 use craft::ui::display::Text;
 use craft::ui::menu::{Menu, MenuItem};
-use craft::ui::runtime::focus;
+use craft::ui::runtime::{env::Env, focus};
 use craft::ui::text::{TextField, ZoomField, ZoomScale};
 use egui::Ui;
 
@@ -28,11 +28,59 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut Ui) {
     let Some(page) = doc.info.pages.get(current) else { return };
     let page_size = Size::new(f64::from(page.width.max(1.0)), f64::from(page.height.max(1.0)));
 
-    if rail_on_right {
-        IconButton::command(IconId::new("panel_left"), "view.rail.left").show(ui);
-    } else {
-        IconButton::command(IconId::new("panel_right"), "view.rail.right").show(ui);
+    let field_size = {
+        let env = Env::of(ui);
+        egui::vec2(env.tokens.size.rail.button, env.tokens.size.control.md)
+    };
+    // Taken once, in the pass that shows the field, also while the field is not focused.
+    let reselect = std::mem::take(&mut view.page_input_reselect);
+    let input_id = view.page_input_id();
+    let (field_rect, _) = ui.allocate_exact_size(field_size, egui::Sense::hover());
+    let edit = TextField::new("Current page", Bind::bound(&mut view.page_input))
+        .id(input_id)
+        .select_on_focus()
+        .select_all(reselect)
+        .submits()
+        .show_at(ui, field_rect);
+    if !edit.events.is_empty() {
+        view.page_input_draft = true;
     }
+    if edit.submitted {
+        let typed = view.page_input.clone();
+        view.go_to_typed(&typed, &labels);
+        view.page_input_draft = false;
+    }
+    if edit.escaped {
+        view.page_input_draft = false;
+    }
+    // Navigation updates the box, never text being typed into it: the field keeps the focus after Enter, and its
+    // focus is on its text part, which counts as the field.
+    if !(view.page_input_draft && focus::is_focused(ui.ctx(), edit.response.id)) {
+        view.page_input_draft = false;
+        view.page_input = view.current_page_label(labels.get(view.current()).map(String::as_str));
+    }
+
+    let label = labels.get(current).map_or("", String::as_str);
+    // Out of range (an empty document) reads "Page 0 of 0", never past the end.
+    let shown = if current < page_count { current + 1 } else { page_count };
+    let of = crate::i18n::fmt(crate::i18n::t("Page {p} of {n}"), &[("p", &shown.to_string()), ("n", &page_count.to_string())]);
+    Text::new(super::page_position(current, page_count, label)).role(TypeRole::Caption).tooltip(of).show(ui);
+
+    IconButton::command(IconId::new("chevron_left"), "view.previous_view").show(ui);
+    IconButton::command(IconId::new("chevron_right"), "view.next_view").show(ui);
+    IconButton::command(IconId::new("chevron_up"), "view.previous_page").show(ui);
+    IconButton::command(IconId::new("chevron_down"), "view.next_page").show(ui);
+
+    let (zoom_rect, _) = ui.allocate_exact_size(field_size, egui::Sense::hover());
+    let field = ZoomField::new("Zoom", view.canvas_view(), page_size).scale(ZoomScale::Points).show_at(ui, zoom_rect);
+    if let Some(edited) = field.view.committed() {
+        view.apply_canvas_view(edited);
+    }
+
+    IconButton::command(IconId::new("zoom_in"), "view.zoom.in").show(ui);
+    IconButton::command(IconId::new("zoom_out"), "view.zoom.out").show(ui);
+    IconButton::command(IconId::new("maximize_2"), "view.fit_toggle").show(ui);
+    IconButton::command(IconId::new("rotate_cw"), "view.rotate.cw").show(ui);
 
     // The rows' marks come from the commands' checked state (the catalog), not from here.
     let display_icon = if view.view.display == PageDisplay::Single { "file-text" } else { "columns-2" };
@@ -56,47 +104,9 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut Ui) {
         }
     });
 
-    IconButton::command(IconId::new("rotate_cw"), "view.rotate.cw").show(ui);
-    IconButton::command(IconId::new("maximize_2"), "view.fit_toggle").show(ui);
-    IconButton::command(IconId::new("zoom_out"), "view.zoom.out").show(ui);
-    IconButton::command(IconId::new("zoom_in"), "view.zoom.in").show(ui);
-
-    let field = ZoomField::new("Zoom", view.canvas_view(), page_size).scale(ZoomScale::Points).show(ui);
-    if let Some(edited) = field.view.committed() {
-        view.apply_canvas_view(edited);
-    }
-
-    IconButton::command(IconId::new("chevron_down"), "view.next_page").show(ui);
-    IconButton::command(IconId::new("chevron_up"), "view.previous_page").show(ui);
-    IconButton::command(IconId::new("chevron_right"), "view.next_view").show(ui);
-    IconButton::command(IconId::new("chevron_left"), "view.previous_view").show(ui);
-
-    let label = labels.get(current).map_or("", String::as_str);
-    // Out of range (an empty document) reads "Page 0 of 0", never past the end.
-    let shown = if current < page_count { current + 1 } else { page_count };
-    let of = crate::i18n::fmt(crate::i18n::t("Page {p} of {n}"), &[("p", &shown.to_string()), ("n", &page_count.to_string())]);
-    Text::new(super::page_position(current, page_count, label)).role(TypeRole::Caption).tooltip(of).show(ui);
-
-    // Taken once, in the pass that shows the field, also while the field is not focused.
-    let reselect = std::mem::take(&mut view.page_input_reselect);
-    let input_id = view.page_input_id();
-    let edit =
-        TextField::new("Current page", Bind::bound(&mut view.page_input)).id(input_id).select_on_focus().select_all(reselect).submits().show(ui);
-    if !edit.events.is_empty() {
-        view.page_input_draft = true;
-    }
-    if edit.submitted {
-        let typed = view.page_input.clone();
-        view.go_to_typed(&typed, &labels);
-        view.page_input_draft = false;
-    }
-    if edit.escaped {
-        view.page_input_draft = false;
-    }
-    // Navigation updates the box, never text being typed into it: the field keeps the focus after Enter, and its
-    // focus is on its text part, which counts as the field.
-    if !(view.page_input_draft && focus::is_focused(ui.ctx(), edit.response.id)) {
-        view.page_input_draft = false;
-        view.page_input = view.current_page_label(labels.get(view.current()).map(String::as_str));
+    if rail_on_right {
+        IconButton::command(IconId::new("panel_left"), "view.rail.left").show(ui);
+    } else {
+        IconButton::command(IconId::new("panel_right"), "view.rail.right").show(ui);
     }
 }
