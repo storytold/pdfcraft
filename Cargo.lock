@@ -1444,6 +1444,7 @@ dependencies = [
 [[package]]
 name = "craft"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-atomic",
  "craft-automation",
@@ -1453,7 +1454,7 @@ dependencies = [
  "craft-dialogs",
  "craft-docpath",
  "craft-draw",
- "craft-font-catalog 0.1.0",
+ "craft-font-catalog",
  "craft-font-manager",
  "craft-host",
  "craft-i18n",
@@ -1483,6 +1484,7 @@ dependencies = [
 [[package]]
 name = "craft-atomic"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "rustix 1.1.6",
 ]
@@ -1490,6 +1492,7 @@ dependencies = [
 [[package]]
 name = "craft-automation"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "base64 0.23.1",
  "craft-behavior",
@@ -1513,6 +1516,7 @@ dependencies = [
 [[package]]
 name = "craft-behavior"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "accesskit",
  "bitflags 2.13.2",
@@ -1528,6 +1532,7 @@ dependencies = [
 [[package]]
 name = "craft-browse"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-behavior",
  "craft-docpath",
@@ -1545,6 +1550,7 @@ dependencies = [
 [[package]]
 name = "craft-cms"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "md-5 0.10.6",
  "rayon",
@@ -1553,10 +1559,12 @@ dependencies = [
 [[package]]
 name = "craft-codepage"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 
 [[package]]
 name = "craft-color-ui"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-behavior",
  "craft-cms",
@@ -1576,6 +1584,7 @@ dependencies = [
 [[package]]
 name = "craft-csv"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -1583,6 +1592,7 @@ dependencies = [
 [[package]]
 name = "craft-dds"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "rayon",
 ]
@@ -1590,6 +1600,7 @@ dependencies = [
 [[package]]
 name = "craft-dialogs"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "block2 0.6.2",
  "craft-atomic",
@@ -1612,6 +1623,7 @@ dependencies = [
 [[package]]
 name = "craft-docpath"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "serde",
 ]
@@ -1619,6 +1631,7 @@ dependencies = [
 [[package]]
 name = "craft-draw"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-behavior",
  "craft-color-ui",
@@ -1637,6 +1650,7 @@ dependencies = [
 [[package]]
 name = "craft-flow"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-wordmodel",
  "image",
@@ -1646,6 +1660,7 @@ dependencies = [
 [[package]]
 name = "craft-font-catalog"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "fontique",
  "harfrust 0.13.3",
@@ -1658,25 +1673,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "craft-font-catalog"
-version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=527c2750e37fb8bf576dc9a9e07ffc60b9d63717#527c2750e37fb8bf576dc9a9e07ffc60b9d63717"
-dependencies = [
- "harfrust 0.13.3",
- "kurbo 0.13.1",
- "skrifa 0.47.0",
- "thiserror 2.0.21",
- "unicode-bidi",
- "unicode-segmentation",
- "windows-registry",
-]
-
-[[package]]
 name = "craft-font-manager"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-behavior",
- "craft-font-catalog 0.1.0",
+ "craft-font-catalog",
  "craft-font-store",
  "craft-host",
  "craft-i18n",
@@ -1691,10 +1693,11 @@ dependencies = [
 [[package]]
 name = "craft-font-store"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "cap-primitives",
  "craft-atomic",
- "craft-font-catalog 0.1.0",
+ "craft-font-catalog",
  "flate2",
  "log",
  "ruzstd",
@@ -1711,10 +1714,12 @@ dependencies = [
 [[package]]
 name = "craft-fonts-build"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 
 [[package]]
 name = "craft-host"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "bitflags 2.13.2",
  "craft-i18n",
@@ -1727,10 +1732,12 @@ dependencies = [
 [[package]]
 name = "craft-html"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 
 [[package]]
 name = "craft-i18n"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "chrono",
  "fixed_decimal",
@@ -1758,6 +1765,7 @@ dependencies = [
 [[package]]
 name = "craft-image-codecs"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-dds",
  "craft-jpeg",
@@ -1784,6 +1792,7 @@ dependencies = [
 [[package]]
 name = "craft-imaging"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-behavior",
  "craft-color-ui",
@@ -1801,6 +1810,7 @@ dependencies = [
 [[package]]
 name = "craft-jpeg"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -1808,6 +1818,7 @@ dependencies = [
 [[package]]
 name = "craft-keymap"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-host",
  "craft-i18n",
@@ -1820,6 +1831,7 @@ dependencies = [
 [[package]]
 name = "craft-markdown"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-flow",
  "craft-html",
@@ -1829,6 +1841,7 @@ dependencies = [
 [[package]]
 name = "craft-math"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-xml",
  "serde",
@@ -1837,6 +1850,7 @@ dependencies = [
 [[package]]
 name = "craft-menu"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-behavior",
  "craft-host",
@@ -1854,6 +1868,7 @@ dependencies = [
 [[package]]
 name = "craft-metadata"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "brotli-decompressor 6.3.2",
  "chrono",
@@ -1865,6 +1880,7 @@ dependencies = [
 [[package]]
 name = "craft-mime"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "chrono",
  "craft-codepage",
@@ -1874,6 +1890,7 @@ dependencies = [
 [[package]]
 name = "craft-opc"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-xml",
  "craft-zip",
@@ -1884,6 +1901,7 @@ dependencies = [
 [[package]]
 name = "craft-pages"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-behavior",
  "craft-keymap",
@@ -1899,6 +1917,7 @@ dependencies = [
 [[package]]
 name = "craft-pdf"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "aes",
  "chrono",
@@ -1918,6 +1937,7 @@ dependencies = [
 [[package]]
 name = "craft-pkcs7"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "aes",
  "aws-lc-rs",
@@ -1949,6 +1969,7 @@ dependencies = [
 [[package]]
 name = "craft-platform"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "arboard",
  "async-channel",
@@ -1981,6 +2002,7 @@ dependencies = [
 [[package]]
 name = "craft-prc"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "flate2",
  "thiserror 2.0.21",
@@ -1989,6 +2011,7 @@ dependencies = [
 [[package]]
 name = "craft-print"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-behavior",
  "craft-theme",
@@ -2007,6 +2030,7 @@ dependencies = [
 [[package]]
 name = "craft-quit"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "dispatch2",
  "egui",
@@ -2019,6 +2043,7 @@ dependencies = [
 [[package]]
 name = "craft-review"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "base64 0.23.1",
  "craft-behavior",
@@ -2036,6 +2061,7 @@ dependencies = [
 [[package]]
 name = "craft-rtf"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-codepage",
  "encoding_rs",
@@ -2044,6 +2070,7 @@ dependencies = [
 [[package]]
 name = "craft-settings"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-atomic",
  "craft-host",
@@ -2059,6 +2086,7 @@ dependencies = [
 [[package]]
 name = "craft-stream-codecs"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "fax",
  "hayro-ccitt",
@@ -2069,6 +2097,7 @@ dependencies = [
 [[package]]
 name = "craft-svg"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-xml",
  "flate2",
@@ -2085,6 +2114,7 @@ dependencies = [
 [[package]]
 name = "craft-table"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-behavior",
  "craft-keymap",
@@ -2096,6 +2126,7 @@ dependencies = [
 [[package]]
 name = "craft-text"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-behavior",
  "craft-font-manager",
@@ -2120,6 +2151,7 @@ dependencies = [
 [[package]]
 name = "craft-theme"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "bitflags 2.13.2",
  "ecolor",
@@ -2132,6 +2164,7 @@ dependencies = [
 [[package]]
 name = "craft-theme-store"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-atomic",
  "craft-behavior",
@@ -2146,6 +2179,7 @@ dependencies = [
 [[package]]
 name = "craft-tiff"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -2154,6 +2188,7 @@ dependencies = [
 [[package]]
 name = "craft-time"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -2162,6 +2197,7 @@ dependencies = [
 [[package]]
 name = "craft-timeline"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-behavior",
  "craft-keymap",
@@ -2176,6 +2212,7 @@ dependencies = [
 [[package]]
 name = "craft-ui"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-ui-canvas",
  "craft-ui-contract",
@@ -2188,6 +2225,7 @@ dependencies = [
 [[package]]
 name = "craft-ui-canvas"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-behavior",
  "craft-i18n",
@@ -2203,10 +2241,11 @@ dependencies = [
 [[package]]
 name = "craft-ui-contract"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "accesskit",
  "craft-behavior",
- "craft-font-catalog 0.1.0",
+ "craft-font-catalog",
  "craft-fonts-build",
  "craft-host",
  "craft-i18n",
@@ -2237,6 +2276,7 @@ dependencies = [
 [[package]]
 name = "craft-ui-macros"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -2247,6 +2287,7 @@ dependencies = [
 [[package]]
 name = "craft-ui-panels"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-behavior",
  "craft-host",
@@ -2264,6 +2305,7 @@ dependencies = [
 [[package]]
 name = "craft-ui-patterns"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-behavior",
  "craft-host",
@@ -2284,6 +2326,7 @@ dependencies = [
 [[package]]
 name = "craft-ui-shell"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-behavior",
  "craft-host",
@@ -2303,6 +2346,7 @@ dependencies = [
 [[package]]
 name = "craft-ui-widgets"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-behavior",
  "craft-host",
@@ -2321,6 +2365,7 @@ dependencies = [
 [[package]]
 name = "craft-update"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "chrono",
  "craft-host",
@@ -2349,6 +2394,7 @@ dependencies = [
 [[package]]
 name = "craft-web-api"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "js-sys",
  "serde_json",
@@ -2359,6 +2405,7 @@ dependencies = [
 [[package]]
 name = "craft-web-host"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-host",
  "craft-platform",
@@ -2370,6 +2417,7 @@ dependencies = [
 [[package]]
 name = "craft-win32"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "winsafe",
 ]
@@ -2377,6 +2425,7 @@ dependencies = [
 [[package]]
 name = "craft-window"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "craft-atomic",
  "craft-behavior",
@@ -2406,6 +2455,7 @@ dependencies = [
 [[package]]
 name = "craft-wordmodel"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "base64 0.23.1",
  "craft-math",
@@ -2419,6 +2469,7 @@ dependencies = [
 [[package]]
 name = "craft-xml"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "quick-xml 0.41.0",
  "serde",
@@ -2428,6 +2479,7 @@ dependencies = [
 [[package]]
 name = "craft-zip"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "flate2",
  "thiserror 2.0.21",
@@ -4044,6 +4096,7 @@ dependencies = [
 [[package]]
 name = "hayro-jbig2"
 version = "0.3.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "fearless_simd",
  "hayro-ccitt",
@@ -4951,6 +5004,7 @@ checksum = "d4a5ff6bcca6c4867b1c4fd4ef63e4db7436ef363e0ad7531d1558856bae64f4"
 [[package]]
 name = "linesweeper"
 version = "0.5.0"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"
 dependencies = [
  "arrayvec",
  "kurbo 0.13.1",
@@ -6205,7 +6259,7 @@ dependencies = [
  "chrono",
  "craft-cms",
  "craft-docpath",
- "craft-font-catalog 0.1.0 (git+https://github.com/storytold/craft-libs?rev=527c2750e37fb8bf576dc9a9e07ffc60b9d63717)",
+ "craft-font-catalog",
  "craft-image-codecs",
  "craft-tiff",
  "getrandom 0.4.3",
@@ -10992,3 +11046,4 @@ source = "git+https://github.com/storytold/egui.git?rev=e9711ca9b69772f875ae0d1c
 [[patch.unused]]
 name = "krilla"
 version = "0.8.2"
+source = "git+https://github.com/storytold/craft-libs?branch=pdfcraft-port#22aa51b5f4a98336f3074f568e2d634989def1b7"

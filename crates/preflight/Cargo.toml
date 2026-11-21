@@ -11,7 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-craft-cms-v2 = { package = "craft-cms", version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "527c2750e37fb8bf576dc9a9e07ffc60b9d63717" }
+craft-cms-v2 = { package = "craft-cms", version = "0.1.0", git = "https://github.com/storytold/craft-libs", branch = "pdfcraft-port" }
 craft-xml = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-cos = { workspace = true }
