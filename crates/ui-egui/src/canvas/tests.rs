@@ -3576,8 +3576,12 @@ fn a_wait_ends_when_the_selection_changes() {
 fn waiting_marks_are_dropped_when_their_pages_change() {
     let mut app = PdfCraftApp::new();
     app.open_bytes("three.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two", "Charlie three"])).unwrap();
-    let id = app.views[0].id;
-    let info = |app: &PdfCraftApp| app.session.get(id).unwrap().info.clone();
+    // Document ids are process-wide across sessions (tear-off windows), so helpers must read the
+    // id from the app under test rather than capture the first open's identity.
+    let info = |app: &PdfCraftApp| {
+        let id = app.views[0].id;
+        app.session.get(id).unwrap().info.clone()
+    };
     let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2, head_x: None } };
     let wait = |app: &mut PdfCraftApp| {
         let info = info(app);
@@ -3602,12 +3606,12 @@ fn waiting_marks_are_dropped_when_their_pages_change() {
     // marked unless the tool finishes it again.
     v.selection = Some(Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 1, head_x: None } });
     assert_eq!(v.tool_marks(QuickTool::Redact, false, Some(0), true, &after), ToolMarks::None, "the wait went with the selection");
+    let id = app.views[0].id;
     let redactions = app.session.get(id).unwrap().redaction_marks();
     assert_eq!(redactions, 0);
     // A change to one page the selection covers (a comment added on it) ends it too.
     let mut app = PdfCraftApp::new();
     app.open_bytes("three.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two", "Charlie three"])).unwrap();
-    let id = app.views[0].id;
     wait(&mut app);
     let note = Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
         page: 2,
@@ -3624,5 +3628,6 @@ fn waiting_marks_are_dropped_when_their_pages_change() {
     v.texts.insert(2, Arc::new(line_text("ghi")));
     v.selection = Some(sel);
     assert_eq!(v.tool_marks(QuickTool::Redact, false, Some(0), true, &now), ToolMarks::None, "nothing marked");
+    let id = app.views[0].id;
     assert_eq!(app.session.get(id).unwrap().redaction_marks(), 0);
 }

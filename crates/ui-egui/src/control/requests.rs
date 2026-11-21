@@ -13,6 +13,7 @@ impl Control {
                 let geometry = Geometry::current(ctx, host.capture_epoch());
                 let size = geometry.size;
                 state["window"] = json!({ "width": size.x, "height": size.y, "pixels_per_point": geometry.pixels_per_point });
+                state["managed_windows"] = crate::window_drop::inspect(ctx);
                 Ok(Handled::Now(Ok(state)))
             }
             "ui.commands" => Ok(Handled::Now(Ok(host.commands()))),
