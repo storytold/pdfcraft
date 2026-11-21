@@ -95,12 +95,15 @@ struct PageWalk<'a> {
     doc: &'a Document,
     seen: std::collections::HashSet<ObjRef>,
     pending: Vec<(std::sync::Arc<Object>, usize, Owners)>,
+    /// Each `/Kids` entry whose object the document reads as no dictionary (it is damaged or
+    /// missing), with what a child of it would inherit from the nodes above it.
+    unreadable: std::collections::HashMap<ObjRef, Owners>,
 }
 
 impl<'a> PageWalk<'a> {
     fn new(doc: &'a Document, top: ObjRef) -> Self {
         let top = std::sync::Arc::new(Object::Array(vec![Object::Ref(top)]));
-        Self { doc, seen: Default::default(), pending: vec![(top, 0, Default::default())] }
+        Self { doc, seen: Default::default(), pending: vec![(top, 0, Default::default())], unreadable: Default::default() }
     }
 }
 
@@ -124,7 +127,10 @@ impl Iterator for PageWalk<'_> {
                 continue;
             }
             let obj = self.doc.get(node);
-            let Some(d) = obj.as_dict() else { continue };
+            let Some(d) = obj.as_dict() else {
+                self.unreadable.insert(node, inherited.clone());
+                continue;
+            };
             let mut owners = inherited.clone();
             for (k, owner) in INHERITABLE.iter().zip(&mut owners) {
                 if d.contains(k) {
@@ -235,6 +241,121 @@ pub fn recover_page_tree(doc: &mut Document) -> Result<usize, OrganizeError> {
     let order: Vec<(ObjRef, Dict)> = found.into_iter().map(|(_, r)| (r, Dict::new())).collect();
     rebuild(doc, &order)?;
     Ok(order.len())
+}
+
+/// How far up a page's `/Parent` chain [`recover_unreadable_page_tree_nodes`] looks for the
+/// unreadable node it hangs from: deeper than any real tree, and it bounds a `/Parent` cycle.
+const MAX_PARENT_CLIMB: usize = 256;
+
+/// Gather into the page tree the pages `shown` (the pages the renderer shows, in its order) lists
+/// under a page tree node the document cannot read. A damaged node, such as one whose `/Kids`
+/// holds a token that is no object, reads as no dictionary, so the walk skips every page under it,
+/// while the renderer reads the rest of that node; edits and saves would then address, and keep,
+/// fewer pages than are shown.
+///
+/// The tree changes only when the shown pages are explained by such a node: every page the walk
+/// reaches is shown, in the walk's order, and every other shown page is a `/Type /Page` whose
+/// `/Parent` chain leads to a `/Kids` entry the walk could not read. Then the tree is rebuilt flat
+/// in `shown` order (ISO 32000-2 §7.7.3.2: a processor need not keep the tree's structure), each
+/// page keeping what it inherits (§7.7.3.4) from the nodes above it: the nodes the document can
+/// read, and each unreadable node as `node_attributes` gives what the renderer inherits from it
+/// (the renderer reads the node leniently). Where `node_attributes` cannot give that (`None`), the
+/// pages would render differently out from under the node, and the tree is left alone. Returns how
+/// many pages were added; 0 leaves the document unchanged.
+pub fn recover_unreadable_page_tree_nodes(
+    doc: &mut Document,
+    shown: &[Option<ObjRef>],
+    node_attributes: &dyn Fn(ObjRef) -> Option<Dict>,
+) -> Result<usize, OrganizeError> {
+    let mut tree = PageWalk::new(doc, pages_root(doc)?);
+    let walked: Vec<(ObjRef, Dict)> = tree.by_ref().collect();
+    let unreadable = tree.unreadable;
+    if unreadable.is_empty() || shown.len() <= walked.len() {
+        return Ok(0);
+    }
+    let walked_set: std::collections::HashSet<ObjRef> = walked.iter().map(|(r, _)| *r).collect();
+    let mut order: Vec<(ObjRef, Dict)> = Vec::with_capacity(shown.len());
+    let mut listed = std::collections::HashSet::new();
+    let mut next = walked.iter().peekable();
+    let mut nodes = std::collections::HashMap::new();
+    for page in shown {
+        let Some(page) = *page else { return Ok(0) };
+        if !listed.insert(page) {
+            return Ok(0);
+        }
+        if let Some((_, inherited)) = next.next_if(|(r, _)| *r == page) {
+            order.push((page, inherited.clone()));
+            continue;
+        }
+        // A page the walk reaches, but out of its order: not this damage.
+        if walked_set.contains(&page) {
+            return Ok(0);
+        }
+        let Some(inherited) = inherited_through_unreadable(doc, page, &unreadable, &mut |node| {
+            if !nodes.contains_key(&node) && nodes.len() >= MAX_UNREADABLE_NODES_READ {
+                return None;
+            }
+            nodes.entry(node).or_insert_with(|| node_attributes(node)).clone()
+        }) else {
+            return Ok(0);
+        };
+        order.push((page, inherited));
+    }
+    if next.next().is_some() {
+        return Ok(0);
+    }
+    let added = order.len().saturating_sub(walked.len());
+    if added > 0 {
+        rebuild(doc, &order)?;
+    }
+    Ok(added)
+}
+
+/// How many unreadable nodes [`recover_unreadable_page_tree_nodes`] asks the renderer about: each
+/// question reads the file again, and real damage is one node or a few.
+const MAX_UNREADABLE_NODES_READ: usize = 16;
+
+/// What `page`, a `/Type /Page` the walk did not reach, inherits on the way up its `/Parent` chain
+/// to an `unreadable` node: from the readable nodes between, nearest first, then from the
+/// unreadable node as `node_attributes` reads it, then from the nodes above it. `None` when the
+/// chain reaches no unreadable node or `node_attributes` cannot read the one it reaches.
+fn inherited_through_unreadable(
+    doc: &Document,
+    page: ObjRef,
+    unreadable: &std::collections::HashMap<ObjRef, Owners>,
+    node_attributes: &mut dyn FnMut(ObjRef) -> Option<Dict>,
+) -> Option<Dict> {
+    let leaf = doc.get(page);
+    let leaf = leaf.as_dict().filter(|d| d.name(b"Type") == Some(b"Page"))?;
+    let mut at = leaf.reference(b"Parent")?;
+    let mut attrs = Dict::new();
+    for _ in 0..MAX_PARENT_CLIMB {
+        if let Some(owners) = unreadable.get(&at) {
+            let own = node_attributes(at)?;
+            for (k, owner) in INHERITABLE.iter().zip(owners) {
+                if attrs.contains(k) {
+                    continue;
+                }
+                if let Some(v) = own.get(k) {
+                    attrs.set(k.to_vec(), v.clone());
+                } else if let Some(v) = owner.as_ref().and_then(|o| o.as_dict()).and_then(|o| o.get(k)) {
+                    attrs.set(k.to_vec(), v.clone());
+                }
+            }
+            return Some(attrs);
+        }
+        let node = doc.get(at);
+        let node = node.as_dict()?;
+        for k in INHERITABLE {
+            if !attrs.contains(k)
+                && let Some(v) = node.get(k)
+            {
+                attrs.set(k.to_vec(), v.clone());
+            }
+        }
+        at = node.reference(b"Parent")?;
+    }
+    None
 }
 
 fn check(indices: &[usize], n: usize) -> Result<(), OrganizeError> {
