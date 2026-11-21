@@ -203,6 +203,7 @@ impl PdfCraftApp {
     /// The app over `host` and `services`, with no document open: every queue runs on the host's
     /// jobs, so a test passes a host over `ManualJobs` and `ScriptedFiles`.
     pub fn with_host(host: Arc<Host>, services: AppServices) -> Self {
+        crate::icons::register();
         let AppServices {
             wake,
             clipboard,

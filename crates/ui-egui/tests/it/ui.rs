@@ -44,6 +44,15 @@ fn home_shows_welcome_and_tools() {
     assert!(h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Open…").count() >= 2, "Home offers Open");
 }
 
+/// Starting the app makes its Home and navigation rail icons available to the renderer.
+#[test]
+fn app_start_registers_its_icons() {
+    let _app = crate::control::new_app();
+    for name in ["file-output", "code-xml", "message-square-text", "files", "text-cursor-input", "paperclip", "signature", "tag"] {
+        assert!(craft::ui::primitives::has_icon(&craft::behavior::IconId::new(name)), "missing icon {name}");
+    }
+}
+
 /// A side string of the control state's `side_panels` (`tools_side`, `rail_side`).
 fn side(h: &mut Harness<'static, PdfCraftApp>, key: &str) -> String {
     pdfcraft_ui_egui::side_panels::state(h.state())[key].as_str().unwrap_or_default().to_owned()
