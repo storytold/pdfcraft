@@ -1,4 +1,4 @@
-use super::info::text_value;
+use super::info::{is_comment_subtype, text_value};
 use super::types::{FLAG_HIDDEN, FLAG_NO_ROTATE, FLAG_NO_VIEW, Shape};
 use super::{AnnotError, Dict, Document, ObjRef, Object, appearance};
 
@@ -89,6 +89,56 @@ thread_local! {
     pub(crate) static ANNOTS_ENTRIES_COPIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Apple Markup's private copy of a page's markup: on the page and on each of its annotations.
+const APPLE_PAGE_MARKUP: [&[u8]; 2] = [b"AAPL:PPK", b"AAPL:PPKHash"];
+const APPLE_ANNOT_MARKUP: &[u8] = b"AAPL:AKExtras";
+
+/// Drop Apple Markup's private copy of the page's markup once the annotation list changes. iOS
+/// draws Markup annotations from that copy, which no longer matches `/Annots`: iOS 26 showed a
+/// Markup signature in its own place and again over a signature added here. Without it, Apple
+/// draws every annotation from its appearance, as other viewers do. The drop is recorded in the
+/// document's repair log (iOS can no longer re-edit those strokes as live ink).
+fn drop_apple_markup(doc: &mut Document, page: ObjRef, list: &mut [Object]) -> Result<(), AnnotError> {
+    let mut dropped = false;
+    if doc.get(page).as_dict().is_some_and(|d| APPLE_PAGE_MARKUP.iter().any(|k| d.contains(k))) {
+        doc.update_dict(page, |d| {
+            for k in APPLE_PAGE_MARKUP {
+                d.remove(k);
+            }
+        })?;
+        dropped = true;
+    }
+    for entry in list {
+        match entry {
+            Object::Dict(d) if d.contains(APPLE_ANNOT_MARKUP) => {
+                d.remove(APPLE_ANNOT_MARKUP);
+                dropped = true;
+            }
+            Object::Ref(r) if doc.get(*r).as_dict().is_some_and(|d| d.contains(APPLE_ANNOT_MARKUP)) => {
+                doc.update_dict(*r, |d| {
+                    d.remove(APPLE_ANNOT_MARKUP);
+                })?;
+                dropped = true;
+            }
+            _ => {}
+        }
+    }
+    if dropped {
+        doc.note_repair(
+            "dropped Apple Markup's private copy of a page's annotations after the page changed; iOS draws them from their appearance instead of as editable ink"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// Replace a page's `/Annots` after an annotation was added, removed or answered: the point at
+/// which Apple Markup's private copy of the page goes stale (see [`drop_apple_markup`]).
+pub(crate) fn change_annots(doc: &mut Document, page: ObjRef, mut list: Vec<Object>) -> Result<(), AnnotError> {
+    drop_apple_markup(doc, page, &mut list)?;
+    Ok(set_annots(doc, page, list)?)
+}
+
 /// Replace a page's `/Annots`, writing into the shared array object when it is indirect. An empty
 /// list removes a direct `/Annots`.
 pub fn set_annots(doc: &mut Document, page: ObjRef, list: Vec<Object>) -> Result<(), pdfcraft_cos::CosError> {
@@ -106,16 +156,23 @@ pub fn set_annots(doc: &mut Document, page: ObjRef, list: Vec<Object>) -> Result
     Ok(())
 }
 
-/// The annotation at `(page, index)` as an indirect object (inline dictionaries are promoted).
+/// Whether the annotation dictionary `d` has a comment `/Subtype` ([`is_comment_subtype`]).
+pub(crate) fn is_comment_dict(d: &Dict) -> bool {
+    d.name(b"Subtype").is_some_and(|s| is_comment_subtype(&String::from_utf8_lossy(s)))
+}
+
+/// The comment annotation at `(page, index)` as an indirect object (inline dictionaries are promoted).
 pub(crate) fn annot_ref(doc: &mut Document, page: usize, index: usize) -> Result<(ObjRef, ObjRef), AnnotError> {
     let p = page_ref(doc, page)?;
     let mut list = annots(doc, p);
     let entry = list.get(index).cloned().ok_or(AnnotError::NoSuchAnnotation { page, index })?;
     let r = match entry {
-        Object::Ref(r) if doc.get(r).as_dict().is_some() => r,
-        Object::Dict(d) => {
+        Object::Ref(r) if doc.get(r).as_dict().is_some_and(is_comment_dict) => r,
+        Object::Dict(d) if is_comment_dict(&d) => {
             let r = doc.add(Object::Dict(d));
-            list[index] = Object::Ref(r);
+            if let Some(slot) = list.get_mut(index) {
+                *slot = Object::Ref(r);
+            }
             set_annots(doc, p, list)?;
             r
         }
@@ -137,11 +194,11 @@ pub fn is_fill_sign(doc: &Document, d: &Dict) -> bool {
     if matches!(d.get(b"PCFillSign").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true))) {
         return true;
     }
-    let subtype = d.name(b"Subtype").unwrap_or_default();
-    if subtype == b"FreeText" && d.name(b"IT") == Some(b"FreeTextTypeWriter") {
+    let name_is = |key: &[u8], expected: &[u8]| d.get(key).is_some_and(|o| doc.resolve(o).as_name() == Some(expected));
+    if name_is(b"Subtype", b"FreeText") && name_is(b"IT", b"FreeTextTypeWriter") {
         return true;
     }
-    if subtype == b"Stamp" {
+    if name_is(b"Subtype", b"Stamp") {
         if matches!(d.name(b"Name"), Some(b"PCCheck" | b"PCCross" | b"PCDot" | b"PCLine" | b"PCTypedSignature")) {
             return true;
         }
@@ -151,7 +208,7 @@ pub fn is_fill_sign(doc: &Document, d: &Dict) -> bool {
             return true;
         }
     }
-    subtype == b"Ink" && text_value(doc, d, b"Subj").as_deref() == Some("Signature")
+    name_is(b"Subtype", b"Ink") && text_value(doc, d, b"Subj").as_deref() == Some("Signature")
 }
 
 pub(crate) fn annotation_flags(doc: &Document, d: &Dict) -> i64 {

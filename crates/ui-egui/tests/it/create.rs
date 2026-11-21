@@ -3,15 +3,8 @@
 use pdfcraft_ui_egui::PdfCraftApp;
 
 fn png() -> Vec<u8> {
-    let mut out = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut out, 8, 4);
-        enc.set_color(png::ColorType::Rgb);
-        enc.set_depth(png::BitDepth::Eight);
-        let mut w = enc.write_header().unwrap();
-        w.write_image_data(&[120u8; 8 * 4 * 3]).unwrap();
-    }
-    out
+    let img = craft_image_codecs::Image::from_u8(8, 4, craft_image_codecs::ChannelLayout::Rgb, vec![120u8; 8 * 4 * 3]).unwrap();
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap()
 }
 
 #[test]
@@ -123,13 +116,8 @@ fn reduce_file_size_writes_a_compact_copy() {
     // A photo-like picture, stored losslessly: Reduce recompresses it as JPEG.
     let (w, h) = (600u32, 400u32);
     let px: Vec<u8> = (0..w * h).flat_map(|i| [(i % w * 255 / w) as u8 ^ (i & 7) as u8, (i / w * 255 / h) as u8, 128]).collect();
-    let mut photo = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut photo, w, h);
-        enc.set_color(png::ColorType::Rgb);
-        enc.set_depth(png::BitDepth::Eight);
-        enc.write_header().unwrap().write_image_data(&px).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgb, px).unwrap();
+    let photo = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let dir = ReduceDir::new();
     let out = dir.0.join("reduced.pdf");
     let h = reduce("photo.png", photo, &out);
