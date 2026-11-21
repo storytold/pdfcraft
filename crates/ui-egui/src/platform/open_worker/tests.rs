@@ -130,10 +130,15 @@ impl HeldToolOpen {
         self.started.recv_timeout(Duration::from_secs(5)).expect("the native open reached its preparation barrier");
     }
 
-    #[allow(clippy::expect_used)]
     fn complete(&self, harness: &mut Harness<'static, PdfCraftApp>) {
+        self.complete_within(harness, Duration::from_secs(5));
+    }
+
+    /// [`Self::complete`] for a preparation that may take up to `timeout`.
+    #[allow(clippy::expect_used)]
+    fn complete_within(&self, harness: &mut Harness<'static, PdfCraftApp>, timeout: Duration) {
         self.release.send(()).expect("release the native preparation");
-        self.finished.recv_timeout(Duration::from_secs(5)).expect("the native open returned its result");
+        self.finished.recv_timeout(timeout).expect("the native open returned its result");
         harness.run_steps(2);
     }
 }
@@ -922,6 +927,55 @@ fn a_repeated_waiting_open_keeps_the_tool_it_brings() {
     assert_eq!(app.deferred_opens.front().and_then(|d| d.then), Some("export.text"));
 }
 
+/// A password retry submits with priority and succeeds even when the open worker queue is full
+/// of ordinary background documents, placing the retry at the head of the worker queue.
+#[test]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+fn password_retry_submits_with_priority_when_worker_queue_is_full() {
+    let (gate, started, release, finished) = open_worker::prepare_gate();
+    let worker = open_worker::OpenWorker::new(Some(gate)).expect("worker");
+    let pdf = Arc::new(fixture(1));
+    let open_context = pdfcraft_engine::Session::new().open_context();
+
+    // Fill the worker queue to its limit while the gate holds the worker on the first job.
+    let _first =
+        worker.submit(1, open_context.clone(), "first.pdf".into(), None, None, open_worker::Input::Bytes(pdf.clone())).expect("submit first");
+    started.recv_timeout(Duration::from_secs(5)).expect("first job reached gate");
+
+    for token in 2..=(open_worker::MAX_QUEUED_OPENS as u64 + 1) {
+        worker
+            .submit(token, open_context.clone(), format!("doc-{token}.pdf"), None, None, open_worker::Input::Bytes(pdf.clone()))
+            .expect("queue up to limit");
+    }
+
+    // At capacity, an ordinary submit fails with the capacity error.
+    let overflow = worker.submit(999, open_context.clone(), "overflow.pdf".into(), None, None, open_worker::Input::Bytes(pdf.clone()));
+    assert_eq!(overflow.err(), Some("too many documents are waiting to open".into()));
+
+    // A priority submit (such as a password prompt retry) succeeds and enters the queue.
+    let priority_token = 1000;
+    let priority_recv = worker.submit_priority(
+        priority_token,
+        open_context.clone(),
+        "password-retry.pdf".into(),
+        None,
+        Some(zeroize::Zeroizing::new("secret".into())),
+        open_worker::Input::Bytes(pdf.clone()),
+    );
+    assert!(priority_recv.is_ok(), "priority submit must bypass the queued opens limit");
+
+    // Release the first job; the priority job must be processed next because it was pushed to the front.
+    release.send(()).expect("release first");
+    finished.recv_timeout(Duration::from_secs(5)).expect("first finished");
+
+    started.recv_timeout(Duration::from_secs(5)).expect("priority job reached gate next");
+    release.send(()).expect("release priority");
+    finished.recv_timeout(Duration::from_secs(5)).expect("priority finished");
+
+    let priority_result = priority_recv.unwrap().recv_timeout(Duration::from_secs(5)).expect("priority result");
+    assert_eq!(priority_result.token, priority_token);
+}
+
 /// A password prompt keeps a place in the worker's bounded queue for its retry: files named after
 /// the protected one fill the rest and wait in order, and the retry is queued, not refused as
 /// "too many documents are waiting to open" while the worker has yet to take the others.
@@ -947,4 +1001,56 @@ fn a_password_prompt_keeps_a_place_in_the_open_queue_for_its_retry() {
     let app = harness.state();
     assert!(app.password_prompt.is_none(), "the retry is queued: {:?}", app.password_prompt.as_ref().and_then(|p| p.error.clone()));
     assert!(app.password_retry.is_some());
+}
+
+/// A Word document built from the synthetic fixture (PdfCraft's own Word export).
+#[allow(clippy::expect_used)]
+fn synthetic_docx() -> Vec<u8> {
+    let mut session = pdfcraft_engine::Session::new();
+    let id = session.open("source.pdf", None, Arc::new(fixture(1)), None).expect("open the fixture");
+    session.get(id).expect("the fixture").export_office(pdfcraft_engine::compare::OfficeFormat::Docx)
+}
+
+/// File ▸ Open of a Word document: LibreOffice runs on the open worker, never on the frame
+/// thread, and the result opens as a new, unsaved PDF. Without LibreOffice the user is
+/// told it is needed, rather than that the file is a broken PDF.
+#[test]
+#[allow(clippy::expect_used)]
+fn file_open_converts_an_office_document_on_the_worker() {
+    let mut harness = tool_open_harness();
+    let held = HeldToolOpen::install(&mut harness);
+    let file = tool_open_file("office", "docx", &synthetic_docx());
+    harness.state_mut().pick_override = Some(vec![file.0.to_string_lossy().into_owned()]);
+    harness.state_mut().run_command("file.open");
+    harness.run_steps(2);
+    held.wait_started();
+    assert!(harness.state().views.is_empty(), "nothing opens before the conversion finishes");
+    // An installed LibreOffice takes seconds; it is stopped after 120 s.
+    held.complete_within(&mut harness, Duration::from_secs(150));
+    let app = harness.state();
+    assert!(app.pending_opens.is_empty());
+    if let Some(view) = app.views.first() {
+        let doc = app.session.get(view.id).expect("the converted document");
+        // Named after the Word file: `<stem>.docx` opens as `<stem>.pdf`.
+        assert_eq!(doc.name, format!("pdfcraft-open-tool-{}-office.pdf", std::process::id()));
+        assert!(doc.path.is_none(), "the converted PDF is new and unsaved, not the .docx on disk");
+    } else {
+        let message = app.toast.as_ref().map(|(message, _)| message.clone()).unwrap_or_default();
+        assert!(message.contains("LibreOffice, which isn't installed"), "the failure names the missing dependency: {message}");
+    }
+}
+
+#[test]
+fn the_open_picker_defaults_to_pdf_and_offers_images_office_text_and_all_files() {
+    let filters = PdfCraftApp::open_filters();
+    let names: Vec<&str> = filters.iter().map(|(name, _)| name.as_str()).collect();
+    #[cfg(not(target_os = "macos"))]
+    assert_eq!(names, ["PDF", "Images", "Office documents", "Text", "All files"]);
+    #[cfg(target_os = "macos")]
+    assert_eq!(names, ["PDF", "Images", "Office documents", "Text"]);
+    let extensions = |name: &str| filters.iter().find(|(n, _)| n == name).map(|(_, e)| e.clone()).unwrap_or_default();
+    assert_eq!(extensions("PDF"), ["pdf"]);
+    assert_eq!(extensions("Images"), pdfcraft_engine::IMAGE_EXTENSIONS);
+    assert!(["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "rtf"].iter().all(|e| extensions("Office documents").contains(e)));
+    assert_eq!(extensions("Text"), pdfcraft_engine::TEXT_EXTENSIONS);
 }

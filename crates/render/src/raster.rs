@@ -23,13 +23,15 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use work_queue::{ResultReceiver, WorkQueue};
 
-use hayro::hayro_interpret::font::{FontData, FontQuery};
-use hayro::hayro_interpret::hayro_cmap::CidFamily;
-use hayro::hayro_interpret::{InterpreterSettings, InterpreterWarning};
-use hayro::hayro_syntax::Pdf;
-use hayro::vello_cpu::color::AlphaColor;
-use hayro::vello_cpu::color::palette::css::{TRANSPARENT, WHITE};
-use hayro::{RenderCache, RenderSettings, render_into, render_size};
+use craft_pdf::interpret::font::{FontData, FontQuery};
+use craft_pdf::interpret::hayro_cmap::CidFamily;
+use craft_pdf::interpret::{ExtendedWarning, InterpreterSettings, InterpreterWarning};
+use craft_pdf::raster::{self as shared_raster, Options as RasterOptions, RenderCache};
+use craft_pdf::syntax::Pdf;
+#[cfg(test)]
+use hayro::vello_cpu::color::palette::css::WHITE;
+#[cfg(test)]
+use hayro::{RenderSettings, render_into};
 
 use crate::{Pixels, ReadingColors};
 
@@ -68,6 +70,15 @@ pub struct RenderConfig {
     pub layers: Arc<Vec<(i32, i32, bool)>>,
     /// View ▸ Hide all comments: markup annotations aren't drawn (fields and links still are).
     pub hide_comments: bool,
+    /// Annotations shown or hidden for viewing in place of their Hidden and NoView flags (object
+    /// number, generation, shown): fields a document's page actions and timers showed or hid
+    /// (an animation's frames). Display only; the document never changes.
+    pub annotations: Arc<Vec<(i32, i32, bool)>>,
+    /// Annotations drawn with a form XObject as their normal appearance (object number and
+    /// generation of the annotation, then of the form): push buttons a document's page actions
+    /// and timers gave another icon (`buttonSetIcon`, an animation's frames). Display only; the
+    /// document never changes.
+    pub appearances: Arc<Vec<(i32, i32, i32, i32)>>,
     /// Refuse a whole-page raster that would be reduced by the renderer's hard size caps.
     /// Tiled requests remain available for pages that exceed those caps. Both modes refuse
     /// a raster whose rounded integer dimensions exceed the final pixel-allocation budget.
@@ -81,7 +92,7 @@ pub struct RenderConfig {
     /// Draw a CID font of an Adobe CJK collection that the PDF does not embed with one face already
     /// installed on this machine (see `system_font`). Off by default and on only for on-screen
     /// viewer and preview rasters: exports, printing and OCR render without it, so nothing drawn with an
-    /// installed font is saved or printed (AGENTS.md §1.2, §1.4).
+    /// installed font is saved or printed (licences.md; docs/development.md "Fonts and attribution").
     pub system_fonts: bool,
     /// The render is output for printing (print as image): the configuration's auto state for
     /// the View event (ISO 32000-2 §8.11.4.4) is not applied, since printing is not viewing.
@@ -100,7 +111,7 @@ impl RenderConfig {
     /// This configuration for a raster that is only shown on screen (the viewer, Combine
     /// thumbnails, figure previews): installed CJK faces may draw fonts the PDF doesn't embed.
     /// Never use it for anything that can be saved, printed, recognised or returned to an agent
-    /// (AGENTS.md §1.2, §1.4).
+    /// (licences.md; docs/development.md "Fonts and attribution").
     #[must_use]
     pub fn on_screen(self) -> Self {
         Self { system_fonts: true, ..self }
@@ -118,6 +129,8 @@ impl RenderConfig {
             ocg_overrides: self.layers.clone(),
             view_auto_state: !self.for_print,
             hide_comments: self.hide_comments,
+            annotation_overrides: self.annotations.clone(),
+            appearance_overrides: self.appearances.clone(),
             font_resolver: Arc::new(move |query| {
                 japanese_fallback(query).or_else(|| system_fonts.then(|| system_fallback(query)).flatten()).or_else(|| standard(query))
             }),
@@ -377,7 +390,8 @@ fn render_page<'a>(
 ) -> Result<Output, (String, bool)> {
     // Print previews share the viewer pool, but must use the output font policy and the layers
     // as they print (`print_layers`). Keep the caller's cancellation/warning hooks and annotation
-    // settings. A fresh cache is essential: hayro keys cached fonts by PDF dictionary, not by the
+    // settings, except what a document's scripts show while it is read (`annotations`,
+    // `appearances`), which never prints. A fresh cache is essential: hayro keys cached fonts by PDF dictionary, not by the
     // font resolver, so the viewer cache could supply an installed face even after changing the
     // resolver (and a cached missing font from print preview could blank the viewer on switching
     // back); nothing drawn with the viewer's layers is reused either.
@@ -385,10 +399,13 @@ fn render_page<'a>(
     let print_cache;
     let print = req.tag & PRINT_TAG != 0;
     let print_layers = config.print_layers.as_ref().filter(|_| print);
-    let (settings, cache) = if (config.system_fonts && print) || print_layers.is_some() {
+    let live = !settings.annotation_overrides.is_empty() || !settings.appearance_overrides.is_empty();
+    let (settings, cache) = if print && (config.system_fonts || print_layers.is_some() || live) {
         print_settings = InterpreterSettings {
             font_resolver: RenderConfig { system_fonts: false, ..config.clone() }.settings().font_resolver,
             ocg_overrides: print_layers.cloned().unwrap_or_else(|| settings.ocg_overrides.clone()),
+            annotation_overrides: Arc::default(),
+            appearance_overrides: Arc::default(),
             ..settings.clone()
         };
         print_cache = RenderCache::new();
@@ -400,37 +417,34 @@ fn render_page<'a>(
     if req.kind == RequestKind::Text {
         return match catch_unwind(AssertUnwindSafe(|| crate::text::extract_page(pdf, req.page, settings))) {
             Ok(Some(t)) => Ok((0, 0, Pixels::default(), Some(Arc::new(t)))),
-            Ok(None) => Err((format!("page {} does not exist", req.page + 1), false)),
-            Err(panic) => Err((format!("text extraction crashed on page {}: {}", req.page + 1, panic_message(&panic)), true)),
+            Ok(None) => Err((format!("page {} does not exist", req.page.saturating_add(1)), false)),
+            Err(panic) => Err((format!("text extraction crashed on page {}: {}", req.page.saturating_add(1), panic_message(&panic)), true)),
         };
     }
     let result = catch_unwind(AssertUnwindSafe(|| {
         let pages = pdf.pages();
-        let page = pages.get(req.page).ok_or_else(|| format!("page {} does not exist", req.page + 1))?;
+        let page = pages.get(req.page).ok_or_else(|| (format!("page {} does not exist", req.page.saturating_add(1)), false))?;
         let (w, h) = page.render_dimensions();
         if !(w.is_finite() && h.is_finite()) || w < 0.5 || h < 0.5 {
-            return Err(format!("page {} has an empty or invalid page box ({w}×{h} pt)", req.page + 1));
+            return Err((format!("page {} has an empty or invalid page box ({w}×{h} pt)", req.page.saturating_add(1)), false));
         }
         // Reading colours: the page clears to the setting's background, and solid text and
         // line-art paints are remapped (images and patterns never are). Off renders as before.
-        let (bg_color, color_replacement) = match reading.params {
-            Some(p) => (AlphaColor::from_rgb8(p.background[0], p.background[1], p.background[2]), Some(hayro::ColorReplacement::from(p))),
-            None => (WHITE, None),
+        let (background, color_replacement) = match reading.params {
+            Some(p) => ([p.background[0], p.background[1], p.background[2], 255], Some(shared_raster::ColorReplacement::from(p))),
+            None => ([255; 4], None),
         };
-        let bg_color = if config.transparent { TRANSPARENT } else { bg_color };
-        let rs = match req.tile {
+        let background = if config.transparent { [0; 4] } else { background };
+        let options = match req.tile {
             // Tiles are bounded by construction, so the page itself may be arbitrarily large.
             Some(t) => {
                 let scale = req.scale.clamp(0.01, 400.0);
                 let (tw, th) = (t.w.clamp(1, 4096), t.h.clamp(1, 4096));
-                RenderSettings {
-                    x_scale: scale,
-                    y_scale: scale,
-                    width: Some(tw as u16),
-                    height: Some(th as u16),
-                    x_offset: t.x as f32,
-                    y_offset: t.y as f32,
-                    bg_color,
+                RasterOptions {
+                    scale: [scale, scale],
+                    size: Some([tw, th]),
+                    offset: [t.x as f32, t.y as f32],
+                    background,
                     color_replacement,
                     ..Default::default()
                 }
@@ -438,44 +452,56 @@ fn render_page<'a>(
             None => {
                 let scale = effective_scale(w, h, req.scale);
                 if config.reject_oversize && (!(req.scale.is_finite() && req.scale > 0.0) || req.scale > scale) {
-                    return Err(format!(
-                        "requested page {} raster scale {req_scale} exceeds renderer limits (maximum scale {scale})",
-                        req.page + 1,
-                        req_scale = req.scale
+                    return Err((
+                        format!(
+                            "requested page {} raster scale {req_scale} exceeds renderer limits (maximum scale {scale})",
+                            req.page.saturating_add(1),
+                            req_scale = req.scale
+                        ),
+                        false,
                     ));
                 }
                 // hayro floors the size when none is given, losing the partial edge pixels. The
-                // scale keeps each side within MAX_SIDE (give or take float noise), so it fits u16.
-                let side = |pt: f32| device_pixels(pt, scale).min(MAX_SIDE as u32) as u16;
-                RenderSettings {
-                    x_scale: scale,
-                    y_scale: scale,
-                    width: Some(side(w)),
-                    height: Some(side(h)),
-                    bg_color,
+                // scale keeps each side within MAX_SIDE (give or take float noise), so it fits u32.
+                let side = |pt: f32| device_pixels(pt, scale).min(MAX_SIDE as u32);
+                RasterOptions {
+                    scale: [scale, scale],
+                    size: Some([side(w), side(h)]),
+                    offset: [0.0, 0.0],
+                    background,
                     color_replacement,
                     ..Default::default()
                 }
             }
         };
         // Rendered straight into a buffer of whole pixels, which the GUI takes over as is.
-        let (w, h) = render_size(page, &rs);
-        if u64::from(w).checked_mul(u64::from(h)).is_none_or(|pixels| pixels > MAX_PIXELS as u64) {
-            return Err(format!("page {} raster size {w}x{h} exceeds renderer pixel limit", req.page + 1));
-        }
-        let mut pixels = Pixels::zeroed(w.into(), h.into()).ok_or_else(|| format!("page {} is too large to render", req.page + 1))?;
+        let [w, h] = shared_raster::dimensions(page, &options).map_err(|error| match error {
+            shared_raster::Error::OutputLimit => {
+                let [rw, rh] = options.size.unwrap_or([0, 0]);
+                (format!("page {} raster size {rw}x{rh} exceeds renderer pixel limit", req.page.saturating_add(1)), false)
+            }
+            other => (other.to_string(), false),
+        })?;
+        let (pw, ph) = (
+            usize::try_from(w).map_err(|_| (format!("page {} is too large to render", req.page.saturating_add(1)), false))?,
+            usize::try_from(h).map_err(|_| (format!("page {} is too large to render", req.page.saturating_add(1)), false))?,
+        );
+        let mut pixels = Pixels::zeroed(pw, ph).ok_or_else(|| (format!("page {} is too large to render", req.page.saturating_add(1)), false))?;
         // Previews render at low detail (tiny images are skipped); finals always draw all.
         let mut preview_settings = settings.clone();
         preview_settings.preview = req.preview;
         // A print preview shows what prints, and printing is not the View event.
         preview_settings.view_auto_state &= req.tag & PRINT_TAG == 0;
-        render_into(page, cache, &preview_settings, &rs, pixels.bytes_mut());
-        Ok((w.into(), h.into(), pixels, None))
+        shared_raster::render_into(page, cache, &preview_settings, &options, pixels.bytes_mut()).map_err(|error| match error {
+            shared_raster::Error::BackendPanic => (format!("renderer crashed on page {}", req.page.saturating_add(1)), true),
+            other => (other.to_string(), false),
+        })?;
+        Ok((w, h, pixels, None))
     }));
     match result {
         Ok(Ok(v)) => Ok(v),
-        Ok(Err(e)) => Err((e, false)),
-        Err(panic) => Err((format!("renderer crashed on page {}: {}", req.page + 1, panic_message(&panic)), true)),
+        Ok(Err(e)) => Err(e),
+        Err(panic) => Err((format!("renderer crashed on page {}: {}", req.page.saturating_add(1), panic_message(&panic)), true)),
     }
 }
 
@@ -488,20 +514,30 @@ fn finish(req: RenderRequest, start: Stopwatch, r: Result<Output, (String, bool)
 }
 
 fn warning_settings(settings: &InterpreterSettings, warnings: Arc<Mutex<Vec<RenderWarning>>>) -> InterpreterSettings {
-    let target = warnings;
+    let target = warnings.clone();
+    let extended_target = warnings;
     InterpreterSettings {
         warning_sink: Arc::new(move |warning| {
             // Nested forms, Type 3 glyphs and patterns are interpreted again and each reports the
-            // exhausted budget, or the colours that fell back, and several images can share one
-            // malformed colour space: each warning is recorded once per page.
+            // exhausted budget: each warning is recorded once per page.
             let warning = match warning {
                 InterpreterWarning::ContentTruncated => RenderWarning::ContentTruncated,
-                InterpreterWarning::ColorFallback => RenderWarning::ColourFallback,
-                InterpreterWarning::MalformedIndexedImage => RenderWarning::MalformedIndexedImage,
-                InterpreterWarning::Type3WidthsMissing => RenderWarning::Type3WidthsMissing,
                 InterpreterWarning::UnsupportedFont | InterpreterWarning::ImageDecodeFailure => return,
             };
             let mut warnings = lock(&target);
+            if !warnings.contains(&warning) {
+                warnings.push(warning);
+            }
+        }),
+        extended_warning_sink: Arc::new(move |warning| {
+            // Colours that fell back, malformed indexed colour spaces, and Type 3 fonts without
+            // `/Widths`: each warning is recorded once per page.
+            let warning = match warning {
+                ExtendedWarning::ColorFallback => RenderWarning::ColourFallback,
+                ExtendedWarning::MalformedIndexedImage => RenderWarning::MalformedIndexedImage,
+                ExtendedWarning::Type3WidthsMissing => RenderWarning::Type3WidthsMissing,
+            };
+            let mut warnings = lock(&extended_target);
             if !warnings.contains(&warning) {
                 warnings.push(warning);
             }
@@ -580,7 +616,7 @@ impl PageRenderer {
 }
 
 fn parse(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Option<Pdf> {
-    catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(bytes.clone(), password.unwrap_or("")).ok())).ok().flatten()
+    crate::backend::open(bytes.clone(), password).ok()
 }
 
 pub(crate) fn panic_message(p: &Box<dyn std::any::Any + Send>) -> String {

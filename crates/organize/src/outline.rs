@@ -584,8 +584,12 @@ pub struct OutlineEntry {
     pub page: usize,
     /// The structure element it stands for (`/SE`).
     pub element: Option<ObjRef>,
-    /// Where on the page it goes: this height (user space) at the top of the window, at the
-    /// reader's zoom. `None` goes to the page, keeping the reader's position.
+    /// Where on the page it goes: this x (user space) at the left of the window, at the reader's
+    /// zoom. `None` keeps the reader's horizontal position.
+    pub left: Option<f64>,
+    /// This height (user space) at the top of the window. `None` keeps the reader's vertical
+    /// position. A bookmark to the top of what is displayed on a page turned a quarter gives
+    /// `left`, not `top`.
     pub top: Option<f64>,
 }
 
@@ -610,7 +614,7 @@ pub fn add_bookmark_tree(doc: &mut Document, parent_title: &str, entries: &[Outl
     for (e, page) in entries.iter().zip(targets) {
         let mut d = Dict::new();
         d.set(b"Title".to_vec(), Object::String(PdfString::text(&e.title)));
-        d.set(b"Dest".to_vec(), go_to_at(page, None, e.top));
+        d.set(b"Dest".to_vec(), go_to_at(page, e.left, e.top));
         if let Some(se) = e.element {
             d.set(b"SE".to_vec(), Object::Ref(se));
         }

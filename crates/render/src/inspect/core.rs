@@ -2,8 +2,8 @@ use super::annotations::{FieldWalk, MAX_LINK_ATTACHMENT_TEXT_BYTES};
 use super::model::{Attachment, AttachmentSource, PageInfo, Portfolio, PortfolioView, Xfa};
 use super::navigation::text_string;
 use super::{
-    Arc, AssertUnwindSafe, DecryptionError, Dictionary, DocInfo, Document, HashMap, HashSet, LazyStructure, LoadOptions, LoadPdfError, Object,
-    ObjectId, OnceCell, OpenError, Pdf, Structure, catch_unwind,
+    Arc, AssertUnwindSafe, Dictionary, DocInfo, Document, HashMap, HashSet, LazyStructure, LoadOptions, Object, ObjectId, OnceCell, OpenError,
+    Structure, catch_unwind,
 };
 
 /// lopdf decodes object and cross-reference streams while it loads, with no limit unless one is
@@ -20,19 +20,7 @@ pub(super) fn load_options(password: Option<&str>) -> LoadOptions {
 /// but must still catch an edit that produced something the viewer cannot display, so the
 /// caller can roll it back. Never panics: parser crashes are caught and reported.
 pub fn check_pages(bytes: Arc<Vec<u8>>, password: Option<&str>, expected: usize) -> Result<(), OpenError> {
-    let pdf = catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(bytes, password.unwrap_or(""))))
-        .map_err(|p| OpenError::Invalid(format!("the parser crashed: {}", crate::raster::panic_message(&p))))?
-        .map_err(|e| match e {
-            LoadPdfError::Decryption(DecryptionError::PasswordProtected) => {
-                if password.is_some() {
-                    OpenError::WrongPassword
-                } else {
-                    OpenError::NeedsPassword
-                }
-            }
-            LoadPdfError::Decryption(other) => OpenError::Unsupported(format!("encryption not supported: {other:?}")),
-            LoadPdfError::Invalid => OpenError::Invalid("no readable page tree or cross-reference data was found".into()),
-        })?;
+    let pdf = crate::backend::open(bytes, password)?;
     let pages = catch_unwind(AssertUnwindSafe(|| pdf.pages().len()))
         .map_err(|p| OpenError::Invalid(format!("the page tree could not be read: {}", crate::raster::panic_message(&p))))?;
     if pages != expected {
@@ -44,19 +32,7 @@ pub fn check_pages(bytes: Arc<Vec<u8>>, password: Option<&str>, expected: usize)
 /// Inspect a document. Fails only if the renderer itself cannot open the file (or needs a
 /// password). Never panics: parser crashes are caught and reported.
 pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, OpenError> {
-    let pdf = catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(bytes.clone(), password.unwrap_or(""))))
-        .map_err(|p| OpenError::Invalid(format!("the parser crashed: {}", crate::raster::panic_message(&p))))?
-        .map_err(|e| match e {
-            LoadPdfError::Decryption(DecryptionError::PasswordProtected) => {
-                if password.is_some() {
-                    OpenError::WrongPassword
-                } else {
-                    OpenError::NeedsPassword
-                }
-            }
-            LoadPdfError::Decryption(other) => OpenError::Unsupported(format!("encryption not supported: {other:?}")),
-            LoadPdfError::Invalid => OpenError::Invalid("no readable page tree or cross-reference data was found".into()),
-        })?;
+    let pdf = crate::backend::open(bytes.clone(), password)?;
     let mut info = DocInfo { file_size: bytes.len(), pdf_version: version_label(&format!("{:?}", pdf.version())), ..Default::default() };
     let pages = catch_unwind(AssertUnwindSafe(|| {
         let mut out = Vec::new();
@@ -64,10 +40,10 @@ pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, O
             let (w, h) = page.render_dimensions();
             let c = page.intersected_crop_box();
             let rotation = match page.rotation() {
-                hayro::hayro_syntax::page::Rotation::None => 0,
-                hayro::hayro_syntax::page::Rotation::Horizontal => 90,
-                hayro::hayro_syntax::page::Rotation::Flipped => 180,
-                hayro::hayro_syntax::page::Rotation::FlippedHorizontal => 270,
+                craft_pdf::syntax::page::Rotation::None => 0,
+                craft_pdf::syntax::page::Rotation::Horizontal => 90,
+                craft_pdf::syntax::page::Rotation::Flipped => 180,
+                craft_pdf::syntax::page::Rotation::FlippedHorizontal => 270,
             };
             let crop = [c.x0 as f32, c.y0 as f32, c.x1 as f32, c.y1 as f32];
             // Degenerate boxes still get a usable placeholder size so layout never divides by zero.
@@ -155,16 +131,34 @@ pub(super) struct Inspector<'a> {
     /// has no `/P`. Searching every page's `/Annots` for each such field was O(fields ×
     /// annotations): a second on a form of 8,000 fields.
     pub(super) annotation_pages: OnceCell<HashMap<ObjectId, usize>>,
+    /// What is left of [`MAX_FIELD_TEXT_BYTES`]: names, values and tooltips of form fields and
+    /// layer names, which many entries can share one string of.
+    pub(super) field_text: std::cell::Cell<usize>,
+    /// Set when a field with an action went unlisted because the text allowance was spent, so the
+    /// document still reports JavaScript.
+    pub(super) field_actions: std::cell::Cell<bool>,
     /// The first page widget naming each field as its `/Parent`, built when a field has no widget
     /// among its `/Kids`.
     pub(super) parent_widgets: OnceCell<HashMap<ObjectId, ObjectId>>,
 }
 
+/// Bytes of field and layer text one inspection reads and keeps together.
+pub(super) const MAX_FIELD_TEXT_BYTES: usize = 64 << 20;
+
 impl<'a> Inspector<'a> {
     pub(super) fn new(doc: &'a dyn Structure) -> Self {
         let page_ids = doc.page_ids();
         let page_index = page_ids.iter().copied().enumerate().map(|(index, id)| (id, index)).collect();
-        let mut me = Self { doc, page_ids, page_index, named: HashMap::new(), annotation_pages: OnceCell::new(), parent_widgets: OnceCell::new() };
+        let mut me = Self {
+            doc,
+            page_ids,
+            page_index,
+            named: HashMap::new(),
+            annotation_pages: OnceCell::new(),
+            field_text: MAX_FIELD_TEXT_BYTES.into(),
+            field_actions: false.into(),
+            parent_widgets: OnceCell::new(),
+        };
         let mut named = HashMap::new();
         if let Some(tree) =
             doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| me.dict(o)).and_then(|n| n.get(b"Dests").ok()).and_then(|o| me.dict(o))
@@ -260,7 +254,7 @@ impl<'a> Inspector<'a> {
                 }
             }
         }
-        info.has_javascript |= info.fields.iter().any(|f| f.has_actions);
+        info.has_javascript |= info.fields.iter().any(|f| f.has_actions) || self.field_actions.get();
         let needs_rendering = catalog.get(b"NeedsRendering").ok().and_then(|o| self.resolve(o).as_bool().ok()).unwrap_or(false);
         if let Some(xfa) = catalog.get(b"AcroForm").ok().and_then(|o| self.dict(o)).and_then(|form| form.get(b"XFA").ok()) {
             // A form with no fields is taken to be laid out from its template, unless its
@@ -351,11 +345,49 @@ impl<'a> Inspector<'a> {
 
     /// Whitespace-trimmed metadata, spent from `budget` as [`spend`] does, so text that trims
     /// short or to nothing still spends its raw length.
+    /// [`Self::budgeted_text`] against the shared field and layer text allowance.
+    pub(super) fn field_text(&self, d: &Dictionary, key: &[u8]) -> Option<String> {
+        let mut left = self.field_text.get();
+        let text = self.budgeted_text(d, key, &mut left);
+        self.field_text.set(left);
+        text
+    }
+
+    /// Converts `bytes` against the field and layer text allowance, as [`spend`] does.
+    pub(super) fn field_spend(&self, bytes: &[u8], convert: impl FnOnce(&[u8]) -> String) -> Option<String> {
+        let mut left = self.field_text.get();
+        let text = spend(bytes, &mut left, convert);
+        self.field_text.set(left);
+        text
+    }
+
+    /// Spends `n` bytes of the field and layer text allowance; `false` when too few are left.
+    pub(super) fn field_charge(&self, n: usize) -> bool {
+        let left = self.field_text.get();
+        self.field_text.set(left.saturating_sub(n));
+        n <= left
+    }
+
     pub(super) fn budgeted_text(&self, d: &Dictionary, key: &[u8], budget: &mut usize) -> Option<String> {
-        let o = self.resolve(d.get(key).ok()?);
-        let (Object::String(bytes, _) | Object::Name(bytes)) = o else { return None };
-        let text = spend(bytes, budget, |_| trimmed_text(o).unwrap_or_default())?;
-        (!text.is_empty()).then_some(text)
+        self.budgeted_text_within(d, key, budget).ok().flatten()
+    }
+
+    /// [`Self::budgeted_text`], but `Err` when the text is there and does not fit `budget`
+    /// (against `Ok(None)`: no text, or none that trims to anything).
+    pub(super) fn budgeted_text_within(&self, d: &Dictionary, key: &[u8], budget: &mut usize) -> Result<Option<String>, ()> {
+        let Ok(o) = d.get(key) else { return Ok(None) };
+        let o = self.resolve(o);
+        let (Object::String(bytes, _) | Object::Name(bytes)) = o else { return Ok(None) };
+        let text = spend(bytes, budget, |_| trimmed_text(o).unwrap_or_default()).ok_or(())?;
+        Ok((!text.is_empty()).then_some(text))
+    }
+
+    /// [`Self::field_text`], but `Err` when the text does not fit the allowance.
+    pub(super) fn field_text_within(&self, d: &Dictionary, key: &[u8]) -> Result<Option<String>, ()> {
+        let mut left = self.field_text.get();
+        let text = self.budgeted_text_within(d, key, &mut left);
+        self.field_text.set(left);
+        text
     }
 
     pub(super) fn name(&self, d: &Dictionary, key: &[u8]) -> Option<String> {

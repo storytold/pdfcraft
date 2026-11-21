@@ -39,6 +39,29 @@ fn search_document(a: &mut Automation, pages: usize) -> DocId {
 }
 
 #[test]
+fn form_fill_cannot_print_but_js_run_can() {
+    let mut a = Automation::new();
+    let doc = search_document(&mut a, 1);
+    json(&mut a, "form_add_field", json!({ "doc": doc.0, "page": 1, "type": "text", "rect": [20, 20, 180, 42], "name": "Qty" }));
+    json(
+        &mut a,
+        "form_set_script",
+        json!({ "doc": doc.0, "field": "Qty", "event": "validate", "script": "this.print(); console.println('validated');" }),
+    );
+    json(&mut a, "form_fill", json!({ "doc": doc.0, "values": { "Qty": "4" } }));
+    let output = a.session.take_js_output(doc);
+    assert!(output.requests.is_empty(), "{output:?}");
+    assert!(output.console.contains(&"validated".to_string()), "{output:?}");
+    assert!(output.console.iter().any(|line| line.contains("Print") && line.contains("ignored")), "{output:?}");
+    assert!(output.errors.is_empty(), "{output:?}");
+    let fields = json(&mut a, "form_fields", json!({ "doc": doc.0 }));
+    let qty = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "Qty").unwrap();
+    assert_eq!(qty["value"], "4");
+    let explicit = json(&mut a, "js_run", json!({ "doc": doc.0, "script": "this.print();" }));
+    assert_eq!(explicit["requests"], json!([{ "print": true }]));
+}
+
+#[test]
 fn search_cache_stays_bounded_reextracts_and_follows_edits_and_close() {
     let mut a = Automation::new();
     a.texts = TextCache::new(16 * 1024);
@@ -522,6 +545,34 @@ fn invalid_save_bytes_never_reach_publication_or_mark_saved() {
     json(&mut a, "doc_save", json!({"doc": id.0}));
     assert!(!a.session.get(id).unwrap().dirty);
     assert_ne!(std::fs::read(&target).unwrap(), old);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn doc_rename_moves_the_file_and_refuses_with_reasons() {
+    let dir = staging_dir("rename");
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let id = search_document(&mut a, 2);
+    let err = |a: &mut Automation, args: Value| a.call("doc_rename", &args).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(err(&mut a, json!({"doc": id.0, "name": "x"})).contains("no file yet"), "never saved");
+    json(&mut a, "doc_save", json!({"doc": id.0, "path": "first.pdf"}));
+    std::fs::write(dir.join("taken.pdf"), b"other").unwrap();
+    assert!(err(&mut a, json!({"doc": id.0, "name": "taken"})).contains("already exists"));
+    assert!(err(&mut a, json!({"doc": id.0, "name": "CON"})).contains("reserves"));
+    assert!(err(&mut a, json!({"doc": id.0, "name": "a/b"})).contains("can't contain"));
+    let out = json(&mut a, "doc_rename", json!({"doc": id.0, "name": "Second"}));
+    assert_eq!(out["name"], "Second.pdf");
+    assert!(dir.join("Second.pdf").exists() && !dir.join("first.pdf").exists());
+    assert_eq!(listing(&dir), ["Second.pdf", "taken.pdf"]);
+    // Unsaved changes are never left behind in a renamed file.
+    json(&mut a, "page_rotate", json!({"doc": id.0, "pages": [1], "degrees": 90}));
+    assert!(err(&mut a, json!({"doc": id.0, "name": "third"})).contains("unsaved changes"));
+    json(&mut a, "doc_save", json!({"doc": id.0}));
+    json(&mut a, "doc_rename", json!({"doc": id.0, "name": "third.pdf"}));
+    assert_eq!(
+        a.session.get(id).unwrap().path.as_deref().map(Path::new).and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned()).as_deref(),
+        Some("third.pdf")
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 

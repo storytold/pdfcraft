@@ -69,12 +69,17 @@ pub fn embed(doc: &Document, evidence: &Evidence) -> Result<Vec<u8>, SignError> 
     let mut dss = Dict::new();
     dss.set(b"Type".to_vec(), Object::name("DSS"));
     dss.set(b"Filter".to_vec(), Object::name("Adobe.PPKLite"));
-    dss.set(b"Certs".to_vec(), Object::Ref(doc.add(Object::Array(cert_refs.clone()))));
-    if !ocsp_refs.is_empty() {
-        dss.set(b"OCSPs".to_vec(), Object::Ref(doc.add(Object::Array(ocsp_refs.clone()))));
+    // Each list is one indirect array the store and every signature's VRI entry point to, so the
+    // output does not grow with signatures times evidence.
+    let cert_list = Object::Ref(doc.add(Object::Array(cert_refs)));
+    let ocsp_list = (!ocsp_refs.is_empty()).then(|| Object::Ref(doc.add(Object::Array(ocsp_refs))));
+    let crl_list = (!crl_refs.is_empty()).then(|| Object::Ref(doc.add(Object::Array(crl_refs))));
+    dss.set(b"Certs".to_vec(), cert_list.clone());
+    if let Some(l) = &ocsp_list {
+        dss.set(b"OCSPs".to_vec(), l.clone());
     }
-    if !crl_refs.is_empty() {
-        dss.set(b"CRLs".to_vec(), Object::Ref(doc.add(Object::Array(crl_refs.clone()))));
+    if let Some(l) = &crl_list {
+        dss.set(b"CRLs".to_vec(), l.clone());
     }
     // Keep any existing /VRI entries, then cover every signature in the file.
     let mut vri =
@@ -82,12 +87,12 @@ pub fn embed(doc: &Document, evidence: &Evidence) -> Result<Vec<u8>, SignError> 
     for contents in crate::pdf::signature_contents(&doc) {
         let mut e = Dict::new();
         e.set(b"Type".to_vec(), Object::name("VRI"));
-        e.set(b"Cert".to_vec(), Object::Array(cert_refs.clone()));
-        if !ocsp_refs.is_empty() {
-            e.set(b"OCSP".to_vec(), Object::Array(ocsp_refs.clone()));
+        e.set(b"Cert".to_vec(), cert_list.clone());
+        if let Some(l) = &ocsp_list {
+            e.set(b"OCSP".to_vec(), l.clone());
         }
-        if !crl_refs.is_empty() {
-            e.set(b"CRL".to_vec(), Object::Array(crl_refs.clone()));
+        if let Some(l) = &crl_list {
+            e.set(b"CRL".to_vec(), l.clone());
         }
         vri.set(vri_key(&contents).into_bytes(), Object::Dict(e));
     }

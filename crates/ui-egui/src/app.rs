@@ -64,7 +64,7 @@ impl PdfCraftApp {
         }
     }
 
-    /// Construct an application with the default session, panels, theme and control state.
+    /// Construct default session, panels, theme and control state with no active property-edit session.
     pub fn new() -> Self {
         Self {
             panes: Default::default(),
@@ -72,6 +72,8 @@ impl PdfCraftApp {
             status_captions_lang: None,
             views: Vec::new(),
             closed_tabs: Vec::new(),
+            rename_draft: None,
+            rename_returned: rename_ui::Returned::default(),
             active: None,
             mode: Mode::AllTools,
             default_mode: Mode::AllTools,
@@ -110,6 +112,7 @@ impl PdfCraftApp {
             scroll_speed: scroll_speed::ScrollSpeed::default(),
             invert_middle_drag: false,
             animation_effects: motion::AnimationEffects::default(),
+            full_screen_escape_exits: true,
             motion: motion::Motion::default(),
             language: i18n::AUTO.to_string(),
             ui_scale: None,
@@ -132,6 +135,8 @@ impl PdfCraftApp {
             updates: updates::Updates::default(),
             printer_source: None,
             options_source: None,
+            default_paper_source: None,
+            printer_papers_source: None,
             spooler: None,
             two_sided_source: None,
             print_tasks: print_ui::PrintTasks::default(),
@@ -175,6 +180,8 @@ impl PdfCraftApp {
             open_prepare_gate: None,
             pinned: Default::default(),
             recent_check: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            reveal_errors: Default::default(),
             pinned_tools: Vec::new(),
             pin_tool_search: String::new(),
             toast: None,
@@ -183,6 +190,7 @@ impl PdfCraftApp {
             script_messages_dropped: 0,
             toast_dropped: 0,
             integrated_titlebar: false,
+            titlebar_lights_right: None,
             window_controls: None,
             system_title_bar: false,
             app_frame_shown: None,
@@ -209,6 +217,7 @@ impl PdfCraftApp {
             attachment_description_draft: None,
             view_draft: None,
             custom_draft: None,
+            props_session: None,
             requests: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             pickers: Default::default(),
@@ -247,6 +256,8 @@ impl PdfCraftApp {
             compare_pages: String::new(),
             compare: None,
             js_console: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            script_pending: None,
             doc_js: Default::default(),
             a11y: a11y_ui::A11yState::default(),
             tags_state: Default::default(),
@@ -440,6 +451,10 @@ impl PdfCraftApp {
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
     /// on the document underneath it.
     pub(crate) fn modal_open(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.script_pending.as_ref().is_some_and(|pending| pending.has_prompt()) {
+            return true;
+        }
         self.dialog.is_some()
             || self.close_request.is_some()
             || self.password_prompt.is_some()
@@ -559,7 +574,7 @@ impl eframe::App for PdfCraftApp {
     /// Each frame's work before drawing: opens, operating-system and control-channel requests,
     /// the quit guard, shortcuts, and the background jobs' results.
     ///
-    /// Last-resort guard (AGENTS.md §4, #3914): a panic in a frame is reported and the app, with
+    /// Last-resort guard (app-agents.md rule 13, #3914): a panic in a frame is reported and the app, with
     /// every open tab, keeps running; see `frame_guard`.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.begin_logic();
@@ -582,6 +597,8 @@ impl PdfCraftApp {
         self.injected_panic(crate::frame_guard::FramePart::Logic);
         self.ctx = Some(ctx.clone());
         #[cfg(not(target_arch = "wasm32"))]
+        self.poll_script_dialog(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
         self.window_state.repair(ctx);
         self.dialog_epoch();
         // Notices raised outside `ui` (opened files, OS events, the control channel) translate too.
@@ -597,6 +614,7 @@ impl PdfCraftApp {
                 worker.set_context(ctx);
             }
             self.poll_pending_opens();
+            self.show_reveal_errors();
             self.poll_pending_destinations();
         }
         self.check_restored_recent();
@@ -711,6 +729,7 @@ impl PdfCraftApp {
             let out = self.session.take_js_output(id);
             self.handle_js(id, out);
         }
+        self.script_tick(ctx);
         if let Some(mut control) = self.control.take() {
             control.tick(ctx, self);
             self.control = Some(control);
@@ -790,6 +809,7 @@ impl PdfCraftApp {
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]
         self.process_picked();
+        self.reopen_returned_rename();
         self.settle_presign();
         // Last, after everything that can open or answer the "save changes?" question.
         self.attend_save_prompt(ctx);
