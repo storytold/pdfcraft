@@ -12,7 +12,7 @@ use craft::behavior::{CanvasView, PointerButton, PressPhase, Selection};
 use craft::host::queue::{JobQueue, QueueOptions};
 use craft::pages::ui::{PageBody, PageView, PageViewOutput, PageViewState, PlacedPage, TextMark, TextMarks, TextSelectState, TextSelection};
 use craft::review::ui::annotate::AnnotateWords;
-use craft::ui::canvas::{ContextRequest, Momentary, NavigationOptions, PageBorder, ToolHost};
+use craft::ui::canvas::{ContextRequest, Momentary, NavigationOptions, PageBorder, PasteboardColor, ToolHost};
 use craft::ui::contract::{Props as _, Show as _};
 use craft::ui::display::Text;
 use craft::ui::list::OpenSet;
@@ -1677,6 +1677,8 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         Color32::from_rgb(r, g, b)
     });
     let table_preview = crate::field_table_ui::preview(&mut app.dialogs, doc_id);
+    // Full screen shows the pages on black, as production does.
+    let surround = if app.full_screen_document() { PasteboardColor::Black } else { PasteboardColor::Default };
     let view = &mut app.views[index];
     // PLAN: assumed `page_tools::seen_tool(&PageSession, QuickTool) -> QuickTool`, the placing rule `page_tool`
     // applies (copied comments on the pointer make the page see Select), so the parts gate on the same tool.
@@ -1803,13 +1805,12 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     let mut callbacks = PageCallbacks { session, momentary, cx: &cx, out: &mut body_out, parts: None, field_arrived: false };
     let out = ui
         .push_id(view_key, |ui| {
-            PageView::new(tl!("Pages"), &source, state, DataColor::new(paper)).navigation(navigation).border(border).keep(&keep).show_at_with(
-                ui,
-                rect,
-                &mut callbacks,
-                page_before,
-                page_body,
-            )
+            PageView::new(tl!("Pages"), &source, state, DataColor::new(paper))
+                .navigation(navigation)
+                .border(border)
+                .pasteboard(surround)
+                .keep(&keep)
+                .show_at_with(ui, rect, &mut callbacks, page_before, page_body)
         })
         .inner;
     if view.view.continuous
