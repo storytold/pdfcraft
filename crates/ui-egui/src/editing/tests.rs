@@ -585,7 +585,18 @@ fn closing_the_window_runs_will_close_once_for_each_document() {
     // CodeRabbit on #7991: nothing lets a later close skip the question. The platform kept the
     // window open, and an edit made since asks to be saved as any other does.
     assert!(!app.allow_quit, "no override is left set");
+    // The later edit is in the second tab, after one whose only changes are Will Close's.
+    app.active = Some(1);
     let id = app.active_ids().map(|(_, id)| id).expect("a document is active");
     assert!(app.apply_edit(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Edited after".into() }));
-    assert_eq!(app.first_dirty_beyond_will_close(), app.views.iter().position(|v| v.id == id), "the later edit holds the close");
+    let edited = app.views.iter().position(|v| v.id == id);
+    assert_eq!(app.first_dirty_beyond_will_close(), edited, "the later edit holds the close");
+    // CodeRabbit on #7991: the Quit question, and its answer, are about that document, not the
+    // earlier tab: discarding it quits with no question about the first.
+    assert_ne!(app.first_dirty(), edited);
+    assert_eq!(app.close_request_tab(crate::CloseRequest::Quit), edited);
+    app.close_request = Some(crate::CloseRequest::Quit);
+    app.resolve_close(&egui::Context::default(), Some(false));
+    assert!(app.session.get(id).is_none() && app.views.len() == 1, "the edited document closed");
+    assert!(app.close_request.is_none() && app.allow_quit, "and the quit went ahead");
 }

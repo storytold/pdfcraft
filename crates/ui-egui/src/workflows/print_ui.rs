@@ -103,20 +103,13 @@ pub(crate) struct PrintTasks {
     /// The browser print being drawn, a sheet a frame (`web_print`).
     #[cfg(target_arch = "wasm32")]
     web_job: Option<crate::web_print::WebPrintJob>,
-    /// What went wrong after the browser print page was handed over, with the print-ready PDF
-    /// to download instead.
-    #[cfg(target_arch = "wasm32")]
-    web_failed: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-    /// The last browser print's PDF and name, for that fallback.
-    #[cfg(target_arch = "wasm32")]
-    web_last: Option<(String, std::sync::Arc<Vec<u8>>)>,
-    /// The document the browser print being drawn is of, for its Did Print actions, kept until
-    /// the browser has taken the print (`web_printed`) or it failed.
+    /// The document the browser print being drawn (`web_job`) is of, for its Did Print actions.
     #[cfg(target_arch = "wasm32")]
     web_doc: Option<pdfcraft_engine::DocId>,
-    /// Set by the print page once `window.print()` returned: the print was handed over.
+    /// The print page handed to the browser, until `window.print()` returns or it fails; its
+    /// own flags, so an earlier page can't settle a later print.
     #[cfg(target_arch = "wasm32")]
-    web_printed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    web_handoff: Option<crate::web_print::Handoff<pdfcraft_engine::DocId>>,
 }
 
 /// The printers to offer when no [`PrinterSource`] is set: the spooler's, or in a browser its
@@ -790,17 +783,8 @@ impl PdfCraftApp {
     /// Draw the next sheet of the browser print, and hand the finished page to the browser.
     #[cfg(target_arch = "wasm32")]
     fn poll_web_print(&mut self) {
-        let failed: Vec<String> = self.print_tasks.web_failed.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
-        if let Some(e) = failed.into_iter().next() {
-            // The print never reached the browser's dialog: no Did Print.
-            self.print_tasks.web_doc = None;
-            self.web_print_failed(&e);
-        }
-        // The browser took the print (`window.print()` returned): its Did Print actions run now.
-        if self.print_tasks.web_printed.swap(false, std::sync::atomic::Ordering::SeqCst)
-            && let Some(id) = self.print_tasks.web_doc.take()
-        {
-            self.did_print(id);
+        if let Some(ended) = crate::web_print::Handoff::settle(&mut self.print_tasks.web_handoff) {
+            self.web_print_settled(ended);
         }
         let Some(job) = self.print_tasks.web_job.as_mut() else { return };
         if !job.finished() {
@@ -817,37 +801,39 @@ impl PdfCraftApp {
             return;
         }
         let Some(mut job) = self.print_tasks.web_job.take() else { return };
+        let Some(id) = self.print_tasks.web_doc.take() else { return };
         let html = job.html();
         let urls = job.take_urls();
-        self.print_tasks.web_last = Some((job.name.clone(), job.pdf.clone()));
-        self.print_tasks.web_printed.store(false, std::sync::atomic::Ordering::SeqCst);
-        match crate::web_print::print_in_iframe(
-            &html,
-            urls,
-            self.print_tasks.web_failed.clone(),
-            self.print_tasks.web_printed.clone(),
-            self.ctx.clone(),
-        ) {
-            // Did Print waits for the page to hand the print to the browser (polled above).
-            Ok(()) => self.notify_tr("Opening the browser's print dialog…"),
-            Err(e) => {
-                self.print_tasks.web_doc = None;
-                self.web_print_failed(&e);
+        let handoff = crate::web_print::Handoff::new(id, job.name.clone(), job.pdf.clone());
+        match crate::web_print::print_in_iframe(&html, urls, handoff.failed.clone(), handoff.printed.clone(), self.ctx.clone()) {
+            // Did Print waits for this page to hand the print to the browser (settled above).
+            Ok(()) => {
+                if let Some(ended) = crate::web_print::Handoff::replace(&mut self.print_tasks.web_handoff, handoff) {
+                    self.web_print_settled(ended);
+                }
+                self.notify_tr("Opening the browser's print dialog…");
             }
+            Err(e) => self.web_print_failed(&e, &handoff.name, &handoff.pdf),
+        }
+    }
+
+    /// A browser print page has ended: run its document's Did Print actions, or report why it
+    /// didn't print.
+    #[cfg(target_arch = "wasm32")]
+    fn web_print_settled(&mut self, ended: crate::web_print::Settled<pdfcraft_engine::DocId>) {
+        match ended {
+            crate::web_print::Settled::Printed(id) => self.did_print(id),
+            crate::web_print::Settled::Failed { error, name, pdf } => self.web_print_failed(&error, &name, &pdf),
         }
     }
 
     /// The browser wouldn't print (a sandboxed frame, a picture it couldn't decode): offer the
-    /// print-ready PDF as a download instead, so the work isn't lost.
+    /// print-ready PDF (`name`, `pdf`) as a download instead, so the work isn't lost. No Did Print.
     #[cfg(target_arch = "wasm32")]
-    fn web_print_failed(&mut self, error: &str) {
-        let Some((name, pdf)) = self.print_tasks.web_last.take() else {
-            self.notify_error(error);
-            return;
-        };
+    fn web_print_failed(&mut self, error: &str, name: &str, pdf: &[u8]) {
         let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF");
         let file = format!("{stem} (print).pdf");
-        match crate::editing::download(&file, &pdf) {
+        match crate::editing::download(&file, pdf) {
             Ok(()) => self.notify_fmt("Couldn't print from the browser ({e}); downloaded {name} to print instead", &[("e", error), ("name", &file)]),
             Err(_) => self.notify_error(error),
         }

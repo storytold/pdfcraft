@@ -117,25 +117,29 @@ impl PdfCraftApp {
         (0..self.views.len()).find(|&i| self.has_unsaved_work(i))
     }
 
+    /// The tab close request `req` asks about next: the prompt and its answer use this one
+    /// choice, so they are about the same document. Quit leaves out a document whose only
+    /// unsaved changes its Will Close actions made ([`Self::first_dirty_beyond_will_close`]), as
+    /// deciding whether to ask does.
+    pub(crate) fn close_request_tab(&self, req: CloseRequest) -> Option<usize> {
+        match req {
+            CloseRequest::Tab(id) => self.asking_tab(id),
+            CloseRequest::Quit => self.first_dirty_beyond_will_close(),
+            CloseRequest::All => self.first_dirty(),
+        }
+    }
+
     /// Answer the save prompt: `Some(true)` save, `Some(false)` discard, `None` cancel.
     pub fn resolve_close(&mut self, ctx: &egui::Context, choice: Option<bool>) {
         let Some(req) = self.close_request.take() else { return };
         // The next question (another dirty document) starts on Save again.
         self.save_prompt_button = Default::default();
-        let index = match req {
-            CloseRequest::Tab(id) => match self.asking_tab(id) {
-                Some(i) => i,
-                None => return, // already closed
-            },
-            CloseRequest::Quit | CloseRequest::All => match self.first_dirty() {
-                Some(i) => i,
-                None => {
-                    if req == CloseRequest::Quit {
-                        self.quit(ctx);
-                    }
-                    return;
-                }
-            },
+        let Some(index) = self.close_request_tab(req) else {
+            // A tab already closed, or no document left to ask about.
+            if req == CloseRequest::Quit {
+                self.quit(ctx);
+            }
+            return;
         };
         // Quitting closes the unsaved tabs one by one (and brings each forward to save it):
         // remember what was open, and which tab was active, before the first one goes (#442).
@@ -188,7 +192,7 @@ impl PdfCraftApp {
         // A newer prompt wins: the user may have started another close while a save was pending,
         // and seen its question, which keeps counting as seen.
         if whole && self.close_request.is_none() {
-            match self.first_dirty() {
+            match self.close_request_tab(req) {
                 Some(_) => {
                     // A question about the next document is a new one.
                     self.save_prompt_seen = false;

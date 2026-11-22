@@ -5,7 +5,7 @@ use egui::{Align, Layout};
 use crate::theme::{self, Tokens};
 use pdfcraft_engine::Edit;
 
-use crate::{CloseRequest, Dialog, PdfCraftApp, PropsTab, panels::human_size, widgets};
+use crate::{Dialog, PdfCraftApp, PropsTab, panels::human_size, widgets};
 
 pub(super) mod appearance;
 pub mod bookmark_styles_ui;

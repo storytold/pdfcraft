@@ -328,11 +328,99 @@ pub(crate) fn print_in_iframe(
     Ok(())
 }
 
+/// A print page handed to the browser ([`print_in_iframe`]), waiting for `window.print()` to
+/// return or fail. Each hand-off has its own `failed` and `printed`, so a print can't take
+/// another print's outcome; `doc` is whose Did Print actions run, `name` and `pdf` the download
+/// offered if it fails.
+pub(crate) struct Handoff<D> {
+    pub doc: D,
+    pub name: String,
+    pub pdf: std::sync::Arc<Vec<u8>>,
+    pub failed: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    pub printed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// How a [`Handoff`] ended.
+pub(crate) enum Settled<D> {
+    /// The browser took the print: run `D`'s Did Print actions.
+    Printed(D),
+    /// The print never reached the dialog: report the error and offer the PDF.
+    Failed { error: String, name: String, pdf: std::sync::Arc<Vec<u8>> },
+}
+
+impl<D> Handoff<D> {
+    pub fn new(doc: D, name: String, pdf: std::sync::Arc<Vec<u8>>) -> Self {
+        Self { doc, name, pdf, failed: Default::default(), printed: Default::default() }
+    }
+
+    /// Take `slot`'s hand-off if it has ended, leaving one still pending in place. A failure
+    /// wins: a print that reported an error never printed.
+    pub fn settle(slot: &mut Option<Self>) -> Option<Settled<D>> {
+        let h = slot.as_ref()?;
+        let error = h.failed.lock().ok().and_then(|mut q| (!q.is_empty()).then(|| q.remove(0)));
+        if error.is_none() && !h.printed.load(std::sync::atomic::Ordering::SeqCst) {
+            return None;
+        }
+        let h = slot.take()?;
+        Some(match error {
+            Some(error) => Settled::Failed { error, name: h.name, pdf: h.pdf },
+            None => Settled::Printed(h.doc),
+        })
+    }
+
+    /// Put `next` in `slot`. [`print_in_iframe`] removes the earlier print page, so an earlier
+    /// hand-off still pending is dropped with no Did Print and no failure; one that already
+    /// ended is returned, to be acted on first.
+    pub fn replace(slot: &mut Option<Self>, next: Self) -> Option<Settled<D>> {
+        let ended = Self::settle(slot);
+        *slot = Some(next);
+        ended
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const LETTER: (f64, f64) = (612.0, 792.0);
+
+    fn handoff(doc: u32) -> Handoff<u32> {
+        Handoff::new(doc, format!("{doc}.pdf"), std::sync::Arc::new(vec![]))
+    }
+
+    #[test]
+    fn an_earlier_print_page_finishing_late_settles_nothing_of_the_later_print() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let mut slot = None;
+        assert!(Handoff::replace(&mut slot, handoff(1)).is_none());
+        let (a_printed, a_failed) = {
+            let a = slot.as_ref().unwrap();
+            (a.printed.clone(), a.failed.clone())
+        };
+        // Print 2 is handed over while print 1's page is still decoding.
+        assert!(Handoff::replace(&mut slot, handoff(2)).is_none());
+        // Print 1's page now prints, or fails: neither is print 2's outcome.
+        a_printed.store(true, SeqCst);
+        assert!(Handoff::settle(&mut slot).is_none());
+        a_failed.lock().unwrap().push("late".into());
+        assert!(Handoff::settle(&mut slot).is_none());
+        assert!(slot.as_ref().is_some_and(|h| h.doc == 2), "print 2 still waits for its own page");
+        // Print 2's own page printing settles print 2.
+        slot.as_ref().unwrap().printed.store(true, SeqCst);
+        assert!(matches!(Handoff::settle(&mut slot), Some(Settled::Printed(2))));
+        assert!(slot.is_none());
+    }
+
+    #[test]
+    fn a_print_that_ended_before_the_next_is_handed_over_still_settles() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let mut slot = Some(handoff(1));
+        slot.as_ref().unwrap().printed.store(true, SeqCst);
+        assert!(matches!(Handoff::replace(&mut slot, handoff(2)), Some(Settled::Printed(1))));
+        slot.as_ref().unwrap().failed.lock().unwrap().push("no dialog".into());
+        slot.as_ref().unwrap().printed.store(true, SeqCst);
+        assert!(matches!(Handoff::settle(&mut slot), Some(Settled::Failed { name, .. }) if name == "2.pdf"), "a failure wins over printed");
+    }
 
     #[test]
     fn resolution_falls_with_the_sheet_count_and_long_jobs_are_refused() {
