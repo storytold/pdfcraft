@@ -1,0 +1,15 @@
+PR #4672: Native and WebAssembly Clippy cleanup
+Date: 2026-11-22
+
+Native-only rendering helpers and UI state are gated for WebAssembly.
+Current Clippy diagnostics use equivalent match guards, optional-value checks,
+lazy author fallbacks and boolean conditions. Path-closing and cycle guards,
+Unicode exclusions, floating-point rejection semantics and test assertions are
+preserved. No new lint allowances or test skips were added in this refresh.
+
+Local validation passed: formatting; strict native Clippy for all affected crates,
+app and CLI targets; strict WebAssembly library Clippy and all render test targets.
+Existing close-path, hairline, form encoding, XFDF appearance, transparency and
+redaction metadata regressions also passed. Windows CI was not run locally.
+
+This fragment replaces this PR's competing shared-roadmap log and milestone edits.
