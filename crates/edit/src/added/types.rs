@@ -151,6 +151,9 @@ pub struct AddedText {
     pub rect: [f64; 4],
     pub text: String,
     pub family: Family,
+    /// A full face the user chose (built-in Inter, a system font or a font they added). It draws
+    /// every character of the item; `family` is the fallback for items saved without one.
+    pub font: Option<pdfcraft_fonts::DocumentFont>,
     pub bold: bool,
     pub italic: bool,
     pub size: f64,
@@ -221,6 +224,7 @@ impl Default for AddedText {
             rect: [0.0; 4],
             text: String::new(),
             family: Family::Helvetica,
+            font: None,
             bold: false,
             italic: false,
             size: 12.0,

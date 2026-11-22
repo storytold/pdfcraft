@@ -32,6 +32,9 @@ pub enum ShapedScript {
     /// ([`crate::document_latin_fonts`]), which every build has: for the ones WinAnsiEncoding
     /// lacks, beside the standard font that draws the rest.
     Latin,
+    /// A full face the user chose for an added text item. Its glyph ids belong to that program,
+    /// which the caller supplies to [`crate::face_glyph`]; there is no static face to name here.
+    Custom,
 }
 
 impl ShapedScript {
@@ -41,6 +44,7 @@ impl ShapedScript {
             Self::Hebrew => crate::document_hebrew_font(false),
             Self::Thai => crate::document_thai_font(),
             Self::Latin => crate::document_latin_fonts(false).into_iter().next(),
+            Self::Custom => None,
         }
     }
 }
@@ -55,6 +59,7 @@ fn face(script: ShapedScript) -> Option<&'static (FontRef<'static>, ShaperData)>
         ShapedScript::Hebrew => &HEBREW,
         ShapedScript::Thai => &THAI,
         ShapedScript::Latin => &LATIN,
+        ShapedScript::Custom => return None,
     };
     cache
         .get_or_init(|| {
@@ -146,11 +151,13 @@ fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedC
             LatinRun::Cyrillic => script::CYRILLIC,
             LatinRun::Latin => script::LATIN,
         },
+        // A user face is shaped by `source_shaping`, not by a static face here.
+        ShapedScript::Custom => return Err(GlyphError::NoFont),
     });
     // Preserve the historical Arabic per-character mapping; Hebrew, Thai and Latin marks stay with their base.
     buffer.set_cluster_level(match kind {
         ShapedScript::Arabic => BufferClusterLevel::Characters,
-        ShapedScript::Hebrew | ShapedScript::Thai | ShapedScript::Latin => BufferClusterLevel::MonotoneGraphemes,
+        ShapedScript::Hebrew | ShapedScript::Thai | ShapedScript::Latin | ShapedScript::Custom => BufferClusterLevel::MonotoneGraphemes,
     });
     let shaped = shaper.shape(buffer, ShapeOptions::new());
     // Clusters are byte offsets into `text`; a cluster shows the characters up to the next one.

@@ -14,7 +14,23 @@ pub(super) fn norm(r: [f64; 4]) -> [f64; 4] {
 /// The advance of `s` in the item's standard font: its glyphs' widths and the character spacing
 /// after each of them, as `Tc` moves the pen (ISO 32000-2 §9.3.2).
 pub(super) fn latin_width(t: &AddedText, s: &str) -> f64 {
+    if t.font.is_some() { custom_width(t, s) } else { standard_width(t, s) }
+}
+
+/// [`latin_width`] for the item's standard-14 family, ignoring a chosen full face.
+fn standard_width(t: &AddedText, s: &str) -> f64 {
     t.family.width(s, t.size, t.bold, t.italic) + t.char_spacing * s.chars().count() as f64
+}
+
+/// The advance of `s` in the full face the user chose, measured by shaping it. A run the program
+/// can't shape is measured by the standard font, and drawing reports the character it lacks.
+fn custom_width(t: &AddedText, s: &str) -> f64 {
+    if let Some(font) = &t.font
+        && let Ok(run) = pdfcraft_fonts::source_shaping::shape(font.bytes(), s)
+    {
+        return run.advance * t.size + t.char_spacing * s.chars().count() as f64;
+    }
+    standard_width(t, s)
 }
 
 /// The lines of a text item after wrapping to its box width.
@@ -33,12 +49,18 @@ thread_local! {
 pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
     #[cfg(test)]
     WRAP_CALLS.with(|c| c.set(c.get().saturating_add(1)));
+    if t.font.is_some() {
+        return custom_wrapped(t);
+    }
     let width = (t.rect[2] - t.rect[0]).max(t.size);
     let mut out = Vec::new();
     for (index, para) in t.text.split('\n').enumerate() {
         // Arabic or Hebrew: laid out with the bidirectional algorithm and shaped.
         let rtl_script = para.chars().any(|c| is_arabic(c) || is_hebrew(c));
         let thai = para.chars().any(is_thai);
+        // Cyrillic, Greek and the Latin letters WinAnsiEncoding lacks are drawn from the bundled
+        // Inter face, which every build has; they wrap by that face's advances.
+        let latin = !rtl_script && !thai && para.chars().any(pdfcraft_fonts::shaped_text::latin_fallback);
         if thai
             && !rtl_script
             && let Ok(lines) = thai_lines(t, para, width)
@@ -51,12 +73,43 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
         // sum of its words' and shaping stays linear in the paragraph's length. The space is the
         // paragraph's; a space between Latin words is drawn in the item's font, a few hundredths
         // of an em apart.
-        let measure = |s: &str| if rtl_script || thai { shaped_width(t, s, rtl) } else { latin_width(t, s) };
+        let measure = |s: &str| if rtl_script || thai || latin { shaped_width(t, s, rtl) } else { latin_width(t, s) };
         let space = measure(" ");
         let (mut line, mut line_w) = (String::new(), 0.0);
         // Widths add up (the standard-14 widths have no kerning), so each word is measured once
         // and appended in place: a line that never fills (negative character spacing) stays
         // linear instead of being copied and measured again for every word.
+        for word in para.split(' ') {
+            let word_w = measure(word);
+            let candidate_w = if line.is_empty() { word_w } else { line_w + space + word_w };
+            if !line.is_empty() && candidate_w > width {
+                out.push((std::mem::take(&mut line), rtl, index));
+                line.push_str(word);
+                line_w = word_w;
+            } else {
+                if !line.is_empty() {
+                    line.push(' ');
+                }
+                line.push_str(word);
+                line_w = candidate_w;
+            }
+        }
+        out.push((line, rtl, index));
+    }
+    out
+}
+
+/// [`wrapped`] for an item drawn in a full face the user chose: every word is measured by that
+/// program, and a right-to-left paragraph takes the alignment its first strong character asks for.
+/// The whole line is shaped again when it is drawn.
+fn custom_wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
+    let width = (t.rect[2] - t.rect[0]).max(t.size);
+    let mut out = Vec::new();
+    for (index, para) in t.text.split('\n').enumerate() {
+        let rtl = unicode_bidi::get_base_direction(para) == unicode_bidi::Direction::Rtl;
+        let measure = |s: &str| latin_width(t, s);
+        let space = measure(" ");
+        let (mut line, mut line_w) = (String::new(), 0.0);
         for word in para.split(' ') {
             let word_w = measure(word);
             let candidate_w = if line.is_empty() { word_w } else { line_w + space + word_w };
@@ -190,10 +243,19 @@ pub(super) fn is_hebrew(c: char) -> bool {
 }
 
 /// The first character of `t` that would be drawn as `?`: outside WinAnsiEncoding and not drawn
-/// with the craft-fonts Arabic (#125) or Hebrew (#128) face, or Arabic or Hebrew that the face can't
-/// draw (or that has no face to draw it). Page-content tools refuse such text; the Add-text editor
-/// keeps it open.
+/// with the craft-fonts Arabic (#125) or Hebrew (#128) face, the bundled Inter face for Cyrillic,
+/// Greek and extra Latin letters, or the full face the item chose; also a character one of those
+/// faces lacks or has no face for. Page-content tools refuse such text; the Add-text editor keeps
+/// it open.
 pub fn first_undrawable(t: &AddedText) -> Option<char> {
+    if let Some(font) = &t.font {
+        // The chosen full program draws every line: a character it has no glyph for is the one
+        // to report, and line breaks or direction marks are not drawn.
+        return t.text.chars().find(|c| {
+            !matches!(*c, '\n' | '\r' | '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+                && !pdfcraft_fonts::face_has(font.bytes(), *c)
+        });
+    }
     if t.text.chars().any(is_thai) {
         if let Some(c) = t.text.chars().find(|c| is_thai(*c) && !pdfcraft_fonts::thai_has(*c)) {
             return Some(c);
@@ -212,6 +274,18 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
         // that is also how `draw` redraws an existing item, so it's checked that way.
         return t.text.split('\n').find_map(pdfcraft_fonts::first_non_win_ansi);
     }
+    // A character no shaped face has: not Arabic, Hebrew or Thai, outside WinAnsiEncoding, and
+    // absent from the bundled Inter face.
+    if let Some(c) = t.text.chars().find(|c| {
+        !matches!(*c, '\n' | '\r' | '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+            && !pdfcraft_fonts::win_ansi_encodable(*c)
+            && !is_arabic(*c)
+            && !is_hebrew(*c)
+            && !is_thai(*c)
+            && !pdfcraft_fonts::latin_has(*c)
+    }) {
+        return Some(c);
+    }
     // What `shaped_layout` leaves to the standard font, exactly as `draw_shaped` splits it.
     wrapped(t).into_iter().find_map(|(line, rtl, _)| {
         let (pieces, _) = shaped_layout(t, &line, rtl).ok()?;
@@ -222,11 +296,13 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
     })
 }
 
-/// Whether `t` has Arabic or Hebrew that its craft-fonts face draws (so `draw` lays it out with
-/// [`draw_shaped`]).
+/// Whether `t` has text a shaped face draws (so `draw` lays it out with [`draw_shaped`]): Arabic
+/// or Hebrew with its craft-fonts face, or the Cyrillic, Greek and extra Latin letters the bundled
+/// Inter face draws.
 fn shaped_by_a_face(t: &AddedText) -> bool {
     (pdfcraft_fonts::document_arabic_font().is_some() && t.text.chars().any(is_arabic))
         || (pdfcraft_fonts::document_hebrew_font(false).is_some() && t.text.chars().any(is_hebrew))
+        || t.text.chars().any(pdfcraft_fonts::shaped_text::latin_fallback)
 }
 
 /// An Arabic character the face shapes and draws (U+061C, a direction mark, is dropped).
@@ -294,7 +370,7 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
             segments.reverse();
         }
         for (script, s) in segments {
-            pieces.push(if let Some(script) = script {
+            if let Some(script) = script {
                 let shaped = match script {
                     ShapedScript::Arabic => shape_arabic(&s, run_rtl).map_err(|e| arabic_error(e, &s))?,
                     ShapedScript::Hebrew => shape_hebrew(&s, run_rtl).map_err(|e| hebrew_error(e, &s))?,
@@ -303,13 +379,21 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
                     ShapedScript::Latin => {
                         pdfcraft_fonts::shape_latin(&s).map_err(|e| EditError::Invalid(pdfcraft_fonts::shaped_text::latin_message(e, &s)))?
                     }
+                    // A chosen full face is drawn by `draw_custom`, never through this layout.
+                    ShapedScript::Custom => return Err(EditError::Invalid("the chosen font has no shaped layout here".into())),
                 };
-                Piece::Shaped(shaped)
+                pieces.push(Piece::Shaped(shaped));
             } else if run_rtl {
-                Piece::Latin(s.chars().rev().map(mirrored).collect())
+                pieces.push(Piece::Latin(s.chars().rev().map(mirrored).collect()));
             } else {
-                Piece::Latin(s)
-            });
+                // The standard font draws what WinAnsiEncoding holds; Cyrillic, Greek and the
+                // rest are shaped from the bundled Inter face, with combining marks kept on
+                // their letter.
+                pieces.extend(
+                    pdfcraft_fonts::shaped_text::fallback_pieces(&s, false, true)
+                        .map_err(|e| EditError::Invalid(pdfcraft_fonts::shaped_text::latin_message(e, &s)))?,
+                );
+            }
         }
     }
     let width = pdfcraft_fonts::shaped_text::pieces_width(&pieces, t.size, t.char_spacing, |s, _| latin_width(t, s));
@@ -410,6 +494,9 @@ fn copy_key(c: &Content) -> Content {
 
 /// The widest explicit line before wrapping, measured with the PDF writing fonts.
 pub fn text_width(t: &AddedText) -> f64 {
+    if t.font.is_some() {
+        return t.text.split('\n').map(|line| latin_width(t, line)).fold(0.0, f64::max);
+    }
     t.text.split('\n').map(|line| shaped_width(t, line, unicode_bidi::get_base_direction(line) == unicode_bidi::Direction::Rtl)).fold(0.0, f64::max)
 }
 

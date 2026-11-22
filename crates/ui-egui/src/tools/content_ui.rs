@@ -680,7 +680,7 @@ pub(crate) fn editor(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, in
     let Some(xf) = view.page_xform(page) else { return (None, false) };
     let zoom = xf.zoom();
     let Some(draft) = view.content.draft.as_mut() else { return (None, false) };
-    let font = crate::edit_text_ui::editor_font(&draft.style, (draft.style.size as f32 * zoom).clamp(1.0, 300.0));
+    let font = crate::edit_text_ui::editor_font_for(ctx, &draft.style, (draft.style.size as f32 * zoom).clamp(1.0, 300.0));
     let text = AddedText { text: draft.text.clone(), ..draft.style.clone() };
     let Some(page_width) = info.pages.get(page).map(|p| p.width as f64) else { return (None, false) };
     if let Some((key, z, width, rect)) = &view.content.layout
@@ -690,18 +690,21 @@ pub(crate) fn editor(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, in
     {
         draft.rect = *rect;
     } else {
+        // A new box grows rightwards until the page edge, so typing a long line does not wrap
+        // it early. Retyping an item that already exists keeps the width it was given: opening
+        // it again must not make the frame jump wider.
         let source = draft.style.rect;
-        if draft.index.is_some() && draft.text == draft.style.text {
-            draft.rect = source;
+        let width = if draft.index.is_some() {
+            source[2] - source[0]
         } else {
             let natural = ctx.fonts_mut(|f| f.layout_no_wrap(draft.text.clone(), font.clone(), Color32::BLACK).size().x) as f64 / zoom as f64;
             let width = natural.max(pdfcraft_engine::added_text_width(&text)) + 2.0;
             let available = page_width - source[0];
-            let width = width.max(source[2] - source[0]).min(available.max(1.0));
-            draft.rect = [source[0], source[1], source[0] + width, source[3]];
-            draft.rect = pdfcraft_engine::added_text_rect(&AddedText { rect: draft.rect, ..text.clone() });
-        }
-        view.content.layout = Some((text, zoom, page_width, draft.rect));
+            width.max(source[2] - source[0]).min(available.max(1.0))
+        };
+        let rect = pdfcraft_engine::added_text_rect(&AddedText { rect: [source[0], source[1], source[0] + width, source[3]], ..text.clone() });
+        draft.rect = rect;
+        view.content.layout = Some((text, zoom, page_width, rect));
     }
     let r = screen_rect(&xf, info, page, draft.rect);
     let source_rect = draft.index.map(|_| screen_rect(&xf, info, page, draft.style.rect));

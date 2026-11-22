@@ -157,6 +157,7 @@ impl PdfCraftApp {
             update_check_at_start: true,
             show_secured_notice: true,
             text_links: true,
+            font_scan_started: false,
             always_default_view: false,
             #[cfg(not(target_arch = "wasm32"))]
             watch: Default::default(),
@@ -596,6 +597,16 @@ impl PdfCraftApp {
         #[cfg(test)]
         self.injected_panic(crate::frame_guard::FramePart::Logic);
         self.ctx = Some(ctx.clone());
+        // The font menus need the installed document faces; scan once at startup, off the UI
+        // thread, so the list is usually ready before a text box is opened.
+        if !self.font_scan_started {
+            self.font_scan_started = true;
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let _ = crate::files::installed_font_files(ctx, false);
+                let _ = crate::files::user_font_files(ctx, false);
+            }
+        }
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_script_dialog(ctx);
         #[cfg(not(target_arch = "wasm32"))]
