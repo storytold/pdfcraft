@@ -519,11 +519,18 @@ fn plurals_and_placeholders() {
     assert_eq!(trn(JA(), 7, "{n} test item", "{n} test items"), "7 test items");
 }
 
-/// PdfCraft's plural rules before craft-i18n (form index by count), kept to show the crate's
-/// CLDR categories pick the same form of the same rows.
+/// Plural form indexes expected for each language. These reproduce PdfCraft's pre-craft-i18n
+/// rules for existing locales; Hebrew is new and uses CLDR's one/two/other categories.
 fn pdfcraft_plural_rule(code: &str) -> fn(u64) -> usize {
     fn one_other(n: u64) -> usize {
         usize::from(n != 1)
+    }
+    fn hebrew(n: u64) -> usize {
+        match n {
+            1 => 0, // one
+            2 => 1, // two
+            _ => 2, // other
+        }
     }
     fn none(_: u64) -> usize {
         0
@@ -593,6 +600,7 @@ fn pdfcraft_plural_rule(code: &str) -> fn(u64) -> usize {
         }
     }
     match code {
+        "he" => hebrew,
         "ja" | "zh-hans" | "zh-hant" | "tr" | "id" | "vi" | "th" | "lo" | "hi" | "ko" => none,
         "cs" => cs,
         "pt-br" | "fr" | "fa" => zero_one_other,
