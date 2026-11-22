@@ -78,8 +78,9 @@ fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if close {
         app.left_open = false;
     }
+    // egui reserves this gutter only when the floating scrollbar is shown.
+    ui.spacing_mut().scroll.floating_allocated_width = SCROLLBAR_GUTTER;
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        clear_of_scrollbar(ui);
         ui.add_space(2.0);
         let shown = if app.all_tools_expanded { TOOL_GROUPS.len() } else { COLLAPSED_TOOLS.min(TOOL_GROUPS.len()) };
         for g in &TOOL_GROUPS[..shown] {

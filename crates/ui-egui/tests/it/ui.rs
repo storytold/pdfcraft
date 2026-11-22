@@ -115,6 +115,99 @@ fn home_removes_one_recent_file_or_clears_them_all() {
     assert!(h.query_by_label("Clear Recent Files").is_none(), "and goes away with nothing left to clear");
 }
 
+fn all_tools_create_row(h: &Harness<'static, PdfCraftApp>) -> (egui::Rect, egui::Rect) {
+    let close = h.get_by_label("Close panel").rect();
+    let row = h
+        .query_all_by(|n| n.role() == egui::accesskit::Role::Button && n.label().as_deref() == Some("Create a PDF"))
+        .find(|n| n.rect().right() <= close.right() + 1.0)
+        .expect("Create a PDF in the All tools sidebar")
+        .rect();
+    (row, close)
+}
+
+fn all_tools_scrollbar(h: &Harness<'static, PdfCraftApp>, row: egui::Rect, close: egui::Rect) -> Option<egui::Rect> {
+    h.query_all_by(|n| n.role() == egui::accesskit::Role::ScrollBar)
+        .find(|n| n.rect().left() > row.center().x && n.rect().right() <= close.right() + 2.0)
+        .map(|n| n.rect())
+}
+
+#[test]
+fn all_tools_rows_have_balanced_insets_when_the_list_fits() {
+    let h = harness(|_| {});
+    let (row, close) = all_tools_create_row(&h);
+    assert!(all_tools_scrollbar(&h, row, close).is_none(), "the collapsed list fits");
+    let pane = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Rect(rect) if rect.rect.contains_rect(row) && rect.rect.contains_rect(close) => Some(rect.rect),
+            _ => None,
+        })
+        .min_by(|a, b| a.width().total_cmp(&b.width()))
+        .expect("painted Tools pane frame");
+    let left = row.left() - pane.left();
+    let right = pane.right() - row.right();
+    assert!((left - right).abs() <= 1.0, "row insets from Tools pane: left {left}, right {right}");
+    assert!((row.right() - close.right()).abs() <= 1.0, "row {row:?} aligns with Close {close:?}");
+}
+
+#[test]
+fn overflowing_all_tools_rows_and_pins_clear_the_scrollbar() {
+    for expand in [false, true] {
+        let mut h = harness(|_| {});
+        if expand {
+            h.get_by_label("View more").click();
+        } else {
+            h.set_size(egui::vec2(1400.0, 360.0));
+        }
+        h.run_steps(8);
+        let (row, close) = all_tools_create_row(&h);
+        let bar = all_tools_scrollbar(&h, row, close).expect("the All tools list overflows");
+        h.input_mut().events.push(egui::Event::PointerMoved(row.center()));
+        let ctx = h.ctx.clone();
+        let mut raw = std::mem::take(h.input_mut());
+        h.state_mut().prepare_raw_input(&ctx, &mut raw);
+        *h.input_mut() = raw;
+        h.step();
+        h.run_steps(2);
+        let pin = h.get_by_label("Pin to Home").rect();
+        assert!(row.right() <= bar.left() + 1.0, "row {row:?} clears scrollbar {bar:?}");
+        assert!(pin.right() <= bar.left() + 1.0, "pin {pin:?} clears scrollbar {bar:?}");
+
+        h.hover_at(bar.center());
+        h.run_steps(3);
+        let (hovered_row, close) = all_tools_create_row(&h);
+        let hovered_bar = all_tools_scrollbar(&h, hovered_row, close).expect("the bar stays visible on hover");
+        assert!((hovered_row.right() - row.right()).abs() <= 1.0, "hovering the scrollbar keeps the row width stable");
+        assert!(hovered_row.right() <= hovered_bar.left() + 1.0, "hovered scrollbar still clears the row");
+    }
+}
+
+#[test]
+fn all_tools_scrollbar_settles_when_resizing_across_the_overflow_threshold() {
+    let mut h = harness(|_| {});
+    let end = h.get_by_label("View more").rect().bottom();
+    let samples = [32.0, 24.0, 16.0, 8.0, 4.0, 0.0, -4.0, -8.0, -16.0];
+    for offsets in [samples.to_vec(), samples.into_iter().rev().collect()] {
+        let mut visibility = Vec::new();
+        for offset in offsets {
+            h.set_size(egui::vec2(1400.0, end + offset));
+            h.run_steps(5);
+            let (row, close) = all_tools_create_row(&h);
+            let visible = all_tools_scrollbar(&h, row, close).is_some();
+            visibility.push(visible);
+            for _ in 0..4 {
+                h.step();
+                let (next, close) = all_tools_create_row(&h);
+                assert_eq!(all_tools_scrollbar(&h, next, close).is_some(), visible, "height offset {offset}");
+                assert!((next.right() - row.right()).abs() <= 1.0, "row width holds at height offset {offset}");
+            }
+        }
+        assert_eq!(visibility.windows(2).filter(|pair| pair[0] != pair[1]).count(), 1, "{visibility:?}");
+    }
+}
+
 #[test]
 fn every_catalog_tool_is_listed_after_view_more() {
     let mut h = harness(|_| {});

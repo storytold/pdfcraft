@@ -1729,8 +1729,8 @@ milestone = "M4"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/ui.rs::every_catalog_tool_is_listed_after_view_more", "crates/engine/src/commands.rs::every_ready_catalogue_item_is_a_registered_command"]
-notes = ""
+evidence = ["crates/ui-egui/tests/it/ui.rs::every_catalog_tool_is_listed_after_view_more", "crates/engine/src/commands.rs::every_ready_catalogue_item_is_a_registered_command", "crates/ui-egui/tests/it/ui.rs::all_tools_rows_have_balanced_insets_when_the_list_fits", "crates/ui-egui/tests/it/ui.rs::overflowing_all_tools_rows_and_pins_clear_the_scrollbar"]
+notes = "The All tools sidebar reserves scrollbar space only when its list overflows, keeping the rows balanced when it fits and keeping row highlights and pins clear of the scrollbar when it scrolls (#8089, #5133)."
 
 [[feature]]
 id = "view.command-palette"
