@@ -885,11 +885,13 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
         };
         let shift = ui.input(|inp| inp.modifiers.shift);
         if d.grip == Grip::Move && !shift {
+            let moving = preview.shrink(2.0);
             let page_images = cx.doc.page_images(page);
-            let text_targets = boxes.iter().enumerate().filter(|(i, _)| *i != d.block).map(|(_, b)| *b);
+            let text_targets =
+                lines.iter().enumerate().filter(|(i, _)| *i != d.block).map(|(_, l)| xf.user_rect(info, page, l.rect.map(|v| v as f32)));
             let image_targets = page_images.iter().map(|im| crate::canvas::image_screen_rect(im, xf, info, page));
             let targets: Vec<Rect> = text_targets.chain(image_targets).chain(std::iter::once(xf.rect)).collect();
-            let snap = crate::tools::snap_guides::snap_rect(preview, targets, crate::tools::snap_guides::SNAP_THRESHOLD);
+            let snap = crate::tools::snap_guides::snap_rect(moving, targets, crate::tools::snap_guides::SNAP_THRESHOLD);
             preview = preview.translate(snap.offset);
             crate::tools::snap_guides::paint_guides(&painter, &snap.guides, Some(xf.rect));
         }

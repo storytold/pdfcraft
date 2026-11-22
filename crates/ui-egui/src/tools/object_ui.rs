@@ -397,6 +397,9 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, press: PagePress, vie
             }
         }
         if !down {
+            let snap_offset = s.snap_offset;
+            s.snap_offset = egui::Vec2::ZERO;
+            s.snap_guides.clear();
             if !gesture.marquee && gesture.start.distance(gesture.now) <= 3.0 && resp.double_clicked() {
                 s.clear();
                 return false;
@@ -428,9 +431,7 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, press: PagePress, vie
                     s.clear();
                 }
             } else if gesture.start.distance(gesture.now) > 3.0 && view.pending_edit.is_none() {
-                let snapped_now = gesture.now + s.snap_offset;
-                s.snap_offset = egui::Vec2::ZERO;
-                s.snap_guides.clear();
+                let snapped_now = gesture.now + snap_offset;
                 let (a, b) = (xf.screen_to_view(gesture.start), xf.screen_to_view(snapped_now));
                 match doc.object_move_offset(page, [f64::from(b.0 - a.0), f64::from(b.1 - a.1)]) {
                     Ok(offset) => view.pending_edit = Some(s.move_by(page, offset)),
@@ -569,6 +570,11 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView
         if v.length() > 0.0 { v / v.length() } else { egui::Vec2::ZERO }
     };
     let mut delta = unit(egui::vec2(1.0, 0.0)) * step.x + unit(egui::vec2(0.0, 1.0)) * step.y;
+    let screen_disp = {
+        let (a0, a1) = xf.screen_to_view(c);
+        let p_disp = xf.norm_to_screen((a0 + delta.x) / xf.pw, (a1 + delta.y) / xf.ph);
+        p_disp - c
+    };
     if !shift_held {
         if objects.is_some() {
             let moving_union = view.objects.selected.iter().fold(Rect::NOTHING, |u, o| u.union(screen(&xf, &doc.info, page, o)));
@@ -580,10 +586,12 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView
                     .filter(|o| !view.objects.selected.iter().any(|sel| sel.target == o.target))
                     .map(|o| screen(&xf, &doc.info, page, o))
                     .chain(std::iter::once(xf.rect));
-                let nudged = moving_union.translate(step);
+                let nudged = moving_union.translate(screen_disp);
                 let snap = crate::tools::snap_guides::snap_rect_directional(nudged, targets, crate::tools::snap_guides::SNAP_THRESHOLD, Some(step));
                 if snap.offset != egui::Vec2::ZERO {
-                    delta = unit(egui::vec2(1.0, 0.0)) * (step.x + snap.offset.x) + unit(egui::vec2(0.0, 1.0)) * (step.y + snap.offset.y);
+                    let (a0, a1) = xf.screen_to_view(c);
+                    let (b0, b1) = xf.screen_to_view(c + snap.offset);
+                    delta += egui::vec2(b0 - a0, b1 - a1);
                 }
                 view.objects.snap_guides = snap.guides;
             } else {
@@ -599,12 +607,14 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView
                 .enumerate()
                 .filter(|(idx, _)| *idx != index)
                 .map(|(_, image)| crate::canvas::image_screen_rect(image, &xf, &doc.info, p));
-            let text_targets = doc.text_blocks(p).into_iter().map(|l| crate::tools::edit_text_ui::paragraph_box(&xf, &doc.info, p, l.rect));
+            let text_targets = doc.text_blocks(p).into_iter().map(|l| xf.user_rect(&doc.info, p, l.rect.map(|v| v as f32)));
             let targets: Vec<Rect> = other_images.chain(text_targets).chain(std::iter::once(xf.rect)).collect();
-            let nudged = current_r.translate(step);
+            let nudged = current_r.translate(screen_disp);
             let snap = crate::tools::snap_guides::snap_rect_directional(nudged, targets, crate::tools::snap_guides::SNAP_THRESHOLD, Some(step));
             if snap.offset != egui::Vec2::ZERO {
-                delta = unit(egui::vec2(1.0, 0.0)) * (step.x + snap.offset.x) + unit(egui::vec2(0.0, 1.0)) * (step.y + snap.offset.y);
+                let (a0, a1) = xf.screen_to_view(c);
+                let (b0, b1) = xf.screen_to_view(c + snap.offset);
+                delta += egui::vec2(b0 - a0, b1 - a1);
             }
             if let Some(s) = view.image_selection.as_mut() {
                 s.snap_guides = snap.guides;

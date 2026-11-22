@@ -50,6 +50,9 @@ pub fn snap_rect_directional(moving: Rect, targets: impl IntoIterator<Item = Rec
             for &tx in &target_xs {
                 let dx = tx - mx;
                 if let Some(dir) = direction {
+                    if dir.x == 0.0 {
+                        continue;
+                    }
                     if dir.x > 0.0 && dx < -0.5 {
                         continue;
                     }
@@ -77,6 +80,9 @@ pub fn snap_rect_directional(moving: Rect, targets: impl IntoIterator<Item = Rec
             for &ty in &target_ys {
                 let dy = ty - my;
                 if let Some(dir) = direction {
+                    if dir.y == 0.0 {
+                        continue;
+                    }
                     if dir.y > 0.0 && dy < -0.5 {
                         continue;
                     }
@@ -279,5 +285,16 @@ mod tests {
         let res = snap_rect_directional(moving_away, vec![target], 5.0, Some(vec2(1.0, 0.0)));
         assert_eq!(res.offset.x, 0.0);
         assert!(!res.guides.iter().any(|g| matches!(g, GuideLine::Vertical { .. })));
+    }
+
+    #[test]
+    fn directional_nudge_ignores_perpendicular_axis() {
+        let target = Rect::from_min_size(pos2(100.0, 50.0), vec2(50.0, 50.0));
+        // Moving right (+1.0, 0.0): target y is at 50.0, moving y is at 52.0 (within threshold 5.0).
+        // Perpendicular Y axis must not snap!
+        let moving = Rect::from_min_size(pos2(80.0, 52.0), vec2(40.0, 40.0));
+        let res = snap_rect_directional(moving, vec![target], 5.0, Some(vec2(1.0, 0.0)));
+        assert_eq!(res.offset.y, 0.0);
+        assert!(!res.guides.iter().any(|g| matches!(g, GuideLine::Horizontal { .. })));
     }
 }
