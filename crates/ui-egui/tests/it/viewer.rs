@@ -2088,7 +2088,9 @@ fn a_short_page_gone_to_from_the_pages_panel_stays_current() {
 
 #[test]
 fn pages_panel_thumbnails_have_a_context_menu() {
-    let mut h = pages_panel_harness(&[(200, 300); 4]);
+    // Landscape thumbnails leave the third page in view at comfortable density.
+    let mut h = pages_panel_harness(&[(300, 200); 4]);
+    assert!(in_panel_view(&h, thumbnail_rect(&h, 3)), "page 3 is reachable before right-clicking it");
     let at = thumbnail(&h, "Page 3");
     press(&mut h, at, egui::PointerButton::Secondary);
     h.run_steps(2);

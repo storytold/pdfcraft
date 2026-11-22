@@ -73,6 +73,11 @@ fn app_on(clipboard: RecordingClipboard) -> PdfCraftApp {
     crate::support::app_with_clipboard(clipboard)
 }
 
+// Keep the word under test clear of the floating quick toolbar.
+fn readable_zoom(app: &mut PdfCraftApp) {
+    app.set_option(&egui::Context::default(), "zoom", "100%").unwrap();
+}
+
 /// What Copy with formatting wrote to the clipboard: `(html, plain text)` per write that had HTML.
 fn html_sets(clipboard: &RecordingClipboard) -> Vec<(String, String)> {
     // PLAN: assumed RecordingClipboard::writes() -> Vec<Vec<Flavor>> recording every attempt, with `mime` and `data`.
@@ -184,7 +189,7 @@ fn copied(clipboard: &RecordingClipboard, want: &str) -> bool {
 fn selected_text_copy_edit_and_context_menus() {
     use egui_kittest::kittest::Queryable;
     let clipboard = RecordingClipboard::default();
-    let (mut h, at) = harness_clip(two_lines(), clipboard.clone(), |_| {});
+    let (mut h, at) = harness_clip(two_lines(), clipboard.clone(), readable_zoom);
     click(&mut h, at);
     click(&mut h, at);
     h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
@@ -215,7 +220,7 @@ fn selected_text_copy_edit_and_context_menus() {
 #[test]
 fn selected_text_copy_command_requires_selection() {
     let clipboard = RecordingClipboard::default();
-    let (mut h, at) = harness_clip(two_lines(), clipboard.clone(), |_| {});
+    let (mut h, at) = harness_clip(two_lines(), clipboard.clone(), readable_zoom);
     assert!(!h.execute("edit.copy"));
     click(&mut h, at);
     click(&mut h, at);
@@ -285,7 +290,7 @@ fn any_copy_text(h: &Harness<'static, PdfCraftApp>) -> bool {
 #[test]
 fn selected_text_copy_keeps_the_formatting_as_html() {
     let clipboard = RecordingClipboard::default();
-    let (mut h, at) = harness_clip(two_lines(), clipboard.clone(), |_| {});
+    let (mut h, at) = harness_clip(two_lines(), clipboard.clone(), readable_zoom);
     click(&mut h, at);
     click(&mut h, at);
     assert!(h.execute("edit.copy"));
@@ -311,7 +316,7 @@ fn selected_text_copy_keeps_the_formatting_as_html() {
 fn selected_text_copy_falls_back_to_plain_text_when_html_is_refused() {
     // PLAN: assumed RecordingClipboard::refusing(mime) refuses a write that has that flavour, and records the attempt.
     let clipboard = RecordingClipboard::refusing("text/html");
-    let (mut h, at) = harness_clip(two_lines(), clipboard.clone(), |_| {});
+    let (mut h, at) = harness_clip(two_lines(), clipboard.clone(), readable_zoom);
     click(&mut h, at);
     click(&mut h, at);
     assert!(h.execute("edit.copy"));
@@ -335,7 +340,12 @@ fn selected_text_copy_with_formatting_honours_permissions() {
     .unwrap();
     let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
     let clipboard = RecordingClipboard::default();
-    let (mut h, at) = harness_clip(bytes, clipboard.clone(), |app| app.submit_password(&egui::Context::default(), Some("pw".into())));
+    let (mut h, _) = harness_clip(bytes, clipboard.clone(), |app| app.submit_password(&egui::Context::default(), Some("pw".into())));
+    h.set_option("zoom", "100%").unwrap();
+    h.run_steps(2);
+    let at = h.state().views[0].glyph_screen_pos(0, 5).expect("text layer loaded");
+    h.hover_at(at);
+    h.run_steps(1);
     click(&mut h, at);
     click(&mut h, at);
     assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick"));
