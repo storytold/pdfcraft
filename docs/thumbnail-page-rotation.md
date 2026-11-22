@@ -13,3 +13,6 @@ Evidence: `crates/ui-egui/tests/it/editing.rs::rotating_pages_from_the_thumbnail
 | Date | Change | Description |
 |---|---|---|
 | 2026-11-12 | minor | Add thumbnail context rotation and the regression evidence |
+
+The thumbnail menu calls these actions **Rotate right** (+90 degrees) and **Rotate left**
+(-90 degrees). The requested Spanish catalog wording is **Rotar derecha** / **Rotar izquierda**.

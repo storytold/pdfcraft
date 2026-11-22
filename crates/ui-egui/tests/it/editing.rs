@@ -11714,7 +11714,7 @@ fn rotating_pages_from_the_thumbnail_menu_is_undoable() {
     h.run_steps(2);
     let at = panel_thumb(&h, "Page 2");
     right_click_at(&mut h, at);
-    h.get_by_label("Rotate clockwise").click();
+    h.get_by_label("Rotate right").click();
     h.run_steps(4);
     assert_eq!(rotations(&h), [0, 90, 90, 0]);
     assert!(h.state_mut().execute("edit.undo"));
@@ -11722,7 +11722,7 @@ fn rotating_pages_from_the_thumbnail_menu_is_undoable() {
     assert_eq!(rotations(&h), [0, 0, 0, 0]);
     let at = panel_thumb(&h, "Page 1");
     right_click_at(&mut h, at);
-    h.get_by_label("Rotate counterclockwise").click();
+    h.get_by_label("Rotate left").click();
     h.run_steps(4);
     assert_eq!(rotations(&h), [270, 0, 0, 0]);
 }
