@@ -184,6 +184,23 @@ pub fn default_workspace(rail_side: DockSide) -> Workspace<PanelId> {
     Workspace::new(Layout::new(Some(root), vec![floating]))
 }
 
+/// The floating quick toolbar sits in the left margin of the page area, as production's does. The page area starts where
+/// the Tools pane ends, so the toolbar moves by the pane's width when the pane closes and opens, and stays clear of the
+/// page text. A toolbar the user has dragged elsewhere (not in the strip the pane's edge defines) stays where it is.
+fn keep_toolbar_in_the_margin(app: &mut PdfCraftApp) {
+    let open = app.dock.layout.contains(&PanelId::Tools);
+    if open == app.toolbar_tools_open {
+        return;
+    }
+    app.toolbar_tools_open = open;
+    let Some(window) = app.dock.layout.floating.iter_mut().find(|window| window.contains(&PanelId::Toolbar)) else { return };
+    let x = window.rect.min.x;
+    let target = if open { (x < TOOLS_WIDTH).then_some(x + TOOLS_WIDTH) } else { (x >= TOOLS_WIDTH).then_some((x - TOOLS_WIDTH).max(0.0)) };
+    if let Some(x) = target.filter(|x| x.is_finite()) {
+        window.rect = window.rect.translate(egui::vec2(x - window.rect.min.x, 0.0));
+    }
+}
+
 /// The window edge whose dock holds `panel`, `None` when it is closed or floating.
 fn edge_of(workspace: &Workspace<PanelId>, panel: PanelId) -> Option<DockEdge> {
     let mut pending: Vec<(&Node<PanelId>, usize)> = workspace.layout.root.iter().map(|node| (node, 0)).collect();
@@ -486,6 +503,7 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
     let organizing = app.active_ids().and_then(|(index, _)| app.views.get(index)).is_some_and(|view| view.organize);
     let toolbar = active && !app.hotbar_hidden() && !organizing && !expanded;
     let anchor = rail_anchor(app);
+    keep_toolbar_in_the_margin(app);
     let workspace = app.dock.clone();
     // The rail lists the Accessibility Checker once the document has a report, and Search and Compare only while
     // they show; their commands open them.
@@ -1057,6 +1075,23 @@ mod tests {
         });
         h.run_steps(6);
         h
+    }
+
+    fn toolbar_x(h: &Harness<'static, PdfCraftApp>) -> f32 {
+        h.state().dock.layout.floating.iter().find(|window| window.contains(&PanelId::Toolbar)).map_or(f32::NAN, |window| window.rect.min.x)
+    }
+
+    /// L-310: the floating quick toolbar stays in the page area's left margin: closing the Tools pane carries it to the
+    /// window's start with the page area, and opening the pane puts it back beside the pane, never over the page text.
+    #[test]
+    fn the_toolbar_follows_the_page_areas_left_edge() {
+        let mut closed = harness(|app| app.set_left_open(false));
+        assert!(toolbar_x(&closed) < TOOLS_WIDTH * 0.5, "left closed: the toolbar at {}", toolbar_x(&closed));
+        closed.state_mut().set_left_open(true);
+        closed.run_steps(4);
+        assert!(toolbar_x(&closed) > TOOLS_WIDTH, "left open again: the toolbar at {}", toolbar_x(&closed));
+        let open = harness(|_| {});
+        assert!(toolbar_x(&open) > TOOLS_WIDTH, "the default arrangement keeps the toolbar beside the Tools pane");
     }
 
     fn tools_x(h: &Harness<'static, PdfCraftApp>) -> f32 {

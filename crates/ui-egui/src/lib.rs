@@ -276,6 +276,9 @@ pub struct PdfCraftApp {
     /// The height of the notice bars over the document, as the last pass drew them: the dock keeps the floating
     /// toolbar below them.
     pub(crate) notice_inset: f32,
+    /// Whether the Tools pane was in the dock when the floating toolbar was last placed: the toolbar follows the page area's
+    /// left edge as the pane closes and opens.
+    pub(crate) toolbar_tools_open: bool,
     /// The right panel that was open when the user switched to Read mode, which starts with the
     /// panes closed; leaving Read mode brings it back unless the user opened or closed a pane in
     /// Read mode meanwhile.
