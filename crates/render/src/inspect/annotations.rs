@@ -396,8 +396,10 @@ impl<'a> Inspector<'a> {
                         LinkTarget::Uri(resolved)
                     }
                     // With no base, a relative reference to a PDF is that file beside the
-                    // document (#7955). The decoded path is no longer than the address.
-                    _ if base.is_none() => match crate::relative_pdf_uri(&uri) {
+                    // document (#7955). The decoded path is no longer than the address. A base
+                    // the document gives but that isn't kept (too long, not a string) is still
+                    // a base, so the address stays as written (review on #8070).
+                    _ if base.is_none() && !self.declares_uri_base() => match crate::relative_pdf_uri(&uri) {
                         Some(file) => LinkTarget::RemoteGoTo { launch: false, file, destination: RemoteDestination::Default, new_window: None },
                         None => LinkTarget::Uri(uri),
                     },
@@ -434,6 +436,13 @@ impl<'a> Inspector<'a> {
             _ => Vec::new(),
         };
         Some(Link { page, index, rect, quads, target })
+    }
+
+    /// Whether the catalog's `/URI` dictionary has a `/Base` at all, kept in
+    /// [`DocInfo::uri_base`] or not. A null one counts as absent (§7.3.9).
+    fn declares_uri_base(&self) -> bool {
+        let uri = self.doc.catalog().ok().and_then(|c| c.get(b"URI").ok()).and_then(|o| self.dict(o));
+        uri.and_then(|d| d.get(b"Base").ok()).is_some_and(|b| !matches!(self.resolve(b), Object::Null))
     }
 
     /// Lists the link annotation `d`, and notes the JavaScript it runs. JavaScript is read from the

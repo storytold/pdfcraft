@@ -1431,6 +1431,13 @@ fn relative_uri_actions_resolve_against_the_catalog_base() {
     assert_eq!(links_of("", pdf).links[0].target, beside);
     assert_eq!(uris(&links_of("/URI << /Base (https://example.com/base/) >>", pdf)), ["https://example.com/base/exhibit%2001.pdf"]);
     assert_eq!(uris(&links_of("/URI << /Base (file:///C:/docs/) >>", pdf)), ["exhibit%2001.pdf"]);
+    // A base the document gives but that isn't kept is a base all the same (review on #8070);
+    // a null one is none (§7.3.9).
+    let long = format!("/URI << /Base (https://example.com/{}/) >>", "a".repeat(crate::MAX_URI_BASE_BYTES));
+    for base in [long.as_str(), "/URI << /Base /NotAString >>", "/URI << /Base 7 >>"] {
+        assert_eq!(uris(&links_of(base, pdf)), ["exhibit%2001.pdf"], "{}", &base[..base.len().min(40)]);
+    }
+    assert_eq!(links_of("/URI << /Base null >>", pdf).links[0].target, beside);
 }
 
 /// ISO 32000-2 §12.5.6.5, Table 176: a link is active in its `/QuadPoints`, or over its
