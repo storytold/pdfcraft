@@ -67,7 +67,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     group: None,
                     label: translated,
                     detail: spec
-                        .shortcut
+                        .shortcut_for(crate::commands::mac_shortcuts(ctx))
                         .map(|k| crate::commands::shortcut_label(ctx, k))
                         .unwrap_or_else(|| tl!(spec.menu.unwrap_or("Command")).to_string()),
                     icon: spec.icon,

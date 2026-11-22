@@ -44,11 +44,14 @@ fn status_icon(s: &SignatureInfo) -> (&'static str, Color32) {
 /// One look per signature verdict, shared by the Signatures panel and the page badges so
 /// the two can't drift apart.
 pub(crate) fn signature_status_style(status: SignatureStatus) -> (&'static str, Color32) {
-    match status {
-        SignatureStatus::Valid => ("circle-check", Color32::from_rgb(0x2D, 0x9D, 0x78)),
-        SignatureStatus::Unknown => ("triangle-alert", Color32::from_rgb(0xE6, 0x86, 0x19)),
-        SignatureStatus::Invalid => ("circle-x", Color32::from_rgb(0xD7, 0x37, 0x3F)),
-    }
+    // The colours the regenerated status layers draw with, so the page and the panel agree.
+    let [r, g, b] = sign::status_rgb(status);
+    let icon = match status {
+        SignatureStatus::Valid => "circle-check",
+        SignatureStatus::Unknown => "triangle-alert",
+        SignatureStatus::Invalid => "circle-x",
+    };
+    (icon, Color32::from_rgb(r, g, b))
 }
 
 /// What the Signatures panel asks the app to do.

@@ -1,6 +1,8 @@
 //! Action Wizard: the actions (PdfCraft's and your own), running one over files in the
 //! background, and creating or editing an action's steps. Your actions are remembered.
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::file_filter::AddFilterAnyCase as _;
 use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
@@ -96,6 +98,8 @@ impl PdfCraftApp {
         let p = progress.clone();
         // The summary is written on the worker thread: draw it in the UI's language.
         let lang = crate::i18n::current();
+        // Each file runs in its own session; it keeps this one's JavaScript preference.
+        let javascript = self.session.javascript();
         let work = move || {
             crate::i18n::set_current(lang);
             let (mut ok, mut failed) = (0, Vec::new());
@@ -103,7 +107,7 @@ impl PdfCraftApp {
                 if let Ok(mut s) = p.lock() {
                     s.done = i;
                 }
-                let r = pdfcraft_engine::actions::run_on(&action, &name, Arc::new(bytes), |_, _| {}).and_then(|r| {
+                let r = pdfcraft_engine::actions::run_on(&action, &name, Arc::new(bytes), javascript, |_, _| {}).and_then(|r| {
                     #[cfg(not(target_arch = "wasm32"))]
                     write_result(&dir, &name, &r.bytes).map_err(|e| e.to_string())?;
                     #[cfg(target_arch = "wasm32")]
@@ -186,7 +190,7 @@ impl PdfCraftApp {
             match self.action_files_override.clone() {
                 Some(p) => run(self, p.into_iter().map(std::path::PathBuf::from).collect()),
                 None => {
-                    let dialog = rfd::AsyncFileDialog::new().set_title(title).add_filter("PDF", &["pdf"]);
+                    let dialog = rfd::AsyncFileDialog::new().set_title(title).add_filter_any_case("PDF", &["pdf"]);
                     self.ask(crate::pickers::Ask::Files(dialog), None, run);
                 }
             }

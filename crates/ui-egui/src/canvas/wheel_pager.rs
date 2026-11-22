@@ -73,6 +73,11 @@ impl WheelPager {
         self.accum = 0.0;
     }
 
+    /// Reset any turned state when a turn did not happen (e.g. at document boundary).
+    pub(crate) fn unturn(&mut self) {
+        self.turned = None;
+    }
+
     /// Whether the current gesture already turned a page: the rest of it must not pan the page
     /// just shown away from its top (or bottom).
     pub(crate) fn gesture_turned(&self) -> bool {
@@ -144,6 +149,9 @@ impl WheelPager {
             };
         if notch {
             if !can_turn {
+                // A notch is a gesture of its own, so one that only pans ends the gesture a
+                // previous notch turned; otherwise `gesture_turned` keeps swallowing the wheel (#5713).
+                self.turned = None;
                 return None;
             }
             // Every notch turns a page; a smooth tail of the same gesture won't add another.

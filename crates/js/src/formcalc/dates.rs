@@ -49,7 +49,15 @@ pub(super) fn civil_from_days(n: i64) -> (i64, u32, u32) {
 /// Day numbers (and years) beyond this are refused rather than computed.
 pub(super) const MAX_DAYS: f64 = 1e8;
 
+/// The century split of a two-digit year (`YY`), XFA picture clauses' default: `00` to `29` are
+/// 2000 to 2029 and `30` to `99` are 1930 to 1999 (XFA 3.3, chapter 26, Picture Clause Reference,
+/// p. 1171, which makes 30 the default and lets the century split be set otherwise).
+const CENTURY_SPLIT: i64 = 30;
+
 const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+/// Characters of the longest month name: all a month token needs to read of the text.
+const LONGEST_MONTH: usize = 9;
 
 /// Parse `text` as a date by `picture` (`YYYY-MM-DD`, `MM/DD/YYYY`, `MMM D, YYYY`, …).
 pub(super) fn parse_date(text: &str, picture: &str) -> Option<(i64, u32, u32)> {
@@ -66,8 +74,9 @@ pub(super) fn parse_date(text: &str, picture: &str) -> Option<(i64, u32, u32)> {
             }
             i += run;
             if c == 'M' && run >= 3 {
-                // Month name.
-                let rest: String = txt.get(j..).unwrap_or(&[]).iter().collect();
+                // Month name: only as much of the text as a name can be, so a picture of many
+                // month tokens does not copy the rest of a long text for each of them.
+                let rest: String = txt.get(j..).unwrap_or(&[]).iter().take(LONGEST_MONTH).collect();
                 let lower = rest.to_ascii_lowercase();
                 let found = MONTHS
                     .iter()
@@ -89,7 +98,7 @@ pub(super) fn parse_date(text: &str, picture: &str) -> Option<(i64, u32, u32)> {
             }
             let v: i64 = digits.parse().ok()?;
             match c {
-                'Y' => y = Some(if run <= 2 { if v < 50 { 2000 + v } else { 1900 + v } } else { v }),
+                'Y' => y = Some(if run <= 2 { if v < CENTURY_SPLIT { 2000 + v } else { 1900 + v } } else { v }),
                 'M' => m = Some(v as u32),
                 _ => d = Some(v as u32),
             }
