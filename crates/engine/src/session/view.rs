@@ -125,7 +125,25 @@ impl Session {
         let ends = doc.revision_ends();
         let end = *n.checked_sub(1).and_then(|i| ends.get(i)).ok_or_else(|| format!("the document has {} revision(s)", ends.len()))?;
         let name = format!("{} (revision {n}).pdf", doc.name.trim_end_matches(".pdf"));
-        let (bytes, password) = (Arc::new(doc.bytes[..end.min(doc.bytes.len())].to_vec()), doc.password.clone());
+        self.open_document_snapshot(id, end, name)
+    }
+
+    /// Open the saved byte prefix from an open document as an unsaved snapshot.
+    /// Reuse its certificate authentication when the prefix has matching encryption.
+    pub fn open_document_snapshot(&mut self, id: DocId, end: usize, name: String) -> Result<DocId, String> {
+        let doc = self.get(id).ok_or("no such document")?;
+        let length = end.min(doc.bytes.len());
+        let bytes = Arc::new(doc.bytes.get(..length).ok_or("invalid snapshot length")?.to_vec());
+        let password = doc.password.clone();
+        let authenticated = doc.config.authenticated.clone();
+        if let Some(authenticated) = authenticated {
+            let source = crate::guard(std::panic::AssertUnwindSafe(|| authenticated.open_earlier_revision(bytes.clone())))
+                .and_then(|result| result.map_err(|e| e.to_string()))?;
+            if let Some(handler) = source.security() {
+                let resolver = |_: &pdfcraft_cos::EncryptDict, _: &[u8]| Ok(handler.clone());
+                return self.open_with_security_resolver(name, None, bytes, &resolver).map_err(|e| e.to_string());
+            }
+        }
         self.open(name, None, bytes, password.as_deref()).map_err(|e| e.to_string())
     }
 

@@ -197,6 +197,11 @@ impl Session {
             take_xfa_output(doc, cx.xfa_out, cx.xfa_ran_away);
             return Ok(None);
         }
+        let keys = guard(|| keys_after(&edit, &next))
+            .map_err(EditError::Reopen)
+            .and_then(|result| result)
+            .inspect_err(|_| discard_edit_callbacks(&cx))?
+            .unwrap_or_else(|| editor.keys.clone());
         // Redaction removed what its own interpreter places under the marks. The marks were drawn
         // over the page as the renderer shows it, so the renderer has the last word: on every
         // apply the edit ran, a batch's included.
@@ -213,7 +218,12 @@ impl Session {
                     "a batch that deletes a page with a redaction mark and adds pages can't be verified; the document was not changed".into(),
                 ));
             }
-            guard(|| shown_under_redactions(&next, &cx.redaction_marks, &cx.redaction_overlays, &doc.config))
+            let credentials = pdfcraft_render::RenderConfig {
+                password: keys.render.as_deref().map(Arc::from),
+                authenticated: keys.authenticated.clone(),
+                ..Default::default()
+            };
+            guard(|| shown_under_redactions(&next, &cx.redaction_marks, &cx.redaction_overlays, &credentials))
                 .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))
                 .inspect_err(|_| discard_edit_callbacks(&cx))?;
         }
@@ -336,7 +346,6 @@ impl Session {
         if cx.redaction_identification != pdfcraft_redact::Identification::default() {
             notices.push(EditNotice::RedactionIdentification(cx.redaction_identification));
         }
-        let keys = guard(|| keys_after(&edit, &next)).map_err(EditError::Reopen)??.unwrap_or_else(|| editor.keys.clone());
         let previous = std::mem::replace(&mut editor.cos, next);
         let previous_keys = std::mem::replace(&mut editor.keys, keys);
         editor.undo.push((label, previous, previous_keys, scope));

@@ -114,11 +114,8 @@ fn execute(request: Request, pin: Option<&str>) -> Result<Zeroizing<Vec<u8>>, Si
         Request::Sign { identity, algorithm, message } => {
             let alg = DigestAlg::from_oid(&algorithm).ok_or_else(|| SignError::Unsupported("unknown smartcard digest".into()))?;
             // Select the same public certificate and physical token before authenticating.
-            let reference = backend::reference(&Certificate::parse(&identity.certificate)?);
-            let id = backend::find_with_pin(&reference, pin, &identity.serial)?;
-            if id.certificate.raw != identity.certificate {
-                return Err(SignError::TokenChanged);
-            }
+            let certificate = Certificate::parse(&identity.certificate)?;
+            let id = backend::find_with_pin(&certificate.raw, pin, &identity.serial)?;
             id.key.sign(alg, &message).map(Zeroizing::new)
         }
         Request::Decrypt { identity, ciphertext } => {

@@ -207,9 +207,8 @@ pub(super) fn list() -> Result<Vec<(DigitalId, String)>, SignError> {
     Ok(out)
 }
 
-/// The identity a `pkcs11:` reference (or a certificate common name) names, optionally
-/// signed in with its PIN for tokens that require it.
-pub(super) fn find_with_pin(reference_or_name: &str, pin: Option<&str>, serial: &str) -> Result<DigitalId, SignError> {
+/// Find the selected certificate on the same physical token and prepare its signing key.
+pub(super) fn find_with_pin(selected_certificate: &[u8], pin: Option<&str>, serial: &str) -> Result<DigitalId, SignError> {
     let mut matches = Vec::new();
     for client in modules() {
         let Ok(slots) = client.get_slots_with_token() else { continue };
@@ -226,8 +225,7 @@ pub(super) fn find_with_pin(reference_or_name: &str, pin: Option<&str>, serial: 
                 if certificate.public_key.store_signing_key().is_none() || certificate.signing_problem().is_some() {
                     continue;
                 }
-                let by_name = certificate.subject.common_name() == Some(reference_or_name.trim_start_matches("pkcs11:"));
-                if reference(&certificate) != reference_or_name && !by_name {
+                if certificate.raw != selected_certificate {
                     continue;
                 }
                 // Log in only on the token that holds the certificate: the private keys

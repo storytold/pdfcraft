@@ -549,3 +549,20 @@ fn a_replaced_local_file_keeps_archive_bit_intact() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn review_regression_new_only_rename_keeps_a_file_created_while_staging() {
+    let dir = test_dir("no-replace");
+    let target = dir.join("out.pdf");
+    let err =
+        write_atomically_using(&target, b"signed", StagingName::TagThenSuffix, [7], |_| std::fs::write(&target, b"concurrent save"), rename_new)
+            .unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(std::fs::read(&target).unwrap(), b"concurrent save");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    let fresh = dir.join("fresh.pdf");
+    write_atomically_new(&fresh, b"signed", StagingName::TagThenSuffix).unwrap();
+    assert_eq!(std::fs::read(&fresh).unwrap(), b"signed");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

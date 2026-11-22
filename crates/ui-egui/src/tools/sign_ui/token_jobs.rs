@@ -38,7 +38,6 @@ pub struct TokenSigning {
     generation: u64,
     saved: Arc<Vec<u8>>,
     path: PathBuf,
-    destination: Option<crate::file_watch::Stamp>,
     retry: SignDraft,
     selection: DigitalIdEntry,
     field: Option<String>,
@@ -156,7 +155,11 @@ impl PdfCraftApp {
         let owner = cancellation.cancel_on_drop();
         let (tx, rx) = std::sync::mpsc::channel();
         let context = self.ctx.clone();
-        let destination = crate::file_watch::Stamp::at(&path.to_string_lossy());
+        match std::fs::symlink_metadata(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Ok(_) => return Err(tl!("Choose a new filename for the smartcard signature.").into()),
+            Err(e) => return Err(format!("Could not check the signing destination: {e}")),
+        }
 
         std::thread::Builder::new()
             .name("pdfcraft-card-sign".into())
@@ -189,7 +192,6 @@ impl PdfCraftApp {
             generation,
             saved,
             path,
-            destination,
             retry,
             selection,
             field,
@@ -266,11 +268,18 @@ impl PdfCraftApp {
     }
 
     fn publish_token_signature(&mut self, job: &TokenSigning, signed: Arc<Vec<u8>>) -> Result<(), String> {
-        if !self.commit_typing_in(job.doc) || !job.current(self) || job.destination != crate::file_watch::Stamp::at(&job.path.to_string_lossy()) {
-            return Err("The document or destination changed; the smartcard signature was not saved.".into());
+        if !self.commit_typing_in(job.doc) || !job.current(self) {
+            return Err("The document changed. The smartcard signature was not saved.".into());
         }
         self.session.check_save(job.doc, &signed).map_err(|e| e.to_string())?;
-        crate::editing::write_atomically(&job.path.to_string_lossy(), &signed).map_err(|e| format!("Could not save: {e}"))?;
+        use pdfcraft_platform::staging::{StagingName, write_atomically_new};
+        write_atomically_new(&job.path, &signed, StagingName::TagThenSuffix).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                tl!("Choose a new filename for the smartcard signature.").into()
+            } else {
+                format!("Could not save: {e}")
+            }
+        })?;
         if self.presign.is_some_and(|(doc, _)| doc == job.doc) {
             self.presign = None;
         }
@@ -322,7 +331,6 @@ mod tests {
             doc,
             generation: document.edit_generation(),
             saved: document.saved_bytes(),
-            destination: crate::file_watch::Stamp::at(&path.to_string_lossy()),
             path,
             retry: draft,
             field: None,

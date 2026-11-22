@@ -185,8 +185,10 @@ verifies our CMS; `tests/data/openssl-signed.pdf` is a signature OpenSSL made, w
 
 Desktop signing uses `pkcs11::signing_identities()` and retains a `SigningIdentity`
 from discovery through the file picker and signing job. `with_pin` binds the one-use
-PIN to that selection; card changes require refresh and clear the input. Legacy
-`list` and `find_with_pin` calls keep their certificate-selection semantics. Token
+PIN to that selection; card changes require refresh and clear the input. Desktop
+smartcard signing requires a new filename so existing files are preserved.
+A prefixed `pkcs11:` reference matches its fingerprint exactly. Unprefixed library
+lookups still accept a common name when it identifies a unique certificate. Token
 serials are provider-reported identifiers, not hardware attestation. Decryption
 discovery skips unavailable modules and readers while retaining healthy cards.
 

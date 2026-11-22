@@ -145,6 +145,19 @@ pub fn write_atomically(path: &Path, bytes: &[u8], form: StagingName) -> std::io
     write_atomically_with(path, bytes, form, staging_suffixes(), std::fs::File::sync_all)
 }
 
+/// Publish a new file atomically. If any file or symlink occupies the path at
+/// publication time, leave it intact and return AlreadyExists.
+#[cfg(target_os = "linux")]
+pub fn write_atomically_new(path: &Path, bytes: &[u8], form: StagingName) -> std::io::Result<()> {
+    write_atomically_using(path, bytes, form, staging_suffixes(), std::fs::File::sync_all, rename_new)
+}
+
+#[cfg(target_os = "linux")]
+fn rename_new(tmp: &Path, path: &Path) -> std::io::Result<()> {
+    use rustix::fs::{CWD, RenameFlags, renameat_with};
+    renameat_with(CWD, tmp, CWD, path, RenameFlags::NOREPLACE).map_err(Into::into)
+}
+
 /// [`write_atomically`] with the staging-name suffixes and the flush given, so tests can plant
 /// names and refuse flushes. A failure at any step removes the staging file and leaves the
 /// target as it was. A read-only target is refused before anything is written.
@@ -154,6 +167,17 @@ pub fn write_atomically_with(
     form: StagingName,
     suffixes: impl IntoIterator<Item = u64>,
     sync_all: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    write_atomically_using(path, bytes, form, suffixes, sync_all, |tmp, path| std::fs::rename(tmp, path))
+}
+
+fn write_atomically_using(
+    path: &Path,
+    bytes: &[u8],
+    form: StagingName,
+    suffixes: impl IntoIterator<Item = u64>,
+    sync_all: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
+    publish: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     use std::io::Write as _;
     // A read-only file is not replaced. Windows refuses the rename anyway, but on Unix a rename
@@ -190,7 +214,7 @@ pub fn write_atomically_with(
             keep_created(&file, created);
             sync_staged(&file, sync_all)?;
         }
-        let rename_result = std::fs::rename(&tmp, path);
+        let rename_result = publish(&tmp, path);
         #[cfg(windows)]
         if rename_result.is_ok()
             && let Some(keep) = &keep

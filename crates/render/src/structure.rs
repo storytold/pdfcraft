@@ -158,6 +158,16 @@ impl LazyStructure {
         Ok(Self { source, trailer, objects, failed: AtomicBool::new(false) })
     }
 
+    pub(crate) fn decoded_attachment(&self, (number, generation): ObjectId) -> std::result::Result<Vec<u8>, String> {
+        if self.source.generation(number) != generation {
+            return Err("the embedded stream reference has the wrong generation".into());
+        }
+        let object = self.source.try_get(number).map_err(|e| e.to_string())?;
+        let CosObject::Stream(stream) = object.as_ref() else { return Err("the embedded file has no data stream".into()) };
+        // COS already applied the crypt filter when it loaded the object.
+        stream.decoded_strict_within(1 << 30).map_err(|e| e.to_string())
+    }
+
     pub(crate) fn failed(&self) -> bool {
         self.failed.load(Ordering::Relaxed)
     }

@@ -64,8 +64,9 @@ fn certificate_tools_reject_pin_arguments_and_confine_paths_before_hardware_acce
     for key in ["pin", "password", "pin_env"] {
         let mut args = json!({"path": "a.pdf", "id": "pkcs11:absent"});
         args[key] = json!("do-not-echo-this-secret");
-        let error = a.call("doc_open_token", &args).unwrap_err().to_string();
-        assert!(!error.contains("do-not-echo-this-secret"));
+        let error = a.call("doc_open_token", &args).unwrap_err();
+        assert!(matches!(&error, ToolError::InvalidArgs(message) if message.contains(&format!("unknown argument {key:?}"))));
+        assert!(!error.to_string().contains("do-not-echo-this-secret"));
     }
     let error = a.call("doc_open_token", &json!({"path": "../secret.pdf", "id": "pkcs11:absent"})).unwrap_err().to_string();
     assert!(error.contains("outside the allowed directory"), "{error}");

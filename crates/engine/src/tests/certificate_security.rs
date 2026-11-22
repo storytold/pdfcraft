@@ -5,6 +5,10 @@ use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest};
 use std::cell::Cell;
 
 fn encrypted(algorithm: pdfcraft_cos::Algorithm, metadata: bool) -> Arc<Vec<u8>> {
+    encrypted_with_attachment(algorithm, metadata, false)
+}
+
+fn encrypted_with_attachment(algorithm: Algorithm, metadata: bool, explicit_crypt: bool) -> Arc<Vec<u8>> {
     let mut source = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
     let mut info = pdfcraft_cos::Dict::new();
     info.set(b"Title".to_vec(), pdfcraft_cos::Object::String(pdfcraft_cos::PdfString { bytes: b"Secret title".to_vec(), hex: false }));
@@ -12,7 +16,17 @@ fn encrypted(algorithm: pdfcraft_cos::Algorithm, metadata: bool) -> Arc<Vec<u8>>
     source.trailer_mut().set(b"Info".to_vec(), pdfcraft_cos::Object::Ref(info));
     let mut stream = pdfcraft_cos::Dict::new();
     stream.set(b"Type".to_vec(), pdfcraft_cos::Object::name("EmbeddedFile"));
-    let stream = source.add(pdfcraft_cos::Stream { dict: stream, raw: b"private attachment".to_vec().into() });
+    let stream = if explicit_crypt {
+        let mut stream = pdfcraft_cos::Stream::flate(stream, b"private attachment");
+        stream.dict.set(b"Filter".to_vec(), vec![pdfcraft_cos::Object::name("Crypt"), pdfcraft_cos::Object::name("FlateDecode")]);
+        let mut parameters = pdfcraft_cos::Dict::new();
+        parameters.set(b"Name".to_vec(), pdfcraft_cos::Object::name("DefaultCryptFilter"));
+        stream.dict.set(b"DecodeParms".to_vec(), vec![pdfcraft_cos::Object::Dict(parameters), pdfcraft_cos::Object::Null]);
+        stream
+    } else {
+        pdfcraft_cos::Stream::from_raw(stream, b"private attachment".to_vec())
+    };
+    let stream = source.add(stream);
     let mut ef = pdfcraft_cos::Dict::new();
     ef.set(b"F".to_vec(), pdfcraft_cos::Object::Ref(stream));
     let mut spec = pdfcraft_cos::Dict::new();
@@ -90,6 +104,39 @@ fn certificate_security_opens_renders_and_preserves_the_original() {
             assert_eq!(calls.get(), 1, "editing and saving must not ask the original resolver again");
         }
     }
+}
+
+#[test]
+fn review_regression_certificate_attachment_with_explicit_crypt_and_flate() {
+    let bytes = encrypted_with_attachment(Algorithm::Aes256, true, true);
+    let resolver = |params: &EncryptDict, _: &[u8]| authenticate(params, -1);
+    let mut session = Session::new();
+    let id = session.open_with_security_resolver("attached.pdf", None, bytes, &resolver).unwrap();
+    let doc = session.get(id).unwrap();
+    assert_eq!(doc.attachment_data(&doc.info.attachments[0]).unwrap(), b"private attachment");
+}
+
+#[test]
+fn review_regression_encrypted_revisions_and_snapshots_reuse_the_recipient() {
+    let bytes = encrypted(Algorithm::Aes256, true);
+    let calls = Cell::new(0);
+    let resolver = |params: &EncryptDict, _: &[u8]| {
+        calls.set(calls.get() + 1);
+        authenticate(params, -1)
+    };
+    let mut session = Session::new();
+    let id = session.open_with_security_resolver("revision.pdf", None, bytes.clone(), &resolver).unwrap();
+    session.apply(id, Edit::SetInfo { key: "Title".into(), value: "Later change".into() }).unwrap();
+    let saved = session.save_bytes(id).unwrap();
+    session.mark_saved(id, saved, None).unwrap();
+    let revision = session.open_revision(id, 1).unwrap();
+    let snapshot = session.open_document_snapshot(id, bytes.len(), "snapshot.pdf".into()).unwrap();
+    for id in [revision, snapshot] {
+        let doc = session.get(id).unwrap();
+        assert!(doc.info.encrypted);
+        assert_eq!(doc.info.title.as_deref(), Some("Secret title"));
+    }
+    assert_eq!(calls.get(), 1);
 }
 
 #[test]
@@ -346,6 +393,43 @@ mod workflows {
                 .collect(),
             algorithm: Algorithm::Aes256,
             encrypt_metadata: true,
+        }
+    }
+
+    #[test]
+    fn review_regression_redaction_batches_verify_under_new_protection() {
+        let owner = identity(1);
+        for protect in [
+            Edit::ProtectCertificates(protection(&[(&owner, -1)])),
+            Edit::Protect(Protection { open_password: Some("new password".into()), ..Default::default() }),
+        ] {
+            let (mut session, id) = session_with(1);
+            let shape = Shape::Redact {
+                quads: vec![pdfcraft_annot::rect_quad([80.0, 140.0, 100.0, 180.0])],
+                overlay: String::new(),
+                look: Default::default(),
+            };
+            session
+                .apply(
+                    id,
+                    Edit::AddAnnotation(NewAnnotation {
+                        page: 0,
+                        style: Style::default_for(&shape),
+                        shape,
+                        contents: String::new(),
+                        author: String::new(),
+                    }),
+                )
+                .unwrap();
+            session
+                .apply(id, Edit::Batch { label: "Redact and protect".into(), edits: vec![Edit::ApplyRedactions { pages: None }, protect] })
+                .unwrap();
+            let doc = session.get(id).unwrap();
+            assert!(doc.info.encrypted);
+            let mut render = PageRenderer::new(doc.bytes.clone(), doc.config.clone());
+            let text = render.render(RenderRequestFor::text(0)).text.unwrap().plain_text();
+            assert!(text.contains("Page") && !text.contains('1'), "{text}");
+            session.check_save(id, &session.save_bytes(id).unwrap()).unwrap();
         }
     }
 

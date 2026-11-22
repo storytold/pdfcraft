@@ -800,7 +800,7 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
                                 req.link_command = Some("protect.unlock");
                             }
                             if ui.button(tl!("Change settings…")).clicked() {
-                                req.link_command = Some("protect.password");
+                                req.link_command = Some(if sec.certificate { "protect.certificate" } else { "protect.password" });
                             }
                             if ui.button(tl!("Remove security")).clicked() {
                                 req.link_command = Some("protect.remove");

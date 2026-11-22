@@ -55,7 +55,9 @@ pub(super) fn request(request: &Request, pin: Option<&str>) -> Result<Zeroizing<
     let executable =
         std::env::var_os("PDFCRAFT_PKCS11_HELPER").map(std::path::PathBuf::from).map(Ok).unwrap_or_else(std::env::current_exe).map_err(io_error)?;
     let mut command = Command::new(executable);
-    command.arg(ARGUMENT).env("PDFCRAFT_PKCS11_PARENT", std::process::id().to_string());
+    // The executable's CPU-override recovery re-execs itself. Strip the override
+    // here so the worker remains a direct child of the host it checks.
+    command.arg(ARGUMENT).env_remove("OPENSSL_ia32cap").env("PDFCRAFT_PKCS11_PARENT", std::process::id().to_string());
     let cancellation = CURRENT.with(|c| c.borrow().clone()).unwrap_or_default();
     let timeout = if matches!(request, Request::List { .. }) { Duration::from_secs(15) } else { Duration::from_secs(120) };
     let json = serde_json::to_vec(request).map_err(|_| SignError::Crypto("could not encode smartcard request".into()))?;

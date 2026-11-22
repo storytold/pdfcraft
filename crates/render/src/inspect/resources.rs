@@ -426,8 +426,12 @@ pub fn attachment_data_with_credentials(
         };
         let fs = insp.dict(spec).ok_or("bad file specification")?;
         let ef = fs.get(b"EF").ok().and_then(|o| insp.dict(o)).ok_or("the file is not embedded (external reference)")?;
-        let stream = ef.get(b"UF").ok().or_else(|| ef.get(b"F").ok()).map(|o| insp.resolve(o)).ok_or("no embedded stream")?;
-        let stream = stream.as_stream().map_err(|e| e.to_string())?;
+        let stream = ef.get(b"UF").ok().or_else(|| ef.get(b"F").ok()).ok_or("no embedded stream")?;
+        if let Some(lazy) = &lazy {
+            let (id, _) = doc.dereference(stream).map_err(|e| e.to_string())?;
+            return lazy.decoded_attachment(id.ok_or("the embedded stream must be indirect")?);
+        }
+        let stream = insp.resolve(stream).as_stream().map_err(|e| e.to_string())?;
         if stream.dict.get(b"Filter").is_ok() {
             stream.decompressed_content_with_limit(1 << 30).map_err(|e| e.to_string())
         } else {

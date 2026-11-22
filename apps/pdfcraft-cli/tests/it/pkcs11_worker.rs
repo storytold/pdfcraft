@@ -92,3 +92,24 @@ fn worker_rejects_missing_decryption_serial_before_provider_access() {
         }
     }
 }
+
+#[test]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn review_regression_library_helper_preserves_parent_when_cpu_override_is_set() {
+    const CHILD: &str = "PDFCRAFT_TEST_PKCS11_CPU_OVERRIDE";
+    if std::env::var_os(CHILD).is_some() {
+        assert!(std::env::var_os("OPENSSL_ia32cap").is_some());
+        let error = pdfcraft_engine::sign::pkcs11::decryption_identities().unwrap_err().to_string();
+        assert!(error.contains("no PKCS #11 module"), "{error}");
+        return;
+    }
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "pkcs11_worker::review_regression_library_helper_preserves_parent_when_cpu_override_is_set"])
+        .env(CHILD, "1")
+        .env("OPENSSL_ia32cap", "0")
+        .env("PDFCRAFT_PKCS11_MODULE", "/nonexistent/pdfcraft-test-provider.so")
+        .env("PDFCRAFT_PKCS11_HELPER", env!("CARGO_BIN_EXE_pdfcraft-cli"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stdout));
+}

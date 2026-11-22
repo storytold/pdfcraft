@@ -96,14 +96,19 @@ pub fn find_with_pin(name: &str, pin: Option<&str>) -> Result<DigitalId, SignErr
     if pin.is_some_and(|p| p.len() > 256) {
         return Err(SignError::Malformed("the token PIN must not exceed 256 UTF-8 bytes".into()));
     }
-    let mut matching = records(false)?.into_iter().filter(|i| {
-        Certificate::parse(&i.certificate).is_ok_and(|c| reference(&c) == name || c.subject.common_name() == Some(name.trim_start_matches("pkcs11:")))
+    signing_id(select_signing_record(records(false)?, name)?, pin)
+}
+
+fn select_signing_record(records: Vec<Identity>, name: &str) -> Result<Identity, SignError> {
+    let mut matching = records.into_iter().filter(|i| {
+        Certificate::parse(&i.certificate)
+            .is_ok_and(|c| if name.starts_with("pkcs11:") { reference(&c) == name } else { c.subject.common_name() == Some(name) })
     });
     let record = matching.next().ok_or_else(|| SignError::Crypto("the selected signing certificate is not present".into()))?;
     if matching.next().is_some() {
         return Err(SignError::Crypto("the signing certificate is ambiguous; leave only the intended token connected".into()));
     }
-    signing_id(record, pin)
+    Ok(record)
 }
 
 pub fn find(name: &str) -> Result<DigitalId, SignError> {
@@ -241,6 +246,25 @@ mod selection_tests {
             certificate: id.certificate,
         }
     }
+    #[test]
+    fn review_regression_prefixed_token_references_only_match_fingerprints() {
+        let selected = selection("original");
+        let wanted = reference(&selected.certificate);
+        let fixture = crate::pkcs12::open(include_bytes!("../tests/data/ec-p256.p12"), "test").unwrap();
+        let lookalike = Certificate::self_signed(
+            &crate::Name::build(wanted.strip_prefix("pkcs11:").unwrap(), "", "", "", ""),
+            &fixture.key,
+            crate::Time::from_unix(1_700_000_000),
+            10,
+            &[1],
+        )
+        .unwrap();
+        let other = Identity { certificate: lookalike.raw, chain: vec![], label: None, serial: "other".into() };
+        assert!(select_signing_record(vec![other.clone()], &wanted).is_err());
+        assert_eq!(select_signing_record(vec![other, selected.record.clone()], &wanted).unwrap().serial, "original");
+        assert!(select_signing_record(vec![selected.record.clone(), selected.record], &wanted).is_err());
+    }
+
     fn ciphertext(id: &RsaDecryptionIdentity) -> Vec<u8> {
         let crate::PublicKey::Rsa { n, .. } = &id.certificate.public_key else { panic!("RSA fixture") };
         vec![1; n.len()]

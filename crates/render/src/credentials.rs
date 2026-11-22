@@ -30,12 +30,18 @@ impl AuthenticatedDocument {
     }
     /// Reuse the credential only if encryption parameters and file identity still match.
     pub fn open(&self, bytes: Arc<Vec<u8>>) -> Result<Document, CosError> {
-        let opened = self.source.open_with_same_credentials(bytes)?;
+        let opened = self.open_earlier_revision(bytes)?;
         if opened.security().is_none() {
             return Err(CosError::NeedsCertificate);
         }
         Ok(opened)
     }
+    /// Open an earlier revision, which may predate encryption. Encrypted revisions must
+    /// still have matching encryption parameters and file identity.
+    pub fn open_earlier_revision(&self, bytes: Arc<Vec<u8>>) -> Result<Document, CosError> {
+        self.source.open_with_same_credentials(bytes)
+    }
+
     pub(crate) fn open_limited(&self, bytes: Arc<Vec<u8>>, limit: usize) -> Result<Document, CosError> {
         let opened = self.source.open_with_same_credentials_and_limit(bytes, limit)?;
         if opened.security().is_none() {
