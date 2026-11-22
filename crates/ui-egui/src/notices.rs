@@ -119,8 +119,14 @@ pub fn posted(ctx: &egui::Context) -> Vec<toast::Card> {
 /// Posts the notices and applies the progress requests queued since the last pass, in the order they were made.
 pub(crate) fn post_queued(app: &mut PdfCraftApp, ctx: &egui::Context) {
     // No PdfCraft notice sets a dismiss key, so nothing is ever silenced and the list is empty.
+    // The same notice raised twice in one pass (a refusal reported by two layers) shows one card, as production's does.
+    let mut posted: Vec<PostedNotice> = Vec::new();
     for notice in std::mem::take(&mut app.posted_notices) {
+        if posted.contains(&notice) {
+            continue;
+        }
         app.notices.post(ctx, &notice, &[]);
+        posted.push(notice);
     }
     for request in std::mem::take(&mut app.progress_requests) {
         apply(app, ctx, request);

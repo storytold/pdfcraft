@@ -1961,3 +1961,16 @@ fn accessible_labels_on_format_text_and_pin_dialog() {
     let char_spin = ok(&mut h, &c, "ui.inspect", json!({"query": "Character spacing", "role": "SpinButton"}));
     assert!(char_spin["count"].as_u64().unwrap() >= 1, "character spacing spin button has accessible label: {char_spin}");
 }
+
+/// Format text's size field keeps room for its value in the Tools pane at its default width, beside the colour well, the list
+/// buttons and the alignment menu (the field was 38 points, "tT" with no readable value, at production's 272).
+#[test]
+fn format_text_size_field_keeps_room_for_its_value() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.command", json!({"id": "edit.text"}));
+    h.run_steps(6);
+    let size = h.get_by_label_contains("Font size").rect();
+    assert!(size.width() >= 64.0, "the size field is {} wide: {size:?}", size.width());
+    let align = h.get_by_label_contains("Alignment").rect();
+    assert!(align.max.x <= 330.0, "the alignment menu stays inside the pane: {align:?}");
+}

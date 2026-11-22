@@ -165,8 +165,10 @@ const START_SHARE: f32 = 0.2;
 /// Share of the rest the page area takes beside the end dock.
 const PAGE_SHARE: f32 = 0.8;
 
-/// The Tools pane's default width, as production opened it.
-const TOOLS_WIDTH: f32 = 272.0;
+/// The Tools pane's default width. Production opened it at 272 points; the Comfortable density's 30-point icon buttons and
+/// 10-point gaps need about 55 more for Format text's size field to keep room for its value beside the colour well, the list
+/// buttons and the alignment menu (the field takes what the row leaves).
+const TOOLS_WIDTH: f32 = 330.0;
 
 /// The arrangement of a new install: Tools at the start edge, the side-panel rail at the window edge,
 /// and the toolbar floating at the start of the page area. The side panels form one collapsed group.
