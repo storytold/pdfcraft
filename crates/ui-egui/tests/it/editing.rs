@@ -5240,10 +5240,11 @@ fn typed_small_coloured_text_size_survives_save_and_reopen() {
     h.drop_at(at);
     h.run_steps(3);
     assert!(h.state().views[0].session.line_editor.is_some());
-    h.get_by_label("Font size").click();
-    h.run_steps(1);
+    h.get_by_role_and_label(Role::SpinButton, "Font size").focus();
+    h.run_steps(2);
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
     h.event(egui::Event::Text("6.5".into()));
+    h.run_steps(1);
     h.key_press(Key::Enter);
     h.run_steps(4);
     h.get_by_label("Text color").click();
