@@ -46,7 +46,7 @@ pub fn kind_label(a: &Annotation) -> &str {
         Some("FreeTextCallout") => "Callout",
         Some("PolygonCloud") => "Cloud",
         Some("FreeTextTypeWriter") => "Typewriter",
-        Some("FreehandHighlight") if a.subtype == "Ink" => "Freehand highlight",
+        Some("FreehandHighlight") if a.subtype == "Ink" => "Freehand-Highlight",
         _ => subtype_label(&a.subtype),
     }
 }
@@ -929,7 +929,7 @@ mod tests {
         assert_eq!(subtype_icon("Square", Some("FreehandHighlight")), "square");
 
         let freehand = mock_annotation("Ink", Some("FreehandHighlight"));
-        assert_eq!(kind_label(&freehand), "Freehand highlight");
+        assert_eq!(kind_label(&freehand), "Freehand-Highlight");
 
         let plain_ink = mock_annotation("Ink", None);
         assert_eq!(kind_label(&plain_ink), "Drawing");
