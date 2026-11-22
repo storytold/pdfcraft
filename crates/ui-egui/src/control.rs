@@ -642,7 +642,7 @@ mod viewport_tests {
     /// Child viewport output must not advance the root pass count or replace its accessibility tree.
     #[test]
     fn nested_child_output_does_not_claim_the_root_pass() {
-        use accesskit::{Node, NodeId, Role, Tree, TreeUpdate};
+        use accesskit::{Node, NodeId, Role, TreeId, TreeInfo, TreeUpdate};
 
         let ctx = egui::Context::default();
         let (control, _client) = attach(&ctx);
@@ -654,7 +654,8 @@ mod viewport_tests {
         let mut root_output = egui::FullOutput::default();
         root_output.platform_output.accesskit_update = Some(TreeUpdate {
             nodes: vec![(NodeId(1), Node::new(Role::Window))],
-            tree: Some(Tree::new(NodeId(1))),
+            tree: Some(TreeInfo::new(NodeId(1))),
+            tree_id: TreeId::ROOT,
             focus: NodeId(1),
         });
         plugin.output_hook(&ctx, &mut root_output);
@@ -666,7 +667,8 @@ mod viewport_tests {
         let mut child_output = egui::FullOutput::default();
         child_output.platform_output.accesskit_update = Some(TreeUpdate {
             nodes: vec![(NodeId(99), Node::new(Role::Button))],
-            tree: Some(Tree::new(NodeId(99))),
+            tree: Some(TreeInfo::new(NodeId(99))),
+            tree_id: TreeId::ROOT,
             focus: NodeId(99),
         });
         // After end_pass egui reports ROOT again; ownership comes from the input/output pair.

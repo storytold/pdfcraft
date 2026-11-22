@@ -67,7 +67,7 @@ pub struct ControlPlugin {
     pub(super) viewport: egui::ViewportId,
     /// Viewport ownership for each nested pass, paired from input_hook to output_hook.
     /// egui pops the child viewport before output_hook, so `ctx.viewport_id()` is unusable there.
-    pass_viewports: Vec<egui::ViewportId>,
+    pub(super) pass_viewports: Vec<egui::ViewportId>,
 }
 
 impl egui::Plugin for ControlPlugin {
