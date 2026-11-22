@@ -399,11 +399,11 @@ fn a_widget_rect_saved_back_as_integers_is_a_form_fill() {
 }
 
 /// A field's appearance stream signed in a damaged slot (header 5, row 0), so `6 0 R` and `6 5 R`
-/// both reach it. Rewritten in place under both generations, it is a form fill only while the
-/// field's widget is all that refers to it: a comment drawing it through the other generation
-/// shows the rewrite too (#3442).
+/// both reach it. Rewritten in place, its entry still doesn't locate its own object, so it is
+/// refused even when the field's widget is all that refers to it (#6754), and when a comment
+/// draws it through the other generation (#3442).
 #[test]
-fn an_appearance_reached_through_another_generation_is_not_only_the_fields() {
+fn an_appearance_rewritten_in_a_damaged_slot_is_not_a_form_fill() {
     let signed = |comment_ap: &str| {
         File::new().revision(&[
             (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>")),
@@ -417,7 +417,7 @@ fn an_appearance_reached_through_another_generation_is_not_only_the_fields() {
     };
     let redrawn = |file: &File| file.clone().revision(&[(6, Row::Obj(5, 0, "<< /Length 13 >>\nstream\n0 0 m 9 9 l S\nendstream"))]);
     let only_the_fields = signed("4 0 R");
-    assert_eq!(verdict(&redrawn(&only_the_fields).open(), only_the_fields.open(), Some(2)), Modification::Allowed(vec![super::kind::FORM_FILL]));
+    assert_refused(&redrawn(&only_the_fields).open(), only_the_fields.open(), 2);
     let shared = signed("6 5 R");
     assert_refused(&redrawn(&shared).open(), shared.open(), 2);
 }

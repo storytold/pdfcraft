@@ -108,7 +108,8 @@ needs a prompt to open is listed and asks at signing (issue #179).
   only when nothing but other fields' appearances refers to it, under any generation of its slot:
   an appearance that is also a Form XObject a page draws stays page content, and one shared with
   a signature field, a comment, a script or a `/DR` entry is not form fill. Changing or dropping a
-  `/DR` entry is not form fill either.
+  `/DR` entry is not form fill either, and neither is rewriting an object in a damaged slot, whose
+  entry doesn't locate its own object (#6754).
 - **Strict in what it checks, tolerant where signers differ.** RSA PKCS #1 signatures are checked
   against the one encoding the digest should have, built here and compared byte for byte; the
   `DigestInfo` may omit its NULL parameter, as older signers write it (RFC 8017 App. B.1), but a
