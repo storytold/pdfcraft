@@ -3964,6 +3964,24 @@ const BLUE_NOTE_WITH_OPEN_POP_UP: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
+#[test]
+fn an_uncoloured_notes_popup_uses_the_yellow_note_default() {
+    let _gpu = crate::gpu();
+    let pdf = String::from_utf8_lossy(BLUE_NOTE_WITH_OPEN_POP_UP).replace("/C [0 0 1]", "");
+    let mut h = harness_with_bytes(pdf.into_bytes(), |_| {});
+    let window = popup_rect(&h, "Alpha");
+    let pixels = h.render().unwrap();
+    let x0 = window.left().max(0.0) as u32;
+    let x1 = window.right().min(pixels.width() as f32) as u32;
+    let y0 = window.top().max(0.0) as u32;
+    let y1 = (window.top() + 16.0).min(pixels.height() as f32) as u32;
+    let yellow = (y0..y1).any(|y| (x0..x1).any(|x| {
+        let [r, g, b, _] = pixels.get_pixel(x, y).0;
+        r > 200 && g > 150 && b < 150
+    }));
+    assert!(yellow, "a note without a colour has a yellow popup header");
+}
+
 /// A note with an open pop-up and a thread of replies: "Second" and "Third" answer the note,
 /// "Second, first answer" answers "Second" (`/IRT` to a reply).
 const NOTE_WITH_A_THREAD: &[u8] = b"%PDF-1.7

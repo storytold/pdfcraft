@@ -210,7 +210,8 @@ pub(crate) fn note_popups(
                 .collect();
             let mark = pcx.screen_rects(a).next();
             // PLAN: `Annotation::color` is f32 components in 0..=1; the window takes 8-bit.
-            let color = a.color.map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8));
+            // A comment with no colour has the note yellow, as the page icon does.
+            let color = Some(a.color.map_or([0xFF, 0xD6, 0x5C], |c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)));
             let selected = view.session.comments.is_selected((page, a.index));
             let popup_id = view.session.comments.popup_id((page, a.index));
             let window_label = match owned.first() {

@@ -1,5 +1,4 @@
 use craft::behavior::{IconId, Mixed};
-use craft::keymap::CommandRef;
 use craft::ui::buttons::{IconButton, ToggleButton};
 use craft::ui::choice::Swatch;
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
@@ -56,6 +55,8 @@ pub(crate) struct MenuRights {
     pub(crate) allowed: bool,
     /// The document's pages may change (Flatten comments draws into them).
     pub(crate) can_modify: bool,
+    /// Comments are on the comment clipboard, to paste.
+    pub(crate) can_paste: bool,
 }
 
 /// What the canvas asks the app to do.
@@ -63,6 +64,8 @@ pub(crate) struct MenuRights {
 pub enum CanvasAction {
     Edit(Box<Edit>),
     OpenComments,
+    /// Run this command of the command board (Copy and Paste of the comments).
+    Command(&'static str),
     /// Comment Properties for (page, index).
     Properties(usize, usize),
     /// Put this text on the clipboard, through the app's clipboard service.
@@ -98,7 +101,7 @@ fn row(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
 /// Rows of the canvas context menu for the selected comment (or the page), inside `Menu::context`.
 pub(crate) fn context_rows(ui: &mut egui::Ui, cx: CommentMenuCx<'_>) -> Option<CanvasAction> {
     let CommentMenuCx { view, info, deletable, prefs, rights, recent, tool } = cx;
-    let MenuRights { allowed, can_modify } = rights;
+    let MenuRights { allowed, can_modify, can_paste } = rights;
     let mut action = None;
     // Connected lines, a polygon or a cloud being drawn: finish it from the menu, as other editors do (Enter
     // and a double-click finish it too), take the last point back, or stop.
@@ -174,8 +177,22 @@ pub(crate) fn context_rows(ui: &mut egui::Ui, cx: CommentMenuCx<'_>) -> Option<C
             // from the command board.
             // The command board owns both gates: the Paste handler (pdf-canvas-w16) reads `allowed`, the
             // clipboard and the paste place (`view.comments.context_at`).
-            MenuItem::command(CommandRef::new("edit.copy")).show(ui);
-            MenuItem::command(CommandRef::new("edit.paste")).show(ui);
+            // Worded and gated as the comment clipboard works: Paste comments waits for copied comments.
+            let chord = |ui: &egui::Ui, id: &str| crate::commands::chord_label(ui.ctx(), id);
+            let mut copy = MenuItem::new(tl!(if several { "Copy comments" } else { "Copy comment" }));
+            if let Some(text) = chord(ui, "edit.copy") {
+                copy = copy.shortcut(text);
+            }
+            if copy.show(ui).ran {
+                action = Some(CanvasAction::Command("edit.copy"));
+            }
+            let mut paste = MenuItem::new(tl!("Paste comments")).enabled(allowed && can_paste);
+            if let Some(text) = chord(ui, "edit.paste") {
+                paste = paste.shortcut(text);
+            }
+            if paste.show(ui).ran {
+                action = Some(CanvasAction::Command("edit.paste"));
+            }
             Divider::horizontal().show(ui);
             // The engine's own check, for each selected comment: a locked comment, or one with a locked
             // reply, stays. On a group subordinate, Delete takes just it, as Acrobat's does.
