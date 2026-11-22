@@ -6,8 +6,8 @@ use std::cell::RefCell;
 use craft::behavior::IconId;
 use craft::behavior::{DisplayOrder, ItemSource, SizeHint};
 use craft::keymap::CommandRef;
-use craft::theme::variant::Tone;
 use craft::theme::TypeRole;
+use craft::theme::variant::Tone;
 use craft::ui::buttons::{Button, IconButton};
 use craft::ui::contract::{ActivateOn, CollectionEvent, Pad, Props as _, Show as _, ShowCollection as _, ShowContainer as _, clicked};
 use craft::ui::display::{PictureSize, Text};
@@ -47,7 +47,8 @@ fn recommended_grid(ui: &mut egui::Ui, groups: &[&'static ToolGroup], asked: &Re
         .zoom(GridZoom::Fixed(1.05))
         .show_items(ui, &Tools(groups.len() + 1), &mut |key, _| {
             if let Some(g) = groups.get(*key) {
-                let description = g.sections.first().map(|s| s.items.iter().take(3).map(|i| tl!(i.label)).collect::<Vec<_>>().join(" · ")).unwrap_or_default();
+                let description =
+                    g.sections.first().map(|s| s.items.iter().take(3).map(|i| tl!(i.label)).collect::<Vec<_>>().join(" · ")).unwrap_or_default();
                 tool_tile(g, false).accessible_name(tl!(g.label).to_string()).detail(description).summary_action(tl!("Use now").to_string())
             } else {
                 Tile::new(tl!("Open file").to_string()).icon(IconId::new("folder_open")).summary_action("")
@@ -165,7 +166,8 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         Row::new().wrap(true).show(ui, |ui, _| {
                             for (i, link) in pdfcraft_engine::links::LINKS.iter().enumerate() {
                                 let label = if i == 0 { tl!("Join our Discord") } else { tl!(link.label) };
-                                if clicked(&Button::new(label.to_string()).icon(IconId::new(link.icon)).show(ui)) {
+                                let variant = if i == 0 { craft::theme::Variant::PRIMARY } else { craft::theme::Variant::SECONDARY };
+                                if clicked(&Button::new(label.to_string()).variant(variant).icon(IconId::new(link.icon)).show(ui)) {
                                     asked.borrow_mut().push(Asked::Link(link.command));
                                 }
                             }

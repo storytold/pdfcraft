@@ -50,8 +50,9 @@ pub(super) enum Notice {
 }
 
 /// One page notice bar with the icon named `icon`.
-fn bar(tone: Tone, icon: &'static str, text: String) -> Bar<'static> {
-    Bar::new(tone, text).layout(NoticeLayout::Bar).icon(NoticeIcon::Custom(IconId::new(icon).into()))
+fn bar(_tone: Tone, icon: &'static str, text: String) -> Bar<'static> {
+    // Production paints every notice bar on the soft accent surface, whatever it warns of; the icon says which kind.
+    Bar::new(Tone::Info, text).layout(NoticeLayout::Bar).icon(NoticeIcon::Custom(IconId::new(icon).into()))
 }
 
 /// The notices above the pages, one after another: a file changed on disk first, then what a historical
@@ -202,7 +203,25 @@ pub(super) fn notices(
     // What each action returns, by the action's index; `None` is the field highlight toggle.
     let mut results: Vec<Option<Notice>> = Vec::new();
     let mut notice = bar(tone, icon, text).dismiss();
-    // The stopped-scripts notice leads with the Console, then the field highlights.
+    // Production lays the buttons out right to left, so the bar reads, left to right: Details, Don't show again,
+    // Unlock, Security settings, JavaScript Console, then the field highlights next to the dismiss control.
+    if repaired && !secured && info.fields.is_empty() {
+        notice = notice.action(NoticeAction::new(tl!("Details").to_string()));
+        results.push(Some(Notice::Repairs));
+    }
+    // Only when the bar shows the security message: a form's stopped scripts come first.
+    if secured && !scripts_off {
+        notice = notice.action(NoticeAction::new(tl!("Don't show again").to_string()));
+        results.push(Some(Notice::HideSecured));
+    }
+    if secured && doc.can_unlock() {
+        notice = notice.action(NoticeAction::new(tl!("Unlock…").to_string()).default_action());
+        results.push(Some(Notice::Unlock));
+    }
+    if secured {
+        notice = notice.action(NoticeAction::new(tl!("Security settings").to_string()));
+        results.push(Some(Notice::Security));
+    }
     if scripts_off {
         notice = notice.action(NoticeAction::new(tl!("JavaScript Console").to_string()));
         results.push(Some(Notice::Console));
@@ -211,23 +230,6 @@ pub(super) fn notices(
         let label = if view.session.highlight_fields { tl!("Hide field highlights") } else { tl!("Highlight fields") };
         notice = notice.action(NoticeAction::new(label.to_string()));
         results.push(None);
-    }
-    if secured {
-        notice = notice.action(NoticeAction::new(tl!("Security settings").to_string()));
-        results.push(Some(Notice::Security));
-    }
-    if secured && doc.can_unlock() {
-        notice = notice.action(NoticeAction::new(tl!("Unlock…").to_string()).default_action());
-        results.push(Some(Notice::Unlock));
-    }
-    // Only when the bar shows the security message: a form's stopped scripts come first.
-    if secured && !scripts_off {
-        notice = notice.action(NoticeAction::new(tl!("Don't show again").to_string()));
-        results.push(Some(Notice::HideSecured));
-    }
-    if repaired && !secured && info.fields.is_empty() {
-        notice = notice.action(NoticeAction::new(tl!("Details").to_string()));
-        results.push(Some(Notice::Repairs));
     }
     let out = notice.show(ui);
     if out.dismissed {

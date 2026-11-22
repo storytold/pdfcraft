@@ -1384,11 +1384,28 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbac
         })
         .collect();
     // 5. The overlays.
-    page_overlays::PageBackdrop::new(body.pages, cx.sizes, cx.rotation, cx.info, session).show_at(ui, body.rect);
+    page_overlays::PageBackdrop::new(
+        body.pages,
+        cx.sizes,
+        cx.rotation,
+        cx.info,
+        session,
+        cx.form,
+        parts_out.hovered.as_ref().map(|(owner, _)| owner),
+    )
+    .show_at(ui, body.rect);
+    let view_picked = session.picked_image;
+    let kept = session.area_pick.filter(|_| !session.box_drag.is_active());
     for (page, xf, page_tabs) in &tabs {
-        PageOverlays::new(*page, *xf, cx.doc, page_tabs, &session.compare_marks, &mut session.flash)
-            .highlight_fields(session.highlight_fields)
-            .show_at(ui, body.rect);
+        let mut overlays =
+            PageOverlays::new(*page, *xf, cx.doc, page_tabs, &session.compare_marks, &mut session.flash).highlight_fields(session.highlight_fields);
+        if let Some(picked) = view_picked.filter(|p| p.page == *page) {
+            overlays = overlays.picked(picked.rect);
+        }
+        if let Some((_, area)) = kept.filter(|(p, _)| p == page) {
+            overlays = overlays.kept_area(area);
+        }
+        overlays.show_at(ui, body.rect);
     }
     if cx.preparing {
         crate::prepare::tool::show_overlays(ui, body.rect, body.view, session, cx.form, cx.info, body.pages, cx.rotation);
@@ -1543,9 +1560,8 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbac
     }
     if cx.chosen == QuickTool::Snapshot {
         let sizes = cx.sizes;
-        out.area_choice = crate::zoom_snap::area_bar(ui, body.rect, body.pages, session.area_pick, cx.rotation, |page| {
-            sizes.get(page).copied().unwrap_or_default()
-        });
+        out.area_choice =
+            crate::zoom_snap::area_bar(ui, body, body.pages, session.area_pick, cx.rotation, |page| sizes.get(page).copied().unwrap_or_default());
     }
     if cx.unobstructed && matches!(cx.tool, QuickTool::Select | QuickTool::ColumnSelect) {
         out.copy_selected =

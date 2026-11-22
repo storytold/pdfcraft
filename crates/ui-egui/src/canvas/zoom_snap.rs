@@ -107,7 +107,7 @@ impl CanvasTool for SnapshotTool<'_> {
 /// with it: the choice made this pass. The outline itself is the page body's (marching ants).
 pub(crate) fn area_bar(
     ui: &mut egui::Ui,
-    body_rect: egui::Rect,
+    body: &craft::pages::ui::PageBody<'_>,
     placed: &[PlacedPage],
     area_pick: Option<(usize, [f32; 4])>,
     rotation: u16,
@@ -116,9 +116,9 @@ pub(crate) fn area_bar(
     let (page, area) = area_pick?;
     let placed = placed.iter().find(|p| p.page == page)?;
     let screen = PageXform::of(placed, rotation, page_size_of(page)).view_rect(area);
-    let anchor = [screen.left_top(), screen.right_top(), screen.right_bottom(), screen.left_bottom()].map(|p| placed.to_page(p));
+    let anchor = [screen.left_top(), screen.right_top(), screen.right_bottom(), screen.left_bottom()].map(|p| body.view.to_doc(p));
     let mut choice = None;
-    TaskBar::fixed(tl!("Snapshot area"), &anchor).show(ui, body_rect, |ui, _cx| {
+    TaskBar::fixed(tl!("Snapshot area"), &anchor).show(ui, body.rect, |ui, _cx| {
         if craft::ui::buttons::Button::new(tl!("Print area…")).show(ui).clicked() {
             choice = Some(AreaChoice::Print);
         }

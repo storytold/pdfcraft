@@ -411,6 +411,9 @@ struct OverlayField {
     selected: bool,
 }
 
+/// How much of the accent the prepare overlay's field fill keeps over the page.
+const FIELD_FILL_SHARE: f32 = 89.0 / 255.0;
+
 /// The fields of one page with their fill, outline, selection and name tags, and the tab-order
 /// badges while they are on. A field being moved is drawn at the moved place.
 #[derive(Component, Props)]
@@ -504,7 +507,7 @@ impl Component for PrepareOverlay {
         let colors = &cx.tokens.color;
         PrepareOverlayStyle {
             metrics: Metrics::new(),
-            fill: cx.color(colors.accent.soft),
+            fill: cx.color(colors.accent.solid),
             outline: cx.color(colors.line.control_edge),
             selected: cx.color(colors.accent.solid),
             tag: cx.color(colors.text.normal),
@@ -524,7 +527,8 @@ impl Component for PrepareOverlay {
         let draw = ui.draw();
         for field in &self.fields {
             let r = field.rect;
-            draw.fill(&PaintShape::Rect(r, CornerRadius::ZERO), style.fill);
+            // A tint of the accent over the page, as production's (89/255), so the page shows through.
+            draw.faded(FIELD_FILL_SHARE, |draw| draw.fill(&PaintShape::Rect(r, CornerRadius::ZERO), style.fill));
             if !field.selected {
                 draw.stroke(&PaintShape::Rect(r, CornerRadius::ZERO), StrokeWidth::Thin, style.outline);
             }
