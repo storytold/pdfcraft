@@ -224,7 +224,13 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
     let current = view.current();
 
     if outline.is_empty() {
-        Notice::new(craft::theme::variant::Tone::Neutral, tl!("This document has no bookmarks.")).show(ui);
+        // Centred in the panel with a glyph above, as the old panel showed an empty list.
+        ui.add_space(40.0);
+        ui.vertical_centered(|ui| {
+            craft::ui::display::Icon::new(IconSpec::svg(IconId::new("bookmark-plus"))).show(ui);
+            ui.add_space(8.0);
+            craft::ui::display::Text::new(tl!("This document has no bookmarks.").to_string()).show(ui);
+        });
         return result;
     }
 

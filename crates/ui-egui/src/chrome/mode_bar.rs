@@ -60,14 +60,15 @@ pub(super) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 if hidden.toolbar {
                     return;
                 }
-                IconButton::command(IconId::new("printer"), "print.dialog").show(ui);
-                IconButton::command(IconId::new("save"), "file.save").show(ui);
-                IconButton::command(IconId::new("info"), "file.properties").show(ui);
                 if compact_search {
                     IconButton::command(IconId::new("search"), "view.palette").label(tl!("Find tools and commands")).show(ui);
                 } else {
                     CommandSearch::new("view.palette", tl!("Find tools and commands")).show(ui);
                 }
+                // Production puts the search first and the document buttons at the right edge.
+                IconButton::command(IconId::new("info"), "file.properties").show(ui);
+                IconButton::command(IconId::new("save"), "file.save").show(ui);
+                IconButton::command(IconId::new("printer"), "print.dialog").show(ui);
             })
             .show(ui, |ui, _| {
                 if hidden.toolbar {

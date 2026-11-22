@@ -200,7 +200,7 @@ fn row_number(h: &Harness<'static, PdfCraftApp>, label: &str) -> Option<String> 
 
 /// The page grid's own Close, in its Organize pages bar: the window's title bar has a Close too.
 fn close_grid(h: &mut Harness<'static, PdfCraftApp>) {
-    h.get_by_label("Organize pages").get_by_role_and_label(Role::Button, "Close").click();
+    h.get_by_role_and_label(Role::Toolbar, "Organize pages").get_by_role_and_label(Role::Button, "Close").click();
 }
 
 fn organize(pages: usize) -> Harness<'static, PdfCraftApp> {

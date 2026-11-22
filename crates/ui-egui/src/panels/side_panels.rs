@@ -315,8 +315,15 @@ impl DockPanels<PanelId> for Panels<'_> {
                 spec
             }
             None if self.app.left == LeftPanel::CalculationOrder => PanelSpec::new(crate::i18n::t("Calculation order").to_owned()).command(command),
-            None if super::tools::has_footer(self.app) => PanelSpec::new(crate::i18n::t("Tools").to_owned()).command(command).footer(),
-            None => PanelSpec::new(crate::i18n::t("Tools").to_owned()).command(command),
+            None => {
+                // The panel is headed by what it shows: the tool's name, or All tools (production's heading).
+                let title = match self.app.left {
+                    LeftPanel::Tool(id) => super::catalog::group(id).map_or_else(|| crate::i18n::t("All tools"), |g| crate::i18n::t(g.label)),
+                    _ => crate::i18n::t("All tools"),
+                };
+                let spec = PanelSpec::new(title.to_owned()).command(command);
+                if super::tools::has_footer(self.app) { spec.footer() } else { spec }
+            }
         }
     }
 
@@ -477,7 +484,7 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
     // in its tab (ISO 32000-2 Table 147); the tab strip stays, and F8 brings the rest back (`viewer_prefs`).
     let bare = app.full_screen_document() || app.hidden_interface().window_ui;
     let organizing = app.active_ids().and_then(|(index, _)| app.views.get(index)).is_some_and(|view| view.organize);
-    let toolbar = active && !app.hotbar_hidden() && !organizing;
+    let toolbar = active && !app.hotbar_hidden() && !organizing && !expanded;
     let anchor = rail_anchor(app);
     let workspace = app.dock.clone();
     // The rail lists the Accessibility Checker once the document has a report, and Search and Compare only while
@@ -491,11 +498,12 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
     };
     let mut panels = Panels { ctx: ui.ctx().clone(), app: &mut *app };
     // Home and Combine have no side panel and no toolbar, and Read mode hides the tools and the quick toolbar, not the
-    // navigation panels.
+    // navigation panels. A document that hides the window controls keeps the quick toolbar on its pages; full screen
+    // hides it (`hotbar_hidden`), and so does the expanded All tools view, which takes the pages' place.
     let shown = |panel: &PanelId| match panel {
         PanelId::Document => true,
-        _ if bare => false,
         PanelId::Toolbar => toolbar,
+        _ if bare => false,
         PanelId::Tools => !read && !expanded,
         _ => active && !expanded && listed(panel),
     };

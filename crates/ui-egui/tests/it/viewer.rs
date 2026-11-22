@@ -1549,6 +1549,9 @@ fn advanced_search_lists_results_with_context() {
     assert!(h.execute("edit.advanced_search"));
     h.run_steps(2);
     h.get_by_label("What word or phrase would you like to search for?");
+    let whole = h.get_by_label("Whole words only").rect();
+    let case = h.get_by_label("Case-sensitive").rect();
+    assert!((whole.center().y - case.center().y).abs() < whole.height() / 2.0, "search options share a row");
     h.state_mut().views[i].find.as_mut().unwrap().query = "pages".into();
     // Background rendering and text extraction can take seconds on a loaded CI runner (FreeBSD VM).
     for _ in 0..3000 {
