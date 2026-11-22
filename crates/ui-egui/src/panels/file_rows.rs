@@ -1,7 +1,8 @@
 //! A row for a file attached to a document, as the Attachments and Portfolio files panels list
 //! them: an icon, the file's name and a line of details, buttons at its end, and a menu. The row
 //! is a list option the keyboard reaches: ↑ and ↓ move between rows ([`arrows`]), Enter or
-//! Space activates it, and the Menu key or Shift+F10 opens its menu under it.
+//! Space activates it, and the Menu key or Shift+F10 opens its menu under it. The row with the
+//! keyboard is outlined.
 
 use super::{Align, Layout, Rect, Sense, Tokens, icons, theme, vec2};
 
@@ -69,6 +70,11 @@ pub(crate) fn show(
     if selected {
         let r = response.rect;
         ui.painter().rect_filled(Rect::from_min_size(r.min, vec2(MARK_WIDTH, r.height())), 1.5, t.accent);
+    }
+    if response.has_focus() {
+        // The keyboard's row, as the app's other focused controls show it. Inside the row: rows
+        // span the panel, whose edges would clip an outline drawn outside.
+        ui.painter().rect_stroke(response.rect, 4.0, egui::Stroke::new(2.0, t.accent_text), egui::StrokeKind::Inside);
     }
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ListBoxOption, true, row.name));
     // Selected, not toggled: the row is the list's selection, not a check box.
