@@ -1,8 +1,12 @@
+# Russian translation © 2026 SuperSfera LLC, MIT OR Apache-2.0
 [Desktop Entry]
 Type=Application
 Name=PdfCraft
+Name[ru]=PdfCraft
 GenericName=PDF Editor
+GenericName[ru]=Редактор PDF
 Comment=Read, organize, combine, split and secure PDFs
+Comment[ru]=Чтение, упорядочивание, объединение, разделение и защита PDF
 Exec=pdfcraft %U
 TryExec=pdfcraft
 Icon=ai.storyteller.pdfcraft
@@ -11,4 +15,5 @@ StartupNotify=true
 StartupWMClass=ai.storyteller.pdfcraft
 Categories=Office;Viewer;
 Keywords=pdf;viewer;editor;annotate;sign;forms;merge;split;
+Keywords[ru]=pdf;просмотр;редактор;аннотации;подпись;формы;объединение;разделение;
 MimeType=application/pdf;

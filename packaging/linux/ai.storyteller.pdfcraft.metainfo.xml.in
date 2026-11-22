@@ -7,6 +7,7 @@
   <project_license>MIT OR Apache-2.0</project_license>
   <name>PdfCraft</name>
   <summary>Read, organize, combine, split and secure PDFs</summary>
+  <summary xml:lang="ru">Чтение, упорядочивание, объединение, разделение и защита PDF</summary>
   <developer id="ai.storyteller">
     <name>Learning Machines LLC</name>
   </developer>
@@ -14,6 +15,11 @@
     <p>
       PdfCraft is an open-source PDF workbench. Read, comment on, fill in and sign PDFs;
       organize, combine and split pages; edit, redact, protect and export documents.
+    </p>
+    <p xml:lang="ru">
+      PdfCraft — открытая рабочая среда для PDF. Читайте, комментируйте, заполняйте и
+      подписывайте PDF; упорядочивайте, объединяйте и разделяйте страницы; редактируйте
+      документы, скрывайте в них конфиденциальные фрагменты, защищайте и экспортируйте их.
     </p>
   </description>
   <launchable type="desktop-id">ai.storyteller.pdfcraft.desktop</launchable>
@@ -29,13 +35,18 @@
   </categories>
   <keywords>
     <keyword>pdf</keyword>
+    <keyword xml:lang="ru">pdf</keyword>
     <keyword>viewer</keyword>
+    <keyword xml:lang="ru">просмотр</keyword>
     <keyword>annotate</keyword>
+    <keyword xml:lang="ru">аннотации</keyword>
     <keyword>forms</keyword>
+    <keyword xml:lang="ru">формы</keyword>
   </keywords>
   <screenshots>
     <screenshot type="default">
       <caption>A PDF open with its threaded comments</caption>
+      <caption xml:lang="ru">Открытый PDF с комментариями в ветках</caption>
       <image>https://raw.githubusercontent.com/storytold/pdfcraft/main/docs/images/pdfcraft-viewer.png</image>
     </screenshot>
   </screenshots>
