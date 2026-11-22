@@ -128,6 +128,7 @@ impl PdfCraftApp {
             if !self.flatten_fill_sign_for_save(id) {
                 return false;
             }
+            self.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillSave);
             let bytes = match self.session.save_bytes(id) {
                 Ok(b) => b,
                 Err(e) => {
@@ -293,6 +294,7 @@ impl PdfCraftApp {
             self.notify_tr("The document was closed before it could be saved.");
             return false;
         };
+        self.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillSave);
         let bytes = if full { self.session.save_full_bytes(id) } else { self.session.save_bytes(id) };
         let bytes = match bytes.and_then(|b| self.session.check_save(id, &b).map(|()| b)) {
             Ok(b) => b,

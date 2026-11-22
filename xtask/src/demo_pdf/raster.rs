@@ -37,13 +37,8 @@ pub fn mandelbrot_png(size: u32) -> Result<Vec<u8>> {
         }
     }
 
-    let mut png_bytes = Vec::new();
-    let mut encoder = png::Encoder::new(&mut png_bytes, size, size);
-    encoder.set_color(png::ColorType::Rgb);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header()?;
-    writer.write_image_data(&rgb)?;
-    writer.finish()?;
+    let img = craft_image_codecs::Image::from_u8(size, size, craft_image_codecs::ChannelLayout::Rgb, rgb)?;
+    let png_bytes = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default())?;
     Ok(png_bytes)
 }
 

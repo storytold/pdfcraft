@@ -1,7 +1,7 @@
 use super::draft::{CUSTOM_SCALE, Handling, PrintDraft, Which};
 use super::{
-    Binding, BookletSubset, Color32, Content, Orientation, PAPERS, PREVIEW_BOX, PREVIEW_H, PREVIEW_W, PageOrder, Pos2, Rect, SizeMode, Stroke,
-    Subset, Tokens, pos2, print, printer_label, spool, still_looking, theme, vec2, widgets,
+    Binding, BookletSubset, Color32, Content, Orientation, PREVIEW_BOX, PREVIEW_H, PREVIEW_W, PageOrder, Pos2, Rect, SizeMode, Stroke, Subset,
+    Tokens, pos2, print, printer_label, spool, still_looking, theme, vec2, widgets,
 };
 
 /// The narrowest the title is still worth cutting: an ellipsis and a couple of pixels at the title's
@@ -103,6 +103,91 @@ fn combo<T: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, name: &str, value: &m
         .accessible_name(name);
 }
 
+/// A wide, searchable fleet list; filtering never changes the selected destination.
+fn printer_picker(ui: &mut egui::Ui, d: &mut PrintDraft) -> egui::Response {
+    let filter_id = ui.make_persistent_id("printer-filter");
+    // Keep the search only while the combo box renders its popup contents.
+    let previous_filter = ui.data(|data| data.get_temp::<String>(filter_id));
+    let opening = previous_filter.is_none();
+    let mut filter = previous_filter.unwrap_or_default();
+    let shown = match d.printer.as_deref() {
+        Some(p) => printer_label(p),
+        None if still_looking(d) => tl!("Looking for printers…").to_string(),
+        None => tl!("Save as PDF").to_string(),
+    };
+    let screen = ui.ctx().content_rect();
+    let width = 430.0_f32.min((screen.width() - 32.0).max(0.0));
+    let height = 420.0_f32.min(screen.height() * 0.6);
+    let response = craft_ui::ComboBox::from_id_salt("printer")
+        .selected_text(&shown)
+        .width(260.0)
+        .truncate()
+        .height(height)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show_ui(ui, |ui| {
+            ui.set_width(width);
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+            let search_label = ui.label(tl!("Search printers"));
+            let search = ui.add(widgets::line(&mut filter).desired_width(f32::INFINITY).char_limit(256)).labelled_by(search_label.id);
+            if opening {
+                search.request_focus();
+            }
+            let query = pdfcraft_render::text::fold_case(filter.trim());
+            if d.printers_loading {
+                ui.add_enabled(false, egui::Label::new(tl!("Looking for printers…")));
+            }
+            // Keep the search and Save as PDF visible while the devices scroll.
+            // The popup's actual clip can be shorter than the requested height.
+            let footer_height = ui.spacing().interact_size.y + 4.0 * ui.spacing().item_spacing.y;
+            let list_height = (ui.clip_rect().bottom() - ui.cursor().top() - footer_height).clamp(0.0, height);
+            let mut list = egui::ScrollArea::vertical().id_salt("printer-results").max_height(list_height);
+            if search.changed() {
+                list = list.vertical_scroll_offset(0.0);
+            }
+            list.show(ui, |ui| {
+                let mut matched = false;
+                for p in &d.printers {
+                    let name = printer_label(&p.name);
+                    if !query.is_empty() && !pdfcraft_render::text::fold_case(&name).contains(&query) {
+                        continue;
+                    }
+                    matched = true;
+                    let label = if p.default && p.name != crate::web_print::BROWSER_PRINTER {
+                        crate::i18n::fmt(tl!("{name} (default)"), &[("name", &name)])
+                    } else {
+                        name
+                    };
+                    let selected = d.printer.as_deref() == Some(p.name.as_str());
+                    let choice = ui.selectable_value(&mut d.printer, Some(p.name.clone()), label);
+                    if opening && selected {
+                        choice.scroll_to_me(Some(egui::Align::Center));
+                    }
+                    if choice.clicked() {
+                        d.printer_picked = true;
+                        ui.close();
+                    }
+                }
+                if !matched && !query.is_empty() && !d.printers_loading {
+                    ui.label(tl!("No printers match."));
+                }
+            });
+            ui.separator();
+            // An explicit choice also protects PDF from a late default-printer refresh.
+            if ui.selectable_value(&mut d.printer, None, tl!("Save as PDF")).clicked() {
+                d.printer_picked = true;
+                ui.close();
+            }
+        });
+    ui.data_mut(|data| {
+        if response.inner.is_some() {
+            data.insert_temp(filter_id, filter);
+        } else {
+            data.remove::<String>(filter_id);
+        }
+    });
+    response.response.on_hover_text(shown)
+}
+
 /// Draw the dialog. `thumb` gives a page's thumbnail texture when there is one. Returns
 /// (print, cancel).
 pub(crate) fn body(
@@ -146,32 +231,7 @@ pub(crate) fn body(
                 // The browser's print dialog sets copies, two-sided printing and colour itself.
                 let browser = d.printer.as_deref() == Some(crate::web_print::BROWSER_PRINTER);
                 ui.horizontal(|ui| {
-                    let shown = match d.printer.as_deref() {
-                        Some(p) => printer_label(p),
-                        None if still_looking(d) => tl!("Looking for printers…").to_string(),
-                        None => tl!("Save as PDF").to_string(),
-                    };
-                    craft_ui::ComboBox::from_id_salt("printer").selected_text(shown).width(260.0).show_ui(ui, |ui| {
-                        if d.printers_loading {
-                            ui.add_enabled(false, egui::Label::new(tl!("Looking for printers…")));
-                        }
-                        for p in &d.printers {
-                            let name = printer_label(&p.name);
-                            let label = if p.default && p.name != crate::web_print::BROWSER_PRINTER {
-                                crate::i18n::fmt(tl!("{name} (default)"), &[("name", &name)])
-                            } else {
-                                name
-                            };
-                            ui.selectable_value(&mut d.printer, Some(p.name.clone()), label);
-                        }
-                        // Chosen even when it was already the selection, so the list arriving
-                        // later doesn't replace it with the default printer.
-                        if ui.selectable_value(&mut d.printer, None, tl!("Save as PDF")).clicked() {
-                            d.printer_picked = true;
-                        }
-                    })
-                    .response
-                    .labelled_by(printer_caption.id);
+                    printer_picker(ui, d).labelled_by(printer_caption.id);
                     let tip = if spool::HAS_PRINTER_PREFERENCES {
                         tl!("Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.")
                     } else {
@@ -201,6 +261,11 @@ pub(crate) fn body(
                     d.driver_error = None;
                     // What this printer was last printed with (#2001).
                     d.apply_setup();
+                    d.reset_unoverridden_custom_paper();
+                    d.apply_printer_papers(Vec::new());
+                    if let Some(p) = d.printer.clone() {
+                        d.read_papers_for = Some(p);
+                    }
                 }
                 ui.end_row();
                 // The spooler answered with no printer at all (#160): say so, rather than
@@ -247,23 +312,35 @@ pub(crate) fn body(
                 let paper_label = ui.label(tl!("Paper:"));
                 d.paper = d.paper.min(d.paper_count().saturating_sub(1));
                 let before = d.paper;
+                let mut paper_clicked = false;
+                let detecting = d.papers_loading();
                 ui.horizontal(|ui| {
                     // A standard size's name is translated; a custom paper keeps the name it was given.
-                    let shown = if d.paper_is_custom() { d.paper_name() } else { tl!(d.paper_name().as_str()).to_string() };
-                    craft_ui::ComboBox::from_id_salt("paper").selected_text(shown).width(260.0).show_ui(ui, |ui| {
-                        for (i, (name, _)) in PAPERS.iter().enumerate() {
-                            ui.selectable_value(&mut d.paper, i, tl!(name));
+                    let shown = if d.paper_is_custom() { d.paper_name().to_string() } else { tl!(&d.paper_name()).to_string() };
+                    craft_ui::ComboBox::from_id_salt("paper").selected_text(shown).width(180.0).show_ui(ui, |ui| {
+                        if detecting {
+                            ui.add_enabled(false, egui::Label::new(tl!("Detecting paper…")));
+                        }
+                        for (i, (name, _)) in d.papers.iter().enumerate() {
+                            if ui.selectable_value(&mut d.paper, i, tl!(name)).clicked() {
+                                paper_clicked = true;
+                            }
                         }
                         if !d.custom_papers.is_empty() {
                             ui.separator();
                         }
                         for (i, p) in d.custom_papers.iter().enumerate() {
                             let label = format!("{} ({})", p.name, d.units.size(p.width, p.height));
-                            ui.selectable_value(&mut d.paper, PAPERS.len() + i, label);
+                            if ui.selectable_value(&mut d.paper, d.papers.len() + i, label).clicked() {
+                                paper_clicked = true;
+                            }
                         }
                     })
                     .response
                     .labelled_by(paper_label.id);
+                    if detecting {
+                        ui.label(egui::RichText::new(tl!("Detecting…")).small().color(t.text_muted));
+                    }
                     if ui.button(tl!("Custom…")).on_hover_text(tl!("Add a paper size of your own to the list")).clicked() {
                         d.custom_new = match d.custom_new {
                             Some(_) => None,
@@ -272,10 +349,38 @@ pub(crate) fn body(
                     }
                     if d.paper_is_custom() && ui.button(tl!("Remove")).on_hover_text(tl!("Take this paper size off the list")).clicked() {
                         d.remove_custom_paper();
+                        paper_clicked = true;
+                    }
+                    let page_setup_tip = if spool::HAS_PRINTER_PREFERENCES {
+                        tl!("Selects paper size and orientation from the printer driver. For paper tray, print quality or other driver defaults, use Properties…")
+                    } else {
+                        tl!("Page setup dialog is not available on this system.")
+                    };
+                    let page_setup = ui
+                        .add_enabled(d.printer.is_some() && !browser && spool::HAS_PRINTER_PREFERENCES, egui::Button::new(tl!("Page Setup…")))
+                        .on_hover_text(page_setup_tip);
+                    if page_setup.clicked()
+                        && let Some(p) = d.printer.clone()
+                    {
+                        d.driver_error = None;
+                        #[cfg(windows)]
+                        let parent = winsafe::HWND::GetActiveWindow().map(|h| h.ptr() as isize);
+                        #[cfg(not(windows))]
+                        let parent = None;
+                        match spool::show_printer_properties(&p, parent) {
+                            Ok(Some((name, size))) => {
+                                d.apply_driver_paper(name, size);
+                            }
+                            Ok(None) => {}
+                            Err(e) => d.driver_error = Some(e.to_string()),
+                        }
                     }
                 });
+                if paper_clicked || d.paper != before {
+                    d.paper_overridden = true;
+                }
                 // Label stock gets the label layout (cut, turned upright, fitted).
-                if d.paper != before && d.paper == print::LABEL_PAPER && d.which != Which::Area {
+                if paper_clicked && d.paper != before && d.paper == print::LABEL_PAPER && d.which != Which::Area {
                     d.paper_before_label = Some(before);
                     d.handling = Handling::Label;
                     d.sheet = 0;
@@ -308,11 +413,12 @@ pub(crate) fn body(
             if let Some(&source) = sizes.get(d.current_page) {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(crate::i18n::fmt(tl!("PDF page: {size}"), &[("size", &d.units.size(source.0, source.1))]));
-                    let matched = print::matching_paper(source);
+                    let matched = d.matching_paper(source);
                     if ui.add_enabled(matched.is_some(), egui::Button::new(tl!("Match page at 100%"))).clicked()
                         && let Some(paper) = matched
                     {
                         d.paper = paper;
+                        d.paper_overridden = true;
                         // A paper picked outright: nothing for leaving Label to give back.
                         d.paper_before_label = None;
                         d.handling = Handling::Size;
@@ -649,8 +755,13 @@ pub(crate) fn body(
     let (mut go, mut cancel) = (false, false);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let looking = still_looking(d);
+        let waiting_paper = d.papers_loading();
         let label = if d.printer.is_some() || looking { tl!("Print") } else { tl!("Save as PDF") };
-        if ui.add_enabled_ui(settings.is_ok() && !sheets.is_empty() && !looking, |ui| widgets::pill_button(ui, label, true)).inner.clicked() {
+        if ui
+            .add_enabled_ui(settings.is_ok() && !sheets.is_empty() && !looking && !waiting_paper, |ui| widgets::pill_button(ui, label, true))
+            .inner
+            .clicked()
+        {
             go = true;
         }
         if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
