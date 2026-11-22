@@ -1,3 +1,4 @@
+use craft::behavior::IconId;
 use craft::theme::variant::Tone;
 use craft::ui::dialog::{DialogId, DialogResult, PromptAnswer, PromptChoice, StandardPrompt};
 use pdfcraft_engine::DocId;
@@ -51,6 +52,7 @@ impl PdfCraftApp {
             "This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it."
         ))
         .title(tl!("Open in Full Screen mode?"))
+        .icon(IconId::new("maximize"))
         .button(PromptChoice::Proceed, tl!("Full Screen"))
         .button(PromptChoice::Cancel, tl!("Not now"))
         .default_choice(PromptChoice::Cancel)
@@ -88,6 +90,7 @@ impl PdfCraftApp {
         };
         let mut prompt = StandardPrompt::custom(crate::i18n::fmt(template, &[("who", tl!(pending.origin.noun()))]))
             .title(title)
+            .icon(IconId::new("external-link"))
             .button(PromptChoice::Proceed, open)
             .button(PromptChoice::Cancel, tl!("Cancel"))
             .default_choice(PromptChoice::Cancel)
@@ -104,7 +107,7 @@ impl PdfCraftApp {
                 prompt = prompt.tone(Tone::Warn, tl!("This web address uses letters from another alphabet, which can look like familiar ones."));
             }
         }
-        let prompt = prompt.lines([pending.url.clone().into()]).paragraph(tl!(
+        let prompt = prompt.lines([pending.url.clone().into()]).note(tl!(
             "Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form."
         ));
         self.prompts.link = Some(self.dialogs.open(prompt));

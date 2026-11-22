@@ -527,6 +527,8 @@ impl PdfCraftApp {
             root.set_theme(theme);
         }
         root.sizes = Arc::clone(sizes);
+        // Every parameter dialog lays out as a document dialog: inline captions, shaded groups, buttons across the foot.
+        root.values.set(craft::ui::patterns::form_dialogs::DialogLayout(craft::ui::patterns::form_dialogs::ParamLayout::Document));
         root.motion = self.animation_effects;
         // Today is the session's day, the one its date formats and Fill & Sign's Date tool use: the calendars ring it
         // and pick it.
