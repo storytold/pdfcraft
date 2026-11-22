@@ -48,7 +48,12 @@ impl Run {
     }
 
     fn same_look(&self, other: &Run) -> bool {
-        Run { text: String::new(), ..self.clone() } == Run { text: String::new(), ..other.clone() }
+        self.bold == other.bold
+            && self.italic == other.italic
+            && self.underline == other.underline
+            && self.script == other.script
+            && self.color == other.color
+            && self.size == other.size
     }
 }
 
@@ -151,9 +156,16 @@ fn rich_string(runs: &[Run]) -> Result<String, AnnotError> {
         }
     }
     body.push_str("</p>");
-    Ok(format!(
+    let out = format!(
         "<?xml version=\"1.0\"?><body xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\" xfa:spec=\"2.0.2\">{body}</body>"
-    ))
+    );
+    if out.len() > MAX_RC_BYTES {
+        return Err(AnnotError::Invalid(format!(
+            "a comment's rich text takes at most {MAX_RC_BYTES} bytes; the formatted body needs {}",
+            out.len()
+        )));
+    }
+    Ok(out)
 }
 
 // ── reading ─────────────────────────────────────────────────────────────────────────────────
@@ -231,7 +243,9 @@ fn unescape(s: &str) -> String {
     while let Some(at) = rest.find('&') {
         out.push_str(rest.get(..at).unwrap_or_default());
         let after = rest.get(at + 1..).unwrap_or_default();
-        let entity = after.find(';').filter(|&end| end <= 10).and_then(|end| after.get(..end).map(|name| (name, end)));
+        // Only the supported entity length is searched, so a long run of bare `&` stays linear.
+        let prefix = after.get(..after.len().min(11)).unwrap_or_default();
+        let entity = prefix.find(';').and_then(|end| after.get(..end).map(|name| (name, end)));
         let decoded = entity.and_then(|(name, _)| match name {
             "amp" => Some('&'),
             "lt" => Some('<'),
@@ -269,42 +283,82 @@ fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
     rest.get(..rest.find('"')?)
 }
 
-/// A line break ends the text before it, in its look.
-fn newline(runs: &mut [Run]) {
-    if let Some(last) = runs.last_mut() {
-        last.text.push('\n');
+struct ParseOut {
+    runs: Vec<Run>,
+    pending_breaks: usize,
+    chars: usize,
+    over: bool,
+}
+
+impl ParseOut {
+    fn take(&mut self, n: usize) -> bool {
+        if self.over || self.chars.saturating_add(n) > MAX_CHARS {
+            self.over = true;
+            false
+        } else {
+            self.chars += n;
+            true
+        }
+    }
+
+    fn newline(&mut self) {
+        if self.runs.is_empty() {
+            self.pending_breaks = self.pending_breaks.saturating_add(1);
+        } else if self.take(1)
+            && let Some(last) = self.runs.last_mut()
+        {
+            last.text.push('\n');
+        }
+    }
+
+    fn push(&mut self, look: &Look, text: String) {
+        if self.over || text.is_empty() {
+            return;
+        }
+        if self.runs.len() >= MAX_RUNS {
+            self.over = true;
+            return;
+        }
+        let lead = if self.runs.is_empty() { self.pending_breaks } else { 0 };
+        let add = text.chars().count();
+        if !self.take(lead.saturating_add(add)) {
+            return;
+        }
+        let text = if lead > 0 {
+            self.pending_breaks = 0;
+            format!("{}{text}", "\n".repeat(lead))
+        } else {
+            text
+        };
+        let run = look.run(text);
+        match self.runs.last_mut() {
+            Some(last) if last.same_look(&run) => last.text.push_str(&run.text),
+            _ => self.runs.push(run),
+        }
     }
 }
 
 /// The runs of an XHTML rich-text string. Unknown tags are skipped, their text kept.
+/// Over-budget input yields no runs, so a matching `/Contents` still refuses the body.
 fn parse_rich(rc: &str) -> Vec<Run> {
     let end = rc.char_indices().map(|(i, _)| i).find(|i| *i >= MAX_RC_BYTES).unwrap_or(rc.len());
     let mut rest = rc.get(..end).unwrap_or_default();
     let mut stack = vec![Look::default()];
-    let mut runs: Vec<Run> = Vec::new();
+    let mut out = ParseOut { runs: Vec::new(), pending_breaks: 0, chars: 0, over: false };
     let mut break_before = false;
-    let mut chars = 0usize;
-    let mut push = |look: &Look, text: String, runs: &mut Vec<Run>| {
-        if text.is_empty() || chars >= MAX_CHARS || runs.len() >= MAX_RUNS {
-            return;
-        }
-        chars += text.chars().count();
-        let run = look.run(text);
-        match runs.last_mut() {
-            Some(last) if last.same_look(&run) => last.text.push_str(&run.text),
-            _ => runs.push(run),
-        }
-    };
     while !rest.is_empty() {
+        if out.over {
+            break;
+        }
         let look = stack.last().cloned().unwrap_or_default();
         let Some(open) = rest.find('<') else {
-            push(&look, unescape(rest), &mut runs);
+            out.push(&look, unescape(rest));
             break;
         };
         let text = unescape(rest.get(..open).unwrap_or_default());
         // Indentation between tags is not text.
         if !(text.trim().is_empty() && text.contains('\n')) {
-            push(&look, text, &mut runs);
+            out.push(&look, text);
         }
         let after = rest.get(open + 1..).unwrap_or_default();
         let Some(close) = after.find('>') else { break };
@@ -325,12 +379,12 @@ fn parse_rich(rc: &str) -> Vec<Run> {
             continue;
         }
         if name == "br" {
-            newline(&mut runs);
+            out.newline();
             continue;
         }
         if name == "p" && break_before {
             break_before = false;
-            newline(&mut runs);
+            out.newline();
         }
         if tag.ends_with('/') {
             continue;
@@ -339,5 +393,8 @@ fn parse_rich(rc: &str) -> Vec<Run> {
         next.apply_tag(&name, attribute(tag, "style"));
         stack.push(next);
     }
-    runs
+    if out.over {
+        return Vec::new();
+    }
+    out.runs
 }

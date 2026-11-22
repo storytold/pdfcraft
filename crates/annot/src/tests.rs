@@ -5757,3 +5757,54 @@ fn a_hostile_rc_is_read_without_panicking() {
         let _ = rich_contents(&doc, 0, note).unwrap();
     }
 }
+
+#[test]
+fn a_comment_body_keeps_a_leading_newline_in_its_formatting() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 700.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    let runs = [Run { bold: true, ..Run::plain("\nA") }];
+    set_rich_contents(&mut doc, 0, note, &runs, &meta("n")).unwrap();
+    assert_eq!(rich_contents(&doc, 0, note).unwrap(), Some(runs.to_vec()));
+}
+
+#[test]
+fn a_comment_body_refuses_markup_that_would_not_fit_back_in() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 700.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    // Many short bold lines stay under the character limit but inflate past the /RC byte bound.
+    let text = "x\n".repeat(50_000);
+    let runs = [Run { bold: true, ..Run::plain(&text) }];
+    assert!(matches!(set_rich_contents(&mut doc, 0, note, &runs, &meta("n")), Err(AnnotError::Invalid(_))));
+    assert_eq!(list(&doc, 0)[note].get(b"Contents").and_then(Object::as_string).map(PdfString::to_text).as_deref(), Some("hello"));
+}
+
+#[test]
+fn a_hostile_rc_of_bare_ampersands_stays_readable() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 700.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    let (_, r) = annot_ref(&mut doc, 0, note).unwrap();
+    let rc = format!("<?xml version=\"1.0\"?><body><p>{}</p></body>", "&".repeat(100_000));
+    let plain = "&".repeat(100_000);
+    doc.update_dict(r, |d| {
+        d.set(b"Contents".to_vec(), PdfString::text(&plain));
+        d.set(b"RC".to_vec(), PdfString::text(&rc));
+    })
+    .unwrap();
+    // Must finish promptly: entity search is bounded, so this is not quadratic in the ampersands.
+    assert_eq!(rich_contents(&doc, 0, note).unwrap(), Some(vec![Run::plain(&plain)]));
+}
+
+#[test]
+fn an_overlong_rich_text_node_is_refused_entirely() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 700.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    let (_, r) = annot_ref(&mut doc, 0, note).unwrap();
+    let plain = "x".repeat(MAX_BODY_CHARS + 1);
+    let rc = format!("<?xml version=\"1.0\"?><body><p>{plain}</p></body>");
+    doc.update_dict(r, |d| {
+        d.set(b"Contents".to_vec(), PdfString::text(&plain));
+        d.set(b"RC".to_vec(), PdfString::text(&rc));
+    })
+    .unwrap();
+    assert_eq!(rich_contents(&doc, 0, note).unwrap(), None);
+}
