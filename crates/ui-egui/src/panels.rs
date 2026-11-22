@@ -12,6 +12,7 @@ pub(super) mod all_tools_ui;
 mod bookmarks;
 pub(super) mod comments_panel;
 mod edit;
+mod file_rows;
 pub(super) mod format_text_ui;
 pub(super) mod organize_panel;
 pub(super) mod page_selection_ui;

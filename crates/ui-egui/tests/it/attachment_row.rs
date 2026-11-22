@@ -2,7 +2,7 @@
 //! in Acrobat (#3466), while its buttons keep taking their own clicks.
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
 
 /// A one-page PDF with no embedded files, to attach to.
@@ -271,6 +271,49 @@ fn a_right_click_on_a_row_button_opens_the_row_menu() {
     h.run_steps(2);
     assert_eq!(count(&h, "Open in a new tab"), 2, "inner.pdf's menu, with Open, is open");
     assert_eq!(count(&h, "Save attachment…"), 3);
+}
+
+/// The panel's row for the attachment `name`, a list option.
+fn row<'a>(h: &'a Harness<'static, PdfCraftApp>, name: &'a str) -> egui_kittest::Node<'a> {
+    h.get_by_role_and_label(egui::accesskit::Role::ListBoxOption, name)
+}
+
+/// #8087: Enter on the focused row does what a double-click does, while a single click still
+/// opens nothing.
+#[test]
+fn enter_on_a_row_does_what_a_double_click_does() {
+    let mut h = harness();
+    let at = row_name(&h, "inner.pdf");
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(30);
+    assert_eq!(h.state().views.len(), 1, "a single click opens nothing");
+    row(&h, "inner.pdf").focus();
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().views.len(), 2, "Enter opens the attached PDF in a tab of its own");
+}
+
+/// #8087: ↓ moves the keyboard to the next row, and the Menu key opens the focused row's menu,
+/// the only way to Edit description.
+#[test]
+fn the_keyboard_moves_between_rows_and_opens_a_rows_menu() {
+    let mut h = harness();
+    row(&h, "inner.pdf").focus();
+    // The row has the keyboard from the next frame, and keeps ↑ and ↓ from the one after.
+    h.run_steps(2);
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(1);
+    assert!(row(&h, "notes.txt").accesskit_node().is_focused(), "↓ moves the keyboard to the next attachment");
+    h.key_press(egui::Key::Menu);
+    h.run_steps(3);
+    h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Edit description").click();
+    h.run_steps(2);
+    let description = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Description");
+    assert_eq!(description.accesskit_node().value().as_deref(), Some("Original"), "the dialog is notes.txt's");
 }
 
 /// Where the attachment named `label` shows in the panel: the lowest text with that name, below
