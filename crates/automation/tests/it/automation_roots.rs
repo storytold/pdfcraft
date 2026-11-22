@@ -212,9 +212,8 @@ fn colour_profiles_are_looked_for_inside_the_read_root() {
     let paths: Vec<&str> = listed["profiles"].as_array().unwrap().iter().filter_map(|p| p["path"].as_str()).collect();
     assert_eq!(paths.len(), 1, "{listed}");
     assert!(paths[0].ends_with("wide.icc"), "{listed}");
-    ok(&mut server, "doc_open", json!({"path": s(&base.join("in/a.pdf"))}));
-    let print =
-        |name: &str| json!({"doc": 1, "pages": "1", "dpi": 72, "path": s(&base.join("out/m.pdf")), "color_management": "app", "color_profile": name});
+    let doc = ok(&mut server, "doc_open", json!({"path": s(&base.join("in/a.pdf"))}))["doc"].as_u64().unwrap();
+    let print = |name: &str| json!({"doc": doc, "pages": "1", "dpi": 72, "path": s(&base.join("out/m.pdf")), "color_management": "app", "color_profile": name});
     ok(&mut server, "doc_print", print("wide"));
     let (error, text) = call(&mut server, "doc_print", print("other"));
     assert!(error, "a profile outside the read root isn't found by name: {text}");

@@ -174,8 +174,9 @@ fn mcp_page_render_carries_the_warnings_as_structured_content() {
         serde_json::from_str(&s.handle_line(&line).expect("a reply")).unwrap()
     };
     rpc(1, "initialize", json!({}));
-    rpc(2, "tools/call", json!({ "name": "doc_open", "arguments": { "path": "fallback.pdf" } }));
-    let reply = rpc(3, "tools/call", json!({ "name": "page_render", "arguments": { "doc": 1, "page": 1 } }));
+    let opened = rpc(2, "tools/call", json!({ "name": "doc_open", "arguments": { "path": "fallback.pdf" } }));
+    let doc = opened["result"]["structuredContent"]["doc"].as_u64().expect("doc_open returns a document id");
+    let reply = rpc(3, "tools/call", json!({ "name": "page_render", "arguments": { "doc": doc, "page": 1 } }));
     let result = &reply["result"];
     assert_eq!(result["isError"], false, "{reply}");
     assert_eq!(result["content"][0]["type"], "image");
