@@ -5,8 +5,10 @@ use std::sync::Arc;
 
 use craft::pages::ui::{PageRangeChoices, PageRangeOptions};
 use craft::pages::{PageRange, PageScope, Subset};
-use craft::ui::contract::Bind;
+use craft::theme::variant::Tone;
+use craft::ui::contract::{Bind, Show as _};
 use craft::ui::dialog::{DialogResult, dialog_id};
+use craft::ui::display::Text;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::memory::SaveKey;
@@ -123,18 +125,25 @@ impl ExtractFacts {
             some => some,
         };
         let chosen = pages_to_extract(&typed, self.selected.clone(), self.count);
+        let message = match &chosen {
+            Ok(pages) if pages.len() == 1 => tl!("1 page selected.").to_string(),
+            Ok(pages) => fmt(tl!("{n} pages selected."), &[("n", &pages.len().to_string())]),
+            Err(e) => e.clone(),
+        };
+        let bad = chosen.is_err();
         let params = vec![
             Param::new("pages", tl!("Pages"), ParamKind::text("")).hint(hint),
+            Param::custom("pages-message", "", move |ui, _, _| {
+                let text = Text::new(message.clone());
+                if bad { text.tone(Tone::Bad).show(ui) } else { text.show(ui) }
+            })
+            .full_width(),
             Param::new("name", tl!("File name"), ParamKind::text("")),
             Param::new("delete", tl!("Delete pages after extracting"), ParamKind::bool(false)),
             Param::new("separate", tl!("Extract pages as separate files"), ParamKind::bool(false)),
         ];
         let dialog = ParamDialog::new(EXTRACT, tl!("Extract pages"), params).ok_label(tl!("Extract").into()).values(Bind::bound(fields));
-        match chosen {
-            Ok(pages) if pages.len() == 1 => dialog.footer_note(tl!("1 page selected.")),
-            Ok(pages) => dialog.footer_note(fmt(tl!("{n} pages selected."), &[("n", &pages.len().to_string())])),
-            Err(e) => dialog.ok_enabled(false).ok_reason(e.into()),
-        }
+        dialog.ok_enabled(chosen.is_ok())
     }
 }
 
@@ -223,7 +232,7 @@ fn number_dialog<'b>(fields: &'b mut DialogFields, count: usize) -> ParamDialog<
     let last = count.max(1) as i64;
     let params = vec![
         Param::new("from", tl!("Pages"), ParamKind::int(Some(1), Some(last), 1)),
-        Param::new("to", tl!("to"), ParamKind::int(Some(1), Some(last), last)),
+        Param::new("to", fmt(tl!("to (of {n})"), &[("n", &count.to_string())]), ParamKind::int(Some(1), Some(last), last)),
         Param::new(
             "style",
             tl!("Style"),
@@ -277,6 +286,20 @@ impl ReplaceSource {
                 fmt(tl!("Replacement: pages of {name}"), &[("name", &self.name)]),
                 ParamKind::int(Some(1), Some(max_start as i64), 1),
             ),
+            Param::read_only_text(
+                "totals",
+                "",
+                fmt(
+                    tl!("Original: {n} pages. Replacement: pages {a} to {b} of {m}."),
+                    &[
+                        ("n", &count.to_string()),
+                        ("a", &src_from.to_string()),
+                        ("b", &(src_from + n.saturating_sub(1)).to_string()),
+                        ("m", &self.src_pages.to_string()),
+                    ],
+                ),
+            )
+            .full_width(),
         ];
         let note = if fits {
             tl!("Only the page content changes: links, comments, form fields and bookmarks on the original pages stay.")

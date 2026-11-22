@@ -86,7 +86,11 @@ pub(crate) fn open_compare_dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
         let pages_ok = parse_pages(fields.text("pages").unwrap_or_default(), count).is_ok();
         let options = others.iter().map(|(key, name)| (key.clone(), name.clone().into())).collect();
         let pages = Param::custom("pages", tl!("Pages").to_string(), move |ui, fields, _| {
-            let shown = parse_pages(fields.text("pages").unwrap_or_default(), count).unwrap_or_default();
+            let mut shown = parse_pages(fields.text("pages").unwrap_or_default(), count).unwrap_or_default();
+            if shown.is_empty() {
+                // An empty entry compares every page, so the field shows them all (1-3).
+                shown = (0..count).collect();
+            }
             let out = PageRangeField::new(tl!("Pages").to_string(), &shown, count, 0).show(ui);
             if let Some(picked) = out.picked {
                 fields.set("pages", format_pages(&picked));

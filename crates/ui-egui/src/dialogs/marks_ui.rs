@@ -924,6 +924,7 @@ impl PdfCraftApp {
             let has_file = fields.text("file.path").is_some_and(|p| !p.is_empty());
             let notes = notes_of(kind, &draft, has_file, &geometry, &selection);
             let applies = notes.applies;
+            let refusal = notes.reason.clone();
             let mut dialog = ParamDialog::new(dialog_key(kind), heading.clone(), rows(kind, &geometry))
                 .values(craft::ui::contract::Bind::bound(fields))
                 .previews(true)
@@ -939,6 +940,9 @@ impl PdfCraftApp {
                     } else {
                         crate::i18n::fmt(tl!("Applies to {n} pages"), &[("n", &applies.to_string())])
                     };
+                    if let Some(reason) = &refusal {
+                        Text::new(reason.clone()).tone(craft::theme::variant::Tone::Bad).show(ui);
+                    }
                     Text::new(applies).show(ui);
                     if replace {
                         Text::new(tl!("Replaces the existing one on those pages.")).show(ui);

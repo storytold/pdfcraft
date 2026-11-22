@@ -82,6 +82,17 @@ fn protected_with(algorithm: pdfcraft_cos::Algorithm, user: &str, owner: &str, p
     pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()
 }
 
+#[test]
+fn word_count_refusal_hides_options_when_copying_is_forbidden() {
+    let mut h = harness(egui::vec2(1200.0, 900.0));
+    let ctx = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx, "locked.pdf", None, protected("", "owner", 0b0100)).unwrap();
+    h.state_mut().run_command(&ctx, "file.word_count");
+    h.run_steps(4);
+    assert!(h.query_by_label("Current page only").is_none(), "options are unavailable when copying is forbidden");
+    assert!(h.query_by_label_contains("security settings don't allow copying").is_some(), "the refusal explains why");
+}
+
 /// A narrow window: the stacked notice bar keeps both buttons inside the window and apart.
 #[test]
 fn the_stacked_notice_keeps_its_buttons_in_view() {

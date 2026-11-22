@@ -470,6 +470,7 @@ fn extract_pages_takes_the_page_ranges_typed_in_the_dialog() {
     h.state_mut().active = Some(0);
     open_extract(&mut h, Extract { pages: Some("2, 9"), ..Default::default() });
     assert!(h.get_all_by_label("Extract").last().unwrap().accesskit_node().is_disabled(), "Extract is off");
+    assert!(h.query_all_by_label("page 9 is out of range (1–6)").next().is_some(), "the invalid range is explained");
     press(&mut h, "Cancel");
     assert_eq!(h.state().views.len(), 2, "nothing extracted");
     // Extract and delete takes the typed pages out of the document.

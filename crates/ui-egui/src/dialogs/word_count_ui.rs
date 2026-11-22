@@ -114,9 +114,13 @@ impl StackDialog for WordCountDialog {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<()>> {
-        let WordCountDialog { options, shown, done, .. } = self;
+        let WordCountDialog { options, shown, done, key, .. } = self;
         let close = FooterButton::new(tl!("Close").to_string(), DialogRole::Cancel);
         let out = FormDialog::new(tl!("Word count").to_string(), Bind::bound(options)).shaped(|d| d.buttons([close])).show(ui, |ui, _, o| {
+            if key.is_none() && let Some(Err(error)) = shown {
+                Text::new(error.clone()).show(ui);
+                return true;
+            }
             Checkbox::new(Bind::bound(&mut o.current_page)).label(tl!("Current page only").to_string()).show(ui);
             Checkbox::new(Bind::bound(&mut o.options.exclude_tables)).label(tl!("Exclude tagged tables").to_string()).show(ui);
             Checkbox::new(Bind::bound(&mut o.options.exclude_code)).label(tl!("Exclude tagged code blocks").to_string()).show(ui);

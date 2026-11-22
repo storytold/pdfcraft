@@ -469,9 +469,7 @@ fn recognize_dialog(fields: &mut DialogFields, count: usize, current: usize) -> 
         .ok_enabled(reason.is_none())
         .values(Bind::bound(fields));
     if let Some(note) = download_notice.or_else(|| reason.clone()) {
-        dialog = dialog.below(move |ui, _| {
-            let _ = Text::new(Label::from(note.clone())).show(ui);
-        });
+        dialog = dialog.footer_note(Label::from(note));
     }
     if let Some(why) = reason {
         dialog = dialog.ok_reason(Label::from(why));
