@@ -439,10 +439,10 @@ impl<'a> Inspector<'a> {
     }
 
     /// Whether the catalog's `/URI` dictionary has a `/Base` at all, kept in
-    /// [`DocInfo::uri_base`] or not. A null one counts as absent (§7.3.9).
+    /// [`DocInfo::uri_base`] or not. A null or dangling one counts as absent (§7.3.9, §7.3.10).
     fn declares_uri_base(&self) -> bool {
         let uri = self.doc.catalog().ok().and_then(|c| c.get(b"URI").ok()).and_then(|o| self.dict(o));
-        uri.and_then(|d| d.get(b"Base").ok()).is_some_and(|b| !matches!(self.resolve(b), Object::Null))
+        uri.and_then(|d| d.get(b"Base").ok()).is_some_and(|b| !matches!(self.resolve(b), Object::Null | Object::Reference(_)))
     }
 
     /// Lists the link annotation `d`, and notes the JavaScript it runs. JavaScript is read from the
