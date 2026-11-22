@@ -30,27 +30,31 @@ pub(crate) struct FullScreenTouch {
 impl FullScreenTouch {
     /// Mouse and synthesized pointer drags are left to the viewer. Only a native touch
     /// starting at the top edge can reveal the button.
-    fn track(&mut self, events: &[Event], screen: Rect, now: f64, drag_stopped: bool) {
+    fn track(&mut self, events: &[Event], screen: Rect) -> Option<(Pos2, bool)> {
+        let mut started_here = false;
+        let mut completed = None;
         for event in events {
             let Event::Touch { device_id, id, phase, pos, .. } = event else { continue };
             match phase {
                 TouchPhase::Start => {
                     let at_edge = screen.contains(*pos) && pos.y <= screen.top() + EDGE_DEPTH;
                     self.touch = (self.touch.is_none() && at_edge).then_some(EdgeTouch { device: *device_id, id: *id, start: *pos });
+                    started_here = self.touch.is_some();
                 }
                 TouchPhase::End | TouchPhase::Cancel => {
                     if self.touch.as_ref().is_some_and(|touch| touch.device == *device_id && touch.id == *id)
                         && let Some(touch) = self.touch.take()
                     {
                         let delta = *pos - touch.start;
-                        if drag_stopped && *phase == TouchPhase::End && delta.y >= SWIPE_DISTANCE && delta.y > delta.x.abs() {
-                            self.shown_until = Some(now + REVEAL_FOR.as_secs_f64());
+                        if *phase == TouchPhase::End && delta.y >= SWIPE_DISTANCE && delta.y > delta.x.abs() {
+                            completed = Some((touch.start, started_here));
                         }
                     }
                 }
                 TouchPhase::Move => {}
             }
         }
+        completed
     }
 
     /// Enter and Space activate a focused button before they can turn the page.
@@ -69,15 +73,24 @@ impl FullScreenTouch {
     /// Draw just the exit button, centred at the top so it stays clear of the page controls.
     pub(super) fn show(&mut self, ctx: &Context) -> bool {
         let screen = ctx.content_rect();
-        let drag_stopped = ctx.read_response(edge_id()).is_some_and(|edge| edge.drag_stopped());
-        let now = ctx.input(|input| {
-            if input.multi_touch().is_some() {
+        let (now, swipe) = ctx.input(|input| {
+            let swipe = if input.multi_touch().is_some() {
                 self.touch = None;
+                None
             } else {
-                self.track(&input.events, screen, input.time, drag_stopped);
-            }
-            input.time
+                self.track(&input.events, screen)
+            };
+            (input.time, swipe)
         });
+        if let Some((start, in_one_pass)) = swipe
+            && let Some(edge) = ctx.read_response(edge_id())
+            // egui clears the drag candidate on release. When the whole swipe arrives together,
+            // check where it began, including the layer, so a foreground control keeps its input.
+            && (edge.drag_stopped()
+                || in_one_pass && edge.interact_rect.contains(start) && ctx.layer_id_at(start) == Some(edge.layer_id))
+        {
+            self.shown_until = Some(now + REVEAL_FOR.as_secs_f64());
+        }
         // Keep the exit available to someone who is using its keyboard or accessibility focus.
         let focused = self.has_focus(ctx);
         let Some(until) = self.shown_until.filter(|until| focused || now < *until) else {

@@ -2828,8 +2828,69 @@ fn a_touch_swipe_exposes_an_exit_from_full_screen() {
     assert!(h.query_by_label("Exit full screen").is_none());
 }
 
+fn full_screen_touch_in_one_pass(h: &mut Harness<'static, PdfCraftApp>, start: egui::Pos2, end: egui::Pos2) {
+    let touch = |phase, pos| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos, force: None };
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    h.input_mut().events.extend([
+        touch(TouchPhase::Start, start),
+        egui::Event::PointerMoved(start),
+        button(start, true),
+        touch(TouchPhase::Move, end),
+        egui::Event::PointerMoved(end),
+        touch(TouchPhase::End, end),
+        button(end, false),
+        egui::Event::PointerGone,
+    ]);
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    h.state_mut().prepare_raw_input(&ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+}
+
 #[test]
-fn a_full_screen_exit_swipe_leaves_page_text_unselected() {
+fn a_touch_swipe_in_one_pass_exposes_an_exit_from_full_screen() {
+    let mut h = full_screen_touch_harness();
+    let start = full_screen_top_edge(&h);
+    full_screen_touch_in_one_pass(&mut h, start, start + egui::vec2(0.0, 96.0));
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, 0, "a coalesced swipe does not turn the page");
+    assert!(
+        h.query_by_role_and_label(egui::accesskit::Role::Button, "Exit full screen").is_some(),
+        "a complete native touch swipe in one input pass reveals the exit"
+    );
+}
+
+#[test]
+fn a_touch_swipe_in_one_pass_over_the_exit_button_does_not_extend_its_timeout() {
+    let mut h = full_screen_touch_harness();
+    reveal_full_screen_touch_exit(&mut h);
+    h.run_steps(12);
+    let button = h.get_by_label("Exit full screen").rect();
+    let start = egui::pos2(button.center().x, button.top() + 2.0);
+    assert!(start.y < full_screen_top_edge(&h).y + 20.0, "the control overlaps the edge strip");
+    full_screen_touch_in_one_pass(&mut h, start, start + egui::vec2(0.0, 96.0));
+    let focused = h.ctx.memory(|memory| memory.focused());
+    if let Some(id) = focused {
+        h.ctx.memory_mut(|memory| memory.surrender_focus(id));
+    }
+    h.run_steps(11);
+    assert!(h.state().full_screen);
+    assert!(h.query_by_label("Exit full screen").is_none(), "the swipe over the control did not restart the timeout");
+}
+
+#[test]
+fn a_touch_tap_in_one_pass_turns_the_page_without_showing_the_exit() {
+    let mut h = full_screen_touch_harness();
+    let start = full_screen_top_edge(&h);
+    full_screen_touch_in_one_pass(&mut h, start, start);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 1);
+    assert!(h.state().full_screen);
+    assert!(h.query_by_label("Exit full screen").is_none());
+}
+
+fn full_screen_text_harness() -> Harness<'static, PdfCraftApp> {
     let stream = "BT /F1 24 Tf 96 642 Td (Sample floor plan) Tj ET\nBT /F1 13 Tf 96 606 Td (Draw a crop around the region to keep.) Tj ET\n";
     let pdf = format!(
         "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
@@ -2849,6 +2910,12 @@ fn a_full_screen_exit_swipe_leaves_page_text_unselected() {
     assert!(h.state_mut().execute("view.full_screen"));
     h.run_steps(8);
     assert!(h.state().views[0].selected_text().is_none());
+    h
+}
+
+#[test]
+fn a_full_screen_exit_swipe_leaves_page_text_unselected() {
+    let mut h = full_screen_text_harness();
     reveal_full_screen_touch_exit(&mut h);
     assert!(h.state().views[0].selected_text().is_none(), "the fullscreen exit swipe must not select page text");
     assert!(h.query_by_label("Add comment").is_none(), "the selection bar stays closed");
@@ -2866,6 +2933,17 @@ fn a_full_screen_exit_swipe_leaves_page_text_unselected() {
     h.drop_at(end);
     h.run_steps(4);
     assert!(h.state().views[0].selected_text().is_some(), "a mouse drag below the strip still selects text");
+}
+
+#[test]
+fn a_one_pass_full_screen_exit_swipe_leaves_page_text_unselected() {
+    let mut h = full_screen_text_harness();
+    let start = full_screen_top_edge(&h);
+    full_screen_touch_in_one_pass(&mut h, start, start + egui::vec2(0.0, 96.0));
+    h.run_steps(3);
+    assert!(h.query_by_label("Exit full screen").is_some());
+    assert!(h.state().views[0].selected_text().is_none(), "the one-pass swipe leaves page text unselected");
+    assert!(h.query_by_label("Add comment").is_none(), "the selection bar stays closed");
 }
 
 #[test]
