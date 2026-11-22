@@ -171,6 +171,19 @@ fn a_pattern_that_may_paint_under_a_mark_is_still_refused() {
             format!("{type3} /ExtGState << /Plain << /Font [5 0 R 10] >> /Glyph << /Font [9 0 R 10] >> >>"),
             vec![glyph.as_bytes().to_vec(), stream("", b"1000 0 d0 /Pattern cs /P1 scn 0 0 1000 1000 re f")],
         ),
+        // One of the two names sets no font: under a reader that takes it, the font in force stays.
+        (
+            "a Type 3 font kept by one of two graphics state names",
+            "BT /T3 10 Tf /Keep /Plain gs 10 100 Td (a) Tj ET".into(),
+            format!("{type3} /ExtGState << /Keep << /LW 1 >> /Plain << /Font [5 0 R 10] >> >>"),
+            vec![glyph.as_bytes().to_vec(), stream("", b"1000 0 d0 /Pattern cs /P1 scn 0 0 1000 1000 re f")],
+        ),
+        (
+            "a Type 3 font kept by a graphics state name nothing defines",
+            "BT /T3 10 Tf /Nowhere /Plain gs 10 100 Td (a) Tj ET".into(),
+            format!("{type3} /ExtGState << /Plain << /Font [5 0 R 10] >> >>"),
+            vec![glyph.as_bytes().to_vec(), stream("", b"1000 0 d0 /Pattern cs /P1 scn 0 0 1000 1000 re f")],
+        ),
         // A plain glyph whose font gives a default colour space that may be a Pattern space.
         (
             "a Type 3 font with a default space that is a Pattern space",

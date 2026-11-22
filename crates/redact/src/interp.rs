@@ -820,10 +820,15 @@ impl Walk {
             _ => {
                 // The state under either operand the readers here take (`last_name`, `name(0)`).
                 // They may name two states: a font either sets may be the one in force, so the
-                // fonts are judged together, not the second over the first.
+                // fonts are judged together, not the second over the first. A name that sets no
+                // font leaves the one in force, which then counts with them.
                 let mut sets_type3 = None;
+                let mut keeps_font = false;
                 for name in [op.last_name(), op.name(0)].into_iter().flatten() {
-                    let Some(state) = self.ext_gstates.get(name).map(|s| doc.resolve(s)) else { continue };
+                    let Some(state) = self.ext_gstates.get(name).map(|s| doc.resolve(s)) else {
+                        keeps_font = true;
+                        continue;
+                    };
                     let Some(state) = state.as_dict() else {
                         // Not a dictionary: what it sets can't be told.
                         self.gs.soft_mask = true;
@@ -836,10 +841,12 @@ impl Walk {
                         let font = font.as_array().and_then(|a| a.first()).map(|f| doc.resolve(f));
                         let may = font.as_deref().and_then(Object::as_dict).is_none_or(|d| type3_may_select_pattern(doc, scope, d));
                         sets_type3 = Some(sets_type3.unwrap_or(false) || may);
+                    } else {
+                        keeps_font = true;
                     }
                 }
                 if let Some(may) = sets_type3 {
-                    self.gs.type3 = may;
+                    self.gs.type3 = may || keeps_font && self.gs.type3;
                 }
                 if let Some((font, vertical, size)) = op.last_name().and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
                     (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
