@@ -939,3 +939,24 @@ fn open_documents_already_in_the_list_are_not_added_again() {
     add_all(&mut h);
     assert_eq!(names(&h), ["a.pdf", "report.pdf", "report.pdf", "b.pdf"]);
 }
+
+/// Passes egui ran in the frames a harness has run so far.
+fn passes(h: &Harness<'static, PdfCraftApp>) -> u64 {
+    h.ctx.cumulative_pass_nr()
+}
+
+#[test]
+/// A settled Combine grid runs one pass a frame: nothing in it asks egui for a discard every frame (egui's PERF WARNING
+/// "request_discard has been called N frames in a row").
+fn a_settled_grid_asks_for_no_discard_pass() {
+    for expanded in [false, true] {
+        let mut h = grid_of(vec![("a.pdf", fixture(1)), ("b.pdf", fixture(3)), ("c.pdf", fixture(2))], vec2(1400.0, 900.0));
+        if expanded {
+            h.get_by_label("Expand all").click();
+        }
+        h.run_steps(30);
+        let (before, frames) = (passes(&h), 20u64);
+        h.run_steps(frames as usize);
+        assert_eq!(passes(&h) - before, frames, "expanded={expanded}: a settled frame runs one pass");
+    }
+}
