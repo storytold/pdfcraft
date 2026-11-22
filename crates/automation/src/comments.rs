@@ -215,10 +215,8 @@ impl Automation {
             {
                 v["border_shape"] = json!(shape.name().to_ascii_lowercase());
             }
-            // Formatting inside the body, as comment_edit's `body` takes it.
-            if !c.is_reply()
-                && let Some(runs) = doc.comment_rich_body(c.page, c.index)
-            {
+            // Formatting inside the body, as comment_edit's `body` takes it (including replies).
+            if let Some(runs) = doc.comment_rich_body(c.page, c.index) {
                 v["body"] = runs.iter().map(run_view).collect();
             }
             // How opaque it is drawn: as a whole, or its fill and text each at their own.
@@ -966,13 +964,23 @@ fn body_runs(body: &Value) -> Result<Vec<pdfcraft_annot::Run>> {
                 Some(v) => v.as_bool().ok_or_else(|| wrong(&format!("{key} is true or false"))),
             };
             let text = item.get("text").and_then(Value::as_str).ok_or_else(|| wrong("every run needs a text string"))?;
-            let script = match item.get("script").and_then(Value::as_str) {
-                None | Some("normal") => pdfcraft_annot::Script::Normal,
-                Some("super") => pdfcraft_annot::Script::Super,
-                Some("sub") => pdfcraft_annot::Script::Sub,
-                Some(other) => return Err(wrong(&format!("script {other:?} is normal, super or sub"))),
+            let script = match item.get("script") {
+                None | Some(Value::Null) => pdfcraft_annot::Script::Normal,
+                Some(v) => match v.as_str() {
+                    Some("normal") => pdfcraft_annot::Script::Normal,
+                    Some("super") => pdfcraft_annot::Script::Super,
+                    Some("sub") => pdfcraft_annot::Script::Sub,
+                    Some(other) => return Err(wrong(&format!("script {other:?} is normal, super or sub"))),
+                    None => return Err(wrong("script is normal, super or sub")),
+                },
             };
-            let color = item.get("color").and_then(Value::as_str).map(parse_color).transpose()?.map(|c| c.map(f64::from));
+            let color = match item.get("color") {
+                None | Some(Value::Null) => None,
+                Some(v) => {
+                    let s = v.as_str().ok_or_else(|| wrong("color is a hex string or colour name"))?;
+                    Some(parse_color(s)?.map(f64::from))
+                }
+            };
             let size = match item.get("size") {
                 None | Some(Value::Null) => None,
                 Some(v) => Some(v.as_f64().ok_or_else(|| wrong("size is a number of points"))?),
