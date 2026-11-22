@@ -169,6 +169,10 @@ const PAGE_SHARE: f32 = 0.8;
 /// 10-point gaps need about 55 more for Format text's size field to keep room for its value beside the colour well, the list
 /// buttons and the alignment menu (the field takes what the row leaves).
 const TOOLS_WIDTH: f32 = 330.0;
+/// The Tools pane's width in a narrow window, as production opened it.
+const TOOLS_WIDTH_NARROW: f32 = 272.0;
+/// Windows narrower than this keep the Tools pane at [`TOOLS_WIDTH_NARROW`]: a wider pane would leave the page area too little.
+pub(crate) const NARROW_WINDOW: f32 = 900.0;
 
 /// The arrangement of a new install: Tools at the start edge, the side-panel rail at the window edge,
 /// and the toolbar floating at the start of the page area. The side panels form one collapsed group.
@@ -200,6 +204,32 @@ fn keep_toolbar_in_the_margin(app: &mut PdfCraftApp) {
     let target = if open { (x < TOOLS_WIDTH).then_some(x + TOOLS_WIDTH) } else { (x >= TOOLS_WIDTH).then_some((x - TOOLS_WIDTH).max(0.0)) };
     if let Some(x) = target.filter(|x| x.is_finite()) {
         window.rect = window.rect.translate(egui::vec2(x - window.rect.min.x, 0.0));
+    }
+}
+
+/// The Tools pane's width follows the window across [`NARROW_WINDOW`]: production's narrower pane in a small window, the
+/// wider default in a large one. Only the crossing changes it, so a width the user dragged to is kept.
+fn fit_tools_to_window(app: &mut PdfCraftApp, window_width: f32) {
+    let narrow = window_width.is_finite() && window_width < NARROW_WINDOW;
+    if narrow == app.window_narrow {
+        return;
+    }
+    app.window_narrow = narrow;
+    if !app.dock.layout.contains(&PanelId::Tools) {
+        return;
+    }
+    let width = if narrow { TOOLS_WIDTH_NARROW } else { TOOLS_WIDTH };
+    // A refused resize (a locked layout) leaves the width as it is.
+    if app.dock.apply(Action::resize_column(PanelId::Tools, width), false, permissions).is_err() {
+        return;
+    }
+    // The floating toolbar sits in the page area's margin, which moved with the pane's edge.
+    let shift = if narrow { TOOLS_WIDTH_NARROW - TOOLS_WIDTH } else { TOOLS_WIDTH - TOOLS_WIDTH_NARROW };
+    if app.toolbar_tools_open
+        && let Some(window) = app.dock.layout.floating.iter_mut().find(|window| window.contains(&PanelId::Toolbar))
+        && window.rect.min.x >= TOOLS_WIDTH_NARROW
+    {
+        window.rect = window.rect.translate(egui::vec2(shift, 0.0));
     }
 }
 
@@ -506,6 +536,7 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
     let toolbar = active && !app.hotbar_hidden() && !organizing && !expanded;
     let anchor = rail_anchor(app);
     keep_toolbar_in_the_margin(app);
+    fit_tools_to_window(app, ui.ctx().content_rect().width());
     let workspace = app.dock.clone();
     // The rail lists the Accessibility Checker once the document has a report, and Search and Compare only while
     // they show; their commands open them.

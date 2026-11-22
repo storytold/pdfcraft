@@ -279,6 +279,9 @@ pub struct PdfCraftApp {
     /// Whether the Tools pane was in the dock when the floating toolbar was last placed: the toolbar follows the page area's
     /// left edge as the pane closes and opens.
     pub(crate) toolbar_tools_open: bool,
+    /// Whether the window was narrow (under [`panels::side_panels::NARROW_WINDOW`]) when the Tools pane's width was last set: a
+    /// narrow window keeps the pane at production's width, a wide one gives it the width Format text needs.
+    pub(crate) window_narrow: bool,
     /// The right panel that was open when the user switched to Read mode, which starts with the
     /// panes closed; leaving Read mode brings it back unless the user opened or closed a pane in
     /// Read mode meanwhile.
