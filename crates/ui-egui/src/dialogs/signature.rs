@@ -60,6 +60,7 @@ pub(crate) fn ask_lock(app: &mut PdfCraftApp, pending: PendingLock) {
             .to_string(),
     )
     .title(tl!("Lock your signature into the page?").to_string())
+    .icon(craft::behavior::IconId::new("lock"))
     .button(PromptChoice::Proceed, tl!("Lock and save").to_string())
     .button(PromptChoice::Alternate, tl!("Keep editable").to_string())
     .button(PromptChoice::Cancel, tl!("Cancel").to_string())

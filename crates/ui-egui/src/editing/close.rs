@@ -263,7 +263,22 @@ impl PdfCraftApp {
         let name = self.session.get(doc).map(|d| d.name.clone()).unwrap_or_default();
         let remaining = self.close_guard.as_ref().map_or(1, |g| g.remaining());
         let shown = crate::dialogs::shorten_middle(&name, 80);
-        self.close_guard_dialog = Some(self.dialogs.open(UnsavedChangesDialog::new(scope, shown).remaining(remaining)));
+        // The question as production words it, on every platform: the name in the title, the consequence as a note.
+        let dialog = UnsavedChangesDialog::new(scope, shown.clone()).remaining(remaining);
+        let dialog = if scope == CloseScope::Revert {
+            dialog
+        } else {
+            let template = match scope {
+                CloseScope::Quit => tl!("Save changes to “{name}” before quitting?"),
+                _ => tl!("Save changes to “{name}” before closing?"),
+            };
+            dialog
+                .document_wording(true)
+                .title(crate::i18n::fmt(template, &[("name", &shown)]))
+                .message(tl!("Your changes will be lost if you don't save them."))
+                .icon(craft::behavior::IconId::new("save"))
+        };
+        self.close_guard_dialog = Some(self.dialogs.open(dialog));
     }
 
     /// Saves `doc`, then lets the guard go on. The save may finish on a later frame (the user

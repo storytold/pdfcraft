@@ -1588,11 +1588,11 @@ mod revert_draft_tests {
             }
             assert!(h.state().close_guard.is_some(), "the typed box holds the close");
             h.run_steps(2);
-            // The question's "save it" answer as the framework words it on this OS: Save on macOS, Yes elsewhere.
+            // The question's "save it" answer: the app words it as a document app does on every platform.
             let save = {
                 use craft::i18n::WordSet as _;
                 let words = craft::ui::dialog::DialogWords::english();
-                if cfg!(target_os = "macos") { words.unsaved_save } else { words.unsaved_yes }.as_str().to_string()
+                words.unsaved_save.as_str().to_string()
             };
             press(&mut h, &save);
             assert!(h.state().views.is_empty(), "the tab closes once saved");

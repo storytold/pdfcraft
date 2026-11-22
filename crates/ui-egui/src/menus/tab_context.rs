@@ -126,7 +126,8 @@ mod tests {
         use craft::i18n::WordSet as _;
         let dialog = craft::ui::dialog::DialogWords::english();
         let common = craft::ui::runtime::words::CommonWords::english();
-        let dont_save = if cfg!(target_os = "macos") { dialog.unsaved_dont_save } else { dialog.unsaved_no };
+        // The app words the question as a document app does on every platform (document_wording).
+        let dont_save = dialog.unsaved_dont_save;
         (dont_save.as_str().to_string(), common.cancel.as_str().to_string())
     }
 
