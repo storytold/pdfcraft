@@ -199,7 +199,7 @@ fn within(value: &str, runs: &[Run], work: &Work) -> bool {
             || r.text.match_indices(value.as_str()).any(|(at, m)| {
                 let before = r.text.get(..at).and_then(|s| s.chars().next_back());
                 let after = r.text.get(at.saturating_add(m.len())..).and_then(|s| s.chars().next());
-                !(word(before) && value.starts_with(char::is_alphanumeric)) && !(word(after) && value.ends_with(char::is_alphanumeric))
+                !(word(before) && value.starts_with(char::is_alphanumeric) || word(after) && value.ends_with(char::is_alphanumeric))
             })
     };
     !work.spend(value.len().saturating_mul(total)) || runs.iter().any(whole)
