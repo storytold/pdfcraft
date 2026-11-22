@@ -3,7 +3,7 @@
 
 use std::ops::RangeInclusive;
 
-use craft::behavior::{IconId, SelectionChange, Value, keyed};
+use craft::behavior::{SelectionChange, Value, keyed};
 use craft::theme::variant::Tone;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing};
@@ -13,7 +13,6 @@ use craft::ui::layout_components::Stack;
 use craft::ui::list::{List, ListRow, RowEvent, TrailingFace, TrailingPart};
 use craft::ui::notices::{Notice, NoticeLayout};
 use craft::ui::pickers::Select;
-use craft::ui::primitives::IconSpec;
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::requests::ColorRequest;
 use craft::ui::tabs::{Tab, TabKind, TabStrip};
@@ -313,9 +312,9 @@ fn choice_options(ui: &mut egui::Ui, d: &mut FieldDraft) {
         &mut |row, _| {
             let name = options.get(*row).cloned().unwrap_or_default();
             let delete = Label::from(crate::i18n::fmt(tl!("Delete {o}"), &[("o", name.as_str())]));
-            let mut item = ListRow::new(name).trailing_part_revealed(DELETE, TrailingFace::Icon(IconSpec::svg(IconId::new("trash"))), delete);
+            let mut item = ListRow::new(name).trailing_part(DELETE, TrailingFace::Strong(tl!("Delete").into()), delete);
             if *row > 0 {
-                item = item.trailing_part_revealed(UP, TrailingFace::Icon(IconSpec::svg(IconId::new("arrow-up"))), tl!("Up"));
+                item = item.trailing_part(UP, TrailingFace::Strong(tl!("Up").into()), tl!("Up"));
             }
             item
         },

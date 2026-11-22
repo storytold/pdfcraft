@@ -8,7 +8,7 @@ use craft::ui::runtime::toast;
 use egui::Pos2;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::{Queryable, by};
+use egui_kittest::kittest::{NodeT as _, Queryable, by};
 use pdfcraft_ui_egui::field_table_ui::FieldTableDialog;
 use pdfcraft_ui_egui::prepare::FieldPropsDialog;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
@@ -778,9 +778,35 @@ fn button_label_is_editable_without_renaming_the_field() {
     h.run_steps(2);
     assert_eq!(h.state().session.save_bytes(id).unwrap(), before);
     open_props(&mut h, "clear_button");
+    assert!(!h.get_by_label("OK").accesskit_node().is_disabled());
     h.get_by_label("OK").click();
     h.run_steps(2);
+    assert!(!props_open(&h));
     assert_eq!(h.state().session.save_bytes(id).unwrap(), before);
+}
+
+/// Option actions stay available without having to hover a row first.
+#[test]
+fn choice_option_actions_are_available_without_hover() {
+    use pdfcraft_engine::{Edit, NewField};
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx, Edit::AddField {
+        page: 0,
+        rect: [40.0, 260.0, 240.0, 310.0],
+        kind: NewField::Combo { options: vec!["Apple".into(), "Banana".into()], editable: false },
+        name: Some("fruit".into()),
+    });
+    open_props(&mut h, "fruit");
+    tab(&mut h, "Options");
+    h.get_by_label("Delete Apple");
+    h.get_by_label("Delete Banana");
+    h.get_by_label("Up").click();
+    h.run_steps(2);
+    h.get_by_label("Delete Apple").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Delete Apple").is_none());
+    h.get_by_label("Delete Banana");
 }
 
 /// A drop-down and a list box each take an alignment from the Options tab, keep their items,
