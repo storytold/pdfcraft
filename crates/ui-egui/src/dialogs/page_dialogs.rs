@@ -6,7 +6,9 @@ use std::sync::Arc;
 use craft::pages::ui::{PageRangeChoices, PageRangeOptions};
 use craft::pages::{PageRange, PageScope, Subset};
 use craft::theme::variant::Tone;
-use craft::ui::contract::{Bind, Show as _};
+use craft::ui::contract::{Bind, Entry, Outcome as _, Show as _, ShowContainer as _};
+use craft::ui::layout_components::Stack;
+use craft::ui::pickers::Select;
 use craft::ui::dialog::{DialogResult, dialog_id};
 use craft::ui::display::Text;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, ParamResult};
@@ -183,15 +185,25 @@ fn rotate_dialog<'b>(fields: &'b mut DialogFields, count: usize, current: usize)
                 Some("90".into()),
             ),
         ),
-        PageRangeOptions::param("pages", tl!("Pages:"), count, current, PageRangeChoices::Selection),
-        Param::new(
-            "orientation",
-            tl!("Rotate:"),
-            ParamKind::choice(
-                options(&[("both", tl!("Landscape and Portrait Pages")), ("landscape", tl!("Landscape Pages")), ("portrait", tl!("Portrait Pages"))]),
-                Some("both".into()),
-            ),
-        ),
+        PageRangeOptions::param("pages", tl!("Pages:"), count, current, PageRangeChoices::SelectedFromTo),
+        // Production's Rotate row: the subset list, then the orientation list, under one caption.
+        Param::custom("orientation", tl!("Rotate:"), |ui, fields, _| {
+            let shown = Stack::new().show(ui, |ui, _| {
+                PageRangeOptions::subset_select(ui, fields, "pages");
+                let entries = [
+                    Entry::new("both".to_string(), tl!("Landscape and Portrait Pages")),
+                    Entry::new("landscape".to_string(), tl!("Landscape Pages")),
+                    Entry::new("portrait".to_string(), tl!("Portrait Pages")),
+                ];
+                let now = fields.text("orientation").unwrap_or("both").to_string();
+                let picked = Select::new(tl!("Rotate:"), Bind::given(now), &entries).show(ui);
+                if let Some(chosen) = picked.value().cloned() {
+                    fields.set("orientation".to_string(), FieldValue::Text(chosen));
+                }
+            });
+            shown.output
+        })
+        .opens_with(FieldValue::Text("both".into())),
     ];
     ParamDialog::new(ROTATE, tl!("Rotate Pages"), params).ok_enabled(valid).remember(SaveKey::new("pdfcraft.page_rotate")).values(Bind::bound(fields))
 }
