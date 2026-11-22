@@ -699,7 +699,7 @@ fn edits_update_view_data_and_mark_dirty() {
 
 /// A font of an Adobe CJK collection that a PDF does not embed is drawn with an installed face on
 /// the viewer's pool only. An export of the same page, which can be saved, has nothing drawn with
-/// an installed font (AGENTS.md §1.2, §1.4). Skipped where no such face is installed.
+/// an installed font (licences.md; docs/development.md "Fonts and attribution"). Skipped where no such face is installed.
 #[test]
 fn installed_cjk_fonts_draw_in_the_viewer_but_not_in_an_export() {
     let content = "BT /F1 40 Tf 5 15 Td <7E419AD45B57> Tj ET";
