@@ -564,14 +564,19 @@ pub fn recognizers(settings: &OcrSettings) -> Result<Recognizers, String> {
         cache.ocrs = pdfcraft_ocr::OcrsRecognizer::find().ok().map(|r| Arc::new(r) as Arc<dyn Recognizer>);
     }
     let ocrs = cache.ocrs.clone();
+    let ocrs_supports_lang = LANGUAGES.iter().any(|(c, _)| c.eq_ignore_ascii_case(settings.language.trim()));
     match settings.engine {
-        EngineChoice::Ocrs => Ok(Recognizers { primary: ocrs.ok_or_else(models_missing)?, secondary: None }),
+        EngineChoice::Ocrs => {
+            if !ocrs_supports_lang {
+                return Err(format!("language {:?} requires the tesseract engine: the built-in engine supports English only", settings.language));
+            }
+            Ok(Recognizers { primary: ocrs.ok_or_else(models_missing)?, secondary: None })
+        }
         EngineChoice::Tesseract => Ok(Recognizers { primary: tesseract.ok_or_else(tesseract_unavailable)?, secondary: None }),
         EngineChoice::Auto => {
             // The built-in ocrs models only cover English (`LANGUAGES`). For any other language,
             // route Automatic straight to Tesseract instead of letting ocrs produce garbled ASCII
             // as the primary reading.
-            let ocrs_supports_lang = LANGUAGES.iter().any(|(c, _)| c.eq_ignore_ascii_case(settings.language.trim()));
             if !ocrs_supports_lang {
                 let primary = tesseract
                     .ok_or_else(|| format!("language {:?} requires the tesseract engine: {}", settings.language, tesseract_unavailable()))?;
@@ -2389,7 +2394,8 @@ mod tests {
 
     /// Automatic with a language `ocrs` cannot read (such as Vietnamese) never silently falls
     /// back to English `ocrs`: it requires Tesseract and names both the language and engine when
-    /// Tesseract cannot run.
+    /// Tesseract cannot run. Built-in `ocrs` likewise rejects non-English languages instead of
+    /// running the English model on them.
     #[test]
     fn auto_engine_for_non_english_language_requires_tesseract() {
         let settings = OcrSettings {
@@ -2400,6 +2406,10 @@ mod tests {
         };
         let err = recognizers(&settings).err().expect("missing tesseract must fail for non-English auto");
         assert!(err.contains("vi") && err.contains("tesseract"), "{err}");
+
+        let ocrs_settings = OcrSettings { engine: EngineChoice::Ocrs, language: "vi".into(), ..Default::default() };
+        let ocrs_err = recognizers(&ocrs_settings).err().expect("built-in ocrs must reject non-English language");
+        assert!(ocrs_err.contains("vi") && ocrs_err.contains("tesseract"), "{ocrs_err}");
     }
 
     /// #7502: Vietnamese OCR words with stacked diacritics survive the invisible searchable text
