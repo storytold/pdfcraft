@@ -8,12 +8,11 @@ use craft::pages::{PageRange, PageScope};
 use craft::ui::buttons::Button;
 use craft::ui::contract::{Bind, Show as _};
 use craft::ui::dialog::dialog_id;
-use craft::ui::display::Picture;
-use craft::ui::list::ThumbAspect;
+use craft::ui::display::{Picture, PictureSize};
+use craft::ui::list::{ThumbAspect, ThumbSize};
 use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, NumberUnit, Param, ParamDialog, ParamKind};
 use craft::ui::primitives::StrokeWidth;
 use craft::ui::runtime::env::UnitKind;
-use craft::ui::style::{Corners, SurfaceKind};
 use egui::{CornerRadius, Rect, Stroke, pos2, vec2};
 use pdfcraft_engine::{BoxSpec, Edit, PageBox};
 
@@ -101,12 +100,13 @@ fn paint_preview(cx: &craft::ui::primitives::ContentPainterCx<'_>, rect: Rect, m
     let (w, h) = ((media[2] - media[0]).max(1.0), (media[3] - media[1]).max(1.0));
     let s = (rect.width() / w as f32).min(rect.height() / h as f32);
     let page = Rect::from_center_size(rect.center(), vec2(w as f32 * s, h as f32 * s));
-    cx.with_draw(|draw| draw.surface(page, SurfaceKind::Well, Corners::None));
-    cx.painter.rect_stroke(page, CornerRadius::ZERO, Stroke::new(cx.stroke_width(StrokeWidth::Thin), cx.ink()), egui::StrokeKind::Outside);
+    // The page is paper: white, whatever the theme.
+    cx.painter.rect_filled(page, CornerRadius::ZERO, egui::Color32::WHITE);
+    cx.painter.rect_stroke(page, CornerRadius::ZERO, Stroke::new(cx.stroke_width(StrokeWidth::Thin), egui::Color32::from_gray(120)), egui::StrokeKind::Outside);
     let [l, bo, ri, to] = margins.map(|v| v as f32 * s);
     let inner = Rect::from_min_max(pos2(page.left() + l, page.top() + to), pos2(page.right() - ri, page.bottom() - bo));
     if inner.is_positive() {
-        cx.painter.rect_stroke(inner, CornerRadius::ZERO, Stroke::new(cx.stroke_width(StrokeWidth::Medium), cx.ink()), egui::StrokeKind::Middle);
+        cx.painter.rect_stroke(inner, CornerRadius::ZERO, Stroke::new(cx.stroke_width(StrokeWidth::Medium), egui::Color32::from_rgb(38, 115, 230)), egui::StrokeKind::Middle);
     }
 }
 
@@ -144,7 +144,7 @@ fn params(count: usize, current: usize, media: Option<[f64; 4]>) -> Vec<Param> {
         rows.push(
             Param::custom("preview", "", move |ui, fields, _| {
                 let margins = margins_of(fields);
-                Picture::painter(label.clone(), aspect, move |cx, rect| paint_preview(cx, rect, media, margins)).show(ui)
+                Picture::painter(label.clone(), aspect, move |cx, rect| paint_preview(cx, rect, media, margins)).extent(PictureSize::Sample(ThumbSize::Large)).show(ui)
             })
             .full_width(),
         );

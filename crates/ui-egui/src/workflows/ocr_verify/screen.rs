@@ -218,83 +218,114 @@ fn options_bar(app: &mut PdfCraftApp, ui: &mut Ui, n: &mut Intents) {
     let mut verified = page_done;
     let engine_before = d.engine;
 
-    Stack::new().label(tl!("OCR options")).fill_width().show(ui, |ui, _| {
-        // Row 1: the settings (each written back into the persisted draft).
-        Row::new().wrap(true).show(ui, |ui, _| {
-            Select::new(tl!("Language"), Bind::bound(&mut d.language), &languages).show(ui);
-            Select::new(tl!("Engine"), Bind::bound(&mut d.engine), &engines).show(ui);
-            Select::new(tl!("Strategy"), Bind::bound(&mut d.strategy), &strategies).show(ui);
-            Select::new(tl!("Output"), Bind::bound(&mut d.output_mode), &outputs).show(ui);
-            for (flag, label, why) in [
-                (&mut d.auto_rotate, tl!("Auto-rotate"), tl!("Turns pages scanned sideways or upside down upright before reading")),
-                (&mut d.deskew, tl!("Deskew"), tl!("Straightens skewed text lines before reading")),
-                (&mut d.denoise, tl!("Denoise"), tl!("A 3×3 median filter against scan speckle")),
-                (&mut d.binarize, tl!("Binarize"), tl!("Sauvola binarization: ink to black, paper to white")),
-            ] {
-                Checkbox::new(Bind::bound(flag)).label(label).tooltip(format!("{label} \u{2014} {why}")).show(ui);
-            }
-        });
-
-        // Row 2: scope and actions.
-        Row::new().wrap(true).show(ui, |ui, _| {
-            RadioGroup::new(tl!("Pages to read"), Bind::bound(&mut d.pages)).show(ui, |ui, _| {
-                Row::new().show(ui, |ui, _| {
-                    Radio::new(OcrPages::All).label(tl!("All pages")).show(ui);
-                    Radio::new(OcrPages::Current).label(tl!("Current page")).show(ui);
-                    Radio::new(OcrPages::Range).label(tl!("From")).show(ui);
-                });
+    // Production's bar is one wide row pair; in a narrower centre column (the side panels stay) the same controls
+    // are grouped into rows that each fit, so nothing runs out of the screen.
+    let wide = ui.available_width() >= 1000.0;
+    let mut language = |ui: &mut Ui| {
+        Select::new(tl!("Language"), Bind::bound(&mut d.language), &languages).show(ui);
+        Select::new(tl!("Engine"), Bind::bound(&mut d.engine), &engines).show(ui);
+    };
+    let mut reading = |ui: &mut Ui| {
+        Select::new(tl!("Strategy"), Bind::bound(&mut d.strategy), &strategies).show(ui);
+        Select::new(tl!("Output"), Bind::bound(&mut d.output_mode), &outputs).show(ui);
+    };
+    let mut prep = |ui: &mut Ui| {
+        for (flag, label, why) in [
+            (&mut d.auto_rotate, tl!("Auto-rotate"), tl!("Turns pages scanned sideways or upside down upright before reading")),
+            (&mut d.deskew, tl!("Deskew"), tl!("Straightens skewed text lines before reading")),
+            (&mut d.denoise, tl!("Denoise"), tl!("A 3×3 median filter against scan speckle")),
+            (&mut d.binarize, tl!("Binarize"), tl!("Sauvola binarization: ink to black, paper to white")),
+        ] {
+            Checkbox::new(Bind::bound(flag)).label(label).tooltip(format!("{label} \u{2014} {why}")).show(ui);
+        }
+    };
+    let mut scope = |ui: &mut Ui| {
+        RadioGroup::new(tl!("Pages to read"), Bind::bound(&mut d.pages)).show(ui, |ui, _| {
+            Row::new().show(ui, |ui, _| {
+                Radio::new(OcrPages::All).label(tl!("All pages")).show(ui);
+                Radio::new(OcrPages::Current).label(tl!("Current page")).show(ui);
+                Radio::new(OcrPages::Range).label(tl!("From")).show(ui);
             });
-            let ranged = d.pages == OcrPages::Range;
-            NumberField::new(tl!("From page"), Bind::bound(&mut from)).range(1.0..=9999.0).enabled(ranged).show(ui);
-            Text::new(tl!("to")).shade(Shade::Muted).show(ui);
-            NumberField::new(tl!("To page"), Bind::bound(&mut to)).range(1.0..=9999.0).enabled(ranged).show(ui);
-
-            Divider::vertical().show(ui);
-            if Button::new(tl!("Run OCR")).variant(Variant::PRIMARY).enabled(run_enabled).show(ui).clicked() {
-                n.run = true;
-            }
-            if running && Button::new(tl!("Cancel")).variant(Variant::SECONDARY).show(ui).clicked() {
-                n.cancel = true;
-            }
-            if rereading && Button::new(tl!("Cancel re-read")).variant(Variant::SECONDARY).show(ui).clicked() {
-                n.cancel_reread = true;
-            }
-            if Button::new(tl!("Accept")).variant(Variant::SECONDARY).enabled(accept_enabled).show(ui).clicked() {
-                n.accept = true;
-            }
-            if Button::new(tl!("Reject")).variant(Variant::SECONDARY).enabled(can_reject).show(ui).clicked() {
-                n.reject = true;
-            }
-            Divider::vertical().show(ui);
-            Checkbox::new(Bind::bound(&mut verified))
-                .label(tl!("Page verified"))
-                .tooltip(tl!("Mark this page as reviewed (Ctrl+T)"))
-                .enabled(review)
-                .show(ui);
-            if Button::new(tl!("Next uncertain"))
-                .variant(Variant::GHOST)
-                .icon(craft::behavior::IconId::new("chevron_right"))
-                .tooltip(tl!("F8: next word to review; Shift+F8 goes back"))
-                .enabled(review)
-                .show(ui)
-                .clicked()
-            {
-                n.next_uncertain = true;
-            }
-            if Button::new(tl!("Previous uncertain"))
-                .variant(Variant::GHOST)
-                .icon(craft::behavior::IconId::new("chevron_left"))
-                .tooltip(tl!("Shift+F8: the previous word to review"))
-                .enabled(review)
-                .show(ui)
-                .clicked()
-            {
-                n.prev_uncertain = true;
-            }
-            if Button::new(tl!("Exit")).variant(Variant::GHOST).icon(craft::behavior::IconId::new("close")).show(ui).clicked() {
-                n.exit = true;
-            }
         });
+        let ranged = d.pages == OcrPages::Range;
+        NumberField::new(tl!("From page"), Bind::bound(&mut from)).range(1.0..=9999.0).enabled(ranged).show(ui);
+        Text::new(tl!("to")).shade(Shade::Muted).show(ui);
+        NumberField::new(tl!("To page"), Bind::bound(&mut to)).range(1.0..=9999.0).enabled(ranged).show(ui);
+    };
+    let mut actions = |ui: &mut Ui, n: &mut Intents| {
+        if wide {
+            Divider::vertical().show(ui);
+        }
+        if Button::new(tl!("Run OCR")).variant(Variant::PRIMARY).enabled(run_enabled).show(ui).clicked() {
+            n.run = true;
+        }
+        if running && Button::new(tl!("Cancel")).variant(Variant::SECONDARY).show(ui).clicked() {
+            n.cancel = true;
+        }
+        if rereading && Button::new(tl!("Cancel re-read")).variant(Variant::SECONDARY).show(ui).clicked() {
+            n.cancel_reread = true;
+        }
+        if Button::new(tl!("Accept")).variant(Variant::SECONDARY).enabled(accept_enabled).show(ui).clicked() {
+            n.accept = true;
+        }
+        if Button::new(tl!("Reject")).variant(Variant::SECONDARY).enabled(can_reject).show(ui).clicked() {
+            n.reject = true;
+        }
+    };
+    let mut review_bar = |ui: &mut Ui, n: &mut Intents| {
+        if wide {
+            Divider::vertical().show(ui);
+        }
+        Checkbox::new(Bind::bound(&mut verified))
+            .label(tl!("Page verified"))
+            .tooltip(tl!("Mark this page as reviewed (Ctrl+T)"))
+            .enabled(review)
+            .show(ui);
+        if Button::new(tl!("Next uncertain"))
+            .variant(Variant::GHOST)
+            .icon(craft::behavior::IconId::new("chevron_right"))
+            .tooltip(tl!("F8: next word to review; Shift+F8 goes back"))
+            .enabled(review)
+            .show(ui)
+            .clicked()
+        {
+            n.next_uncertain = true;
+        }
+        if Button::new(tl!("Previous uncertain"))
+            .variant(Variant::GHOST)
+            .icon(craft::behavior::IconId::new("chevron_left"))
+            .tooltip(tl!("Shift+F8: the previous word to review"))
+            .enabled(review)
+            .show(ui)
+            .clicked()
+        {
+            n.prev_uncertain = true;
+        }
+        if Button::new(tl!("Exit")).variant(Variant::GHOST).icon(craft::behavior::IconId::new("close")).show(ui).clicked() {
+            n.exit = true;
+        }
+    };
+
+    Stack::new().label(tl!("OCR options")).fill_width().show(ui, |ui, _| {
+        if wide {
+            Row::new().wrap(true).show(ui, |ui, _| {
+                language(ui);
+                reading(ui);
+                prep(ui);
+            });
+            Row::new().wrap(true).show(ui, |ui, _| {
+                scope(ui);
+                actions(ui, n);
+                review_bar(ui, n);
+            });
+        } else {
+            Row::new().show(ui, |ui, _| language(ui));
+            Row::new().show(ui, |ui, _| reading(ui));
+            Row::new().show(ui, |ui, _| prep(ui));
+            Row::new().show(ui, |ui, _| scope(ui));
+            Row::new().show(ui, |ui, _| actions(ui, n));
+            Row::new().show(ui, |ui, _| review_bar(ui, n));
+        }
     });
 
     if let Some(from) = from {

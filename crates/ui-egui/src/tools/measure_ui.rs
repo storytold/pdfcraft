@@ -10,8 +10,8 @@ use craft::ui::{
     buttons::Button,
     canvas::{CanvasTool, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer},
     choice::{Checkbox, Segmented},
-    contract::{Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _},
-    form::SliderField,
+    contract::{Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _},
+    form::{Field, SliderField},
     list::{List, ListRow},
     notices::Notice,
     pickers::{Select, UnitSelect},
@@ -643,7 +643,9 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     } else {
         Notice::new(Tone::Neutral, tl!("Click the first point to begin.")).show(ui);
     }
-    TextField::new(tl!("Label"), Bind::bound(&mut state.label)).show(ui);
+    Field::new(tl!("Label")).id_salt("measure-label").show(ui, |ui, _| {
+        TextField::new(tl!("Label"), Bind::bound(&mut state.label)).show(ui);
+    });
     Checkbox::new(Bind::bound(&mut state.snap_enabled)).label(tl!("Snap to drawing")).show(ui);
     if state.snap_enabled {
         Checkbox::new(Bind::bound(&mut state.snaps.endpoints)).label(tl!("Endpoints")).show(ui);
@@ -656,17 +658,22 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut chosen = None;
     let fields = scale_fields(state);
     let before = state.ratio_text.clone();
-    let typed = TextField::new(tl!("Scale"), Bind::bound(&mut state.ratio_text)).submits().show(ui);
+    let ratio_text = &mut state.ratio_text;
+    let typed = Field::new(tl!("Drawing scale")).id_salt("measure-ratio").show(ui, |ui, _| {
+        TextField::new(tl!("Scale"), Bind::bound(ratio_text)).submits().show(ui)
+    });
     state.ratio_dirty |= state.ratio_text != before;
-    if (typed.submitted || typed.response.lost_focus()) && std::mem::take(&mut state.ratio_dirty) {
+    if typed.inner.as_ref().is_some_and(|t| t.submitted || t.response.lost_focus()) && std::mem::take(&mut state.ratio_dirty) {
         match parse_ratio(&state.ratio_text) {
             Some(n) => chosen = Some(n),
             None => state.error = Some(tl!("Enter a scale such as 1:50.").into()),
         }
     }
     let ratios: Vec<Entry<String>> = RATIOS.iter().map(|&n| Entry::new(format_ratio(n), format_ratio(n))).collect();
-    let common = Select::new(tl!("Common scales"), Bind::given(state.ratio_text.clone()), &ratios).show(ui);
-    if let Some(text) = common.value()
+    let common = Field::new(tl!("Common scales")).id_salt("measure-common").show(ui, |ui, _| {
+        Select::new(tl!("Common scales"), Bind::given(state.ratio_text.clone()), &ratios).show(ui)
+    });
+    if let Some(text) = common.inner.as_ref().and_then(|c| c.value())
         && let Some(n) = parse_ratio(text)
         && *text != state.ratio_text
     {
@@ -676,17 +683,25 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let unit_entries: Vec<Entry<UnitKind>> = PageUnit::ALL.iter().map(|&u| Entry::new(unit_kind(u), u.label())).collect();
     let mut drawing = Some(state.drawing_points);
     let mut picked_unit = unit_kind(page_unit);
-    UnitSelect::new(tl!("Page length"), Bind::bound(&mut drawing), Bind::bound(&mut picked_unit), &unit_entries).range(0.000001..=1e9).show(ui);
+    Field::new(tl!("Page length")).id_salt("measure-page-length").show(ui, |ui, _| {
+        UnitSelect::new(tl!("Page length"), Bind::bound(&mut drawing), Bind::bound(&mut picked_unit), &unit_entries).range(0.000001..=1e9).show(ui);
+    });
     state.drawing_points = drawing.unwrap_or(state.drawing_points);
     if picked_unit != unit_kind(page_unit) {
         state.page_unit = page_unit_of_kind(picked_unit);
     }
     let mut real = Some(state.real_distance);
-    NumberField::new(tl!("Real distance"), Bind::bound(&mut real)).range(0.000001..=1e9).show(ui);
+    Field::new(tl!("Real distance")).id_salt("measure-real").show(ui, |ui, _| {
+        NumberField::new(tl!("Real distance"), Bind::bound(&mut real)).range(0.000001..=1e9).show(ui);
+    });
     state.real_distance = real.unwrap_or(state.real_distance);
-    TextField::new(tl!("Unit"), Bind::bound(&mut state.unit)).show(ui);
+    Field::new(tl!("Unit")).id_salt("measure-unit").show(ui, |ui, _| {
+        TextField::new(tl!("Unit"), Bind::bound(&mut state.unit)).show(ui);
+    });
     let mut precision = Some(f64::from(state.precision));
-    NumberField::new(tl!("Decimals"), Bind::bound(&mut precision)).range(0.0..=6.0).step(1.0).show(ui);
+    Field::new(tl!("Decimals")).id_salt("measure-decimals").show(ui, |ui, _| {
+        NumberField::new(tl!("Decimals"), Bind::bound(&mut precision)).range(0.0..=6.0).step(1.0).show(ui);
+    });
     state.precision = precision.map_or(state.precision, |p| p.round().clamp(0.0, 6.0) as u8);
     // A hand edit of the fields leaves the 1:N field showing the old ratio: say the new one.
     if scale_fields(state) != fields {
@@ -706,7 +721,9 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             }
         }
     }
-    TextField::new(tl!("Viewport"), Bind::bound(&mut state.name)).show(ui);
+    Field::new(tl!("Viewport")).id_salt("measure-viewport").show(ui, |ui, _| {
+        TextField::new(tl!("Viewport"), Bind::bound(&mut state.name)).show(ui);
+    });
     let apply = Button::new(tl!("Apply scale")).enabled(doc.allows_annotation()).show(ui).clicked();
     if let Some(error) = &state.error {
         Notice::new(Tone::Bad, error.clone()).show(ui);
