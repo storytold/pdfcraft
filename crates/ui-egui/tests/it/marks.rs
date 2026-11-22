@@ -404,7 +404,7 @@ trailer << /Root 1 0 R >>
 
 /// The preview pager's position, read from its caption's accessible value: the shown page and the count.
 fn is_pager(ak: &egui_kittest::kittest::AccessKitNode<'_>) -> bool {
-    ak.role() == egui::accesskit::Role::Label && ak.numeric_value().is_some() && ak.label().is_some_and(|label| label.starts_with("Page "))
+    ak.role() == egui::accesskit::Role::Label && ak.numeric_value().is_some() && ak.label().is_some_and(|label| label.starts_with("Preview: page "))
 }
 
 fn pager(h: &Rig) -> (usize, usize) {
@@ -455,8 +455,8 @@ fn frame_shapes(h: &Rig) -> Vec<&egui::Shape> {
     shapes
 }
 
-/// The picture of the preview pane: the largest uploaded texture painted over the pager, the pane being
-/// the pager's neighbour above.
+/// The picture of the preview pane: the largest uploaded texture painted beside the pager (the small page picture
+/// stands at its left, as in production).
 fn preview_picture(h: &Rig) -> Option<Picture> {
     let caption = h.query_by(is_pager)?;
     let row = caption.parent()?;
@@ -468,10 +468,10 @@ fn preview_picture(h: &Rig) -> Option<Picture> {
         .filter_map(|(at, s)| {
             let egui::Shape::Mesh(m) = s else { return None };
             let rect = m.calc_bounds();
-            let over = rect.width() > 50.0
-                && rect.bottom() <= pager_rect.top() + 4.0
-                && rect.left() < pager_rect.right()
-                && rect.right() > pager_rect.left();
+            let over = rect.width() > 30.0
+                && rect.right() <= pager_rect.left() + 4.0
+                && rect.top() < pager_rect.bottom()
+                && rect.bottom() > pager_rect.top();
             if !over {
                 return None;
             }
