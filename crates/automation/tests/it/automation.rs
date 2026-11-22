@@ -14854,3 +14854,55 @@ fn grouped_existing_thai_body_edits_saves_reopens_and_undo_restores_original_gly
     assert_eq!(page_text(&mut a, reopened), [new, old]);
     assert_eq!(ok(&mut a, "content_list", json!({"doc":reopened}))["count"], 0, "editing existing text must not create Add Text objects");
 }
+
+#[test]
+fn editing_a_text_box_keeps_its_displayed_width_and_top_left() {
+    let dir = workdir("turned-text-box-refit");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "blank", "width": 612, "height": 792, "pages": 5 }))["doc"].as_u64().unwrap();
+    let close = |actual: &[f64], expected: &[f64]| actual.iter().zip(expected).all(|(a, b)| (a - b).abs() < 0.01);
+    let listing = |a: &mut Automation, doc, page| ok(a, "comment_list", json!({ "doc": doc, "page": page }))["comments"][0].clone();
+    let rect = |comment: &Value| serde_json::from_value::<[f64; 4]>(comment["rect"].clone()).unwrap();
+    let placed = [100.0, 100.0, 280.0, 130.0];
+    let contents = "First\nSecond\nThird\nFourth\nFifth";
+
+    let mut expected = Vec::new();
+    for (page, degrees) in [(1, 0), (2, 90), (3, 180), (4, 270), (5, 90)] {
+        let rotate = |a: &mut Automation| ok(a, "page_rotate", json!({ "doc": doc, "pages": [page], "degrees": degrees }));
+        if degrees != 0 && page != 5 {
+            rotate(&mut a);
+        }
+        let added = ok(
+            &mut a,
+            "comment_add",
+            json!({ "doc": doc, "page": page, "type": "textbox", "rect": placed, "font_size": 12, "contents": "First" }),
+        )["comment"]
+            .clone();
+        // The last box was drawn before the page turned, so its own axes are still unrotated.
+        if page == 5 {
+            rotate(&mut a);
+        }
+        let before = rect(&listing(&mut a, doc, page));
+        if page != 5 {
+            assert!(close(&before, &placed), "rotation {degrees}: initial box {before:?}");
+        }
+
+        ok(&mut a, "comment_edit", json!({ "doc": doc, "page": page, "index": added["index"], "contents": contents }));
+        let after = rect(&listing(&mut a, doc, page));
+        if page == 5 {
+            assert!(close(&after[1..], &before[1..]) && after[0] < before[0], "box placed before rotation: {before:?} -> {after:?}");
+        } else {
+            assert!(close(&after[..3], &before[..3]), "rotation {degrees}: preserve the displayed top-left and width: {before:?} -> {after:?}");
+            assert!(after[3] > before[3], "rotation {degrees}: grow downward: {before:?} -> {after:?}");
+        }
+        expected.push((page, after));
+    }
+
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "edited.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "edited.pdf" }))["doc"].as_u64().unwrap();
+    for (page, after) in expected {
+        let saved = listing(&mut a, reopened, page);
+        assert_eq!(saved["contents"], contents);
+        assert!(close(&rect(&saved), &after), "page {page}: the fitted rectangle survives reopen");
+    }
+}

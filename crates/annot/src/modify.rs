@@ -321,13 +321,7 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
         // where the standard fonts can't draw some of it (marked and reported, see
         // `draw_appearance`). A circle snug around its text stays snug around the new text; one
         // made larger by hand keeps its size, only growing for more lines.
-        let fit = if snug {
-            snug_refit(doc, r)
-        } else {
-            let d = annot_dict(doc, r);
-            let circle = text_box_of(&d).filter(|_| BorderShape::of(&d) == BorderShape::Circle);
-            fitted_box(doc, r, text).map(|fit| circle.map_or(fit, |old| [fit[0], fit[1].min(old[1]), fit[2], fit[3]]))
-        };
+        let fit = if snug { snug_refit(doc, r) } else { fitted_box(doc, r, text, false) };
         match fit {
             Some(rect) => apply_text_box(doc, r, rect, meta, true)?,
             None => draw_appearance(doc, r)?,
@@ -336,10 +330,10 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
     Ok(())
 }
 
-/// The rectangle a FreeText annotation's text box needs for `text`: the current wrap width and
-/// top edge stay and the height fits the wrapped lines, as at creation. `None` keeps the old
-/// rectangle (the box can't be measured, so only the appearance is redrawn).
-fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
+/// Fit `text` in the appearance's own axes, preserving the wrap width and top-left corner.
+/// Existing circles and font-size changes can grow the box without shrinking it.
+/// `None` keeps the old rectangle, so only the appearance is redrawn.
+fn fitted_box(doc: &Document, r: ObjRef, text: &str, grow_only: bool) -> Option<[f64; 4]> {
     let d = annot_dict(doc, r);
     let nums = |key: &[u8]| -> Option<Vec<f64>> { d.get(key)?.as_array()?.iter().map(|o| o.as_f64()).collect() };
     // Measured in the face and size the text is drawn in (`/DA`, or `/DS` where it sets one).
@@ -350,14 +344,18 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
     let rect = [rect[0], rect[1], rect[2], rect[3]];
     // A callout re-fits its text box (`/Rect` inset by `/RD`); the leader line keeps its place.
     // So does a text box inside an oval or a circle.
-    let tb = if d.contains(b"CL") {
+    let callout = d.contains(b"CL");
+    let existing = if callout { None } else { text_box_of(&d) };
+    let tb = if callout {
         let rd = nums(b"RD").filter(|v| v.len() == 4 && v.iter().all(|x| *x >= 0.0))?;
         [rect[0] + rd[0], rect[1] + rd[1], rect[2] - rd[2], rect[3] - rd[3]]
     } else {
-        text_box_of(&d).unwrap_or(rect)
+        existing.unwrap_or(rect)
     };
-    let (x0, top) = (tb[0].min(tb[2]), tb[1].max(tb[3]));
-    let w = tb[2] - tb[0];
+    // Match draw_free_text: a callout uses user-space axes, and other boxes keep the turn
+    // saved in the annotation when they were placed, even if the page was turned later.
+    let turn = if callout { 0 } else { appearance::text_turn(&d) };
+    let w = if matches!(turn, 90 | 270) { tb[3] - tb[1] } else { tb[2] - tb[0] };
     let w = if w.is_finite() && w >= 1.0 {
         w
     } else {
@@ -365,8 +363,19 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
         let longest = text.lines().map(|l| measure(l, size)).fold(0.0, f64::max);
         (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0)
     };
-    let height = appearance::text_lines_height(&pdfcraft_fonts::wrap_with(text, size, (w - 2.0 * pad).max(1.0), measure), size);
-    Some([x0, top - height - 2.0 * pad - 2.0, x0 + w, top])
+    let lines = pdfcraft_fonts::wrap_with(text, size, (w - 2.0 * pad).max(1.0), measure);
+    let h = appearance::text_lines_height(&lines, size) + 2.0 * pad + 2.0;
+    let h = match existing {
+        Some(old) if grow_only || BorderShape::of(&d) == BorderShape::Circle => h.max(displayed_sides(&d, old).1),
+        _ => h,
+    };
+    let [left, bottom, right, top] = normalize(tb);
+    Some(match turn {
+        90 => [left, bottom, left + h, bottom + w],
+        180 => [right - w, bottom, right, bottom + h],
+        270 => [right - h, top - w, right, top],
+        _ => [left, top - h, left + w, top],
+    })
 }
 
 /// Reply to a comment; returns the reply's index in the page's `/Annots`.
@@ -1279,18 +1288,10 @@ pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, m
         touch(d, meta);
     })?;
     let text = text_value(doc, &annot_dict(doc, r), b"Contents").unwrap_or_default();
-    let result = match (snug, if snug { snug_refit(doc, r) } else { fitted_box(doc, r, &text) }) {
-        // A circle snug around its text stays snug around it at the new size.
-        (true, Some(fit)) => apply_text_box(doc, r, fit, meta, false),
-        (false, Some(fit)) => {
-            let cur = annot_dict(doc, r);
-            // Keep the top and sides; only the bottom edge moves, and only downwards.
-            match text_box_of(&cur) {
-                Some(old) if !cur.contains(b"CL") => apply_text_box(doc, r, [fit[0], fit[1].min(old[1]), fit[2], fit[3]], meta, false),
-                _ => apply_text_box(doc, r, fit, meta, false),
-            }
-        }
-        (_, None) => redraw_or_restore(doc, r, before.clone()),
+    let fit = if snug { snug_refit(doc, r) } else { fitted_box(doc, r, &text, true) };
+    let result = match fit {
+        Some(fit) => apply_text_box(doc, r, fit, meta, false),
+        None => redraw_or_restore(doc, r, before.clone()),
     };
     if result.is_err() {
         doc.set(r, Object::Dict(before));
