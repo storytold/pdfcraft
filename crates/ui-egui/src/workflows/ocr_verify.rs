@@ -1454,12 +1454,16 @@ fn toolbar(app: &mut PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
 
     // Row 1: the settings (each written back into the persisted draft).
     ui.horizontal_wrapped(|ui| {
+        let langs = pdfcraft_engine::ocr::languages_for(d.engine);
+        if !langs.iter().any(|l| l.0 == d.language) {
+            d.language = "en".into();
+        }
         craft_ui::ComboBox::from_id_salt("ocr-verify-language").width(150.0).selected_text(language_name(&d.language)).show_ui(ui, |ui| {
-            for (code, name) in pdfcraft_engine::ocr::LANGUAGES {
+            for (code, name) in langs {
                 ui.selectable_value(&mut d.language, (*code).to_string(), *name);
             }
         });
-        engine_combo(ui, &mut d.engine, &mut d.strategy);
+        engine_combo(ui, &mut d.engine, &mut d.strategy, &mut d.language);
         strategy_combo(ui, &mut d.strategy);
         output_combo(ui, &mut d.output_mode);
         for (flag, label, why) in [
@@ -1533,7 +1537,7 @@ fn toolbar(app: &mut PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
 
 /// A language code's dropdown text: its name and its code ("English (en)").
 fn language_name(code: &str) -> String {
-    pdfcraft_engine::ocr::LANGUAGES.iter().find(|l| l.0 == code).map_or_else(|| code.to_owned(), |l| format!("{} ({})", l.1, l.0))
+    pdfcraft_engine::ocr::TESSERACT_LANGUAGES.iter().find(|l| l.0 == code).map_or_else(|| code.to_owned(), |l| format!("{} ({})", l.1, l.0))
 }
 
 /// The Engine dropdown's text.
@@ -1558,7 +1562,7 @@ fn strategy_label(strategy: MergeStrategy) -> &'static str {
 /// says why (a tooltip names the missing models or program). The choice feeds the next run.
 /// Choosing Automatic while the strategy is "Primary only" (which would never run the second
 /// engine) moves the strategy to Automatic's own default, Confidence weighted.
-fn engine_combo(ui: &mut egui::Ui, engine: &mut EngineChoice, strategy: &mut MergeStrategy) {
+fn engine_combo(ui: &mut egui::Ui, engine: &mut EngineChoice, strategy: &mut MergeStrategy, language: &mut String) {
     ocr_ui::keep_asking_while_probing(ui.ctx());
     craft_ui::ComboBox::from_id_salt("ocr-verify-engine").width(120.0).selected_text(engine_label(*engine)).show_ui(ui, |ui| {
         for (choice, label) in [(EngineChoice::Auto, tl!("Automatic")), (EngineChoice::Ocrs, "ocrs"), (EngineChoice::Tesseract, "Tesseract")] {
@@ -1581,6 +1585,9 @@ fn engine_combo(ui: &mut egui::Ui, engine: &mut EngineChoice, strategy: &mut Mer
                 *engine = choice;
                 if choice == EngineChoice::Auto && *strategy == MergeStrategy::PrimaryOnly {
                     *strategy = choice.default_strategy();
+                }
+                if !pdfcraft_engine::ocr::languages_for(choice).iter().any(|l| l.0 == language.as_str()) {
+                    *language = "en".into();
                 }
             }
         }

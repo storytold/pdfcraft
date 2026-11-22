@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
 use pdfcraft_engine::DocId;
-use pdfcraft_engine::ocr::{EngineChoice, LANGUAGES, MergeStrategy, OcrPage, OcrSettings, OutputMode};
+use pdfcraft_engine::ocr::{EngineChoice, MergeStrategy, OcrPage, OcrSettings, OutputMode, languages_for};
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
@@ -102,11 +102,14 @@ impl OcrDraft {
     /// Restore from the preferences JSON (`ocr` object); unknown or malformed values keep the
     /// defaults, like every other restored setting.
     pub fn apply_pref(&mut self, v: &serde_json::Value) {
-        if let Some(l) = v["language"].as_str().filter(|l| LANGUAGES.iter().any(|x| x.0 == *l)) {
-            self.language = l.to_string();
-        }
         if let Some(e) = v["engine"].as_str() {
             self.engine = EngineChoice::parse(e);
+        }
+        let langs = languages_for(self.engine);
+        if let Some(l) = v["language"].as_str().filter(|l| langs.iter().any(|x| x.0 == *l)) {
+            self.language = l.to_string();
+        } else if !langs.iter().any(|x| x.0 == self.language) {
+            self.language = "en".into();
         }
         if let Some(s) = v["strategy"].as_str() {
             self.strategy = match s.trim().to_ascii_lowercase().as_str() {
@@ -283,10 +286,14 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             group(ui, "Settings", &mut |ui| {
                 egui::Grid::new("ocr-settings").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
                     ui.label(tl!("Document language"));
-                    let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
-                    craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(tl!(name)).width(220.0).show_ui(ui, |ui| {
-                        for (code, name) in LANGUAGES {
-                            ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name));
+                    let langs = languages_for(d.engine);
+                    if !langs.iter().any(|l| l.0 == d.language) {
+                        d.language = "en".into();
+                    }
+                    let name = langs.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
+                    craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(name).width(220.0).show_ui(ui, |ui| {
+                        for (code, name) in langs {
+                            ui.selectable_value(&mut d.language, (*code).to_string(), *name);
                         }
                     });
                     ui.end_row();
@@ -300,7 +307,11 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                         let choices: [(EngineChoice, &str); 3] =
                             [(EngineChoice::Auto, "Automatic"), (EngineChoice::Ocrs, "Built-in"), (EngineChoice::Tesseract, "Tesseract")];
                         for (choice, name) in choices {
-                            ui.selectable_value(&mut d.engine, choice, tl!(name));
+                            if ui.selectable_value(&mut d.engine, choice, tl!(name)).clicked()
+                                && !languages_for(choice).iter().any(|l| l.0 == d.language)
+                            {
+                                d.language = "en".into();
+                            }
                         }
                     });
                     ui.end_row();
@@ -1571,5 +1582,31 @@ mod tests {
         assert_eq!(app.session.get(id).unwrap().can_undo(), None, "no invisible layer was written");
         assert!(app.ocr_verify.open, "the review opens, to accept as an editable document");
         assert_eq!(app.ocr_verify.phase, crate::workflows::ocr_verify::Phase::ReviewReady);
+    }
+
+    /// Restoring persisted OCR settings parses the engine before validating the language, so
+    /// Vietnamese survives restart under Tesseract/Automatic while Built-in (`ocrs`) clamps back
+    /// to English.
+    #[test]
+    fn ocr_draft_restores_vietnamese_for_tesseract_and_clamps_for_ocrs() {
+        let mut draft = OcrDraft::default();
+        draft.apply_pref(&serde_json::json!({ "language": "vi", "engine": "tesseract" }));
+        assert_eq!(draft.engine, EngineChoice::Tesseract);
+        assert_eq!(draft.language, "vi");
+        let saved = draft.to_pref();
+        let mut restored = OcrDraft::default();
+        restored.apply_pref(&saved);
+        assert_eq!(restored.engine, EngineChoice::Tesseract);
+        assert_eq!(restored.language, "vi");
+
+        // Switching back to Built-in `ocrs` clamps an unsupported language to English.
+        restored.apply_pref(&serde_json::json!({ "engine": "ocrs" }));
+        assert_eq!(restored.engine, EngineChoice::Ocrs);
+        assert_eq!(restored.language, "en");
+
+        let mut ocrs_draft = OcrDraft::default();
+        ocrs_draft.apply_pref(&serde_json::json!({ "language": "vi", "engine": "ocrs" }));
+        assert_eq!(ocrs_draft.engine, EngineChoice::Ocrs);
+        assert_eq!(ocrs_draft.language, "en");
     }
 }

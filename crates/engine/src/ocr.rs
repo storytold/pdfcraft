@@ -14,10 +14,23 @@ use std::time::{Duration, Instant};
 use pdfcraft_render::text::TextFilter;
 use pdfcraft_render::{PageInfo, PageRenderer, RenderConfig, RenderRequest, RequestKind};
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use pdfcraft_ocr::tesseract::LANGUAGE_NAMES as TESSERACT_LANGUAGES;
 pub use pdfcraft_ocr::{
     ConfidenceBand, DETECTION_MODEL, LANGUAGES, Line, MergeStrategy, Models, Ocr, OcrError, OcrImage, PlacedWord, RECOGNITION_MODEL, Recognizer,
     StrategyOutcome, Word, band_for, is_suspect, lines_from_json, low_confidence,
 };
+#[cfg(target_arch = "wasm32")]
+pub const TESSERACT_LANGUAGES: &[(&str, &str)] = LANGUAGES;
+
+/// Languages `engine` can read: Built-in (`ocrs`) covers English only, while Tesseract (and
+/// Automatic off the web) covers the allow-listed Tesseract language set.
+pub fn languages_for(engine: EngineChoice) -> &'static [(&'static str, &'static str)] {
+    match engine {
+        EngineChoice::Ocrs => LANGUAGES,
+        EngineChoice::Tesseract | EngineChoice::Auto => TESSERACT_LANGUAGES,
+    }
+}
 
 use crate::{DocId, Edit, EditError, Session};
 
@@ -108,7 +121,8 @@ impl OutputMode {
 pub struct OcrSettings {
     /// Resolution pages are rendered at for recognition (Acrobat's "Downsample to" choices).
     pub dpi: f32,
-    /// Language code from [`LANGUAGES`] (the models read the Latin alphabet, whatever this says).
+    /// Language code from [`languages_for`] (`"en"` for Built-in `ocrs`; allow-listed ISO 639-1
+    /// codes including `"vi"` for Tesseract and Automatic).
     pub language: String,
     /// Leave pages that already have text alone (Acrobat reports "page contains renderable
     /// text" and skips them). When `false`, such pages are read too (a picture on a page that
@@ -553,11 +567,22 @@ pub fn recognizers(settings: &OcrSettings) -> Result<Recognizers, String> {
     match settings.engine {
         EngineChoice::Ocrs => Ok(Recognizers { primary: ocrs.ok_or_else(models_missing)?, secondary: None }),
         EngineChoice::Tesseract => Ok(Recognizers { primary: tesseract.ok_or_else(tesseract_unavailable)?, secondary: None }),
-        EngineChoice::Auto => match (ocrs, tesseract) {
-            (Some(p), s) => Ok(Recognizers { primary: p, secondary: s }),
-            (None, Some(p)) => Ok(Recognizers { primary: p, secondary: None }),
-            (None, None) => Err(models_missing()),
-        },
+        EngineChoice::Auto => {
+            // The built-in ocrs models only cover English (`LANGUAGES`). For any other language,
+            // route Automatic straight to Tesseract instead of letting ocrs produce garbled ASCII
+            // as the primary reading.
+            let ocrs_supports_lang = LANGUAGES.iter().any(|(c, _)| c.eq_ignore_ascii_case(settings.language.trim()));
+            if !ocrs_supports_lang {
+                let primary = tesseract
+                    .ok_or_else(|| format!("language {:?} requires the tesseract engine: {}", settings.language, tesseract_unavailable()))?;
+                return Ok(Recognizers { primary, secondary: None });
+            }
+            match (ocrs, tesseract) {
+                (Some(p), s) => Ok(Recognizers { primary: p, secondary: s }),
+                (None, Some(p)) => Ok(Recognizers { primary: p, secondary: None }),
+                (None, None) => Err(models_missing()),
+            }
+        }
     }
 }
 
@@ -2347,6 +2372,74 @@ mod tests {
                 assert!(near(shot.width, want[0]) && near(shot.height, want[1]), "{dpi} dpi, page {page}: {}x{}", shot.width, shot.height);
             }
         }
+    }
+
+    /// Built-in `ocrs` exposes English only; Tesseract and Automatic expose Vietnamese alongside
+    /// the rest of the allow-listed Tesseract languages (off wasm32).
+    #[test]
+    fn languages_for_engine_includes_vietnamese_for_tesseract_and_auto() {
+        assert_eq!(languages_for(EngineChoice::Ocrs), &[("en", "English")]);
+        #[cfg(not(target_arch = "wasm32"))]
+        for engine in [EngineChoice::Tesseract, EngineChoice::Auto] {
+            let langs = languages_for(engine);
+            assert!(langs.contains(&("en", "English")), "{engine:?}: {langs:?}");
+            assert!(langs.contains(&("vi", "Vietnamese")), "{engine:?}: {langs:?}");
+        }
+    }
+
+    /// Automatic with a language `ocrs` cannot read (such as Vietnamese) never silently falls
+    /// back to English `ocrs`: it requires Tesseract and names both the language and engine when
+    /// Tesseract cannot run.
+    #[test]
+    fn auto_engine_for_non_english_language_requires_tesseract() {
+        let settings = OcrSettings {
+            engine: EngineChoice::Auto,
+            language: "vi".into(),
+            tesseract_path: Some("/no/such/pdfcraft-tesseract-binary".into()),
+            ..Default::default()
+        };
+        let err = recognizers(&settings).err().expect("missing tesseract must fail for non-English auto");
+        assert!(err.contains("vi") && err.contains("tesseract"), "{err}");
+    }
+
+    /// #7502: Vietnamese OCR words with stacked diacritics survive the invisible searchable text
+    /// layer, text extraction, and save/reopen without turning into `?`.
+    #[test]
+    fn vietnamese_searchable_layer_preserves_diacritics_on_extract() {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("scan.pdf", None, Arc::new(fixture(1)), None).unwrap();
+        let sentence = "Bộ máy tính mã số 2756, số lượng: 01 bộ, vị trí: phòng tư vấn – khoa Dinh dưỡng.";
+        let words: Vec<PlacedWord> = sentence
+            .split_whitespace()
+            .enumerate()
+            .map(|(i, token)| {
+                let col = i % 4;
+                let row = i / 4;
+                PlacedWord {
+                    text: token.into(),
+                    origin: [10.0 + (col as f64) * 45.0, 250.0 - (row as f64) * 18.0],
+                    across: [40.0, 0.0],
+                    up: [0.0, 10.0],
+                    confidence: Some(95.0),
+                    source: "tesseract".into(),
+                }
+            })
+            .collect();
+        s.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+        let extracted = crate::tests::page_texts(&s, id)[0].clone();
+        for expected in ["Bộ", "máy", "tính", "mã", "số", "lượng:", "bộ,", "vị", "trí:", "phòng", "tư", "vấn", "dưỡng."] {
+            assert!(extracted.contains(expected), "missing {expected:?} in extracted text: {extracted:?}");
+        }
+        assert!(!extracted.contains('?'), "no character may degrade to '?': {extracted:?}");
+        // Save and reopen to verify the generated Type3 + ToUnicode CMap round-trips cleanly.
+        let saved = s.save_bytes(id).unwrap();
+        let mut reopened = Session::new();
+        let rid = reopened.open("saved.pdf", None, saved, None).unwrap();
+        let reread = crate::tests::page_texts(&reopened, rid)[0].clone();
+        for expected in ["Bộ", "máy", "tính", "mã", "số", "lượng:", "vị", "trí:", "phòng", "tư", "vấn", "dưỡng."] {
+            assert!(reread.contains(expected), "missing {expected:?} after save/reopen: {reread:?}");
+        }
+        assert!(!reread.contains('?'), "no character may degrade to '?' after reopen: {reread:?}");
     }
 
     /// The first and last letters of a line are read: ocrs' own 3-pixel margin clipped them at
