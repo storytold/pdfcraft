@@ -151,11 +151,15 @@ fn texts(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
 
 /// The user's close action on every card, then the passes that act on it.
 fn dismiss_all(h: &mut Harness<'static, PdfCraftApp>) {
-    // Programmatic removal emits no close event; use the user's dismiss control.
-    for button in h.query_all_by(|node| !node.is_hidden() && node.label().as_deref() == Some("Dismiss")) {
-        button.click();
+    // Programmatic removal emits no close event; use the user's dismiss control. The cards shown now, one at a
+    // time: cards are as wide as their text, so the next card's control moves once one closes.
+    let shown = h.query_all_by(|node| !node.is_hidden() && node.label().as_deref() == Some("Dismiss")).count();
+    for _ in 0..shown {
+        if let Some(button) = h.query_all_by(|node| !node.is_hidden() && node.label().as_deref() == Some("Dismiss")).next() {
+            button.click();
+        }
+        h.run_steps(3);
     }
-    h.run_steps(3);
 }
 
 /// One run's messages are all shown, in order (#4294): the first is a card with its title and tone
