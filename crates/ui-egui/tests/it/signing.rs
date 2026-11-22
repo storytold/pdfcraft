@@ -325,6 +325,55 @@ fn assert_trust_and_id_persist(h: &Harness<'static, PdfCraftApp>) {
     assert_eq!((fresh.digital_ids.len(), fresh.session.trusted_certificates().len()), (1, 1));
 }
 
+/// A one-field form (`log`) whose `/OpenAction` appends "x" to the field on every opening.
+fn form_that_changes_on_opening() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /OpenAction << /S /JavaScript /JS (getField\\('log'\\).value += 'x';) >> /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (log) /V () /Rect [20 250 180 270] /P 3 0 R /F 4 >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    pdf
+}
+
+/// Compare signed version opens its baseline without the document's opening scripts: the
+/// baseline's field is the value that was signed, not one an `/OpenAction` changed again.
+#[test]
+fn the_compared_signed_version_opens_without_running_its_opening_scripts() {
+    let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12");
+    let digital_id = pdfcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap();
+    let mut s = pdfcraft_engine::Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("form.pdf", None, std::sync::Arc::new(form_that_changes_on_opening()), None).unwrap();
+    let signed = s.sign(id, &digital_id, pdfcraft_engine::SignOptions::default()).unwrap();
+    let log = |s: &pdfcraft_engine::Session, id| s.get(id).unwrap().form.iter().find(|f| f.name == "log").unwrap().value.join(",");
+    let as_signed = log(&s, id);
+    let mut h = harness(dir());
+    h.state_mut().open_bytes("signed.pdf", None, signed.to_vec()).unwrap();
+    h.state_mut().active = Some(1);
+    support::settle(&mut h);
+    let current = h.state().views[1].id;
+    assert_ne!(log(&h.state().session, current), as_signed, "opening the signed file in the app ran its open action");
+    h.state_mut().compare_signed_version(0);
+    h.run_steps(3);
+    let st = h.state();
+    let compare = st.compare.as_ref().expect("the comparison ran");
+    assert_eq!(compare.new, current);
+    assert_eq!(log(&st.session, compare.old), as_signed, "the signed version keeps the value it was signed with");
+}
+
 #[test]
 fn certifying_without_a_visible_signature() {
     let dir = dir().join("certify");

@@ -781,7 +781,8 @@ impl PdfCraftApp {
         let from = doc.name.clone();
         let bytes = doc.bytes[..end].to_vec();
         let name = format!("{} (signed version)", Self::file_stem(&from));
-        match self.session.open(format!("{name}.pdf"), None, std::sync::Arc::new(bytes), doc.password.clone().as_deref()) {
+        // Without its opening scripts, so the tab shows the file exactly as it was signed.
+        match self.session.open_without_scripts(format!("{name}.pdf"), None, std::sync::Arc::new(bytes), doc.password.clone().as_deref()) {
             Ok(new) => {
                 // The reading-colours preference is app-wide: the newly opened copy starts with it.
                 self.session.set_reading_colors(new, self.reading_colors);
