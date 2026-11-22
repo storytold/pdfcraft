@@ -985,7 +985,7 @@ fn outline_closed(ui: &mut egui::Ui, body: &PageBody<'_>, session: &PageSession,
     let paths: Vec<BezPath> =
         boxes.iter().enumerate().filter(|(i, _)| Some(*i) != open).take(MAX_OUTLINES).map(|(_, b)| rect_path(doc_rect(&body.view, *b))).collect();
     if !paths.is_empty() {
-        let _ = SelectionOutline::faint(tl!("Edit text & images").to_string(), &paths).show_at(ui, clip);
+        let _ = SelectionOutline::faint(tl!("Edit text & images").to_string(), &paths).color(crate::object_ui::accent_ink(ui, 0.9)).show_at(ui, clip);
     }
 }
 

@@ -468,9 +468,8 @@ fn show(
         .char_spacing_presets(&char_spacings)
         .char_spacing_range(range(&CHAR_SPACING_RANGE))
         .unsupported(&unsupported);
-    if let Some(line_spacing) = v.line_spacing {
-        text = text.line_spacing(line_spacing);
-    }
+    // With nothing to set it on the row still reads Auto, as production's does, not Mixed.
+    text = text.line_spacing(v.line_spacing.unwrap_or(LineSpacing::Auto));
     #[cfg(not(target_arch = "wasm32"))]
     if matches!(target, Target::Paragraph(_))
         && let Some(installed) = installed

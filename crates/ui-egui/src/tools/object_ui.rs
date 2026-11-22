@@ -426,11 +426,11 @@ pub(crate) fn object_controls(
             .unwrap_or(Vec2::ZERO);
         let rects: Vec<Rect> = s.selected.iter().map(|o| screen(&xf, info, page, o)).collect();
         let shown: Vec<BezPath> = rects.iter().map(|r| outline_path(body, r.translate(offset))).collect();
-        SelectionOutline::solid(tl!("Selected object"), &shown).show(ui);
+        SelectionOutline::solid(tl!("Selected object"), &shown).color(accent_ink(ui, 1.0)).show(ui);
         if rects.len() > 1 {
             let union = rects.iter().fold(Rect::NOTHING, |u, r| u.union(*r)).translate(offset).expand(4.0);
             let group = [outline_path(body, union)];
-            SelectionOutline::faint(tl!("Selected objects"), &group).show(ui);
+            SelectionOutline::faint(tl!("Selected objects"), &group).color(accent_ink(ui, 1.0)).show(ui);
         }
     }
     None
@@ -593,4 +593,11 @@ mod tests {
         assert!(matches!(Edit::delete_objects(2, vec![t(ObjectKind::Image, 4)]), Some(Edit::EditPageImage { page: 2, index: 4, .. })));
         assert!(Edit::delete_objects(0, Vec::new()).is_none());
     }
+}
+
+/// The accent as outline ink: production outlines the selection and the editable paragraphs in blue, not in
+/// the overlay grey the outline component defaults to.
+pub(crate) fn accent_ink(ui: &egui::Ui, share: f32) -> craft::ui::style::DataColor {
+    let [r, g, b, a] = craft::ui::runtime::env::Env::of(ui).tokens.color.accent.solid.0;
+    craft::ui::style::DataColor::new(egui::Color32::from_rgba_unmultiplied(r, g, b, a).gamma_multiply(share))
 }
