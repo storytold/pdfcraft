@@ -273,6 +273,9 @@ pub struct PdfCraftApp {
     pub left: LeftPanel,
     /// The side panel F4 reopens: the one open last.
     pub(crate) last_right: RightPanel,
+    /// The height of the notice bars over the document, as the last pass drew them: the dock keeps the floating
+    /// toolbar below them.
+    pub(crate) notice_inset: f32,
     /// The right panel that was open when the user switched to Read mode, which starts with the
     /// panes closed; leaving Read mode brings it back unless the user opened or closed a pane in
     /// Read mode meanwhile.

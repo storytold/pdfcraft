@@ -273,6 +273,7 @@ impl PdfCraftApp {
             mode_override: None,
             left: LeftPanel::AllTools,
             last_right: RightPanel::Comments,
+            notice_inset: 0.0,
             right_before_read: None,
             comments_panel_closed: false,
             right_panel_closed: false,

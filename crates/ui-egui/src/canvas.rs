@@ -1618,7 +1618,14 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     let repaired = !doc.repair_log().is_empty();
     // PLAN: assumed `notices(view, doc, secured, repaired, lock_offer, banner, ui)`: pdf-canvas-w16 drops the tokens
     // argument and gives no other change.
+    let bars_top = ui.available_rect_before_wrap().top();
     let notice = notices(view, doc, secured, repaired, lock_offer, crate::sign_ui::banner(&doc.signatures), ui);
+    // The notice bars' height keeps the floating toolbar below them (the dock's top inset, next pass).
+    let inset = (ui.available_rect_before_wrap().top() - bars_top).max(0.0);
+    if (inset - app.notice_inset).abs() > 0.5 {
+        app.notice_inset = inset;
+        ui.ctx().request_repaint();
+    }
     apply_notice(app, ui.ctx(), index, notice);
     let doc = app.session.get(doc_id)?;
     let info = &doc.info;

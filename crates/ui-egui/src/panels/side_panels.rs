@@ -179,7 +179,7 @@ pub fn default_workspace(rail_side: DockSide) -> Workspace<PanelId> {
     let (start, end) = if rail_edge(rail_side) == DockEdge::Start { (vec![side, tools], Vec::new()) } else { (vec![tools], vec![side]) };
     let page = Node::split(Axis::X, SplitSize::Ratio(PAGE_SHARE), Node::tabs(vec![PanelId::Document], 0), Node::dock(DockEdge::End, end));
     let root = Node::split(Axis::X, SplitSize::Ratio(START_SHARE), Node::dock(DockEdge::Start, start), page);
-    let rect = egui::Rect::from_min_size(egui::pos2(TOOLS_WIDTH + 3.0, 96.0), egui::vec2(48.0, 400.0));
+    let rect = egui::Rect::from_min_size(egui::pos2(TOOLS_WIDTH + 3.0, 8.0), egui::vec2(48.0, 400.0));
     let floating = Floating::new(toolbar, rect).with_id(1);
     Workspace::new(Layout::new(Some(root), vec![floating]))
 }
@@ -489,6 +489,7 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
         PanelId::Search | PanelId::Compare => open == Some(*panel),
         _ => true,
     };
+    let inset = app.notice_inset;
     let mut panels = Panels { ctx: ui.ctx().clone(), app: &mut *app };
     // Home and Combine have no side panel and no toolbar, and Read mode hides the tools and the quick toolbar, not the
     // navigation panels.
@@ -502,7 +503,7 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
     // The side panels' icons are production's rail: they stay beside the expanded column, a click on one opens its
     // panel docked, and a click on the open panel's icon closes it.
     let config = DockConfig::default().native_windows(false).iconic_mode(IconicMode::Rail);
-    let area = DockArea::new("Dock", Bind::given(workspace), &mut panels, config).hide(HidePanels::Except(&shown));
+    let area = DockArea::new("Dock", Bind::given(workspace), &mut panels, config).hide(HidePanels::Except(&shown)).top_inset(inset);
     let output = match anchor {
         Some(panel) => area.rail_footer(panel).show(ui),
         None => area.show(ui),
