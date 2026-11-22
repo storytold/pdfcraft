@@ -209,6 +209,28 @@ fn auto(dir: &Path) -> Automation {
     Automation::new().with_root(dir).unwrap().with_clock(|| 1_700_000_000)
 }
 
+/// Detaching a document keeps its identity in a separate window session, as a torn-off tab does.
+#[test]
+fn doc_detach_moves_a_live_document_into_its_own_window_session() {
+    let dir = workdir("detach-window");
+    let mut a = auto(&dir);
+    let id = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_rotate", json!({"doc": id, "pages": [1], "degrees": 90}));
+    let detached = ok(&mut a, "doc_detach", json!({"doc": id}));
+    assert_eq!(detached["doc"], id);
+    assert_eq!(detached["window"], 1);
+    let list = ok(&mut a, "doc_list", json!({}));
+    assert_eq!(list["documents"].as_array().unwrap().len(), 1);
+    assert_eq!(list["documents"][0]["doc"], id);
+    assert_eq!(list["documents"][0]["window"], 1);
+    assert_eq!(list["documents"][0]["dirty"], true);
+    let info = ok(&mut a, "doc_info", json!({"doc": id}));
+    assert_eq!(info["pages"].as_array().unwrap().len(), 3);
+    assert_eq!(info["pages"][0]["rotation"], 90);
+    ok(&mut a, "doc_close", json!({"doc": id, "discard_changes": true}));
+    assert!(ok(&mut a, "doc_list", json!({}))["documents"].as_array().unwrap().is_empty());
+}
+
 /// Full-screen presentation settings (`/Trans`, `/Dur`) reach `doc_info`, 1-based pages, only
 /// for the pages that carry them.
 #[test]

@@ -25,7 +25,10 @@ struct Layout {
     scale: f32,
     content: Rect,
     tabs: Option<(Rect, Vec<(usize, Rect)>)>,
-    grid: Option<Grid>,
+    grids: Vec<Grid>,
+    /// Native top-level window under this viewport when last observed on Windows.
+    #[cfg(target_os = "windows")]
+    hwnd: Option<isize>,
 }
 
 impl Layout {
@@ -37,6 +40,13 @@ impl Layout {
     fn local(&self, physical: Pos2) -> Pos2 {
         ((physical - self.origin) / self.scale).to_pos2()
     }
+    /// Insertion point in the destination's global `views` order for a pointer in the tab strip.
+    fn tab_insert_at(tabs: &[(usize, Rect)], p: Pos2) -> usize {
+        tabs.iter()
+            .find(|(_, r)| p.x <= r.center().x)
+            .map(|(index, _)| *index)
+            .unwrap_or_else(|| tabs.last().map(|(index, _)| index.saturating_add(1)).unwrap_or(0))
+    }
     /// Resolve a tab gap or enabled page grid; reject all other positions inside this window.
     fn target(&self, physical: Pos2) -> Option<Target> {
         let p = self.local(physical);
@@ -46,11 +56,9 @@ impl Layout {
         if let Some((rect, tabs)) = &self.tabs
             && rect.contains(p)
         {
-            return Some(Target::Tabs(tabs.iter().filter(|(_, r)| p.x > r.center().x).count()));
+            return Some(Target::Tabs(Self::tab_insert_at(tabs, p)));
         }
-        if let Some(grid) = &self.grid
-            && grid.enabled
-            && grid.rect.contains(p)
+        if let Some(grid) = self.grids.iter().find(|g| g.enabled && g.rect.contains(p))
             && let Some(at) = crate::canvas::drop_gap(&grid.cells, p)
         {
             return Some(Target::Pages { doc: grid.doc, at });
@@ -88,13 +96,37 @@ pub(crate) fn begin(ctx: &egui::Context, enabled: bool) {
     let origin = ctx.input(|i| i.viewport().inner_rect.map(|r| r.min));
     let content = ctx.input(|i| i.viewport_rect());
     update(ctx, |s| {
+        #[cfg(target_os = "windows")]
+        let previous_hwnd = s.layouts.get(&id).and_then(|l| l.hwnd);
         s.layouts.remove(&id);
         if enabled
             && scale.is_finite()
             && (0.01..=100.0).contains(&scale)
             && let Some(origin) = origin.filter(|p| p.x.is_finite() && p.y.is_finite())
         {
-            s.layouts.insert(id, Layout { origin: (origin.to_vec2() * scale).to_pos2(), scale, content, tabs: None, grid: None });
+            let origin = (origin.to_vec2() * scale).to_pos2();
+            #[cfg(target_os = "windows")]
+            let hwnd = {
+                // Prefer a probe that still names this viewport's native window. When another
+                // maximized window covers it, keep the last trusted handle so identity stays.
+                let center = origin + egui::vec2(content.center().x, content.center().y) * scale;
+                match top_window(center) {
+                    Some((handle, handle_origin)) if handle_origin.distance(origin) <= 3.0 => Some(handle),
+                    _ => previous_hwnd,
+                }
+            };
+            s.layouts.insert(
+                id,
+                Layout {
+                    origin,
+                    scale,
+                    content,
+                    tabs: None,
+                    grids: Vec::new(),
+                    #[cfg(target_os = "windows")]
+                    hwnd,
+                },
+            );
         }
     });
 }
@@ -105,28 +137,31 @@ pub(crate) fn retain(ctx: &egui::Context, live: &[ViewportId]) {
     update(ctx, |s| s.layouts.retain(|id, _| live.contains(id)));
 }
 
-// WindowFromPoint excludes covered/hidden windows. Compare the native client origin so a
-// geometrically overlapping background window never steals the drop (also across DPI scales).
+// WindowFromPoint names the top-level native window under the pointer. Match that handle to
+// the viewport's stored window so maximized windows that share a client origin stay distinct.
 /// Locate the visible native window under a bounded physical pointer position.
 #[cfg(target_os = "windows")]
-fn top_origin(p: Pos2) -> Option<Pos2> {
+fn top_window(p: Pos2) -> Option<(isize, Pos2)> {
     if !p.x.is_finite() || !p.y.is_finite() || p.x.abs() > 1_000_000.0 || p.y.abs() > 1_000_000.0 {
         return None;
     }
     let hwnd = winsafe::HWND::WindowFromPoint(winsafe::POINT { x: p.x as i32, y: p.y as i32 })?;
     let hwnd = hwnd.GetAncestor(winsafe::co::GA::ROOT).unwrap_or(hwnd);
     let origin = hwnd.ClientToScreen(winsafe::POINT { x: 0, y: 0 }).ok()?;
-    Some(egui::pos2(origin.x as f32, origin.y as f32))
+    Some((hwnd.ptr() as isize, egui::pos2(origin.x as f32, origin.y as f32)))
 }
 
 /// Select a foreign viewport under the pointer, excluding obscured windows on Windows.
 fn find(s: &State, source: ViewportId, physical: Pos2) -> Option<(ViewportId, Target)> {
     #[cfg(target_os = "windows")]
-    let origin = top_origin(physical)?;
+    let (hwnd, origin) = top_window(physical)?;
     s.layouts.iter().filter(|(id, _)| **id != source).find_map(|(id, layout)| {
         #[cfg(target_os = "windows")]
-        if layout.origin.distance(origin) > 3.0 {
-            return None;
+        {
+            let same_window = layout.hwnd == Some(hwnd) || (layout.hwnd.is_none() && layout.origin.distance(origin) <= 3.0);
+            if !same_window {
+                return None;
+            }
         }
         layout.target(physical).map(|target| (*id, target))
     })
@@ -174,7 +209,12 @@ pub(crate) fn tabs(ui: &egui::Ui, rect: Rect, slots: &[(usize, Rect)]) {
         }
     });
     if let Some((_, Target::Tabs(at))) = hover(ctx) {
-        let x = slots.get(at).map(|(_, r)| r.left()).or_else(|| slots.last().map(|(_, r)| r.right())).unwrap_or(rect.left());
+        let x = slots
+            .iter()
+            .find(|(index, _)| *index == at)
+            .map(|(_, r)| r.left())
+            .or_else(|| slots.last().map(|(_, r)| r.right()))
+            .unwrap_or(rect.left());
         let color = crate::theme::Tokens::get(ctx).accent;
         ui.painter()
             .with_clip_rect(rect)
@@ -188,10 +228,13 @@ pub(crate) fn grid(ui: &egui::Ui, doc: DocId, rect: Rect, cells: &[(usize, Rect)
     let viewport = ctx.viewport_id();
     update(ctx, |s| {
         if let Some(l) = s.layouts.get_mut(&viewport) {
-            l.grid = Some(Grid { doc, rect, cells: cells.to_vec(), enabled });
+            l.grids.push(Grid { doc, rect, cells: cells.to_vec(), enabled });
         }
     });
-    if let Some((p, Target::Pages { at, .. })) = hover(ctx) {
+    if let Some((p, Target::Pages { doc: hover_doc, at, .. })) = hover(ctx)
+        && hover_doc == doc
+        && rect.contains(p)
+    {
         let painter = ui.painter().with_clip_rect(rect);
         let color = crate::theme::Tokens::get(ctx).accent;
         let next = cells.iter().find(|(i, _)| *i == at);
@@ -219,7 +262,7 @@ pub(crate) fn inspect(ctx: &egui::Context) -> serde_json::Value {
                     "viewport":format!("{id:?}"), "current":*id==ctx.viewport_id(),
                     "origin_pixels":[l.origin.x,l.origin.y], "pixels_per_point":l.scale,
                     "content":rect(l.content), "tabs":l.tabs.as_ref().map(|(r,_)|rect(*r)),
-                    "organize":l.grid.as_ref().map(|g|serde_json::json!({"doc":g.doc.0,"rect":rect(g.rect),"enabled":g.enabled})),
+                    "organize":l.grids.iter().map(|g|serde_json::json!({"doc":g.doc.0,"rect":rect(g.rect),"enabled":g.enabled})).collect::<Vec<_>>(),
                 })
             })
             .collect(),
@@ -242,7 +285,7 @@ mod tests {
                     (1, Rect::from_min_max(egui::pos2(200.0, 0.0), egui::pos2(360.0, 38.0))),
                 ],
             )),
-            grid: Some(Grid {
+            grids: vec![Grid {
                 doc: DocId(7),
                 rect: Rect::from_min_max(egui::pos2(150.0, 100.0), egui::pos2(800.0, 600.0)),
                 enabled: true,
@@ -250,7 +293,9 @@ mod tests {
                     (5, Rect::from_min_max(egui::pos2(200.0, 150.0), egui::pos2(400.0, 400.0))),
                     (6, Rect::from_min_max(egui::pos2(400.0, 150.0), egui::pos2(600.0, 400.0))),
                 ],
-            }),
+            }],
+            #[cfg(target_os = "windows")]
+            hwnd: None,
         }
     }
     /// Cross-scale coordinate conversion retains the intended tab gap and page insertion position.
@@ -278,9 +323,49 @@ mod tests {
     fn window_drop_does_not_insert_into_disabled_or_closed_organizer() {
         let mut l = layout(1.5);
         let p = l.physical(egui::pos2(300.0, 250.0));
-        l.grid.as_mut().unwrap().enabled = false;
+        l.grids[0].enabled = false;
         assert_eq!(l.target(p), Some(Target::Reject));
-        l.grid = None;
+        l.grids.clear();
         assert_eq!(l.target(p), Some(Target::Reject));
+    }
+
+    /// Tab gaps use each visible tab's global view index, not its position in the strip alone.
+    #[test]
+    fn window_drop_tab_gaps_use_global_view_indices() {
+        let mut l = layout(1.0);
+        l.tabs = Some((
+            Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 38.0)),
+            vec![
+                (1, Rect::from_min_max(egui::pos2(40.0, 0.0), egui::pos2(200.0, 38.0))),
+                (3, Rect::from_min_max(egui::pos2(200.0, 0.0), egui::pos2(360.0, 38.0))),
+            ],
+        ));
+        assert_eq!(l.target(l.physical(egui::pos2(50.0, 20.0))), Some(Target::Tabs(1)));
+        assert_eq!(l.target(l.physical(egui::pos2(190.0, 20.0))), Some(Target::Tabs(3)));
+        assert_eq!(l.target(l.physical(egui::pos2(700.0, 20.0))), Some(Target::Tabs(4)));
+    }
+
+    /// Each Organize pane keeps its own grid, so a drop picks the pane under the pointer.
+    #[test]
+    fn window_drop_keeps_each_organize_pane_grid() {
+        let mut l = layout(1.0);
+        l.grids = vec![
+            Grid {
+                doc: DocId(1),
+                rect: Rect::from_min_max(egui::pos2(0.0, 100.0), egui::pos2(400.0, 600.0)),
+                enabled: true,
+                cells: vec![(0, Rect::from_min_max(egui::pos2(40.0, 150.0), egui::pos2(180.0, 400.0)))],
+            },
+            Grid {
+                doc: DocId(2),
+                rect: Rect::from_min_max(egui::pos2(400.0, 100.0), egui::pos2(800.0, 600.0)),
+                enabled: true,
+                cells: vec![(0, Rect::from_min_max(egui::pos2(440.0, 150.0), egui::pos2(580.0, 400.0)))],
+            },
+        ];
+        assert_eq!(l.target(l.physical(egui::pos2(80.0, 220.0))), Some(Target::Pages { doc: DocId(1), at: 0 }));
+        assert_eq!(l.target(l.physical(egui::pos2(480.0, 220.0))), Some(Target::Pages { doc: DocId(2), at: 0 }));
+        l.grids[0].enabled = false;
+        assert_eq!(l.target(l.physical(egui::pos2(80.0, 220.0))), Some(Target::Reject));
     }
 }

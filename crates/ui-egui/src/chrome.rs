@@ -460,6 +460,9 @@ fn tab_drag(
         }
         return None;
     }
+    if app.tab_drag_cancelled {
+        return None;
+    }
     match app.drop_target(pos, place) {
         TabDrop::Strip => {
             let x = pos.x;
@@ -536,6 +539,9 @@ pub(crate) fn pane_tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, strip: Re
         };
         let response = tab(&mut row, spec, &mut close);
         slots.push((i, response.rect));
+        if response.drag_started() {
+            app.tab_drag_cancelled = false;
+        }
         if response.dragged() || response.drag_stopped() {
             dragged = Some((i, response.drag_stopped()));
         }

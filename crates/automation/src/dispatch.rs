@@ -56,13 +56,34 @@ impl Automation {
             "doc_bates_multi" => self.doc_bates_multi(&a)?,
             "doc_open" => self.doc_open(&a)?,
             "doc_batch" => self.doc_batch(&a)?,
-            "doc_list" => json!({ "documents": self.session.docs().iter().map(summary).collect::<Vec<_>>() }),
+            "doc_list" => {
+                let mut documents = self.session.docs().iter().map(|d| {
+                    let mut v = summary(d);
+                    if let Some(obj) = v.as_object_mut() {
+                        obj.insert("window".into(), json!(0));
+                    }
+                    v
+                }).collect::<Vec<_>>();
+                for (i, session) in self.windows.iter().enumerate() {
+                    for d in session.docs() {
+                        let mut v = summary(d);
+                        if let Some(obj) = v.as_object_mut() {
+                            obj.insert("window".into(), json!(i + 1));
+                        }
+                        documents.push(v);
+                    }
+                }
+                json!({ "documents": documents })
+            }
             "doc_info" => {
                 let id = self.doc(&a)?.id;
-                self.session.refresh_fonts(id);
+                if let Some(index) = self.session_index(id) {
+                    self.session_mut(index).refresh_fonts(id);
+                }
                 info(self.doc(&a)?)
             }
             "doc_close" => self.doc_close(&a)?,
+            "doc_detach" => self.doc_detach(&a)?,
             "doc_save" => self.doc_save(&a)?,
             "doc_rename" => self.doc_rename(&a)?,
             "doc_set_info" => {

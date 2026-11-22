@@ -40,7 +40,44 @@ impl Automation {
     pub(crate) fn doc(&self, a: &Args) -> Result<&Document> {
         let id = a.int("doc")?;
         let id = u64::try_from(id).map_err(|_| ToolError::InvalidArgs("doc must be positive".into()))?;
-        self.session.get(DocId(id)).ok_or_else(|| ToolError::Failed(format!("no open document with id {id} (see doc_list)")))
+        self.document(DocId(id)).ok_or_else(|| ToolError::Failed(format!("no open document with id {id} (see doc_list)")))
+    }
+
+    /// A document in the primary session or any detached window session.
+    pub(crate) fn document(&self, id: DocId) -> Option<&Document> {
+        self.session.get(id).or_else(|| self.windows.iter().find_map(|session| session.get(id)))
+    }
+
+    /// Which session holds `id`: 0 for the primary session, or 1+ for `windows[index - 1]`.
+    pub(crate) fn session_index(&self, id: DocId) -> Option<usize> {
+        if self.session.get(id).is_some() {
+            return Some(0);
+        }
+        self.windows.iter().position(|session| session.get(id).is_some()).map(|i| i + 1)
+    }
+
+    pub(crate) fn session_mut(&mut self, index: usize) -> &mut pdfcraft_engine::Session {
+        if index == 0 {
+            &mut self.session
+        } else {
+            &mut self.windows[index - 1]
+        }
+    }
+
+    /// Move a live document into its own session, as the UI does when tearing a tab into a window.
+    pub(crate) fn doc_detach(&mut self, a: &Args) -> Result<Value> {
+        let id = a.int("doc")?;
+        let id = DocId(u64::try_from(id).map_err(|_| ToolError::InvalidArgs("doc must be positive".into()))?);
+        if self.session.get(id).is_none() {
+            if self.document(id).is_some() {
+                return Err(failed("that document is already in its own window"));
+            }
+            return Err(ToolError::Failed(format!("no open document with id {} (see doc_list)", id.0)));
+        }
+        let detached = self.session.detach_document(id).ok_or_else(|| failed("couldn't detach that document"))?;
+        self.windows.push(detached);
+        let window = self.windows.len();
+        Ok(json!({ "doc": id.0, "window": window }))
     }
 
     /// Most pages whose paragraph listing is remembered.
@@ -134,7 +171,11 @@ impl Automation {
         if doc.dirty && !discard_changes {
             return Err(failed("the document has unsaved changes: save it with doc_save, or pass discard_changes: true"));
         }
-        self.session.close(id);
+        let index = self.session_index(id).ok_or_else(|| failed("the document vanished"))?;
+        self.session_mut(index).close(id);
+        if index > 0 && self.windows[index - 1].docs().is_empty() {
+            self.windows.remove(index - 1);
+        }
         self.renderers.remove(&id);
         self.texts.remove(&id);
         self.listed.retain(|(d, _), _| *d != id);
@@ -559,7 +600,8 @@ impl Automation {
 
     pub(crate) fn apply(&mut self, a: &Args, edit: Edit) -> Result<Value> {
         let id = self.doc(a)?.id;
-        self.session.apply(id, edit).map_err(failed)?;
+        let index = self.session_index(id).ok_or_else(|| failed("the document vanished"))?;
+        self.session_mut(index).apply(id, edit).map_err(failed)?;
         self.applied(a)
     }
 

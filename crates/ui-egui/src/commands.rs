@@ -129,6 +129,15 @@ impl PdfCraftApp {
 
     /// Why the command can't run right now, for the user.
     fn disabled_reason(&self, spec: &CommandSpec) -> String {
+        if spec.id == "file.detach_tab" {
+            if self.active_ids().is_none() {
+                return tl!("Open a document first").to_string();
+            }
+            if !self.managed_windows {
+                return tl!("Moving a tab into its own window needs a desktop window host").to_string();
+            }
+            return tl!("This tab can't be moved right now").to_string();
+        }
         match spec.needs {
             commands::Needs::Undo => tl!("Nothing to undo").to_string(),
             commands::Needs::Redo => tl!("Nothing to redo").to_string(),

@@ -65,6 +65,9 @@ const MAX_QUEUED_BATCHES: usize = 512;
 pub struct ControlPlugin {
     pub(super) shared: Arc<Mutex<Shared>>,
     pub(super) viewport: egui::ViewportId,
+    /// Viewport ownership for each nested pass, paired from input_hook to output_hook.
+    /// egui pops the child viewport before output_hook, so `ctx.viewport_id()` is unusable there.
+    pass_viewports: Vec<egui::ViewportId>,
 }
 
 impl egui::Plugin for ControlPlugin {
@@ -75,6 +78,7 @@ impl egui::Plugin for ControlPlugin {
     /// Inject admitted control batches into the current pass, dropping stale requests, applying cancellations
     /// and scheduling repaints.
     fn input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        self.pass_viewports.push(input.viewport_id);
         if input.viewport_id != self.viewport {
             return;
         }
@@ -129,7 +133,8 @@ impl egui::Plugin for ControlPlugin {
     /// Record presented passes and the accesskit tree and focus after a pass, so control replies observe only
     /// drawn frames.
     fn output_hook(&mut self, ctx: &egui::Context, output: &mut egui::FullOutput) {
-        if ctx.viewport_id() != self.viewport {
+        let completed = self.pass_viewports.pop();
+        if completed != Some(self.viewport) {
             return;
         }
         let Ok(mut s) = self.shared.lock() else { return };

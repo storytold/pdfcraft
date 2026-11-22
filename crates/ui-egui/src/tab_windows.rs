@@ -24,6 +24,7 @@ impl PdfCraftApp {
         self.pinned_tools.clone_from(&source.pinned_tools);
         self.show_page_edge_shadows = source.show_page_edge_shadows;
         self.show_secured_notice = source.show_secured_notice;
+        self.text_links = source.text_links;
         self.hotbar.tools.clone_from(&source.hotbar.tools);
         self.hotbar.position = source.hotbar.position;
         self.hotbar.vertical = source.hotbar.vertical;
@@ -96,7 +97,11 @@ impl PdfCraftApp {
 
     /// Native hosts opt in only when they can keep the detached document alive.
     pub fn can_detach_tab(&self, id: DocId) -> bool {
-        self.transfer_ready() && self.detach_request.is_none() && self.session.get(id).is_some() && self.views.iter().any(|v| v.id == id)
+        self.transfer_ready()
+            && self.detach_request.is_none()
+            && self.session.get(id).is_some()
+            && self.views.iter().filter(|v| v.id == id).count() == 1
+            && !self.ocr_verify.holds_reading_of(id)
     }
 
     /// Refuse transfers while a modal, worker or save operation still owns document state.
@@ -416,7 +421,11 @@ impl eframe::App for NativeWindows {
             self.root.allow_quit = false;
         }
         self.root.logic(ctx, frame);
-        if self.root_hidden && (!self.root.views.is_empty() || !self.root.pending_opens.is_empty()) {
+        if self.root_hidden
+            && (!self.root.views.is_empty()
+                || !self.root.pending_opens.is_empty()
+                || self.root.combine_showing())
+        {
             self.root_hidden = false;
             self.final_session = None;
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
@@ -654,7 +663,48 @@ mod tests {
 
     /// Unavailable hosts and blocked operations leave the source document owned and intact.
     #[test]
-    fn tear_off_rejects_unavailable_host_missing_document_and_modal_without_removing_work() {
+    /// A split document keeps both views of the same DocId until the move is refused.
+    #[test]
+    fn tear_off_refuses_while_the_document_still_has_a_split_view() {
+        let mut root = app();
+        let id = root.views[0].id;
+        root.toggle_split();
+        assert_eq!(root.views.iter().filter(|v| v.id == id).count(), 2);
+        assert!(!root.can_detach_tab(id));
+        assert!(!root.request_detach_tab(id, None));
+        assert_eq!(root.views.len(), 2);
+        assert!(root.session.get(id).is_some());
+    }
+
+    /// Unaccepted OCR corrections stay with their document: detach is refused until accept or discard.
+    #[test]
+    fn tear_off_refuses_while_ocr_verify_holds_unaccepted_corrections() {
+        use pdfcraft_engine::ocr::{OcrPage, OcrSettings, PlacedWord};
+        let mut root = app();
+        let id = root.views[0].id;
+        let job = root.session.ocr_job(id, &[], OcrSettings::default()).expect("ocr job");
+        let page = OcrPage {
+            already_on_page: 0,
+            page: 0,
+            words: vec![PlacedWord {
+                text: "word".into(),
+                origin: [72.0, 700.0],
+                across: [40.0, 0.0],
+                up: [0.0, 12.0],
+                confidence: Some(50.0),
+                source: "ocrs".into(),
+            }],
+            skipped: None,
+            notes: Vec::new(),
+        };
+        root.ocr_verify.load(id, job.guard.clone(), vec![page]);
+        assert!(root.ocr_verify.holds_reading_of(id));
+        assert!(!root.can_detach_tab(id));
+        assert!(!root.request_detach_tab(id, None));
+        assert!(root.session.get(id).is_some());
+    }
+
+        fn tear_off_rejects_unavailable_host_missing_document_and_modal_without_removing_work() {
         let mut root = app();
         let id = root.views[0].id;
         root.managed_windows = false;
