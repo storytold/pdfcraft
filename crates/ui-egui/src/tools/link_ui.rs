@@ -399,7 +399,7 @@ fn action(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize) {
                 field = field.help(Help::Text(tl!("Type the web address.").to_string().into()));
             }
             field.show(ui, |ui, _| {
-                TextField::new(tl!("Link URL").to_string(), Bind::bound(&mut d.url)).enabled(web).show(ui);
+                TextField::new(tl!("Link URL").to_string(), Bind::bound(&mut d.url)).placeholder("https://example.org").enabled(web).show(ui);
             });
             Radio::new(false).label(tl!("Go to a page view").to_string()).show(ui);
             Field::new(tl!("Page").to_string()).show(ui, |ui, _| {

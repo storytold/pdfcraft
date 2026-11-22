@@ -156,7 +156,7 @@ impl StackDialog for FieldPropsDialog {
         self.id
     }
 
-    /// Shows the dialog. OK is enabled while something changed and no OK waits for the app; Enter is OK.
+    /// Shows the dialog. OK is enabled while no answer waits for the app; Enter is OK.
     /// A pass that finds the app accepted the held OK closes with its properties.
     fn show(&mut self, ui: &mut egui::Ui, _: &DialogStack) -> Option<DialogResult<FieldProps>> {
         let finish_held = self.held.is_accepted();
@@ -167,7 +167,7 @@ impl StackDialog for FieldPropsDialog {
             self.held.clear_refusal();
         }
         let refusal = self.held.refusal().map(|(reason, _)| reason.clone());
-        let ready = props.is_some() && !waiting;
+        let ready = !waiting;
         let title = tl!(self.draft.title());
         let FieldPropsDialog { draft, recent, pending_colour, .. } = self;
         // The footer's Locked box edits a copy: the form is bound over the draft itself.
@@ -178,7 +178,6 @@ impl StackDialog for FieldPropsDialog {
                 check(ui, tl!("Locked"), &mut locked, true);
             })
             .ok_enabled(ready)
-            .ok_reason(tl!("No properties have been changed."))
             .show(ui, |ui, form, d| {
                 // A measuring run closes nothing: the real run of the same pass makes the close, as in
                 // `HostedParamDialog`.
@@ -193,6 +192,8 @@ impl StackDialog for FieldPropsDialog {
         if pressed && !finish_held && !waiting {
             if let Some(props) = props {
                 self.held.file(props);
+            } else {
+                return Some(DialogResult::Cancel);
             }
             return None;
         }

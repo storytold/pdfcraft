@@ -807,7 +807,7 @@ pub(crate) fn open_alt_text(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some(doc) = app.session.get(id) else { return };
     let figures = doc.figures();
     if figures.is_empty() {
-        app.dialogs.open(HostedAlert::new(Alert::new(tl!("Set Alternate Text"), tl!("This document has no tagged figures."))));
+        app.dialogs.open(HostedAlert::new(Alert::new(tl!("Set Alternate Text"), tl!("This document has no tagged figures.")).ok_label(tl!("Close"))));
         return;
     }
     let dialog = AltTextDialog {

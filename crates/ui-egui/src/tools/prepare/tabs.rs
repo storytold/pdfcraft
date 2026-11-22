@@ -1,4 +1,4 @@
-use craft::behavior::{IconId, Value, keyed};
+use craft::behavior::{Value, keyed};
 use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
 use craft::ui::choice::{Radio, RadioGroup};
@@ -11,7 +11,6 @@ use craft::ui::form::{Field, Help};
 use craft::ui::layout_components::Stack;
 use craft::ui::list::{List, ListRow, RowEvent, TrailingFace, TrailingPart};
 use craft::ui::notices::{Notice, NoticeLayout};
-use craft::ui::primitives::IconSpec;
 use craft::ui::runtime::env::Label;
 use craft::ui::text::TextField;
 
@@ -266,11 +265,11 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft) {
             let delete = Label::from(crate::i18n::fmt(tl!("Delete {o}"), &[("o", tl!(tr.label()))]));
             let mut item = ListRow::new(format!("{}: {summary}", tl!(tr.label()))).trailing_part(
                 DELETE,
-                TrailingFace::Icon(IconSpec::svg(IconId::new("trash"))),
+                TrailingFace::Strong(tl!("Delete").into()),
                 delete,
             );
             if !editing && matches!(act, pdfcraft_engine::FieldAction::JavaScript(_)) {
-                item = item.trailing_part(EDIT, TrailingFace::Icon(IconSpec::svg(IconId::new("pencil"))), tl!("Edit"));
+                item = item.trailing_part(EDIT, TrailingFace::Strong(tl!("Edit").into()), tl!("Edit"));
             }
             item
         },
