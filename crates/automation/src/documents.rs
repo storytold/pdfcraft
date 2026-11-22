@@ -57,11 +57,33 @@ impl Automation {
     }
 
     pub(crate) fn session_mut(&mut self, index: usize) -> &mut pdfcraft_engine::Session {
-        if index == 0 {
-            &mut self.session
-        } else {
-            &mut self.windows[index - 1]
+        if index == 0 { &mut self.session } else { &mut self.windows[index - 1] }
+    }
+
+    /// Open documents across the primary session and every detached window session.
+    pub(crate) fn doc_list(&self) -> Value {
+        let mut documents = self
+            .session
+            .docs()
+            .iter()
+            .map(|d| {
+                let mut v = summary(d);
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert("window".into(), json!(0));
+                }
+                v
+            })
+            .collect::<Vec<_>>();
+        for (i, session) in self.windows.iter().enumerate() {
+            for d in session.docs() {
+                let mut v = summary(d);
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert("window".into(), json!(i + 1));
+                }
+                documents.push(v);
+            }
         }
+        json!({ "documents": documents })
     }
 
     /// Move a live document into its own session, as the UI does when tearing a tab into a window.
