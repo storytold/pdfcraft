@@ -350,15 +350,15 @@ fn saving_over_a_file_changed_by_something_else_asks_first() {
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "not written yet");
     h.run_steps(2);
-    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "File changed");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Save over the changed file?");
     h.get_by_label("Cancel").click();
     h.run_steps(2);
     assert_eq!(std::fs::read(&file.path).unwrap(), fixture(4), "Cancel keeps the newer file");
-    assert!(dirty(&h) && h.query_by_label("File changed").is_none());
+    assert!(dirty(&h) && h.query_by_label("Save over the changed file?").is_none());
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.run_steps(2);
-    h.get_by_label("Replace").click();
+    h.get_by_label("Save anyway").click();
     h.run_steps(3);
     assert!(!dirty(&h), "written");
     assert_ne!(std::fs::read(&file.path).unwrap(), fixture(4));
@@ -381,7 +381,7 @@ fn saving_checks_the_file_with_the_watcher_off_too() {
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.run_steps(2);
-    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "File changed");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Save over the changed file?");
 }
 
 /// One file, one tab (#2166): opening a file that is open already brings its tab forward,
