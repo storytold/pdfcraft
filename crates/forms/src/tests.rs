@@ -5800,6 +5800,32 @@ fn an_unlinked_kid_inherits_the_password_flag_its_lister_gained_in_the_session()
     assert!(!has_password_values(&doc));
 }
 
+/// A kid with no `/Parent` that a Password field listed in the opened file keeps its value
+/// scrubbed after it leaves that field, even when the session then takes the Password flag off
+/// the field (#7891): the value was typed as a password.
+#[test]
+fn an_unlinked_kid_stays_scrubbed_when_its_lister_loses_the_password_flag() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /FT /Tx /Ff 8192 /T (account) /Kids [6 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /T (pin) /Rect [50 600 150 620] /P 3 0 R >>".into(),
+    ]);
+    let (parent, kid) = (ObjRef::new(5, 0), ObjRef::new(6, 0));
+    doc.update_dict(kid, |d| d.set(b"V".to_vec(), PdfString::text("secret"))).unwrap();
+    doc.update_dict(parent, |d| {
+        d.remove(b"Kids");
+    })
+    .unwrap();
+    doc.update_dict(parent, |d| d.set(b"Ff".to_vec(), Object::Int(0))).unwrap();
+    assert!(has_password_values(&doc), "the kid's value was not seen as a password");
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert!(doc.get(kid).as_dict().is_some_and(|d| d.get(b"V").is_none()), "the kid kept its value");
+    assert!(!has_password_values(&doc));
+}
+
 /// A widget `depth` levels below a Password field `/FT /Tx /Ff 8192` in `/Fields`, through fields
 /// that point at their parent with `/Parent`, except two steps that only the parent's `/Kids`
 /// make: the widget's own and the one at level 40. Objects: 5 is the Password field, 5 + i the

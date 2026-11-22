@@ -845,13 +845,18 @@ fn unlinked_password_values(doc: &Document) -> Vec<ObjRef> {
     // as the field reader reads it (#7979). Unlinking it edits that listing, so the edited objects
     // as the opened file had them say which field listed it; a listing further up that nothing
     // edited is in the form's tree as it is now. The opened file's listing comes first; it only
-    // says which field listed the kid, and that field's flags are read as they are now.
+    // says which field listed the kid; that field's flags are read as they are now and as the
+    // opened file had them.
     let mut listed_by: std::collections::HashMap<ObjRef, (ObjRef, Dict)> = std::collections::HashMap::new();
+    // The edited dictionaries as the opened file had them: a field the session took the Password
+    // flag (or `/FT /Tx`) off after unlinking a kid still made that kid's value a password there.
+    let mut originals: std::collections::HashMap<ObjRef, Dict> = std::collections::HashMap::new();
     for (parent, original) in doc.scan_original_objects_subset(edited) {
         let Some(d) = original.ok().and_then(|o| o.as_dict().cloned()) else { continue };
         for kid in kids_in(&d).iter().filter_map(Object::as_ref) {
             listed_by.entry(kid).or_insert_with(|| (parent, d.clone()));
         }
+        originals.insert(parent, d);
     }
     let top = acroform(doc).and_then(|af| af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned())).unwrap_or_default();
     let mut stack: Vec<(ObjRef, usize)> = top.iter().filter_map(Object::as_ref).map(|r| (r, 0)).collect();
@@ -874,6 +879,7 @@ fn unlinked_password_values(doc: &Document) -> Vec<ObjRef> {
         // and `/Kids` steps it took.
         const MAX_CHAIN: usize = MAX_FIELD_DEPTH + 2;
         let mut dicts: Vec<Dict> = Vec::new();
+        let mut opened: Vec<Dict> = Vec::new();
         let mut visited = std::collections::HashSet::new();
         let mut next = Some((r, None::<Dict>));
         'walk: while let Some((start, listed)) = next.take() {
@@ -889,15 +895,22 @@ fn unlinked_password_values(doc: &Document) -> Vec<ObjRef> {
                 // that gained the Password flag in this session has it. Only a listing field that
                 // is no longer a dictionary (deleted with its kid) is read as it listed the kid.
                 let d = doc.get(*c).as_dict().cloned().or_else(|| if i == 0 { listed.clone() } else { None });
+                // And as the opened file had it, where the session edited it.
+                opened.extend(originals.get(c).cloned().or_else(|| d.clone()));
                 dicts.extend(d);
             }
             next = chain.last().and_then(|top| listed_by.get(top)).filter(|(p, _)| !visited.contains(p)).map(|(p, d)| (*p, Some(d.clone())));
         }
         // Inherited as the field reader inherits them: a `/FT` that isn't a name, or an `/Ff`
         // that isn't a valid number (`null` included), is skipped and the parent's value applies.
-        let text = dicts.iter().find_map(|d| d.name(b"FT").map(<[u8]>::to_vec)).is_some_and(|ft| ft == b"Tx");
-        let password = dicts.iter().find_map(|d| field_flags(doc, d)).is_some_and(|ff| ff & flags::PASSWORD != 0);
-        text && password
+        // A Password text field now or in the opened file: either way its value was a password,
+        // and a field nothing reads any more loses nothing by having it scrubbed.
+        let password_text = |dicts: &[Dict]| {
+            let text = dicts.iter().find_map(|d| d.name(b"FT").map(<[u8]>::to_vec)).is_some_and(|ft| ft == b"Tx");
+            let password = dicts.iter().find_map(|d| field_flags(doc, d)).is_some_and(|ff| ff & flags::PASSWORD != 0);
+            text && password
+        };
+        password_text(&dicts) || password_text(&opened)
     };
     let mut found: Vec<ObjRef> = candidates.into_iter().filter(|r| is_password_text(*r)).collect();
     if found.is_empty() {
