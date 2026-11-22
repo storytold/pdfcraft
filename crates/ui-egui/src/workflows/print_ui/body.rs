@@ -259,7 +259,7 @@ fn paper_section(d: &PrintDraft, sizes: &[(f64, f64)], units: Unit, no_printers:
             tl!("No printers were found. Check that the printer is installed and the print spooler is running, then open Print again."),
         ));
     }
-    PrintSection::new(lbl(tl!("Paper")), params)
+    PrintSection::new(lbl(tl!("Paper")), params).untitled()
 }
 
 /// The paper the custom row has typed, when the paper list would take it.
