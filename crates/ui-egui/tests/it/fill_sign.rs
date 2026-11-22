@@ -481,6 +481,8 @@ fn the_toolbar_shows_and_changes_the_selected_texts_border() {
     h.state_mut()
         .apply_edit(&ctx_h, pdfcraft_engine::Edit::StyleAnnotation { page, index, color: None, opacity: None, width: Some(2.0), endings: None });
     h.run_steps(3);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Border").click();
+    h.run_steps(2);
     assert!(shows(&h, "2 pt"), "the toolbar shows the selected text's border");
     assert_eq!(h.state().fill_text_border, 0.0, "new text keeps none");
 
