@@ -81,7 +81,8 @@ impl PdfCraftApp {
             {
                 prepare::nudge_keys(ctx, keys, &mut self.views[i], doc);
             }
-            canvas::shortcuts(&mut self.views[i], ctx, keys, chords && page_chords, self.scroll_speed);
+            let navigation = keys.also(self.full_screen_touch.has_focus(ctx));
+            canvas::shortcuts(&mut self.views[i], ctx, navigation, chords && page_chords, self.scroll_speed);
             self.clipboard_keys(i, ctx);
             self.image_pick_keys(i, ctx);
         }

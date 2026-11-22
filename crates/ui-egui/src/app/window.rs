@@ -41,6 +41,9 @@ impl PdfCraftApp {
         } else if !on && let Some(tool) = self.full_screen_tool.take() {
             self.quick_tool = tool;
         }
+        if self.full_screen != on {
+            self.full_screen_touch.reset(self.ctx.as_ref());
+        }
         self.full_screen = on;
         for view in &mut self.views {
             if on {

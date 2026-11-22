@@ -12,6 +12,7 @@ mod commands;
 mod control;
 mod files;
 mod frame;
+mod full_screen_touch;
 mod input;
 mod keys;
 mod links;
@@ -22,6 +23,7 @@ pub(crate) use clipboard::{ObjectClipMark, copy_refused, print_refused};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use files::same_file;
 use frame::migrate_panel_state;
+pub(crate) use full_screen_touch::FullScreenTouch;
 pub(crate) use prefs::{MAX_AUTHOR_CHARS, date_text_for_pdf};
 
 impl Default for PdfCraftApp {
@@ -98,6 +100,7 @@ impl PdfCraftApp {
             quick_tool: QuickTool::Select,
             space_hand: None,
             full_screen_tool: None,
+            full_screen_touch: Default::default(),
             comment_prefs: Default::default(),
             hotbar: Default::default(),
             theme: ThemeKind::Light,
@@ -851,16 +854,29 @@ impl PdfCraftApp {
         // Windows) can tell it apart (#4614). egui builds the root node afresh every pass.
         ctx.accesskit_node_builder(egui::accesskit_root_id(), |root| root.set_label(self.window_title.as_str()));
         if self.full_screen && self.active.is_some() {
-            // Full screen: the page on black, nothing else, as Acrobat's Full Screen Mode (Esc
-            // or ⌘L to leave).
+            // Full screen shows the page on black. Draw the touch exit before the page so
+            // the overlay owns a tap on the button and the page does not turn.
+            let edge_available = !self.over_pages(&ctx);
+            let exit = if !edge_available {
+                self.full_screen_touch.reset(Some(&ctx));
+                false
+            } else {
+                self.full_screen_touch.show(&ctx)
+            };
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(egui::Color32::BLACK)).show(ui, |ui| {
                 if let Some(i) = self.active {
                     match compare_ui::side_by_side(self, i) {
                         Some((old, new)) => compare_ui::compare_area(self, old, new, ui),
                         None => canvas::document_area(self, i, ui),
                     }
+                    if edge_available {
+                        FullScreenTouch::register_edge(ui);
+                    }
                 }
             });
+            if exit {
+                self.run_command("view.full_screen");
+            }
             dialogs::show(self, &ctx);
             // Notices too: a refused field value or a failed save must be seen in full screen.
             self.show_progress(&ctx);
