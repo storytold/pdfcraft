@@ -76,6 +76,8 @@ impl PdfCraftApp {
             next_group_id: 1,
             editing_group: None,
             group_title_draft: String::new(),
+            rename_draft: None,
+            rename_returned: rename_ui::Returned::default(),
             active: None,
             mode: Mode::AllTools,
             default_mode: Mode::AllTools,
@@ -578,7 +580,7 @@ impl eframe::App for PdfCraftApp {
     /// Each frame's work before drawing: opens, operating-system and control-channel requests,
     /// the quit guard, shortcuts, and the background jobs' results.
     ///
-    /// Last-resort guard (AGENTS.md §4, #3914): a panic in a frame is reported and the app, with
+    /// Last-resort guard (app-agents.md rule 13, #3914): a panic in a frame is reported and the app, with
     /// every open tab, keeps running; see `frame_guard`.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.begin_logic();
@@ -813,6 +815,7 @@ impl PdfCraftApp {
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]
         self.process_picked();
+        self.reopen_returned_rename();
         self.settle_presign();
         // Last, after everything that can open or answer the "save changes?" question.
         self.attend_save_prompt(ctx);

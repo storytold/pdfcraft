@@ -219,7 +219,7 @@ fn main() -> eframe::Result {
         let name = pdfcraft_platform::crypto_env::IA32CAP;
         log::warn!("{name} was set to {value}; PdfCraft started again without it (aws-lc stops on a CPU feature the processor lacks)");
     }
-    // Last-resort guard (AGENTS.md §4): commands, edits, opens and saves catch panics and report
+    // Last-resort guard (app-agents.md rule 13): commands, edits, opens and saves catch panics and report
     // them; this hook logs every panic, caught or not, with a backtrace when RUST_BACKTRACE is set.
     std::panic::set_hook(Box::new(|info| {
         let trace = std::backtrace::Backtrace::capture();
@@ -573,7 +573,7 @@ fn notify_software_renderer(app: &mut PdfCraftApp, device_type: eframe::wgpu::De
 /// opens, so nothing is lost.
 fn open_control_channel(file: &str, endpoint: std::io::Result<pdfcraft_ui_egui::control::Endpoint>) -> Result<(), String> {
     match endpoint.and_then(|ep| write_control_file(file, ep.port, &ep.token).map(|()| ep.port)) {
-        // Never the token (AGENTS.md §3): it stays in the owner-only file.
+        // Never the token (app-agents.md rule 14): it stays in the owner-only file.
         Ok(port) => {
             log::info!("UI control channel on 127.0.0.1:{port} (connection details in {file})");
             Ok(())

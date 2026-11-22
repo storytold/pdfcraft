@@ -619,6 +619,10 @@ fn show_main_tabs_content(app: &mut PdfCraftApp, ui: &mut egui::Ui, cfg: &TabsSt
             None
         });
         popup.show(|ui| tab_menu(app, ui, i, &mut action));
+        // Double-clicking the tab's name renames its file, as in Finder and File Explorer.
+        if response.double_clicked() && cfg!(not(target_arch = "wasm32")) && doc.path.is_some() {
+            action = Some(Action::Rename(view_id));
+        }
         if response.clicked() {
             app.active = Some(i);
         }
@@ -808,6 +812,10 @@ fn tab_menu(app: &PdfCraftApp, ui: &mut egui::Ui, index: usize, action: &mut Opt
     let label = if cfg!(target_os = "macos") { tl!("Reveal in Finder") } else { tl!("Reveal in File Explorer") };
     if ui.add_enabled(reveal, egui::Button::new(label)).clicked() {
         *action = Some(Action::Reveal(id));
+        ui.close();
+    }
+    if ui.add_enabled(reveal, egui::Button::new(tl!("Rename…"))).clicked() {
+        *action = Some(Action::Rename(id));
         ui.close();
     }
 }
@@ -1004,6 +1012,10 @@ pub(crate) fn pane_tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, strip: Re
             None
         });
         popup.show(|ui| tab_menu(app, ui, i, &mut action));
+        // Double-clicking the tab's name renames its file, as in Finder and File Explorer.
+        if response.double_clicked() && cfg!(not(target_arch = "wasm32")) && doc.path.is_some() {
+            action = Some(Action::Rename(view_id));
+        }
         if response.clicked() {
             app.active = Some(i);
             app.combine_tab.focused = false;
