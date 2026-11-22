@@ -7,6 +7,7 @@ use craft::theme::Srgba;
 use craft::ui::buttons::Button;
 use craft::ui::choice::{Checkbox, Radio, RadioGroup};
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use craft::ui::layout_components::Row;
 use craft::ui::dialog::{PromptChoice, StandardPrompt};
 use craft::ui::display::{Shade, Text};
 use craft::ui::form::{Field, FieldGroup};
@@ -186,7 +187,7 @@ pub(crate) fn open_pages(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let range = PageRange { scope: PageScope::Current, ..PageRange::default() };
     let fields = DialogFields::from_pairs([("pages", PageRangeOptions::field_value(&range))]);
     let dialog = HostedParamDialog::new(ctx, "redact.pages", fields, move |fields| {
-        let rows = vec![PageRangeOptions::param("pages", "", count, current, PageRangeChoices::Current)];
+        let rows = vec![PageRangeOptions::param("pages", "", count, current, PageRangeChoices::CurrentFromTo)];
         ParamDialog::new("redact.pages", tl!("Mark Page Range"), rows).values(Bind::bound(fields))
     });
     crate::dialogs::host::open(app, dialog);
@@ -321,9 +322,12 @@ pub(crate) fn show_hidden(app: &mut PdfCraftApp, ui: &mut Ui) {
         .show(ui, |ui, _, d: &mut HiddenDraft| {
             Text::new(tl!("Select the items to remove from this document.")).shade(Shade::Muted).show(ui);
             for (h, n, on) in d.found.iter_mut() {
-                Checkbox::new(Bind::bound(on)).label(tl!(h.label())).enabled(*n > 0).show(ui);
-                let count = if *n == 0 { tl!("None found").to_string() } else { n.to_string() };
-                Text::new(count).shade(Shade::Muted).show(ui);
+                // The count stands beside its checkbox, on one row.
+                Row::new().show(ui, |ui, _| {
+                    Checkbox::new(Bind::bound(on)).label(tl!(h.label())).enabled(*n > 0).show(ui);
+                    let count = if *n == 0 { tl!("None found").to_string() } else { n.to_string() };
+                    Text::new(count).shade(Shade::Muted).show(ui);
+                });
             }
             Text::new(tl!("Form fields are flattened: their values stay visible. Saving rewrites the whole file.")).shade(Shade::Muted).show(ui);
             true

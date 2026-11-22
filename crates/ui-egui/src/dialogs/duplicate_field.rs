@@ -22,7 +22,7 @@ pub(crate) fn open(app: &mut PdfCraftApp, ctx: &egui::Context, name: String) {
     fields.set(FIELD, name.clone());
     let line = crate::i18n::fmt(tl!("Duplicate \"{name}\" onto:"), &[("name", &name)]);
     let dialog = HostedParamDialog::new(ctx, "form.duplicate_field", fields, move |fields| {
-        let rows = vec![PageRangeOptions::param("pages", "", count, current, PageRangeChoices::Acrobat)];
+        let rows = vec![PageRangeOptions::param("pages", "", count, current, PageRangeChoices::FromTo)];
         ParamDialog::new("form.duplicate_field", tl!("Duplicate Field"), rows).title_note(line.clone()).values(Bind::bound(fields))
     });
     crate::dialogs::host::open(app, dialog);

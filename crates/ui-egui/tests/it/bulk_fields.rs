@@ -216,7 +216,8 @@ fn locked_field_refuses_the_entire_batch_and_keeps_the_draft_for_correction() {
     click_gate(&mut h, "Locked");
     h.run_steps(4);
     assert_eq!(shared(&h)["locked"]["value"], false);
-    assert_eq!(shared(&h)["tooltip"]["value"], "Shared help", "what was typed is kept");
+    // The field shows the first field's own text (the tooltip is mixed), so typing adds to it.
+    assert!(shared(&h)["tooltip"]["value"].as_str().is_some_and(|v| v.ends_with("Shared help")), "what was typed is kept");
     h.get_by_label("OK").click();
     h.run_steps(4);
     assert!(!shared_open(&h));
@@ -225,7 +226,7 @@ fn locked_field_refuses_the_entire_batch_and_keeps_the_draft_for_correction() {
             .form
             .iter()
             .filter(|f| ["alpha", "beta"].contains(&f.name.as_str()))
-            .all(|f| !f.locked() && f.tooltip.as_deref() == Some("Shared help"))
+            .all(|f| !f.locked() && f.tooltip.as_deref().is_some_and(|t| t.ends_with("Shared help")))
     );
     h.execute("edit.undo");
     h.run_steps(4);

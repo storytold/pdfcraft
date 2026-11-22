@@ -8,9 +8,9 @@ use craft::docpath::names::{CopyNumbering, unique_file_name};
 use craft::host::queue::Priority;
 use craft::host::{Files, PickRequest, Picked, WriteIntent};
 use craft::ui::buttons::Button;
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Entry, Props as _, RowAlign, Show as _, ShowContainer as _};
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
-use craft::ui::display::Text;
+use craft::ui::display::{Shade, Text};
 use craft::ui::form::{Field, FieldGroup};
 use craft::ui::layout_components::Row;
 use craft::ui::patterns::form_dialogs::{FormDialog, ListManager, ListManagerAction, ListManagerChoice, ListManagerEntry, ListManagerWords};
@@ -132,7 +132,9 @@ impl StackDialog for ActionEditorDialog {
                 }
                 let mut remove = None;
                 for (i, s) in d.steps.iter_mut().enumerate() {
-                    Row::new().show(ui, |ui, _| {
+                    let plain = s.arg_mut().is_none();
+                    let spread = if plain { RowAlign::SpaceBetween } else { RowAlign::Start };
+                    Row::new().fill_width().align(spread).show(ui, |ui, _| {
                         let label = format!("{}. {}", i + 1, tl!(s.label()));
                         Text::new(label.clone()).show(ui);
                         if let Some(arg) = s.arg_mut() {
@@ -160,6 +162,9 @@ impl StackDialog for ActionEditorDialog {
                     }
                 });
             });
+            if taken {
+                Text::new(tl!("An action with this name already exists.")).shade(Shade::Muted).show(ui);
+            }
             true
         });
         match (shown.accepted, shown.closed) {

@@ -314,7 +314,9 @@ impl PdfCraftApp {
                     }
                 }
                 let message = if matches!(edit, Edit::MoveObjects { .. }) { crate::object_ui::move_error(&e) } else { e.to_string() };
-                self.notify_fmt("{label} failed: {e}", &[("label", &crate::i18n::edit_label(&label)), ("e", &message)]);
+                let text = crate::i18n::fmt(tl!("{label} failed: {e}"), &[("label", &crate::i18n::edit_label(&label)), ("e", &message)]);
+                self.last_edit_refusal = Some(text.clone());
+                self.notify(text);
                 false
             }
         }

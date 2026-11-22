@@ -473,6 +473,8 @@ pub struct PdfCraftApp {
     pub(crate) script_shown: Option<js_ui::ScriptShown>,
     /// The notices posted since the last pass, which `notices::show` hands to the toast service.
     pub(crate) posted_notices: Vec<craft::ui::notices::PostedNotice>,
+    /// The text of the last refused edit's notice, for a dialog that shows the refusal in place.
+    pub(crate) last_edit_refusal: Option<String>,
     /// The notice center that posts them and shows the cards.
     pub(crate) notices: craft::ui::notices::NoticeCenter,
     /// The changes to progress cards made since the last pass, which `notices::show` applies in order.
