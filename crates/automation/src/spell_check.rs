@@ -23,16 +23,24 @@ impl Automation {
             return Err(Args::wrong("words", "at most 10000 words"));
         }
         let rejected: Vec<&str> = user_words.iter().copied().filter(|w| !dictionary.add_word(w)).collect();
-        let only = a.opt_int("page")?.map(|p| (p.max(1) - 1) as usize);
+        let only = match a.opt_int("page")? {
+            Some(_) => Some(self.page(a)?),
+            None => None,
+        };
         let limit = a.opt_int("limit")?.map_or(DEFAULT_LIMIT, |l| l.clamp(1, 10_000) as usize);
 
         let mut results = Vec::new();
         let mut checked = 0usize;
         let mut total = 0usize;
-        for comment in self.comments(a)?.iter().filter(|c| only.is_none_or(|p| c.page == p)) {
+        let mut complete = true;
+        for comment in self.comments(a)?.iter().filter(|c| !c.is_group_member() && only.is_none_or(|p| c.page == p)) {
             let Some(text) = comment.contents.as_deref().filter(|t| !t.trim().is_empty()) else { continue };
             checked += 1;
-            for m in dictionary.check(text) {
+            let outcome = dictionary.check(text);
+            if !outcome.complete {
+                complete = false;
+            }
+            for m in outcome.misspellings {
                 total += 1;
                 if results.len() < limit {
                     results.push(json!({
@@ -44,6 +52,7 @@ impl Automation {
         }
         Ok(json!({
             "checked": checked, "count": total, "misspellings": results, "truncated": total > results.len(),
+            "complete": complete,
             "dictionary_words": dictionary.len(), "dictionary_truncated": dictionary.truncated(), "rejected_words": rejected,
         }))
     }
