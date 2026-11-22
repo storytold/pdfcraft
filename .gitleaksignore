@@ -1,0 +1,6 @@
+# Placeholder 16-hex token in source and tests (CA triage 2026-11-22). Fingerprints only.
+74e30e58030d890ff0802b49602676a91006658b:apps/pdfcraft/src/main.rs:generic-api-key:551
+0a0986483378b57d62103a36490bd66166d32c8f:apps/pdfcraft/src/main.rs:generic-api-key:680
+801729ed19cf17a7e2b58eb904bf9ce2e0819aac:apps/pdfcraft/src/tests.rs:generic-api-key:39
+apps/pdfcraft/src/main.rs:generic-api-key:680
+apps/pdfcraft/src/tests.rs:generic-api-key:39

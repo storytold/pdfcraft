@@ -1,0 +1,8 @@
+title = "pdfcraft: signing-test certificates and placeholder-token fingerprints"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Signing test certificates"
+paths = ['''^crates/sign/tests/data/.*\.p12$''']
