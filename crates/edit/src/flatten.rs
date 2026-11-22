@@ -453,6 +453,15 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
             u32::from(c)
         )));
     }
+    // `/Annots` array objects listed by more than one page. Each of those pages gets a list of its
+    // own: emptying the shared array for the first page would take its annotations off the other
+    // pages before they were drawn there.
+    let mut users: HashMap<ObjRef, usize> = HashMap::new();
+    for p in &all {
+        if let Some(r) = p.dict.get(b"Annots").and_then(|a| a.as_ref()) {
+            *users.entry(r).or_default() += 1;
+        }
+    }
     let mut drawn = 0;
     let mut removed_widgets: HashSet<ObjRef> = HashSet::new();
     for &i in pages {
@@ -587,7 +596,12 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
             place_tagged(doc, &page, "Flattened", content.into_bytes(), false)?;
         }
         let page_now = refreshed(doc, &page);
-        match page_now.dict.get(b"Annots").and_then(|a| a.as_ref()).filter(|r| doc.get(*r).as_array().is_some()) {
+        match page_now
+            .dict
+            .get(b"Annots")
+            .and_then(|a| a.as_ref())
+            .filter(|r| doc.get(*r).as_array().is_some() && users.get(r).is_none_or(|&n| n < 2))
+        {
             Some(r) => doc.set(r, Object::Array(kept)),
             None => doc.update_dict(page.obj, |d| {
                 if kept.is_empty() {

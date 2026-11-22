@@ -139,12 +139,21 @@ pub(crate) fn change_annots(doc: &mut Document, page: ObjRef, mut list: Vec<Obje
     Ok(set_annots(doc, page, list)?)
 }
 
-/// Replace a page's `/Annots`, writing into the shared array object when it is indirect. An empty
-/// list removes a direct `/Annots`.
+/// Whether a page other than `page` lists the array object `array` as its `/Annots`. Some
+/// producers point several pages at one array object, often an empty one.
+fn annots_shared(doc: &Document, page: ObjRef, array: ObjRef) -> bool {
+    let Ok(pages) = page_refs(doc) else { return false };
+    pages.into_iter().any(|p| p != page && doc.get(p).as_dict().and_then(|d| d.reference(b"Annots")) == Some(array))
+}
+
+/// Replace a page's `/Annots`, writing into its array object when it is indirect and no other page
+/// lists it. A page that shares its array object with others gets a direct array of its own, so
+/// an annotation added to one page doesn't show on the others too. An empty list removes a direct
+/// `/Annots`.
 pub fn set_annots(doc: &mut Document, page: ObjRef, list: Vec<Object>) -> Result<(), pdfcraft_cos::CosError> {
     let existing = doc.get(page).as_dict().and_then(|d| d.reference(b"Annots"));
     match existing {
-        Some(r) if doc.get(r).as_array().is_some() => doc.set(r, Object::Array(list)),
+        Some(r) if doc.get(r).as_array().is_some() && !annots_shared(doc, page, r) => doc.set(r, Object::Array(list)),
         _ => doc.update_dict(page, |d| {
             if list.is_empty() {
                 d.remove(b"Annots");

@@ -7177,6 +7177,28 @@ fn fill_sign_flatten_bakes_marks_keeps_other_comments_and_does_not_reuse_pcfl0()
     assert_eq!(summaries(&doc).iter().filter(|s| s.intent.as_deref() == Some("FreeTextTypeWriter")).count(), 1);
 }
 
+#[test]
+fn fill_sign_flatten_draws_a_mark_on_every_page_that_shares_its_annots_array() {
+    use pdfcraft_annot::{FillMark, Meta, NewAnnotation, Shape, Style, add_annotation};
+    let mut doc = fixture();
+    let shape = Shape::Mark { rect: [100.0, 100.0, 120.0, 120.0], mark: FillMark::Check };
+    let style = Style::default_for(&shape);
+    let meta = Meta { date: None, id: "x".into() };
+    let i = add_annotation(&mut doc, &NewAnnotation { page: 2, shape, style, contents: String::new(), author: "a".into() }, &meta).unwrap();
+    let mark = annot_at(&doc, 2, i);
+    // Pages 1 and 3 list one array object, as some producers write it: the mark shows on both.
+    let shared = doc.add(Object::Array(vec![Object::Ref(mark)]));
+    let pages = pdfcraft_model::pages(&doc);
+    for p in [pages[0].obj, pages[2].obj] {
+        doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Ref(shared))).unwrap();
+    }
+    flatten_fill_sign(&mut doc, &[0, 1, 2]).unwrap();
+    let doc = reopen(&doc);
+    for page in [0, 2] {
+        assert!(streams(&doc, page).iter().any(|s| s.contains("/PCFl")), "page {} keeps the mark it showed", page + 1);
+    }
+}
+
 /// A one-page document from its objects (object 1 is the catalog).
 fn build(objs: &[&str]) -> Document {
     let mut out = b"%PDF-1.7\n".to_vec();
