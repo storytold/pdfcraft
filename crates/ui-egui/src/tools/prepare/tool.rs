@@ -318,7 +318,7 @@ impl CanvasTool for PrepareTool<'_> {
             Gesture::Draw { drag, .. } => drag.paint(cx),
             Gesture::Marquee { marquee, .. } => {
                 let r = marquee.rect();
-                cx.marching_ants(&[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()], true);
+                marquee_fill(_draw, cx, r);
             }
             Gesture::Move { .. } | Gesture::Idle => {}
         }
@@ -410,9 +410,6 @@ struct OverlayField {
     name: String,
     selected: bool,
 }
-
-/// How much of the accent the prepare overlay's field fill keeps over the page.
-const FIELD_FILL_SHARE: f32 = 89.0 / 255.0;
 
 /// The fields of one page with their fill, outline, selection and name tags, and the tab-order
 /// badges while they are on. A field being moved is drawn at the moved place.
@@ -507,11 +504,13 @@ impl Component for PrepareOverlay {
         let colors = &cx.tokens.color;
         PrepareOverlayStyle {
             metrics: Metrics::new(),
+            // Production tints a field over the page with the accent at about a third, not the soft surface (dark navy).
             fill: cx.color(colors.accent.solid),
             outline: cx.color(colors.line.control_edge),
             selected: cx.color(colors.accent.solid),
-            tag: cx.color(colors.text.normal),
-            tag_text: cx.color(colors.surface.sunken),
+            // Production's name tag: light text on a dark plate, over the light page.
+            tag: cx.color(colors.surface.sunken),
+            tag_text: cx.color(colors.text.normal),
             selected_tag: cx.color(colors.accent.solid),
             selected_tag_text: cx.color(colors.text.on_strong),
             badge: cx.color(colors.accent.solid),
@@ -527,8 +526,7 @@ impl Component for PrepareOverlay {
         let draw = ui.draw();
         for field in &self.fields {
             let r = field.rect;
-            // A tint of the accent over the page, as production's (89/255), so the page shows through.
-            draw.faded(FIELD_FILL_SHARE, |draw| draw.fill(&PaintShape::Rect(r, CornerRadius::ZERO), style.fill));
+            draw.faded(89.0 / 255.0, |draw| draw.fill(&PaintShape::Rect(r, CornerRadius::ZERO), style.fill));
             if !field.selected {
                 draw.stroke(&PaintShape::Rect(r, CornerRadius::ZERO), StrokeWidth::Thin, style.outline);
             }
@@ -562,4 +560,13 @@ impl Component for PrepareOverlay {
     fn finish(self, cx: Cx<'_, Self>) -> Response {
         cx.response.clone()
     }
+}
+
+/// A marquee as production draws it: the accent over the page at about a quarter, with a solid accent edge.
+pub(crate) fn marquee_fill(draw: &Draw<'_>, cx: &ToolContext<'_>, r: Rect) {
+    let Some(style) = cx.style() else { return };
+    let shape = PaintShape::Rect(r, CornerRadius::ZERO);
+    let accent = style.color(style.tokens.color.accent.solid);
+    draw.faded(0.3, |draw| draw.fill(&shape, accent));
+    draw.stroke(&shape, StrokeWidth::Thin, accent);
 }
