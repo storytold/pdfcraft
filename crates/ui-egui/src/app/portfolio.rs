@@ -172,12 +172,15 @@ impl PdfCraftApp {
             let right = self.right;
             self.apply_initial_view(index, &initial);
             self.right = right;
-            // After the initial view, as on opening: full screen shows one fitted page, and
-            // leaving it comes back to the file's own display.
-            if self.full_screen
-                && let Some(view) = self.views.get_mut(index)
-            {
+        }
+        // The view shown follows the window's full screen, new or put aside before: full screen
+        // changed only the views shown at the time. After the initial view, as on opening, so
+        // leaving full screen comes back to the file's own display.
+        if let Some(view) = self.views.get_mut(index) {
+            if self.full_screen {
                 view.enter_presentation();
+            } else {
+                view.leave_presentation();
             }
         }
         Ok(())

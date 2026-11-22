@@ -564,3 +564,26 @@ fn a_file_shown_in_full_screen_keeps_its_initial_view_after_it() {
     h.run_steps(2);
     assert_eq!(h.state().views[tab].layout, pdfcraft_ui_egui::canvas::PageLayout::TwoUp, "the file's two columns, after full screen");
 }
+
+/// A view put aside follows full screen when it comes back: the portfolio's own pages brought
+/// back in full screen (Save does) are presented, and a file put aside in full screen comes back
+/// without presenting once full screen has ended.
+#[test]
+fn a_view_put_aside_follows_full_screen_when_it_comes_back() {
+    let mut h = opened(portfolio("/Collection << /D (one.pdf) >>", &[("one.pdf", PAGE), ("two.pdf", PAGE)]), true);
+    assert_eq!(shown(&h, 0).as_deref(), Some("one.pdf"));
+    assert!(h.state_mut().execute("view.full_screen"));
+    h.run_steps(2);
+    assert!(h.state().views[0].presenting());
+    // Save comes back to the portfolio's own pages, put aside before full screen.
+    h.state_mut().save_view(0, pdfcraft_ui_egui::SaveTarget::InPlace);
+    h.run_steps(2);
+    assert_eq!(shown(&h, 0).as_deref(), Some("portfolio.pdf"));
+    assert!(h.state().views[0].presenting(), "the portfolio's pages are presented too");
+    assert!(h.state_mut().execute("view.full_screen"), "full screen ends");
+    h.run_steps(2);
+    row(&h, "one.pdf").click();
+    h.run_steps(2);
+    assert_eq!(shown(&h, 0).as_deref(), Some("one.pdf"));
+    assert!(!h.state().views[0].presenting(), "the file put aside in full screen no longer presents");
+}
