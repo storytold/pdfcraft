@@ -74,11 +74,14 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut dropped = None;
 
     Panel::new(tl!("Combine files")).titled().fallback_collection(super::collection_id()).show(ui, |ui, _| {
-        if Button::new(tl!("Combine")).variant(Variant::PRIMARY).icon(IconId::new("files")).enabled(blocker.is_none()).show(ui).clicked() {
-            combine = true;
+        // Why it can't run is the button's hover text, as in production (no warning line above the grid).
+        let why = blocker.clone().unwrap_or_default();
+        let mut combine_button = Button::new(tl!("Combine")).variant(Variant::PRIMARY).icon(IconId::new("files")).enabled(blocker.is_none());
+        if blocker.is_some() {
+            combine_button = combine_button.tooltip(why);
         }
-        if let Some(why) = &blocker {
-            Text::new(why.clone()).tone(Tone::Warn).show(ui);
+        if combine_button.show(ui).clicked() {
+            combine = true;
         }
         let hint = if grid {
             tl!("Files are combined in the order shown. Drag them to change it.")
