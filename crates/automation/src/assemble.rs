@@ -251,7 +251,7 @@ impl Automation {
             let out_dir = a.str("out_dir").map_err(|_| ToolError::InvalidArgs("separate files need out_dir".into()))?;
             json!({ "files": self.extract_separate(id, &pages, out_dir, &stem)? })
         } else {
-            let bytes = self.session.extract(id, &pages).map_err(failed)?;
+            let bytes = self.session_for(id)?.extract(id, &pages).map_err(failed)?;
             self.deliver(a, &name, bytes)?
         };
         if a.opt_bool("delete")?.unwrap_or(false) {
@@ -268,7 +268,7 @@ impl Automation {
     /// are removed.
     fn extract_separate(&self, id: pdfcraft_engine::DocId, pages: &[usize], out_dir: &str, stem: &str) -> Result<Vec<String>> {
         let Some(&first) = pages.first() else { return Ok(Vec::new()) };
-        let mut first_bytes = Some(self.session.extract(id, &[first]).map_err(failed)?);
+        let mut first_bytes = Some(self.session_for(id)?.extract(id, &[first]).map_err(failed)?);
         let dir = self.resolve(out_dir, true)?;
         let made_dir = !dir.exists();
         std::fs::create_dir_all(&dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
@@ -276,7 +276,7 @@ impl Automation {
         let outcome = pages.iter().try_for_each(|&p| -> Result<()> {
             let bytes = match first_bytes.take() {
                 Some(bytes) => bytes,
-                None => self.session.extract(id, &[p]).map_err(failed)?,
+                None => self.session_for(id)?.extract(id, &[p]).map_err(failed)?,
             };
             let path = child(&dir, &format!("{stem}-page{}.pdf", p.saturating_add(1)));
             let existed = path.exists();
@@ -411,13 +411,13 @@ impl Automation {
             if !mb.is_finite() || mb <= 0.0 {
                 return Err(ToolError::InvalidArgs("max_mb must be positive".into()));
             }
-            self.session.split_by_size(id, (mb * 1_048_576.0) as usize).map_err(failed)?
+            self.session_for(id)?.split_by_size(id, (mb * 1_048_576.0) as usize).map_err(failed)?
         } else {
             let by = match (a.opt_int("every")?, a.opt_ints("before")?) {
                 (Some(n), None) if n > 0 => pdfcraft_organize::SplitBy::PageCount(n as usize),
                 (None, Some(b)) => pdfcraft_organize::SplitBy::Before(one_based(&b)?),
                 _ if bookmarks => {
-                    titles = self.session.bookmark_splits(id);
+                    titles = self.session_for(id)?.bookmark_splits(id);
                     if titles.is_empty() {
                         return Err(failed("the document has no top-level bookmarks"));
                     }
@@ -425,7 +425,7 @@ impl Automation {
                 }
                 _ => return Err(ToolError::InvalidArgs("every must be a positive page count".into())),
             };
-            self.session.split(id, &by).map_err(failed)?
+            self.session_for(id)?.split(id, &by).map_err(failed)?
         };
         let dir = self.resolve(a.str("out_dir")?, true)?;
         std::fs::create_dir_all(&dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;

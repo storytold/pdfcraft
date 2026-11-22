@@ -891,7 +891,7 @@ impl Automation {
         if comments && !matches!(format, pdfcraft_engine::DataFormat::Xfdf | pdfcraft_engine::DataFormat::Fdf) {
             return Err(bad("comments travel as .xfdf or .fdf; .xml, .csv and .txt hold form data (use what: fields)"));
         }
-        let bytes = self.session.export_data(id, format, comments, fields).map_err(failed)?;
+        let bytes = self.session_for_mut(id)?.export_data(id, format, comments, fields).map_err(failed)?;
         crate::write_atomic(&path, &bytes)?;
         Ok(json!({ "path": path.to_string_lossy(), "bytes": bytes.len() }))
     }

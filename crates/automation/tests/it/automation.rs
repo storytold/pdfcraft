@@ -227,7 +227,32 @@ fn doc_detach_moves_a_live_document_into_its_own_window_session() {
     let info = ok(&mut a, "doc_info", json!({"doc": id}));
     assert_eq!(info["pages"].as_array().unwrap().len(), 3);
     assert_eq!(info["pages"][0]["rotation"], 90);
-    ok(&mut a, "doc_close", json!({"doc": id, "discard_changes": true}));
+    // Further calls still address the document by id in its detached session.
+    assert_eq!(ok(&mut a, "edit_undo", json!({"doc": id}))["undone"], "Rotate page");
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc": id}))["pages"][0]["rotation"], 0);
+    assert_eq!(ok(&mut a, "edit_redo", json!({"doc": id}))["redone"], "Rotate page");
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc": id}))["pages"][0]["rotation"], 90);
+    let saved = ok(&mut a, "doc_save", json!({"doc": id, "path": "detached-saved.pdf"}));
+    assert_eq!(saved["document"]["dirty"], false);
+    assert!(dir.join("detached-saved.pdf").is_file());
+    // Tools that take the caller-supplied doc id must still reach the detached session.
+    let extracted = ok(&mut a, "page_extract", json!({"doc": id, "pages": [1], "out": "detached-page.pdf"}));
+    assert!(dir.join("detached-page.pdf").is_file(), "{extracted}");
+    let optimized = ok(&mut a, "doc_optimize", json!({"doc": id, "path": "detached-optimized.pdf"}));
+    assert!(dir.join("detached-optimized.pdf").is_file(), "{optimized}");
+    let reduced = ok(&mut a, "doc_reduce", json!({"doc": id, "path": "detached-reduced.pdf"}));
+    assert!(reduced["written"].is_boolean(), "{reduced}");
+    let colors = ok(&mut a, "view_reading_colors", json!({"doc": id, "mode": "black-on-white"}));
+    assert_eq!(colors["mode"], "black-on-white");
+    let hairlines = ok(&mut a, "doc_fix_hairlines", json!({"doc": id}));
+    assert_eq!(hairlines["fixed"], 0);
+    let colours = ok(&mut a, "doc_convert_colours", json!({"doc": id, "to": "gray"}));
+    assert!(colours["colours"].is_number() || colours["pages"].is_number(), "{colours}");
+    let links = ok(&mut a, "link_list", json!({"doc": id, "text_links": true}));
+    assert!(links.get("links").is_some() || links.is_object(), "{links}");
+    let split = ok(&mut a, "doc_split", json!({"doc": id, "every": 1, "out_dir": "detached-parts"}));
+    assert!(split["files"].as_array().is_some_and(|f| !f.is_empty()), "{split}");
+    ok(&mut a, "doc_close", json!({"doc": id}));
     assert!(ok(&mut a, "doc_list", json!({}))["documents"].as_array().unwrap().is_empty());
 }
 

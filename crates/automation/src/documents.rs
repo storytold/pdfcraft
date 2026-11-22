@@ -30,7 +30,7 @@ impl Automation {
             .filter(|l| (1..=MAX_BOOKMARK_PAGE).contains(l))
             .ok_or_else(|| ToolError::InvalidArgs(format!("limit must be from 1 to {MAX_BOOKMARK_PAGE}")))?;
         let page = self
-            .session
+            .session_for(id)?
             .bookmark_page(id, offset, limit)
             .ok_or_else(|| ToolError::Failed(format!("no open document with id {} (see doc_list)", id.0)))?;
         let pages = &self.doc(a)?.info.pages;
@@ -56,8 +56,24 @@ impl Automation {
         self.windows.iter().position(|session| session.get(id).is_some()).map(|i| i + 1)
     }
 
+    pub(crate) fn session_at(&self, index: usize) -> &pdfcraft_engine::Session {
+        if index == 0 { &self.session } else { &self.windows[index - 1] }
+    }
+
     pub(crate) fn session_mut(&mut self, index: usize) -> &mut pdfcraft_engine::Session {
         if index == 0 { &mut self.session } else { &mut self.windows[index - 1] }
+    }
+
+    /// The session that holds `id` (primary or a detached window), for document-scoped ops.
+    pub(crate) fn session_for(&self, id: DocId) -> Result<&pdfcraft_engine::Session> {
+        let index = self.session_index(id).ok_or_else(|| failed(format!("no open document with id {} (see doc_list)", id.0)))?;
+        Ok(self.session_at(index))
+    }
+
+    /// The session that holds `id` (primary or a detached window), for document-scoped ops.
+    pub(crate) fn session_for_mut(&mut self, id: DocId) -> Result<&mut pdfcraft_engine::Session> {
+        let index = self.session_index(id).ok_or_else(|| failed(format!("no open document with id {} (see doc_list)", id.0)))?;
+        Ok(self.session_mut(index))
     }
 
     /// Open documents across the primary session and every detached window session.
@@ -232,8 +248,15 @@ impl Automation {
             self.apply(a, Edit::FlattenFillSign)?;
         }
         // The document's Will Save actions run first: what they change is saved (#269).
-        let scripts = self.session.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillSave);
-        let bytes = if full { self.session.save_full_bytes(id) } else { self.session.save_bytes(id) }.map_err(failed)?;
+        let scripts = {
+            let session = self.session_for_mut(id)?;
+            session.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillSave)
+        };
+        let bytes = {
+            let session = self.session_for_mut(id)?;
+            if full { session.save_full_bytes(id) } else { session.save_bytes(id) }
+        }
+        .map_err(failed)?;
         // A save that adds or removes encryption, or must not keep the old revision (Sanitize,
         // redaction), is rewritten in full even when an incremental save was asked for.
         let incremental = !full && bytes.starts_with(&self.doc(a)?.saved_bytes());
@@ -268,8 +291,8 @@ impl Automation {
             (w, r) => w.or(r),
         }
         .map(Path::to_path_buf);
-        let path = self.session.rename_file_in(id, name, root.as_deref()).map_err(failed)?;
-        let doc = self.session.get(id).ok_or_else(|| failed("the renamed document is no longer open"))?;
+        let path = self.session_for_mut(id)?.rename_file_in(id, name, root.as_deref()).map_err(failed)?;
+        let doc = self.document(id).ok_or_else(|| failed("the renamed document is no longer open"))?;
         Ok(json!({ "path": path, "name": doc.name.clone(), "document": summary(doc) }))
     }
 
@@ -282,11 +305,11 @@ impl Automation {
         incremental: bool,
         write: impl FnOnce(&Path, &[u8]) -> Result<()>,
     ) -> Result<Value> {
-        self.session.check_save(id, &bytes).map_err(failed)?;
+        self.session_for_mut(id)?.check_save(id, &bytes).map_err(failed)?;
         write(target, &bytes)?;
         let path = target.to_string_lossy().into_owned();
-        self.session.mark_saved(id, bytes.clone(), Some(path.clone())).map_err(failed)?;
-        let doc = self.session.get(id).ok_or_else(|| failed("the saved document is no longer open"))?;
+        self.session_for_mut(id)?.mark_saved(id, bytes.clone(), Some(path.clone())).map_err(failed)?;
+        let doc = self.document(id).ok_or_else(|| failed("the saved document is no longer open"))?;
         Ok(json!({ "path": path, "bytes": bytes.len(), "incremental": incremental, "document": summary(doc) }))
     }
 
@@ -505,7 +528,7 @@ impl Automation {
             Some(t) if t >= 1 => Some(usize::try_from(t).map_err(|_| ToolError::InvalidArgs(format!("target_bytes {t} is too large")))?),
             Some(t) => return Err(ToolError::InvalidArgs(format!("target_bytes must be at least 1, not {t}"))),
         };
-        let (mut bytes, mut r) = self.session.optimized_bytes(id, &settings, &discard).map_err(failed)?;
+        let (mut bytes, mut r) = self.session_for_mut(id)?.optimized_bytes(id, &settings, &discard).map_err(failed)?;
         let mut attempts = 1;
         let mut step_used = 0;
         // Settings already optimized with; a rung that changes nothing is not run again.
@@ -531,7 +554,7 @@ impl Automation {
                 if tried.contains(&s) {
                     continue;
                 }
-                let (b2, r2) = self.session.optimized_bytes(id, &s, &discard).map_err(failed)?;
+                let (b2, r2) = self.session_for_mut(id)?.optimized_bytes(id, &s, &discard).map_err(failed)?;
                 tried.push(s);
                 attempts += 1;
                 if b2.len() < bytes.len() {
@@ -631,7 +654,7 @@ impl Automation {
     /// repaired and left grouped.
     pub(crate) fn prepare_text(&mut self, a: &Args, page: usize) -> Result<Value> {
         let id = self.doc(a)?.id;
-        let prepared = self.session.prepare_text(id, page).map_err(failed)?;
+        let prepared = self.session_for_mut(id)?.prepare_text(id, page).map_err(failed)?;
         let mut out = self.applied(a)?;
         out["prepared_groups"] = json!(prepared.expanded);
         out["repaired_fonts"] = json!(prepared.repaired_fonts);

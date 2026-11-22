@@ -61,7 +61,7 @@ impl Automation {
     }
 
     fn outline_of(&self, id: DocId, path: &[usize]) -> Result<pdfcraft_engine::OutlineTree> {
-        match self.session.outline_tree(id, path) {
+        match self.session_for(id)?.outline_tree(id, path) {
             // The engine names the path 0-based; the caller gave it 1-based.
             Some(tree) => tree.map_err(|e| match e {
                 pdfcraft_organize::OutlineError::NoSuchBookmark(_) => failed(format!("there is no bookmark at {:?}", one_based(path))),

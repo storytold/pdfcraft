@@ -56,14 +56,19 @@ impl Automation {
     }
 
     pub(crate) fn renderer(&mut self, id: DocId) -> Result<&mut PageRenderer> {
-        let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
-        // The document's own view settings: layer visibility, hidden comments, reading colours
-        // (tools that change one drop this cache so the next render reads it again).
-        let config =
-            self.session.render_config(id).unwrap_or_else(|| RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() });
-        let fresh = || (doc.display.clone(), PageRenderer::new(doc.display.clone(), config.clone()));
+        let index = self.session_index(id).ok_or_else(|| failed("no such document"))?;
+        let (display, config) = {
+            let session = self.session_mut(index);
+            let doc = session.get(id).ok_or_else(|| failed("no such document"))?;
+            // The document's own view settings: layer visibility, hidden comments, reading colours
+            // (tools that change one drop this cache so the next render reads it again).
+            let config =
+                session.render_config(id).unwrap_or_else(|| RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() });
+            (doc.display.clone(), config)
+        };
+        let fresh = || (display.clone(), PageRenderer::new(display.clone(), config.clone()));
         let entry = self.renderers.entry(id).or_insert_with(fresh);
-        if !Arc::ptr_eq(&entry.0, &doc.display) {
+        if !Arc::ptr_eq(&entry.0, &display) {
             *entry = fresh();
         }
         Ok(&mut entry.1)
@@ -117,7 +122,7 @@ impl Automation {
             return Err(ToolError::InvalidArgs(format!("scale must be between 0 and {}", MAX_DPI / 72.0)));
         }
         let id = DocId(doc);
-        let n = self.session.get(id).ok_or_else(|| failed(format!("no open document with id {doc} (see doc_list)")))?.info.pages.len();
+        let n = self.document(id).ok_or_else(|| failed(format!("no open document with id {doc} (see doc_list)")))?.info.pages.len();
         if page < 1 || page > n {
             return Err(ToolError::InvalidArgs(format!("page {page} is out of range: the document has {n} pages")));
         }
@@ -152,7 +157,7 @@ impl Automation {
         pages: &[usize],
         extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageTexts,
     ) -> Result<PageTexts> {
-        let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
+        let doc = self.document(id).ok_or_else(|| failed("no such document"))?;
         let (bytes, n) = (doc.bytes.clone(), doc.info.pages.len());
         let password: Option<Arc<str>> = doc.password.as_deref().map(Arc::from);
         self.texts.prepare(id, &bytes);

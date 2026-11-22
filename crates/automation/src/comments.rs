@@ -732,7 +732,7 @@ impl Automation {
     pub(crate) fn comments_hide(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
         let hidden = a.opt_bool("hidden")?.unwrap_or(true);
-        if self.session.set_hide_comments(id, hidden) {
+        if self.session_for_mut(id)?.set_hide_comments(id, hidden) {
             // The cached renderer drew with the old setting; page_render must read it again.
             self.renderers.remove(&id);
         }
@@ -746,7 +746,7 @@ impl Automation {
             Some(s) => SummarySort::parse(s).ok_or_else(|| ToolError::InvalidArgs(format!("unknown sort {s:?}")))?,
             None => SummarySort::Page,
         };
-        let bytes = self.session.summarize_comments(id, sort).map_err(failed)?;
+        let bytes = self.session_for(id)?.summarize_comments(id, sort).map_err(failed)?;
         self.deliver(a, &format!("Summary of comments on {stem}.pdf"), bytes)
     }
 
@@ -841,7 +841,7 @@ impl Automation {
             }
             which.push((page, index));
         }
-        let xfdf = self.session.export_comments(id, &which).map_err(failed)?;
+        let xfdf = self.session_for(id)?.export_comments(id, &which).map_err(failed)?;
         Ok(json!({ "xfdf": xfdf, "comments": which.len() }))
     }
 

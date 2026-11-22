@@ -120,7 +120,7 @@ impl Automation {
                         let [x, y] = info.view_to_user(c[2 * i] as f32, c[2 * i + 1] as f32);
                         [x as f64, y as f64]
                     }),
-                    None => self.session.detect_camera_corners(id, page).ok_or_else(|| {
+                    None => self.session_for(id)?.detect_camera_corners(id, page).ok_or_else(|| {
                         failed("the document's edges could not be found on this page: pass `corners` [x1, y1, x2, y2, x3, y3, x4, y4]")
                     })?,
                 };
@@ -134,7 +134,7 @@ impl Automation {
                     Some(m) => pdfcraft_engine::camera_clean::Look::from_name(m)
                         .ok_or_else(|| ToolError::InvalidArgs(format!("unknown mode {m:?} (original, colour, greyscale, bw)")))?,
                 };
-                self.session.enhance_camera_page_at(id, page, corners, look, level).map_err(failed)?;
+                self.session_for_mut(id)?.enhance_camera_page_at(id, page, corners, look, level).map_err(failed)?;
                 let r = |v: f32| (v * 100.0).round() / 100.0;
                 let used: Vec<f32> = corners.iter().flat_map(|&[x, y]| info.user_to_view(x as f32, y as f32)).map(r).collect();
                 let mut out = summary(self.doc(&a)?);
@@ -167,12 +167,12 @@ impl Automation {
             "doc_split" => self.doc_split(&a)?,
             "edit_undo" => {
                 let id = self.doc(&a)?.id;
-                let label = self.session.undo(id).map_err(failed)?.to_string();
+                let label = self.session_for_mut(id)?.undo(id).map_err(failed)?.to_string();
                 json!({ "undone": label, "document": summary(self.doc(&a)?) })
             }
             "edit_redo" => {
                 let id = self.doc(&a)?.id;
-                let label = self.session.redo(id).map_err(failed)?.to_string();
+                let label = self.session_for_mut(id)?.redo(id).map_err(failed)?.to_string();
                 json!({ "redone": label, "document": summary(self.doc(&a)?) })
             }
             "command_list" => self.command_list(&a)?,
@@ -350,7 +350,7 @@ impl Automation {
                 let id = self.doc(&a)?.id;
                 let before = self.doc(&a)?.bytes.len();
                 let path = self.resolve(a.str("path")?, true)?;
-                let (bytes, merged, images_refused) = self.session.reduced_bytes(id).map_err(failed)?;
+                let (bytes, merged, images_refused) = self.session_for_mut(id)?.reduced_bytes(id).map_err(failed)?;
                 // As in the app, a copy that isn't smaller is not written (#490).
                 let written = bytes.len() < before;
                 if written {
@@ -718,8 +718,8 @@ impl Automation {
             "doc_open_revision" => {
                 let id = self.doc(&a)?.id;
                 let n = usize::try_from(a.opt_int("revision")?.ok_or_else(|| ToolError::InvalidArgs("revision is required".into()))?).unwrap_or(0);
-                let new = self.session.open_revision(id, n).map_err(failed)?;
-                summary(self.session.get(new).ok_or_else(|| failed("the document vanished"))?)
+                let new = self.session_for_mut(id)?.open_revision(id, n).map_err(failed)?;
+                summary(self.document(new).ok_or_else(|| failed("the document vanished"))?)
             }
             "doc_export_images" | "doc_export_text" | "doc_export_all_images" => self.export(name, &a)?,
             "doc_header_footer" | "doc_watermark" | "doc_background" | "doc_printer_marks" | "doc_remove_marks" => self.marks(name, &a)?,
@@ -1024,7 +1024,7 @@ impl Automation {
             settings.despeckle = on;
         }
         let id = self.doc(a)?.id;
-        let report = self.session.enhance_scanned_pages(id, &pages, settings).map_err(failed)?;
+        let report = self.session_for_mut(id)?.enhance_scanned_pages(id, &pages, settings).map_err(failed)?;
         let numbered = |p: &[usize]| p.iter().map(|p| p + 1).collect::<Vec<_>>();
         let skipped: Vec<Value> = report.skipped.iter().map(|k| json!({ "pages": numbered(&k.pages), "name": k.name, "reason": k.reason })).collect();
         let mut out = summary(self.doc(a)?);

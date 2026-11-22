@@ -326,8 +326,8 @@ impl Automation {
         if before_id == after_id {
             return Err(ToolError::InvalidArgs("before and after must be separate open documents".into()));
         }
-        let before = self.session.get(before_id).ok_or_else(|| failed(format!("no open document with id {}", before_id.0)))?;
-        let after = self.session.get(after_id).ok_or_else(|| failed(format!("no open document with id {}", after_id.0)))?;
+        let before = self.document(before_id).ok_or_else(|| failed(format!("no open document with id {}", before_id.0)))?;
+        let after = self.document(after_id).ok_or_else(|| failed(format!("no open document with id {}", after_id.0)))?;
         let mut options = Options::default();
         if a.opt_bool("all")?.unwrap_or(false) {
             options.rules = Rule::ALL.into_iter().collect();
@@ -596,7 +596,7 @@ impl Automation {
     /// Apply `edit` to document `id` and take out the errors it added to the document's script
     /// output, such as the values of an XFA form that could not be written to its data.
     fn apply_with_warnings(&mut self, id: DocId, edit: pdfcraft_engine::Edit) -> Result<Vec<String>> {
-        let ((), out) = self.session.with_own_js_output(id, |s| s.apply(id, edit)).map_err(failed)?;
+        let ((), out) = self.session_for_mut(id)?.with_own_js_output(id, |s| s.apply(id, edit)).map_err(failed)?;
         Ok(out.errors)
     }
 }

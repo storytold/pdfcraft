@@ -80,8 +80,10 @@ impl Automation {
         let answers = answers(a)?;
         let identity = field_id(a)?;
         let (script, field) = (a.str("script")?, a.opt_str("field")?);
-        let (mut o, edit) =
-            self.session.with_own_js_output(id, |s| s.run_javascript_answers_target(id, script, field, identity, &answers)).map_err(failed)?;
+        let (mut o, edit) = self
+            .session_for_mut(id)?
+            .with_own_js_output(id, |s| s.run_javascript_answers_target(id, script, field, identity, &answers))
+            .map_err(failed)?;
         o.alerts.extend(edit.alerts);
         o.console.extend(edit.console);
         o.requests.extend(edit.requests);
@@ -108,7 +110,7 @@ impl Automation {
         if !doc.info.links.iter().any(|l| l.page == page && l.index == index && matches!(l.target, pdfcraft_render::LinkTarget::JavaScript(_))) {
             return Err(failed(format!("page {} has no JavaScript link {} (see link_list)", page + 1, index + 1)));
         }
-        let (o, edit) = self.session.with_own_js_output(id, |s| s.run_link_javascript(id, page, index, &answers)).map_err(failed)?;
+        let (o, edit) = self.session_for_mut(id)?.with_own_js_output(id, |s| s.run_link_javascript(id, page, index, &answers)).map_err(failed)?;
         let reqs: Vec<Value> = o.requests.iter().chain(&edit.requests).map(request_json).collect();
         let alerts: Vec<Value> = o.alerts.iter().chain(&edit.alerts).map(alert_json).collect();
         let console: Vec<&String> = o.console.iter().chain(&edit.console).collect();
@@ -119,8 +121,8 @@ impl Automation {
     pub(crate) fn js_page(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
         let page = self.page(a)?;
-        let clock = self.session.script_clock(id).unwrap_or(0.0);
-        let run = self.session.show_page(id, page, clock);
+        let clock = self.session_for(id)?.script_clock(id).unwrap_or(0.0);
+        let run = self.session_for_mut(id)?.show_page(id, page, clock);
         // What the actions showed or hid is in the document's view settings.
         self.renderers.remove(&id);
         Ok(self.script_run_json(id, &run))
@@ -136,21 +138,21 @@ impl Automation {
         if !(0.0..=3_600_000.0).contains(&ms) {
             return Err(ToolError::InvalidArgs("ms must be between 0 and 3600000".into()));
         }
-        let start = self.session.script_clock(id).unwrap_or(0.0);
+        let start = self.session_for(id)?.script_clock(id).unwrap_or(0.0);
         let end = start + ms;
         let mut total = pdfcraft_engine::ScriptRun::default();
         while total.ran < MAX_RUNS {
-            let Some(at) = self.session.next_timer(id).filter(|at| *at <= end) else { break };
-            let run = self.session.run_timers_at_most(id, at.max(start), MAX_RUNS - total.ran);
+            let Some(at) = self.session_for_mut(id)?.next_timer(id).filter(|at| *at <= end) else { break };
+            let run = self.session_for_mut(id)?.run_timers_at_most(id, at.max(start), MAX_RUNS - total.ran);
             if run.ran == 0 {
                 break;
             }
             merge_runs(&mut total, run);
         }
-        let behind = self.session.next_timer(id).is_some_and(|at| at <= end);
+        let behind = self.session_for_mut(id)?.next_timer(id).is_some_and(|at| at <= end);
         // The clock ends where it was sent; a timer the run cap left behind counts on from there,
         // and runs at the next call, not past the cap.
-        let last = self.session.run_timers_at_most(id, end, MAX_RUNS - total.ran);
+        let last = self.session_for_mut(id)?.run_timers_at_most(id, end, MAX_RUNS - total.ran);
         merge_runs(&mut total, last);
         self.renderers.remove(&id);
         let mut out = self.script_run_json(id, &total);
@@ -163,8 +165,15 @@ impl Automation {
         let reqs: Vec<Value> = run.output.requests.iter().map(request_json).collect();
         let alerts: Vec<Value> = run.output.alerts.iter().map(alert_json).collect();
         let pages: Vec<usize> = run.pages.iter().map(|p| p + 1).collect();
-        let clock = self.session.script_clock(id).unwrap_or(0.0);
-        let next = self.session.next_timer(id).map(|at| (at - clock).max(0.0));
+        let (clock, next) = match self.session_index(id) {
+            Some(index) => {
+                let session = self.session_mut(index);
+                let clock = session.script_clock(id).unwrap_or(0.0);
+                let next = session.next_timer(id).map(|at| (at - clock).max(0.0));
+                (clock, next)
+            }
+            None => (0.0, None),
+        };
         json!({ "alerts": alerts, "console": run.output.console, "requests": reqs, "errors": run.output.errors,
             "pages": pages, "edited": run.edited, "layers": run.layers, "clock_ms": clock, "next_timer_in_ms": next })
     }
@@ -192,7 +201,7 @@ impl Automation {
             script: a.opt_str("script")?.map(str::to_string),
         };
         let id = self.doc(a)?.id;
-        let ((), out) = self.session.with_own_js_output(id, |s| s.apply(id, edit)).map_err(failed)?;
+        let ((), out) = self.session_for_mut(id)?.with_own_js_output(id, |s| s.apply(id, edit)).map_err(failed)?;
         Ok(json!({ "field": a.str("field")?, "event": a.str("event")?, "console": out.console, "errors": out.errors }))
     }
 
@@ -217,8 +226,8 @@ impl Automation {
             n => ToolError::InvalidArgs(format!("widget must be 1 to {n} for {name:?}")),
         })?;
         let id = doc.id;
-        let changed = self.session.field_focus(id, name, widget, focus).map_err(failed)?;
-        let out = self.session.take_js_output(id);
+        let changed = self.session_for_mut(id)?.field_focus(id, name, widget, focus).map_err(failed)?;
+        let out = self.session_for_mut(id)?.take_js_output(id);
         let reqs: Vec<Value> = out.requests.iter().map(request_json).collect();
         Ok(
             json!({ "changed": changed, "alerts": out.alerts.iter().map(alert_json).collect::<Vec<_>>(), "console": out.console, "requests": reqs, "errors": out.errors }),
@@ -252,7 +261,7 @@ impl Automation {
         let (id, object) = (doc.id, pdfcraft_engine::js::field_object_id(field.obj));
         // Only this event's output: what opening or an earlier tool left waiting stays.
         let (changed, out) =
-            self.session.with_own_js_output(id, |s| s.field_trigger_target(id, name, Some(object), widget, trigger)).map_err(failed)?;
+            self.session_for_mut(id)?.with_own_js_output(id, |s| s.field_trigger_target(id, name, Some(object), widget, trigger)).map_err(failed)?;
         let mut result = js_output_json(&out);
         result["changed"] = json!(changed);
         Ok(result)
@@ -276,7 +285,7 @@ impl Automation {
     pub(crate) fn form_detect_fields(&mut self, a: &Args) -> Result<Value> {
         let pages = if a.opt_ints("pages")?.is_some() { self.pages(a, "pages")? } else { Vec::new() };
         let id = self.doc(a)?.id;
-        let found = self.session.detect_fields(id, &pages);
+        let found = self.session_for(id)?.detect_fields(id, &pages);
         let list: Vec<Value> = found
             .iter()
             .map(|(p, c)| {
@@ -294,7 +303,7 @@ impl Automation {
             .collect();
         let mut warnings = Vec::new();
         if a.opt_bool("add")?.unwrap_or(true) && !found.is_empty() {
-            let (_, out) = self.session.with_own_js_output(id, |s| s.auto_detect_fields(id, &pages)).map_err(failed)?;
+            let (_, out) = self.session_for_mut(id)?.with_own_js_output(id, |s| s.auto_detect_fields(id, &pages)).map_err(failed)?;
             warnings = out.errors;
         }
         Ok(with_warnings(json!({ "fields": list }), warnings))

@@ -185,7 +185,7 @@ impl Automation {
                     .map(|p| p - 1)
                     .ok_or_else(|| bad(format!("text_links_from must be a page from 1 to {pages}")))?,
             };
-            let scan = self.session.text_links(id, from);
+            let scan = self.session_for(id)?.text_links(id, from);
             if let Some(next) = scan.next_page {
                 out["text_links_next_page"] = json!(next.saturating_add(1));
             }
@@ -295,7 +295,7 @@ impl Automation {
 
     pub(crate) fn links_from_urls(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
-        let found = self.session.find_urls(id);
+        let found = self.session_for(id)?.find_urls(id);
         if found.is_empty() {
             return Err(failed("no unlinked web addresses were found in the text"));
         }
