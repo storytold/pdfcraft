@@ -143,4 +143,3 @@ fn text_past_the_character_budget_is_left_unchecked() {
     assert!(found.misspellings.is_empty(), "{:?}", found.misspellings);
     assert!(!found.complete);
 }
-

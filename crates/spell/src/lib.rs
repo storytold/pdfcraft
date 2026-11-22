@@ -294,8 +294,7 @@ fn collect_words(piece: &str, base: usize, limit: usize, out: &mut Vec<(usize, u
         let start = i;
         let mut end = i;
         while let Some(&c) = chars.get(end) {
-            let inner_apostrophe = matches!(c, '\'' | '\u{2019}' | '\u{2018}' | '\u{02bc}')
-                && chars.get(end + 1).is_some_and(|n| n.is_alphabetic());
+            let inner_apostrophe = matches!(c, '\'' | '\u{2019}' | '\u{2018}' | '\u{02bc}') && chars.get(end + 1).is_some_and(|n| n.is_alphabetic());
             if c.is_alphabetic() || inner_apostrophe {
                 end += 1;
             } else {
