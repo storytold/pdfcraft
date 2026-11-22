@@ -241,8 +241,10 @@ fn unescape(s: &str) -> String {
         out.push_str(rest.get(..at).unwrap_or_default());
         let after = rest.get(at + 1..).unwrap_or_default();
         // Only the supported entity length is searched, so a long run of bare `&` stays linear.
-        let prefix = after.get(..after.len().min(11)).unwrap_or_default();
-        let entity = prefix.find(';').and_then(|end| after.get(..end).map(|name| (name, end)));
+        // Floor the window to a char boundary: byte 11 can sit inside a following non-ASCII
+        // character, and `str::get` would then return None and leave the entity literal.
+        let prefix = after.get(..after.floor_char_boundary(after.len().min(11))).unwrap_or_default();
+        let entity = prefix.find(';').filter(|&semi| semi <= 10).and_then(|semi| after.get(..semi).map(|name| (name, semi)));
         let decoded = entity.and_then(|(name, _)| match name {
             "amp" => Some('&'),
             "lt" => Some('<'),

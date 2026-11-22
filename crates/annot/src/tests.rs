@@ -5808,3 +5808,29 @@ fn an_overlong_rich_text_node_is_refused_entirely() {
     .unwrap();
     assert_eq!(rich_contents(&doc, 0, note).unwrap(), None);
 }
+
+#[test]
+fn a_comment_body_keeps_entities_before_non_ascii_text() {
+    // Entity names are short ASCII, but the 11-byte scan window can land inside a following
+    // CJK character; flooring that window must still decode the entity.
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 700.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    let reply = add_reply(&mut doc, 0, note, "r", "Bob", &meta("r")).unwrap();
+    for (index, text) in [(note, "&日本語"), (note, "<日本語"), (note, ">日本語"), (note, "\"日本語"), (reply, "&日本語"), (reply, "<日本語")]
+    {
+        let runs = [Run { bold: true, ..Run::plain(text) }];
+        set_rich_contents(&mut doc, 0, index, &runs, &meta("e")).unwrap();
+        assert_eq!(rich_contents(&doc, 0, index).unwrap(), Some(runs.to_vec()), "{text}");
+    }
+    // Numeric references (hex and decimal) before non-ASCII must decode the same way.
+    for (entity, plain) in [("&#x65E5;日本語", "日日本語"), ("&#26085;日本語", "日日本語"), ("&apos;日本語", "'日本語")] {
+        let (_, r) = annot_ref(&mut doc, 0, note).unwrap();
+        let rc = format!("<?xml version=\"1.0\"?><body><p><span style=\"font-weight:bold\">{entity}</span></p></body>");
+        doc.update_dict(r, |d| {
+            d.set(b"Contents".to_vec(), PdfString::text(plain));
+            d.set(b"RC".to_vec(), PdfString::text(&rc));
+        })
+        .unwrap();
+        assert_eq!(rich_contents(&doc, 0, note).unwrap(), Some(vec![Run { bold: true, ..Run::plain(plain) }]), "{entity}");
+    }
+}

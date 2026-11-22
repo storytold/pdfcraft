@@ -14890,12 +14890,13 @@ fn a_comment_body_takes_formatting_through_the_tools_and_keeps_it_when_saved() {
     // Missing or null script/color keep the defaults; only a wrong type is refused.
     ok(&mut a, "comment_edit", json!({ "doc": reopened, "page": 1, "index": 1, "body": [{ "text": "plain", "script": null, "color": null }] }));
     assert_eq!(ok(&mut a, "comment_list", json!({"doc": reopened}))["comments"][0]["contents"], "plain");
-    // Replies keep the same body round-trip as top-level comments.
+    // Replies keep the same body round-trip as top-level comments, including entities before CJK.
     ok(&mut a, "comment_reply", json!({ "doc": reopened, "page": 1, "index": 1, "text": "ok", "author": "Bob" }));
     let listed = ok(&mut a, "comment_list", json!({"doc": reopened}));
     let reply_id = listed["comments"][0]["replies"][0]["id"].as_str().unwrap().to_string();
-    let reply_body = json!([{ "text": "ok", "italic": true }]);
+    let reply_body = json!([{ "text": "&日本語", "italic": true }, { "text": "<日本語", "bold": true }]);
     ok(&mut a, "comment_edit", json!({ "doc": reopened, "id": reply_id, "body": reply_body }));
     let listed = ok(&mut a, "comment_list", json!({"doc": reopened}));
     assert_eq!(listed["comments"][0]["replies"][0]["body"], reply_body);
+    assert_eq!(listed["comments"][0]["replies"][0]["contents"], "&日本語<日本語");
 }
