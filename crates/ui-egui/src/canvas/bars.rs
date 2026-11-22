@@ -180,7 +180,7 @@ pub(super) fn notices(
         None
     };
     let msg = if scripts_off {
-        Some(("triangle-alert", Tone::Warn, crate::js_ui::scripts_off_notice(), true))
+        Some(("triangle-alert", Tone::Info, crate::js_ui::scripts_off_notice(), true))
     } else if secured {
         // A secured form still says what it is, and keeps Highlight fields: the security
         // sentence follows the form's.
@@ -202,14 +202,15 @@ pub(super) fn notices(
     // What each action returns, by the action's index; `None` is the field highlight toggle.
     let mut results: Vec<Option<Notice>> = Vec::new();
     let mut notice = bar(tone, icon, text).dismiss();
+    // The stopped-scripts notice leads with the Console, then the field highlights.
+    if scripts_off {
+        notice = notice.action(NoticeAction::new(tl!("JavaScript Console").to_string()));
+        results.push(Some(Notice::Console));
+    }
     if fields {
         let label = if view.session.highlight_fields { tl!("Hide field highlights") } else { tl!("Highlight fields") };
         notice = notice.action(NoticeAction::new(label.to_string()));
         results.push(None);
-    }
-    if scripts_off {
-        notice = notice.action(NoticeAction::new(tl!("JavaScript Console").to_string()));
-        results.push(Some(Notice::Console));
     }
     if secured {
         notice = notice.action(NoticeAction::new(tl!("Security settings").to_string()));

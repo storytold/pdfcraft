@@ -414,10 +414,12 @@ fn apply(ctx: &egui::Context, app: &mut PdfCraftApp, draft: &Draft) -> Result<()
         return Ok(());
     }
     // `apply_edit` posts its own reason as a notice; the dialog's refusal is this fixed text.
+    app.last_edit_refusal = None;
     if app.apply_edit(ctx, Edit::Batch { label: "Change field properties".into(), edits }) {
         Ok(())
     } else {
-        Err(tl!("The field properties could not be changed.").to_owned().into())
+        // The edit's own reason (a locked field says to unlock it), as the dialog shows it.
+        Err(app.last_edit_refusal.take().map_or_else(|| tl!("The field properties could not be changed.").to_owned().into(), Label::from))
     }
 }
 
@@ -531,9 +533,21 @@ fn body(ui: &mut Ui, d: &mut Draft, recent: &RecentColours, request: &mut Option
         match d.tab {
             Tab::General => {
                 let c = &mut d.tooltip;
-                row(ui, "Tooltip:", c, false, |ui, shown| {
-                    TextField::new(tl!("Tooltip").to_owned(), Bind::bound_mixed(shown)).show(ui);
+                // A mixed tooltip shows the first field's text, editable, and says it is mixed.
+                let was_mixed = c.mixed;
+                let mut text = c.value.clone();
+                row(ui, "Tooltip:", c, false, |ui, _| {
+                    ui.horizontal(|ui| {
+                        TextField::new(tl!("Tooltip").to_owned(), Bind::bound(&mut text)).show(ui);
+                        if was_mixed {
+                            Text::new(tl!("Mixed").to_owned()).show(ui);
+                        }
+                    });
                 });
+                if text != c.value {
+                    c.value = text;
+                    c.mixed = false;
+                }
                 yes_no(ui, "Read Only", &mut d.read_only);
                 yes_no(ui, "Required", &mut d.required);
                 yes_no(ui, "Locked", &mut d.locked);

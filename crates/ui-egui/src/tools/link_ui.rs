@@ -11,7 +11,9 @@ use craft::ui::canvas_controls::SelectionOutline;
 use craft::ui::choice::{Radio, RadioGroup};
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft::ui::display::{Shade, Text};
 use craft::ui::form::{Field, FieldGroup, Help};
+use craft::ui::layout_components::Row;
 use craft::ui::patterns::form_dialogs::FormDialog;
 use craft::ui::pickers::Select;
 use craft::ui::primitives::Draw;
@@ -337,6 +339,7 @@ fn pick<T: Clone + PartialEq + std::fmt::Debug + Send + Sync + 'static>(
 /// The Link Appearance group.
 fn appearance(ui: &mut egui::Ui, d: &mut LinkDraft, request: &mut Option<ColorRequest>, recent: &RecentColours) {
     FieldGroup::new(tl!("Link Appearance").to_string()).show(ui, |ui, _| {
+        Text::new(tl!("Link Appearance").to_uppercase()).shade(Shade::Muted).show(ui);
         let visible = [(true, tl!("Visible Rectangle").to_string()), (false, tl!("Invisible Rectangle").to_string())];
         if let Some(v) = pick(ui, tl!("Link Type").to_string(), d.style.visible, visible.to_vec()) {
             d.style.visible = v;
@@ -385,6 +388,7 @@ fn appearance(ui: &mut egui::Ui, d: &mut LinkDraft, request: &mut Option<ColorRe
 /// The Link Action group.
 fn action(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize) {
     FieldGroup::new(tl!("Link Action").to_string()).show(ui, |ui, _| {
+        Text::new(tl!("Link Action").to_uppercase()).shade(Shade::Muted).show(ui);
         if d.preserve_action {
             Field::new(tl!("Action").to_string())
                 .help(Help::Text(tl!("The existing action will be preserved.").to_string().into()))
@@ -403,14 +407,17 @@ fn action(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize) {
             });
             Radio::new(false).label(tl!("Go to a page view").to_string()).show(ui);
             Field::new(tl!("Page").to_string()).show(ui, |ui, _| {
-                let page = NumberField::new(tl!("Page").to_string(), Bind::given(Some(d.target as f64)))
-                    .range(1.0..=pages.max(1) as f64)
-                    .step(1.0)
-                    .enabled(!web)
-                    .show(ui);
-                if let Some(n) = page.edit.events.landed().cloned().flatten() {
-                    d.target = (n.round().max(1.0) as usize).min(pages.max(1));
-                }
+                Row::new().show(ui, |ui, _| {
+                    let page = NumberField::new(tl!("Page").to_string(), Bind::given(Some(d.target as f64)))
+                        .range(1.0..=pages.max(1) as f64)
+                        .step(1.0)
+                        .enabled(!web)
+                        .show(ui);
+                    if let Some(n) = page.edit.events.landed().cloned().flatten() {
+                        d.target = (n.round().max(1.0) as usize).min(pages.max(1));
+                    }
+                    Text::new(crate::i18n::fmt(tl!("of {pages}"), &[("pages", &pages.max(1).to_string())]).to_string()).shade(Shade::Muted).show(ui);
+                });
             });
             // The destination's own zoom, past what the dialog offers, stays a choice.
             let mut zooms = ZOOMS.to_vec();

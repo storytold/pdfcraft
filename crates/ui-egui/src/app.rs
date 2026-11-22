@@ -359,6 +359,7 @@ impl PdfCraftApp {
             script_messages_dropped: 0,
             script_shown: None,
             posted_notices: Vec::new(),
+            last_edit_refusal: None,
             notices: craft::ui::notices::NoticeCenter::new(),
             progress_requests: Vec::new(),
             progress_cards: Default::default(),
