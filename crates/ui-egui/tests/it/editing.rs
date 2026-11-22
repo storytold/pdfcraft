@@ -50,14 +50,14 @@ fn scripted_app() -> PdfCraftApp {
     crate::control::app_with_files(FILES.with(std::sync::Arc::clone))
 }
 
-/// The unsaved-changes question's Save answer in the platform's words (the framework dialog asks Yes and No off macOS).
+/// The unsaved-changes question's Save answer in the platform's words (production's wording, on every platform).
 fn save_answer() -> &'static str {
-    if cfg!(target_os = "macos") { "Save" } else { "Yes" }
+    "Save"
 }
 
 /// The unsaved-changes question's Don't Save answer in the platform's words.
 fn dont_save() -> &'static str {
-    if cfg!(target_os = "macos") { "Don't Save" } else { "No" }
+    "Don't save"
 }
 
 /// The next Save's picker answers `path`.
@@ -544,7 +544,7 @@ fn closing_a_dirty_tab_asks_and_cancel_keeps_it() {
     h.run_steps(3);
     h.key_press_modifiers(Modifiers::COMMAND, Key::W);
     h.run_steps(3);
-    h.get_by_label_contains("save the changes you made to “doc.pdf”");
+    assert!(h.query_all_by_label_contains("Save changes to “doc.pdf”").next().is_some());
     h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert_eq!(h.state().views.len(), 1, "cancel keeps the document open");
@@ -568,7 +568,7 @@ fn closing_a_dirty_tab_can_save_first() {
     let ctx_h = h.ctx.clone();
     h.state_mut().request_close_tab(&ctx_h, 0);
     h.run_steps(2);
-    h.get_by_label(save_answer()).click();
+    h.query_all_by_label(save_answer()).last().expect("the prompt's Save button").click();
     h.run_steps(3);
     assert!(h.state().views.is_empty());
     let saved = pdfcraft_render::inspect(std::sync::Arc::new(saved_file(&out)), None).unwrap();
@@ -578,15 +578,15 @@ fn closing_a_dirty_tab_can_save_first() {
 
 #[test]
 fn the_save_prompt_answers_to_the_keyboard() {
-    // Issue #8: Enter saves; ⌘D / Ctrl+D and, off macOS, Alt+N (the button's letter) don't save;
+    // Issue #8: Enter saves; ⌘D / Ctrl+D and Alt+D (the Don't save button's letter) don't save;
     // Escape cancels. While the prompt is open, ⌘D is not Document properties.
-    for (m, key) in [(Modifiers::COMMAND, Key::D), (Modifiers::ALT, Key::N)] {
+    for (m, key) in [(Modifiers::COMMAND, Key::D), (Modifiers::ALT, Key::D)] {
         let mut h = organize(2);
         h.get_by_label("Rotate clockwise").click();
         h.run_steps(3);
         h.key_press_modifiers(Modifiers::COMMAND, Key::W);
         h.run_steps(3);
-        h.get_by_label_contains("save the changes you made to “doc.pdf”");
+        assert!(h.query_all_by_label_contains("Save changes to “doc.pdf”").next().is_some());
         h.key_press_modifiers(m, key);
         h.run_steps(3);
         assert!(h.state().views.is_empty(), "{m:?}+{key:?} doesn't save and closes");
@@ -621,7 +621,7 @@ fn dirty_prompt() -> Harness<'static, PdfCraftApp> {
     h.run_steps(3);
     h.key_press_modifiers(Modifiers::COMMAND, Key::W);
     h.run_steps(3);
-    h.get_by_label_contains("save the changes you made to “doc.pdf”");
+    assert!(h.query_all_by_label_contains("Save changes to “doc.pdf”").next().is_some());
     h
 }
 
@@ -703,7 +703,7 @@ fn keys_leave_the_document_under_a_dialog_alone() {
     assert_eq!(h.state().views[0].target_pages(), [1], "Escape went to the dialog, not the page selection");
     h.key_press_modifiers(Modifiers::COMMAND, Key::W);
     h.run_steps(3);
-    h.get_by_label_contains("save the changes you made to “doc.pdf”"); // with the dialog closed, ⌘W asks to close the file again
+    assert!(h.query_all_by_label_contains("Save changes to “doc.pdf”").next().is_some()); // with the dialog closed, ⌘W asks to close the file again
 }
 
 #[test]
@@ -729,10 +729,10 @@ fn quitting_with_unsaved_changes_asks_for_each_document() {
     }
     h.key_press_modifiers(Modifiers::COMMAND, Key::Q);
     h.run_steps(3);
-    h.get_by_label_contains("save the changes you made to “doc.pdf”");
+    assert!(h.query_all_by_label_contains("Save changes to “doc.pdf”").next().is_some());
     h.get_by_label(dont_save()).click();
     h.run_steps(3);
-    h.get_by_label_contains("save the changes you made to “second.pdf”");
+    assert!(h.query_all_by_label_contains("Save changes to “second.pdf”").next().is_some());
     h.get_by_label(dont_save()).click();
     h.run_steps(3);
     assert!(h.state().views.is_empty());
@@ -997,11 +997,11 @@ fn save_prompt_stays_inside_the_screen_for_a_long_filename() {
     h.run_steps(4);
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1365.0, 719.0));
     let inside = |r: egui::Rect| screen.contains(r.min) && screen.contains(r.max);
-    let title = h.get_by_label_contains("save the changes you made to");
+    let title = h.query_all_by_label_contains("Save changes to").last().expect("the prompt's title");
     let title_rect = title.rect();
     assert!(inside(title_rect), "the title rect {title_rect:?} leaves the screen");
     for button in [save_answer(), "Cancel", dont_save()] {
-        let rect = h.get_by_label(button).rect();
+        let rect = h.query_all_by_label(button).last().unwrap_or_else(|| panic!("no {button} button")).rect();
         assert!(inside(rect), "the {button} button rect {rect:?} leaves the screen");
     }
 }
@@ -1039,16 +1039,16 @@ fn save_prompt_fits_the_smallest_window_whatever_the_name() {
         h.run_steps(4);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
         let inside = |r: egui::Rect| screen.contains(r.min) && screen.contains(r.max);
-        let title = h.get_by_label_contains("save the changes you made to");
+        let title = h.query_all_by_label_contains("Save changes to").last().expect("the prompt's title");
         let title_rect = title.rect();
         assert!(inside(title_rect), "{start}…: the title rect {title_rect:?} leaves the screen");
-        let opening = format!("Do you want to save the changes you made to “{start}");
+        let opening = format!("Save changes to “{start}");
         assert!(
-            h.query_by(|n| n.value().is_some_and(|l| l.starts_with(&opening) && l.contains('…') && l.contains(".pdf” before closing?"))).is_some(),
+            h.query_all_by(|n| n.label().or(n.value()).is_some_and(|l| l.starts_with(&opening) && l.contains('…') && l.contains(".pdf” before closing?"))).next().is_some(),
             "{start}…: the title keeps the start and the extension"
         );
         for button in [save_answer(), "Cancel", dont_save()] {
-            let rect = h.get_by_label(button).rect();
+            let rect = h.query_all_by_label(button).last().unwrap_or_else(|| panic!("no {button} button")).rect();
             assert!(inside(rect), "{start}…: the {button} button rect {rect:?} leaves the screen");
         }
     }

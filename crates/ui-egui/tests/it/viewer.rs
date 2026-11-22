@@ -135,7 +135,7 @@ fn close_all_asks_only_for_changed_documents() {
     h.run_steps(2);
     assert_eq!(h.state().views.len(), 1, "the clean document closed at once");
     // b.pdf asks to be saved: the close dialog is on screen.
-    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Unsaved changes");
+    assert!(h.query_all_by_label_contains("Save changes to “").next().is_some());
 }
 
 #[test]

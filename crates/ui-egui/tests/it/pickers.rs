@@ -145,22 +145,14 @@ fn settle(r: &mut Rig, what: &str, ready: impl Fn(&PdfCraftApp) -> bool) {
     panic!("timed out waiting for {what}");
 }
 
-/// The unsaved-changes question's "save it" answer as the framework words it on this OS: Save on macOS, Yes on
-/// Windows and Linux.
+/// The unsaved-changes question's "save it" answer, in production's words on every platform.
 fn save_answer() -> String {
-    use craft::i18n::WordSet as _;
-    let words = craft::ui::dialog::DialogWords::english();
-    let save = if cfg!(target_os = "macos") { words.unsaved_save } else { words.unsaved_yes };
-    save.as_str().to_string()
+    "Save".to_string()
 }
 
-/// The unsaved-changes question's "don't save" answer as the framework words it on this OS: Don't Save on macOS,
-/// No on Windows and Linux.
+/// The unsaved-changes question's "don't save" answer, in production's words on every platform.
 fn dont_save_answer() -> String {
-    use craft::i18n::WordSet as _;
-    let words = craft::ui::dialog::DialogWords::english();
-    let discard = if cfg!(target_os = "macos") { words.unsaved_dont_save } else { words.unsaved_no };
-    discard.as_str().to_string()
+    "Don't save".to_string()
 }
 
 /// Presses the button called `label` of the dialog on top (the last such node drawn).

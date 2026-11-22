@@ -67,12 +67,12 @@ fn card_count(h: &Harness<'static, PdfCraftApp>) -> usize {
 
 /// Whether the "Save changes?" prompt is on screen.
 fn asks_to_save(h: &Harness<'static, PdfCraftApp>) -> bool {
-    h.query_by_role_and_label(egui::accesskit::Role::Dialog, "Unsaved changes").is_some()
+    h.query_by(|n| n.role() == egui::accesskit::Role::Dialog && n.label().is_some_and(|l| l.starts_with("Save changes to “"))).is_some()
 }
 
-/// The unsaved-changes question's Save answer in the platform's words (the framework dialog asks Yes and No off macOS).
+/// The unsaved-changes question's Save answer in the platform's words (production's wording, on every platform).
 fn save_answer() -> &'static str {
-    if cfg!(target_os = "macos") { "Save" } else { "Yes" }
+    "Save"
 }
 
 fn harness() -> Harness<'static, PdfCraftApp> {

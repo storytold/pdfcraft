@@ -288,8 +288,8 @@ fn verify_dirty_snapshot_close(h: &mut Harness<'static, PdfCraftApp>) {
     h.state_mut().views[1].close_requested = true;
     h.run_steps(2);
     assert_eq!(h.state().views.len(), 2);
-    h.get_by_label("Do you want to save the changes you made to “contract_signed (signed version).pdf” before closing?");
-    let discard = if cfg!(target_os = "macos") { "Don't Save" } else { "No" };
+    assert!(h.query_all_by_label("Save changes to “contract_signed (signed version).pdf” before closing?").next().is_some());
+    let discard = "Don't save";
     h.query_all_by_label(discard).last().expect("the question has a Don't Save / No button").click();
     h.run_steps(2);
     assert_eq!(h.state().views.len(), 1);

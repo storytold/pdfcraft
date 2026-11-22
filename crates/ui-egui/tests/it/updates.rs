@@ -251,7 +251,7 @@ fn saving_at_the_restart_question_writes_the_file_and_quits() {
     let (mut h, path) = app_with_unsaved_file("save");
     restart_to_update(&mut h);
     assert!(!h.state().dialogs.open_dialogs().is_empty(), "the unsaved-changes question is on the host");
-    let accept = if cfg!(target_os = "macos") { "Save" } else { "Yes" };
+    let accept = "Save";
     h.query_all_by_label(accept).last().expect("the question has a Save/Yes button").click();
     let quit = crate::support::step_until(&mut h, |h| close_requested(h));
     assert!(quit, "the app quits once the document is saved");

@@ -277,6 +277,7 @@ impl PdfCraftApp {
                 .title(crate::i18n::fmt(template, &[("name", &shown)]))
                 .message(tl!("Your changes will be lost if you don't save them."))
                 .icon(craft::behavior::IconId::new("save"))
+                .dont_save_label(tl!("Don't save"))
         };
         self.close_guard_dialog = Some(self.dialogs.open(dialog));
     }

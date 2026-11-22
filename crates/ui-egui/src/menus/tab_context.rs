@@ -126,9 +126,9 @@ mod tests {
         use craft::i18n::WordSet as _;
         let dialog = craft::ui::dialog::DialogWords::english();
         let common = craft::ui::runtime::words::CommonWords::english();
-        // The app words the question as a document app does on every platform (document_wording).
-        let dont_save = dialog.unsaved_dont_save;
-        (dont_save.as_str().to_string(), common.cancel.as_str().to_string())
+        // The app words the question as production does on every platform: "Don't save", in lower case.
+        let _ = dialog;
+        ("Don't save".to_string(), common.cancel.as_str().to_string())
     }
 
     #[test]

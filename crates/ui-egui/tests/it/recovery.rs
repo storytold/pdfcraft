@@ -129,7 +129,7 @@ fn leftovers(dir: &Path) -> Vec<craft::platform::autosave::RecoveryEntry> {
 /// The label of the question's "don't save" button on this platform.
 fn dont_save() -> &'static str {
     // PLAN: the words come from `DialogWords` (`unsaved_dont_save` on macOS, `unsaved_no` elsewhere); literal here as the catalog's English.
-    if cfg!(target_os = "macos") { "Don't Save" } else { "No" }
+    "Don't save"
 }
 
 #[test]

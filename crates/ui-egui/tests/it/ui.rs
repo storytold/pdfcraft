@@ -1598,7 +1598,7 @@ fn cancelling_then_discarding_an_earlier_dirty_tab_preserves_the_selected_docume
     h.run_steps(3);
     h.get_by_label("middle.pdf").click();
     h.run_steps(3);
-    let discard = if cfg!(target_os = "macos") { "Don't Save" } else { "No" };
+    let discard = "Don't save";
     close_named_tab(&mut h, "first.pdf, modified");
     h.get_by_label(discard);
     h.get_by_label("Cancel").click();
@@ -1612,7 +1612,7 @@ fn cancelling_then_discarding_an_earlier_dirty_tab_preserves_the_selected_docume
     assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[1]));
     assert_eq!(h.state().views.iter().map(|view| view.id).collect::<Vec<_>>(), [ids[1], ids[2]]);
     assert!(h.state().session.get(ids[0]).is_none());
-    assert!(h.query_by_role_and_label(egui::accesskit::Role::Dialog, "Unsaved changes").is_none(), "no prompt is left");
+    assert!(h.query_by_label_contains("before closing?").is_none(), "no prompt is left");
     for doc in h.state().session.docs() {
         assert_eq!(doc.bytes.as_slice(), FIXTURE);
         assert!(!doc.dirty);

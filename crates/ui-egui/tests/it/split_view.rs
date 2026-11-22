@@ -24,9 +24,7 @@ fn page_size(s: &PdfCraftApp, i: usize) -> Option<egui::Vec2> {
 /// The label of the unsaved-changes dialog's "don't keep the changes" answer on this OS, as the
 /// framework words it.
 fn dont_save() -> String {
-    use craft::i18n::WordSet as _;
-    let words = craft::ui::dialog::DialogWords::english();
-    if cfg!(target_os = "macos") { words.unsaved_dont_save } else { words.unsaved_no }.as_str().to_owned()
+    "Don't save".to_owned()
 }
 
 /// `pages` portrait pages (300 × 400) with a line of text each.

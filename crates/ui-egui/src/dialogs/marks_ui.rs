@@ -918,7 +918,7 @@ impl PdfCraftApp {
         let heading = title(kind, replace);
         // Passed inline: a closure made apart from the call gets one lifetime for its argument and result.
         // PLAN: assumed `self.dialogs: DialogHost`, `self.host`/`self.wake` (pdf-hub-w1 note 11)
-        let dialog = HostedParamDialog::new(ctx, dialog_key(kind), fields, move |fields: &mut DialogFields| {
+        let mut dialog = HostedParamDialog::new(ctx, dialog_key(kind), fields, move |fields: &mut DialogFields| {
             let mut draft = base.clone();
             read_fields(&mut draft, fields, kind, &units);
             let has_file = fields.text("file.path").is_some_and(|p| !p.is_empty());
@@ -953,6 +953,8 @@ impl PdfCraftApp {
             }
             dialog
         });
+        // The pager row is there from the first pass, so the dialog is sized with its row.
+        dialog.set_preview_pager(Some(PanePager { shown: current + 1, count, shown_label: None, back: false, next: false, unit: PagerUnit::Page }));
         self.dialogs.open(dialog);
         self.marks_preview = Some(MarksPreview::new(kind, self.host.jobs_shared().clone(), self.wake.clone()));
     }
