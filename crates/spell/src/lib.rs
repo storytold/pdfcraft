@@ -115,19 +115,21 @@ impl Dictionary {
     }
 
     /// Every misspelled word in `text`, in order, with suggestions.
-    pub fn check(&self, text: &str) -> Vec<Misspelling> {
-        let mut found = Vec::new();
+    ///
+    /// `complete` is false when characters past [`MAX_TEXT_CHARS`] were not examined.
+    pub fn check(&self, text: &str) -> CheckResult {
+        let (words, complete) = words_of(text);
+        let mut misspellings = Vec::new();
         // An empty dictionary would flag everything: nothing is known, so nothing is claimed.
-        if self.is_empty() {
-            return found;
-        }
-        for (start, end, word) in words_of(text) {
-            if !self.knows(&word) {
-                let suggestions = self.suggest(&word);
-                found.push(Misspelling { word, start, end, suggestions });
+        if !self.is_empty() {
+            for (start, end, word) in words {
+                if !self.knows(&word) {
+                    let suggestions = self.suggest(&word);
+                    misspellings.push(Misspelling { word, start, end, suggestions });
+                }
             }
         }
-        found
+        CheckResult { misspellings, complete }
     }
 
     /// Words one edit away from `word` (a letter dropped, added, changed or two swapped), in the
@@ -165,8 +167,33 @@ impl Dictionary {
                 s.to_string()
             }
         };
-        candidates.iter().map(|c| shape(c)).filter(|c| !c.eq_ignore_ascii_case(&word) && self.knows(c)).take(MAX_SUGGESTIONS).collect()
+        let lower_word = lowercase(&word);
+        candidates
+            .iter()
+            .filter(|c| **c != lower_word)
+            .filter_map(|c| {
+                if self.lower.contains(c) {
+                    let shaped = shape(c);
+                    return self.knows(&shaped).then_some(shaped);
+                }
+                // Cased entries ("Paris", "iPhone"): shape like lower-case ones when that form is
+                // known (so "PARI" → "PARIS"), otherwise keep the stored spelling ("iPhone").
+                self.cased.iter().find(|w| lowercase(w) == *c).map(|stored| {
+                    let shaped = shape(c);
+                    if self.knows(&shaped) { shaped } else { stored.clone() }
+                })
+            })
+            .take(MAX_SUGGESTIONS)
+            .collect()
     }
+}
+
+/// Misspellings found in a text, and whether the whole text was examined.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckResult {
+    pub misspellings: Vec<Misspelling>,
+    /// False when characters past [`MAX_TEXT_CHARS`] were skipped.
+    pub complete: bool,
 }
 
 fn is_word_char(c: char) -> bool {
@@ -202,28 +229,64 @@ fn capitalise(word: &str) -> String {
 /// The words to check in `text` with their character range. Whitespace-separated pieces that are
 /// not prose (a digit, `@`, `://`, `www.`) are skipped whole; elsewhere a word is a run of
 /// letters, with apostrophes only between letters ("don't", not "'quoted'").
-fn words_of(text: &str) -> Vec<(usize, usize, String)> {
+///
+/// Stops after [`MAX_TEXT_CHARS`] characters. Each piece is consumed only up to the remaining
+/// budget, plus [`MAX_WORD_CHARS`] of look-ahead (so a word that starts inside the budget and
+/// would cross it is detected and left out), plus one character to see that the piece continues.
+/// The non-prose test and lowercasing see only the budgeted prefix. Words that end inside the
+/// budget keep their ranges. The second return value is false when any character past the limit
+/// was not examined.
+fn words_of(text: &str) -> (Vec<(usize, usize, String)>, bool) {
     let mut out = Vec::new();
     let mut offset = 0usize;
+    let mut complete = true;
     for piece in text.split_inclusive(char::is_whitespace) {
         if offset >= MAX_TEXT_CHARS {
+            complete = false;
             break;
         }
-        let trimmed = piece.trim_end();
+        let remaining = MAX_TEXT_CHARS - offset;
+        let scan_limit = remaining.saturating_add(MAX_WORD_CHARS);
+        // Only the budgeted prefix plus look-ahead are kept; one further character detects that a
+        // space-free piece continues, without allocating the rest of the run.
+        let mut piece_chars = Vec::with_capacity(scan_limit.min(piece.len()));
+        let mut chars = piece.chars();
+        for _ in 0..scan_limit {
+            match chars.next() {
+                Some(c) => piece_chars.push(c),
+                None => break,
+            }
+        }
+        let piece_continues = chars.next().is_some();
+        if piece_continues || piece_chars.len() > remaining {
+            complete = false;
+        }
+        let budget_end = remaining.min(piece_chars.len());
+        let scan: String = piece_chars.iter().collect();
+        let budgeted: String = piece_chars[..budget_end].iter().collect();
+        let trimmed = budgeted.trim_end();
         let lower = lowercase(trimmed);
         let prose = !trimmed.chars().any(|c| c.is_ascii_digit() || c == '@') && !lower.contains("://") && !lower.starts_with("www.");
         if prose {
-            collect_words(trimmed, offset, &mut out);
+            collect_words(&scan, offset, MAX_TEXT_CHARS, &mut out);
         }
-        offset = offset.saturating_add(piece.chars().count());
+        if piece_continues {
+            // The rest of this piece (and later pieces) lie past what we examine.
+            break;
+        }
+        offset = offset.saturating_add(piece_chars.len());
     }
-    out
+    (out, complete)
 }
 
-fn collect_words(piece: &str, base: usize, out: &mut Vec<(usize, usize, String)>) {
+fn collect_words(piece: &str, base: usize, limit: usize, out: &mut Vec<(usize, usize, String)>) {
     let chars: Vec<char> = piece.chars().collect();
     let mut i = 0;
     while i < chars.len() {
+        let abs = base + i;
+        if abs >= limit {
+            break;
+        }
         if !chars.get(i).is_some_and(|c| c.is_alphabetic()) {
             i += 1;
             continue;
@@ -231,7 +294,8 @@ fn collect_words(piece: &str, base: usize, out: &mut Vec<(usize, usize, String)>
         let start = i;
         let mut end = i;
         while let Some(&c) = chars.get(end) {
-            let inner_apostrophe = matches!(c, '\'' | '\u{2019}' | '\u{2018}' | '\u{02bc}') && chars.get(end + 1).is_some_and(|n| n.is_alphabetic());
+            let inner_apostrophe = matches!(c, '\'' | '\u{2019}' | '\u{2018}' | '\u{02bc}')
+                && chars.get(end + 1).is_some_and(|n| n.is_alphabetic());
             if c.is_alphabetic() || inner_apostrophe {
                 end += 1;
             } else {
@@ -239,8 +303,10 @@ fn collect_words(piece: &str, base: usize, out: &mut Vec<(usize, usize, String)>
             }
         }
         let length = end - start;
-        if length > 1 && length <= MAX_WORD_CHARS {
-            out.push((base + start, base + end, chars.iter().skip(start).take(length).collect()));
+        let abs_start = base + start;
+        let abs_end = base + end;
+        if length > 1 && length <= MAX_WORD_CHARS && abs_end <= limit {
+            out.push((abs_start, abs_end, chars.iter().skip(start).take(length).collect()));
         }
         i = end.max(i + 1);
     }
