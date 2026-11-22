@@ -9,9 +9,10 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use craft::behavior::{ColumnKey, ColumnWidth, DisplayOrder, ItemSource};
 use craft::host::queue::{JobQueue, Priority};
-use craft::ui::contract::{Bind, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, Sizing};
+use craft::ui::contract::{Bind, ColumnSpec, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing};
 use craft::ui::dialog::{DialogResult, dialog_id};
 use craft::ui::display::Text;
+use craft::ui::layout_components::Stack;
 use craft::ui::list::ListRow;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, ParamTab, SharedRows};
 use craft::ui::table::Table;
@@ -499,27 +500,31 @@ impl ItemSource<usize> for AuditRows<'_> {}
 fn audit_row(rows: Arc<RwLock<Vec<SpaceUse>>>) -> Param {
     Param::custom("space-audit", tl!("Space Audit"), move |ui, _fields, _cx| {
         let lines = audit_lines(&rows.read().unwrap_or_else(PoisonError::into_inner));
-        Text::new(tl!("What takes up the space in this file, by kind of content.")).show(ui);
-        let columns = vec![
-            ColumnSpec::new(DESCRIPTION, tl!("Description"), ColumnWidth::Content),
-            ColumnSpec::new(BYTES, tl!("Bytes"), ColumnWidth::Content).numeric(),
-            ColumnSpec::new(PERCENTAGE, tl!("Percentage"), ColumnWidth::Content).numeric(),
-        ];
-        Table::<usize>::new(tl!("Space Audit"), columns)
-            .select(SelectMode::None)
-            .sizing(Sizing::Content)
-            .natural_height(true)
-            .striped(true)
-            .show_items(ui, &AuditRows(&lines), &mut |at, icx| {
-                let Some(line) = lines.get(*at) else { return ListRow::new("") };
-                ListRow::new(line.description.clone())
-                    .cells(icx.cells())
-                    .striped(icx.row.striped)
-                    .cell(BYTES, line.bytes.clone())
-                    .cell(PERCENTAGE, line.percentage.clone())
-            })
-            .response
+        let shown = Stack::new().fill_width().show(ui, |ui, _| {
+            Text::new(tl!("What takes up the space in this file, by kind of content.")).show(ui);
+            let columns = vec![
+                ColumnSpec::new(DESCRIPTION, tl!("Description"), ColumnWidth::Content),
+                ColumnSpec::new(BYTES, tl!("Bytes"), ColumnWidth::Content).numeric(),
+                ColumnSpec::new(PERCENTAGE, tl!("Percentage"), ColumnWidth::Content).numeric(),
+            ];
+            Table::<usize>::new(tl!("Space Audit"), columns)
+                .select(SelectMode::None)
+                .sizing(Sizing::Content)
+                .natural_height(true)
+                .striped(true)
+                .show_items(ui, &AuditRows(&lines), &mut |at, icx| {
+                    let Some(line) = lines.get(*at) else { return ListRow::new("") };
+                    ListRow::new(line.description.clone())
+                        .cells(icx.cells())
+                        .striped(icx.row.striped)
+                        .cell(BYTES, line.bytes.clone())
+                        .cell(PERCENTAGE, line.percentage.clone())
+                })
+                .response
+        });
+        shown.inner.unwrap_or(shown.output)
     })
+    .full_width()
 }
 
 /// The Space Audit row, for a dialog that shows the audit among other rows (Properties ▸ Space Audit): reads the app's shared

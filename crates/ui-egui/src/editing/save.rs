@@ -179,7 +179,17 @@ impl PdfCraftApp {
             SaveStep::AskChangedOnDisk { key, .. } => {
                 // The file on disk is another version than the document came from (#2166).
                 let name = self.session.get(key).map(|d| d.name.clone()).unwrap_or_default();
-                let prompt = crate::dialogs::host::open(self, StandardPrompt::changed_on_disk(name));
+                // Production's wording and buttons: Save anyway is an ordinary answer, not a red Replace.
+                let message = crate::i18n::fmt(
+                    tl!("“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one."),
+                    &[("name", &name)],
+                );
+                let prompt = StandardPrompt::custom(message)
+                    .title(tl!("Save over the changed file?").to_string())
+                    .button(PromptChoice::Proceed, tl!("Save anyway").to_string())
+                    .button(PromptChoice::Alternate, tl!("Save as…").to_string())
+                    .button(PromptChoice::Cancel, tl!("Cancel").to_string());
+                let prompt = crate::dialogs::host::open(self, prompt);
                 if let Some(pending) = self.pending_save.as_mut().filter(|p| p.key == key) {
                     pending.prompt = Some(prompt);
                 }

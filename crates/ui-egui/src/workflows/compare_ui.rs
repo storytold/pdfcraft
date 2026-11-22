@@ -402,7 +402,10 @@ pub(crate) fn compare_area(app: &mut PdfCraftApp, old: usize, new: usize, ui: &m
             if let Some(v) = app.views.get_mut(index) {
                 std::mem::swap(&mut v.view, state);
             }
-            let output = crate::canvas::document_area_at(app, index, rect, ui);
+            // Each half's notices lie within its own half: draw in a child ui bounded by the half.
+            let mut half_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt(("compare-half", index)));
+            half_ui.shrink_clip_rect(rect);
+            let output = crate::canvas::document_area_at(app, index, rect, &mut half_ui);
             if let Some(v) = app.views.get_mut(index) {
                 std::mem::swap(&mut v.view, state);
             }

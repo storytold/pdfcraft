@@ -263,6 +263,39 @@ impl PageSource for FilePages {
     }
 }
 
+/// The pages a file adds as the preview's whole document: it counts and numbers them 1..n as the production
+/// preview does ("Page 1 of 3" for a range of three), where `pages` maps each one to its page in the file.
+struct RangePages<'a> {
+    inner: &'a FilePages,
+    pages: &'a [usize],
+}
+
+impl ThumbSource<usize> for RangePages<'_> {
+    fn revision(&self, page: &usize, request: &ThumbRequest) -> Revision {
+        match self.pages.get(*page) {
+            Some(real) => self.inner.revision(real, request),
+            None => Revision::of(&u8::MAX),
+        }
+    }
+
+    fn render(&self, page: &usize, request: &ThumbRequest) -> ThumbRender {
+        match self.pages.get(*page) {
+            Some(real) => self.inner.render(real, request),
+            None => ThumbRender::Blank,
+        }
+    }
+}
+
+impl PageSource for RangePages<'_> {
+    fn page_count(&self) -> usize {
+        self.pages.len()
+    }
+
+    fn page_size(&self, page: usize) -> Size {
+        self.pages.get(page).map_or_else(|| Size::new(612.0, 792.0), |real| self.inner.page_size(*real))
+    }
+}
+
 /// The file a tile's Preview opened, shown large over the window: one of the pages it adds at a time,
 /// stepped with the buttons or the keys; Escape or Close closes it. It closes by itself when the file
 /// leaves the list, is locked again or has nothing to show.
@@ -302,7 +335,9 @@ pub(crate) fn preview(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         documents: app.combine_tab.open_documents.clone(),
     };
     let mut at = p.at;
-    let shown = PagePreview::new(&source, &pages, &mut at, DataColor::new(egui::Color32::WHITE)).show(ui);
+    let numbered: Vec<usize> = (0..pages.len()).collect();
+    let ranged = RangePages { inner: &source, pages: &pages };
+    let shown = PagePreview::new(&ranged, &numbered, &mut at, DataColor::new(egui::Color32::WHITE)).show(ui);
     p.at = at;
     p.page = pages.get(at).copied();
     if shown.closed {
