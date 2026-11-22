@@ -301,6 +301,19 @@ fn verify_compare_signed_version(h: &mut Harness<'static, PdfCraftApp>) {
     h.run_steps(3);
     let s = h.state();
     assert_eq!((s.views.len(), s.active, s.right), (2, Some(0), Some(RightPanel::Compare)));
+    // Started from the signed-version tab, the comparison runs against a baseline of its own
+    // instead of finding that tab and doing nothing.
+    h.state_mut().active = Some(1);
+    h.state_mut().compare = None;
+    h.run_steps(2);
+    h.state_mut().compare_signed_version(0);
+    h.run_steps(3);
+    let s = h.state();
+    assert_eq!(s.active, Some(1), "the signed-version tab stays in front");
+    let compare = s.compare.as_ref().expect("the comparison ran");
+    assert_eq!(compare.new, s.views[1].id);
+    assert_ne!(compare.old, compare.new, "the baseline is another tab");
+    assert!(compare.result.changes.is_empty(), "the signed version matches itself");
 }
 
 fn assert_trust_and_id_persist(h: &Harness<'static, PdfCraftApp>) {
