@@ -209,6 +209,9 @@ fn organize(pages: usize) -> Harness<'static, PdfCraftApp> {
 
 /// Organize pages ▸ Insert ▸ `item`: the panel lists the Insert rows under their heading.
 fn insert_menu(h: &mut Harness<'static, PdfCraftApp>, item: &str) {
+    // Insert is one row that opens a menu of its ways.
+    h.get_by_label("Insert").click();
+    h.run_steps(2);
     h.get_by_label(item).click();
 }
 
@@ -8509,7 +8512,7 @@ fn dragging_the_rotate_knob_past_the_page_edge_turns_the_picture() {
 #[test]
 fn organize_panel_comes_with_the_grid_and_closes_it() {
     let mut h = organize(3);
-    h.get_by_label("Insert a blank page after the selection");
+    h.get_by_label("Insert");
     h.get_by_label("Bates numbering");
     h.get_by_label("Page properties");
     h.get_by_label("Close panel").click();
@@ -8651,7 +8654,7 @@ fn leaving_organize_goes_back_to_the_workspace_panel() {
     h.state_mut().left = LeftPanel::Tool("organize");
     h.state_mut().views[0].organize = true;
     h.run_steps(3);
-    h.get_by_label("Insert a blank page after the selection");
+    h.get_by_label("Insert");
     // What opening a page from the grid does.
     h.state_mut().views[0].organize = false;
     h.run_steps(3);
