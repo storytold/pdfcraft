@@ -388,12 +388,22 @@ impl PdfCraftApp {
         if self.pickers.pending() {
             return;
         }
-        if self.dialog == Some(crate::Dialog::Sign) {
+        if self.dialog == Some(crate::Dialog::Sign) || self.token_signing_busy() {
             return;
         }
         self.presign = None;
         if self.session.get(doc).is_some_and(|d| d.undo_depth() == depth) && self.session.undo(doc).is_ok() {
             self.refresh_view_of(doc);
+        }
+    }
+
+    fn finish_signed_form(&mut self, doc: pdfcraft_engine::DocId, field: Option<&str>) {
+        // postSign changes are left unsaved. The signature has already been written.
+        let after = field.and_then(|f| self.session.run_sign_event(doc, f, pdfcraft_engine::js::SignEvent::After).err());
+        let said = self.session.take_js_output(doc);
+        self.handle_js(doc, said);
+        if let Some(e) = after {
+            self.notify_fmt("Signed and saved, but the form's postSign script couldn't finish: {e}", &[("e", &e.to_string())]);
         }
     }
 
@@ -580,6 +590,12 @@ impl PdfCraftApp {
             _ => None,
         };
         let choice = d.graphic.clone();
+        #[cfg(target_os = "linux")]
+        let token_retry = token.then(|| {
+            let mut retry = d.clone();
+            zeroize::Zeroize::zeroize(&mut retry.password);
+            retry
+        });
         let opts = SignOptions {
             field: d.field.clone(),
             page: d.page,
@@ -607,7 +623,7 @@ impl PdfCraftApp {
             }
             if token {
                 #[cfg(target_os = "linux")]
-                return app.start_token_signing(doc_id, entry, pin, opts, d, path);
+                return app.start_token_signing(doc_id, entry, pin, opts, token_retry.ok_or("Choose a smartcard.")?, path);
                 #[cfg(not(target_os = "linux"))]
                 return Err("Smartcard signing requires Linux.".into());
             }
@@ -632,11 +648,6 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             app.watch.known_now(doc_id, &path.to_string_lossy());
             app.session.mark_signed(doc_id, signed, Some(path.to_string_lossy().into_owned())).map_err(|e| e.to_string())?;
-            // Then its postSign scripts; what they change is a change after signing, to save.
-            // What they say shows once signing is done, after the notice that it was saved.
-            // The file is signed and saved by now: a postSign step that fails is said, not a failure.
-            let after = field.as_deref().and_then(|f| app.session.run_sign_event(doc_id, f, pdfcraft_engine::js::SignEvent::After).err());
-            let said = app.session.take_js_output(doc_id);
             #[cfg(target_os = "macos")]
             crate::macos_association::repair(&path);
             app.sign_graphic = choice;
@@ -645,10 +656,7 @@ impl PdfCraftApp {
             }
             app.right = Some(crate::RightPanel::Signatures);
             app.notify_fmt("Signed and saved to {path}", &[("path", &path.display().to_string())]);
-            app.handle_js(doc_id, said);
-            if let Some(e) = after {
-                app.notify_fmt("Signed and saved, but the form's postSign script couldn't finish: {e}", &[("e", &e.to_string())]);
-            }
+            app.finish_signed_form(doc_id, field.as_deref());
             Ok(())
         };
         match self.save_override.clone() {

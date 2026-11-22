@@ -83,7 +83,7 @@ fn authenticated_explicit_crypt_rejects_unsupported_and_malformed_selectors() {
         "/Filter [/Crypt /Crypt]",
         "/Filter [/FlateDecode /Crypt] /DecodeParms [null << /Name /Identity >>]",
     ] {
-        let pdf = Pdf::new_with_external_decryptor(fixture(selector, false), Arc::new(Decrypt::default())).unwrap();
+        let pdf = Pdf::new_with_external_decryptor(fixture(selector, false), Arc::new(Decrypt::default()), Default::default()).unwrap();
         let stream = pdf.xref().get::<Stream<'_>>(ObjectIdentifier::new(4, 0)).unwrap();
         assert!(stream.decoded().is_err(), "{selector}");
     }

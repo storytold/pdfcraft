@@ -1009,6 +1009,7 @@ impl Session {
                     .reduce(f32::max)
             })
             .collect();
+        let guard = OcrGuard { doc: id, pages: all, revisions: doc.revision_ends().len(), bytes: doc.bytes.clone() };
         Some(OcrJob {
             bytes: doc.bytes.clone(),
             password: doc.password.clone(),

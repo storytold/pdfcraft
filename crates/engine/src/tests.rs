@@ -628,7 +628,7 @@ fn a_3d_model_needs_the_comments_permission_and_changes_the_comments() {
         name: String::new(),
     };
     let p = pdfcraft_cos::Permissions { bits: 0, owner: false, revision: 3 };
-    assert_eq!(check_permission(&edit, &p), Err(EditError::NotPermitted("comments")));
+    assert_eq!(check_permission(&edit, &p, false), Err(EditError::NotPermitted("comments")));
     assert_eq!(crate::history::scope_of(&edit), crate::history::Scope::Comments);
 }
 

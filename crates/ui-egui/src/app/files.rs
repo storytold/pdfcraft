@@ -1,14 +1,13 @@
 use super::*;
 use crate::file_filter::AddFilterAnyCase as _;
 
-/// Whether an open's reply asks for a password: the file is encrypted and none, or a wrong one,
-/// was given.
+/// Whether opening the file needs another password or a certificate.
 #[cfg(not(target_arch = "wasm32"))]
-fn asks_for_password(kind: &open_worker::ResultKind) -> bool {
+fn asks_for_credential(kind: &open_worker::ResultKind) -> bool {
     matches!(
         kind,
         open_worker::ResultKind::Prepared { result, .. }
-            if matches!(**result, Err(pdfcraft_render::OpenError::NeedsPassword | pdfcraft_render::OpenError::WrongPassword))
+            if matches!(**result, Err(pdfcraft_render::OpenError::NeedsPassword | pdfcraft_render::OpenError::WrongPassword | pdfcraft_render::OpenError::NeedsCertificate))
     )
 }
 
@@ -213,9 +212,9 @@ impl PdfCraftApp {
                     }
                 },
             };
-            // While a closed prompt's password is being tried, a later file that asks for its own
-            // password keeps its reply: its prompt would hide the retry's outcome. Others admit.
-            if !retry && self.password_retry.is_some() && asks_for_password(&kind) {
+            // While a password retry runs, hold replies that need credentials so their prompts
+            // cannot hide its outcome.
+            if !retry && self.password_retry.is_some() && asks_for_credential(&kind) {
                 pending.ready = Some(kind);
                 waiting.push(pending);
                 continue;
@@ -682,18 +681,26 @@ impl PdfCraftApp {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn opening_prompt(&self) -> Option<&PasswordPrompt> {
+        self.password_prompt.as_ref().or_else(|| self.certificate_prompt.as_ref().map(|p| &p.pending))
+    }
+
     pub(crate) fn opening_prompt_mut(&mut self) -> Option<&mut PasswordPrompt> {
         match self.password_prompt.as_mut() {
             Some(p) => Some(p),
             None => self.certificate_prompt.as_mut().map(|p| &mut p.pending),
         }
     }
-    pub(crate) fn cancel_certificate_open(&mut self, prompt: PasswordPrompt) {
-        if let Some(meta) = prompt.recovered {
+    pub(crate) fn cancel_certificate_open(&mut self, mut prompt: PasswordPrompt) {
+        if let Some(meta) = prompt.recovered.take() {
             self.recoverable.push(meta);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.settle_launch_layout();
     }
-    pub(crate) fn finish_certificate_open(&mut self, prompt: PasswordPrompt, prepared: pdfcraft_engine::PreparedDocument) -> Result<(), String> {
+
+    pub(crate) fn finish_certificate_open(&mut self, mut prompt: PasswordPrompt, prepared: pdfcraft_engine::PreparedDocument) -> Result<(), String> {
         let id = self.finish_open(&prompt.name, prompt.path.clone(), prompt.bytes.len(), prepared, prompt.activate)?;
         #[cfg(not(target_arch = "wasm32"))]
         if prompt.path.is_some() {
@@ -701,15 +708,24 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         let _ = id;
-        if let Some(destination) = prompt.after_open {
+        if let Some(destination) = prompt.after_open.take() {
             self.apply_remote_destination(destination);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((layout, continuous)) = prompt.display_override
+            && let Some(view) = self.views.iter_mut().find(|view| view.id == id)
+        {
+            view.set_display(layout, continuous);
+            self.launch_display_target = Some(id);
         }
         if let Some(meta) = &prompt.recovered {
             self.finish_recovery(meta);
         }
-        if let Some(command) = prompt.then {
+        if let Some(command) = prompt.then.take() {
             self.execute(command);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.settle_launch_layout();
         Ok(())
     }
 
@@ -918,10 +934,10 @@ impl PdfCraftApp {
             }
             return OpenOutcome::Pending;
         }
-        // The same file named again while its password is being asked for joins that prompt
+        // The same file named again while awaiting credentials joins that prompt
         // instead of queuing a second one; a display override, a place to open at or a tool it
         // brings is kept.
-        if let Some(prompt) = self.password_prompt.as_mut().filter(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
+        if let Some(prompt) = self.opening_prompt_mut().filter(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
             if display_override.is_some() {
                 prompt.display_override = display_override;
             }
@@ -953,12 +969,12 @@ impl PdfCraftApp {
         // the bounded worker and commit on the UI thread.
         // Keep later files behind an open password prompt: it belongs to an earlier file, and an
         // inline open would clear it. Keep flagged launch files behind any dialog or picker too.
-        let held = self.password_prompt.is_some() || (display_override.is_some() && (self.modal_open() || self.pickers.pending()));
+        let held = self.opening_prompt().is_some() || (display_override.is_some() && (self.modal_open() || self.pickers.pending()));
         if (self.ctx.is_none() || self.run_inline) && !held {
             match std::fs::read(path) {
                 Ok(bytes) => {
                     let before = self.views.len();
-                    let previous_prompt = self.password_prompt.as_ref().map(|p| p.bytes.clone());
+                    let previous_prompt = self.opening_prompt().map(|p| p.bytes.clone());
                     if let Err(error) = self.open_bytes(&name, Some(path.to_string()), bytes) {
                         self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
                         return OpenOutcome::Failed;
@@ -1044,7 +1060,7 @@ impl PdfCraftApp {
     fn settle_launch_layout(&mut self) {
         if self.pending_opens.iter().any(|open| open.display_override.is_some())
             || self.deferred_opens.iter().any(|open| open.display_override.is_some())
-            || self.password_prompt.as_ref().is_some_and(|prompt| prompt.display_override.is_some())
+            || self.opening_prompt().is_some_and(|prompt| prompt.display_override.is_some())
         {
             return;
         }

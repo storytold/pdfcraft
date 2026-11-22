@@ -13,7 +13,8 @@ impl SigningJob {
     /// Produce signed bytes without writing a file or changing a session.
     pub fn sign(self, identity: &pdfcraft_sign::DigitalId) -> Result<Arc<Vec<u8>>, EditError> {
         guard(|| {
-            let cos = writable(&self.cos)?;
+            // The password-field text is excluded and the first signature preserves its displayed appearance.
+            let cos = drawn_for_first_signature(writable(&self.cos)?);
             Ok(Arc::new(pdfcraft_sign::sign(&cos, identity, &self.options)?))
         })
         .map_err(EditError::Write)?
@@ -383,9 +384,7 @@ impl Session {
         if opts.date.is_empty() {
             opts.date = self.signing_date();
         }
-        // A typed Password-field value is not signed into the file (#3926), as it isn't saved.
-        let cos = drawn_for_first_signature(writable(&editor.cos)?);
-        Ok(SigningJob { cos, options: opts })
+        Ok(SigningJob { cos: editor.cos.clone(), options: opts })
     }
 
     /// [`Session::sign`], embedding an RFC 3161 signature timestamp (PAdES B-T) produced by

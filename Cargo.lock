@@ -2032,6 +2032,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "cryptoki"
+version = "0.12.0"
+source = "git+https://github.com/parallaxsecond/rust-cryptoki?rev=2e4ff5d717f46f90785496949c08599b589b8e32#2e4ff5d717f46f90785496949c08599b589b8e32"
+dependencies = [
+ "bitflags 2.13.2",
+ "cryptoki-sys",
+ "libloading",
+ "log",
+ "secrecy",
+]
+
+[[package]]
+name = "cryptoki-sys"
+version = "0.5.0"
+source = "git+https://github.com/parallaxsecond/rust-cryptoki?rev=2e4ff5d717f46f90785496949c08599b589b8e32#2e4ff5d717f46f90785496949c08599b589b8e32"
+dependencies = [
+ "libloading",
+]
+
+[[package]]
 name = "ctutils"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5009,6 +5029,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "tempfile",
+ "zeroize",
 ]
 
 [[package]]
@@ -5106,6 +5127,7 @@ dependencies = [
 name = "pdfcraft-engine"
 version = "0.21.1"
 dependencies = [
+ "aws-lc-rs",
  "chrono",
  "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "craft-docpath",
@@ -5146,6 +5168,7 @@ dependencies = [
  "thiserror 2.0.21",
  "unicode-segmentation",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -5398,6 +5421,7 @@ dependencies = [
  "chrono",
  "craft-pkcs7",
  "crypto-bigint",
+ "cryptoki",
  "des",
  "ecdsa",
  "ed25519-dalek",
@@ -5416,8 +5440,11 @@ dependencies = [
  "rc2",
  "ripemd",
  "rsa",
+ "rustix 1.1.6",
  "rustls-cng",
  "security-framework",
+ "serde",
+ "serde_json",
  "sha1 0.11.0",
  "sha2 0.11.1",
  "sha3",
@@ -6800,6 +6827,15 @@ dependencies = [
  "der 0.8.2",
  "hybrid-array",
  "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "secrecy"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
+dependencies = [
  "zeroize",
 ]
 

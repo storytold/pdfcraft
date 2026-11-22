@@ -367,7 +367,7 @@ impl Automation {
     pub(crate) fn text_replace_with(
         &mut self,
         a: &Args,
-        extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageTexts,
+        extract: &mut impl FnMut(&Arc<Vec<u8>>, RenderConfig, &[usize]) -> PageTexts,
     ) -> Result<Value> {
         let doc = self.doc(a)?;
         let (id, n) = (doc.id, doc.info.pages.len());

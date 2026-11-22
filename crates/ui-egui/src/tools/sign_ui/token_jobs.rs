@@ -41,6 +41,7 @@ pub struct TokenSigning {
     destination: Option<crate::file_watch::Stamp>,
     retry: SignDraft,
     selection: DigitalIdEntry,
+    field: Option<String>,
 }
 impl TokenSigning {
     pub(crate) fn epoch(&self) -> u64 {
@@ -149,6 +150,7 @@ impl PdfCraftApp {
         retry.password.clear();
         let document = self.session.get(doc).ok_or("The document is closed.")?;
         let (generation, saved) = (document.edit_generation(), document.saved_bytes());
+        let field = options.field.clone();
         let snapshot = self.session.prepare_sign(doc, options).map_err(|e| e.to_string())?;
         let cancellation = pkcs11::Cancellation::default();
         let owner = cancellation.cancel_on_drop();
@@ -190,6 +192,7 @@ impl PdfCraftApp {
             destination,
             retry,
             selection,
+            field,
         });
         Ok(())
     }
@@ -268,6 +271,9 @@ impl PdfCraftApp {
         }
         self.session.check_save(job.doc, &signed).map_err(|e| e.to_string())?;
         crate::editing::write_atomically(&job.path.to_string_lossy(), &signed).map_err(|e| format!("Could not save: {e}"))?;
+        if self.presign.is_some_and(|(doc, _)| doc == job.doc) {
+            self.presign = None;
+        }
         self.watch.known_now(job.doc, &job.path.to_string_lossy());
         self.session.mark_signed(job.doc, signed, Some(job.path.to_string_lossy().into_owned())).map_err(|e| e.to_string())?;
         self.sign_graphic = job.retry.graphic.clone();
@@ -276,6 +282,7 @@ impl PdfCraftApp {
         }
         self.right = Some(RightPanel::Signatures);
         self.notify_fmt("Signed and saved to {path}", &[("path", &job.path.display().to_string())]);
+        self.finish_signed_form(job.doc, job.field.as_deref());
         Ok(())
     }
 }
@@ -318,6 +325,7 @@ mod tests {
             destination: crate::file_watch::Stamp::at(&path.to_string_lossy()),
             path,
             retry: draft,
+            field: None,
             selection: entry_for(
                 "pkcs11:test",
                 &sign::pkcs12::open(&std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap(), "test")

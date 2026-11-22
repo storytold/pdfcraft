@@ -160,6 +160,7 @@ mod tests {
                 recovered: None,
                 then: None,
                 after_open: None,
+                display_override: None,
             };
             let mut prompt = OpenPrompt::new(pending);
             let (sender, receiver) = std::sync::mpsc::channel();

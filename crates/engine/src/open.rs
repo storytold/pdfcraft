@@ -47,10 +47,11 @@ fn authenticated_context(structure: &StructureResult, with_resolver: bool) -> Re
         return Err(OpenError::NeedsCertificate);
     }
     if with_resolver && !matches!(structure, Ok(Ok(_))) {
-        return Err(OpenError::CertificateSecurity(match structure {
-            Ok(Err(e)) => e.to_string(),
-            _ => "certificate authentication failed unexpectedly".into(),
-        }));
+        return Err(match structure {
+            Ok(Err(pdfcraft_cos::CosError::Security(reason))) => OpenError::CertificateSecurity(reason.clone()),
+            Ok(Err(e)) => OpenError::Invalid(e.to_string()),
+            _ => OpenError::CertificateSecurity("certificate authentication failed unexpectedly".into()),
+        });
     }
     match structure {
         Ok(Ok(source)) if source.security().is_some_and(|h| h.dict().filter == b"Adobe.PubSec") => {

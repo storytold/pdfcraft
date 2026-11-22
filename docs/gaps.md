@@ -48,7 +48,7 @@ update the numbers.
 | 7 | OCR reads only unaccented Latin | feature | 40–75 | [file-format-parity.md](file-format-parity.md) |
 | 8 | Office export weak, Office import basic | file format | 55–100 | [file-format-parity.md](file-format-parity.md) |
 | 9 | No Preflight; PDF/A partial; PDF/X and PDF/UA absent | standards | 65–115 | [pdf-spec-parity.md](pdf-spec-parity.md) |
-| 10 | Signatures: no PKCS #11, timestamp servers or online revocation | feature, hardware | 40–70 | [pdf-spec-parity.md](pdf-spec-parity.md) |
+| 10 | Signatures: broader PKCS #11 qualification, timestamp servers and online revocation | feature, hardware | 40–70 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 11 | Accessibility: checker only, no tagging tools | feature | 40–70 | [target-app-parity.md](target-app-parity.md) |
 | 12 | No measured fidelity harness against Acrobat | quality | (in 2) | [target-app-parity.md](target-app-parity.md) |
 | 13 | Performance budgets and lazy loading of very large files | performance | 25–45 | this file |
@@ -226,13 +226,13 @@ update the numbers.
 - **Impact:** blocks print shops, archives and accessibility compliance work.
 - **Estimate:** 65–115 h. **Doc:** [pdf-spec-parity.md](pdf-spec-parity.md).
 
-### 10. Signatures: no PKCS #11, timestamp servers or online revocation
+### 10. Signatures: broader PKCS #11 qualification, timestamp servers and online revocation
 
-- **Missing:** PKCS #11 tokens and smart cards on macOS and Linux; timestamp-server preferences;
+- **Missing:** broader reader, card and provider qualification for Linux PKCS #11; direct PKCS #11 on macOS; timestamp-server preferences;
   fetching OCSP/CRL online for LTV; FieldMDP and locking fields on signing; the OS trust store; EU
   Trusted Lists; signature graphics and saved appearances; compare signed version; signing in the
   browser.
-- **Evidence:** `sign.pkcs11`, `sign.timestamp-servers`, `sign.field-mdp`, `sign.os-trust`,
+- **Evidence:** `sign.pkcs11` partial (Linux signing and PIN pad); `sign.timestamp-servers`, `sign.field-mdp`, `sign.os-trust`,
   `sign.eutl` planned; `sign.pades-bt`, `sign.ltv`, `sign.ocsp-crl` partial (caller-supplied
   evidence). Users ask for Acrobat-like validation
   ([#824](https://github.com/storytold/pdfcraft/issues/824),

@@ -60,9 +60,6 @@ impl ExternalDecryptor for ObjectDecryptor {
                 if metadata && !self.0.encrypts_metadata() {
                     return Some(data.to_vec());
                 }
-                if metadata && !self.0.encrypts_metadata() {
-                    return Some(data.to_vec());
-                }
                 let kind = match &filter {
                     Some(name) => pdfcraft_cos::CryptStreamKind::Named(name),
                     None if embedded_file => pdfcraft_cos::CryptStreamKind::EmbeddedFile,

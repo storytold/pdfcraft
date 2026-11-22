@@ -1046,7 +1046,9 @@ pub(crate) fn shown_under_redactions(
     let bytes = Arc::new(write_incremental(&shown, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?);
     // Page geometry comes from the document as it is now written: a page moved earlier in the batch
     // brings its own size and rotation with it.
-    let pages = pdfcraft_render::inspect_with_credentials(bytes.clone(), credentials.password.as_deref(), credentials.authenticated.as_ref()).map_err(|e| EditError::Write(e.to_string()))?.pages;
+    let pages = pdfcraft_render::inspect_with_credentials(bytes.clone(), credentials.password.as_deref(), credentials.authenticated.as_ref())
+        .map_err(|e| EditError::Write(e.to_string()))?
+        .pages;
     // The model counts one entry per `/Kids` entry; the renderer one per page it draws. If they
     // disagree, a mark's index could land on another page's text, and the check cannot confirm
     // the redaction.

@@ -63,7 +63,11 @@ fn certificate_security_opens_renders_and_preserves_the_original() {
             assert_eq!(doc.info.title.as_deref(), Some("Secret title"));
             assert_eq!(doc.info.pages.len(), 1);
             assert_eq!(doc.attachment_data(&doc.info.attachments[0]).unwrap(), b"private attachment");
-            let mut renderer = PageRenderer::new(doc.display.clone(), doc.config.clone());
+            let viewer = crate::display_config(&doc.config);
+            assert!(viewer.system_fonts, "the viewer retains on-screen font fallback");
+            assert!(viewer.authenticated.is_some(), "on-screen configuration retains certificate credentials");
+            assert!(!doc.export_source().config.system_fonts, "exports keep the output font policy");
+            let mut renderer = PageRenderer::new(doc.display.clone(), viewer);
             let got = renderer.render(RenderRequest::default());
             assert!(got.error.is_none(), "{:?}", got.error);
             let mut clear = PageRenderer::new(Arc::new(fixture(1)), RenderConfig::default());
@@ -193,9 +197,9 @@ fn certificate_redaction_verification_ignores_viewer_layer_hiding() {
 #[test]
 fn certificate_printing_supports_explicit_and_permission_forced_rasterization() {
     for (permissions, raster) in [
-        (-1, Some(print::Raster { dpi: 72.0, grayscale: true })),
+        (-1, Some(print::Raster { dpi: 72.0, grayscale: true, colour: None })),
         (1 << 2, None),
-        (1 << 2, Some(print::Raster { dpi: 600.0, grayscale: false })),
+        (1 << 2, Some(print::Raster { dpi: 600.0, grayscale: false, colour: None })),
         (0, None),
     ] {
         let calls = Cell::new(0);
@@ -356,6 +360,9 @@ mod workflows {
                 config.algorithm = algorithm;
                 config.encrypt_metadata = metadata;
                 session.apply(id, Edit::ProtectCertificates(config)).unwrap();
+                let pending = session.get(id).unwrap().security_summary().unwrap();
+                assert!(pending.pending && pending.certificate);
+                assert!(pending.permissions.print_high_quality() && pending.permissions.copy() && pending.permissions.modify());
                 let saved = session.save_bytes(id).unwrap();
                 assert!(!String::from_utf8_lossy(&saved).contains("Page 1"));
                 session.check_save(id, &saved).unwrap();
@@ -419,7 +426,8 @@ mod workflows {
                 decrypt(&original, key)
             })
         };
-        assert!(pdfcraft_cos::Document::open_with_security_resolver(second.clone(), &old_resolver).is_err());
+        let error = Session::new().open_with_security_resolver("reprotected.pdf", None, second.clone(), &old_resolver).unwrap_err();
+        assert!(matches!(error, OpenError::CertificateSecurity(ref reason) if reason.contains("no recipient matching")), "{error}");
         assert_eq!(calls.get(), 0, "a removed recipient must not use a private key");
         let resolver =
             |params: &EncryptDict, _: &[u8]| certificate_security::authenticate(params, &replacement.certificate, |key| decrypt(&replacement, key));

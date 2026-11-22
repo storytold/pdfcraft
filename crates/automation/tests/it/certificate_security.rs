@@ -30,6 +30,10 @@ fn certificate_tools_encrypt_render_save_and_undo_without_a_token() {
     let protected = ok(&mut a, "doc_protect_certificates", json!({"doc": doc, "recipients": [{"certificate": "recipient.der"}]}));
     assert_eq!(protected["encrypted"], true);
     assert_eq!(protected["security"]["pending"], true);
+    assert_eq!(protected["security"]["printing"], "high");
+    for right in ["modify", "assemble", "copy", "annotate", "security_control"] {
+        assert_eq!(protected["security"][right], true, "{right}");
+    }
     assert!(ok(&mut a, "text_extract", json!({"doc": doc})).to_string().contains("Page 1"));
     assert!(a.call("page_render", &json!({"doc": doc, "page": 1, "dpi": 36})).unwrap().iter().any(|c| matches!(c, Content::Png { .. })));
     ok(&mut a, "doc_save", json!({"doc": doc, "path": "encrypted.pdf"}));
