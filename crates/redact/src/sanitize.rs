@@ -479,12 +479,13 @@ fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
         o.and_then(|g| doc.resolve(g).as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default()
     };
     let all = refs(oc.get(b"OCGs"));
-    let (on, off) = (refs(d.get(b"ON")), refs(d.get(b"OFF")));
-    let mut hidden: Vec<ObjRef> = if d.name(b"BaseState") == Some(b"OFF") {
-        all.iter().copied().filter(|g| !on.contains(g)).collect()
-    } else {
-        off.into_iter().filter(|g| all.contains(g)).collect()
-    };
+    // sets: the lists are the document's, and a filter over every group would scan them each time
+    let (on, off): (std::collections::HashSet<ObjRef>, std::collections::HashSet<ObjRef>) =
+        (refs(d.get(b"ON")).into_iter().collect(), refs(d.get(b"OFF")).into_iter().collect());
+    // The default state is /BaseState, then /ON turns groups on and /OFF turns them off, so a
+    // group both lists name ends up off (§8.11.4.3, Table 101) — the viewer reads it the same way.
+    let base_off = d.get(b"BaseState").map(|b| crate::resolve_chain(doc, b)).is_some_and(|b| b.as_name() == Some(b"OFF".as_slice()));
+    let mut hidden: Vec<ObjRef> = all.iter().copied().filter(|g| off.contains(g) || (base_off && !on.contains(g))).collect();
     // Each rule, layer list and layer is read once, however often the rules name them: many rules
     // can share one long list.
     let known: std::collections::HashSet<ObjRef> = all.iter().copied().collect();
@@ -658,6 +659,17 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
         let out = process(doc, &mut scope, &data, &resources, Matrix::IDENTITY);
         if let Some(error) = out.error {
             return Err(error.into());
+        }
+        // Bytes the parser can't read, or an inline image whose end is a guess: the walk reads past
+        // them, so what it reads around them may not be what other readers draw (hidden text in a
+        // broken `TJ` is neither found nor removed). As for content that doesn't decode, count the
+        // page so the removal runs and refuses it.
+        if out.unparsed || out.ambiguous {
+            if write {
+                return Err(RedactError::Unreadable(pi + 1));
+            }
+            total += 1;
+            continue;
         }
         let blocks = scope.layer_blocks;
         let glyphs = scope.report.glyphs;

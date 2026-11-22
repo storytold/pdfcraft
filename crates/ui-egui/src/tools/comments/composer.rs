@@ -2,8 +2,8 @@ use super::geometry::{drawn_text_box_rect, page_rotation, text_box_rect};
 use super::paint::{edited_in_view, new_comment};
 use super::state::{ComposerKind, PageCx};
 use super::{
-    Color32, CommentPrefs, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NoteIcon, PagePointer, QuickTool, Shape, Tokens, pos2,
-    theme,
+    Color32, CommentPrefs, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, Markup, NoteIcon, PagePointer, QuickTool, Shape, Tokens,
+    pos2, theme,
 };
 use crate::page_keys::PageKeys;
 
@@ -38,6 +38,7 @@ pub(crate) fn composer(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, 
     let c = view.comments.composer.as_mut()?;
     let title = match c.kind {
         ComposerKind::Note => "Sticky note",
+        ComposerKind::TextNote { .. } => "Add comment",
         ComposerKind::TextBox { .. } => "Text box",
         ComposerKind::Callout { .. } => "Callout",
         ComposerKind::Caret { .. } => "Inserted text",
@@ -124,6 +125,10 @@ pub(crate) fn composer(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, 
         ComposerKind::Note => {
             view.comments.tool_done = true;
             Some(new_comment(&cx, CommentTool::Note, Shape::Note { at: c.at, icon: NoteIcon::Comment }, text))
+        }
+        ComposerKind::TextNote { quads } => {
+            view.comments.tool_done = true;
+            Some(new_comment(&cx, CommentTool::Highlight, Shape::TextMarkup { kind: Markup::Highlight, quads }, text))
         }
         ComposerKind::TextBox { size } => {
             view.comments.tool_done = true;

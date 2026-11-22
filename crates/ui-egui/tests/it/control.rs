@@ -1788,8 +1788,7 @@ fn a_script_opened_panel_shows() {
     assert!(h.query_by_label("This document has no bookmarks.").is_none());
     let id = h.state().active_ids().unwrap().1;
     h.state_mut().run_button_script(id, "", "app.execMenuItem('ShowHideBookmarks')");
-    h.run_steps(4);
-    h.get_by_label("This document has no bookmarks.");
+    assert!(crate::support::step_until(&mut h, |h| h.query_by_label("This document has no bookmarks.").is_some()));
 }
 
 #[test]

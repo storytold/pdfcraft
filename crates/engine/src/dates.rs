@@ -63,7 +63,7 @@ const CKB_DAYS: [&str; 7] = ["یەکشەممە", "دووشەممە", "سێشەم
 
 /// The languages month and weekday names can be written in (Preferences ▸ Date format ▸ Language):
 /// the interface languages, in the same order and with the same names.
-pub static DATE_LANGUAGES: [DateLanguage; 35] = [
+pub static DATE_LANGUAGES: [DateLanguage; 36] = [
     DateLanguage {
         code: "en",
         name: "English",
@@ -321,6 +321,15 @@ pub static DATE_LANGUAGES: [DateLanguage; 35] = [
         months_short: ["jan.", "feb.", "mar.", "apr.", "maj", "jun.", "jul.", "avg.", "sep.", "okt.", "nov.", "dec."],
         days: ["nedelja", "ponedeljek", "torek", "sreda", "četrtek", "petek", "sobota"],
         days_short: ["ned.", "pon.", "tor.", "sre.", "čet.", "pet.", "sob."],
+    },
+    DateLanguage {
+        code: "bs",
+        name: "Bosanski",
+        months: ["januar", "februar", "mart", "april", "maj", "juni", "juli", "august", "septembar", "oktobar", "novembar", "decembar"],
+        months_with_day: None,
+        months_short: ["jan.", "feb.", "mar.", "apr.", "maj", "jun.", "jul.", "aug.", "sep.", "okt.", "nov.", "dec."],
+        days: ["nedjelja", "ponedjeljak", "utorak", "srijeda", "četvrtak", "petak", "subota"],
+        days_short: ["ned.", "pon.", "uto.", "sri.", "čet.", "pet.", "sub."],
     },
     DateLanguage {
         code: "el",
