@@ -388,7 +388,7 @@ pub(crate) fn show(
             .mode(if multiline { EditorMode::FieldLines } else { EditorMode::FieldLine })
             .esc_commits(false);
         let editor = if f.has(field_flags::PASSWORD) { editor.masked() } else { editor };
-        let out = editor.show_at(ui, rect);
+        let out = ui.push_id((&f.name, f.obj, widget), |ui| editor.show_at(ui, rect)).inner;
         ended = out.ended;
         shown = Some(out.response.id);
     }
