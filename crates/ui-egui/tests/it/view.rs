@@ -1024,6 +1024,9 @@ fn bookmark_destinations_scroll_to_their_position() {
     use egui_kittest::kittest::Queryable;
     use pdfcraft_ui_egui::canvas::Fit;
     let mut h = dests_harness();
+    // Leave enough room to scroll the destination to the start edge at 300%.
+    h.set_size(egui::vec2(1300.0, 900.0));
+    h.run_steps(6);
     // Fit width: the pages are taller than the window, so any point of them can reach its top.
     h.get_by_label("Section 1.1 Shapes").click();
     h.run_steps(6);
