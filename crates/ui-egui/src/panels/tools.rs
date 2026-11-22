@@ -1,9 +1,14 @@
 use craft::behavior::{DisplayOrder, IconId, ItemSource, Selection};
+use craft::theme::{
+    Variant,
+    variant::{Emphasis, Tone},
+};
 use craft::ui::buttons::Button;
 use craft::ui::choice::{Checkbox, Segmented};
-use craft::ui::contract::{ActivateOn, Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, Sizing};
+use craft::ui::contract::{
+    ActivateOn, Bind, CollectionEvent, Entry, Outcome as _, Props as _, SelectMode, Show as _, ShowCollection as _, Sizing, clicked,
+};
 use craft::ui::display::Badge;
-use craft::theme::{Variant, variant::{Emphasis, Tone}};
 use craft::ui::list::{HueTarget, List, ListRow, RowEvent, RowInk, TrailingFace, TrailingPart};
 use craft::ui::primitives::IconSpec;
 use craft::ui::style::DataColor;
@@ -99,6 +104,7 @@ fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let shown = if app.all_tools_expanded { TOOL_GROUPS.len() } else { COLLAPSED_TOOLS.min(TOOL_GROUPS.len()) };
     let pins: Vec<bool> = TOOL_GROUPS[..shown].iter().map(|g| app.is_tool_pinned(g.id)).collect();
     let out = List::<usize>::new(tl!("All tools").to_owned())
+        .natural_height(true)
         .select(SelectMode::Single)
         .activate(ActivateOn::Click)
         .selection(Bind::given(Selection::default()))
@@ -122,7 +128,7 @@ fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         }
     }
     let more = if app.all_tools_expanded { "View less" } else { "View more" };
-    if Button::new(tl!(more).to_owned()).show(ui).clicked() {
+    if clicked(craft::ui::buttons::Link::new(tl!(more).to_owned()).show(ui).response()) {
         app.all_tools_expanded = !app.all_tools_expanded;
     }
 }

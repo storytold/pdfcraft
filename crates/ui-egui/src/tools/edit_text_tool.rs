@@ -138,8 +138,8 @@ impl CanvasTool for EditTextTool<'_> {
     }
 
     fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
-        let (Some(rect), Some(style)) = (object_ui::marquee_rect(&self.press.phase), cx.style()) else { return };
-        draw.stroke(&PaintShape::Rect(rect, egui::CornerRadius::ZERO), StrokeWidth::Thin, style.color(style.tokens.color.accent.solid));
+        let Some(rect) = object_ui::marquee_rect(&self.press.phase) else { return };
+        crate::prepare::tool::marquee_fill(draw, cx, rect);
     }
 
     fn command_form(&self) -> ToolPath {
