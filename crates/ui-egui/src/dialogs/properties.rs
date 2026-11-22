@@ -6,6 +6,7 @@ use craft::ui::buttons::Button;
 use craft::ui::contract::{Bind, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, clicked};
 use craft::ui::dialog::{DialogId, dialog_id};
 use craft::ui::display::Text;
+use craft::ui::form::Field;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::{List, ListRow};
 use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamKind, PropertiesDialog, PropertiesTab, PropertyRow};
@@ -149,8 +150,12 @@ fn custom_row(file_listed: usize, editable: bool, listed: Vec<(String, String)>)
         let mut props = custom_pairs(fields).unwrap_or_default();
         let unlisted = fields.bool("custom.unlisted").unwrap_or(false);
         let shown = Stack::new().show(ui, |ui, _| {
-            TextField::new(tl!("Name:").to_string(), Bind::bound(&mut name)).enabled(editable).show(ui);
-            TextField::new(tl!("Value:").to_string(), Bind::bound(&mut text)).enabled(editable).show(ui);
+            Field::new(tl!("Name:").to_string()).show(ui, |ui, _| {
+                TextField::new(tl!("Name:").to_string(), Bind::bound(&mut name)).enabled(editable).show(ui);
+            });
+            Field::new(tl!("Value:").to_string()).show(ui, |ui, _| {
+                TextField::new(tl!("Value:").to_string(), Bind::bound(&mut text)).enabled(editable).show(ui);
+            });
             // Untrimmed: a file's `/Project#20` is not `/Project`, and a typed space is refused.
             let value = text.trim().to_owned();
             let at = props.iter().position(|(key, _)| *key == name);
