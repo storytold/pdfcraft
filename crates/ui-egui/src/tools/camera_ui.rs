@@ -12,6 +12,7 @@ use craft_ui::buttons::{Button, IconButton};
 use craft_ui::canvas::{CanvasTool, CropShield, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft_ui::canvas_controls::TaskBar;
 use craft_ui::choice::Segmented;
+use craft::ui::display::Text;
 use craft_ui::contract::{Bind, Entry, Props as _, Show as _, Styled as _, clicked};
 use craft_ui::primitives::Draw;
 use craft_ui::style::Variant;
@@ -23,6 +24,8 @@ pub use pdfcraft_engine::camera_clean::Look;
 
 /// How far in from the page's edges the corners start, as a share of its size.
 const INSET: f32 = 0.05;
+/// How strongly the area outside the quadrilateral is greyed, in percent: production's page reads mid grey there.
+const SHIELD_OPACITY: f32 = 43.0;
 /// The slider's top.
 pub const MAX_LEVEL: u8 = pdfcraft_engine::camera_clean::MAX_LEVEL;
 
@@ -87,9 +90,11 @@ pub(crate) fn show_quad(ui: &mut Ui, body: &PageBody<'_>, session: &mut PageSess
     let to_doc = |c: [f32; 2]| body.view.to_doc(placed.to_screen(Point::new(f64::from(c[0]), f64::from(c[1]))));
     let mut doc_quad = Some(quad.corners.map(to_doc));
     let page_bounds = DocRect::from_points(body.view.to_doc(placed.rect.min), body.view.to_doc(placed.rect.max));
+    let mut shield = CropShield::PERSPECTIVE;
+    shield.opacity = SHIELD_OPACITY;
     let out = PerspectiveCropQuad::new(tl!("Corners"), Bind::bound(&mut doc_quad))
         .show_grid(false)
-        .shield(CropShield::PERSPECTIVE)
+        .shield(shield)
         .bounds(page_bounds)
         .enabled(allowed)
         .show_at(ui, body.rect);
@@ -130,6 +135,8 @@ pub(crate) fn bar(ui: &mut Ui, body: &PageBody<'_>, session: &mut PageSession, a
                 again = true;
             }
             let mut level = f64::from(done.level);
+            // The slider's name shows beside it, as production's bar does.
+            Text::new(tl!("Clean-up")).show(ui);
             let edit = Slider::new(Bind::bound(&mut level), 0.0..=f64::from(MAX_LEVEL))
                 .step(1.0)
                 .label(tl!("Clean-up"))
@@ -148,10 +155,10 @@ pub(crate) fn bar(ui: &mut Ui, body: &PageBody<'_>, session: &mut PageSession, a
             if clicked(&IconButton::new(IconId::new("rotate_cw")).label(tl!("Rotate clockwise")).enabled(allowed).show(ui)) {
                 action = Some(ViewAction::CameraRotate { clockwise: true });
             }
-            if clicked(&Button::new(tl!("Crop pages")).show(ui)) {
+            if clicked(&Button::new(tl!("Crop pages")).variant(Variant::GHOST).show(ui)) {
                 action = Some(ViewAction::CameraNext("page.crop"));
             }
-            if clicked(&Button::new(tl!("Organize pages")).show(ui)) {
+            if clicked(&Button::new(tl!("Organize pages")).variant(Variant::GHOST).show(ui)) {
                 action = Some(ViewAction::CameraNext("page.organize"));
             }
             if clicked(&Button::new(tl!("Done")).variant(Variant::PRIMARY).show(ui)) {

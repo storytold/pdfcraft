@@ -819,6 +819,10 @@ impl PdfCraftApp {
         // Dialogs and notices show in full screen too: a refused field value or a failed save must be seen.
         dialogs::show(self, ui);
         crate::notices::show(self, ui);
+        // A notice or progress change made after the notices' turn (a finished job's result) is posted next pass: ask for it.
+        if !self.posted_notices.is_empty() || !self.progress_requests.is_empty() {
+            ctx.request_repaint();
+        }
         for view in &mut self.views {
             crate::canvas::organize::finish_reveal(view, &ctx);
         }
