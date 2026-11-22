@@ -7,7 +7,7 @@ use craft::keymap::CommandRef;
 use craft::menu::Target;
 use craft::ui::bars::{Bar, BarKind};
 use craft::ui::buttons::{CommandSearch, IconButton};
-use craft::ui::contract::{Bind, CollectionEvent, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::contract::{Bind, CollectionEvent, Props as _, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::layout_components::Row;
 use craft::ui::menu::HelpEntry;
 use craft::ui::patterns::panels::CommandPalette;
@@ -51,6 +51,8 @@ pub(super) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         if menus {
             app.menu_bar_ui(ui);
         }
+        // Production replaces the search field with its icon when the field cannot keep its minimum width.
+        let compact_search = ui.available_width() < 140.0 + 116.0;
         // The document may hide the tools (`crate::viewer_prefs`): the mode strip, the buttons and the search.
         let shown = MODES.iter().position(|(mode, _)| *mode == app.mode);
         Bar::new(tl!("Modes"), BarKind::Tool)
@@ -61,7 +63,11 @@ pub(super) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 IconButton::command(IconId::new("printer"), "print.dialog").show(ui);
                 IconButton::command(IconId::new("save"), "file.save").show(ui);
                 IconButton::command(IconId::new("info"), "file.properties").show(ui);
-                CommandSearch::new("view.palette", tl!("Find tools and commands")).show(ui);
+                if compact_search {
+                    IconButton::command(IconId::new("search"), "view.palette").label(tl!("Find tools and commands")).show(ui);
+                } else {
+                    CommandSearch::new("view.palette", tl!("Find tools and commands")).show(ui);
+                }
             })
             .show(ui, |ui, _| {
                 if hidden.toolbar {
