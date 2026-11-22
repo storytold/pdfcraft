@@ -6,8 +6,9 @@ use std::collections::HashMap;
 
 use craft::behavior::{DisplayOrder, ItemSource, Selection, SelectionChange};
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _};
+use craft::ui::contract::{Bind, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::display::Text;
+use craft::ui::layout_components::Row;
 use craft::ui::list::{List, ListRow};
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::focus::{self, FocusTarget};
@@ -60,7 +61,9 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
     let searched = view.session.texts.len() + view.session.text_failed.len();
     let Some(find) = view.find.as_mut() else { return result };
     find.in_panel = true;
-    let field = TextField::search(tl!("What word or phrase would you like to search for?").to_string(), Bind::bound(&mut find.query))
+    Text::new(tl!("What word or phrase would you like to search for?").to_string()).show(ui);
+    let field = TextField::search(tl!("Search").to_string(), Bind::bound(&mut find.query))
+        .placeholder(tl!("Search"))
         .select_on_focus()
         .show(ui);
     // The bar was asked for (⇧⌘F, also with the panel open): the field takes the focus once.
@@ -68,8 +71,10 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
         focus::request(ui.ctx(), FocusTarget::Id(field.response.id));
     }
     let before = (find.options.whole_word, find.options.match_case);
-    Checkbox::new(Bind::bound(&mut find.options.whole_word)).label(tl!("Whole words only").to_string()).show(ui);
-    Checkbox::new(Bind::bound(&mut find.options.match_case)).label(tl!("Case-sensitive").to_string()).show(ui);
+    Row::new().show(ui, |ui, _| {
+        Checkbox::new(Bind::bound(&mut find.options.whole_word)).label(tl!("Whole words only").to_string()).show(ui);
+        Checkbox::new(Bind::bound(&mut find.options.match_case)).label(tl!("Case-sensitive").to_string()).show(ui);
+    });
     if before != (find.options.whole_word, find.options.match_case) {
         find.case_query.clear();
     }

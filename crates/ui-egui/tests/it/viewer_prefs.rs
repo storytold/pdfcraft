@@ -78,8 +78,8 @@ fn a_document_that_hides_the_interface_opens_without_it_and_f8_brings_it_back() 
     let mut h = harness(|_| {}, &["", HIDE_ALL]);
     assert_eq!(shown(&h), (false, false, false), "the toolbar, menu and rail are hidden");
     assert_eq!(h.state().hidden_interface(), HiddenInterface::ALL);
-    // The tool rail is a toolbar too.
-    assert!(h.query_by_role_and_label(egui::accesskit::Role::Toolbar, "Toolbar").is_none());
+    // The floating tool rail stays on the pages, as in production.
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Toolbar, "Toolbar").is_some());
     // The tab strip stays: the tabs and Home are still there.
     h.get_by_label("Home");
 
@@ -165,6 +165,22 @@ fn hiding_the_window_controls_leaves_the_document_the_whole_width() {
     settle(&mut h);
     // The rail and the Pages panel are back beside the document.
     assert!(width(&h) < 1400.0 - 48.0 - 200.0, "{}", width(&h));
+}
+
+#[test]
+fn document_hiding_window_ui_keeps_the_floating_quick_tools() {
+    let h = harness(|_| {}, &["/ViewerPreferences << /HideWindowUI true >>"]);
+    assert!(h.query_by_label("Select").is_some(), "the floating toolbar remains available");
+}
+
+#[test]
+fn expanded_all_tools_does_not_cover_the_grid_with_the_quick_toolbar() {
+    let mut h = harness(|_| {}, &[""]);
+    assert!(h.query_by_label("Select").is_some(), "the quick toolbar starts visible");
+    h.get_by_label("Expand all tools").click();
+    h.run_steps(3);
+    assert!(h.state().all_tools_full);
+    assert!(h.query_by_label("Select").is_none(), "the expanded catalogue keeps the toolbar out of its way");
 }
 
 #[test]
