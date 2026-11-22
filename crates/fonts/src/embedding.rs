@@ -10,7 +10,7 @@ use skrifa::{
     raw::TableProvider,
 };
 
-use crate::wire::{
+use craft_pdf::fonts::wire::{
     CidMapping, FontDescriptorSpec, build_cid_encoding_cmap, build_cid_font_dict, build_font_descriptor, build_to_unicode_cmap,
     build_type0_font_dict, font_program_stream,
 };
@@ -467,5 +467,52 @@ mod tests {
         let programs = doc.scan_objects().filter(|(_, o)| matches!(o.as_ref(), Object::Stream(s) if s.dict.get(b"PCFullFont").is_some())).count();
         assert_eq!(programs, 1, "one program for both pages");
         assert!(doc.scan_objects().count() > objects, "the second page gets its own resource");
+    }
+
+    #[test]
+    fn custom_cmap_wire_builders_round_trip_through_metrics_across_chunks_and_surrogates() {
+        let mut doc = Document::new_empty();
+        let mut cff_widths = std::collections::BTreeMap::new();
+        let mut entries: Vec<(u16, u16, f64, String)> =
+            vec![(1, 301, 512.0, "A".into()), (2, 302, 625.0, "é".into()), (3, 303, 750.0, "fi".into()), (4, 304, 880.0, "𠀋".into())];
+        // Exceed the 100-entry CMap chunk size so multi-block begincidchar/beginbfchar output is exercised.
+        for i in 5..=125u16 {
+            let ch = char::from_u32(0x4E00 + u32::from(i)).unwrap();
+            entries.push((i, 300 + i, 500.0 + f64::from(i), ch.to_string()));
+        }
+        for &(_, glyph, width, _) in &entries {
+            cff_widths.insert(glyph, width);
+        }
+        let cid_mappings: Vec<_> = entries
+            .iter()
+            .map(|(cid, glyph, width, unicode)| CidMapping { cid: *cid, glyph: *glyph, width: *width, unicode: unicode.as_str() })
+            .collect();
+        let cid_encoding = build_cid_encoding_cmap(&cid_mappings);
+        let to_unicode = build_to_unicode_cmap(&cid_mappings);
+        let program = font_program_stream(&mut doc, b"OTTO", true);
+        let descriptor = build_font_descriptor(&FontDescriptorSpec {
+            font_name: "CustomCffTest",
+            family: "CustomCffTest",
+            italic_angle: 0.0,
+            ascent: 800.0,
+            descent: -200.0,
+            cap_height: 700.0,
+            bbox: [0.0, -200.0, 1000.0, 800.0],
+            cff: true,
+            program,
+        });
+        let desc = Object::Ref(doc.add(Object::Dict(descriptor)));
+        let cid = build_cid_font_dict(&mut doc, "CustomCffTest", desc, true, cff_widths, Vec::new(), Vec::new());
+        let descendant = Object::Ref(doc.add(Object::Dict(cid)));
+        let top = build_type0_font_dict(&mut doc, "CustomCffTest", descendant, Some(cid_encoding.into_bytes()), to_unicode.into_bytes());
+
+        let m = Metrics::from_dict(&doc, &top);
+        for &(cid_code, glyph, width, ref expected) in &entries {
+            let code = u32::from(cid_code);
+            let bytes = cid_code.to_be_bytes();
+            assert_eq!(m.decode(&bytes), *expected, "cid {cid_code} ToUnicode");
+            assert_eq!(m.cid(code), u32::from(glyph), "cid {cid_code} PCGlyphs mapping");
+            assert!((m.width(code) - width / 1000.0).abs() < 1e-8, "cid {cid_code} width");
+        }
     }
 }

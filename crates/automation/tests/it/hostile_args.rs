@@ -1,6 +1,6 @@
 //! Every tool, called with hostile arguments (D2) and with paths that try to leave `--root` (D3).
 //!
-//! AGENTS.md §3 and §4 treat tool arguments as untrusted — they are the MCP attack surface, and an
+//! app-agents.md rules 13 and 14 treat tool arguments as untrusted — they are the MCP attack surface, and an
 //! agent can send any JSON at all. But `tools::check_args` only checks the *shape* of an argument
 //! object: that it is an object, that it has no unknown keys, and that the required keys are
 //! present and not null. **Types and ranges are not validated there**, so a string where an
@@ -9,7 +9,7 @@
 //!
 //! These tests call every tool in the table with a zoo of hostile values and require two things:
 //!
-//! 1. **Nothing panics.** A panic in a tool is a crashed MCP server or CLI (AGENTS.md §4), so
+//! 1. **Nothing panics.** A panic in a tool is a crashed MCP server or CLI (app-agents.md rule 13), so
 //!    every call must come back as `Ok` or as a `ToolError` the agent can read.
 //! 2. **Nothing escapes `--root` or the automation roots.** Every path argument is tried with `..`
 //!    traversal, absolute paths, Windows drive and UNC paths, and a planted symbolic link, under

@@ -92,7 +92,7 @@ pub struct RenderConfig {
     /// Draw a CID font of an Adobe CJK collection that the PDF does not embed with one face already
     /// installed on this machine (see `system_font`). Off by default and on only for on-screen
     /// viewer and preview rasters: exports, printing and OCR render without it, so nothing drawn with an
-    /// installed font is saved or printed (AGENTS.md §1.2, §1.4).
+    /// installed font is saved or printed (licences.md; docs/development.md "Fonts and attribution").
     pub system_fonts: bool,
     /// The render is output for printing (print as image): the configuration's auto state for
     /// the View event (ISO 32000-2 §8.11.4.4) is not applied, since printing is not viewing.
@@ -111,7 +111,7 @@ impl RenderConfig {
     /// This configuration for a raster that is only shown on screen (the viewer, Combine
     /// thumbnails, figure previews): installed CJK faces may draw fonts the PDF doesn't embed.
     /// Never use it for anything that can be saved, printed, recognised or returned to an agent
-    /// (AGENTS.md §1.2, §1.4).
+    /// (licences.md; docs/development.md "Fonts and attribution").
     #[must_use]
     pub fn on_screen(self) -> Self {
         Self { system_fonts: true, ..self }
@@ -440,7 +440,14 @@ fn render_page<'a>(
             Some(t) => {
                 let scale = req.scale.clamp(0.01, 400.0);
                 let (tw, th) = (t.w.clamp(1, 4096), t.h.clamp(1, 4096));
-                RasterOptions { scale: [scale, scale], size: Some([tw, th]), offset: [t.x as f32, t.y as f32], background, color_replacement }
+                RasterOptions {
+                    scale: [scale, scale],
+                    size: Some([tw, th]),
+                    offset: [t.x as f32, t.y as f32],
+                    background,
+                    color_replacement,
+                    ..Default::default()
+                }
             }
             None => {
                 let scale = effective_scale(w, h, req.scale);
@@ -457,7 +464,14 @@ fn render_page<'a>(
                 // hayro floors the size when none is given, losing the partial edge pixels. The
                 // scale keeps each side within MAX_SIDE (give or take float noise), so it fits u32.
                 let side = |pt: f32| device_pixels(pt, scale).min(MAX_SIDE as u32);
-                RasterOptions { scale: [scale, scale], size: Some([side(w), side(h)]), offset: [0.0, 0.0], background, color_replacement }
+                RasterOptions {
+                    scale: [scale, scale],
+                    size: Some([side(w), side(h)]),
+                    offset: [0.0, 0.0],
+                    background,
+                    color_replacement,
+                    ..Default::default()
+                }
             }
         };
         // Rendered straight into a buffer of whole pixels, which the GUI takes over as is.
