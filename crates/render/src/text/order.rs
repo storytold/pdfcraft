@@ -385,9 +385,11 @@ pub(super) fn restarts_run(glyphs: &[&TextGlyph], start: usize, next: usize, pro
 pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32, s: &Seg, sc: &mut Scratch) {
     let x0 = |i: usize| glyphs[i].rect[0];
     let zero_width = |i: usize| glyphs[i].rect[2] - glyphs[i].rect[0] <= 0.05 * height(i);
-    // A mark riding on a letter has no place of its own whatever its width, so a run of such marks goes with the marks.
-    // As a text run of its own it would collide with nothing and be placed apart from its letter.
+    // A mark riding on a letter has no place of its own whatever its width, so it goes with the marks when its letter is
+    // in another run: a run of such marks, or those that end or start a run of other glyphs. Placed with their run, they
+    // would follow it rather than their letter.
     let rides = |i: usize| anchor_of(&sc.anchor, i) != i;
+    let apart = |run: Run, i: usize| rides(i) && !run.range().contains(&anchor_of(&sc.anchor, i));
     sc.text.clear();
     sc.marks.clear();
     sc.placed.clear();
@@ -395,9 +397,18 @@ pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32,
     for run in s.runs() {
         if run.range().all(|i| zero_width(i) || rides(i)) {
             sc.marks.extend(run.range());
-        } else {
-            sc.text.push(run);
+            continue;
         }
+        let mut own = run;
+        while own.start < own.end && apart(run, own.start) {
+            sc.marks.push(own.start);
+            own.start += 1;
+        }
+        while own.end > own.start && apart(run, own.end - 1) {
+            sc.marks.push(own.end - 1);
+            own.end -= 1;
+        }
+        sc.text.push(own);
     }
     if sc.text.len() <= 1 {
         // A single run cannot collide with itself: its glyphs only need sorting by x.

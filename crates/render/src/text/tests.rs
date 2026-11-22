@@ -4017,6 +4017,19 @@ fn a_hebrew_point_with_width_in_a_run_of_its_own_reads_after_its_letter() {
     assert!(layout(v).plain_text().contains("ל\u{5B9}"));
 }
 
+/// A point that ends the run of the letter drawn before it reads after its own letter in the next run: a gimel and a
+/// holam drawn at one height, the lamed the holam sits on lower, and a he over the lamed's left half.
+#[test]
+fn a_hebrew_point_drawn_in_the_run_before_its_letter_reads_after_it() {
+    let v = vec![
+        em_box("ג", 4.0, -8.0, 10.0, 2.0),
+        em_box("\u{5B9}", 10.0, -8.0, 10.3, 2.0),
+        em_box("ל", 10.0, 0.0, 16.0, 10.0),
+        em_box("ה", 6.0, -4.0, 12.0, 6.0),
+    ];
+    assert!(layout(v).plain_text().contains("ל\u{5B9}"));
+}
+
 /// Nonspacing marks count toward neither direction of a line: a line of four Latin letters and a
 /// three-letter Hebrew word whose letters each carry two points reads in the same order as without
 /// the points.
