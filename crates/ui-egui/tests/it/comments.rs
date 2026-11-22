@@ -585,6 +585,20 @@ fn selected_text_menu_uses_compact_icon_buttons_for_actions() {
 }
 
 #[test]
+fn selected_text_menu_opens_at_the_end_of_selected_text() {
+    let mut h = harness(|_| {});
+    // Select from glyph 0 ("The") to 18 ("fox").
+    h.state_mut().views[0].select_text(0, 0, 18);
+    h.run_steps(3);
+    let start_rect = h.state().views[0].glyph_screen_rect(0, 0).unwrap();
+    let end_rect = h.state().views[0].glyph_screen_rect(0, 18).unwrap();
+    let id = egui::Id::unique(("text-selection-actions", h.state().views[0].view_key()));
+    let bar = h.ctx.memory(|m| m.area_rect(id)).expect("the selection bar is shown");
+    assert!(bar.left() > start_rect.left(), "bar should open towards the end of the text, not at the start");
+    assert!((bar.right() - end_rect.right()).abs() < 16.0, "bar right edge {} should be near end glyph right {}", bar.right(), end_rect.right());
+}
+
+#[test]
 fn selected_text_copy_action_closes_the_bar_and_keeps_the_selection() {
     let mut h = harness(|_| {});
     h.state_mut().views[0].select_text(0, 4, 8);

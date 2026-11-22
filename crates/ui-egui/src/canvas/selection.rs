@@ -471,9 +471,9 @@ pub(super) fn selection_actions(
     }
     let id = egui::Id::unique(("text-selection-actions", view.view_key()));
     // The bar stays inside the pages' area, by the width it had last frame (a first guess before
-    // it has one), so it never covers a side panel.
+    // it has one), so it never covers a side panel. It opens at the end of the selected text.
     let width = egui::AreaState::load(ui.ctx(), id).and_then(|a| a.size).map_or(SELECTION_BAR_GUESS, |s| s.x);
-    let x = rect.left().clamp(viewport.left() + 8.0, (viewport.right() - width - 8.0).max(viewport.left() + 8.0));
+    let x = (rect.right() - width).clamp(viewport.left() + 8.0, (viewport.right() - width - 8.0).max(viewport.left() + 8.0));
     let y = if rect.bottom() + 48.0 < viewport.bottom() { rect.bottom() + 6.0 } else { (rect.top() - 44.0).max(viewport.top() + 6.0) };
     let mut chosen = None;
     egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(ui.ctx(), |ui| {
