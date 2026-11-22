@@ -8,12 +8,12 @@
 //! On top of the glyph list: line grouping (baseline clustering), word gaps, plain-text output,
 //! case-insensitive search and reading-order selection.
 
-use hayro::hayro_interpret::font::Glyph;
-use hayro::hayro_interpret::hayro_syntax::Pdf;
-use hayro::hayro_interpret::{
+use craft_pdf::interpret::font::Glyph;
+use craft_pdf::interpret::{
     BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, InterpreterWarning, Paint, PathDrawMode,
     SoftMask, interpret_page,
 };
+use craft_pdf::syntax::Pdf;
 use kurbo::{Affine, BezPath, Rect, Shape};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -766,7 +766,7 @@ const RUNNING_TEXT_RAG: f32 = 0.2;
 /// Lines a selection compares pairwise to tell a table from running text.
 const SIDE_BY_SIDE_LINES: usize = 256;
 
-use hayro::hayro_interpret::TransformExt;
+use craft_pdf::interpret::TransformExt;
 
 mod device;
 mod layout;
