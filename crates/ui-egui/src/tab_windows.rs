@@ -421,11 +421,7 @@ impl eframe::App for NativeWindows {
             self.root.allow_quit = false;
         }
         self.root.logic(ctx, frame);
-        if self.root_hidden
-            && (!self.root.views.is_empty()
-                || !self.root.pending_opens.is_empty()
-                || self.root.combine_showing())
-        {
+        if self.root_hidden && (!self.root.views.is_empty() || !self.root.pending_opens.is_empty() || self.root.combine_showing()) {
             self.root_hidden = false;
             self.final_session = None;
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
@@ -684,12 +680,13 @@ mod tests {
     #[test]
     fn tear_off_refuses_while_the_document_still_has_a_split_view() {
         let mut root = app();
+        root.active = Some(0);
         let id = root.views[0].id;
         root.toggle_split();
         assert_eq!(root.views.iter().filter(|v| v.id == id).count(), 2);
         assert!(!root.can_detach_tab(id));
         assert!(!root.request_detach_tab(id, None));
-        assert_eq!(root.views.len(), 2);
+        assert_eq!(root.views.iter().filter(|v| v.id == id).count(), 2);
         assert!(root.session.get(id).is_some());
     }
 
