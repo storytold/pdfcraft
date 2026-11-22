@@ -98,6 +98,9 @@ mod state;
 pub mod tab_windows;
 mod tools;
 mod window_drop;
+/// Record each managed viewport's native HWND so cross-window drops match window identity.
+#[cfg(target_os = "windows")]
+pub use window_drop::set_viewport_hwnd;
 mod workflows;
 
 #[cfg(not(target_arch = "wasm32"))]

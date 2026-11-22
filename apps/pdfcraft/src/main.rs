@@ -377,10 +377,35 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
     // PdfCraft installs its own last-resort system face (`PDFCRAFT_SYSTEM_FONTS`); eframe's
     // provider would read every installed face, including proprietary ones, into every UI pass.
     native.system_font_fallback = false;
+    // Tear-off drops match each viewport by its own top-level HWND from the window host.
+    #[cfg(target_os = "windows")]
+    {
+        native.viewport_hooks = Some(std::sync::Arc::new(TearOffHwndHooks));
+    }
     if renderer == eframe::Renderer::Wgpu {
         configure_gpu(&mut native);
     }
     native
+}
+
+/// Publish each viewport's native HWND so cross-window tab drops never confuse maximized windows.
+#[cfg(target_os = "windows")]
+struct TearOffHwndHooks;
+
+#[cfg(target_os = "windows")]
+impl eframe::ViewportHooks for TearOffHwndHooks {
+    fn window_created(&self, viewport: egui::ViewportId, window: &winit::window::Window) {
+        use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+        let hwnd = window.window_handle().ok().and_then(|handle| match handle.as_raw() {
+            RawWindowHandle::Win32(win) => Some(win.hwnd.get() as isize),
+            _ => None,
+        });
+        pdfcraft_ui_egui::set_viewport_hwnd(viewport, hwnd);
+    }
+
+    fn window_destroyed(&self, viewport: egui::ViewportId) {
+        pdfcraft_ui_egui::set_viewport_hwnd(viewport, None);
+    }
 }
 
 /// What the command line asked for, kept so a second run (with OpenGL) can start the same way.

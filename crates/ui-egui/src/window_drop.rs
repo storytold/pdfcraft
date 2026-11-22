@@ -3,6 +3,35 @@
 use egui::{Pos2, Rect, Vec2, ViewportId};
 use pdfcraft_engine::DocId;
 use std::collections::HashMap;
+#[cfg(target_os = "windows")]
+use std::sync::Mutex;
+
+/// Native top-level HWND for each managed viewport, filled by the window host via
+/// [`set_viewport_hwnd`] (eframe `ViewportHooks`), never by probing under the pointer.
+#[cfg(target_os = "windows")]
+static VIEWPORT_HWND: Mutex<HashMap<ViewportId, isize>> = Mutex::new(HashMap::new());
+
+/// Record or clear this viewport's own top-level HWND from the native window host.
+#[cfg(target_os = "windows")]
+pub fn set_viewport_hwnd(id: ViewportId, hwnd: Option<isize>) {
+    let Ok(mut map) = VIEWPORT_HWND.lock() else {
+        return;
+    };
+    match hwnd {
+        Some(handle) => {
+            map.insert(id, handle);
+        }
+        None => {
+            map.remove(&id);
+        }
+    }
+}
+
+/// The host-recorded HWND for a viewport, if the window is still alive.
+#[cfg(target_os = "windows")]
+fn host_hwnd(id: ViewportId) -> Option<isize> {
+    VIEWPORT_HWND.lock().ok()?.get(&id).copied()
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Target {
@@ -96,8 +125,6 @@ pub(crate) fn begin(ctx: &egui::Context, enabled: bool) {
     let origin = ctx.input(|i| i.viewport().inner_rect.map(|r| r.min));
     let content = ctx.input(|i| i.viewport_rect());
     update(ctx, |s| {
-        #[cfg(target_os = "windows")]
-        let previous_hwnd = s.layouts.get(&id).and_then(|l| l.hwnd);
         s.layouts.remove(&id);
         if enabled
             && scale.is_finite()
@@ -105,16 +132,6 @@ pub(crate) fn begin(ctx: &egui::Context, enabled: bool) {
             && let Some(origin) = origin.filter(|p| p.x.is_finite() && p.y.is_finite())
         {
             let origin = (origin.to_vec2() * scale).to_pos2();
-            #[cfg(target_os = "windows")]
-            let hwnd = {
-                // Prefer a probe that still names this viewport's native window. When another
-                // maximized window covers it, keep the last trusted handle so identity stays.
-                let center = origin + egui::vec2(content.center().x, content.center().y) * scale;
-                match top_window(center) {
-                    Some((handle, handle_origin)) if handle_origin.distance(origin) <= 3.0 => Some(handle),
-                    _ => previous_hwnd,
-                }
-            };
             s.layouts.insert(
                 id,
                 Layout {
@@ -123,8 +140,10 @@ pub(crate) fn begin(ctx: &egui::Context, enabled: bool) {
                     content,
                     tabs: None,
                     grids: Vec::new(),
+                    // Own HWND from the window host — never WindowFromPoint, which names a
+                    // covering window when two maximized clients share an origin.
                     #[cfg(target_os = "windows")]
-                    hwnd,
+                    hwnd: host_hwnd(id),
                 },
             );
         }
@@ -137,31 +156,33 @@ pub(crate) fn retain(ctx: &egui::Context, live: &[ViewportId]) {
     update(ctx, |s| s.layouts.retain(|id, _| live.contains(id)));
 }
 
-// WindowFromPoint names the top-level native window under the pointer. Match that handle to
-// the viewport's stored window so maximized windows that share a client origin stay distinct.
-/// Locate the visible native window under a bounded physical pointer position.
+// WindowFromPoint names the top-level native window under the pointer. Accept a layout only when
+// that root HWND equals the viewport's host-recorded handle — never by shared client origin.
+/// Locate the visible native top-level window under a bounded physical pointer position.
 #[cfg(target_os = "windows")]
-fn top_window(p: Pos2) -> Option<(isize, Pos2)> {
+fn top_window(p: Pos2) -> Option<isize> {
     if !p.x.is_finite() || !p.y.is_finite() || p.x.abs() > 1_000_000.0 || p.y.abs() > 1_000_000.0 {
         return None;
     }
     let hwnd = winsafe::HWND::WindowFromPoint(winsafe::POINT { x: p.x as i32, y: p.y as i32 })?;
     let hwnd = hwnd.GetAncestor(winsafe::co::GA::ROOT).unwrap_or(hwnd);
-    let origin = hwnd.ClientToScreen(winsafe::POINT { x: 0, y: 0 }).ok()?;
-    Some((hwnd.ptr() as isize, egui::pos2(origin.x as f32, origin.y as f32)))
+    Some(hwnd.ptr() as isize)
+}
+
+/// Whether this layout is the native window under the pointer (host HWND, not client origin).
+#[cfg(target_os = "windows")]
+fn accepts_native(layout: &Layout, hwnd: isize) -> bool {
+    layout.hwnd == Some(hwnd)
 }
 
 /// Select a foreign viewport under the pointer, excluding obscured windows on Windows.
 fn find(s: &State, source: ViewportId, physical: Pos2) -> Option<(ViewportId, Target)> {
     #[cfg(target_os = "windows")]
-    let (hwnd, origin) = top_window(physical)?;
+    let hwnd = top_window(physical)?;
     s.layouts.iter().filter(|(id, _)| **id != source).find_map(|(id, layout)| {
         #[cfg(target_os = "windows")]
-        {
-            let same_window = layout.hwnd == Some(hwnd) || (layout.hwnd.is_none() && layout.origin.distance(origin) <= 3.0);
-            if !same_window {
-                return None;
-            }
+        if !accepts_native(layout, hwnd) {
+            return None;
         }
         layout.target(physical).map(|target| (*id, target))
     })
@@ -367,5 +388,26 @@ mod tests {
         assert_eq!(l.target(l.physical(egui::pos2(480.0, 220.0))), Some(Target::Pages { doc: DocId(2), at: 0 }));
         l.grids[0].enabled = false;
         assert_eq!(l.target(l.physical(egui::pos2(80.0, 220.0))), Some(Target::Reject));
+    }
+
+    /// Native identity is the host HWND alone: a matching client origin must not claim another window.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn window_drop_accepts_only_the_host_recorded_hwnd() {
+        let mut covered = layout(1.0);
+        let mut covering = layout(1.0);
+        covered.origin = egui::pos2(0.0, 0.0);
+        covering.origin = egui::pos2(0.0, 0.0);
+        covered.hwnd = Some(0x1111);
+        covering.hwnd = Some(0x2222);
+        assert!(accepts_native(&covering, 0x2222));
+        assert!(!accepts_native(&covered, 0x2222), "a covered window must not match the covering HWND");
+        assert!(!accepts_native(&covered, 0x2222));
+        covered.hwnd = None;
+        assert!(!accepts_native(&covered, 0x2222), "origin alone is not window identity");
+        set_viewport_hwnd(ViewportId::ROOT, Some(0x3333));
+        assert_eq!(host_hwnd(ViewportId::ROOT), Some(0x3333));
+        set_viewport_hwnd(ViewportId::ROOT, None);
+        assert_eq!(host_hwnd(ViewportId::ROOT), None);
     }
 }
