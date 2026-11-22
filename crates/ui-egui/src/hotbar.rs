@@ -349,7 +349,15 @@ fn fill_text_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp) {
         app.apply_edit(ui.ctx(), Edit::FontSizeAnnotation { page, index, size });
     }
 
-    fill_text_border_controls(ui, app, picked);
+    comments::popover_from(
+        ui,
+        tl!("Border"),
+        |ui| IconButton::new(IconId::new("square")).label(tl!("Border")).show(ui).response,
+        |ui| {
+            fill_text_border_controls(ui, app, picked);
+            false
+        },
+    );
 }
 
 /// Fill & Sign's Border controls for typed text: its width, colour and shape, for the selected text (`picked`), or
