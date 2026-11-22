@@ -835,6 +835,75 @@ fn added_arabic_text_keeps_copy_search_and_editor_order_after_retyping_and_reope
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A paragraph from a Chrome PDF (a Google Docs export) wraps its text in U+202D ... U+202C,
+/// as `/ActualText` over a glyph. Filling in its blank with the listed `editor_text` failed on a
+/// missing glyph for U+202D. The listing leaves the marks out, the edit succeeds, and the result
+/// names the edited paragraph.
+#[test]
+fn text_edit_of_a_chrome_paragraph_leaves_out_its_override_marks() {
+    use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
+    use std::sync::Arc;
+
+    let dir = workdir("chrome-override-marks");
+    let content = "BT /F1 24 Tf 20 150 Td /Span <</ActualText <FEFF202D>>> BDC ( ) Tj EMC (Growth: ____) Tj \
+                   /Span <</ActualText <FEFF202C>>> BDC ( ) Tj EMC ET";
+    let mut doc = Document::open(Arc::new(fixture(1))).unwrap();
+    doc.set(ObjRef::new(5, 0), Object::Stream(Stream::flate(Dict::new(), content.as_bytes())));
+    std::fs::write(dir.join("chrome.pdf"), write_full(&doc, &SaveOptions::default()).unwrap()).unwrap();
+
+    let mut a = auto(&dir);
+    let id = ok(&mut a, "doc_open", json!({"path":"chrome.pdf"}))["doc"].as_u64().unwrap();
+    let listed = ok(&mut a, "text_paragraphs", json!({"doc":id,"page":1}));
+    let own = listed["paragraphs"][0]["editor_text"].as_str().unwrap().to_owned();
+    assert!(!own.contains(['\u{202D}', '\u{202C}']) && own.contains("Growth: ____"), "{own:?}");
+    // A word about as wide as the blank, so the paragraph keeps one row.
+    let draft = own.replace("____", "fast");
+    let edit = ok(&mut a, "text_edit", json!({"doc":id,"page":1,"paragraph":1,"text":draft}));
+    assert_eq!(edit["paragraph"]["text"], "Growth: fast", "{edit}");
+    assert!(edit.get("stale_paragraphs").is_none(), "{edit}");
+    ok(&mut a, "doc_save", json!({"doc":id,"path":"filled.pdf"}));
+    let re = ok(&mut a, "doc_open", json!({"path":"filled.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, re), ["Growth: fast"]);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// An edit of a Chrome paragraph that leaves a row as it was keeps that row's source operators,
+/// marks and all; read back, the paragraph still says what the edit asked for, so the result names
+/// it rather than calling it stale, and listing the page again says the same.
+#[test]
+fn text_edit_of_one_row_of_a_chrome_paragraph_still_names_the_paragraph() {
+    use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
+    use std::sync::Arc;
+
+    let dir = workdir("chrome-override-marks-kept-row");
+    let span = |text: &str| {
+        let hex: String = format!("\u{202D}{text}\u{202C}").encode_utf16().map(|u| format!("{u:04X}")).collect();
+        format!("/Span <</ActualText <FEFF{hex}>>> BDC ({text}) Tj EMC")
+    };
+    let content = format!(
+        "BT /F1 12 Tf 1 0 0 1 20 150 Tm 0 0 0 rg {} 1 0 0 rg {} 1 0 0 1 20 136 Tm 0 0 0 rg {} ET",
+        span("Hello "),
+        span("world"),
+        span("again")
+    );
+    let mut doc = Document::open(Arc::new(fixture(1))).unwrap();
+    doc.set(ObjRef::new(5, 0), Object::Stream(Stream::flate(Dict::new(), content.as_bytes())));
+    std::fs::write(dir.join("chrome.pdf"), write_full(&doc, &SaveOptions::default()).unwrap()).unwrap();
+
+    let mut a = auto(&dir);
+    let id = ok(&mut a, "doc_open", json!({"path":"chrome.pdf"}))["doc"].as_u64().unwrap();
+    let listed = ok(&mut a, "text_paragraphs", json!({"doc":id,"page":1}));
+    assert_eq!(listed["paragraphs"].as_array().unwrap().len(), 1, "{listed}");
+    let own = listed["paragraphs"][0]["editor_text"].as_str().unwrap().to_owned();
+    assert!(own.contains('\n'), "two rows: {own:?}");
+    let edit = ok(&mut a, "text_edit", json!({"doc":id,"page":1,"paragraph":1,"text":own.replace("again", "later")}));
+    assert!(edit.get("stale_paragraphs").is_none(), "{edit}");
+    assert_eq!(edit["paragraph"]["text"], "Hello world later", "{edit}");
+    let again = ok(&mut a, "text_paragraphs", json!({"doc":id,"page":1}));
+    assert_eq!(again["paragraphs"][0]["text"], edit["paragraph"]["text"], "{again}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn arabic_actual_text_stays_logical_through_editor_tools_and_save_reopen() {
     use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};

@@ -1,4 +1,5 @@
 use super::fallback::is_type3_fallback;
+use super::marks::InvisibleMarks;
 use super::rewrite::vertical_advance;
 use super::{Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, Rc};
 
@@ -730,6 +731,10 @@ impl MarkedContent {
                         first.ink.extend(item.ink);
                     }
                     first.extra_ops.extend([open, index]);
+                    // Without the invisible format characters no font draws (Chrome wraps every
+                    // run's ActualText in U+202D ... U+202C), so no text read for editing, nor any
+                    // draft made from it, carries them ([`super::marks`]).
+                    let logical = InvisibleMarks::of(&logical).strip(&logical).into_owned();
                     // Only right-to-left ActualText is already in typing order and must stay out of
                     // bidi recovery. Word and Chrome also wrap Latin ligatures mid-word.
                     first.logical_order = logical.chars().any(crate::bidi::is_rtl);

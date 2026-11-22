@@ -137,6 +137,19 @@ SEPARATOR, U+0085 NEXT LINE, the vertical tab, the form feed and the information
 row rather than being looked up in a font, so a paste no longer fails because no face has an
 outline for them. Other white space is still written as one space.
 
+Invisible format characters in a page's `/ActualText` are left out when the page is read for
+editing, so the paragraphs and lines listed, their formatting ranges and every draft made from
+them never carry them, and an edit never asks a font for one: the zero-width space (U+200B),
+the word joiner and invisible operators (U+2060 to U+2064), the byte order mark (U+FEFF), the
+Mongolian vowel separator (U+180E) and, in text with no right-to-left letters, the bidi marks,
+embeddings, overrides and isolates (U+200E, U+200F, U+061C, U+202A to U+202E, U+2066 to
+U+2069). PDFs printed or exported from Chrome, Google Docs among them, wrap every run's text in
+U+202D and U+202C, so before this an edit of any of their paragraphs failed on a missing glyph
+for U+202D. A Chrome page now reads, and edits, as the same page without the marks. Rows the
+edit leaves as they were keep their operators, marks included. Right-to-left text keeps its bidi
+controls, because shaping it in the paragraph's own font orders it with them; the zero-width
+joiners (U+200C, U+200D) stay for shaping too.
+
 Select text within the editor before changing size, colour, font, underline or spacing to
 format that selection. Automation supports up to 1024 disjoint UTF-8 byte ranges with the
 same properties; invalid or overlapping ranges fail atomically. Untouched source formatting
