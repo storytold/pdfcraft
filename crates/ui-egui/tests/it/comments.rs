@@ -4603,28 +4603,36 @@ fn closing_a_pop_up_saves_its_typed_text() {
     assert_eq!((note.contents.as_deref(), note.popup.map(|p| p.open)), (Some("A note"), Some(true)), "one undo step for both");
 }
 
-/// The selection bar stays inside the pages' area: its place was worked out for a 520 pt bar,
-/// so longer labels (German here) pushed it over the side panel next to a selection on the right.
+/// The selection bar stays inside the pages' area: the bar opens at the selection's end,
+/// so selecting at the start of a line would push it over the left edge without clamping.
 #[test]
 fn the_selection_bar_stays_inside_the_pages_area() {
-    if crate::support::skip_without_catalogs("the_selection_bar_stays_inside_the_pages_area") {
-        return;
-    }
-    let mut h = harness(|app| app.set_option("language", "de").unwrap());
-    // Narrower than the harness, as with a side panel open.
-    h.set_size(egui::vec2(1100.0, 900.0));
+    let mut h = harness(|app| app.set_option("language", "en").unwrap());
+    // 1. At the start of a line, the bar opening at the end of the selection would exceed the left edge without clamping.
+    h.state_mut().views[0].select_text(0, 0, 0);
     h.run_steps(4);
-    // The rightmost glyph of "The quick brown fox": the bar opens at its left.
+    let viewport = h.state().views[0].viewport_rect();
+    let id = egui::Id::unique(("text-selection-actions", h.state().views[0].view_key()));
+    let bar = h.ctx.memory(|m| m.area_rect(id)).expect("the selection bar is shown");
+    let first_rect = h.state().views[0].glyph_screen_rect(0, 0).unwrap();
+    assert!(
+        first_rect.right() - bar.width() < viewport.left() + 8.0,
+        "anchor {} should be < left clamp {}",
+        first_rect.right() - bar.width(),
+        viewport.left() + 8.0
+    );
+    assert!(viewport.contains_rect(bar), "bar {bar:?} inside {viewport:?}");
+
+    // 2. Selecting the whole line or glyphs towards the right also keeps the bar inside the pages' area.
     let last = (0..64).filter_map(|i| h.state().views[0].glyph_screen_pos(0, i).map(|p| (i, p.x))).max_by(|a, b| a.1.total_cmp(&b.1)).unwrap().0;
     h.state_mut().views[0].select_text(0, last, last);
     h.run_steps(4);
-    let viewport = h.state().views[0].viewport_rect();
-    // The bar's whole area, frame included, not only its first and last buttons.
-    let id = egui::Id::unique(("text-selection-actions", h.state().views[0].view_key()));
     let bar = h.ctx.memory(|m| m.area_rect(id)).expect("the selection bar is shown");
-    // The bar opens at the selection's left edge: past the area's right edge, without the clamp.
-    let anchor = h.state().views[0].glyph_screen_rect(0, last).unwrap().left();
-    assert!(anchor + bar.width() > viewport.right(), "selection at {anchor}, bar {} wide, area {viewport:?}", bar.width());
+    assert!(viewport.contains_rect(bar), "bar {bar:?} inside {viewport:?}");
+
+    h.state_mut().views[0].select_text(0, 0, last);
+    h.run_steps(4);
+    let bar = h.ctx.memory(|m| m.area_rect(id)).expect("the selection bar is shown");
     assert!(viewport.contains_rect(bar), "bar {bar:?} inside {viewport:?}");
 }
 
