@@ -106,10 +106,10 @@ pub(crate) struct PrintTasks {
     /// The document the browser print being drawn (`web_job`) is of, for its Did Print actions.
     #[cfg(target_arch = "wasm32")]
     web_doc: Option<pdfcraft_engine::DocId>,
-    /// The print page handed to the browser, until `window.print()` returns or it fails; its
-    /// own flags, so an earlier page can't settle a later print.
+    /// The print pages handed to the browser, each kept until its `window.print()` returns or it
+    /// fails, with its own flags, so a print settles only on its own page's outcome.
     #[cfg(target_arch = "wasm32")]
-    web_handoff: Option<crate::web_print::Handoff<pdfcraft_engine::DocId>>,
+    web_handoffs: Vec<crate::web_print::Handoff<pdfcraft_engine::DocId>>,
 }
 
 /// The printers to offer when no [`PrinterSource`] is set: the spooler's, or in a browser its
@@ -783,7 +783,7 @@ impl PdfCraftApp {
     /// Draw the next sheet of the browser print, and hand the finished page to the browser.
     #[cfg(target_arch = "wasm32")]
     fn poll_web_print(&mut self) {
-        if let Some(ended) = crate::web_print::Handoff::settle(&mut self.print_tasks.web_handoff) {
+        for ended in crate::web_print::Handoff::settle(&mut self.print_tasks.web_handoffs) {
             self.web_print_settled(ended);
         }
         let Some(job) = self.print_tasks.web_job.as_mut() else { return };
@@ -808,9 +808,7 @@ impl PdfCraftApp {
         match crate::web_print::print_in_iframe(&html, urls, handoff.failed.clone(), handoff.printed.clone(), self.ctx.clone()) {
             // Did Print waits for this page to hand the print to the browser (settled above).
             Ok(()) => {
-                if let Some(ended) = crate::web_print::Handoff::replace(&mut self.print_tasks.web_handoff, handoff) {
-                    self.web_print_settled(ended);
-                }
+                self.print_tasks.web_handoffs.push(handoff);
                 self.notify_tr("Opening the browser's print dialog…");
             }
             Err(e) => self.web_print_failed(&e, &handoff.name, &handoff.pdf),
