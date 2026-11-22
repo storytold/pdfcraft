@@ -13,6 +13,8 @@ use craft::pages::ui::PageRangeField;
 use craft::ui::buttons::IconButton;
 use craft::ui::contract::{ActivateOn, Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::layout_components::Row;
+use craft::ui::contract::overlay::Anchor;
+use craft::ui::menu::Menu;
 use craft::ui::list::{List, ListRow, RowInk};
 use craft::ui::primitives::IconSpec;
 use pdfcraft_engine::Edit;
@@ -130,17 +132,8 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let (w, h) = ((crop[2] - crop[0]).abs().max(1.0) as f64, (crop[3] - crop[1]).abs().max(1.0) as f64);
     let row = |icon, label, act, enabled, later, space| Line::Row { icon, label, act, enabled, later, space };
     let mut lines = vec![
-        Line::Heading("Insert"),
-        row(
-            "file-plus-2",
-            "Insert a blank page after the selection",
-            Some(Act::Edit(Box::new(Edit::InsertBlankPage { at: last.saturating_add(1), width: w, height: h }))),
-            editable,
-            false,
-            false,
-        ),
-        row("file-plus-2", "Insert pages from a file…", Some(Act::View(ViewAction::InsertFromFile)), editable, false, false),
-        row("copy", "Duplicate pages", Some(Act::Command("page.duplicate")), editable, false, false),
+        // Production's Insert is one row that opens a menu of the three ways to insert.
+        row("file-plus-2", "Insert", None, editable, false, false),
         row("replace", "Replace", Some(Act::View(ViewAction::ReplacePages)), editable, false, true),
         row("scissors", "Split", Some(Act::View(ViewAction::Split)), editable, false, false),
         row("hash", "Bates numbering", Some(Act::Command("edit.bates")), true, false, false),
@@ -159,11 +152,46 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .show_items(ui, &Rows(lines.len()), &mut |at, _| match lines.get(*at) {
             Some(Line::Heading(title)) => ListRow::new(tl!(title).to_owned()).heading().ink(RowInk::Dimmed),
             Some(Line::Row { icon, label, enabled, later, space, .. }) => {
-                let row = ListRow::new(tl!(label).to_owned()).icon(IconSpec::svg(IconId::new(icon))).enabled(*enabled).space_above(*space);
+                let mut row = ListRow::new(tl!(label).to_owned()).icon(IconSpec::svg(IconId::new(icon))).enabled(*enabled).space_above(*space);
+                if *label == "Insert" {
+                    row = row.row_menu();
+                }
                 if *later { row.ink(RowInk::Dimmed).tooltip(tl!("Planned").to_owned()) } else { row }
             }
             None => ListRow::spacer(),
         });
+    // The Insert menu hangs where it was asked for (the row's More button, a right click or a plain click on the
+    // row) and stays until a pick or a click elsewhere closes it.
+    let menu_id = ui.id().with("insert-menu-at");
+    let mut menu_at: Option<egui::Pos2> = ui.ctx().data(|d| d.get_temp::<Option<egui::Pos2>>(menu_id)).flatten();
+    for event in &out.events {
+        match event {
+            CollectionEvent::ContextMenu(request) => menu_at = Some(request.at),
+            CollectionEvent::Activate(at) if matches!(lines.get(*at), Some(Line::Row { label: "Insert", enabled: true, .. })) => {
+                menu_at = Some(ui.ctx().pointer_latest_pos().unwrap_or_else(|| out.response.rect.left_top()));
+            }
+            _ => {}
+        }
+    }
+    if let Some(at) = menu_at {
+        let entries = [
+            Entry::new(0u8, tl!("Insert a blank page after the selection").to_owned()),
+            Entry::new(1u8, tl!("Insert pages from a file…").to_owned()),
+            Entry::new(2u8, tl!("Duplicate pages").to_owned()),
+        ];
+        let mut open = true;
+        let picked = Menu::context(tl!("Insert").to_owned(), &out.response).anchor(Anchor::Point(at)).open(Bind::bound(&mut open)).pick(ui, &entries).picked;
+        match picked {
+            Some(0) => act = Some(Act::Edit(Box::new(Edit::InsertBlankPage { at: last.saturating_add(1), width: w, height: h }))),
+            Some(1) => act = Some(Act::View(ViewAction::InsertFromFile)),
+            Some(2) => act = Some(Act::Command("page.duplicate")),
+            _ => {}
+        }
+        if !open || picked.is_some() {
+            menu_at = None;
+        }
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(menu_id, menu_at));
     for event in out.events {
         if let CollectionEvent::Activate(at) = event
             && let Some(Line::Row { act: slot, enabled: true, later: false, .. }) = lines.get_mut(at)
