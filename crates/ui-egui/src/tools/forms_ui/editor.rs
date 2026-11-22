@@ -13,7 +13,7 @@ use craft::behavior::CanvasView;
 use craft::behavior::kurbo::Point;
 use craft::pages::ui::view::PageBody;
 use craft::text::ui::editor::{CaretLine, EditKind, EditorEnd, EditorMode, HostLine, HostRun, TextEditor, TextEditorHost};
-use craft::ui::contract::{Bind, Show as _};
+use craft::ui::contract::{Bind, Props as _, Show as _};
 use egui::text::{CCursor, CharIndex, LayoutJob};
 use egui::{Align, Color32, CornerRadius, FontId, Pos2, Rect, pos2, vec2};
 use pdfcraft_engine::{Document, FormField, FormFieldKind, FormWidget, field_flags, form_appearance};
@@ -385,6 +385,7 @@ pub(crate) fn show(
         host.with(|laid, _| laid.paint(&painter));
         let multiline = f.kind == FormFieldKind::Text && f.has(field_flags::MULTILINE);
         let editor = TextEditor::new(f.name.clone(), &mut host, Bind::bound(selection))
+            .id_salt((f.obj, widget))
             .mode(if multiline { EditorMode::FieldLines } else { EditorMode::FieldLine })
             .esc_commits(false);
         let editor = if f.has(field_flags::PASSWORD) { editor.masked() } else { editor };
