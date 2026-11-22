@@ -1034,6 +1034,60 @@ fn a_resized_added_picture_shows_only_at_its_new_size() {
     assert!(red(&pixels, kept) > 100 && red(&pixels, gone) == 0, "the page raster has the picture at its new size");
 }
 
+#[test]
+fn resizing_an_image_shows_its_physical_size_before_release() {
+    use pdfcraft_ui_egui::units::Unit;
+
+    for unit in [Unit::Millimetres, Unit::Inches] {
+        let mut h = harness_bytes(crate::support::fixtures::pdf_pages(1));
+        h.state_mut().units = unit;
+        assert!(h.state_mut().execute("edit.edit_text"));
+        h.run_steps(2);
+        let img = craft_image_codecs::Image::from_u8(60, 60, craft_image_codecs::ChannelLayout::Rgb, [200u8, 30, 30].repeat(3600)).unwrap();
+        let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
+        h.state_mut().add_image("red.png".into(), png);
+        h.run_steps(3);
+        assert_eq!(h.state().views[0].content.selected, Some((0, 0)));
+        crate::support::settle(&mut h);
+        assert!(crate::support::image_resize_status(&h).is_none(), "selecting the image alone does not show the readout");
+
+        let before = added(&h)[0].content.rect();
+        let image = item_on_screen(&h, before);
+        let grip = image.expand(1.0).right_bottom();
+        let to = grip - image.size() * 0.5;
+        h.hover_at(grip);
+        h.run_steps(1);
+        h.drag_at(grip);
+        h.run_steps(1);
+        h.hover_at(grip.lerp(to, 0.5));
+        h.run_steps(2);
+        let (intermediate, _) = crate::support::image_resize_status(&h).expect("the resize exposes a polite status");
+
+        let viewport = h.state().views[0].viewport_rect();
+        h.hover_at(viewport.right_bottom() - egui::vec2(2.0, 2.0));
+        h.run_steps(2);
+        let (_, at_edge) = crate::support::image_resize_status(&h).expect("the resize readout follows near the viewport edge");
+        assert!(viewport.expand(1.0).contains_rect(at_edge), "the readout fits inside the viewport: {at_edge:?} in {viewport:?}");
+
+        h.hover_at(to);
+        h.run_steps(2);
+        let (preview, _) = crate::support::image_resize_status(&h).expect("the resized dimensions are accessible before release");
+        assert_ne!(preview, intermediate, "the readout updates as the resize handle moves");
+        assert!(
+            h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == preview)),
+            "the preview paints the same dimensions it exposes to AccessKit"
+        );
+        assert_eq!(added(&h)[0].content.rect(), before, "the drag is still a preview");
+
+        h.drop_at(to);
+        h.run_steps(4);
+        let after = added(&h)[0].content.rect();
+        assert!((after[2] - after[0]) < (before[2] - before[0]) * 0.6, "the corner drag really resized the image");
+        assert_eq!(preview, unit.size(after[2] - after[0], after[3] - after[1]));
+        assert!(crate::support::image_resize_status(&h).is_none(), "the readout disappears on release");
+    }
+}
+
 /// #4477, #3938: in Edit a PDF, an added image can be resized repeatedly by its corner handles
 /// (including the outer part of the handle circle and when a corner reaches past the page edge)
 /// without losing selection to the object marquee, and dragging an out-of-bounds image back onto

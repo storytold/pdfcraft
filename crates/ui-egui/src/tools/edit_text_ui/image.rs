@@ -4,6 +4,7 @@ use crate::image_engine::{CROP_ACCENT, apply_crop, apply_resize, apply_resize_pr
 use crate::page_cursor::Layer;
 use crate::page_keys::PageKeys;
 use crate::page_router::{CropPart, Hit, Owner, PagePress, PicturePart};
+use crate::{theme::Tokens, units::Unit};
 
 /// What the pointer and the page are, for the image tools on one page.
 #[derive(Clone, Copy)]
@@ -19,6 +20,7 @@ pub(crate) struct ImageCx<'a> {
     pub press: PagePress,
     /// Edit text's input is open: no dialog, palette, other window or other tab has it.
     pub gate: bool,
+    pub units: Unit,
 }
 
 /// The 8 resize handles on an image (4 corners + 4 edge centers).
@@ -562,6 +564,49 @@ fn picture_frame(painter: &egui::Painter, obb: &ImageObb, upright: Rect, fill: C
     }
 }
 
+/// The two visible frame edges in physical points, independent of the view zoom and turn.
+/// PageXform's view space already includes /UserUnit.
+fn paint_resize_size(cx: &ImageCx<'_>, pointer: Pos2, [origin, across, down]: [Pos2; 3]) {
+    let (x, y) = cx.xf.screen_to_view(origin);
+    let length = |p| {
+        let (px, py) = cx.xf.screen_to_view(p);
+        (f64::from(px) - f64::from(x)).hypot(f64::from(py) - f64::from(y))
+    };
+    let (width, height) = (length(across), length(down));
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return;
+    }
+
+    let ui = cx.ui;
+    let painter = ui.painter();
+    let t = Tokens::get(ui.ctx());
+    let label = cx.units.size(width, height);
+    let galley = painter.layout_no_wrap(label.clone(), egui::TextStyle::Small.resolve(ui.style()), t.text);
+    let padding = egui::vec2(6.0, 3.0);
+    let size = galley.size() + 2.0 * padding;
+    let viewport = painter.clip_rect().intersect(ui.ctx().content_rect());
+    if size.x > viewport.width() || size.y > viewport.height() {
+        return;
+    }
+    let along = |pointer: f32, min, max, extent| {
+        let gap = 12.0;
+        let forward = pointer + gap;
+        let beside = if forward + extent <= max { forward } else { pointer - gap - extent };
+        beside.min(max - extent).max(min)
+    };
+    let pos = pos2(along(pointer.x, viewport.left(), viewport.right(), size.x), along(pointer.y, viewport.top(), viewport.bottom(), size.y));
+    let rect = Rect::from_min_size(pos, size);
+    painter.rect(rect, t.radius, t.card, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    painter.galley(pos + padding, galley, t.text);
+
+    let id = ui.make_persistent_id(("image-resize-size", cx.page));
+    let readout = ui.interact(rect, id, egui::Sense::hover());
+    readout.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Status, true, &label));
+    ui.ctx().accesskit_node_builder(id, |node| {
+        node.set_live(egui::accesskit::Live::Polite);
+    });
+}
+
 /// The selected picture's grips under `p`: its corners and its rotate knob. They are asked after
 /// the paragraphs, so text on top of a picture cannot take them; `clip` is the pages' visible
 /// area, which the knob stays inside.
@@ -718,7 +763,7 @@ pub(super) fn turn_degrees(centre: Pos2, pointer: Pos2, snap: bool) -> f32 {
 /// pointer was used.
 #[allow(clippy::cognitive_complexity)]
 pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage], view: &mut DocView) -> bool {
-    let ImageCx { ui, resp, xf, ptr, page, doc, info, press, gate } = *cx;
+    let ImageCx { ui, resp, xf, ptr, page, doc, info, press, gate, .. } = *cx;
     let boxes: Vec<Rect> = images.iter().map(|im| crate::canvas::image_screen_rect(im, xf, info, page)).collect();
     let painter = ui.painter();
     let hover_pos = ptr.pos;
@@ -932,6 +977,9 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
                     }
                 }
 
+                if ptr.primary_down && matches!(drag.target, DragTarget::Handle(_)) {
+                    paint_resize_size(cx, p, [preview.left_top(), preview.right_top(), preview.left_bottom()]);
+                }
                 if resp.drag_stopped() || !ptr.primary_down {
                     if let Some(s) = view.image_selection.as_mut() {
                         s.drag = None;
@@ -990,6 +1038,9 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
                 draw_handle(painter, h, false, false, false, ACCENT);
             }
 
+            if ptr.primary_down && matches!(drag.target, DragTarget::Handle(_)) {
+                paint_resize_size(cx, p, [preview_obb.s00, preview_obb.s10, preview_obb.s01]);
+            }
             if resp.drag_stopped() || !ptr.primary_down {
                 if let Some(s) = view.image_selection.as_mut() {
                     s.drag = None;
