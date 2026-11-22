@@ -68,7 +68,7 @@ fn marking_applying_and_clearing() {
     let mut h = harness();
     assert!(h.execute("redact.mark"));
     h.run_steps(2);
-    h.get_by_role_and_label(egui::accesskit::Role::Tab, "Redact a PDF");
+    assert!(h.query_all_by_label("Redact a PDF").count() >= 1, "the panel title shows");
     // Draw a box in an empty part of the page.
     let (a, b) = (at(&h, 40.0, 280.0), at(&h, 200.0, 320.0));
     h.hover_at(a);

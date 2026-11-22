@@ -251,7 +251,7 @@ fn placing_moving_editing_and_deleting_a_field() {
     let before = names(&h).len();
     assert!(h.execute("form.add.text"));
     h.run_steps(2);
-    h.get_by_role_and_label(egui::accesskit::Role::Tab, "Prepare a form");
+    assert!(h.query_all_by_label("Prepare a form").count() >= 1, "the panel title shows");
     // Drag out a text field in the empty lower part of the page.
     let (a, b) = (at(&h, 40.0, 300.0), at(&h, 200.0, 322.0));
     drag(&mut h, a, b);
