@@ -1553,7 +1553,8 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbac
         // A full-screen key's turn first, then the display time's.
         out.turn = out.turn.or(frame.step);
     }
-    if cx.tool == QuickTool::EnhanceCamera {
+    // A document that forbids changes has nothing to enhance: production shows the page without a quad or the bar.
+    if cx.tool == QuickTool::EnhanceCamera && cx.can_modify {
         let quad = crate::camera_ui::show_quad(ui, body, session, cx.can_modify, cx.current);
         let bar = crate::camera_ui::bar(ui, body, session, cx.can_modify);
         out.action = bar.or(quad);
