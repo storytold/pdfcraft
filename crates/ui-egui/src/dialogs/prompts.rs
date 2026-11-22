@@ -75,8 +75,8 @@ pub(crate) fn save_prompt_key(ctx: &egui::Context, chosen: &mut PromptButton) ->
 pub(super) fn save_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some(req) = app.close_request else { return };
     let index = match req {
-        CloseRequest::Tab(id) => {
-            let idx = app.asking_tab(id);
+        CloseRequest::Tab { id, key } => {
+            let idx = app.asking_tab(id, key);
             // Detached windows render their own save prompt inside their child viewport pass.
             if idx.is_some_and(|i| app.views.get(i).is_some_and(|v| v.detached)) {
                 return;

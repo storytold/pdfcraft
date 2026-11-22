@@ -20,23 +20,15 @@ impl Control {
             "ui.command" if str_param("id")? == "ui.panel" => Ok(Handled::Now(host.panel(false, p.get("params").unwrap_or(p)))),
             "ui.command" if str_param("id")? == "ui.detach" => {
                 let sub = p.get("params").unwrap_or(p);
-                let id = parse_doc_or_tab(sub, host, "ui.detach")?;
-                Ok(Handled::Now(host.detach(id)))
+                Ok(Handled::Now(detach_or_attach(host, sub, "ui.detach", true)))
             }
             "ui.command" if str_param("id")? == "ui.attach" => {
                 let sub = p.get("params").unwrap_or(p);
-                let id = parse_doc_or_tab(sub, host, "ui.attach")?;
-                Ok(Handled::Now(host.attach(id)))
+                Ok(Handled::Now(detach_or_attach(host, sub, "ui.attach", false)))
             }
             "ui.command" => Ok(Handled::Now(host.command(str_param("id")?))),
-            "ui.detach" | "ui.tab.detach" => {
-                let id = parse_doc_or_tab(p, host, method)?;
-                Ok(Handled::Now(host.detach(id)))
-            }
-            "ui.attach" | "ui.tab.attach" => {
-                let id = parse_doc_or_tab(p, host, method)?;
-                Ok(Handled::Now(host.attach(id)))
-            }
+            "ui.detach" | "ui.tab.detach" => Ok(Handled::Now(detach_or_attach(host, p, method, true))),
+            "ui.attach" | "ui.tab.attach" => Ok(Handled::Now(detach_or_attach(host, p, method, false))),
             "ui.set" => {
                 let value = match p.get("value") {
                     Some(Value::String(s)) => s.clone(),
@@ -409,4 +401,19 @@ fn parse_doc_or_tab(p: &Value, host: &impl Host, method: &str) -> Result<pdfcraf
         return Ok(pdfcraft_engine::DocId(id_num));
     }
     Err(format!("{method}: pass doc id (doc) or tab index (tab)"))
+}
+
+/// Tab-targeted detach/attach act on that view index; document-ID targets keep first-match policy.
+fn detach_or_attach(host: &mut impl Host, p: &Value, method: &str, detach: bool) -> Reply {
+    only_params(p, method, &["doc", "id", "tab", "index", "params"])?;
+    if let Some(tab_val) = p.get("tab").or_else(|| p.get("index")) {
+        let tab_num = tab_val
+            .as_u64()
+            .or_else(|| tab_val.as_str().and_then(|s| s.parse::<u64>().ok()))
+            .ok_or_else(|| format!("{method}: tab index must be a non-negative integer"))?;
+        let tab_idx = usize::try_from(tab_num).map_err(|_| format!("{method}: tab index out of range"))?;
+        return if detach { host.detach_at(tab_idx) } else { host.attach_at(tab_idx) };
+    }
+    let id = parse_doc_or_tab(p, host, method)?;
+    if detach { host.detach(id) } else { host.attach(id) }
 }

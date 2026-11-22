@@ -616,10 +616,13 @@ impl PdfCraftApp {
             Some(crate::canvas::ViewAction::CopyPages { cut }) => {
                 self.active = Some(i);
                 self.copy_pages(cut);
+                // Copy/cut from a detached view must not leave `active` pointing at it.
+                self.restore_docked_active_if_detached(i);
             }
             Some(crate::canvas::ViewAction::PastePages) => {
                 self.active = Some(i);
                 self.paste_pages();
+                self.restore_docked_active_if_detached(i);
             }
             Some(crate::canvas::ViewAction::EnhanceCamera) => self.enhance_camera(i),
             Some(crate::canvas::ViewAction::CancelCamera) => self.leave_camera(i),
@@ -1169,7 +1172,7 @@ impl PdfCraftApp {
         let after = self.session.get(id).map(|d| d.edit_generation());
         if before != after
             && let Some(doc) = self.session.get(id)
-            && let Some(view) = self.asking_tab(id).and_then(|i| self.views.get_mut(i))
+            && let Some(view) = self.asking_tab(id, 0).and_then(|i| self.views.get_mut(i))
         {
             // The tab in use: `sync_views` brings any other tab of the document up to date.
             view.document_changed(&doc.info);
@@ -1875,11 +1878,12 @@ mod attention_tests {
         // a.pdf was answered with Save while quitting. While that save is pending, the user closes
         // c.pdf's tab, and its question opens in front.
         let c = app.views[2].id;
-        app.close_request = Some(CloseRequest::Tab(c));
+        let c_key = app.views[2].view_key();
+        app.close_request = Some(CloseRequest::Tab { id: c, key: c_key });
         assert!(attend(&mut app, &ctx, true).is_empty());
         // a.pdf's save finishes once the user has gone to another app.
         app.close_and_continue(&ctx, 0, CloseRequest::Quit);
-        assert_eq!(app.close_request, Some(CloseRequest::Tab(c)), "the newer question stands");
+        assert_eq!(app.close_request, Some(CloseRequest::Tab { id: c, key: c_key }), "the newer question stands");
         assert!(attend(&mut app, &ctx, false).is_empty(), "the user has seen it");
     }
 }

@@ -10,13 +10,9 @@ impl PdfCraftApp {
         // "Save changes?" is modal: its keys are its own (⌘D is Don't save there, not Document
         // properties; Escape cancels it rather than clearing a selection), and nothing may run
         // underneath it. They are read here, before the canvas can consume them.
-        if let Some(req) = self.close_request {
-            let is_detached_tab = match req {
-                CloseRequest::Tab(id) => self.views.iter().find(|v| v.id == id).is_some_and(|v| v.detached),
-                CloseRequest::Quit | CloseRequest::All => false,
-            };
+        if self.close_request.is_some() {
             // A detached window draws its own save prompt. The main window must not answer it.
-            if !is_detached_tab {
+            if !self.is_detached_save_prompt_open() {
                 // These dialogs are drawn after the save prompt and own the keyboard while open.
                 // Don't let Escape or Return resolve unsaved work underneath one.
                 #[cfg(not(target_arch = "wasm32"))]

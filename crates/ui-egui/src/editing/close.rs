@@ -4,9 +4,10 @@ use super::save::SaveTarget;
 /// What the user was doing when we asked whether to save.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CloseRequest {
-    /// Close this document's tab. By id, not tab index: tabs can close and shift while a save
-    /// panel is open.
-    Tab(pdfcraft_engine::DocId),
+    /// Close this document's tab. `id` is the document; `key` is the specific view
+    /// ([`crate::DocView::view_key`]) so a split twin or detached window is not confused with
+    /// another view of the same document. Tabs can close and shift while a save panel is open.
+    Tab { id: pdfcraft_engine::DocId, key: u64 },
     /// Quit the application once every dirty document is resolved.
     Quit,
     /// File ▸ Close all: like Quit, but the application stays open.
@@ -23,13 +24,13 @@ impl PdfCraftApp {
         // Text typed into a field counts as an unsaved change. Another tab of the document (split
         // view) keeps the document's changes open, so closing this one asks only about its own.
         if self.asks_before_closing(index)
-            && let Some(id) = self.views.get(index).map(|v| v.id)
+            && let Some((id, key)) = self.views.get(index).map(|v| (v.id, v.view_key()))
         {
             if self.has_twin(index) {
                 // The question is about this tab of the document (`asking_tab`).
                 self.active = Some(index);
             }
-            self.close_request = Some(CloseRequest::Tab(id));
+            self.close_request = Some(CloseRequest::Tab { id, key });
         } else {
             self.close_tab(index);
         }
@@ -123,7 +124,7 @@ impl PdfCraftApp {
         // The next question (another dirty document) starts on Save again.
         self.save_prompt_button = Default::default();
         let index = match req {
-            CloseRequest::Tab(id) => match self.asking_tab(id) {
+            CloseRequest::Tab { id, key } => match self.asking_tab(id, key) {
                 Some(i) => i,
                 None => return, // already closed
             },
@@ -149,7 +150,11 @@ impl PdfCraftApp {
             None => {} // cancelled: nothing closes
             Some(false) => self.close_and_continue(ctx, index, req),
             Some(true) => {
-                let Some(id) = self.views.get(index).map(|v| v.id) else { return };
+                let Some((id, view_key)) = self.views.get(index).map(|v| (v.id, v.view_key())) else { return };
+                let key = match req {
+                    CloseRequest::Tab { key, .. } => key,
+                    _ => view_key,
+                };
                 // Bring the document forward if it's docked in the main window: what's typed
                 // in its form is committed and saved with it, and a field that rejects the value
                 // is shown where the user can fix it. Detached windows keep their own viewport.
@@ -161,7 +166,7 @@ impl PdfCraftApp {
                 // document open.
                 let ctx = ctx.clone();
                 self.save_then(index, SaveTarget::InPlace, move |app| {
-                    if let Some(i) = app.asking_tab(id) {
+                    if let Some(i) = app.asking_tab(id, key) {
                         app.close_and_continue(&ctx, i, req);
                     }
                 });
@@ -169,10 +174,13 @@ impl PdfCraftApp {
         }
     }
 
-    /// The tab a close question about document `id` is about: the active one when it shows `id`
-    /// (in split view two tabs can), else the document's first.
-    pub(crate) fn asking_tab(&self, id: pdfcraft_engine::DocId) -> Option<usize> {
-        self.active.filter(|&a| self.views.get(a).is_some_and(|v| v.id == id)).or_else(|| self.views.iter().position(|v| v.id == id))
+    /// The tab a close question about document `id` / view `key` is about: the keyed view when it
+    /// still exists, else the active one when it shows `id` (split view), else the document's first.
+    pub(crate) fn asking_tab(&self, id: pdfcraft_engine::DocId, key: u64) -> Option<usize> {
+        self.tab_with_key(key)
+            .filter(|&i| self.views.get(i).is_some_and(|v| v.id == id))
+            .or_else(|| self.active.filter(|&a| self.views.get(a).is_some_and(|v| v.id == id)))
+            .or_else(|| self.views.iter().position(|v| v.id == id))
     }
 
     /// Close tab `index` for a close request, then ask about the next dirty document, or quit.
@@ -187,10 +195,10 @@ impl PdfCraftApp {
             }
             return;
         }
-        let detached_id = self.views.get(index).filter(|v| v.detached).map(|v| v.id);
+        let detached_key = self.views.get(index).filter(|v| v.detached).map(|v| v.view_key());
         self.close_tab(index);
-        if let Some(id) = detached_id {
-            ctx.send_viewport_cmd_to(egui::ViewportId::from_hash_of(("detached-doc", id)), egui::ViewportCommand::Close);
+        if let Some(key) = detached_key {
+            ctx.send_viewport_cmd_to(Self::detached_viewport_id(key), egui::ViewportCommand::Close);
         }
         // A newer prompt wins: the user may have started another close while a save was pending,
         // and seen its question, which keeps counting as seen.
@@ -234,8 +242,7 @@ impl PdfCraftApp {
     fn close_detached_viewports(&self, ctx: &egui::Context) {
         for view in &self.views {
             if view.detached {
-                let id = egui::ViewportId::from_hash_of(("detached-doc", view.id));
-                ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
+                ctx.send_viewport_cmd_to(Self::detached_viewport_id(view.view_key()), egui::ViewportCommand::Close);
             }
         }
     }
@@ -304,7 +311,7 @@ impl PdfCraftApp {
     /// a question the user saw; a request that still stands carries over to it.
     pub(crate) fn attend_save_prompt(&mut self, ctx: &egui::Context) {
         let open = match self.close_request {
-            Some(CloseRequest::Tab(id)) => !self.views.iter().any(|v| v.id == id && v.detached),
+            Some(CloseRequest::Tab { key, .. }) => self.tab_with_key(key).is_some_and(|i| self.views.get(i).is_some_and(|v| !v.detached)),
             Some(_) => true,
             None => false,
         };

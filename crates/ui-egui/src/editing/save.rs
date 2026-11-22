@@ -315,7 +315,7 @@ impl PdfCraftApp {
                 self.placed_signatures.remove(&id);
                 // The tab in use: `sync_views` brings any other tab of the document up to date.
                 if let Some(doc) = self.session.get(id)
-                    && let Some(view) = self.asking_tab(id).and_then(|i| self.views.get_mut(i))
+                    && let Some(view) = self.asking_tab(id, 0).and_then(|i| self.views.get_mut(i))
                 {
                     view.document_changed(&doc.info);
                 }

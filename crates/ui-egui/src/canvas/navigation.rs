@@ -436,6 +436,10 @@ pub(crate) fn shortcuts(
 /// has the keyboard, and then it has the plain keys too; else whether the arrows are the view's (a
 /// focused radio button keeps them), and whether an open form field (a drop-down's or a list box's
 /// items) keeps the plain keys.
+///
+/// `detached_prompt_open`: a focused control in a child save prompt marks the shared context as
+/// wanting keyboard input. Root canvas chords must still run then, but a real root `TextEdit`
+/// (find bar, rename, …) keeps owning the keys.
 fn view_chords(view: &mut DocView, ctx: &egui::Context, chords: bool, detached_prompt_open: bool) -> Option<(bool, bool)> {
     use egui::{Key, KeyboardShortcut, Modifiers};
     let pressed = |s: KeyboardShortcut| chords && ctx.input_mut(|i| i.consume_shortcut(&s));
@@ -455,8 +459,11 @@ fn view_chords(view: &mut DocView, ctx: &egui::Context, chords: bool, detached_p
     // A focused check box or radio button holds egui's keyboard focus only for Space, and a
     // radio button for the arrows that move within its group: the other page keys still work.
     let form_box = view.forms.keys.filter(|(id, _)| ctx.memory(|m| m.focused()) == Some(*id));
-    if ctx.egui_wants_keyboard_input() && form_box.is_none() && !detached_prompt_open {
-        return None;
+    if ctx.egui_wants_keyboard_input() && form_box.is_none() {
+        let root_text_edit = ctx.memory(|m| m.focused()).is_some_and(|id| egui::TextEdit::load_state(ctx, id).is_some());
+        if !detached_prompt_open || root_text_edit {
+            return None;
+        }
     }
     let arrows = !form_box.is_some_and(|(_, radio)| radio);
     // Rotation first: egui matches ⌘+ loosely with respect to Shift.

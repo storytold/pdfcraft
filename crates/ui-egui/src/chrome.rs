@@ -414,7 +414,7 @@ fn tab_menu(app: &PdfCraftApp, ui: &mut egui::Ui, index: usize, action: &mut Opt
         let detach = egui::Button::new(tl!("Move to New Window"));
         let detach = ui.add_enabled(app.views.len() > 1, detach).on_disabled_hover_text(tl!("Cannot detach the only open document"));
         if detach.clicked() {
-            *action = Some(Action::Detach(id));
+            *action = Some(Action::Detach(tab));
             ui.close();
         }
     }
@@ -459,8 +459,8 @@ fn tab_drag(
         let stays = matches!(app.drop_target(pos, place), TabDrop::SplitRight | TabDrop::Pane(_));
         if outside && !stays {
             if released && !busy {
-                if let Some(view) = app.views.get(from) {
-                    app.detach_tab(view.id);
+                if let Some(key) = app.views.get(from).map(|v| v.view_key()) {
+                    app.detach_tab_by_key(key);
                 }
             } else if !released {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);

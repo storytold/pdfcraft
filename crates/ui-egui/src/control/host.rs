@@ -259,6 +259,25 @@ impl Host for crate::PdfCraftApp {
         }
     }
 
+    fn detach_at(&mut self, tab: usize) -> Reply {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = tab;
+            return Err("ui.detach needs native window viewports".into());
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.views.len() <= 1 {
+                return Err("cannot detach the only open document".into());
+            }
+            let Some(id) = self.views.get(tab).map(|v| v.id) else {
+                return Err(format!("tab index {tab} out of range"));
+            };
+            self.detach_view_at(tab);
+            Ok(json!({ "detached": id.0, "tab": tab }))
+        }
+    }
+
     fn attach(&mut self, id: pdfcraft_engine::DocId) -> Reply {
         #[cfg(target_arch = "wasm32")]
         {
@@ -272,6 +291,22 @@ impl Host for crate::PdfCraftApp {
             }
             PdfCraftControl::attach_tab(self, id);
             Ok(json!({ "attached": id.0 }))
+        }
+    }
+
+    fn attach_at(&mut self, tab: usize) -> Reply {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = tab;
+            return Err("ui.attach needs native window viewports".into());
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let Some(id) = self.views.get(tab).map(|v| v.id) else {
+                return Err(format!("tab index {tab} out of range"));
+            };
+            self.attach_view_at(tab);
+            Ok(json!({ "attached": id.0, "tab": tab }))
         }
     }
 

@@ -13,8 +13,10 @@ pub(crate) enum Action {
         tab: u64,
         down: bool,
     },
+    /// Tear the tab off into its own window, by its view key (split view can show one document in
+    /// two tabs; DocId alone would detach the wrong twin).
     #[cfg(not(target_arch = "wasm32"))]
-    Detach(DocId),
+    Detach(u64),
 }
 
 impl crate::PdfCraftApp {
@@ -91,8 +93,8 @@ impl crate::PdfCraftApp {
             }
             Action::Rename(id) => self.start_rename(id),
             #[cfg(not(target_arch = "wasm32"))]
-            Action::Detach(id) => {
-                self.detach_tab(id);
+            Action::Detach(key) => {
+                self.detach_tab_by_key(key);
             }
         }
     }

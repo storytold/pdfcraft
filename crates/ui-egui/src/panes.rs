@@ -141,15 +141,17 @@ fn layout(area: Rect, split: Split) -> (Rect, Rect, Rect) {
 
 impl PdfCraftApp {
     /// The tabs shown in `place`, in their strip's order (indexes into `views`).
+    /// Detached views live in their own window and are not docked strip members.
     pub fn tabs_in(&self, place: Place) -> Vec<usize> {
-        self.views.iter().enumerate().filter(|(_, v)| v.pane.place == place).map(|(i, _)| i).collect()
+        self.views.iter().enumerate().filter(|(_, v)| v.pane.place == place && !v.detached).map(|(i, _)| i).collect()
     }
 
     /// The tab `place` shows: the active tab when it is there, else the one active there last.
     /// `None` for the main pane while Home (or Combine files) shows.
+    /// Detached views are never selected as a docked pane's front.
     pub fn pane_front(&self, place: Place) -> Option<usize> {
         if let Some(a) = self.active
-            && self.views.get(a).is_some_and(|v| v.pane.place == place)
+            && self.views.get(a).is_some_and(|v| v.pane.place == place && !v.detached)
         {
             return Some(a);
         }
@@ -159,12 +161,12 @@ impl PdfCraftApp {
         self.latest_in(place)
     }
 
-    /// The tab of `place` active last (the first one when none has been).
+    /// The tab of `place` active last (the first one when none has been). Detached views are ignored.
     fn latest_in(&self, place: Place) -> Option<usize> {
         self.views
             .iter()
             .enumerate()
-            .filter(|(_, v)| v.pane.place == place)
+            .filter(|(_, v)| v.pane.place == place && !v.detached)
             .max_by_key(|(i, v)| (v.pane.shown_seq, std::cmp::Reverse(*i)))
             .map(|(i, _)| i)
     }
@@ -217,7 +219,8 @@ impl PdfCraftApp {
             }
         }
         if split {
-            let has = |p: Place| self.views.iter().any(|v| v.pane.place == p);
+            // Detached views do not keep a docked pane alive.
+            let has = |p: Place| self.views.iter().any(|v| v.pane.place == p && !v.detached);
             if !has(Place::Main) || !has(Place::Second) {
                 self.unsplit();
             }
@@ -293,7 +296,12 @@ impl PdfCraftApp {
         let Some((key, id)) = self.views.get(index).map(|v| (v.pane.key, v.id)) else { return };
         let active = self.active_key();
         self.views.remove(index);
-        self.active = if active == Some(key) { self.views.iter().position(|v| v.id == id) } else { active.and_then(|k| self.tab_with_key(k)) };
+        // Prefer a docked twin: a detached view of the same document must not become the root active tab.
+        self.active = if active == Some(key) {
+            self.views.iter().position(|v| v.id == id && !v.detached).or_else(|| self.views.iter().position(|v| v.id == id))
+        } else {
+            active.and_then(|k| self.tab_with_key(k))
+        };
     }
 
     /// Tab `index`'s right-click Split right (or Split down). The tab the main pane shows gets a
@@ -330,7 +338,7 @@ impl PdfCraftApp {
     fn show_twin(&mut self, index: usize, place: Place) {
         let Some(view) = self.views.get(index) else { return };
         let id = view.id;
-        if let Some(there) = self.views.iter().position(|v| v.id == id && v.pane.place == place) {
+        if let Some(there) = self.views.iter().position(|v| v.id == id && v.pane.place == place && !v.detached) {
             self.active = Some(there);
             return;
         }
@@ -353,15 +361,24 @@ impl PdfCraftApp {
     }
 
     /// End split view: the second pane's tabs join the main strip, except second views of
-    /// documents the main pane has open already, which close.
+    /// documents the main pane has open already (docked), which close. A Main twin that is only
+    /// detached does not count: the docked Second is promoted to Main instead of dropped.
+    /// Detached Second views are never dropped here; they only clear their Second placement.
     pub fn unsplit(&mut self) {
         self.panes.split = None;
         for i in (0..self.views.len()).rev() {
-            let Some((id, place)) = self.views.get(i).map(|v| (v.id, v.pane.place)) else { continue };
+            let Some((id, place, detached)) = self.views.get(i).map(|v| (v.id, v.pane.place, v.detached)) else { continue };
             if place != Place::Second {
                 continue;
             }
-            if self.views.iter().any(|v| v.id == id && v.pane.place == Place::Main) {
+            if detached {
+                if let Some(v) = self.views.get_mut(i) {
+                    v.pane.place = Place::Main;
+                }
+                continue;
+            }
+            let has_docked_main = self.views.iter().any(|v| v.id == id && v.pane.place == Place::Main && !v.detached);
+            if has_docked_main {
                 self.drop_view(i);
             } else if let Some(v) = self.views.get_mut(i) {
                 v.pane.place = Place::Main;
@@ -380,7 +397,8 @@ impl PdfCraftApp {
         if place == Place::Second && self.panes.split.is_none() {
             self.panes.split = Some(Split::new(false));
         }
-        if let Some(there) = self.views.iter().position(|v| v.id == id && v.pane.place == place && v.pane.key != key) {
+        // Only a docked occupant of `place` counts as a duplicate; a detached twin keeps its window.
+        if let Some(there) = self.views.iter().position(|v| v.id == id && v.pane.place == place && v.pane.key != key && !v.detached) {
             let keep = self.views.get(there).map(|v| v.pane.key);
             self.drop_view(index);
             self.active = keep.and_then(|k| self.tab_with_key(k));

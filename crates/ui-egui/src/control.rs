@@ -249,14 +249,24 @@ pub(crate) trait Host {
     fn open(&mut self, path: &str) -> Reply;
     /// Request application exit; returns whether it closed without asking for confirmation.
     fn quit(&mut self, ctx: &egui::Context) -> bool;
-    /// Detach a tab into a separate window viewport.
+    /// Detach a tab into a separate window viewport (first view of the document).
     fn detach(&mut self, id: pdfcraft_engine::DocId) -> Reply {
         let _ = id;
         Err("detach is not supported on this host".into())
     }
-    /// Re-attach a detached tab back to the primary window tab strip.
+    /// Detach the view at tab index into a separate window viewport.
+    fn detach_at(&mut self, tab: usize) -> Reply {
+        let _ = tab;
+        Err("detach is not supported on this host".into())
+    }
+    /// Re-attach a detached tab back to the primary window tab strip (first view of the document).
     fn attach(&mut self, id: pdfcraft_engine::DocId) -> Reply {
         let _ = id;
+        Err("attach is not supported on this host".into())
+    }
+    /// Re-attach the view at tab index back to the primary window tab strip.
+    fn attach_at(&mut self, tab: usize) -> Reply {
+        let _ = tab;
         Err("attach is not supported on this host".into())
     }
     /// Resolve a tab index to a document ID.
