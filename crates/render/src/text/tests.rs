@@ -4034,10 +4034,14 @@ fn the_part_of_a_match_to_redact_keeps_only_whole_letters_and_digits_readable() 
     let card = of(&["x", "4", "1", "-", "2", "3", "-", "5", "6", "y"]);
     // The match is glyphs 1..9 ("41-23-56"); the last four letters and digits are 2, 3, 5 and 6.
     let kept_after = card.redaction_part(1..9, 0, 4).unwrap();
-    assert!(kept_after.start == 1 && kept_after.end <= 4, "only 4, 1 and at most the dash go: {kept_after:?}");
+    assert!(kept_after.start == 1 && (kept_after.end == 3 || kept_after.end == 4), "only 4, 1 and at most the dash go: {kept_after:?}");
     let kept_before = card.redaction_part(1..9, 2, 0).unwrap();
-    assert!(kept_before.start >= 3 && kept_before.end == 9, "4 and 1 stay: {kept_before:?}");
+    assert!(kept_before.end == 9 && (kept_before.start == 3 || kept_before.start == 4), "4 and 1 stay: {kept_before:?}");
     assert_eq!(card.redaction_part(1..9, 0, 0), Some(1..9), "nothing kept, the whole match goes");
+    // A match with no letters or digits (the dashes alone) goes whole when nothing is kept, and
+    // is left alone when something is.
+    assert_eq!(card.redaction_part(3..4, 0, 0), Some(3..4), "nothing kept, a separator-only match still goes");
+    assert_eq!(card.redaction_part(3..4, 1, 0), None);
     assert_eq!(card.redaction_part(1..9, 3, 3), None, "six letters and digits, all kept");
     // "ef" drawn as one ligature glyph: keeping the last letter can't split it, so it goes.
     let lig = of(&["d", "ef", "g"]);

@@ -193,9 +193,7 @@ impl Automation {
         out["marked"] = json!(count);
         out["pages_marked"] = json!(marks.iter().map(|m| m.0 + 1).collect::<std::collections::BTreeSet<_>>());
         out["marks_pending"] = json!(self.doc(a)?.redaction_marks());
-        if leave_first > 0 || leave_last > 0 {
-            out["skipped_short"] = json!(skipped_short);
-        }
+        out["skipped_short"] = json!(skipped_short);
         if a.get("words").is_some() {
             out["matched_words"] = json!(matched_words.iter().map(|(w, n)| json!({ "word": w, "marked": n })).collect::<Vec<_>>());
         }
