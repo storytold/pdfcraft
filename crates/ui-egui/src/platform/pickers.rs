@@ -275,7 +275,7 @@ impl PdfCraftApp {
             if !self.still_pick_target(target) {
                 continue;
             }
-            // Last-resort guard (AGENTS.md §4), as for commands: this work used to run inside
+            // Last-resort guard (app-agents.md rule 13), as for commands: this work used to run inside
             // the command that asked, and a panic in it must not take the app down.
             if let Err(m) = pdfcraft_engine::guard(|| then(self, paths)) {
                 self.notify_fmt("That didn't work: an internal error stopped it ({m}).", &[("m", m.as_str())]);
@@ -494,31 +494,51 @@ mod tests {
     }
 
     /// Reduce File Size asks first, so a heavy file can finish by itself.
-    #[test]
-    fn reduce_file_size_asks_where_to_save_before_it_compresses() {
-        let (mut app, dir) = reducing("first");
+    fn reduce_file_size_after_pick(inline: bool) {
+        let (mut app, dir) = reducing(if inline { "first-inline" } else { "first" });
+        app.run_inline = inline;
         let out = dir.join("notes (reduced).pdf");
         app.pick_override = Some(vec![out.to_string_lossy().into_owned()]);
         app.reduce_file_size();
         assert!(app.optimize_run.is_none() && app.progress_notice.is_none(), "nothing runs until the answer is in");
         assert!(app.pickers.pending(), "the question is out");
+        assert!(!out.exists(), "no copy is written before the answer");
+        // The first answer is already queued; any second question would use this wrong path.
+        let unasked = dir.join("not asked.pdf");
+        app.pick_override = Some(vec![unasked.to_string_lossy().into_owned()]);
         app.process_picked();
-        let run = app.optimize_run.as_ref().expect("the answer starts it");
-        assert_eq!(run.destination.as_deref(), out.to_str());
+        // A tiny optimization may finish during the initial poll, before the test observes it.
+        // Check the destination in either state; the saved copy is verified below in both cases.
+        if let Some(run) = app.optimize_run.as_ref() {
+            assert_eq!(run.destination.as_deref(), out.to_str());
+        } else {
+            assert!(out.is_file(), "a completed optimization saved the chosen destination");
+        }
         // Nothing more is asked at the end: the copy is simply there.
-        app.pick_override = Some(vec![dir.join("not asked.pdf").to_string_lossy().into_owned()]);
         let start = std::time::Instant::now();
         while app.optimize_run.is_some() && start.elapsed() < std::time::Duration::from_secs(30) {
             app.poll_optimize();
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+        assert!(app.optimize_run.is_none(), "optimization finishes");
         assert!(!app.pickers.pending(), "it doesn't ask again");
+        assert!(!unasked.exists(), "the queued destination is retained");
         let written = std::fs::read(&out).unwrap_or_default();
         let mut again = pdfcraft_engine::Session::new();
         let id = again.open("notes (reduced).pdf", None, Arc::new(written), None).unwrap();
         let text = pdfcraft_engine::export::Exporter::new(again.get(id).unwrap()).text(0).unwrap();
         assert!(text.contains("Minutes of the harbour board"), "the copy reopens with its text: {text:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reduce_file_size_asks_where_to_save_before_it_compresses() {
+        reduce_file_size_after_pick(false);
+    }
+
+    #[test]
+    fn reduce_file_size_can_finish_before_the_first_poll_returns() {
+        reduce_file_size_after_pick(true);
     }
 
     #[test]

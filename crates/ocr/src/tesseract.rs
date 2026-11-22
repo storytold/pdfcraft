@@ -496,14 +496,10 @@ impl Recognizer for TesseractCli {
 
 /// Encode an RGBA raster as PNG (the interchange format Tesseract reads best).
 fn encode_png(image: &OcrImage) -> Result<Vec<u8>, OcrError> {
-    let mut out = Vec::new();
-    let mut enc = png::Encoder::new(&mut out, image.width, image.height);
-    enc.set_color(png::ColorType::Rgba);
-    enc.set_depth(png::BitDepth::Eight);
-    let mut writer = enc.write_header().map_err(|e| OcrError::Process(format!("encoding the page image failed: {e}")))?;
-    writer.write_image_data(&image.rgba).map_err(|e| OcrError::Process(format!("encoding the page image failed: {e}")))?;
-    writer.finish().map_err(|e| OcrError::Process(format!("encoding the page image failed: {e}")))?;
-    Ok(out)
+    let img = craft_image_codecs::Image::from_u8(image.width, image.height, craft_image_codecs::ChannelLayout::Rgba, image.rgba.clone())
+        .map_err(|e| OcrError::Process(format!("encoding the page image failed: {e}")))?;
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default())
+        .map_err(|e| OcrError::Process(format!("encoding the page image failed: {e}")))
 }
 
 /// Make a just-created file owner-only, where the OS supports it (Unix). Windows relies on the
