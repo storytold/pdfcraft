@@ -539,3 +539,28 @@ fn a_portfolio_rewritten_on_disk_reloads_while_its_tab_shows_a_file() {
     assert_eq!(shown(&h, 0).as_deref(), Some("one.pdf"));
     assert_eq!(s.session.get(s.views[0].id).unwrap().info.pages.len(), 2, "from the new version, not the one shown before");
 }
+
+/// A file shown in full screen keeps its own initial view for when full screen ends: here a
+/// portfolio opened in full screen presents a file that asks for two columns.
+#[test]
+fn a_file_shown_in_full_screen_keeps_its_initial_view_after_it() {
+    let two_columns =
+        String::from_utf8_lossy(PAGES).replace("/Type /Catalog /Pages 2 0 R", "/Type /Catalog /Pages 2 0 R /PageLayout /TwoColumnLeft").into_bytes();
+    let pdf = portfolio("/Collection << /D (two.pdf) >>", &[("one.pdf", PAGE), ("two.pdf", &two_columns)]);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("other.pdf", None, PAGE.to_vec()).unwrap();
+        app
+    });
+    h.run_steps(2);
+    assert!(h.state_mut().execute("view.full_screen"));
+    h.run_steps(2);
+    h.state_mut().open_bytes("portfolio.pdf", None, pdf).unwrap();
+    h.run_steps(4);
+    let tab = h.state().active.unwrap();
+    assert_eq!(shown(&h, tab).as_deref(), Some("two.pdf"));
+    assert!(h.state_mut().execute("view.full_screen"), "full screen ends");
+    h.run_steps(2);
+    assert_eq!(h.state().views[tab].layout, pdfcraft_ui_egui::canvas::PageLayout::TwoUp, "the file's two columns, after full screen");
+}

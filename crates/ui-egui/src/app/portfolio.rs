@@ -48,7 +48,14 @@ enum Unshown {
 /// The view a portfolio's tab shows next: one put aside before, at its index, or a new one.
 enum Next {
     Parked(usize),
-    Opened(Box<DocView>),
+    Opened(Box<Opened>),
+}
+
+/// A portfolio's file just opened: its view, and the way the file asks to be opened, read
+/// before it was made read-only (an `InitialView` is read from the editable document).
+struct Opened {
+    view: DocView,
+    initial: pdfcraft_engine::InitialView,
 }
 
 impl PdfCraftApp {
@@ -140,11 +147,13 @@ impl PdfCraftApp {
             // The portfolio's own view is put aside whenever a file is shown.
             (None, None) => return Err(Unshown::Nothing),
         };
-        let opened = matches!(next, Next::Opened(_));
         let Some(mut tab) = self.views.get_mut(index).and_then(|v| v.portfolio.take()) else { return Err(Unshown::Nothing) };
-        let mut view = match next {
-            Next::Parked(i) => tab.parked.remove(i).1,
-            Next::Opened(view) => *view,
+        let (mut view, initial) = match next {
+            Next::Parked(i) => (tab.parked.remove(i).1, None),
+            Next::Opened(opened) => {
+                let Opened { view, initial } = *opened;
+                (view, Some(initial))
+            }
         };
         let old = &self.views[index];
         // The new view takes the tab's place among the panes; its own key keeps its scroll
@@ -159,17 +168,24 @@ impl PdfCraftApp {
         // A file shown for the first time opens the way it asks to (its layout, magnification
         // and page), as it would in a tab of its own; one shown before keeps where the reader
         // left it. The tab keeps its file list, whatever panel the file asks for.
-        if opened && let Some(initial) = self.session.get(self.views[index].id).map(|d| d.initial_view()) {
+        if let Some(initial) = initial {
             let right = self.right;
             self.apply_initial_view(index, &initial);
             self.right = right;
+            // After the initial view, as on opening: full screen shows one fitted page, and
+            // leaving it comes back to the file's own display.
+            if self.full_screen
+                && let Some(view) = self.views.get_mut(index)
+            {
+                view.enter_presentation();
+            }
         }
         Ok(())
     }
 
     /// Open portfolio `host`'s file `key` as a read-only document without a tab of its own, and
-    /// a view of it.
-    fn open_portfolio_file(&mut self, host: DocId, key: &str) -> Result<Box<DocView>, Unshown> {
+    /// a view of it, with the way it asks to be opened.
+    fn open_portfolio_file(&mut self, host: DocId, key: &str) -> Result<Box<Opened>, Unshown> {
         use pdfcraft_render::OpenError;
         let attachment = self.portfolio_attachment(host, key).ok_or(Unshown::Nothing)?;
         let doc = self.session.get(host).ok_or(Unshown::Nothing)?;
@@ -187,14 +203,12 @@ impl PdfCraftApp {
             Err(e) => return Err(Unshown::Failed(att.name, e.to_string())),
         };
         let id = self.session.commit_open(prepared);
+        // Read while the document is still editable: read-only, it has no structure to read from.
+        let initial = self.session.get(id).map(|d| d.initial_view()).unwrap_or_default();
         self.session.set_read_only(id, tl!("it is shown inside a portfolio; open it in a new tab to edit a copy").to_string());
         self.session.set_reading_colors(id, self.reading_colors);
         let doc = self.session.get(id).ok_or(Unshown::Nothing)?;
-        let mut view = Box::new(DocView::new(id, &doc.info, self.view_defaults));
-        if self.full_screen {
-            view.enter_presentation();
-        }
-        Ok(view)
+        Ok(Box::new(Opened { view: DocView::new(id, &doc.info, self.view_defaults), initial }))
     }
 
     /// The documents a closing portfolio tab put aside, closed with it unless another tab

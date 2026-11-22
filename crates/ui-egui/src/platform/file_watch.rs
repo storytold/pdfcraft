@@ -478,9 +478,10 @@ impl PdfCraftApp {
     /// Open `bytes` in place of tab `i`'s document, keeping the tab and the reader's place. A
     /// version that can't be opened leaves the document as it was, and says so.
     fn reload_view(&mut self, i: usize, bytes: Arc<Vec<u8>>) {
-        // A portfolio's tab reloads the portfolio, on its own pages.
+        // A portfolio's tab reloads the portfolio, whichever file it shows, on its own pages when
+        // they can come back (a file's typing that can't be committed keeps that file shown).
         self.show_in_portfolio_tab(i, None);
-        let Some(id) = self.views.get(i).map(|v| v.id) else { return };
+        let Some(id) = self.tab_doc(i) else { return };
         match self.session.reload(id, bytes) {
             Ok(()) => {
                 // The files it showed came from the old version: they open again from the new
@@ -490,8 +491,13 @@ impl PdfCraftApp {
                 // signature placed since the last save is left to ask about locking (#2149).
                 self.forget_recovery(id);
                 self.placed_signatures.remove(&id);
+                // The portfolio's own view takes the new version, shown or put aside.
                 if let (Some(view), Some(doc)) = (self.views.get_mut(i), self.session.get(id)) {
-                    view.document_replaced(&doc.info);
+                    if view.id == id {
+                        view.document_replaced(&doc.info);
+                    } else if let Some((_, own)) = view.portfolio.as_mut().and_then(|p| p.parked.iter_mut().find(|(key, _)| key.is_none())) {
+                        own.document_replaced(&doc.info);
+                    }
                 }
                 // What the form's scripts said while it opened, as on opening.
                 let out = self.session.take_js_output(id);
