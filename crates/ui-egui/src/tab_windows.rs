@@ -163,21 +163,24 @@ impl PdfCraftApp {
         true
     }
 
+    /// Whether this window can copy `id`'s pages into another window's Organize grid.
+    /// Unlike [`can_detach_tab`], split views and an OCR review are fine: the source stays put.
+    fn can_copy_tab_pages(&self, id: DocId) -> bool {
+        self.transfer_ready() && self.detach_request.is_none() && self.session.get(id).is_some()
+    }
+
     /// Copy the current PDF pages into another window as one undoable insertion.
     /// Extract uses the unlocked engine document and enforces its page-copy permissions.
     pub fn insert_tab_pages_into(&mut self, id: DocId, target: &mut Self, into: DocId, at: usize) -> bool {
-        if !self.can_detach_tab(id) || !target.transfer_ready() || target.active_ids().map(|(_, id)| id) != Some(into) {
+        if !self.can_copy_tab_pages(id) || !target.transfer_ready() || target.active_ids().map(|(_, id)| id) != Some(into) {
             return false;
         }
         if !target.session.get(into).is_some_and(|d| d.allows_assembly() && at <= d.info.pages.len()) {
             return false;
         }
-        let Some(index) = self.views.iter().position(|v| v.id == id) else { return false };
-        let previous = self.active;
-        self.active = Some(index);
-        let committed = self.commit_form_typing();
-        self.active = previous;
-        if !committed || !target.commit_form_typing() {
+        // Every view of both documents can hold typing or a queued edit (split panes).
+        // Commit them all before extract; a rejected value stops the copy.
+        if !self.commit_typing_in(id) || !target.commit_typing_in(into) {
             return false;
         }
         let Some(doc) = self.session.get(id) else { return false };
@@ -690,6 +693,92 @@ mod tests {
         assert!(root.session.get(id).is_some());
     }
 
+    /// Organize page-copy does not remove the source, so a split view still allows the drop.
+    #[test]
+    fn window_drop_organize_copies_pages_from_a_split_document() {
+        let mut source = app();
+        let mut target = app();
+        source.active = Some(0);
+        let id = source.views[0].id;
+        let into = target.active_ids().unwrap().1;
+        source.toggle_split();
+        assert_eq!(source.views.iter().filter(|v| v.id == id).count(), 2);
+        assert!(!source.can_detach_tab(id));
+        assert!(source.can_copy_tab_pages(id));
+        assert!(source.insert_tab_pages_into(id, &mut target, into, 0));
+        assert_eq!(target.session.get(into).unwrap().info.pages.len(), 6);
+        assert_eq!(source.views.iter().filter(|v| v.id == id).count(), 2);
+        assert!(source.session.get(id).is_some());
+    }
+
+    fn form_focus(text: &str) -> crate::forms_ui::Focus {
+        crate::forms_ui::Focus {
+            name: "name".into(),
+            obj: None,
+            widget: 0,
+            text: text.into(),
+            picked: Vec::new(),
+            request_focus: false,
+            select_all: false,
+            press: None,
+            calendar: None,
+            calendar_rect: None,
+            calendar_text: None,
+            list: Default::default(),
+            had_focus: false,
+        }
+    }
+
+    fn queue_form_draft(app: &mut PdfCraftApp, index: usize, text: &str) {
+        app.views[index].forms.focus = Some(form_focus(text));
+        let form = app.session.get(app.views[index].id).unwrap().form.clone();
+        crate::forms_ui::commit(&mut app.views[index], &form);
+        assert!(app.views[index].pending_edit.is_some());
+    }
+
+    /// Page-copy commits every view of the source DocId, including the inactive split pane.
+    #[test]
+    fn window_drop_organize_commits_queued_edits_on_every_source_view() {
+        let mut source = PdfCraftApp::new();
+        source.run_inline = true;
+        source.managed_windows = true;
+        source.open_bytes("form.pdf", None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
+        let mut target = app();
+        let id = source.views[0].id;
+        let into = target.active_ids().unwrap().1;
+        source.toggle_split();
+        let inactive = source.views.iter().enumerate().find(|(i, v)| *i != 0 && v.id == id).map(|(i, _)| i).expect("split adds a second view");
+        source.active = Some(0);
+        assert_ne!(source.active, Some(inactive));
+        queue_form_draft(&mut source, inactive, "From inactive pane");
+        assert!(source.insert_tab_pages_into(id, &mut target, into, 0));
+        assert!(source.views[inactive].pending_edit.is_none());
+        assert!(source.views[inactive].forms.focus.is_none());
+        assert_eq!(source.session.get(id).unwrap().form.iter().find(|f| f.name == "name").unwrap().value, ["From inactive pane".to_string()]);
+        assert!(target.session.get(into).unwrap().info.pages.len() > 3);
+    }
+
+    /// Page-copy also commits every view of the destination DocId before inserting.
+    #[test]
+    fn window_drop_organize_commits_queued_edits_on_every_destination_view() {
+        let mut source = app();
+        let mut target = PdfCraftApp::new();
+        target.run_inline = true;
+        target.managed_windows = true;
+        target.open_bytes("form.pdf", None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
+        let id = source.views[0].id;
+        let into = target.views[0].id;
+        target.active = Some(0);
+        target.toggle_split();
+        let inactive = target.views.iter().enumerate().find(|(i, v)| *i != 0 && v.id == into).map(|(i, _)| i).expect("split adds a second view");
+        target.active = Some(0);
+        assert_ne!(target.active, Some(inactive));
+        queue_form_draft(&mut target, inactive, "Dest inactive pane");
+        assert!(source.insert_tab_pages_into(id, &mut target, into, 0));
+        assert!(target.views[inactive].pending_edit.is_none());
+        assert_eq!(target.session.get(into).unwrap().form.iter().find(|f| f.name == "name").unwrap().value, ["Dest inactive pane".to_string()]);
+    }
+
     /// Unaccepted OCR corrections stay with their document: detach is refused until accept or discard.
     #[test]
     fn tear_off_refuses_while_ocr_verify_holds_unaccepted_corrections() {
@@ -716,6 +805,38 @@ mod tests {
         assert!(!root.can_detach_tab(id));
         assert!(!root.request_detach_tab(id, None));
         assert!(root.session.get(id).is_some());
+    }
+
+    /// Organize page-copy leaves the OCR review in place, so the drop is still allowed.
+    #[test]
+    fn window_drop_organize_copies_pages_while_ocr_verify_holds_corrections() {
+        use pdfcraft_engine::ocr::{OcrPage, OcrSettings, PlacedWord};
+        let mut source = app();
+        let mut target = app();
+        let id = source.views[0].id;
+        let into = target.active_ids().unwrap().1;
+        let job = source.session.ocr_job(id, &[], OcrSettings::default()).expect("ocr job");
+        let page = OcrPage {
+            already_on_page: 0,
+            page: 0,
+            words: vec![PlacedWord {
+                text: "word".into(),
+                origin: [72.0, 700.0],
+                across: [40.0, 0.0],
+                up: [0.0, 12.0],
+                confidence: Some(50.0),
+                source: "ocrs".into(),
+            }],
+            skipped: None,
+            notes: Vec::new(),
+        };
+        source.ocr_verify.load(id, job.guard.clone(), vec![page]);
+        assert!(!source.can_detach_tab(id));
+        assert!(source.can_copy_tab_pages(id));
+        assert!(source.insert_tab_pages_into(id, &mut target, into, 0));
+        assert_eq!(target.session.get(into).unwrap().info.pages.len(), 6);
+        assert!(source.ocr_verify.holds_reading_of(id));
+        assert!(source.session.get(id).is_some());
     }
 
     /// Unavailable hosts and blocked operations leave the source document owned and intact.
