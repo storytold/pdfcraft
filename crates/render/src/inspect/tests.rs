@@ -1424,6 +1424,13 @@ fn relative_uri_actions_resolve_against_the_catalog_base() {
     for base in ["/URI << /Base (file:///C:/docs/) >>", "/URI << /Base /NotAString >>", "/URI 7", "/URI << /Base (javascript:x//) >>"] {
         assert_eq!(uris(&links_of(base, annots)).first().map(String::as_str), Some("page.html"), "{base}");
     }
+    // A relative PDF is the file beside the document only without a base (#7955): a web base
+    // makes it a web address, and one that isn't used leaves it as written.
+    let pdf = "<< /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI (exhibit%2001.pdf) >> >>";
+    let beside = LinkTarget::RemoteGoTo { launch: false, file: "exhibit 01.pdf".into(), destination: RemoteDestination::Default, new_window: None };
+    assert_eq!(links_of("", pdf).links[0].target, beside);
+    assert_eq!(uris(&links_of("/URI << /Base (https://example.com/base/) >>", pdf)), ["https://example.com/base/exhibit%2001.pdf"]);
+    assert_eq!(uris(&links_of("/URI << /Base (file:///C:/docs/) >>", pdf)), ["exhibit%2001.pdf"]);
 }
 
 /// ISO 32000-2 §12.5.6.5, Table 176: a link is active in its `/QuadPoints`, or over its

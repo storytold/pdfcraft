@@ -395,6 +395,12 @@ impl<'a> Inspector<'a> {
                         *text_budget = text_budget.saturating_sub(resolved.len().saturating_sub(uri.len()));
                         LinkTarget::Uri(resolved)
                     }
+                    // With no base, a relative reference to a PDF is that file beside the
+                    // document (#7955). The decoded path is no longer than the address.
+                    _ if base.is_none() => match crate::relative_pdf_uri(&uri) {
+                        Some(file) => LinkTarget::RemoteGoTo { launch: false, file, destination: RemoteDestination::Default, new_window: None },
+                        None => LinkTarget::Uri(uri),
+                    },
                     _ => LinkTarget::Uri(uri),
                 },
                 other => other,
