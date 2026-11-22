@@ -55,10 +55,10 @@ The multi-window system maintains strict state synchronization across all viewpo
 ## Implementation Decisions
 
 ### 1. Viewport Lifecycle and Target Isolation
-- Native multiple window support will utilize immediate viewports (`egui::Context::show_viewport_immediate`), with unique viewport IDs derived deterministically from the document identifier (`egui::ViewportId::from_hash_of(("detached-doc", doc_id))`).
+- Native multiple window support will utilize immediate viewports (`egui::Context::show_viewport_immediate`), with unique viewport IDs derived from each view's `view_key` (`PdfCraftApp::detached_viewport_id(key)`), so two torn-off twins of one document do not share a window.
 - Viewport immediate closures must be intercepted during the child UI frame pass. When `child_ui.input(|i| i.viewport().close_requested())` is detected on a child viewport:
-  - If the document has unsaved changes, the app issues `child_ui.ctx().send_viewport_cmd_to(viewport_id, egui::ViewportCommand::CancelClose)` to abort premature OS window destruction.
-  - The close request is flagged per-view on `DocView::close_requested` rather than overwriting global exit flags.
+  - If the document has unsaved changes, the app issues `child_ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose)` to abort premature OS window destruction.
+  - The close question uses the shared `PdfCraftApp::close_request` state as `CloseRequest::Tab { id, key }`, where `key` is the closing view's `DocView::view_key`. Detached viewports route that Tab prompt into their own UI pass; `DocView::close_requested` is not the owner of save-on-close state.
   - The modal save confirmation dialog is displayed inside the detached viewport's central UI pass, ensuring visual co-location with the user's close request.
   - Upon user confirmation to discard or completed save, the child window sends a close command to its viewport and calls `self.close_tab(idx)`.
 
@@ -77,16 +77,12 @@ The multi-window system maintains strict state synchronization across all viewpo
 - Keyboard tab cycling shortcuts (Ctrl+Tab, ⌘⌥→) must filter out detached views.
 - Under no circumstances may `self.active` point to an index where `views[i].detached == true`, preventing concurrent dual-rendering of the same document across multiple viewports.
 
-### 4. Slot-to-View Index Translation for Tab Drag-and-Drop
-- The visual tab strip renders only non-detached views, producing a filtered set of slots (`slots`).
-- Drag-and-drop position calculations produce a slot index (`slot_to`).
-- To prevent index drift caused by preceding detached tabs, `slot_to` must be mapped back to the absolute `views` vector index prior to calling `move_tab`:
-  ```rust
-  let to_view_index = slots.get(slot_to).map_or(app.views.len() - 1, |(idx, _)| *idx);
-  app.move_tab(from, to_view_index);
-  ```
+### 4. Strip-local Tab Drag-and-Drop
+- The visual tab strip renders only non-detached views, producing a filtered set of slots (`slots`) whose first element is each tab's absolute `views` index.
+- In-strip drops call `move_tab_in_strip(from, &slots, to)` with the strip-local drop index and the strip's visible slots as the anchor list (not a separate views-index remapping step).
 - The drag tear-off boundary threshold requires a minimum vertical displacement (15 points above or below the tab strip bounds) before initiating tear-off state. While tearing off, a visual drag badge indicates the document name and detaching action.
 - Tear-off triggers when leaving the tab strip bounds vertically while the pointer is at or to the right of the strip's left edge (pos.x >= strip.left()), with no right-edge bound. Dragging to the left of the strip (pos.x < strip.left()) remains a tab reorder, ensuring off-strip drops to the left reorder to the front of the strip without falsely detaching.
+- Tear-off and the tab menu detach by view key / strip slot index, so a split twin is not confused with another view of the same document.
 
 ### 5. Sole Tab Detachment Rule
 - When only a single document tab exists across the application (`self.views.len() == 1`), detaching is disallowed:
@@ -110,8 +106,8 @@ Detached windows render a lightweight top header panel and a central document pa
 - For Wayland environments where programmatic window positioning is restricted by the compositor, window size and minimum dimensions are supplied via `ViewportBuilder` without enforcing absolute coordinate placement.
 
 ### 8. Parity Tracking and Headless Automation Seam
-- Parity entry `view.multiple-windows` in `parity/acrobat-features.toml` will be marked `status = "partial"` until dedicated automation commands or UI control-channel tools are implemented.
-- The UI control channel (`PdfCraftControl`) will expose methods to detach and re-attach tabs by `DocId`, allowing automated tests and AI agents to simulate window detachment headlessly.
+- Parity entry `view.multiple-windows` in `parity/acrobat-features.toml` remains `status = "partial"`: detached windows lack full shortcut and menu parity with the root window (Undo/Redo only in the child today).
+- The UI control channel (`PdfCraftControl`) already exposes `ui.detach` / `ui.attach` (by document id or tab index), so headless detach/reattach is available; remaining partial status is about desktop UX coverage, not the control seam.
 
 ## Testing Decisions
 

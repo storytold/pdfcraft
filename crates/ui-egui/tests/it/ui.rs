@@ -618,7 +618,7 @@ fn a_link_prompt_above_a_save_prompt_owns_its_keys() {
         let mut h = harness(|app| {
             app.open_bytes("first.pdf", None, FIXTURE.to_vec()).unwrap();
             app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
-            app.close_request = Some(pdfcraft_ui_egui::CloseRequest::Tab(app.views[0].id));
+            app.close_request = Some(pdfcraft_ui_egui::CloseRequest::Tab { id: app.views[0].id, key: app.views[0].view_key() });
         });
         h.run_steps(3);
         h.state_mut().pending_link =
@@ -1662,7 +1662,10 @@ fn cancelling_then_discarding_an_earlier_dirty_tab_preserves_the_selected_docume
     h.get_by_label("middle.pdf").click();
     h.run_steps(3);
     close_named_tab(&mut h, "first.pdf (edited)");
-    assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Tab(ids[0])));
+    assert_eq!(
+        h.state().close_request,
+        Some(pdfcraft_ui_egui::CloseRequest::Tab { id: ids[0], key: h.state().views.iter().find(|v| v.id == ids[0]).unwrap().view_key() })
+    );
     h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert_eq!(h.state().views.len(), 3);
@@ -2188,7 +2191,8 @@ fn closing_clean_detached_window_immediately_closes_tab() {
     assert!(h.state().views[1].detached);
 
     // Request OS close on detached child viewport
-    let child_viewport_id = egui::ViewportId::from_hash_of(("detached-doc", ids[1]));
+    let child_viewport_id =
+        pdfcraft_ui_egui::PdfCraftApp::detached_viewport_id(h.state().views.iter().find(|v| v.id == ids[1]).expect("detached view").view_key());
     h.input_mut().viewports.entry(child_viewport_id).or_default().events.push(egui::ViewportEvent::Close);
     h.run_steps(3);
 
@@ -2210,7 +2214,8 @@ fn closing_dirty_detached_window_intercepts_close_and_prompts_inside_child_viewp
     h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
 
     // Request OS close on detached child viewport
-    let child_viewport_id = egui::ViewportId::from_hash_of(("detached-doc", ids[1]));
+    let child_viewport_id =
+        pdfcraft_ui_egui::PdfCraftApp::detached_viewport_id(h.state().views.iter().find(|v| v.id == ids[1]).expect("detached view").view_key());
     h.input_mut().viewports.entry(child_viewport_id).or_default().events.push(egui::ViewportEvent::Close);
     h.step();
 
@@ -2220,7 +2225,10 @@ fn closing_dirty_detached_window_intercepts_close_and_prompts_inside_child_viewp
     assert!(cancel_close_sent, "CancelClose command must be sent to child viewport");
 
     // Close request is flagged for this detached document
-    assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Tab(ids[1])));
+    assert_eq!(
+        h.state().close_request,
+        Some(pdfcraft_ui_egui::CloseRequest::Tab { id: ids[1], key: h.state().views.iter().find(|v| v.id == ids[1]).unwrap().view_key() })
+    );
 
     h.run_steps(2);
 
@@ -2246,7 +2254,8 @@ fn cancelling_save_prompt_in_detached_window_leaves_tab_open_detached_and_dirty(
     h.run_steps(3);
     h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
 
-    let child_viewport_id = egui::ViewportId::from_hash_of(("detached-doc", ids[1]));
+    let child_viewport_id =
+        pdfcraft_ui_egui::PdfCraftApp::detached_viewport_id(h.state().views.iter().find(|v| v.id == ids[1]).expect("detached view").view_key());
     h.input_mut().viewports.entry(child_viewport_id).or_default().events.push(egui::ViewportEvent::Close);
     h.run_steps(3);
 
@@ -2275,7 +2284,8 @@ fn dont_save_in_detached_window_discards_changes_and_closes_tab() {
     h.run_steps(3);
     h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
 
-    let child_viewport_id = egui::ViewportId::from_hash_of(("detached-doc", ids[1]));
+    let child_viewport_id =
+        pdfcraft_ui_egui::PdfCraftApp::detached_viewport_id(h.state().views.iter().find(|v| v.id == ids[1]).expect("detached view").view_key());
     h.input_mut().viewports.entry(child_viewport_id).or_default().events.push(egui::ViewportEvent::Close);
     h.run_steps(3);
 
@@ -2314,7 +2324,8 @@ fn save_in_detached_window_saves_changes_and_closes_tab() {
     h.run_steps(3);
     h.state_mut().session.apply(ids[1], pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
 
-    let child_viewport_id = egui::ViewportId::from_hash_of(("detached-doc", ids[1]));
+    let child_viewport_id =
+        pdfcraft_ui_egui::PdfCraftApp::detached_viewport_id(h.state().views.iter().find(|v| v.id == ids[1]).expect("detached view").view_key());
     h.input_mut().viewports.entry(child_viewport_id).or_default().events.push(egui::ViewportEvent::Close);
     h.run_steps(3);
 
@@ -2717,7 +2728,8 @@ fn detached_window_undo_redo_targets_detached_view_without_affecting_docked_tab(
     assert_eq!(h.state().session.get(tab_a_id).unwrap().info.pages[0].rotation, 0);
 
     // Send Cmd+Z to Tab B's detached child viewport
-    let child_viewport_id = egui::ViewportId::from_hash_of(("detached-doc", tab_b_id));
+    let child_viewport_id =
+        pdfcraft_ui_egui::PdfCraftApp::detached_viewport_id(h.state().views.iter().find(|v| v.id == tab_b_id).expect("detached view").view_key());
     h.input_mut().viewports.entry(child_viewport_id).or_default();
     h.input_mut().viewport_id = child_viewport_id;
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);

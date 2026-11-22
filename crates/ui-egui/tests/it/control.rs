@@ -2297,6 +2297,37 @@ fn headless_control_channel_tab_detach_and_reattach() {
     assert!(!cmd_enabled(&mut h, &c, "ui.attach"));
 }
 
+/// Tab-index detach must hit that view of a split document, not the first DocId match.
+#[test]
+fn headless_detach_by_tab_index_targets_the_second_split_twin() {
+    use egui::{Key, Modifiers};
+    use pdfcraft_ui_egui::panes::Place;
+
+    let (mut h, c) = harness();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Backslash);
+    settle(&mut h);
+    assert_eq!(h.state().views.len(), 2);
+    assert_eq!(h.state().views[0].place(), Place::Main);
+    assert_eq!(h.state().views[1].place(), Place::Second);
+    let (first_key, second_key, id) = (h.state().views[0].view_key(), h.state().views[1].view_key(), h.state().views[0].id);
+    assert_eq!(h.state().views[0].id, h.state().views[1].id);
+
+    let res = ok(&mut h, &c, "ui.detach", json!({"tab": 1}));
+    assert_eq!(res["detached"], id.0);
+    assert_eq!(res["tab"], 1);
+    settle(&mut h);
+
+    let first = h.state().views.iter().find(|v| v.view_key() == first_key).unwrap();
+    let second = h.state().views.iter().find(|v| v.view_key() == second_key).unwrap();
+    assert!(!first.detached, "DocId-first policy would have torn off this twin");
+    assert!(second.detached, "tab index 1 is the second twin");
+
+    let res = ok(&mut h, &c, "ui.attach", json!({"tab": 1}));
+    assert_eq!(res["attached"], id.0);
+    settle(&mut h);
+    assert!(!h.state().views.iter().find(|v| v.view_key() == second_key).unwrap().detached);
+}
+
 #[test]
 fn headless_control_channel_tab_detach_errors_and_trait() {
     use pdfcraft_ui_egui::PdfCraftControl;
