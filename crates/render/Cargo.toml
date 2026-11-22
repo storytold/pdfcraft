@@ -13,8 +13,7 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 # The usable-quad rule `/QuadPoints` readers share.
 pdfcraft-geom = { workspace = true }
-hayro ={ workspace = true }
-hayro-syntax = { workspace = true }
+craft-pdf = { workspace = true, features = ["raster"] }
 # Picks the face of an installed font collection (the version pdfcraft-fonts already uses).
 skrifa = "0.44"
 lopdf = { workspace = true }
@@ -37,6 +36,9 @@ unicode-bidi = "0.3"
 getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
+# Existing backend-level regressions use the same pinned sources as the shared facade.
+hayro = { workspace = true }
+hayro-syntax = { workspace = true }
 # The content crate's parser, compared operator by operator against hayro's in
 # `tests/content_differential.rs` (L3 may depend on L2).
 pdfcraft-content = { workspace = true }

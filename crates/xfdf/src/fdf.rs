@@ -1,7 +1,7 @@
 use super::common::{MAX_DEPTH, rect_strict, text_of};
-use super::grammar::fdf_annot_skip_key;
 use super::xfdf::{add_popup, apply_values, find_by_name, place};
 use super::*;
+use craft_xfdf::grammar::fdf_annot_skip_key;
 
 fn pdf_string(s: &str) -> Vec<u8> {
     let mut v = Vec::new();
