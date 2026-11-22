@@ -1042,6 +1042,34 @@ fn an_unreadable_library_keeps_the_saved_code_choice() {
     assert_eq!(saved["redact_prefs"]["code_set"], "foia");
 }
 
+/// CodeRabbit on #7992: codes picked in Redaction Properties and made default end the kept
+/// choice, even when they are picked back to what the unreadable choice was read as.
+#[test]
+fn choosing_codes_while_the_library_is_unreadable_ends_the_saved_choice() {
+    let damaged = r#"{"redaction_code_sets":{"format":"pdfcraft-redaction-codes","version":2,"sets":[]},"redact_prefs":{"use_overlay":true,"use_code":true,"code_set":"Court","codes":["Sealed"]}}"#;
+    let saved_set =
+        |h: &Harness<'_, PdfCraftApp>| serde_json::from_str::<serde_json::Value>(&h.state().persist()).unwrap()["redact_prefs"]["code_set"].clone();
+    let mut h = harness();
+    h.state_mut().restore(damaged);
+    // OK with no code picked keeps it.
+    assert!(h.state_mut().execute("redact.properties"));
+    h.run_steps(4);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert_eq!(saved_set(&h), "Court", "no choice made");
+    // A code ticked and unticked again, then OK, is a choice: the fallback is saved.
+    assert!(h.state_mut().execute("redact.properties"));
+    h.run_steps(4);
+    h.get_by_label("(b)(6)").click();
+    h.run_steps(2);
+    h.get_by_label("(b)(6)").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert!(h.state().redact_defaults.codes.is_empty());
+    assert_ne!(saved_set(&h), "Court", "the user's choice is saved");
+}
+
 /// Saved code sets that can't be read are neither dropped nor overwritten: the user is told, the
 /// entry is written back as it was, and Edit Codes can discard it.
 #[test]

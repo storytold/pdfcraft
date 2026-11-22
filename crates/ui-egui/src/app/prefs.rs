@@ -502,6 +502,7 @@ impl PdfCraftApp {
             self.redaction_choice_unread = self.redaction_codes_unread.is_some().then(|| crate::redact_ui::RedactChoiceUnread {
                 saved: (v["redact_prefs"]["code_set"].clone(), v["redact_prefs"]["codes"].clone()),
                 fallback: (prefs.code_set.clone(), prefs.codes.clone()),
+                touched: false,
             });
             self.redact_prefs = prefs.clone();
             self.redact_defaults = prefs;

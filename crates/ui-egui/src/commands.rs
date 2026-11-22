@@ -819,6 +819,10 @@ impl PdfCraftApp {
             }
             "redact.properties" => {
                 self.redact_before = Some(self.redact_prefs.clone());
+                // Only a set or codes chosen in this dialog count as the user's choice.
+                if let Some(kept) = self.redaction_choice_unread.as_mut() {
+                    kept.touched = false;
+                }
                 self.dialog = Some(Dialog::RedactProps);
             }
             "redact.apply" => {

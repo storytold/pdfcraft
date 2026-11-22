@@ -51,6 +51,9 @@ pub(crate) struct RedactChoiceUnread {
     pub saved: (serde_json::Value, serde_json::Value),
     /// What they were read as (the default set, no codes), which the defaults keep until changed.
     pub fallback: (String, Vec<String>),
+    /// The open Redaction Properties changed the set or codes, even if back to the fallback:
+    /// once those become the defaults, they are the user's choice and this one ends.
+    pub touched: bool,
 }
 
 /// Redaction Tool Properties: what new marks look like once applied.

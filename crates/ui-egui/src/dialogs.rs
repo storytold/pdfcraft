@@ -1121,12 +1121,24 @@ fn dialog_redact_props(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pendi
     let t = Tokens::get(ui.ctx());
     let mut prefs = app.redact_prefs.clone();
     let (ok, cancel, edit_codes) = crate::redact_ui::props_body(ui, &mut prefs, &app.redaction_codes, &t);
+    let chose_codes = (&prefs.code_set, &prefs.codes) != (&app.redact_prefs.code_set, &app.redact_prefs.codes);
+    if let Some(kept) = app.redaction_choice_unread.as_mut() {
+        kept.touched |= chose_codes;
+    }
     app.redact_prefs = prefs;
     if edit_codes {
         app.open_code_editor();
         req.next = Some(Dialog::RedactCodes);
     }
     if ok && app.redact_prefs.remember {
+        // Defaults with a set or codes chosen here end the saved choice kept while the sets
+        // can't be read, even when they match what it was read as.
+        let chosen = app.redaction_choice_unread.as_ref().is_some_and(|kept| {
+            kept.touched || (&app.redact_prefs.code_set, &app.redact_prefs.codes) != (&app.redact_defaults.code_set, &app.redact_defaults.codes)
+        });
+        if chosen {
+            app.redaction_choice_unread = None;
+        }
         app.redact_defaults = app.redact_prefs.clone();
     }
     if cancel && let Some(before) = app.redact_before.take() {
