@@ -481,6 +481,8 @@ fn the_toolbar_shows_and_changes_the_selected_texts_border() {
     h.state_mut()
         .apply_edit(&ctx_h, pdfcraft_engine::Edit::StyleAnnotation { page, index, color: None, opacity: None, width: Some(2.0), endings: None });
     h.run_steps(3);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Border").click();
+    h.run_steps(2);
     assert!(shows(&h, "2 pt"), "the toolbar shows the selected text's border");
     assert_eq!(h.state().fill_text_border, 0.0, "new text keeps none");
 
@@ -510,6 +512,8 @@ fn typed_text_takes_an_oval_or_a_circle_from_the_toolbar() {
     use pdfcraft_engine::BorderShape;
     let mut h = harness();
     h.execute("sign.fill.text");
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Border").click();
     h.run_steps(2);
     assert_eq!(h.query_all_by_label("Border shape").count(), 0, "no shape without a border");
     h.state_mut().fill_text_border = 1.0;
@@ -547,6 +551,8 @@ fn typed_text_takes_an_oval_or_a_circle_from_the_toolbar() {
     // Selected, an oval from the toolbar: one undo step.
     h.state_mut().views[0].session.comments.select_only((page, index));
     h.run_steps(3);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Border").click();
+    h.run_steps(2);
     h.query_all_by_role(egui::accesskit::Role::ComboBox)
         .find(|n| n.value().as_deref() == Some("Circle"))
         .expect("shows the text's own")
@@ -597,6 +603,10 @@ fn no_border_takes_the_oval_or_circle_away_too() {
     let props = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().comment_props(page, index).unwrap();
     assert_eq!(props(&h).border_shape, Some(BorderShape::Circle));
     let no_border = |h: &mut Harness<'static, PdfCraftApp>| {
+        if h.query_all_by_role_and_label(egui::accesskit::Role::Dialog, "Border").count() == 0 {
+            h.get_by_role_and_label(egui::accesskit::Role::Button, "Border").click();
+            h.run_steps(2);
+        }
         h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("1 pt")).expect("the Border control").click();
         h.run_steps(2);
         h.get_by_label("None").click();
@@ -629,7 +639,11 @@ fn fill_text_border_frames_new_and_selected_text() {
     let mut h = harness();
     h.execute("sign.fill.text");
     h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Border").click();
+    h.run_steps(2);
     h.get_by_label("Border:");
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Border").click();
+    h.run_steps(2);
     let type_at = |h: &mut Harness<'static, PdfCraftApp>, y: f32| {
         click(h, 50.0, y);
         h.event(egui::Event::Text("Same".into()));
@@ -656,9 +670,12 @@ fn fill_text_border_frames_new_and_selected_text() {
 
     // The plain text selected, then framed with 2 pt from the toolbar.
     h.state_mut().views[0].session.comments.select_only((page, index));
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Border").click();
+    h.run_steps(2);
     h.query_all_by_role(egui::accesskit::Role::ComboBox)
-        .find(|n| n.value().as_deref() == Some("1.5 pt"))
-        .expect("the Border control, showing the border for new text")
+        .find(|n| n.value().as_deref() == Some("None"))
+        .expect("the Border control, showing the selected text's border")
         .click();
     h.run_steps(2);
     h.get_by_label("2 pt").click();
