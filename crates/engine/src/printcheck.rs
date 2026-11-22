@@ -436,6 +436,44 @@ mod tests {
         assert!(report.text().contains("verification only"));
     }
 
+    /// A low-resolution picture used as a pattern fill is listed and failed like a drawn one (#7741).
+    #[test]
+    fn an_image_painted_through_a_tiling_pattern_is_measured() {
+        let mut doc = Document::new_empty();
+        let tiny = image(&mut doc, 8, 8);
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Pattern"));
+        d.set(b"PatternType".to_vec(), Object::Int(1));
+        d.set(b"PaintType".to_vec(), Object::Int(1));
+        d.set(b"TilingType".to_vec(), Object::Int(1));
+        d.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 72.into(), 72.into()]));
+        d.set(b"XStep".to_vec(), Object::Int(72));
+        d.set(b"YStep".to_vec(), Object::Int(72));
+        // The cell draws the image one inch wide; the pattern matrix makes that ten inches: 0.8 ppi.
+        d.set(b"Matrix".to_vec(), Object::Array(vec![10.into(), 0.into(), 0.into(), 10.into(), 0.into(), 0.into()]));
+        let mut x = Dict::new();
+        x.set(b"Im".to_vec(), Object::Ref(tiny));
+        let mut cell = Dict::new();
+        cell.set(b"XObject".to_vec(), Object::Dict(x));
+        d.set(b"Resources".to_vec(), Object::Dict(cell));
+        let pattern = doc.add(Object::Stream(Stream::flate(d, b"q 72 0 0 72 0 0 cm /Im Do Q")));
+        let p = page(&mut doc, "Unused", tiny, "/Pattern cs /P1 scn 0 0 612 792 re f");
+        doc.update_dict(p, |d| {
+            let mut patterns = Dict::new();
+            patterns.set(b"P1".to_vec(), Object::Ref(pattern));
+            let mut res = Dict::new();
+            res.set(b"Pattern".to_vec(), Object::Dict(patterns));
+            d.set(b"Resources".to_vec(), Object::Dict(res));
+        })
+        .unwrap();
+
+        let report = inspect(&doc);
+        assert_eq!(report.images.len(), 1, "{:?}", report.images);
+        assert!((report.images[0].ppi - 0.8).abs() < 0.01, "{}", report.images[0].ppi);
+        assert!(report.findings.iter().any(|f| f.id == "image-ppi" && f.severity == "fail" && f.page == Some(1)), "{:?}", report.findings);
+        assert_eq!(report.resolution_unknown, 0);
+    }
+
     #[test]
     fn box_sizes_and_bleed_follow_the_pages_user_unit() {
         let mut doc = Document::new_empty();
