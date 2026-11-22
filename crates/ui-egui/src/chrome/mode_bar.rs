@@ -53,6 +53,9 @@ pub(super) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         }
         // Production replaces the search field with its icon when the field cannot keep its minimum width.
         let compact_search = ui.available_width() < 140.0 + 116.0;
+        // Below room for the current mode, the search icon and the three document buttons, the buttons give way
+        // (their commands stay in the menus and on their shortcuts) so the search never lands on the strip.
+        let document_buttons = ui.available_width() >= 200.0;
         // The document may hide the tools (`crate::viewer_prefs`): the mode strip, the buttons and the search.
         let shown = MODES.iter().position(|(mode, _)| *mode == app.mode);
         Bar::new(tl!("Modes"), BarKind::Tool)
@@ -66,9 +69,11 @@ pub(super) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     CommandSearch::new("view.palette", tl!("Find tools and commands")).show(ui);
                 }
                 // Production puts the search first and the document buttons at the right edge.
-                IconButton::command(IconId::new("info"), "file.properties").show(ui);
-                IconButton::command(IconId::new("save"), "file.save").show(ui);
-                IconButton::command(IconId::new("printer"), "print.dialog").show(ui);
+                if document_buttons {
+                    IconButton::command(IconId::new("info"), "file.properties").show(ui);
+                    IconButton::command(IconId::new("save"), "file.save").show(ui);
+                    IconButton::command(IconId::new("printer"), "print.dialog").show(ui);
+                }
             })
             .show(ui, |ui, _| {
                 if hidden.toolbar {
