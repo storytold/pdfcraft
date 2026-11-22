@@ -23,6 +23,7 @@ pub(super) fn calendar(ui: &mut egui::Ui, rect: Rect, text: &str, fmt: &str, tod
     let today = PickedDate::day(i32::try_from(today.0).unwrap_or(1970), u8::try_from(today.1).unwrap_or(1), u8::try_from(today.2).unwrap_or(1));
     CalendarPopover::new("Calendar", Bind::bound(&mut *open), Bind::bound(&mut picked))
         .precisions(&[DatePrecision::Day])
+        .first_weekday(craft::i18n::Weekday::Sunday)
         .today(today)
         .overlay(|overlay| {
             overlay
