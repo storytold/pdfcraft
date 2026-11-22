@@ -563,6 +563,28 @@ fn selected_text_shows_actions_and_underlines_without_changing_tools() {
 }
 
 #[test]
+fn selected_text_menu_uses_compact_icon_buttons_for_actions() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    h.run_steps(3);
+    for label in ["Add comment", "Underline", "Strikethrough", "Replace text", "Copy"] {
+        let btn = h.get_by_label(label);
+        let rect = btn.rect();
+        assert!(rect.width() <= 32.0, "button '{label}' should be a compact icon button, got width {}", rect.width());
+    }
+    let highlights: Vec<_> = h.query_all_by_label("Highlight").collect();
+    assert_eq!(highlights.len(), 2, "one on toolbar, one in selection actions");
+    for btn in &highlights {
+        assert!(btn.rect().width() <= 40.0);
+    }
+    h.get_by_label("Underline").click();
+    h.run_steps(3);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].subtype, "Underline");
+}
+
+#[test]
 fn selected_text_copy_action_closes_the_bar_and_keeps_the_selection() {
     let mut h = harness(|_| {});
     h.state_mut().views[0].select_text(0, 4, 8);
@@ -4517,6 +4539,9 @@ fn closing_a_pop_up_saves_its_typed_text() {
 /// so longer labels (German here) pushed it over the side panel next to a selection on the right.
 #[test]
 fn the_selection_bar_stays_inside_the_pages_area() {
+    if crate::support::skip_without_catalogs("the_selection_bar_stays_inside_the_pages_area") {
+        return;
+    }
     let mut h = harness(|app| app.set_option("language", "de").unwrap());
     // Narrower than the harness, as with a side panel open.
     h.set_size(egui::vec2(1100.0, 900.0));

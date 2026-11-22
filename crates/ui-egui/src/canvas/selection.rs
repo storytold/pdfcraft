@@ -407,8 +407,8 @@ enum SelectionAction {
     Copy,
 }
 
-/// The selection bar's width before it has been laid out once (English labels).
-const SELECTION_BAR_GUESS: f32 = 520.0;
+/// The selection bar's width before it has been laid out once (six icon buttons plus margins).
+const SELECTION_BAR_GUESS: f32 = 196.0;
 
 /// Edits that each add a page's part of something marked on a text selection, as one undo step:
 /// the edit itself for one page, a batch named like it for several. For edits whose label has no
@@ -470,8 +470,8 @@ pub(super) fn selection_actions(
         return false;
     }
     let id = egui::Id::unique(("text-selection-actions", view.view_key()));
-    // The bar stays inside the pages' area, by the width it had last frame (its labels make it
-    // wider in some languages), so it never covers a side panel; a first guess before it has one.
+    // The bar stays inside the pages' area, by the width it had last frame (a first guess before
+    // it has one), so it never covers a side panel.
     let width = egui::AreaState::load(ui.ctx(), id).and_then(|a| a.size).map_or(SELECTION_BAR_GUESS, |s| s.x);
     let x = rect.left().clamp(viewport.left() + 8.0, (viewport.right() - width - 8.0).max(viewport.left() + 8.0));
     let y = if rect.bottom() + 48.0 < viewport.bottom() { rect.bottom() + 6.0 } else { (rect.top() - 44.0).max(viewport.top() + 6.0) };
@@ -479,19 +479,20 @@ pub(super) fn selection_actions(
     egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.horizontal(|ui| {
-                for (label, action) in [
-                    (tl!("Add comment"), SelectionAction::Note),
-                    (tl!("Highlight"), SelectionAction::Markup(comments::CommentTool::Highlight)),
-                    (tl!("Underline"), SelectionAction::Markup(comments::CommentTool::Underline)),
-                    (tl!("Strikethrough"), SelectionAction::Markup(comments::CommentTool::StrikeOut)),
-                    (tl!("Replace text"), SelectionAction::Replace),
+                for (icon, label, action) in [
+                    (comments::CommentTool::Note.icon(), tl!("Add comment"), SelectionAction::Note),
+                    (comments::CommentTool::Highlight.icon(), tl!("Highlight"), SelectionAction::Markup(comments::CommentTool::Highlight)),
+                    (comments::CommentTool::Underline.icon(), tl!("Underline"), SelectionAction::Markup(comments::CommentTool::Underline)),
+                    (comments::CommentTool::StrikeOut.icon(), tl!("Strikethrough"), SelectionAction::Markup(comments::CommentTool::StrikeOut)),
+                    (comments::CommentTool::ReplaceText.icon(), tl!("Replace text"), SelectionAction::Replace),
                 ] {
                     let one_page_only = matches!(action, SelectionAction::Note | SelectionAction::Replace);
-                    if ui.add_enabled(can_comment && !(across_pages && one_page_only), egui::Button::new(label)).clicked() {
+                    let enabled = can_comment && !(across_pages && one_page_only);
+                    if ui.add_enabled_ui(enabled, |ui| crate::icons::button(ui, icon, 26.0, false, label)).inner.clicked() {
                         chosen = Some(action);
                     }
                 }
-                if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy"))).clicked() {
+                if ui.add_enabled_ui(can_copy, |ui| crate::icons::button(ui, "copy", 26.0, false, tl!("Copy"))).inner.clicked() {
                     chosen = Some(SelectionAction::Copy);
                 }
             });
