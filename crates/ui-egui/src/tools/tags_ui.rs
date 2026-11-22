@@ -217,7 +217,9 @@ pub(crate) fn panel(
         state.selected = Some(tags[0].object);
         state.draft = Draft::from_tag(&tags[0]);
     }
-    TextField::new(tl!("Find a tag"), Bind::bound(&mut state.query)).show(ui);
+    Field::new(tl!("Find a tag")).show(ui, |ui, _| {
+        TextField::new(tl!("Find a tag"), Bind::bound(&mut state.query)).show(ui);
+    });
     let query = state.query.to_lowercase();
     let matching = visible_tags(tags, &query, &state.collapsed);
     let parents: HashSet<ObjRef> = tags.iter().filter_map(|tag| tag.parent).collect();
