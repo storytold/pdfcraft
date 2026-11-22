@@ -39,19 +39,39 @@ fn harness() -> H {
     h
 }
 
-/// Whether the Preferences window is on screen: its page list names the first page while it is open.
+/// Whether the Preferences window is on screen: its search field shows while it is open.
 fn preferences_shown(h: &H) -> bool {
-    h.query_by_role_and_label(egui::accesskit::Role::ListItem, "General & Interface").is_some()
+    h.query_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings").is_some()
 }
 
 fn click(h: &mut H, label: &str) {
+    // Preferences is one scrolling page: bring the row into view first.
+    h.get_by(|node| !node.is_hidden() && node.role() != egui::accesskit::Role::Label && node.label().as_deref() == Some(label)).scroll_to_me();
+    h.run_steps(3);
     h.get_by(|node| !node.is_hidden() && node.role() != egui::accesskit::Role::Label && node.label().as_deref() == Some(label)).click();
     h.run_steps(3);
+}
+
+/// Picks `option` of the choice row `row`: a short choice is a row of segments (a radio group), a long one a
+/// drop-down whose options show once it opens.
+fn choose(h: &mut H, row: &str, option: &str) {
+    use egui::accesskit::Role;
+    if h.query_by_role_and_label(Role::RadioGroup, row).is_some() {
+        h.get_by_role_and_label(Role::RadioGroup, row).scroll_to_me();
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::RadioGroup, row).get_by_label(option).click();
+        h.run_steps(3);
+    } else {
+        click(h, row);
+        click(h, option);
+    }
 }
 
 /// Replaces the text of the field named `label` through the keyboard, as a user would.
 fn type_into(h: &mut H, label: &str, text: &str) {
     let role = if label == "Recent files to keep" { egui::accesskit::Role::SpinButton } else { egui::accesskit::Role::TextInput };
+    h.get_by_role_and_label(role, label).scroll_to_me();
+    h.run_steps(3);
     h.get_by_role_and_label(role, label).click();
     h.run_steps(2);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
@@ -67,8 +87,7 @@ fn cases() -> Vec<Case> {
             page: "Documents and view",
             edit: |h| {
                 // A choice row is a drop-down: its options show once it opens.
-                click(h, "Default workspace mode");
-                click(h, "E-Sign");
+                choose(h, "Default workspace mode", "E-Sign");
             },
             applied: |a| a.default_mode == Mode::Sign,
         },
@@ -77,8 +96,7 @@ fn cases() -> Vec<Case> {
             page: "Documents and view",
             edit: |h| {
                 // A choice row is a drop-down: its options show once it opens.
-                click(h, "Default page display");
-                click(h, "Two-page view");
+                choose(h, "Default page display", "Two-page view");
                 click(h, "Continuous scrolling");
             },
             applied: |a| {
@@ -90,8 +108,7 @@ fn cases() -> Vec<Case> {
             name: "units",
             page: "Documents and view",
             edit: |h| {
-                click(h, "Units");
-                click(h, Unit::Millimetres.label());
+                choose(h, "Units", Unit::Millimetres.label());
             },
             applied: |a| a.units == Unit::Millimetres,
         },
@@ -100,10 +117,8 @@ fn cases() -> Vec<Case> {
             page: "General & Interface",
             edit: |h| {
                 // Each side row is a drop-down of Left and Right.
-                click(h, "Tools panel side");
-                click(h, "Right");
-                click(h, "Navigation rail side");
-                click(h, "Left");
+                choose(h, "Tools panel side", "Right");
+                choose(h, "Navigation rail side", "Left");
             },
             applied: |a| {
                 let dock = side_panels::state(a);
@@ -114,8 +129,7 @@ fn cases() -> Vec<Case> {
             name: "animation effects",
             page: "General & Interface",
             edit: |h| {
-                click(h, "Animation effects");
-                click(h, "Off");
+                choose(h, "Animation effects", "Off");
             },
             applied: |a| a.animation_effects == MotionChoice::Off,
         },
@@ -145,9 +159,6 @@ fn edited(case: &Case) -> H {
     let mut h = harness();
     h.state_mut().open_preferences();
     h.run_steps(4);
-    // The page list's row, not the heading of the page it shows.
-    h.get_by(|node| !node.is_hidden() && node.role() == egui::accesskit::Role::ListItem && node.label().as_deref() == Some(case.page)).click();
-    h.run_steps(3);
     (case.edit)(&mut h);
     h
 }

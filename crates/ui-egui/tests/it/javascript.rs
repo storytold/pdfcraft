@@ -241,7 +241,7 @@ fn document_scripts_and_preferences() {
     h.run_steps(2);
     h.state_mut().open_preferences();
     h.run_steps(2);
-    h.get_by_role_and_label(egui::accesskit::Role::ListItem, "JavaScript").click();
+    h.get_by_label("Enable Acrobat JavaScript").scroll_to_me();
     h.run_steps(4);
     h.get_by_label("Enable Acrobat JavaScript").click();
     h.run_steps(2);

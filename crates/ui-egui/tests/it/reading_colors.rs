@@ -72,6 +72,8 @@ fn pending_pages_use_document_reading_background() {
 
 /// Picks `option` in the Appearance page's Reading colours row, a select whose options show once it is opened.
 fn pick_reading_colours(h: &mut Harness<'static, PdfCraftApp>, option: &str) {
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Reading colours").scroll_to_me();
+    h.run_steps(3);
     h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Reading colours").click();
     h.run_steps(3);
     h.get_all_by_label(option).last().unwrap_or_else(|| panic!("the {option:?} option is on screen")).click();
@@ -98,8 +100,6 @@ fn reading_colours_preference_round_trips() {
     });
     h.run_steps(4);
     assert_eq!(h.state().reading_colors, ReadingColors::default());
-    h.get_by_label("Appearance").click();
-    h.run_steps(3);
     pick_reading_colours(&mut h, "White on black");
     assert_eq!(h.state().reading_colors, ReadingColors::WHITE_ON_BLACK, "the row applies immediately");
     h.get_by_label("OK").click();
@@ -140,8 +140,6 @@ fn reading_presets_follow_appearance_and_do_not_change_the_interface_theme() {
         }
     });
     h.run_steps(6);
-    h.get_by_label("Appearance").click();
-    h.run_steps(3);
     // The document's own colours: the row starts on Off.
     let row = h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Reading colours");
     assert_eq!(row.value().as_deref(), Some("Off"));
@@ -160,8 +158,6 @@ fn reading_presets_follow_appearance_and_do_not_change_the_interface_theme() {
         assert_eq!(h.state().theme_preference, theme);
         h.state_mut().open_preferences();
         h.run_steps(4);
-        h.get_by_label("Appearance").click();
-        h.run_steps(3);
     }
     if let Ok(path) = std::env::var("PDFCRAFT_READING_SHOT") {
         h.render().unwrap().save(path).unwrap();

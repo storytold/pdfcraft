@@ -32,8 +32,6 @@ fn the_identity_name_signs_new_comments_and_is_remembered() {
         }
     });
     h.run_steps(4);
-    h.get_by_label("Comment").click();
-    h.run_steps(2);
     // Replace the name in the field (the preferences scroll to it in a 900-point window).
     h.get_by_role_and_label(Role::TextInput, "Name on new comments").scroll_to_me();
     h.run_steps(4);

@@ -55,10 +55,8 @@ fn rect(h: &Harness<'static, PdfCraftApp>, page: usize) -> Option<egui::Rect> {
     h.state().views[0].page_screen_rect(page)
 }
 
-/// Turns on the Preferences row `label` on the Documents and view page and applies it with OK, as a user does.
+/// Turns on the Preferences row `label` in the Documents and view card and applies it with OK, as a user does.
 fn choose_in_documents_preferences(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
-    h.get_by_label("Documents and view").click();
-    h.run_steps(3);
     h.get_by_label(label).scroll_to_me();
     h.run_steps(4);
     h.get_by_label(label).click();
@@ -70,14 +68,21 @@ fn choose_in_documents_preferences(h: &mut Harness<'static, PdfCraftApp>, label:
 /// Picks `option` in the Preferences choice row `row` on the Documents and view page and applies it with OK, as a
 /// user does: the row is a select, whose options show once it is opened.
 fn pick_in_documents_preferences(h: &mut Harness<'static, PdfCraftApp>, row: &str, option: &str) {
-    h.get_by_label("Documents and view").click();
-    h.run_steps(3);
-    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, row).scroll_to_me();
-    h.run_steps(4);
-    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, row).click();
-    h.run_steps(3);
-    h.get_all_by_label(option).last().unwrap_or_else(|| panic!("the {option:?} option is on screen")).click();
-    h.run_steps(2);
+    let group = egui::accesskit::Role::RadioGroup;
+    if h.query_by_role_and_label(group, row).is_some() {
+        // A short choice is a row of segments.
+        h.get_by_role_and_label(group, row).scroll_to_me();
+        h.run_steps(4);
+        h.get_by_role_and_label(group, row).get_by_label(option).click();
+        h.run_steps(2);
+    } else {
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, row).scroll_to_me();
+        h.run_steps(4);
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, row).click();
+        h.run_steps(3);
+        h.get_all_by_label(option).last().unwrap_or_else(|| panic!("the {option:?} option is on screen")).click();
+        h.run_steps(2);
+    }
     h.get_by_label("OK").click();
     h.run_steps(3);
 }

@@ -104,9 +104,14 @@ fn posted_notices(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
 /// list's.
 fn pick_preference(h: &mut Harness<'static, PdfCraftApp>, page: Option<&str>, row: &str, option: &str) {
     use egui::accesskit::Role;
-    if let Some(page) = page {
-        h.get_by_label(page).click();
-        h.run_steps(3);
+    // Preferences is one scrolling page: `page` needs no opening.
+    let _ = page;
+    if h.query_by_role_and_label(Role::RadioGroup, row).is_some() {
+        h.get_by_role_and_label(Role::RadioGroup, row).scroll_to_me();
+        h.run_steps(4);
+        h.get_by_role_and_label(Role::RadioGroup, row).get_by_label(option).click();
+        h.run_steps(2);
+        return;
     }
     h.get_by_role_and_label(Role::ComboBox, row).scroll_to_me();
     h.run_steps(4);
