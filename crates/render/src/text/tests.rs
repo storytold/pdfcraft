@@ -4030,6 +4030,36 @@ fn a_hebrew_point_drawn_in_the_run_before_its_letter_reads_after_it() {
     assert!(layout(v).plain_text().contains("ל\u{5B9}"));
 }
 
+/// A point drawn before its letter goes in right before the letter wherever the letter was placed: runs that overprint
+/// are placed whole, so a letter further right can come before it. The holam of
+/// `a_hebrew_point_with_width_in_a_run_of_its_own_reads_after_its_letter`, with an alef drawn last in the he's run.
+#[test]
+fn a_hebrew_point_goes_with_its_letter_when_a_letter_further_right_is_placed_before_it() {
+    let v = vec![
+        em_box("\u{5B9}", 10.0, -8.0, 11.0, 2.0),
+        em_box("ל", 10.0, 0.0, 16.0, 10.0),
+        em_box("ב", 40.0, 0.0, 46.0, 10.0),
+        em_box("ה", 7.0, -6.0, 13.0, 4.0),
+        em_box("א", 20.0, -6.0, 26.0, 4.0),
+    ];
+    assert!(layout(v).plain_text().contains("ל\u{5B9}"));
+}
+
+/// A word break before a letter stays before its cluster when a point drawn before the letter goes in ahead of it: the
+/// line reads as it does without the point, plus the point. A wide he overprints the lamed's run, which breaks a word
+/// before the lamed.
+#[test]
+fn a_word_break_before_a_letter_stays_when_its_point_goes_before_it() {
+    let line = |point: bool| {
+        let mut v = vec![em_box("ל", 10.0, 0.0, 16.0, 10.0), em_box("ב", 40.0, 0.0, 46.0, 10.0), em_box("ה", 7.0, -6.0, 25.0, 4.0)];
+        if point {
+            v.insert(0, em_box("\u{5B9}", 10.0, -8.0, 11.0, 2.0));
+        }
+        layout(v).plain_text()
+    };
+    assert_eq!(line(true).replace('\u{5B9}', ""), line(false));
+}
+
 /// Nonspacing marks count toward neither direction of a line: a line of four Latin letters and a
 /// three-letter Hebrew word whose letters each carry two points reads in the same order as without
 /// the points.

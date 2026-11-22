@@ -211,8 +211,13 @@ pub(super) struct Scratch {
     pub(super) owner: Vec<(usize, usize)>,
     /// The text runs of the segment (runs that are not all zero-width).
     pub(super) text: Vec<Run>,
-    /// The glyphs of the zero-width runs, in run order.
+    /// The glyphs merged into `placed` after the text runs: the zero-width runs, and marks riding on a letter of
+    /// another run.
     pub(super) marks: Vec<usize>,
+    /// For each glyph of the page, its position in `placed` (`usize::MAX` when it is not there), and each mark with the
+    /// position in `placed` it goes before. Both are filled by the merge of the marks.
+    pub(super) slot: Vec<usize>,
+    pub(super) at: Vec<(usize, usize)>,
     /// Union-find parents over `text`, and for each root the list of its runs through `next`.
     pub(super) parent: Vec<usize>,
     pub(super) head: Vec<usize>,
@@ -417,29 +422,65 @@ pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32,
     } else {
         collide(glyphs, height, s.h, sc);
     }
-    // Each mark goes before the first placed glyph whose x is greater than its own, or its letter's when it is a
-    // combining mark riding on one. Marks are visited in that order, and that position never moves back, so one pass
-    // over `placed` puts all of them in. A mark riding on the letter drawn after it stops before the glyphs of its
-    // cluster drawn after it, that letter among them: it goes before the letter, as it does when the two share a run.
+    // A mark riding on the letter drawn after it goes right before the first placed glyph of its cluster drawn after
+    // it, that letter among them, as it does when the two share a run. That is where the letter was placed, not where
+    // its x falls: colliding runs are placed whole, so `placed` is not in x order, and a letter further right can come
+    // before it. Every other mark goes before the first placed glyph whose x is greater than its own, or its letter's
+    // when it is a combining mark riding on one. Those marks are visited in that order, and that position never moves
+    // back, so one pass over `placed` finds all of them.
     sc.marks.sort_by(|a, b| by_cluster(glyphs, &sc.anchor, *a, *b));
     if !sc.marks.is_empty() {
-        sc.merged.clear();
+        sc.slot.clear();
+        sc.slot.resize(glyphs.len(), usize::MAX);
+        for (w, &p) in sc.placed.iter().enumerate() {
+            if let Some(slot) = sc.slot.get_mut(p) {
+                *slot = w;
+            }
+        }
+        sc.at.clear();
         let mut next = 0;
         for &m in &sc.marks {
             let own = anchor_of(&sc.anchor, m);
+            let drawn_after = (m + 1..=own).filter(|&k| own > m && anchor_of(&sc.anchor, k) == own);
+            if let Some(w) = drawn_after.filter_map(|k| sc.slot.get(k).copied()).filter(|&w| w != usize::MAX).min() {
+                sc.at.push((w, m));
+                continue;
+            }
             while let Some(&p) = sc.placed.get(next) {
-                let cluster = anchor_of(&sc.anchor, p);
-                let drawn_after_in_cluster = own > m && cluster == own && p > m;
-                if drawn_after_in_cluster || x0(cluster).partial_cmp(&x0(own)).is_none_or(std::cmp::Ordering::is_gt) {
+                if x0(anchor_of(&sc.anchor, p)).partial_cmp(&x0(own)).is_none_or(std::cmp::Ordering::is_gt) {
                     break;
                 }
-                sc.merged.push(p);
                 next += 1;
             }
-            sc.merged.push(m);
+            sc.at.push((next, m));
         }
-        sc.merged.extend_from_slice(&sc.placed[next..]);
+        // Stable, so the marks that go before one glyph keep their cluster order.
+        sc.at.sort_by_key(|&(w, _)| w);
+        // A word break on a glyph that marks of its cluster now go before moves to the first of them, where the cluster
+        // starts: the gap is measured there ([`measure_cluster_gaps`]), and the glyph gets none.
+        let mut moved: Vec<(usize, usize)> = Vec::new();
+        sc.merged.clear();
+        let mut taken = 0;
+        for (w, &p) in sc.placed.iter().enumerate() {
+            let first = taken;
+            while let Some(&(_, m)) = sc.at.get(taken).filter(|&&(at, _)| at == w) {
+                sc.merged.push(m);
+                taken += 1;
+            }
+            let cluster = anchor_of(&sc.anchor, p);
+            let lead = sc.at.get(first..taken).and_then(|g| g.iter().find(|&&(_, m)| anchor_of(&sc.anchor, m) == cluster));
+            if let Some(&(_, lead)) = lead.filter(|_| sc.breaks.binary_search(&p).is_ok()) {
+                moved.push((p, lead));
+            }
+            sc.merged.push(p);
+        }
+        sc.merged.extend(sc.at.get(taken..).unwrap_or_default().iter().map(|&(_, m)| m));
         std::mem::swap(&mut sc.placed, &mut sc.merged);
+        if !moved.is_empty() {
+            sc.breaks.retain(|b| !moved.iter().any(|&(from, _)| from == *b));
+            sc.breaks.extend(moved.iter().map(|&(_, to)| to));
+            sc.breaks.sort_unstable();
+        }
     }
     // After the marks: their merge relies on `placed` being in x order, which this breaks on purpose.
     keep_taken_back_blanks(glyphs, &mut sc.placed);
