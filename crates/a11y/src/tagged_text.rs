@@ -13,7 +13,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use pdfcraft_model::Page;
 
 use crate::alt::{standard, tree_root};
-use crate::headings::mcid_texts_up_to;
+use crate::headings::mcid_texts_of;
 
 const MAX_VISITS: usize = 1_000_000;
 const MAX_DEPTH: usize = 256;
@@ -55,7 +55,9 @@ struct Reader<'a> {
     page_index: HashMap<ObjRef, usize>,
     seen: HashSet<ObjRef>,
     visits: usize,
-    /// Per page: the text each MCID shows (read once per page, while [`MAX_CACHED`] allows).
+    /// Per page: the MCIDs the tags reference (see [`Reader::want`]), the only ones read.
+    wanted: HashMap<usize, HashSet<i64>>,
+    /// Per page: the text each wanted MCID shows (read once per page, while [`MAX_CACHED`] allows).
     texts: HashMap<usize, HashMap<i64, String>>,
     /// Bytes of text `texts` holds.
     cached: usize,
@@ -75,8 +77,8 @@ struct Row {
     tab: bool,
 }
 
-/// Bytes of page text kept for the pages read so far. A page's text beyond this is read again
-/// when another of its marks comes: the tags may name only a little of what pages hold.
+/// Bytes of referenced page text kept for the pages read so far. A page whose referenced text
+/// alone is beyond this is read again when another of its marks comes.
 const MAX_CACHED: usize = MAX_TEXT;
 
 /// The document's text in tag order (see the module documentation).
@@ -90,6 +92,7 @@ pub fn tagged_text(doc: &Document) -> Result<TaggedText, TaggedTextError> {
         page_index: pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect(),
         seen: HashSet::new(),
         visits: 0,
+        wanted: HashMap::new(),
         texts: HashMap::new(),
         cached: 0,
         gap: Gap::Space,
@@ -97,6 +100,9 @@ pub fn tagged_text(doc: &Document) -> Result<TaggedText, TaggedTextError> {
         out: TaggedText::default(),
     };
     if let Some(k) = root.get(b"K") {
+        r.want(k, None, 0);
+        r.seen.clear();
+        r.visits = 0;
         r.walk(k, None, 0);
     }
     if !r.out.text.is_empty() {
@@ -148,6 +154,44 @@ fn is_block(ty: &[u8]) -> bool {
 impl Reader<'_> {
     fn full(&self) -> bool {
         self.out.text.len() >= MAX_TEXT
+    }
+
+    /// Note in `wanted` every MCID the tree references, walking it as [`Reader::walk`] does, so a
+    /// page's text is read only for those: a page can hold far more marked text than its tags
+    /// name. Replaced elements' kids are noted too, since `walk` reads them when the replacement
+    /// doesn't fit.
+    fn want(&mut self, k: &Object, pg: Option<ObjRef>, depth: usize) {
+        self.visits += 1;
+        if depth > MAX_DEPTH || self.visits > MAX_VISITS {
+            return;
+        }
+        match k {
+            Object::Ref(r) => {
+                if self.seen.insert(*r) {
+                    let target = self.doc.get(*r);
+                    self.want(&target, pg, depth + 1);
+                }
+            }
+            Object::Array(a) => a.iter().for_each(|x| self.want(x, pg, depth + 1)),
+            Object::Int(n) => self.note(pg, *n),
+            Object::Dict(d) if d.contains(b"S") => {
+                if let Some(kids) = d.get(b"K") {
+                    self.want(kids, d.get(b"Pg").and_then(Object::as_ref).or(pg), depth + 1);
+                }
+            }
+            Object::Dict(d) if !d.contains(b"Stm") => {
+                if let Some(n) = d.get(b"MCID").and_then(Object::as_int) {
+                    self.note(d.get(b"Pg").and_then(Object::as_ref).or(pg), n);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn note(&mut self, pg: Option<ObjRef>, mcid: i64) {
+        if let Some(page) = pg.and_then(|p| self.page_index.get(&p).copied()) {
+            self.wanted.entry(page).or_default().insert(mcid);
+        }
     }
 
     fn walk(&mut self, k: &Object, pg: Option<ObjRef>, depth: usize) {
@@ -245,8 +289,11 @@ impl Reader<'_> {
         let text = match self.texts.get(&page) {
             Some(texts) => texts.get(&mcid).cloned(),
             None => {
-                // Each id's whole text, up to what one export gathers; more is reported.
-                let (texts, cut) = self.pages.get(page).map(|p| mcid_texts_up_to(self.doc, &p.dict, MAX_TEXT)).unwrap_or_default();
+                // Each referenced id's whole text, up to what one export gathers; more is
+                // reported. The page's other marked text is never built.
+                let none = HashSet::new();
+                let wanted = Some(self.wanted.get(&page).unwrap_or(&none));
+                let (texts, cut) = self.pages.get(page).map(|p| mcid_texts_of(self.doc, &p.dict, MAX_TEXT, wanted)).unwrap_or_default();
                 self.out.truncated |= cut;
                 let text = texts.get(&mcid).cloned();
                 // The pages read are kept up to MAX_CACHED bytes of text in all: past that the

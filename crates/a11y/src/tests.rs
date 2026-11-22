@@ -1603,6 +1603,32 @@ fn tagged_text_keeps_long_text_cell_tabs_empty_replacements_and_counts_comments(
 }
 
 #[test]
+fn page_text_for_tagged_export_builds_only_the_referenced_ids() {
+    // Id 1's text is more than the cap and no tag references it: it is neither built nor
+    // reported as cut, so a page full of it costs the export nothing to keep.
+    let content = stream(&format!(
+        "/P << /MCID 0 >> BDC BT /F1 12 Tf 20 190 Td (kept) Tj ET EMC \
+         /P << /MCID 1 >> BDC BT /F1 12 Tf 20 170 Td ({}) Tj ET EMC",
+        "x".repeat(200)
+    ));
+    let bodies = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        content,
+        FONT.into(),
+    ];
+    let doc = pdf(&bodies, "");
+    let page = &pdfcraft_model::pages(&doc)[0].dict;
+    let (all, all_cut) = crate::headings::mcid_texts_of(&doc, page, 100, None);
+    assert!(all.contains_key(&1) && all_cut, "unfiltered, id 1 is read and cut");
+    let (some, cut) = crate::headings::mcid_texts_of(&doc, page, 100, Some(&std::collections::HashSet::from([0])));
+    assert_eq!(some.keys().collect::<Vec<_>>(), [&0]);
+    assert_eq!(some.get(&0), all.get(&0), "a wanted id reads as it does unfiltered");
+    assert!(!cut, "only a wanted id's text being cut counts");
+}
+
+#[test]
 fn tag_content_reads_the_text_of_each_marked_content_reference() {
     let doc = pdf(&headings_doc(), "");
     let items = |n| tag_content(&doc, ref_(n).unwrap()).unwrap().into_iter().map(|i| (i.page, i.mcid, i.text)).collect::<Vec<_>>();

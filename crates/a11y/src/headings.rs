@@ -213,6 +213,12 @@ pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
 /// [`mcid_texts`], each id gathering text until it holds `cap` bytes, and whether any id had
 /// more text than that.
 pub(crate) fn mcid_texts_up_to(doc: &Document, page: &Dict, cap: usize) -> (HashMap<i64, String>, bool) {
+    mcid_texts_of(doc, page, cap, None)
+}
+
+/// [`mcid_texts_up_to`], gathering only the ids in `wanted` (all of them for `None`); the text of
+/// other ids is never built, and only a wanted id's text being cut counts.
+pub(crate) fn mcid_texts_of(doc: &Document, page: &Dict, cap: usize, wanted: Option<&HashSet<i64>>) -> (HashMap<i64, String>, bool) {
     let mut cut = false;
     let res = sub(doc, page, b"Resources");
     let (fonts, props) = (sub(doc, &res, b"Font"), sub(doc, &res, b"Properties"));
@@ -233,7 +239,7 @@ pub(crate) fn mcid_texts_up_to(doc: &Document, page: &Dict, cap: usize) -> (Hash
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     for op in pdfcraft_content::parse(&page_content(doc, page)).ops {
         crate::count_mark_reads(1);
-        let id = stack.last().copied().flatten();
+        let id = stack.last().copied().flatten().filter(|id| wanted.is_none_or(|w| w.contains(id)));
         match op.op.as_slice() {
             b"BMC" => stack.push(id),
             b"BDC" => stack.push(
