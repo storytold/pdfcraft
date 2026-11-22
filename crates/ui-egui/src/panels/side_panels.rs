@@ -165,10 +165,9 @@ const START_SHARE: f32 = 0.2;
 /// Share of the rest the page area takes beside the end dock.
 const PAGE_SHARE: f32 = 0.8;
 
-/// The Tools pane's default width. Production opened it at 272 points; the Comfortable density's 30-point icon buttons and
-/// 10-point gaps need about 55 more for Format text's size field to keep room for its value beside the colour well, the list
-/// buttons and the alignment menu (the field takes what the row leaves).
-const TOOLS_WIDTH: f32 = 330.0;
+/// The Tools pane's default width: production's 272 points at every window width (the framework's Format text row keeps the
+/// size field readable in it).
+const TOOLS_WIDTH: f32 = 272.0;
 /// The Tools pane's width in a narrow window, as production opened it.
 const TOOLS_WIDTH_NARROW: f32 = 272.0;
 /// Windows narrower than this keep the Tools pane at [`TOOLS_WIDTH_NARROW`]: a wider pane would leave the page area too little.
