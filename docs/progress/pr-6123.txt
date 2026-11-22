@@ -1,0 +1,14 @@
+PR #6123: Fixed build-time update repository
+Date: 2026-11-22
+
+PDFCRAFT_UPDATE_REPO selects one validated GitHub repository at build time.
+The compiled source is shared by native updates, release links and AppImage
+metadata. The metadata query exits headlessly before normal startup.
+
+Local validation passed: seven source tests, six actual-binary/AppImage resolver
+tests, and Cargo build-script checks across custom, invalid and unset settings.
+These cover case-insensitive repository identities, malformed values, argument
+precedence and cross-build emulator execution. The updater pin depends on
+craft-libs PR #595. Windows and hosted CI were not run locally.
+
+This fragment replaces this PR's competing shared-roadmap log and milestone edits.
