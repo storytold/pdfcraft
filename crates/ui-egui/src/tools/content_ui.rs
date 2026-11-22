@@ -433,11 +433,15 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, ccx: ContentCx<'_>, view: &mut
                 && (end - start).length() >= 1.0
             {
                 let mut delta = end - start;
-                if grab == Grab::Move {
+                let shift = cx.ui.input(|i| i.modifiers.shift);
+                if grab == Grab::Move && !shift {
                     let base_r = screen_rect(xf, info, page, a.content.rect());
                     let moving = base_r.translate(delta);
-                    let targets =
-                        on_page(added, page).into_iter().filter(|(i, _)| *i != si).map(|(_, item)| screen_rect(xf, info, page, item.content.rect()));
+                    let targets = on_page(added, page)
+                        .into_iter()
+                        .filter(|(i, _)| *i != si)
+                        .map(|(_, item)| screen_rect(xf, info, page, item.content.rect()))
+                        .chain(std::iter::once(xf.rect));
                     let snap = crate::tools::snap_guides::snap_rect(moving, targets, crate::tools::snap_guides::SNAP_THRESHOLD);
                     delta += snap.offset;
                 }
@@ -592,10 +596,14 @@ pub(crate) fn paint_page(
             && gp == page
         {
             let mut delta = p - start;
-            if g == Grab::Move {
+            let shift = painter.ctx().input(|i| i.modifiers.shift);
+            if g == Grab::Move && !shift {
                 let moving = r.translate(delta);
-                let targets =
-                    on_page(added, page).into_iter().filter(|(idx, _)| *idx != i).map(|(_, item)| screen_rect(xf, info, page, item.content.rect()));
+                let targets = on_page(added, page)
+                    .into_iter()
+                    .filter(|(idx, _)| *idx != i)
+                    .map(|(_, item)| screen_rect(xf, info, page, item.content.rect()))
+                    .chain(std::iter::once(xf.rect));
                 let snap = crate::tools::snap_guides::snap_rect(moving, targets, crate::tools::snap_guides::SNAP_THRESHOLD);
                 delta += snap.offset;
                 crate::tools::snap_guides::paint_guides(painter, &snap.guides, Some(xf.rect));

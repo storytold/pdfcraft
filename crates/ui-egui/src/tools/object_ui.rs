@@ -372,15 +372,25 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, press: PagePress, vie
             gesture.now = p;
         }
         if !gesture.marquee {
-            let raw_delta = gesture.now - gesture.start;
-            let moving_union = s.selected.iter().fold(Rect::NOTHING, |u, o| u.union(screen(xf, info, page, o))).translate(raw_delta);
-            if moving_union.is_positive()
-                && let Ok(inventory) = s.inventory(doc, page)
-            {
-                let targets = inventory.iter().filter(|o| !s.selected.iter().any(|sel| sel.target == o.target)).map(|o| screen(xf, info, page, o));
-                let snap = crate::tools::snap_guides::snap_rect(moving_union, targets, crate::tools::snap_guides::SNAP_THRESHOLD);
-                s.snap_offset = snap.offset;
-                s.snap_guides = snap.guides;
+            let shift = ui.input(|inp| inp.modifiers.shift);
+            if !shift {
+                let raw_delta = gesture.now - gesture.start;
+                let moving_union = s.selected.iter().fold(Rect::NOTHING, |u, o| u.union(screen(xf, info, page, o))).translate(raw_delta);
+                if moving_union.is_positive()
+                    && let Ok(inventory) = s.inventory(doc, page)
+                {
+                    let targets = inventory
+                        .iter()
+                        .filter(|o| !s.selected.iter().any(|sel| sel.target == o.target))
+                        .map(|o| screen(xf, info, page, o))
+                        .chain(std::iter::once(xf.rect));
+                    let snap = crate::tools::snap_guides::snap_rect(moving_union, targets, crate::tools::snap_guides::SNAP_THRESHOLD);
+                    s.snap_offset = snap.offset;
+                    s.snap_guides = snap.guides;
+                } else {
+                    s.snap_offset = egui::Vec2::ZERO;
+                    s.snap_guides.clear();
+                }
             } else {
                 s.snap_offset = egui::Vec2::ZERO;
                 s.snap_guides.clear();
@@ -525,6 +535,7 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView
     let Some(xf) = view.page_xform(page) else { return };
     use egui::Key;
     let mut step = egui::Vec2::ZERO;
+    let mut shift_held = false;
     // Only an arrow pressed alone or with Shift, judged by each press's own modifiers (the
     // frame's can differ when a key is let go in the same frame). Alt+← / Alt+→ go back and
     // forward through the view history (#3632) and Ctrl/⌘+← / → turn the page, both in
@@ -540,6 +551,9 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView
             Key::ArrowDown => egui::vec2(0.0, 1.0),
             _ => return false,
         };
+        if modifiers.shift {
+            shift_held = true;
+        }
         step += direction * if modifiers.shift { 10.0 } else { 1.0 };
         true
     });
@@ -554,7 +568,54 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView
         let v = egui::vec2(b.0 - a.0, b.1 - a.1);
         if v.length() > 0.0 { v / v.length() } else { egui::Vec2::ZERO }
     };
-    let delta = unit(egui::vec2(1.0, 0.0)) * step.x + unit(egui::vec2(0.0, 1.0)) * step.y;
+    let mut delta = unit(egui::vec2(1.0, 0.0)) * step.x + unit(egui::vec2(0.0, 1.0)) * step.y;
+    if !shift_held {
+        if objects.is_some() {
+            let moving_union = view.objects.selected.iter().fold(Rect::NOTHING, |u, o| u.union(screen(&xf, &doc.info, page, o)));
+            if moving_union.is_positive()
+                && let Ok(inventory) = view.objects.inventory(doc, page)
+            {
+                let targets = inventory
+                    .iter()
+                    .filter(|o| !view.objects.selected.iter().any(|sel| sel.target == o.target))
+                    .map(|o| screen(&xf, &doc.info, page, o))
+                    .chain(std::iter::once(xf.rect));
+                let nudged = moving_union.translate(step);
+                let snap = crate::tools::snap_guides::snap_rect_directional(nudged, targets, crate::tools::snap_guides::SNAP_THRESHOLD, Some(step));
+                if snap.offset != egui::Vec2::ZERO {
+                    delta = unit(egui::vec2(1.0, 0.0)) * (step.x + snap.offset.x) + unit(egui::vec2(0.0, 1.0)) * (step.y + snap.offset.y);
+                }
+                view.objects.snap_guides = snap.guides;
+            } else {
+                view.objects.snap_guides.clear();
+            }
+        } else if let Some((p, index)) = image
+            && let Some(im) = doc.page_images(p).get(index)
+        {
+            let current_r = crate::canvas::image_screen_rect(im, &xf, &doc.info, p);
+            let page_images = doc.page_images(p);
+            let other_images = page_images
+                .iter()
+                .enumerate()
+                .filter(|(idx, _)| *idx != index)
+                .map(|(_, image)| crate::canvas::image_screen_rect(image, &xf, &doc.info, p));
+            let text_targets = doc.text_blocks(p).into_iter().map(|l| crate::tools::edit_text_ui::paragraph_box(&xf, &doc.info, p, l.rect));
+            let targets: Vec<Rect> = other_images.chain(text_targets).chain(std::iter::once(xf.rect)).collect();
+            let nudged = current_r.translate(step);
+            let snap = crate::tools::snap_guides::snap_rect_directional(nudged, targets, crate::tools::snap_guides::SNAP_THRESHOLD, Some(step));
+            if snap.offset != egui::Vec2::ZERO {
+                delta = unit(egui::vec2(1.0, 0.0)) * (step.x + snap.offset.x) + unit(egui::vec2(0.0, 1.0)) * (step.y + snap.offset.y);
+            }
+            if let Some(s) = view.image_selection.as_mut() {
+                s.snap_guides = snap.guides;
+            }
+        }
+    } else {
+        view.objects.snap_guides.clear();
+        if let Some(s) = view.image_selection.as_mut() {
+            s.snap_guides.clear();
+        }
+    }
     let Ok(offset) = doc.object_move_offset(page, [f64::from(delta.x), f64::from(delta.y)]) else { return };
     if objects.is_some() {
         view.pending_edit = Some(view.objects.move_by(page, offset));
@@ -598,7 +659,7 @@ pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: 
     if selection.selected.len() > 1 {
         painter.rect_stroke(union.expand(4.0), 0.0, Stroke::new(1.0, BLUE.gamma_multiply(0.7)), egui::StrokeKind::Outside);
     }
-    if selection.gesture.is_some_and(|g| !g.marquee) {
+    if !selection.snap_guides.is_empty() {
         crate::tools::snap_guides::paint_guides(painter, &selection.snap_guides, Some(xf.rect));
     }
     if let Some(g) = selection.gesture.filter(|g| g.marquee) {

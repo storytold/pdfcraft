@@ -445,15 +445,18 @@ pub(crate) fn page_input(
                     if delta.length() >= 1.0 {
                         let shift = ui.input(|i| i.modifiers.shift);
                         let mut r = dragged(screen_rect(xf, info, page, w.rect), grab, delta, shift);
-                        if matches!(grab, Grab::Move(_)) {
-                            let targets = form.iter().flat_map(|field| {
-                                field
-                                    .widgets
-                                    .iter()
-                                    .enumerate()
-                                    .filter(|(idx, widget)| widget.page == Some(page) && !(field.name == name && *idx == wi))
-                                    .map(|(_, widget)| screen_rect(xf, info, page, widget.rect))
-                            });
+                        if matches!(grab, Grab::Move(_)) && !shift {
+                            let targets = form
+                                .iter()
+                                .flat_map(|field| {
+                                    field
+                                        .widgets
+                                        .iter()
+                                        .enumerate()
+                                        .filter(|(idx, widget)| widget.page == Some(page) && !(field.name == name && *idx == wi))
+                                        .map(|(_, widget)| screen_rect(xf, info, page, widget.rect))
+                                })
+                                .chain(std::iter::once(xf.rect));
                             let snap = crate::tools::snap_guides::snap_rect(r, targets, crate::tools::snap_guides::SNAP_THRESHOLD);
                             r = r.translate(snap.offset);
                         }
@@ -685,15 +688,18 @@ pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], tab_order:
                 let delta = p - start;
                 let shift = ui.input(|i| i.modifiers.shift);
                 let base_r = dragged(r, g, delta, shift);
-                if matches!(g, Grab::Move(_)) {
-                    let targets = form.iter().flat_map(|field| {
-                        field
-                            .widgets
-                            .iter()
-                            .enumerate()
-                            .filter(|(idx, widget)| widget.page == Some(page) && !(field.name == f.name && *idx == wi))
-                            .map(|(_, widget)| screen_rect(xf, info, page, widget.rect))
-                    });
+                if matches!(g, Grab::Move(_)) && !shift {
+                    let targets = form
+                        .iter()
+                        .flat_map(|field| {
+                            field
+                                .widgets
+                                .iter()
+                                .enumerate()
+                                .filter(|(idx, widget)| widget.page == Some(page) && !(field.name == f.name && *idx == wi))
+                                .map(|(_, widget)| screen_rect(xf, info, page, widget.rect))
+                        })
+                        .chain(std::iter::once(xf.rect));
                     let snap = crate::tools::snap_guides::snap_rect(base_r, targets, crate::tools::snap_guides::SNAP_THRESHOLD);
                     r = base_r.translate(snap.offset);
                     crate::tools::snap_guides::paint_guides(painter, &snap.guides, Some(xf.rect));
