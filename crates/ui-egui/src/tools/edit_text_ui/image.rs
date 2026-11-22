@@ -896,7 +896,14 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
                             apply_resize(drag.initial_rect, handle, delta)
                         }
                     }
-                    DragTarget::Move => drag.initial_rect.translate(p - drag.start),
+                    DragTarget::Move => {
+                        let mut r = drag.initial_rect.translate(p - drag.start);
+                        let targets = boxes.iter().enumerate().filter(|(idx, _)| *idx != i).map(|(_, b)| *b);
+                        let snap = crate::tools::snap_guides::snap_rect(r, targets, crate::tools::snap_guides::SNAP_THRESHOLD);
+                        r = r.translate(snap.offset);
+                        crate::tools::snap_guides::paint_guides(painter, &snap.guides, Some(xf.rect));
+                        r
+                    }
                     _ => drag.initial_rect,
                 };
 

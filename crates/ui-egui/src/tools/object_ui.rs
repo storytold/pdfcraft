@@ -29,6 +29,8 @@ pub(crate) struct ObjectSelection {
     /// A paragraph (page, block) to select once the document is at hand: Esc in the inline
     /// editor asks for it, and the next `prepare` selects it.
     select_paragraph: Option<(usize, usize)>,
+    pub(crate) snap_offset: egui::Vec2,
+    pub(crate) snap_guides: Vec<crate::tools::snap_guides::GuideLine>,
 }
 
 #[derive(Clone, Copy)]
@@ -43,6 +45,8 @@ impl ObjectSelection {
     /// Clear any object-selection gesture.
     pub(crate) fn cancel_pointer_gesture(&mut self) {
         self.gesture = None;
+        self.snap_offset = egui::Vec2::ZERO;
+        self.snap_guides.clear();
     }
 
     pub fn count(&self) -> usize {
@@ -99,6 +103,8 @@ impl ObjectSelection {
         self.input_blocked = blocked;
         if blocked {
             self.gesture = None;
+            self.snap_offset = egui::Vec2::ZERO;
+            self.snap_guides.clear();
         }
     }
 
@@ -108,6 +114,8 @@ impl ObjectSelection {
         self.gesture = None;
         self.pending = None;
         self.select_paragraph = None;
+        self.snap_offset = egui::Vec2::ZERO;
+        self.snap_guides.clear();
     }
 
     /// Select paragraph `block` of `page` as an object at the next `prepare`, as Acrobat does
@@ -127,6 +135,8 @@ impl ObjectSelection {
         if self.generation != Some(generation) {
             self.cache.clear();
             self.gesture = None;
+            self.snap_offset = egui::Vec2::ZERO;
+            self.snap_guides.clear();
             let expected = self.pending.take();
             let remapped = self.page.zip(expected).and_then(|(page, expected)| {
                 let inventory = doc.editable_objects(page).ok()?;
@@ -361,6 +371,21 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, press: PagePress, vie
         if let Some(p) = pointer {
             gesture.now = p;
         }
+        if !gesture.marquee {
+            let raw_delta = gesture.now - gesture.start;
+            let moving_union = s.selected.iter().fold(Rect::NOTHING, |u, o| u.union(screen(xf, info, page, o))).translate(raw_delta);
+            if moving_union.is_positive()
+                && let Ok(inventory) = s.inventory(doc, page)
+            {
+                let targets = inventory.iter().filter(|o| !s.selected.iter().any(|sel| sel.target == o.target)).map(|o| screen(xf, info, page, o));
+                let snap = crate::tools::snap_guides::snap_rect(moving_union, targets, crate::tools::snap_guides::SNAP_THRESHOLD);
+                s.snap_offset = snap.offset;
+                s.snap_guides = snap.guides;
+            } else {
+                s.snap_offset = egui::Vec2::ZERO;
+                s.snap_guides.clear();
+            }
+        }
         if !down {
             if !gesture.marquee && gesture.start.distance(gesture.now) <= 3.0 && resp.double_clicked() {
                 s.clear();
@@ -393,7 +418,10 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, press: PagePress, vie
                     s.clear();
                 }
             } else if gesture.start.distance(gesture.now) > 3.0 && view.pending_edit.is_none() {
-                let (a, b) = (xf.screen_to_view(gesture.start), xf.screen_to_view(gesture.now));
+                let snapped_now = gesture.now + s.snap_offset;
+                s.snap_offset = egui::Vec2::ZERO;
+                s.snap_guides.clear();
+                let (a, b) = (xf.screen_to_view(gesture.start), xf.screen_to_view(snapped_now));
                 match doc.object_move_offset(page, [f64::from(b.0 - a.0), f64::from(b.1 - a.1)]) {
                     Ok(offset) => view.pending_edit = Some(s.move_by(page, offset)),
                     Err(_) => s.notice = Some(tl!("These objects could not be moved. Select them again and try a smaller move.").into()),
@@ -559,7 +587,7 @@ pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: 
     if selection.page != Some(page) {
         return;
     }
-    let delta = selection.gesture.filter(|g| !g.marquee).map_or(egui::Vec2::ZERO, |g| g.now - g.start);
+    let delta = selection.gesture.filter(|g| !g.marquee).map_or(egui::Vec2::ZERO, |g| g.now - g.start + selection.snap_offset);
     let mut union = Rect::NOTHING;
     for object in &selection.selected {
         let rect = screen(xf, info, page, object).translate(delta);
@@ -569,6 +597,9 @@ pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: 
     }
     if selection.selected.len() > 1 {
         painter.rect_stroke(union.expand(4.0), 0.0, Stroke::new(1.0, BLUE.gamma_multiply(0.7)), egui::StrokeKind::Outside);
+    }
+    if selection.gesture.is_some_and(|g| !g.marquee) {
+        crate::tools::snap_guides::paint_guides(painter, &selection.snap_guides, Some(xf.rect));
     }
     if let Some(g) = selection.gesture.filter(|g| g.marquee) {
         let area = Rect::from_two_pos(g.start, g.now).intersect(xf.rect);

@@ -444,7 +444,19 @@ pub(crate) fn page_input(
                     let delta = end - start;
                     if delta.length() >= 1.0 {
                         let shift = ui.input(|i| i.modifiers.shift);
-                        let r = dragged(screen_rect(xf, info, page, w.rect), grab, delta, shift);
+                        let mut r = dragged(screen_rect(xf, info, page, w.rect), grab, delta, shift);
+                        if matches!(grab, Grab::Move(_)) {
+                            let targets = form.iter().flat_map(|field| {
+                                field
+                                    .widgets
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(idx, widget)| widget.page == Some(page) && !(field.name == name && *idx == wi))
+                                    .map(|(_, widget)| screen_rect(xf, info, page, widget.rect))
+                            });
+                            let snap = crate::tools::snap_guides::snap_rect(r, targets, crate::tools::snap_guides::SNAP_THRESHOLD);
+                            r = r.translate(snap.offset);
+                        }
                         let rect = user_rect(xf, info, page, r);
                         view.pending_edit =
                             Some(Edit::SetFieldProps { name, props: Box::new(FieldProps { rect: Some((wi, rect)), ..Default::default() }) });
@@ -670,7 +682,24 @@ pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], tab_order:
             let also = prep.also.iter().any(|(n, i)| n == &f.name && *i == wi);
             let selected = primary || also;
             if primary && let (Some((_, g, start)), Some(p)) = (grab, pointer) {
-                r = dragged(r, g, p - start, ui.input(|i| i.modifiers.shift));
+                let delta = p - start;
+                let shift = ui.input(|i| i.modifiers.shift);
+                let base_r = dragged(r, g, delta, shift);
+                if matches!(g, Grab::Move(_)) {
+                    let targets = form.iter().flat_map(|field| {
+                        field
+                            .widgets
+                            .iter()
+                            .enumerate()
+                            .filter(|(idx, widget)| widget.page == Some(page) && !(field.name == f.name && *idx == wi))
+                            .map(|(_, widget)| screen_rect(xf, info, page, widget.rect))
+                    });
+                    let snap = crate::tools::snap_guides::snap_rect(base_r, targets, crate::tools::snap_guides::SNAP_THRESHOLD);
+                    r = base_r.translate(snap.offset);
+                    crate::tools::snap_guides::paint_guides(painter, &snap.guides, Some(xf.rect));
+                } else {
+                    r = base_r;
+                }
             }
             painter.rect_filled(r, CornerRadius::ZERO, FIELD_FILL);
             painter.rect_stroke(

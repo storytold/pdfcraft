@@ -432,7 +432,16 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, ccx: ContentCx<'_>, view: &mut
                 && let Some((_, a)) = on_page(added, page).into_iter().find(|(i, a)| *i == si && matches!(a.content, AddedContent::Text(_)))
                 && (end - start).length() >= 1.0
             {
-                let r = dragged(screen_rect(xf, info, page, a.content.rect()), grab, end - start, false);
+                let mut delta = end - start;
+                if grab == Grab::Move {
+                    let base_r = screen_rect(xf, info, page, a.content.rect());
+                    let moving = base_r.translate(delta);
+                    let targets =
+                        on_page(added, page).into_iter().filter(|(i, _)| *i != si).map(|(_, item)| screen_rect(xf, info, page, item.content.rect()));
+                    let snap = crate::tools::snap_guides::snap_rect(moving, targets, crate::tools::snap_guides::SNAP_THRESHOLD);
+                    delta += snap.offset;
+                }
+                let r = dragged(screen_rect(xf, info, page, a.content.rect()), grab, delta, false);
                 let (p0, p1) = (to_display(xf, info, page, r.left_bottom()), to_display(xf, info, page, r.right_top()));
                 let mut rect = [p0[0], p0[1], p1[0], p1[1]];
                 if let AddedContent::Text(t) = &a.content
@@ -582,7 +591,16 @@ pub(crate) fn paint_page(
             && let (Some((gp, g, start)), Some(p)) = (cv.grab, pointer)
             && gp == page
         {
-            r = dragged(r, g, p - start, matches!(a.content, AddedContent::Image(_)));
+            let mut delta = p - start;
+            if g == Grab::Move {
+                let moving = r.translate(delta);
+                let targets =
+                    on_page(added, page).into_iter().filter(|(idx, _)| *idx != i).map(|(_, item)| screen_rect(xf, info, page, item.content.rect()));
+                let snap = crate::tools::snap_guides::snap_rect(moving, targets, crate::tools::snap_guides::SNAP_THRESHOLD);
+                delta += snap.offset;
+                crate::tools::snap_guides::paint_guides(painter, &snap.guides, Some(xf.rect));
+            }
+            r = dragged(r, g, delta, matches!(a.content, AddedContent::Image(_)));
         }
         if selected {
             painter.rect_stroke(r.expand(1.0), CornerRadius::ZERO, Stroke::new(1.5, SELECT_BLUE), egui::StrokeKind::Outside);

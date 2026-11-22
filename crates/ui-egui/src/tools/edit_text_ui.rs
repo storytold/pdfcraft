@@ -878,11 +878,17 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
     {
         let p = ptr.pos.unwrap_or(d.start);
         let dx = p.x - d.start.x;
-        let preview = match d.grip {
+        let mut preview = match d.grip {
             Grip::Move => b.translate(p - d.start),
             Grip::Left => Rect::from_min_max(Pos2::new((b.left() + dx).min(b.right() - 12.0), b.min.y), b.max),
             Grip::Right => Rect::from_min_max(b.min, Pos2::new((b.right() + dx).max(b.left() + 12.0), b.max.y)),
         };
+        if d.grip == Grip::Move {
+            let targets = boxes.iter().enumerate().filter(|(i, _)| *i != d.block).map(|(_, b)| *b);
+            let snap = crate::tools::snap_guides::snap_rect(preview, targets, crate::tools::snap_guides::SNAP_THRESHOLD);
+            preview = preview.translate(snap.offset);
+            crate::tools::snap_guides::paint_guides(&painter, &snap.guides, Some(xf.rect));
+        }
         painter.rect_stroke(preview, CornerRadius::same(2), Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
         let resizing = d.grip != Grip::Move;
         if resizing {

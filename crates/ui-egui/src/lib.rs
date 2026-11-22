@@ -190,6 +190,7 @@ use tools::object_ui;
 pub use tools::prepare;
 use tools::redact_ui;
 use tools::sign_ui;
+pub use tools::snap_guides;
 use tools::stamps_ui;
 use tools::tags_ui;
 use widgets::icon_data;
