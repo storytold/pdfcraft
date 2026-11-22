@@ -132,6 +132,8 @@ use dialogs::rename_ui;
 use dialogs::standards_ui;
 use dialogs::word_count_ui;
 pub use home::folders_ui;
+#[cfg(not(target_arch = "wasm32"))]
+pub use hooks::PickerParent;
 pub use hooks::{FailedInbox, HostDirtyFn, HostSaveFn, Inbox, OsEvent, OsEventsFn};
 use menus::tab_context;
 use panels::all_tools_ui;
@@ -613,6 +615,9 @@ pub struct PdfCraftApp {
     /// Pick these files instead of showing a picker (tests and automation).
     #[cfg(not(target_arch = "wasm32"))]
     pub pick_override: Option<Vec<String>>,
+    /// The window every native picker is shown for (set by the desktop app; see [`PickerParent`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub picker_parent: Option<std::sync::Arc<dyn PickerParent>>,
     /// Write exported files (split) here instead of asking (tests and automation).
     pub export_dir_override: Option<String>,
     /// Split dialog settings.

@@ -484,6 +484,8 @@ fn app_creator<'a>(
             }
             app.motion.source = Some(motion::source());
         }
+        // File pickers belong to the main window, so none opens behind it (#7906).
+        app.picker_parent = cc.winit_window().map(|window| window.clone() as std::sync::Arc<dyn pdfcraft_ui_egui::PickerParent>);
         app.set_startup_update_check(true);
         app.printer_source = Some(pdfcraft_ui_egui::system_printers());
         app.two_sided_source = Some(pdfcraft_ui_egui::system_two_sided());

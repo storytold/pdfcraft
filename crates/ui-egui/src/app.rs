@@ -223,6 +223,8 @@ impl PdfCraftApp {
             pickers: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             pick_override: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            picker_parent: None,
             export_dir_override: None,
             split_draft: SplitDraft::default(),
             extract_draft: ExtractDraft::default(),

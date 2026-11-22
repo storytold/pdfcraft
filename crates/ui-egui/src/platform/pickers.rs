@@ -16,6 +16,10 @@
 //! - Linux and the BSDs: the XDG portal backend (with a Zenity fallback) also works off the UI
 //!   thread; the optional GTK3 backend shows the panel on rfd's own GTK thread.
 //!
+//! Every panel is given the app's main window as its parent when the desktop app set
+//! [`PdfCraftApp::picker_parent`]. Without one the panel is unowned: on Linux the portal request
+//! names no parent window, and the window manager may open it behind the app (#7906).
+//!
 //! Every native picker goes through [`PdfCraftApp::ask`]: open, save, folder and multi-file
 //! panels alike. What happens with the choice is a closure that runs on that later frame, so
 //! work that depends on the file being written (closing the tab after Save, deleting extracted
@@ -52,6 +56,19 @@ pub(crate) enum Ask {
     Folder(rfd::AsyncFileDialog),
     /// Choose where to save a file.
     Save(rfd::AsyncFileDialog),
+}
+
+impl Ask {
+    /// The same panel, owned by `parent`, so the window manager keeps it in front of that
+    /// window instead of placing it freely, possibly behind the app (#7906).
+    fn with_parent(self, parent: &dyn crate::PickerParent) -> Self {
+        match self {
+            Ask::File(d) => Ask::File(d.set_parent(parent)),
+            Ask::Files(d) => Ask::Files(d.set_parent(parent)),
+            Ask::Folder(d) => Ask::Folder(d.set_parent(parent)),
+            Ask::Save(d) => Ask::Save(d.set_parent(parent)),
+        }
+    }
 }
 
 /// What to do with the chosen paths, on a later frame.
@@ -215,6 +232,10 @@ impl PdfCraftApp {
             self.pickers.deliver(target, paths.into_iter().map(PathBuf::from).collect(), then);
             return true;
         }
+        let ask = match &self.picker_parent {
+            Some(parent) => ask.with_parent(parent.as_ref()),
+            None => ask,
+        };
         // On macOS creating the future shows the panel; it must happen here, on the main thread.
         let ctx = self.ctx.clone();
         let one = |h: Option<rfd::FileHandle>| h.map(|h| h.path().to_path_buf()).into_iter().collect::<Vec<_>>();

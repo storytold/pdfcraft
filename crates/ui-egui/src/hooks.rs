@@ -21,6 +21,14 @@ pub enum OsEvent {
 /// Returns the [`OsEvent`]s that arrived since it was last called (set by the desktop app).
 pub type OsEventsFn = Box<dyn FnMut() -> Vec<OsEvent>>;
 
+/// The window native file pickers belong to: the desktop app's main window (its winit window).
+/// A picker without one is unowned, and the window manager may put it behind the app (#7906).
+#[cfg(not(target_arch = "wasm32"))]
+pub trait PickerParent: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle + Send + Sync {}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<T: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle + Send + Sync + ?Sized> PickerParent for T {}
+
 /// Hands a saved PDF to the page embedding PdfCraft (web): `(name, bytes, save_as)`. `save_as`
 /// is `true` for Save As. Set by the web app when a host page (such as a Nextcloud app) asked
 /// for saves; without it the browser downloads the file.
