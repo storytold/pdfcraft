@@ -326,6 +326,7 @@ pub(crate) fn preview(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         return;
     };
     p.page = Some(page);
+    let name = f.name.clone();
     let source = FilePages {
         bytes: f.bytes.clone(),
         auth: f.auth,
@@ -337,7 +338,7 @@ pub(crate) fn preview(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut at = p.at;
     let numbered: Vec<usize> = (0..pages.len()).collect();
     let ranged = RangePages { inner: &source, pages: &pages };
-    let shown = PagePreview::new(&ranged, &numbered, &mut at, DataColor::new(egui::Color32::WHITE)).show(ui);
+    let shown = PagePreview::new(&ranged, &numbered, &mut at, DataColor::new(egui::Color32::WHITE)).title(name).show(ui);
     p.at = at;
     p.page = pages.get(at).copied();
     if shown.closed {
