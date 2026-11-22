@@ -304,7 +304,7 @@ mod tests {
         assert!(!app.save_active(&egui::Context::default(), SaveTarget::InPlace), "asks before writing over B");
         r.steps(2);
         assert_eq!(r.doc().info.pages.len(), 2, "B waits while the question is open");
-        r.h.get_by_label("Replace").click();
+        r.h.get_by_label("Save anyway").click();
         r.steps(4);
 
         let d = r.doc();
