@@ -34,8 +34,20 @@ fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, P
     harness_with_bytes(TEXT_FIXTURE.to_vec(), setup)
 }
 
+fn visible_page_harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
+    harness(|app| {
+        // Keep the whole small fixture visible below the window's chrome.
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+        setup(app);
+    })
+}
+
 fn harness_with_bytes(bytes: Vec<u8>, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+    harness_with_size(bytes, egui::vec2(1400.0, 900.0), setup)
+}
+
+fn harness_with_size(bytes: Vec<u8>, size: egui::Vec2, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(size).build_eframe(move |cc| {
         crate::support::install_runtime(&cc.egui_ctx);
         {
             let mut app = crate::control::new_app();
@@ -272,7 +284,7 @@ fn the_quick_bar_colour_changes_the_selected_arrow() {
     use pdfcraft_ui_egui::comments::CommentTool;
 
     // Arrows are saved as Line annotations; the Arrow tool's colour must still reach them.
-    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "arrow").unwrap());
+    let mut h = visible_page_harness(|app| app.set_option(&egui::Context::default(), "quick", "arrow").unwrap());
     drag_pt(&mut h, (20.0, 20.0), (120.0, 30.0));
     assert_eq!(comments(&h)[0].subtype, "Line");
     assert_eq!(h.state().quick_tool, QuickTool::Comment(CommentTool::Arrow), "the arrow tool is still active");
@@ -627,7 +639,7 @@ fn selection_note_replaced_by_sticky_note_posts_at_the_new_anchor() {
 #[test]
 fn selection_note_posts_highlight_and_hovers_author_and_comment() {
     let _gpu = std::env::var_os("PDFCRAFT_SHOTS").map(|_| crate::gpu());
-    let mut h = harness(|_| {});
+    let mut h = visible_page_harness(|_| {});
     h.state_mut().views[0].select_text(0, 4, 8);
     let selected = h.state().views[0].selected_text().unwrap();
     h.run_steps(3);
@@ -662,7 +674,7 @@ fn selection_note_posts_highlight_and_hovers_author_and_comment() {
 
 #[test]
 fn shapes_and_ink_are_drawn_by_dragging() {
-    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
+    let mut h = visible_page_harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
     drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
     h.set_option("quick", "ink").unwrap();
     drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
@@ -773,7 +785,7 @@ fn undoing_a_pen_stroke_before_its_raster_leaves_no_ghost() {
 
 #[test]
 fn pen_strokes_stay_unselected_so_writing_continues() {
-    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "ink").unwrap());
+    let mut h = visible_page_harness(|app| app.set_option(&egui::Context::default(), "quick", "ink").unwrap());
     // No Comments panel: the author's name should only show in a hover popup.
     h.set_option("panel", "none").unwrap();
     h.run_steps(2);
@@ -1014,7 +1026,7 @@ fn a_dragged_text_box_wraps_inside_its_border() {
 
 #[test]
 fn comments_are_selected_moved_and_deleted_with_the_select_tool() {
-    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
+    let mut h = visible_page_harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
     drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
     h.set_option("quick", "select").unwrap();
     // Click away, then on the rectangle's border area.
@@ -1110,7 +1122,7 @@ fn arrow_keys_nudge_all_selected_comments_as_one_undo_step() {
 
 #[test]
 fn arrow_nudge_skips_locked_comments_and_duplicate_selection_entries() {
-    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
+    let mut h = visible_page_harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
     for (a, b) in [((20.0, 20.0), (60.0, 60.0)), ((100.0, 20.0), (140.0, 60.0)), ((180.0, 20.0), (220.0, 60.0))] {
         drag_pt(&mut h, a, b);
     }
@@ -1171,7 +1183,7 @@ fn the_rubber_band_shows_the_closing_side_with_shift_held() {
 /// Shift they go where the pointer is.
 #[test]
 fn shift_holds_new_lines_and_sides_level_or_plumb() {
-    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "line").unwrap());
+    let mut h = visible_page_harness(|app| app.set_option(&egui::Context::default(), "quick", "line").unwrap());
     let shift = |h: &mut Harness<'static, PdfCraftApp>, on: bool| {
         h.event(egui::Event::ModifiersChanged(if on { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE }));
         h.run_steps(1);
@@ -1221,7 +1233,7 @@ fn shift_holds_new_lines_and_sides_level_or_plumb() {
 fn a_shape_just_drawn_resizes_from_its_handles_without_the_select_tool() {
     // #2338: the new shape showed its handles, but only the Select tool answered them.
     let square = QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::Rectangle);
-    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
+    let mut h = visible_page_harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
     drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
     assert_eq!(h.state().views[0].session.comments.selection(), vec![(0, 0)], "the new rectangle is selected");
     let before = comments(&h)[0].rect;
@@ -1938,7 +1950,7 @@ trailer << /Root 1 0 R >>
 
 #[test]
 fn replies_that_lead_nowhere_stay_comments_and_deeper_replies_join_their_thread() {
-    let mut h = harness_with_bytes(THREAD_EDGES.to_vec(), |app| {
+    let mut h = harness_with_size(THREAD_EDGES.to_vec(), egui::vec2(1400.0, 2000.0), |app| {
         app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
         app.set_option(&egui::Context::default(), "quick", "select").unwrap();
     });
@@ -2199,7 +2211,7 @@ fn comments_take_checkmarks_lock_hide_and_summarize() {
 
 #[test]
 fn polygons_clouds_connected_lines_callouts_and_inserted_text() {
-    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "polygon").unwrap());
+    let mut h = visible_page_harness(|app| app.set_option(&egui::Context::default(), "quick", "polygon").unwrap());
     // Polygon: click the corners, Enter finishes.
     for p in [(40.0, 40.0), (120.0, 40.0), (80.0, 110.0)] {
         click_pt(&mut h, p);
@@ -3841,6 +3853,7 @@ fn a_double_click_opens_a_notes_pop_up_which_drags_and_closes() {
             app.set_option(&egui::Context::default(), "left", "closed").unwrap();
             app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
             app.set_option(&egui::Context::default(), "quick", "note").unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
             app
         }
     });
@@ -4369,7 +4382,7 @@ fn other_edit_composers_keep_trimming_trailing_whitespace() {
 /// Delete removes every selected comment as one undo step.
 #[test]
 fn ctrl_click_selects_several_comments_and_delete_removes_them_all() {
-    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
+    let mut h = visible_page_harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
     for (a, b) in [((20.0, 20.0), (60.0, 60.0)), ((100.0, 20.0), (140.0, 60.0)), ((180.0, 20.0), (220.0, 60.0))] {
         drag_pt(&mut h, a, b);
     }
@@ -4410,7 +4423,7 @@ fn ctrl_click_selects_several_comments_and_delete_removes_them_all() {
 /// grabbed one takes the handles and the one that had them stays selected.
 #[test]
 fn dragging_any_selected_comment_moves_the_whole_selection() {
-    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
+    let mut h = visible_page_harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
     for (a, b) in [((20.0, 20.0), (60.0, 60.0)), ((100.0, 20.0), (140.0, 60.0)), ((180.0, 20.0), (220.0, 60.0))] {
         drag_pt(&mut h, a, b);
     }
@@ -4610,7 +4623,7 @@ fn copied_comments_paste_into_another_document() {
 /// the menu also takes the last point back and cancels the drawing.
 #[test]
 fn connected_lines_are_completed_from_the_context_menu() {
-    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "polyline").unwrap());
+    let mut h = visible_page_harness(|app| app.set_option(&egui::Context::default(), "quick", "polyline").unwrap());
     for p in [(20.0, 150.0), (60.0, 130.0), (100.0, 150.0)] {
         click_pt(&mut h, p);
     }
