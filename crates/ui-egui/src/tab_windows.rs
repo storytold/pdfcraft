@@ -539,6 +539,7 @@ mod tests {
         child.pinned_tools = vec!["edit.edit_text".into()];
         child.show_page_edge_shadows = false;
         child.show_secured_notice = false;
+        child.text_links = false;
 
         child.always_default_view = true;
         child.organize_zoom = 1.25;
@@ -561,6 +562,7 @@ mod tests {
         assert_eq!(next.pinned_tools, ["edit.edit_text"]);
         assert!(!next.show_page_edge_shadows);
         assert!(!next.show_secured_notice);
+        assert!(!next.text_links);
 
         assert_eq!(next.ui_scale, Some(1.25));
         assert!(next.always_default_view);
@@ -586,6 +588,23 @@ mod tests {
         assert!(saved["signature_text"].is_null());
         assert!(saved["initials"].is_null());
         assert_eq!(saved["recent"], serde_json::json!([]));
+    }
+
+    /// A Combine request stages files without opening a view, so the hidden-root reveal must
+    /// watch the Combine tab rather than only views and pending opens.
+    #[test]
+    fn hidden_root_reveals_when_combine_files_are_staged() {
+        let mut host = NativeWindows::new(app());
+        host.root.views.clear();
+        host.root.active = None;
+        host.root_hidden = true;
+        assert!(!host.root.combine_showing());
+        host.root.open_combine_tab();
+        // Same gate NativeWindows::logic uses before sending Visible(true).
+        assert!(host.root_hidden);
+        assert!(host.root.views.is_empty());
+        assert!(host.root.pending_opens.is_empty());
+        assert!(host.root.combine_showing());
     }
 
     /// Hiding the root must not omit detached documents from session restoration.
@@ -661,8 +680,6 @@ mod tests {
         assert_eq!(root.views.len(), 2);
     }
 
-    /// Unavailable hosts and blocked operations leave the source document owned and intact.
-    #[test]
     /// A split document keeps both views of the same DocId until the move is refused.
     #[test]
     fn tear_off_refuses_while_the_document_still_has_a_split_view() {
@@ -704,7 +721,9 @@ mod tests {
         assert!(root.session.get(id).is_some());
     }
 
-        fn tear_off_rejects_unavailable_host_missing_document_and_modal_without_removing_work() {
+    /// Unavailable hosts and blocked operations leave the source document owned and intact.
+    #[test]
+    fn tear_off_rejects_unavailable_host_missing_document_and_modal_without_removing_work() {
         let mut root = app();
         let id = root.views[0].id;
         root.managed_windows = false;
