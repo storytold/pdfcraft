@@ -631,6 +631,94 @@ impl CanvasPosition {
 }
 
 #[cfg(target_os = "linux")]
+fn horizontal_autoscroll_arrows(h: &Harness<'static, PdfCraftApp>, anchor: egui::Pos2) -> usize {
+    let tips = [anchor - egui::vec2(10.0, 0.0), anchor + egui::vec2(10.0, 0.0)];
+    h.output()
+        .shapes
+        .iter()
+        .filter(|shape| matches!(&shape.shape, egui::Shape::Path(path) if path.points.len() == 3 && tips.iter().any(|tip| path.points.contains(tip))))
+        .count()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn middle_click_autoscroll_moves_sideways_on_a_zoomed_page() {
+    let (mut h, c) = harness_pages_at(1, 1000.0, 1.0);
+    h.state_mut().set_option("zoom", "800").unwrap();
+    h.run_steps(4);
+    let anchor = start_autoscroll(&mut h, &c);
+    let view = &h.state().views[0];
+    let viewport = view.viewport_rect();
+    let page = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(0).unwrap();
+    let before = page(&h);
+    assert!(before.right() > viewport.right() + 90.0, "the page has room to scroll right");
+
+    ok(&mut h, &c, "ui.move", json!({ "x": anchor.x + 90.0, "y": anchor.y }));
+    h.run_steps(8);
+    let after = page(&h);
+    assert!((after.top() - before.top()).abs() < 1.0, "sideways movement keeps the page at the same height");
+    assert!(after.left() < before.left() - 25.0, "moving right of the middle-click anchor should scroll right: {before:?} -> {after:?}");
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::AllScroll);
+    assert_eq!(horizontal_autoscroll_arrows(&h, anchor), 2);
+
+    ok(&mut h, &c, "ui.move", json!({ "x": anchor.x + 220.0, "y": anchor.y }));
+    h.run_steps(40);
+    let edge = page(&h);
+    assert!(edge.right() <= viewport.right() + 1.0, "the right edge comes into view: {edge:?} at {viewport:?}");
+    assert!(edge.intersect(viewport).width() > viewport.width() * 0.75, "the page still fills most of the viewport at the stop");
+    h.run_steps(8);
+    assert!((page(&h).right() - edge.right()).abs() < 1.0, "continued rightward input cannot overshoot the edge");
+
+    ok(&mut h, &c, "ui.move", json!({ "x": anchor.x - 90.0, "y": anchor.y }));
+    h.run_steps(8);
+    assert!(page(&h).left() > edge.left() + 25.0, "moving left of the anchor scrolls back from the right edge");
+
+    ok(&mut h, &c, "ui.move", json!({ "x": anchor.x + 8.0, "y": anchor.y + 90.0 }));
+    h.run_steps(2);
+    let vertical = page(&h);
+    h.run_steps(8);
+    assert!(page(&h).top() < vertical.top() - 25.0, "the vertical component scrolls");
+    assert!((page(&h).left() - vertical.left()).abs() < 1.0, "small horizontal jitter in the dead zone does not drift");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn middle_click_autoscroll_stays_vertical_when_the_page_fits_width() {
+    let (mut h, c) = harness_pages_at(5, 1000.0, 1.0);
+    h.state_mut().run_command("view.fit_width_scrolling");
+    h.run_steps(4);
+    let anchor = start_autoscroll(&mut h, &c);
+    let page = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(0).unwrap();
+    let before = page(&h);
+    assert!(before.width() <= h.state().views[0].viewport_rect().width() + 1.0);
+
+    ok(&mut h, &c, "ui.move", json!({ "x": anchor.x + 90.0, "y": anchor.y }));
+    h.run_steps(8);
+    assert!((page(&h).left() - before.left()).abs() < 1.0, "a page that fits width stays centred");
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeVertical);
+    assert_eq!(horizontal_autoscroll_arrows(&h, anchor), 0);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn sideways_autoscroll_stops_when_the_held_middle_button_is_released() {
+    let (mut h, c) = harness_pages_at(1, 1000.0, 1.0);
+    h.state_mut().set_option("zoom", "800").unwrap();
+    h.run_steps(4);
+    let anchor = h.state().views[0].viewport_rect().center();
+    let page = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(0).unwrap();
+    let before = page(&h);
+    ok(&mut h, &c, "ui.drag", json!({ "from": [anchor.x, anchor.y], "to": [anchor.x + 90.0, anchor.y], "steps": 12, "button": "middle" }));
+    h.run_steps(2);
+    let released = page(&h);
+    assert!(!h.state().views[0].auto_scrolling(), "sideways movement while held stops the latch on release");
+    assert!(released.left() < before.left() - 25.0, "the held gesture scrolled right");
+    assert!((released.top() - before.top()).abs() < 1.0, "the held gesture was only sideways");
+    h.run_steps(8);
+    assert!((page(&h).left() - released.left()).abs() < 1.0, "there is no drift after release");
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn middle_click_autoscroll_latches_has_a_dead_zone_and_scrolls_both_directions() {
     let (mut h, c) = harness();

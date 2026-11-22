@@ -285,7 +285,7 @@ pub(super) fn organize_grid(
     let viewport = ui.available_rect_before_wrap();
     view.viewport_screen = viewport;
     let auto_delta = if unobstructed {
-        view.auto_scroll.update(ui, viewport, true, invert_middle)
+        view.auto_scroll.update(ui, viewport, true, invert_middle, false)
     } else {
         view.auto_scroll.cancel();
         Vec2::ZERO
@@ -542,7 +542,7 @@ pub(super) fn organize_grid(
             painter.line_segment([at - vec2(0.0, 4.0), at + vec2(0.0, 4.0)], Stroke::new(1.5, Color32::WHITE));
         }
     }
-    view.auto_scroll.paint(ui, viewport);
+    view.auto_scroll.paint(ui, viewport, false);
     // Pinch, or Ctrl/⌘ with the wheel, zooms the grid about the page under the pointer.
     let pinch = crate::motion::zoom_delta(ui.ctx());
     if (pinch - 1.0).abs() > 0.001 && pointer.is_some() && !middle_gesture {

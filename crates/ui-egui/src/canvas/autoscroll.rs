@@ -52,16 +52,16 @@ impl AutoScroll {
     /// Run before the document's widgets. Starting is restricted to the unobstructed viewport;
     /// once started, moving outside that viewport still controls the speed. `invert` is
     /// Preferences ▸ Invert middle-button drag: the returned delta scrolls the other way.
-    pub(crate) fn update(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool, invert: bool) -> Vec2 {
-        self.update_for_platform(ui, viewport, organize, cfg!(target_os = "linux"), invert)
+    pub(crate) fn update(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool, invert: bool, sideways: bool) -> Vec2 {
+        self.update_for_platform(ui, viewport, organize, cfg!(target_os = "linux"), invert, sideways)
     }
 
-    fn update_for_platform(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool, supported: bool, invert: bool) -> Vec2 {
-        let delta = if supported { self.update_latched(ui, viewport, organize) } else { self.update_drag(ui, viewport) };
+    fn update_for_platform(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool, supported: bool, invert: bool, sideways: bool) -> Vec2 {
+        let delta = if supported { self.update_latched(ui, viewport, organize, sideways) } else { self.update_drag(ui, viewport) };
         oriented(delta, invert)
     }
 
-    fn update_latched(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool) -> Vec2 {
+    fn update_latched(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool, sideways: bool) -> Vec2 {
         let ctx = ui.ctx();
         let (pointer, middle_press, middle_down, middle_released, has_release_event, cancel, cancel_button, dt) = ctx.input(|i| {
             let cancel_button = [PointerButton::Primary, PointerButton::Secondary, PointerButton::Extra1, PointerButton::Extra2]
@@ -116,8 +116,9 @@ impl AutoScroll {
             }
         }
         let (Some(anchor), Some(pointer)) = (self.anchor, pointer) else { return Vec2::ZERO };
-        let displacement = pointer.y - anchor.y;
-        let past_dead_zone = displacement.is_finite() && displacement.abs() > DEAD_ZONE;
+        let dx = if sideways { pointer.x - anchor.x } else { 0.0 };
+        let dy = pointer.y - anchor.y;
+        let past_dead_zone = [dx, dy].into_iter().any(|d| d.is_finite() && d.abs() > DEAD_ZONE);
         if middle_down && !has_release_event && past_dead_zone {
             self.held_frames_past_dead_zone = self.held_frames_past_dead_zone.saturating_add(1);
         }
@@ -127,13 +128,13 @@ impl AutoScroll {
             return Vec2::ZERO;
         }
         // Cap the elapsed time too: returning from an idle/hidden window must never jump pages.
-        let delta = scroll_delta(displacement, dt);
+        let delta = vec2(scroll_delta(dx, dt), scroll_delta(dy, dt));
         if past_dead_zone {
             // Continuous redraws let stable_dt use measured frame time. Delayed redraws
             // instead use predicted_dt, which can make speed depend on the actual frame rate.
             ctx.request_repaint();
         }
-        vec2(0.0, delta)
+        delta
     }
 
     /// Without auto-scroll, a middle-button drag pans the view 1:1, like the Hand tool. Input is
@@ -177,7 +178,7 @@ impl AutoScroll {
     }
 
     /// Draw an original geometric marker at the activation point, above page content.
-    pub(crate) fn paint(&self, ui: &egui::Ui, viewport: egui::Rect) {
+    pub(crate) fn paint(&self, ui: &egui::Ui, viewport: egui::Rect, sideways: bool) {
         if self.drag.is_some() {
             ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
             return;
@@ -187,14 +188,19 @@ impl AutoScroll {
         let ink = ui.visuals().text_color();
         painter.circle(anchor, 13.0, ui.visuals().window_fill(), Stroke::new(1.0, ink));
         painter.circle_filled(anchor, 2.0, ink);
-        for direction in [-1.0, 1.0] {
-            painter.add(egui::Shape::convex_polygon(
-                vec![anchor + vec2(-4.0, direction * 6.0), anchor + vec2(4.0, direction * 6.0), anchor + vec2(0.0, direction * 10.0)],
-                ink,
-                Stroke::NONE,
-            ));
+        let arrows = |axis: Vec2| {
+            let half_width = vec2(axis.y, -axis.x) * 4.0;
+            for direction in [-1.0, 1.0] {
+                let outward = axis * direction;
+                let base = anchor + outward * 6.0;
+                painter.add(egui::Shape::convex_polygon(vec![base - half_width, base + half_width, anchor + outward * 10.0], ink, Stroke::NONE));
+            }
+        };
+        arrows(Vec2::Y);
+        if sideways {
+            arrows(Vec2::X);
         }
-        ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+        ui.ctx().set_cursor_icon(if sideways { CursorIcon::AllScroll } else { CursorIcon::ResizeVertical });
     }
 
     /// Escape belongs to autoscroll first, leaving selection/find/full-screen intact.
@@ -294,7 +300,7 @@ mod tests {
         let mut output = ctx.run_ui(
             egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))), events, focused, ..Default::default() },
             |ui| {
-                let delta = scroll.update_for_platform(ui, ui.max_rect(), false, mode.0, mode.1);
+                let delta = scroll.update_for_platform(ui, ui.max_rect(), false, mode.0, mode.1, false);
                 check(scroll, delta);
             },
         );
