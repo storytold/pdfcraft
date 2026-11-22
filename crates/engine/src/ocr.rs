@@ -2117,27 +2117,94 @@ mod tests {
     }
 
     /// The editable output carries non-WinAnsi words as visible text that extraction reads
-    /// back, in a face beyond Helvetica when the build has one.
+    /// back: Cyrillic/extended Latin via the bundled Inter face in every build, and CJK via
+    /// craft-fonts when built with them (or `?` otherwise).
     #[test]
     fn editable_output_round_trips_non_win_ansi_words() {
         let mut s = Session::new().with_clock(|| 1_700_000_000);
         let id = s.open("src.pdf", None, Arc::new(fixture(1)), None).unwrap();
-        let w = PlacedWord {
-            text: "Привет".into(),
-            origin: [20.0, 250.0],
+        let word = |text: &str, y: f64| PlacedWord {
+            text: text.into(),
+            origin: [20.0, y],
             across: [80.0, 0.0],
             up: [0.0, 10.0],
             confidence: None,
             source: "ocrs".into(),
         };
-        let bytes = s.editable_ocr_bytes(id, &[OcrPage { already_on_page: 0, page: 0, words: vec![w], skipped: None, notes: Vec::new() }]).unwrap();
+        let bytes = s
+            .editable_ocr_bytes(
+                id,
+                &[OcrPage {
+                    already_on_page: 0, page: 0, words: vec![word("Привет", 250.0), word("日本", 220.0)], skipped: None, notes: Vec::new()
+                }],
+            )
+            .unwrap();
         let mut out = Session::new();
         let oid = out.open("ocr.pdf", None, bytes, None).unwrap();
         let text = crate::tests::page_texts(&out, oid)[0].clone();
+        assert!(text.contains("Привет"), "{text}");
         if pdfcraft_fonts::CRAFT_FONTS.is_empty() {
-            assert!(text.contains("??????"), "{text}");
+            assert!(text.contains("??"), "{text}");
         } else {
-            assert!(text.contains("Привет"), "{text}");
+            assert!(text.contains("日本"), "{text}");
+        }
+    }
+
+    /// Editable OCR output preserves Vietnamese stacked diacritics (issue #7502) through the
+    /// bundled Inter face even when built without craft-fonts, with no `?` substitutions.
+    #[test]
+    fn editable_output_preserves_vietnamese_diacritics_without_question_marks() {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("src.pdf", None, Arc::new(fixture(1)), None).unwrap();
+        let tokens = [
+            "Bộ",
+            "máy",
+            "tính",
+            "mã",
+            "số",
+            "2756,",
+            "số",
+            "lượng:",
+            "01",
+            "bộ,",
+            "vị",
+            "trí:",
+            "phòng",
+            "tư",
+            "vấn",
+            "–",
+            "khoa",
+            "Dinh",
+            "dưỡng.",
+        ];
+        let words: Vec<PlacedWord> = tokens
+            .iter()
+            .enumerate()
+            .map(|(i, text)| PlacedWord {
+                text: (*text).into(),
+                origin: [10.0 + (i % 4) as f64 * 46.0, 260.0 - (i / 4) as f64 * 18.0],
+                across: [42.0, 0.0],
+                up: [0.0, 10.0],
+                confidence: Some(0.95),
+                source: "tesseract".into(),
+            })
+            .collect();
+        let bytes = s.editable_ocr_bytes(id, &[OcrPage { already_on_page: 0, page: 0, words, skipped: None, notes: Vec::new() }]).unwrap();
+        let mut out = Session::new();
+        let oid = out.open("ocr-vi.pdf", None, bytes, None).unwrap();
+        let extracted = crate::tests::page_texts(&out, oid)[0].clone();
+        assert!(!extracted.contains('?'), "Vietnamese editable OCR must not substitute '?': {extracted}");
+        for expected in ["Bộ", "máy", "tính", "mã", "số", "lượng:", "bộ,", "vị", "trí:", "phòng", "tư", "vấn", "Dinh", "dưỡng."]
+        {
+            assert!(extracted.contains(expected), "missing {expected:?} in editable OCR text: {extracted}");
+        }
+        let saved = out.save_bytes(oid).unwrap();
+        let mut reopened = Session::new();
+        let rid = reopened.open("ocr-vi-reopened.pdf", None, saved, None).unwrap();
+        let reread = crate::tests::page_texts(&reopened, rid)[0].clone();
+        assert!(!reread.contains('?'), "reopened editable OCR must not substitute '?': {reread}");
+        for expected in ["Bộ", "lượng:", "vị", "tư", "vấn", "dưỡng."] {
+            assert!(reread.contains(expected), "missing {expected:?} after save/reopen: {reread}");
         }
     }
 

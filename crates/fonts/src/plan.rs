@@ -1,12 +1,14 @@
 //! Planning visible Unicode text output for OCR: which characters the standard WinAnsi
-//! fonts show as is, which need a Type3 font drawn from the craft-fonts faces, and which have
-//! no glyph anywhere (written as `?` — and counted, never silently dropped).
+//! fonts show as is, which need a Type3 font drawn from the craft-fonts or bundled Latin
+//! (`Inter`) faces, and which have no glyph anywhere (written as `?` — and counted, never
+//! silently dropped).
 //!
 //! The plan is a pure function of the words ([`TextPlan::for_words`]). The content generators
 //! (`pdfcraft_ocr::text_layer` / `visible_text_layer`) read the per-character codes and
 //! advances from it, and whoever registers the fonts (`pdfcraft_edit::add_type3_fonts`) fills
 //! in each face's resource name and object. The build must work without craft-fonts too: there
-//! [`CRAFT_FONTS`] is empty, nothing can be planned, and every non-WinAnsi character is
+//! [`CRAFT_FONTS`] is empty, the bundled Latin face (`Inter`) still covers extended Latin
+//! (including Vietnamese), Greek and Cyrillic, and every other non-WinAnsi character is
 //! reported as a substitution instead.
 
 use std::collections::HashMap;
@@ -70,10 +72,11 @@ pub struct TextPlan {
 impl TextPlan {
     /// Plan the output for `words`, in order: characters the WinAnsi fonts can't show get codes
     /// in Type3 fonts built from the craft-fonts faces (the document face preferred, then the
-    /// rest of the build input in manifest order); a word whose face can't show a character
-    /// substitutes its `?`. Faces are chosen per word, so a word of one script stays one face;
-    /// characters already planned for an earlier word keep their code. Built without
-    /// craft-fonts, the plan reports every non-WinAnsi character as a substitution.
+    /// rest of the build input in manifest order) and the bundled Latin face (`Inter`, present
+    /// in every build); a word whose face can't show a character substitutes its `?`. Faces are
+    /// chosen per word, so a word of one script stays one face; characters already planned for
+    /// an earlier word keep their code. Characters no available face covers are reported as
+    /// substitutions.
     pub fn for_words<'a>(words: impl IntoIterator<Item = &'a str>) -> TextPlan {
         let faces = document_faces();
         let mut coverage = Coverage::default();
@@ -198,13 +201,20 @@ impl TextPlan {
 }
 
 /// The faces that can draw document text, in preference order: the Japanese document face
-/// (serif document text) first, then the rest of the build input in manifest order.
+/// (serif document text) first, then the rest of the build input in manifest order, then the
+/// bundled Latin face (`Inter`, present in every build) for extended Latin (such as Vietnamese),
+/// Greek and Cyrillic letters that WinAnsi and the Japanese faces lack.
 fn document_faces() -> Vec<&'static CraftFont> {
     let mut out = Vec::new();
     if let Some(d) = document_japanese_font() {
         out.push(d);
     }
     for f in crate::CRAFT_FONTS {
+        if !out.iter().any(|d| std::ptr::eq(*d, f)) {
+            out.push(f);
+        }
+    }
+    for f in crate::document_latin_fonts(false) {
         if !out.iter().any(|d| std::ptr::eq(*d, f)) {
             out.push(f);
         }
@@ -255,15 +265,14 @@ mod tests {
     #[test]
     fn face_coverage_is_remembered_per_face_and_character() {
         let faces = document_faces();
-        let Some(face) = faces.first() else {
-            eprintln!("skipping: built without craft-fonts (set CRAFT_FONTS_DIR to run it)");
-            return;
-        };
+        let face = faces.first().expect("bundled Inter is always available");
+        let (sample, probe) = if crate::CRAFT_FONTS.is_empty() { ("lượng", 'ư') } else { ("日本語", '日') };
         let mut coverage = Coverage::default();
-        let first = (0..50).map(|_| choose_face(&faces, "日本語", &mut coverage)).last().flatten();
+        let first = (0..50).map(|_| choose_face(&faces, sample, &mut coverage)).last().flatten();
         assert!(first.is_some());
-        assert!(coverage.lookups <= faces.len() * 3, "{} lookups for 3 characters", coverage.lookups);
-        assert_eq!(coverage.has(0, face, '日'), face_has(face.bytes, '日'));
+        let unique = sample.chars().collect::<std::collections::HashSet<_>>().len();
+        assert!(coverage.lookups <= faces.len() * unique, "{} lookups for {unique} characters", coverage.lookups);
+        assert_eq!(coverage.has(0, face, probe), face_has(face.bytes, probe));
     }
 
     /// A page's vocabulary: German umlauts are WinAnsi, and a character no bundled face has
@@ -289,9 +298,12 @@ mod tests {
             return;
         }
         let plan = TextPlan::for_words(["Привет", "日本", "abc"]);
-        assert!(plan.words.iter().all(Vec::is_empty));
-        assert!(plan.fonts.is_empty());
-        assert_eq!(plan.missing(), 8, "six Cyrillic + two CJK characters, each reported");
+        assert_eq!(plan.encoding(0).len(), 6, "bundled Inter covers Cyrillic without craft-fonts");
+        assert!(plan.encoding(1).is_empty(), "CJK has no face without craft-fonts");
+        assert!(plan.encoding(2).is_empty(), "ASCII uses WinAnsi");
+        assert_eq!(plan.fonts.len(), 1);
+        assert_eq!(plan.fonts[0].family, "Inter");
+        assert_eq!(plan.missing(), 2, "two CJK characters without a face are reported");
     }
 
     #[test]
@@ -322,6 +334,45 @@ mod tests {
         assert!(plan.planned_glyphs() <= MAX_PLAN_GLYPHS);
         assert!(plan.fonts.iter().all(|f| f.glyphs.len() <= MAX_TYPE3_GLYPHS));
         assert!(plan.missing() > 0, "characters beyond the caps are reported, never silently dropped");
+    }
+
+    #[test]
+    fn vietnamese_words_plan_with_bundled_inter_and_zero_missing() {
+        let alphabet = "aáàảãạăắằẳẵặâấầẩẫậeéèẻẽẹêếềểễệiíìỉĩịoóòỏõọôốồổỗộơớờởỡợuúùủũụưứừửữựyýỳỷỹỵđ";
+        let upper = alphabet.to_uppercase();
+        let sentence = [
+            "Bộ",
+            "máy",
+            "tính",
+            "mã",
+            "số",
+            "2756,",
+            "số",
+            "lượng:",
+            "01",
+            "bộ,",
+            "vị",
+            "trí:",
+            "phòng",
+            "tư",
+            "vấn",
+            "–",
+            "khoa",
+            "Dinh",
+            "dưỡng.",
+        ];
+        let words: Vec<&str> = sentence.iter().copied().chain([alphabet, upper.as_str()]).collect();
+        let plan = TextPlan::for_words(words.iter().copied());
+        assert_eq!(plan.missing(), 0, "bundled Inter covers every Vietnamese letter without ? substitution");
+        for (i, word) in sentence.iter().enumerate() {
+            if fits_win_ansi(word) {
+                assert!(plan.encoding(i).is_empty(), "{word} fits WinAnsi");
+            } else {
+                let enc = plan.encoding(i);
+                assert_eq!(enc.len(), word.chars().count(), "{word} encodes every character");
+                assert!(plan.advance_of(enc) > 0.0, "{word} has positive advance");
+            }
+        }
     }
 
     #[test]
