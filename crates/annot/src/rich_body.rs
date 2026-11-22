@@ -160,10 +160,7 @@ fn rich_string(runs: &[Run]) -> Result<String, AnnotError> {
         "<?xml version=\"1.0\"?><body xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\" xfa:spec=\"2.0.2\">{body}</body>"
     );
     if out.len() > MAX_RC_BYTES {
-        return Err(AnnotError::Invalid(format!(
-            "a comment's rich text takes at most {MAX_RC_BYTES} bytes; the formatted body needs {}",
-            out.len()
-        )));
+        return Err(AnnotError::Invalid(format!("a comment's rich text takes at most {MAX_RC_BYTES} bytes; the formatted body needs {}", out.len())));
     }
     Ok(out)
 }
