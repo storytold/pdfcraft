@@ -6841,7 +6841,7 @@ fn inline_editor_preserves_source_font_and_previews_live_bounds() {
     font.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
     cos.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |d| *d = font).unwrap();
     let bytes = write_incremental(&cos, &Default::default()).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+    let mut h = Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_eframe(move |cc| {
         crate::support::install_runtime(&cc.egui_ctx);
         {
             let mut app = crate::control::new_app();
