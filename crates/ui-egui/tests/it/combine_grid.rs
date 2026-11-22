@@ -160,7 +160,7 @@ fn settle(h: &mut Harness<'static, PdfCraftApp>, done: impl Fn(&PdfCraftApp) -> 
 fn request(h: &Harness<'static, PdfCraftApp>, name: &str, stacked: bool) -> ThumbRequest {
     let env = craft::ui::runtime::env::Env::of_root(&h.ctx);
     let tokens = &env.tokens;
-    let side = card(h, name).width() - 2.0 * tokens.space.pad.control - if stacked { 2.0 * tokens.space.gap.tight } else { 0.0 };
+    let side = card(h, name).width() - 2.0 * tokens.size.icon.md - if stacked { 2.0 * tokens.space.gap.tight } else { 0.0 };
     ThumbRequest::for_cell(side, h.ctx.pixels_per_point())
 }
 
@@ -373,9 +373,11 @@ fn hover_card(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
     h.run_steps(2);
 }
 
-/// Click the Remove action of the tile the pointer is over (the toolbar's own Remove comes before it).
-fn remove_hovered(h: &mut Harness<'static, PdfCraftApp>) {
-    h.get_all_by_label("Remove").last().expect("the hovered tile offers Remove").click();
+/// Click an action inside the named tile, even when other tiles expose the same action.
+fn tile_action(h: &mut Harness<'static, PdfCraftApp>, name: &str, action: &str) {
+    hover_card(h, name);
+    let rect = card(h, name);
+    h.query_all_by_label(action).find(|n| rect.contains(n.rect().center())).expect("the tile offers the action").click();
     h.run_steps(2);
 }
 
@@ -386,9 +388,7 @@ fn page_card(page: usize, name: &str) -> String {
 
 /// Expand a file from its tile's own action.
 fn expand(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
-    hover_card(h, name);
-    h.get_by_label("Expand").click();
-    h.run_steps(2);
+    tile_action(h, name, "Expand");
 }
 
 /// Trash removes only its own file, whatever else is selected, in one undo step.
@@ -399,13 +399,11 @@ fn row_remove_acts_on_its_own_file() {
     command_click(&mut h, "c.pdf");
     h.run_steps(1);
     // The trash of a tile that isn't selected: that file only, the selection stays.
-    hover_card(&mut h, "a.pdf");
-    remove_hovered(&mut h);
+    tile_action(&mut h, "a.pdf", "Remove");
     assert_eq!(names(&h), ["b.pdf", "c.pdf", "d.pdf"]);
     assert_eq!(h.state().combine_selection(), [0, 1], "b and c stay selected");
     // The trash of a selected tile: still that file only.
-    hover_card(&mut h, "b.pdf");
-    remove_hovered(&mut h);
+    tile_action(&mut h, "b.pdf", "Remove");
     assert_eq!(names(&h), ["c.pdf", "d.pdf"]);
     assert_eq!(h.state().combine_selection(), [0], "c stays selected");
     // One undo step each.
@@ -422,8 +420,7 @@ fn row_preview_opens_that_file() {
     let mut h = grid_of_pages(&[("a.pdf", 1), ("b.pdf", 3)]);
     h.get_by_label("a.pdf").click();
     h.run_steps(1);
-    hover_card(&mut h, "b.pdf");
-    h.get_by_label("Preview").click();
+    tile_action(&mut h, "b.pdf", "Preview");
     h.run_steps(2);
     assert_eq!(h.state().combine_preview(), Some(("b.pdf".to_string(), 0)));
     assert_eq!(h.state().combine_selection(), [0]);
@@ -436,8 +433,7 @@ fn row_page_preview_opens_that_page() {
     h.state_mut().combine_draft[1].range = "3, 1, 4".into();
     h.run_steps(2);
     expand(&mut h, "b.pdf");
-    hover_card(&mut h, &page_card(4, "b.pdf"));
-    h.get_by_label("Preview").click();
+    tile_action(&mut h, &page_card(4, "b.pdf"), "Preview");
     h.run_steps(2);
     assert_eq!(h.state().combine_preview(), Some(("b.pdf".to_string(), 3)));
 }
@@ -483,8 +479,7 @@ fn row_expand_and_collapse() {
     assert!(h.state().combine_expanded().is_empty());
     expand(&mut h, "c.pdf");
     assert_eq!(h.state().combine_expanded(), [2]);
-    hover_card(&mut h, &page_card(2, "c.pdf"));
-    h.get_by_label("Collapse").click();
+    tile_action(&mut h, &page_card(2, "c.pdf"), "Collapse");
     h.run_steps(2);
     assert!(h.state().combine_expanded().is_empty());
 }
@@ -512,8 +507,7 @@ fn the_preview_shows_the_files_range_in_order_and_the_grid_selection_stays() {
     h.state_mut().combine_draft[1].range = "3, 1".into();
     h.get_by_label("a.pdf").click();
     h.run_steps(1);
-    hover_card(&mut h, "b.pdf");
-    h.get_by_label("Preview").click();
+    tile_action(&mut h, "b.pdf", "Preview");
     h.run_steps(2);
     // The first page it adds: page 3.
     assert_eq!(h.state().combine_preview(), Some(("b.pdf".to_string(), 2)));
@@ -538,8 +532,7 @@ fn the_preview_shows_the_files_range_in_order_and_the_grid_selection_stays() {
 #[test]
 fn the_preview_closes_when_its_file_leaves() {
     let mut h = grid_of_pages(&[("f00.pdf", 2), ("f01.pdf", 2), ("f02.pdf", 2)]);
-    hover_card(&mut h, "f01.pdf");
-    h.get_by_label("Preview").click();
+    tile_action(&mut h, "f01.pdf", "Preview");
     h.run_steps(2);
     assert!(h.state().combine_preview().is_some());
     // The file leaves the list (as undo of its adding would): the preview closes.
@@ -551,8 +544,7 @@ fn the_preview_closes_when_its_file_leaves() {
 #[test]
 fn leaving_the_tab_closes_the_preview_and_coming_back_does_not_reopen_it() {
     let mut h = grid_of_pages(&[("a.pdf", 6)]);
-    hover_card(&mut h, "a.pdf");
-    h.get_by_label("Preview").click();
+    tile_action(&mut h, "a.pdf", "Preview");
     h.run_steps(2);
     assert!(h.state().combine_preview().is_some());
     // Home, then back: the preview is gone, not waiting there.
@@ -627,7 +619,7 @@ fn expanding_a_file_shows_the_pages_it_adds_in_order_with_their_numbers() {
     h.run_steps(2);
     // A single page has nothing to expand.
     hover_card(&mut h, "a.pdf");
-    assert!(h.query_by_label("Expand").is_none());
+    assert!(!h.query_all_by_label("Expand").any(|n| card(&h, "a.pdf").contains(n.rect().center())));
     expand(&mut h, "b.pdf");
     assert_eq!(h.state().combine_expanded(), [1]);
     assert!(h.query_by_role_and_label(Role::ListItem, "b.pdf").is_none(), "the file's tile gives way to its pages");
@@ -648,8 +640,7 @@ fn expanding_a_file_shows_the_pages_it_adds_in_order_with_their_numbers() {
     let (w, h4) = shape(&shapes[2].1).unwrap();
     assert!((w - h4).abs() < 2.0, "page 4 is square: {w}×{h4}");
     // A page tile collapses the file again.
-    hover_card(&mut h, &page_card(1, "b.pdf"));
-    h.get_by_label("Collapse").click();
+    tile_action(&mut h, &page_card(1, "b.pdf"), "Collapse");
     h.run_steps(2);
     assert!(h.state().combine_expanded().is_empty());
     h.get_by_label("b.pdf");
@@ -690,7 +681,7 @@ fn expanding_is_a_view_kept_across_views_and_zoom_and_never_an_undo_step() {
     // back as its tile.
     h.get_by_label("a.pdf").click();
     h.run_steps(1);
-    h.key_press(Key::ArrowRight);
+    h.key_press(Key::ArrowDown);
     h.run_steps(1);
     assert_eq!(h.state().combine_selection(), [1]);
     h.key_press(Key::Delete);
@@ -705,7 +696,7 @@ fn expanding_is_a_view_kept_across_views_and_zoom_and_never_an_undo_step() {
 
 #[test]
 fn dragging_a_page_moves_that_page_even_between_another_files_pages() {
-    let mut h = grid_of_pages(&[("a.pdf", 1), ("b.pdf", 4), ("c.pdf", 1)]);
+    let mut h = grid_of(vec![("a.pdf", fixture(1)), ("b.pdf", fixture(4)), ("c.pdf", fixture(1))], vec2(2600.0, 1600.0));
     expand(&mut h, "b.pdf");
     // b's page 2 dragged after c: that page alone moves; b is now in two parts.
     let (p2, c) = (card(&h, &page_card(2, "b.pdf")), card(&h, "c.pdf"));
@@ -757,8 +748,7 @@ fn removing_pages_from_the_tile_the_toolbar_and_delete_never_touches_the_file() 
     let parts =
         |h: &Harness<'static, PdfCraftApp>| h.state().combine_parts_shown().into_iter().map(|(n, p)| format!("{n}:{p:?}")).collect::<Vec<_>>();
     // A page tile's trash: that page.
-    hover_card(&mut h, &page_card(2, "b.pdf"));
-    remove_hovered(&mut h);
+    tile_action(&mut h, &page_card(2, "b.pdf"), "Remove");
     assert_eq!(parts(&h), ["a.pdf:[0]", "b.pdf:[0, 2, 3]"]);
     // Two selected: the toolbar's trash says so, and takes both.
     h.get_by_label(&page_card(1, "b.pdf")).click();
@@ -820,15 +810,14 @@ fn a_split_file_counts_once_and_combines_with_one_bookmark() {
 fn pages_picked_out_of_sight_or_before_an_undo_are_let_go_of() {
     // Regression: a page picked, then hidden (its file collapsed, or the list shown) or undone,
     // stayed picked, and the trash or Delete took it.
-    let mut h = grid_of_pages(&[("a.pdf", 1), ("b.pdf", 4), ("c.pdf", 1)]);
+    let mut h = grid_of(vec![("a.pdf", fixture(1)), ("b.pdf", fixture(4)), ("c.pdf", fixture(1))], vec2(2000.0, 1200.0));
     let parts =
         |h: &Harness<'static, PdfCraftApp>| h.state().combine_parts_shown().into_iter().map(|(n, p)| format!("{n}:{p:?}")).collect::<Vec<_>>();
     expand(&mut h, "b.pdf");
     // Collapsed from a page tile's action: nothing picked, Delete takes nothing.
     h.get_by_label(&page_card(2, "b.pdf")).click();
     h.run_steps(2);
-    hover_card(&mut h, &page_card(3, "b.pdf"));
-    h.get_by_label("Collapse").click();
+    tile_action(&mut h, &page_card(3, "b.pdf"), "Collapse");
     h.run_steps(2);
     assert!(h.state().combine_selected_pages().is_empty());
     h.key_press(Key::Delete);
@@ -881,8 +870,7 @@ fn a_files_parts_join_when_what_was_between_them_goes_and_one_file_cannot_be_com
     drag(&mut h, p2.center(), two.center() + vec2(two.width() * 0.3, 0.0));
     assert_eq!(parts(&h), ["one.pdf:[0]", "two.pdf:[0]", "one.pdf:[1]"]);
     // two goes: one's parts meet and are one entry again, in the same undo step.
-    hover_card(&mut h, "two.pdf");
-    remove_hovered(&mut h);
+    tile_action(&mut h, "two.pdf", "Remove");
     assert_eq!(parts(&h), ["one.pdf:[0, 1]"]);
     // One file is nothing to combine, however it is split.
     assert!(h.get_by_role_and_label(Role::Button, "Combine").accesskit_node().is_disabled());
