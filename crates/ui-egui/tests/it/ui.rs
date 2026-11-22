@@ -2278,3 +2278,64 @@ fn home_recent_context_menu_reveals_the_target_without_opening_or_removing_it() 
         "the selected path is checked and the existing reveal error is shown"
     );
 }
+
+fn tool_detail_for_hover(tool: &str, language: &str) -> Harness<'static, PdfCraftApp> {
+    let mut h = harness(|app| {
+        let blank = app.session.create_blank(300.0, 400.0, 1).unwrap();
+        app.open_bytes("blank.pdf", None, (*blank).clone()).unwrap();
+    });
+    h.state_mut().set_option("language", language).unwrap();
+    h.state_mut().set_option("tool", tool).unwrap();
+    h.run_steps(6);
+    h
+}
+
+fn hover_tool_detail_row(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    let row = h.get_by_role_and_label(egui::accesskit::Role::Button, label).rect();
+    h.input_mut().events.push(egui::Event::PointerMoved(row.center()));
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    h.state_mut().prepare_raw_input(&ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+    h.run_steps(8);
+}
+
+fn tool_detail_tooltip_has_no_command_id(tool: &str, label: &str, command: &str) {
+    let mut h = tool_detail_for_hover(tool, "en");
+    assert!(painted_text(&h).iter().any(|(s, elided, _)| s == label && !elided), "the row already shows its whole name");
+    hover_tool_detail_row(&mut h, label);
+    let text = painted_text(&h);
+    let leaked: Vec<_> = text.iter().filter(|(s, _, _)| s.contains(command)).map(|(s, _, _)| s.as_str()).collect();
+    assert!(leaked.is_empty(), "{tool} hover exposes its internal ID: {leaked:?}");
+    assert_eq!(text.iter().filter(|(s, _, _)| s == label).count(), 1, "the fully visible label needs no tooltip");
+}
+
+#[test]
+fn tool_detail_hover_create_does_not_show_an_internal_id() {
+    tool_detail_tooltip_has_no_command_id("create", "Single file", "create.file");
+}
+
+#[test]
+fn tool_detail_hover_export_does_not_show_an_internal_id() {
+    tool_detail_tooltip_has_no_command_id("export", "Image (PNG)", "export.image");
+}
+
+#[test]
+fn tool_detail_hover_shows_the_full_localized_name_for_an_elided_row() {
+    use pdfcraft_ui_egui::i18n;
+    if support::skip_without_catalogs("elided tool detail tooltip") {
+        return;
+    }
+    let mut h = tool_detail_for_hover("export", "ru");
+    h.state_mut().side_panels.tools_width = 273.0;
+    h.run_steps(6);
+    let label = i18n::tr(i18n::Lang::from_code("ru").unwrap(), "Export all images");
+    assert_ne!(label, "Export all images");
+    assert!(painted_text(&h).iter().any(|(s, elided, _)| s == label && *elided), "{label} is elided in the narrow pane");
+    hover_tool_detail_row(&mut h, label);
+    let text = painted_text(&h);
+    let matching: Vec<_> = text.iter().filter(|(s, _, _)| s.starts_with(label)).map(|(s, elided, _)| (s.as_str(), *elided)).collect();
+    assert!(matching.contains(&(label, false)), "an elided row should show its full translated label on hover: {matching:?}");
+    assert!(!text.iter().any(|(s, _, _)| s.contains("export.all_images")), "{matching:?}");
+}

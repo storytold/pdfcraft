@@ -1729,8 +1729,8 @@ milestone = "M4"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/ui.rs::every_catalog_tool_is_listed_after_view_more", "crates/engine/src/commands.rs::every_ready_catalogue_item_is_a_registered_command"]
-notes = ""
+evidence = ["crates/ui-egui/tests/it/ui.rs::every_catalog_tool_is_listed_after_view_more", "crates/engine/src/commands.rs::every_ready_catalogue_item_is_a_registered_command", "crates/ui-egui/tests/it/ui.rs::tool_detail_hover_create_does_not_show_an_internal_id", "crates/ui-egui/tests/it/ui.rs::tool_detail_hover_export_does_not_show_an_internal_id", "crates/ui-egui/tests/it/ui.rs::tool_detail_hover_shows_the_full_localized_name_for_an_elided_row"]
+notes = "Tool detail rows show the full translated name on hover only when it is truncated. The tooltip leaves out internal command IDs and the row always retains its full accessible name (#8095)."
 
 [[feature]]
 id = "view.command-palette"
