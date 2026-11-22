@@ -2,7 +2,7 @@
 //!
 //! Every image is a headless render of the real app (`examples/shot.rs`) showing the showcase
 //! PDF. That PDF is built only from the OFL fonts and generated artwork in ATTRIBUTION.toml, so
-//! the screenshots are contributor-original and policy-compliant (AGENTS.md §1). Afterwards the
+//! the screenshots are contributor-original and policy-compliant (clean-room.md and licences.md). Afterwards the
 //! `docs/images/*.png` entries in ATTRIBUTION.toml are rewritten with fresh hashes, and
 //! ATTRIBUTION.md is regenerated.
 //!
@@ -71,7 +71,7 @@ pub fn run(args: &[String]) -> Result<()> {
             .arg(PDF)
             .args(["--size", "1440x900", "--scale", "2", "--width", "1600"])
             .args(*scene)
-            // Published images show only the embedded, openly licensed fonts (AGENTS.md §1.2).
+            // Published images show only the embedded, openly licensed fonts (licences.md).
             .env("PDFCRAFT_SYSTEM_FONTS", "0")
             .current_dir(&root)
             .status()
@@ -108,7 +108,7 @@ fn update_attribution(root: &Path) -> Result<()> {
         let scene = SCENES.iter().find(|(n, ..)| *n == stem);
         let (title, usage) = scene.map(|(_, t, u, _)| (*t, *u)).unwrap_or(("PdfCraft screenshot", "README"));
         // The home screen shows the ArtCraft mark: say so (it is a Storyteller trademark, not open
-        // source; AGENTS.md §1.2), so the screenshot's licence is not read as covering it.
+        // source; licences.md), so the screenshot's licence is not read as covering it.
         let shows_home = scene.is_some_and(|(.., args)| args.windows(2).any(|w| w[0] == "--home" && w[1] == "on"));
         let shows_ocr = scene.is_some_and(|(.., args)| args.windows(2).any(|w| w[0] == "--ocr-verify" && w[1] == "on"));
         let contents = if shows_ocr {
