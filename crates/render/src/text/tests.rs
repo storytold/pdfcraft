@@ -4003,6 +4003,20 @@ fn a_hebrew_point_in_a_run_of_its_own_reads_after_its_letter() {
     assert_eq!(layout(v).plain_text(), "הל\u{5B9}");
 }
 
+/// A point with a width of its own, drawn before its letter in a run of its own, reads after its letter when the letter's
+/// run overprints another: a holam 1 pt wide drawn before its lamed, a bet further right, and a he drawn last over the
+/// lamed's left half.
+#[test]
+fn a_hebrew_point_with_width_in_a_run_of_its_own_reads_after_its_letter() {
+    let v = vec![
+        em_box("\u{5B9}", 10.0, -8.0, 11.0, 2.0),
+        em_box("ל", 10.0, 0.0, 16.0, 10.0),
+        em_box("ב", 40.0, 0.0, 46.0, 10.0),
+        em_box("ה", 7.0, -6.0, 13.0, 4.0),
+    ];
+    assert!(layout(v).plain_text().contains("ל\u{5B9}"));
+}
+
 /// Nonspacing marks count toward neither direction of a line: a line of four Latin letters and a
 /// three-letter Hebrew word whose letters each carry two points reads in the same order as without
 /// the points.

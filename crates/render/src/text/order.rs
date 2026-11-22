@@ -385,12 +385,15 @@ pub(super) fn restarts_run(glyphs: &[&TextGlyph], start: usize, next: usize, pro
 pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32, s: &Seg, sc: &mut Scratch) {
     let x0 = |i: usize| glyphs[i].rect[0];
     let zero_width = |i: usize| glyphs[i].rect[2] - glyphs[i].rect[0] <= 0.05 * height(i);
+    // A mark riding on a letter has no place of its own whatever its width, so a run of such marks goes with the marks.
+    // As a text run of its own it would collide with nothing and be placed apart from its letter.
+    let rides = |i: usize| anchor_of(&sc.anchor, i) != i;
     sc.text.clear();
     sc.marks.clear();
     sc.placed.clear();
     sc.breaks.clear();
     for run in s.runs() {
-        if run.range().all(&zero_width) {
+        if run.range().all(|i| zero_width(i) || rides(i)) {
             sc.marks.extend(run.range());
         } else {
             sc.text.push(run);
