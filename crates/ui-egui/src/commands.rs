@@ -44,10 +44,13 @@ pub(crate) fn mac_shortcuts(ctx: &egui::Context) -> bool {
 }
 
 /// How a command's chord is written in a menu row (`⌘C` or `Ctrl+C`): the registry's shortcut, and the
-/// clipboard chord for Copy, which the framework's clipboard commands own.
+/// clipboard chords for Copy and Paste, which the framework's clipboard commands own.
 pub(crate) fn chord_label(ctx: &egui::Context, id: &str) -> Option<String> {
     let mac = mac_shortcuts(ctx);
-    let shortcut = commands::command(id)?.shortcut_for(mac).or((id == "edit.copy").then_some(COPY))?;
+    let shortcut = commands::command(id)
+        .and_then(|c| c.shortcut_for(mac))
+        .or((id == "edit.copy").then_some(COPY))
+        .or((id == "edit.paste").then_some(Shortcut::cmd("V")))?;
     Some(shortcut.label(mac))
 }
 

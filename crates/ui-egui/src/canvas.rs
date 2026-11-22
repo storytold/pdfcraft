@@ -1865,8 +1865,16 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     view.want_text(&app.session, &visible_pages, &rest_pages);
 
     find_bar(view, info.pages.len(), rect, tool == QuickTool::EditText && can_modify, ui);
-    // The clipboard is read when Paste is invoked, so its menu stays enabled while the document is open.
-    let can_paste_image = true;
+    // Whether the clipboard holds a picture is asked when the secondary button goes down, and the menu keeps
+    // that answer while it is open.
+    let can_paste_key = egui::Id::new(("can-paste-image", index));
+    let can_paste_image = if ui.input(|i| i.pointer.secondary_pressed()) {
+        let can = app.can_paste_image();
+        ui.data_mut(|d| d.insert_temp(can_paste_key, can));
+        can
+    } else {
+        ui.data(|d| d.get_temp(can_paste_key)).unwrap_or(false)
+    };
     let doc = app.session.get(doc_id)?;
     let info = &doc.info;
     let view = &mut app.views[index];
@@ -1919,7 +1927,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
                 doc,
                 info,
                 prefs: &app.comment_prefs,
-                rights: comments::MenuRights { allowed, can_modify },
+                rights: comments::MenuRights { allowed, can_modify, can_paste: app.comment_clipboard.is_some() },
                 recent: &app.recent_colours,
                 tool,
                 preparing,
@@ -1940,6 +1948,9 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         Some(comments::CanvasAction::OpenComments) => {
             app.comments_panel_closed = false;
             crate::side_panels::set_panel_visible(app, RightPanel::Comments.into(), true);
+        }
+        Some(comments::CanvasAction::Command(id)) => {
+            app.execute(ui.ctx(), id);
         }
         Some(comments::CanvasAction::Properties(p, i)) => open_props = Some((p, i)),
         Some(comments::CanvasAction::Colour(c)) => recolour = Some(c),

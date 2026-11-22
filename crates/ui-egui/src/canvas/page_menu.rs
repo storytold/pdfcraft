@@ -130,11 +130,11 @@ pub(crate) fn default_rows(perms: &PageMenuPerms, page: usize, at: [f64; 2], pic
         rows.push(PageMenuRow::Separator);
     }
     rows.push(PageMenuRow::Icons(vec![
-        (IconId::new("rotate-ccw"), tl!("Rotate view counterclockwise").to_string(), true, A::RotateCCW),
+        (IconId::new("rotate_ccw"), tl!("Rotate view counterclockwise").to_string(), true, A::RotateCCW),
         (IconId::new("printer"), tl!("Print").to_string(), perms.can_print, A::Print),
-        (IconId::new("mouse-pointer-2"), tl!("Select Tool").to_string(), true, A::SelectTool),
+        (IconId::new("pointer"), tl!("Select Tool").to_string(), true, A::SelectTool),
         (IconId::new("hand"), tl!("Hand Tool").to_string(), true, A::HandTool),
-        (IconId::new("zoom-in"), tl!("Marquee Zoom").to_string(), true, A::MarqueeZoom),
+        (IconId::new("zoom_in"), tl!("Marquee Zoom").to_string(), true, A::MarqueeZoom),
     ]));
     rows.push(PageMenuRow::Separator);
     rows.push(PageMenuRow::Item {
