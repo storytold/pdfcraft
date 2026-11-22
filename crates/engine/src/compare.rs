@@ -173,14 +173,17 @@ impl Session {
     /// [`Document::signatures`](crate::Document::signatures), as listed) signed: the file up to the
     /// end of the signature's `/ByteRange`, as a new, unsaved document named "<name> (signed
     /// version)". Refused, naming the signature and why, when it is unsigned or its byte range is
-    /// malformed, overflows or doesn't fit the file ([`crate::Document::signed_version`]).
+    /// malformed, overflows or doesn't fit the file ([`crate::Document::signed_version`]). Its
+    /// opening scripts don't run ([`Session::open_without_scripts`]).
     pub fn open_signed_version(&mut self, id: DocId, index: usize) -> Result<DocId, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let version = doc.signed_version(index)?;
         let bytes = doc.bytes.get(..version.len).ok_or_else(|| EditError::Sign(byte_range_refusal(&version.field)))?.to_vec();
         let name = format!("{} (signed version).pdf", doc.name.trim_end_matches(".pdf"));
         let password = doc.password.clone();
-        self.open(name, None, Arc::new(bytes), password.as_deref())
+        // Opening scripts could change the fields or, in an XFA form, append a revision; the
+        // signed version is the file as it was signed.
+        self.open_without_scripts(name, None, Arc::new(bytes), password.as_deref())
             .map_err(|e| EditError::Sign(format!("the version signature {:?} signed could not be opened: {e}", version.field)))
     }
 

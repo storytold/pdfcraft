@@ -71,6 +71,30 @@ fn the_signed_version_is_compared_with_the_text_added_after_signing() {
     assert!(doc.dirty || doc.path.is_none(), "a new, unsaved document");
 }
 
+/// The signed version opens without its opening scripts: an `/OpenAction` that changes a field
+/// on every opening leaves the signed version's field as it was signed, so the comparison shows
+/// no change the script made. Ordinary opening still runs the script.
+#[test]
+fn the_signed_version_opens_without_running_its_opening_scripts() {
+    let bytes = crate::document_actions_tests::form("/OpenAction << /S /JavaScript /JS (getField\\('log'\\).value += 'x';) >>", &[]);
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("form.pdf", None, Arc::new(bytes), None).unwrap();
+    let as_signed = crate::document_actions_tests::log(&s, id);
+    assert_eq!(as_signed, "x", "an ordinary open runs the open action");
+    let signed = s.sign(id, &digital_id(), SignOptions { page: 0, ..SignOptions::default() }).unwrap();
+    s.mark_signed(id, signed.clone(), None).unwrap();
+    // Reopened normally, the open action runs again on the signed file.
+    let reopened = s.open("again.pdf", None, signed.clone(), None).unwrap();
+    assert_ne!(crate::document_actions_tests::log(&s, reopened), as_signed, "the open action ran on the reopened file");
+    let old = s.open_signed_version(id, 0).unwrap();
+    let doc = s.get(old).unwrap();
+    assert_eq!(crate::document_actions_tests::log(&s, old), as_signed, "the signed version keeps the value it was signed with");
+    assert_eq!(doc.bytes.as_slice(), signed.as_slice());
+    s.close(old);
+    let (_, c) = s.compare_signed_version(id, 0).unwrap();
+    assert!(c.identical(), "{:?}", c.changes);
+}
+
 #[test]
 fn signatures_that_cannot_give_a_signed_version_are_refused_by_name() {
     let (mut s, id, signed) = signed_session();

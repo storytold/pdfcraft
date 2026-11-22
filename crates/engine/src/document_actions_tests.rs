@@ -26,7 +26,7 @@ fn pdf_of(objs: &[String]) -> Vec<u8> {
 
 /// A one-field form (`log`, a text field) whose catalog carries `catalog` (PDF syntax, e.g.
 /// `/OpenAction 6 0 R`), with `extra` objects numbered from 6.
-fn form(catalog: &str, extra: &[&str]) -> Vec<u8> {
+pub(crate) fn form(catalog: &str, extra: &[&str]) -> Vec<u8> {
     let mut objs = vec![
         format!("<< /Type /Catalog /Pages 2 0 R {catalog} /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>"),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
@@ -38,7 +38,7 @@ fn form(catalog: &str, extra: &[&str]) -> Vec<u8> {
     pdf_of(&objs)
 }
 
-fn log(s: &Session, id: DocId) -> String {
+pub(crate) fn log(s: &Session, id: DocId) -> String {
     s.get(id).unwrap().form.iter().find(|f| f.name == "log").unwrap().value.join(",")
 }
 
