@@ -3,7 +3,8 @@
 //! shading or transparency. The pages are rendered the way the viewer shows them (reading
 //! colours off, the print's own colours) with only what the print's content choice keeps, made
 //! into an image-only document, and that document is imposed on the paper like any other. The
-//! print is no longer searchable text.
+//! print is no longer searchable text. With app-managed colour the pictures are converted into
+//! the printer's ICC profile ([`pdfcraft_print::colour`]).
 
 use pdfcraft_cos::{SaveOptions, write_incremental};
 use pdfcraft_create::ImageResolution;
@@ -51,6 +52,11 @@ pub fn rasterize(doc: &Document, pages: &[usize], raster: &Raster, content: Cont
         }
         let mut rgba = r.rgba.to_vec();
         over_white(&mut rgba, raster.grayscale);
+        // App-managed colour: the picture's values become the printer's, so it is placed as
+        // device colour the driver passes on unconverted.
+        if let Some(colour) = &raster.colour {
+            colour.convert(&mut rgba).map_err(|e| format!("page {}: {e}", page + 1))?;
+        }
         images.push((format!("page-{}.png", page + 1), encode_png(r.width, r.height, &rgba)?));
     }
     let dpi = used.unwrap_or(dpi);
@@ -59,7 +65,7 @@ pub fn rasterize(doc: &Document, pages: &[usize], raster: &Raster, content: Cont
 }
 
 /// Premultiplied RGBA composed over white paper (opaque), in grey when asked (Rec. 601 luma).
-fn over_white(rgba: &mut [u8], grayscale: bool) {
+pub(crate) fn over_white(rgba: &mut [u8], grayscale: bool) {
     for px in rgba.as_chunks_mut::<4>().0 {
         let gap = 255 - u32::from(px[3]);
         let (r, g, b) = ((u32::from(px[0]) + gap).min(255), (u32::from(px[1]) + gap).min(255), (u32::from(px[2]) + gap).min(255));

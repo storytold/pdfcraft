@@ -15,7 +15,7 @@
 
 use base64::Engine as _;
 
-use super::common::{check_form_xml_depth, esc, parse_form_xml};
+use super::common::{check_form_xml_depth, el_text, esc, parse_form_xml};
 use super::{Dict, Document, ObjRef, Object, PdfString};
 
 /// At most this much decoded XML in one appearance (and at most this much XML is written for one).
@@ -254,13 +254,12 @@ pub(crate) fn decode(text: &str, budget: &mut usize) -> Result<Node, String> {
     let xml = std::str::from_utf8(&bytes).map_err(|_| "the appearance is not UTF-8 text".to_string())?;
     let xml = xml.trim_start_matches('\u{feff}');
     check_form_xml_depth(xml).map_err(|e| e.to_string())?;
-    let parsed = parse_form_xml(xml).map_err(|e| format!("the appearance is not XML: {e}"))?;
-    let root = parsed.root_element();
-    if !root.tag_name().name().eq_ignore_ascii_case("DICT") {
+    let root = parse_form_xml(xml).map_err(|e| format!("the appearance is not XML: {e}"))?;
+    if !root.local().eq_ignore_ascii_case("DICT") {
         return Err("the appearance is not a dictionary".into());
     }
     let mut values = MAX_VALUES;
-    let node = read(root, 0, &mut values)?;
+    let node = read(&root, 0, &mut values)?;
     let usable = match &node {
         Node::Dict(entries) => entries.iter().any(|(k, v)| k.as_slice() == b"N" && matches!(v, Node::Stream(..))),
         _ => false,
@@ -271,20 +270,20 @@ pub(crate) fn decode(text: &str, budget: &mut usize) -> Result<Node, String> {
     Ok(node)
 }
 
-fn attr<'a>(node: roxmltree::Node<'a, '_>, name: &str) -> Option<&'a str> {
-    node.attributes().find(|a| a.name().eq_ignore_ascii_case(name)).map(|a| a.value())
+fn attr<'a>(node: &'a craft_xml::El, name: &str) -> Option<&'a str> {
+    node.attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
 }
 
-fn read(node: roxmltree::Node, depth: usize, values: &mut usize) -> Result<Node, String> {
+fn read(node: &craft_xml::El, depth: usize, values: &mut usize) -> Result<Node, String> {
     if depth > MAX_NESTING {
         return Err(format!("the appearance nests objects more than {MAX_NESTING} deep"));
     }
     *values = values.checked_sub(1).ok_or_else(|| format!("the appearance holds more than {MAX_VALUES} values"))?;
-    let tag = node.tag_name().name().to_ascii_uppercase();
+    let tag = node.local().to_ascii_uppercase();
     let val = || attr(node, "VAL").ok_or_else(|| format!("{tag} has no VAL"));
     let entries = |values: &mut usize| -> Result<Vec<(Vec<u8>, Node)>, String> {
         let mut out = Vec::new();
-        for child in node.children().filter(|c| c.is_element() && !c.tag_name().name().eq_ignore_ascii_case("DATA")) {
+        for child in node.elements().filter(|c| !c.local().eq_ignore_ascii_case("DATA")) {
             let key = attr(child, "KEY").ok_or_else(|| format!("an entry of {tag} has no KEY"))?;
             out.push((pdfcraft_forms::name_bytes(key), read(child, depth + 1, values)?));
         }
@@ -294,15 +293,15 @@ fn read(node: roxmltree::Node, depth: usize, values: &mut usize) -> Result<Node,
         "DICT" => Node::Dict(entries(values)?),
         "ARRAY" => {
             let mut items = Vec::new();
-            for child in node.children().filter(|c| c.is_element()) {
+            for child in node.elements() {
                 items.push(read(child, depth + 1, values)?);
             }
             Node::Array(items)
         }
         "STREAM" => {
             let mut dict = entries(values)?;
-            let data = node.children().find(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("DATA")).ok_or("a stream has no DATA")?;
-            let text: String = data.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
+            let data = node.elements().find(|c| c.local().eq_ignore_ascii_case("DATA")).ok_or("a stream has no DATA")?;
+            let text = el_text(data);
             let bytes = match attr(data, "ENCODING").map(str::to_ascii_lowercase).as_deref() {
                 Some("hex") => bytes_of_hex(&text).ok_or("stream data is not hexadecimal")?,
                 Some("ascii") | None => text.into_bytes(),

@@ -2079,3 +2079,26 @@ fn with_prepare_open_a_double_click_on_a_field_leaves_the_polygon_unfinished() {
     assert_eq!(polygons, 0, "the polygon is not finished");
     assert!(matches!(s.views[0].comments.gesture, Some(pdfcraft_ui_egui::comments::Gesture::Draw { .. })), "it is still being clicked out");
 }
+
+/// Delete and Escape with a dialog open are the dialog's: the field selected behind it stays and
+/// stays selected. Delete removed it, and Escape deselected it as it closed the dialog.
+#[test]
+fn delete_and_escape_under_a_dialog_leave_the_selected_field() {
+    for key in [egui::Key::Delete, egui::Key::Escape] {
+        let mut h = harness();
+        let before = names(&h).len();
+        assert!(h.state_mut().execute("form.add.text"));
+        h.run_steps(2);
+        let (a, b) = (at(&h, 40.0, 300.0), at(&h, 200.0, 322.0));
+        drag(&mut h, a, b);
+        h.run_steps(2);
+        assert_eq!(h.state().views[0].prepare.selected.as_ref().map(|s| s.0.as_str()), Some("Text1"));
+        h.state_mut().dialog = Some(Dialog::Shortcuts);
+        h.run_steps(3);
+        h.key_press(key);
+        h.run_steps(3);
+        assert_eq!(names(&h).len(), before + 1, "{key:?} under a dialog deletes nothing");
+        assert!(h.state().views[0].prepare.selected.is_some(), "{key:?}: still selected");
+        assert_eq!(h.state().dialog.is_none(), key == egui::Key::Escape, "{key:?}: only Escape closes it");
+    }
+}

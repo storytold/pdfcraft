@@ -152,9 +152,20 @@ pub fn parse_request(line: &str) -> Option<(Vec<String>, bool)> {
 }
 
 /// File arguments made absolute against this launch's working folder, which the running app
-/// doesn't share. A path that can't be made absolute is sent as it is.
+/// doesn't share. A path that can't be made absolute is sent as it is. Of a file named with open
+/// parameters (`manual.pdf#nameddest=Intro`, #3425), only the file is made absolute and the
+/// parameters are sent as given: as part of the path, `//` and `/./` in a destination name were
+/// folded, and on Windows `/` became `\`, `..` took the file name with it and a trailing dot went.
 pub fn absolute(paths: &[String]) -> Vec<String> {
-    paths.iter().map(|p| std::path::absolute(p).map_or_else(|_| p.clone(), |a| a.to_string_lossy().into_owned())).collect()
+    let made = |p: &str| std::path::absolute(p).map_or_else(|_| p.to_string(), |a| a.to_string_lossy().into_owned());
+    paths
+        .iter()
+        .map(|p| match pdfcraft_engine::open_parameters::split(p, |f| std::path::Path::new(f).is_file()) {
+            // `file` is what comes before one of `p`'s `#`, so the rest starts at that `#`.
+            Some((file, _)) => format!("{}{}", made(&file), p.get(file.len()..).unwrap_or_default()),
+            None => made(p),
+        })
+        .collect()
 }
 
 /// Decide what this launch does. `files` are absolute ([`absolute`]); `may_hand_off` is false
@@ -414,6 +425,26 @@ mod tests {
         assert_eq!(out, vec![std::env::current_dir().unwrap().join("Quote.pdf").to_string_lossy().into_owned()]);
         let already = std::env::current_dir().unwrap().join("x.pdf").to_string_lossy().into_owned();
         assert_eq!(absolute(std::slice::from_ref(&already)), vec![already]);
+    }
+
+    /// #3425: the open parameters after a file reach the running app as they were given. Made
+    /// absolute with the file, `a//b/./c` became `a/b/c` (`a\b\c` on Windows), and on Windows
+    /// `x/../y` lost the file name and `Intro.` its dot.
+    #[test]
+    fn only_the_file_before_open_parameters_is_made_absolute() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-instance-{}-open-parameters", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (manual, notes) = (dir.join("manual.pdf"), dir.join("notes#2.pdf"));
+        std::fs::write(&manual, b"%PDF-1.7").unwrap();
+        std::fs::write(&notes, b"%PDF-1.7").unwrap();
+        let made = |p: &std::path::Path| std::path::absolute(p).unwrap().to_string_lossy().into_owned();
+        for parameters in ["#nameddest=a//b/./c", "#nameddest=x/../y", "#Intro.", "#page=2"] {
+            let given = format!("{}{parameters}", manual.to_string_lossy());
+            assert_eq!(absolute(&[given]), vec![format!("{}{parameters}", made(&manual))], "{parameters}");
+        }
+        // A file with `#` in its name is made absolute whole, as before.
+        assert_eq!(absolute(&[notes.to_string_lossy().into_owned()]), vec![made(&notes)]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

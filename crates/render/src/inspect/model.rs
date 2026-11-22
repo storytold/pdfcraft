@@ -230,6 +230,9 @@ pub enum LinkTarget {
     /// reference ([`crate::resolve_uri`]); not yet checked, as the opener must
     /// (`pdfcraft_engine::links::document_url`).
     Uri(String),
+    /// Source of a JavaScript action, decoded with a bounded stream reader (never run while
+    /// inspecting).
+    JavaScript(String),
     /// A set-layer-visibility action (`SetOCGState`, ISO 32000-2 §12.6.4.13): each change in
     /// order, naming the layer by its optional content group. With `preserve_rb`, a layer turned
     /// on turns off the other layers of its radio-button groups.

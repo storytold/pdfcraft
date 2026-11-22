@@ -1823,20 +1823,20 @@ fn a_form_button_opens_only_a_real_pdf_and_returns_to_the_tab_it_opened() {
     let _ = std::fs::remove_file(&saved);
     h.state_mut().pick_override = Some(vec![saved.to_string_lossy().into_owned()]);
     h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: 'fake.pdf', nLaunch: 2});");
-    h.run_steps(6);
+    wait_for_file(&mut h, &saved);
     assert_eq!(tabs(&h), 2, "no tab for a file that isn't a PDF: {:?}", h.state().toast);
     assert_eq!(std::fs::read(&saved).ok().as_deref(), Some(&b"not a PDF at"[..]), "offered to save instead");
     let _ = std::fs::remove_file(&saved);
     // The real attached PDF opens in a tab of its own, though another inner.pdf starts with it.
     h.state_mut().active = Some(0);
     h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: 'Guide.pdf', nLaunch: 2});");
-    h.run_steps(4);
+    crate::support::wait_until(&mut h, "the attachment to open", |app| app.active == Some(2));
     assert_eq!(tabs(&h), 3, "a tab of its own");
     assert_eq!(h.state().active, Some(2));
     // Asked again, it goes back to the tab it opened.
     h.state_mut().active = Some(0);
     h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: 'Guide.pdf', nLaunch: 2});");
-    h.run_steps(4);
+    crate::support::wait_until(&mut h, "the attachment tab to activate", |app| app.active == Some(2));
     assert_eq!((tabs(&h), h.state().active), (3, Some(2)), "the tab it opened, not the other inner.pdf");
 }
 
@@ -1858,23 +1858,24 @@ fn a_form_button_opens_its_attached_instructions_in_a_new_tab() {
     let id = h.state().views[0].id;
     // By its key in the document's attached files, as forms name it.
     h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: 'Guide.pdf', nLaunch: 2});");
-    h.run_steps(4);
+    crate::support::wait_until(&mut h, "the attachment to open", |app| app.active == Some(1));
     assert_eq!(tabs(&h), ["form.pdf", "inner.pdf"], "the attached PDF opens in its own tab");
     // Asked again from the form, it goes back to that tab rather than opening another.
     h.state_mut().active = Some(0);
     h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: 'Guide.pdf', nLaunch: 2});");
-    h.run_steps(4);
+    crate::support::wait_until(&mut h, "the attachment tab to activate", |app| app.active == Some(1));
     assert_eq!(tabs(&h), ["form.pdf", "inner.pdf"], "no second copy");
     assert_eq!(h.state().active, Some(1), "its tab is shown");
     // A file the document doesn't have is said so.
+    h.state_mut().active = Some(0);
     h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: 'nope.pdf', nLaunch: 2});");
-    h.run_steps(2);
+    crate::support::wait_until(&mut h, "the missing attachment notice", |app| app.toast.as_ref().is_some_and(|t| t.0.contains("nope.pdf")));
     assert!(h.state().toast.as_ref().is_some_and(|t| t.0.contains("nope.pdf")), "{:?}", h.state().toast);
     assert_eq!(tabs(&h).len(), 2);
     // A name of the form's own is shortened in the message, keeping its end. (Past a line's
     // length, the script engine cuts it first, as it cuts every name a script passes.)
     h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: new Array(3001).join('x') + '.pdf', nLaunch: 2});");
-    h.run_steps(2);
+    crate::support::wait_until(&mut h, "the shortened attachment notice", |app| app.toast.as_ref().is_some_and(|t| t.0.contains("x.pdf")));
     let toast = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
     assert!(toast.contains('…') && toast.contains("x.pdf"), "{toast}");
     assert!(toast.chars().count() < 200, "{} characters", toast.chars().count());
@@ -2017,12 +2018,10 @@ fn a_form_button_shows_and_hides_the_attachments_panel() {
     h.run_steps(2);
     let id = h.state().views[0].id;
     h.state_mut().run_button_script(id, "size", "app.execMenuItem('ShowHideFileAttachment');");
-    h.run_steps(2);
-    assert_eq!(h.state().right, Some(pdfcraft_ui_egui::RightPanel::Attachments));
+    crate::support::wait_until(&mut h, "attachments panel to open", |app| app.right == Some(pdfcraft_ui_egui::RightPanel::Attachments));
     // Show/Hide, as its name says: asked again, it closes.
     h.state_mut().run_button_script(id, "size", "app.execMenuItem('ShowHideFileAttachment');");
-    h.run_steps(2);
-    assert_eq!(h.state().right, None);
+    crate::support::wait_until(&mut h, "attachments panel to close", |app| app.right.is_none());
 }
 
 /// Which widgets of field `name` are on (their `/AS` is their on state).
