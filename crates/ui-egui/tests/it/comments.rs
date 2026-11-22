@@ -621,6 +621,21 @@ fn selected_text_menu_does_not_spawn_when_using_comment_box() {
 }
 
 #[test]
+fn focusing_selection_toolbar_button_does_not_hide_the_toolbar() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    h.run_steps(3);
+    assert!(h.query_by_label("Replace text").is_some(), "selection bar appears on text select");
+
+    let add_comment_btn = h.get_by_label("Add comment");
+    add_comment_btn.focus();
+    h.run_steps(3);
+
+    assert!(h.ctx.memory(|m| m.focused().is_some()), "a widget is focused");
+    assert!(h.query_by_label("Replace text").is_some(), "toolbar remains visible when toolbar buttons are focused");
+}
+
+#[test]
 fn interacting_with_comment_box_does_not_select_page_text() {
     let mut h = harness(|_| {});
     h.state_mut().set_option("quick", "note").unwrap();

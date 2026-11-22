@@ -267,9 +267,13 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     // leaves them unselected. A press nobody holds that another tool took this frame (Prepare's
     // selection rectangle, added content) is not also a commenting tool's, as before.
     let taken = on_objects || on_edit_text || on_link || on_content || boxing || on_field;
-    let over_comment_box = ptr.pos.is_some_and(|p| view.comments.contains_screen_pos(p))
-        || ptr.origin.is_some_and(|p| view.comments.contains_screen_pos(p))
-        || ptr.pressed().is_some_and(|p| view.comments.contains_screen_pos(p));
+    let over_comment_box = if let Some(origin) = ptr.origin {
+        view.comments.contains_screen_pos(origin)
+    } else if let Some(pressed) = ptr.pressed() {
+        view.comments.contains_screen_pos(pressed)
+    } else {
+        ptr.pos.is_some_and(|p| view.comments.contains_screen_pos(p))
+    };
     let on_comment = comments::page_input(ui, resp, &pcx, press, taken, view) || over_comment_box;
     let consumed = taken || on_comment;
     let hover = pointer.and_then(|p| claim_under(&hits, view, p, frame.env.unobstructed));

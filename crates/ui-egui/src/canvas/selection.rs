@@ -450,8 +450,12 @@ pub(super) fn selection_actions(
     if ui.input(|input| input.pointer.is_decidedly_dragging()) {
         return false;
     }
+    let id = egui::Id::unique(("text-selection-actions", view.view_key()));
+    let toolbar_layer = egui::LayerId::new(egui::Order::Foreground, id);
+    let external_focus =
+        ui.ctx().memory(|m| m.focused()).is_some_and(|fid| fid != id && !ui.ctx().read_response(fid).is_some_and(|r| r.layer_id == toolbar_layer));
     if ui.ctx().text_edit_focused()
-        || ui.ctx().memory(|m| m.focused().is_some())
+        || external_focus
         || view.comments.composer.is_some()
         || view.comments.popup_text.is_some()
         || view.comments.popup_reply.is_some()
@@ -478,7 +482,6 @@ pub(super) fn selection_actions(
     if !viewport.intersects(rect) {
         return false;
     }
-    let id = egui::Id::unique(("text-selection-actions", view.view_key()));
     // The bar stays inside the pages' area, by the width it had last frame (a first guess before
     // it has one), so it never covers a side panel. It opens at the end of the selected text.
     let width = egui::AreaState::load(ui.ctx(), id).and_then(|a| a.size).map_or(SELECTION_BAR_GUESS, |s| s.x);
