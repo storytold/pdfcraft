@@ -279,6 +279,8 @@ impl PdfCraftApp {
             paper_px,
         };
         let (sheet, pager) = sheet::build(input, &thumbs, &pages, ctx);
+        // Print waits while the page range or another setting names no job.
+        let settings_valid = settings_result.is_ok();
         let d = &self.print_draft;
         let new_fields = body::fields_from_draft(d);
         let sections = body::build(d, &sizes, self.units, d.area.is_some(), no_printers);
@@ -297,6 +299,7 @@ impl PdfCraftApp {
         dialog.set_sheet(sheet);
         dialog.set_preview_pager(pager);
         dialog.set_duplex_by_layout(booklet);
+        dialog.set_settings_valid(settings_valid);
 
         if ok.is_some() {
             match self.print_now(ctx) {
