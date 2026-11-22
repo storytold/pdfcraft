@@ -488,6 +488,12 @@ pub(crate) struct PageOverlays<'a> {
     /// Acrobat's "Highlight existing fields".
     #[prop]
     highlight_fields: bool,
+    /// Snapshot's kept area on this page (view space): outlined until another tool or drag replaces it.
+    #[prop]
+    kept_area: Option<[f32; 4]>,
+    /// The selected picture on this page (user space): tinted like production's selection.
+    #[prop]
+    picked: Option<[f64; 4]>,
 }
 
 impl<'a> PageOverlays<'a> {
@@ -502,7 +508,7 @@ impl<'a> PageOverlays<'a> {
         compare: &'a [(usize, [f32; 4], Color32)],
         flash: &'a mut Option<(usize, [f32; 4], f64)>,
     ) -> Self {
-        PageOverlays { common: Common::new(), page, xf, doc, tabs, compare, flash, highlight_fields: false }
+        PageOverlays { common: Common::new(), page, xf, doc, tabs, compare, flash, highlight_fields: false, kept_area: None, picked: None }
     }
 }
 
@@ -554,6 +560,18 @@ impl Component for PageOverlays<'_> {
         }
         self.paint_compare_marks(&draw, style);
         self.paint_flash(&draw, cx);
+        if let Some(rect) = self.picked {
+            let rect = self.xf.user_rect_f64(&self.doc.info, self.page, rect);
+            if rect.is_finite() {
+                draw.faded(50.0 / 255.0, |draw| draw.fill(&PaintShape::Rect(rect, CornerRadius::ZERO), style.flash));
+            }
+        }
+        if let Some(area) = self.kept_area {
+            let rect = self.xf.view_rect(area);
+            if rect.is_finite() {
+                draw.stroke(&PaintShape::Rect(rect, CornerRadius::ZERO), StrokeWidth::Thick, style.flash);
+            }
+        }
         for tab in self.tabs {
             paint_sign_tab(&draw, tab, style);
         }
@@ -671,11 +689,22 @@ pub(crate) struct PageBackdrop<'a> {
     rotation: u16,
     info: &'a DocInfo,
     session: &'a PageSession,
+    /// The document's fields and the part under the pointer: the unbaked widgets, the hover frame and the drop-down arrows.
+    form: &'a [pdfcraft_engine::FormField],
+    hover: Option<&'a Owner>,
 }
 
 impl<'a> PageBackdrop<'a> {
-    pub(crate) fn new(pages: &'a [PlacedPage], sizes: &'a [(f32, f32)], rotation: u16, info: &'a DocInfo, session: &'a PageSession) -> Self {
-        Self { common: Common::new(), pages, sizes, rotation, info, session }
+    pub(crate) fn new(
+        pages: &'a [PlacedPage],
+        sizes: &'a [(f32, f32)],
+        rotation: u16,
+        info: &'a DocInfo,
+        session: &'a PageSession,
+        form: &'a [pdfcraft_engine::FormField],
+        hover: Option<&'a Owner>,
+    ) -> Self {
+        Self { common: Common::new(), pages, sizes, rotation, info, session, form, hover }
     }
 }
 
@@ -724,6 +753,7 @@ impl Component for PageBackdrop<'_> {
                 self.session.content.draft.as_ref(),
             );
             self.session.move_background.paint(&draw, &content, placed, self.info, &self.session.content);
+            crate::forms_ui::paint_page(&draw, &content.painter, (&xf, placed.page), self.info, self.form, self.session, self.hover);
         }
     }
 
