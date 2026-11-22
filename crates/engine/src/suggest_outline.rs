@@ -172,7 +172,7 @@ fn blocks(lines: Vec<Line>) -> Vec<Block> {
 }
 
 /// For each of `lines` (in reading order), whether it is set inside a sentence: prose in another
-/// style at the same size sits right beside it on its row. A bold word in a paragraph (a
+/// style, no smaller than it, sits right beside it on its row. A bold word in a paragraph (a
 /// requirement keyword, a defined term) is emphasis, not a heading. Text beside it is prose only
 /// when it has a lower-case letter, so a section number set apart from its bold title (`2.3`)
 /// leaves the title a heading.
@@ -193,7 +193,9 @@ fn set_inline(lines: &[Line]) -> Vec<bool> {
 /// Whether prose `o` sits beside `l` in the same sentence: on the same row (their boxes share at
 /// least half the shorter one's height, since a box runs from the font's ascent to its descent
 /// and tight leading makes stacked lines' boxes touch), side by side rather than one over the
-/// other, at the same size, in another style, at most [`BESIDE_GAP`] ems apart.
+/// other, no smaller than `l`, in another style, at most [`BESIDE_GAP`] ems apart. A heading set
+/// beside text more than [`SIZE_TOLERANCE`] smaller is still a heading; a word set smaller than
+/// the prose around it is not.
 fn beside(l: &Line, o: &Line) -> bool {
     let size = l.style.size;
     let shared = l.top.min(o.top) - l.bottom.max(o.bottom);
@@ -202,7 +204,7 @@ fn beside(l: &Line, o: &Line) -> bool {
     shared >= shorter * 0.5
         && gap >= -size * 0.25
         && gap <= size * BESIDE_GAP
-        && (o.style.size - size).abs() <= SIZE_TOLERANCE
+        && size <= o.style.size + SIZE_TOLERANCE
         && !o.style.matches(&l.style)
         && o.text.chars().any(char::is_lowercase)
 }
@@ -312,6 +314,27 @@ mod tests {
             body(0, 656.0),
         ];
         assert_eq!(titles(&inferred(lines).0), [(1, "MUST", 0), (1, "Numbered title", 0)]);
+    }
+
+    #[test]
+    fn a_bold_word_set_smaller_than_its_sentence_is_not_a_heading_but_a_larger_one_is() {
+        let mut small = run(726.0, true, "MUST", 133.0, 163.0);
+        small.style.size = 10.0;
+        small.top = 725.2;
+        small.bottom = small.top - 8.0;
+        let lines = vec![
+            line(0, 760.0, 11.0, true, "MUST"),
+            body(0, 740.0),
+            run(726.0, false, "A recipient", 72.0, 130.0),
+            small,
+            run(726.0, false, "ignore the field.", 166.0, 400.0),
+            body(0, 712.0),
+            Line { left: 72.0, right: 110.0, ..line(0, 690.0, 14.0, true, "Scope") },
+            run(688.8, false, "covers the rest of this page.", 113.0, 400.0),
+            body(0, 670.0),
+            body(0, 656.0),
+        ];
+        assert_eq!(titles(&inferred(lines).0), [(1, "MUST", 0), (1, "Scope", 0)]);
     }
 
     #[test]
