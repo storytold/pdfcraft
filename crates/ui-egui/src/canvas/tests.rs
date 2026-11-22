@@ -1164,12 +1164,19 @@ fn a_later_copy_cancels_a_document_copy_still_reading() {
     assert!(app.document_copy.is_none(), "cancelled");
     let copies: Vec<_> = out.platform_output.commands.iter().filter(|c| matches!(c, egui::OutputCommand::CopyText(_))).collect();
     assert_eq!(copies, vec![&egui::OutputCommand::CopyText("a word".to_owned())], "the later copy stays");
-    // So does copying a page selection.
+    // So does copying a page selection whose page is read.
     app.views[0].select_all();
     assert!(app.copy_selected_text(0, &ctx) && app.document_copy.is_some());
+    app.views[0].texts.insert(0, Arc::new(line_text("abcdef")));
     app.views[0].select_text(0, 0, 5);
     app.copy_selected_text(0, &ctx);
     assert!(app.document_copy.is_none(), "a page selection's copy cancels it");
+    // One whose pages are still to be read replaces it with its own (#5017 review).
+    app.views[0].select_all();
+    assert!(app.copy_selected_text(0, &ctx) && app.document_copy.is_some());
+    app.views[0].select_text(0, 0, 5);
+    app.views[0].selection = Some(Selection { page: 0, span: Span::Run { anchor: 0, head: 0, head_page: 1, head_x: None } });
+    assert!(app.copy_selected_text(0, &ctx) && app.document_copy.is_some(), "the selection's own copy");
 }
 
 /// A press anywhere on a page ends Select All of the document, whatever the tool (here the
@@ -1284,6 +1291,157 @@ fn text_layers_keep_the_selection_page() {
     v.frame_visible = HashSet::from([90, 91]);
     let _ = v.prepare_render_queue(&info, 1.0);
     assert_eq!(v.selected_text().as_deref(), Some("x"), "stale selections still copy");
+    // Every page of a selection across pages stays, however far from the pages shown.
+    for p in 0..100 {
+        v.texts.insert(p, Arc::new(text.clone()));
+    }
+    v.selection = Some(Selection { page: 0, span: Span::Run { anchor: 0, head: 0, head_page: 40, head_x: None } });
+    let _ = v.prepare_render_queue(&info, 1.0);
+    assert!((0..=40).all(|p| v.texts.contains_key(&p)), "the selection's pages are kept");
+    assert_eq!(v.selected_text().map(|t| t.lines().count()), Some(41));
+}
+
+/// One line of 10-wide glyphs, one per char.
+fn line_text(s: &str) -> PageText {
+    PageText {
+        glyphs: s
+            .chars()
+            .map(|c| pdfcraft_render::TextGlyph { text: c.into(), rect: [0.0, 0.0, 10.0, 10.0], quad: [[0.0, 0.0]; 4], direction: [1.0, 0.0] })
+            .collect(),
+        line_of: s.chars().map(|_| 0).collect(),
+        space_before: s.chars().map(|_| false).collect(),
+        truncated: false,
+    }
+}
+
+/// Two lines of two glyphs: "ab" at the top, "cd" below it.
+fn two_line_text() -> PageText {
+    let glyph =
+        |c: char, y: f32| pdfcraft_render::TextGlyph { text: c.into(), rect: [0.0, y, 10.0, y + 10.0], quad: [[0.0, 0.0]; 4], direction: [1.0, 0.0] };
+    PageText {
+        glyphs: vec![glyph('a', 0.0), glyph('b', 0.0), glyph('c', 20.0), glyph('d', 20.0)],
+        line_of: vec![0, 0, 1, 1],
+        space_before: vec![false; 4],
+        truncated: false,
+    }
+}
+
+/// Review of #5017: the selection bar goes where the drag ended, which is on screen: dragged
+/// back from page 3 to page 1, at the start of what page 1 has selected, not at the end of page
+/// 3 (perhaps scrolled away).
+#[test]
+fn the_selection_bar_sits_where_the_drag_ended() {
+    let text = Arc::new(two_line_text());
+    let texts: Vec<(usize, &Arc<PageText>)> = (1..=3).map(|p| (p, &text)).collect();
+    let anchor = |s: Selection| super::selection::bar_anchor(&s, &texts).map(|(page, r)| (page, r[1]));
+    // Backward: page 1, its top line (the first rectangle there).
+    let back = Selection { page: 3, span: Span::Run { anchor: 1, head: 0, head_page: 1, head_x: None } };
+    assert_eq!(anchor(back), Some((1, 0.0)));
+    // Forward: page 3, the last line selected there.
+    let forward = Selection { page: 1, span: Span::Run { anchor: 0, head: 3, head_page: 3, head_x: None } };
+    assert_eq!(anchor(forward), Some((3, 20.0)));
+    // On one page, as before: the end of the selection, whichever way it was dragged.
+    assert_eq!(anchor(Selection::run(2, 3, 0)), Some((2, 20.0)));
+    assert_eq!(anchor(Selection::run(2, 0, 3)), Some((2, 20.0)));
+}
+
+#[test]
+fn a_selection_across_pages_takes_the_rest_of_the_first_and_the_start_of_the_last() {
+    let s = Selection { page: 1, span: Span::Run { anchor: 2, head: 1, head_page: 3, head_x: None } };
+    assert_eq!(s.pages(), 1..=3);
+    assert!(s.spans_pages());
+    let on = |s: &Selection| (0..5).map(|p| s.run_on(p, 5)).collect::<Vec<_>>();
+    assert_eq!(on(&s), [None, Some(2..5), Some(0..5), Some(0..2), None]);
+    // Anchored on the last page and dragged back: the same glyphs.
+    let back = Selection { page: 3, span: Span::Run { anchor: 1, head: 2, head_page: 1, head_x: None } };
+    assert_eq!(on(&back), on(&s));
+    assert_eq!(back.pages(), 1..=3);
+    // On one page, as before: either way round, both ends included.
+    let one = Selection::run(2, 4, 1);
+    assert!(!one.spans_pages());
+    assert_eq!(on(&one), [None, None, Some(1..5), None, None]);
+    // A column selection stays on its page and has no reading-order run.
+    let column = Selection { page: 2, span: Span::Column { rect: [0.0, 0.0, 100.0, 100.0] } };
+    assert_eq!(column.pages(), 2..=2);
+    assert_eq!(column.run_on(2, 5), None);
+    let t = line_text("abcde");
+    assert!(column.rects_on(1, &t).is_empty() && column.text_on(1, &t).is_empty(), "nothing off its page");
+    // Extending moves the head, onto another page too; a column selection has none to move.
+    let mut ext = Selection::run(0, 3, 3);
+    ext.extend_to_at(2, 1, None);
+    assert_eq!(ext, Selection { page: 0, span: Span::Run { anchor: 3, head: 1, head_page: 2, head_x: None } });
+    let mut col = column;
+    col.extend_to_at(4, 0, None);
+    assert_eq!(col, column);
+    // Hostile indices: no overflow, no inverted range.
+    let edge = Selection { page: usize::MAX, span: Span::Run { anchor: usize::MAX, head: usize::MAX, head_page: usize::MAX, head_x: None } };
+    assert_eq!(edge.run_on(usize::MAX, 3), Some(usize::MAX..usize::MAX));
+    assert_eq!(edge.text_on(usize::MAX, &t), "");
+    // Glyph indices past a page's end (a stale selection) select only what is there.
+    let stale = Selection { page: 0, span: Span::Run { anchor: 3, head: 99, head_page: 1, head_x: None } };
+    assert_eq!(stale.text_on(0, &t), "de");
+    assert_eq!(stale.text_on(1, &t), "abcde");
+}
+
+#[test]
+fn a_selection_across_pages_copies_each_page_on_its_own_line_once_all_are_read() {
+    let info = thumbnail_info(4);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.texts.insert(0, Arc::new(line_text("abc")));
+    v.texts.insert(2, Arc::new(line_text("ghi")));
+    v.texts.insert(3, Arc::new(line_text("jkl")));
+    v.selection = Some(Selection { page: 2, span: Span::Run { anchor: 0, head: 1, head_page: 0, head_x: None } });
+    assert_eq!(v.selected_text(), None, "page 2 is not read yet: no short copy");
+    assert!(v.selection_quads(&info).is_empty(), "nor a short markup");
+    v.texts.insert(1, Arc::new(line_text("def")));
+    assert_eq!(v.selected_text().as_deref(), Some("bc\ndef\ng"));
+    // A page whose text could not be read has nothing selected and is passed over.
+    v.texts.remove(&1);
+    v.text_failed.insert(1);
+    assert_eq!(v.selected_text().as_deref(), Some("bc\ng"));
+    let pages: Vec<usize> = v.selection_quads(&info).into_iter().map(|(p, _)| p).collect();
+    assert_eq!(pages, [0, 2], "one set of quads per page with text selected");
+    // A change to one of its pages ends it, as on one page; to another page it stays.
+    v.page_changed(3);
+    assert!(v.selection.is_some());
+    v.page_changed(1);
+    assert!(v.selection.is_none());
+}
+
+/// Copy with formatting takes one page's glyphs: a selection on one page keeps it, as before; one
+/// across pages copies plain text, every page's, rather than formatted text of one page.
+#[test]
+fn copy_with_formatting_takes_a_selection_on_one_page_only() {
+    let info = thumbnail_info(3);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.texts.insert(0, Arc::new(line_text("abc")));
+    v.texts.insert(1, Arc::new(line_text("def")));
+    v.selection = Some(Selection::run(0, 2, 1));
+    assert_eq!(v.selected_glyphs().map(|(page, _, glyphs)| (page, glyphs)), Some((0, vec![1, 2])));
+    // Glyphs past a stale selection's page end are left out.
+    v.selection = Some(Selection::run(0, 1, 99));
+    assert_eq!(v.selected_glyphs().map(|(_, _, glyphs)| glyphs), Some(vec![1, 2]));
+    v.selection = Some(Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 1, head_x: None } });
+    assert!(v.selected_glyphs().is_none(), "across pages: plain text");
+    assert_eq!(v.selected_text().as_deref(), Some("bc\nde"), "which has every page's part");
+}
+
+#[test]
+fn markup_on_several_pages_is_one_undo_step_named_like_one() {
+    let mark = |page| {
+        Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+            page,
+            shape: pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, quads: vec![[0.0; 8]] },
+            style: Default::default(),
+            contents: String::new(),
+            author: String::new(),
+        })
+    };
+    assert!(selection::one_undo_step(Vec::new()).is_none());
+    assert!(matches!(selection::one_undo_step(vec![mark(0)]), Some(Edit::AddAnnotation(_))));
+    let Some(Edit::Batch { label, edits }) = selection::one_undo_step(vec![mark(0), mark(1)]) else { panic!("a batch") };
+    assert_eq!((label.as_str(), edits.len()), (mark(0).label().wording, 2));
+    assert!(pdfcraft_engine::EDIT_LABELS.contains(&label.as_str()), "a wording the catalogues translate");
 }
 
 #[test]
@@ -2049,9 +2207,9 @@ fn many_open_documents_share_one_raster_allowance_and_close_releases_handles() {
 #[test]
 fn suspended_signature_preview_releases_layers_and_rebuilds_without_editing() {
     let ctx = egui::Context::default();
-    let mut png = std::io::Cursor::new(Vec::new());
-    image::RgbaImage::from_pixel(12, 4, image::Rgba([20, 30, 40, 255])).write_to(&mut png, image::ImageFormat::Png).unwrap();
-    let image = pdfcraft_engine::SignatureImage::from_bytes(png.get_ref()).unwrap();
+    let img = craft_image_codecs::Image::from_u8(12, 4, craft_image_codecs::ChannelLayout::Rgba, [20, 30, 40, 255].repeat(48)).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
+    let image = pdfcraft_engine::SignatureImage::from_bytes(&png).unwrap();
     let mut session = pdfcraft_engine::Session::new();
     let blank = session.create_blank(300.0, 400.0, 1).unwrap();
     let id = session.open_new("signature-preview.pdf", blank).unwrap();
@@ -2399,22 +2557,41 @@ fn full_screen_two_page_view_fits_the_spread_it_shows() {
     assert!(small > windowed * 1.9, "the small spread fills the screen: {small} vs {windowed}");
     v.current = 3;
     v.fit_zoom(&info);
-    assert!((v.zoom - windowed).abs() < 1e-4, "the large spread fits as before");
+    // The large spread fits the screen edge to edge, without the window's margins (#576).
+    let edge_to_edge = (v.viewport_w - v.page_gap()) / (2.0 * 600.0 * PT);
+    assert!((v.zoom - edge_to_edge).abs() < 1e-4 && v.zoom > windowed, "the large spread fills the screen: {} vs {edge_to_edge}", v.zoom);
     v.current = 1;
     v.fit_zoom(&info);
     assert_eq!(v.zoom, small, "page 2 is in the first spread");
-    // With a cover page: [0] alone, then [1, 2] (the large page decides), then [3].
+    // With a cover page: [0] alone, then [1, 2], then [3].
     v.cover = true;
     v.current = 0;
     v.fit_zoom(&info);
     assert_eq!(v.zoom, small, "the cover page alone");
+    // The mixed spread [1, 2] fits its two pages' own widths side by side, 300 + 600 points,
+    // and not twice the wider one: here the height decides.
     v.current = 1;
     v.fit_zoom(&info);
-    assert!((v.zoom - windowed).abs() < 1e-4, "page 2 shares a spread with the large page 3");
+    let mixed_fit = ((v.viewport_w - v.page_gap()) / (900.0 * PT)).min(v.viewport_h / (800.0 * PT));
+    assert!((v.zoom - mixed_fit).abs() < 1e-4 && v.zoom > edge_to_edge, "page 2 shares a spread with the large page 3: {} vs {mixed_fit}", v.zoom);
+    // And the content is as wide as that spread, so the spread is centred on the screen: room for
+    // twice the larger page would centre it past the screen's right edge.
+    let content_w = v.content_width(&info, v.viewport_w);
+    let rects = v.layout(&info, content_w, 1.0);
+    let (left, right) = (rects[1].min.x, rects[2].max.x);
+    assert!(content_w <= v.viewport_w + 0.5, "the spread needs no scrolling: {content_w}");
+    assert!(left >= -0.5 && right <= v.viewport_w + 0.5, "the spread is on the screen: {left}..{right}");
+    assert!((left - (v.viewport_w - right)).abs() < 1.0, "and centred: {left}..{right}");
+    // The cover alone keeps its spread's blank slot, and is on the screen too.
+    v.current = 0;
+    v.fit_zoom(&info);
+    let content_w = v.content_width(&info, v.viewport_w);
+    let cover = v.layout(&info, content_w, 1.0)[0];
+    assert!(cover.min.x >= v.viewport_w / 2.0 && cover.max.x <= v.viewport_w + 0.5, "the cover sits on the right: {cover:?}");
     // Scrolling while in full screen fits the document, as scrolling does in the window.
     (v.continuous, v.current) = (true, 0);
     v.fit_zoom(&info);
-    assert!((v.zoom - windowed).abs() < 1e-4, "continuous full screen keeps one zoom");
+    assert!((v.zoom - edge_to_edge).abs() < 1e-4, "continuous full screen keeps one zoom");
     v.continuous = false;
     // The cover page is a spread of its own even when the next page is larger.
     let mixed = DocInfo { pages: vec![page(300.0, 400.0), page(600.0, 800.0), page(600.0, 800.0)], ..Default::default() };
@@ -2427,6 +2604,17 @@ fn full_screen_two_page_view_fits_the_spread_it_shows() {
     (v.layout, v.continuous) = (PageLayout::TwoUp, false);
     v.fit_zoom(&info);
     assert!((v.zoom - windowed).abs() < 1e-4, "in the window, one zoom for the document");
+    // With Fill off, full screen keeps the window's display (#4273): two-page view keeps one zoom
+    // for the document, and its width, as the spreads turn.
+    let content_w = v.content_width(&info, v.viewport_w);
+    v.full_screen_fill = false;
+    v.enter_presentation();
+    for current in [0, 1, 3] {
+        v.current = current;
+        v.fit_zoom(&info);
+        assert!((v.zoom - windowed).abs() < 1e-4, "fill off, page {current}: the window's zoom, {} vs {windowed}", v.zoom);
+        assert_eq!(v.content_width(&info, v.viewport_w), content_w, "fill off, page {current}: the window's width");
+    }
 }
 
 #[test]
@@ -2693,6 +2881,45 @@ fn a_moved_picture_is_drawn_from_the_fresh_raster_while_a_tile_is_still_stale() 
     assert_eq!(red(&pixels, old), 0, "nothing shows where it first was");
     h.state_mut().views[0].stale_tiles.clear();
     h.state_mut().views[0].tiles.clear();
+}
+
+/// Review on #5325: one Esc closes one thing. With a form field being filled (a check box that
+/// has the focus) and text selected, the page leaves the selection for the next Esc: the field's
+/// editor takes this one.
+#[test]
+fn esc_with_a_field_being_filled_leaves_the_selection() {
+    let mut v = view(3, PageLayout::Single, true);
+    v.all_text = true;
+    v.forms.focus = Some(crate::forms_ui::Focus {
+        name: "agree".into(),
+        obj: None,
+        widget: 0,
+        text: String::new(),
+        picked: Vec::new(),
+        request_focus: false,
+        select_all: false,
+        press: None,
+        calendar: None,
+        calendar_rect: None,
+        calendar_text: None,
+        list: Default::default(),
+        had_focus: true,
+    });
+    let ctx = egui::Context::default();
+    ctx.input_mut(|i| {
+        i.events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+    });
+    shortcuts(&mut v, &ctx, Default::default(), true, Default::default());
+    assert!(v.all_text, "the selection stays while the field takes Esc");
+    v.forms.focus = None;
+    shortcuts(&mut v, &ctx, Default::default(), true, Default::default());
+    assert!(!v.all_text, "with no field being filled, Esc clears the selection");
 }
 
 /// Review on #4378: `FitWindow` measures the spread the view shows, its pages side by side
@@ -3029,6 +3256,25 @@ fn a_transition_of_zero_or_negative_length_cuts() {
     }
 }
 
+/// Full screen that keeps a continuous display (Fill screen off, #4273) scrolls from page to page:
+/// a page's transition doesn't play over the scrolling pages.
+#[test]
+fn full_screen_that_keeps_scrolling_plays_no_transition() {
+    use pdfcraft_render::TransitionStyle;
+    let ctx = egui::Context::default();
+    let page = pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
+    let info = DocInfo { pages: vec![page; 3], transitions: vec![trans(1, Some(TransitionStyle::Wipe), 1.0, None)], ..Default::default() };
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults { layout: PageLayout::Single, continuous: true, ..Default::default() });
+    v.full_screen_fill = false;
+    v.enter_presentation();
+    assert!(v.continuous(), "Fill screen off keeps continuous scrolling");
+    give_raster(&ctx, &mut v, 0);
+    presenter_frame(&ctx, &mut v, &info, 0.0);
+    turn_to(&ctx, &mut v, 1);
+    presenter_frame(&ctx, &mut v, &info, 0.1);
+    assert!(!v.presenting_a_transition(), "no Wipe over a scrolling display");
+}
+
 /// A style the spec doesn't name is read as its default R, Replace (ISO 32000-2 Table 164: "The
 /// new page simply replaces the old one with no special transition effect"): the page changes at
 /// once, and its display time still counts.
@@ -3181,10 +3427,10 @@ fn only_pixel_snapping_passes_for_fitting_the_view() {
     let page = |height: f32| [Rect::from_min_size(pos2(0.0, MARGIN), vec2(300.0, height))];
     for ppp in [1.0, 2.0] {
         let slack = 0.5 / ppp;
-        let (_, content) = vertical_placement(false, &page(600.0 + slack), &[0], 600.0, ppp);
+        let (_, content) = vertical_placement(false, &page(600.0 + slack), &[0], 600.0, MARGIN, ppp);
         assert_eq!(content, 600.0, "at {ppp}x, snapping's half pixel still fits");
         for over in [slack + 0.1, 1.0] {
-            let (shift, content) = vertical_placement(false, &page(600.0 + over), &[0], 600.0, ppp);
+            let (shift, content) = vertical_placement(false, &page(600.0 + over), &[0], 600.0, MARGIN, ppp);
             assert_eq!((shift, content), (0.0, 600.0 + over + 2.0 * MARGIN), "at {ppp}x, {over} pt too tall scrolls");
         }
     }
@@ -3192,4 +3438,191 @@ fn only_pixel_snapping_passes_for_fitting_the_view() {
     for ppp in [0.0, f32::NAN, f32::INFINITY] {
         assert!(!fits_height(Rect::from_min_size(pos2(0.0, 0.0), vec2(1.0, 600.5)), 600.0, ppp));
     }
+}
+
+/// Review of #5017: a selection across pages copied before every page it covers is read is not
+/// dropped. Copy stays on and reads those pages off the UI thread, taking only the part each
+/// page has selected.
+#[test]
+fn a_selection_across_pages_still_to_be_read_is_copied_once_read() {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("three.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two", "Charlie three"])).unwrap();
+    // From the second glyph of page 1 to the first of page 3, no page read yet.
+    app.views[0].selection = Some(Selection { page: 0, span: Span::Run { anchor: 1, head: 0, head_page: 2, head_x: None } });
+    let span = app.views[0].selection_waits_for_text().expect("waits for its pages");
+    assert_eq!(span, TextSpan { start: (0, 1), end: (2, 0) });
+    assert!(app.views[0].selected_text().is_none(), "nothing to copy on this thread yet");
+    assert!(pdfcraft_engine::commands::command("edit.copy").is_some_and(|c| app.command_enabled(c)), "Copy stays on");
+    // The job reads only the selection's part of each page, and no page outside it.
+    let doc = app.session.get(app.views[0].id).unwrap();
+    let text = crate::DocumentCopyJob::of_selection(&app.views[0], doc, span).text(&std::sync::atomic::AtomicBool::new(false));
+    assert_eq!(text.as_deref(), Some("lpha one\nBravo two\nC"));
+    let later = crate::DocumentCopyJob::of_selection(&app.views[0], doc, TextSpan { start: (1, 0), end: (1, 4) });
+    assert!(matches!(later.pages[0], crate::CopyPage::Skip) && matches!(later.pages[2], crate::CopyPage::Skip));
+    assert_eq!(later.text(&std::sync::atomic::AtomicBool::new(false)).as_deref(), Some("Bravo"));
+    // Copy starts that job, and the clipboard gets the text when it is done.
+    let ctx = egui::Context::default();
+    assert!(app.copy_selected_text(0, &ctx), "the copy starts");
+    let mut copied = None;
+    for _ in 0..500 {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| app.finish_document_copy(ui.ctx()));
+        out.textures_delta.clear();
+        copied = out.platform_output.commands.iter().find_map(|c| match c {
+            egui::OutputCommand::CopyText(t) => Some(t.clone()),
+            _ => None,
+        });
+        if copied.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(copied.as_deref(), Some("lpha one\nBravo two\nC"));
+}
+
+/// Review of #5017: Redact refuses a selection across a page whose text could not be read,
+/// rather than leave that page unmarked, and says why; markup tools mark the readable pages.
+#[test]
+fn redaction_refuses_a_selection_over_an_unreadable_page() {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("three.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two", "Charlie three"])).unwrap();
+    let info = app.session.get(app.views[0].id).unwrap().info.clone();
+    let v = &mut app.views[0];
+    v.texts.insert(0, Arc::new(line_text("abc")));
+    v.texts.insert(2, Arc::new(line_text("ghi")));
+    v.text_failed.insert(1);
+    let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2, head_x: None } };
+    v.selection = Some(sel);
+    assert!(v.selection_has_unreadable_page());
+    assert_eq!(v.tool_marks(QuickTool::Redact, true, None, true, &info), ToolMarks::Unreadable);
+    let pages = |m: ToolMarks| match m {
+        ToolMarks::Marks(m, _) => m.into_iter().map(|(p, _)| p).collect::<Vec<_>>(),
+        other => panic!("marks expected, got {other:?}"),
+    };
+    let highlight = QuickTool::Comment(comments::CommentTool::Highlight);
+    assert_eq!(pages(v.tool_marks(highlight, true, None, false, &info)), [0, 2], "a highlight has nothing to hide");
+    // Redact ▸ Mark on it: nothing marked, the selection kept, and the reason given.
+    app.views[0].selection = Some(sel);
+    assert!(app.execute("redact.mark"));
+    let doc = app.session.get(app.views[0].id).unwrap();
+    assert_eq!(doc.redaction_marks(), 0, "no partial redaction");
+    assert_eq!(app.views[0].selection, Some(sel), "still selected");
+    assert!(app.toast.as_ref().is_some_and(|(t, _)| t.contains("could not be read")), "{:?}", app.toast);
+}
+
+/// Review of #5017: a marking tool that finishes a selection while a page it covers is still
+/// to be read marks it once that page is read, from one of its pages, unless the selection or
+/// the tool changed meanwhile.
+#[test]
+fn a_marking_tool_waits_for_the_selections_pages() {
+    let info = thumbnail_info(3);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.texts.insert(0, Arc::new(line_text("abc")));
+    v.texts.insert(2, Arc::new(line_text("ghi")));
+    let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2, head_x: None } };
+    v.selection = Some(sel);
+    let tool = QuickTool::Comment(comments::CommentTool::Underline);
+    assert_eq!(v.tool_marks(tool, true, Some(0), false, &info), ToolMarks::None, "page 2 is not read yet");
+    assert_eq!(v.tool_marks(tool, false, Some(0), false, &info), ToolMarks::None, "still waiting");
+    v.texts.insert(1, Arc::new(line_text("def")));
+    // Asked from a page it doesn't cover, it keeps waiting; from one it covers, all of it, once.
+    let mut w = DocView::new(DocId(2), &thumbnail_info(4), ViewDefaults::default());
+    w.texts = v.texts.clone();
+    w.selection = Some(sel);
+    assert_eq!(w.tool_marks(tool, true, Some(3), false, &info), ToolMarks::None);
+    assert!(matches!(w.tool_marks(tool, false, Some(2), false, &info), ToolMarks::Marks(ref m, _) if m.len() == 3));
+    assert_eq!(w.tool_marks(tool, false, Some(2), false, &info), ToolMarks::None, "marked once");
+    assert!(matches!(v.tool_marks(tool, false, Some(1), false, &info), ToolMarks::Marks(ref m, _) if m.len() == 3));
+    // Another tool, or another selection, does not inherit the wait.
+    v.texts.remove(&1);
+    assert_eq!(v.tool_marks(tool, true, Some(0), false, &info), ToolMarks::None);
+    v.texts.insert(1, Arc::new(line_text("def")));
+    assert_eq!(v.tool_marks(QuickTool::Redact, false, Some(0), true, &info), ToolMarks::None, "another tool");
+    v.selection = Some(Selection::run(0, 0, 2));
+    assert_eq!(v.tool_marks(tool, false, Some(0), false, &info), ToolMarks::None, "another selection");
+    // Clearing the selection ends the wait.
+    v.selection = Some(sel);
+    v.texts.remove(&1);
+    assert_eq!(v.tool_marks(tool, true, Some(0), false, &info), ToolMarks::None);
+    v.clear_selection();
+    v.selection = Some(sel);
+    v.texts.insert(1, Arc::new(line_text("def")));
+    assert_eq!(v.tool_marks(tool, false, Some(0), false, &info), ToolMarks::None, "cleared");
+}
+
+/// Review of #5017: a wait ends as soon as the selection changes, so a new drag that passes back
+/// through the selection it was for doesn't mark that selection before the drag is let go.
+#[test]
+fn a_wait_ends_when_the_selection_changes() {
+    let info = thumbnail_info(3);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.texts.insert(0, Arc::new(line_text("abc")));
+    v.texts.insert(2, Arc::new(line_text("ghi")));
+    let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2, head_x: None } };
+    v.selection = Some(sel);
+    let tool = QuickTool::Comment(comments::CommentTool::Underline);
+    assert_eq!(v.tool_marks(tool, true, Some(0), false, &info), ToolMarks::None, "page 2 is not read yet");
+    // A new drag starts elsewhere, page 2 is read, and the drag comes back to the same selection.
+    v.selection = Some(Selection::run(0, 0, 0));
+    assert_eq!(v.tool_marks(tool, false, Some(0), false, &info), ToolMarks::None);
+    v.texts.insert(1, Arc::new(line_text("def")));
+    v.selection = Some(sel);
+    assert_eq!(v.tool_marks(tool, false, Some(0), false, &info), ToolMarks::None, "not marked mid-drag");
+}
+
+/// Review of #5017 (FredApps): marks a tool is still waiting to make, for a page whose text has
+/// not arrived, never land on a page that changed or went away meanwhile. Deleting a page, or a
+/// change to a page the selection covers, ends the selection, and the wait goes with it.
+#[test]
+fn waiting_marks_are_dropped_when_their_pages_change() {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("three.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two", "Charlie three"])).unwrap();
+    let id = app.views[0].id;
+    let info = |app: &PdfCraftApp| app.session.get(id).unwrap().info.clone();
+    let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2, head_x: None } };
+    let wait = |app: &mut PdfCraftApp| {
+        let info = info(app);
+        let v = &mut app.views[0];
+        v.texts.clear();
+        v.texts.insert(0, Arc::new(line_text("abc")));
+        v.texts.insert(2, Arc::new(line_text("ghi")));
+        v.selection = Some(sel);
+        assert_eq!(v.tool_marks(QuickTool::Redact, true, Some(0), true, &info), ToolMarks::None, "waiting for page 2's text");
+    };
+    // Page 2 deleted while the marks wait.
+    wait(&mut app);
+    assert!(app.apply_edit(Edit::DeletePages { pages: vec![1] }));
+    let after = info(&app);
+    assert_eq!(after.pages.len(), 2);
+    let v = &mut app.views[0];
+    assert!(v.selection.is_none(), "a change to the document's pages ends the selection");
+    for p in 0..2 {
+        v.texts.insert(p, Arc::new(line_text("abc")));
+    }
+    // The old selection's glyph positions now name other pages: even made again, nothing is
+    // marked unless the tool finishes it again.
+    v.selection = Some(Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 1, head_x: None } });
+    assert_eq!(v.tool_marks(QuickTool::Redact, false, Some(0), true, &after), ToolMarks::None, "the wait went with the selection");
+    let redactions = app.session.get(id).unwrap().redaction_marks();
+    assert_eq!(redactions, 0);
+    // A change to one page the selection covers (a comment added on it) ends it too.
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("three.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two", "Charlie three"])).unwrap();
+    let id = app.views[0].id;
+    wait(&mut app);
+    let note = Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 2,
+        shape: pdfcraft_engine::Shape::Note { at: [10.0, 10.0], icon: pdfcraft_engine::NoteIcon::Comment },
+        style: Default::default(),
+        contents: "x".into(),
+        author: String::new(),
+    });
+    assert!(app.apply_edit(note));
+    let now = info(&app);
+    let v = &mut app.views[0];
+    assert!(v.selection.is_none(), "a change to a page it covers ends the selection");
+    v.texts.insert(1, Arc::new(line_text("def")));
+    v.texts.insert(2, Arc::new(line_text("ghi")));
+    v.selection = Some(sel);
+    assert_eq!(v.tool_marks(QuickTool::Redact, false, Some(0), true, &now), ToolMarks::None, "nothing marked");
+    assert_eq!(app.session.get(id).unwrap().redaction_marks(), 0);
 }

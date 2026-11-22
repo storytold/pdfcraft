@@ -2,7 +2,9 @@
 //! status lookup for evidence embedded in a DSS or supplied by the caller. Never fetches:
 //! the transport and the choice of evidence stay with the caller.
 
-use crate::der::{Tlv, tag};
+use crate::der::Tlv;
+#[cfg(test)]
+use crate::der::tag;
 use crate::keys::{self, DigestAlg, PublicKey};
 use crate::x509::Certificate;
 use crate::{SignError, Time};
@@ -10,6 +12,7 @@ use crate::{SignError, Time};
 /// A DER size cap: real CRLs and OCSP responses are far smaller.
 pub(crate) const MAX_EVIDENCE: usize = 2 * 1024 * 1024;
 
+#[cfg(test)]
 const ID_PKIX_OCSP_BASIC: &str = "1.3.6.1.5.5.7.48.1.1";
 const EKU_OCSP_SIGNING: &str = "1.3.6.1.5.5.7.3.9";
 
@@ -25,6 +28,7 @@ pub enum RevocationStatus {
     Unknown,
 }
 
+#[cfg(test)]
 fn bad(what: impl Into<String>) -> SignError {
     SignError::Malformed(format!("revocation: {}", what.into()))
 }
@@ -65,6 +69,21 @@ pub struct CertificateList {
 
 impl CertificateList {
     pub fn parse(bytes: &[u8]) -> Result<CertificateList, SignError> {
+        let parsed = craft_pkcs7::revocation::CertificateList::parse(bytes).map_err(crate::der::app_error)?.into_parts();
+        Ok(Self {
+            tbs: parsed.tbs,
+            sig_alg: parsed.sig_alg,
+            signature: parsed.signature,
+            issuer_raw: parsed.issuer_raw,
+            this_update: parsed.this_update,
+            next_update: parsed.next_update,
+            revoked: parsed.revoked,
+        })
+    }
+
+    // Retained parity oracle: original CRL parser by Justin John (4d0078aeff).
+    #[cfg(test)]
+    fn parse_legacy(bytes: &[u8]) -> Result<CertificateList, SignError> {
         if bytes.is_empty() || bytes.len() > MAX_EVIDENCE {
             return Err(bad("CRL is empty or exceeds the 2 MiB limit"));
         }
@@ -177,6 +196,52 @@ pub struct OcspResponse {
 
 impl OcspResponse {
     pub fn parse(bytes: &[u8]) -> Result<OcspResponse, SignError> {
+        use craft_pkcs7::revocation as shared;
+        let parsed = shared::OcspResponse::parse(bytes).map_err(crate::der::app_error)?.into_parts();
+        let responder_id = match parsed.responder_id {
+            shared::ResponderId::ByName(v) => ResponderId::ByName(v),
+            shared::ResponderId::ByKey(v) => ResponderId::ByKey(v),
+        };
+        let responses = parsed
+            .responses
+            .into_iter()
+            .map(|response| {
+                let (id, status, this_update, next_update) = response.into_parts();
+                let hash_alg = match id.hash_alg {
+                    craft_pkcs7::DigestAlg::Sha1 => DigestAlg::Sha1,
+                    craft_pkcs7::DigestAlg::Sha224 => DigestAlg::Sha224,
+                    craft_pkcs7::DigestAlg::Sha256 => DigestAlg::Sha256,
+                    craft_pkcs7::DigestAlg::Sha384 => DigestAlg::Sha384,
+                    craft_pkcs7::DigestAlg::Sha512 => DigestAlg::Sha512,
+                    craft_pkcs7::DigestAlg::Sha512_224 => DigestAlg::Sha512_224,
+                    craft_pkcs7::DigestAlg::Sha512_256 => DigestAlg::Sha512_256,
+                    craft_pkcs7::DigestAlg::Sha3_224 => DigestAlg::Sha3_224,
+                    craft_pkcs7::DigestAlg::Sha3_256 => DigestAlg::Sha3_256,
+                    craft_pkcs7::DigestAlg::Sha3_384 => DigestAlg::Sha3_384,
+                    craft_pkcs7::DigestAlg::Sha3_512 => DigestAlg::Sha3_512,
+                    craft_pkcs7::DigestAlg::Ripemd160 => DigestAlg::Ripemd160,
+                };
+                let cert_id = CertId { hash_alg, issuer_name_hash: id.issuer_name_hash, issuer_key_hash: id.issuer_key_hash, serial: id.serial };
+                let status = match status {
+                    shared::CertStatus::Good => CertStatus::Good,
+                    shared::CertStatus::Revoked(at) => CertStatus::Revoked(at),
+                    shared::CertStatus::Unknown => CertStatus::Unknown,
+                };
+                SingleResponse { cert_id, status, this_update, next_update }
+            })
+            .collect();
+        Ok(Self {
+            tbs: parsed.tbs,
+            sig_alg: parsed.sig_alg,
+            signature: parsed.signature,
+            responder_id,
+            responses,
+            responder_cert: parsed.responder_cert.map(Certificate::from_shared),
+        })
+    }
+
+    #[cfg(test)]
+    fn parse_legacy(bytes: &[u8]) -> Result<OcspResponse, SignError> {
         if bytes.is_empty() || bytes.len() > MAX_EVIDENCE {
             return Err(bad("OCSP response is empty or exceeds the 2 MiB limit"));
         }
@@ -201,7 +266,7 @@ impl OcspResponse {
             if t.tag == tag::ctx(0) {
                 for c in t.children()? {
                     if c.tag == tag::SEQUENCE
-                        && let Ok(cert) = Certificate::parse(c.raw)
+                        && let Ok(cert) = Certificate::parse_legacy(c.raw)
                     {
                         responder_cert.get_or_insert(cert);
                     }
@@ -305,5 +370,131 @@ impl OcspResponse {
             CertStatus::Revoked(at) => RevocationStatus::Revoked { at },
             CertStatus::Unknown => RevocationStatus::Unknown,
         }
+    }
+}
+
+#[cfg(test)]
+mod shared_ocsp_tests {
+    use super::*;
+    use crate::der;
+
+    fn compare(bytes: &[u8]) {
+        match (OcspResponse::parse(bytes), OcspResponse::parse_legacy(bytes)) {
+            (Ok(a), Ok(b)) => {
+                assert_eq!(
+                    (a.tbs, a.sig_alg, a.signature, a.responses, a.responder_cert),
+                    (b.tbs, b.sig_alg, b.signature, b.responses, b.responder_cert)
+                );
+                match (a.responder_id, b.responder_id) {
+                    (ResponderId::ByName(a), ResponderId::ByName(b)) | (ResponderId::ByKey(a), ResponderId::ByKey(b)) => assert_eq!(a, b),
+                    _ => panic!("responder identifier changed"),
+                }
+            }
+            (Err(a), Err(b)) => assert_eq!(format!("{a:?}"), format!("{b:?}")),
+            _ => panic!("shared and retained OCSP parsers disagree"),
+        }
+    }
+
+    #[test]
+    fn standard_certificate_wrapper_intentionally_improves_on_legacy() -> Result<(), SignError> {
+        let date = Time { year: 2026, month: 6, day: 15, hour: 12, minute: 0, second: 0 };
+        let cert = crate::pkcs12::open(include_bytes!("../tests/data/ec-p256.p12"), "test")?.certificate;
+        let hash = DigestAlg::Sha256;
+        let id = der::seq(&[&hash.algorithm(), &der::octets(&[1]), &der::octets(&[2]), &der::uint(&[0x80])]);
+        let single = der::seq(&[&id, &der::tlv(tag::ctx_prim(0), &[]), &date.encode()]);
+        let identity = der::tlv(tag::ctx(1), &cert.subject.raw);
+        let tbs = der::seq(&[&identity, &date.encode(), &der::seq(&[&single])]);
+        let basic = der::seq(&[&tbs, &hash.algorithm(), &der::bit_string(&[1, 2, 3]), &der::explicit(0, &der::seq(&[&cert.raw]))]);
+        let response =
+            der::seq(&[&der::tlv(tag::ENUMERATED, &[0]), &der::explicit(0, &der::seq(&[&der::oid(ID_PKIX_OCSP_BASIC), &der::octets(&basic)]))]);
+        let parsed = OcspResponse::parse(&response)?;
+        let legacy = OcspResponse::parse_legacy(&response)?;
+        // Deliberate correction from shared #2245: the frozen oracle dropped the RFC 6960
+        // SEQUENCE OF wrapper. Keep that baseline unchanged rather than hiding the difference.
+        assert_eq!(parsed.responder_cert.as_ref(), Some(&cert));
+        assert!(legacy.responder_cert.is_none());
+        assert_eq!(parsed.responses, legacy.responses);
+        // Finding a certificate must not make this fabricated response trusted.
+        assert_eq!(parsed.check(&cert, &cert, date), RevocationStatus::Unknown);
+        Ok(())
+    }
+
+    #[test]
+    fn shared_ocsp_matches_status_digest_identity_and_error_policy() {
+        let date = Time { year: 2026, month: 6, day: 15, hour: 12, minute: 0, second: 0 };
+        let cert = crate::pkcs12::open(include_bytes!("../tests/data/ec-p256.p12"), "test").unwrap().certificate;
+        let statuses = [der::tlv(tag::ctx_prim(0), &[]), der::tlv(tag::ctx(1), &date.encode()), der::tlv(tag::ctx_prim(2), &[])];
+        let identities = [der::tlv(tag::ctx(1), &cert.subject.raw), der::tlv(tag::ctx(2), &der::octets(&[1, 2, 3]))];
+        for hash in DigestAlg::ALL {
+            for status in &statuses {
+                for identity in &identities {
+                    let id = der::seq(&[&hash.algorithm(), &der::octets(&[1]), &der::octets(&[2]), &der::uint(&[0x80])]);
+                    let single = der::seq(&[&id, status, &date.encode(), &der::explicit(0, &date.encode())]);
+                    let tbs = der::seq(&[identity, &date.encode(), &der::seq(&[&single])]);
+                    // Preserve the existing parser's accepted direct certificate sequence form.
+                    let basic = der::seq(&[&tbs, &hash.algorithm(), &der::bit_string(&[1, 2, 3]), &der::explicit(0, &cert.raw)]);
+                    let response = der::seq(&[
+                        &der::tlv(tag::ENUMERATED, &[0]),
+                        &der::explicit(0, &der::seq(&[&der::oid(ID_PKIX_OCSP_BASIC), &der::octets(&basic)])),
+                    ]);
+                    compare(&response);
+                    for end in [0, 1, response.len() / 2, response.len() - 1] {
+                        compare(&response[..end]);
+                    }
+                    // Mutate each byte in one representative record, keeping test cost bounded.
+                    if hash == DigestAlg::Sha256 && status == &statuses[0] && identity == &identities[0] {
+                        for i in 0..response.len() {
+                            let mut mutated = response.clone();
+                            mutated[i] ^= 0x80;
+                            compare(&mutated);
+                        }
+                    }
+                }
+            }
+        }
+        compare(&vec![0; MAX_EVIDENCE]);
+        compare(&vec![0; MAX_EVIDENCE + 1]);
+        compare(&der::seq(&[&der::tlv(tag::ENUMERATED, &[1])]));
+    }
+}
+
+#[cfg(test)]
+mod shared_crl_tests {
+    use super::*;
+    use crate::der;
+
+    #[test]
+    fn shared_crl_parser_matches_retained_app_reader() {
+        let date = Time { year: 2026, month: 6, day: 15, hour: 12, minute: 0, second: 0 };
+        let algorithm = DigestAlg::Sha256.algorithm();
+        let tbs = der::seq(&[
+            &der::int(1),
+            &algorithm,
+            &der::seq(&[]),
+            &date.encode(),
+            &date.encode(),
+            &der::seq(&[&der::seq(&[&der::uint(&[0x80]), &date.encode()])]),
+        ]);
+        let valid = der::seq(&[&tbs, &algorithm, &der::bit_string(&[1, 2, 3])]);
+        let compare = |bytes: &[u8]| match (CertificateList::parse(bytes), CertificateList::parse_legacy(bytes)) {
+            (Ok(a), Ok(b)) => {
+                assert_eq!(
+                    (a.tbs, a.sig_alg, a.signature, a.issuer_raw, a.this_update, a.next_update, a.revoked),
+                    (b.tbs, b.sig_alg, b.signature, b.issuer_raw, b.this_update, b.next_update, b.revoked)
+                );
+            }
+            (Err(a), Err(b)) => assert_eq!(format!("{a:?}"), format!("{b:?}")),
+            _ => panic!("shared and retained CRL parsers disagree"),
+        };
+        for end in 0..=valid.len() {
+            compare(&valid[..end]);
+        }
+        for i in 0..valid.len() {
+            let mut mutated = valid.clone();
+            mutated[i] ^= 0x80;
+            compare(&mutated);
+        }
+        compare(&vec![0; MAX_EVIDENCE]);
+        compare(&vec![0; MAX_EVIDENCE + 1]);
     }
 }

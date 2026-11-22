@@ -49,6 +49,31 @@ fn settle(h: &mut Harness<'static, PdfCraftApp>) {
 
 #[test]
 fn a_newer_release_is_offered_for_download() {
+    #[cfg(target_os = "linux")]
+    {
+        const FIXTURE: &str = "PDFCRAFT_TEST_UPDATE_DOWNLOAD_FIXTURE";
+        if craft_update::self_update::is_self_updating(&pdfcraft_ui_egui::UPDATE_APP) {
+            assert!(std::env::var_os(FIXTURE).is_none(), "the fixture must be detected as a Cargo build");
+            // nextest's extracted archive can omit Cargo's metadata. Give the child a
+            // private build directory with the marker the updater uses to identify it.
+            let current = std::env::current_exe().unwrap();
+            let build = tempfile::tempdir_in(current.parent().unwrap()).unwrap();
+            std::fs::write(build.path().join(".rustc_info.json"), "{}").unwrap();
+            let exe = build.path().join("update-download-test");
+            if std::fs::hard_link(&current, &exe).is_err() {
+                std::fs::copy(&current, &exe).unwrap();
+            }
+            let output = std::process::Command::new(exe)
+                .args(["--exact", "updates::a_newer_release_is_offered_for_download", "--nocapture"])
+                .env(FIXTURE, "1")
+                .env_remove(craft_update::self_update::DEV_VAR)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+            return;
+        }
+    }
     let mut h = harness(Ok(Some("v99.0.0")));
     h.state_mut().execute("help.check_updates");
     settle(&mut h);

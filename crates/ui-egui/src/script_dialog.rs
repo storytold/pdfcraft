@@ -69,6 +69,18 @@ fn reply_to_prompt(ctx: &egui::Context, pending: &mut Pending, answer: Option<St
 impl PdfCraftApp {
     /// Start one explicit button interaction with captured document/view state and leave egui responsive.
     pub(crate) fn start_ui_script(&mut self, id: DocId, script: &str, field: Option<&str>, identity: Option<u64>) {
+        self.start_script_with(id, |s| s.start_javascript_target(id, script, field, identity));
+    }
+    /// Start link `index` on page `page`'s JavaScript action (0-based) as a button's runs: its
+    /// menus and questions are asked without blocking the window (#2081).
+    pub(crate) fn start_link_script(&mut self, id: DocId, page: usize, index: usize) {
+        self.start_script_with(id, |s| s.start_link_javascript(id, page, index));
+    }
+    fn start_script_with(
+        &mut self,
+        id: DocId,
+        start: impl FnOnce(&mut pdfcraft_engine::Session) -> Result<PendingScript, pdfcraft_engine::EditError>,
+    ) {
         if self.script_pending.is_some() {
             self.notify("Another form script is active; this click was not run");
             return;
@@ -76,7 +88,7 @@ impl PdfCraftApp {
         let Some(view) = self.views.iter().find(|v| v.id == id) else { return };
         let (zoom, page, highlight) = (view.zoom, view.current, view.highlight_fields);
         self.session.set_javascript_view(id, zoom as f64 * 100.0, highlight, page);
-        match self.session.start_javascript_target(id, script, field, identity) {
+        match start(&mut self.session) {
             Ok(run) => {
                 self.script_pending =
                     Some(Pending { run, prompt: None, text: String::new(), focus: false, started: Instant::now(), zoom, page, serial: 0 })
@@ -408,5 +420,71 @@ mod review13_ui_tests {
         let view = app.views.iter().find(|v| v.id == id).unwrap();
         assert_eq!(view.current, 1);
         assert_eq!(view.forms.focus.as_ref().unwrap().name, "later");
+    }
+}
+
+#[cfg(test)]
+mod link_script_tests {
+    use super::*;
+
+    /// A one-page PDF whose only annotation is a link running `script`, and a field `log`.
+    fn linked(script: &str) -> Vec<u8> {
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 4 0 R] >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (log) /V () /Rect [20 250 180 270] /P 3 0 R /F 4 >>".into(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+            format!("<< /Type /Annot /Subtype /Link /Rect [20 20 180 60] /Border [0 0 0] /A << /S /JavaScript /JS ({script}) >> >>"),
+        ];
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        pdf
+    }
+
+    /// Clicking a JavaScript link runs its action without blocking: its popup menu is the
+    /// window's prompt, the answer resumes it, and its field change and openDoc consent apply.
+    #[test]
+    fn a_javascript_link_asks_its_menu_and_applies_its_result() {
+        // An absolute path on this system (the document has no folder): on Windows, Acrobat's
+        // `/C/…` form, which reads as `C:/…`.
+        let path = if cfg!(windows) { "/C/abs/other.pdf" } else { "/abs/other.pdf" };
+        let script = format!("getField\\('log'\\).value = app.popUpMenuEx\\({{cName:'A', cReturn:'a'}}\\) + event.type; app.openDoc\\('{path}'\\);");
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("link.pdf", None, linked(&script)).unwrap();
+        let id = app.active_ids().unwrap().1;
+        app.run_link_script(id, 0, 0);
+        let ctx = egui::Context::default();
+        for _ in 0..400 {
+            app.poll_script_dialog(&ctx);
+            if app.script_pending.as_ref().is_some_and(|p| p.prompt.is_some()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let (prompt, reply) = app.script_pending.as_mut().unwrap().prompt.take().unwrap();
+        assert!(matches!(&prompt, Prompt::Menu(items) if items.len() == 1 && items[0].value == "a"), "{prompt:?}");
+        reply.send(Some("a".into())).unwrap();
+        for _ in 0..400 {
+            app.poll_script_dialog(&ctx);
+            if app.script_pending.is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(app.script_pending.is_none());
+        let log = app.session.get(id).unwrap().form.iter().find(|f| f.name == "log").unwrap().value.clone();
+        assert_eq!(log, ["aLink"]);
+        assert!(app.pending_remote_link.as_ref().is_some_and(|p| p.path.ends_with("other.pdf")), "openDoc waits for consent");
     }
 }

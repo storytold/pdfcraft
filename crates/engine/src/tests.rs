@@ -699,7 +699,7 @@ fn edits_update_view_data_and_mark_dirty() {
 
 /// A font of an Adobe CJK collection that a PDF does not embed is drawn with an installed face on
 /// the viewer's pool only. An export of the same page, which can be saved, has nothing drawn with
-/// an installed font (AGENTS.md §1.2, §1.4). Skipped where no such face is installed.
+/// an installed font (licences.md; docs/development.md "Fonts and attribution"). Skipped where no such face is installed.
 #[test]
 fn installed_cjk_fonts_draw_in_the_viewer_but_not_in_an_export() {
     let content = "BT /F1 40 Tf 5 15 Td <7E419AD45B57> Tj ET";
@@ -1201,6 +1201,98 @@ fn reset_layers_returns_to_the_files_visibility() {
     assert!(!s.reset_layers(DocId(999)));
 }
 
+/// #7411: a full Save As renumbers the objects (the layer groups move from 9 and 10 to the lowest
+/// free numbers); the open document keeps the layer the user hid hidden, and the other shown.
+#[test]
+fn a_full_save_as_keeps_the_layer_choices_of_the_open_document() {
+    let content = b"/OC /R BDC 1 0 0 rg 10 10 40 80 re f EMC /OC /B BDC 0 0 1 rg 110 10 40 80 re f EMC";
+    let mut objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [9 0 R 10 0 R] /D << /BaseState /ON /Order [9 0 R 10 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << /Properties << /R 9 0 R /B 10 0 R >> >> >>".to_vec(),
+        [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat(),
+    ];
+    // Objects 5 to 8 are not used, so a rewrite closes the gap.
+    objs.extend((5..=8).map(|_| b"null".to_vec()));
+    objs.push(b"<< /Type /OCG /Name (Red rectangle) >>".to_vec());
+    objs.push(b"<< /Type /OCG /Name (Blue rectangle) >>".to_vec());
+    let mut s = Session::new();
+    let id = s.open("layers.pdf", None, Arc::new(pdf_of_objects(&objs)), None).unwrap();
+    let colours = |s: &Session| {
+        let page = render_page(s, id);
+        let px = page.rgba.as_chunks::<4>().0;
+        let red = px.iter().filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60).count();
+        let blue = px.iter().filter(|p| p[2] > 200 && p[0] < 60 && p[1] < 60).count();
+        (red, blue)
+    };
+    let hidden = |s: &Session| s.get(id).unwrap().info.layers.iter().map(|l| (l.name.clone(), l.visible)).collect::<Vec<_>>();
+    let (red, blue) = colours(&s);
+    assert!(red > 100 && blue > 100, "both layers show as the file opens: {red} red, {blue} blue");
+    assert!(s.set_layer_visible(id, 0, false));
+    assert_eq!(colours(&s).0, 0, "the red rectangle is hidden");
+    let before = s.get(id).unwrap().info.layers.iter().map(|l| l.id).collect::<Vec<_>>();
+
+    let saved = s.save_full_bytes(id).unwrap();
+    s.mark_saved(id, saved, Some("/tmp/out/layers.pdf".into())).unwrap();
+
+    let after = s.get(id).unwrap().info.layers.iter().map(|l| l.id).collect::<Vec<_>>();
+    assert_ne!(before, after, "the rewrite renumbered the layer groups");
+    assert_eq!(hidden(&s), [("Red rectangle".to_string(), false), ("Blue rectangle".to_string(), true)]);
+    let (red, blue) = colours(&s);
+    assert_eq!(red, 0, "the page is still drawn without the red rectangle");
+    assert!(blue > 100, "and with the blue one: {blue}");
+}
+
+/// #7411: undo history survives the full Save As, whose renumbering the restored graph does not
+/// share. Undo and redo carry the user's layer choices over by name, so the layer hidden before the
+/// save stays hidden in the layer list and in the pixels, and the renderer's overrides name the
+/// numbers the restored graph has.
+#[test]
+fn undo_and_redo_after_a_full_save_as_keep_the_hidden_layer_hidden() {
+    let content = b"/OC /R BDC 1 0 0 rg 10 10 40 80 re f EMC /OC /B BDC 0 0 1 rg 110 10 40 80 re f EMC";
+    let mut objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [9 0 R 10 0 R] /D << /BaseState /ON /Order [9 0 R 10 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << /Properties << /R 9 0 R /B 10 0 R >> >> >>".to_vec(),
+        [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat(),
+    ];
+    objs.extend((5..=8).map(|_| b"null".to_vec()));
+    objs.push(b"<< /Type /OCG /Name (Red rectangle) >>".to_vec());
+    objs.push(b"<< /Type /OCG /Name (Blue rectangle) >>".to_vec());
+    let mut s = Session::new();
+    let id = s.open("layers.pdf", None, Arc::new(pdf_of_objects(&objs)), None).unwrap();
+    let colours = |s: &Session| {
+        let page = render_page(s, id);
+        let px = page.rgba.as_chunks::<4>().0;
+        let red = px.iter().filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60).count();
+        let blue = px.iter().filter(|p| p[2] > 200 && p[0] < 60 && p[1] < 60).count();
+        (red, blue)
+    };
+    let layers = |s: &Session| s.get(id).unwrap().info.layers.iter().map(|l| (l.name.clone(), l.visible)).collect::<Vec<_>>();
+    let ids = |s: &Session| s.get(id).unwrap().info.layers.iter().map(|l| l.id).collect::<Vec<_>>();
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 180 }).unwrap();
+    assert!(s.set_layer_visible(id, 0, false));
+    let saved = s.save_full_bytes(id).unwrap();
+    s.mark_saved(id, saved, Some("/tmp/out/layers.pdf".into())).unwrap();
+    let saved_ids = ids(&s);
+    let expect_red_hidden = |s: &Session, step: &str| {
+        assert_eq!(layers(s), [("Red rectangle".to_string(), false), ("Blue rectangle".to_string(), true)], "{step}: the layer list");
+        let (red, blue) = colours(s);
+        assert_eq!((red, blue > 100), (0, true), "{step}: the pixels show the blue rectangle only");
+    };
+    expect_red_hidden(&s, "after the save");
+
+    s.undo(id).unwrap();
+    assert_ne!(ids(&s), saved_ids, "undo brings back the numbers from before the save");
+    expect_red_hidden(&s, "after undo");
+    s.redo(id).unwrap();
+    assert_eq!(ids(&s), saved_ids, "redo brings back the numbers the save wrote");
+    expect_red_hidden(&s, "after redo");
+    // Choices made after the trip still apply to the numbers now in use.
+    assert!(s.set_layer_visible(id, 0, true));
+    assert!(colours(&s).0 > 100, "the red rectangle shows again when asked for");
+}
+
 #[test]
 fn edits_to_unknown_documents_are_rejected() {
     let (mut s, _) = session_with(1);
@@ -1608,7 +1700,7 @@ fn files_for_combine_are_made_into_pdfs_and_pdfs_pass_through() {
 
 fn protected(user: &str, owner: &str, permissions: i32) -> Arc<Vec<u8>> {
     let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(2))).unwrap();
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes256,
         user_password: user,
         owner_password: owner,
@@ -1631,7 +1723,7 @@ fn protected_with_changes(algorithm: pdfcraft_cos::Algorithm, changes: Changes) 
 fn protected_pages(pages: usize, algorithm: pdfcraft_cos::Algorithm, changes: Changes, seed: u8) -> Arc<Vec<u8>> {
     let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(pages))).unwrap();
     let protection = Protection { permissions_password: Some("boss".into()), changes, algorithm, ..Protection::default() };
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm,
         user_password: "",
         owner_password: "boss",
@@ -1796,7 +1888,7 @@ fn pages_under_the_same_protection_are_inserted_without_page_extraction() {
 fn page_extraction_needs_the_copy_permission_on_every_revision() {
     for algorithm in [pdfcraft_cos::Algorithm::Rc4_40, pdfcraft_cos::Algorithm::Aes256] {
         let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(2))).unwrap();
-        doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
             algorithm,
             user_password: "",
             owner_password: "boss",
@@ -1935,8 +2027,8 @@ fn low_resolution_printing_prints_pictures_of_at_most_150_dpi() {
     let low = s.open("low.pdf", None, bytes.clone(), None).unwrap();
     let width = f64::from(s.get(low).unwrap().info.pages[0].width);
     let actual = print::Settings { pages: vec![0], layout: print::Layout::Size(print::SizeMode::Actual), ..Default::default() };
-    for raster in [None, Some(print::Raster { dpi: 600.0, grayscale: false })] {
-        let printed = s.print_pdf(low, &print::Settings { raster, ..actual.clone() }).unwrap();
+    for raster in [None, Some(print::Raster { dpi: 600.0, grayscale: false, colour: None })] {
+        let printed = s.print_pdf(low, &print::Settings { raster: raster.clone(), ..actual.clone() }).unwrap();
         let mut s2 = Session::new();
         let id2 = s2.open("print.pdf", None, Arc::new(printed.clone()), None).unwrap();
         assert!(page_texts(&s2, id2).iter().all(|t| t.trim().is_empty()), "{raster:?}: no text is left");
@@ -1992,7 +2084,7 @@ fn print_content_pdf() -> Vec<u8> {
 #[test]
 fn low_resolution_printing_prints_only_the_chosen_content() {
     let mut cos = pdfcraft_cos::Document::open(Arc::new(print_content_pdf())).unwrap();
-    cos.set_encryption(&pdfcraft_cos::NewEncryption {
+    cos.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes256,
         user_password: "",
         owner_password: "owner",
@@ -2148,7 +2240,7 @@ fn combining_protected_files_is_refused_clearly() {
 fn owner_password_of_older_revisions_opens_the_viewer_too() {
     for alg in [pdfcraft_cos::Algorithm::Rc4_128, pdfcraft_cos::Algorithm::Aes128] {
         let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
-        doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
             algorithm: alg,
             user_password: "u",
             owner_password: "o",
@@ -2172,7 +2264,7 @@ fn owner_password_of_older_revisions_opens_the_viewer_too() {
 fn render_password_for_recovers_the_user_password_of_older_revisions() {
     for alg in [pdfcraft_cos::Algorithm::Rc4_40, pdfcraft_cos::Algorithm::Rc4_128, pdfcraft_cos::Algorithm::Aes128, pdfcraft_cos::Algorithm::Aes256] {
         let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
-        doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
             algorithm: alg,
             user_password: "u",
             owner_password: "o",
@@ -2431,7 +2523,7 @@ fn bookmarks_from_text_styles_refuse_one_style_for_two_levels() {
 #[test]
 fn bookmarks_from_text_styles_need_copying_permission() {
     let mut doc = pdfcraft_cos::Document::open(Arc::new(styled_headings_fixture())).unwrap();
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes256,
         user_password: "",
         owner_password: "owner",
@@ -2470,6 +2562,165 @@ fn headings_in_two_columns_are_two_bookmarks() {
     let style = s.get(id).unwrap().text_styles()[0].style.clone();
     s.apply(id, Edit::BookmarksFromTextStyles { levels: vec![style] }).unwrap();
     assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["Untitled→0[Left heading→1,Right heading→1]"]);
+}
+
+/// #7415: a heading's bookmark goes to the top of the heading as displayed. The same heading is
+/// shown at the same place on four pages turned 0, 90, 180 and 270 degrees; on a quarter turn the
+/// displayed top is a user-space x, so it is the destination's `left` and `top` stays unspecified.
+#[test]
+fn style_bookmarks_go_to_the_displayed_heading_top_on_turned_pages() {
+    // (rotation, media box, text matrix): each shows "Birch Survey" at 90 pt from the left and
+    // 130 pt (baseline) from the top of a 400 x 600 displayed page.
+    let pages = [
+        (0, "0 0 400 600", "1 0 0 1 90 470"),
+        (90, "0 0 600 400", "0 1 -1 0 130 90"),
+        (180, "0 0 400 600", "-1 0 0 -1 310 130"),
+        (270, "0 0 600 400", "0 -1 1 0 470 310"),
+    ];
+    let mut pdf =
+        pdfcraft_testkit::Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R >>").obj("<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R 9 0 R] /Count 4 >>");
+    for (i, (rotate, media, tm)) in pages.iter().enumerate() {
+        let content = format!("BT /F1 20 Tf {tm} Tm (Birch Survey) Tj ET");
+        pdf = pdf
+            .obj(format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [{media}] /Rotate {rotate} /Resources << /Font << /F1 11 0 R >> >> /Contents {} 0 R >>",
+                4 + 2 * i
+            ))
+            .stream("", &content);
+    }
+    let bytes = pdf.obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>").build();
+    let mut s = Session::new();
+    let id = s.open("turned.pdf", None, Arc::new(bytes), None).unwrap();
+    let style = s.get(id).unwrap().text_styles()[0].style.clone();
+    s.apply(id, Edit::BookmarksFromTextStyles { levels: vec![style] }).unwrap();
+    let doc = s.get(id).unwrap();
+    let kids = &doc.info.outline[0].children;
+    assert_eq!(kids.len(), 4);
+    // The displayed top of the heading, from the upright page.
+    let top_of_heading = {
+        let cos = pdfcraft_cos::Document::open(doc.bytes.clone()).unwrap();
+        let line = &pdfcraft_edit::text_lines(&cos, 0).unwrap()[0];
+        600.0 - line.rect[1].max(line.rect[3]) as f32
+    };
+    assert!((110.0..115.0).contains(&top_of_heading), "{top_of_heading}");
+    for (i, kid) in kids.iter().enumerate() {
+        let page = &doc.info.pages[i];
+        assert_eq!(page.rotation, pages[i].0);
+        let [want_left, want_top] = page.xyz_for_view(None, Some(top_of_heading));
+        match kid.view {
+            pdfcraft_render::DestView::Xyz { left, top, zoom: None } => {
+                let near = |got: Option<f32>, want: Option<f32>| match (got, want) {
+                    (None, None) => true,
+                    (Some(g), Some(w)) => (g - w).abs() < 1.0,
+                    _ => false,
+                };
+                assert!(near(left, want_left) && near(top, want_top), "rotate {}: got {left:?} {top:?}, want {want_left:?} {want_top:?}", pages[i].0);
+            }
+            ref v => panic!("{v:?}"),
+        }
+    }
+}
+
+/// #7415: on a turned page the headings are read in displayed order (top to bottom), a heading
+/// set on two lines is one bookmark, and each goes to the top of its first displayed line. One
+/// layout (two headings and a two-line heading, written to the file out of order) on pages turned
+/// 0, 90, 180 and 270 degrees must give the same bookmarks at the same displayed tops, with and
+/// without a crop box whose origin is not the page's.
+#[test]
+fn style_bookmarks_read_and_join_headings_as_displayed_on_turned_pages() {
+    for cropped in [false, true] {
+        let (mut s, id) = turned_headings_session(cropped);
+        let style = s.get(id).unwrap().text_styles()[0].style.clone();
+        s.apply(id, Edit::BookmarksFromTextStyles { levels: vec![style] }).unwrap();
+        check_turned_headings(&s, id, cropped);
+        // The destinations survive a save and reopen (`/XYZ left null` on the quarter turns).
+        let bytes = s.save_bytes(id).unwrap();
+        let mut s2 = Session::new();
+        let id2 = s2.open("saved.pdf", None, bytes, None).unwrap();
+        check_turned_headings(&s2, id2, cropped);
+    }
+}
+
+/// A document of four pages turned 0, 90, 180 and 270, each showing the same three headings at the
+/// same displayed places on a displayed page of 400 x 600 (or 600 x 600 with `cropped`, where
+/// the crop box does not start at the page's origin), written in an order that is not reading order.
+fn turned_headings_session(cropped: bool) -> (Session, DocId) {
+    // Displayed baselines (x, y from the top).
+    let lines = [("Gamma Three", 50.0, 450.0), ("Beta Cont", 50.0, 274.0), ("Alpha One", 50.0, 100.0), ("Beta Two", 50.0, 250.0)];
+    // (rotation, page boxes, text matrix prefix, user position of a displayed (x, y)).
+    type Place = fn(f64, f64) -> (f64, f64);
+    let plain: [(i32, &str, &str, Place); 4] = [
+        (0, "/MediaBox [0 0 400 600]", "1 0 0 1", |x, y| (x, 600.0 - y)),
+        (90, "/MediaBox [0 0 600 400]", "0 1 -1 0", |x, y| (y, x)),
+        (180, "/MediaBox [0 0 400 600]", "-1 0 0 -1", |x, y| (400.0 - x, y)),
+        (270, "/MediaBox [0 0 600 400]", "0 -1 1 0", |x, y| (600.0 - y, 400.0 - x)),
+    ];
+    let boxes = "/MediaBox [0 0 700 700] /CropBox [50 40 650 640]";
+    let crop: [(i32, &str, &str, Place); 4] = [
+        (0, boxes, "1 0 0 1", |x, y| (50.0 + x, 640.0 - y)),
+        (90, boxes, "0 1 -1 0", |x, y| (50.0 + y, 40.0 + x)),
+        (180, boxes, "-1 0 0 -1", |x, y| (650.0 - x, 40.0 + y)),
+        (270, boxes, "0 -1 1 0", |x, y| (650.0 - y, 640.0 - x)),
+    ];
+    let mut pdf =
+        pdfcraft_testkit::Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R >>").obj("<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R 9 0 R] /Count 4 >>");
+    for (i, (rotate, boxes, prefix, place)) in (if cropped { crop } else { plain }).iter().enumerate() {
+        let content: String = lines
+            .iter()
+            .map(|(text, x, y)| {
+                let (ux, uy) = place(*x, *y);
+                format!("BT /F1 20 Tf {prefix} {ux} {uy} Tm ({text}) Tj ET\n")
+            })
+            .collect();
+        pdf = pdf
+            .obj(format!(
+                "<< /Type /Page /Parent 2 0 R {boxes} /Rotate {rotate} /Resources << /Font << /F1 11 0 R >> >> /Contents {} 0 R >>",
+                4 + 2 * i
+            ))
+            .stream("", &content);
+    }
+    let bytes = pdf.obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>").build();
+    let mut s = Session::new();
+    let id = s.open("turned.pdf", None, Arc::new(bytes), None).unwrap();
+    (s, id)
+}
+
+/// The bookmarks of [`turned_headings_session`] after "from text styles": displayed order, the
+/// two-line heading joined, each at the displayed top of its first line.
+fn check_turned_headings(s: &Session, id: DocId, cropped: bool) {
+    let doc = s.get(id).unwrap();
+    let kids = &doc.info.outline[0].children;
+    let titles: Vec<_> = kids.iter().map(|k| k.title.as_str()).collect();
+    let per_page = ["Alpha One", "Beta Two Beta Cont", "Gamma Three"];
+    assert_eq!(titles, per_page.repeat(4), "displayed order, the two-line heading joined (cropped: {cropped})");
+    // The displayed tops of the three headings, from the text of the upright page.
+    let cos = pdfcraft_cos::Document::open(doc.bytes.clone()).unwrap();
+    let upright = &doc.info.pages[0];
+    let mut found: Vec<_> =
+        pdfcraft_edit::text_lines(&cos, 0).unwrap().into_iter().map(|l| upright.user_to_view(0.0, l.rect[3].max(l.rect[1]) as f32)[1]).collect();
+    found.sort_by(f32::total_cmp);
+    // Alpha, Beta Two (the upper line of its heading), Gamma: three of the four lines.
+    let tops = [found[0], found[1], found[3]];
+    for (i, kid) in kids.iter().enumerate() {
+        let (page, n) = (&doc.info.pages[i / 3], i % 3);
+        let [want_left, want_top] = page.xyz_for_view(None, Some(tops[n]));
+        let near = |got: Option<f32>, want: Option<f32>| match (got, want) {
+            (None, None) => true,
+            (Some(g), Some(w)) => (g - w).abs() < 1.0,
+            _ => false,
+        };
+        match kid.view {
+            pdfcraft_render::DestView::Xyz { left, top, .. } => {
+                assert!(
+                    near(left, want_left) && near(top, want_top),
+                    "rotate {} {} (cropped: {cropped}): got {left:?} {top:?}, want {want_left:?} {want_top:?}",
+                    page.rotation,
+                    kid.title
+                )
+            }
+            ref v => panic!("{v:?}"),
+        }
+    }
 }
 
 /// `style` at another size.
@@ -2586,7 +2837,7 @@ fn converting_colours_of_comments_needs_the_comment_permission() {
         encrypt_metadata: true,
         seed: [7; 32],
     };
-    cos.set_encryption(&params).unwrap();
+    cos.set_encryption_legacy(&params).unwrap();
     let bytes = pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap();
     let mut s = Session::new();
     let id = s.open("locked.pdf", None, Arc::new(bytes), None).unwrap();
@@ -2608,7 +2859,7 @@ fn comment_permission_is_enforced() {
         encrypt_metadata: true,
         seed: [7; 32],
     };
-    cos.set_encryption(&params).unwrap();
+    cos.set_encryption_legacy(&params).unwrap();
     let bytes = pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap();
     let mut s = Session::new();
     let id = s.open("locked.pdf", None, Arc::new(bytes), None).unwrap();
@@ -3031,16 +3282,16 @@ fn need_appearances_form() -> Vec<u8> {
         "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 11 0 R 12 0 R 15 0 R] >>".into(),
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Ada Lovelace) /Rect [20 250 180 270] /P 3 0 R /AP << /N 8 0 R >> >>".into(),
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (town) /V <FEFF0050006C007A00650148> /Rect [20 200 180 220] /P 3 0 R /AP << /N 9 0 R >> >>".into(),
-        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (city) /V <FEFF00420072006E006F00200159> /Rect [20 150 180 170] /P 3 0 R /AP << /N 10 0 R >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (city) /V <FEFF00420072006E006F00205317> /Rect [20 150 180 170] /P 3 0 R /AP << /N 10 0 R >> >>".into(),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
         stream("/Tx BMC EMC"),
         stream("/Tx BMC EMC"),
         stream("/Tx BMC BT /Helv 10 Tf 2 5 Td (Brno r) Tj ET EMC"),
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (street) /V (Main Street) /Rect [20 100 180 120] /P 3 0 R >>".into(),
-        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (river) /V <FEFF004F0159006500630068> /Rect [20 50 180 70] /P 3 0 R /AP << /N 13 0 R >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (river) /V <FEFF004F5317006500630068> /Rect [20 50 180 70] /P 3 0 R /AP << /N 13 0 R >> >>".into(),
         "<< /Type /XObject /Subtype /Form /BBox [0 0 160 20] /Resources << /XObject << /Bg 14 0 R >> >> /Length 10 >>\nstream\nq /Bg Do Q\nendstream".into(),
         stream("0.9 g 0 0 160 20 re f"),
-        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (lake) /V <FEFF004F0159006500630068> /Rect [20 20 180 40] /P 3 0 R /AP << /N 16 0 R >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (lake) /V <FEFF004F5317006500630068> /Rect [20 20 180 40] /P 3 0 R /AP << /N 16 0 R >> >>".into(),
         "<< /Type /XObject /Subtype /Form /BBox [0 0 160 20] /Resources << /XObject << /Fm 17 0 R >> >> /Length 10 >>\nstream\nq /Fm Do Q\nendstream".into(),
         stream("BT /Helv 10 Tf 2 5 Td (Orech) Tj ET"),
     ];
@@ -3070,7 +3321,8 @@ fn normal_appearance(doc: &pdfcraft_cos::Document, num: u32) -> String {
 
 /// #5939 review: the first signature removes `/NeedAppearances`, so the fields are drawn from
 /// their values first; without that, `name` and `town` would show their empty placeholders. A
-/// field whose own appearance draws its value keeps it rather than get a `?` for `ř`.
+/// field whose own appearance draws its value keeps it rather than get a `?` for `北`, which no
+/// font PdfCraft draws with has; `ň` is drawn from the bundled Inter face (#6822).
 #[test]
 fn the_first_signature_draws_the_fields_need_appearances_left_to_the_viewer() {
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
@@ -3082,7 +3334,8 @@ fn the_first_signature_draws_the_fields_need_appearances_left_to_the_viewer() {
     let doc = pdfcraft_cos::Document::open(signed.clone()).unwrap();
     assert!(!pdfcraft_forms::need_appearances(&doc));
     assert!(normal_appearance(&doc, 4).contains("(Ada Lovelace) Tj"), "{}", normal_appearance(&doc, 4));
-    assert!(normal_appearance(&doc, 5).contains("(Plze?) Tj"), "{}", normal_appearance(&doc, 5));
+    let town = normal_appearance(&doc, 5);
+    assert!(town.contains("(Plze) Tj") && town.contains("/PCLa") && !town.contains('?'), "{town}");
     assert!(normal_appearance(&doc, 6).contains("(Brno r) Tj"), "{}", normal_appearance(&doc, 6));
     assert!(normal_appearance(&doc, 11).contains("(Main Street) Tj"), "{}", normal_appearance(&doc, 11));
     // Its own appearance only paints a background, so `river` gets the drawing, `?` and all.
@@ -3934,8 +4187,8 @@ fn printing_applies_the_print_auto_state() {
     }
     // Hidden in the panel, View entry (no Print recommendation) leaves the preview too.
     assert!(printed_blue[1] * 4 < printed_blue[0] * 3, "the preview follows the panel: {printed_blue:?} blue");
-    for raster in [None, Some(print::Raster { dpi: 72.0, grayscale: false })] {
-        let bytes = Arc::new(s.print_pdf(id, &print::Settings { pages: vec![0], raster, ..Default::default() }).unwrap());
+    for raster in [None, Some(print::Raster { dpi: 72.0, grayscale: false, colour: None })] {
+        let bytes = Arc::new(s.print_pdf(id, &print::Settings { pages: vec![0], raster: raster.clone(), ..Default::default() }).unwrap());
         let mut out = Session::new();
         let printed = out.open("print.pdf", None, bytes.clone(), None).unwrap();
         let (red, green, blue) = colours(&render_page(&out, printed));
@@ -4716,13 +4969,8 @@ fn flattening_fill_and_sign_keeps_other_comments_fields_and_undoes() {
     s.apply(id, fill_item(Shape::Signature { strokes: vec![vec![[10.0, 40.0], [40.0, 70.0], [70.0, 40.0]]] }, "")).unwrap();
     s.apply(id, fill_item(Shape::TypedSignature { rect: [90.0, 40.0, 150.0, 70.0], contours: vec![vec![[0.1, 0.2], [0.5, 0.9], [0.9, 0.2]]] }, ""))
         .unwrap();
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 8, 8);
-        enc.set_color(png::ColorType::Rgba);
-        let pixel = [40u8, 60, 80, 200];
-        enc.write_header().unwrap().write_image_data(&pixel.repeat(64)).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(8, 8, craft_image_codecs::ChannelLayout::Rgba, [40u8, 60, 80, 200].repeat(64)).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let image = SignatureImage::from_bytes(&png).unwrap();
     let info = s.get(id).unwrap().info.pages[0].clone();
     s.apply(id, image.edit(0, &info, [20.0, 120.0], false, "Ada").unwrap()).unwrap();
@@ -4822,10 +5070,11 @@ fn pages_export_as_png_jpeg_and_tiff() {
     let tif = ex.image(0, 144.0, ImageFormat::Tiff).unwrap();
     let decoded = image::load_from_memory_with_format(&tif, image::ImageFormat::Tiff).unwrap();
     assert_eq!((decoded.width(), decoded.height()), (400, 600));
-    let mut tags = tiff::decoder::Decoder::new(std::io::Cursor::new(&tif)).unwrap();
-    let compression = tags.get_tag_u32(tiff::tags::Tag::Compression).unwrap();
-    let predictor = tags.get_tag_u32(tiff::tags::Tag::Predictor).unwrap();
-    assert_eq!((compression, predictor), (5, 1), "LZW, without a predictor");
+    let tiff = craft_tiff::Tiff::parse(&tif).unwrap();
+    let ifd = &tiff.ifds[0];
+    let compression = ifd.u32(craft_tiff::tags::COMPRESSION).unwrap();
+    let predictor = ifd.u32(craft_tiff::tags::PREDICTOR).unwrap();
+    assert_eq!((compression, predictor), (5, 2), "LZW, with horizontal predictor");
 }
 
 /// Export ▸ Image draws several pages at once: each file is the one exporting that page alone
@@ -4894,14 +5143,11 @@ fn exporting_pages_at_once_stops_at_the_first_error() {
 
 /// A TIFF's resolution unit (2 = inch) and its horizontal and vertical resolution.
 fn tiff_resolution(bytes: &[u8]) -> (u32, f64, f64) {
-    use tiff::{decoder::ifd::Value, tags::Tag};
-    let mut d = tiff::decoder::Decoder::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut res = |tag| match d.get_tag(tag).unwrap() {
-        Value::Rational(n, d) => f64::from(n) / f64::from(d),
-        v => panic!("{tag:?} is {v:?}"),
-    };
-    let (x, y) = (res(Tag::XResolution), res(Tag::YResolution));
-    (d.get_tag_u32(Tag::ResolutionUnit).unwrap(), x, y)
+    let tiff = craft_tiff::Tiff::parse(bytes).unwrap();
+    let ifd = &tiff.ifds[0];
+    let x = ifd.f64(craft_tiff::tags::X_RESOLUTION).unwrap();
+    let y = ifd.f64(craft_tiff::tags::Y_RESOLUTION).unwrap();
+    (ifd.u32(craft_tiff::tags::RESOLUTION_UNIT).unwrap(), x, y)
 }
 
 /// An exported TIFF or JPEG says the resolution it was drawn at, so other programs show and print it
@@ -4918,7 +5164,7 @@ fn exported_pages_record_the_resolution_they_were_drawn_at() {
     // pHYs counts pixels per metre: 72 dpi would read back as 72.009, and a page made from the PNG
     // (doc_create from images) would come out 0.01% small.
     let png = ex.image(0, 72.0, ImageFormat::Png).unwrap();
-    assert!(png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap().info().pixel_dims.is_none(), "a PNG states no resolution");
+    assert!(craft_image_codecs::decode(&png).unwrap().meta.dpi.is_none(), "a PNG states no resolution");
 
     // A page too large for the renderer at the asked resolution says the one it was drawn at.
     let mut s = Session::new().with_clock(|| 1_700_000_000);
@@ -4938,13 +5184,8 @@ fn added_text_and_images_render_and_stay_editable() {
     assert_eq!(s.get(id).unwrap().can_undo(), Some("Add text"));
     assert!(page_texts(&s, id)[0].contains("Added note"), "the renderer's extractor sees page content");
     // A PNG, centred at its natural size.
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 20, 10);
-        enc.set_color(png::ColorType::Rgb);
-        let mut w = enc.write_header().unwrap();
-        w.write_image_data(&[0u8; 600]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(20, 10, craft_image_codecs::ChannelLayout::Rgb, vec![0u8; 600]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     s.apply(id, Edit::AddImage { page: 0, rect: None, name: "dot.png".into(), bytes: Arc::new(png) }).unwrap();
     let d = s.get(id).unwrap();
     assert_eq!(d.added().len(), 2);
@@ -4986,13 +5227,9 @@ fn pasted_added_content_keeps_its_style_and_picture() {
     assert_eq!(doc.added()[1].content, moved, "every part of the style, in the new box");
 
     // An image, turned, flipped and cropped.
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 20, 10);
-        enc.set_color(png::ColorType::Rgb);
-        let px: Vec<u8> = (0..200).flat_map(|i| [(i % 256) as u8, 40, 200]).collect();
-        enc.write_header().unwrap().write_image_data(&px).unwrap();
-    }
+    let px: Vec<u8> = (0..200).flat_map(|i| [(i % 256) as u8, 40, 200]).collect();
+    let img = craft_image_codecs::Image::from_u8(20, 10, craft_image_codecs::ChannelLayout::Rgb, px).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 150.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
     let AddedContent::Image(mut img) = s.get(id).unwrap().added()[1].content.clone() else { panic!("the image is the page's second item") };
     (img.rotation, img.flip_h, img.crop) = (1, true, [0.1, 0.0, 0.2, 0.05]);
@@ -5022,12 +5259,8 @@ fn pasted_added_content_keeps_its_style_and_picture() {
     assert_eq!(again.image, first, "one picture object for both pastes");
     // The object holds another picture of the same size (another document's numbering, an undone
     // add): the file is embedded instead of drawing the wrong picture.
-    let mut other_png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut other_png, 20, 10);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[7u8; 600]).unwrap();
-    }
+    let other_img = craft_image_codecs::Image::from_u8(20, 10, craft_image_codecs::ChannelLayout::Rgb, vec![7u8; 600]).unwrap();
+    let other_png = craft_image_codecs::encode(&other_img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let other_file = Some(("other.png".to_string(), Arc::new(other_png)));
     s.apply(id, Edit::PasteContent { page: 0, content: AddedContent::Image(pasted.clone()), file: other_file }).unwrap();
     let AddedContent::Image(fresh) = s.get(id).unwrap().added()[3].content.clone() else { panic!("an image was pasted") };
@@ -5106,12 +5339,8 @@ fn added_images_rotate_flip_and_crop_as_drawn() {
             px.extend_from_slice(if x < 10 { &[255, 0, 0] } else { &[0, 0, 255] });
         }
     }
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 20, 10);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&px).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(20, 10, craft_image_codecs::ChannelLayout::Rgb, px).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     // A 100×100 box at (50, 100) on the 200×300 page.
     s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "rb.png".into(), bytes: Arc::new(png) }).unwrap();
@@ -5660,7 +5889,7 @@ fn signed_documents_round_trip_behind_a_user_password() {
     let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
     // After the test certificate's start date (2026-10-02).
     let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes128,
         user_password: "user",
         owner_password: "owner",
@@ -5839,7 +6068,7 @@ fn assert_signature_artwork_survives_trust(mut cos: pdfcraft_cos::Document, expe
     }
     let mut settings = print::Settings { pages: vec![0], paper: (200.0, 200.0), ..Default::default() };
     let original_vector_print = printed_pixels(session.print_pdf(id, &settings).unwrap());
-    settings.raster = Some(print::Raster { dpi: 72.0, grayscale: false });
+    settings.raster = Some(print::Raster { dpi: 72.0, grayscale: false, colour: None });
     let original_raster_print = printed_pixels(session.print_pdf(id, &settings).unwrap());
     session.set_trusted_certificates(vec![anchor.clone()]);
     let doc = session.get(id).unwrap();
@@ -5984,7 +6213,7 @@ fn real_layered_signatures_round_trip_behind_a_user_password() {
     let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
     let date = "D:20261002120000+01'00'";
     let mut doc = pdfcraft_cos::Document::open(Arc::new(layered_signable_fixture())).unwrap();
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes128,
         user_password: "user",
         owner_password: "owner",
@@ -6147,7 +6376,7 @@ fn named_layer_signatures_show_their_state_through_trust_save_and_reopen() {
 fn named_layer_signatures_round_trip_behind_a_user_password() {
     let (id, anchor) = test_identity();
     let mut doc = pdfcraft_cos::Document::open(Arc::new(named_layer_signable_fixture())).unwrap();
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes128,
         user_password: "user",
         owner_password: "owner",
@@ -6204,7 +6433,7 @@ fn named_layer_states_reach_exports_and_both_print_modes() {
     assert!(text.contains("Signature valid") && !text.contains("Not Verified"), "{text:?}");
     let mut settings = print::Settings { pages: vec![0], paper: (400.0, 300.0), ..Default::default() };
     let (_, _, vector) = printed_pixels(s.print_pdf(id, &settings).unwrap());
-    settings.raster = Some(print::Raster { dpi: 72.0, grayscale: false });
+    settings.raster = Some(print::Raster { dpi: 72.0, grayscale: false, colour: None });
     let (_, _, raster) = printed_pixels(s.print_pdf(id, &settings).unwrap());
     for (mode, pixels) in [("vector", &vector), ("raster", &raster)] {
         assert!(pixels_near(pixels, VALID_GREEN) > 500, "{mode} print draws the valid state");
@@ -6938,7 +7167,7 @@ fn javascript_invalid_field_colour_array_is_refused_without_partial_changes() {
 fn javascript_field_colours_respect_document_fill_permissions() {
     let mut plain = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
     plain
-        .set_encryption(&pdfcraft_cos::NewEncryption {
+        .set_encryption_legacy(&pdfcraft_cos::NewEncryption {
             algorithm: pdfcraft_cos::Algorithm::Aes256,
             user_password: "",
             owner_password: "owner",
@@ -7466,6 +7695,17 @@ fn detecting_fields_on_a_printed_form() {
     let f = &d.form[0];
     assert!(f.widgets[0].rect[0] > 72.0 + 20.0, "{:?}", f.widgets[0].rect);
     assert!(s.detect_fields(id, &[]).is_empty(), "nothing left to detect");
+
+    // #2943: a "label, box, label, box" line names each check box after the label before it.
+    let labels_pdf = paper_form_with(
+        595,
+        842,
+        "BT /F1 10 Tf 100 534 Td (Monsieur) Tj ET 146 532 11 10 re S BT /F1 10 Tf 180 534 Td (Madame) Tj ET 222 532 11 10 re S",
+    );
+    let labels_id = s.open("labels.pdf", None, Arc::new(labels_pdf), None).unwrap();
+    let found = s.detect_fields(labels_id, &[]);
+    let names: Vec<&str> = found.iter().map(|(_, c)| c.name.as_str()).collect();
+    assert_eq!(names, ["Monsieur", "Madame"], "{found:?}");
 }
 
 /// #294, #2831: a detected field sits on a line or box the page already draws, so it gets no border
@@ -7490,18 +7730,11 @@ fn detected_fields_have_no_border_or_fill() {
     assert!(look.border.is_some() && look.fill.is_some(), "{look:?}");
 }
 
-/// A printed form, 420 × 300 pt: a title, a label with a rule to write on, a box with a small
-/// label in its corner, an empty box with its label above, and two check boxes.
-fn paper_form() -> Vec<u8> {
-    let content = "BT /F1 14 Tf 30 270 Td (Gewerbe-Ummeldung) Tj ET \
-        BT /F1 10 Tf 30 230 Td (Name:) Tj ET 0.75 w 80 228 m 380 228 l S \
-        1 w 30 150 350 50 re S BT /F1 7 Tf 34 191 Td (Anschrift) Tj ET \
-        BT /F1 8 Tf 30 124 Td (Telefon) Tj ET 30 90 350 30 re S \
-        30 50 10 10 re S BT /F1 9 Tf 46 51 Td (Haupt) Tj ET 150 50 10 10 re S BT /F1 9 Tf 166 51 Td (Zweig) Tj ET";
+fn paper_form_with(w: u32, h: u32, content: &str) -> Vec<u8> {
     let objs = [
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>").into_bytes(),
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes(),
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
     ];
@@ -7520,6 +7753,20 @@ fn paper_form() -> Vec<u8> {
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     out
+}
+
+/// A printed form, 420 × 300 pt: a title, a label with a rule to write on, a box with a small
+/// label in its corner, an empty box with its label above, and two check boxes.
+fn paper_form() -> Vec<u8> {
+    paper_form_with(
+        420,
+        300,
+        "BT /F1 14 Tf 30 270 Td (Gewerbe-Ummeldung) Tj ET \
+        BT /F1 10 Tf 30 230 Td (Name:) Tj ET 0.75 w 80 228 m 380 228 l S \
+        1 w 30 150 350 50 re S BT /F1 7 Tf 34 191 Td (Anschrift) Tj ET \
+        BT /F1 8 Tf 30 124 Td (Telefon) Tj ET 30 90 350 30 re S \
+        30 50 10 10 re S BT /F1 9 Tf 46 51 Td (Haupt) Tj ET 150 50 10 10 re S BT /F1 9 Tf 166 51 Td (Zweig) Tj ET",
+    )
 }
 
 /// How the paper form was scanned.
@@ -10432,7 +10679,7 @@ fn legacy_passwords_with_turkish_characters_open() {
         encrypt_metadata: true,
         seed: [7; 32],
     };
-    cos.set_encryption(&params).unwrap();
+    cos.set_encryption_legacy(&params).unwrap();
     let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap());
     let mut s = Session::new();
     // The renderer used to try only the UTF-8 bytes, and the owner fallback handed it the
@@ -10496,7 +10743,7 @@ fn aes256_files_whose_passwords_saslprep_changes_open_as_typed() {
             encrypt_metadata: true,
             seed: [7; 32],
         };
-        cos.set_encryption(&params).unwrap();
+        cos.set_encryption_legacy(&params).unwrap();
         let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap());
         let mut s = Session::new();
         // pdfcraft-cos accepts the password as typed (it applies SASLprep); the renderer used to
@@ -11319,7 +11566,7 @@ fn printing_as_image_sends_pictures_instead_of_pages() {
     let settings = print::Settings {
         pages: vec![1, 2, 1],
         layout: print::Layout::Size(print::SizeMode::Actual),
-        raster: Some(print::Raster { dpi: 100.0, grayscale: false }),
+        raster: Some(print::Raster { dpi: 100.0, grayscale: false, colour: None }),
         ..Default::default()
     };
     let bytes = s.print_pdf(id, &settings).unwrap();
@@ -11341,13 +11588,52 @@ fn printing_as_image_sends_pictures_instead_of_pages() {
     assert!((w as f64 - page_size.0 * 100.0 / 72.0).abs() <= 1.0, "{w} px for {} pt", page_size.0);
     assert!(images.iter().all(|d| d.name(b"ColorSpace") == Some(b"DeviceRGB")), "{images:?}");
     // Grayscale renders the pictures grey (the printer is not merely asked for monochrome).
-    let grey = s.print_pdf(id, &print::Settings { raster: Some(print::Raster { dpi: 72.0, grayscale: true }), ..settings.clone() }).unwrap();
+    let grey =
+        s.print_pdf(id, &print::Settings { raster: Some(print::Raster { dpi: 72.0, grayscale: true, colour: None }), ..settings.clone() }).unwrap();
     let mut s3 = Session::new();
     let id3 = s3.open("grey.pdf", None, Arc::new(grey), None).unwrap();
     let mut ex = crate::export::Exporter::new(s3.get(id3).unwrap());
     let png = ex.png(0, 36.0).unwrap();
     let img = image::load_from_memory(&png).unwrap().to_rgba8();
     assert!(img.pixels().all(|p| p[0] == p[1] && p[1] == p[2]), "every pixel grey");
+}
+
+/// #6269: with app-managed colour the printed pictures carry the printer profile's values, not
+/// sRGB's: a pure green page converted into a wider-gamut RGB profile gains red; without it the
+/// pictures stay sRGB.
+#[test]
+fn app_managed_colour_converts_the_printed_pictures() {
+    let pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >>")
+        .stream("", "0 1 0 rg 0 0 100 100 re f")
+        .build();
+    let mut s = Session::new();
+    let id = s.open("green.pdf", None, Arc::new(pdf), None).unwrap();
+    let wide = craft_cms::Builtin::AdobeRgbCompat.profile().to_bytes();
+    let colour = print::colour::ManagedColour {
+        profile: print::colour::PrinterProfile::from_bytes(&wide).unwrap(),
+        intent: print::colour::Intent::RelativeColorimetric,
+        black_point: true,
+    };
+    let middle = |colour: Option<print::colour::ManagedColour>| {
+        let settings = print::Settings {
+            pages: vec![0],
+            layout: print::Layout::Size(print::SizeMode::Actual),
+            raster: Some(print::Raster { dpi: 72.0, grayscale: false, colour }),
+            ..Default::default()
+        };
+        let mut out = Session::new();
+        let printed = out.open("print.pdf", None, Arc::new(s.print_pdf(id, &settings).unwrap()), None).unwrap();
+        let png = crate::export::Exporter::new(out.get(printed).unwrap()).png(0, 72.0).unwrap();
+        let img = image::load_from_memory(&png).unwrap().to_rgba8();
+        img.get_pixel(img.width() / 2, img.height() / 2).0
+    };
+    let srgb = middle(None);
+    assert!(srgb[0] < 10 && srgb[1] > 245, "sRGB green: {srgb:?}");
+    let converted = middle(Some(colour));
+    assert!(converted[0] > 100 && converted[1] > 240, "the profile's values for sRGB green: {converted:?}");
 }
 
 /// A one-page PDF: a JPEG logo (DCTDecode) at the top and a big text title below it.
@@ -12651,12 +12937,8 @@ fn a_page_truncated_for_forms_and_pictures_is_listed_once() {
 /// Moving an added image, then rotating it, must keep the moved position.
 #[test]
 fn added_image_move_then_rotate_keeps_position() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
     let rect = |s: &Session| s.get(id).unwrap().page_images(0)[0].rect;
@@ -12672,12 +12954,8 @@ fn added_image_move_then_rotate_keeps_position() {
 /// Transforming an added image, then rotating it, must keep the moved position.
 #[test]
 fn added_image_transform_then_rotate_keeps_position() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
     let rect = |s: &Session| s.get(id).unwrap().page_images(0)[0].rect;
@@ -12694,12 +12972,8 @@ fn added_image_transform_then_rotate_keeps_position() {
 /// Moving an added image, then rotating by degrees, must keep the moved position.
 #[test]
 fn added_image_move_then_rotate_by_keeps_position() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
     let rect = |s: &Session| s.get(id).unwrap().page_images(0)[0].rect;
@@ -12716,12 +12990,8 @@ fn added_image_move_then_rotate_by_keeps_position() {
 /// page image (dropping the PCAdded marker), so no empty shell remains in list_added.
 #[test]
 fn added_image_arrange_converts_to_ordinary_image() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p1.png".into(), bytes: Arc::new(png.clone()) }).unwrap();
     s.apply(id, Edit::AddImage { page: 0, rect: Some([100.0, 100.0, 200.0, 200.0]), name: "p2.png".into(), bytes: Arc::new(png) }).unwrap();
@@ -12734,12 +13004,8 @@ fn added_image_arrange_converts_to_ordinary_image() {
 
 #[test]
 fn added_image_crop_then_move_keeps_crop() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 100.0, 100.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
     s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Crop([30.0, 30.0, 70.0, 70.0]) }).unwrap();
@@ -12750,12 +13016,8 @@ fn added_image_crop_then_move_keeps_crop() {
 
 #[test]
 fn added_image_move_and_transform_on_rotated_and_user_unit_pages() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let png_bytes = Arc::new(png);
 
     let cases = [(90, 1.0), (180, 1.0), (270, 1.0), (0, 2.0), (90, 2.0)];
@@ -12828,14 +13090,9 @@ fn added_image_move_and_transform_on_rotated_and_user_unit_pages() {
 #[test]
 fn replace_on_added_image_replaces_xobject_and_undo_restores() {
     let make_png = |rgb: [u8; 3]| {
-        let mut png = Vec::new();
-        {
-            let mut enc = png::Encoder::new(&mut png, 2, 2);
-            enc.set_color(png::ColorType::Rgb);
-            let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]];
-            enc.write_header().unwrap().write_image_data(&data).unwrap();
-        }
-        Arc::new(png)
+        let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]].to_vec();
+        let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, data).unwrap();
+        Arc::new(craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap())
     };
     let png1 = make_png([255, 0, 0]);
     let png2 = make_png([0, 0, 255]);
@@ -12870,14 +13127,9 @@ fn replace_on_added_image_replaces_xobject_and_undo_restores() {
 #[test]
 fn mirroring_transform_on_added_image_flips_and_non_finite_is_refused() {
     let make_png = |rgb: [u8; 3]| {
-        let mut png = Vec::new();
-        {
-            let mut enc = png::Encoder::new(&mut png, 2, 2);
-            enc.set_color(png::ColorType::Rgb);
-            let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]];
-            enc.write_header().unwrap().write_image_data(&data).unwrap();
-        }
-        Arc::new(png)
+        let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]].to_vec();
+        let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, data).unwrap();
+        Arc::new(craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap())
     };
     let png1 = make_png([255, 0, 0]);
 
@@ -12930,14 +13182,9 @@ fn mirroring_transform_on_added_image_flips_and_non_finite_is_refused() {
 #[test]
 fn transform_on_added_image_folds_quarter_turns_and_promotes_non_axis_aligned() {
     let make_png = |rgb: [u8; 3]| {
-        let mut png = Vec::new();
-        {
-            let mut enc = png::Encoder::new(&mut png, 2, 2);
-            enc.set_color(png::ColorType::Rgb);
-            let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]];
-            enc.write_header().unwrap().write_image_data(&data).unwrap();
-        }
-        Arc::new(png)
+        let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]].to_vec();
+        let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, data).unwrap();
+        Arc::new(craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap())
     };
     let png1 = make_png([0, 128, 255]);
 
@@ -13003,13 +13250,8 @@ fn test_added_image_transform_reflections_with_rotation() {
                 px.extend_from_slice(&color);
             }
         }
-        let mut png = Vec::new();
-        {
-            let mut enc = png::Encoder::new(&mut png, 20, 20);
-            enc.set_color(png::ColorType::Rgb);
-            enc.write_header().unwrap().write_image_data(&px).unwrap();
-        }
-        Arc::new(png)
+        let img = craft_image_codecs::Image::from_u8(20, 20, craft_image_codecs::ChannelLayout::Rgb, px).unwrap();
+        Arc::new(craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap())
     };
 
     let colour_at = |s: &Session, id: DocId, x: u32, y_from_top: u32| -> [u8; 3] {
@@ -13160,7 +13402,7 @@ fn buttons_and_combs_left_to_the_viewer_are_displayed() {
     }
     assert_eq!(count(&shown, (95, 84, 97, 106), &blue), 0, "no line inside a cell");
     // Print as Image: the page as a picture, at 72 dpi so it is the size of the page here.
-    let raster = pdfcraft_print::Raster { dpi: 72.0, grayscale: false };
+    let raster = pdfcraft_print::Raster { dpi: 72.0, grayscale: false, colour: None };
     let pictures = crate::print_raster::rasterize(s.get(id).unwrap(), &[0], &raster, pdfcraft_print::Content::Document).unwrap();
     let printed = render(Arc::new(pictures));
     assert!(count(&printed, (24, 154, 56, 186), &red) > 60, "the check box prints");
@@ -13226,7 +13468,7 @@ fn importing_a_pdf_copies_its_comments() {
     // A PDF that needs a password is refused with that reason, with or without bytes before its header.
     let mut locked = pdfcraft_cos::Document::open(Arc::new(review)).unwrap();
     locked
-        .set_encryption(&pdfcraft_cos::NewEncryption {
+        .set_encryption_legacy(&pdfcraft_cos::NewEncryption {
             algorithm: pdfcraft_cos::Algorithm::Aes256,
             user_password: "u",
             owner_password: "o",
@@ -13330,7 +13572,7 @@ fn need_appearances_buttons_are_displayed_from_their_captions() {
     let mut s = Session::new();
     let id = s.open("form.pdf", None, Arc::new(pdf(true)), None).unwrap();
     let shown = render(s.get(id).unwrap().display.clone());
-    let raster = pdfcraft_print::Raster { dpi: 72.0, grayscale: false };
+    let raster = pdfcraft_print::Raster { dpi: 72.0, grayscale: false, colour: None };
     let pictures = crate::print_raster::rasterize(s.get(id).unwrap(), &[0], &raster, pdfcraft_print::Content::Document).unwrap();
     let printed = render(Arc::new(pictures));
     for (page, how) in [(&shown, "shown"), (&printed, "printed")] {
@@ -13765,10 +14007,8 @@ fn original_image_edit_does_not_match_an_added_sibling_of_the_same_xobject() {
 
 #[test]
 fn image_transform_engine_refuses_singular_matrices_without_mutation() {
-    let mut png = Vec::new();
-    let mut enc = png::Encoder::new(&mut png, 1, 1);
-    enc.set_color(png::ColorType::Rgb);
-    enc.write_header().unwrap().write_image_data(&[100, 150, 200]).unwrap();
+    let img = craft_image_codecs::Image::from_u8(1, 1, craft_image_codecs::ChannelLayout::Rgb, vec![100, 150, 200]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let mut s = Session::new();
     let bytes = s.create_from_images(&[("pixel.png".into(), png)]).unwrap();
     let id = s.open("image.pdf", None, bytes, None).unwrap();
@@ -14121,12 +14361,8 @@ fn redacting_an_optimized_jbig2_page_stores_the_rest_of_its_group_again() {
 
 #[test]
 fn resizing_an_added_image_back_inside_the_page_keeps_its_identity() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     s.apply(id, Edit::AddImage { page: 0, rect: Some([-30.0, -20.0, 70.0, 80.0]), name: "edge.png".into(), bytes: Arc::new(png) }).unwrap();
     let original = s.get(id).unwrap().added()[0].obj;
@@ -14188,7 +14424,8 @@ fn reset_order_session(reset: &str) -> (Session, DocId) {
     })
     .unwrap();
     let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap());
-    let mut s = Session::new();
+    // Callers compare two saves byte for byte, and each save stamps `/ModDate`: pin the clock.
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
     s.set_javascript(false);
     let id = s.open("reset-order.pdf", None, bytes, None).unwrap();
     s.apply(
@@ -14357,6 +14594,31 @@ fn a_budget_refusal_discards_pdf_edits_and_callback_globals() {
     assert!(matches!(s.apply(id, edit), Err(EditError::Invalid(_))));
     assert_eq!(s.save_bytes(id).unwrap(), before);
     assert_eq!(s.run_javascript(id, "typeof fromRejectedEdit;", None).unwrap().result.as_deref(), Some("undefined"));
+}
+
+/// A batch whose field scripts ran and that a redaction check then refuses leaves the script realm
+/// as it was, like the document: here the check that a deleted marked page can't be tied to the
+/// pages the batch added.
+#[test]
+fn a_batch_a_redaction_check_refuses_discards_callback_globals() {
+    let (mut s, id) = reset_order_session("");
+    let script = Some("var fromRefusedBatch = 1;".to_string());
+    s.apply(id, Edit::SetFieldScript { name: "qty".into(), event: "keystroke".into(), script }).unwrap();
+    let shape = Shape::Redact { quads: vec![pdfcraft_annot::rect_quad([10.0, 10.0, 60.0, 30.0])], overlay: String::new(), look: Default::default() };
+    let mark = NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: "Ada".into() };
+    s.apply(id, Edit::AddAnnotation(mark)).unwrap();
+    s.set_javascript(true);
+    let before = s.save_bytes(id).unwrap();
+    let edits = vec![
+        Edit::SetFieldValue { name: "qty".into(), value: pdfcraft_forms::FieldValue::Text("10".into()) },
+        Edit::ApplyRedactions { pages: None },
+        Edit::InsertBlankPage { at: 1, width: 612.0, height: 792.0 },
+        Edit::DeletePages { pages: vec![0] },
+    ];
+    let refused = s.apply(id, Edit::Batch { label: "x".into(), edits });
+    assert!(matches!(&refused, Err(EditError::Invalid(m)) if m.contains("can't be verified")), "{refused:?}");
+    assert_eq!(s.save_bytes(id).unwrap(), before);
+    assert_eq!(s.run_javascript(id, "typeof fromRefusedBatch;", None).unwrap().result.as_deref(), Some("undefined"));
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -15192,6 +15454,39 @@ fn mixed_widget_icons_are_normalized_with_history_and_save() {
         }
     }
 }
+/// #7409: a form-data file whose only known value the form refuses imports nothing, and says which
+/// field refused it; the document, its Undo and its Redo stay as they were. A file with other
+/// values that took still imports them, and the repair log names the field that refused.
+#[test]
+fn form_data_the_form_refuses_is_reported_and_leaves_the_document_alone() {
+    let (mut s, id) = session_with(1);
+    let combo = NewField::Combo { options: vec!["A".into(), "B".into()], editable: false };
+    s.apply(id, Edit::AddField { page: 0, rect: [20.0, 250.0, 180.0, 272.0], kind: combo, name: Some("Choice".into()) }).unwrap();
+    let notes = NewField::Text { multiline: false };
+    s.apply(id, Edit::AddField { page: 0, rect: [20.0, 210.0, 180.0, 232.0], kind: notes, name: Some("Notes".into()) }).unwrap();
+    let choose =
+        |s: &mut Session, v: &str| s.apply(id, Edit::SetFieldValue { name: "Choice".into(), value: FieldValue::Choice(vec![v.into()]) }).unwrap();
+    choose(&mut s, "A");
+    choose(&mut s, "B");
+    s.undo(id).unwrap();
+    let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).map(|f| f.value.clone()).unwrap_or_default();
+    let import = |s: &mut Session, xml: &str| s.apply(id, Edit::ImportData { name: "data.xml".into(), bytes: Arc::new(xml.as_bytes().to_vec()) });
+    let (undo, redo) = (s.get(id).unwrap().can_undo().map(String::from), s.get(id).unwrap().can_redo().map(String::from));
+    assert!(redo.is_some());
+
+    let err = import(&mut s, "<fields><Choice>INVALID</Choice></fields>").unwrap_err();
+    assert!(err.to_string().contains("nothing was imported") && err.to_string().contains("\"Choice\""), "{err}");
+    let doc = s.get(id).unwrap();
+    assert_eq!((doc.can_undo().map(String::from), doc.can_redo().map(String::from)), (undo, redo), "no Import step, Redo kept");
+    assert_eq!(value(&s, "Choice"), vec!["A".to_string()]);
+
+    // Some values took: the file imports, and the refused field is named in the repair log.
+    import(&mut s, "<fields><Choice>INVALID</Choice><Notes>hello</Notes></fields>").unwrap();
+    assert_eq!((value(&s, "Choice"), value(&s, "Notes")), (vec!["A".to_string()], vec!["hello".to_string()]));
+    let log = s.get(id).unwrap().repair_log().to_vec();
+    assert!(log.iter().any(|l| l.contains("refused") && l.contains("\"Choice\"") && !l.contains("Notes")), "{log:?}");
+}
+
 /// A comment imported or pasted without the appearance its file carried (unreadable there) is
 /// said in the repair log, which the interface shows and the tools return.
 #[test]

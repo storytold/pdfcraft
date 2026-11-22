@@ -210,6 +210,13 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc"],
         )),
+        t(
+            "doc_rename",
+            "Rename a document's file",
+            "Rename the open document's file on disk, in its own folder; the document stays open with its undo history. The extension is kept (added back when left out). Refused, with the reason, when the document has unsaved changes (save first), has no file yet, the name is taken, the file is in use, or the name can't be a file name on Windows, macOS or Linux (no / \\ : * ? \" < > |, no device names such as CON, no trailing dot, at most 255 bytes, a full path within the system limit).",
+        )
+        .destructive()
+        .with(schema(json!({ "doc": doc(), "name": { "type": "string", "description": "The new file name, with or without the extension." } }), &["doc", "name"])),
         t("doc_set_info", "Set document metadata", "Set a document information entry such as Title, Author, Subject or Keywords, or a custom property under any other name (no spaces, delimiters, / or #; at most 127 bytes; doc_info lists them under custom); an empty value removes it. When the file has XMP metadata, the matching XMP property (dc:title, dc:creator, dc:description, pdf:Keywords, xmp:CreatorTool, pdf:Producer) is changed too, so viewers that read XMP first show the new value, and a custom property is kept there as pdfx:<name> when its name can be an XML name (in a PDF/A file only one already there is changed). Undoable.")
             .with(schema(json!({ "doc": doc(), "key": { "type": "string" }, "value": { "type": "string" } }), &["doc", "key", "value"])),
         t("page_render", "Render a page", "Render one page to a PNG image (default 96 dpi, at most 600). When the picture is incomplete or approximate (content cut at the page's safety budget, a picture left out because its JBIG2 mask is past a decoder limit, a colour painted in a fallback colour), a JSON part follows the image: { page, warnings: [sentence, ...] }.")
@@ -681,7 +688,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("doc_export_data", "Export comments or form data", "Write comments and/or form data to path; the extension picks the format: .xfdf or .fdf (comments and/or fields), .xml, .csv or .txt (form data). For an XFA form, .xml is its data alone (rooted at the form's root data node, as Acrobat exports it) and .xdp an XML Data Package holding the whole datasets. what: all (default), comments, fields.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" }, "what": { "type": "string", "enum": ["all", "comments", "fields"] } }), &["doc", "path"])),
-        t("doc_import_data", "Import comments or form data", "Import comments and/or field values from an XFDF, FDF, XML, CSV or tab-delimited text file (detected from its content), or the comments of another PDF, each onto the page with the same number (comments on pages past this document's last page are left out). Comments with the same name are replaced; values go through the form's formats and validation. For an XFA form, an XDP, datasets or data XML file replaces the form's data: a laid-out form is laid out again from it (rows included) and its calculations run. Undoable.")
+        t("doc_import_data", "Import comments or form data", "Import comments and/or field values from an XFDF, FDF, XML, CSV or tab-delimited text file (detected from its content), or the comments of another PDF, each onto the page with the same number (comments on pages past this document's last page are left out). Comments with the same name are replaced; values go through the form's formats and validation. For an XFA form, an XDP, datasets or data XML file replaces the form's data: a laid-out form is laid out again from it (rows included) and its calculations run. Undoable. The result lists in `import_repairs` what this import left out (values the form refused, comments taken without their appearance); the import fails instead only when the form refuses every value and no comment is taken.")
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" } }), &["doc", "path"])),
         t("form_delete_field", "Delete a field", "Delete a form field and all its widgets, or with widget only that one: one radio button of a group (widget n is the nth of the radio group's options in form_fields), or one copy of a duplicated field. A field's last widget takes the field with it. Undoable.")
             .destructive()
@@ -746,11 +753,14 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_audit_redactions",
             "Audit faux redactions",
-            "Find faux redactions: opaque filled rectangles painted over text that is still extractable, and /Redact annotations that were marked but never applied. Paint-order and colour-aware: a rectangle counts only when painted after the text and dark enough to hide it (page backgrounds and light shading are not flagged). Each finding reports the 1-based page, the kind (covered-text or unapplied-mark), the rectangle (points from the top-left of the displayed page, like comment_list), and the hidden text. Fails closed: unreadable content is an error, never a clean bill. A properly applied redaction removes the text and never flags.",
+            "Find faux redactions: opaque covers painted over text that is still extractable (filled rectangles, thick marker-style strokes, dark opaque Highlight annotations), text whited out under an opaque white rectangle, and /Redact annotations that were marked but never applied. Paint-order and colour-aware: a cover counts only when painted after the text and dark enough to hide it (page backgrounds and light shading are not flagged); a white rectangle over dark text is reported apart. Each finding reports the 1-based page, the kind (covered-text, hidden-under-white or unapplied-mark), the rectangle, and the hidden text. Fails closed: unreadable content is an error, never a clean bill. A properly applied redaction removes the text and never flags.",
         )
         .ro()
         .with(schema(json!({ "doc": doc() }), &["doc"])),
         t("printers", "List printers", "The printers the system's print spooler knows (CUPS on macOS and Linux), with the default marked.").ro().with(schema(json!({}), &[])),
+        t("print_color_profiles", "List printer colour profiles", "The RGB and grey ICC profiles installed on this computer that doc_print can convert the pages into (color_management app): name, path and color_space. Windows: the system colour folder; macOS: the ColorSync folders; Linux: the shared and per-user icc folders. CMYK profiles are left out: the printed pictures are RGB.")
+            .ro()
+            .with(schema(json!({}), &[])),
         t("printer_options", "List printer options", "A printer driver's own job options (CUPS: from its PPD), such as the paper tray, paper type or finishing: key, label, group, default and choices. Pass chosen values to doc_print as options. Empty on Windows, where the driver's preferences window holds them.")
             .ro()
             .with(schema(json!({ "printer": { "type": "string" } }), &["printer"])),
@@ -764,7 +774,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_print",
             "Print",
-            "Print with Acrobat's Print dialog options, or save the print-ready PDF. pages: a range such as \"1-3, 6, 9-\" (page labels allowed, \"(n)\" for the nth page whatever its label, unless a page is labelled exactly \"(n)\", since labels are looked up first; default all); subset odd/even (by page number, as Acrobat counts them: pages 2, 7-10 with even prints 2, 8 and 10, not every second page of the range); reverse. layout: fit (default), actual, shrink, custom (scale %), multiple (per_sheet 2/4/6/9/16, which turns the sheet to suit the grid, or a custom grid of cols across by rows down, each 1-99, on the sheet as oriented (auto prints portrait); order, border, auto_rotate; cut-stack order arranges single-sided sheets for cutting into piles and stacking left to right, top to bottom, keeping sheet order within each pile; duplex must be off), booklet (booklet_subset both/front/back, binding left/right; a booklet sets two-sided itself, as Acrobat does: both flips on the short edge, front or back prints one-sided), poster (scale %, overlap pt, cut_marks). orientation auto/portrait/landscape; comments_forms document / document-and-markups (default) / document-and-stamps / form-fields-only; paper Letter/Legal/Tabloid, ARCH A/B/C/D/E1/E, ANSI C/D/E, A0/A1/A2/A3/A4/A5/A6, US #10 Envelope, a driver paper name from printer_papers, or dimensions \"<w>x<h>\"; when printer is given and paper is omitted, uses the printer's default paper if available; use layout actual for 100% in the print-ready PDF; printer drivers may still substitute paper or scale. Then path (save) or printer (a name or \"default\") with copies, collate, duplex off/long-edge/short-edge, grayscale, and options (driver options from printer_options, CUPS).",
+            "Print with Acrobat's Print dialog options, or save the print-ready PDF. pages: a range such as \"1-3, 6, 9-\" (page labels allowed, \"(n)\" for the nth page whatever its label, unless a page is labelled exactly \"(n)\", since labels are looked up first; default all); subset odd/even (by page number, as Acrobat counts them: pages 2, 7-10 with even prints 2, 8 and 10, not every second page of the range); reverse. layout: fit (default), actual, shrink, custom (scale %), multiple (per_sheet 2/4/6/9/16, which turns the sheet to suit the grid, or a custom grid of cols across by rows down, each 1-99, on the sheet as oriented (auto prints portrait); order, border, auto_rotate; cut-stack order arranges single-sided sheets for cutting into piles and stacking left to right, top to bottom, keeping sheet order within each pile; duplex must be off), booklet (booklet_subset both/front/back, binding left/right; a booklet sets two-sided itself, as Acrobat does: both flips on the short edge, front or back prints one-sided), poster (scale %, overlap pt, cut_marks). orientation auto/portrait/landscape; comments_forms document / document-and-markups (default) / document-and-stamps / form-fields-only; paper Letter/Legal/Tabloid, ARCH A/B/C/D/E1/E, ANSI C/D/E, A0/A1/A2/A3/A4/A5/A6, US #10 Envelope, a driver paper name from printer_papers, or dimensions \"<w>x<h>\"; when printer is given and paper is omitted, uses the printer's default paper if available; use layout actual for 100% in the print-ready PDF; printer drivers may still substitute paper or scale. Then path (save) or printer (a name or \"default\") with copies, collate, duplex off/long-edge/short-edge, grayscale, and options (driver options from printer_options, CUPS). color_management app (Acrobat's Color Handling, the app managing colours) prints the pages as images converted into color_profile with rendering_intent and black_point_compensation; turn the driver's own colour management off for that job, or the printer converts them again.",
         )
         .with(schema(
             json!({
@@ -798,6 +808,10 @@ pub fn tools() -> Vec<ToolDef> {
                 "as_image": { "type": "boolean", "description": "Print as image (Acrobat's Advanced Print Setup): every page rendered to a picture at dpi before it is placed on the paper, for printers that skip text, shading or transparency; the print is no longer searchable text, and with grayscale the pictures are grey, so the printer isn't asked for grayscale (a driver without that setting still prints them)." },
                 "dpi": { "type": "number", "minimum": 72, "maximum": 600, "description": "Resolution for as_image (default 300)." },
                 "options": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Printer driver options from printer_options: key → choice value." },
+                "color_management": { "type": "string", "enum": ["printer", "app"], "description": "Who converts the colours: printer (default, the driver does) or app, which prints the pages as images (dpi, grayscale apply) converted from sRGB into color_profile." },
+                "color_profile": { "type": "string", "description": "For color_management app: a name or file name from print_color_profiles, or the path of an RGB or grey ICC printer profile." },
+                "rendering_intent": { "type": "string", "enum": ["perceptual", "relative", "saturation", "absolute"], "description": "For color_management app: how colours the printer can't reach are mapped (default relative colorimetric)." },
+                "black_point_compensation": { "type": "boolean", "description": "For color_management app: map sRGB black onto the printer's darkest black, so shadows stay apart instead of clipping (default true; no effect with absolute)." },
             }),
             &["doc"],
         )),
@@ -901,6 +915,9 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "page", "index"],
             )),
+        t("link_run_javascript", "Run a link's JavaScript", "Run the JavaScript action of link `index` on page `page` (1-based, from link_list: index is the link's place among the page's annotations), as clicking it does: event.type Link, event.name Mouse Up, event.target the document, this.pageNum the link's page, in the document's script realm. answers reply to its popup menus, response dialogs and alerts in order (null cancels a menu or response; missing answers do too); a menu with no items answers null without using one. Field changes and resetForm are one undoable step; a script that fails commits nothing and its requests are dropped. Returns alerts, console, requests (page, url, open_doc and others, never carried out), error and result.")
+            .destructive()
+            .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 }, "answers": {"type":"array","maxItems":32,"items":{"type":["string","null"],"maxLength":4096}} }), &["doc", "page", "index"])),
         t("link_delete", "Delete a link", "Delete one link (page, index from link_list). Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 } }), &["doc", "page", "index"])),
@@ -1174,6 +1191,13 @@ pub fn tools() -> Vec<ToolDef> {
         t("page_duplicate", "Duplicate pages", "Insert copies of pages so the first copy becomes page `at`, or after the last of them when `at` is left out (fonts and images are shared, not copied). Undoable.")
             .cmd("page.duplicate")
             .with(schema(json!({ "doc": doc(), "pages": pages("to duplicate"), "at": { "type": "integer", "minimum": 1 } }), &["doc", "pages"])),
+        t("page_templates", "List page templates", "The document's page templates (ISO 32000-2 §7.7.4: the name dictionary's /Templates, pages kept out of the document, then /Pages, named visible pages): each name, and whether it is hidden. A form's JavaScript adds pages from them (Template.spawn) or shows them (Template.hidden = false).")
+            .ro()
+            .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t("page_template_spawn", "Add a page from a template", "Insert a copy of page template `name` so it becomes page `at` (default: after the last page), as JavaScript's Template.spawn does. With rename (the default, as in Acrobat) the copy's fields are its own, named P<at-1>.<name>.<field>; with rename false they are more widgets of the template's fields and share their values. Undoable.")
+            .with(schema(json!({ "doc": doc(), "name": { "type": "string" }, "at": { "type": "integer", "minimum": 1 }, "rename": { "type": "boolean" } }), &["doc", "name"])),
+        t("page_template_set_hidden", "Show or hide a page template", "Show page template `name` (hidden false: its own page goes at the end of the document, with its fields) or hide it again (hidden true: the page leaves the document and is kept as a template), as JavaScript's Template.hidden does. Undoable.")
+            .with(schema(json!({ "doc": doc(), "name": { "type": "string" }, "hidden": { "type": "boolean" } }), &["doc", "name", "hidden"])),
         t(
             "page_transition_set",
             "Set page transitions",
@@ -1197,7 +1221,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "page_set_box",
             "Set page boxes / crop",
-            "Set a page box (crop by default; also trim, bleed, art, media) on pages: either margins in points from the media box [left, bottom, right, top], or an absolute rect in points from the top-left of the displayed page. Omit both to reset the box to its default. Undoable.",
+            "Set a page box (crop by default; also trim, bleed, art, media) on pages: either margins from the media box [left, bottom, right, top] in default user-space units of the unrotated page (not points when the page has /UserUnit), or an absolute rect in points from the top-left of the displayed page. Omit both to reset the box to its default. Undoable.",
         )
         .cmd("page.boxes")
         .with(schema(
@@ -1436,6 +1460,10 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc", "field", "event"],
         )),
+        t("js_page", "Run page actions", "Read the document at `page`, as the viewer does when that page becomes the one being read: the actions the page it was at runs as it closes, then this page's open actions (its own, and its annotations' page-open and page-visible actions, which start an animation made with the LaTeX animate package), in the document's JavaScript context, which buttons, the console and timers share. Fields the actions show or hide change only how the document is shown, and page_render draws them so; values they change are applied as one undoable step. Returns the actions' alerts, console output, requests and errors, the pages showing a field they showed or hid, and when the next timer falls due on the script clock (js_advance moves it).")
+            .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 } }), &["doc", "page"])),
+        t("js_advance", "Advance the script clock", "Move the document's script clock on by `ms` milliseconds and run the timers its scripts set (app.setInterval, app.setTimeOut) as they fall due on the way, in order, as the viewer runs them over time: an animation shows its next frames. Fields timers show or hide change only how the document is shown, and page_render draws them so. A timer's alerts and requests go to its console output instead. Returns how many timers ran, their console output and errors, the pages showing a field they showed or hid, the clock, and when the next timer falls due.")
+            .with(schema(json!({ "doc": doc(), "ms": { "type": "number", "minimum": 0, "maximum": 3600000 } }), &["doc", "ms"])),
         t("js_document_scripts", "Document JavaScripts", "List the document-level JavaScripts (name and source), which define functions field scripts use.")
             .ro()
             .cmd("tools.document_js")
@@ -1741,6 +1769,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "aligns": { "type": "array", "maxItems": 4096, "items": { "type": "string", "enum": ["left", "center", "right", "justify", "inherit"] }, "description": "Each paragraph's (line's) own alignment, by index; inherit (or legacy null) follows align." },
                     "underline": { "type": "boolean" },
                     "line_spacing": { "type": "number", "description": "Multiple of the font size (1.2 is ordinary)." },
+                    "paragraph_spacing": { "type": "number", "description": "Points between paragraphs (a line break in text starts one), beyond the line spacing; unset, half the size for a paragraph the page did not have (rows it had keep their space); 0 is none." },
                     "dx": { "type": "number", "description": "Paragraph only: move right by this many points (negative: left)." },
                     "dy": { "type": "number", "description": "Paragraph only: move up by this many points (negative: down)." },
                     "width": { "type": "number", "description": "Paragraph only: rewrap to this width in points (dragging the box's edge)." },
