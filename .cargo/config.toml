@@ -5,3 +5,11 @@ xtask = "run -p xtask --"
 # engine's kernels (rten-simd) and other vectorised code only use it when compiled in.
 [target.wasm32-unknown-unknown]
 rustflags = ["-C", "target-feature=+simd128"]
+
+# aws-lc (digital signatures and TLS, through aws-lc-rs) detects the CPU when `main` asks it to
+# (`pdfcraft_sign::init_crypto`), not in a static initializer before `main`. On x86 it reads
+# `OPENSSL_ia32cap` then, and aborts when that asks for a feature the processor lacks; each
+# executable first runs itself again without the variable (#2916, `pdfcraft_platform::crypto_env`),
+# which it can only do once `main` runs.
+[env]
+AWS_LC_SYS_CFLAGS = "-DBORINGSSL_NO_STATIC_INITIALIZER"

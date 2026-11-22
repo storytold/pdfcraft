@@ -1,7 +1,7 @@
 use super::error::{Result, ToolError, failed};
 use super::json::{Args, nest_rows, security, summary};
 use super::paths::{child, read_input, write_atomic};
-use super::{Arc, Automation, BlockKey, DocId, Document, Edit, Path, TextBlock, Value, comments, json};
+use super::{Arc, Automation, BlockKey, DocId, Document, Edit, Path, PathBuf, TextBlock, Value, comments, file_access, json};
 
 /// How far a watermark may be moved from the page centre, in points (a page is at most 14,400).
 const WATERMARK_MAX_OFFSET: f64 = 20_000.0;
@@ -168,11 +168,46 @@ impl Automation {
         if flatten_fill_sign {
             self.apply(a, Edit::FlattenFillSign)?;
         }
+        // The document's Will Save actions run first: what they change is saved (#269).
+        let scripts = self.session.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillSave);
         let bytes = if full { self.session.save_full_bytes(id) } else { self.session.save_bytes(id) }.map_err(failed)?;
         // A save that adds or removes encryption, or must not keep the old revision (Sanitize,
         // redaction), is rewritten in full even when an incremental save was asked for.
         let incremental = !full && bytes.starts_with(&self.doc(a)?.saved_bytes());
-        self.publish_save(id, &target, bytes, incremental, write)
+        let mut out = self.publish_save(id, &target, bytes, incremental, write)?;
+        if !scripts.is_empty()
+            && let Some(o) = out.as_object_mut()
+        {
+            o.insert("will_save".into(), crate::a11y::form_tools::js_output_json(&scripts));
+        }
+        Ok(out)
+    }
+
+    /// Rename the document's file in its own folder (#2102). Both the old and the new name are
+    /// writes there, so the automation write root must allow the folder; unsaved changes are refused
+    /// rather than left behind in a file that no longer matches the document.
+    pub(crate) fn doc_rename(&mut self, a: &Args) -> Result<Value> {
+        let doc = self.doc(a)?;
+        let id = doc.id;
+        let own = doc.path.clone().ok_or_else(|| failed("the document has no file yet: save it with doc_save and a path first"))?;
+        let name = a.str("name")?;
+        let own_path = PathBuf::from(&own);
+        self.resolve_for(&own, file_access::Access::Write, true)?;
+        if let Some(target) = pdfcraft_engine::rename_target(&own_path, name).map_err(failed)? {
+            let shown = target.to_string_lossy().into_owned();
+            self.resolve_for(&shown, file_access::Access::Write, true)?;
+        }
+        // The move is made below the write folder where the system allows it (Linux: no link on the
+        // way is followed, so a folder swapped for a link after the checks above can't carry the
+        // file out). macOS and Windows keep the check-then-rename model.
+        let root = match (self.roots.as_ref().and_then(|r| r.write_root()), self.root.as_deref()) {
+            (Some(w), Some(r)) => Some(if r.starts_with(w) { r } else { w }),
+            (w, r) => w.or(r),
+        }
+        .map(Path::to_path_buf);
+        let path = self.session.rename_file_in(id, name, root.as_deref()).map_err(failed)?;
+        let doc = self.session.get(id).ok_or_else(|| failed("the renamed document is no longer open"))?;
+        Ok(json!({ "path": path, "name": doc.name.clone(), "document": summary(doc) }))
     }
 
     /// Validate the prepared bytes before publishing them or marking the document saved.

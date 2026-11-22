@@ -1,4 +1,5 @@
 use super::spool;
+use crate::matching_paper;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Orientation {
@@ -185,17 +186,20 @@ pub struct Settings {
 }
 
 /// How pages are rendered when printing as image.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Raster {
     /// Dots per inch, 72–600 (Acrobat offers 150, 300 and 600).
     pub dpi: f64,
     /// Render the pictures in grey, so the print-ready PDF itself is grayscale.
     pub grayscale: bool,
+    /// App-managed colour: the pictures are converted into the printer's profile. `None` leaves
+    /// colour to the printer.
+    pub colour: Option<crate::colour::ManagedColour>,
 }
 
 impl Default for Raster {
     fn default() -> Self {
-        Raster { dpi: 300.0, grayscale: false }
+        Raster { dpi: 300.0, grayscale: false, colour: None }
     }
 }
 
@@ -203,7 +207,7 @@ impl Default for Raster {
 /// Not when the pages go as grey pictures (`raster` with [`Raster::grayscale`]): they are grey
 /// already, so a driver that keeps no grayscale setting (Microsoft Print to PDF, many inkjets)
 /// still prints them instead of the job being refused (#5806).
-pub fn driver_needs_grayscale(grayscale: bool, raster: Option<Raster>) -> bool {
+pub fn driver_needs_grayscale(grayscale: bool, raster: Option<&Raster>) -> bool {
     grayscale && !raster.is_some_and(|r| r.grayscale)
 }
 
@@ -300,4 +304,52 @@ pub fn cups_media(index: usize) -> Option<&'static str> {
 /// dialog's jobs and `doc_print`'s alike.
 pub fn media_option(index: usize) -> Option<(String, String)> {
     cups_media(index).map(|m| ("media".to_string(), m.to_string()))
+}
+
+/// Format custom dimensions in points as a CUPS custom media string (e.g. `Custom.300x500`).
+pub fn custom_media(size: (f64, f64)) -> String {
+    let format_dim = |d: f64| {
+        if (d.round() - d).abs() < 1e-4 {
+            format!("{:.0}", d.round())
+        } else {
+            let s = format!("{d:.2}");
+            s.trim_end_matches('0').trim_end_matches('.').to_string()
+        }
+    };
+    format!("Custom.{}x{}", format_dim(size.0), format_dim(size.1))
+}
+
+/// The CUPS media name for a paper by its name and dimensions.
+///
+/// Matches standard [`PAPERS`] presets by size first, then a clean driver-reported keyword,
+/// falling back to custom media dimensions (`Custom.<width>x<height>`).
+pub fn paper_media(name: Option<&str>, size: (f64, f64)) -> String {
+    if let Some(index) = matching_paper(size)
+        && let Some(media) = cups_media(index)
+    {
+        return media.to_string();
+    }
+    if let Some(n) = name {
+        let is_dim = n.split_once(['x', 'X', '*']).is_some_and(|(w, h)| {
+            let parse_dim = |d: &str| {
+                let d = d.trim().trim_start_matches("Custom.").trim_start_matches("custom.").trim_end_matches("points").trim_end_matches("pt").trim();
+                d.parse::<f64>().is_ok()
+            };
+            parse_dim(w) && parse_dim(h)
+        });
+        let is_clean = !n.is_empty()
+            && n.len() <= 64
+            && !n.contains(' ')
+            && !is_dim
+            && n.chars().all(|c| c.is_ascii_graphic() && !matches!(c, '/' | ':' | '=' | '"' | '\'' | '\\' | '{'));
+        if is_clean {
+            return n.to_string();
+        }
+    }
+    custom_media(size)
+}
+
+/// The media job option (`("media", <name>)`) for a paper by its optional name and dimensions.
+pub fn paper_media_option(name: Option<&str>, size: (f64, f64)) -> (String, String) {
+    ("media".to_string(), paper_media(name, size))
 }

@@ -33,12 +33,15 @@ fn load_ocr_verify(app: &mut PdfCraftApp) -> Result<(), String> {
     let png = export::Exporter::new(s.get(id).ok_or("the document is gone")?).png(0, 150.0).map_err(|e| e.to_string())?;
     // Keep the text block of the rendered page, so the scan is a short note-sized picture:
     // the whole page and the confidence legend fit in the shot's source-page pane.
-    let mut page = image::load_from_memory(&png).map_err(|e| e.to_string())?;
-    let mut scan_png = std::io::Cursor::new(Vec::new());
-    page.crop(0, 0, page.width(), (page.height() as f32 * 0.34) as u32)
-        .write_to(&mut scan_png, image::ImageFormat::Png)
+    let page = craft_image_codecs::decode(&png).map_err(|e| e.to_string())?;
+    let crop_h = ((page.height() as f32 * 0.34) as u32).max(1);
+    let bpp = page.layout().channels() as usize;
+    let row_bytes = page.width() as usize * bpp;
+    let cropped_data = page.as_u8().ok_or("expected 8-bit PNG")?[..crop_h as usize * row_bytes].to_vec();
+    let cropped = craft_image_codecs::Image::from_u8(page.width(), crop_h, page.layout(), cropped_data).map_err(|e| e.to_string())?;
+    let scan_png = craft_image_codecs::encode(&cropped, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default())
         .map_err(|e| e.to_string())?;
-    let scan = s.create_from_images(&[("scan.png".into(), scan_png.into_inner())]).map_err(|e| e.to_string())?.to_vec();
+    let scan = s.create_from_images(&[("scan.png".into(), scan_png)]).map_err(|e| e.to_string())?.to_vec();
     let settings =
         OcrSettings { engine: pdfcraft_engine::ocr::EngineChoice::Auto, strategy: MergeStrategy::ConfidenceWeighted, ..OcrSettings::default() };
     app.ocr_draft.engine = settings.engine;
@@ -118,7 +121,11 @@ fn main() -> Result<(), String> {
         let h = (image.height() as f64 * w as f64 / image.width() as f64).round() as u32;
         image = image::imageops::resize(&image, w, h, image::imageops::FilterType::Lanczos3);
     }
-    image.save(&out).map_err(|e| e.to_string())?;
-    eprintln!("shot: wrote {out} ({}×{})", image.width(), image.height());
+    let (w, h) = (image.width(), image.height());
+    let out_img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgba, image.into_raw()).map_err(|e| e.to_string())?;
+    let encoded = craft_image_codecs::encode(&out_img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default())
+        .map_err(|e| e.to_string())?;
+    std::fs::write(&out, encoded).map_err(|e| e.to_string())?;
+    eprintln!("shot: wrote {out} ({w}×{h})");
     Ok(())
 }

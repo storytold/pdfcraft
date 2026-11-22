@@ -55,15 +55,8 @@ fn pending_pages_use_document_reading_background() {
 
 /// A small PNG for the Create ▸ Images path, which opens the document it builds.
 fn png() -> Vec<u8> {
-    let mut out = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut out, 8, 4);
-        enc.set_color(png::ColorType::Rgb);
-        enc.set_depth(png::BitDepth::Eight);
-        let mut w = enc.write_header().unwrap();
-        w.write_image_data(&[120u8; 8 * 4 * 3]).unwrap();
-    }
-    out
+    let img = craft_image_codecs::Image::from_u8(8, 4, craft_image_codecs::ChannelLayout::Rgb, vec![120u8; 8 * 4 * 3]).unwrap();
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap()
 }
 
 #[test]
