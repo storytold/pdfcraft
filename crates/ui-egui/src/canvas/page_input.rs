@@ -116,7 +116,9 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         text_links,
         tabs: &tabs,
     };
-    if let Some(o) = ptr.pressed() {
+    if let Some(o) = ptr.pressed()
+        && !view.comments.contains_screen_pos(o)
+    {
         // A press with Shift or ⌘ in Edit text is the objects', whatever lies under it
         // (`object_ui::modified_hit`): the page's objects are read for it alone. Crop mode holds
         // it on its page as any other press, so a modified click away applies the crop rather
@@ -173,7 +175,8 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     // as a press is (#5835): what a right-click there would go to is asked only off the page.
     let right = frame.right_click_on(|p| {
         use crate::page_router::PicturePart;
-        xf.rect.contains(p) || matches!(hits.context_at(view, p, &[]), Some(Owner::Picture { part: PicturePart::Crop(_), .. }))
+        (xf.rect.contains(p) || matches!(hits.context_at(view, p, &[]), Some(Owner::Picture { part: PicturePart::Crop(_), .. })))
+            && !view.comments.contains_screen_pos(p)
     });
     let context = right.and_then(|p| right_click(&hits, &under, view, p, press_held));
     // Edit text: a right-click on a picture selects it for its menu, and one on anything else on the
@@ -264,7 +267,10 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     // leaves them unselected. A press nobody holds that another tool took this frame (Prepare's
     // selection rectangle, added content) is not also a commenting tool's, as before.
     let taken = on_objects || on_edit_text || on_link || on_content || boxing || on_field;
-    let on_comment = comments::page_input(ui, resp, &pcx, press, taken, view);
+    let over_comment_box = ptr.pos.is_some_and(|p| view.comments.contains_screen_pos(p))
+        || ptr.origin.is_some_and(|p| view.comments.contains_screen_pos(p))
+        || ptr.pressed().is_some_and(|p| view.comments.contains_screen_pos(p));
+    let on_comment = comments::page_input(ui, resp, &pcx, press, taken, view) || over_comment_box;
     let consumed = taken || on_comment;
     let hover = pointer.and_then(|p| claim_under(&hits, view, p, frame.env.unobstructed));
     PageInput {

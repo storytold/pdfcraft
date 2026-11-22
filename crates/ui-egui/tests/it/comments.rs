@@ -599,6 +599,45 @@ fn selected_text_menu_opens_at_the_end_of_selected_text() {
 }
 
 #[test]
+fn selected_text_menu_does_not_spawn_when_using_comment_box() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    h.run_steps(3);
+    assert!(h.query_by_label("Replace text").is_some(), "selection bar appears on text select");
+
+    // Click Add comment to open the comment composer
+    h.get_by_label("Add comment").click();
+    h.run_steps(3);
+    assert!(h.state().views[0].comments.composer.is_some(), "composer is open");
+    assert!(h.query_by_label("Replace text").is_none(), "selection bar is hidden while composer is open");
+
+    // Type text into the composer and select text inside it
+    let composer_field = h.get_by_role_and_label(Role::MultilineTextInput, "Add a comment");
+    composer_field.type_text("Note text");
+    h.run_steps(2);
+
+    assert!(h.ctx.text_edit_focused());
+    assert!(h.query_by_label("Replace text").is_none(), "selection bar must not spawn when using comment box");
+}
+
+#[test]
+fn interacting_with_comment_box_does_not_select_page_text() {
+    let mut h = harness(|_| {});
+    h.state_mut().set_option("quick", "note").unwrap();
+    click_pt(&mut h, (250.0, 180.0));
+    h.run_steps(3);
+    assert!(h.state().views[0].comments.composer.is_some());
+    assert!(h.state().views[0].selected_text().is_none());
+
+    let composer_field = field(&h, "Add a comment");
+    composer_field.type_text("Hello comment world");
+    h.run_steps(2);
+
+    assert!(h.query_by_label("Replace text").is_none(), "selection actions bar is not shown");
+    assert!(h.state().views[0].selected_text().is_none(), "no page text is selected underneath comment box");
+}
+
+#[test]
 fn selected_text_copy_action_closes_the_bar_and_keeps_the_selection() {
     let mut h = harness(|_| {});
     h.state_mut().views[0].select_text(0, 4, 8);

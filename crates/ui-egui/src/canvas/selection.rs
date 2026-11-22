@@ -450,6 +450,15 @@ pub(super) fn selection_actions(
     if ui.input(|input| input.pointer.is_decidedly_dragging()) {
         return false;
     }
+    if ui.ctx().text_edit_focused()
+        || ui.ctx().memory(|m| m.focused().is_some())
+        || view.comments.composer.is_some()
+        || view.comments.popup_text.is_some()
+        || view.comments.popup_reply.is_some()
+        || view.comments.editing.is_some()
+    {
+        return false;
+    }
     let Some(selection) = view.selection else {
         view.actions_dismissed = None;
         return false;

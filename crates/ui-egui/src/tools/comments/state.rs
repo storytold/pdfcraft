@@ -131,6 +131,14 @@ impl CommentView {
     pub(crate) fn drawings_refused(&mut self) {
         self.settling.retain(|s| s.committed);
     }
+
+    /// Whether screen point `p` is inside an open comment composer card or pop-up window.
+    pub fn contains_screen_pos(&self, p: Pos2) -> bool {
+        if self.composer.is_some() && self.composer_rect.is_some_and(|r| r.contains(p)) {
+            return true;
+        }
+        self.popup_rects.iter().any(|(_, r)| r.contains(p))
+    }
 }
 
 /// Per-document commenting state.
@@ -160,6 +168,8 @@ pub struct CommentView {
     /// committed annotation arrives, so the stroke never vanishes in between (#1858).
     pub(crate) settling: Vec<Settling>,
     pub composer: Option<Composer>,
+    /// Screen rectangle of the open composer card, if displayed.
+    pub composer_rect: Option<Rect>,
     /// Reply being typed under the selected card.
     pub reply: String,
     /// Inline edit of a card's text in the Comments panel: (page, index, text).

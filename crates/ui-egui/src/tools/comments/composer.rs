@@ -9,13 +9,17 @@ use crate::page_keys::PageKeys;
 
 /// The floating composer card (new note, new text box, edit). Returns the edit to apply.
 pub(crate) fn composer(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, info: &DocInfo, prefs: &CommentPrefs) -> Option<Edit> {
-    let c = view.comments.composer.as_ref()?;
+    let Some(c) = view.comments.composer.as_ref() else {
+        view.comments.composer_rect = None;
+        return None;
+    };
     let page = c.page;
     let Some(xf) = view.page_xform(page) else {
         // Scrolled away: keep the draft until the page is back, and give it the keyboard then.
         if let Some(c) = view.comments.composer.as_mut() {
             c.focus = true;
         }
+        view.comments.composer_rect = None;
         return None;
     };
     let cx = PageCx {
@@ -53,13 +57,14 @@ pub(crate) fn composer(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, 
         let part_visible = matches!(c.kind, ComposerKind::Edit(index) if edited_in_view(&cx, index, viewport));
         if !part_visible {
             c.focus = true;
+            view.comments.composer_rect = None;
             return None;
         }
         anchor = anchor.clamp(viewport.min, viewport.max);
     }
     let pos = pos2(anchor.x + 12.0, anchor.y);
     let area = egui::Area::new(egui::Id::unique(("comment-composer", view.pane.key))).order(egui::Order::Foreground).constrain_to(viewport);
-    area.fixed_pos(pos).show(ctx, |ui| {
+    let area_out = area.fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(12)).corner_radius(CornerRadius::same(8)).show(ui, |ui| {
             ui.set_width(260.0);
             ui.horizontal(|ui| {
@@ -106,13 +111,16 @@ pub(crate) fn composer(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, 
             });
         });
     });
+    view.comments.composer_rect = Some(area_out.response.rect);
     if cancel {
         view.comments.composer = None;
+        view.comments.composer_rect = None;
         return None;
     }
     if !post {
         return None;
     }
+    view.comments.composer_rect = None;
     let c = view.comments.composer.take()?;
     let typewriter_edit = matches!(c.kind, ComposerKind::Edit(index) if info.annotations.iter().any(|a|
         a.page == page && a.index == index && a.subtype == "FreeText" && a.intent.as_deref() == Some("FreeTextTypeWriter")
