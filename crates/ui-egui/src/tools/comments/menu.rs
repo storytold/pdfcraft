@@ -357,14 +357,25 @@ pub(crate) fn quick_bar_colour(ui: &mut egui::Ui, current: Rgb) -> Option<Rgb> {
     picked
 }
 
+/// What the quick bar's controls picked this frame, besides the tool's own defaults they set: the
+/// hotbar gives it to the selected comments too.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct QuickBarPick {
+    /// A colour.
+    pub color: Option<Rgb>,
+    /// A fill (`Some(None)`: No fill).
+    pub fill: Option<Option<Rgb>>,
+}
+
 /// The comment tools' extra quick-bar controls: pin, colour, fill, opacity and thickness.
-pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &mut CommentPrefs) -> Option<Rgb> {
+pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &mut CommentPrefs) -> QuickBarPick {
     let style = prefs.style(tool);
+    let mut pick = QuickBarPick::default();
     if icons::button(ui, "pin", 32.0, prefs.pinned, if prefs.pinned { tl!("Keep tool selected: on") } else { tl!("Keep tool selected") }).clicked() {
         prefs.pinned = !prefs.pinned;
     }
-    let selected_color = quick_bar_colour(ui, style.color);
-    if let Some(c) = selected_color {
+    pick.color = quick_bar_colour(ui, style.color);
+    if let Some(c) = pick.color {
         prefs.set_color(tool, c);
     }
     if tool.has_fill() {
@@ -373,6 +384,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
             ui.label(egui::RichText::new(tl!("Fill colour")).font(theme::semibold(12.0)));
             if let Some(f) = fill_picker(ui, style.fill) {
                 prefs.set_fill(tool, f);
+                pick.fill = Some(f);
                 ui.close();
             }
         });
@@ -399,7 +411,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
             }
         });
     }
-    selected_color
+    pick
 }
 
 /// A border-colour button: a hollow square in the border's colour (`current`, else the text's,
