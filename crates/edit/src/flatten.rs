@@ -701,17 +701,18 @@ fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&
     }
     af_dict.set(b"Fields".to_vec(), Object::Array(survivors));
     // #2670: the calculation order keeps only the fields that are left, and goes once it is empty.
-    // Only the keys go: an indirect `/CO` or `/SigFlags` may be shared, and freeing it would null
-    // the other references; once nothing refers to it, a full save leaves it out.
+    // Only the form's keys change: an indirect `/CO` or `/SigFlags` may be shared, so it is neither
+    // freed (that would null the other references) nor rewritten (they would see the shorter
+    // list). A shortened order is the form's own direct array; once nothing refers to the old
+    // object, a full save leaves it out.
     let surviving: HashSet<ObjRef> = known.iter().filter(|(_, (survives, _))| *survives).map(|(&r, _)| r).collect();
     if let Some(co_obj) = af_dict.get(b"CO").cloned() {
         let co_array = doc.resolve(&co_obj).as_array().cloned().unwrap_or_default();
+        let before = co_array.len();
         let co_survivors: Vec<Object> = co_array.into_iter().filter(|item| item.as_ref().is_some_and(|r| surviving.contains(&r))).collect();
         if co_survivors.is_empty() {
             af_dict.remove(b"CO");
-        } else if let Some(r) = co_obj.as_ref() {
-            doc.set(r, Object::Array(co_survivors));
-        } else {
+        } else if co_survivors.len() != before {
             af_dict.set(b"CO".to_vec(), Object::Array(co_survivors));
         }
     }

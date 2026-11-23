@@ -805,6 +805,36 @@ endstream",
     assert!(doc.resolve(kept.get(b"Order").unwrap()).as_array().is_some(), "the shared /CO array still resolves");
 }
 
+/// #2670: a calculation order that loses some fields but not all is shortened for the form alone.
+/// Its indirect array may be shared, and the other references must still see the whole list.
+#[test]
+fn flattening_shortens_a_shared_calculation_order_without_changing_it() {
+    let page = stream("", " ");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] /CO 8 0 R >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (calc) /Rect [10 10 150 40] /F 4 /AP << /N 7 0 R >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (kept) /V (Ada) /Order 8 0 R /Rect [10 50 150 80] /F 4 >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>
+stream
+
+endstream",
+        "[5 0 R 6 0 R]",
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1, "only calc is drawn; kept has no appearance");
+    let doc = reopen(&doc);
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let co = doc.resolve(af.as_dict().unwrap().get(b"CO").expect("one field is left in the calculation order"));
+    let co: Vec<_> = co.as_array().unwrap().iter().map(|o| o.as_ref()).collect();
+    assert_eq!(co, [Some(pdfcraft_cos::ObjRef::new(6, 0))], "the form's order keeps only the field that is left");
+    let kept = doc.get(pdfcraft_cos::ObjRef::new(6, 0));
+    let order = doc.resolve(kept.as_dict().unwrap().get(b"Order").unwrap());
+    assert_eq!(order.as_array().map(|a| a.len()), Some(2), "the shared array still lists both fields");
+}
+
 /// #1794: a form field whose widget has no usable appearance (none stored, or none for its
 /// selected state) has nothing to draw. Flattening used to remove it anyway, losing its value
 /// with no ink in its place. It stays, in the page and in the form, like a comment that can't be
