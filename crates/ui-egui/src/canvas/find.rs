@@ -1,5 +1,7 @@
 use super::{Align2, Color32, CornerRadius, DocView, Range, Rect, Stroke, Tokens, ViewAction, icons, theme, vec2, widgets};
 
+use crate::page_keys::PageKeys;
+
 /// The find bar (⌘F): query, matches across the document, current match.
 #[derive(Default)]
 pub struct Find {
@@ -21,6 +23,8 @@ pub struct Find {
     pub follow_ended: bool,
     pub focus: bool,
     pub case_query: String,
+    /// The unsubmitted Find bar match number, present while that field has the keyboard.
+    pub match_number: Option<String>,
     /// Find options (Acrobat's: case-sensitive, whole words only).
     pub case_sensitive: bool,
     pub whole_words: bool,
@@ -270,14 +274,16 @@ impl DocView {
 /// Acrobat-style floating find bar at the top-right of the document area. In Edit text mode
 /// (`editing`) it offers a Replace row: Replace changes the highlighted match, Replace all every
 /// match, each inside its own paragraph.
-pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bool, ui: &mut egui::Ui, t: &Tokens) {
+pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bool, keys: PageKeys, ui: &mut egui::Ui, t: &Tokens) {
     let Some(find) = view.find.as_mut() else { return };
     // The Search panel shows this search.
     if find.in_panel {
+        find.match_number = None;
         return;
     }
     let mut close = false;
     let mut step: Option<bool> = None;
+    let mut jump = None;
     let mut replace: Option<bool> = None;
     let searched = view.texts.len() + view.text_failed.len();
     egui::Area::new(egui::Id::unique(("find-bar", view.pane.key)))
@@ -294,40 +300,91 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bo
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.add(icons::image("search", 16.0, t.text_muted));
+                        let query_id = find_input_id(view.pane.key);
+                        let number_id = query_id.with("match-number");
+                        // Escape can clear egui's focus before widgets draw. Keep the draft only
+                        // if the number field still owns these keys, including that Escape frame.
+                        let editing_number = find.match_number.is_some()
+                            && !keys.over()
+                            && ui.memory(|m| m.focused().map_or_else(|| m.had_focus_last_frame(number_id), |id| id == number_id));
                         let edit = egui::TextEdit::singleline(&mut find.query)
-                            .id(find_input_id(view.pane.key))
+                            .id(query_id)
                             .hint_text(tl!("Find text"))
                             .desired_width(220.0)
                             .frame(egui::Frame::NONE);
                         let r = ui.add(edit).accessible_name(tl!("Find text"));
                         widgets::focus_selecting_all(ui, &r, &find.query, &mut find.focus);
-                        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        if !editing_number && r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                             step = Some(!ui.input(|i| i.modifiers.shift));
                             r.request_focus();
                         }
                         if r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                             close = true;
                         }
-                        let status = if find.query.trim().is_empty() {
-                            String::new()
-                        } else if find.matches.is_empty() {
-                            if searched < pages {
+                        let status_font = theme::regular(12.0);
+                        let status_text = |text: String| egui::RichText::new(text).font(status_font.clone()).color(t.text_muted);
+                        if find.query.trim().is_empty() || find.matches.is_empty() {
+                            find.match_number = None;
+                            let status = if find.query.trim().is_empty() {
+                                String::new()
+                            } else if searched < pages {
                                 crate::i18n::fmt(tl!("Searching… {s}/{p}"), &[("s", &searched.to_string()), ("p", &pages.to_string())])
                             } else {
                                 tl!("No matches").to_string()
-                            }
+                            };
+                            ui.label(status_text(status));
                         } else {
+                            let current = find.current.map_or(0, |i| i + 1).to_string();
+                            let total = find.matches.len().to_string();
                             let more = if searched < pages { "+" } else { "" };
-                            crate::i18n::fmt(
-                                tl!("{c} of {n}{more}"),
-                                &[
-                                    ("c", &find.current.map(|c| c + 1).unwrap_or(0).to_string()),
-                                    ("n", &find.matches.len().to_string()),
-                                    ("more", more),
-                                ],
-                            )
-                        };
-                        ui.label(egui::RichText::new(status).font(theme::regular(12.0)).color(t.text_muted));
+                            let template = tl!("{c} of {n}{more}");
+                            let args = [("n", total.as_str()), ("more", more)];
+                            if let Some((prefix, suffix)) = template.split_once("{c}") {
+                                // Widgets are placed left to right. A right-to-left status
+                                // puts its logical prefix on the right of the number field.
+                                let (left, right) = if crate::bidi::has_rtl(template) { (suffix, prefix) } else { (prefix, suffix) };
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 0.0;
+                                    if !left.is_empty() {
+                                        ui.label(status_text(crate::i18n::fmt(left, &args)));
+                                    }
+                                    let mut draft = find.match_number.take().filter(|_| editing_number).unwrap_or(current);
+                                    let width = ui.fonts_mut(|fonts| fonts.glyph_width(&status_font, '0') * total.len() as f32 + 4.0);
+                                    let r = ui
+                                        .add(
+                                            egui::TextEdit::singleline(&mut draft)
+                                                .id(number_id)
+                                                .font(status_font.clone())
+                                                .text_color(t.text_muted)
+                                                .align(Align2::RIGHT_CENTER)
+                                                .desired_width(width)
+                                                .margin(egui::Margin::symmetric(2, 0))
+                                                .char_limit(20)
+                                                .frame(egui::Frame::NONE),
+                                        )
+                                        .accessible_name(tl!("Match number"));
+                                    let mut select = !keys.over() && r.gained_focus();
+                                    widgets::focus_selecting_all(ui, &r, &draft, &mut select);
+                                    if editing_number && keys.take(ui.ctx(), egui::Key::Escape) {
+                                        ui.memory_mut(|memory| memory.request_focus(query_id));
+                                    } else if editing_number && r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                        jump = draft
+                                            .parse::<usize>()
+                                            .ok()
+                                            .filter(|_| draft.bytes().all(|byte| byte.is_ascii_digit()))
+                                            .and_then(|number| number.checked_sub(1));
+                                    } else if !keys.over() && r.has_focus() {
+                                        find.match_number = Some(draft);
+                                    }
+                                    if !right.is_empty() {
+                                        ui.label(status_text(crate::i18n::fmt(right, &args)));
+                                    }
+                                });
+                            } else {
+                                find.match_number = None;
+                                ui.label(status_text(crate::i18n::fmt(template, &args)));
+                            }
+                        }
                         let tip = crate::commands::key_tip(ui.ctx(), tl!("Previous ({key})"), crate::commands::FIND_PREV);
                         if icons::button(ui, "chevron-up", 26.0, false, &tip).clicked() {
                             step = Some(false);
@@ -402,7 +459,9 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bo
     if find.query != find.case_query {
         view.rerun_find();
     }
-    if let Some(forward) = step {
+    if let Some(index) = jump {
+        view.go_to_match(index);
+    } else if let Some(forward) = step {
         view.find_step(forward);
     }
 }
