@@ -1485,6 +1485,150 @@ fn headings_are_found_with_their_levels_titles_and_pages() {
 }
 
 #[test]
+fn tagged_text_follows_tag_order_and_leaves_out_untagged_text() {
+    // Drawn in another order than the tags list it, with an artifact and untagged text between.
+    let content = stream(
+        "/Artifact BMC BT /F1 12 Tf 20 190 Td (Running header) Tj ET EMC \
+         /P << /MCID 0 >> BDC BT /F1 12 Tf 20 170 Td (Second) Tj ET EMC \
+         /H1 << /MCID 1 >> BDC BT /F1 12 Tf 20 150 Td (Title) Tj ET EMC \
+         BT /F1 12 Tf 20 130 Td (Loose words) Tj ET \
+         /Span << /MCID 2 >> BDC BT /F1 12 Tf 20 110 Td (alpha) Tj ET EMC \
+         /Span << /MCID 3 >> BDC BT /F1 12 Tf 20 100 Td (beta) Tj ET EMC \
+         /Span << /MCID 4 >> BDC BT /F1 12 Tf 20 90 Td (gamma) Tj ET EMC \
+         /Span << /MCID 5 >> BDC BT /F1 12 Tf 20 80 Td (garbled) Tj ET EMC \
+         /TD << /MCID 7 >> BDC BT /F1 12 Tf 20 60 Td (Name) Tj ET EMC \
+         /TD << /MCID 8 >> BDC BT /F1 12 Tf 90 60 Td (Value) Tj ET EMC",
+    );
+    let bodies = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        content,
+        FONT.into(),
+        "<< /Type /StructTreeRoot /K 7 0 R /RoleMap << /Heading /H1 >> >>".into(),
+        "<< /S /Document /Pg 3 0 R /K [\
+            << /S /Heading /K 1 >> \
+            << /S /P /K [2 << /S /Span /K 3 >> 4] >> \
+            << /S /P /K 0 >> \
+            << /S /Span /ActualText (replaced) /K 5 >> \
+            << /S /Figure /Alt (A chart) /K 6 >> \
+            << /S /Table /K << /S /TR /K [<< /S /TD /K 7 >> << /S /TD /K 8 >>] >> >> \
+            << /S /P /K << /Type /MCR /Stm 99 0 R /MCID 0 >> >>\
+         ] >>"
+            .into(),
+    ];
+    let out = tagged_text(&pdf(&bodies, "")).unwrap();
+    // The heading first (tag order, not drawing order); a paragraph's own marks and its child
+    // tag interleave as /K lists them; artifact and untagged text are not in it.
+    assert_eq!(out.text, "Title\nalpha beta gamma\nSecond\nreplaced\nA chart\nName\tValue\n");
+    assert!(!out.text.contains("garbled") && !out.text.contains("Loose") && !out.text.contains("Running"));
+    // The marked content in a form XObject is counted, not silently dropped.
+    assert_eq!((out.unread, out.truncated), (1, false));
+
+    let untagged = pdf(&bodies[..5].iter().map(|b| b.replace(" /StructTreeRoot 6 0 R", "")).collect::<Vec<_>>(), "");
+    assert_eq!(tagged_text(&untagged), Err(TaggedTextError::Untagged));
+}
+
+/// CodeRabbit on #8008: a long paragraph is exported whole (not at the heading reader's length),
+/// cells holding paragraphs stay apart by tabs, an empty /ActualText reads as nothing, and a
+/// comment the tags reference is counted as unread while a link is not.
+/// CodeRabbit on #8008 (second pass): a row whose first cell is empty keeps the line break
+/// before it, and a table nested in a cell doesn't take the tab before that cell's text.
+#[test]
+fn tagged_text_tabs_follow_each_rows_own_cells() {
+    let content = stream(
+        "/P << /MCID 0 >> BDC BT /F1 12 Tf 20 190 Td (A) Tj ET EMC \
+         /P << /MCID 1 >> BDC BT /F1 12 Tf 60 190 Td (B) Tj ET EMC \
+         /P << /MCID 2 >> BDC BT /F1 12 Tf 60 170 Td (C) Tj ET EMC \
+         /P << /MCID 3 >> BDC BT /F1 12 Tf 20 150 Td (D) Tj ET EMC \
+         /P << /MCID 4 >> BDC BT /F1 12 Tf 60 150 Td (E) Tj ET EMC",
+    );
+    let bodies = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        content,
+        FONT.into(),
+        "<< /Type /StructTreeRoot /K 7 0 R >>".into(),
+        "<< /S /Document /Pg 3 0 R /K [\
+            << /S /Table /K [\
+                << /S /TR /K [<< /S /TD /K << /S /P /K 0 >> >> << /S /TD /K << /S /P /K 1 >> >>] >> \
+                << /S /TR /K [<< /S /TD /K [] >> << /S /TD /K << /S /P /K 2 >> >>] >>\
+            ] >> \
+            << /S /Table /K << /S /TR /K [\
+                << /S /TD /K << /S /P /K 3 >> >> \
+                << /S /TD /K [<< /S /Table /K << /S /TR /K << /S /TD /ActualText () >> >> >> << /S /P /K 4 >>] >>\
+            ] >> >>\
+         ] >>"
+            .into(),
+    ];
+    let out = tagged_text(&pdf(&bodies, "")).unwrap();
+    assert_eq!(out.text, "A\tB\nC\nD\tE\n");
+}
+
+#[test]
+fn tagged_text_keeps_long_text_cell_tabs_empty_replacements_and_counts_comments() {
+    let long = "word ".repeat(600);
+    let content = stream(&format!(
+        "/P << /MCID 0 >> BDC BT /F1 12 Tf 20 190 Td ({long}) Tj ET EMC \
+         /P << /MCID 1 >> BDC BT /F1 12 Tf 20 170 Td (A) Tj ET EMC \
+         /P << /MCID 2 >> BDC BT /F1 12 Tf 90 170 Td (B) Tj ET EMC \
+         /P << /MCID 3 >> BDC BT /F1 12 Tf 20 150 Td (hidden) Tj ET EMC \
+         /P << /MCID 4 >> BDC BT /F1 12 Tf 20 130 Td (shown) Tj ET EMC"
+    ));
+    let bodies = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [8 0 R 9 0 R] >>".into(),
+        content,
+        FONT.into(),
+        "<< /Type /StructTreeRoot /K 7 0 R >>".into(),
+        "<< /S /Document /Pg 3 0 R /K [\
+            << /S /P /K 0 >> \
+            << /S /Table /K << /S /TR /K [<< /S /TD /K << /S /P /K 1 >> >> << /S /TD /K << /S /P /K 2 >> >>] >> >> \
+            << /S /Span /ActualText () /K 3 >> \
+            << /S /P /K 4 >> \
+            << /S /Annot /K << /Type /OBJR /Obj 8 0 R >> >> \
+            << /S /Link /K << /Type /OBJR /Obj 9 0 R >> >>\
+         ] >>"
+            .into(),
+        "<< /Type /Annot /Subtype /Text /Rect [0 0 10 10] /Contents (A note) >>".into(),
+        "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Contents (A link) >>".into(),
+    ];
+    let out = tagged_text(&pdf(&bodies, "")).unwrap();
+    let lines: Vec<&str> = out.text.lines().collect();
+    assert_eq!(lines.first().map(|l| l.split_whitespace().count()), Some(600), "the long paragraph is whole");
+    assert_eq!(lines.get(1..), Some(&["A\tB", "shown"][..]), "{:?}", out.text);
+    assert_eq!((out.unread, out.truncated), (1, false), "the note is unread; the link is not");
+}
+
+#[test]
+fn page_text_for_tagged_export_builds_only_the_referenced_ids() {
+    // Id 1's text is more than the cap and no tag references it: it is neither built nor
+    // reported as cut, so a page full of it costs the export nothing to keep.
+    let content = stream(&format!(
+        "/P << /MCID 0 >> BDC BT /F1 12 Tf 20 190 Td (kept) Tj ET EMC \
+         /P << /MCID 1 >> BDC BT /F1 12 Tf 20 170 Td ({}) Tj ET EMC",
+        "x".repeat(200)
+    ));
+    let bodies = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        content,
+        FONT.into(),
+    ];
+    let doc = pdf(&bodies, "");
+    let page = &pdfcraft_model::pages(&doc)[0].dict;
+    let (all, all_cut) = crate::headings::mcid_texts_of(&doc, page, 100, None);
+    assert!(all.contains_key(&1) && all_cut, "unfiltered, id 1 is read and cut");
+    let (some, cut) = crate::headings::mcid_texts_of(&doc, page, 100, Some(&std::collections::HashSet::from([0])));
+    assert_eq!(some.keys().collect::<Vec<_>>(), [&0]);
+    assert_eq!(some.get(&0), all.get(&0), "a wanted id reads as it does unfiltered");
+    assert!(!cut, "only a wanted id's text being cut counts");
+}
+
+#[test]
 fn tag_content_reads_the_text_of_each_marked_content_reference() {
     let doc = pdf(&headings_doc(), "");
     let items = |n| tag_content(&doc, ref_(n).unwrap()).unwrap().into_iter().map(|i| (i.page, i.mcid, i.text)).collect::<Vec<_>>();
