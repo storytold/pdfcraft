@@ -115,7 +115,7 @@ impl PdfCraftApp {
         self.open_created_bytes(&format!("{}.pdf", stem(name)), created)
     }
 
-    fn open_created_bytes(&mut self, name: &str, created: Result<Arc<Vec<u8>>, String>) -> Result<(), String> {
+    pub(crate) fn open_created_bytes(&mut self, name: &str, created: Result<Arc<Vec<u8>>, String>) -> Result<(), String> {
         let bytes = created?;
         let id = self.session.open_new(name, bytes).map_err(|e| e.to_string())?;
         // The reading-colours preference is app-wide: the newly created document starts with it.

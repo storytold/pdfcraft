@@ -4984,3 +4984,146 @@ fn combining_some_pages_brings_only_their_bookmarks_and_no_attachments() {
     assert_eq!(source_bookmarks(&all), [("Chapter one".to_string(), vec!["Section".to_string()])]);
     assert!(attachments(&all));
 }
+
+/// The `/CI` value `field` of the attachment `key` in a portfolio, as text.
+fn portfolio_value(doc: &Document, key: &str, field: &[u8]) -> Option<String> {
+    let root = doc.root().unwrap();
+    let names = doc.get(root).as_dict().unwrap().get(b"Names").cloned().unwrap();
+    let tree = doc.resolve(&names).as_dict().unwrap().get(b"EmbeddedFiles").cloned().unwrap();
+    let pairs = doc.resolve(&tree).as_dict().unwrap().get(b"Names").cloned().unwrap();
+    let pairs = doc.resolve(&pairs).as_array().cloned().unwrap();
+    let spec = pairs.chunks(2).find(|p| p[0].as_string().map(PdfString::to_text).as_deref() == Some(key)).map(|p| p[1].clone())?;
+    let spec = doc.resolve(&spec).as_dict().cloned()?;
+    let ci = doc.resolve(spec.get(b"CI")?).as_dict().cloned()?;
+    match doc.resolve(ci.get(field)?).as_ref() {
+        Object::Int(n) => Some(n.to_string()),
+        Object::String(s) => Some(s.to_text()),
+        _ => None,
+    }
+}
+
+#[test]
+fn exhibit_labels_count_in_letters_or_numbers() {
+    assert_eq!(exhibit_label(ExhibitStyle::Letters, "Exhibit", 0).as_deref(), Some("Exhibit A"));
+    assert_eq!(exhibit_label(ExhibitStyle::Letters, "Exhibit", 25).as_deref(), Some("Exhibit Z"));
+    assert_eq!(exhibit_label(ExhibitStyle::Letters, "", 26).as_deref(), Some("AA"));
+    assert_eq!(exhibit_label(ExhibitStyle::Letters, "", 27).as_deref(), Some("AB"));
+    assert_eq!(exhibit_label(ExhibitStyle::Letters, "", 701).as_deref(), Some("ZZ"));
+    assert_eq!(exhibit_label(ExhibitStyle::Letters, "", 702).as_deref(), Some("AAA"));
+    assert_eq!(exhibit_label(ExhibitStyle::Numbers, " Tab ", 2).as_deref(), Some("Tab 3"));
+    assert_eq!(exhibit_label(ExhibitStyle::None, "Exhibit", 0), None);
+    // The largest index does not overflow.
+    assert!(exhibit_label(ExhibitStyle::Letters, "", usize::MAX).is_some());
+    assert!(exhibit_label(ExhibitStyle::Numbers, "", usize::MAX).is_some());
+}
+
+#[test]
+fn a_portfolio_lists_its_files_in_order_with_exhibits_and_dates() {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    // Added in an order the name tree sorts differently: the list keeps the order given.
+    let complaint = add_attachment(&mut doc, "Complaint.pdf", b"%PDF-1.7", Some("Filed complaint"), Some("application/pdf"), None).unwrap();
+    let answer = add_attachment(&mut doc, "Answer.docx", b"PK", None, None, None).unwrap();
+    let spec = PortfolioSpec {
+        items: vec![
+            PortfolioItem { key: complaint.clone(), exhibit: Some("Exhibit A".into()), document_date: Some("D:20260301".into()) },
+            PortfolioItem { key: answer.clone(), exhibit: Some("Exhibit B".into()), document_date: None },
+        ],
+        layout: PortfolioLayout::Tile,
+        initial: Some(complaint.clone()),
+    };
+    set_portfolio(&mut doc, &spec).unwrap();
+    let doc = save_and_reopen(&doc);
+
+    let root = doc.root().unwrap();
+    let catalog = doc.get(root).as_dict().cloned().unwrap();
+    assert_eq!(catalog.get(b"PageMode"), Some(&Object::name("UseAttachments")));
+    let collection = doc.resolve(catalog.get(b"Collection").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(collection.get(b"View"), Some(&Object::name("T")));
+    assert_eq!(collection.get(b"D").and_then(Object::as_string).map(PdfString::to_text).as_deref(), Some("Complaint.pdf"));
+    let schema = doc.resolve(collection.get(b"Schema").unwrap()).as_dict().cloned().unwrap();
+    for key in [&b"Order"[..], b"Exhibit", b"FileName", b"Description", b"DocDate", b"Modified", b"Size"] {
+        assert!(schema.get(key).is_some(), "column {}", String::from_utf8_lossy(key));
+    }
+    let sort = doc.resolve(collection.get(b"Sort").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(sort.get(b"S"), Some(&Object::name("Order")));
+
+    assert_eq!(portfolio_value(&doc, "Complaint.pdf", b"Order").as_deref(), Some("1"));
+    assert_eq!(portfolio_value(&doc, "Answer.docx", b"Order").as_deref(), Some("2"));
+    assert_eq!(portfolio_value(&doc, "Complaint.pdf", b"Exhibit").as_deref(), Some("Exhibit A"));
+    assert_eq!(portfolio_value(&doc, "Complaint.pdf", b"DocDate").as_deref(), Some("D:20260301"));
+    assert_eq!(portfolio_value(&doc, "Answer.docx", b"DocDate"), None);
+}
+
+#[test]
+fn a_portfolio_without_exhibits_or_dates_has_no_such_columns_and_opens_on_its_cover() {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    let key = add_attachment(&mut doc, "notes.txt", b"hi", None, None, None).unwrap();
+    set_portfolio(&mut doc, &PortfolioSpec { items: vec![PortfolioItem { key, ..Default::default() }], ..Default::default() }).unwrap();
+    let doc = save_and_reopen(&doc);
+    let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+    let collection = doc.resolve(catalog.get(b"Collection").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(collection.get(b"View"), Some(&Object::name("D")));
+    assert!(collection.get(b"D").is_none());
+    let schema = doc.resolve(collection.get(b"Schema").unwrap()).as_dict().cloned().unwrap();
+    assert!(schema.get(b"Exhibit").is_none());
+    assert!(schema.get(b"DocDate").is_none());
+}
+
+#[test]
+fn a_portfolio_refuses_unknown_repeated_or_missing_files_and_changes_nothing() {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    let key = add_attachment(&mut doc, "a.pdf", b"x", None, None, None).unwrap();
+    let item = |k: &str| PortfolioItem { key: k.into(), ..Default::default() };
+    let refuse = |doc: &mut Document, spec: PortfolioSpec| assert!(matches!(set_portfolio(doc, &spec), Err(OrganizeError::Invalid(_))));
+    refuse(&mut doc, PortfolioSpec::default());
+    refuse(&mut doc, PortfolioSpec { items: vec![item("missing.pdf")], ..Default::default() });
+    refuse(&mut doc, PortfolioSpec { items: vec![item(&key), item(&key)], ..Default::default() });
+    refuse(&mut doc, PortfolioSpec { items: vec![item(&key)], initial: Some("missing.pdf".into()), ..Default::default() });
+    let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+    assert!(catalog.get(b"Collection").is_none());
+    assert!(portfolio_value(&doc, "a.pdf", b"Order").is_none());
+}
+
+#[test]
+fn portfolio_layouts_and_exhibit_styles_parse_their_names() {
+    assert_eq!(PortfolioLayout::parse("Tile"), Some(PortfolioLayout::Tile));
+    assert_eq!(PortfolioLayout::parse("details"), Some(PortfolioLayout::Details));
+    assert_eq!(PortfolioLayout::parse("hidden"), Some(PortfolioLayout::Hidden));
+    assert_eq!(PortfolioLayout::parse("grid"), None);
+    assert_eq!(ExhibitStyle::parse("numbers"), Some(ExhibitStyle::Numbers));
+    assert_eq!(ExhibitStyle::parse("none"), Some(ExhibitStyle::None));
+    assert_eq!(ExhibitStyle::parse("roman"), None);
+}
+
+#[test]
+fn attachment_keys_for_a_batch_match_adding_one_by_one() {
+    // The batch keys are the keys adding the same names one at a time gives, including a name
+    // that already looks like a suffixed copy.
+    let names = ["report.pdf", "/a/report.pdf", "report.pdf (2)", "C:\\b\\report.pdf", "notes.txt"];
+    let mut one_by_one = Document::open(Arc::new(fixture())).unwrap();
+    let expected: Vec<String> = names.iter().map(|n| add_attachment(&mut one_by_one, n, b"x", None, None, None).unwrap()).collect();
+    let mut batch = Document::open(Arc::new(fixture())).unwrap();
+    let files: Vec<NewAttachment<'_>> = names.iter().map(|n| NewAttachment { name: n, bytes: b"x", ..Default::default() }).collect();
+    assert_eq!(add_attachments(&mut batch, &files).unwrap(), expected);
+    // The name tree holds every key once (it keeps them sorted, so compare as sets).
+    let mut stored = attachment_keys(&batch);
+    let mut want = expected.clone();
+    stored.sort();
+    want.sort();
+    assert_eq!(stored, want);
+    // Every key is distinct, so no two files share an entry.
+    let distinct: std::collections::HashSet<&String> = expected.iter().collect();
+    assert_eq!(distinct.len(), expected.len());
+    assert!(unique_attachment_keys(&[], &["report.pdf", " "]).is_err());
+}
+
+#[test]
+fn many_attachments_with_one_name_get_distinct_keys() {
+    // Thousands of same-named files (one name from many folders) each get their own key.
+    let names: Vec<String> = (0..5000).map(|i| format!("/case/{i}/document.pdf")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let keys = unique_attachment_keys(&[], &refs).unwrap();
+    let distinct: std::collections::HashSet<&String> = keys.iter().collect();
+    assert_eq!(distinct.len(), names.len());
+    assert!(keys.iter().all(|k| k.starts_with("document.pdf")));
+}

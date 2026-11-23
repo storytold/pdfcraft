@@ -161,6 +161,7 @@ impl Automation {
             "page_extract" => self.page_extract(&a)?,
             "doc_combine" => self.doc_combine(&a)?,
             "doc_create_multiple" => self.doc_create_multiple(&a)?,
+            "doc_create_portfolio" => self.doc_create_portfolio(&a)?,
             "doc_split" => self.doc_split(&a)?,
             "edit_undo" => {
                 let id = self.doc(&a)?.id;
