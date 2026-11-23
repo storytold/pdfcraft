@@ -26,13 +26,16 @@ const MAX_SUCCESSORS: usize = 1 << 16;
 /// Drop the references form actions and fields' `/Kids` hold to `removed`, then refuse if anything
 /// else a full save would write still reaches one of them. A field whose `/Kids` held only removed
 /// objects is deleted too, as the form deletes an ancestor left without kids: it would keep the
-/// value of the field the redaction removed. Costs one walk of the reachable objects when nothing
-/// refers to them, and a few more when something does.
-pub(crate) fn drop_references(doc: &mut Document, removed: &HashSet<ObjRef>) -> Result<(), RedactError> {
+/// value of the field the redaction removed, and the structure tree's references to it go as
+/// they went for the rest (returned: how many). Costs one walk of the reachable objects when
+/// nothing refers to them, and a few more when something does.
+pub(crate) fn drop_references(doc: &mut Document, removed: &HashSet<ObjRef>) -> Result<usize, RedactError> {
     if removed.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
     let mut removed = removed.clone();
+    // The fields deleted here, after the structure tree was cleaned of the rest.
+    let mut emptied_fields = HashSet::new();
     // Each round deletes the fields the one before left without kids, one level further up.
     for _ in 0..=MAX_DEPTH {
         let childless = drop_once(doc, &removed)?;
@@ -48,9 +51,15 @@ pub(crate) fn drop_references(doc: &mut Document, removed: &HashSet<ObjRef>) -> 
         }
         // An ancestor the form keeps (it has other kids) is not removed.
         let in_form: HashSet<ObjRef> = pdfcraft_forms::fields(doc).iter().flat_map(|f| crate::field_and_ancestors(doc, f.obj)).collect();
-        removed.extend(deleted.into_iter().filter(|f| !in_form.contains(f)));
+        for f in deleted.into_iter().filter(|f| !in_form.contains(f)) {
+            removed.insert(f);
+            emptied_fields.insert(f);
+        }
     }
-    refuse_kept(doc, &removed)
+    // A tagged field (a widget the field is merged with) keeps its `/OBJR` until this.
+    let tags = crate::tags::drop_object_refs(doc, &emptied_fields)?;
+    refuse_kept(doc, &removed)?;
+    Ok(tags)
 }
 
 /// One pass of [`drop_references`] over the objects a full save would write: the fields whose

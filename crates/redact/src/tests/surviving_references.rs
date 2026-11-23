@@ -1173,3 +1173,34 @@ fn a_redacted_field_that_is_itself_a_widget_leaves_the_saved_file() {
         assert!(!full_save_holds(&doc, secret), "{} stayed in the saved file", String::from_utf8_lossy(secret));
     }
 }
+
+/// A radio group that is itself a widget on the page, outside the mark, holds buttons that name no
+/// `/Parent` (#7885), and a structure element tags the group through an object reference (`/OBJR`).
+/// With every button under the mark the group goes too, after the structure tree was cleaned of
+/// the buttons: its tag goes with it, and the redaction succeeds without the group or its value.
+#[test]
+fn a_tagged_field_left_without_kids_leaves_the_saved_file() {
+    let button = |rect: &str, tip: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 49152 /T (Group1) /TU ({tip}) /Rect [{rect}] /P 3 0 R /AS /Off >>").into_bytes()
+    };
+    let mut doc = page_with(
+        b"",
+        "/AcroForm << /Fields [7 0 R] >> /StructTreeRoot 10 0 R /MarkInfo << /Marked true >>",
+        "",
+        "/Annots [7 0 R 8 0 R 9 0 R]",
+        vec![
+            b"<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 49152 /T (Group1) /V /TAGGEDSECRETV /TU (TAGGEDSECRETTIP) /Rect [0 0 0 0] /P 3 0 R /Kids [8 0 R 9 0 R] >>"
+                .to_vec(),
+            button("10 50 30 70", "TAGGEDSECRETONE"),
+            button("40 50 60 70", "TAGGEDSECRETTWO"),
+            b"<< /Type /StructTreeRoot /K [11 0 R] >>".to_vec(),
+            b"<< /Type /StructElem /S /Form /P 10 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 7 0 R /Pg 3 0 R >> >>".to_vec(),
+        ],
+    );
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    let report = apply(&mut doc, None).unwrap();
+    assert!(report.tags > 0, "the group's tag counts among the structure-tree changes");
+    for secret in [b"TAGGEDSECRETONE".as_slice(), b"TAGGEDSECRETTWO", b"TAGGEDSECRETV", b"TAGGEDSECRETTIP"] {
+        assert!(!full_save_holds(&doc, secret), "{} stayed in the saved file", String::from_utf8_lossy(secret));
+    }
+}

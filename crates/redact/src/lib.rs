@@ -808,7 +808,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         pdfcraft_forms::fields(doc).iter().flat_map(|f| field_and_ancestors(doc, f.obj)).collect()
     };
     let removed: HashSet<ObjRef> = gone.into_iter().chain(deleted_fields.into_iter().filter(|f| !in_form.contains(f))).collect();
-    reachable::drop_references(doc, &removed)?;
+    report.tags += reachable::drop_references(doc, &removed)?;
 
     // 4. The boxes.
     for (pi, content) in overlays {
