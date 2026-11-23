@@ -55,6 +55,8 @@ pub(crate) fn composer(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, pr
         .hint(hint)
         .draft_kind(draft)
         .close(ComposerClose::OnPostOrCancel)
+        // The card keeps one size, so its Post button stays inside it near the bottom of the page.
+        .fixed_rows()
         .show(ui);
     if output.cancelled {
         view.session.comments.composer = None;
