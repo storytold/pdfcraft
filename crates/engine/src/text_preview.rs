@@ -1,5 +1,5 @@
-//! The page beneath an inline text editor, with the source glyphs removed on a COS clone; and,
-//! the same way, the page beneath a dragged added item or the marks an Update replaces.
+//! Read-only PDF previews on COS clones: inline paragraph drafts, textless editing backgrounds,
+//! and the page beneath a dragged added item or the marks an Update replaces.
 
 use std::sync::Arc;
 
@@ -123,6 +123,24 @@ impl Document {
     /// This is read-only; no source font is installed or exported.
     pub fn text_editor_fonts(&self, page: usize) -> Vec<pdfcraft_edit::text::TextEditorFont> {
         self.editor.as_ref().and_then(|e| pdfcraft_edit::text::text_editor_fonts(&e.cos, page).ok()).unwrap_or_default()
+    }
+
+    /// Render a paragraph draft with the same PDF fonts and rewrite as Apply, on a copy.
+    /// The live document, its dirty state and undo history are untouched.
+    pub fn text_edit_draft_preview(
+        &self,
+        page: usize,
+        block: usize,
+        text: &str,
+        style: &pdfcraft_edit::BlockStyle,
+    ) -> Result<TextEditPreview, String> {
+        guard(|| {
+            let editor = self.editor.as_ref().ok_or("the document can't be read")?;
+            let mut cos = editor.cos.clone();
+            pdfcraft_edit::rewrite_block(&mut cos, page, block, Some(text), style).map_err(|e| e.to_string())?;
+            let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())?);
+            Ok(TextEditPreview { page, bytes, config: self.config.clone() })
+        })?
     }
 
     /// Preparing the background never changes working bytes, dirty state or undo history.

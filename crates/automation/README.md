@@ -219,7 +219,13 @@ the PNG alone.
 `text_font_import` registers a full document face, and `text_fonts` lists source/full resources.
 Use `text_edit.font_resource` to choose a resource, or keep source faces and let matching full
 faces complete absent subset glyphs. `text_edit.ranges` accepts disjoint UTF-8 byte ranges;
-`text_edit_layout` measures the same resource/range draft without committing. All changes are
+`text_edit_layout` measures the same resource/range draft without committing. Its `rows`
+include UTF-8 `byte_range` (excluding a hard newline), `ends_with_newline`, `rect`, `baseline`,
+and per-scalar `characters` start/end baseline points in page view coordinates. An empty
+`rows` list means the PDF reading order cannot safely supply caret geometry.
+`page_render` with `draft_paragraph` and optional `text`, `size`, `width`, `font_resource` and
+`ranges` renders that draft with its PDF fonts, without changing dirty state or undo history.
+The inline paragraph editor uses this same PDF preview while typing. All changes are
 undoable and survive saving/reopening. `image_hit` shares the UI's curve and hole hit testing.
 The bounds, limits and font requirements are in [existing-text editing](../../docs/editing-existing-text.md)
 and [image editing](../../docs/editing-images.md).

@@ -78,6 +78,7 @@ pub use links::{
 };
 pub use live_scripts::{MAX_TIMER_RUNS, ScriptRun};
 pub use pdfcraft_edit::strip_subset_tag;
+pub use pdfcraft_edit::text::{DraftRow, TextEditLayout};
 pub use rich_copy::RichCopy;
 pub use signature_image::{ImageSignaturePreview, SignatureImage};
 pub use signature_scan::{PhotoRect, ScanError, SignaturePhoto, Turn};

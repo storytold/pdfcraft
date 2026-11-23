@@ -3860,6 +3860,9 @@ fn an_applied_paragraph_keeps_its_edited_look_until_the_page_is_redrawn() {
     support::wait_until(&mut h, "the editor's textless page", |app| !app.render_pending());
     h.state_mut().views[0].line_editor.as_mut().expect("the top box is open").text = "T".into();
     h.run_steps(2);
+    // The editor now draws a PDF raster asynchronously. Preserve the look the user has
+    // actually seen when Apply runs, rather than relying on two frames finishing the raster.
+    support::wait_until(&mut h, "the edited PDF preview", |app| !app.render_pending());
     h.state_mut().views[0].hold_rasters = true;
     h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
     for frame in 0..4 {
@@ -4198,6 +4201,56 @@ fn resizing_the_live_box_keeps_the_neighbour() {
     };
     assert!(after.iter().any(|t| t.contains("Neighbor stays.")), "resize removed the neighbour: {after:?}");
     save_live_shot(&mut h, "live-after-resize.png");
+}
+
+#[test]
+fn a_serif_paragraph_keeps_its_pdf_font_while_typing() {
+    let _gpu = gpu();
+    let mut h = harness(1, |app| {
+        let id = app.views[0].id;
+        app.session
+            .apply(
+                id,
+                pdfcraft_engine::Edit::EditTextBlock {
+                    page: 0,
+                    block: 0,
+                    text: "Page 1".into(),
+                    style: pdfcraft_engine::BlockStyle { family: Some((pdfcraft_engine::FontFamily::Times, false, false)), ..Default::default() },
+                },
+            )
+            .unwrap();
+    });
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    open_the_first_line(&mut h);
+    h.state_mut().views[0].line_editor.as_mut().unwrap().text = "Page 12".into();
+    h.run_steps(2);
+    support::wait_until(&mut h, "the PDF draft with the typed text", |app| !app.render_pending());
+    let galley = h
+        .output()
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Page 12" => Some(&text.galley),
+            _ => None,
+        })
+        .expect("the inline editor retains its caret layout");
+    assert!(
+        galley.rows.iter().flat_map(|row| &row.row.visuals.mesh.vertices).all(|vertex| vertex.color == egui::Color32::TRANSPARENT),
+        "interface fallback glyphs must stay invisible after typing, too"
+    );
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().text_lines(0)[0].text, "Page 1");
+    if std::env::var_os("PDFCRAFT_ORGANIZE_SNAPSHOT").is_some() {
+        save_live_shot(&mut h, "font-preview-typing.png");
+    }
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+    h.run_steps(4);
+    assert_eq!(h.state().session.get(id).unwrap().text_lines(0)[0].text, "Page 12");
+    assert_eq!(h.state().session.get(id).unwrap().text_lines(0)[0].base_font, "Times-Roman");
+    if std::env::var_os("PDFCRAFT_ORGANIZE_SNAPSHOT").is_some() {
+        save_live_shot(&mut h, "font-preview-applied.png");
+    }
 }
 
 #[test]
@@ -11701,5 +11754,124 @@ fn a_modified_click_away_from_a_cropped_picture_applies_its_crop() {
         assert!(h.state().views[0].image_selection.is_none(), "{mods:?}: the picture is let go");
         let visible = h.state().session.get(doc_id).unwrap().page_images(0)[0].visible_rect.unwrap();
         assert!(keep.iter().zip(visible).all(|(a, b)| (a - b).abs() < 0.5), "{mods:?}: the crop is applied: {visible:?}");
+    }
+}
+
+#[test]
+fn inline_caret_uses_pdf_advances_before_and_after_typing() {
+    let bytes = source_font_fixture_with_text("BT /F1 18 Tf 20 220 Td [(Wi) 100 (Wi)] TJ ET");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("caret.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    let point = egui::pos2(page.left() + 25.0 / 300.0 * page.width(), page.top() + 72.0 / 300.0 * page.height());
+    h.hover_at(point);
+    h.run_steps(1);
+    h.drag_at(point);
+    h.run_steps(1);
+    h.drop_at(point);
+    h.run_steps(4);
+    for text in ["WiWi", "ill Wide WiWi"] {
+        if text != "WiWi" {
+            h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+            h.event(egui::Event::Text(text.into()));
+            h.run_steps(3);
+        }
+        assert!(crate::support::step_until(&mut h, |h| h
+            .output()
+            .shapes
+            .iter()
+            .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == text))));
+        let ed = h.state().views[0].line_editor.as_ref().unwrap();
+        assert_eq!(ed.text, text);
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        let layout = doc.text_edit_layout(0, ed.block, text, &Default::default()).unwrap();
+        assert_eq!(layout.rows.len(), 1);
+        let shape = h
+            .output()
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text() == text => Some(t),
+                _ => None,
+            })
+            .unwrap();
+        let scale = page.width() / 300.0;
+        for (i, span) in layout.rows[0].characters.iter().enumerate() {
+            let caret = shape.galley.pos_from_cursor(egui::text::CCursor::new(i));
+            // The Area origin is pixel-rounded; character spacing within it is not.
+            let expected = shape.pos.x + (span[0] - layout.source_rect[0]) as f32 * scale;
+            assert!((shape.pos.x + caret.left() - expected).abs() < 0.1, "caret {i}: {} != {expected}", shape.pos.x + caret.left());
+        }
+    }
+}
+
+#[test]
+fn typed_caret_stays_at_the_pdf_position_after_each_draft_completes() {
+    let bytes = source_font_fixture_with_text(
+        "BT /F1 18 Tf 20.123456 280.123456 Td (Caption) Tj 0 -60 Td (WiWi) Tj 0 -22 Td (more) Tj 0 -100 Td (Unchanged) Tj ET",
+    );
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("caret.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    let point = egui::pos2(page.left() + 25.0 / 300.0 * page.width(), page.top() + 72.0 / 300.0 * page.height());
+    h.hover_at(point);
+    h.run_steps(1);
+    h.drag_at(point);
+    h.run_steps(1);
+    h.drop_at(point);
+    h.run_steps(4);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    let mut draft = String::new();
+    for typed in ["Wi", "Wi", " ill ", "Wide words that wrap into more than one line", "\n", "another row", " ", "and more"] {
+        draft.push_str(typed);
+        if typed == "\n" {
+            h.key_press(Key::Enter);
+        } else {
+            h.event(egui::Event::Text(typed.into()));
+        }
+        assert!(crate::support::step_until(&mut h, |h| h
+            .output()
+            .shapes
+            .iter()
+            .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == draft))));
+        let ed = h.state().views[0].line_editor.as_ref().unwrap();
+        assert_eq!(ed.text, draft);
+        let id = egui::Id::unique(("edit-text-line-input", h.state().views[0].place()));
+        let cursor = egui::TextEdit::load_state(&h.ctx, id).unwrap().cursor.char_range().unwrap().primary;
+        assert_eq!(usize::from(cursor.index), draft.chars().count(), "cursor index after {typed:?}");
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        let layout = doc.text_edit_layout(0, ed.block, &draft, &Default::default()).unwrap();
+        let shape = h
+            .output()
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text() == draft => Some(t),
+                _ => None,
+            })
+            .unwrap();
+        let row = layout.rows.last().unwrap();
+        let caret = shape.galley.pos_from_cursor(cursor).translate(shape.pos.to_vec2());
+        let scale = page.width() / 300.0;
+        let x = row.characters.last().map_or(row.rect[0], |span| span[1]);
+        let expected = page.min + egui::vec2(x as f32, 300.0 - row.rect[3] as f32) * scale;
+        assert!(
+            (caret.left() - expected.x).abs() < 1.0 && (caret.top() - expected.y).abs() < 1.0,
+            "{draft:?}: caret {caret:?}, expected {expected:?}"
+        );
     }
 }

@@ -32,7 +32,7 @@ use image::{rotate_knob, turn_degrees, turn_degrees_delta};
 #[cfg(test)]
 use layout::{DARK_EDITOR_FILL, contrast};
 pub(crate) use layout::{caret_color_on, editor_fill, editor_font, install_source_fonts};
-use layout::{color32, editor_galley, editor_job, look_of, luminance, source_look, unseen};
+use layout::{color32, draft_galley, editor_job, look_of, luminance, source_look, unseen};
 
 const ACCENT: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
@@ -996,7 +996,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
 }
 
 /// The inline editor; returns the edit once the text is applied.
-pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, info: &DocInfo) -> Option<Edit> {
+pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, info: &DocInfo, doc: &pdfcraft_engine::Document) -> Option<Edit> {
     let view_id = view.id;
     // Clicks outside the document (the Format text panel) keep the paragraph open, as does the
     // keyboard moving there. Where the click landed is `interact_pos`: `latest_pos` is gone on the
@@ -1009,12 +1009,8 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, i
     let place = view.place();
     let xf = view.page_xform(page)?;
     let hold = view.objects.hold_editor;
-    // An OCR word is invisible text over a scan: the textless background still shows the scanned
-    // word, so the editor covers it, as the applied edit will.
-    let background_ready = view
-        .line_editor
-        .as_ref()
-        .is_some_and(|ed| view.text_background.ready(ed.page, ed.block) && !ed.source.as_ref().is_some_and(|(b, _)| b.invisible));
+    let background_ready = view.line_editor.as_ref().is_some_and(|ed| view.text_background.ready(ed.page, ed.block));
+    let preview_error = view.line_editor.as_ref().and_then(|ed| view.text_background.error_for(ed.page, ed.block)).map(str::to_owned);
     // The measured extent of this paragraph's draft: a click straight from another paragraph
     // opens this one after the frame's measuring, which was the other one's.
     let draft_rect = view
@@ -1053,8 +1049,8 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, i
     let block = ed.block;
     let mut done = None;
     let mut reveal = false;
-    let mut look = None;
-    // No fade-in: while it faded, the page's own copy of the text showed through the cover.
+    let mut drew_editor = false;
+    // Keep the caret and selection fully visible from the first editor frame.
     // Over the page, so only where the document shows: a paragraph scrolled under the mode bar or
     // a side panel must leave them their pointer (#2755). It stays at its paragraph, cut off as
     // the page is, rather than pushed back into the window.
@@ -1079,7 +1075,7 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, i
                 ed.rect.width().max(1.0)
             };
             ui.set_width(width);
-            let measured = editor_galley(ui, ed, &ed.text, scale, width);
+            let measured = draft_galley(ui, ed, &ed.text, scale, width, view.text_background.layout_for(doc, ed, &ed.text));
             ed.overflow = ed.has_changes() && (measured.rect.width() > ed.rect.width() + 1.5 || measured.rect.height() > ed.rect.height() + 1.5);
             let visible = Rect::from_min_size(ed.rect.min, measured.rect.size().max(egui::vec2(1.0, 1.0)));
             // Unsupported source programs use an interface fallback whose glyph advances
@@ -1102,35 +1098,31 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, i
             // White, unless the text is too pale to read on white (white text from a coloured
             // banner, #913): then a dark box, with a caret that shows on it.
             let fill = if background_ready { Color32::TRANSPARENT } else { editor_fill(text_color) };
-            // An unchanged paragraph is the page's own text: the editor draws only its frame and
-            // caret over it. Once it changes, the textless page goes under the editor's text or,
-            // until that background is ready, a cover over the entire source box, including lines
-            // the draft no longer occupies. Shrinking the text must never expose a copy. Both are
-            // decided after this frame's typing, in places kept under the editor's text.
-            let cover = ui.painter().add(egui::Shape::Noop);
+            // PDF rasters supply all visible glyphs, including while typing. egui only lays
+            // out the caret and selection; its fallback face must never cover the PDF text.
             let unchanged = !ed.has_changes();
             egui::Frame::NONE.show(ui, |ui| {
-                // A textless PDF preview, or the page itself, keeps its real background through
-                // the transparent editor. The temporary opaque cover uses the shared caret-contrast rule.
+                // The PDF draft (or the page while it is pending) keeps the background visible
+                // through the editor. Choose a caret that contrasts with the text's background.
                 ui.visuals_mut().text_cursor.stroke.color = if background_ready || unchanged {
                     if luminance(text_color) < 0.5 { Color32::BLACK } else { Color32::WHITE }
                 } else {
                     caret_color_on(fill)
                 };
-                // An unchanged paragraph's galley is unseen over the page's own text. Selecting
-                // part of it must not paint its stand-in glyphs over that text in the selection
-                // colour (a serif paragraph turned sans when highlighted), nor hide it under an
-                // opaque fill: the selection is a tint the page shows through.
-                if unchanged {
-                    let selection = &mut ui.visuals_mut().selection;
-                    selection.stroke.color = Color32::TRANSPARENT;
-                    selection.bg_fill = selection.bg_fill.gamma_multiply(0.45);
-                }
+                let selection = &mut ui.visuals_mut().selection;
+                selection.stroke.color = Color32::TRANSPARENT;
+                selection.bg_fill = selection.bg_fill.gamma_multiply(0.45);
                 let rows = 1;
                 let snapshot = ed.clone();
                 let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
-                    let galley = editor_galley(ui, &snapshot, text.as_str(), scale, wrap_width);
-                    if snapshot.changes_with(text.as_str()) { galley } else { unseen(galley) }
+                    unseen(draft_galley(
+                        ui,
+                        &snapshot,
+                        text.as_str(),
+                        scale,
+                        wrap_width,
+                        view.text_background.layout_for(doc, &snapshot, text.as_str()),
+                    ))
                 };
                 let before = ed.text.clone();
                 let input = input_id(place);
@@ -1147,14 +1139,13 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, i
                     .show(ui);
                 // The editor paints over the page with no visible label; name it for assistive tech.
                 output.response.response.clone().accessible_name(tl!("Text editing line"));
-                if ed.has_changes() {
-                    if background_ready {
-                        reveal = true;
-                    } else {
-                        ui.painter().set(cover, egui::Shape::rect_filled(ed.rect.expand(1.0).union(output.response.rect), CornerRadius::ZERO, fill));
-                    }
+                if ed.has_changes() && background_ready {
+                    reveal = true;
                 }
-                look = Some((Arc::clone(&output.galley), output.galley_pos));
+                drew_editor = true;
+                if let Some(error) = &preview_error {
+                    ui.colored_label(ui.visuals().error_fg_color, error);
+                }
                 narrow_double_click(ui, input, &ed.text, &output);
                 let r = output.response;
                 if ed.focus {
@@ -1190,8 +1181,8 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, i
     if reveal {
         view.text_background.reveal();
     }
-    if let Some((galley, pos)) = look {
-        view.text_background.remember(&xf, page, block, galley, pos, text_color);
+    if drew_editor {
+        view.text_background.remember(&xf, page, block);
     }
     match done {
         Some(apply) => {
@@ -1732,6 +1723,49 @@ C", &picked
     }
 
     #[test]
+    fn draft_carets_follow_pdf_characters_and_row_breaks() {
+        let (app, ed) = preview_app();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        let ctx = egui::Context::default();
+        for text in ["WiWi ilW", "Wide words that wrap into several PDF rows with narrow letters iii", "WiWi\n\nill\n"] {
+            let style = pdfcraft_engine::BlockStyle { width: Some(70.0), ..Default::default() };
+            let layout = doc.text_edit_layout(0, 0, text, &style).unwrap();
+            assert!(!layout.rows.is_empty(), "geometry for {text:?}");
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                ui.scope(|ui| {
+                    let mut galley = draft_galley(ui, &ed, text, 2.0, 140.0, Some(&layout));
+                    assert_eq!(galley.rows.len(), layout.rows.len(), "PDF wrap points");
+                    let mut index = 0;
+                    for (row, expected) in galley.rows.iter().zip(&layout.rows) {
+                        assert_eq!(row.glyphs.len(), expected.characters.len());
+                        for (glyph, span) in row.glyphs.iter().zip(&expected.characters) {
+                            let x = ((span[0] - layout.source_rect[0]) * 2.0) as f32;
+                            assert!((row.pos.x + glyph.pos.x - x).abs() < 0.001, "glyph {index}");
+                            let caret = egui::text::CCursor { index: index.into(), prefer_next_row: true };
+                            assert!((galley.pos_from_cursor(caret).left() - x).abs() < 0.001, "caret {index}");
+                            if glyph.advance_width > 0.1 {
+                                let hit = galley.cursor_from_pos(egui::vec2(x + glyph.advance_width * 0.1, row.pos.y + row.size.y * 0.5));
+                                assert_eq!(usize::from(hit.index), index, "click before glyph midpoint");
+                            }
+                            index += 1;
+                        }
+                        index += usize::from(row.ends_with_newline);
+                    }
+                    assert_eq!(index, text.chars().count());
+                    let selection = egui::text::CCursorRange::two(egui::text::CCursor::new(1), egui::text::CCursor::new(2));
+                    egui::text_selection::visuals::paint_text_selection(&mut galley, ui.visuals(), &selection, None);
+                    assert!(!galley.rows[0].visuals.mesh.vertices.is_empty(), "selection background remains visible");
+                    assert!(
+                        galley.mesh_bounds.intersects(galley.rows[0].visuals.mesh_bounds.translate(galley.rows[0].pos.to_vec2())),
+                        "selection is not culled"
+                    );
+                });
+            });
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
     fn review_committing_the_shown_size_applies_it_to_a_mixed_selection() {
         let (_app, mut ed) = preview_app();
         ed.selection = Some(0..2);
@@ -1882,6 +1916,39 @@ C", &picked
 
         assert!(!app.commit_typing_in(app.views[0].id));
         assert_eq!(app.views[0].line_editor, Some(ed), "the paragraph keeps its unsaved text");
+    }
+
+    #[test]
+    fn editing_preview_draws_the_same_fonts_as_the_applied_paragraph() {
+        let (mut app, mut ed) = preview_app();
+        ed.text = "Changed preview text".into();
+        let id = app.views[0].id;
+        let ctx = egui::Context::default();
+        let mut background = TextBackground::default();
+        let doc = app.session.get(id).unwrap();
+        let bytes = doc.bytes.clone();
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        let pool = background.renderer.as_ref().unwrap();
+        pool.set_queue(vec![pdfcraft_render::RenderRequest { page: 0, scale: 1.0, tag: 999, ..Default::default() }]);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let preview = loop {
+            if let Some(out) = pool.try_recv()
+                && out.request.tag == 999
+            {
+                break out;
+            }
+            assert!(std::time::Instant::now() < deadline, "draft render timed out");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert!(preview.error.is_none(), "{:?}", preview.error);
+        assert_eq!(doc.bytes, bytes);
+        assert!(!doc.dirty && doc.can_undo().is_none());
+        app.session.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: ed.text.clone(), style: ed.style() }).unwrap();
+        let doc = app.session.get(id).unwrap();
+        let mut renderer = pdfcraft_render::PageRenderer::new(doc.display.clone(), Default::default());
+        let applied = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        assert!(applied.error.is_none());
+        assert!(preview.rgba == applied.rgba, "typing must draw the PDF's glyphs, just as Apply does");
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use super::caret::CharacterPosition;
 use super::fallback::is_type3_fallback;
 use super::rewrite::vertical_advance;
 use super::{Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, Rc};
@@ -464,6 +465,7 @@ pub(super) struct Shown {
     pub(super) frame: [f64; 4],
     /// The boxes of its words (see [`TextLine::ink`]).
     pub(super) ink: Vec<[f64; 4]>,
+    pub(super) characters: Vec<CharacterPosition>,
     pub(super) baseline: f64,
     pub(super) start_x: f64,
     end_x: f64,
@@ -623,6 +625,8 @@ pub(super) struct Carry {
     pub(super) layers: Vec<Option<Vec<u8>>>,
     /// Bytes of glyph text the rest of the page may still produce (see [`MAX_PAGE_TEXT`]).
     pub(super) text_left: usize,
+    // Caret geometry is optional; bound its allocation separately from extracted text.
+    pub(super) characters_left: usize,
     /// Whether the last run ended in a space read from a gap, with the next operator a `Tj` or
     /// `TJ` that may start with the space glyph that gap widened.
     pub(super) gap_space: bool,
@@ -657,7 +661,7 @@ impl Carry {
             dash: (Vec::new(), 0.0),
             line_cap: 0,
         };
-        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT, gap_space: false }
+        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT, characters_left: 131_072, gap_space: false }
     }
 }
 
@@ -728,6 +732,7 @@ impl MarkedContent {
                         ];
                         first.frame = union(first.frame, item.frame);
                         first.ink.extend(item.ink);
+                        first.characters.extend(item.characters);
                     }
                     first.extra_ops.extend([open, index]);
                     // Only right-to-left ActualText is already in typing order and must stay out of
@@ -758,6 +763,23 @@ struct TextRunState<'a> {
     soft_break: bool,
     hard_break: bool,
     soft_gap: usize,
+}
+
+/// Preserve the advances already used by the PDF interpreter. Optional geometry stops
+/// at its budget while ordinary text extraction keeps its existing byte limit.
+fn caret_characters(text: &str, advance: f64, origin: (f64, f64), matrix: &Matrix, left: &mut usize, out: &mut Vec<CharacterPosition>) {
+    let count = text.chars().count();
+    if count > *left {
+        return;
+    }
+    *left -= count;
+    for (index, ch) in text.chars().enumerate() {
+        out.push(CharacterPosition {
+            ch,
+            left: matrix.apply(origin.0 + advance * index as f64 / count as f64, origin.1).0,
+            right: matrix.apply(origin.0 + advance * (index + 1) as f64 / count as f64, origin.1).0,
+        });
+    }
 }
 
 fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), EditError> {
@@ -806,6 +828,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
     // before may have ended in one: a justified line can be split over `TJ` and `Tj`.
     let mut gap_space = std::mem::take(&mut carry.gap_space);
     let mut glyph_count = 0_usize;
+    let mut characters = Vec::new();
     for p in &pieces {
         match p {
             Object::String(s) => {
@@ -824,6 +847,11 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                                 .checked_sub(t.len())
                                 .ok_or_else(|| EditError::Invalid("the page's text is too large to read".into()))?;
                             text.push_str(t);
+                            if vertical.is_none() {
+                                let advance = (m.width(code) * ts.size + ts.char_spacing + if m.is_space(code, len) { ts.word_spacing } else { 0.0 })
+                                    * ts.scale;
+                                caret_characters(t, advance, (x_text, ts.rise), &trm0, &mut carry.characters_left, &mut characters);
+                            }
                         }
                         None => decodable = false,
                     }
@@ -875,6 +903,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                     let dx = -n / 1000.0 * ts.size * ts.scale;
                     // A large gap inside TJ reads as a space.
                     if dx - tracking > (ts.size * ts.scale).abs() * 0.2 && !text.ends_with(' ') {
+                        caret_characters(" ", dx, (x_text, ts.rise), &trm0, &mut carry.characters_left, &mut characters);
                         text.push(' ');
                         gap_space = true;
                     }
@@ -949,6 +978,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         rect,
         frame,
         ink,
+        characters,
         baseline: start.1,
         start_x: start.0,
         end_x: end.0,

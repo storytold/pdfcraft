@@ -1,7 +1,7 @@
-use super::{Arc, Color32, Edit, LineEditor, PageXform, Pos2, TextTarget};
+use super::{Color32, Edit, LineEditor, PageXform, Pos2, TextTarget};
 
-/// A cached, read-only page background. The source glyphs are removed before rasterization;
-/// colour, pictures and unselected text beneath the editor remain visible.
+/// A cached, read-only PDF raster. Paragraph drafts include their real PDF glyphs;
+/// retyping an added item still uses a textless background.
 #[derive(Default)]
 pub(crate) struct TextBackground {
     key: Option<(u64, usize, TextTarget)>,
@@ -9,42 +9,47 @@ pub(crate) struct TextBackground {
     pub(super) texture: Option<egui::TextureHandle>,
     pub(super) tag: Option<u64>,
     received: Option<u64>,
+    // Wait for cancelled workers to exit before starting another draft. A slow image decoder
+    // must not accumulate one render thread per keystroke.
+    retiring: Vec<pdfcraft_render::Retiring>,
     draft_key: Option<(String, pdfcraft_engine::BlockStyle)>,
-    draft_rect: Option<[f64; 4]>,
-    /// This frame's place for the textless page under the open paragraph's editor. It stays
+    render_key: Option<(String, pdfcraft_engine::BlockStyle)>,
+    draft_layout: Option<pdfcraft_engine::TextEditLayout>,
+    draft_error: Option<String>,
+    /// This frame's place for the PDF draft under the open paragraph's editor. It stays
     /// empty, so the page shows its own text, until the paragraph is changed ([`Self::reveal`]).
     slot: Option<(egui::Painter, egui::layers::ShapeIdx, egui::Shape)>,
     /// How the open paragraph looked in its editor last frame.
     look: Option<EditorLook>,
     /// An applied paragraph's last look. The page raster still has the old text until the page
-    /// is rendered again, so the textless page and this look stay up until then.
+    /// is rendered again, so the draft raster stays up until then.
     settling: Option<EditorLook>,
 }
 
-/// A paragraph editor's text as last drawn: its laid-out rows, where they were on the page (in
-/// the page's 0..1 coordinates), and the page's width and turn on screen then.
+/// The page placement of the last draft, retained until the applied page raster arrives.
 struct EditorLook {
     page: usize,
     block: usize,
-    galley: Arc<egui::Galley>,
-    at: (f32, f32),
-    color: Color32,
     page_width: f32,
     rot: u16,
 }
 
 impl TextBackground {
-    pub fn pending(&self) -> bool {
+    fn raster_pending(&self) -> bool {
         self.renderer.is_some() && self.received != self.tag
     }
 
-    /// The open paragraph's editor drew `galley` at `pos` this frame.
-    pub fn remember(&mut self, xf: &PageXform, page: usize, block: usize, galley: Arc<egui::Galley>, pos: Pos2, color: Color32) {
-        self.look = Some(EditorLook { page, block, galley, at: xf.screen_to_norm(pos), color, page_width: xf.rect.width(), rot: xf.rot });
+    pub fn pending(&self) -> bool {
+        self.raster_pending() || self.draft_key != self.render_key || self.retiring.iter().any(|pool| !pool.exited())
+    }
+
+    /// The open paragraph's editor was drawn at this page placement this frame.
+    pub fn remember(&mut self, xf: &PageXform, page: usize, block: usize) {
+        self.look = Some(EditorLook { page, block, page_width: xf.rect.width(), rot: xf.rot });
     }
 
     /// An edit was applied. When it is the open paragraph's, its last look stays up over the
-    /// textless page until the page is rendered again; any other edit ends both.
+    /// draft raster until the page is rendered again; any other edit ends both.
     pub fn committed(&mut self, edit: &Edit) {
         let look = self.look.take().filter(|look| {
             matches!(edit, Edit::EditTextBlock { page, block, .. } if (look.page, look.block) == (*page, *block))
@@ -53,17 +58,29 @@ impl TextBackground {
         });
         match look {
             Some(look) => {
-                self.renderer = None;
+                self.retire_renderer();
                 self.settling = Some(look);
             }
-            None => *self = Self::default(),
+            None => self.reset(None),
         }
     }
 
     pub fn page_received(&mut self, page: usize) {
         if self.settling.as_ref().is_some_and(|look| look.page == page) {
-            *self = Self::default();
+            self.reset(None);
         }
+    }
+
+    fn retire_renderer(&mut self) {
+        if let Some(pool) = self.renderer.take() {
+            self.retiring.push(pool.retire());
+        }
+    }
+
+    fn reset(&mut self, key: Option<(u64, usize, TextTarget)>) {
+        self.retire_renderer();
+        let retiring = std::mem::take(&mut self.retiring);
+        *self = Self { key, retiring, ..Default::default() };
     }
 
     pub fn prepare(
@@ -81,23 +98,41 @@ impl TextBackground {
         if key.is_none() && self.settling.is_some() {
             return;
         }
+        self.retiring.retain(|pool| !pool.exited());
         if self.key != key {
-            *self = Self { key, ..Default::default() };
-            if let Some((_, page, target)) = key {
-                self.renderer = match target {
-                    TextTarget::Block(block) => doc.text_edit_preview(page, block),
-                    TextTarget::Added(index) => doc.added_text_preview(page, index),
-                }
-                .ok()
-                .map(|p| p.renderer());
-            }
+            self.reset(key);
+        }
+        if !self.retiring.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
         if let Some(ed) = editor {
             let draft_key = (ed.text.clone(), ed.style());
-            if self.draft_key.as_ref() != Some(&draft_key) {
-                self.draft_rect = doc.text_edit_layout(ed.page, ed.block, &ed.text, &draft_key.1).ok().and_then(|layout| layout.draft_rect);
-                self.draft_key = Some(draft_key);
+            self.layout_for(doc, ed, &ed.text);
+            // Coalesce typing while one raster is in flight; the next render uses the latest
+            // draft. Keep the last faithful raster visible instead of exposing UI fallback ink.
+            if self.render_key.as_ref() != Some(&draft_key) && !self.raster_pending() && self.retiring.is_empty() {
+                if self.renderer.is_some() {
+                    self.retire_renderer();
+                    ctx.request_repaint();
+                    return;
+                }
+                match doc.text_edit_draft_preview(ed.page, ed.block, &ed.text, &draft_key.1) {
+                    Ok(preview) => {
+                        self.renderer = Some(preview.renderer().without_replacements());
+                        self.draft_error = None;
+                    }
+                    Err(error) => self.draft_error = Some(error),
+                }
+                self.tag = None;
+                self.received = None;
+                self.render_key = Some(draft_key);
             }
+        } else if let Some((_, page, TextTarget::Added(index))) = key
+            && self.renderer.is_none()
+            && self.tag.is_none()
+            && self.retiring.is_empty()
+        {
+            self.renderer = doc.added_text_preview(page, index).ok().map(|p| p.renderer().without_replacements());
         }
         let (Some((_, page, _)), Some(renderer)) = (self.key, self.renderer.as_ref()) else { return };
         let Some(p) = doc.info.pages.get(page) else { return };
@@ -113,9 +148,11 @@ impl TextBackground {
             self.tag = Some(tag);
         }
         if let Some(out) = renderer.try_recv() {
-            if out.error.is_some() {
-                self.renderer = None;
-                self.texture = None;
+            if let Some(error) = out.error {
+                self.draft_error = Some(error);
+                self.retire_renderer();
+                self.received = Some(tag);
+                ctx.request_repaint();
                 return;
             }
             if out.request.tag == tag {
@@ -125,6 +162,8 @@ impl TextBackground {
                     egui::TextureOptions::LINEAR,
                 ));
                 self.received = Some(tag);
+                // The draft may have changed while this render was running.
+                ctx.request_repaint();
             }
         }
         if self.received != Some(tag) {
@@ -132,9 +171,30 @@ impl TextBackground {
         }
     }
 
+    /// Measure the current keystroke as well as the draft prepared before UI input.
+    pub fn layout_for(&mut self, doc: &pdfcraft_engine::Document, ed: &LineEditor, text: &str) -> Option<&pdfcraft_engine::TextEditLayout> {
+        let key = Some((doc.edit_generation(), ed.page, TextTarget::Block(ed.block)));
+        if self.key != key {
+            self.reset(key);
+        }
+        let draft_key = (text.to_owned(), ed.style());
+        if self.draft_key.as_ref() != Some(&draft_key) {
+            self.draft_layout = doc.text_edit_layout(ed.page, ed.block, text, &draft_key.1).ok();
+            self.draft_key = Some(draft_key);
+        }
+        self.draft_layout.as_ref()
+    }
+
+    pub fn error_for(&self, page: usize, block: usize) -> Option<&str> {
+        self.draft_error.as_deref().filter(|_| self.key.is_some_and(|(_, p, target)| (p, target) == (page, TextTarget::Block(block))))
+    }
+
     /// The draft's measured extent, when it was measured for paragraph `block` on `page`.
     pub fn draft_rect_for(&self, page: usize, block: usize) -> Option<[f64; 4]> {
-        self.draft_rect.filter(|_| self.key.is_some_and(|(_, p, target)| (p, target) == (page, TextTarget::Block(block))))
+        self.draft_layout
+            .as_ref()
+            .and_then(|layout| layout.draft_rect)
+            .filter(|_| self.key.is_some_and(|(_, p, target)| (p, target) == (page, TextTarget::Block(block))))
     }
 
     pub fn ready(&self, page: usize, block: usize) -> bool {
@@ -164,8 +224,8 @@ impl TextBackground {
             return;
         }
         let Some(tex) = &self.texture else { return };
-        // Font metrics can underestimate the actual glyph ink. Paint the complete textless
-        // page so overhanging glyphs cannot remain outside the estimated source rectangle.
+        // Paint the complete PDF draft so overhanging glyphs cannot leave stale source ink
+        // outside the estimated paragraph rectangle.
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
         if for_editor {
             // Its place under everything drawn on the page later; the editor fills it once the
@@ -180,13 +240,10 @@ impl TextBackground {
             self.slot = Some((painter, idx, egui::Shape::mesh(mesh)));
         } else {
             xf.paint_image(&painter, tex.id(), 0.0, 0.0, 1.0, 1.0);
-            if let Some(look) = settled {
-                painter.galley(xf.norm_to_screen(look.at.0, look.at.1), Arc::clone(&look.galley), look.color);
-            }
         }
     }
 
-    /// The open paragraph has changed: show the textless page under its editor this frame.
+    /// The open paragraph has changed: show its PDF draft under the caret this frame.
     pub fn reveal(&mut self) {
         if let Some((painter, idx, shape)) = self.slot.take() {
             painter.set(idx, shape);

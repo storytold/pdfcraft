@@ -975,6 +975,31 @@ fn word_count_reads_selected_pages_and_unsaved_edits_without_mutating() {
 }
 
 #[test]
+fn text_draft_preview_matches_apply_without_modifying_the_document() {
+    let dir = workdir("text-draft-preview");
+    let mut a = auto(&dir);
+    std::fs::write(dir.join("draft.pdf"), fixture(1)).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({"path":"draft.pdf"}))["doc"].as_u64().unwrap();
+    // A non-embedded serif face cannot be installed in egui; the PDF renderer can draw it.
+    ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"font":"times"}));
+    let render = json!({"doc":doc,"page":1,"dpi":72});
+    let original = a.call("page_render", &render).unwrap();
+    let state = ok(&mut a, "doc_info", json!({"doc":doc}));
+    let preview = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72,"draft_paragraph":1,"text":"Edited serif text"})).unwrap();
+    assert_ne!(preview, original);
+    assert_eq!(a.call("page_render", &render).unwrap(), original);
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc":doc})), state);
+    for paragraph in [-1, 0, 2, i64::MAX] {
+        assert!(a.call("page_render", &json!({"doc":doc,"page":1,"draft_paragraph":paragraph})).is_err());
+    }
+    assert!(a.call("page_render", &json!({"doc":doc,"page":1,"draft_paragraph":1,"hide_text_block":1})).is_err());
+    ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"text":"Edited serif text"}));
+    assert_eq!(preview, a.call("page_render", &render).unwrap());
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(original, a.call("page_render", &render).unwrap());
+}
+
+#[test]
 fn text_editor_background_is_read_only_and_removes_source_glyphs() {
     let dir = workdir("text-preview");
     let mut a = auto(&dir);
@@ -12027,6 +12052,10 @@ fn mixed_visual_region_edit_preview_save_reopen_and_undo_through_tools() {
     assert_eq!(before["paragraphs"][0]["lines"].as_array().unwrap().len(), 4);
     let unchanged = ok(&mut a, "text_edit_layout", json!({"doc":doc,"page":1,"paragraph":1}));
     assert_eq!(unchanged["overflow"], false);
+    assert_eq!(unchanged["rows"].as_array().unwrap().len(), 2);
+    assert_eq!(unchanged["rows"][0]["byte_range"], json!([0, 7]));
+    assert_eq!(unchanged["rows"][0]["characters"].as_array().unwrap().len(), 7);
+    assert_eq!(unchanged["rows"][0]["ends_with_newline"], true);
     assert_eq!(unchanged["source_rect"], unchanged["draft_rect"]);
     let growing = ok(&mut a, "text_edit_layout", json!({"doc":doc,"page":1,"paragraph":1,"text":"Heading\nBody bold text\nExtra row\nAnother row"}));
     assert_eq!(growing["overflow"], true);

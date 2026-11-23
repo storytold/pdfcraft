@@ -15659,3 +15659,42 @@ fn thai_paragraphs_break_the_row_on_unicode_row_breaks() {
         assert_eq!(rows(&doc), ["กข", "ค"], "matching U+{:04X}", u32::from(separator));
     }
 }
+
+#[test]
+fn draft_caret_geometry_keeps_pdf_widths_spacing_and_kerning() {
+    let doc = text_page("BT /F2 20 Tf 1 Tc 2 Tw 80 Tz 72 700 Td [(ab) 100 ( a)] TJ ET");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let layout = text::text_edit_layout(&doc, 0, 0, &blocks[0].editor_text, &BlockStyle::default()).unwrap();
+    assert_eq!(layout.rows.len(), 1);
+    let chars = &layout.rows[0].characters;
+    assert_eq!(chars.len(), blocks[0].editor_text.chars().count());
+    assert!((chars[0][0] - 72.0).abs() < 1e-6);
+    assert!((chars[0][1] - (72.0 + (10.0 + 1.0) * 0.8)).abs() < 1e-6);
+    assert!((chars[1][1] - (chars[1][0] + (10.4 + 1.0 - 2.0) * 0.8)).abs() < 1e-6);
+    assert!((layout.rows[0].baseline - lines[0].baseline()[1]).abs() < 1e-6);
+}
+
+#[test]
+fn draft_caret_ranges_use_utf8_and_refuse_reordered_or_rotated_text() {
+    let doc = text_page("BT /F1 12 Tf 72 700 Td (caf\\351) Tj ET");
+    let layout = text::text_edit_layout(&doc, 0, 0, "café", &BlockStyle::default()).unwrap();
+    assert_eq!(layout.rows[0].range, 0..5);
+    assert_eq!(layout.rows[0].characters.len(), 4);
+    for content in ["BT /F1 12 Tf 0 1 -1 0 72 700 Tm (abc) Tj ET", "/Span << /ActualText (xyz) >> BDC BT /F1 12 Tf 72 700 Td (abc) Tj ET EMC"] {
+        let doc = text_page(content);
+        let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+        let layout = text::text_edit_layout(&doc, 0, 0, &block.editor_text, &BlockStyle::default()).unwrap();
+        assert!(layout.rows.is_empty(), "ambiguous mapping must use the UI fallback");
+    }
+}
+
+#[test]
+fn draft_caret_geometry_excludes_untouched_fractional_text() {
+    let doc = text_page(
+        "BT /F1 12 Tf 72.123456789 780.123456789 Td (Caption) Tj 0 -80 Td (Edit this) Tj 0 -14 Td (text) Tj 0 -100 Td (Untouched paragraph) Tj ET",
+    );
+    let layout = text::text_edit_layout(&doc, 0, 1, "Edited this\ntext now", &BlockStyle::default()).unwrap();
+    assert!(!layout.rows.is_empty(), "untouched text must not invalidate draft caret positions");
+    assert!(layout.draft_rect.unwrap()[1] > 650.0);
+}

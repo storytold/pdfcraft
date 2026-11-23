@@ -603,8 +603,22 @@ impl Automation {
                     [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]
                 };
                 let fonts: Vec<_> = doc.text_editor_fonts(page).into_iter().map(|f| json!({"resource": f.resource, "face": f.face})).collect();
+                let rows: Vec<_> = layout
+                    .rows
+                    .iter()
+                    .map(|row| {
+                        json!({
+                            "byte_range": [row.range.start, row.range.end], "rect": view_rect(row.rect),
+                            "baseline": info.user_to_view(row.rect[0] as f32, row.baseline as f32),
+                            "characters": row.characters.iter().map(|span| [
+                                info.user_to_view(span[0] as f32, row.baseline as f32),
+                                info.user_to_view(span[1] as f32, row.baseline as f32)
+                            ]).collect::<Vec<_>>(), "ends_with_newline": row.ends_with_newline
+                        })
+                    })
+                    .collect();
                 json!({ "page": page + 1, "paragraph": k, "source_rect": view_rect(layout.source_rect),
-                    "draft_rect": layout.draft_rect.map(view_rect), "overflow": layout.overflow, "embedded_fonts": fonts })
+                    "draft_rect": layout.draft_rect.map(view_rect), "overflow": layout.overflow, "embedded_fonts": fonts, "rows": rows })
             }
             "text_edit" if a.get("paragraph").is_some() => {
                 let page = self.page(&a)?;
