@@ -1687,7 +1687,7 @@ fn png_of(w: u32, h: u32, color: TestPngColor, depth: TestPngDepth, data: &[u8],
         (TestPngColor::Grayscale | TestPngColor::Indexed, TestPngDepth::One) => (w as usize).div_ceil(8),
         (TestPngColor::Grayscale | TestPngColor::Indexed, TestPngDepth::Eight) => w as usize,
         (TestPngColor::Rgb, TestPngDepth::Eight) => w as usize * 3,
-        (TestPngColor::Rgb, TestPngDepth::One) => return Vec::new(),
+        (TestPngColor::Rgb, TestPngDepth::One) => panic!("one-bit RGB is not a valid PNG test fixture"),
     };
     let mut raw = Vec::with_capacity((1 + row_bytes) * h as usize);
     for row in data.chunks_exact(row_bytes) {

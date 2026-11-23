@@ -1,6 +1,7 @@
-use super::common::{MAX_DEPTH, SUBTYPES, rect_strict, text_of};
+use super::common::{MAX_DEPTH, rect_strict, text_of};
 use super::xfdf::{add_popup, apply_values, find_by_name, place};
 use super::*;
+use craft_xfdf::grammar::fdf_annot_skip_key;
 
 fn pdf_string(s: &str) -> Vec<u8> {
     let mut v = Vec::new();
@@ -105,7 +106,7 @@ impl<'a> FdfCopy<'a> {
         let stamp = dict.name(b"Subtype") == Some(b"Stamp".as_slice());
         let mut out = Dict::new();
         for (key, value) in dict.iter() {
-            if matches!(key.as_slice(), b"P" | b"Popup" | b"IRT" | b"Parent" | b"FS" | b"Sound") || (key.as_slice() == b"AP" && !stamp) {
+            if fdf_annot_skip_key(key.as_slice(), stamp) {
                 continue;
             }
             self.dict_entry(&mut out, key, value, 1)?;
@@ -476,16 +477,27 @@ pub(crate) fn walk_fdf(
         let full = if prefix.is_empty() { t } else { format!("{prefix}.{t}") };
         budget.spend(0, full.len())?;
         if let Some(v) = d.get(b"V").map(|v| fdf.resolve(v)) {
-            let vals: Vec<String> = match &*v {
-                Object::String(s) => vec![s.to_text()],
-                Object::Name(n) => vec![pdfcraft_forms::name_text(n)],
+            // Each value is charged as it is decoded, before the next: an array of references to
+            // one long string is not decoded whole and then refused.
+            let mut vals: Vec<String> = Vec::new();
+            let keep = |vals: &mut Vec<String>, s: String, budget: &mut ImportBudget| -> Result<(), DataError> {
+                budget.spend(1, s.len())?;
+                vals.push(s);
+                Ok(())
+            };
+            match &*v {
+                Object::String(s) => keep(&mut vals, s.to_text(), budget)?,
+                Object::Name(n) => keep(&mut vals, pdfcraft_forms::name_text(n), budget)?,
                 Object::Array(a) => {
                     budget.spend(a.len(), 0)?;
-                    a.iter().filter_map(|x| fdf.resolve(x).as_string().map(|s| s.to_text())).collect()
+                    for x in a {
+                        if let Some(s) = fdf.resolve(x).as_string() {
+                            keep(&mut vals, s.to_text(), budget)?;
+                        }
+                    }
                 }
-                _ => Vec::new(),
-            };
-            budget.spend(vals.len(), vals.iter().map(String::len).fold(0, usize::saturating_add))?;
+                _ => {}
+            }
             out.push((full.clone(), vals));
         }
         if let Some(kids) = d.get(b"Kids").map(|k| fdf.resolve(k))
