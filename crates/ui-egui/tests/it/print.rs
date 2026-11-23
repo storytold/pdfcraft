@@ -783,6 +783,23 @@ fn print_as_image_is_an_advanced_choice_that_saves_pictures() {
     assert_eq!(pictures, 1, "the page is one picture");
 }
 
+/// Print colours as black is a choice in the dialog's Advanced section, and it turns the resolution on.
+#[test]
+fn print_colours_as_black_is_an_advanced_choice() {
+    let mut h = harness();
+    h.open();
+    h.get_by_role_and_label(Role::Button, "Advanced").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::CheckBox, "Print colours as black").scroll_to_me();
+    h.run_steps(4);
+    let resolution = |h: &Rig| h.query_all_by(|n| n.label().is_some_and(|l| l.starts_with("Resolution")) && !n.is_disabled()).next().is_some();
+    assert!(!resolution(&h), "the resolution is off while nothing prints as pictures");
+    h.get_by_role_and_label(Role::CheckBox, "Print colours as black").click();
+    h.run_steps(2);
+    assert!(h.state().print_draft.black_only);
+    assert!(resolution(&h), "Print colours as black prints pictures at the chosen resolution");
+}
+
 /// The spooler answering with no printers at all says so (#160), and Save as PDF still works.
 #[test]
 fn an_empty_printer_list_says_none_were_found() {
@@ -1572,6 +1589,7 @@ fn print_preferences_survive_a_restart_but_the_jobs_own_choices_reset() {
     d.content = Content::Document;
     d.binding = Binding::Right;
     d.as_image = true;
+    d.black_only = true;
     d.dpi = 600.0;
     d.copies = 5;
     d.which = PrintWhich::Range;
@@ -1616,6 +1634,7 @@ fn print_preferences_survive_a_restart_but_the_jobs_own_choices_reset() {
     assert_eq!(d.binding, Binding::Right, "a booklet's binding side is kept (#2707)");
     assert!(d.as_image, "Print as image is kept, for a printer that needs pictures (#6392)");
     assert_eq!(d.dpi, 600.0, "and its resolution");
+    assert!(d.black_only, "and Print colours as black");
     assert_eq!(d.copies, 1, "copies are this job's");
     assert_eq!(d.which, PrintWhich::All, "the page choice is this job's");
     assert_eq!(d.range, "");

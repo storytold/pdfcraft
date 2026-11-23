@@ -66,6 +66,7 @@ pub struct Print {
     pub comments_forms: Option<String>,
     pub binding: Option<String>,
     pub as_image: Option<bool>,
+    pub black_only: Option<bool>,
     pub dpi: Option<f64>,
 }
 
@@ -570,6 +571,7 @@ pub fn import_json(text: &str) -> (PdfCraftSettings, Vec<SectionError>) {
             comments_forms: r.string("comments_forms"),
             binding: r.string("binding"),
             as_image: r.bool("as_image"),
+            black_only: r.bool("black_only"),
             dpi: r.f64("dpi"),
         }
     };

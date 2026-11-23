@@ -238,6 +238,7 @@ impl Session {
         let low_res = doc.permissions().is_some_and(|p| !p.print_high_quality()).then(|| print::Raster {
             dpi: settings.raster.as_ref().map_or(LOW_RESOLUTION_PRINT_DPI, |r| r.dpi.min(LOW_RESOLUTION_PRINT_DPI)),
             grayscale: settings.raster.as_ref().is_some_and(|r| r.grayscale),
+            black_only: settings.raster.as_ref().is_some_and(|r| r.black_only),
             colour: settings.raster.as_ref().and_then(|r| r.colour.clone()),
         });
         // Print as image: the pages used become pictures first, then the picture document is

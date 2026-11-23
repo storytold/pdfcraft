@@ -52,6 +52,9 @@ pub fn rasterize(doc: &Document, pages: &[usize], raster: &Raster, content: Cont
         }
         let mut rgba = r.rgba.to_vec();
         over_white(&mut rgba, raster.grayscale);
+        if raster.black_only {
+            black_only(&mut rgba);
+        }
         // App-managed colour: the picture's values become the printer's, so it is placed as
         // device colour the driver passes on unconverted.
         if let Some(colour) = &raster.colour {
@@ -62,6 +65,22 @@ pub fn rasterize(doc: &Document, pages: &[usize], raster: &Raster, content: Cont
     let dpi = used.unwrap_or(dpi);
     let doc = pdfcraft_create::from_images_with_resolution(&images, ImageResolution::Dpi(dpi)).map_err(|e| e.to_string())?;
     pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())
+}
+
+/// A channel at or above this counts as white paper for [`black_only`], so faint noise around
+/// white doesn't print as specks.
+const WHITE_AT: u8 = 250;
+
+/// Opaque RGBA (after [`over_white`]) made pure black and white: a pixel with any channel
+/// below [`WHITE_AT`] becomes black, every other one white.
+pub(crate) fn black_only(rgba: &mut [u8]) {
+    for px in rgba.as_chunks_mut::<4>().0 {
+        let white = px[..3].iter().all(|&c| c >= WHITE_AT);
+        let v = if white { 255 } else { 0 };
+        px[0] = v;
+        px[1] = v;
+        px[2] = v;
+    }
 }
 
 /// Premultiplied RGBA composed over white paper (opaque), in grey when asked (Rec. 601 luma).
@@ -79,5 +98,17 @@ pub(crate) fn over_white(rgba: &mut [u8], grayscale: bool) {
         px[1] = g as u8;
         px[2] = b as u8;
         px[3] = 255;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WHITE_AT, black_only};
+
+    #[test]
+    fn black_only_keeps_white_paper_and_blackens_the_rest() {
+        let mut px = [255, 255, 255, 255, WHITE_AT, WHITE_AT, 255, 255, 255, WHITE_AT - 1, 255, 255, 30, 200, 90, 255];
+        black_only(&mut px);
+        assert_eq!(px, [255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 255, 0, 0, 0, 255]);
     }
 }

@@ -852,6 +852,15 @@ mod tests {
         assert!(!PrintDraft::default().job("a.pdf").grayscale);
     }
 
+    /// Print colours as black prints the pages as black and white pictures without Print as
+    /// image.
+    #[test]
+    fn colours_as_black_print_black_and_white_pictures() {
+        let draft = PrintDraft { black_only: true, ..PrintDraft::default() };
+        let raster = draft.settings(1, &[]).unwrap().raster;
+        assert!(raster.is_some_and(|r| r.black_only), "the pages go as black and white pictures");
+    }
+
     #[test]
     fn composed_sheets_keep_exact_scaling_and_the_dialogs_duplex_choice() {
         let draft = PrintDraft { duplex: Some(spool::Duplex::LongEdge), ..PrintDraft::default() };

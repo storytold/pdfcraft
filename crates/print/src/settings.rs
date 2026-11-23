@@ -192,6 +192,9 @@ pub struct Raster {
     pub dpi: f64,
     /// Render the pictures in grey, so the print-ready PDF itself is grayscale.
     pub grayscale: bool,
+    /// Render every pixel that isn't white as solid black: colour, grey and antialiased edges
+    /// print as pure black on white.
+    pub black_only: bool,
     /// App-managed colour: the pictures are converted into the printer's profile. `None` leaves
     /// colour to the printer.
     pub colour: Option<crate::colour::ManagedColour>,
@@ -199,7 +202,7 @@ pub struct Raster {
 
 impl Default for Raster {
     fn default() -> Self {
-        Raster { dpi: 300.0, grayscale: false, colour: None }
+        Raster { dpi: 300.0, grayscale: false, black_only: false, colour: None }
     }
 }
 

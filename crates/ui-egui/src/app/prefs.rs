@@ -172,6 +172,7 @@ impl PdfCraftApp {
             comments_forms: Some(print_names::content(d.content).to_string()),
             binding: Some(print_names::binding(d.binding).to_string()),
             as_image: Some(d.as_image),
+            black_only: Some(d.black_only),
             dpi: Some(d.dpi),
         };
         let behavior = settings::Behavior {
@@ -455,6 +456,9 @@ impl PdfCraftApp {
         // them; a resolution the dialog doesn't offer keeps the default.
         if let Some(on) = p.as_image {
             draft.as_image = on;
+        }
+        if let Some(on) = p.black_only {
+            draft.black_only = on;
         }
         if let Some(dpi) = p.dpi.filter(|d| print_ui::IMAGE_DPI.contains(d)) {
             draft.dpi = dpi;

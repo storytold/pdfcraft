@@ -425,18 +425,26 @@ fn sizing_section(d: &PrintDraft) -> PrintSection {
 
 fn advanced_section(d: &PrintDraft) -> PrintSection {
     let dpi: Vec<(String, Label)> = IMAGE_DPI.iter().map(|v| ((*v as u32).to_string(), lbl(format!("{} dpi", *v as u32)))).collect();
+    let dpi = choice("dpi", row_label(tl!("Resolution:")), dpi, &(d.dpi.round() as u32).to_string());
+    // Print colours as black prints pictures too, so the resolution is live while either is on.
+    let dpi = if d.black_only { dpi } else { dpi.enabled_when("as_image", true) };
     PrintSection::new(
         lbl(tl!("Advanced")),
         vec![
             check("as_image", lbl(tl!("Print as image")), d.as_image),
-            choice("dpi", row_label(tl!("Resolution:")), dpi, &(d.dpi.round() as u32).to_string()).enabled_when("as_image", true),
+            dpi,
             note(
                 "note.image",
                 tl!("Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey."),
             ),
+            check("black_only", lbl(tl!("Print colours as black")), d.black_only),
+            note(
+                "note.black_only",
+                tl!("Prints the pages as pure black and white pictures: everything that isn't white comes out solid black, with no grey screen."),
+            ),
         ],
     )
-    .folded(d.as_image)
+    .folded(d.as_image || d.black_only)
 }
 
 /// The values of every row the draft decides.
@@ -465,6 +473,7 @@ pub(super) fn fields_from_draft(d: &PrintDraft) -> DialogFields {
     f.set("orientation", id_of(&ORIENTATION, d.orientation));
     f.set("content", id_of(&CONTENT, d.content));
     f.set("as_image", d.as_image);
+    f.set("black_only", d.black_only);
     f.set("dpi", (d.dpi.round() as u32).to_string());
     f.set("paper", d.paper_name());
     f.set("custom_open", d.custom_new.is_some());
@@ -631,6 +640,11 @@ pub(super) fn draft_from_fields(d: &mut PrintDraft, f: &DialogFields, edited: &[
         && let Some(v) = f.bool("as_image")
     {
         d.as_image = v;
+    }
+    if on("black_only")
+        && let Some(v) = f.bool("black_only")
+    {
+        d.black_only = v;
     }
     if on("dpi")
         && let Some(v) = text("dpi").and_then(|t| t.parse::<f64>().ok()).filter(|v| IMAGE_DPI.contains(v))
