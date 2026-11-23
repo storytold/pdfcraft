@@ -281,7 +281,9 @@ impl PdfCraftApp {
             return false;
         }
         let recovered = self.recovered_paths.contains(&id);
-        let Some((name, full)) = self.session.get(id).map(|d| {
+        let Some((name, full, copied_from)) = self.session.get(id).map(|d| {
+            // A copy in another file: Save As, or Save of an email attachment's temporary copy.
+            let copied_from = d.path.clone().filter(|p| !crate::same_file(p, dest));
             // Save As to another file and a recovered document are clean copies, without earlier
             // revisions that may retain deleted pages or replaced text (#2165, #3923). A signed
             // document stays incremental so its signatures keep covering the file.
@@ -289,7 +291,7 @@ impl PdfCraftApp {
                 && !d.path.as_deref().is_some_and(|p| crate::same_file(p, dest))
                 && d.read_only_reason.is_none()
                 && !d.is_signed();
-            (d.name.clone(), full)
+            (d.name.clone(), full, copied_from)
         }) else {
             self.notify_tr("The document was closed before it could be saved.");
             return false;
@@ -306,6 +308,11 @@ impl PdfCraftApp {
         if let Err(e) = write_atomically(dest, &bytes) {
             self.notify_fmt("Couldn't save {name}: {e}", &[("name", dest), ("e", &e.to_string())]);
             return false;
+        }
+        // A copy of a document from the internet keeps its Mark-of-the-Web (#7887). Best effort,
+        // as for a saved attachment: some volumes keep no zone.
+        if let Some(source) = &copied_from {
+            let _ = pdfcraft_platform::zone::copy_zone(std::path::Path::new(dest), std::path::Path::new(source));
         }
         // Our own write is not a change on disk to reload (#431).
         self.watch.known_now(id, dest);

@@ -162,6 +162,17 @@ impl Automation {
             }
         };
         let same_file = explicit.is_none() || doc.path.as_deref().is_some_and(|p| Path::new(p) == target);
+        // A copy of a document from the internet keeps its Mark-of-the-Web (#7887): the zone is
+        // read from the document's own file, held to the read root like any other read.
+        let copied_from = doc.path.clone().filter(|_| !same_file).and_then(|p| self.resolve(&p, false).ok());
+        let write = |path: &Path, bytes: &[u8]| -> Result<()> {
+            write(path, bytes)?;
+            if let Some(source) = &copied_from {
+                // Best effort, as for a saved attachment: some volumes keep no zone.
+                let _ = pdfcraft_platform::zone::copy_zone(path, source);
+            }
+            Ok(())
+        };
         // Saving to a new file is a full rewrite unless asked otherwise, like Save As.
         let full = a.opt_bool("full")?.unwrap_or(!same_file);
         let flatten_fill_sign = a.opt_bool("flatten_fill_sign")?.unwrap_or(false);
