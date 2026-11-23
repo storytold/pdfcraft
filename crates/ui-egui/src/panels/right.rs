@@ -1,4 +1,4 @@
-use super::bookmarks::{BmAction, OutlineCtx, outline_item, outline_matches};
+use super::bookmarks::{BmAction, BookmarksPanelInput, outline_matches, show_panel};
 use super::pages::{page_tools, pages, thumbnail_size};
 use super::{
     Align, Align2, Color32, DocInfo, FieldKind, Layout, Nav, PdfCraftApp, Rect, RightPanel, Sense, Stroke, Tokens, human_size, icons, theme, vec2,
@@ -189,235 +189,237 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     let enabled = !modal && view.panel_drag.is_none();
                     thumbnail_size(ui, &t, view, enabled);
                 }
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match panel {
-                    RightPanel::Comments => {
-                        if let Some(e) = crate::comments_panel::show(ui, &t, doc, view, prefs, comment_allowed, &mut nav) {
-                            panel_edit = Some(e);
-                        }
-                    }
-                    RightPanel::Bookmarks => {
-                        if info.outline.is_empty() {
-                            empty(ui, &t, "bookmark", "This document has no bookmarks.");
-                        }
-                        let mut ctx = OutlineCtx {
-                            nav: &mut nav,
-                            action: &mut bm_action,
-                            rename: &mut bm_rename,
+                if panel == RightPanel::Bookmarks {
+                    show_panel(
+                        ui,
+                        &t,
+                        BookmarksPanelInput {
+                            doc_id: id,
+                            info,
+                            view,
+                            modal,
+                            keys,
                             editable: bm_editable,
                             can_paste: bm_can_paste,
-                            current: view.current,
-                            expand: bm_expand,
+                            expand_override: bm_expand,
                             matches: &bookmark_matches,
                             searching: !bookmark_query.is_empty(),
-                        };
-                        if ctx.searching && bookmark_matches.is_empty() && !info.outline.is_empty() {
-                            ui.label(tl!("No matches."));
-                        }
-                        for (i, item) in info.outline.iter().enumerate() {
-                            outline_item(ui, &t, info, item, &[i], info.outline.len(), &mut ctx);
-                        }
-                        if info.outline_more {
-                            ui.label(tl!("Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth."));
-                        }
-                    }
-                    RightPanel::Pages => pages(ui, &t, info, view, modal, keys, bm_editable, &mut nav),
-                    RightPanel::Fields => {
-                        field_properties = fields(
-                            ui,
-                            FieldsPanel {
-                                theme: &t,
-                                info,
-                                form: doc.form.as_slice(),
-                                preparing,
-                                selection: &mut view.prepare,
-                                nav: &mut nav,
-                                edit: &mut panel_edit,
-                            },
-                        );
-                    }
-                    RightPanel::Layers => {
-                        if info.layers.is_empty() {
-                            empty(ui, &t, "layers", "This document has no layers.");
-                        } else if info.layer_order.is_empty() {
-                            // ISO 32000-2 Table 99: only the groups /Order lists are presented.
-                            empty(ui, &t, "layers", "This document lists no layers to show.");
-                        }
-                        // The default configuration's /Order, as a tree: a level is indented
-                        // 16 points, up to eight levels; a label is a heading, not a layer.
-                        for row in &info.layer_order {
-                            let indent = 16.0 * row.depth.min(8) as f32;
-                            let li = match &row.item {
-                                pdfcraft_render::LayerItem::Layer(li) => *li,
-                                pdfcraft_render::LayerItem::Label(label) => {
-                                    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
-                                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, label));
-                                    crate::widgets::paint_left(
-                                        ui,
-                                        rect.left_center() + vec2(8.0 + indent, 0.0),
-                                        label,
-                                        theme::medium(12.0),
-                                        t.text_faint,
-                                        (rect.width() - 12.0 - indent).max(0.0),
-                                    );
-                                    continue;
-                                }
-                            };
-                            let Some(l) = info.layers.get(li) else { continue };
-                            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
-                            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, l.visible, &l.name));
-                            let press = theme::Press::track(ui, &resp);
-                            press.wash(ui, rect, 6, false);
-                            let body = rect.translate(press.offset());
-                            icons::paint(
-                                ui,
-                                Rect::from_min_size(body.min + vec2(4.0 + indent, 7.0), vec2(18.0, 18.0)),
-                                if l.visible { "eye" } else { "eye-off" },
-                                16.0,
-                                t.icon,
-                            );
-                            let fg = if l.visible { t.text } else { t.text_faint };
-                            crate::widgets::paint_left(
-                                ui,
-                                body.left_center() + vec2(32.0 + indent, 0.0),
-                                &l.name,
-                                theme::regular(13.0),
-                                fg,
-                                (rect.width() - 40.0 - indent).max(0.0),
-                            );
-                            if theme::hand(resp).on_hover_text(if l.visible { tl!("Hide layer") } else { tl!("Show layer") }).clicked() {
-                                toggle_layer = Some((li, !l.visible));
+                            rename: &mut bm_rename,
+                            nav: &mut nav,
+                            action: &mut bm_action,
+                        },
+                    );
+                } else {
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match panel {
+                        RightPanel::Bookmarks => {}
+                        RightPanel::Comments => {
+                            if let Some(e) = crate::comments_panel::show(ui, &t, doc, view, prefs, comment_allowed, &mut nav) {
+                                panel_edit = Some(e);
                             }
                         }
-                    }
-                    RightPanel::Signatures => {
-                        sig_action = crate::sign_ui::panel(ui, &t, &doc.signatures, sig_expanded);
-                    }
-                    RightPanel::Accessibility => {
-                        a11y_action = crate::a11y_ui::panel(ui, &t, a11y, id);
-                    }
-                    RightPanel::Tags => {
-                        let tags = tags_state.tags(doc);
-                        let content = tags_state.content(doc);
-                        let (page, edit) = crate::tags_ui::panel(ui, &t, id, &tags, &content, tags_state, doc.allows_modification());
-                        if let Some(page) = page {
-                            nav = Some(Nav::Page(page));
+                        RightPanel::Pages => pages(ui, &t, info, view, modal, keys, bm_editable, &mut nav),
+                        RightPanel::Fields => {
+                            field_properties = fields(
+                                ui,
+                                FieldsPanel {
+                                    theme: &t,
+                                    info,
+                                    form: doc.form.as_slice(),
+                                    preparing,
+                                    selection: &mut view.prepare,
+                                    nav: &mut nav,
+                                    edit: &mut panel_edit,
+                                },
+                            );
                         }
-                        panel_edit = edit;
-                    }
-                    RightPanel::Search => crate::search_ui::panel(ui, &t, view, info.pages.len()),
-                    RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare, id),
-                    RightPanel::Attachments => {
-                        let attachable = doc.allows_modification() && doc.read_only_reason.is_none();
-                        if attachable {
-                            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 6)).show(ui, |ui| {
-                                if ui.add(egui::Button::new(tl!("Attach a file…"))).clicked() {
-                                    panel_command = Some("edit.attach");
+                        RightPanel::Layers => {
+                            if info.layers.is_empty() {
+                                empty(ui, &t, "layers", "This document has no layers.");
+                            } else if info.layer_order.is_empty() {
+                                // ISO 32000-2 Table 99: only the groups /Order lists are presented.
+                                empty(ui, &t, "layers", "This document lists no layers to show.");
+                            }
+                            // The default configuration's /Order, as a tree: a level is indented
+                            // 16 points, up to eight levels; a label is a heading, not a layer.
+                            for row in &info.layer_order {
+                                let indent = 16.0 * row.depth.min(8) as f32;
+                                let li = match &row.item {
+                                    pdfcraft_render::LayerItem::Layer(li) => *li,
+                                    pdfcraft_render::LayerItem::Label(label) => {
+                                        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
+                                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, label));
+                                        crate::widgets::paint_left(
+                                            ui,
+                                            rect.left_center() + vec2(8.0 + indent, 0.0),
+                                            label,
+                                            theme::medium(12.0),
+                                            t.text_faint,
+                                            (rect.width() - 12.0 - indent).max(0.0),
+                                        );
+                                        continue;
+                                    }
+                                };
+                                let Some(l) = info.layers.get(li) else { continue };
+                                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
+                                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, l.visible, &l.name));
+                                let press = theme::Press::track(ui, &resp);
+                                press.wash(ui, rect, 6, false);
+                                let body = rect.translate(press.offset());
+                                icons::paint(
+                                    ui,
+                                    Rect::from_min_size(body.min + vec2(4.0 + indent, 7.0), vec2(18.0, 18.0)),
+                                    if l.visible { "eye" } else { "eye-off" },
+                                    16.0,
+                                    t.icon,
+                                );
+                                let fg = if l.visible { t.text } else { t.text_faint };
+                                crate::widgets::paint_left(
+                                    ui,
+                                    body.left_center() + vec2(32.0 + indent, 0.0),
+                                    &l.name,
+                                    theme::regular(13.0),
+                                    fg,
+                                    (rect.width() - 40.0 - indent).max(0.0),
+                                );
+                                if theme::hand(resp).on_hover_text(if l.visible { tl!("Hide layer") } else { tl!("Show layer") }).clicked() {
+                                    toggle_layer = Some((li, !l.visible));
                                 }
-                            });
+                            }
                         }
-                        if info.attachments.is_empty() {
-                            empty(ui, &t, "paperclip", "This document has no attachments.");
+                        RightPanel::Signatures => {
+                            sig_action = crate::sign_ui::panel(ui, &t, &doc.signatures, sig_expanded);
                         }
-                        for (ai, a) in info.attachments.iter().enumerate() {
-                            let is_pdf = a.name.to_lowercase().ends_with(".pdf");
-                            // Only an attachment of the document itself can be deleted here.
-                            let deletable = match &a.source {
-                                pdfcraft_render::AttachmentSource::Document { key } if attachable => Some(key),
-                                _ => None,
-                            };
-                            // The whole row answers a double-click and a right-click (#3466), below
-                            // its buttons, which still take their own clicks.
-                            let mut buttons: Vec<egui::Response> = Vec::new();
-                            let row = ui.scope_builder(egui::UiBuilder::new().sense(Sense::click()), |ui| {
+                        RightPanel::Accessibility => {
+                            a11y_action = crate::a11y_ui::panel(ui, &t, a11y, id);
+                        }
+                        RightPanel::Tags => {
+                            let tags = tags_state.tags(doc);
+                            let content = tags_state.content(doc);
+                            let (page, edit) = crate::tags_ui::panel(ui, &t, id, &tags, &content, tags_state, doc.allows_modification());
+                            if let Some(page) = page {
+                                nav = Some(Nav::Page(page));
+                            }
+                            panel_edit = edit;
+                        }
+                        RightPanel::Search => crate::search_ui::panel(ui, &t, view, info.pages.len()),
+                        RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare, id),
+                        RightPanel::Attachments => {
+                            let attachable = doc.allows_modification() && doc.read_only_reason.is_none();
+                            if attachable {
                                 egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 6)).show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.add(icons::image("paperclip", 16.0, t.icon));
-                                        ui.vertical(|ui| {
-                                            ui.set_width(ui.available_width() - 70.0);
-                                            // Not selectable, so a click on the name or the details reaches the row.
-                                            ui.add(
-                                                egui::Label::new(egui::RichText::new(&a.name).font(theme::medium(13.0))).truncate().selectable(false),
-                                            );
-                                            let mut meta = a.size.map(human_size).unwrap_or_default();
-                                            if let pdfcraft_render::AttachmentSource::Annotation { page, .. } = a.source {
-                                                let on_page = crate::i18n::fmt(
-                                                    tl!("on page {label}"),
-                                                    &[("label", info.pages.get(page).map(|p| p.label.as_str()).unwrap_or("?"))],
-                                                );
-                                                meta = format!("{meta}  ·  {on_page}");
-                                            }
-                                            if let Some(d) = &a.description {
-                                                meta = format!("{meta}  ·  {d}");
-                                            }
-                                            ui.add(
-                                                egui::Label::new(egui::RichText::new(meta).color(t.text_faint).small()).truncate().selectable(false),
-                                            );
-                                        });
-                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                            let save = icons::button(ui, "file-down", 28.0, false, tl!("Save attachment…"));
-                                            if save.clicked() {
-                                                attachment_action = Some((ai, false));
-                                            }
-                                            buttons.push(save);
-                                            if is_pdf {
-                                                let open = icons::button(ui, "file-input", 28.0, false, tl!("Open in a new tab"));
-                                                if open.clicked() {
-                                                    attachment_action = Some((ai, true));
-                                                }
-                                                buttons.push(open);
-                                            }
-                                            if let Some(key) = deletable {
-                                                let delete = icons::button(ui, "trash-2", 28.0, false, tl!("Delete attachment"));
-                                                if delete.clicked() {
-                                                    panel_edit = Some(pdfcraft_engine::Edit::DeleteAttachment { key: key.clone() });
-                                                }
-                                                buttons.push(delete);
-                                            }
-                                        });
-                                    });
-                                })
-                            });
-                            // A double-click opens a PDF in a new tab, as Acrobat opens an attachment;
-                            // any other file is saved, since PdfCraft opens only PDFs.
-                            if row.response.double_clicked() {
-                                attachment_action = Some((ai, is_pdf));
+                                    if ui.add(egui::Button::new(tl!("Attach a file…"))).clicked() {
+                                        panel_command = Some("edit.attach");
+                                    }
+                                });
                             }
-                            // A right-click on one of the row's buttons is a right-click on the row:
-                            // the union keeps the row's id, so it is one menu either way.
-                            let menu = buttons.into_iter().fold(row.response.clone(), |row, button| row | button);
-                            menu.context_menu(|ui| {
-                                if is_pdf && ui.button(tl!("Open in a new tab")).clicked() {
-                                    attachment_action = Some((ai, true));
-                                    ui.close();
+                            if info.attachments.is_empty() {
+                                empty(ui, &t, "paperclip", "This document has no attachments.");
+                            }
+                            for (ai, a) in info.attachments.iter().enumerate() {
+                                let is_pdf = a.name.to_lowercase().ends_with(".pdf");
+                                // Only an attachment of the document itself can be deleted here.
+                                let deletable = match &a.source {
+                                    pdfcraft_render::AttachmentSource::Document { key } if attachable => Some(key),
+                                    _ => None,
+                                };
+                                // The whole row answers a double-click and a right-click (#3466), below
+                                // its buttons, which still take their own clicks.
+                                let mut buttons: Vec<egui::Response> = Vec::new();
+                                let row = ui.scope_builder(egui::UiBuilder::new().sense(Sense::click()), |ui| {
+                                    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 6)).show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.add(icons::image("paperclip", 16.0, t.icon));
+                                            ui.vertical(|ui| {
+                                                ui.set_width(ui.available_width() - 70.0);
+                                                // Not selectable, so a click on the name or the details reaches the row.
+                                                ui.add(
+                                                    egui::Label::new(egui::RichText::new(&a.name).font(theme::medium(13.0)))
+                                                        .truncate()
+                                                        .selectable(false),
+                                                );
+                                                let mut meta = a.size.map(human_size).unwrap_or_default();
+                                                if let pdfcraft_render::AttachmentSource::Annotation { page, .. } = a.source {
+                                                    let on_page = crate::i18n::fmt(
+                                                        tl!("on page {label}"),
+                                                        &[("label", info.pages.get(page).map(|p| p.label.as_str()).unwrap_or("?"))],
+                                                    );
+                                                    meta = format!("{meta}  ·  {on_page}");
+                                                }
+                                                if let Some(d) = &a.description {
+                                                    meta = format!("{meta}  ·  {d}");
+                                                }
+                                                ui.add(
+                                                    egui::Label::new(egui::RichText::new(meta).color(t.text_faint).small())
+                                                        .truncate()
+                                                        .selectable(false),
+                                                );
+                                            });
+                                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                                let save = icons::button(ui, "file-down", 28.0, false, tl!("Save attachment…"));
+                                                if save.clicked() {
+                                                    attachment_action = Some((ai, false));
+                                                }
+                                                buttons.push(save);
+                                                if is_pdf {
+                                                    let open = icons::button(ui, "file-input", 28.0, false, tl!("Open in a new tab"));
+                                                    if open.clicked() {
+                                                        attachment_action = Some((ai, true));
+                                                    }
+                                                    buttons.push(open);
+                                                }
+                                                if let Some(key) = deletable {
+                                                    let delete = icons::button(ui, "trash-2", 28.0, false, tl!("Delete attachment"));
+                                                    if delete.clicked() {
+                                                        panel_edit = Some(pdfcraft_engine::Edit::DeleteAttachment { key: key.clone() });
+                                                    }
+                                                    buttons.push(delete);
+                                                }
+                                            });
+                                        });
+                                    })
+                                });
+                                // A double-click opens a PDF in a new tab, as Acrobat opens an attachment;
+                                // any other file is saved, since PdfCraft opens only PDFs.
+                                if row.response.double_clicked() {
+                                    attachment_action = Some((ai, is_pdf));
                                 }
-                                if ui.button(tl!("Save attachment…")).clicked() {
-                                    attachment_action = Some((ai, false));
-                                    ui.close();
-                                }
-                                if let Some(key) = deletable
-                                    && ui.button(tl!("Edit description")).clicked()
-                                {
-                                    app.attachment_description_draft = Some((
-                                        id,
-                                        doc.edit_generation(),
-                                        key.clone(),
-                                        a.name.clone(),
-                                        a.description.clone().unwrap_or_default(),
-                                        a.has_description,
-                                    ));
-                                    app.dialog = Some(crate::Dialog::AttachmentDescription);
-                                    ui.close();
-                                }
-                                if let Some(key) = deletable
-                                    && ui.button(tl!("Delete attachment")).clicked()
-                                {
-                                    panel_edit = Some(pdfcraft_engine::Edit::DeleteAttachment { key: key.clone() });
-                                    ui.close();
-                                }
-                            });
+                                // A right-click on one of the row's buttons is a right-click on the row:
+                                // the union keeps the row's id, so it is one menu either way.
+                                let menu = buttons.into_iter().fold(row.response.clone(), |row, button| row | button);
+                                menu.context_menu(|ui| {
+                                    if is_pdf && ui.button(tl!("Open in a new tab")).clicked() {
+                                        attachment_action = Some((ai, true));
+                                        ui.close();
+                                    }
+                                    if ui.button(tl!("Save attachment…")).clicked() {
+                                        attachment_action = Some((ai, false));
+                                        ui.close();
+                                    }
+                                    if let Some(key) = deletable
+                                        && ui.button(tl!("Edit description")).clicked()
+                                    {
+                                        app.attachment_description_draft = Some((
+                                            id,
+                                            doc.edit_generation(),
+                                            key.clone(),
+                                            a.name.clone(),
+                                            a.description.clone().unwrap_or_default(),
+                                            a.has_description,
+                                        ));
+                                        app.dialog = Some(crate::Dialog::AttachmentDescription);
+                                        ui.close();
+                                    }
+                                    if let Some(key) = deletable
+                                        && ui.button(tl!("Delete attachment")).clicked()
+                                    {
+                                        panel_edit = Some(pdfcraft_engine::Edit::DeleteAttachment { key: key.clone() });
+                                        ui.close();
+                                    }
+                                });
+                            }
                         }
-                    }
-                });
+                    });
+                }
             });
     }
     if close {
@@ -504,7 +506,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
 }
 
-fn empty(ui: &mut egui::Ui, t: &Tokens, icon: &str, text: &str) {
+pub(super) fn empty(ui: &mut egui::Ui, t: &Tokens, icon: &str, text: &str) {
     ui.add_space(40.0);
     ui.vertical_centered(|ui| {
         ui.add(icons::image(icon, 36.0, t.text_faint));

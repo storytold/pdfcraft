@@ -95,9 +95,13 @@ impl PdfCraftApp {
         use egui::Key;
         let pages_owns_keyboard =
             self.right == Some(RightPanel::Pages) && self.views[i].pages_focus_id.is_some_and(|id| ctx.memory(|m| m.has_focus(id)));
+        let bookmarks_owns_keyboard = self.right == Some(RightPanel::Bookmarks)
+            && self.bookmark_rename.is_none()
+            && !ctx.egui_wants_keyboard_input()
+            && self.views[i].bookmarks_focused;
         if self.dialog.is_none()
             && !self.palette_open
-            && (pages_owns_keyboard || !ctx.egui_wants_keyboard_input())
+            && (pages_owns_keyboard || bookmarks_owns_keyboard || !ctx.egui_wants_keyboard_input())
             && ctx.input_mut(|input| input.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, Key::A)))
         {
             let view = &self.views[i];
@@ -105,6 +109,15 @@ impl PdfCraftApp {
             let edit_objects = self.quick_tool == QuickTool::EditText && view.line_editor.is_none() && view.content.draft.is_none();
             if pages_owns_keyboard {
                 self.views[i].select_all_pages();
+            } else if bookmarks_owns_keyboard {
+                let doc_id = self.views[i].id;
+                let search_id = egui::Id::unique(("bookmark_search", doc_id.0));
+                let q = ctx.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
+                let q = pdfcraft_render::text::fold_case(q.trim());
+                if let Some(doc) = self.session.get(doc_id) {
+                    let keys = crate::panels::visible_bookmark_keys(&doc.info.outline, &mut self.views[i].bookmarks_ui, &q);
+                    self.views[i].bookmarks_ui.selected_keys = keys.into_iter().collect();
+                }
             } else if let Some(doc) = self.session.get(view.id).filter(|d| edit_objects && d.allows_modification()) {
                 object_ui::select_all(&mut self.views[i], doc);
             } else if self.is_preparing() {
