@@ -214,7 +214,9 @@ pub(crate) fn measure_rail(app: &mut PdfCraftApp, ui: &egui::Ui, width: f32) -> 
     app.hotbar.normalize();
     let model = take_rail_model(app);
     let current = current_tool(app);
-    let mut rail = ToolRail::new(tl!("Toolbar").to_string(), &model.0, &current, &model.1).edit_toolbar(tl!("Edit toolbar").to_string()).edit_icon(IconId::new("settings"));
+    let mut rail = ToolRail::new(tl!("Toolbar").to_string(), &model.0, &current, &model.1)
+        .edit_toolbar(tl!("Edit toolbar").to_string())
+        .edit_icon(IconId::new("settings"));
     if app.hotbar.drawer_open {
         rail = rail.editing();
     }
@@ -255,7 +257,9 @@ pub(crate) fn show_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 fn show_rail_over(app: &mut PdfCraftApp, ui: &mut egui::Ui, toolbar: &Tracked<Vec<ToolSlot<String>>>, last_used: &Tracked<LastUsed<String>>) {
     let current = current_tool(app);
     let editing = app.hotbar.drawer_open;
-    let mut rail = ToolRail::new(tl!("Toolbar").to_string(), toolbar, &current, last_used).edit_toolbar(tl!("Edit toolbar").to_string()).edit_icon(IconId::new("settings"));
+    let mut rail = ToolRail::new(tl!("Toolbar").to_string(), toolbar, &current, last_used)
+        .edit_toolbar(tl!("Edit toolbar").to_string())
+        .edit_icon(IconId::new("settings"));
     if editing {
         rail = rail.editing();
     }

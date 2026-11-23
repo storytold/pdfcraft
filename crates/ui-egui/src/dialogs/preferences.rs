@@ -12,8 +12,8 @@ use craft::ui::contract::{Bind, Entry, Props as _, SaveKey, Show as _};
 use craft::ui::dialog::DialogHost;
 use craft::ui::notices::{Notice, NoticeLayout};
 use craft::ui::patterns::preferences::{
-    GroupSpec, PageSpec, PrefValue, PreferencesDraft, PreferencesLayout, PreferencesMode, PreferencesModel, PreferencesState, PreferencesWindow, RowKind,
-    RowSpec,
+    GroupSpec, PageSpec, PrefValue, PreferencesDraft, PreferencesLayout, PreferencesMode, PreferencesModel, PreferencesState, PreferencesWindow,
+    RowKind, RowSpec,
 };
 use craft::ui::runtime::env::Label;
 use craft::ui::text::TextField;
