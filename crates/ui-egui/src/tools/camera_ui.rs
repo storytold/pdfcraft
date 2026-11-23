@@ -2,37 +2,45 @@
 //! a photographed document; Enhance page straightens what they enclose
 //! (`Session::enhance_camera_page`, one undoable step).
 
-use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Shape, Stroke, vec2};
+// PLAN: `craft-draw`, `craft-pages` and `craft-behavior` must be dependencies of pdfcraft-ui-egui (Cargo.toml is not in this set's files).
+use craft::behavior::kurbo::{Point, Rect as DocRect};
+use craft::behavior::overlay::Align;
+use craft::behavior::{CancelReason, Cursor, CursorIcon, IconId, PressState};
+use craft::draw::ui::PerspectiveCropQuad;
+use craft::pages::ui::view::{PageBody, PlacedPage};
+use craft::ui::display::Text;
+use craft_ui::buttons::{Button, IconButton};
+use craft_ui::canvas::{CanvasTool, CropShield, ToolAction, ToolContext, ToolPath, ToolPointer};
+use craft_ui::canvas_controls::TaskBar;
+use craft_ui::choice::Segmented;
+use craft_ui::contract::{Bind, Entry, Props as _, Show as _, clicked};
+use craft_ui::primitives::Draw;
+use craft_ui::style::Variant;
+use craft_ui::value_drag::Slider;
+use egui::Ui;
 
-use crate::canvas::{DocView, PageXform, ViewAction};
-use crate::page_cursor::Layer;
-use crate::page_pointer::PagePointer;
-use crate::page_router::{Hit, Owner, PagePress};
-use crate::theme::Tokens;
+use crate::canvas::{PageSession, ViewAction};
 pub use pdfcraft_engine::camera_clean::Look;
 
 /// How far in from the page's edges the corners start, as a share of its size.
 const INSET: f32 = 0.05;
-/// How close (screen points) the pointer must be to pick up a corner.
-const GRAB: f32 = 12.0;
+/// How strongly the area outside the quadrilateral is greyed, in percent: production's page reads mid grey there.
+const SHIELD_OPACITY: f32 = 43.0;
 /// The slider's top.
 pub const MAX_LEVEL: u8 = pdfcraft_engine::camera_clean::MAX_LEVEL;
-const BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
-/// The quadrilateral being placed: its page, its corners in view space (points, y down) and the
-/// corner being dragged.
+/// The quadrilateral being placed: its page and its corners in view space (points, y down).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CameraQuad {
     pub page: usize,
     pub corners: [[f32; 2]; 4],
-    pub grab: Option<usize>,
 }
 
 impl CameraQuad {
     /// The page `page` (view size `w` × `h` points) inset by [`INSET`] on every side.
     pub fn inset(page: usize, w: f32, h: f32) -> Self {
         let (dx, dy) = (w * INSET, h * INSET);
-        Self { page, corners: [[dx, dy], [w - dx, dy], [w - dx, h - dy], [dx, h - dy]], grab: None }
+        Self { page, corners: [[dx, dy], [w - dx, dy], [w - dx, h - dy], [dx, h - dy]] }
     }
 }
 
@@ -56,184 +64,185 @@ pub struct CameraDone {
     pub steps: usize,
 }
 
-fn screen(xf: &PageXform, c: [f32; 2]) -> Pos2 {
-    xf.norm_to_screen(c[0] / xf.pw.max(1e-3), c[1] / xf.ph.max(1e-3))
+/// The page's size in view points.
+pub(crate) fn page_points(placed: &PlacedPage) -> (f32, f32) {
+    let scale = placed.scale.max(1e-6) as f32;
+    (placed.rect.width() / scale, placed.rect.height() / scale)
 }
 
-/// The corner of the quadrilateral under `p` on `page`, the nearest within reach: the one hit test
-/// of the camera tool, for the cursor and the press. `None` once the page is enhanced, on a page
-/// without the quadrilateral, or off the page (a press there is no page's), even where a corner at
-/// its edge would reach past it.
-pub(crate) fn hit(xf: &PageXform, page: usize, view: &DocView, p: Pos2) -> Option<Hit> {
-    if view.camera_done.is_some() || !xf.rect.contains(p) {
+/// The quadrilateral on its page, shown as the framework's perspective quad over the canvas: it seeds the inset corners on
+/// the current page when there are none yet, follows the corners the user drags, and turns Enter into Enhance page and
+/// Esc into Cancel, which it returns for the app. `current` is the view's current page. Called only while the Camera
+/// image tool is open.
+pub(crate) fn show_quad(ui: &mut Ui, body: &PageBody<'_>, session: &mut PageSession, allowed: bool, current: usize) -> Option<ViewAction> {
+    // Once the page is enhanced, the bar's buttons take over.
+    if session.camera_done.is_some() {
         return None;
     }
-    let q = view.camera.filter(|q| q.page == page)?;
-    let corner = q
-        .corners
-        .iter()
-        .enumerate()
-        .map(|(i, &c)| (i, screen(xf, c).distance(p)))
-        .filter(|(_, d)| *d <= GRAB)
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(i, _)| i)?;
-    Some(Hit::new(Owner::CameraCorner { corner }, Layer::Handle, egui::CursorIcon::Grab))
+    if session.camera.is_none()
+        && let Some(placed) = body.pages.iter().find(|p| p.page == current)
+    {
+        let (w, h) = page_points(placed);
+        session.camera = Some(CameraQuad::inset(placed.page, w, h));
+    }
+    let quad = session.camera?;
+    let placed = body.pages.iter().find(|p| p.page == quad.page)?;
+    let to_doc = |c: [f32; 2]| body.view.to_doc(placed.to_screen(Point::new(f64::from(c[0]), f64::from(c[1]))));
+    let mut doc_quad = Some(quad.corners.map(to_doc));
+    let page_bounds = DocRect::from_points(body.view.to_doc(placed.rect.min), body.view.to_doc(placed.rect.max));
+    let mut shield = CropShield::PERSPECTIVE;
+    shield.opacity = SHIELD_OPACITY;
+    let out = PerspectiveCropQuad::new(tl!("Corners"), Bind::bound(&mut doc_quad))
+        .show_grid(false)
+        .shield(shield)
+        .bounds(page_bounds)
+        .enabled(allowed)
+        .show_at(ui, body.rect);
+    if let Some(moved) = doc_quad {
+        let to_page = |d: Point| {
+            let p = placed.to_page(body.view.to_screen(d));
+            [p.x as f32, p.y as f32]
+        };
+        session.camera = Some(CameraQuad { page: quad.page, corners: moved.map(to_page) });
+    }
+    if out.discard {
+        Some(ViewAction::CancelCamera)
+    } else if allowed && out.apply {
+        Some(ViewAction::EnhanceCamera)
+    } else {
+        None
+    }
 }
 
-/// Corner dragging on one page: a corner's own press ([`hit`]) drags it, and a press nobody holds
-/// on a page without the quadrilateral moves it there.
-pub(crate) fn page_input(resp: &egui::Response, xf: &PageXform, ptr: &PagePointer, page: usize, view: &mut DocView, allowed: bool, press: PagePress) {
-    let (pointer, origin) = (ptr.pos, ptr.origin);
-    if !allowed {
-        if pointer.is_some_and(|p| xf.rect.contains(p)) {
-            view.cursor.claim(Layer::ToolArea, egui::CursorIcon::NotAllowed);
-        }
-        return;
-    }
-    // Once the page is enhanced, the bar's buttons take over.
-    if view.camera_done.is_some() {
-        return;
-    }
-    // The tool starts with the corners on the current page.
-    if view.camera.is_none() && page == view.current {
-        view.camera = Some(CameraQuad::inset(page, xf.pw, xf.ph));
-    }
-    // A press nobody holds on a page without the quadrilateral moves it there: a drag from where it
-    // began, a click where it came up (egui has cleared the press's origin by its release, and the
-    // pointer may have moved on in the same frame).
-    let at = if resp.clicked() { ptr.released } else { origin };
-    if (ptr.drag_started || resp.clicked())
-        && press == PagePress::Free
-        && at.is_some_and(|p| xf.rect.contains(p))
-        && view.camera.is_none_or(|q| q.page != page)
-    {
-        view.camera = Some(CameraQuad::inset(page, xf.pw, xf.ph));
-    }
-    if ptr.drag_started
-        && let PagePress::Mine(Owner::CameraCorner { corner }) = press
-        && let Some(q) = view.camera.as_mut().filter(|q| q.page == page)
-    {
-        q.grab = Some(corner);
-    }
-    let Some(q) = view.camera.as_mut().filter(|q| q.page == page) else { return };
-    // Over a corner, its hit claims the grab cursor.
-    if let Some(i) = q.grab {
-        view.cursor.claim(Layer::Drag, egui::CursorIcon::Grabbing);
-        if let Some(p) = pointer {
-            let (x, y) = xf.screen_to_view(p);
-            if let Some(c) = q.corners.get_mut(i) {
-                *c = [x.clamp(0.0, xf.pw), y.clamp(0.0, xf.ph)];
+/// The task bar at the top right of the document area: Enhance page and Cancel; once the page is enhanced, rotate it either
+/// way, choose its look (original, colour, greyscale, black and white) and clean-up level, Crop pages, Organize pages, or
+/// Done. The instructions are a notice (`ocr.enhance_camera`). Returns the action a button asked the app for.
+pub(crate) fn bar(ui: &mut Ui, body: &PageBody<'_>, session: &mut PageSession, allowed: bool) -> Option<ViewAction> {
+    let mut action = None;
+    TaskBar::at_edge(tl!("Camera image"), Align::End).show(ui, body.rect, |ui, _| {
+        // After Enhance page: put the page the right way up, trim it, or move on.
+        if let Some(mut done) = session.camera_done {
+            let looks = [
+                Entry::new(Look::Original, tl!("Original")),
+                Entry::new(Look::Colour, tl!("Colour")),
+                Entry::new(Look::Greyscale, tl!("Greyscale")),
+                Entry::new(Look::BlackWhite, tl!("Black and white")),
+            ];
+            let mut again = false;
+            let picked = Segmented::new(tl!("Look"), Bind::given(done.look), &looks).enabled(allowed).show(ui).value().copied();
+            if let Some(look) = picked.filter(|look| *look != done.look) {
+                done.look = look;
+                again = true;
             }
+            let mut level = f64::from(done.level);
+            // The slider's name shows beside it, as production's bar does.
+            Text::new(tl!("Clean-up")).show(ui);
+            let edit = Slider::new(Bind::bound(&mut level), 0.0..=f64::from(MAX_LEVEL))
+                .step(1.0)
+                .label(tl!("Clean-up"))
+                .enabled(allowed && done.look != Look::Original)
+                .show(ui);
+            done.level = level.round().clamp(0.0, f64::from(MAX_LEVEL)) as u8;
+            // Enhance again once the slider is let go (or moved with the keys).
+            again |= edit.events.committed().is_some();
+            if again && (done.look, done.level) != done.applied {
+                action = Some(ViewAction::CameraLevel);
+            }
+            session.camera_done = Some(done);
+            if clicked(&IconButton::new(IconId::new("rotate_ccw")).label(tl!("Rotate counterclockwise")).enabled(allowed).show(ui)) {
+                action = Some(ViewAction::CameraRotate { clockwise: false });
+            }
+            if clicked(&IconButton::new(IconId::new("rotate_cw")).label(tl!("Rotate clockwise")).enabled(allowed).show(ui)) {
+                action = Some(ViewAction::CameraRotate { clockwise: true });
+            }
+            if clicked(&Button::new(tl!("Crop pages")).variant(Variant::GHOST).show(ui)) {
+                action = Some(ViewAction::CameraNext("page.crop"));
+            }
+            if clicked(&Button::new(tl!("Organize pages")).variant(Variant::GHOST).show(ui)) {
+                action = Some(ViewAction::CameraNext("page.organize"));
+            }
+            if clicked(&Button::new(tl!("Done")).variant(Variant::PRIMARY).show(ui)) {
+                action = Some(ViewAction::CancelCamera);
+            }
+            return;
         }
-        if resp.drag_stopped() || !ptr.primary_down {
-            q.grab = None;
+        let ready = allowed && session.camera.is_some();
+        if clicked(&Button::new(tl!("Enhance page")).variant(Variant::PRIMARY).enabled(ready).show(ui)) {
+            action = Some(ViewAction::EnhanceCamera);
         }
+        if clicked(&Button::new(tl!("Cancel")).show(ui)) {
+            action = Some(ViewAction::CancelCamera);
+        }
+    });
+    action
+}
+
+/// The press rule of the Camera image tool: a press nobody holds (the quad's corners take their own) on a page without the
+/// quadrilateral moves it there, as a drag from where it began or a click where it came up. The page body reads
+/// [`moved_to`](Self::moved_to) after the host ran and puts the inset quad on that page.
+pub(crate) struct CameraTool<'a> {
+    allowed: bool,
+    pages: &'a [PlacedPage],
+    /// The page the press in progress went down on, read from this pass's press: the press and its release come in
+    /// different passes.
+    pressed: Option<usize>,
+    /// The press moved past slop: it is a drag from its page, not a click.
+    dragged: bool,
+    moved_to: Option<usize>,
+}
+
+impl<'a> CameraTool<'a> {
+    /// The tool over the pages on screen, in a pass whose press is `press`; with `allowed` off it only refuses.
+    pub(crate) fn new(allowed: bool, pages: &'a [PlacedPage], press: &PressState) -> Self {
+        let pressed = press.phase.start().and_then(|start| pages.iter().find(|p| p.rect.contains(start.origin))).map(|p| p.page);
+        CameraTool { allowed, pages, pressed: pressed.filter(|_| allowed), dragged: false, moved_to: None }
+    }
+
+    /// The page the quadrilateral moves to, once a press asked for it.
+    pub(crate) fn moved_to(&self) -> Option<usize> {
+        self.moved_to
+    }
+
+    fn page_at(&self, pointer: &ToolPointer) -> Option<usize> {
+        self.pages.iter().find(|p| p.rect.contains(pointer.pos)).map(|p| p.page)
     }
 }
 
-/// The quadrilateral and its handles, with what will be cut away dimmed.
-pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, view: &DocView) {
-    let Some(q) = view.camera.filter(|q| q.page == page) else { return };
-    let pts: Vec<Pos2> = q.corners.iter().map(|&c| screen(xf, c)).collect();
-    // Dim the page outside the quadrilateral: a band from each edge out to the page's border.
-    let r = xf.rect;
-    let mut mesh = egui::Mesh::default();
-    let dim = Color32::from_black_alpha(70);
-    let outer = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()];
-    // Pair each quad corner with the page corner nearest to it, in order around the page.
-    let start = (0..4).min_by(|&a, &b| pts[0].distance_sq(outer[a]).total_cmp(&pts[0].distance_sq(outer[b]))).unwrap_or(0);
-    for i in 0..4 {
-        let (a, b) = (pts[i], pts[(i + 1) % 4]);
-        let (oa, ob) = (outer[(start + i) % 4], outer[(start + i + 1) % 4]);
-        let base = mesh.vertices.len() as u32;
-        for p in [a, b, ob, oa] {
-            mesh.colored_vertex(p, dim);
-        }
-        mesh.add_triangle(base, base + 1, base + 2);
-        mesh.add_triangle(base, base + 2, base + 3);
+impl CanvasTool for CameraTool<'_> {
+    fn press(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) -> ToolAction {
+        self.dragged = false;
+        self.pressed = self.page_at(pointer).filter(|_| self.allowed);
+        if self.pressed.is_some() { ToolAction::Claimed } else { ToolAction::Ignored }
     }
-    painter.add(Shape::mesh(mesh));
-    painter.add(Shape::closed_line(pts.clone(), Stroke::new(1.5, BLUE)));
-    for p in pts {
-        painter.circle(p, 6.0, Color32::WHITE, Stroke::new(2.0, BLUE));
-    }
-}
 
-/// The floating bar at the top right of the document area (where the find bar goes, clear of a
-/// centred page's corners): Enhance page and Cancel; once the page is enhanced, rotate it either
-/// way, choose its look (original, colour, greyscale, black and white) and clean-up level,
-/// Crop pages, Organize pages, or Done. The instructions are a notice (`ocr.enhance_camera`).
-pub(crate) fn bar(ctx: &egui::Context, view: &mut DocView, area: Rect, t: &Tokens, allowed: bool) {
-    egui::Area::new(egui::Id::unique("camera-bar"))
-        .order(egui::Order::Middle)
-        .pivot(Align2::RIGHT_TOP)
-        .fixed_pos(area.right_top() + vec2(-18.0, 12.0))
-        .show(ctx, |ui| {
-            egui::Frame::NONE
-                .fill(t.card)
-                .stroke(Stroke::new(1.0, t.border))
-                .corner_radius(CornerRadius::same(10))
-                .shadow(egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(if t.dark() { 90 } else { 30 }) })
-                .inner_margin(egui::Margin::symmetric(12, 8))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        // After Enhance page: put the page the right way up, trim it, or move on.
-                        if let Some(done) = view.camera_done.as_mut() {
-                            let mut again = false;
-                            for (look, label) in [
-                                (Look::Original, tl!("Original")),
-                                (Look::Colour, tl!("Colour")),
-                                (Look::Greyscale, tl!("Greyscale")),
-                                (Look::BlackWhite, tl!("Black and white")),
-                            ] {
-                                if ui.add_enabled(allowed, egui::Button::selectable(done.look == look, label)).clicked() && done.look != look {
-                                    done.look = look;
-                                    again = true;
-                                }
-                            }
-                            ui.separator();
-                            ui.label(tl!("Clean-up"));
-                            let slider = ui.add_enabled(
-                                allowed && done.look != Look::Original,
-                                egui::Slider::new(&mut done.level, 0..=crate::camera_ui::MAX_LEVEL).show_value(false),
-                            );
-                            // Enhance again once the slider is let go (or moved with the keys).
-                            again |= slider.drag_stopped() || (slider.changed() && !slider.dragged());
-                            if again && (done.look, done.level) != done.applied {
-                                view.pending_action = Some(ViewAction::CameraLevel);
-                            }
-                            ui.separator();
-                            let icon = |ui: &mut egui::Ui, name: &str, tip: &str| {
-                                let r = ui.add_enabled(allowed, egui::Button::image(crate::icons::image(name, 18.0, t.text)).frame(false));
-                                // Named for screen readers (and tests), not only on hover.
-                                r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, allowed, tip));
-                                r.on_hover_text(tip).clicked()
-                            };
-                            if icon(ui, "rotate-ccw", tl!("Rotate counterclockwise")) {
-                                view.pending_action = Some(ViewAction::CameraRotate { clockwise: false });
-                            }
-                            if icon(ui, "rotate-cw", tl!("Rotate clockwise")) {
-                                view.pending_action = Some(ViewAction::CameraRotate { clockwise: true });
-                            }
-                            if crate::widgets::pill_button(ui, tl!("Crop pages"), false).clicked() {
-                                view.pending_action = Some(ViewAction::CameraNext("page.crop"));
-                            }
-                            if crate::widgets::pill_button(ui, tl!("Organize pages"), false).clicked() {
-                                view.pending_action = Some(ViewAction::CameraNext("page.organize"));
-                            }
-                            if crate::widgets::pill_button(ui, tl!("Done"), true).clicked() {
-                                view.pending_action = Some(ViewAction::CancelCamera);
-                            }
-                            return;
-                        }
-                        let ready = allowed && view.camera.is_some();
-                        if ui.add_enabled_ui(ready, |ui| crate::widgets::pill_button(ui, tl!("Enhance page"), true)).inner.clicked() {
-                            view.pending_action = Some(ViewAction::EnhanceCamera);
-                        }
-                        if crate::widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-                            view.pending_action = Some(ViewAction::CancelCamera);
-                        }
-                    });
-                });
-        });
+    fn drag(&mut self, _pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {
+        if !self.dragged {
+            self.dragged = true;
+            self.moved_to = self.pressed;
+        }
+    }
+
+    fn release(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {
+        // A click is located where it came up; one released off its page moves nothing.
+        if !self.dragged && self.page_at(pointer) == self.pressed {
+            self.moved_to = self.pressed;
+        }
+        self.pressed = None;
+    }
+
+    fn cancel(&mut self, _reason: CancelReason, _cx: &mut ToolContext<'_>) {
+        self.pressed = None;
+        self.dragged = false;
+    }
+
+    fn paint(&self, _draw: &Draw<'_>, _cx: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the Enhance page command")
+    }
+
+    fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        let over_page = cx.pointer.is_some_and(|p| self.pages.iter().any(|page| page.rect.contains(p.pos)));
+        if over_page && !self.allowed { CursorIcon::NotAllowed.into() } else { CursorIcon::Default.into() }
+    }
 }
