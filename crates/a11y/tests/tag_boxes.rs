@@ -99,7 +99,7 @@ fn an_image_cell_and_a_path_cell_are_outlined_where_they_paint() {
 #[test]
 fn form_content_and_an_annotation_are_outlined_where_the_page_places_them() {
     let doc = table();
-    assert_eq!(only(&doc, 16), [400.0, 680.0, 430.0, 710.0], "the form's box where the page draws it");
+    assert_eq!(only(&doc, 16), [400.0, 680.0, 420.0, 700.0], "what the form's sequence paints, where the page draws the form");
     assert_eq!(only(&doc, 17), [450.0, 700.0, 500.0, 720.0], "the annotation's rectangle, normalised");
 }
 
@@ -108,7 +108,7 @@ fn a_row_is_outlined_by_its_cells_and_a_table_by_its_rows_one_box_per_page() {
     let doc = table();
     let row: Vec<[f64; 4]> = boxes(&doc, 11).into_iter().map(|b| b.rect).collect();
     assert_eq!(row.len(), 5, "one box per cell, in structure order: {row:?}");
-    assert_eq!(row[1..], [[200.0, 690.0, 240.0, 720.0], [300.0, 690.0, 350.0, 710.0], [400.0, 680.0, 430.0, 710.0], [450.0, 700.0, 500.0, 720.0]]);
+    assert_eq!(row[1..], [[200.0, 690.0, 240.0, 720.0], [300.0, 690.0, 350.0, 710.0], [400.0, 680.0, 420.0, 700.0], [450.0, 700.0, 500.0, 720.0]]);
     let table = boxes(&doc, 10);
     assert_eq!(table.len(), 6);
     assert_eq!(table.last(), Some(&TagBox { page: 1, rect: [50.0, 50.0, 150.0, 70.0] }), "the inline cell on page 2");
@@ -271,8 +271,48 @@ fn two_sequences_in_one_form_are_two_boxes() {
             stream("/Type /XObject /Subtype /Form /BBox [0 0 30 30]", "/P << /MCID 0 >> BDC 0 0 9 9 re f EMC /P << /MCID 1 >> BDC 9 9 9 9 re f EMC"),
         )],
     );
-    let whole = TagBox { page: 0, rect: [400.0, 680.0, 430.0, 710.0] };
-    assert_eq!(boxes(&doc, 10), [whole.clone(), whole]);
+    let outlines: Vec<[f64; 4]> = boxes(&doc, 10).into_iter().map(|b| b.rect).collect();
+    assert_eq!(outlines, [[400.0, 680.0, 409.0, 689.0], [409.0, 689.0, 418.0, 698.0]], "each sequence where it paints, not the whole form");
+}
+
+#[test]
+fn two_cells_in_one_form_are_outlined_apart() {
+    // Two table cells side by side inside one form, the form placed twice and scaled by its own
+    // `/Matrix`: each cell is outlined where it paints, in every placement, and nothing else.
+    let doc = one_tag(
+        "q 1 0 0 1 100 500 cm /Fm1 Do Q q 1 0 0 1 100 300 cm /Fm1 Do Q",
+        "/XObject << /Fm1 21 0 R >>",
+        "<< /S /TR /Pg 3 0 R /K [11 0 R 12 0 R] >>",
+        vec![
+            (11, "<< /S /TD /P 10 0 R /K << /Type /MCR /Stm 21 0 R /MCID 0 >> >>".into()),
+            (12, "<< /S /TD /P 10 0 R /K << /Type /MCR /Stm 21 0 R /MCID 1 >> >>".into()),
+            (
+                21,
+                stream(
+                    "/Type /XObject /Subtype /Form /BBox [0 0 100 20] /Matrix [2 0 0 2 0 0] /Resources << /Font << /F1 7 0 R >> >>",
+                    "/TD << /MCID 0 >> BDC BT /F1 10 Tf 2 5 Td (A) Tj ET EMC /TD << /MCID 1 >> BDC 50 0 40 10 re f EMC",
+                ),
+            ),
+        ],
+    );
+    assert_eq!(boxes(&doc, 12), [TagBox { page: 0, rect: [200.0, 300.0, 280.0, 520.0] }], "the path cell over both placements");
+    let [x0, y0, x1, y1] = only(&doc, 11);
+    assert!((x0 - 104.0).abs() < 1e-6, "the text cell starts at its origin under the form matrix: {x0}");
+    // "A" in 10 pt Helvetica is 6.67 units wide, doubled by the form's matrix.
+    assert!(x1 > 115.0 && x1 < 120.0, "and ends after its advance: {x1}");
+    assert!(y0 > 300.0 && y0 < 310.0 && y1 > 520.0 && y1 < 530.0, "over both placements: {y0} {y1}");
+    assert!(x1 < 200.0, "the cells do not overlap");
+}
+
+#[test]
+fn form_content_is_cut_to_the_forms_box() {
+    let doc = one_tag(
+        "q 1 0 0 1 100 100 cm /Fm1 Do Q",
+        "/XObject << /Fm1 21 0 R >>",
+        "<< /S /P /Pg 3 0 R /K << /Type /MCR /Stm 21 0 R /MCID 0 >> >>",
+        vec![(21, stream("/Type /XObject /Subtype /Form /BBox [0 0 30 30]", "/P << /MCID 0 >> BDC 10 10 100 100 re f EMC"))],
+    );
+    assert_eq!(boxes(&doc, 10), [TagBox { page: 0, rect: [110.0, 110.0, 130.0, 130.0] }]);
 }
 
 #[test]
@@ -295,4 +335,20 @@ fn an_annotation_rectangle_past_f32_is_not_outlined() {
         vec![(11, format!("<< /Type /Annot /Subtype /Link /P 3 0 R /Rect [0 0 1{} 10] >>", "0".repeat(40)))],
     );
     assert_eq!(boxes(&doc, 10), []);
+}
+
+#[test]
+fn forms_past_the_read_limit_are_outlined_whole() {
+    // 257 forms, each with one sequence: the first 256 are read, the last counts as its whole form.
+    let n = 257u32;
+    let content: String = (0..n).map(|i| format!("q 1 0 0 1 {} 0 cm /F{i} Do Q ", i * 2)).collect();
+    let names: String = (0..n).map(|i| format!("/F{i} {} 0 R ", 100 + i)).collect();
+    let kids: String = (0..n).map(|i| format!("<< /Type /MCR /Stm {} 0 R /MCID 0 >> ", 100 + i)).collect();
+    let forms =
+        (0..n).map(|i| (100 + i, stream("/Type /XObject /Subtype /Form /BBox [0 0 2 30]", "/P << /MCID 0 >> BDC 0 0 1 1 re f EMC"))).collect();
+    let doc = one_tag(&content, &format!("/XObject << {names}>>"), &format!("<< /S /P /Pg 3 0 R /K [{kids}] >>"), forms);
+    let b = boxes(&doc, 10);
+    assert_eq!(b.len(), 257);
+    assert_eq!(b[0].rect, [0.0, 0.0, 1.0, 1.0], "a read form: where its sequence paints");
+    assert_eq!(b[256].rect, [512.0, 0.0, 514.0, 30.0], "past the limit: the whole form");
 }

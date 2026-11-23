@@ -1404,7 +1404,7 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("a11y.tags")
             .with(schema(json!({ "doc": doc(), "object": { "type": "integer", "minimum": 1 }, "generation": { "type": "integer", "minimum": 0, "maximum": 65535 } }), &["doc", "object", "generation"])),
-        t("accessibility_tag_boxes", "Highlight tag content", "Where one reachable indirect structure tag's content and its descendants' content is drawn: what the Tags panel outlines for the selected tag. Use object and generation from accessibility_tags. Returns one box per marked-content sequence or referenced object (glyphs, paths, images and forms it paints; an annotation's rectangle; a form XObject's placement for content inside it), and each page's union of them, as top-left-origin points on the displayed page. page limits the answer to one page.")
+        t("accessibility_tag_boxes", "Highlight tag content", "Where one reachable indirect structure tag's content and its descendants' content is drawn: what the Tags panel outlines for the selected tag. Use object and generation from accessibility_tags. Returns one box per marked-content sequence or referenced object (glyphs, paths, images and forms it paints; an annotation's rectangle; the same for content inside a form XObject, wherever the page places the form), and each page's union of them, as top-left-origin points on the displayed page. page limits the answer to one page.")
             .ro()
             .cmd("a11y.tags")
             .with(schema(json!({

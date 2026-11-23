@@ -13,6 +13,10 @@ use crate::tags::{TagError, tag_type_name};
 const MAX_DEPTH: usize = 512;
 /// How many `/K` entries the walk visits before giving up.
 const MAX_ITEMS: usize = 65_536;
+/// How many form-content boxes are moved onto the page, over all of a page's form placements.
+const MAX_PLACED_MARKS: usize = 1 << 20;
+/// How many forms' content one page reads for `/Stm` marked content; later forms count whole.
+const MAX_FORMS_READ: usize = 256;
 
 /// One box a tag's content is drawn in.
 #[derive(Clone, Debug, PartialEq)]
@@ -28,7 +32,7 @@ pub struct TagBox {
 enum Item {
     /// Marked content in the page's own content.
     Mark { page: ObjRef, mcid: i64 },
-    /// Marked content in a form XObject (`/Stm`): outlined where the form is placed.
+    /// Marked content in a form XObject (`/Stm`): what it paints, where the page places the form.
     Stream { page: ObjRef, stream: ObjRef, mcid: Option<i64> },
     /// An object reference: an annotation, or an XObject placed on the page.
     Object { page: Option<ObjRef>, object: ObjRef },
@@ -38,10 +42,12 @@ enum Item {
 /// sequence or referenced object, in page order and then structure order.
 ///
 /// Marked content on a page counts what it paints (glyph boxes from the font's advance, ascent and
-/// descent; paths; images; forms). Marked content inside a form XObject (`/Stm`) counts the whole
-/// form where the page places it, and an object reference counts an annotation's `/Rect` or an
-/// XObject's placement. Returns `NotATag` for an object that isn't a reachable indirect tag, and
-/// `ContentLimit` beyond 65,536 entries or 512 levels.
+/// descent; paths; images; forms). Marked content inside a form XObject (`/Stm`) counts the same,
+/// read from the form's content within its `/BBox` and moved to wherever the page places the form
+/// (the whole form when the reference has no `/MCID`, or past the 256th form a page reads), and
+/// an object reference counts an annotation's `/Rect` or an XObject's placement. Returns
+/// `NotATag` for an object that isn't a reachable indirect tag, and `ContentLimit` beyond 65,536
+/// entries or 512 levels.
 pub fn tag_boxes(doc: &Document, object: ObjRef) -> Result<Vec<TagBox>, TagError> {
     // Only what the tag listing lists: a tag type that is a name.
     let Some(element) = alt::elements(doc).into_iter().find(|e| e.object == object && tag_type_name(doc, &e.dict).is_some()) else {
@@ -172,12 +178,15 @@ fn page_boxes(doc: &Document, page: &Dict, items: &[Item], mut f: impl FnMut([f6
         })
         .collect();
     let mut marks = if ids.is_empty() { HashMap::new() } else { mark_bounds(doc, page, &ids) };
-    let placed = if objects.is_empty() { HashMap::new() } else { placements(doc, page, &objects) };
+    let inner = form_marks(doc, page, items);
+    let placed = if objects.is_empty() { Placed::default() } else { placements(doc, page, &objects, &inner) };
     for item in items {
         let rect = match *item {
             Item::Mark { mcid, .. } => marks.remove(&mcid),
-            Item::Stream { stream, .. } => placed.get(&stream).copied(),
-            Item::Object { object, .. } => annotation_rect(doc, object).or_else(|| placed.get(&object).copied()),
+            // A form whose content wasn't read (past the limit, or unreadable) counts whole.
+            Item::Stream { stream, mcid: Some(mcid), .. } if inner.contains_key(&stream) => placed.marks.get(&(stream, mcid)).copied(),
+            Item::Stream { stream, .. } => placed.whole.get(&stream).copied(),
+            Item::Object { object, .. } => annotation_rect(doc, object).or_else(|| placed.whole.get(&object).copied()),
         };
         // Within `f32`, which the screen and the headless tool draw and report in.
         if let Some(rect) = rect.filter(|r| r.iter().all(|v| v.is_finite() && v.abs() <= f64::from(f32::MAX))) {
@@ -200,6 +209,56 @@ fn mark_bounds(doc: &Document, page: &Dict, ids: &HashSet<i64>) -> HashMap<i64, 
     out
 }
 
+/// For each form XObject `items` reference marked content in, what each of those ids paints in the
+/// form's own space, cut to the form's `/BBox`: the first [`MAX_FORMS_READ`] forms in `items` order.
+fn form_marks(doc: &Document, page: &Dict, items: &[Item]) -> HashMap<ObjRef, (Matrix, HashMap<i64, [f64; 4]>)> {
+    let mut order: Vec<ObjRef> = Vec::new();
+    let mut wanted: HashMap<ObjRef, HashSet<i64>> = HashMap::new();
+    for item in items {
+        if let Item::Stream { stream, mcid: Some(mcid), .. } = *item {
+            if !wanted.contains_key(&stream) {
+                if order.len() == MAX_FORMS_READ {
+                    continue;
+                }
+                order.push(stream);
+            }
+            wanted.entry(stream).or_default().insert(mcid);
+        }
+    }
+    let mut out = HashMap::new();
+    for stream in order {
+        let ids = wanted.remove(&stream).unwrap_or_default();
+        let target = doc.get(stream);
+        let Object::Stream(s) = &*target else { continue };
+        let Some(bbox) = form_bbox(&s.dict) else { continue };
+        let matrix =
+            Matrix::from_operands(s.dict.get(b"Matrix").and_then(|m| m.as_array()).map(Vec::as_slice).unwrap_or(&[])).unwrap_or(Matrix::IDENTITY);
+        // The form read as if it were a page: its own content, and its own resources or else the page's.
+        let mut form = Dict::new();
+        form.set(b"Contents".to_vec(), Object::Ref(stream));
+        if let Some(res) = s.dict.get(b"Resources").or_else(|| page.get(b"Resources")) {
+            form.set(b"Resources".to_vec(), res.clone());
+        }
+        let clipped = mark_bounds(doc, &form, &ids).into_iter().filter_map(|(id, b)| intersect(b, bbox).map(|b| (id, b))).collect();
+        out.insert(stream, (matrix, clipped));
+    }
+    out
+}
+
+/// A form's `/BBox`, normalised so the first corner is the lower left.
+fn form_bbox(d: &Dict) -> Option<[f64; 4]> {
+    let b: Vec<f64> = d.get(b"BBox").and_then(|b| b.as_array().map(|a| a.iter().filter_map(Object::as_f64).collect()))?;
+    match b[..] {
+        [a, b, c, e] => Some([a.min(c), b.min(e), a.max(c), b.max(e)]),
+        _ => None,
+    }
+}
+
+fn intersect(a: [f64; 4], b: [f64; 4]) -> Option<[f64; 4]> {
+    let r = [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])];
+    (r[0] <= r[2] && r[1] <= r[3]).then_some(r)
+}
+
 /// An annotation's `/Rect`, normalised so the first corner is the lower left.
 fn annotation_rect(doc: &Document, object: ObjRef) -> Option<[f64; 4]> {
     let target = doc.get(object);
@@ -213,15 +272,26 @@ fn annotation_rect(doc: &Document, object: ObjRef) -> Option<[f64; 4]> {
     }
 }
 
-/// Where the page's own content places each XObject of `objects` (a form's `/BBox` under its
-/// `/Matrix` and the CTM, an image's unit square), united over every placement.
-fn placements(doc: &Document, page: &Dict, objects: &HashSet<ObjRef>) -> HashMap<ObjRef, [f64; 4]> {
+/// Where the page draws XObjects and the marked content inside forms.
+#[derive(Default)]
+struct Placed {
+    /// Each XObject's whole box: a form's `/BBox` under its `/Matrix` and the CTM, an image's unit square.
+    whole: HashMap<ObjRef, [f64; 4]>,
+    /// Each form's marked content (`inner` of [`placements`]) under the form's `/Matrix` and the CTM.
+    marks: HashMap<(ObjRef, i64), [f64; 4]>,
+}
+
+/// Where the page's own content places each XObject of `objects`, and the form-space boxes of
+/// `inner`, united over every placement. Past [`MAX_PLACED_MARKS`] moved boxes, later placements
+/// add only to the whole boxes.
+fn placements(doc: &Document, page: &Dict, objects: &HashSet<ObjRef>, inner: &HashMap<ObjRef, (Matrix, HashMap<i64, [f64; 4]>)>) -> Placed {
     let res = page.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let xobjects = res.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
     let mut ctm = Matrix::IDENTITY;
     let mut saved: Vec<Matrix> = Vec::new();
     let mut unsaved = 0usize;
-    let mut out = HashMap::new();
+    let mut out = Placed::default();
+    let mut moves_left = MAX_PLACED_MARKS;
     for op in pdfcraft_content::parse(&alt::page_content(doc, page)).ops {
         match op.op.as_slice() {
             b"q" if saved.len() < MAX_SAVED => saved.push(ctm),
@@ -238,8 +308,19 @@ fn placements(doc: &Document, page: &Dict, objects: &HashSet<ObjRef>) -> HashMap
                     continue;
                 };
                 if let Some(b) = alt::xobject_bbox(doc, &xobjects, &op, &ctm) {
-                    let e = out.entry(r).or_insert(b);
+                    let e = out.whole.entry(r).or_insert(b);
                     *e = union(Some(*e), b);
+                }
+                if let Some((matrix, marks)) = inner.get(&r)
+                    && let Some(left) = moves_left.checked_sub(marks.len())
+                {
+                    moves_left = left;
+                    let to_page = matrix.then(&ctm);
+                    for (id, b) in marks {
+                        let b = to_page.bbox(*b);
+                        let e = out.marks.entry((r, *id)).or_insert(b);
+                        *e = union(Some(*e), b);
+                    }
                 }
             }
             _ => {}
