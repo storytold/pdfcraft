@@ -5,7 +5,7 @@ use craft::theme::Srgba;
 use craft::ui::buttons::IconButton;
 use craft::ui::choice::Swatch;
 use craft::ui::contract::{Bind, Entry, Props as _, Show};
-use craft::ui::docking::PanelSpec;
+use craft::ui::docking::{DockGrid, PanelSpec};
 use craft::ui::form::SliderField;
 use craft::ui::pickers::Select;
 use craft::ui::rails::{DrawerGroup, DrawerKind, LastUsed, RailTool, SlotId, ToolRail, ToolSlot, ToolbarDrawer, apply_toolbar_edit};
@@ -170,13 +170,17 @@ fn drawer_groups() -> Vec<DrawerGroup<String>> {
         .collect()
 }
 
-/// The toolbar's dock panel: its column is whole tool columns wide, and its tab shows the marker of the command that
-/// toggles panels.
-pub(crate) fn panel_spec(app: &PdfCraftApp, ctx: &egui::Context) -> PanelSpec {
-    // PLAN: assumed the toolbar's `PanelId` serialises as "toolbar" in `view.panel {panel}` (pdf-chrome-w13).
-    PanelSpec::new(tl!("Toolbar").to_string())
-        .grid(ToolRail::<String>::dock_grid(ctx, slots(app).len()))
+/// The toolbar's dock panel, titled `title`: its column is whole tool columns wide (a rail grid of `cells` cells, which
+/// the dock sizes from its style), and its tab shows the marker of the command that toggles panels.
+pub(crate) fn panel_spec(title: &str, cells: usize) -> PanelSpec {
+    PanelSpec::new(title.to_owned())
+        .grid(DockGrid::rail(cells))
         .command(CommandRef::with_params("view.panel", serde_json::json!({ "panel": "toolbar" })))
+}
+
+/// The number of cells the toolbar's rail shows.
+pub(crate) fn rail_cells(app: &PdfCraftApp) -> usize {
+    slots(app).len()
 }
 
 /// Measures the toolbar and active tool controls so the dock gives the rail its full height.

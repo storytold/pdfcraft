@@ -1095,7 +1095,7 @@ fn initial_view_is_edited_and_honoured_on_open() {
     app.open_bytes(&egui::Context::default(), "again.pdf", None, bytes.to_vec()).unwrap();
     let view = &app.views[0];
     assert_eq!((view.current(), view.view.cover), (1, true));
-    assert!(app.dock.layout.contains(&PanelId::Bookmarks), "the Bookmarks panel opens");
+    assert!(app.dock.layout().contains(&PanelId::Bookmarks), "the Bookmarks panel opens");
 }
 
 #[test]

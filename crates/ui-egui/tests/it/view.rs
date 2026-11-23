@@ -2147,7 +2147,7 @@ fn long_view_menu_fits_a_short_window() {
     assert!(row.top() >= 0.0 && row.bottom() <= 400.0, "the Bookmarks submenu row is onscreen: {row:?}");
     bookmarks.click();
     h.run_steps(4);
-    assert!(h.state().dock.layout.contains(&pdfcraft_ui_egui::side_panels::PanelId::Bookmarks), "the Bookmarks panel is open in the dock");
+    assert!(h.state().dock.layout().contains(&pdfcraft_ui_egui::side_panels::PanelId::Bookmarks), "the Bookmarks panel is open in the dock");
 }
 
 /// A click at `pos` with `modifiers` held, reported as the platform does: the held keys first,

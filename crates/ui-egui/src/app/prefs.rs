@@ -238,7 +238,7 @@ impl PdfCraftApp {
             javascript: Some(self.session.javascript()),
         };
         // PLAN: assumed app fields `dock`, `rail_side`, `recent_view`, `recent_sort` (chrome-w13, chrome-w16)
-        let dock = settings::Dock { dock: json_text(&self.dock), rail_side: name_of(&self.rail_side) };
+        let dock = settings::Dock { dock: json_text(&*self.dock), rail_side: name_of(&self.rail_side) };
         let recent = settings::Recent {
             recent: json_text(&self.recent.iter().take(self.recent_limit).collect::<Vec<_>>()),
             recent_limit: u32::try_from(self.recent_limit).ok(),
@@ -279,7 +279,7 @@ impl PdfCraftApp {
 
     fn apply_dock(&mut self, s: &settings::Dock) {
         if let Some(workspace) = parsed(&s.dock).and_then(|v| serde_json::from_value(v).ok()) {
-            self.dock = workspace;
+            std::sync::Arc::make_mut(&mut self.dock).replace(workspace);
         }
         if let Some(side) = s.rail_side.as_deref().and_then(from_name) {
             self.rail_side = side;

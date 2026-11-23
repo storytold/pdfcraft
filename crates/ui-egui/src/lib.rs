@@ -242,8 +242,11 @@ pub struct PdfCraftApp {
     pub(crate) shortcuts: Option<dialogs::shortcuts::ShortcutsSession>,
     /// Split view (`panes`); which pane shows each tab is its view's.
     pub panes: panes::Panes,
-    /// Where the side panels are docked, their sizes and which are open.
-    pub dock: craft::behavior::dock::Workspace<side_panels::PanelId>,
+    /// Where the side panels are docked, their sizes and which are open. One `Arc` across frames: the dock area keys
+    /// what it derives on the workspace's revision, so edits go through `Arc::make_mut`.
+    pub dock: std::sync::Arc<craft::behavior::dock::Workspace<side_panels::PanelId>>,
+    /// What the dock reads of the panels' specs, refreshed before each dock pass.
+    pub(crate) dock_specs: craft::ui::contract::Tracked<side_panels::DockSpecs>,
     /// The side the rail of panel buttons sits on.
     pub rail_side: craft::behavior::DockSide,
     pub session: Session,

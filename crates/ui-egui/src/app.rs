@@ -256,7 +256,8 @@ impl PdfCraftApp {
             preferences: None,
             shortcuts: None,
             panes: Default::default(),
-            dock: side_panels::default_workspace(craft::behavior::DockSide::End),
+            dock: std::sync::Arc::new(side_panels::default_workspace(craft::behavior::DockSide::End)),
+            dock_specs: Default::default(),
             rail_side: craft::behavior::DockSide::End,
             session: Session::new(),
             status_captions_lang: None,
@@ -505,7 +506,7 @@ impl PdfCraftApp {
 
     /// Whether the dock has the Tools panel open; Read mode and the expanded All tools view hide it without closing it.
     pub fn left_open(&self) -> bool {
-        self.dock.layout.contains(&side_panels::PanelId::Tools)
+        self.dock.layout().contains(&side_panels::PanelId::Tools)
     }
 
     /// Opens or closes the Tools panel in the dock, the one record of it (L-136).

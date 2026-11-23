@@ -4,6 +4,8 @@
 //! The workspace is the one record of which panels are open and where they sit. Settings written
 //! by earlier versions (`side_panels`, `docking`) are read once by [`migrate`].
 
+use std::sync::Arc;
+
 use craft::automation::dock as dock_rpc;
 use craft::behavior::dock::{
     Action, Column, DockEdge, DockError, DockPlacement, Floating, Group, Layout, Node, PanelState, Permissions, SplitSize, Target, Workspace,
@@ -11,8 +13,8 @@ use craft::behavior::dock::{
 use craft::behavior::{Axis, DockSide, IconId};
 use craft::keymap::CommandRef;
 use craft::ui::buttons::IconButton;
-use craft::ui::contract::{Bind, BodyCx, Props as _, Show as _};
-use craft::ui::docking::{DockConfig, DockPanels, GroupAt, HidePanels, IconicMode, PanelSpec};
+use craft::ui::contract::{Bind, BodyCx, PlainData, Props as _, Show as _};
+use craft::ui::docking::{DockConfig, DockPanels, GroupAt, HidePanels, IconicMode, PanelSpec, PanelSpecs};
 use craft::ui::menu::PanelRow;
 use craft::ui::patterns::dock::DockArea;
 use craft::ui::primitives::IconSpec;
@@ -193,17 +195,27 @@ pub fn default_workspace(rail_side: DockSide) -> Workspace<PanelId> {
 /// the Tools pane ends, so the toolbar moves by the pane's width when the pane closes and opens, and stays clear of the
 /// page text. A toolbar the user has dragged elsewhere (not in the strip the pane's edge defines) stays where it is.
 fn keep_toolbar_in_the_margin(app: &mut PdfCraftApp) {
-    let open = app.dock.layout.contains(&PanelId::Tools);
+    let open = app.dock.layout().contains(&PanelId::Tools);
     if open == app.toolbar_tools_open {
         return;
     }
     app.toolbar_tools_open = open;
-    let Some(window) = app.dock.layout.floating.iter_mut().find(|window| window.contains(&PanelId::Toolbar)) else { return };
-    let x = window.rect.min.x;
+    let Some(rect) = toolbar_rect(&app.dock) else { return };
+    let x = rect.min.x;
     let target = if open { (x < TOOLS_WIDTH).then_some(x + TOOLS_WIDTH) } else { (x >= TOOLS_WIDTH).then_some((x - TOOLS_WIDTH).max(0.0)) };
     if let Some(x) = target.filter(|x| x.is_finite()) {
-        window.rect = window.rect.translate(egui::vec2(x - window.rect.min.x, 0.0));
+        move_toolbar(app, rect.translate(egui::vec2(x - rect.min.x, 0.0)));
     }
+}
+
+/// The floating toolbar's window rect, `None` when the toolbar is docked or closed.
+fn toolbar_rect(workspace: &Workspace<PanelId>) -> Option<egui::Rect> {
+    workspace.layout().floating.iter().find(|window| window.contains(&PanelId::Toolbar)).map(|window| window.rect)
+}
+
+/// Moves the floating toolbar's window to `rect`. A refused move (a locked layout) leaves it where it is.
+fn move_toolbar(app: &mut PdfCraftApp, rect: egui::Rect) {
+    drop(Arc::make_mut(&mut app.dock).apply(Action::move_floating(PanelId::Toolbar, rect), false, permissions));
 }
 
 /// The Tools pane's width follows the window across [`NARROW_WINDOW`]: production's narrower pane in a small window, the
@@ -214,27 +226,27 @@ fn fit_tools_to_window(app: &mut PdfCraftApp, window_width: f32) {
         return;
     }
     app.window_narrow = narrow;
-    if !app.dock.layout.contains(&PanelId::Tools) {
+    if !app.dock.layout().contains(&PanelId::Tools) {
         return;
     }
     let width = if narrow { TOOLS_WIDTH_NARROW } else { TOOLS_WIDTH };
     // A refused resize (a locked layout) leaves the width as it is.
-    if app.dock.apply(Action::resize_column(PanelId::Tools, width), false, permissions).is_err() {
+    if Arc::make_mut(&mut app.dock).apply(Action::resize_column(PanelId::Tools, width), false, permissions).is_err() {
         return;
     }
     // The floating toolbar sits in the page area's margin, which moved with the pane's edge.
     let shift = if narrow { TOOLS_WIDTH_NARROW - TOOLS_WIDTH } else { TOOLS_WIDTH - TOOLS_WIDTH_NARROW };
     if app.toolbar_tools_open
-        && let Some(window) = app.dock.layout.floating.iter_mut().find(|window| window.contains(&PanelId::Toolbar))
-        && window.rect.min.x >= TOOLS_WIDTH_NARROW
+        && let Some(rect) = toolbar_rect(&app.dock)
+        && rect.min.x >= TOOLS_WIDTH_NARROW
     {
-        window.rect = window.rect.translate(egui::vec2(shift, 0.0));
+        move_toolbar(app, rect.translate(egui::vec2(shift, 0.0)));
     }
 }
 
 /// The window edge whose dock holds `panel`, `None` when it is closed or floating.
 fn edge_of(workspace: &Workspace<PanelId>, panel: PanelId) -> Option<DockEdge> {
-    let mut pending: Vec<(&Node<PanelId>, usize)> = workspace.layout.root.iter().map(|node| (node, 0)).collect();
+    let mut pending: Vec<(&Node<PanelId>, usize)> = workspace.layout().root.iter().map(|node| (node, 0)).collect();
     while let Some((node, depth)) = pending.pop() {
         if depth > MAX_DEPTH {
             continue;
@@ -257,7 +269,7 @@ fn edge_of(workspace: &Workspace<PanelId>, panel: PanelId) -> Option<DockEdge> {
 
 /// The columns of the dock at `edge`, from the window edge inward; empty when there is no such dock.
 fn dock_columns(workspace: &Workspace<PanelId>, edge: DockEdge) -> &[Column<PanelId>] {
-    let mut pending: Vec<(&Node<PanelId>, usize)> = workspace.layout.root.iter().map(|node| (node, 0)).collect();
+    let mut pending: Vec<(&Node<PanelId>, usize)> = workspace.layout().root.iter().map(|node| (node, 0)).collect();
     while let Some((node, depth)) = pending.pop() {
         if depth > MAX_DEPTH {
             continue;
@@ -294,7 +306,7 @@ fn edge_name(edge: Option<DockEdge>) -> &'static str {
 /// The side panel that is open, if any: the front tab of the side panels' expanded column. Collapsed to its icons,
 /// the column shows none.
 fn open_side(workspace: &Workspace<PanelId>) -> Option<PanelId> {
-    SIDE.into_iter().find(|panel| workspace.layout.panel_state(panel) == PanelState::Front)
+    SIDE.into_iter().find(|panel| workspace.layout().panel_state(panel) == PanelState::Front)
 }
 
 /// The label of a side panel, which its icon in the collapsed column and its tab share: production's rail button name.
@@ -332,49 +344,102 @@ fn side_icon(panel: RightPanel) -> &'static str {
     }
 }
 
-/// The dock's panels over the app in one pass.
-struct Panels<'a> {
-    app: &'a mut PdfCraftApp,
-    ctx: egui::Context,
+/// What the dock reads of the panels: the app state their specs show, read from the app before each pass
+/// ([`DockSpecs::of`]) and written to the app's [`Tracked`] only when it changed, so an idle pass reads no spec.
+#[derive(Clone, Debug, Default, PartialEq, PlainData)]
+pub(crate) struct DockSpecs {
+    /// The side panels' labels, in [`SIDE`]'s order.
+    side_labels: Vec<String>,
+    /// The Comments panel's comment count, with a document open.
+    comments: Option<usize>,
+    /// The Comments panel's reply count caption, when the document has replies.
+    replies: Option<String>,
+    /// The Tools panel's heading: the tool's name, All tools or Calculation order.
+    tools_title: String,
+    /// Whether the Tools panel shows its footer bar.
+    tools_footer: bool,
+    /// The toolbar's title.
+    toolbar_title: String,
+    /// The number of cells of the toolbar's rail.
+    toolbar_cells: usize,
+    /// The page area's title.
+    document_title: String,
 }
 
-impl DockPanels<PanelId> for Panels<'_> {
+impl DockSpecs {
+    /// The specs' inputs as `app` stands.
+    fn of(app: &PdfCraftApp) -> Self {
+        let info = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|doc| &doc.info);
+        let replies = info.map(crate::comments_panel::reply_count).filter(|replies| *replies > 0);
+        let calc_order = app.left == LeftPanel::CalculationOrder;
+        let tools_title = if calc_order {
+            crate::i18n::t("Calculation order")
+        } else {
+            // The panel is headed by what it shows: the tool's name, or All tools (production's heading).
+            match app.left {
+                LeftPanel::Tool(id) => super::catalog::group(id).map_or_else(|| crate::i18n::t("All tools"), |g| crate::i18n::t(g.label)),
+                _ => crate::i18n::t("All tools"),
+            }
+        };
+        DockSpecs {
+            side_labels: SIDE.into_iter().filter_map(PanelId::side).map(side_label).collect(),
+            comments: info.map(crate::comments_panel::count),
+            replies: replies.map(|replies| crate::i18n::trn(crate::i18n::current(), replies as u64, "{n} reply", "{n} replies")),
+            tools_title: tools_title.to_owned(),
+            tools_footer: !calc_order && super::tools::has_footer(app),
+            toolbar_title: tl!("Toolbar").to_string(),
+            toolbar_cells: crate::hotbar::rail_cells(app),
+            document_title: crate::i18n::t("Document").to_owned(),
+        }
+    }
+}
+
+impl PanelSpecs<PanelId> for DockSpecs {
     fn spec(&self, panel: &PanelId) -> PanelSpec {
-        if *panel == PanelId::Toolbar {
-            return crate::hotbar::panel_spec(&*self.app, &self.ctx);
-        }
-        if *panel == PanelId::Document {
-            return PanelSpec::new(crate::i18n::t("Document").to_owned()).canvas();
-        }
         let command = CommandRef::with_params("view.panel", json!({ "panel": panel.name() }));
-        match panel.side() {
-            Some(side) => {
-                let mut spec = PanelSpec::new(side_label(side)).icon(IconSpec::svg(IconId::new(side_icon(side)))).command(command);
-                if side == RightPanel::Comments
-                    && let Some(info) = self.app.active_ids().and_then(|(_, id)| self.app.session.get(id)).map(|doc| &doc.info)
-                {
-                    spec = spec.count(crate::comments_panel::count(info));
-                    let replies = crate::comments_panel::reply_count(info);
-                    if replies > 0 {
-                        let text = crate::i18n::trn(crate::i18n::current(), replies as u64, "{n} reply", "{n} replies");
-                        spec = spec.caption(text);
+        match panel {
+            PanelId::Toolbar => crate::hotbar::panel_spec(&self.toolbar_title, self.toolbar_cells),
+            PanelId::Document => PanelSpec::new(self.document_title.clone()).canvas(),
+            PanelId::Tools => {
+                let spec = PanelSpec::new(self.tools_title.clone()).command(command);
+                if self.tools_footer { spec.footer() } else { spec }
+            }
+            side => {
+                let label = SIDE.iter().position(|p| p == side).and_then(|i| self.side_labels.get(i)).cloned().unwrap_or_default();
+                let icon = side.side().map_or("", side_icon);
+                let mut spec = PanelSpec::new(label).icon(IconSpec::svg(IconId::new(icon))).command(command);
+                if *side == PanelId::Comments {
+                    if let Some(count) = self.comments {
+                        spec = spec.count(count);
+                    }
+                    if let Some(replies) = &self.replies {
+                        spec = spec.caption(replies.clone());
                     }
                 }
                 spec
             }
-            None if self.app.left == LeftPanel::CalculationOrder => PanelSpec::new(crate::i18n::t("Calculation order").to_owned()).command(command),
-            None => {
-                // The panel is headed by what it shows: the tool's name, or All tools (production's heading).
-                let title = match self.app.left {
-                    LeftPanel::Tool(id) => super::catalog::group(id).map_or_else(|| crate::i18n::t("All tools"), |g| crate::i18n::t(g.label)),
-                    _ => crate::i18n::t("All tools"),
-                };
-                let spec = PanelSpec::new(title.to_owned()).command(command);
-                if super::tools::has_footer(self.app) { spec.footer() } else { spec }
-            }
         }
     }
 
+    fn permissions(&self, panel: &PanelId) -> Permissions {
+        permissions(panel)
+    }
+}
+
+/// Reads the specs' inputs from the app, moving the specs' revision only when one changed.
+fn refresh_specs(app: &mut PdfCraftApp) {
+    let specs = DockSpecs::of(app);
+    if *app.dock_specs != specs {
+        *app.dock_specs = specs;
+    }
+}
+
+/// The dock's panels over the app in one pass.
+struct Panels<'a> {
+    app: &'a mut PdfCraftApp,
+}
+
+impl DockPanels<PanelId> for Panels<'_> {
     fn footer(&mut self, panel: &PanelId, ui: &mut Ui, _cx: &mut BodyCx<'_>) {
         if *panel == PanelId::Tools {
             super::tools::footer(self.app, ui);
@@ -383,10 +448,6 @@ impl DockPanels<PanelId> for Panels<'_> {
 
     fn rail_footer(&mut self, _: &PanelId, ui: &mut Ui, _: &mut BodyCx<'_>) {
         crate::chrome::view_rail::show(self.app, ui);
-    }
-
-    fn permissions(&self, panel: &PanelId) -> Permissions {
-        permissions(panel)
     }
 
     fn body(&mut self, panel: &PanelId, ui: &mut Ui, cx: &mut BodyCx<'_>) {
@@ -486,21 +547,6 @@ fn document_view(app: &mut PdfCraftApp, ui: &mut Ui, rect: egui::Rect) {
     }
 }
 
-/// The permissions alone, for the automation method that applies a dock action without drawing the dock.
-struct Rules;
-
-impl DockPanels<PanelId> for Rules {
-    fn spec(&self, panel: &PanelId) -> PanelSpec {
-        PanelSpec::new(panel.name())
-    }
-
-    fn permissions(&self, panel: &PanelId) -> Permissions {
-        permissions(panel)
-    }
-
-    fn body(&mut self, _panel: &PanelId, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
-}
-
 /// A visible panel in the navigation rail anchors the fixed view controls. If all panels have
 /// moved away or are hidden, the shell keeps the controls available on its own rail.
 pub(crate) fn rail_anchor(app: &PdfCraftApp) -> Option<PanelId> {
@@ -521,7 +567,7 @@ pub(crate) fn rail_anchor(app: &PdfCraftApp) -> Option<PanelId> {
 
 /// Draws the dock. Call after the top bars and before the central panel.
 ///
-/// The area gets a copy of the workspace and reports every change of the pass; they are applied to `app.dock` here,
+/// The area gets the app's workspace `Arc` and reports every change of the pass; they are applied to `app.dock` here,
 /// the area's own actions first, then the ones the bodies requested. A pass applies only what it reported.
 pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
     let active = app.active.is_some();
@@ -536,7 +582,8 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
     let anchor = rail_anchor(app);
     keep_toolbar_in_the_margin(app);
     fit_tools_to_window(app, ui.ctx().content_rect().width());
-    let workspace = app.dock.clone();
+    refresh_specs(app);
+    let workspace = Arc::clone(&app.dock);
     // The rail lists the Accessibility Checker once the document has a report, and Search and Compare only while
     // they show; their commands open them.
     let open = open_side(&workspace);
@@ -547,7 +594,9 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
         _ => true,
     };
     let inset = app.notice_inset;
-    let mut panels = Panels { ctx: ui.ctx().clone(), app: &mut *app };
+    // The specs leave the app while its panels borrow it, and come back with their revision.
+    let specs = std::mem::take(&mut app.dock_specs);
+    let mut panels = Panels { app: &mut *app };
     // Home and Combine have no side panel and no toolbar, and Read mode hides the tools and the quick toolbar, not the
     // navigation panels. A document that hides the window controls keeps the quick toolbar on its pages; full screen
     // hides it (`hotbar_hidden`), and so does the expanded All tools view, which takes the pages' place.
@@ -562,15 +611,20 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
     // panel docked, and a click on the open panel's icon closes it.
     let config =
         DockConfig::default().native_windows(false).iconic_mode(IconicMode::Rail).titled_headers(true).tab_close_buttons(true).floating_grip(true);
-    let area = DockArea::new("Dock", Bind::given(workspace), &mut panels, config).hide(HidePanels::Except(&shown)).top_inset(inset);
+    let area = DockArea::new("Dock", Bind::given(workspace), &specs, &mut panels, config).hide(HidePanels::Except(&shown)).top_inset(inset);
     let output = match anchor {
         Some(panel) => area.rail_footer(panel).show(ui),
         None => area.show(ui),
     };
+    app.dock_specs = specs;
     let before = right_of(&app.dock);
-    for action in output.actions.into_iter().chain(output.requested) {
-        // The area drops what the workspace refuses; one refused here is stale, not the user's mistake.
-        drop(app.dock.apply(action, false, permissions));
+    let actions: Vec<_> = output.actions.into_iter().chain(output.requested).collect();
+    if !actions.is_empty() {
+        let dock = Arc::make_mut(&mut app.dock);
+        for action in actions {
+            // The area drops what the workspace refuses; one refused here is stale, not the user's mistake.
+            drop(dock.apply(action, false, permissions));
+        }
     }
     let after = right_of(&app.dock);
     if after != before {
@@ -586,7 +640,7 @@ pub fn state(app: &PdfCraftApp) -> Value {
     let side = open_side(&app.dock);
     json!({
         "tools_side": edge_name(edge_of(&app.dock, PanelId::Tools)),
-        "tools_open": app.dock.layout.contains(&PanelId::Tools),
+        "tools_open": app.dock.layout().contains(&PanelId::Tools),
         "rail_side": edge_name(Some(rail_edge(app.rail_side))),
         "side_open": side.is_some(),
         "side_panel": side.and_then(PanelId::side).map(|r| format!("{r:?}")),
@@ -600,14 +654,14 @@ fn refused() -> String {
 
 /// Opens or closes `panel` in the workspace, the one write path for panel visibility.
 fn show_panel(app: &mut PdfCraftApp, panel: PanelId, visible: bool) -> Result<(), String> {
-    set_shown(&mut app.dock, panel, visible).map_err(|_| refused())
+    set_shown(Arc::make_mut(&mut app.dock), panel, visible).map_err(|_| refused())
 }
 
 /// Shows or hides `panel` in `workspace`. A side panel stays in the layout as an icon of its column: showing it
 /// expands the column with it in front, hiding it collapses the column to its icons. One closed from its tab comes
 /// back to its recorded place first.
 fn set_shown(workspace: &mut Workspace<PanelId>, panel: PanelId, visible: bool) -> Result<(), DockError> {
-    let fallback = (panel != PanelId::Toolbar && workspace.layout.contains(&PanelId::Toolbar)).then_some(PanelId::Toolbar);
+    let fallback = (panel != PanelId::Toolbar && workspace.layout().contains(&PanelId::Toolbar)).then_some(PanelId::Toolbar);
     if panel.side().is_none() {
         return workspace.set_visible(panel, visible, fallback, false, permissions);
     }
@@ -615,7 +669,7 @@ fn set_shown(workspace: &mut Workspace<PanelId>, panel: PanelId, visible: bool) 
         workspace.set_visible(panel, true, fallback, false, permissions)?;
         return workspace.apply(Action::set_iconic(panel, false), false, permissions).map(drop);
     }
-    if workspace.layout.panel_state(&panel) != PanelState::Front {
+    if workspace.layout().panel_state(&panel) != PanelState::Front {
         return Ok(());
     }
     workspace.apply(Action::set_iconic(panel, true), false, permissions).map(drop)
@@ -635,12 +689,12 @@ pub(crate) fn set_panel_visible(app: &mut PdfCraftApp, panel: PanelId, visible: 
 
 /// Whether the left panel `panel` is the one the tool panels show and the dock has them open.
 pub(crate) fn panel_visible(app: &PdfCraftApp, panel: LeftPanel) -> bool {
-    app.left == panel && app.dock.layout.contains(&PanelId::Tools)
+    app.left == panel && app.dock.layout().contains(&PanelId::Tools)
 }
 
 /// Moves the column holding `panel` to the `edge` dock.
 fn move_to_edge(app: &mut PdfCraftApp, panel: PanelId, edge: DockEdge) -> Result<(), String> {
-    if !app.dock.layout.contains(&panel) {
+    if !app.dock.layout().contains(&panel) {
         return Err(format!("open the {} panel first", panel.name()));
     }
     if edge_of(&app.dock, panel) == Some(edge) {
@@ -651,14 +705,14 @@ fn move_to_edge(app: &mut PdfCraftApp, panel: PanelId, edge: DockEdge) -> Result
     } else {
         edge_target(&app.dock, edge)
     };
-    app.dock.apply(Action::move_column(panel, to), false, permissions).map(drop).map_err(|_| refused())
+    Arc::make_mut(&mut app.dock).apply(Action::move_column(panel, to), false, permissions).map(drop).map_err(|_| refused())
 }
 
 /// Puts the rail, and the side panels that share its edge, on `side`.
 pub(crate) fn set_rail_side(app: &mut PdfCraftApp, side: DockSide) -> Result<(), String> {
     let edge = rail_edge(side);
     for panel in [PanelId::Toolbar].into_iter().chain(SIDE) {
-        if app.dock.layout.contains(&panel) {
+        if app.dock.layout().contains(&panel) {
             move_to_edge(app, panel, edge)?;
         }
     }
@@ -673,7 +727,7 @@ pub(crate) fn tools_on_right(app: &PdfCraftApp) -> bool {
 
 /// Docks the tools panel at the end (`on_right`) or the start edge. A closed panel has no edge to move: it stays closed.
 pub(crate) fn set_tools_on_right(app: &mut PdfCraftApp, on_right: bool) -> Result<(), String> {
-    if !app.dock.layout.contains(&PanelId::Tools) {
+    if !app.dock.layout().contains(&PanelId::Tools) {
         return Ok(());
     }
     move_to_edge(app, PanelId::Tools, if on_right { DockEdge::End } else { DockEdge::Start })
@@ -693,7 +747,7 @@ fn edge_param(value: &str, key: &str) -> Result<DockEdge, String> {
 /// dragging a divider or by `ui.dock.apply`.
 pub fn command(app: &mut PdfCraftApp, reset: bool, params: &Value) -> Result<Value, String> {
     if reset {
-        app.dock = default_workspace(app.rail_side);
+        Arc::make_mut(&mut app.dock).replace(default_workspace(app.rail_side));
         return Ok(json!({ "side_panels": state(app) }));
     }
     if params.get("width").is_some_and(|width| !width.is_null()) {
@@ -744,7 +798,7 @@ pub fn command(app: &mut PdfCraftApp, reset: bool, params: &Value) -> Result<Val
 
 /// `ui.dock.apply {action}`: one dock action applied to the workspace under the panels' permissions.
 pub fn dock_method(app: &mut PdfCraftApp, method: &str, params: &Value) -> Option<Result<Value, String>> {
-    dock_rpc::dock_method(&mut app.dock, &Rules, false, method, params)
+    dock_rpc::dock_method(Arc::make_mut(&mut app.dock), &*app.dock_specs, false, method, params)
 }
 
 /// The dock's layout for `ui.inspect`.
@@ -954,9 +1008,9 @@ mod tests {
     fn new_workspace_floats_the_toolbar() {
         for side in [DockSide::Start, DockSide::End] {
             let workspace = default_workspace(side);
-            assert!(workspace.layout.validate().is_ok());
+            assert!(workspace.layout().validate().is_ok());
             assert_eq!(edge_of(&workspace, PanelId::Toolbar), None);
-            assert!(workspace.layout.floating.iter().any(|window| window.contains(&PanelId::Toolbar)));
+            assert!(workspace.layout().floating.iter().any(|window| window.contains(&PanelId::Toolbar)));
         }
     }
 
@@ -1064,7 +1118,7 @@ mod tests {
         ];
         for (name, saved, tools_open, edge, side_open) in cases {
             let migrated = migrate(&saved).unwrap_or_else(|| panic!("{name}: not migrated"));
-            assert_eq!(migrated.workspace.layout.contains(&PanelId::Tools), tools_open, "{name}: Tools open");
+            assert_eq!(migrated.workspace.layout().contains(&PanelId::Tools), tools_open, "{name}: Tools open");
             if tools_open {
                 assert_eq!(edge_of(&migrated.workspace, PanelId::Tools), Some(edge), "{name}: Tools edge");
             }
@@ -1111,7 +1165,7 @@ mod tests {
     }
 
     fn toolbar_x(h: &Harness<'static, PdfCraftApp>) -> f32 {
-        h.state().dock.layout.floating.iter().find(|window| window.contains(&PanelId::Toolbar)).map_or(f32::NAN, |window| window.rect.min.x)
+        h.state().dock.layout().floating.iter().find(|window| window.contains(&PanelId::Toolbar)).map_or(f32::NAN, |window| window.rect.min.x)
     }
 
     /// L-310: the floating quick toolbar stays in the page area's left margin: closing the Tools pane carries it to the
