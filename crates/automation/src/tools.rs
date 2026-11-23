@@ -1514,7 +1514,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("doc_compare_report", "Compare report", "Write the compare summary report (a PDF listing every change) to path.")
             .cmd("doc.compare")
             .with(schema(json!({ "doc": doc(), "other": { "type": "integer" }, "path": { "type": "string" }, "pages": pages("to compare (default: all)") }), &["doc", "other", "path"])),
-        t("doc_compare_mark", "Mark differences as comments", "Add the differences from other (older) to doc (newer) as comments in doc: highlights over replaced (blue) and inserted (green) text, notes where text was deleted (red), authored Compare. Undoable.")
+        t("doc_compare_mark", "Mark differences as comments", "Add the differences from other (older) to doc (newer) as comments in doc: highlights over replaced (blue) and inserted (green) text, notes where text was deleted (red), authored Compare. Undoable, one undo step per page marked.")
             .cmd("doc.compare")
             .with(schema(json!({ "doc": doc(), "other": { "type": "integer" }, "pages": pages("to compare (default: all)") }), &["doc", "other"])),
         t("form_detect_fields", "Detect form fields", "Prepare a form ▸ automatic field detection: find the blanks a printed form asks to be filled (underscore runs, lines, empty boxes, rows of comb boxes, small squares for check boxes; on scanned pages read from the pixels) and name each field from its label. With add (default true) the fields are created as one undoable step; otherwise they are only proposed. Returns page (1-based), kind, name and rect (points, origin bottom-left); a row of comb boxes is one text field with comb set to its number of cells, created with the comb flag and that character limit.")

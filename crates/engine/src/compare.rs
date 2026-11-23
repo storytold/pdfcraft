@@ -58,17 +58,27 @@ fn rects_overlap(a: [f64; 4], b: [f64; 4]) -> bool {
     a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1]
 }
 
-fn change_matches_position(word: &pdfcraft_compare::Word, page: usize, rects: &[[f64; 4]], near: Option<[f64; 4]>) -> bool {
-    if word.page != page {
-        return false;
+/// The first run of `text`'s words at or after `from` that reads as `text` and, for a change
+/// with a position, sits where the change was found: on its page and inside its rectangles (or
+/// its anchor). `None` when the document holds no such run.
+fn find_run(words: &[pdfcraft_compare::Word], text: &str, from: usize, page: usize, rects: &[[f64; 4]], near: Option<[f64; 4]>) -> Option<usize> {
+    let wanted: Vec<&str> = text.split_whitespace().collect();
+    let count = wanted.len();
+    if count == 0 || count > words.len() || from > words.len() - count {
+        return None;
     }
-    if !rects.is_empty() {
-        rects.iter().any(|r| rects_overlap(word.rect, *r))
-    } else if let Some(rect) = near {
-        rects_overlap(word.rect, rect)
-    } else {
-        true
-    }
+    let positional = !rects.is_empty() || near.is_some();
+    (from..=words.len() - count).find(|&start| {
+        let run = &words[start..start + count];
+        run.iter().zip(&wanted).all(|(word, text)| word.text == *text)
+            && run[0].page == page
+            && (!positional
+                || if rects.is_empty() {
+                    near.is_some_and(|anchor| rects_overlap(run[0].rect, anchor))
+                } else {
+                    run.iter().all(|word| rects.iter().any(|rect| rects_overlap(word.rect, *rect)))
+                })
+    })
 }
 
 impl crate::Document {
@@ -205,7 +215,6 @@ impl Session {
     }
 
     /// [`Session::mark_differences`] of the changes on `pages` ([`Session::compare_pages`]).
-    #[allow(clippy::cognitive_complexity)]
     pub fn mark_differences_of(&mut self, old: DocId, new: DocId, pages: &[usize]) -> Result<usize, EditError> {
         let c = self.compare_pages(old, new, pages)?;
         let old_words = {
@@ -233,158 +242,34 @@ impl Session {
                 Kind::Inserted => format!("Inserted: \"{}\"", ch.new.text),
                 Kind::Deleted => format!("Deleted: \"{}\"", ch.old.text),
             };
-            let new_changed: Vec<&str> = ch.new.text.split_whitespace().collect();
-            let new_slice = if new_changed.is_empty() || new_changed.len() > new_words.len() {
-                &new_words[0..0]
-            } else {
-                let new_word_count = new_changed.len();
-                // Find this change's words in document order. Searching from the previous
-                // change's end skips the unchanged words between changes; falling back to
-                // the whole list keeps a match when the first search misses. Match every
-                // word's text, not just the first one, and keep the search page- and
-                // rectangle-aware so an earlier occurrence of the same text cannot be
-                // mistaken for the words the diff actually changed.
-                let mut start = None;
-                for candidate in new_search_from..=new_words.len().saturating_sub(new_word_count) {
-                    if !new_words[candidate..candidate + new_word_count].iter().zip(&new_changed).all(|(word, text)| word.text == *text) {
-                        continue;
-                    }
-                    if new_words[candidate].page != ch.new.page {
-                        continue;
-                    }
-                    let positional = !ch.new.rects.is_empty() || ch.new.near.is_some();
-                    if positional {
-                        if ch.new.rects.is_empty() {
-                            if let Some(near) = ch.new.near
-                                && !rects_overlap(new_words[candidate].rect, near)
-                            {
-                                continue;
-                            }
-                        } else if !new_words[candidate..candidate + new_word_count]
-                            .iter()
-                            .all(|word| ch.new.rects.iter().any(|rect| rects_overlap(word.rect, *rect)))
-                        {
-                            continue;
-                        }
-                    }
-                    start = Some(candidate);
-                    break;
+            // `compare` groups consecutive edits into one `Change`, and a change's new-side
+            // words are a contiguous run of `new_words` with unchanged words between changes:
+            // search on from the previous change's end first, then from the start.
+            let new_slice = match find_run(&new_words, &ch.new.text, new_search_from, ch.new.page, &ch.new.rects, ch.new.near)
+                .or_else(|| find_run(&new_words, &ch.new.text, 0, ch.new.page, &ch.new.rects, ch.new.near))
+            {
+                Some(start) => {
+                    let count = ch.new.text.split_whitespace().count();
+                    new_search_from = (start + count).min(new_words.len());
+                    &new_words[start..start + count]
                 }
-                if start.is_none() {
-                    for candidate in 0..=new_words.len().saturating_sub(new_word_count) {
-                        if !new_words[candidate..candidate + new_word_count].iter().zip(&new_changed).all(|(word, text)| word.text == *text) {
-                            continue;
-                        }
-                        if new_words[candidate].page != ch.new.page {
-                            continue;
-                        }
-                        let positional = !ch.new.rects.is_empty() || ch.new.near.is_some();
-                        if positional {
-                            if ch.new.rects.is_empty() {
-                                if let Some(near) = ch.new.near
-                                    && !rects_overlap(new_words[candidate].rect, near)
-                                {
-                                    continue;
-                                }
-                            } else if !new_words[candidate..candidate + new_word_count]
-                                .iter()
-                                .all(|word| ch.new.rects.iter().any(|rect| rects_overlap(word.rect, *rect)))
-                            {
-                                continue;
-                            }
-                        }
-                        start = Some(candidate);
-                        break;
-                    }
-                }
-                let start = start.unwrap_or_else(|| new_search_from.min(new_words.len().saturating_sub(new_word_count)));
-                new_search_from = (start + new_word_count).min(new_words.len());
-                &new_words[start..start + new_word_count]
+                // The change's words aren't in the document as words (spacing, ligatures): the
+                // rectangles the diff found are used as they are.
+                None => &new_words[0..0],
             };
 
             let old_word_count = ch.old.text.split_whitespace().count();
-            let old_slice = if ch.kind == Kind::Deleted && old_word_count > 0 && old_word_count <= old_words.len() {
-                let mut start = None;
-                for candidate in old_search_from..=old_words.len().saturating_sub(old_word_count) {
-                    let positional = !ch.old.rects.is_empty() || ch.old.near.is_some();
-                    let matches = if positional {
-                        change_matches_position(&old_words[candidate], ch.old.page, &ch.old.rects, ch.old.near)
-                    } else {
-                        old_words[candidate..candidate + old_word_count]
-                            .iter()
-                            .zip(ch.old.text.split_whitespace())
-                            .all(|(word, text)| word.text == text)
-                    };
-                    if matches {
-                        start = Some(candidate);
-                        break;
-                    }
-                }
-                if start.is_none() {
-                    for candidate in 0..=old_words.len().saturating_sub(old_word_count) {
-                        let positional = !ch.old.rects.is_empty() || ch.old.near.is_some();
-                        let matches = if positional {
-                            change_matches_position(&old_words[candidate], ch.old.page, &ch.old.rects, ch.old.near)
-                        } else {
-                            old_words[candidate..candidate + old_word_count]
-                                .iter()
-                                .zip(ch.old.text.split_whitespace())
-                                .all(|(word, text)| word.text == text)
-                        };
-                        if matches {
-                            start = Some(candidate);
-                            break;
-                        }
-                    }
-                }
-                if let Some(s) = start {
-                    old_search_from = s + old_word_count;
-                    Some(&old_words[s..s + old_word_count])
-                } else {
-                    let s = old_search_from.min(old_words.len().saturating_sub(old_word_count));
-                    old_search_from = (s + old_word_count).min(old_words.len());
-                    None
-                }
-            } else {
-                if old_word_count > 0 && old_word_count <= old_words.len() {
-                    let mut start = None;
-                    for candidate in old_search_from..=old_words.len().saturating_sub(old_word_count) {
-                        let positional = !ch.old.rects.is_empty() || ch.old.near.is_some();
-                        let matches = if positional {
-                            change_matches_position(&old_words[candidate], ch.old.page, &ch.old.rects, ch.old.near)
-                        } else {
-                            old_words[candidate..candidate + old_word_count]
-                                .iter()
-                                .zip(ch.old.text.split_whitespace())
-                                .all(|(word, text)| word.text == text)
-                        };
-                        if matches {
-                            start = Some(candidate);
-                            break;
-                        }
-                    }
-                    if start.is_none() {
-                        for candidate in 0..=old_words.len().saturating_sub(old_word_count) {
-                            let positional = !ch.old.rects.is_empty() || ch.old.near.is_some();
-                            let matches = if positional {
-                                change_matches_position(&old_words[candidate], ch.old.page, &ch.old.rects, ch.old.near)
-                            } else {
-                                old_words[candidate..candidate + old_word_count]
-                                    .iter()
-                                    .zip(ch.old.text.split_whitespace())
-                                    .all(|(word, text)| word.text == text)
-                            };
-                            if matches {
-                                start = Some(candidate);
-                                break;
-                            }
-                        }
-                    }
-                    let start = start.unwrap_or_else(|| old_search_from.min(old_words.len().saturating_sub(old_word_count)));
+            let mut old_slice = None;
+            if old_word_count > 0 && old_word_count <= old_words.len() {
+                let found = find_run(&old_words, &ch.old.text, old_search_from, ch.old.page, &ch.old.rects, ch.old.near)
+                    .or_else(|| find_run(&old_words, &ch.old.text, 0, ch.old.page, &ch.old.rects, ch.old.near));
+                if let Some(start) = found {
                     old_search_from = (start + old_word_count).min(old_words.len());
+                    if ch.kind == Kind::Deleted {
+                        old_slice = Some(&old_words[start..start + old_word_count]);
+                    }
                 }
-                None
-            };
+            }
 
             if ch.kind == Kind::Deleted {
                 if let Some(slice) = old_slice {
@@ -719,29 +604,9 @@ mod tests {
         let old_bytes = build("Rate 900");
         let new_bytes = build("Rate 950");
 
-        let dir = std::env::temp_dir();
-        let old_path = dir.join(format!("pdfcraft-mark-differences-old-{}.pdf", std::process::id()));
-        let new_path = dir.join(format!("pdfcraft-mark-differences-new-{}.pdf", std::process::id()));
-        std::fs::write(&old_path, &old_bytes).unwrap();
-        std::fs::write(&new_path, &new_bytes).unwrap();
-
         let mut session = Session::new();
-        let old = session
-            .open(
-                old_path.file_name().unwrap().to_string_lossy().into_owned(),
-                Some(old_path.to_string_lossy().into_owned()),
-                Arc::new(old_bytes),
-                None,
-            )
-            .unwrap();
-        let new = session
-            .open(
-                new_path.file_name().unwrap().to_string_lossy().into_owned(),
-                Some(new_path.to_string_lossy().into_owned()),
-                Arc::new(new_bytes),
-                None,
-            )
-            .unwrap();
+        let old = session.open("old.pdf", None, Arc::new(old_bytes), None).unwrap();
+        let new = session.open("new.pdf", None, Arc::new(new_bytes), None).unwrap();
 
         let marked = session.mark_differences_of(old, new, &[]).unwrap();
         assert_eq!(marked, 1);
@@ -749,8 +614,5 @@ mod tests {
         let doc = session.get(new).unwrap();
         assert!((0..2).any(|i| doc.comment_props(1, i).is_some()));
         assert!((0..2).all(|i| doc.comment_props(0, i).is_none()));
-
-        let _ = std::fs::remove_file(old_path);
-        let _ = std::fs::remove_file(new_path);
     }
 }
