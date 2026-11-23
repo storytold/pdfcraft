@@ -111,6 +111,7 @@ impl PdfCraftApp {
             desktop_theme_enabled: false,
             scroll_speed: scroll_speed::ScrollSpeed::default(),
             invert_middle_drag: false,
+            middle_button: canvas::MiddleButton::default(),
             animation_effects: motion::AnimationEffects::default(),
             full_screen_escape_exits: true,
             motion: motion::Motion::default(),
