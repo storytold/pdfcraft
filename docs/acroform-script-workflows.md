@@ -83,6 +83,34 @@ host path cancels unanswered popups and response dialogs; no web-interaction par
 This work does not add timer execution, PDF annotations/layers to the JS object model, or the
 remaining document action triggers.
 
+## Link actions
+
+A link annotation whose action is JavaScript (`/S /JavaScript`) runs it when clicked. The script
+runs in the document's realm, so document scripts and earlier button or field scripts are in
+scope. `event.type` is `Link`, `event.name` is `Mouse Up`, `event.target` is the document
+(`this`; not enumerable on the event, so `JSON.stringify(event)` works), and `this.pageNum` is
+the link's page. Its menus, questions and alerts use the same worker prompts as a button's. A
+script that fails commits nothing: its field changes and requests are dropped, and what it
+printed to the console and its error are kept. A read-only document's links run too, but a
+field change there fails to commit as any edit does. The link's tip reads "JavaScript action".
+A script is read up to 256 KiB per link and 4 MiB per document. Longer ones are rejected and
+reported once.
+
+`app.openDoc(cPath)` and `app.openDoc({cPath, oDoc, cFS})` only queue a request, then return
+null. The base may only be this document, and only the local file system (`cFS` empty) is
+supported; other options are refused with a script error. The path resolves against the
+document's folder as a link to another PDF does (`/C/dir/file.pdf` reads as `C:/dir/file.pdf`
+on Windows). The viewer always asks before opening it. A request that arrives while another
+link is waiting for an answer is dropped. Field scripts (format, keystroke, validate,
+calculate) may not open documents; the request is noted on the console. The web build says
+local cross-PDF links need the desktop app. A popup menu with no items returns null without
+asking, but it still counts toward the 32-prompt limit.
+
+`link_run_javascript` (doc, 1-based page and annotation index from `link_list`, and optional
+ordered `answers`) runs a link's action headlessly. It returns alerts, console output,
+requests (including `open_doc`) and the error, and never carries requests out. `doc_info`
+shows such links as `{ "javascript": … }`.
+
 ## Page actions, timers and layers
 
 When the page being read changes (the active tab's current page), the close actions of the

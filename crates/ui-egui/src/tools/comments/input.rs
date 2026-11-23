@@ -431,7 +431,11 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
     let QuickTool::Comment(tool) = cx.tool else { return };
     let finished = resp.drag_stopped_by(egui::PointerButton::Primary) || resp.double_clicked();
     if tool == CommentTool::ReplaceText && cx.allowed && finished {
-        if let Some((page, quads)) = view.selection_quads(cx.info).filter(|(p, _)| *p == cx.page) {
+        // A replacement sits on one page: a selection across pages stays selected for the bar's
+        // markup or Copy.
+        if let Ok([(page, quads)]) = <[_; 1]>::try_from(view.selection_quads(cx.info))
+            && page == cx.page
+        {
             view.clear_selection();
             let last = quads.last().copied().unwrap_or_default();
             let at = [last[2].max(last[6]), last[1].max(last[3])];
@@ -440,15 +444,22 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
         }
         return;
     }
-    if tool.markup().is_none() || !cx.allowed || !finished {
-        return;
-    }
-    if let Some(kind) = tool.markup()
-        && let Some((page, quads)) = view.selection_quads(cx.info).filter(|(p, _)| *p == cx.page)
-    {
+    let Some(kind) = tool.markup().filter(|_| cx.allowed) else { return };
+    // Once, from whichever of the selection's pages is drawn: after an edge scroll its first page
+    // may be out of view. Every page it covers gets its own markup, in one undo step, once all
+    // of them are read.
+    if let crate::canvas::ToolMarks::Marks(marks, head) = view.tool_marks(cx.tool, finished, Some(cx.page), false, cx.info) {
         view.clear_selection();
-        view.pending_edit = Some(new_comment(cx, tool, Shape::TextMarkup { kind, quads }, String::new()));
-        let _ = page;
+        let edits = marks.into_iter().map(|(page, quads)| {
+            Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+                page,
+                shape: Shape::TextMarkup { kind, quads },
+                style: cx.prefs.style(tool),
+                contents: String::new(),
+                author: cx.prefs.author.clone(),
+            })
+        });
+        view.pending_edit = view.selection_marks_edit(edits.collect(), head);
     }
 }
 
@@ -788,7 +799,7 @@ pub(crate) fn delete_selected(cv: &mut CommentView, info: &DocInfo) -> Option<Ed
     }
 }
 
-/// The arrow keys move the selected comment a screen pixel; with ⌘/Ctrl or Shift, ten. Up is up
+/// The arrow keys move selected comments a screen pixel; with ⌘/Ctrl or Shift, ten. Up is up
 /// on screen whatever the zoom, the page's rotation and the view's; the keys are taken before
 /// the view scrolls or turns the page with them. Each press is one undo step. Text markup stays
 /// with its text, and a locked comment where it is.
@@ -838,7 +849,25 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView
     let (a, b) = (user(xf.rect.center()), user(xf.rect.center() + step));
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     if dx.is_finite() && dy.is_finite() && (dx != 0.0 || dy != 0.0) {
-        view.pending_edit = Some(Edit::MoveAnnotation { page, index, dx, dy });
+        // Match a pointer drag: move the eligible selection on this page as one undo step.
+        // Text markup and locked comments cannot be moved and would reject a batch.
+        let mut indices = vec![index];
+        for &(other_page, other_index) in &view.comments.also {
+            if other_page == page
+                && !indices.contains(&other_index)
+                && info.annotations.iter().any(|a| a.page == page && a.index == other_index && !a.is_reply() && !on_text(a) && !a.locked)
+            {
+                indices.push(other_index);
+            }
+        }
+        view.pending_edit = Some(if indices.len() == 1 {
+            Edit::MoveAnnotation { page, index, dx, dy }
+        } else {
+            Edit::Batch {
+                label: tl!("Move comments").to_owned(),
+                edits: indices.into_iter().map(|index| Edit::MoveAnnotation { page, index, dx, dy }).collect(),
+            }
+        });
     }
 }
 
