@@ -923,6 +923,10 @@ fn a_repaired_file_is_rewritten_by_save_even_without_edits() {
         let id = s.open("broken.pdf", Some("/tmp/broken.pdf".into()), Arc::new(damaged.clone()), None).unwrap();
         let doc = s.get(id).unwrap();
         assert!(doc.repair_log().iter().any(|l| l.contains("rebuilt cross-reference index")), "{name}: {:?}", doc.repair_log());
+        // The callers that only want to know *whether* something was repaired ask `was_repaired`,
+        // which does not copy the notes. It has to answer what reading the notes would say, or the
+        // cheap question and the expensive one drift apart unnoticed (CodeRabbit on #5336).
+        assert!(doc.was_repaired(), "{name}: repaired, and says so without copying the notes");
         assert_eq!(doc.info.pages.len(), 2, "{name}");
         assert!(!doc.dirty, "{name}: a repair is not an edit");
         let saved = s.save_bytes(id).unwrap();
@@ -933,6 +937,7 @@ fn a_repaired_file_is_rewritten_by_save_even_without_edits() {
         s.mark_saved(id, saved.clone(), None).unwrap();
         let doc = s.get(id).unwrap();
         assert!(doc.repair_log().is_empty(), "{name}: {:?}", doc.repair_log());
+        assert!(!doc.was_repaired(), "{name}: sound now, and the cheap question agrees");
         assert_eq!(doc.info.pages.len(), 2, "{name}");
         // Sound now: saving again without edits writes the same bytes.
         assert_eq!(s.save_bytes(id).unwrap(), saved, "{name}");
