@@ -7,7 +7,8 @@
 //! page numbers repeat. 40% lets alternating left- and right-page headers qualify. A group whose
 //! text changes from page to page and is all heading-sized (`Chapter 1`, `Chapter 2`) is a
 //! sequence of headings, not running text, unless it reads as a page number (`Page 3`, `3 of 9`).
-//! Each separate cluster of heights that qualifies counts. Position alone never makes running text.
+//! Every object in some qualifying span of distances counts, so spans that overlap and spans that
+//! lie apart are each marked. Position alone never makes running text.
 //! A text object whose extent is not known (see [`Evidence::extent`]) is never running text.
 
 use std::collections::HashMap;
@@ -18,7 +19,7 @@ use crate::autotag_roles::{Evidence, HEADING_SIZE_RATIO, MAX_KEPT_CHARS};
 const BAND: f64 = 0.15;
 /// How far, in user-space units, the same running text may move from page to page.
 const TOLERANCE: f64 = 4.0;
-/// Height clusters kept per group of the same text, so the search stays linear in its size.
+/// Height clusters marked per group of the same text; copies at further heights stay content.
 const MAX_CLUSTERS: usize = 8;
 
 /// The page edge running text repeats at.
@@ -67,25 +68,13 @@ pub(crate) fn find(pages: &[PageText<'_>], body: Option<f64>) -> Vec<Vec<Option<
     let needed = pages.len().saturating_mul(2).div_ceil(5).max(2);
     for ((edge, key), mut members) in groups(pages) {
         members.sort_by(|a, b| a.distance.total_cmp(&b.distance));
-        // Each qualifying window splits what is left into the runs on either side of it, so every
-        // separate cluster of heights is found; a run that does not qualify holds none.
-        let mut pending: Vec<&[Member<'_>]> = vec![&members];
-        let mut clusters = 0usize;
-        while let Some(run) = pending.pop().filter(|_| clusters < MAX_CLUSTERS) {
-            let (start, end, distinct) = best_window(run);
-            let (Some(before), Some(window), Some(after)) = (run.get(..start), run.get(start..end), run.get(end..)) else {
-                continue;
-            };
-            if distinct < needed || window.is_empty() {
+        for cluster in clusters(&members, needed) {
+            if is_heading_sequence(cluster, &key, body) {
                 continue;
             }
-            pending.extend([before, after]);
-            clusters = clusters.saturating_add(1);
-            if !is_heading_sequence(window, &key, body) {
-                for m in window {
-                    if let Some(slot) = out.get_mut(m.page).and_then(|p| p.get_mut(m.object)) {
-                        *slot = Some(edge);
-                    }
+            for m in cluster {
+                if let Some(slot) = out.get_mut(m.page).and_then(|p| p.get_mut(m.object)) {
+                    *slot = Some(edge);
                 }
             }
         }
@@ -142,36 +131,46 @@ fn groups<'a>(pages: &'a [PageText<'a>]) -> HashMap<(Edge, String), Vec<Member<'
     groups
 }
 
-/// The run `start..end` of `members` (sorted by distance) spanning at most [`TOLERANCE`] that
-/// covers the most pages, and that number of pages. The run takes every member within the
-/// tolerance of its first, so further copies on pages it already covers belong to it.
-fn best_window(members: &[Member<'_>]) -> (usize, usize, usize) {
+/// The clusters of `members` (sorted by distance) that run: the union of every window of members
+/// within [`TOLERANCE`] of the window's first that covers at least `needed` pages, with windows that
+/// share a member joined into one cluster. At most [`MAX_CLUSTERS`] are returned, nearest the edge
+/// first.
+fn clusters<'m, 'a>(members: &'m [Member<'a>], needed: usize) -> Vec<&'m [Member<'a>]> {
     let mut on_page: HashMap<usize, usize> = HashMap::new();
-    let (mut low, mut best, mut most) = (0usize, (0usize, 0usize), 0usize);
-    for (high, member) in members.iter().enumerate() {
-        let n = on_page.entry(member.page).or_default();
-        *n = n.saturating_add(1);
-        while let Some(first) = members.get(low).filter(|m| member.distance - m.distance > TOLERANCE) {
-            if let Some(n) = on_page.get_mut(&first.page) {
-                *n = n.saturating_sub(1);
-                if *n == 0 {
-                    on_page.remove(&first.page);
+    let mut found: Vec<&'m [Member<'a>]> = Vec::new();
+    let mut current: Option<(usize, usize)> = None;
+    let mut end = 0usize;
+    for (start, first) in members.iter().enumerate() {
+        while let Some(next) = members.get(end).filter(|m| m.distance - first.distance <= TOLERANCE) {
+            let n = on_page.entry(next.page).or_default();
+            *n = n.saturating_add(1);
+            end = end.saturating_add(1);
+        }
+        if on_page.len() >= needed {
+            current = match current {
+                Some((from, to)) if start < to => Some((from, to.max(end))),
+                done => {
+                    if let Some(cluster) = done.and_then(|(from, to)| members.get(from..to)) {
+                        found.push(cluster);
+                    }
+                    if found.len() >= MAX_CLUSTERS {
+                        return found;
+                    }
+                    Some((start, end))
                 }
+            };
+        }
+        if let Some(n) = on_page.get_mut(&first.page) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                on_page.remove(&first.page);
             }
-            low = low.saturating_add(1);
-        }
-        if on_page.len() > most {
-            (most, best) = (on_page.len(), (low, high.saturating_add(1)));
         }
     }
-    let (start, mut end) = best;
-    while let (Some(first), Some(next)) = (members.get(start), members.get(end)) {
-        if next.distance - first.distance > TOLERANCE {
-            break;
-        }
-        end = end.saturating_add(1);
+    if let Some(cluster) = current.and_then(|(from, to)| members.get(from..to)) {
+        found.push(cluster);
     }
-    (start, end, most)
+    found
 }
 
 /// The bottom and top of a user-space box as the page displays it.
@@ -357,6 +356,16 @@ mod tests {
         let found = run(&[column.clone(), column], None);
         let marked = found.iter().flatten().filter(|e| e.is_some()).count();
         assert_eq!(marked, 16, "8 clusters on 2 pages: {found:?}");
+    }
+
+    #[test]
+    fn overlapping_qualifying_spans_of_heights_both_count() {
+        // Six pages need three: "Note" 20 units below the top on two pages, 24 on one and 28 on
+        // two. 20..24 and 24..28 each cover three pages and share the copy at 24.
+        let at = |distance: f64| line("Note", 792.0 - 10.0 - distance);
+        let pages = vec![vec![at(20.0)], vec![at(20.0)], vec![at(24.0)], vec![at(28.0)], vec![at(28.0)], Vec::new()];
+        let found = run(&pages, None);
+        assert!(found.iter().flatten().all(|e| *e == Some(Edge::Top)), "{found:?}");
     }
 
     #[test]
