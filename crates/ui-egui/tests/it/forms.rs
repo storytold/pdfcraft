@@ -603,6 +603,77 @@ fn date_fields_offer_a_calendar() {
     assert_eq!(value(&h, "due"), vec![format!("{nm:02}/15/{ny}")], "picked in the field's format");
 }
 
+#[test]
+fn yearless_date_calendars_use_the_current_year_and_keep_month_navigation() {
+    for (fmt, typed, year, picked) in [
+        ("mm/dd", "05/18", 2023, "06/15"),
+        ("d-mmm", "18-May", 2023, "15-Jun"),
+        ("mm/dd/yyyy", "05/18/2000", 2000, "06/15/2000"),
+        ("mm/dd/yy", "05/18/00", 2000, "06/15/00"),
+    ] {
+        let mut h = harness();
+        let app = h.state_mut();
+        app.session = std::mem::take(&mut app.session).with_clock(|| 1_700_000_000);
+        assert!(app.apply_edit(pdfcraft_engine::Edit::AddField {
+            page: 0,
+            rect: [50.0, 40.0, 200.0, 60.0],
+            kind: pdfcraft_engine::NewField::Date,
+            name: Some("due".into()),
+        }));
+        assert!(app.apply_edit(pdfcraft_engine::Edit::SetFieldProps {
+            name: "due".into(),
+            props: Box::new(pdfcraft_engine::FieldProps {
+                format: Some(pdfcraft_engine::form_scripts::Format::Date(fmt.into())),
+                ..Default::default()
+            }),
+        }));
+        assert!(app.apply_edit(pdfcraft_engine::Edit::SetFieldValue { name: "due".into(), value: pdfcraft_engine::FieldValue::Text(typed.into()) }));
+        h.run_steps(4);
+        click_field(&mut h, "due", 0);
+        h.get_by_label(&format!("May {year}"));
+        h.get_by_label("›").click();
+        h.run_steps(4);
+        h.get_by_label(&format!("June {year}"));
+        h.get_by_label("15").click();
+        h.run_steps(4);
+        assert_eq!(value(&h, "due"), [picked], "the field keeps its {fmt} format");
+        h.state_mut().undo();
+        h.run_steps(2);
+        assert_eq!(value(&h, "due"), [typed]);
+    }
+}
+
+#[test]
+fn yearless_date_calendars_validate_leap_days_in_the_current_year() {
+    for leap in [false, true] {
+        let mut h = harness();
+        let app = h.state_mut();
+        app.session = std::mem::take(&mut app.session).with_clock(if leap {
+            || chrono::NaiveDate::from_ymd_opt(2024, 11, 14).unwrap().and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp()
+        } else {
+            || 1_700_000_000
+        });
+        assert!(app.apply_edit(pdfcraft_engine::Edit::AddField {
+            page: 0,
+            rect: [50.0, 40.0, 200.0, 60.0],
+            kind: pdfcraft_engine::NewField::Date,
+            name: Some("due".into()),
+        }));
+        assert!(app.apply_edit(pdfcraft_engine::Edit::SetFieldProps {
+            name: "due".into(),
+            props: Box::new(pdfcraft_engine::FieldProps {
+                format: Some(pdfcraft_engine::form_scripts::Format::Date("mm/dd".into())),
+                ..Default::default()
+            }),
+        }));
+        h.run_steps(4);
+        click_field(&mut h, "due", 0);
+        h.event(egui::Event::Text("02/29".into()));
+        h.run_steps(3);
+        h.get_by_label(if leap { "February 2024" } else { "November 2023" });
+    }
+}
+
 /// The calendar used to keep the month it opened on, so a date typed while it was open showed
 /// only after leaving the field and coming back.
 #[test]
