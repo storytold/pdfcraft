@@ -16,6 +16,8 @@ pub(crate) struct Pending {
     zoom: f32,
     page: usize,
     serial: u32,
+    /// Link-click position and view, retained while the worker reaches its menu.
+    link_anchor: Option<(u64, egui::Pos2)>,
 }
 impl Pending {
     /// Whether this invocation is waiting for an explicit user reply rather than worker execution.
@@ -40,6 +42,83 @@ fn menu(ui: &mut egui::Ui, items: &[MenuItem], answer: &mut Option<String>) {
                 egui::CollapsingHeader::new(&item.name).show(ui, |ui| menu(ui, &item.children, answer));
             }
         });
+    }
+}
+
+/// CAD properties are flat key/value rows; other menus retain the interactive upstream UI.
+fn component_properties(items: &[MenuItem]) -> bool {
+    !items.is_empty()
+        && items.iter().any(|item| item.name.contains(": "))
+        && items.iter().all(|item| {
+            item.enabled && !item.marked && item.children.is_empty() && item.value == item.name && (item.name == "-" || item.name.contains(": "))
+        })
+}
+
+/// Display CAD properties beside the clicked component, within its document viewport.
+fn component_popup(ctx: &egui::Context, anchor: egui::Pos2, viewport: egui::Rect, items: &[MenuItem]) -> std::task::Poll<Option<String>> {
+    use std::task::Poll;
+    if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        return Poll::Ready(None);
+    }
+    let bounds = viewport.intersect(ctx.content_rect()).shrink(8.0);
+    if !bounds.is_positive() {
+        return Poll::Pending;
+    }
+    let t = crate::theme::Tokens::get(ctx);
+    let mut open = true;
+    let mut answer = None;
+    let popup = egui::Area::new(egui::Id::unique("popup-menu"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(anchor + egui::vec2(12.0, 12.0))
+        .constrain_to(bounds)
+        .show(ctx, |ui| {
+            egui::Frame::NONE
+                .fill(t.panel)
+                .stroke(egui::Stroke::new(1.0, t.divider))
+                .corner_radius(egui::CornerRadius::same(8))
+                .inner_margin(egui::Margin::same(12))
+                .shadow(egui::Shadow { offset: [0, 2], blur: 8, spread: 0, color: egui::Color32::from_black_alpha(40) })
+                .show(ui, |ui| {
+                    ui.set_width(360.0_f32.min((bounds.width() - 24.0).max(0.0)));
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(tl!("Component Properties")).strong());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if crate::icons::button(ui, "x", 24.0, false, tl!("Close (Esc)")).clicked() {
+                                open = false;
+                            }
+                        });
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, true])
+                        .max_height((bounds.height() - 80.0).max(0.0).min(bounds.height() * 0.6))
+                        .show(ui, |ui| {
+                            for item in items {
+                                if item.name == "-" {
+                                    ui.separator();
+                                } else if let Some((key, value)) = item.name.split_once(": ") {
+                                    let row = ui.horizontal_wrapped(|ui| {
+                                        ui.label(egui::RichText::new(key).strong());
+                                        ui.label(value);
+                                    });
+                                    if item.enabled && row.response.interact(egui::Sense::click()).clicked() {
+                                        answer = Some(item.value.clone());
+                                    }
+                                }
+                            }
+                        });
+                });
+        });
+    let outside_click = ctx.input(|input| {
+        input.pointer.button_pressed(egui::PointerButton::Primary)
+            && input.pointer.interact_pos().is_some_and(|pos| viewport.contains(pos) && !popup.response.rect.contains(pos))
+    });
+    if !open || outside_click {
+        Poll::Ready(None)
+    } else if answer.is_some() {
+        Poll::Ready(answer)
+    } else {
+        Poll::Pending
     }
 }
 /// Consume the current prompt before replying so two UI events cannot resume it twice.
@@ -69,16 +148,17 @@ fn reply_to_prompt(ctx: &egui::Context, pending: &mut Pending, answer: Option<St
 impl PdfCraftApp {
     /// Start one explicit button interaction with captured document/view state and leave egui responsive.
     pub(crate) fn start_ui_script(&mut self, id: DocId, script: &str, field: Option<&str>, identity: Option<u64>) {
-        self.start_script_with(id, |s| s.start_javascript_target(id, script, field, identity));
+        self.start_script_with(id, false, |s| s.start_javascript_target(id, script, field, identity));
     }
     /// Start link `index` on page `page`'s JavaScript action (0-based) as a button's runs: its
     /// menus and questions are asked without blocking the window (#2081).
     pub(crate) fn start_link_script(&mut self, id: DocId, page: usize, index: usize) {
-        self.start_script_with(id, |s| s.start_link_javascript(id, page, index));
+        self.start_script_with(id, true, |s| s.start_link_javascript(id, page, index));
     }
     fn start_script_with(
         &mut self,
         id: DocId,
+        link: bool,
         start: impl FnOnce(&mut pdfcraft_engine::Session) -> Result<PendingScript, pdfcraft_engine::EditError>,
     ) {
         if self.script_pending.is_some() {
@@ -87,11 +167,25 @@ impl PdfCraftApp {
         }
         let Some(view) = self.views.iter().find(|v| v.id == id) else { return };
         let (zoom, page, highlight) = (view.zoom, view.current, view.highlight_fields);
+        let pointer = self.ctx.as_ref().and_then(|ctx| ctx.input(|i| i.pointer.interact_pos()));
+        let link_anchor = link.then(|| {
+            let view = pointer.and_then(|p| self.views.iter().find(|v| v.id == id && v.document_viewport().contains(p))).unwrap_or(view);
+            (view.view_key(), pointer.unwrap_or_else(|| view.document_viewport().center()))
+        });
         self.session.set_javascript_view(id, zoom as f64 * 100.0, highlight, page);
         match start(&mut self.session) {
             Ok(run) => {
-                self.script_pending =
-                    Some(Pending { run, prompt: None, text: String::new(), focus: false, started: Instant::now(), zoom, page, serial: 0 })
+                self.script_pending = Some(Pending {
+                    run,
+                    prompt: None,
+                    text: String::new(),
+                    focus: false,
+                    started: Instant::now(),
+                    zoom,
+                    page,
+                    serial: 0,
+                    link_anchor,
+                })
             }
             Err(e) => self.notify(e.to_string()),
         }
@@ -132,12 +226,19 @@ impl PdfCraftApp {
                 }
                 Ok(InteractiveEvent::Complete(out)) => {
                     let id = pending.run.id;
+                    let before = self.session.get(id).map(|doc| doc.edit_generation());
                     match self.session.finish_javascript(pending.run, out) {
                         Ok(out) => {
-                            if let Some(i) = self.views.iter().position(|v| v.id == id)
-                                && let Some(info) = self.session.get(id).map(|d| d.info.clone())
-                            {
-                                self.views[i].document_changed(&info);
+                            if let Some(doc) = self.session.get(id) {
+                                if Some(doc.edit_generation()) != before {
+                                    for view in self.views.iter_mut().filter(|view| view.id == id) {
+                                        view.document_changed(&doc.info);
+                                    }
+                                } else if !out.layers.is_empty() {
+                                    for view in self.views.iter_mut().filter(|view| view.id == id) {
+                                        view.invalidate_content();
+                                    }
+                                }
                             }
                             self.handle_js(
                                 id,
@@ -168,7 +269,18 @@ impl PdfCraftApp {
     }
     /// Display the current typed prompt and send one answer/cancellation without replaying script side effects.
     pub(crate) fn show_script_dialog(&mut self, ctx: &egui::Context) {
-        self.show_script_dialog_with_menu(ctx, |_, _, _| None);
+        let placement = self
+            .script_pending
+            .as_ref()
+            .and_then(|p| p.link_anchor)
+            .and_then(|(key, anchor)| self.views.iter().find(|v| v.view_key() == key).map(|v| (anchor, v.document_viewport())));
+        self.show_script_dialog_with_menu(ctx, |ctx, _, items| {
+            let (anchor, viewport) = placement?;
+            if !component_properties(items) {
+                return None;
+            }
+            Some(component_popup(ctx, anchor, viewport, items))
+        });
     }
 
     /// Let an alternative renderer own a menu until it returns a selection or cancellation.
@@ -427,6 +539,89 @@ mod review13_ui_tests {
 mod link_script_tests {
     use super::*;
 
+    #[test]
+    fn flat_component_properties_use_the_popup_and_escape_closes_it() {
+        let items = vec![
+            MenuItem { name: "Value: 10k".into(), value: "Value: 10k".into(), enabled: true, marked: false, children: Vec::new() },
+            MenuItem { name: "Part: R1".into(), value: "Part: R1".into(), enabled: true, marked: false, children: Vec::new() },
+        ];
+        assert!(component_properties(&items));
+        let mut ordinary = items.clone();
+        ordinary[0].name = "Open".into();
+        assert!(!component_properties(&ordinary));
+        let ctx = egui::Context::default();
+        let viewport = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+        let anchor = egui::pos2(100.0, 100.0);
+        for _ in 0..3 {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                assert!(component_popup(ui.ctx(), anchor, viewport, &items).is_pending());
+            })
+            .drop_without_applying_deltas();
+        }
+        let popup = ctx.memory(|m| m.area_rect(egui::Id::unique("popup-menu"))).unwrap();
+        assert!(popup.min.distance(anchor) < 32.0 && viewport.contains_rect(popup), "{popup:?}");
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        ctx.run_ui(input, |ui| {
+            assert!(matches!(component_popup(ui.ctx(), anchor, viewport, &items), std::task::Poll::Ready(None)));
+        })
+        .drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn component_popup_closes_on_a_canvas_click_outside_it() {
+        let items = vec![MenuItem { name: "Value: 10k".into(), value: "Value: 10k".into(), enabled: true, marked: false, children: Vec::new() }];
+        let ctx = egui::Context::default();
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let anchor = egui::pos2(100.0, 100.0);
+        for _ in 0..3 {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                assert!(component_popup(ui.ctx(), anchor, viewport, &items).is_pending());
+            })
+            .drop_without_applying_deltas();
+        }
+        let pos = egui::pos2(700.0, 500.0);
+        let input = egui::RawInput {
+            events: vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+            ],
+            ..Default::default()
+        };
+        ctx.run_ui(input, |ui| {
+            assert!(matches!(component_popup(ui.ctx(), anchor, viewport, &items), std::task::Poll::Ready(None)));
+        })
+        .drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn a_script_without_document_changes_keeps_the_view_cache() {
+        let mut app = PdfCraftApp::new();
+        let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
+        app.open_bytes("synthetic.pdf", None, bytes.to_vec()).unwrap();
+        let id = app.active_ids().unwrap().1;
+        app.start_ui_script(id, "1 + 1", None, None);
+        app.views[0].goto = Some((0, 0.25));
+        let ctx = egui::Context::default();
+        for _ in 0..400 {
+            app.poll_script_dialog(&ctx);
+            if app.script_pending.is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(app.script_pending.is_none());
+        assert_eq!(app.views[0].goto, Some((0, 0.25)));
+    }
+
     /// A one-page PDF whose only annotation is a link running `script`, and a field `log`.
     fn linked(script: &str) -> Vec<u8> {
         let objs = [
@@ -450,6 +645,28 @@ mod link_script_tests {
         }
         pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
         pdf
+    }
+
+    #[test]
+    fn schematic_link_requests_flat_component_properties() {
+        let mut app = PdfCraftApp::new();
+        let pdf = linked("app.popUpMenu\\('Value: 10k', 'Part: R1'\\);");
+        app.open_bytes("schematic.pdf", None, pdf).unwrap();
+        let id = app.active_ids().unwrap().1;
+        app.run_link_script(id, 0, 0);
+        let ctx = egui::Context::default();
+        for _ in 0..400 {
+            app.poll_script_dialog(&ctx);
+            if app.script_pending.as_ref().is_some_and(|p| p.prompt.is_some()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let pending = app.script_pending.as_mut().expect("link script still active");
+        assert!(pending.link_anchor.is_some());
+        let (prompt, reply) = pending.prompt.take().expect("link requested a menu");
+        assert!(matches!(&prompt, Prompt::Menu(items) if component_properties(items) && items.len() == 2));
+        reply.send(None).unwrap();
     }
 
     /// Clicking a JavaScript link runs its action without blocking: its popup menu is the
