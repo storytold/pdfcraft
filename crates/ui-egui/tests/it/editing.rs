@@ -10438,7 +10438,7 @@ fn format_panel_shows_selection_size_and_updates_after_font_applied() {
     // Apply Times to the whole block
     font_node.click();
     h.run_steps(2);
-    h.get_by_label("Times").click();
+    h.query_all_by_label("Times").next().expect("the Times row").click();
     h.run_steps(4);
 
     // Now all text is Times, so font combo box updates to Times

@@ -525,25 +525,36 @@ fn boxes_row() -> Param {
     let companions: Vec<String> = (0..6).map(|k| format!("hf.text.{k}")).chain(["hf.focused".to_string()]).collect();
     Param::custom("hf.boxes", tl!("Header and footer text"), |ui, fields, _cx| {
         let mut out: Option<egui::Response> = None;
-        for (k, name) in BOX_NAMES.iter().enumerate() {
-            let key = format!("hf.text.{k}");
-            let before = fields.text(&key).unwrap_or_default().to_owned();
-            let mut text = before.clone();
-            let r = ui
-                .push_id(("hf-box", k), |ui| TextField::new(tl!(name), craft::ui::contract::Bind::bound(&mut text)).lines(2).show(ui).response)
-                .inner;
-            // The field's focus stop is the component: egui's focus sits on its text part.
-            if craft::ui::runtime::focus::is_focused(ui.ctx(), r.id) {
-                fields.set("hf.focused", FieldValue::Int(k as i64));
+        // Two rows of three, the header's boxes over the footer's, as production lays them out: one row of six runs
+        // past the dialog's edge.
+        ui.vertical(|ui| {
+            for (row, names) in BOX_NAMES.chunks(3).enumerate() {
+                ui.horizontal(|ui| {
+                    for (col, name) in names.iter().enumerate() {
+                        let k = row * 3 + col;
+                        let key = format!("hf.text.{k}");
+                        let before = fields.text(&key).unwrap_or_default().to_owned();
+                        let mut text = before.clone();
+                        let r = ui
+                            .push_id(("hf-box", k), |ui| {
+                                TextField::new(tl!(name), craft::ui::contract::Bind::bound(&mut text)).lines(2).show(ui).response
+                            })
+                            .inner;
+                        // The field's focus stop is the component: egui's focus sits on its text part.
+                        if craft::ui::runtime::focus::is_focused(ui.ctx(), r.id) {
+                            fields.set("hf.focused", FieldValue::Int(k as i64));
+                        }
+                        if text != before {
+                            fields.set(key, FieldValue::Text(text));
+                        }
+                        out = Some(match out.take() {
+                            Some(o) => o.union(r),
+                            None => r,
+                        });
+                    }
+                });
             }
-            if text != before {
-                fields.set(key, FieldValue::Text(text));
-            }
-            out = Some(match out {
-                Some(o) => o.union(r),
-                None => r,
-            });
-        }
+        });
         out.unwrap_or_else(|| ui.response())
     })
     .companions(companions)
