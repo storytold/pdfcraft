@@ -165,8 +165,10 @@ impl XHost {
     /// Show message box `m` and return the button picked: the next of the event's answers
     /// (headless runs); past them, the user's answer when the viewer can ask (an app's button
     /// click: the script waits on its thread, as an AcroForm script's `app.alert` does), or
-    /// else the buttons' safe default. `Err`: an answer `m`'s buttons can't give, or the
-    /// event's prompts are spent.
+    /// else the buttons' safe default. Past [`crate::interaction::MAX_PROMPTS`] questions nobody
+    /// is asked and the safe default is given, as it is when the click's questions are spent
+    /// across its script sessions: a form follows the same path either way. `Err`: an answer
+    /// `m`'s buttons can't give.
     pub(crate) fn message_box(&mut self, m: Message) -> Result<u8, String> {
         // Clipped before the viewer is asked, as the effect is: the dialog shows no more than is kept.
         let m = Message { text: clip(m.text), title: m.title.map(clip), ..m };
@@ -178,7 +180,7 @@ impl XHost {
         };
         let reply = match self.answers.get(at) {
             Some(answer) => m.buttons.reply(answer.as_deref()).ok_or_else(|| invalid(answer.as_deref()))?,
-            None if crate::interaction::has_host() => {
+            None if crate::interaction::can_ask() => {
                 let answer = crate::interaction::ask(crate::interaction::Prompt::Alert(m.clone())).map_err(|e| e.to_string())?;
                 m.buttons.reply(answer.as_deref()).ok_or_else(|| invalid(answer.as_deref()))?
             }

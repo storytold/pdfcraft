@@ -10238,15 +10238,16 @@ fn an_xfa_click_is_dropped_when_the_document_changes_while_it_asks() {
     assert_eq!(qty(&s, id), ["7"]);
 }
 
-/// A click's prompts are limited as an AcroForm script's are: past 32 the script fails, and
-/// keeps what it did before, as a failing script does.
+/// A click asks at most 32 questions; every later message box gets its buttons' safe default (No
+/// for Yes/No) without asking, and the script goes on, as it does when the click's questions are
+/// spent across its script sessions (review on #6984).
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn an_xfa_click_asks_at_most_32_questions() {
     use crate::js::{InteractiveEvent, Prompt};
     let tpl = pdfcraft_xfa::fixtures::scripted_template().replace(
         r#"xfa.host.messageBox("Hello " + qty.rawValue);"#,
-        r#"for (var i = 0; i &lt; 1000; i++) { if (xfa.host.messageBox("Again?", "", 2, 2) == 4) qty.rawValue = i + 1; }"#,
+        r#"var yes = 0; var no = 0; for (var i = 0; i &lt; 60; i++) { var a = xfa.host.messageBox("Again?", "", 2, 2); if (a == 4) yes++; else if (a == 3) no++; } qty.rawValue = yes * 10000 + no;"#,
     );
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("many.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).expect("opens");
@@ -10264,8 +10265,9 @@ fn an_xfa_click_asks_at_most_32_questions() {
     };
     assert_eq!(asked, 32);
     let o = s.finish_javascript(p, out).unwrap();
-    assert!(o.error.as_deref().is_some_and(|e| e.contains("too many interactive prompts")), "{o:?}");
-    assert_eq!(qty(&s, id), ["32"]);
+    assert!(o.error.is_none(), "the script goes on: {o:?}");
+    // 32 answered Yes; the other 28 got No without being asked.
+    assert_eq!(qty(&s, id), ["320028"]);
 }
 
 /// The 32-question limit holds for the whole click, not for each script session: a script that

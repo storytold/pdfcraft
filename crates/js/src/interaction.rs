@@ -33,6 +33,11 @@ pub(crate) fn has_host() -> bool {
 pub(crate) fn set_host(host: Option<Sender<InteractiveEvent>>) {
     HOST.with(|h| *h.borrow_mut() = host.map(|h| (h, 0)));
 }
+/// Whether the invocation may still ask: it has a prompt channel and has asked fewer than
+/// [`MAX_PROMPTS`] questions.
+pub(crate) fn can_ask() -> bool {
+    HOST.with(|h| h.borrow().as_ref().is_some_and(|(_, n)| *n < MAX_PROMPTS))
+}
 /// Charge one prompt to the invocation's budget: the channel to send it on, if the worker has one.
 fn reserve() -> JsResult<Option<Sender<InteractiveEvent>>> {
     HOST.with(|h| {
