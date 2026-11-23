@@ -19,6 +19,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::SetTemplateHidden { .. }
         | Edit::ReplacePages { .. }
         | Edit::SetPageBox { .. }
+        | Edit::ScalePages { .. }
         | Edit::SetTransition { .. }
         | Edit::InsertPagesFrom { .. }
         // "Assemble the document: insert, rotate or delete pages and create bookmarks" (Table 22).
@@ -196,6 +197,22 @@ fn note_skipped(doc: &mut pdfcraft_cos::Document, report: &pdfcraft_xfdf::Report
         if report.skipped.len() == 1 { "it" } else { "them" },
         shown.join("; ")
     ));
+}
+
+/// Scale `pages`, saying in the repair log which geospatial measures were left as they were:
+/// they now measure the scaled page.
+fn scale_pages(doc: &mut pdfcraft_cos::Document, pages: &[usize], request: crate::ScaleRequest) -> Result<(), EditError> {
+    let left = pdfcraft_organize::scale_pages(doc, pages, request)?.geo_measures_unchanged;
+    if left > 0 {
+        doc.note_repair(format!(
+            "scaling pages left {left} geospatial measure{} as {}: {} no longer match{} the scaled content",
+            if left == 1 { "" } else { "s" },
+            if left == 1 { "it was" } else { "they were" },
+            if left == 1 { "it" } else { "they" },
+            if left == 1 { "es" } else { "" }
+        ));
+    }
+    Ok(())
 }
 
 /// Up to the first five of `names`, quoted and joined, then how many more there are.
@@ -581,6 +598,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_organize::replace_pages(doc, pages, &src, src_pages)?;
         }
         Edit::SetPageBox { pages, which, spec } => pdfcraft_organize::set_page_box(doc, pages, *which, *spec)?,
+        Edit::ScalePages { pages, request } => scale_pages(doc, pages, *request)?,
         Edit::SetTransition { pages, spec } => pdfcraft_organize::set_transition(doc, pages, spec)?,
         Edit::InsertPagesFrom { name, bytes, pages, at, field_conflicts } => {
             let src = crate::sources::open_source_into(name, bytes, doc)?;

@@ -1,0 +1,246 @@
+use std::sync::Arc;
+
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, write_full};
+
+use super::*;
+use crate::pages;
+
+const A4: (f64, f64) = (595.28, 841.89);
+
+/// A document from its objects (object 1 the catalog, 2 the page tree).
+fn build(objs: &[&str]) -> Document {
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+const CONTENT: &str = "<< /Length 8 >>\nstream\n0 0 m S\nendstream";
+
+/// One Letter page holding `extra` in its dictionary.
+fn letter(extra: &str) -> Document {
+    build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        &format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R {extra} >>"),
+        CONTENT,
+    ])
+}
+
+fn request(width: f64, height: f64) -> ScaleRequest {
+    ScaleRequest { width, height, mode: ScaleMode::Fit, orientation: ScaleOrientation::Match }
+}
+
+fn page(doc: &Document, i: usize) -> Dict {
+    doc.get(pages(doc).unwrap()[i].obj).as_dict().cloned().unwrap()
+}
+
+fn rect_at(doc: &Document, d: &Dict, key: &[u8]) -> [f64; 4] {
+    rect(doc, d.get(key).unwrap()).unwrap()
+}
+
+fn size(r: [f64; 4]) -> (f64, f64) {
+    (r[2] - r[0], r[3] - r[1])
+}
+
+/// The scale and translation the page's first content stream applies.
+fn placement(doc: &Document, i: usize) -> (f64, f64, f64) {
+    let contents = page(doc, i).get(b"Contents").cloned().unwrap();
+    let first = doc.resolve(&contents).as_array().unwrap()[0].clone();
+    let Object::Stream(s) = &*doc.resolve(&first) else { panic!("a stream") };
+    let text = String::from_utf8(s.decoded().unwrap()).unwrap();
+    let cm: Vec<f64> = text.lines().find(|l| l.ends_with(" cm")).unwrap().split(' ').filter_map(|t| t.parse().ok()).collect();
+    (cm[0], cm[4], cm[5])
+}
+
+/// Where a point of the old page lands.
+fn mapped(doc: &Document, i: usize, x: f64, y: f64) -> (f64, f64) {
+    let (s, dx, dy) = placement(doc, i);
+    (s * x + dx, s * y + dy)
+}
+
+/// Within a thousandth of a point: the content stream writes six decimals.
+fn close(a: f64, b: f64) -> bool {
+    (a - b).abs() < 1e-3
+}
+
+#[test]
+fn fit_shrinks_the_whole_page_inside_the_new_size_and_centres_it() {
+    let mut doc = letter("/Annots [<< /Type /Annot /Subtype /Square /Rect [100 100 200 300] >>]");
+    let report = scale_pages(&mut doc, &[0], request(A4.0, A4.1)).unwrap();
+    let media = rect_at(&doc, &page(&doc, 0), b"MediaBox");
+    assert!(close(size(media).0, A4.0) && close(size(media).1, A4.1), "the page is the size asked for");
+    let (x0, y0) = mapped(&doc, 0, 0.0, 0.0);
+    let (x1, y1) = mapped(&doc, 0, 612.0, 792.0);
+    assert!(x0 >= -1e-3 && y0 >= -1e-3 && x1 <= A4.0 + 1e-3 && y1 <= A4.1 + 1e-3, "all of the old page shows");
+    assert!(close(x0, A4.0 - x1) && close(y0, A4.1 - y1), "the spare room is split evenly");
+    assert!(close(x1 - x0, A4.0) || close(y1 - y0, A4.1), "it touches two edges");
+    let annot = doc.resolve(page(&doc, 0).get(b"Annots").unwrap()).as_array().unwrap()[0].clone();
+    let r = rect_at(&doc, annot.as_dict().unwrap(), b"Rect");
+    let (ax, ay) = mapped(&doc, 0, 100.0, 100.0);
+    assert!(close(r[0], ax) && close(r[1], ay), "the comment moves with the content");
+    assert_eq!((report.pages.len(), report.annotations), (1, 1));
+}
+
+#[test]
+fn fill_covers_the_new_size_and_overflows_both_sides() {
+    let mut doc = letter("");
+    scale_pages(&mut doc, &[0], ScaleRequest { mode: ScaleMode::Fill, ..request(A4.0, A4.1) }).unwrap();
+    let (x0, y0) = mapped(&doc, 0, 0.0, 0.0);
+    let (x1, y1) = mapped(&doc, 0, 612.0, 792.0);
+    assert!(x0 <= 1e-3 && y0 <= 1e-3 && x1 >= A4.0 - 1e-3 && y1 >= A4.1 - 1e-3, "the content covers the page");
+    assert!(x0 < -1.0 && close(-x0, x1 - A4.0), "the overflow is split evenly");
+}
+
+#[test]
+fn the_size_follows_the_page_orientation_unless_exact() {
+    let landscape = (A4.1, A4.0);
+    let mut doc = letter("");
+    scale_pages(&mut doc, &[0], request(landscape.0, landscape.1)).unwrap();
+    let (w, h) = size(rect_at(&doc, &page(&doc, 0), b"MediaBox"));
+    assert!(w < h, "a portrait page stays portrait");
+    let mut doc = letter("");
+    scale_pages(&mut doc, &[0], ScaleRequest { orientation: ScaleOrientation::Exact, ..request(landscape.0, landscape.1) }).unwrap();
+    let (w, h) = size(rect_at(&doc, &page(&doc, 0), b"MediaBox"));
+    assert!(w > h, "exact keeps the size as given");
+}
+
+#[test]
+fn a_turned_page_gets_the_size_as_shown() {
+    let mut doc = letter("/Rotate 90");
+    scale_pages(&mut doc, &[0], ScaleRequest { orientation: ScaleOrientation::Exact, ..request(A4.1, A4.0) }).unwrap();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+    let (w, h) = pdf.pages()[0].render_dimensions();
+    assert!((f64::from(w) - A4.1).abs() < 0.01 && (f64::from(h) - A4.0).abs() < 0.01, "shown {w}×{h}");
+}
+
+#[test]
+fn a_user_unit_page_is_sized_in_points() {
+    let mut doc = letter("/UserUnit 2");
+    scale_pages(&mut doc, &[0], request(A4.0, A4.1)).unwrap();
+    let (w, h) = size(rect_at(&doc, &page(&doc, 0), b"MediaBox"));
+    assert!(close(w * 2.0, A4.0) && close(h * 2.0, A4.1));
+}
+
+#[test]
+fn every_box_present_becomes_the_new_page_and_an_offset_crop_is_what_scales() {
+    let pages_node = "<< /Type /Pages /Kids [3 0 R] /Count 1 /CropBox [100 100 400 500] >>";
+    let page_obj = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /TrimBox [10 10 600 780] /Contents 4 0 R >>";
+    let mut doc = build(&["<< /Type /Catalog /Pages 2 0 R >>", pages_node, page_obj, CONTENT]);
+    scale_pages(&mut doc, &[0], request(600.0, 800.0)).unwrap();
+    let d = page(&doc, 0);
+    let media = rect_at(&doc, &d, b"MediaBox");
+    assert_eq!(rect_at(&doc, &d, b"CropBox"), media, "an inherited crop box is overridden");
+    assert_eq!(rect_at(&doc, &d, b"TrimBox"), media);
+    assert!(!d.contains(b"BleedBox"), "absent boxes stay absent");
+    let (x0, y0) = mapped(&doc, 0, 100.0, 100.0);
+    let (x1, y1) = mapped(&doc, 0, 400.0, 500.0);
+    assert!(close(x0, 600.0 - x1) && close(y0, 800.0 - y1), "the old visible area is centred");
+    assert!(close(x1 - x0, 600.0) || close(y1 - y0, 800.0), "and fills the page one way");
+}
+
+#[test]
+fn annotation_geometry_moves_and_no_zoom_keeps_its_size() {
+    let annots = "/Annots [<< /Subtype /Ink /Rect [0 0 100 100] /InkList [[0 0 100 100]] /RD [10 10 10 10] >> \
+                  << /Subtype /Text /F 8 /Rect [300 300 320 320] >>]";
+    let mut doc = letter(annots);
+    scale_pages(&mut doc, &[0], request(306.0, 396.0)).unwrap();
+    let list = doc.resolve(page(&doc, 0).get(b"Annots").unwrap()).as_array().unwrap().clone();
+    let ink = list[0].as_dict().unwrap();
+    let stroke = ink.get(b"InkList").unwrap().as_array().unwrap()[0].as_array().unwrap().clone();
+    let end = mapped(&doc, 0, 100.0, 100.0);
+    assert!(close(stroke[2].as_f64().unwrap(), end.0) && close(stroke[3].as_f64().unwrap(), end.1), "ink follows the content");
+    assert!(ink.get(b"RD").unwrap().as_array().unwrap()[0].as_f64().unwrap() < 10.0, "margins shrink with it");
+    let note = rect_at(&doc, list[1].as_dict().unwrap(), b"Rect");
+    assert_eq!(size(note), (20.0, 20.0), "a no-zoom note keeps its size");
+    let corner = mapped(&doc, 0, 300.0, 320.0);
+    assert!(close(note[0], corner.0) && close(note[3], corner.1), "its upper-left corner moves with the page");
+}
+
+#[test]
+fn measurements_still_read_true_and_geospatial_ones_are_reported() {
+    let measure = "<< /Type /Measure /Subtype /RL /R (1 in = 1 ft) /X [<< /U (ft) /C 0.1 >>] /A [<< /U (sq ft) /C 0.01 >>] >>";
+    let annots = format!(
+        "/Annots [<< /Subtype /Line /Rect [0 0 100 100] /L [0 0 100 0] /Measure {measure} >>] /VP [<< /BBox [0 0 612 792] /Measure 5 0 R >>]"
+    );
+    let geo = "<< /Type /Measure /Subtype /GEO >>";
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        &format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R {annots} >>"),
+        CONTENT,
+        geo,
+    ]);
+    let report = scale_pages(&mut doc, &[0], request(306.0, 396.0)).unwrap();
+    let list = doc.resolve(page(&doc, 0).get(b"Annots").unwrap()).as_array().unwrap().clone();
+    let line = list[0].as_dict().unwrap();
+    let m = line.get(b"Measure").unwrap().as_dict().unwrap();
+    let c = |k: &[u8]| m.get(k).unwrap().as_array().unwrap()[0].as_dict().unwrap().get(b"C").unwrap().as_f64().unwrap();
+    let l = line.get(b"L").unwrap().as_array().unwrap().clone();
+    let length = l[2].as_f64().unwrap() - l[0].as_f64().unwrap();
+    assert!(close(length * c(b"X"), 100.0 * 0.1), "the line measures as before");
+    assert!(close(length * length * c(b"A"), 100.0 * 100.0 * 0.01), "areas too");
+    assert_eq!(report.geo_measures_unchanged, 1, "a geospatial measure is not rescaled, and said");
+}
+
+#[test]
+fn destinations_to_a_scaled_page_move_wherever_they_are() {
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 6 0 R /OpenAction [3 0 R /XYZ 100 700 0] /Dests << /a [3 0 R /FitH 500] /b [4 0 R /FitH 500] >> >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R /Annots [<< /Subtype /Link /Rect [0 0 9 9] /A << /S /GoTo /D [3 0 R /FitR 10 20 30 40] >> >>] >>",
+        CONTENT,
+        "<< /Type /Outlines /First 7 0 R /Last 7 0 R /Count 1 >>",
+        "<< /Title (One) /Parent 6 0 R /Dest [3 0 R /XYZ null 600 null] >>",
+    ]);
+    let report = scale_pages(&mut doc, &[0], request(306.0, 396.0)).unwrap();
+    assert_eq!(report.destinations, 4);
+    let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+    let open = catalog.get(b"OpenAction").unwrap().as_array().unwrap().clone();
+    let at = mapped(&doc, 0, 100.0, 700.0);
+    assert!(close(open[2].as_f64().unwrap(), at.0) && close(open[3].as_f64().unwrap(), at.1));
+    assert_eq!(open[4], Object::Int(0), "the zoom is kept");
+    let item = doc.get(ObjRef::new(7, 0)).as_dict().unwrap().get(b"Dest").unwrap().as_array().unwrap().clone();
+    assert_eq!(item[2], Object::Null, "a null coordinate stays unchanged");
+    assert!(close(item[3].as_f64().unwrap(), mapped(&doc, 0, 0.0, 600.0).1));
+    let dests = catalog.get(b"Dests").unwrap().as_dict().unwrap();
+    assert_eq!(dests.get(b"b").unwrap().as_array().unwrap()[2], Object::Int(500), "a destination on another page is left alone");
+}
+
+#[test]
+fn a_comment_shared_by_two_pages_moves_once() {
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R /Annots [6 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R /Annots [6 0 R] >>",
+        CONTENT,
+        "<< /Subtype /Square /Rect [100 100 200 200] >>",
+    ]);
+    scale_pages(&mut doc, &[0, 1], request(306.0, 396.0)).unwrap();
+    let r = rect_at(&doc, doc.get(ObjRef::new(6, 0)).as_dict().unwrap(), b"Rect");
+    let at = mapped(&doc, 0, 100.0, 100.0);
+    assert!(close(r[0], at.0) && close(r[1], at.1), "moved by one page's placement, not twice");
+}
+
+#[test]
+fn bad_requests_change_nothing() {
+    let mut doc = letter("");
+    let before = page(&doc, 0);
+    for (w, h) in [(0.0, 100.0), (f64::NAN, 100.0), (100.0, f64::INFINITY), (0.5, 100.0)] {
+        assert!(matches!(scale_pages(&mut doc, &[0], request(w, h)), Err(OrganizeError::InvalidBox(_))), "{w}×{h}");
+    }
+    assert_eq!(scale_pages(&mut doc, &[0, 3], request(100.0, 100.0)), Err(OrganizeError::NoSuchPage(3)));
+    assert_eq!(page(&doc, 0), before);
+}
