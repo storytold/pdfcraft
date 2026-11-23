@@ -48,7 +48,7 @@ fn assert_resolved(name: &str, version: &str, url: &str, rev: &str) {
 /// files remain.
 #[test]
 fn vendor_provenance_window_stack_graph_is_resolved() {
-    assert_resolved("winit", "0.30.13", "https://github.com/storytold/winit.git", "a517b3846ee8457d84ee4975110bfda6797c44dc");
+    assert_resolved("winit", "0.30.13", "https://github.com/storytold/winit.git", "934cb6a6406c794772c66654742f10445f32d0d9");
     assert_resolved("egui-wgpu", "0.37.0", "https://github.com/storytold/egui.git", "725a39fca940f77149ffbb9c58eef405a16997bc");
     // Retained provenance: the audited copies and their recorded W1–W13 / E2+E3 rows.
     let readme = std::fs::read_to_string(root().join("vendor/README.md")).expect("vendor/README.md");
