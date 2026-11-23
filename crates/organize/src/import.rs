@@ -31,7 +31,7 @@ mod combine;
 mod copy;
 mod fields;
 
-use carry::{Mark, source_outline, write_outline_level};
+use carry::{Mark, shown_count, source_outline, write_outline_level};
 pub(crate) use carry::{set_attachments, set_attachments_exact};
 pub use combine::{
     CombineOutcome, Combiner, Run, SplitBy, combine, combine_grouped, combine_grouped_with, combine_selected, combine_selected_with, combine_with,
@@ -53,6 +53,30 @@ pub enum FieldConflicts {
     /// The older behaviour: a field that arrives with a taken name becomes one field with the
     /// one already there. Duplicate, Replace, Extract and Split always use it.
     Merge,
+}
+
+/// How Combine Files builds its result. A [`FieldConflicts`] converts into the defaults with that
+/// resolution, so the `_with` functions take either.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CombineOptions {
+    /// How colliding field names are resolved as each file is added.
+    pub field_conflicts: FieldConflicts,
+    /// Give each file a top-level bookmark (its title, at its first page) holding the file's own
+    /// bookmarks, like Acrobat's Combine Files (the default). Off, no bookmark is added: the
+    /// files' own bookmarks are the top level of the result, in file order (#3679).
+    pub file_bookmarks: bool,
+}
+
+impl Default for CombineOptions {
+    fn default() -> Self {
+        Self { field_conflicts: FieldConflicts::Rename, file_bookmarks: true }
+    }
+}
+
+impl From<FieldConflicts> for CombineOptions {
+    fn from(field_conflicts: FieldConflicts) -> Self {
+        Self { field_conflicts, ..Self::default() }
+    }
 }
 
 /// What [`import_pages_with`] did beyond placing the pages.
@@ -137,10 +161,10 @@ fn insert_file_bookmark(doc: &mut Document, mark: &Mark, after: usize) -> Result
     let mut d = Dict::new();
     d.set(b"Title".to_vec(), Object::String(pdfcraft_cos::PdfString::text(&mark.title)));
     d.set(b"Dest".to_vec(), Object::Array(vec![Object::Ref(mark.page), Object::name("Fit")]));
-    if let Some((f, l, n)) = write_outline_level(doc, item, &mark.outline)? {
+    if let Some((f, l, _)) = write_outline_level(doc, item, &mark.outline)? {
         d.set(b"First".to_vec(), Object::Ref(f));
         d.set(b"Last".to_vec(), Object::Ref(l));
-        d.set(b"Count".to_vec(), Object::Int(-(n as i64))); // collapsed
+        d.set(b"Count".to_vec(), Object::Int(-shown_count(&mark.outline))); // collapsed
     }
     doc.set(item, Object::Dict(d));
     let mut top = crate::outline::children(doc, root);

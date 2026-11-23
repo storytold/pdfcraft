@@ -477,7 +477,8 @@ impl PdfCraftApp {
         let sources: Vec<(String, Arc<Vec<u8>>, Option<String>)> =
             files.iter().map(|f| (title_of(&f.name).to_string(), f.bytes.clone(), Some(f.range.clone()).filter(|r| !r.trim().is_empty()))).collect();
         let passwords: Vec<Option<&str>> = files.iter().map(|f| f.password.as_ref().map(|p| p.0.as_str())).collect();
-        match self.session.combine_grouped(&sources, &groups, &passwords) {
+        let options = pdfcraft_engine::CombineOptions { file_bookmarks: self.combine_file_bookmarks, ..Default::default() };
+        match self.session.combine_grouped_reporting(&sources, &groups, &passwords, options).map(|c| c.bytes) {
             Ok(bytes) => {
                 self.close_combine_tab();
                 let message = crate::i18n::fmt(tl!("Combined {n} files"), &[("n", &count.to_string())]);

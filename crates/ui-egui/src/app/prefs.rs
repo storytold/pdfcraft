@@ -190,6 +190,7 @@ impl PdfCraftApp {
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
         v["text_links"] = serde_json::Value::Bool(self.text_links);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
+        v["combine_file_bookmarks"] = serde_json::Value::Bool(self.combine_file_bookmarks);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language;
         // a custom paper is stored by the name it was given.
         let d = &self.print_draft;
@@ -232,6 +233,9 @@ impl PdfCraftApp {
         // Clamped like any grid zoom when the grid next shows; nonsense keeps the usual size.
         if let Some(zoom) = v["organize_zoom"].as_f64().map(|z| z as f32).filter(|z| z.is_finite()) {
             self.organize_zoom = zoom.clamp(*canvas::GRID_ZOOM_RANGE.start(), *canvas::GRID_ZOOM_RANGE.end());
+        }
+        if let Some(on) = v["combine_file_bookmarks"].as_bool() {
+            self.combine_file_bookmarks = on;
         }
         if let Ok(r) = serde_json::from_value::<Vec<RecentFile>>(v["recent"].clone()) {
             // Entries whose files are gone leave once the window is up: asking here could block
