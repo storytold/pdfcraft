@@ -36,8 +36,8 @@ workspace and Save target stay selected. Click the downloaded file's tab to swit
   the server send `Content-Encoding: br`.
 - **Caching:** `Cache-Control: public, max-age=31536000, immutable` on the hashed `.wasm` and
   `.js` files, and `no-cache` on `index.html`.
-- **HTTPS:** WebGPU (and the clipboard) only work in a secure context, which means `https://`
-  or `http://localhost`. Over plain HTTP elsewhere, the app falls back to WebGL2.
+- **HTTPS:** the clipboard only works in a secure context, which means `https://` or
+  `http://localhost`.
 - **Opener isolation:** send `Cross-Origin-Opener-Policy: same-origin` (the sample `_headers`
   and `.htaccess` do; Apache needs `mod_headers` for it). Pages opened from a document's links
   then can't reach or navigate the PdfCraft tab. The app opens links with `noopener` already;
@@ -104,9 +104,11 @@ From a source build, `trunk build --release` doesn't fetch the models. Add them 
   that partition or block third-party storage may forget them between visits, and the app
   then starts with defaults.
 - **Sandboxed iframes** need at least
-  `sandbox="allow-scripts allow-same-origin allow-downloads allow-popups"`. Without
-  `allow-same-origin` there's no storage. Without `allow-downloads`, Save and Export (browser
-  downloads) are blocked.
+  `sandbox="allow-scripts allow-same-origin allow-downloads"`. Without `allow-same-origin`
+  there's no storage. Without `allow-downloads`, Save and Export (browser downloads) are blocked.
+  `allow-popups` is optional: it lets links open in a new tab (help and documentation, the
+  releases page, community links, and links in a document once the user allows them). Without
+  it they do nothing. `?embedded` on the iframe `src` hides the community links; the others stay.
 - Don't send `X-Frame-Options: DENY` or a `frame-ancestors` CSP that excludes the embedding page.
 
 ## Same-document host mode (no iframe)
@@ -179,20 +181,20 @@ const { data } = await pdfcraft.screenshot();           // the window as PNG (ba
 
 Opening a PDF, handing a saved or exported file to the page, the file name and the unsaved flag stay with the host messages above.
 
-## Renderer selection and fallback flags
+## URL query flags
 
-PdfCraft renders with wgpu. It uses **WebGPU** when the browser has it and falls back to
-**WebGL2** on its own. URL query flags override this, and they work on the iframe `src` too:
+URL query flags configure startup behavior. They work on the iframe `src` too.
 
 | Flag | Effect |
 |---|---|
-| *(none)* | WebGPU if available, otherwise WebGL2 |
-| `?webgl` | Force the WebGL2 backend (useful when a WebGPU driver misbehaves) |
-| `?cpu` | Force the CPU canvas path (slowest, most compatible) |
+| `?embedded` | Hide external community links (welcome screen card and header bar Discord button) |
 
-For example: `<iframe src="https://example.com/pdfcraft/?webgl" ...>`.
+For example: `<iframe src="https://example.com/pdfcraft/?embedded" ...>`.
 
-A browser with neither WebGPU nor WebGL2 gets a message in place of the app.
+PdfCraft renders with eframe's Glow renderer. It uses **WebGL2**, or WebGL1 when the browser has
+no WebGL2. No flag changes the renderer. In a browser with neither, the app doesn't start and the
+page stays blank: the error goes to the browser console, and a connected host gets the `failed`
+message.
 
 The build uses WebAssembly SIMD (`.cargo/config.toml`), which reads a scanned page about 2.4
 times faster. Every current browser has it (Chrome and Edge 91, Firefox 89, Safari 16.4 and

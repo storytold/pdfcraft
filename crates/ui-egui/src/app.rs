@@ -206,6 +206,7 @@ impl PdfCraftApp {
             os_events: None,
             host_save: None,
             host_dirty: None,
+            embedded: false,
             close_request: None,
             save_prompt_button: Default::default(),
             save_prompt_seen: false,
