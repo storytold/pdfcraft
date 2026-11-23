@@ -20,6 +20,7 @@ use crate::{
 };
 
 mod editing;
+pub(crate) use editing::prepare_ocr_text_edit;
 mod files;
 mod save;
 mod view;

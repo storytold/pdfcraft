@@ -137,7 +137,17 @@ impl Document {
         guard(|| {
             let editor = self.editor.as_ref().ok_or("the document can't be read")?;
             let mut cos = editor.cos.clone();
-            pdfcraft_edit::rewrite_block(&mut cos, page, block, Some(text), style).map_err(|e| e.to_string())?;
+            // An unchanged paragraph is the page as it is: `text_edit_layout` reports its source
+            // geometry, which a rewrite would not keep exactly (it drops the source's TJ spacing).
+            let unchanged = *style == pdfcraft_edit::BlockStyle::default()
+                && editor.text_blocks(page).ok().is_some_and(|blocks| blocks.get(block).is_some_and(|b| b.editor_text == text));
+            // The same scan cover, ink and changed-words rewrite Apply makes of an OCR paragraph.
+            let edit = crate::Edit::EditTextBlock { page, block, text: text.to_owned(), style: style.clone() };
+            if !unchanged
+                && let Some(crate::Edit::EditTextBlock { text, style, .. }) = crate::session::prepare_ocr_text_edit(editor, &self.info, edit)
+            {
+                pdfcraft_edit::rewrite_block(&mut cos, page, block, Some(&text), &style).map_err(|e| e.to_string())?;
+            }
             let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())?);
             Ok(TextEditPreview { page, bytes, config: self.config.clone() })
         })?
