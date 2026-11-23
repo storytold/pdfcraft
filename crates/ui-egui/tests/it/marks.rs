@@ -414,6 +414,47 @@ fn preview_step(h: &mut Harness<'static, PdfCraftApp>, label: &str, now: &str) {
 }
 
 #[test]
+fn header_footer_preview_expands_tokens_for_the_page_shown() {
+    use pdfcraft_ui_egui::marks::{PageRange, Subset};
+
+    let mut h = harness_with(content_fixture());
+    let session = &mut h.state_mut().session;
+    *session = std::mem::take(session).with_clock(|| 1_700_000_000);
+    let (year, month, day) = h.state().session.today();
+    assert!(h.state_mut().execute("edit.bates"));
+    h.state_mut().marks_draft.hf.text[0] = "Page <<1>> of <<n>>".into();
+    h.state_mut().marks_draft.hf.text[2] = "Date <<m/d/yyyy>>".into();
+    let (_, page, _) = wait_for_picture(&mut h, 0);
+    painted(&h, "000001", page);
+    painted(&h, "Page 1 of 2", page);
+    let text_on_preview: Vec<_> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if page.contains(text.galley.rect.translate(text.pos.to_vec2()).center()) => Some(text.galley.text()),
+            _ => None,
+        })
+        .collect();
+    assert!(!text_on_preview.contains(&"Bates Number#6#1##"));
+    painted(&h, &format!("Date {month}/{day}/{year}"), page);
+
+    preview_step(&mut h, "Next page", "Preview: page 1 of 2");
+    let (_, page, _) = wait_for_picture(&mut h, 1);
+    painted(&h, "000002", page);
+    painted(&h, "Page 2 of 2", page);
+
+    // Page 2 is now first in the range, so it gets the starting numbers.
+    let draft = &mut h.state_mut().marks_draft;
+    draft.range = PageRange { all: false, from: 2, to: 2, subset: Subset::All };
+    draft.hf.start_number = 17;
+    h.run_steps(2);
+    let (_, page, _) = wait_for_picture(&mut h, 1);
+    painted(&h, "000001", page);
+    painted(&h, "Page 17 of 2", page);
+}
+
+#[test]
 fn the_preview_steps_through_the_pages_and_starts_at_the_current_one() {
     let mut h = harness();
     h.state_mut().views[0].go_to_page(1);

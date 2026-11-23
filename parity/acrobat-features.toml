@@ -2501,8 +2501,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.header_footer"]
 tools = ["doc_header_footer"]
-evidence = ["crates/edit/src/tests.rs::tokens_expand", "crates/engine/src/tests.rs::headers_footers_watermarks_and_backgrounds_show_update_and_remove"]
-notes = "<<1>>, <<n>>, <<1 of n>>, <<Page 1 of n>>, dates (US, ISO, day-first with slashes and the dotted <<dd.mm.yyyy>>, <<d.m.yyyy>>, <<dd.mm.yy>>, <<d.m.yy>>), Bates. Month names are English only"
+evidence = ["crates/ui-egui/tests/it/marks.rs::header_footer_preview_expands_tokens_for_the_page_shown", "crates/edit/src/tests.rs::tokens_expand", "crates/engine/src/tests.rs::headers_footers_watermarks_and_backgrounds_show_update_and_remove"]
+notes = "<<1>>, <<n>>, <<1 of n>>, <<Page 1 of n>>, dates (US, ISO, day-first with slashes and the dotted <<dd.mm.yyyy>>, <<d.m.yyyy>>, <<dd.mm.yy>>, <<d.m.yy>>), Bates. Month names are English only. The Header & Footer preview expands the tokens for the displayed page using the same numbering and date as Apply (#8064)."
 
 [[feature]]
 id = "edit.header-footer-ranges"

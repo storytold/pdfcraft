@@ -128,6 +128,12 @@ impl Session {
         self.apply_reporting(id, edit).map(|_| ())
     }
 
+    /// Header and footer text for one page at `offset` in the selected pages, as Apply expands
+    /// it today. `count` is the total number of pages in the document.
+    pub fn header_footer_preview(&self, settings: &crate::HeaderFooter, offset: usize, count: usize) -> Result<[String; 6], EditError> {
+        settings.preview_text(offset, count, &pdfcraft_edit::Context { date: self.today() }).map_err(Into::into)
+    }
+
     /// Edit a PDF ▸ Edit text: make the grouped text on `page` (0-based) editable, as one undoable
     /// [`Edit::PrepareText`], and say what it prepared, which fonts' maps it repaired and which
     /// groups it left as they were (and why). The counts are this edit's own, not a preview's.

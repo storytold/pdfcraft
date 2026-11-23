@@ -652,6 +652,12 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
     let tint =
         if kind == MarkKind::Background && !d.use_file { background_tint(d, d.backdrops.found(doc, target).flatten()) } else { Color32::WHITE };
     let hf = d.hf.clone();
+    let selected_pages = d.range.pages(count);
+    let hf_text = if kind == MarkKind::HeaderFooter {
+        selected_pages.iter().position(|&page| page == target).and_then(|offset| app.session.header_footer_preview(&hf, offset, count).ok())
+    } else {
+        None
+    };
     let size_h = page.1.max(1.0);
     let (wm, fit) = (d.wm.clone(), d.fit);
     let file_name = d.use_file.then(|| d.file.as_ref().map(|f| f.0.clone())).flatten();
@@ -666,11 +672,10 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     let content = Rect::from_center_size(band.center(), vec2(r.width() * k, band.height().max(0.0)));
                     p.rect_filled(content, CornerRadius::ZERO, Color32::from_gray(232));
                 }
-                for (k, text) in hf.text.iter().enumerate() {
+                for (k, text) in hf_text.iter().flatten().enumerate() {
                     if text.trim().is_empty() {
                         continue;
                     }
-                    let shown = text.replace("<<", "").replace(">>", "");
                     let y = if k < 3 { r.top() + hf.margins[0] as f32 * s } else { r.bottom() - hf.margins[1] as f32 * s };
                     let (x, align) = match k % 3 {
                         0 => (r.left() + hf.margins[2] as f32 * s, egui::Align2::LEFT_CENTER),
@@ -680,7 +685,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     // Courier previews in the monospaced UI face, the others proportional.
                     let size = (hf.font_size as f32 * s).max(5.0);
                     let font = if hf.font == FontFamily::Courier { egui::FontId::monospace(size) } else { egui::FontId::proportional(size) };
-                    p.text(pos2(x, y), align, shown, font, rgb32(hf.color));
+                    p.text(pos2(x, y), align, text, font, rgb32(hf.color));
                 }
             }
             MarkKind::Watermark if file_name.is_some() => {
@@ -742,7 +747,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     d.preview = next.or(d.preview);
                 }
             });
-            let n = d.range.pages(count).len();
+            let n = selected_pages.len();
             let applies =
                 if n == 1 { tl!("Applies to 1 page").to_string() } else { crate::i18n::fmt(tl!("Applies to {n} pages"), &[("n", &n.to_string())]) };
             ui.label(egui::RichText::new(applies).small().color(t.text_faint));

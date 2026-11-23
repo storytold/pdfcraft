@@ -135,6 +135,17 @@ impl Default for HeaderFooter {
 }
 
 impl HeaderFooter {
+    pub(crate) fn numbering(&self) -> HeaderFooterNumbering {
+        HeaderFooterNumbering { start: self.start_number, bates_start: self.text.iter().find_map(|text| bates_start(text)).unwrap_or(1) }
+    }
+
+    /// Expand the six templates for a page at `offset` in the selected pages. `count` is the
+    /// total number of pages in the document, even if only some of them are selected.
+    pub fn preview_text(&self, offset: usize, count: usize, cx: &Context) -> Result<[String; 6], EditError> {
+        let (number, bates) = self.numbering().at(offset)?;
+        Ok(std::array::from_fn(|slot| expand(&self.text[slot], number, count, bates, cx)))
+    }
+
     /// The first character [`add_header_footer`] would refuse, because neither the standard
     /// fonts nor (for Thai) the Thai face can draw it (#125). Tokens only add ASCII (Bates
     /// prefixes and suffixes are part of the template), so checking the templates, split as
@@ -298,6 +309,49 @@ pub struct Context {
     pub date: (i64, u32, u32),
 }
 
+pub(crate) struct HeaderFooterNumbering {
+    start: u32,
+    bates_start: u64,
+}
+
+impl HeaderFooterNumbering {
+    /// Check the last offset before writing anything. The same calculation is used per page.
+    pub(crate) fn check(&self, count: usize) -> Result<(), EditError> {
+        let last = count.saturating_sub(1);
+        if self.page_number(last).is_none() {
+            return Err(EditError::Invalid(format!(
+                "the header start number {} leaves no room for {} pages (page numbers stop at {})",
+                self.start,
+                count,
+                u32::MAX
+            )));
+        }
+        if self.bates_number(last).is_none() {
+            return Err(EditError::Invalid(format!(
+                "the Bates start number {} leaves no room for {} pages (Bates numbers stop at {})",
+                self.bates_start,
+                count,
+                u64::MAX
+            )));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn at(&self, offset: usize) -> Result<(u32, u64), EditError> {
+        let page = self.page_number(offset).ok_or_else(|| EditError::Invalid("the header page numbers are too large".into()))?;
+        let bates = self.bates_number(offset).ok_or_else(|| EditError::Invalid("the Bates numbers are too large".into()))?;
+        Ok((page, bates))
+    }
+
+    fn page_number(&self, offset: usize) -> Option<u32> {
+        self.start.checked_add(u32::try_from(offset).ok()?)
+    }
+
+    fn bates_number(&self, offset: usize) -> Option<u64> {
+        self.bates_start.checked_add(u64::try_from(offset).ok()?)
+    }
+}
+
 // Model-derived transforms can contain tiny scale factors; retain their PDF decimal precision.
 pub(crate) fn matrix_number(value: f64) -> String {
     let mut bytes = Vec::new();
@@ -323,12 +377,23 @@ pub fn expand(template: &str, page_number: u32, count: usize, bates: u64, cx: &C
     let (y, m, d) = cx.date;
     let mut out = String::new();
     let mut rest = template;
+    let mut closing = None;
     while let Some(start) = rest.find("<<") {
         out.push_str(&rest[..start]);
         let after = &rest[start + 2..];
-        let Some(end) = after.find(">>") else {
-            out.push_str(&rest[start..]);
-            return out;
+        let after_offset = template.len() - after.len();
+        // An unrecognized token retries at the next '<'. Reuse its closing delimiter so a
+        // pasted run of opening brackets does not repeatedly scan the tail during preview.
+        let end = match closing.and_then(|offset: usize| offset.checked_sub(after_offset)) {
+            Some(end) => end,
+            None => {
+                let Some(end) = after.find(">>") else {
+                    out.push_str(&rest[start..]);
+                    return out;
+                };
+                closing = Some(after_offset + end);
+                end
+            }
         };
         let token = &after[..end];
         let p = page_number;
