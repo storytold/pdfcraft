@@ -89,18 +89,21 @@ pub struct ImageSelection {
     /// A move or resize applied on release: the frame it had and the one it got, in the page's
     /// 0..1 coordinates, while the page raster still has the picture where it was.
     pub settled: Option<(Rect, Rect)>,
+    /// Alignment guidelines.
+    pub snap_guides: Vec<crate::tools::snap_guides::GuideLine>,
 }
 
 impl ImageSelection {
     /// Select a page image without an active gesture.
     pub fn at(page: usize, index: usize) -> Self {
-        Self { page, index, drag: None, crop: None, turning: false, settled: None }
+        Self { page, index, drag: None, crop: None, turning: false, settled: None, snap_guides: Vec::new() }
     }
 
     /// Cancel an in-progress text, rotation or crop drag and restore the crop it was previewing.
     pub(crate) fn cancel_pointer_gesture(&mut self) {
         self.drag = None;
         self.turning = false;
+        self.snap_guides.clear();
         if let Some(crop) = &mut self.crop
             && let Some((_, _, before)) = crop.drag.take()
         {
@@ -813,6 +816,9 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
                 draw_handle(painter, h, false, is_hovered, false, ACCENT);
             }
         }
+        if let Some(s) = view.image_selection.as_ref().filter(|s| s.drag.is_none() && !s.snap_guides.is_empty()) {
+            crate::tools::snap_guides::paint_guides(painter, &s.snap_guides, Some(xf.rect));
+        }
 
         // A drag of the selected picture takes what its press was on ([`body_hit`], [`handle_hit`]):
         // the rotate knob turns it, a grip resizes it, the picture itself moves. The knob and the
@@ -896,7 +902,19 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
                             apply_resize(drag.initial_rect, handle, delta)
                         }
                     }
-                    DragTarget::Move => drag.initial_rect.translate(p - drag.start),
+                    DragTarget::Move => {
+                        let mut r = drag.initial_rect.translate(p - drag.start);
+                        let shift = ui.input(|inp| inp.modifiers.shift);
+                        if !shift {
+                            let other_images = boxes.iter().enumerate().filter(|(idx, _)| *idx != i).map(|(_, b)| *b);
+                            let text_targets = doc.text_blocks(page).into_iter().map(|l| xf.user_rect(info, page, l.rect.map(|v| v as f32)));
+                            let targets: Vec<Rect> = other_images.chain(text_targets).chain(std::iter::once(xf.rect)).collect();
+                            let snap = crate::tools::snap_guides::snap_rect(r, targets, crate::tools::snap_guides::SNAP_THRESHOLD);
+                            r = r.translate(snap.offset);
+                            crate::tools::snap_guides::paint_guides(painter, &snap.guides, Some(xf.rect));
+                        }
+                        r
+                    }
                     _ => drag.initial_rect,
                 };
 
@@ -935,6 +953,7 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
                 if resp.drag_stopped() || !ptr.primary_down {
                     if let Some(s) = view.image_selection.as_mut() {
                         s.drag = None;
+                        s.snap_guides.clear();
                         let norm = |r: Rect| {
                             let ((u0, v0), (u1, v1)) = (xf.screen_to_norm(r.min), xf.screen_to_norm(r.max));
                             Rect::from_two_pos(Pos2::new(u0, v0), Pos2::new(u1, v1))
@@ -962,6 +981,19 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
 
             let (m_new, cursor_icon) = match drag.target {
                 DragTarget::Move => {
+                    let mut snap_offset = egui::Vec2::ZERO;
+                    let shift = ui.input(|inp| inp.modifiers.shift);
+                    if !shift {
+                        let r = b.translate(p - drag.start);
+                        let other_images = boxes.iter().enumerate().filter(|(idx, _)| *idx != i).map(|(_, b)| *b);
+                        let text_targets = doc.text_blocks(page).into_iter().map(|l| xf.user_rect(info, page, l.rect.map(|v| v as f32)));
+                        let targets: Vec<Rect> = other_images.chain(text_targets).chain(std::iter::once(xf.rect)).collect();
+                        let snap = crate::tools::snap_guides::snap_rect(r, targets, crate::tools::snap_guides::SNAP_THRESHOLD);
+                        snap_offset = snap.offset;
+                        crate::tools::snap_guides::paint_guides(painter, &snap.guides, Some(xf.rect));
+                    }
+                    let snapped_p = p + snap_offset;
+                    let (px, py) = screen_to_user(xf, info, page, snapped_p);
                     let (dx, dy) = (px - sx, py - sy);
                     (Matrix([a0, b0, c0, d0, e0 + dx, f0 + dy]), egui::CursorIcon::Move)
                 }
@@ -993,10 +1025,12 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
             if resp.drag_stopped() || !ptr.primary_down {
                 if let Some(s) = view.image_selection.as_mut() {
                     s.drag = None;
+                    s.snap_guides.clear();
                 }
                 if m_new.0 != drag.initial_matrix {
                     if matches!(drag.target, DragTarget::Move) {
-                        let (dx, dy) = (px - sx, py - sy);
+                        let dx = m_new.0[4] - e0;
+                        let dy = m_new.0[5] - f0;
                         let new_rect = [image.rect[0] + dx, image.rect[1] + dy, image.rect[2] + dx, image.rect[3] + dy];
                         view.pending_edit = Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::Move(new_rect) });
                     } else if let Some(inv) = Matrix(drag.initial_matrix).invert() {

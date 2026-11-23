@@ -4992,6 +4992,7 @@ fn tiny_image_crop_handle_drag_does_not_panic() {
         crop: Some(pdfcraft_ui_egui::CropMode::new([100.0, 100.0, 105.0, 105.0])),
         turning: false,
         settled: None,
+        snap_guides: Vec::new(),
     });
     h.run_steps(1);
 
@@ -9820,7 +9821,7 @@ fn arrange_duplicate_image_clears_selection_when_ambiguous() {
 
     // Select the second occurrence (index 1)
     h.state_mut().views[0].image_selection =
-        Some(pdfcraft_ui_egui::ImageSelection { page: 0, index: 1, drag: None, crop: None, turning: false, settled: None });
+        Some(pdfcraft_ui_egui::ImageSelection { page: 0, index: 1, drag: None, crop: None, turning: false, settled: None, snap_guides: Vec::new() });
     h.run_steps(2);
 
     // Arrange send to back
@@ -9878,7 +9879,7 @@ fn arrange_unique_image_preserves_selection() {
 
     // Select FigA at index 0 and bring it to front (should move after FigB, becoming index 1)
     h.state_mut().views[0].image_selection =
-        Some(pdfcraft_ui_egui::ImageSelection { page: 0, index: 0, drag: None, crop: None, turning: false, settled: None });
+        Some(pdfcraft_ui_egui::ImageSelection { page: 0, index: 0, drag: None, crop: None, turning: false, settled: None, snap_guides: Vec::new() });
     h.run_steps(2);
 
     let applied = h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage {
@@ -9934,7 +9935,7 @@ fn undo_arrange_re_resolves_image_selection_or_clears() {
 
     // Select FigA (back image, index 0)
     h.state_mut().views[0].image_selection =
-        Some(pdfcraft_ui_egui::ImageSelection { page: 0, index: 0, drag: None, crop: None, turning: false, settled: None });
+        Some(pdfcraft_ui_egui::ImageSelection { page: 0, index: 0, drag: None, crop: None, turning: false, settled: None, snap_guides: Vec::new() });
     h.run_steps(2);
 
     // Bring to front
