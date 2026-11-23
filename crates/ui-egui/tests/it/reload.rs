@@ -124,6 +124,25 @@ fn a_rebuilt_file_reloads_in_place_keeping_the_page_and_zoom() {
 }
 
 #[test]
+fn automatic_reload_shows_a_dismissible_notice() {
+    let file = TempPdf::new("reload-notice", &fixture(2));
+    let mut h = harness(&file.path);
+    let message = "This document changed on disk and was reloaded.";
+    assert!(h.query_by_label(message).is_none(), "opening the file does not show a reload notice");
+
+    for page_count in [3, 4] {
+        file.rebuild(&fixture(page_count));
+        h.run_steps(3);
+        assert_eq!(pages(&h), page_count, "the watcher reloaded the new version");
+        h.get_by_label(message);
+
+        h.get_by_label("Dismiss").click();
+        h.run_steps(2);
+        assert!(h.query_by_label(message).is_none(), "the notice stays dismissed until the next reload");
+    }
+}
+
+#[test]
 fn a_watched_label_replacement_keeps_the_display_mode_and_focused_page() {
     use pdfcraft_engine::{Edit, LabelStyle, Session};
     use pdfcraft_ui_egui::canvas::display_token;
@@ -247,10 +266,12 @@ fn unsaved_changes_are_kept_until_reload_is_chosen() {
     h.run_steps(3);
     assert_eq!((pages(&h), dirty(&h)), (2, true), "not replaced behind the user's back");
     h.get_by_label_contains("This file changed on disk");
+    assert!(h.query_by_label("This document changed on disk and was reloaded.").is_none());
     h.get_by_label("Reload").click();
     h.run_steps(3);
     assert_eq!((pages(&h), dirty(&h)), (4, false), "replaced when asked");
     assert!(h.query_by_label_contains("This file changed on disk").is_none());
+    assert!(h.query_by_label("This document changed on disk and was reloaded.").is_none());
 }
 
 #[test]

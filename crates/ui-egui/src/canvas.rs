@@ -522,6 +522,8 @@ pub struct DocView {
     /// The file changed on disk while this document had unsaved changes: the notice bar asks
     /// before replacing it (#431).
     pub disk_changed: bool,
+    /// This tab's file was automatically reloaded. Show the notice until dismissed.
+    pub(crate) disk_reloaded: bool,
     /// The snapshot notice bar's Close was clicked: the tab closes at the top of the next
     /// frame, where no document borrow is held (the bar itself can't close it).
     pub close_requested: bool,
@@ -1077,6 +1079,7 @@ impl DocView {
             notice_dismissed: false,
             scripts_off_noted: false,
             disk_changed: false,
+            disk_reloaded: false,
             close_requested: false,
             snapshot: None,
             cover: false,
