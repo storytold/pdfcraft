@@ -270,7 +270,7 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
     // Revocation evidence embedded in the document security store, if any. A verified
     // revocation is final: later blocks must not soften the verdict.
     let signer = info.chain.first().cloned();
-    let revocation = check_dss_revocation(doc, signer.as_ref(), at, info);
+    let revocation = check_dss_revocation(doc, signer.as_ref(), &pool, at, info);
     let revoked = revocation == DssRevocation::Revoked;
     // Changes after signing.
     let mut locks = Locked::Kept;
@@ -511,14 +511,20 @@ fn current_time() -> Time {
 /// Only evidence whose signature verifies against the issuer counts; returns whether the
 /// certificate is revoked (which invalidates the signature), or whether a cap kept the check from
 /// reading all of the evidence.
-fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: Time, info: &mut SignatureInfo) -> DssRevocation {
+///
+/// The issuer is the chain's, else the certificate in `pool` named as the signer's issuer whose
+/// key signed it. The chain leaves out an issuer that is not valid at `at` (one that has expired
+/// since, say), but that issuer's evidence still speaks for the signer: it can only revoke it or
+/// report it good, never make it trusted.
+fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, pool: &[Certificate], at: Time, info: &mut SignatureInfo) -> DssRevocation {
     use crate::revocation::{CertificateList, OcspResponse, RevocationStatus};
     let Some(signer) = signer else { return DssRevocation::NotRevoked };
     let Some(root) = doc.root() else { return DssRevocation::NotRevoked };
     let Some(dss) = doc.get(root).as_dict().and_then(|c| c.get(b"DSS").cloned()).map(|d| doc.resolve(&d)).and_then(|d| d.as_dict().cloned()) else {
         return DssRevocation::NotRevoked;
     };
-    let issuer = info.chain.get(1).unwrap_or(signer);
+    let issuer =
+        info.chain.get(1).or_else(|| pool.iter().find(|c| c.subject.raw == signer.issuer.raw && signer.signed_by(&c.public_key))).unwrap_or(signer);
     // A verified revocation wins; "good" from any covering evidence is reported, but never
     // contradicts a revocation.
     let mut revoked = None;

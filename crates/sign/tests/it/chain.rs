@@ -196,6 +196,30 @@ fn verdict(leaf: Party, embedded: Vec<Certificate>, anchor: &Certificate) -> (St
     (s.status, s.details.iter().map(|d| d.message.clone()).collect())
 }
 
+/// An issuer that has expired no longer vouches for the signer, so the chain leaves it out, but
+/// its CRL still counts: a directly trusted signer that the CRL revokes is invalid, not valid.
+#[test]
+fn an_expired_issuers_crl_still_revokes_a_directly_trusted_signer() {
+    use pdfcraft_sign::DigestAlg;
+    use pdfcraft_sign::dss::{self, Evidence};
+    let r = issue("Expired Root", None, (2020, 2021), &[basic_constraints(true, None), key_usage(KEY_CERT_SIGN)]);
+    let leaf = issue("Revoked Signer", Some(&r), (2020, 9999), &[basic_constraints(false, None), key_usage(DIGITAL_SIGNATURE)]);
+    let alg = r.key.signature_algorithm(DigestAlg::Sha256);
+    let revoked = der::seq(&[&der::seq(&[&der::uint(&leaf.cert.serial), &time(2020).encode()])]);
+    let tbs = der::seq(&[&der::int(1), &alg, &r.name.raw, &time(2020).encode(), &time(9999).encode(), &revoked]);
+    let crl = der::seq(&[&tbs, &alg, &der::bit_string(&r.key.sign(DigestAlg::Sha256, &tbs).unwrap())]);
+    let anchor = leaf.cert.clone();
+    let id = DigitalId { key: leaf.key, certificate: leaf.cert, chain: vec![r.cert], friendly_name: None };
+    let opts = SignOptions { page: 0, rect: None, date: "D:20200601120000Z".into(), ..SignOptions::default() };
+    let signed = pdfcraft_sign::sign(&Document::open(Arc::new(fixture())).unwrap(), &id, &opts).unwrap();
+    let evidence = Evidence { certs: Vec::new(), ocsps: Vec::new(), crls: vec![crl] };
+    let ltv = dss::embed(&Document::open(Arc::new(signed)).unwrap(), &evidence).unwrap();
+    let trust = TrustStore { certs: vec![anchor] };
+    let s = signatures(&Document::open(Arc::new(ltv.clone())).unwrap(), &ltv, &trust).into_iter().rfind(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.message.contains("revoked")), "{:?}", s.details);
+}
+
 #[test]
 fn a_signature_chaining_through_an_ordinary_certificate_is_not_trusted() {
     let r = root();
