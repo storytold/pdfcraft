@@ -48,6 +48,8 @@ raw-window-handle = "0.6"
 pollster = "1.0"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
+# The packaging emulator fixture records its calls in an automatically cleaned temporary directory.
+tempfile = "3.27"
 # Exercise the vendored Wayland scroll policy with the actual winit event type.
 winit = { version = "0.30", default-features = false, features = ["wayland"] }
 

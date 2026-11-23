@@ -77,6 +77,7 @@ Options:
                               view settings applied once the files are open
   -h, --help                  print this and exit
   --version                   print the version and exit
+  --print-update-repository   as the first argument, print the compiled GitHub update source and exit
 
 To inspect, convert or edit PDFs from a script, use pdfcraft-cli (pdfcraft-cli --help).";
 
@@ -200,7 +201,12 @@ fn rejoin_split_paths(args: Vec<String>, exists: impl Fn(&str) -> bool) -> Vec<S
     out
 }
 
+/// Answer packaging queries before startup, then initialize the desktop and its command-line actions.
 fn main() -> eframe::Result {
+    // Packaging reads the exact binary's source, without a display, logs or update/network work.
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--print-update-repository")) {
+        return print_and_exit(pdfcraft_ui_egui::updates::REPOSITORY);
+    }
     // Before anything uses aws-lc: an `OPENSSL_ia32cap` naming a CPU feature this processor lacks
     // would stop it, so PdfCraft runs again without it (#2916, `crypto_env`).
     if let Some(code) = pdfcraft_platform::crypto_env::run_without_cpu_override() {
