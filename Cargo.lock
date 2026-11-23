@@ -5163,6 +5163,7 @@ dependencies = [
  "craft-zip 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "flate2",
  "image",
+ "unicode-bidi",
 ]
 
 [[package]]

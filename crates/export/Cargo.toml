@@ -21,6 +21,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 craft-pptx.workspace = true
 craft-xml.workspace = true
 craft-zip.workspace = true
+unicode-bidi = "0.3"
 
 [dev-dependencies]
 flate2.workspace = true
