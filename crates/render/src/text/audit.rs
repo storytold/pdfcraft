@@ -163,8 +163,8 @@ impl AuditDevice<'_> {
         // only its geometry inside one. A /ActualText replacement over such a glyph is still
         // what an extractor reads, so the span must not lose the glyph's paint.
         let text = match glyph.as_unicode() {
-            Some(hayro::hayro_interpret::hayro_cmap::BfString::Char(c)) => c.to_string(),
-            Some(hayro::hayro_interpret::hayro_cmap::BfString::String(s)) => s,
+            Some(craft_pdf::interpret::hayro_cmap::BfString::Char(c)) => c.to_string(),
+            Some(craft_pdf::interpret::hayro_cmap::BfString::String(s)) => s,
             None => String::new(),
         };
         let text = if text.chars().all(char::is_control) { String::new() } else { text };
