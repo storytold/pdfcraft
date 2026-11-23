@@ -34,6 +34,10 @@ use choice_list::choice_list;
 
 /// The page's paper: what an unbaked widget is filled with until its appearance is rendered.
 const PAPER: Color32 = Color32::WHITE;
+/// Background of the in-place text field editor, the same in every theme (as production).
+const FIELD_FILL: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xF4);
+/// Border of the field being edited.
+const FOCUS_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
 /// The field being edited.
 #[derive(Clone, Debug, PartialEq)]

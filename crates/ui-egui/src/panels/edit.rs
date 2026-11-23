@@ -199,7 +199,7 @@ pub(super) fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             for (n, (group, title)) in titles.iter().enumerate() {
                 let start = kinds.len();
                 kinds.extend(StampKind::ALL.into_iter().filter(|k| k.group() == *group).map(|k| (*group, k)));
-                groups.push(TileGroup::new(1_000_000 + n, start, kinds.len() - start, title.to_string()));
+                groups.push(TileGroup::new(1_000_000 + n, start, kinds.len() - start, title.to_uppercase()));
             }
             let mut selection = match app.quick_tool {
                 crate::QuickTool::Stamp(current) => kinds.iter().position(|(_, kind)| *kind == current).map(Selection::single).unwrap_or_default(),
