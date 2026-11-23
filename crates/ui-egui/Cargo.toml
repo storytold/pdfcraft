@@ -30,6 +30,9 @@ pdfcraft-model = { workspace = true }
 pdfcraft-platform = { workspace = true }
 egui = { workspace = true, features = ["bytemuck", "default_fonts", "monochrome_emoji_fonts"] }
 egui_extras = { workspace = true }
+# Rasterises an SVG tab-strip logo when it is loaded (egui_extras' own SVG support, called
+# directly); the same version egui_extras pulls in.
+resvg = { version = "0.45.1", default-features = false }
 # `glow` is always on: `eframe::App::on_exit` takes a GL context when that feature is enabled.
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "persistence", "links", "clipboard"] }
 serde = { workspace = true }
