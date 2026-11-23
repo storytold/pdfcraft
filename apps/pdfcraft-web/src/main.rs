@@ -35,7 +35,9 @@ fn main() {
                         pending_bytes: usize::try_from(host::MAX_OPEN_BYTES).unwrap_or(usize::MAX),
                         ..craft::platform::browser_files::PickLimits::DEFAULT
                     };
-                    let files = craft::platform::browser_files::BrowserFiles::new(move || wake.wake()).limits(limits);
+                    let files = craft::platform::browser_files::BrowserFiles::new(move || wake.wake())
+                        .limits(limits)
+                        .page_saves(craft_web_host::files::page_save);
                     let app_host = craft::host::Host::builder(pdfcraft_ui_egui::APP_INFO).files(Arc::new(files)).build();
                     let mut app = PdfCraftApp::with_host(Arc::new(app_host), AppServices::system(&cc.egui_ctx, intake));
                     app.apply_settings(&settings.get());
