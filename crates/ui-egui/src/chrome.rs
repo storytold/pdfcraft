@@ -37,6 +37,9 @@ pub(crate) fn shell(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .screen_mode(Bind::given(app.screen_mode))
         // A presentation shows the page and nothing else, so no reveal brings the bars back.
         .allow_reveal(false)
+        // macOS with a right-to-left system language puts the traffic lights at the right: the title bar mirrors
+        // with them, Home beside the lights and the tabs reading from the right (production 4448ee940).
+        .title_follows_lights(true)
         .title_bar(|ui, _, app: &mut PdfCraftApp| title_bar(app, ui))
         .top(Slot::new("modes").visible(modes_visible), |ui, _, app: &mut PdfCraftApp| mode_bar::show(app, ui))
         .start(

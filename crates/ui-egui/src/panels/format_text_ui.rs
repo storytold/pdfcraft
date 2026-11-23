@@ -245,7 +245,9 @@ const CHAR_SPACINGS: [f64; 8] = [-1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 3.0, 5.0];
 /// What can be typed: horizontal scale in percent, character spacing in points.
 const SCALE_RANGE: std::ops::RangeInclusive<f64> = 10.0..=400.0;
 const CHAR_SPACING_RANGE: std::ops::RangeInclusive<f64> = -5.0..=50.0;
-/// The space between paragraphs the engine takes, in points.
+/// The paragraph spacings the field's menu offers, in points.
+const PARAGRAPH_SPACINGS: [f64; 5] = [0.0, 6.0, 12.0, 18.0, 24.0];
+/// The space between paragraphs the engine takes, in points: the bound the field shows and `apply` enforces.
 const PARAGRAPH_SPACING_RANGE: std::ops::RangeInclusive<f64> = 0.0..=72.0;
 /// The sizes the engine takes, in points: the bound the size field shows and `apply` enforces.
 const SIZE_RANGE: RangeInclusive<f64> = 1.0..=500.0;
@@ -462,6 +464,7 @@ fn show(
     let sizes: Vec<f32> = SIZES.iter().map(|v| *v as f32).collect();
     let scales: Vec<f32> = SCALES.iter().map(|v| *v as f32).collect();
     let char_spacings: Vec<f32> = CHAR_SPACINGS.iter().map(|v| *v as f32).collect();
+    let paragraph_spacings: Vec<f32> = PARAGRAPH_SPACINGS.iter().map(|v| *v as f32).collect();
     let mut line_presets = vec![LineSpacing::Auto];
     line_presets.extend(LINE_SPACINGS.iter().map(|v| LineSpacing::Multiple(*v as f32)));
     let range = |r: &RangeInclusive<f64>| *r.start() as f32..=*r.end() as f32;
@@ -473,6 +476,8 @@ fn show(
         .scale_range(range(&SCALE_RANGE))
         .char_spacing_presets(&char_spacings)
         .char_spacing_range(range(&CHAR_SPACING_RANGE))
+        .paragraph_spacing_presets(&paragraph_spacings)
+        .paragraph_spacing_range(range(&PARAGRAPH_SPACING_RANGE))
         .unsupported(&unsupported);
     // With nothing to set it on the row still reads Auto, as production's does, not Mixed.
     text = text.line_spacing(v.line_spacing.unwrap_or(LineSpacing::Auto));
