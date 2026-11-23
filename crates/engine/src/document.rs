@@ -514,6 +514,16 @@ impl Document {
         self.editor.as_ref().map_or(0, |e| e.undo.len())
     }
 
+    /// Which step Undo would take back (see [`crate::HistoryStep`]).
+    pub fn undo_step(&self) -> Option<crate::HistoryStep> {
+        self.editor.as_ref().and_then(|e| e.undo.last()).map(|s| s.4)
+    }
+
+    /// Whether `step` is still in this document's history, to undo or to redo.
+    pub fn holds_step(&self, step: crate::HistoryStep) -> bool {
+        self.editor.as_ref().is_some_and(|e| e.undo.iter().chain(&e.redo).any(|s| s.4 == step))
+    }
+
     /// What Undo would undo, in parts, for an interface that says it in another language.
     pub fn undo_label(&self) -> Option<&Label> {
         self.editor.as_ref().and_then(|e| e.undo.last()).map(|(l, ..)| l)

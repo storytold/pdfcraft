@@ -121,8 +121,23 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
     }
 }
 
-/// One undo/redo step: its label, the document state, its passwords, and what it changed.
-pub(crate) type Snapshot = (Label, pdfcraft_cos::Document, Keys, Scope);
+/// One undo/redo step: its label, the document state, its passwords, what it changed, and which
+/// step it is.
+pub(crate) type Snapshot = (Label, pdfcraft_cos::Document, Keys, Scope, HistoryStep);
+
+/// Which step of a document's history an undo/redo entry is. It stays the same while the step
+/// moves between Undo and Redo, and when older steps are dropped past [`MAX_UNDO`] or a save
+/// reopens the document, so an interface can recognise one of its own steps later (a position
+/// in the history moves when older steps are dropped). No two steps share one, in any document.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct HistoryStep(u64);
+
+impl HistoryStep {
+    pub(crate) fn next() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        Self(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+}
 
 /// Editing state of a document (absent when the document cannot be edited yet, e.g. encrypted).
 #[derive(Clone)]

@@ -207,6 +207,35 @@ fn editing_a_scanned_page_recognizes_its_text_first_and_only_once() {
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), None, "recognized only once per page");
 }
 
+/// #6655: undoing the recognition Edit ran by itself leaves the scan without editable text, and
+/// Edit won't read it again, so the notice says how to get it back. Undoing any other step says
+/// only what it undid.
+#[test]
+fn undoing_edits_own_recognition_says_how_to_get_the_text_back() {
+    if !pdfcraft_engine::ocr::available() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let mut h = edit_harness(scan());
+    let id = h.state().active_ids().unwrap().1;
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(4);
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Recognize text"));
+    h.state_mut().undo();
+    h.run_steps(2);
+    let toast = h.state().toast.clone().unwrap().0;
+    assert!(toast.contains("Redo") && toast.contains("Scan & OCR ▸ Recognize text"), "{toast}");
+
+    // A plain step: no such notice.
+    let mut h = edit_harness(text_page());
+    let id = h.state().active_ids().unwrap().1;
+    h.state_mut().session.apply(id, Edit::InsertBlankPage { at: 1, width: 595.0, height: 842.0 }).unwrap();
+    h.state_mut().undo();
+    h.run_steps(2);
+    let toast = h.state().toast.clone().unwrap().0;
+    assert!(toast.starts_with("Undid ") && !toast.contains("Recognize text"), "{toast}");
+}
+
 /// The Edit tab (its tool panel) turns Edit on without picking Edit text & images, and Acrobat's
 /// conversion happens there too.
 #[test]
