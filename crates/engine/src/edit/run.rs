@@ -199,10 +199,11 @@ fn note_skipped(doc: &mut pdfcraft_cos::Document, report: &pdfcraft_xfdf::Report
     ));
 }
 
-/// Scale `pages`, saying in the repair log which geospatial measures were left as they were:
-/// they now measure the scaled page.
+/// Scale `pages`, saying in the repair log which geospatial measures and fill patterns were left
+/// as they were: they no longer match the scaled content.
 fn scale_pages(doc: &mut pdfcraft_cos::Document, pages: &[usize], request: crate::ScaleRequest) -> Result<(), EditError> {
-    let left = pdfcraft_organize::scale_pages(doc, pages, request)?.geo_measures_unchanged;
+    let report = pdfcraft_organize::scale_pages(doc, pages, request)?;
+    let left = report.geo_measures_unchanged;
     if left > 0 {
         doc.note_repair(format!(
             "scaling pages left {left} geospatial measure{} as {}: {} no longer match{} the scaled content",
@@ -210,6 +211,15 @@ fn scale_pages(doc: &mut pdfcraft_cos::Document, pages: &[usize], request: crate
             if left == 1 { "it was" } else { "they were" },
             if left == 1 { "it" } else { "they" },
             if left == 1 { "es" } else { "" }
+        ));
+    }
+    let patterns = report.patterns_unplaced;
+    if patterns > 0 {
+        doc.note_repair(format!(
+            "scaling pages left {patterns} fill pattern{} unplaced: {} no longer line{} up with the scaled content",
+            if patterns == 1 { "" } else { "s" },
+            if patterns == 1 { "it" } else { "they" },
+            if patterns == 1 { "s" } else { "" }
         ));
     }
     Ok(())

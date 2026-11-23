@@ -244,3 +244,45 @@ fn bad_requests_change_nothing() {
     assert_eq!(scale_pages(&mut doc, &[0, 3], request(100.0, 100.0)), Err(OrganizeError::NoSuchPage(3)));
     assert_eq!(page(&doc, 0), before);
 }
+
+#[test]
+fn patterns_move_with_the_content_and_a_page_sharing_them_keeps_its_own() {
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 /Resources << /Pattern << /Shade 6 0 R /Tile 7 0 R /Bad 8 0 R >> >> >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>",
+        CONTENT,
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>",
+        "<< /PatternType 2 /Shading << /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 1 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >> /Matrix [2 0 0 2 10 20] >>",
+        "<< /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 5 5] /XStep 5 /YStep 5 /Resources << >> /Length 8 >>\nstream\n0 0 m S\nendstream",
+        "<< /PatternType 2 /Shading << /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 1 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >> /Matrix [1 0 0] >>",
+    ]);
+    let report = scale_pages(&mut doc, &[0], request(A4.0, A4.1)).unwrap();
+    // A pattern whose matrix can't be read is left as it was, and said.
+    assert_eq!(report.patterns_unplaced, 1);
+    let pattern = |i: usize, name: &[u8]| {
+        // The page's own resources, else those it inherits from the page tree.
+        let tree = doc.get(ObjRef::new(2, 0)).as_dict().cloned().unwrap();
+        let own = page(&doc, i);
+        let res = doc.resolve(own.get(b"Resources").or(tree.get(b"Resources")).unwrap()).as_dict().cloned().unwrap();
+        let pats = doc.resolve(res.get(b"Pattern").unwrap()).as_dict().cloned().unwrap();
+        let m = match &*doc.resolve(pats.get(name).unwrap()) {
+            Object::Stream(s) => s.dict.get(b"Matrix").cloned(),
+            Object::Dict(d) => d.get(b"Matrix").cloned(),
+            _ => None,
+        };
+        m.map(|m| doc.resolve(&m).as_array().unwrap().iter().map(|v| doc.resolve(v).as_f64().unwrap()).collect::<Vec<_>>())
+    };
+    let apply = |m: &[f64], x: f64, y: f64| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
+    // A pattern point lands where the page content it was under went.
+    for (name, old) in [(&b"Shade"[..], vec![2.0, 0.0, 0.0, 2.0, 10.0, 20.0]), (b"Tile", vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0])] {
+        let new = pattern(0, name).unwrap();
+        let (ox, oy) = apply(&old, 3.0, 4.0);
+        let (nx, ny) = apply(&new, 3.0, 4.0);
+        let (ex, ey) = mapped(&doc, 0, ox, oy);
+        assert!(close(nx, ex) && close(ny, ey), "{}", String::from_utf8_lossy(name));
+    }
+    // The unscaled page still sees the patterns as they were.
+    assert_eq!(pattern(1, b"Shade").unwrap(), vec![2.0, 0.0, 0.0, 2.0, 10.0, 20.0]);
+    assert_eq!(pattern(1, b"Tile"), None);
+}

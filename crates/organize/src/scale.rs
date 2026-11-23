@@ -7,10 +7,11 @@
 //! (§12.5.2, §12.5.6), viewports (§12.9.1), article beads (§12.4.3) and explicit destinations
 //! (§12.3.2.2) that name a scaled page move with the content; `/Measure` conversion factors are
 //! rescaled so measurements still read true (§12.9). Geospatial measures are left as they are
-//! and counted.
+//! and counted. A page's patterns map to its default space, not the current transformation
+//! (§8.7.3.1), so the `cm` doesn't reach them: each page gets copies with the placement composed
+//! into their `/Matrix`.
 //!
-//! Adapted from pdfcer (MIT, same author) `pageops/scale.rs` and `EditSession::scale_pages` at
-//! commit f5525637.
+//! Adapted from pdfcer (MIT, same author) `pageops/scale.rs` and `EditSession::scale_pages`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -62,6 +63,9 @@ pub struct ScaleReport {
     /// Geospatial `/Measure` dictionaries (`/Subtype /GEO`) left unchanged: they register points
     /// to coordinates rather than carry a factor, and are not rescaled.
     pub geo_measures_unchanged: usize,
+    /// Fill patterns left unplaced on a scaled page (an unreadable `/Matrix`, or past the
+    /// per-page cap), so they no longer line up with the content.
+    pub patterns_unplaced: usize,
 }
 
 /// Where one page's content lands, in its unrotated user space.
@@ -73,6 +77,9 @@ struct Placement {
     /// The new page, `[0 0 w h]`.
     size: [f64; 2],
 }
+
+/// Most patterns copied for one page.
+const MAX_PATTERNS: usize = 4096;
 
 impl Placement {
     fn x(&self, x: f64) -> Option<f64> {
@@ -126,6 +133,69 @@ fn prefix(source: [f64; 4], p: &Placement) -> Vec<u8> {
     let s = num(p.scale);
     let (w, h) = (source[2] - source[0], source[3] - source[1]);
     format!("q\n{s} 0 0 {s} {} {} cm\n{} {} {} {} re W n\n", num(p.dx), num(p.dy), num(source[0]), num(source[1]), num(w), num(h)).into_bytes()
+}
+
+/// `m` (a pattern's `/Matrix`, identity when absent) followed by the placement.
+fn placed_matrix(doc: &Document, m: Option<&Object>, p: &Placement) -> Option<Object> {
+    let m = match m.map(|m| doc.resolve(m)) {
+        None => [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        Some(m) => {
+            let items = m.as_array()?;
+            let v: Vec<f64> = items.iter().filter_map(|o| number(doc, o)).collect();
+            <[f64; 6]>::try_from(v.as_slice()).ok().filter(|_| items.len() == 6)?
+        }
+    };
+    let s = p.scale;
+    let out = [m[0] * s, m[1] * s, m[2] * s, m[3] * s, m[4] * s + p.dx, m[5] * s + p.dy];
+    out.iter().all(|v| v.is_finite()).then(|| reals(out))
+}
+
+/// The page's resources with every pattern replaced by a placed copy, or `None` when it has no
+/// patterns. A pattern shared with the same placement is copied once.
+fn placed_resources(doc: &mut Document, resources: &Object, p: &Placement, s: &mut Scaling) -> Option<Object> {
+    let mut res = doc.resolve(resources).as_dict()?.clone();
+    let patterns = doc.resolve(res.get(b"Pattern")?).as_dict()?.clone();
+    // A pattern that can't be placed (an unreadable `/Matrix`) is kept as it was, and counted.
+    let mut placed = patterns.clone();
+    s.report.patterns_unplaced += patterns.len().saturating_sub(MAX_PATTERNS);
+    for (name, pattern) in patterns.iter().take(MAX_PATTERNS) {
+        let key = pattern.as_ref().map(|r| (r, [p.scale, p.dx, p.dy].map(f64::to_bits)));
+        if let Some(copy) = key.and_then(|k| s.patterns.get(&k)) {
+            placed.set(name.clone(), Object::Ref(*copy));
+            continue;
+        }
+        let copy = match &*doc.resolve(pattern) {
+            Object::Stream(st) => {
+                let mut st = st.clone();
+                let Some(m) = placed_matrix(doc, st.dict.get(b"Matrix"), p) else {
+                    s.report.patterns_unplaced += 1;
+                    continue;
+                };
+                st.dict.set(b"Matrix".to_vec(), m);
+                Object::Stream(st)
+            }
+            Object::Dict(d) => {
+                let mut d = d.clone();
+                let Some(m) = placed_matrix(doc, d.get(b"Matrix"), p) else {
+                    s.report.patterns_unplaced += 1;
+                    continue;
+                };
+                d.set(b"Matrix".to_vec(), m);
+                Object::Dict(d)
+            }
+            _ => {
+                s.report.patterns_unplaced += 1;
+                continue;
+            }
+        };
+        let r = doc.add(copy);
+        if let Some(k) = key {
+            s.patterns.insert(k, r);
+        }
+        placed.set(name.clone(), Object::Ref(r));
+    }
+    res.set(b"Pattern".to_vec(), Object::Dict(placed));
+    Some(Object::Dict(res))
 }
 
 /// The stream after the page's own. The leading newline keeps a last token from fusing with `Q`.
@@ -265,6 +335,8 @@ fn move_rect_key(doc: &Document, d: &Dict, key: &[u8], p: &Placement) -> Option<
 /// The edit in progress: objects already moved (shared ones move once) and the counts.
 struct Scaling {
     seen: HashSet<ObjRef>,
+    /// Placed copies of shared patterns, by pattern and placement.
+    patterns: HashMap<(ObjRef, [u64; 3]), ObjRef>,
     report: ScaleReport,
 }
 
@@ -463,12 +535,13 @@ pub fn scale_pages(doc: &mut Document, pages: &[usize], request: ScaleRequest) -
         let unit = own.as_dict().and_then(|d| d.get(b"UserUnit")).and_then(|u| number(doc, u)).filter(|u| *u > 0.0).unwrap_or(1.0);
         let placement = plan(source, resolved_rotation(doc, inherited), request.width / unit, request.height / unit, &request)
             .ok_or_else(|| OrganizeError::InvalidBox(format!("page {} can't be scaled to that size", i + 1)))?;
-        plans.push((i, *page, inherited.contains(b"CropBox"), source, placement));
+        plans.push((i, *page, inherited.contains(b"CropBox"), inherited.get(b"Resources").cloned(), source, placement));
     }
-    let mut s = Scaling { seen: HashSet::new(), report: ScaleReport::default() };
+    let mut s = Scaling { seen: HashSet::new(), patterns: HashMap::new(), report: ScaleReport::default() };
     let mut placed = HashMap::new();
-    for &(i, page, cropped, source, p) in &plans {
-        scale_page(doc, page, cropped, source, &p, &mut s)?;
+    for (i, page, cropped, resources, source, p) in &plans {
+        let (i, page, p) = (*i, *page, *p);
+        scale_page(doc, page, *cropped, resources.as_ref(), *source, &p, &mut s)?;
         placed.insert(page, p);
         s.report.pages.push((i, p.scale));
     }
@@ -476,9 +549,22 @@ pub fn scale_pages(doc: &mut Document, pages: &[usize], request: ScaleRequest) -
     Ok(s.report)
 }
 
-/// Write one planned page: its boxes, its annotations, viewports and beads, and its contents.
-fn scale_page(doc: &mut Document, page: ObjRef, cropped: bool, source: [f64; 4], p: &Placement, s: &mut Scaling) -> Result<(), OrganizeError> {
+/// Write one planned page: its boxes, patterns, annotations, viewports and beads, and its contents.
+fn scale_page(
+    doc: &mut Document,
+    page: ObjRef,
+    cropped: bool,
+    inherited: Option<&Object>,
+    source: [f64; 4],
+    p: &Placement,
+    s: &mut Scaling,
+) -> Result<(), OrganizeError> {
     let Some(mut d) = doc.get(page).as_dict().cloned() else { return Ok(()) };
+    if let Some(res) = d.get(b"Resources").or(inherited).cloned()
+        && let Some(placed) = placed_resources(doc, &res, p, s)
+    {
+        d.set(b"Resources".to_vec(), placed);
+    }
     let target = reals([0.0, 0.0, p.size[0], p.size[1]]);
     d.set(b"MediaBox".to_vec(), target.clone());
     if cropped || d.contains(b"CropBox") {
