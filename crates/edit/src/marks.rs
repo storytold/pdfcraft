@@ -35,7 +35,7 @@ impl MarkText {
         }
         let mut fonts = Dict::new();
         let shaped =
-            ShapedFonts::new(clusters(pieces.iter().map(Vec::as_slice)), pdfcraft_fonts::shaped_glyph, &taken, &mut fonts, "PCTh", &mut |o| {
+            ShapedFonts::new(clusters(pieces.iter().map(Vec::as_slice)), pdfcraft_fonts::shaped_glyph, None, &taken, &mut fonts, "PCTh", &mut |o| {
                 Object::Ref(doc.add(o))
             })
             .map_err(|(e, c)| EditError::Invalid(thai_message(e, &c.text)))?;

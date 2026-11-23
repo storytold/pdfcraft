@@ -21,7 +21,22 @@ fn harness_bytes(bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
 }
 
 fn harness_bytes_with_step_dt(bytes: Vec<u8>, step_dt: f32) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(step_dt).build_eframe(move |_cc| {
+    harness_with(bytes, step_dt, false)
+}
+
+/// The harness for a test that lays out text no font in the build can draw on purpose. egui_kittest
+/// panics on a missing glyph by default, which made #125's emoji depend on whether the machine
+/// happens to have an installed emoji face (macOS does, the Linux runners do not).
+fn harness_allowing_missing_glyphs() -> Harness<'static, PdfCraftApp> {
+    harness_with(include_bytes!("../data/form.pdf").to_vec(), 0.25, true)
+}
+
+fn harness_with(bytes: Vec<u8>, step_dt: f32, allow_missing_glyphs: bool) -> Harness<'static, PdfCraftApp> {
+    let mut builder = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(step_dt);
+    if allow_missing_glyphs {
+        builder = builder.allow_missing_glyphs();
+    }
+    let mut h = builder.build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         app.open_bytes("form.pdf", None, bytes.clone()).unwrap();
@@ -338,7 +353,10 @@ fn text_the_standard_fonts_cant_draw_stays_in_the_editor() {
         return;
     }
     let _gpu = gpu();
-    let mut h = harness();
+    // The emoji below is drawn as a tofu box on purpose: the test is about the editor keeping text
+    // no face can draw, so a harness that panics on a missing glyph would only pass on a machine
+    // with an installed emoji font.
+    let mut h = harness_allowing_missing_glyphs();
     assert!(h.state_mut().execute("edit.text"));
     h.run_steps(2);
     let p = at(&h, 40.0, 300.0);
