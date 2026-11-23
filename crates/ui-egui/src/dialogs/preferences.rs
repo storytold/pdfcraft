@@ -1,693 +1,827 @@
-//! Preferences dialog: card-based settings interface organized into clean, modular cards
-//! with segmented pill controls and real-time search filtering.
+//! Preferences: the draft the window edits and the model that applies each change to the app.
 
-use egui::{Color32, CornerRadius, Margin, Rect, RichText, Sense, Stroke, pos2, vec2};
+use std::sync::{Arc, Mutex};
+
+use craft::behavior::DockSide;
+use craft::theme::color::{Rgba, Srgba};
+use craft::theme::selection::MotionChoice;
+use craft::theme::variant::Tone;
+use craft::theme_store::SelectionChange;
+use craft::theme_store::ui::AppearancePage;
+use craft::ui::contract::{Bind, Entry, SaveKey, Show as _};
+use craft::ui::dialog::DialogHost;
+use craft::ui::notices::{Notice, NoticeLayout};
+use craft::ui::patterns::preferences::{
+    GroupSpec, PageSpec, PrefValue, PreferencesDraft, PreferencesLayout, PreferencesMode, PreferencesModel, PreferencesState, PreferencesWindow,
+    RowKind, RowSpec,
+};
+use craft::ui::runtime::env::Label;
+use craft::ui::text::TextField;
+use craft::window::policy::TitleBarPref;
+use egui::Ui;
 
 use crate::PdfCraftApp;
-use crate::canvas::{Fit, PageLayout, ViewDefaults};
-use crate::motion::AnimationEffects;
+use crate::canvas::{Fit, PageDisplay, ViewDefaults};
+use crate::colour_picker::PickerHost;
+use crate::i18n::{self, Lang};
 use crate::scroll_speed::ScrollSpeed;
-use crate::side_panels::ToolsSide;
-use crate::theme::{self, ThemeKind, Tokens};
+use crate::state::Mode;
+use crate::ui_scale;
 use crate::units::Unit;
-use crate::widgets::{self, icons};
 
-/// The height the Preferences dialog keeps below its scrolling settings for the buttons row.
-pub(crate) const PREFERENCES_BUTTON_ROW: f32 = 52.0;
-
-/// The least height the scrolling settings are given in very small windows.
-pub(crate) const PREFERENCES_MIN_SCROLL: f32 = 60.0;
-
-/// A segmented pill control for mutually exclusive choices.
-///
-/// Draws a rounded container with options inside. The active option is highlighted
-/// with the accent colour. Emits AccessKit RadioButton widget info with the option's label.
-pub fn segmented_pill_choice<T: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, current: &mut T, options: &[(T, &str)]) -> bool {
-    let with_a11y: Vec<(T, &str, &str)> = options.iter().map(|&(v, l)| (v, l, l)).collect();
-    segmented_pill_choice_a11y(ui, t, current, &with_a11y)
+/// What the open Preferences window keeps between passes; `PdfCraftApp::preferences` holds it while
+/// the window is open.
+pub struct PreferencesSession {
+    state: PreferencesState,
+    draft: PrefsDraft,
+    selection: SelectionChange,
+    /// The dialogs opened from inside the window (the colour picker), run in its own viewport.
+    host: DialogHost,
+    /// The colours the picker answered, waiting for `Prefs::nested` to write them into the draft.
+    answers: Answers,
 }
 
-/// A segmented pill selection bar with separate accessibility labels.
-pub fn segmented_pill_choice_a11y<T: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, current: &mut T, options: &[(T, &str, &str)]) -> bool {
-    segmented_pill_choice_a11y_query(ui, t, current, options, "").0
+/// Colour answers by row key, filled by the picker's `then` and drained in the same window's pass.
+type Answers = Arc<Mutex<Vec<(String, Srgba)>>>;
+
+impl PreferencesSession {
+    fn new(app: &PdfCraftApp) -> Self {
+        Self {
+            state: PreferencesState::default(),
+            draft: PrefsDraft::from_app(app),
+            selection: SelectionChange::default(),
+            host: DialogHost::new(),
+            answers: Answers::default(),
+        }
+    }
 }
 
-/// A segmented pill selection bar with separate accessibility labels and optional query highlighting.
-/// Returns whether the selection changed and the Response of the first matching option, if any.
-pub fn segmented_pill_choice_a11y_query<T: PartialEq + Copy>(
-    ui: &mut egui::Ui,
-    t: &Tokens,
-    current: &mut T,
-    options: &[(T, &str, &str)],
-    query: &str,
-) -> (bool, Option<egui::Response>) {
-    let mut changed = false;
-    let mut first_match_resp: Option<egui::Response> = None;
-    egui::Frame::new()
-        .fill(t.field)
-        .stroke(Stroke::new(1.0, t.border))
-        .corner_radius(CornerRadius::same(14))
-        .inner_margin(Margin::symmetric(2, 2))
-        .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
-            ui.horizontal(|ui| {
-                for &(value, label, a11y_label) in options {
-                    let is_active = *current == value;
-                    let font = theme::medium(12.0);
-                    let text_color = if is_active { Color32::WHITE } else { t.text };
-                    let label_galley = layout_pill_label(ui, label, query, font, text_color);
-                    let w = label_galley.size().x;
-                    let (rect, resp) = ui.allocate_exact_size(vec2(w + 18.0, 24.0), Sense::click());
-                    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, is_active, a11y_label));
+/// Every setting the window edits, copied from the app when the window opens and applied as it changes.
+#[derive(Clone, PartialEq)]
+struct PrefsDraft {
+    language: String,
+    ui_scale: Option<f32>,
+    tools_right: bool,
+    rail_right: bool,
+    animation: MotionChoice,
+    reopen_last_session: bool,
+    restore_last_view: bool,
+    reload_changed_files: bool,
+    update_check_at_start: bool,
+    show_secured_notice: bool,
+    recent_limit: usize,
+    system_title_bar: bool,
+    show_page_edge_shadows: bool,
+    reading_colors: pdfcraft_render::ReadingColors,
+    default_mode: Mode,
+    view_defaults: ViewDefaults,
+    full_screen_fill: bool,
+    full_screen_escape_exits: bool,
+    highlight_fields: bool,
+    always_default_view: bool,
+    text_links: bool,
+    units: Unit,
+    scroll_speed: ScrollSpeed,
+    invert_middle_drag: bool,
+    author: String,
+    hide_empty_highlight_hover: bool,
+    flatten_fill_sign_on_save: bool,
+    ask_to_lock_signatures: bool,
+    date_format: String,
+    date_language: Option<String>,
+    javascript: bool,
+}
 
-                    if first_match_resp.is_none() && !find_match_ranges(label, query).is_empty() {
-                        first_match_resp = Some(resp.clone());
-                    }
+impl PrefsDraft {
+    fn from_app(app: &PdfCraftApp) -> Self {
+        Self {
+            language: app.language.clone(),
+            ui_scale: app.ui_scale,
+            tools_right: crate::side_panels::tools_on_right(app),
+            rail_right: app.rail_side != DockSide::Start,
+            animation: app.animation_effects,
+            reopen_last_session: app.reopen_last_session,
+            restore_last_view: app.restore_last_view,
+            reload_changed_files: app.reload_changed_files,
+            update_check_at_start: app.update_check_at_start,
+            show_secured_notice: app.show_secured_notice,
+            recent_limit: app.recent_limit,
+            system_title_bar: app.title_bar_choice == TitleBarPref::System,
+            show_page_edge_shadows: app.show_page_edge_shadows,
+            reading_colors: app.reading_colors,
+            default_mode: app.default_mode,
+            view_defaults: app.view_defaults,
+            full_screen_fill: app.full_screen_fill,
+            full_screen_escape_exits: app.full_screen_escape_exits,
+            highlight_fields: app.highlight_fields,
+            always_default_view: app.always_default_view,
+            text_links: app.text_links,
+            units: app.units,
+            scroll_speed: app.scroll_speed,
+            invert_middle_drag: app.invert_middle_drag,
+            author: app.comment_prefs.author.clone(),
+            hide_empty_highlight_hover: app.comment_prefs.hide_empty_highlight_hover,
+            flatten_fill_sign_on_save: app.flatten_fill_sign_on_save,
+            ask_to_lock_signatures: app.ask_to_lock_signatures,
+            date_format: app.session.date_format().to_string(),
+            date_language: app.session.date_language().map(str::to_string),
+            javascript: app.session.javascript(),
+        }
+    }
 
-                    if is_active {
-                        ui.painter().rect(rect, CornerRadius::same(12), t.accent, Stroke::NONE, egui::StrokeKind::Inside);
-                    } else {
-                        let press = theme::Press::track(ui, &resp);
-                        let fill = press.fill(Color32::TRANSPARENT, t.hover, t.pressed);
-                        ui.painter().rect(rect, CornerRadius::same(12), fill, Stroke::NONE, egui::StrokeKind::Inside);
-                    }
-                    ui.painter().galley(rect.center() - label_galley.size() / 2.0, label_galley, text_color);
+    /// The draft a fresh install starts with: the values `PdfCraftApp::with_host` starts the app with, and the
+    /// engine session's own for the date format, date language and JavaScript.
+    // PLAN: the app's starting values are literals in `PdfCraftApp::with_host`, not a shared item; this list repeats them.
+    fn defaults() -> Self {
+        let engine = pdfcraft_engine::Session::new();
+        let prefs = crate::comments::CommentPrefs::default();
+        Self {
+            language: i18n::AUTO.to_string(),
+            ui_scale: None,
+            tools_right: false,
+            rail_right: true,
+            animation: MotionChoice::System,
+            reopen_last_session: false,
+            restore_last_view: true,
+            reload_changed_files: true,
+            update_check_at_start: true,
+            show_secured_notice: true,
+            recent_limit: crate::RECENT_FILES_DEFAULT,
+            system_title_bar: false,
+            show_page_edge_shadows: true,
+            reading_colors: Default::default(),
+            default_mode: Mode::AllTools,
+            view_defaults: ViewDefaults::default(),
+            full_screen_fill: true,
+            full_screen_escape_exits: true,
+            highlight_fields: true,
+            always_default_view: false,
+            text_links: true,
+            units: Unit::default(),
+            scroll_speed: ScrollSpeed::default(),
+            invert_middle_drag: false,
+            author: prefs.author,
+            hide_empty_highlight_hover: prefs.hide_empty_highlight_hover,
+            flatten_fill_sign_on_save: false,
+            ask_to_lock_signatures: true,
+            date_format: engine.date_format().to_string(),
+            date_language: engine.date_language().map(str::to_string),
+            javascript: engine.javascript(),
+        }
+    }
+}
 
-                    if resp.has_focus() {
-                        ui.painter().rect_stroke(
-                            rect.expand(1.0),
-                            CornerRadius::same(13),
-                            Stroke::new(2.0, t.accent_text),
-                            egui::StrokeKind::Outside,
-                        );
-                    }
+impl PdfCraftApp {
+    /// Opens Preferences, or leaves the open window as it is.
+    pub fn open_preferences(&mut self) {
+        if self.preferences.is_none() {
+            self.preferences = Some(PreferencesSession::new(self));
+        }
+    }
 
-                    let resp = theme::hand(resp);
-                    let key_select = resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Space) || i.key_pressed(egui::Key::Enter));
-                    if (resp.clicked() || key_select) && *current != value {
-                        *current = value;
-                        changed = true;
-                    }
+    /// Opens Preferences, or leaves the open window as it is, showing the page `page` (the id its `PageSpec` has).
+    pub(crate) fn open_preferences_at(&mut self, page: &str) {
+        self.open_preferences();
+        if let Some(session) = self.preferences.as_mut() {
+            session.state.selected = page.to_string();
+        }
+    }
+
+    /// Shows the Preferences window for this pass while it is open, and closes it when answered.
+    pub(crate) fn show_preferences(&mut self, ui: &mut Ui) {
+        let Some(mut session) = self.preferences.take() else {
+            return;
+        };
+        let PreferencesSession { state, draft, selection, host, answers } = &mut session;
+        let ctx = ui.ctx().clone();
+        let output = {
+            let mut prefs = Prefs::new(self, draft, selection, host, answers, &ctx);
+            PreferencesWindow::new(Bind::bound(state))
+                .mode(PreferencesMode::Live)
+                .layout(PreferencesLayout::Cards)
+                // Production applies each row as it changes, and Escape closes the window with the typing kept.
+                .escape_keeps_typing()
+                .remember(SaveKey::new("pdfcraft.preferences"))
+                .show(ui, &mut prefs)
+        };
+        if let Some(request) = output.pick_color {
+            let answers = Arc::clone(answers);
+            let key = request.key.clone();
+            self.open_colour_picker(PickerHost::Window(host), request, move |_, _, colour| {
+                if let Ok(mut queue) = answers.lock() {
+                    queue.push((key, colour));
                 }
             });
-        });
-    (changed, first_match_resp)
-}
-
-/// An independent toggle pill button with optional query highlighting.
-/// Returns whether the active state changed and the control's Response.
-pub fn toggle_pill_query(ui: &mut egui::Ui, t: &Tokens, active: &mut bool, label: &str, query: &str) -> (bool, egui::Response) {
-    let mut changed = false;
-    let is_active = *active;
-    let font = theme::medium(12.0);
-    let text_color = if is_active { Color32::WHITE } else { t.text };
-    let label_galley = layout_pill_label(ui, label, query, font, text_color);
-    let w = label_galley.size().x;
-    let (rect, resp) = ui.allocate_exact_size(vec2(w + 20.0, 26.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, is_active, label));
-
-    let (fill, stroke) = if is_active {
-        (t.accent, Stroke::NONE)
-    } else {
-        let press = theme::Press::track(ui, &resp);
-        (press.fill(t.field, t.hover, t.pressed), Stroke::new(1.0, t.border))
-    };
-    ui.painter().rect(rect, CornerRadius::same(13), fill, stroke, egui::StrokeKind::Inside);
-    ui.painter().galley(rect.center() - label_galley.size() / 2.0, label_galley, text_color);
-
-    if resp.has_focus() {
-        ui.painter().rect_stroke(rect.expand(1.0), CornerRadius::same(14), Stroke::new(2.0, t.accent_text), egui::StrokeKind::Outside);
-    }
-
-    let resp = theme::hand(resp);
-    let key_select = resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Space) || i.key_pressed(egui::Key::Enter));
-    if resp.clicked() || key_select {
-        *active = !*active;
-        changed = true;
-    }
-    (changed, resp)
-}
-
-fn layout_pill_label(ui: &egui::Ui, label: &str, query: &str, font: egui::FontId, normal_color: Color32) -> std::sync::Arc<egui::Galley> {
-    let ranges = find_match_ranges(label, query);
-    if ranges.is_empty() {
-        crate::bidi::layout_ui(ui, label.to_owned(), font, normal_color)
-    } else {
-        let (job, _) = create_highlight_job(label, &ranges, font, normal_color);
-        ui.painter().layout_job(job)
-    }
-}
-
-/// A standard card container for a Preferences section.
-/// Groups related settings with clean margins, subtle border and rounded corners.
-pub fn preference_card<R>(
-    ui: &mut egui::Ui,
-    t: &Tokens,
-    title: &str,
-    icon: Option<&str>,
-    ctx: &mut PrefSearchContext,
-    content: impl FnOnce(&mut egui::Ui, &mut PrefSearchContext) -> R,
-) -> R {
-    let card_fill = if t.kind == ThemeKind::Light { Color32::from_rgb(0xF7, 0xF8, 0xFA) } else { Color32::from_rgb(0x24, 0x24, 0x28) };
-    egui::Frame::new()
-        .fill(card_fill)
-        .stroke(Stroke::new(1.0, t.border))
-        .corner_radius(CornerRadius::same(8))
-        .inner_margin(Margin::symmetric(14, 12))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                if let Some(ic) = icon {
-                    ui.add(icons::image(ic, 16.0, t.accent));
-                }
-                ctx.card_title(ui, title, t);
-            });
-            ui.add_space(8.0);
-            content(ui, ctx)
-        })
-        .inner
-}
-
-/// Folds a character for case-insensitive search, folding dotted/dotless i variants
-/// ('I', 'i', 'İ', 'ı') to 'i', Greek sigmas to 'σ', and otherwise following `char::to_lowercase`.
-fn fold_search_char(c: char, mut f: impl FnMut(char)) {
-    match c {
-        'I' | 'i' | '\u{130}' | '\u{131}' => f('i'),
-        'Σ' | 'σ' | 'ς' => f('σ'),
-        _ => {
-            for lc in c.to_lowercase() {
-                f(lc);
-            }
+        }
+        if output.closed.is_none() {
+            self.preferences = Some(session);
         }
     }
 }
 
-/// Finds non-overlapping (start_byte, end_byte) slices in `text` matching `query` case-insensitively.
-/// All byte indices are guaranteed to align to valid char boundaries.
-pub fn find_match_ranges(text: &str, query: &str) -> Vec<(usize, usize)> {
-    let q = query.trim();
-    if q.is_empty() {
-        return Vec::new();
-    }
-    let mut q_chars = Vec::new();
-    for c in q.chars() {
-        fold_search_char(c, |ch| q_chars.push(ch));
-    }
-    if q_chars.is_empty() {
-        return Vec::new();
-    }
-    let char_indices: Vec<(usize, char)> = text.char_indices().collect();
-    let mut ranges = Vec::new();
-    let mut i = 0;
-    while i < char_indices.len() {
-        let mut matched = true;
-        let mut text_char_count = 0;
-        let mut q_idx = 0;
-
-        while q_idx < q_chars.len() {
-            if i + text_char_count >= char_indices.len() {
-                matched = false;
-                break;
-            }
-            let c = char_indices.get(i + text_char_count).map(|(_, ch)| *ch).unwrap_or('\0');
-            let mut c_folded = ['\0'; 4];
-            let mut len = 0;
-            fold_search_char(c, |lc| {
-                if len < c_folded.len() {
-                    c_folded[len] = lc;
-                    len += 1;
-                }
-            });
-            if len == 0 || q_idx + len > q_chars.len() || q_chars.get(q_idx..q_idx + len) != Some(&c_folded[..len]) {
-                matched = false;
-                break;
-            }
-            q_idx += len;
-            text_char_count += 1;
-        }
-
-        if matched
-            && q_idx == q_chars.len()
-            && text_char_count > 0
-            && let Some(start_byte) = char_indices.get(i).map(|(pos, _)| *pos)
-        {
-            let end_byte = if let Some((pos, _)) = char_indices.get(i + text_char_count) { *pos } else { text.len() };
-            ranges.push((start_byte, end_byte));
-            i += text_char_count;
-            continue;
-        }
-        i += 1;
-    }
-    ranges
+/// Strings the pages borrow, built once per pass from the app and the draft.
+struct Texts {
+    auto_scale: String,
+    scale_ids: Vec<(String, String)>,
+    date_samples: Vec<String>,
+    date_follow: String,
+    today: Result<String, String>,
+    unwritable: String,
+    date_help: String,
+    date_custom_id: &'static str,
 }
 
-/// Builds an `egui::text::LayoutJob` with yellow background for matching spans.
-pub fn create_highlight_job(
-    text: &str,
-    ranges: &[(usize, usize)],
-    normal_font: egui::FontId,
-    normal_color: Color32,
-) -> (egui::text::LayoutJob, usize) {
-    let mut job = egui::text::LayoutJob::default();
-    let normal_format = egui::text::TextFormat { font_id: normal_font.clone(), color: normal_color, ..Default::default() };
-    let highlight_format = egui::text::TextFormat {
-        font_id: egui::FontId::new(normal_font.size, egui::FontFamily::Proportional),
-        color: Color32::BLACK,
-        background: Color32::from_rgb(255, 220, 60),
-        ..Default::default()
-    };
-
-    let mut cursor = 0;
-    for &(start, end) in ranges {
-        if start > cursor
-            && let Some(sub) = text.get(cursor..start)
-        {
-            job.append(sub, 0.0, normal_format.clone());
+impl Texts {
+    fn new(app: &PdfCraftApp, draft: &PrefsDraft, ctx: &egui::Context) -> Self {
+        use pdfcraft_engine::dates::DATE_FORMATS;
+        let native_pixels = ctx.native_pixels_per_point().unwrap_or(1.0);
+        let system_text_scale = craft::ui::runtime::env::system_text_scale(ctx).unwrap_or(1.0);
+        let auto_percent = ui_scale::percent(ui_scale::drawn(None, system_text_scale, native_pixels));
+        let sample = |f: &str| format!("{}   {f}", app.date_text(Some(f)).unwrap_or_default());
+        let interface = i18n::current().picker_name(|text| picker_text_is_drawable(ctx, text));
+        let bad = app.date_text(None).map(|today| pdfcraft_engine::dates::unwritable(&today)).unwrap_or_default();
+        let unwritable = if bad.is_empty() {
+            String::new()
+        } else {
+            i18n::fmt(
+                tl!(
+                    "{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy."
+                ),
+                &[("chars", &bad)],
+            )
+        };
+        Self {
+            auto_scale: i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &auto_percent.to_string())]),
+            scale_ids: ui_scale::PRESETS.iter().map(|p| (p.to_string(), format!("{p}%"))).collect(),
+            date_samples: DATE_FORMATS.iter().map(|f| sample(f)).collect(),
+            date_follow: i18n::fmt(tl!("Same as interface ({language})"), &[("language", interface)]),
+            today: app.date_text(Some(&draft.date_format)),
+            unwritable,
+            date_help: i18n::fmt(
+                tl!(
+                    "yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is."
+                ),
+                &[("escape", "\\")],
+            ),
+            date_custom_id: "custom",
         }
-        if let Some(matched) = text.get(start..end) {
-            job.append(matched, 0.0, highlight_format.clone());
-        }
-        cursor = end;
-    }
-    if cursor < text.len()
-        && let Some(sub) = text.get(cursor..)
-    {
-        job.append(sub, 0.0, normal_format);
-    }
-    let count = ranges.len();
-    (job, count)
-}
-
-/// Creates a `WidgetText` highlighting `query` in `text` and returning match count.
-pub fn highlight_widget_text(text: &str, query: &str, normal_font: egui::FontId, normal_color: Color32) -> (egui::WidgetText, usize) {
-    let ranges = find_match_ranges(text, query);
-    if ranges.is_empty() {
-        (egui::WidgetText::from(egui::RichText::new(text).font(normal_font).color(normal_color)), 0)
-    } else {
-        let (job, count) = create_highlight_job(text, &ranges, normal_font, normal_color);
-        (egui::WidgetText::from(job), count)
     }
 }
 
-/// Context for browser-style in-situ text scanning, highlighting, and auto-scrolling in Preferences.
-pub(crate) struct PrefSearchContext<'a> {
-    pub query: &'a str,
-    pub total_matches: usize,
-    pub first_match_scrolled: bool,
-    pub should_scroll: bool,
+/// The id a choice row reports for the "no value" option of the date language and the interface size.
+const AUTO_ID: &str = "auto";
+/// The date language option that follows the interface language.
+const FOLLOW_ID: &str = "";
+
+/// The app's side of the window: maps rows to the draft and the draft to the app.
+struct Prefs<'a> {
+    app: &'a mut PdfCraftApp,
+    draft: &'a mut PrefsDraft,
+    selection: &'a mut SelectionChange,
+    host: &'a mut DialogHost,
+    answers: &'a Answers,
+    ctx: &'a egui::Context,
+    texts: Texts,
 }
 
-impl<'a> PrefSearchContext<'a> {
-    pub fn new(query: &'a str, should_scroll: bool) -> Self {
-        Self { query, total_matches: 0, first_match_scrolled: false, should_scroll }
-    }
-
-    pub fn scroll_if_first_match(&mut self, resp: &egui::Response, count: usize) {
-        if count > 0 && self.should_scroll && !self.first_match_scrolled {
-            resp.scroll_to_me(Some(egui::Align::Center));
-            self.first_match_scrolled = true;
-        }
-    }
-
-    pub fn checkbox(&mut self, ui: &mut egui::Ui, checked: &mut bool, label: &str, t: &Tokens) -> egui::Response {
-        let (widget_text, count) = highlight_widget_text(label, self.query, theme::regular(13.0), t.text);
-        self.total_matches += count;
-        let resp = ui.add(widgets::checkbox(checked, widget_text));
-        self.scroll_if_first_match(&resp, count);
-        resp
-    }
-
-    pub fn label(&mut self, ui: &mut egui::Ui, text: &str, font: egui::FontId, color: Color32) -> egui::Response {
-        let (widget_text, count) = highlight_widget_text(text, self.query, font, color);
-        self.total_matches += count;
-        let resp = ui.label(widget_text);
-        self.scroll_if_first_match(&resp, count);
-        resp
-    }
-
-    pub fn label_primary(&mut self, ui: &mut egui::Ui, text: &str, t: &Tokens) -> egui::Response {
-        self.label(ui, text, theme::regular(13.0), t.text)
-    }
-
-    pub fn label_secondary(&mut self, ui: &mut egui::Ui, text: &str, t: &Tokens) -> egui::Response {
-        self.label(ui, text, theme::regular(11.5), t.text_muted)
-    }
-
-    pub fn card_title(&mut self, ui: &mut egui::Ui, title: &str, t: &Tokens) -> egui::Response {
-        self.label(ui, title, theme::semibold(13.5), t.text)
-    }
-
-    pub fn pill_choice<T: PartialEq + Copy>(&mut self, ui: &mut egui::Ui, t: &Tokens, current: &mut T, options: &[(T, &str)]) -> bool {
-        let mut matches = 0;
-        for &(_, label) in options {
-            matches += find_match_ranges(label, self.query).len();
-        }
-        self.total_matches += matches;
-        let with_a11y: Vec<(T, &str, &str)> = options.iter().map(|&(v, l)| (v, l, l)).collect();
-        let (changed, match_resp) = segmented_pill_choice_a11y_query(ui, t, current, &with_a11y, self.query);
-        if let Some(resp) = match_resp {
-            self.scroll_if_first_match(&resp, matches);
-        }
-        changed
-    }
-
-    pub fn pill_choice_a11y<T: PartialEq + Copy>(&mut self, ui: &mut egui::Ui, t: &Tokens, current: &mut T, options: &[(T, &str, &str)]) -> bool {
-        let mut matches = 0;
-        for &(_, label, _) in options {
-            matches += find_match_ranges(label, self.query).len();
-        }
-        self.total_matches += matches;
-        let (changed, match_resp) = segmented_pill_choice_a11y_query(ui, t, current, options, self.query);
-        if let Some(resp) = match_resp {
-            self.scroll_if_first_match(&resp, matches);
-        }
-        changed
-    }
-
-    pub fn toggle_pill(&mut self, ui: &mut egui::Ui, t: &Tokens, active: &mut bool, label: &str) -> bool {
-        let matches = find_match_ranges(label, self.query).len();
-        self.total_matches += matches;
-        let (changed, resp) = toggle_pill_query(ui, t, active, label, self.query);
-        self.scroll_if_first_match(&resp, matches);
-        changed
+impl<'a> Prefs<'a> {
+    fn new(
+        app: &'a mut PdfCraftApp,
+        draft: &'a mut PrefsDraft,
+        selection: &'a mut SelectionChange,
+        host: &'a mut DialogHost,
+        answers: &'a Answers,
+        ctx: &'a egui::Context,
+    ) -> Self {
+        let texts = Texts::new(app, draft, ctx);
+        Self { app, draft, selection, host, answers, ctx, texts }
     }
 }
 
-/// Whether the interface can draw a language picker's native name.
-fn picker_text_is_drawable(ui: &egui::Ui, text: &str) -> bool {
+type Table<'a, T> = Vec<(T, &'static str, &'a str)>;
+
+/// A choice row over `table` (value, id, label) with `current` chosen.
+fn choice_row<'a, T: Copy + PartialEq>(key: &'a str, label: &'a str, current: T, table: &Table<'a, T>) -> RowSpec<'a> {
+    let value = table.iter().find(|(v, ..)| *v == current).map_or("", |(_, id, _)| *id);
+    RowSpec::new(key, label, RowKind::choice(value, table.iter().map(|(_, id, l)| Entry::new(*id, l.to_string())).collect()))
+}
+
+/// The value a choice row's `id` stands for.
+fn lookup<T: Copy>(table: &Table<'_, T>, id: &str) -> Option<T> {
+    table.iter().find(|(_, i, _)| *i == id).map(|(v, ..)| *v)
+}
+
+fn side_table<'a>() -> Table<'a, bool> {
+    vec![(false, "left", tl!("Left")), (true, "right", tl!("Right"))]
+}
+
+fn animation_table<'a>() -> Table<'a, MotionChoice> {
+    vec![
+        (MotionChoice::System, "system", tl_ctx!("animation effects", "Use system setting")),
+        (MotionChoice::Full, "on", tl_ctx!("animation effects", "On")),
+        (MotionChoice::Off, "off", tl_ctx!("animation effects", "Off")),
+    ]
+}
+
+fn mode_table<'a>() -> Table<'a, Mode> {
+    vec![
+        (Mode::AllTools, "all", tl!("All tools")),
+        (Mode::Read, "read", tl!("Read")),
+        (Mode::Edit, "edit", tl!("Edit")),
+        (Mode::Convert, "convert", tl!("Convert")),
+        (Mode::Sign, "sign", tl!("E-Sign")),
+    ]
+}
+
+fn layout_table<'a>() -> Table<'a, PageDisplay> {
+    vec![(PageDisplay::Single, "single", tl!("Single page")), (PageDisplay::TwoUp, "two-up", tl!("Two-page view"))]
+}
+
+fn fit_table<'a>() -> Table<'a, Fit> {
+    vec![(Fit::Width, "width", tl!("Fit to width")), (Fit::Page, "page", tl!("Zoom to page level")), (Fit::None, "custom", tl!("Custom"))]
+}
+
+fn unit_table<'a>() -> Table<'a, Unit> {
+    vec![
+        (Unit::Inches, "in", Unit::Inches.label()),
+        (Unit::Millimetres, "mm", Unit::Millimetres.label()),
+        (Unit::Centimetres, "cm", Unit::Centimetres.label()),
+        (Unit::Points, "pt", Unit::Points.label()),
+    ]
+}
+
+fn speed_table<'a>() -> Table<'a, ScrollSpeed> {
+    vec![
+        (ScrollSpeed::Slow, "slow", tl_ctx!("scroll speed", ScrollSpeed::Slow.label())),
+        (ScrollSpeed::Normal, "normal", tl_ctx!("scroll speed", ScrollSpeed::Normal.label())),
+        (ScrollSpeed::Fast, "fast", tl_ctx!("scroll speed", ScrollSpeed::Fast.label())),
+    ]
+}
+
+/// The reading-colour presets by the id `ReadingColors::mode_name` gives them.
+fn reading_presets() -> [(&'static str, &'static str, pdfcraft_render::ReadingColors); 5] {
+    [
+        ("off", tl!("Off"), pdfcraft_render::ReadingColors::default()),
+        ("black-on-white", tl!("Black on white"), pdfcraft_render::ReadingColors::BLACK_ON_WHITE),
+        ("white-on-black", tl!("White on black"), pdfcraft_render::ReadingColors::WHITE_ON_BLACK),
+        ("yellow-on-black", tl!("Yellow on black"), pdfcraft_render::ReadingColors::YELLOW_ON_BLACK),
+        ("green-on-black", tl!("Green on black"), pdfcraft_render::ReadingColors::GREEN_ON_BLACK),
+    ]
+}
+
+fn rgb(c: [u8; 3]) -> Rgba {
+    Rgba([c[0], c[1], c[2], 255])
+}
+
+/// Whether the interface can draw a language picker's native name in both the body and semibold faces.
+fn picker_text_is_drawable(ctx: &egui::Context, text: &str) -> bool {
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (ui, text);
+        let _ = (ctx, text);
         true
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        ui.fonts_mut(|fonts| fonts.has_glyphs(&egui::FontId::proportional(13.0), text))
+        ctx.fonts_mut(|fonts| {
+            fonts.has_glyphs(&egui::FontId::proportional(13.0), text)
+                && fonts.has_glyphs(&egui::FontId::new(13.0, egui::FontFamily::Name("semibold".into())), text)
+        })
     }
 }
 
-/// The date picker's displayed name.
-pub(crate) fn date_language_picker_name(l: &pdfcraft_engine::dates::DateLanguage, drawable: impl FnOnce(&str) -> bool) -> &'static str {
-    match crate::i18n::Lang::from_code(l.code) {
-        Some(language) => language.picker_name(drawable),
-        None => l.name,
-    }
+/// The name a date-language option shows: the language's own name when the fonts can draw it, else English.
+fn date_language_picker_name(ctx: &egui::Context, l: &pdfcraft_engine::dates::DateLanguage) -> &'static str {
+    if picker_text_is_drawable(ctx, l.name) { l.name } else { i18n::english_name_for_code(l.code) }
 }
 
-/// Interactive search box widget at the top of Preferences.
-fn preference_search_box_at(ui: &mut egui::Ui, t: &Tokens, query: &mut String, matches_count: Option<usize>, rect: Rect) {
-    let stroke = Stroke::new(1.0, t.border);
-    ui.painter().rect(rect, CornerRadius::same(15), t.field, stroke, egui::StrokeKind::Inside);
+impl PreferencesModel for Prefs<'_> {
+    fn pages(&self) -> Vec<PageSpec<'_>> {
+        vec![self.general_page(), self.appearance_page(), self.documents_page(), self.comment_page(), self.fill_sign_page(), self.javascript_page()]
+    }
 
-    // Magnifying glass icon: 14pt icon centered vertically at (rect.min.x + 16, rect.center().y)
-    let icon_rect = Rect::from_center_size(pos2(rect.min.x + 16.0, rect.center().y), vec2(14.0, 14.0));
-    icons::paint(ui, icon_rect, "search", 14.0, t.text_muted);
-
-    let badge_text = if !query.trim().is_empty() {
-        let count = matches_count.unwrap_or(0);
-        Some(crate::i18n::trn(crate::i18n::current(), count as u64, "{n} match", "{n} matches"))
-    } else {
-        None
-    };
-
-    let mut right_cursor = rect.max.x;
-    let edit_id = ui.auto_id_with("search_input");
-
-    if !query.is_empty() {
-        let clear_rect = Rect::from_center_size(pos2(right_cursor - 14.0, rect.center().y), vec2(16.0, 16.0));
-        let clear_resp = ui.interact(clear_rect, ui.auto_id_with("clear_search"), Sense::click());
-        clear_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Clear search")));
-        icons::paint(ui, clear_rect, "x", 12.0, if clear_resp.hovered() { t.text } else { t.text_muted });
-        if clear_resp.clicked() {
-            query.clear();
-            let state = egui::text_edit::TextEditState::default();
-            state.store(ui.ctx(), edit_id);
+    fn set(&mut self, key: &str, value: PrefValue) {
+        let d = &mut *self.draft;
+        match (key, value) {
+            ("general.language", PrefValue::Choice(id)) => {
+                d.language = id;
+                // Previews the language; `cancel` installs the saved one again.
+                i18n::set_current(Lang::from_pref(&d.language));
+            }
+            ("general.scale", PrefValue::Choice(id)) => d.ui_scale = id.parse::<u16>().ok().map(|p| f32::from(p) / 100.0),
+            ("general.tools_side", PrefValue::Choice(id)) => d.tools_right = lookup(&side_table(), &id).unwrap_or(d.tools_right),
+            ("general.rail_side", PrefValue::Choice(id)) => d.rail_right = lookup(&side_table(), &id).unwrap_or(d.rail_right),
+            ("general.animation", PrefValue::Choice(id)) => d.animation = lookup(&animation_table(), &id).unwrap_or(d.animation),
+            ("general.reopen", PrefValue::Bool(v)) => d.reopen_last_session = v,
+            ("general.restore_view", PrefValue::Bool(v)) => d.restore_last_view = v,
+            ("general.reload", PrefValue::Bool(v)) => d.reload_changed_files = v,
+            ("general.updates", PrefValue::Bool(v)) => d.update_check_at_start = v,
+            ("general.secured_notice", PrefValue::Bool(v)) => d.show_secured_notice = v,
+            ("general.recent", PrefValue::Int(v)) => d.recent_limit = usize::try_from(v).unwrap_or(0).min(crate::RECENT_FILES_MAX),
+            ("general.title_bar", PrefValue::Bool(v)) => d.system_title_bar = v,
+            ("appearance.edge_shadows", PrefValue::Bool(v)) => d.show_page_edge_shadows = v,
+            ("appearance.highlight_fields", PrefValue::Bool(v)) => d.highlight_fields = v,
+            ("appearance.reading.mode", PrefValue::Choice(id)) => {
+                if id == "custom" {
+                    if d.reading_colors.params.is_none() {
+                        d.reading_colors = pdfcraft_render::ReadingColors::BLACK_ON_WHITE;
+                    }
+                } else if let Some((.., colors)) = reading_presets().into_iter().find(|(name, ..)| *name == id) {
+                    d.reading_colors = colors;
+                }
+            }
+            ("appearance.reading.text", PrefValue::Color(c)) => {
+                if let Some(p) = d.reading_colors.params.as_mut() {
+                    p.text = [c.0[0], c.0[1], c.0[2]];
+                }
+            }
+            ("appearance.reading.background", PrefValue::Color(c)) => {
+                if let Some(p) = d.reading_colors.params.as_mut() {
+                    p.background = [c.0[0], c.0[1], c.0[2]];
+                }
+            }
+            ("appearance.reading.only_black", PrefValue::Bool(v)) => {
+                if let Some(p) = d.reading_colors.params.as_mut() {
+                    p.only_black = v;
+                }
+            }
+            ("appearance.reading.line_art", PrefValue::Bool(v)) => {
+                if let Some(p) = d.reading_colors.params.as_mut() {
+                    p.line_art = v;
+                }
+            }
+            ("view.mode", PrefValue::Choice(id)) => d.default_mode = lookup(&mode_table(), &id).unwrap_or(d.default_mode),
+            ("view.layout", PrefValue::Choice(id)) => d.view_defaults.display = lookup(&layout_table(), &id).unwrap_or(d.view_defaults.display),
+            ("view.continuous", PrefValue::Bool(v)) => d.view_defaults.continuous = v,
+            ("view.gaps", PrefValue::Bool(v)) => d.view_defaults.page_gaps = v,
+            ("view.full_screen_fill", PrefValue::Bool(v)) => d.full_screen_fill = v,
+            ("view.full_screen_escape", PrefValue::Bool(v)) => d.full_screen_escape_exits = v,
+            ("view.fit", PrefValue::Choice(id)) => d.view_defaults.fit = lookup(&fit_table(), &id).unwrap_or(d.view_defaults.fit),
+            ("view.zoom", PrefValue::Int(v)) => {
+                d.view_defaults.fit = Fit::None;
+                d.view_defaults.zoom = v.clamp(8, 6400) as f64 / 100.0;
+            }
+            ("view.always", PrefValue::Bool(v)) => d.always_default_view = v,
+            ("view.text_links", PrefValue::Bool(v)) => d.text_links = v,
+            ("view.units", PrefValue::Choice(id)) => d.units = lookup(&unit_table(), &id).unwrap_or(d.units),
+            ("view.scroll_speed", PrefValue::Choice(id)) => d.scroll_speed = lookup(&speed_table(), &id).unwrap_or(d.scroll_speed),
+            ("view.invert_middle", PrefValue::Bool(v)) => d.invert_middle_drag = v,
+            ("comment.author", PrefValue::Text(v)) => d.author = v.chars().take(crate::MAX_AUTHOR_CHARS).collect(),
+            ("comment.hide_hover", PrefValue::Bool(v)) => d.hide_empty_highlight_hover = v,
+            ("fill.flatten", PrefValue::Bool(v)) => d.flatten_fill_sign_on_save = v,
+            ("fill.ask_lock", PrefValue::Bool(v)) => d.ask_to_lock_signatures = v,
+            ("fill.date_preset", PrefValue::Choice(id)) => {
+                if id != self.texts.date_custom_id {
+                    d.date_format = id;
+                }
+            }
+            ("fill.date_language", PrefValue::Choice(id)) => d.date_language = (id != FOLLOW_ID).then_some(id),
+            ("javascript.enable", PrefValue::Bool(v)) => d.javascript = v,
+            _ => {}
         }
-        right_cursor -= 28.0;
     }
 
-    if let Some(ref text) = badge_text {
-        let font = theme::medium(11.0);
-        let count = matches_count.unwrap_or(0);
-        let badge_color = if count > 0 { t.accent_text } else { t.text_muted };
-        let galley = crate::bidi::layout_ui(ui, text.clone(), font, badge_color);
-        let bw = galley.size().x;
-        let badge_pos = pos2(right_cursor - bw - 4.0, rect.center().y - galley.size().y / 2.0);
-        ui.painter().galley(badge_pos, galley, badge_color);
-        let badge_rect = Rect::from_min_size(badge_pos, vec2(bw, 16.0));
-        let badge_resp = ui.interact(badge_rect, ui.auto_id_with("search_match_count"), Sense::hover());
-        badge_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text.clone()));
-        right_cursor -= bw + 8.0;
+    fn custom_row(&mut self, ui: &mut Ui, key: &str) -> bool {
+        if key != "fill.date_pattern" {
+            return false;
+        }
+        let before = self.draft.date_format.clone();
+        let mut text = self.draft.date_format.clone();
+        TextField::new(tl!("Pattern"), Bind::bound(&mut text)).limit(pdfcraft_engine::dates::MAX_DATE_FORMAT_CHARS).show(ui);
+        self.draft.date_format = text;
+        match &self.texts.today {
+            Ok(today) => {
+                let line = i18n::fmt(tl!("Today: {date}"), &[("date", today)]);
+                Notice::new(Tone::Info, Label::from(line)).layout(NoticeLayout::Inline).show(ui);
+            }
+            Err(e) => {
+                Notice::new(Tone::Bad, Label::from(e.clone())).layout(NoticeLayout::Inline).show(ui);
+            }
+        }
+        if !self.texts.unwritable.is_empty() {
+            Notice::new(Tone::Warn, Label::from(self.texts.unwritable.clone())).layout(NoticeLayout::Inline).show(ui);
+        }
+        self.draft.date_format != before
     }
 
-    let edit_rect = Rect::from_min_max(pos2(rect.min.x + 28.0, rect.min.y), pos2(right_cursor.max(rect.min.x + 30.0), rect.max.y));
-    let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(edit_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
-    let edit = child_ui.add(
-        egui::TextEdit::singleline(query)
-            .id(edit_id)
-            .hint_text(tl!("Search settings…"))
-            .frame(egui::Frame::NONE)
-            .align(egui::Align2::LEFT_CENTER)
-            .desired_width(edit_rect.width()),
-    );
-    edit.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, tl!("Search settings…")));
-
-    if edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-        query.clear();
-        let state = egui::text_edit::TextEditState::default();
-        state.store(ui.ctx(), edit_id);
-    }
-}
-
-/// Top header for Preferences: Title on the left, search box and match count badge on the right.
-pub(crate) fn preferences_header(ui: &mut egui::Ui, t: &Tokens) {
-    let search_id = egui::Id::unique("pdfcraft_preferences_search_query");
-    let mut query: String = ui.data(|d| d.get_temp(search_id)).unwrap_or_default();
-    let matches_id = egui::Id::unique("pdfcraft_preferences_search_matches");
-    let last_matches: usize = ui.data(|d| d.get_temp(matches_id)).unwrap_or(0);
-
-    // Top Header: Title on the left, Search bar on the right.
-    // Allocate the full available width so the search bar aligns flush with the card boxes below.
-    let full_w = ui.available_width();
-    let header_h = 30.0;
-    let (header_rect, _) = ui.allocate_exact_size(vec2(full_w, header_h), Sense::hover());
-
-    // Title on the left, vertically centered in the header row:
-    let title_rect = Rect::from_min_max(header_rect.min, pos2(header_rect.min.x + 240.0, header_rect.max.y));
-    let mut title_ui = ui.new_child(egui::UiBuilder::new().max_rect(title_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
-    title_ui.label(RichText::new(tl!("Preferences")).font(theme::semibold(18.0)).color(t.text));
-
-    // Search bar on the right, right edge flush with the card box boundary:
-    let search_w = 230.0;
-    let search_rect = Rect::from_min_max(pos2(header_rect.max.x - search_w, header_rect.min.y), header_rect.max);
-    let match_count = (!query.trim().is_empty()).then_some(last_matches);
-    let before = query.clone();
-    preference_search_box_at(ui, t, &mut query, match_count, search_rect);
-    if query != before {
-        ui.data_mut(|d| d.insert_temp(search_id, query));
-        ui.ctx().request_repaint();
-    }
-}
-
-/// The body of the Preferences dialog with card layout and browser-style in-situ text scanning.
-pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
-    let search_id = egui::Id::unique("pdfcraft_preferences_search_query");
-    let query: String = ui.data(|d| d.get_temp(search_id)).unwrap_or_default();
-    let matches_id = egui::Id::unique("pdfcraft_preferences_search_matches");
-    let last_matches: usize = ui.data(|d| d.get_temp(matches_id)).unwrap_or(0);
-    let last_scrolled_id = egui::Id::unique("pdfcraft_pref_last_scrolled_query");
-    let last_scrolled_query: String = ui.data(|d| d.get_temp(last_scrolled_id)).unwrap_or_default();
-
-    let should_scroll = !query.trim().is_empty() && query != last_scrolled_query;
-    let mut ctx = PrefSearchContext::new(&query, should_scroll);
-
-    // Card 1: General & Interface
-    let title1 = tl!("General & Interface");
-    preference_card(ui, t, title1, Some("settings"), &mut ctx, |ui, ctx| {
-        card_general(ui, app, t, ctx);
-    });
-    ui.add_space(12.0);
-
-    // Card 2: Appearance & Theme
-    let title2 = tl_ctx!("theme", "Appearance");
-    preference_card(ui, t, title2, Some("sun"), &mut ctx, |ui, ctx| {
-        card_appearance(ui, app, t, ctx);
-    });
-    ui.add_space(12.0);
-
-    // Card 3: Documents and View
-    let title3 = tl!("Documents and view");
-    preference_card(ui, t, title3, Some("file-text"), &mut ctx, |ui, ctx| {
-        card_documents_and_view(ui, app, t, ctx);
-    });
-    ui.add_space(12.0);
-
-    // Card 4: Comment
-    let title4 = tl!("Comment");
-    preference_card(ui, t, title4, Some("message-square-text"), &mut ctx, |ui, ctx| {
-        card_identity(ui, app, t, ctx);
-    });
-    ui.add_space(12.0);
-
-    // Card 5: Fill & Sign
-    let title5 = tl!("Fill & Sign");
-    preference_card(ui, t, title5, Some("pen-tool"), &mut ctx, |ui, ctx| {
-        card_fill_and_sign(ui, app, t, ctx);
-    });
-    ui.add_space(12.0);
-
-    // Card 6: JavaScript
-    let title6 = "JavaScript";
-    preference_card(ui, t, title6, Some("code-xml"), &mut ctx, |ui, ctx| {
-        card_javascript(ui, app, t, ctx);
-    });
-    ui.add_space(12.0);
-
-    if ctx.first_match_scrolled {
-        ui.data_mut(|d| d.insert_temp(last_scrolled_id, query.clone()));
-    } else if query.trim().is_empty() {
-        ui.data_mut(|d| d.insert_temp(last_scrolled_id, String::new()));
+    fn custom_page(&mut self, ui: &mut Ui, page: &str) -> bool {
+        if page != "appearance" {
+            return false;
+        }
+        let before = self.selection.clone();
+        // PdfCraft keeps its own appearance and no favourite themes (L-224).
+        let suite = self.app.suite_view();
+        let system_dark = craft::ui::runtime::env::system_appearance(self.ctx).appearance.mode == Some(craft::theme::Mode::Dark);
+        AppearancePage::new(&suite, Bind::bound(&mut *self.selection))
+            .can_favorite(false)
+            .size(false)
+            .text_size(false)
+            .contrast(false)
+            .system_dark(system_dark)
+            .show(ui);
+        *self.selection != before
     }
 
-    if ctx.total_matches != last_matches {
-        ui.data_mut(|d| d.insert_temp(matches_id, ctx.total_matches));
-        ui.ctx().request_repaint();
+    fn reset_page(&mut self, page: &str) {
+        let fresh = PrefsDraft::defaults();
+        let d = &mut *self.draft;
+        match page {
+            "general" => {
+                d.language = fresh.language;
+                i18n::set_current(Lang::from_pref(&d.language));
+                d.ui_scale = fresh.ui_scale;
+                d.tools_right = fresh.tools_right;
+                d.rail_right = fresh.rail_right;
+                d.animation = fresh.animation;
+                d.reopen_last_session = fresh.reopen_last_session;
+                d.restore_last_view = fresh.restore_last_view;
+                d.reload_changed_files = fresh.reload_changed_files;
+                d.update_check_at_start = fresh.update_check_at_start;
+                d.show_secured_notice = fresh.show_secured_notice;
+                d.recent_limit = fresh.recent_limit;
+                d.system_title_bar = fresh.system_title_bar;
+            }
+            "appearance" => {
+                *self.selection = SelectionChange::default();
+                d.show_page_edge_shadows = fresh.show_page_edge_shadows;
+                d.reading_colors = fresh.reading_colors;
+                d.highlight_fields = fresh.highlight_fields;
+            }
+            "documents" => {
+                d.default_mode = fresh.default_mode;
+                d.view_defaults = fresh.view_defaults;
+                d.full_screen_fill = fresh.full_screen_fill;
+                d.full_screen_escape_exits = fresh.full_screen_escape_exits;
+                d.always_default_view = fresh.always_default_view;
+                d.text_links = fresh.text_links;
+                d.units = fresh.units;
+                d.scroll_speed = fresh.scroll_speed;
+                d.invert_middle_drag = fresh.invert_middle_drag;
+            }
+            "comment" => {
+                d.author = fresh.author;
+                d.hide_empty_highlight_hover = fresh.hide_empty_highlight_hover;
+            }
+            "fill" => {
+                d.flatten_fill_sign_on_save = fresh.flatten_fill_sign_on_save;
+                d.ask_to_lock_signatures = fresh.ask_to_lock_signatures;
+                d.date_format = fresh.date_format;
+                d.date_language = fresh.date_language;
+            }
+            "javascript" => d.javascript = fresh.javascript,
+            _ => {}
+        }
+    }
+
+    fn nested(&mut self, ui: &mut Ui) {
+        self.host.run(ui);
+        let answered = self.answers.lock().map(|mut queue| std::mem::take(&mut *queue)).unwrap_or_default();
+        for (key, colour) in answered {
+            self.set_color(&key, colour);
+        }
+    }
+
+    fn nested_open(&self) -> bool {
+        !self.host.is_empty()
     }
 }
 
-/// Content for Card 1: General & Interface
-fn card_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
-    ui.horizontal(|ui| {
-        let label = ctx.label_primary(ui, tl!("Interface language"), t);
-        let (selected, picker) = {
-            let drawable = |text: &str| picker_text_is_drawable(ui, text);
-            let selected = crate::i18n::Lang::from_code(&app.language)
-                .map_or_else(|| tl!("Auto").to_owned(), |language| language.picker_name(drawable).to_owned());
-            let picker = crate::i18n::Lang::for_picker_by(|language| language.picker_name(drawable))
-                .into_iter()
-                .map(|language| (language, language.picker_name(drawable)))
-                .collect::<Vec<_>>();
-            (selected, picker)
+impl PreferencesDraft for Prefs<'_> {
+    fn differs(&self) -> bool {
+        *self.draft != PrefsDraft::from_app(self.app) || *self.selection != SelectionChange::default()
+    }
+
+    fn can_ok(&self) -> bool {
+        self.texts.today.is_ok()
+    }
+
+    fn apply(&mut self) -> Result<(), String> {
+        let d = self.draft.clone();
+        self.app.date_text(Some(&d.date_format))?;
+        let old_defaults = self.app.view_defaults;
+        let old_always = self.app.always_default_view;
+
+        // The date settings can still be refused by the session; they go first so a failure leaves the app unchanged.
+        self.app.session.set_date_format(&d.date_format).map_err(|_| tl!("The date pattern can't be used.").to_string())?;
+        self.app.session.set_date_language(d.date_language.as_deref()).map_err(|_| tl!("The date language can't be used.").to_string())?;
+
+        self.app.language = d.language;
+        i18n::set_current(Lang::from_pref(&self.app.language));
+        self.app.ui_scale = d.ui_scale;
+        crate::side_panels::set_tools_on_right(self.app, d.tools_right)?;
+        crate::side_panels::set_rail_side(self.app, if d.rail_right { DockSide::End } else { DockSide::Start })?;
+        self.app.animation_effects = d.animation;
+        self.app.reopen_last_session = d.reopen_last_session;
+        self.app.restore_last_view = d.restore_last_view;
+        self.app.reload_changed_files = d.reload_changed_files;
+        self.app.update_check_at_start = d.update_check_at_start;
+        self.app.show_secured_notice = d.show_secured_notice;
+        self.app.recent_limit = d.recent_limit;
+        self.app.recent.truncate(d.recent_limit);
+        let title_bar = if d.system_title_bar { TitleBarPref::System } else { TitleBarPref::Integrated };
+        if title_bar != self.app.title_bar_choice {
+            self.app.title_bar_choice = title_bar;
+            self.app.set_title_bar_choice(self.ctx, title_bar);
+        }
+        self.app.show_page_edge_shadows = d.show_page_edge_shadows;
+        self.app.set_reading_colors(d.reading_colors);
+        self.app.default_mode = d.default_mode;
+        self.app.view_defaults = d.view_defaults;
+        self.app.full_screen_fill = d.full_screen_fill;
+        self.app.full_screen_escape_exits = d.full_screen_escape_exits;
+        self.app.highlight_fields = d.highlight_fields;
+        self.app.always_default_view = d.always_default_view;
+        self.app.text_links = d.text_links;
+        self.app.units = d.units;
+        self.app.scroll_speed = d.scroll_speed;
+        self.app.invert_middle_drag = d.invert_middle_drag;
+        self.app.comment_prefs.author = d.author;
+        self.app.comment_prefs.hide_empty_highlight_hover = d.hide_empty_highlight_hover;
+        self.app.flatten_fill_sign_on_save = d.flatten_fill_sign_on_save;
+        self.app.ask_to_lock_signatures = d.ask_to_lock_signatures;
+
+        self.app.session.set_javascript(d.javascript);
+        self.app.apply_selection(std::mem::take(&mut *self.selection));
+
+        let defaults = self.app.view_defaults;
+        let changes = ViewPrefChanges {
+            always_reset: old_always != self.app.always_default_view,
+            layout: old_defaults.display != defaults.display,
+            continuous: old_defaults.continuous != defaults.continuous,
+            gaps: old_defaults.page_gaps != defaults.page_gaps,
+            fit: old_defaults.fit != defaults.fit,
+            zoom: old_defaults.zoom != defaults.zoom,
         };
-        let before = app.language.clone();
-        craft_ui::ComboBox::from_id_salt("interface-language")
-            .selected_text(selected)
-            .width(160.0)
-            .show_ui(ui, |ui| {
-                if ui.selectable_value(&mut app.language, crate::i18n::AUTO.to_string(), tl!("Auto")).clicked() {
-                    ui.close();
-                }
-                for (language, name) in &picker {
-                    if ui.selectable_value(&mut app.language, language.code().to_string(), *name).clicked() {
-                        ui.close();
-                    }
-                }
-            })
-            .response
-            .labelled_by(label.id);
-        if app.language != before {
-            crate::i18n::set_current(crate::i18n::Lang::from_pref(&app.language));
+        if self.app.always_default_view && changes.any() {
+            for view in &mut self.app.views {
+                apply_view_pref_changes(view, &defaults, changes);
+            }
+        } else if let Some(view) = self.app.active.and_then(|i| self.app.views.get_mut(i)) {
+            apply_view_pref_changes(view, &defaults, ViewPrefChanges { always_reset: false, ..changes });
         }
-
-        ui.add_space(16.0);
-        use crate::ui_scale;
-        let label_size = ctx.label_primary(ui, tl!("Interface size"), t);
-        let native = ui.ctx().native_pixels_per_point().unwrap_or(1.0);
-        let auto_percent = ui_scale::percent(ui_scale::drawn(None, app.system_text_scale, native));
-        let auto = crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &auto_percent.to_string())]);
-        let selected = app.ui_scale.map_or_else(|| auto.clone(), |f| format!("{}%", ui_scale::percent(f)));
-        craft_ui::ComboBox::from_id_salt("interface-size")
-            .selected_text(selected)
-            .width(130.0)
-            .show_ui(ui, |ui| {
-                if ui.selectable_value(&mut app.ui_scale, None, auto).clicked() {
-                    ui.close();
-                }
-                for p in ui_scale::PRESETS {
-                    let factor = f32::from(p) / 100.0;
-                    if ui.selectable_label(app.ui_scale.is_some_and(|f| ui_scale::percent(f) == u32::from(p)), format!("{p}%")).clicked() {
-                        app.ui_scale = Some(factor);
-                        ui.close();
-                    }
-                }
-            })
-            .response
-            .labelled_by(label_size.id);
-    });
-    ctx.label_secondary(ui, tl!("Auto follows the system's text size. Pages always render at the display's full resolution."), t);
-    ui.add_space(6.0);
-
-    ui.horizontal(|ui| {
-        ctx.label_primary(ui, tl!("Tools panel side"), t);
-        let right = app.side_panels.tools_on_right();
-        let mut side = if right { ToolsSide::Right } else { ToolsSide::Left };
-        if ctx.pill_choice(ui, t, &mut side, &[(ToolsSide::Left, tl!("Left")), (ToolsSide::Right, tl!("Right"))]) {
-            app.side_panels.tools_side = side;
-        }
-
-        ui.add_space(16.0);
-        ctx.label_primary(ui, tl!("Navigation rail side"), t);
-        let rail_right = app.side_panels.rail_on_right();
-        let mut rside = if rail_right { ToolsSide::Right } else { ToolsSide::Left };
-        let left_a11y = format!("{}: {}", tl!("Navigation rail side"), tl!("Left"));
-        let right_a11y = format!("{}: {}", tl!("Navigation rail side"), tl!("Right"));
-        if ctx.pill_choice_a11y(ui, t, &mut rside, &[(ToolsSide::Left, tl!("Left"), &left_a11y), (ToolsSide::Right, tl!("Right"), &right_a11y)]) {
-            app.side_panels.rail_side = rside;
-        }
-    });
-    ui.add_space(6.0);
-
-    ui.horizontal(|ui| {
-        ctx.label_primary(ui, tl!("Animation effects"), t);
-        ctx.pill_choice(
-            ui,
-            t,
-            &mut app.animation_effects,
-            &[
-                (AnimationEffects::System, tl_ctx!("animation effects", AnimationEffects::System.label())),
-                (AnimationEffects::On, tl_ctx!("animation effects", AnimationEffects::On.label())),
-                (AnimationEffects::Off, tl_ctx!("animation effects", AnimationEffects::Off.label())),
-            ],
-        );
-    });
-    ui.add_space(6.0);
-
-    #[cfg(not(target_arch = "wasm32"))]
-    ctx.checkbox(ui, &mut app.reopen_last_session, tl!("Reopen the files that were open when PdfCraft last closed"), t);
-    #[cfg(not(target_arch = "wasm32"))]
-    ctx.checkbox(ui, &mut app.restore_last_view, tl!("Restore the last view (page, zoom and page display) when a document is opened again"), t);
-    #[cfg(not(target_arch = "wasm32"))]
-    ctx.checkbox(ui, &mut app.reload_changed_files, tl!("Reload documents when their files change on disk"), t);
-    #[cfg(not(target_arch = "wasm32"))]
-    ctx.checkbox(ui, &mut app.update_check_at_start, tl!("Check for updates when PdfCraft starts"), t);
-    ctx.checkbox(ui, &mut app.show_secured_notice, tl!("Show a notice when a document is secured"), t);
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        ui.horizontal(|ui| {
-            let label = ctx.label_primary(ui, tl!("Recent files to keep"), t);
-            ui.add(egui::DragValue::new(&mut app.recent_limit).range(0..=crate::RECENT_FILES_MAX)).labelled_by(label.id);
-        });
-        ctx.label_secondary(ui, tl!("Lowering this forgets the oldest files. At 0 there is no list."), t);
+        Ok(())
     }
 
-    if app.window_controls.is_some() {
-        ctx.checkbox(ui, &mut app.system_title_bar, tl!("Use system title bar"), t).on_hover_text(tl!(
-            "Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme."
-        ));
+    fn cancel(&mut self) {
+        i18n::set_current(Lang::from_pref(&self.app.language));
+        *self.selection = SelectionChange::default();
     }
 }
 
-/// Content for Card 2: Appearance & Theme
-fn card_appearance(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
-    if ctx.checkbox(ui, &mut app.show_page_edge_shadows, tl!("Show Page Edge Shadows"), t).changed() {
-        ui.ctx().request_repaint();
+impl Prefs<'_> {
+    fn general_page(&self) -> PageSpec<'_> {
+        let d = &*self.draft;
+        let t = &self.texts;
+        let mut languages = vec![Entry::new(i18n::AUTO, tl!("Auto"))];
+        let drawable = |text: &str| picker_text_is_drawable(self.ctx, text);
+        languages.extend(Lang::for_picker_by(|l| l.picker_name(drawable)).into_iter().map(|l| Entry::new(l.code(), l.picker_name(drawable))));
+        let language = if Lang::from_code(&d.language).is_some() { d.language.as_str() } else { i18n::AUTO };
+        let mut scales = vec![Entry::new(AUTO_ID, t.auto_scale.clone())];
+        scales.extend(t.scale_ids.iter().map(|(id, label)| Entry::new(id.as_str(), label.clone())));
+        let scale = d.ui_scale.map_or(AUTO_ID, |f| {
+            t.scale_ids.iter().find(|(id, _)| id.parse::<u32>().is_ok_and(|p| p == ui_scale::percent(f))).map_or(AUTO_ID, |(id, _)| id.as_str())
+        });
+        let mut rows = vec![
+            RowSpec::new("general.language", tl!("Interface language"), RowKind::choice(language, languages)),
+            RowSpec::new("general.scale", tl!("Interface size"), RowKind::choice(scale, scales))
+                .help(tl!("Auto follows the system's text size. Pages always render at the display's full resolution.")),
+            choice_row("general.tools_side", tl!("Tools panel side"), d.tools_right, &side_table()),
+            choice_row("general.rail_side", tl!("Navigation rail side"), d.rail_right, &side_table()),
+            choice_row("general.animation", tl!("Animation effects"), d.animation, &animation_table()),
+        ];
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            rows.push(RowSpec::new(
+                "general.reopen",
+                tl!("Reopen the files that were open when PdfCraft last closed"),
+                RowKind::Bool(d.reopen_last_session),
+            ));
+            rows.push(RowSpec::new(
+                "general.restore_view",
+                tl!("Restore the last view (page, zoom and page display) when a document is opened again"),
+                RowKind::Bool(d.restore_last_view),
+            ));
+            rows.push(RowSpec::new("general.reload", tl!("Reload documents when their files change on disk"), RowKind::Bool(d.reload_changed_files)));
+            rows.push(RowSpec::new("general.updates", tl!("Check for updates when PdfCraft starts"), RowKind::Bool(d.update_check_at_start)));
+        }
+        rows.push(RowSpec::new("general.secured_notice", tl!("Show a notice when a document is secured"), RowKind::Bool(d.show_secured_notice)));
+        #[cfg(not(target_arch = "wasm32"))]
+        rows.push(
+            RowSpec::new("general.recent", tl!("Recent files to keep"), RowKind::int(d.recent_limit as i64, 0..=crate::RECENT_FILES_MAX as i64))
+                .help(tl!("Lowering this forgets the oldest files. At 0 there is no list.")),
+        );
+        rows.push(
+            RowSpec::new("general.title_bar", tl!("Use system title bar"), RowKind::Bool(d.system_title_bar))
+                .help(tl!(
+                    "Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme."
+                ))
+                .visible(self.app.system_title_bar_available(self.ctx)),
+        );
+        PageSpec::new("general", tl!("General & Interface"), rows)
     }
-    ui.add_space(4.0);
-    crate::appearance::preferences_section_with_context(ui, app, t, ctx);
-    ui.add_space(8.0);
-    reading_colours_section(ui, app, t, ctx);
+
+    fn appearance_page(&self) -> PageSpec<'_> {
+        let d = &*self.draft;
+        let mode = d.reading_colors.mode_name();
+        let presets = reading_presets();
+        let mut modes: Vec<_> = presets.iter().map(|(id, label, _)| Entry::new(*id, *label)).collect();
+        modes.push(Entry::new("custom", tl!("Custom")));
+        let custom = mode == "custom";
+        let (text, background, only_black, line_art) =
+            d.reading_colors.params.map_or(([0, 0, 0], [255, 255, 255], false, true), |p| (p.text, p.background, p.only_black, p.line_art));
+        let reading = vec![
+            RowSpec::new("appearance.reading.mode", tl!("Reading colours"), RowKind::choice(mode, modes)),
+            RowSpec::new("appearance.reading.text", tl!("Text"), RowKind::Color(rgb(text))).enabled(custom),
+            RowSpec::new("appearance.reading.background", tl!("Page background"), RowKind::Color(rgb(background))).enabled(custom),
+            RowSpec::new("appearance.reading.only_black", tl!("Only change the colour of black text or line art"), RowKind::Bool(only_black))
+                .enabled(custom),
+            RowSpec::new("appearance.reading.line_art", tl!("Change the colour of line art as well as text"), RowKind::Bool(line_art))
+                .enabled(custom),
+        ];
+        let display = vec![
+            RowSpec::new("appearance.edge_shadows", tl!("Show Page Edge Shadows"), RowKind::Bool(d.show_page_edge_shadows)),
+            RowSpec::new("appearance.highlight_fields", tl!("Highlight fields"), RowKind::Bool(d.highlight_fields)),
+        ];
+        PageSpec::custom("appearance", tl_ctx!("theme", "Appearance"))
+            .group(GroupSpec::new(None, display))
+            .group(GroupSpec::new(Some(tl!("Reading colours")), reading))
+            .footnote(tl!("Colours are remapped while rendering; the document itself never changes."))
+    }
+
+    fn documents_page(&self) -> PageSpec<'_> {
+        let d = &*self.draft;
+        let v = &d.view_defaults;
+        let rows = vec![
+            choice_row("view.mode", tl!("Default workspace mode"), d.default_mode, &mode_table())
+                .help(tl!("Used when opening PDFs. An explicit launch or control mode takes precedence for the session.")),
+            choice_row("view.layout", tl!("Default page display"), v.display, &layout_table()),
+            RowSpec::new("view.continuous", tl!("Continuous scrolling"), RowKind::Bool(v.continuous)),
+            RowSpec::new("view.gaps", tl!("Show gaps between pages"), RowKind::Bool(v.page_gaps))
+                .help(tl!("Hide gaps to join page edges. Margins inside the PDF remain unchanged.")),
+            RowSpec::new("view.full_screen_fill", tl!("Full screen fills the screen with one page at a time"), RowKind::Bool(d.full_screen_fill))
+                .help(tl!("Turn off to keep the page display, such as continuous scrolling, in full screen.")),
+            RowSpec::new("view.full_screen_escape", tl!("Esc leaves full screen"), RowKind::Bool(d.full_screen_escape_exits))
+                .help(tl!("Turn off so that only Ctrl+L (⌘L on macOS) leaves full screen, as for a kiosk display.")),
+            choice_row("view.fit", tl!("Default zoom"), v.fit, &fit_table())
+                .help(tl!("Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.")),
+            RowSpec::new("view.zoom", tl!("Custom zoom (%)"), RowKind::int((v.zoom * 100.0).round() as i64, 8..=6400)),
+            RowSpec::new("view.always", tl!("Always use my default zoom and page layout"), RowKind::Bool(d.always_default_view)),
+            RowSpec::new("view.text_links", tl!("Open web and email addresses written in the page text"), RowKind::Bool(d.text_links))
+                .help(tl!("Only web (http, https) and email addresses open, and PdfCraft asks first, as for other links.")),
+            choice_row("view.units", tl!("Units"), d.units, &unit_table()).help(tl!("For page sizes and margins.")),
+            choice_row("view.scroll_speed", tl!("Scroll speed (mouse wheel and arrow keys)"), d.scroll_speed, &speed_table()),
+            RowSpec::new("view.invert_middle", tl!("Invert middle-button drag"), RowKind::Bool(d.invert_middle_drag))
+                .help(tl!("Panning or auto-scrolling with the middle (wheel) button moves the page the other way.")),
+        ];
+        PageSpec::new("documents", tl!("Documents and view"), rows)
+    }
+
+    fn comment_page(&self) -> PageSpec<'_> {
+        let d = &*self.draft;
+        let rows = vec![
+            RowSpec::new("comment.author", tl!("Name on new comments"), RowKind::Text(d.author.as_str())),
+            RowSpec::new(
+                "comment.hide_hover",
+                tl!("Hide hover previews for highlights without comment text"),
+                RowKind::Bool(d.hide_empty_highlight_hover),
+            ),
+        ];
+        PageSpec::new("comment", tl!("Comment"), rows)
+    }
+
+    fn fill_sign_page(&self) -> PageSpec<'_> {
+        use pdfcraft_engine::dates::{DATE_FORMATS, DATE_LANGUAGES};
+        let d = &*self.draft;
+        let t = &self.texts;
+        let preset = DATE_FORMATS.iter().position(|f| *f == d.date_format).and_then(|i| DATE_FORMATS.get(i).copied()).unwrap_or(t.date_custom_id);
+        let mut presets: Vec<_> = DATE_FORMATS.iter().zip(&t.date_samples).map(|(f, sample)| Entry::new(*f, sample.clone())).collect();
+        presets.push(Entry::new(t.date_custom_id, tl!("Custom")));
+        let mut languages = vec![Entry::new(FOLLOW_ID, t.date_follow.clone())];
+        languages.extend(DATE_LANGUAGES.iter().map(|l| Entry::new(l.code, date_language_picker_name(self.ctx, l))));
+        let language = d.date_language.as_deref().filter(|c| DATE_LANGUAGES.iter().any(|l| l.code == *c)).unwrap_or(FOLLOW_ID);
+        let rows = vec![
+            RowSpec::new("fill.flatten", tl!("Flatten Fill & Sign when saving"), RowKind::Bool(d.flatten_fill_sign_on_save))
+                .help(tl!("Text, marks and signatures become part of the page. Other comments stay editable.")),
+            RowSpec::new(
+                "fill.ask_lock",
+                tl!("Otherwise, ask on the first save after a signature is placed"),
+                RowKind::Bool(d.ask_to_lock_signatures),
+            )
+            .enabled(!d.flatten_fill_sign_on_save),
+            RowSpec::new("fill.date_preset", tl!("Fill & Sign dates"), RowKind::choice(preset, presets)).keywords(tl!("Date format")),
+            RowSpec::new("fill.date_pattern", tl!("Pattern"), RowKind::CustomRows).keywords(tl!("Date format")).help(t.date_help.as_str()),
+            RowSpec::new("fill.date_language", tl!("Language"), RowKind::choice(language, languages)).keywords(tl!("Date format")),
+        ];
+        PageSpec::new("fill", tl!("Fill & Sign"), rows)
+    }
+
+    fn javascript_page(&self) -> PageSpec<'_> {
+        let rows = vec![
+            RowSpec::new("javascript.enable", tl!("Enable Acrobat JavaScript"), RowKind::Bool(self.draft.javascript)).help(tl!(
+                "Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work."
+            )),
+        ];
+        PageSpec::new("javascript", "JavaScript", rows)
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -700,13 +834,20 @@ struct ViewPrefChanges {
     zoom: bool,
 }
 
+impl ViewPrefChanges {
+    /// Whether any default or the "always" switch changed.
+    fn any(self) -> bool {
+        self.always_reset || self.layout || self.continuous || self.gaps || self.fit || self.zoom
+    }
+}
+
 fn apply_view_pref_changes(view: &mut crate::DocView, defaults: &ViewDefaults, changes: ViewPrefChanges) {
     if changes.always_reset || changes.gaps {
-        view.set_page_gaps(defaults.show_page_gaps);
+        view.view.page_gaps = defaults.page_gaps;
     }
     if let Some(saved) = view.saved_display_mut() {
         if changes.always_reset || changes.layout {
-            saved.layout = defaults.layout;
+            saved.display = defaults.display;
         }
         if changes.always_reset || changes.continuous {
             saved.continuous = defaults.continuous;
@@ -722,404 +863,23 @@ fn apply_view_pref_changes(view: &mut crate::DocView, defaults: &ViewDefaults, c
             saved.zoom = defaults.zoom;
         }
     } else {
-        if changes.always_reset || (changes.layout && changes.continuous) {
-            view.set_display(defaults.layout, defaults.continuous);
-        } else {
-            if changes.layout {
-                view.set_layout(defaults.layout);
-            }
-            if changes.continuous {
-                view.set_continuous(defaults.continuous);
-            }
+        // The page view's next pass takes the display, fit and zoom from its state and keeps the current page in view.
+        let shown = &mut view.view;
+        if changes.always_reset || changes.layout {
+            shown.display = defaults.display;
+        }
+        if changes.always_reset || changes.continuous {
+            shown.continuous = defaults.continuous;
         }
         if changes.always_reset || changes.fit {
-            match defaults.fit {
-                Fit::None => view.set_zoom(defaults.zoom),
-                fit if view.fit != fit => view.set_fit(fit),
-                _ => {}
+            shown.fit = defaults.fit;
+            if defaults.fit == Fit::None {
+                shown.zoom = defaults.zoom;
             }
         }
         if changes.zoom {
-            view.set_zoom(defaults.zoom);
+            shown.fit = Fit::None;
+            shown.zoom = defaults.zoom;
         }
-    }
-}
-
-/// Content for Card 3: Documents and View
-fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
-    ui.horizontal(|ui| {
-        ctx.label_primary(ui, tl!("Default workspace mode"), t);
-        ctx.pill_choice(
-            ui,
-            t,
-            &mut app.default_mode,
-            &[
-                (crate::Mode::AllTools, tl!("All tools")),
-                (crate::Mode::Read, tl!("Read")),
-                (crate::Mode::Edit, tl!("Edit")),
-                (crate::Mode::Convert, tl!("Convert")),
-                (crate::Mode::Sign, tl!("E-Sign")),
-            ],
-        );
-    });
-    ctx.label_secondary(ui, tl!("Used when opening PDFs. An explicit launch or control mode takes precedence for the session."), t);
-    ui.add_space(6.0);
-
-    let mut layout_choice = app.view_defaults.layout;
-    let mut continuous = app.view_defaults.continuous;
-    let mut layout_changed = false;
-    let mut continuous_changed = false;
-    ui.horizontal(|ui| {
-        ctx.label_primary(ui, tl!("Default page display"), t);
-        if ctx.pill_choice(ui, t, &mut layout_choice, &[(PageLayout::Single, tl!("Single page")), (PageLayout::TwoUp, tl!("Two-page view"))]) {
-            app.view_defaults.layout = layout_choice;
-            layout_changed = true;
-        }
-        if ctx.toggle_pill(ui, t, &mut continuous, tl!("Continuous scrolling")) {
-            app.view_defaults.continuous = continuous;
-            continuous_changed = true;
-        }
-    });
-    let mut show_page_gaps = app.view_defaults.show_page_gaps;
-    let gaps_changed = ctx.checkbox(ui, &mut show_page_gaps, tl!("Show gaps between pages"), t).changed();
-    if gaps_changed {
-        app.view_defaults.show_page_gaps = show_page_gaps;
-    }
-    ctx.label_secondary(ui, tl!("Hide gaps to join page edges. Margins inside the PDF remain unchanged."), t);
-    ctx.checkbox(ui, &mut app.view_defaults.full_screen_fill, tl!("Full screen fills the screen with one page at a time"), t);
-    ctx.label_secondary(ui, tl!("Turn off to keep the page display, such as continuous scrolling, in full screen."), t);
-    ctx.checkbox(ui, &mut app.full_screen_escape_exits, tl!("Esc leaves full screen"), t);
-    ctx.label_secondary(ui, tl!("Turn off so that only Ctrl+L (⌘L on macOS) leaves full screen, as for a kiosk display."), t);
-    ui.add_space(6.0);
-
-    let mut fit_changed = false;
-    let mut zoom_changed = false;
-    ui.horizontal(|ui| {
-        ctx.label_primary(ui, tl!("Default zoom"), t);
-        let mut fit = app.view_defaults.fit;
-        if ctx.pill_choice(ui, t, &mut fit, &[(Fit::Width, tl!("Fit to width")), (Fit::Page, tl!("Zoom to page level")), (Fit::None, tl!("Custom"))])
-        {
-            app.view_defaults.fit = fit;
-            fit_changed = true;
-        }
-        let mut percent = app.view_defaults.zoom * 100.0;
-        if ui.add(egui::DragValue::new(&mut percent).range(8.0..=6400.0).max_decimals(0).suffix("%")).changed() {
-            (app.view_defaults.fit, app.view_defaults.zoom) = (Fit::None, percent / 100.0);
-            zoom_changed = true;
-        }
-    });
-    ctx.label_secondary(ui, tl!("Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages."), t);
-    let always_changed = ctx.checkbox(ui, &mut app.always_default_view, tl!("Always use my default zoom and page layout"), t).changed();
-
-    let changes = ViewPrefChanges {
-        always_reset: always_changed,
-        layout: layout_changed,
-        continuous: continuous_changed,
-        gaps: gaps_changed,
-        fit: fit_changed,
-        zoom: zoom_changed,
-    };
-    if app.always_default_view && (always_changed || layout_changed || continuous_changed || gaps_changed || fit_changed || zoom_changed) {
-        let defaults = app.view_defaults;
-        for view in &mut app.views {
-            apply_view_pref_changes(view, &defaults, changes);
-        }
-    } else if let Some(i) = app.active {
-        let defaults = app.view_defaults;
-        apply_view_pref_changes(&mut app.views[i], &defaults, ViewPrefChanges { always_reset: false, ..changes });
-    }
-    ctx.checkbox(ui, &mut app.text_links, tl!("Open web and email addresses written in the page text"), t);
-    ctx.label_secondary(ui, tl!("Only web (http, https) and email addresses open, and PdfCraft asks first, as for other links."), t);
-    ui.add_space(6.0);
-
-    ui.horizontal(|ui| {
-        ctx.label_primary(ui, tl!("Units"), t);
-        ctx.pill_choice(
-            ui,
-            t,
-            &mut app.units,
-            &[
-                (Unit::Inches, Unit::Inches.label()),
-                (Unit::Millimetres, Unit::Millimetres.label()),
-                (Unit::Centimetres, Unit::Centimetres.label()),
-                (Unit::Points, Unit::Points.label()),
-            ],
-        );
-    });
-    ctx.label_secondary(ui, tl!("For page sizes and margins."), t);
-    ui.add_space(6.0);
-    scrolling(ui, app, t, ctx);
-}
-
-/// The scroll speed and the middle button's direction, in Card 3.
-fn scrolling(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
-    ui.horizontal(|ui| {
-        ctx.label_primary(ui, tl!("Scroll speed (mouse wheel and arrow keys)"), t);
-        ctx.pill_choice(
-            ui,
-            t,
-            &mut app.scroll_speed,
-            &[
-                (ScrollSpeed::Slow, tl_ctx!("scroll speed", ScrollSpeed::Slow.label())),
-                (ScrollSpeed::Normal, tl_ctx!("scroll speed", ScrollSpeed::Normal.label())),
-                (ScrollSpeed::Fast, tl_ctx!("scroll speed", ScrollSpeed::Fast.label())),
-            ],
-        );
-    });
-    ui.add_space(6.0);
-    ctx.checkbox(ui, &mut app.invert_middle_drag, tl!("Invert middle-button drag"), t);
-    ctx.label_secondary(ui, tl!("Panning or auto-scrolling with the middle (wheel) button moves the page the other way."), t);
-}
-
-/// Content for Card 4: Identity
-fn card_identity(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
-    ui.horizontal(|ui| {
-        let label = ctx.label_primary(ui, tl!("Name on new comments"), t);
-        ui.add(crate::widgets::line(&mut app.comment_prefs.author).desired_width(240.0).char_limit(crate::MAX_AUTHOR_CHARS)).labelled_by(label.id);
-    });
-    ctx.checkbox(ui, &mut app.comment_prefs.hide_empty_highlight_hover, tl!("Hide hover previews for highlights without comment text"), t);
-}
-
-/// Content for Card 5: Fill & Sign
-fn card_fill_and_sign(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
-    ctx.checkbox(ui, &mut app.flatten_fill_sign_on_save, tl!("Flatten Fill & Sign when saving"), t);
-    ui.add_enabled_ui(!app.flatten_fill_sign_on_save, |ui| {
-        ctx.checkbox(ui, &mut app.ask_to_lock_signatures, tl!("Otherwise, ask on the first save after a signature is placed"), t);
-    });
-    ctx.label_secondary(ui, tl!("Text, marks and signatures become part of the page. Other comments stay editable."), t);
-    ui.add_space(8.0);
-    date_format(ui, app, t, ctx);
-}
-
-/// Content for Card 6: JavaScript
-fn card_javascript(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
-    let mut on = app.session.javascript();
-    if ctx.checkbox(ui, &mut on, tl!("Enable Acrobat JavaScript"), t).changed() {
-        app.session.set_javascript(on);
-    }
-    ctx.label_secondary(
-        ui,
-        tl!(
-            "Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work."
-        ),
-        t,
-    );
-}
-
-/// Preferences dialog buttons: OK on the right. Returns true to close.
-pub(crate) fn preferences_buttons(ui: &mut egui::Ui) -> bool {
-    ui.add_space(10.0);
-    let mut close = false;
-    ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if widgets::pill_button(ui, tl!("OK"), true).clicked() {
-                close = true;
-            }
-        });
-    });
-    close
-}
-
-/// Fill & Sign date pattern and date language picker.
-fn date_format(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
-    use pdfcraft_engine::dates::{DATE_FORMATS, DATE_LANGUAGES, MAX_DATE_FORMAT_CHARS};
-    ctx.label(ui, tl!("Date format"), theme::semibold(12.5), t.text);
-    let sample = |app: &PdfCraftApp, f: &str| format!("{}   {f}", app.date_text(Some(f)).unwrap_or_default());
-    ui.horizontal(|ui| {
-        let label = ctx.label_primary(ui, tl!("Fill & Sign dates"), t);
-        let current = app.session.date_format().to_string();
-        let selected = if DATE_FORMATS.contains(&current.as_str()) { sample(app, &current) } else { tl!("Custom").to_string() };
-        craft_ui::ComboBox::from_id_salt("date-format")
-            .selected_text(selected)
-            .width(240.0)
-            .show_ui(ui, |ui| {
-                for f in DATE_FORMATS {
-                    if ui.selectable_label(current == f, sample(app, f)).clicked() && app.session.set_date_format(f).is_ok() {
-                        app.date_format_draft = None;
-                        ui.close();
-                    }
-                }
-            })
-            .response
-            .labelled_by(label.id);
-    });
-    ui.horizontal(|ui| {
-        let label = ctx.label_primary(ui, tl!("Pattern"), t);
-        let mut text = app.date_format_draft.clone().unwrap_or_else(|| app.session.date_format().to_string());
-        let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(160.0).char_limit(MAX_DATE_FORMAT_CHARS)).labelled_by(label.id);
-        if edit.changed() {
-            let _ = app.session.set_date_format(&text);
-            app.date_format_draft = Some(text.clone());
-        }
-        if !edit.has_focus() && pdfcraft_engine::dates::check_date_format(&text).is_ok() {
-            app.date_format_draft = None;
-        }
-        match app.date_text(Some(&text)) {
-            Ok(today) => {
-                let today_str = crate::i18n::fmt(tl!("Today: {date}"), &[("date", &today)]);
-                ctx.label_secondary(ui, &today_str, t);
-            }
-            Err(e) => {
-                ctx.label(ui, &e, theme::regular(13.0), Color32::from_rgb(0xD1, 0x3B, 0x3B));
-            }
-        };
-    });
-    let bad = app.date_text(None).map(|today| pdfcraft_engine::dates::unwritable(&today)).unwrap_or_default();
-    if !bad.is_empty() {
-        let bad_msg = crate::i18n::fmt(
-            tl!("{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy."),
-            &[("chars", &bad)],
-        );
-        ctx.label(ui, &bad_msg, theme::regular(13.0), Color32::from_rgb(0xD1, 0x3B, 0x3B));
-    }
-    ui.horizontal(|ui| {
-        let label = ctx.label_primary(ui, tl!("Language"), t);
-        let (follow, selected, current, names) = {
-            let drawable = |text: &str| picker_text_is_drawable(ui, text);
-            let interface = crate::i18n::current().picker_name(drawable);
-            let follow = crate::i18n::fmt(tl!("Same as interface ({language})"), &[("language", interface)]);
-            let current = app.session.date_language().map(str::to_string);
-            let selected = DATE_LANGUAGES
-                .iter()
-                .find(|l| current.as_deref() == Some(l.code))
-                .map_or_else(|| follow.clone(), |l| date_language_picker_name(l, drawable).to_string());
-            let names = DATE_LANGUAGES.iter().map(|l| (l, date_language_picker_name(l, drawable))).collect::<Vec<_>>();
-            (follow, selected, current, names)
-        };
-        craft_ui::ComboBox::from_id_salt("date-language")
-            .selected_text(selected)
-            .width(240.0)
-            .show_ui(ui, |ui| {
-                if ui.selectable_label(current.is_none(), follow).clicked() && app.session.set_date_language(None).is_ok() {
-                    ui.close();
-                }
-                for (l, name) in &names {
-                    if ui.selectable_label(current.as_deref() == Some(l.code), *name).clicked() && app.session.set_date_language(Some(l.code)).is_ok()
-                    {
-                        ui.close();
-                    }
-                }
-            })
-            .response
-            .labelled_by(label.id);
-    });
-    let date_help = crate::i18n::fmt(
-        tl!(
-            "yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is."
-        ),
-        &[("escape", "\\")],
-    );
-    ctx.label_secondary(ui, &date_help, t);
-}
-
-/// Reading colours settings: presets, preview and custom replacement options.
-fn reading_colours_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
-    ctx.label(ui, tl!("Reading colours"), theme::semibold(13.0), t.text);
-    let mode = app.reading_colors.mode_name();
-    ui.horizontal_wrapped(|ui| {
-        for (name, label, colors) in [
-            ("off", "Off", pdfcraft_render::ReadingColors::default()),
-            ("black-on-white", "Black on white", pdfcraft_render::ReadingColors::BLACK_ON_WHITE),
-            ("white-on-black", "White on black", pdfcraft_render::ReadingColors::WHITE_ON_BLACK),
-            ("yellow-on-black", "Yellow on black", pdfcraft_render::ReadingColors::YELLOW_ON_BLACK),
-            ("green-on-black", "Green on black", pdfcraft_render::ReadingColors::GREEN_ON_BLACK),
-        ] {
-            let params = colors.params.unwrap_or(pdfcraft_render::ReadingParams {
-                text: [0, 0, 0],
-                background: [255, 255, 255],
-                only_black: false,
-                line_art: true,
-            });
-            ui.vertical(|ui| {
-                ui.set_width(100.0);
-                let sample = RichText::new("Aa").size(20.0).color(Color32::from_rgb(params.text[0], params.text[1], params.text[2]));
-                let button = egui::Button::new(sample)
-                    .fill(Color32::from_rgb(params.background[0], params.background[1], params.background[2]))
-                    .min_size(vec2(90.0, 40.0))
-                    .stroke(Stroke::new(if mode == name { 2.0 } else { 1.0 }, if mode == name { t.accent } else { t.border }));
-                let response = ui.add(button);
-                response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, mode == name, tl!(label)));
-                if response.clicked() {
-                    app.set_reading_colors(colors);
-                }
-                ctx.label(ui, tl!(label), theme::regular(12.0), t.text);
-            });
-        }
-    });
-    ui.add_space(4.0);
-    if let Some(params) = app.reading_colors.params {
-        let text = Color32::from_rgb(params.text[0], params.text[1], params.text[2]);
-        let background = Color32::from_rgb(params.background[0], params.background[1], params.background[2]);
-        egui::Frame::new().fill(background).inner_margin(12.0).corner_radius(CornerRadius::same(6)).show(ui, |ui| {
-            ui.set_min_width((ui.available_width() - 24.0).max(0.0));
-            ctx.label(ui, tl!("Reading colours"), theme::semibold(16.0), text);
-            ctx.label(ui, tl!("Colours are remapped while rendering; the document itself never changes."), theme::regular(13.0), text);
-        });
-    } else {
-        ctx.label_primary(ui, tl!("Original"), t);
-    }
-    egui::CollapsingHeader::new(tl!("Custom")).default_open(mode == "custom").show(ui, |ui| {
-        let mut colors = if app.reading_colors.params.is_some() { app.reading_colors } else { pdfcraft_render::ReadingColors::BLACK_ON_WHITE };
-        let mut changed = false;
-        if let Some(params) = colors.params.as_mut() {
-            ui.horizontal(|ui| {
-                let text = ctx.label_primary(ui, tl!("Text"), t);
-                changed |= ui.color_edit_button_srgb(&mut params.text).labelled_by(text.id).changed();
-                let background = ctx.label_primary(ui, tl!("Page background"), t);
-                changed |= ui.color_edit_button_srgb(&mut params.background).labelled_by(background.id).changed();
-            });
-            changed |= ctx.checkbox(ui, &mut params.only_black, tl!("Only change the colour of black text or line art"), t).changed();
-            changed |= ctx.checkbox(ui, &mut params.line_art, tl!("Change the colour of line art as well as text"), t).changed();
-        }
-        if changed {
-            app.set_reading_colors(colors);
-        }
-    });
-    ctx.label_secondary(ui, tl!("Colours are remapped while rendering; the document itself never changes."), t);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_find_match_ranges_case_insensitive() {
-        let text = "Hide hover previews for highlights without comment text";
-        let ranges = find_match_ranges(text, "hide hover");
-        assert_eq!(ranges, vec![(0, 10)]);
-        assert_eq!(text.get(ranges[0].0..ranges[0].1), Some("Hide hover"));
-
-        let text2 = "Highlight fields and highlight text";
-        let ranges2 = find_match_ranges(text2, "highlight");
-        assert_eq!(ranges2.len(), 2);
-        assert_eq!(text2.get(ranges2[0].0..ranges2[0].1), Some("Highlight"));
-        assert_eq!(text2.get(ranges2[1].0..ranges2[1].1), Some("highlight"));
-
-        let ranges3 = find_match_ranges(text, "not found");
-        assert!(ranges3.is_empty());
-
-        let ranges4 = find_match_ranges(text, "");
-        assert!(ranges4.is_empty());
-    }
-
-    #[test]
-    fn test_find_match_ranges_turkish_i() {
-        let text = "Doldur ve İmzala";
-        let ranges = find_match_ranges(text, "imzala");
-        assert_eq!(ranges.len(), 1);
-        assert_eq!(text.get(ranges[0].0..ranges[0].1), Some("İmzala"));
-
-        let ranges2 = find_match_ranges(text, "İMZALA");
-        assert_eq!(ranges2.len(), 1);
-        assert_eq!(text.get(ranges2[0].0..ranges2[0].1), Some("İmzala"));
-
-        let text2 = "Doldur ve imzala";
-        let ranges3 = find_match_ranges(text2, "İmzala");
-        assert_eq!(ranges3.len(), 1);
-        assert_eq!(text2.get(ranges3[0].0..ranges3[0].1), Some("imzala"));
-
-        let ranges4 = find_match_ranges(text, "ımzala");
-        assert_eq!(ranges4.len(), 1);
-        assert_eq!(text.get(ranges4[0].0..ranges4[0].1), Some("İmzala"));
     }
 }

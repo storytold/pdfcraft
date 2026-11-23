@@ -12,19 +12,20 @@ workspace = true
 # Help ▸ Check for updates (issue #28): one HTTPS request to GitHub, over rustls with the OS's
 # trusted roots. No bundled root list (webpki-roots and webpki-root-certs are CDLA-licensed).
 pdfcraft-ui-egui = { workspace = true }
+# The framework, through its facade (contract head): host, platform, automation, pages and quit,
+# and the UI runtime and window policy the window is installed with.
+craft = { workspace = true, features = ["platform", "automation", "pages", "quit", "ui", "window"] }
 # `build_info`: the version and compile-time build label for `--version` and the log.
 pdfcraft-engine = { workspace = true }
-# `owner_only`: the --control file is restricted to its user on Windows (#3922).
+# `crypto_env`: the cryptography environment the engine opens files with.
 pdfcraft-platform = { workspace = true }
 # wgpu draws; OpenGL (glow) is the fallback when wgpu can't start on an old or unusual GPU or
 # driver (#461, #435, #392), and can be chosen with PDFCRAFT_RENDERER=gl.
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "wayland", "x11", "persistence", "links", "clipboard"] }
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 serde_json = { workspace = true }
-# Records from every crate go to standard error and the log file (src/logging.rs).
+# Records from every crate go to standard error and the log file (`craft_platform::logs`).
 log = { workspace = true }
-# The log timestamp goes through chrono (no hand-rolled calendar code).
-chrono = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Finder double-click / Open With / Dock drops arrive as Apple events (#73); this small audited
@@ -46,6 +47,8 @@ raw-window-handle = "0.6"
 [dev-dependencies]
 # Waits for wgpu's adapter, device and error-scope futures in tests (already in the tree through wgpu).
 pollster = "1.0"
+# Runs the app for a frame in tests, so what it shows (its notices) can be read (already in the tree through the UI crate's tests).
+egui_kittest = { workspace = true, features = ["eframe"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # Exercise the vendored Wayland scroll policy with the actual winit event type.
@@ -56,10 +59,6 @@ winit = { version = "0.30", default-features = false, features = ["wayland"] }
 # shows it (issue #378). Safe wrappers over Win32; only the `user` feature (which brings `kernel` with it),
 # and `advapi` for the session id that names the single-instance socket (#3338).
 winsafe = { version = "0.0.29", default-features = false, features = ["user", "advapi"] }
-# Settings ▸ Accessibility ▸ Visual effects ▸ Animation effects (src/motion.rs), through WinRT's
-# `UISettings`, whose bindings are safe to call (winsafe's `SystemParametersInfo` is an unsafe
-# fn). Already in the tree through wgpu's DX12 backend; this adds one small namespace to it.
-windows = { version = "0.62", default-features = false, features = ["std", "UI_ViewManagement"] }
 # Single instance (#282): later launches hand their files to the running app over a Unix domain
 # socket. `std` has no Unix sockets on Windows, and calling Winsock directly needs unsafe, which
 # our workspace forbids. Already in the lockfile through zbus; pinned exactly, review before bumping.
