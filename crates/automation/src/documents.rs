@@ -127,6 +127,67 @@ impl Automation {
         Ok(value)
     }
 
+    /// Open a PDF attached to document `doc` (by its key from doc_info, or a unique displayed
+    /// name) as a document of its own: a copy, as the app's Open in a new tab opens it, so a
+    /// script can read, render or search a portfolio's files. The source document is unchanged.
+    pub(crate) fn attachment_open(&mut self, a: &Args) -> Result<Value> {
+        use pdfcraft_render::AttachmentSource;
+        let key = a.opt_str("key")?;
+        let name = a.opt_str("name")?;
+        if key.is_some() == name.is_some() {
+            return Err(ToolError::InvalidArgs("provide exactly one of key or name".into()));
+        }
+        let source = self.doc(a)?;
+        let found: Vec<(&pdfcraft_render::Attachment, &String)> = source
+            .info
+            .attachments
+            .iter()
+            .filter_map(|att| match &att.source {
+                AttachmentSource::Document { key: k } if key.is_some_and(|key| key == k) || name.is_some_and(|name| name == att.name) => {
+                    Some((att, k))
+                }
+                AttachmentSource::Document { .. } | AttachmentSource::Annotation { .. } => None,
+            })
+            .collect();
+        let (att, file_key) = match found.as_slice() {
+            [(att, k)] => ((*att).clone(), (*k).clone()),
+            [] if key.is_some() => {
+                return Err(ToolError::InvalidArgs(format!("there is no document attachment with key {:?}", key.unwrap_or_default())));
+            }
+            [] => {
+                return Err(ToolError::InvalidArgs(format!(
+                    "there is no document attachment named {:?}; use a name from doc_info",
+                    name.unwrap_or_default()
+                )));
+            }
+            _ => {
+                return Err(ToolError::InvalidArgs(format!(
+                    "more than one document attachment is named {:?}; provide its key from doc_info",
+                    name.unwrap_or_default()
+                )));
+            }
+        };
+        let bytes = pdfcraft_render::attachment_data(&source.bytes, source.password.as_deref(), &att).map_err(failed)?;
+        let from = source.id;
+        // A PDF by its bytes, whatever its name, as the app decides; an image, text or an Office
+        // document opens as the PDF Open makes of it, as the app's portfolio tab shows it.
+        let (name, bytes, converted) = match pdfcraft_engine::source_kind(&att.name, &bytes) {
+            Some(pdfcraft_engine::SourceKind::Pdf) => (att.name.clone(), Arc::new(bytes), false),
+            Some(_) => {
+                let (_, pdf) = self.session.convert_to_pdf(&att.name, &Arc::new(bytes)).map_err(failed)?;
+                let stem = att.name.rsplit_once('.').map_or(att.name.as_str(), |(s, _)| s);
+                (format!("{stem}.pdf"), pdf, true)
+            }
+            None => return Err(failed(format!("{}: this kind of file can't be opened as a document", att.name))),
+        };
+        let id = self.session.open(name, None, bytes, a.opt_str("password")?).map_err(failed)?;
+        let doc = self.session.get(id).ok_or_else(|| failed("the document vanished"))?;
+        let mut value = summary(doc);
+        value["from"] = json!({ "doc": from.0, "key": file_key });
+        value["converted"] = json!(converted);
+        Ok(value)
+    }
+
     pub(crate) fn doc_close(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let id = doc.id;

@@ -786,6 +786,7 @@ impl Automation {
                 let edit = Edit::DeleteAttachment { key: a.str("name")?.into() };
                 self.apply(&a, edit)?
             }
+            "attachment_open" => self.attachment_open(&a)?,
             "doc_convert_colours" => self.convert_colours(&a)?,
             "attachment_edit" => {
                 let key = a.opt_str("key")?;

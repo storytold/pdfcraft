@@ -168,6 +168,11 @@ pub fn tools() -> Vec<ToolDef> {
         t("attachment_add", "Attach a file", "Attach the file at path to the document (document level, the Attachments panel; not a paper-clip comment on a page). name defaults to the file's name; the attachment's key, unique in the document, is returned. Undoable.")
             .cmd("edit.attach")
             .with(schema(json!({"doc": doc(), "path": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}}), &["doc", "path"])),
+        t("attachment_open", "Open an attachment", "Open a file attached to the document, by its exact key from doc_info or a unique displayed name, as a document of its own, and return its document id, page count and whether it can be edited, as doc_open does, with from (the source document and the attachment's key) and converted. A PDF opens as it is; an image, a text file or an Office document (with LibreOffice installed) opens as the PDF File ▸ Open makes of it, and converted is true. A copy: the source document is unchanged, and saving the copy doesn't put it back. A PDF portfolio's files are read this way. Another kind of file is refused.")
+            .with(schema(
+                json!({"doc": doc(), "key": {"type": "string"}, "name": {"type": "string"}, "password": { "type": "string", "description": "User or owner password for an encrypted attachment." }}),
+                &["doc"],
+            )),
         t("attachment_delete", "Delete an attachment", "Remove the document-level attachment with this name (as doc_info lists it). Undoable.")
             .destructive()
             .with(schema(json!({"doc": doc(), "name": {"type": "string"}}), &["doc", "name"])),

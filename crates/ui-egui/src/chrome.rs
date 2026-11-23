@@ -184,7 +184,9 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 combine_tab(app, ui, &t, cap, tab_h, changed);
                             }
                             for i in order {
-                                let Some(doc) = app.session.get(app.views[i].id) else { continue };
+                                // A portfolio's tab stands for the portfolio, whichever file it shows.
+                                let Some(tab_doc) = app.tab_doc(i) else { continue };
+                                let Some(doc) = app.session.get(tab_doc) else { continue };
                                 let Some(name) = crate::canvas::tab_label(app, i) else { continue };
                                 let dirty = doc.dirty;
                                 // A tab showing the document's title names its file on hover.
@@ -192,7 +194,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 let response = tab(
                                     ui,
                                     TabSpec {
-                                        id: ui.scope_id().with(("document-tab", app.views[i].id)),
+                                        id: ui.scope_id().with(("document-tab", tab_doc)),
                                         theme: &t,
                                         icon: "file-text",
                                         name: &name,
@@ -216,7 +218,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 response.context_menu(|ui| tab_menu(app, ui, i, &mut action));
                                 // Double-clicking the tab's name renames its file, as in Finder and File Explorer.
                                 if response.double_clicked() && cfg!(not(target_arch = "wasm32")) && doc.path.is_some() {
-                                    action = Some(crate::tab_context::Action::Rename(app.views[i].id));
+                                    action = Some(crate::tab_context::Action::Rename(tab_doc));
                                 }
                                 if response.clicked() {
                                     app.active = Some(i);
@@ -382,7 +384,9 @@ fn appearance_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 /// A document tab's right-click menu, in any strip: the choice is left in `action`.
 fn tab_menu(app: &PdfCraftApp, ui: &mut egui::Ui, index: usize, action: &mut Option<Action>) {
     let Some(view) = app.views.get(index) else { return };
-    let (tab, id) = (view.view_key(), view.id);
+    // A portfolio's tab stands for the portfolio, whichever file it shows: Reveal and Rename
+    // act on the portfolio's file.
+    let (tab, id) = (view.view_key(), app.tab_doc(index).unwrap_or(view.id));
     if ui.button(tl!("Close Tab")).clicked() {
         *action = Some(Action::Close(tab));
         ui.close();
@@ -487,7 +491,8 @@ pub(crate) fn pane_tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, strip: Re
     let mut dragged = None;
     for &i in &tabs {
         let Some(view) = app.views.get(i) else { continue };
-        let Some(doc) = app.session.get(view.id) else { continue };
+        // A portfolio's tab stands for the portfolio, whichever file it shows.
+        let Some(doc) = app.tab_doc(i).and_then(|id| app.session.get(id)) else { continue };
         let Some(name) = crate::canvas::tab_label(app, i) else { continue };
         let dirty = doc.dirty;
         let file = (name != doc.name).then(|| doc.name.clone());
@@ -850,7 +855,12 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         }
     };
     let has = |has: bool, label: &'static str| has.then_some(label);
-    let mut items = vec![
+    let mut items = Vec::new();
+    // A portfolio's tab lists its files first: they are what the portfolio is.
+    if app.active_portfolio().is_some() {
+        items.push(item(RightPanel::PortfolioFiles, "folder-open", "Portfolio files", None));
+    }
+    items.extend([
         item(RightPanel::Comments, "message-square-text", "Comments", has(has_comments, "Has comments")),
         item(RightPanel::Bookmarks, "bookmark", "Bookmarks", has(has_outline, "Has bookmarks")),
         item(RightPanel::Pages, "files", "Page thumbnails", None),
@@ -858,7 +868,7 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         item(RightPanel::Layers, "layers", "Layers", has(has_layers, "Has layers")),
         item(RightPanel::Attachments, "paperclip", "Attachments", has(has_files, "Has attachments")),
         item(RightPanel::Signatures, "signature", "Signatures", has(has_signatures, "Signed")),
-    ];
+    ]);
     if has_check {
         items.push(item(RightPanel::Accessibility, "accessibility", "Accessibility Checker", None));
     }

@@ -15,6 +15,7 @@ mod frame;
 mod input;
 mod keys;
 mod links;
+pub(crate) mod portfolio;
 mod prefs;
 mod window;
 

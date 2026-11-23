@@ -52,7 +52,7 @@ impl PdfCraftApp {
             return;
         }
         let Some(draft) = self.rename_returned.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() else { return };
-        if self.views.iter().any(|v| v.id == draft.id) {
+        if self.tab_of_doc(draft.id).is_some() {
             self.rename_draft = Some(draft);
             self.dialog = Some(Dialog::RenameFile);
         }
@@ -70,7 +70,8 @@ impl PdfCraftApp {
     /// The dialog's Rename (or Save and Rename).
     pub(crate) fn rename_with_draft(&mut self) {
         let Some(draft) = self.rename_draft.take() else { return };
-        let Some(index) = self.views.iter().position(|v| v.id == draft.id) else { return };
+        // A portfolio's tab is found whichever of its files it shows.
+        let Some(index) = self.tab_of_doc(draft.id) else { return };
         if self.has_unsaved_work(index) {
             // Saved in place first; the rename follows only if the save went through.
             let mut pending = Pending { draft: Some(draft), back: self.rename_returned.clone() };
@@ -115,7 +116,7 @@ pub(crate) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> (bool, bool) {
     let (mut close, mut go) = (false, false);
     let Some(doc_id) = app.rename_draft.as_ref().map(|d| d.id) else { return (true, false) };
     let Some((path, current)) = app.session.get(doc_id).and_then(|d| d.path.clone().map(|p| (p, d.name.clone()))) else { return (true, false) };
-    let unsaved = app.views.iter().position(|v| v.id == doc_id).is_some_and(|i| app.has_unsaved_work(i));
+    let unsaved = app.tab_of_doc(doc_id).is_some_and(|i| app.has_unsaved_work(i));
     let Some(draft) = app.rename_draft.as_mut() else { return (true, false) };
     let heading = ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Rename “{name}”"), &[("name", &current)])).font(theme::semibold(18.0)));
     ui.add_space(8.0);

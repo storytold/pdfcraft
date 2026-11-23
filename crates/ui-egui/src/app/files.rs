@@ -23,7 +23,7 @@ impl PdfCraftApp {
     /// page and the place on it (Document Properties ▸ Initial View, `/OpenAction`). With Always
     /// use my default zoom and page layout on, the layout and magnification stay at the defaults
     /// the view opened with, and the view goes to the opening page's top.
-    fn apply_initial_view(&mut self, index: usize, v: &pdfcraft_engine::InitialView) {
+    pub(super) fn apply_initial_view(&mut self, index: usize, v: &pdfcraft_engine::InitialView) {
         use pdfcraft_engine::{InitialLayout as L, Magnification as M, Navigation as N};
         let pages = self.session.get(self.views[index].id).map_or(0, |d| d.info.pages.len());
         // A right panel the user closed stays closed, whatever the document asks for (#2884).
@@ -399,7 +399,11 @@ impl PdfCraftApp {
                 None
             };
         }
-        let view = DocView::new(id, &doc.info, self.view_defaults);
+        let mut view = DocView::new(id, &doc.info, self.view_defaults);
+        // A portfolio's tab shows its files, one at a time, in place of its cover sheet.
+        if doc.info.portfolio.is_some() {
+            view.portfolio = Some(super::portfolio::PortfolioTab::new(id));
+        }
         self.views.push(view);
         if activate {
             self.active = Some(self.views.len() - 1);
@@ -562,12 +566,14 @@ impl PdfCraftApp {
     }
 
     /// A PDF portfolio (ISO 32000-2 §7.11.6) shows its documents, not the cover sheet that its
-    /// pages are. The document a portfolio that just opened presents first (`/D`) opens in a
-    /// tab of its own, and a portfolio's tab shows its file list, the Attachments panel, even
-    /// with the right panel closed, unless the portfolio keeps the list hidden (`/View /H`).
-    /// Leaving the tab gives back the panel the list replaced, unless the reader changed panels
-    /// meanwhile. Called every frame.
+    /// pages are. The document a portfolio that just opened presents first (`/D`) is shown in
+    /// the portfolio's own tab (`super::portfolio`), and the tab shows its file list, the
+    /// Portfolio files panel, even with the right panel closed, unless the portfolio keeps the
+    /// list hidden (`/View /H`). Leaving the tab gives back the panel the list replaced, unless
+    /// the reader changed panels meanwhile. Called every frame.
     pub(crate) fn present_portfolios(&mut self) {
+        // An Office document converted off the frame thread is shown once it is ready.
+        self.poll_portfolio_conversions();
         // A prompt or picker over the window belongs to the document it was raised for (the
         // password of a file opened together with the portfolio, say): the initial document
         // waits for its answer, and opening it then would close the prompt. A file still
@@ -579,22 +585,22 @@ impl PdfCraftApp {
         let busy = self.modal_open() || self.web_reads.load(std::sync::atomic::Ordering::Relaxed) > 0;
         if !busy
             && let Some((doc, key)) = self.portfolio_initial.take()
-            && self.active_ids().is_some_and(|(_, id)| id == doc)
-            && let Some(index) = self.portfolio_attachment(doc, &key)
+            && let Some(index) = self.active.filter(|&i| self.tab_doc(i) == Some(doc))
         {
-            self.open_portfolio_initial(doc, index);
+            // A file of another kind, or one that can't be read, stays in the list.
+            self.show_in_portfolio_tab(index, Some(&key));
             // A portfolio inside the portfolio waits until the reader opens it, so a nested
             // file can't open tab after tab on its own.
             self.portfolio_initial = None;
         }
-        let active = self.active_ids().map(|(_, id)| id);
+        let active = self.active.and_then(|i| self.tab_doc(i));
         if active == self.portfolio_seen {
             return;
         }
         self.leave_portfolio();
         if let Some(id) = active
             && self.mode != Mode::Read
-            && self.right != Some(RightPanel::Attachments)
+            && self.right != Some(RightPanel::PortfolioFiles)
             && self.lists_files(id)
         {
             self.show_portfolio_files(id, self.right);
@@ -613,32 +619,18 @@ impl PdfCraftApp {
     fn show_portfolio_files(&mut self, id: DocId, before: Option<RightPanel>) {
         self.portfolio_seen = Some(id);
         self.portfolio_panel = Some(before);
-        self.right = Some(RightPanel::Attachments);
+        self.right = Some(RightPanel::PortfolioFiles);
     }
 
     /// Where in `doc`'s attachments now the file its name tree keys `key` is: an attachment
     /// deleted since the portfolio opened moves it, or it is gone.
-    fn portfolio_attachment(&self, doc: DocId, key: &str) -> Option<usize> {
+    pub(super) fn portfolio_attachment(&self, doc: DocId, key: &str) -> Option<usize> {
         self.session
             .get(doc)?
             .info
             .attachments
             .iter()
             .position(|a| matches!(&a.source, pdfcraft_render::AttachmentSource::Document { key: k } if k == key))
-    }
-
-    /// Open portfolio `doc`'s attachment `index` in a tab of its own when its bytes are a PDF,
-    /// whatever its name. A file of another kind, or one that can't be read, stays in the list.
-    fn open_portfolio_initial(&mut self, doc: DocId, index: usize) {
-        let Some(d) = self.session.get(doc) else { return };
-        let Some(att) = d.info.attachments.get(index).cloned() else { return };
-        let Ok(bytes) = pdfcraft_render::attachment_data(&d.bytes, d.password.as_deref(), &att) else { return };
-        if pdfcraft_engine::source_kind(&att.name, &bytes) != Some(pdfcraft_engine::SourceKind::Pdf) {
-            return;
-        }
-        if let Err(e) = self.open_bytes(&crate::files::attachment_file_name(&att.name), None, bytes) {
-            self.notify_fmt("Couldn't open {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]);
-        }
     }
 
     /// Leave a portfolio's tab: the panel its file list replaced comes back, unless the reader
@@ -649,10 +641,10 @@ impl PdfCraftApp {
         self.portfolio_seen = None;
         let Some(before) = self.portfolio_panel.take() else { return };
         if self.mode == Mode::Read {
-            if self.right_before_read == Some(RightPanel::Attachments) {
+            if self.right_before_read == Some(RightPanel::PortfolioFiles) {
                 self.right_before_read = before;
             }
-        } else if self.right == Some(RightPanel::Attachments) {
+        } else if self.right == Some(RightPanel::PortfolioFiles) {
             self.right = before;
         }
     }
@@ -793,7 +785,9 @@ impl PdfCraftApp {
     /// The tab already showing the file at `path` (the same path, or one that names the same
     /// file once made absolute).
     pub(crate) fn tab_showing(&self, path: &str) -> Option<usize> {
-        self.views.iter().position(|v| self.session.get(v.id).and_then(|d| d.path.as_deref()).is_some_and(|p| same_file(p, path)))
+        // A portfolio's tab shows its file whichever of the portfolio's files it shows.
+        (0..self.views.len())
+            .find(|&i| self.tab_doc(i).and_then(|id| self.session.get(id)).and_then(|d| d.path.as_deref()).is_some_and(|p| same_file(p, path)))
     }
 
     /// Open a file from a recent list: focus the tab already showing it, else open it (File ▸
@@ -847,6 +841,12 @@ impl PdfCraftApp {
         if let Some(i) = self.tab_showing(path) {
             self.startup_superseded = true;
             self.active = Some(i);
+            // A portfolio's tab showing one of its files: what was asked of the portfolio (a
+            // destination, a display, a tool) is done on the portfolio's own pages. Only coming
+            // to the front leaves the file shown.
+            if after_open.is_some() || then.is_some() || display_override.is_some() {
+                self.show_in_portfolio_tab(i, None);
+            }
             if let Some((layout, continuous)) = display_override
                 && let Some(view) = self.views.get_mut(i)
             {
@@ -1066,11 +1066,17 @@ impl PdfCraftApp {
         if index >= self.views.len() {
             return;
         }
+        // A portfolio's tab closes on the portfolio's own view, which is what the reader comes
+        // back to and the recently closed list names; the files it showed close with it.
+        self.show_in_portfolio_tab(index, None);
         self.remember_view(index);
-        let view = self.views.remove(index);
+        let mut view = self.views.remove(index);
         let (id, place) = (view.id, view.place());
+        if let Some(tab) = view.portfolio.take() {
+            self.close_parked(tab);
+        }
         // Another tab showing the same document (split view) keeps it open.
-        if !self.views.iter().any(|v| v.id == id) {
+        if !self.doc_in_a_tab(id) {
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
                 if self.closed_tabs.len() == 10 {
