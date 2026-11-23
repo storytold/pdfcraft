@@ -925,7 +925,10 @@ impl PdfCraftApp {
 }
 
 pub(crate) fn strip_pdf(name: &str) -> &str {
-    name.strip_suffix(".pdf").or_else(|| name.strip_suffix(".PDF")).unwrap_or(name)
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if ext.eq_ignore_ascii_case("pdf") => stem,
+        _ => name,
+    }
 }
 
 impl PdfCraftApp {
@@ -1142,7 +1145,14 @@ impl PdfCraftApp {
 
 #[cfg(test)]
 mod stem_tests {
-    use super::{attachment_file_name, file_stem_from_user, is_plain_file_name};
+    use super::{attachment_file_name, file_stem_from_user, is_plain_file_name, strip_pdf};
+
+    #[test]
+    fn strip_pdf_removes_one_case_insensitive_extension() {
+        assert_eq!(strip_pdf("résumé.v2.PdF"), "résumé.v2");
+        assert_eq!(strip_pdf("archive.pdf.PDF"), "archive.pdf");
+        assert_eq!(strip_pdf("résumé.文"), "résumé.文");
+    }
 
     #[test]
     fn user_file_names_stay_inside_the_folder_and_writable_everywhere() {
