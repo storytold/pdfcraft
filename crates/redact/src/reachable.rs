@@ -37,8 +37,10 @@ pub(crate) fn drop_action_targets(doc: &mut Document, removed: &HashSet<ObjRef>)
             changed.push((r, object));
         }
     }
+    // An object whose xref and header generations disagree is reached by either: replace it under
+    // both, or a reference by the other one would read null and drop what it names.
     for (r, object) in changed {
-        doc.set(r, object);
+        doc.set_existing(r, object)?;
     }
     let reachable = pdfcraft_cos::reachable_objects(doc)?;
     let mut kept: Vec<u32> = numbers.into_iter().filter(|n| reachable.contains(n)).collect();

@@ -1014,6 +1014,39 @@ fn a_redacted_comment_a_hide_action_names_leaves_the_saved_file() {
     assert!(!full_save_holds(&doc, b"HIDESECRETNOTE"), "the hide action kept the redacted comment");
 }
 
+/// The link holding the hide action is written as `5 1 obj` while the cross-reference table says
+/// generation 0, and the page names it `5 1 R`. Dropping the comment from the action must keep the
+/// link reachable through the generation the page uses.
+#[test]
+fn an_action_whose_generations_disagree_stays_reachable_by_both() {
+    let objects: [(u32, u16, &str); 5] = [
+        (1, 0, "<< /Type /Catalog /Pages 2 0 R >>"),
+        (2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        (3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << >> /Annots [4 0 R 5 1 R] >>"),
+        (4, 0, "<< /Type /Annot /Subtype /FreeText /Rect [10 50 100 70] /Contents (GENSECRETNOTE) /DA (/Helv 10 Tf 0 g) >>"),
+        (5, 1, "<< /Type /Annot /Subtype /Link /Rect [200 200 250 220] /A << /S /Hide /T 4 0 R >> >>"),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (num, generation, body) in objects {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{num} {generation} obj\n{body}\nendobj\n").as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
+    for offset in offsets {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    let mut doc = Document::open(Arc::new(bytes)).unwrap();
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    apply(&mut doc, None).unwrap();
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    let links = annots_of(&doc, &page.dict).iter().filter(|a| doc.resolve(a).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Link"))).count();
+    assert_eq!(links, 1, "the link the mark misses stays on the page");
+    assert!(!full_save_holds(&doc, b"GENSECRETNOTE"), "the hide action kept the redacted comment");
+}
+
 /// A figure tags the form the mark covers through an object reference (`/OBJR`, #7885): the
 /// original form, its text included, must not stay in the saved file.
 #[test]
