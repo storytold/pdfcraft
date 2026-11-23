@@ -362,6 +362,30 @@ impl PdfCraftApp {
         false
     }
 
+<<<<<<< HEAD
+=======
+    /// Handle files picked asynchronously.
+    pub(crate) fn process_file_requests(&mut self) {
+        let pending: Vec<_> = self.requests.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
+        for FileRequest { purpose, target, files, dropped } in pending {
+            if !self.still_pick_target(target) {
+                continue;
+            }
+            // Last-resort guard (app-agents.md rule 13), as for desktop picks and commands.
+            let used = pdfcraft_engine::guard(|| {
+                if dropped {
+                    self.add_dropped_to_combine(files.into_iter().map(|(name, bytes)| crate::combine_ui::Incoming::new(name, bytes)).collect());
+                } else {
+                    self.use_files(purpose, files);
+                }
+            });
+            if let Err(m) = used {
+                self.notify_fmt("That didn't work: an internal error stopped it ({m}).", &[("m", m.as_str())]);
+            }
+        }
+    }
+
+>>>>>>> upstream/main
     /// Use picked files (also the entry point for tests and automation).
     pub fn use_files(&mut self, ctx: &egui::Context, purpose: FilePurpose, files: Vec<(String, Vec<u8>)>) {
         match purpose {

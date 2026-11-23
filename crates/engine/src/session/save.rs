@@ -65,6 +65,7 @@ impl Session {
     /// so the next save appends only newer edits. Undo history is kept.
     pub fn mark_saved(&mut self, id: DocId, bytes: Arc<Vec<u8>>, path: Option<String>) -> Result<(), EditError> {
         let doc = self.doc_mut(id)?;
+        let mut renumbered = false;
         if let Some(editor) = doc.editor.as_mut() {
             // An encrypted file needs the password it is protected with now (the owner
             // password when known, so saving never downgrades this session's rights).
@@ -77,6 +78,7 @@ impl Session {
             let reopened =
                 pdfcraft_cos::Document::open_with_password(bytes.clone(), keys.reopen.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
             if !preserves_objects {
+                renumbered = true;
                 crate::js::replace_runtime(&mut doc.js_runtime);
             }
             editor.cos = reopened;
@@ -95,7 +97,8 @@ impl Session {
         }
         doc.dirty = false;
         doc.generation += 1;
-        Self::refresh(doc).inspect_err(|_| Self::show_released(doc))
+        let refreshed = if renumbered { Self::refresh_renumbered(doc) } else { Self::refresh(doc) };
+        refreshed.inspect_err(|_| Self::show_released(doc))
     }
 
     /// Enter the permissions (owner) password of a document opened with its user password,

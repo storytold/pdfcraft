@@ -82,7 +82,7 @@ pub struct Document {
 }
 
 /// Something the last successful edit did that the user should hear about, never left silent
-/// (AGENTS.md §4).
+/// (app-agents.md rule 13).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditNotice {
     /// Text stored as typed but drawn with `?`.
@@ -748,6 +748,17 @@ impl Document {
         self.editor.as_ref().and_then(|e| pdfcraft_organize::page_boxes(&e.cos).ok()).unwrap_or_default()
     }
 
+    /// Every page's `/UserUnit`: points per user-space unit, read as Acrobat reads it (1 when absent or invalid).
+    pub fn page_user_units(&self) -> Vec<f64> {
+        self.editor.as_ref().map(|e| pdfcraft_model::pages(&e.cos).iter().map(|p| p.user_unit(&e.cos)).collect()).unwrap_or_default()
+    }
+
+    /// Page `page`'s `/UserUnit` (see [`Self::page_user_units`]); 1 when there is no such page.
+    pub fn page_user_unit(&self, page: usize) -> f64 {
+        let Some(e) = self.editor.as_ref() else { return 1.0 };
+        pdfcraft_model::page_at(&e.cos, page).map_or(1.0, |p| p.user_unit(&e.cos))
+    }
+
     /// Current value of a document-information entry (Title, Author, …).
     pub fn info_value(&self, key: &str) -> Option<String> {
         self.editor.as_ref().and_then(|e| pdfcraft_organize::info(&e.cos, key))
@@ -761,6 +772,11 @@ impl Document {
     /// The custom document properties as they are now (name, text), Document Properties ▸ Custom.
     pub fn custom_info(&self) -> Vec<(String, String)> {
         self.editor.as_ref().map(|e| pdfcraft_organize::custom_info(&e.cos)).unwrap_or_default()
+    }
+
+    /// The page templates as they are now: the hidden ones, then the named visible pages (#1429).
+    pub fn templates(&self) -> Vec<pdfcraft_organize::Template> {
+        self.editor.as_ref().map(|e| pdfcraft_organize::templates(&e.cos)).unwrap_or_default()
     }
 
     /// The name shown on the tab and window: the document title when the document asks for it

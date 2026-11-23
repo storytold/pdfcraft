@@ -1015,6 +1015,7 @@ fn draft_session(
         _ => 0.0,
     };
     let at = r.min - egui::vec2((width - r.width()) * anchor, 0.0);
+<<<<<<< HEAD
     let [cr, cg, cb] = draft.style.color.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8);
     let layout = BoxLayout {
         font,
@@ -1066,6 +1067,115 @@ fn draft_session(
     }
     if !done && ended != Some(EditorEnd::Commit) {
         return None;
+=======
+    let background_ready = draft.index.is_some_and(|index| view.text_background.ready_added(page, index));
+    let tokens = Tokens::get(ctx);
+    let (mut commit, mut cancel, mut done) = (false, false, false);
+    let mut undrawable = None;
+    let memo = &view.content.undrawable;
+    // Clicks outside the document (the Format text panel) keep the text open, as they keep a
+    // paragraph being edited open.
+    // Where the click that took the focus was: the pointer itself may be gone by then (a touch, a
+    // pen lifted away). The keyboard moving there (Tab, a screen reader) keeps it open too.
+    let away = |p: egui::Pos2| !view.viewport_rect().contains(p);
+    let outside = ctx.input(|i| i.pointer.interact_pos()).is_some_and(away) || crate::edit_text_ui::focus_pos(ctx).is_some_and(away);
+    // Shown at once, like the paragraph editor: a fade-in shows the page's copy through it. Over
+    // the page, so only where the document shows: text scrolled under the mode bar or a side
+    // panel must leave them their pointer (#2755).
+    egui::Area::new(egui::Id::unique(("added-text", view.view_key())))
+        .fade_in(false)
+        .order(egui::Order::Foreground)
+        .fixed_pos(at)
+        .constrain_to(view.viewport_rect())
+        .constrain(false)
+        .show(ctx, |ui| {
+            let Some(t) = view.content.draft.as_mut() else { return };
+            ui.set_width(r.width() + 64.0);
+            if let Some(source_rect) = source_rect.filter(|_| !background_ready) {
+                ui.painter().rect_filled(source_rect.union(r).expand(1.0), CornerRadius::ZERO, Color32::WHITE);
+            }
+            // The box is white in every theme, so the caret must not follow the theme (pale in dark mode) (#655).
+            ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(Color32::WHITE);
+            let [cr, cg, cb] = t.style.color.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8);
+            let color = Color32::from_rgb(cr, cg, cb);
+            // Character spacing shows as the page will draw it, scaled like the font.
+            let letter_spacing = (t.style.char_spacing * f64::from(zoom)) as f32;
+            // Laid out as the page draws it, each paragraph with its own alignment, so opening the
+            // box doesn't show it realigned.
+            let style = t.style.clone();
+            let line_font = font.clone();
+            let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap: f32| {
+                aligned_galley(ui, text.as_str(), &style, &line_font, color, letter_spacing, wrap)
+            };
+            let before = t.text.clone();
+            let input = input_id();
+            t.claim_typing(ui.ctx(), doc_id);
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let output = egui::TextEdit::multiline(&mut t.text)
+                    .font(font)
+                    .desired_width(width)
+                    .desired_rows(1)
+                    .layouter(&mut layouter)
+                    // Keep the page editor's original inset; the theme's larger button padding
+                    // otherwise shifts narrow right-aligned boxes away from their text edge.
+                    .margin(egui::Margin::symmetric(4, 2))
+                    .background_color(if background_ready { Color32::TRANSPARENT } else { Color32::WHITE })
+                    .text_color(color)
+                    .hint_text(tl!("Type text"))
+                    .id(input)
+                    .show(ui);
+                crate::edit_text_ui::narrow_double_click(ui, input, &t.text, &output);
+                let resp = output.response;
+                if let Some(cursor) = output.cursor_range {
+                    let chars = cursor.as_sorted_char_range();
+                    let byte = |index: usize| t.text.char_indices().nth(index).map_or(t.text.len(), |(at, _)| at);
+                    t.selection = Some(byte(chars.start.into())..byte(chars.end.into()));
+                }
+                // Each paragraph keeps its own alignment through the typing.
+                if t.text != before {
+                    crate::edit_text_ui::follow_typing(ui.ctx(), input, &before, &t.text, &mut [&mut t.style.aligns]);
+                }
+                // The editor has no visible label; name it for assistive tech.
+                resp.response.clone().accessible_name(tl!("Added text"));
+                if t.focus {
+                    resp.request_focus();
+                    if let Some(range) = &t.selection {
+                        crate::edit_text_ui::reselect(ui.ctx(), input, &t.text, range);
+                    }
+                    t.focus = false;
+                }
+                let buttons = egui::Frame::NONE
+                    .fill(tokens.card)
+                    .stroke(Stroke::new(1.0, tokens.border))
+                    .corner_radius(CornerRadius::same(6))
+                    .inner_margin(2)
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
+                        ui.horizontal(|ui| {
+                            done = crate::icons::button(ui, "check", 24.0, false, tl!("Done adding text")).clicked();
+                            cancel = crate::icons::button(ui, "x", 24.0, false, tl!("Discard this text (Esc)")).clicked();
+                        });
+                    })
+                    .response
+                    .rect;
+                // Pressing a button, or moving the keyboard to one, takes the focus from the text:
+                // that is not a click away.
+                let on_buttons = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| buttons.contains(p))
+                    || crate::edit_text_ui::focus_pos(ui.ctx()).is_some_and(|p| buttons.contains(p));
+                cancel |= keys.pressed(ui.ctx(), egui::Key::Escape);
+                commit = done || resp.lost_focus() && !on_buttons && !outside && !view.objects.hold_editor;
+            });
+            // Page text is drawn with the standard fonts; anything else would be saved as `?` (#125).
+            undrawable = self::undrawable(t, memo);
+            if let Some(c) = undrawable {
+                ui.label(egui::RichText::new(undrawable_message(c)).small().color(UNDRAWABLE));
+            }
+        });
+    if cancel {
+        view.content.draft = None;
+        return (None, false);
+>>>>>>> upstream/main
     }
     // Text that can't be drawn stays in the editor, with the warning, rather than being lost.
     if blocked.is_some() {

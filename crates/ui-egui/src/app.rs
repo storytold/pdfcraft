@@ -262,6 +262,8 @@ impl PdfCraftApp {
             status_captions_lang: None,
             views: Vec::new(),
             closed_tabs: Vec::new(),
+            rename_draft: None,
+            rename_returned: rename_ui::Returned::default(),
             active: None,
             last_frame_active: None,
             mode: Mode::AllTools,
@@ -295,7 +297,13 @@ impl PdfCraftApp {
             show_page_edge_shadows: true,
             scroll_speed: scroll_speed::ScrollSpeed::default(),
             invert_middle_drag: false,
+<<<<<<< HEAD
             animation_effects: craft::theme::MotionChoice::System,
+=======
+            animation_effects: motion::AnimationEffects::default(),
+            full_screen_escape_exits: true,
+            motion: motion::Motion::default(),
+>>>>>>> upstream/main
             language: i18n::AUTO.to_string(),
             ui_scale: None,
             title_bar_choice: Default::default(),
@@ -360,12 +368,21 @@ impl PdfCraftApp {
             pinned_tools: Vec::new(),
             script_messages: std::collections::VecDeque::new(),
             script_messages_dropped: 0,
+<<<<<<< HEAD
             script_shown: None,
             posted_notices: Vec::new(),
             last_edit_refusal: None,
             notices: craft::ui::notices::NoticeCenter::new(),
             progress_requests: Vec::new(),
             progress_cards: Default::default(),
+=======
+            toast_dropped: 0,
+            integrated_titlebar: false,
+            titlebar_lights_right: None,
+            window_controls: None,
+            system_title_bar: false,
+            app_frame_shown: None,
+>>>>>>> upstream/main
             password_prompt: None,
             unlock_prompt: None,
             screen_mode: Default::default(),
@@ -669,7 +686,7 @@ impl eframe::App for PdfCraftApp {
     /// Each frame's work before drawing: the update check, opens, control-channel requests, the
     /// background jobs' results, and last the close path (the "save changes?" questions).
     ///
-    /// Last-resort guard (AGENTS.md §4, #3914): a panic in a frame is reported and the app, with
+    /// Last-resort guard (app-agents.md rule 13, #3914): a panic in a frame is reported and the app, with
     /// every open tab, keeps running; see `frame_guard`.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.begin_logic();
@@ -779,7 +796,22 @@ impl PdfCraftApp {
         if self.ocr_verify.awaiting_models.is_some() {
             workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll_models);
         }
+<<<<<<< HEAD
         self.settle_presign(ctx);
+=======
+        // So may a page or region re-read's worker.
+        if self.ocr_verify.reread.is_some() {
+            workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll_reread);
+        }
+        self.process_file_requests();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.process_picked();
+        self.reopen_returned_rename();
+        self.settle_presign();
+        // Last, after everything that can open or answer the "save changes?" question.
+        self.attend_save_prompt(ctx);
+        self.sync_native_menu(ctx);
+>>>>>>> upstream/main
         self.sync_titles(ctx);
     }
 

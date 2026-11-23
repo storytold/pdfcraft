@@ -63,6 +63,7 @@ mod organize_drag;
 mod page_view;
 mod pageboxes;
 mod panel_snapshots;
+mod paragraph_spacing;
 mod paste_ownership;
 mod pdf_links;
 mod pickers;

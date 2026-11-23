@@ -294,7 +294,7 @@ impl PdfCraftApp {
     /// Run a registered command by id. Returns `false` when the id is unknown or the command
     /// is disabled right now (the user is told why).
     ///
-    /// Last-resort guard (AGENTS.md §4): a command that panics is reported and the app, with its
+    /// Last-resort guard (app-agents.md rule 13): a command that panics is reported and the app, with its
     /// open documents, keeps running. Edits are applied to a copy, so the document is unchanged.
     pub fn execute(&mut self, ctx: &egui::Context, id: &str) -> bool {
         let done = match pdfcraft_engine::guard(|| self.execute_unguarded(ctx, id)) {

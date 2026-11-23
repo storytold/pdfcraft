@@ -457,6 +457,7 @@ impl PdfCraftApp {
             .collect()
     }
 
+<<<<<<< HEAD
     /// The native macOS bar's layout with the state AppKit shows: each item's enabled and checked
     /// state is its command's, read from the board. The one reader of command state for the native
     /// bar.
@@ -467,6 +468,137 @@ impl PdfCraftApp {
             ItemState::default().enabled(resolved.enabled).checked(resolved.checked)
         });
         layout
+=======
+    /// What may run from the menus now: a dialog, a prompt or the command palette holds the
+    /// window. Edit's text items stay with a focused text field (craft-menu's gate).
+    pub fn menu_gate(&self, ctx: &egui::Context) -> Gate {
+        Gate { modal: self.modal_open() || self.palette_open, recording_shortcut: false, text_editing: ctx.text_edit_focused() }
+    }
+
+    /// Whether a menu item's command can run now, and its checked or selected state.
+    pub fn menu_state(&self, ctx: &egui::Context, command: &CommandRef) -> ItemState {
+        let view = self.active.and_then(|i| self.views.get(i));
+        let organize = view.is_some_and(|v| v.organize);
+        let has_doc = view.is_some();
+        let enabled_id = |id: &str| commands::command(id).is_some_and(|s| self.command_enabled(s));
+        let index = param_index(command);
+        let text = ctx.text_edit_focused() && matches!(command.id.as_str(), "edit.undo" | "edit.redo" | "edit.copy" | CUT | PASTE | SELECT_ALL);
+        // Objects selected together in Edit a PDF are what Copy and Cut take, and Paste brings
+        // back objects copied there.
+        let edit_objects = self.quick_tool == crate::QuickTool::EditText && !organize;
+        let doc = self.active_ids().and_then(|(_, id)| self.session.get(id));
+        let enabled = text
+            || match command.id.as_str() {
+                NO_RECENT => false,
+                "file.open_recent" => index.is_none_or(|i| i < self.recent.len()),
+                "file.clear_recent" => !self.recent.is_empty(),
+                DOCUMENT => index.is_some_and(|i| i < self.views.len()),
+                // macOS ⌘W closes the window when no document is open (#869).
+                "file.close" if !has_doc && crate::commands::mac_shortcuts(ctx) && !cfg!(target_arch = "wasm32") => true,
+                "edit.copy" if organize => enabled_id("page.copy"),
+                "edit.copy" if view.is_some_and(|v| v.picked_image.is_some()) => {
+                    self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.allows_copying())
+                }
+                "edit.copy" | CUT if edit_objects && view.is_some_and(|v| v.objects.count() > 0) => {
+                    doc.is_some_and(|d| d.allows_copying() && (command.id != CUT || d.allows_modification()))
+                }
+                PASTE if edit_objects && self.object_clipboard.is_some() => doc.is_some_and(pdfcraft_engine::Document::allows_modification),
+                // Selected comments are what ⌘C copies when no text is selected, and ⌘V pastes
+                // copied ones onto the pages (#7123); the menu items send those same events.
+                // Selected text is ⌘C's first, and Prepare Form takes neither key (`clipboard_keys`).
+                "edit.copy"
+                    if !organize
+                        && !self.is_preparing()
+                        && view.is_some_and(|v| v.comments.selected.is_some() && v.selected_text().is_none_or(|t| t.is_empty())) =>
+                {
+                    enabled_id("comment.copy")
+                }
+                PASTE if !organize && !self.is_preparing() && self.comment_clipboard.is_some() => enabled_id("comment.paste"),
+                CUT => organize && enabled_id("page.cut"),
+                PASTE => organize && self.page_clipboard.is_some() && enabled_id("page.paste"),
+                SELECT_ALL | DELETE => has_doc,
+                ACTUAL_SIZE | PAGE_LEVEL | FIT_WIDTH | FIT_HEIGHT | ZOOM_IN | ZOOM_OUT | ROTATE_CW | ROTATE_CCW => has_doc,
+                PANEL => panel(command).is_some(),
+                id => enabled_id(id),
+            };
+        let checked = match command.id.as_str() {
+            "view.layout.single" => Some(view.is_some_and(|v| v.layout == PageLayout::Single)),
+            "view.layout.two_up" => Some(view.is_some_and(|v| v.layout == PageLayout::TwoUp)),
+            "view.continuous" => Some(view.is_some_and(|v| v.continuous())),
+            "view.page_gaps" => Some(view.is_some_and(|v| v.show_page_gaps)),
+            "view.layout.cover" => Some(view.is_some_and(|v| v.cover)),
+            "view.full_screen" => Some(self.full_screen),
+            "view.read_mode" => Some(self.mode == crate::Mode::Read),
+            "view.side_panel" => Some(self.right.is_some()),
+            "view.tools_pane" => Some(self.left_open),
+            "view.split" => Some(self.panes.split.is_some()),
+            "view.theme.system" => Some(self.theme_preference == ThemePreference::System),
+            "view.theme.light" => Some(self.theme_preference == ThemePreference::Light),
+            "view.theme.dark" => Some(self.theme_preference == ThemePreference::Dark),
+            PANEL => Some(panel(command).is_some_and(|p| self.right == Some(p))),
+            _ => None,
+        };
+        ItemState { enabled, checked }
+    }
+
+    /// Run a command chosen in either menu bar. Registry commands go through
+    /// [`PdfCraftApp::dispatch_command`], as their shortcuts do; the clipboard items act as
+    /// their keys would (⌘C is a Copy event, Delete a key press), so every place that handles the
+    /// key handles the click. A command that can't run now (a dialog opened since the menu was
+    /// drawn) does nothing.
+    pub fn run_menu_command(&mut self, ctx: &egui::Context, command: &CommandRef) {
+        // Both menu bars run Quit and Minimize themselves; Hide and Hide Others are AppKit's.
+        if Builtin::of(command).is_some() {
+            return;
+        }
+        if !self.menu_gate(ctx).allows_command(command) || !self.menu_state(ctx, command).enabled {
+            return;
+        }
+        let index = param_index(command);
+        let key = |key: egui::Key, modifiers: egui::Modifiers| {
+            [true, false].map(|pressed| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers })
+        };
+        match command.id.as_str() {
+            "file.open_recent" if index.is_some() => {
+                if let Some(path) = index.and_then(|i| self.recent.get(i)).map(|r| r.path.clone()) {
+                    self.open_recent(&path);
+                }
+            }
+            DOCUMENT => {
+                if let Some(i) = index.filter(|&i| i < self.views.len()) {
+                    self.active = Some(i);
+                }
+            }
+            "edit.copy" => self.menu_input.push(egui::Event::Copy),
+            CUT => self.menu_input.push(egui::Event::Cut),
+            PASTE => self.menu_pastes = self.menu_pastes.saturating_add(1),
+            SELECT_ALL => self.menu_input.extend(key(egui::Key::A, egui::Modifiers::COMMAND)),
+            DELETE => self.menu_input.extend(key(egui::Key::Delete, egui::Modifiers::NONE)),
+            PANEL => self.choose_right_panel(panel(command)),
+            ACTUAL_SIZE | PAGE_LEVEL | FIT_WIDTH | FIT_HEIGHT | ZOOM_IN | ZOOM_OUT | ROTATE_CW | ROTATE_CCW => {
+                let Some(v) = self.active.and_then(|i| self.views.get_mut(i)) else { return };
+                match command.id.as_str() {
+                    ACTUAL_SIZE => v.set_zoom(1.0),
+                    PAGE_LEVEL => v.fit = Fit::Page,
+                    FIT_WIDTH => v.fit = Fit::Width,
+                    FIT_HEIGHT => {
+                        v.fit = Fit::Height;
+                        v.goto = Some((v.current, 0.0));
+                    }
+                    ZOOM_IN => v.zoom_step(true),
+                    ZOOM_OUT => v.zoom_step(false),
+                    ROTATE_CW => v.rotate_view(true),
+                    _ => v.rotate_view(false),
+                }
+            }
+            id => {
+                if let Some(spec) = commands::command(id) {
+                    self.dispatch_command(ctx, spec.id);
+                }
+            }
+        }
+        ctx.request_repaint();
+>>>>>>> upstream/main
     }
 
     /// The menu bar drawn in the window (Windows, Linux, the web, and macOS when the native one

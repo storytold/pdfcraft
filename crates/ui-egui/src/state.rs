@@ -95,6 +95,148 @@ pub enum QuickTool {
     ColumnSelect,
 }
 
+<<<<<<< HEAD
+=======
+/// A file dropped on a page grid: its name, and its bytes or, for a file on disk, the path they are
+/// read from when the file's turn to be inserted comes (so a long drop holds one file at a time).
+pub(crate) type GridFile = (String, Result<Vec<u8>, std::path::PathBuf>);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dialog {
+    WordCount,
+    CreateImages,
+    Properties(PropsTab),
+    About,
+    Shortcuts,
+    Split,
+    /// Pages ▸ Number pages… (page labels).
+    NumberPages,
+    /// Print production ▸ Add printer marks.
+    PrinterMarks,
+    /// Print production ▸ Convert colours.
+    ConvertColours,
+    /// Print production ▸ Fix hairlines.
+    FixHairlines,
+    /// Organize pages ▸ Page properties (the tab order of the selected pages).
+    PageProps,
+    /// Protect Using Password.
+    Protect,
+    /// Bookmarks ▸ New bookmarks from text styles (#1693).
+    BookmarksFromTextStyles,
+    /// Set Page Boxes (crop, trim, bleed, art, media).
+    PageBoxes,
+    /// Add / Update Header and Footer, Watermark, Background.
+    Marks(pdfcraft_engine::MarkKind),
+    /// Export a PDF ▸ Image / Text.
+    Export(export_ui::ExportKind),
+    /// Fill & Sign ▸ Create signature (the drawing pad).
+    Signature,
+    /// Comment Properties.
+    CommentProps,
+    /// Edit the description of an embedded document attachment.
+    AttachmentDescription,
+    /// Replace Pages (after choosing the file).
+    ReplacePages,
+    /// Prepare a form ▸ Field Properties.
+    FieldProps,
+    /// Shared properties of several selected form fields.
+    BulkFieldProps,
+    /// Redact a PDF ▸ Redact pages, Find text and redact, Set properties, apply confirmation.
+    RedactPages,
+    RedactSearch,
+    RedactProps,
+    RedactApply,
+    /// File ▸ Print.
+    Print,
+    /// File ▸ Revert confirmation.
+    Revert,
+    /// Save over a file that changed on disk since the document came from it (#2166).
+    OverwriteChanged,
+    /// Saving a document with a signature just placed by Fill & Sign: lock it into the page
+    /// first? (#2149)
+    LockSignatures,
+    /// Link Properties.
+    LinkProps,
+    /// Organize ▸ Extract (options), Rotate Pages.
+    Extract,
+    RotatePages,
+    /// Remove Hidden Information and Sanitize Document.
+    RemoveHidden,
+    Sanitize,
+    /// Documents from a session that ended unexpectedly.
+    Recovery,
+    /// Comments ▸ Summarize comments (options).
+    SummarizeComments,
+    /// Sign with a Digital ID ▸ Configure ▸ Sign as.
+    Sign,
+    /// Optimize PDF ▸ Advanced optimization.
+    Optimize,
+    /// Prepare a form ▸ right-click a field ▸ Duplicate.
+    DuplicateField,
+    /// Prepare a form ▸ Text field table: a movable window rather than a modal (`field_table_ui`).
+    FieldTable,
+    /// Check for accessibility ▸ Accessibility Checker Options.
+    AccessibilityOptions,
+    /// Scan & OCR ▸ Recognize text.
+    RecognizeText,
+    /// Scan & OCR ▸ Enhance scanned file.
+    EnhanceScan,
+    /// The JavaScript console (⌘J).
+    JsConsole,
+    /// Document JavaScripts.
+    DocumentJs,
+    /// Preferences.
+    Preferences,
+    /// Compare files: choose the older version.
+    CompareFiles,
+    /// Action Wizard.
+    ActionWizard,
+    /// Standards ▸ PDF/A.
+    PdfA,
+    /// Custom stamps ▸ Create.
+    CreateStamp,
+    /// Prepare for accessibility ▸ Add alternate text.
+    AltText,
+    /// PDF Optimizer ▸ Audit space usage (then back to the optimizer).
+    AuditSpace,
+    /// Signatures ▸ Show certificate.
+    CertificateViewer,
+    /// Rename… on a document tab.
+    RenameFile,
+    /// Pin tools to Home: selection modal.
+    PinTool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PropsTab {
+    Description,
+    InitialView,
+    Security,
+    Fonts,
+    Custom,
+    Advanced,
+    SpaceAudit,
+}
+
+/// Document Properties ▸ Custom being edited: the properties as they will be after OK, in order,
+/// and the Name and Value fields.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CustomDraft {
+    pub props: Vec<(String, String)>,
+    pub name: String,
+    pub value: String,
+}
+
+/// Duplicate Field: the field and the pages (all, or a range, 1-based).
+#[derive(Clone, Debug, PartialEq)]
+pub struct DuplicateDraft {
+    pub name: String,
+    pub all: bool,
+    pub from: usize,
+    pub to: usize,
+}
+
+>>>>>>> upstream/main
 /// Page Properties: the document and pages it applies to (0-based), the document's edit
 /// generation when the dialog opened, and the pages' tab order as they have it (`None` when they
 /// differ). The order chosen is the hosted dialog's value.

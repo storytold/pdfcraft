@@ -227,6 +227,7 @@ impl PdfCraftApp {
             }),
             sign_graphic: Some(self.sign_graphic.clone()),
             // macOS Keychain and Windows store identities are read from their OS key stores each time.
+<<<<<<< HEAD
             digital_ids: Some(
                 self.digital_ids.iter().filter(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")).cloned().collect(),
             ),
@@ -247,6 +248,53 @@ impl PdfCraftApp {
         // Kept only while the preference is on.
         let session = settings::Session { last_session: self.reopen_last_session.then(|| json_text(&self.session_to_save())).flatten() };
         PdfCraftSettings { layout, print, behavior, view, comment, signature, dock, recent, hotbar, session }
+=======
+            "digital_ids": self.digital_ids.iter().filter(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")).collect::<Vec<_>>(),
+            "trusted": trusted,
+            "custom_stamps": stamps_ui::encode(&self.custom_stamps),
+            "javascript": self.session.javascript(),
+            "actions": actions_ui::encode(&self.custom_actions),
+            "combine_columns": self.combine_columns.to_json(),
+            "combine_view": self.combine_view.as_str(),
+            "combine_zoom": self.combine_zoom,
+            "comments_panel_closed": self.comments_panel_closed,
+            "right_panel_closed": self.right_panel_closed,
+            "ocr": self.ocr_draft.to_pref(),
+        });
+        // Set apart: one more key inside the macro above passes serde_json's recursion limit.
+        v["default_page_gaps"] = serde_json::Value::Bool(self.view_defaults.show_page_gaps);
+        v["recent_limit"] = serde_json::json!(self.recent_limit);
+        v["fill_text_color"] = serde_json::json!(self.fill_text_color);
+        v["full_screen_fill"] = serde_json::Value::Bool(self.view_defaults.full_screen_fill);
+        v["full_screen_escape_exits"] = serde_json::Value::Bool(self.full_screen_escape_exits);
+        v["redact_prefs"] = self.redact_defaults.to_json();
+        v["pinned_tools"] = serde_json::json!(self.pinned_tools);
+        // Set outside json! above, which is at serde_json's macro recursion limit.
+        v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
+        // The Print dialog's own paper sizes (print.page-setup).
+        v["print_custom_papers"] = serde_json::json!(self.print_draft.custom_papers);
+        v["show_page_edge_shadows"] = self.show_page_edge_shadows.into();
+        // Not `check_updates_at_start`: that key was an opt-in of its own, off unless chosen, and
+        // settings written then would turn this off unasked.
+        v["update_check_at_start"] = self.update_check_at_start.into();
+        v["hotbar"] = serde_json::to_value(&self.hotbar).unwrap_or_default();
+        v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
+        v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
+        v["text_links"] = serde_json::Value::Bool(self.text_links);
+        v["organize_zoom"] = serde_json::json!(self.organize_zoom);
+        // Canonical names survive changes to the order of PAPERS and do not depend on UI language;
+        // a custom paper is stored by the name it was given.
+        let d = &self.print_draft;
+        v["print_paper"] = serde_json::json!((d.paper < d.paper_count()).then(|| d.paper_name()));
+        let size = self.print_draft.paper_size();
+        v["print_paper_size"] = serde_json::json!([size.0, size.1]);
+        v["print_paper_overridden"] = serde_json::json!(self.print_draft.paper_overridden);
+        // Also set outside json! above, which is at serde_json's macro recursion limit.
+        v["print"] = print;
+        // Each printer's paper, sizing and two-sided choice, the one printed to last first (#2001).
+        v["print_printers"] = crate::print_ui::setups_to_json(&self.print_draft.setups);
+        v.to_string()
+>>>>>>> upstream/main
     }
 
     /// Hands the app the settings store it saves the preferences to from now on (the launch opens it).
@@ -376,10 +424,24 @@ impl PdfCraftApp {
         }
     }
 
+<<<<<<< HEAD
     /// The windows to reopen. Absent clears them, as the choice is saved only while reopening is on.
     fn apply_session(&mut self, s: &settings::Session) {
         let value = parsed(&s.last_session).unwrap_or(serde_json::Value::Null);
         self.last_session = craft::platform::session::Session::from_json(&value);
+=======
+    /// The page gaps and full screen's switches: fill the screen, and whether Esc leaves it.
+    fn restore_page_display_prefs(&mut self, v: &serde_json::Value) {
+        if let Some(show) = v["default_page_gaps"].as_bool() {
+            self.view_defaults.show_page_gaps = show;
+        }
+        if let Some(fill) = v["full_screen_fill"].as_bool() {
+            self.view_defaults.full_screen_fill = fill;
+        }
+        if let Some(exits) = v["full_screen_escape_exits"].as_bool() {
+            self.full_screen_escape_exits = exits;
+        }
+>>>>>>> upstream/main
     }
 
     /// The Print dialog's papers, each printer's setup and the choices it keeps (#2001).
@@ -454,11 +516,17 @@ impl PdfCraftApp {
     }
 
     /// Switches for reopening, window chrome and file watching.
+<<<<<<< HEAD
     fn apply_behavior(&mut self, b: &settings::Behavior) {
         if let Some(show) = b.default_page_gaps {
             self.view_defaults.page_gaps = show;
         }
         if let Some(units) = b.units {
+=======
+    fn restore_behavior_prefs(&mut self, v: &serde_json::Value) {
+        self.restore_page_display_prefs(v);
+        if let Ok(units) = serde_json::from_value::<units::Unit>(v["units"].clone()) {
+>>>>>>> upstream/main
             self.units = units;
         }
         if let Some(on) = b.always_default_view {

@@ -4908,9 +4908,203 @@ fn edit_delete_removes_the_selected_comment_with_or_without_a_popup() {
     }
 }
 
+<<<<<<< HEAD
 /// Full screen hides the rail and its drawer, which don't come back with the rail: back from full
 /// screen, a Delete on the pass that shows the rail again removes the selected comment with
 /// nothing over it. The drawer came back, drawn after that pass's keys.
+=======
+/// Escape with a dialog open closes the dialog and nothing else: the comment stays selected. It
+/// was deselected too.
+#[test]
+fn escape_under_a_dialog_closes_it_and_keeps_the_selected_comment() {
+    let mut h = selected_square();
+    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::Shortcuts);
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "and nothing else");
+}
+
+/// With a menu of the menu bar open, Delete is the menu's: the comment stays. It was deleted.
+#[test]
+fn delete_with_a_menu_open_leaves_the_selected_comment() {
+    let mut h = selected_square();
+    crate::support::open_menu(&mut h, "View");
+    assert!(egui::Popup::is_any_open(&h.ctx), "the menu is open");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), 1);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment was still selected for the Delete");
+}
+
+/// Edit ▸ Delete removes the selected comment: the key a menu click stands for is not under the
+/// menu it came from.
+#[test]
+fn edit_delete_removes_the_selected_comment() {
+    let mut h = selected_square();
+    crate::support::open_menu(&mut h, "Edit");
+    crate::support::menu_row(&h, "Delete").click();
+    h.run_steps(4);
+    assert!(comments(&h).is_empty());
+}
+
+/// The Escape that closes a dialog opened from a menu while a comment is being typed is the
+/// dialog's: the typing stays, in the composer or posted. It was thrown away.
+#[test]
+fn escape_closing_a_dialog_over_a_comment_being_typed_keeps_the_typing() {
+    let mut h = harness(|app| app.set_option("quick", "note").unwrap());
+    click_pt(&mut h, (250.0, 180.0));
+    field(&h, "Add a comment").click();
+    h.run_steps(2);
+    h.event(egui::Event::Text("First line".into()));
+    h.run_steps(2);
+    crate::support::open_shortcuts_from_the_help_menu(&mut h);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
+    let open = h.state().views[0].comments.composer.as_ref().is_some_and(|c| c.text.contains("First line"));
+    let posted = comments(&h).iter().any(|c| c.contents.as_deref().is_some_and(|t| t.contains("First line")));
+    assert!(open || posted, "the typing stays");
+}
+
+/// With a menu of the menu bar open, the arrows are the menu's: the selected comment stays put.
+#[test]
+fn an_arrow_with_a_menu_open_leaves_the_selected_comment_where_it_is() {
+    let mut h = selected_square();
+    let before = comments(&h)[0].rect;
+    crate::support::open_menu(&mut h, "View");
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    assert_eq!(comments(&h)[0].rect, before, "not moved");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment was still selected for the arrow");
+}
+
+/// Edit ▸ Delete from a native menu with the comment's own menu still open removes the comment:
+/// the click never reaches the window, so Edit ▸ Delete closes the popup, as a click anywhere else
+/// would, before its key joins the pages'. The popup held the Delete.
+#[test]
+fn edit_delete_with_a_popup_open_removes_the_selected_comment() {
+    let mut h = selected_square();
+    let p = at(&h, 90.0, 70.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the comment's menu is open");
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
+    h.run_steps(4);
+    assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
+}
+
+/// Edit ▸ Copy and Paste take a selected drawn comment as ⌘C and ⌘V do (#7123). Both were
+/// greyed out, as the menu only counted selected text, pictures and objects.
+#[test]
+fn edit_copy_and_paste_are_enabled_for_a_selected_comment() {
+    let mut h = selected_square();
+    let state = |h: &Harness<'static, PdfCraftApp>, id: &str| h.state().menu_state(&h.ctx, &craft_menu::CommandRef::new(id)).enabled;
+    assert!(state(&h, "edit.copy"), "Edit ▸ Copy is enabled with a comment selected");
+    assert!(!state(&h, "edit.paste"), "nothing is copied yet");
+
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.copy"));
+    h.run_steps(4);
+    assert!(h.state().comment_clipboard.is_some(), "Edit ▸ Copy copied the comment");
+    assert!(state(&h, "edit.paste"), "Edit ▸ Paste is enabled with a comment copied");
+
+    // Edit ▸ Paste asks the platform for the clipboard; its answer, the XFDF Copy put there,
+    // arrives as a paste (the harness has no platform, so the test delivers it). The copy hangs
+    // on the pointer, as with ⌘V, and a click places it there.
+    let id = h.state().views[0].id;
+    let annotations = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.annotations.clone();
+    let before = annotations(&h).len();
+    let xfdf = h.state().comment_clipboard.as_ref().map(|c| c.xfdf.clone()).expect("copied");
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
+    h.step();
+    assert!(crate::support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
+    h.step();
+    h.event(egui::Event::Paste(xfdf));
+    h.run_steps(2);
+    assert!(h.state().views[0].comments.gesture.is_some(), "Edit ▸ Paste waits for a click to place the copy");
+    let at = (200.0, 160.0);
+    click_pt(&mut h, at);
+    let after = annotations(&h);
+    assert_eq!(after.len(), before + 1, "Edit ▸ Paste placed one copy: {after:?}");
+    let placed = after.iter().max_by_key(|a| a.index).map(|a| a.rect).expect("placed");
+    assert!(((placed[0] + placed[2]) / 2.0 - at.0).abs() < 1.0, "centred on the click: {placed:?}");
+    assert!(h.state().views[0].comments.gesture.is_none(), "the copy is placed");
+    assert!(h.state().views[0].comments.selected.is_some(), "the copy is selected");
+
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(2);
+    assert!(!state(&h, "edit.copy"), "with nothing selected, Copy is greyed out again");
+}
+
+/// Prepare Form keeps ⌘C off the selected comments, so Edit ▸ Copy, which sends the same Copy,
+/// is greyed out there too rather than enabled and doing nothing (#7123).
+#[test]
+fn edit_copy_is_off_for_a_selected_comment_while_preparing_a_form() {
+    let mut h = selected_square();
+    assert!(h.state_mut().execute("form.prepare"));
+    h.run_steps(2);
+    assert!(h.state().is_preparing());
+    assert!(h.state().views[0].comments.selected.is_some(), "the comment stays selected");
+    let copy = h.state().menu_state(&h.ctx, &craft_menu::CommandRef::new("edit.copy"));
+    assert!(!copy.enabled, "Edit ▸ Copy is greyed out while preparing a form");
+}
+
+/// A native menu's click never reaches the window, so Edit ▸ Delete closes the Hotbar tools window,
+/// as it closes egui's popups, and removes the selected comment. The window held the Delete.
+#[test]
+fn edit_delete_from_a_native_menu_with_the_hotbar_window_open_removes_the_comment() {
+    let mut h = selected_square();
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "the Hotbar tools window is open");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is still selected");
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
+    h.run_steps(4);
+    assert!(h.query_by_label("Close menu").is_none(), "Edit ▸ Delete closed the Hotbar tools window");
+    assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
+}
+
+/// Edit ▸ Delete goes to a text field that has the keyboard, as the user's Delete does: with the
+/// Hotbar tools window's search field focused, a native Edit ▸ Delete leaves the window open and
+/// deletes in the field. Closed, the window took the field with it, and the Delete removed the
+/// selected comment. (A native click on Edit ▸ Copy, Cut, Paste or Select all reaches a focused
+/// field as craft-menu's tap of the shortcut, not as a menu command.)
+#[test]
+fn edit_delete_from_a_native_menu_into_the_hotbar_window_search_keeps_the_window() {
+    let mut h = selected_square();
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "the Hotbar tools window is open");
+    let search = |h: &Harness<'static, PdfCraftApp>, text: &str| h.query_all_by_role(Role::TextInput).any(|n| n.value().as_deref() == Some(text));
+    assert!(search(&h, ""), "the search field is empty");
+    h.query_all_by_role(Role::TextInput).find(|n| n.value().as_deref() == Some("")).expect("the search field").click();
+    h.run_steps(2);
+    h.event(egui::Event::Text("pen".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::ArrowLeft);
+    h.run_steps(2);
+    assert!(search(&h, "pen"), "typed into the search field");
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "Edit ▸ Delete closed the Hotbar tools window");
+    assert!(search(&h, "pe"), "Edit ▸ Delete deleted in the search field");
+    assert_eq!(comments(&h).len(), 1, "Edit ▸ Delete removed the comment");
+}
+
+/// Full screen hides the hotbar and closes its tools window, which doesn't come back with the
+/// hotbar: back from full screen, a Delete on the pass that shows the hotbar again removes the
+/// selected comment with nothing over it. The window came back, drawn after that pass's keys.
+>>>>>>> upstream/main
 #[test]
 fn full_screen_closes_the_hotbar_tools_window() {
     let mut h = selected_square();

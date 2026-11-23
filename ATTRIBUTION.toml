@@ -1,4 +1,4 @@
-# ATTRIBUTION.toml: one entry per asset (AGENTS.md §1). The source of truth for provenance and licences.
+# ATTRIBUTION.toml: one entry per asset (clean-room.md and licences.md). The source of truth for provenance and licences.
 # ATTRIBUTION.md is generated from this file: `cargo xtask assets --write`. Checked by `cargo xtask assets` (part of `xtask ci`).
 #
 # [[asset]]    a file in this repository (committed or vendored); `sha256` must match the file.
@@ -7,8 +7,8 @@
 # [[build_input]] an optional build input outside this repository (craft-fonts via CRAFT_FONTS_DIR, craft-i18n via CRAFT_I18N_DIR);
 #              never committed or downloaded here, its own repository attributes each file.
 #
-# licence: SPDX expression from the allowlist in AGENTS.md §1.2. adobe_data = true marks the closed list of
-# Adobe-authored non-visual technical data allowed by AGENTS.md §1.1.
+# licence: SPDX expression from the allowlist in licences.md. adobe_data = true marks the closed list of
+# Adobe-authored non-visual technical data allowed by clean-room.md.
 
 [[asset]]
 path = "docs/images/pdfcraft-ocr-verify.png"
@@ -912,182 +912,185 @@ kind = "font"
 usage = "UI monospace font; demo PDF code"
 sha256 = "e6fd0d7e91550b3ed2b735d4312474362c4716edc4fc0577a0f61ed782d5aed1"
 
-[[asset]]
-path = "vendor/hayro-interpret/assets/FoxitDingbats.pfb"
+[[bundled]]
+crate = "hayro-interpret"
+version = "0.7.0"
+path = "assets/FoxitDingbats.pfb"
 title = "FoxitDingbats (standard-14 substitute font)"
 author = "Foxit Software Inc. / PDFium Authors"
 source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/)"
 licence = "BSD-3-Clause"
-licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (shared hayro-interpret, pinned by Cargo.lock)"
 sha256 = "845c752392b6c914fb989c75a08b7792b88f542d2499042ef2889f8c814a16ed"
 
-[[asset]]
-path = "vendor/hayro-interpret/assets/FoxitFixed.pfb"
+[[bundled]]
+crate = "hayro-interpret"
+version = "0.7.0"
+path = "assets/FoxitFixed.pfb"
 title = "FoxitFixed (standard-14 substitute font)"
 author = "Foxit Software Inc. / PDFium Authors"
 source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/)"
 licence = "BSD-3-Clause"
-licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (shared hayro-interpret, pinned by Cargo.lock)"
 sha256 = "b6c8fe53f134b8b6d4578cd2d544df4cee9624c4efa8d51a560fb40ea296101b"
 
-[[asset]]
-path = "vendor/hayro-interpret/assets/FoxitFixedBold.pfb"
+[[bundled]]
+crate = "hayro-interpret"
+version = "0.7.0"
+path = "assets/FoxitFixedBold.pfb"
 title = "FoxitFixedBold (standard-14 substitute font)"
 author = "Foxit Software Inc. / PDFium Authors"
 source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/)"
 licence = "BSD-3-Clause"
-licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (shared hayro-interpret, pinned by Cargo.lock)"
 sha256 = "f1b7159702973f54fc86254ea38bcf3712b2a736eb3a0995751e9f4bb45ad603"
 
-[[asset]]
-path = "vendor/hayro-interpret/assets/FoxitFixedBoldItalic.pfb"
+[[bundled]]
+crate = "hayro-interpret"
+version = "0.7.0"
+path = "assets/FoxitFixedBoldItalic.pfb"
 title = "FoxitFixedBoldItalic (standard-14 substitute font)"
 author = "Foxit Software Inc. / PDFium Authors"
 source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/)"
 licence = "BSD-3-Clause"
-licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (shared hayro-interpret, pinned by Cargo.lock)"
 sha256 = "8a000945843bd31add06aee63bf9fd41b7578b4f3242a4b7cd46349ad9d24d4d"
 
-[[asset]]
-path = "vendor/hayro-interpret/assets/FoxitFixedItalic.pfb"
+[[bundled]]
+crate = "hayro-interpret"
+version = "0.7.0"
+path = "assets/FoxitFixedItalic.pfb"
 title = "FoxitFixedItalic (standard-14 substitute font)"
 author = "Foxit Software Inc. / PDFium Authors"
 source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/)"
 licence = "BSD-3-Clause"
-licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (shared hayro-interpret, pinned by Cargo.lock)"
 sha256 = "5007faf8320fa1fcc08b8894b356ad976f60b992ba29ee5272578bbdebaf3876"
 
-[[asset]]
-path = "vendor/hayro-interpret/assets/FoxitSans.pfb"
+[[bundled]]
+crate = "hayro-interpret"
+version = "0.7.0"
+path = "assets/FoxitSans.pfb"
 title = "FoxitSans (standard-14 substitute font)"
 author = "Foxit Software Inc. / PDFium Authors"
 source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/)"
 licence = "BSD-3-Clause"
-licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (shared hayro-interpret, pinned by Cargo.lock)"
 sha256 = "a02339e95d20db14cbdfc1c6baf359cd36a091d5434925c3a4040f60e1a1af9e"
 
-[[asset]]
-path = "vendor/hayro-interpret/assets/FoxitSansBold.pfb"
+[[bundled]]
+crate = "hayro-interpret"
+version = "0.7.0"
+path = "assets/FoxitSansBold.pfb"
 title = "FoxitSansBold (standard-14 substitute font)"
 author = "Foxit Software Inc. / PDFium Authors"
 source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/)"
 licence = "BSD-3-Clause"
-licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (shared hayro-interpret, pinned by Cargo.lock)"
 sha256 = "7bdfa36de1d5757dcfaf8b8a4be95c6e41c40fa70dbed9d78bf979a7b9959054"
 
-[[asset]]
-path = "vendor/hayro-interpret/assets/FoxitSansBoldItalic.pfb"
+[[bundled]]
+crate = "hayro-interpret"
+version = "0.7.0"
+path = "assets/FoxitSansBoldItalic.pfb"
 title = "FoxitSansBoldItalic (standard-14 substitute font)"
 author = "Foxit Software Inc. / PDFium Authors"
 source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/)"
 licence = "BSD-3-Clause"
-licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (shared hayro-interpret, pinned by Cargo.lock)"
 sha256 = "555ce45924338e2e4b32821910221ce85da691fd59a9723c4c971a7c5627fc8b"
 
-[[asset]]
-path = "vendor/hayro-interpret/assets/FoxitSansItalic.pfb"
+[[bundled]]
+crate = "hayro-interpret"
+version = "0.7.0"
+path = "assets/FoxitSansItalic.pfb"
 title = "FoxitSansItalic (standard-14 substitute font)"
 author = "Foxit Software Inc. / PDFium Authors"
 source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/)"
 licence = "BSD-3-Clause"
-licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (shared hayro-interpret, pinned by Cargo.lock)"
 sha256 = "7751cbefeda351708dae8c4a88db043411bc39ab2ae2097685da845d4d16f307"
 
-[[asset]]
-path = "vendor/hayro-interpret/assets/FoxitSerif.pfb"
+[[bundled]]
+crate = "hayro-interpret"
+version = "0.7.0"
+path = "assets/FoxitSerif.pfb"
 title = "FoxitSerif (standard-14 substitute font)"
 author = "Foxit Software Inc. / PDFium Authors"
 source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/)"
 licence = "BSD-3-Clause"
-licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (shared hayro-interpret, pinned by Cargo.lock)"
 sha256 = "4f57d2b9d884af8f907bf22df6019b52d86cbf6214fdbd02b1ae05472a543f35"
 
-[[asset]]
-path = "vendor/hayro-interpret/assets/FoxitSerifBold.pfb"
+[[bundled]]
+crate = "hayro-interpret"
+version = "0.7.0"
+path = "assets/FoxitSerifBold.pfb"
 title = "FoxitSerifBold (standard-14 substitute font)"
 author = "Foxit Software Inc. / PDFium Authors"
 source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/)"
 licence = "BSD-3-Clause"
-licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (shared hayro-interpret, pinned by Cargo.lock)"
 sha256 = "0bdf4b04e964139818d51eda03d566ba999fc3ba2421b1c6c51f9dc969022e80"
 
-[[asset]]
-path = "vendor/hayro-interpret/assets/FoxitSerifBoldItalic.pfb"
+[[bundled]]
+crate = "hayro-interpret"
+version = "0.7.0"
+path = "assets/FoxitSerifBoldItalic.pfb"
 title = "FoxitSerifBoldItalic (standard-14 substitute font)"
 author = "Foxit Software Inc. / PDFium Authors"
 source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/)"
 licence = "BSD-3-Clause"
-licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (shared hayro-interpret, pinned by Cargo.lock)"
 sha256 = "a406cac82583bf98175cb62c87ed5e95c45fbb34eece63a10b0a13e793cb2e10"
 
-[[asset]]
-path = "vendor/hayro-interpret/assets/FoxitSerifItalic.pfb"
+[[bundled]]
+crate = "hayro-interpret"
+version = "0.7.0"
+path = "assets/FoxitSerifItalic.pfb"
 title = "FoxitSerifItalic (standard-14 substitute font)"
 author = "Foxit Software Inc. / PDFium Authors"
 source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/)"
 licence = "BSD-3-Clause"
-licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (shared hayro-interpret, pinned by Cargo.lock)"
 sha256 = "610ae0687198045c4db5d1a6650fd5e92536631706382eb8b72e38df578d0ae9"
 
-[[asset]]
-path = "vendor/hayro-interpret/assets/FoxitSymbol.pfb"
+[[bundled]]
+crate = "hayro-interpret"
+version = "0.7.0"
+path = "assets/FoxitSymbol.pfb"
 title = "FoxitSymbol (standard-14 substitute font)"
 author = "Foxit Software Inc. / PDFium Authors"
 source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 assets/)"
 licence = "BSD-3-Clause"
-licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (shared hayro-interpret, pinned by Cargo.lock)"
 sha256 = "47967d055530e7357088a08403115425643ec2cdfd6201ba8af0fbd7116c1539"
 
-[[asset]]
-path = "vendor/hayro-interpret/assets/CGATS001Compat-v2-micro.icc"
+[[bundled]]
+crate = "hayro-interpret"
+version = "0.7.0"
+path = "assets/CGATS001Compat-v2-micro.icc"
 title = "CGATS001Compat v2 micro ICC profile"
 author = "Clinton Ingram (saucecontrol/Compact-ICC-Profiles)"
 source = "https://github.com/saucecontrol/Compact-ICC-Profiles"
 licence = "CC0-1.0"
-licence_file = "vendor/hayro-interpret/assets/CGATS_LICENSE.txt"
 kind = "data"
-usage = "Default CMYK colour conversion (vendored hayro-interpret)"
+usage = "Default CMYK colour conversion (shared hayro-interpret, pinned by Cargo.lock)"
 sha256 = "73e1ba37d2bad5bab2a964f40a9eed96209666efc067c3322626214bbef234a0"
-
-[[asset]]
-path = "crates/fonts/src/std14_metrics.rs"
-title = "Standard-14 font advance widths and encodings (as Rust tables)"
-author = "Adobe (Core14 AFM metrics, PDF specification encodings); tables generated by the PdfCraft contributors"
-source = "ISO 32000-2 Annex D and the Adobe Core14 AFM metrics. Generated by joining the published WinAnsi, Symbol and ZapfDingbats encodings (code to glyph name) with the per-glyph advance widths, then spot-checked against the specification by hand in the tests of crates/fonts/src/std14.rs. Data only: the code that reads these tables lives in std14.rs, so that ordinary edits do not churn this file's hash."
-licence = "MIT OR Apache-2.0"
-licence_file = "LICENSE-MIT"
-kind = "data"
-adobe_data = true
-usage = "Advance widths for the fourteen standard fonts, which a PDF may name without embedding. Non-visual data, not a typeface: the item AGENTS.md 1.1 permits, held first-party so generated appearance streams and the renderer agree."
-sha256 = "f225e0b044875b8fa6375b6b5ad935f0d99fcc1ad03ecf9f0baae2cedbfca4d2"
 
 [[bundled]]
 crate = "craft-prc"
@@ -1161,13 +1164,14 @@ kind = "font"
 usage = "Small special-icon subset embedded by egui default_fonts; retained in FontDefinitions::default(). Provenance: https://github.com/storytold/egui/blob/725a39fca940f77149ffbb9c58eef405a16997bc/crates/epaint_default_fonts/fonts/egui-icons.txt; complete MIT copyright and permission text in NOTICE."
 sha256 = "122806555c73df7cef55aa1d945289ae27fbc4dbbd31abbb4204ee0cda829cc8"
 
-[[asset]]
-path = "vendor/hayro-cmap/assets/cmaps.brotli"
+[[bundled]]
+crate = "hayro-cmap"
+version = "0.1.0"
+path = "assets/cmaps.brotli"
 title = "Adobe CMap resources (predefined CJK CMaps)"
 author = "Adobe"
 source = "https://github.com/adobe-type-tools/cmap-resources (via hayro-cmap 0.1.0 assets/)"
 licence = "BSD-3-Clause"
-licence_file = "vendor/hayro-cmap/assets/LICENSE.txt"
 kind = "data"
 adobe_data = true
 usage = "Character-code mapping tables required to read CJK PDFs. Non-visual data, allowed by AGENTS.md §1.1"

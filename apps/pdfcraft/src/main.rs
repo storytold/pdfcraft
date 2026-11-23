@@ -207,7 +207,7 @@ fn main() -> eframe::Result {
         let name = pdfcraft_platform::crypto_env::IA32CAP;
         log::warn!("{name} was set to {value}; PdfCraft started again without it (aws-lc stops on a CPU feature the processor lacks)");
     }
-    // Last-resort guard (AGENTS.md §4): commands, edits, opens and saves catch panics and report
+    // Last-resort guard (app-agents.md rule 13): commands, edits, opens and saves catch panics and report
     // them; this hook logs every panic, caught or not, with a backtrace when RUST_BACKTRACE is set.
     std::panic::set_hook(Box::new(|info| {
         let trace = std::backtrace::Backtrace::capture();
@@ -629,6 +629,134 @@ fn notify_software_renderer(app: &mut PdfCraftApp, device_type: eframe::wgpu::De
     }
 }
 
+<<<<<<< HEAD
+=======
+/// Publish a started control channel in `file`.
+///
+/// A failure stops the app. `--control` was asked for, so carrying on without it would leave a
+/// script driving nothing, and the file that couldn't be replaced may be another user's, planted
+/// at a shared path such as `/tmp/pc.json` to receive the commands. This runs before any document
+/// opens, so nothing is lost.
+fn open_control_channel(file: &str, endpoint: std::io::Result<pdfcraft_ui_egui::control::Endpoint>) -> Result<(), String> {
+    match endpoint.and_then(|ep| write_control_file(file, ep.port, &ep.token).map(|()| ep.port)) {
+        // Never the token (app-agents.md rule 14): it stays in the owner-only file.
+        Ok(port) => {
+            log::info!("UI control channel on 127.0.0.1:{port} (connection details in {file})");
+            Ok(())
+        }
+        Err(e) => {
+            // cmd.exe doesn't expand `~` (#3922).
+            let example = if cfg!(windows) { r"%USERPROFILE%\.pdfcraft-control.json" } else { "~/.pdfcraft-control.json" };
+            let message = format!("--control {file}: {e}. Use a control file in a folder only you can write, such as {example}");
+            log::error!("{message}");
+            Err(message)
+        }
+    }
+}
+
+/// Write the control endpoint so that only the current user can read the token.
+///
+/// The JSON goes to a new file, created fresh and owner-only, which then replaces `path`. On Unix
+/// the file sits next to `path` with mode 0600. On Windows it sits in a new folder next to `path`
+/// whose access list, of this user and SYSTEM only, it inherits when it is created, so no other
+/// account can open it at any time (#3922; review on #3956). Opening `path` itself would follow a
+/// link planted there and truncate whatever it points at; a rename replaces the link and leaves
+/// its target alone. A reader polling for the file also never sees it half-written.
+fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()> {
+    use std::io::ErrorKind;
+    let json = serde_json::json!({ "port": port, "token": token, "pid": std::process::id() }).to_string();
+    let path = std::path::Path::new(path);
+    let name = path.file_name().ok_or_else(|| std::io::Error::new(ErrorKind::InvalidInput, "not a file name"))?;
+    // Windows: the user's SID, read once for the private folder and for the file in it, since each
+    // lookup starts `whoami` (review on #3956).
+    #[cfg(windows)]
+    let me = pdfcraft_platform::owner_only::current_user_sid()?;
+    #[cfg(windows)]
+    let restrict = |file: &std::path::Path| pdfcraft_platform::owner_only::restrict_to_owner(file, &me);
+    #[cfg(not(windows))]
+    let restrict = |_: &std::path::Path| Ok::<(), std::io::Error>(());
+    // Unpredictable suffixes, so the name can't be planted in advance. `RandomState` is keyed from
+    // the operating system's random source.
+    let random = std::hash::RandomState::new();
+    for i in 0..16u32 {
+        let mut staged = std::ffi::OsString::from(".");
+        staged.push(name);
+        staged.push(format!(".{:016x}.tmp", std::hash::BuildHasher::hash_one(&random, i)));
+        let staged = path.with_file_name(staged);
+        // Windows: a file created next to `path` would inherit that folder's access list, which may
+        // let other users read it, and restricting it afterwards leaves a window in which one of
+        // them opens a handle; Windows checks access only when a handle is opened, so a later
+        // change of the list doesn't revoke it. The file is created in a private folder instead,
+        // and that folder is removed once the file has left it.
+        #[cfg(windows)]
+        let (staging, staged) = {
+            match pdfcraft_platform::owner_only::create_private_dir(&staged, &me) {
+                Ok(()) => {}
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+                // As for a file below: something at the name we may not open still takes it.
+                Err(e) if e.kind() == ErrorKind::PermissionDenied && staged.symlink_metadata().is_ok() => continue,
+                Err(e) => return Err(e),
+            }
+            let file = staged.join(name);
+            (staged, file)
+        };
+        let done = stage_control_file(&staged, path, &json, &restrict);
+        #[cfg(windows)]
+        let _ = std::fs::remove_dir(&staging);
+        match done {
+            Some(done) => return done,
+            None => continue,
+        }
+    }
+    Err(std::io::Error::new(ErrorKind::AlreadyExists, "no free name for the control file's temporary copy"))
+}
+
+/// Create `staged` fresh and owner-only, `restrict` it, write `json` to it and rename it to `path`.
+/// `None` when something already has the name, so the caller tries another. On any other failure
+/// the new file is removed and nothing is left at `path`'s side.
+fn stage_control_file(
+    staged: &std::path::Path,
+    path: &std::path::Path,
+    json: &str,
+    restrict: &dyn Fn(&std::path::Path) -> std::io::Result<()>,
+) -> Option<std::io::Result<()>> {
+    use std::io::{ErrorKind, Write};
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let file = match opts.open(staged) {
+        Ok(f) => f,
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => return None,
+        // Windows refuses `create_new` on a folder with "access denied"; the name is taken all
+        // the same. A folder we can't write to, with nothing at the name, still fails here.
+        Err(e) if e.kind() == ErrorKind::PermissionDenied && staged.symlink_metadata().is_ok() => return None,
+        Err(e) => return Some(Err(e)),
+    };
+    // Windows: the file inherited the private folder's list. It also gets a list of its own, so it
+    // stays private wherever the rename puts it, and that is checked before the token is written;
+    // nothing is written if that fails (#3922). Unix has mode 0600 above, and `restrict` does nothing.
+    if let Err(e) = restrict(staged) {
+        drop(file);
+        let _ = std::fs::remove_file(staged);
+        return Some(Err(e));
+    }
+    // The block closes the file before it is renamed.
+    let written = {
+        let mut file = file;
+        file.write_all(json.as_bytes())
+    };
+    let done = written.and_then(|()| std::fs::rename(staged, path));
+    if done.is_err() {
+        let _ = std::fs::remove_file(staged);
+    }
+    Some(done)
+}
+
+>>>>>>> upstream/main
 /// How wgpu finds a GPU. Each choice yields to its wgpu environment variable.
 ///
 /// - Draw on the integrated GPU unless `WGPU_POWER_PREF` says otherwise. A PDF viewer has no use

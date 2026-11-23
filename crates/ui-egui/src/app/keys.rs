@@ -25,9 +25,63 @@ impl PdfCraftApp {
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
             && view.find.is_some()
         {
+<<<<<<< HEAD
             view.find = None;
         } else if self.full_screen() && self.combine_tab.preview.is_none() {
             self.set_full_screen(false);
+=======
+            return;
+        }
+        // The in-window menu bar holds the keys while one of its menus is open or it has the
+        // keyboard (Alt, F10); a command shortcut has left it already (`logic`) and runs. The
+        // chords wait meanwhile: the registered commands', Select all and the view's.
+        let chords = !craft_menu::bar::is_open(ctx) && !craft_menu::bar::is_focused(ctx);
+        // The pages' own chords (Select all, the view's) don't reach pages something covers: the
+        // full-screen and update prompts, or the OCR Verify screen in their place (a dialog has
+        // returned above, and the palette holds the keyboard).
+        let page_chords = !self.covers_pages();
+        if chords {
+            self.registry_shortcuts(ctx);
+        }
+        // Esc closes one thing at a time: a Combine file shown large, an open menu, or the camera,
+        // a selection or the find bar on the page go first, and full screen stays (#5302). With
+        // the Esc leaves full screen preference off, only ⌘L / Ctrl+L leaves it.
+        let page_takes_escape =
+            egui::Popup::is_any_open(ctx) || self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.escape_closes_something());
+        if self.full_screen
+            && self.full_screen_escape_exits
+            && self.combine_tab.preview.is_none()
+            && !page_takes_escape
+            // Taken: the Esc that leaves full screen closes nothing on the page as well.
+            && self.page_keys.take(ctx, Key::Escape)
+        {
+            self.set_full_screen(ctx, false);
+        }
+        if let Some(i) = self.active {
+            if page_chords && chords {
+                self.select_all_keys(i, ctx);
+            }
+            self.tool_keys(i, ctx);
+            let keys = self.page_keys;
+            if self.quick_tool == QuickTool::EditText
+                && let Some(doc) = self.session.get(self.views[i].id).filter(|d| d.allows_modification())
+            {
+                object_ui::nudge_keys(ctx, keys, &mut self.views[i], doc);
+                object_ui::delete_keys(ctx, keys, &mut self.views[i]);
+            } else if let Some(doc) = self.session.get(self.views[i].id).filter(|d| d.allows_annotation()) {
+                comments::nudge_keys(ctx, keys, &mut self.views[i], &doc.info);
+            }
+            // A selected field moves with the arrows too (Prepare a form, #2608), before the view
+            // turns the page with them.
+            if self.is_preparing()
+                && let Some(doc) = self.session.get(self.views[i].id).filter(|d| d.allows_modification())
+            {
+                prepare::nudge_keys(ctx, keys, &mut self.views[i], doc);
+            }
+            canvas::shortcuts(&mut self.views[i], ctx, keys, chords && page_chords, self.scroll_speed);
+            self.clipboard_keys(i, ctx);
+            self.image_pick_keys(i, ctx);
+>>>>>>> upstream/main
         }
     }
 }

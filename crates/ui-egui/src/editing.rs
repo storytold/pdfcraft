@@ -107,9 +107,15 @@ fn select_after_edit(
         // A group moved together stays selected (its positions don't change), so it
         // can be moved or copied again; anything else in a batch clears the selection.
         Edit::Batch { edits, .. } if edits.iter().all(|e| matches!(e, Edit::MoveAnnotation { .. })) => {}
+<<<<<<< HEAD
         Edit::Batch { edits, .. } => {
             view.session.comments.clear_selection();
         }
+=======
+        // Set Page Boxes over pages with different /UserUnit is a batch too; like one SetPageBox it keeps the selection.
+        Edit::Batch { edits, .. } if edits.iter().all(|e| matches!(e, Edit::SetPageBox { .. })) => {}
+        Edit::Batch { .. } => view.comments.clear_selection(),
+>>>>>>> upstream/main
         // The copies the paste added (and nothing that was there before): select them all.
         Edit::PasteComments { page, .. } => {
             let new: Vec<(usize, usize)> = info

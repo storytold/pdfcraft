@@ -858,3 +858,385 @@ fn apply_view_pref_changes(view: &mut crate::DocView, defaults: &ViewDefaults, c
         }
     }
 }
+<<<<<<< HEAD
+=======
+
+/// Content for Card 3: Documents and View
+fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
+    ui.horizontal(|ui| {
+        ctx.label_primary(ui, tl!("Default workspace mode"), t);
+        ctx.pill_choice(
+            ui,
+            t,
+            &mut app.default_mode,
+            &[
+                (crate::Mode::AllTools, tl!("All tools")),
+                (crate::Mode::Read, tl!("Read")),
+                (crate::Mode::Edit, tl!("Edit")),
+                (crate::Mode::Convert, tl!("Convert")),
+                (crate::Mode::Sign, tl!("E-Sign")),
+            ],
+        );
+    });
+    ctx.label_secondary(ui, tl!("Used when opening PDFs. An explicit launch or control mode takes precedence for the session."), t);
+    ui.add_space(6.0);
+
+    let mut layout_choice = app.view_defaults.layout;
+    let mut continuous = app.view_defaults.continuous;
+    let mut layout_changed = false;
+    let mut continuous_changed = false;
+    ui.horizontal(|ui| {
+        ctx.label_primary(ui, tl!("Default page display"), t);
+        if ctx.pill_choice(ui, t, &mut layout_choice, &[(PageLayout::Single, tl!("Single page")), (PageLayout::TwoUp, tl!("Two-page view"))]) {
+            app.view_defaults.layout = layout_choice;
+            layout_changed = true;
+        }
+        if ctx.toggle_pill(ui, t, &mut continuous, tl!("Continuous scrolling")) {
+            app.view_defaults.continuous = continuous;
+            continuous_changed = true;
+        }
+    });
+    let mut show_page_gaps = app.view_defaults.show_page_gaps;
+    let gaps_changed = ctx.checkbox(ui, &mut show_page_gaps, tl!("Show gaps between pages"), t).changed();
+    if gaps_changed {
+        app.view_defaults.show_page_gaps = show_page_gaps;
+    }
+    ctx.label_secondary(ui, tl!("Hide gaps to join page edges. Margins inside the PDF remain unchanged."), t);
+    ctx.checkbox(ui, &mut app.view_defaults.full_screen_fill, tl!("Full screen fills the screen with one page at a time"), t);
+    ctx.label_secondary(ui, tl!("Turn off to keep the page display, such as continuous scrolling, in full screen."), t);
+    ctx.checkbox(ui, &mut app.full_screen_escape_exits, tl!("Esc leaves full screen"), t);
+    ctx.label_secondary(ui, tl!("Turn off so that only Ctrl+L (⌘L on macOS) leaves full screen, as for a kiosk display."), t);
+    ui.add_space(6.0);
+
+    let mut fit_changed = false;
+    let mut zoom_changed = false;
+    ui.horizontal(|ui| {
+        ctx.label_primary(ui, tl!("Default zoom"), t);
+        let mut fit = app.view_defaults.fit;
+        if ctx.pill_choice(ui, t, &mut fit, &[(Fit::Width, tl!("Fit to width")), (Fit::Page, tl!("Zoom to page level")), (Fit::None, tl!("Custom"))])
+        {
+            app.view_defaults.fit = fit;
+            fit_changed = true;
+        }
+        let mut percent = app.view_defaults.zoom * 100.0;
+        if ui.add(egui::DragValue::new(&mut percent).range(8.0..=6400.0).max_decimals(0).suffix("%")).changed() {
+            (app.view_defaults.fit, app.view_defaults.zoom) = (Fit::None, percent / 100.0);
+            zoom_changed = true;
+        }
+    });
+    ctx.label_secondary(ui, tl!("Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages."), t);
+    let always_changed = ctx.checkbox(ui, &mut app.always_default_view, tl!("Always use my default zoom and page layout"), t).changed();
+
+    let changes = ViewPrefChanges {
+        always_reset: always_changed,
+        layout: layout_changed,
+        continuous: continuous_changed,
+        gaps: gaps_changed,
+        fit: fit_changed,
+        zoom: zoom_changed,
+    };
+    if app.always_default_view && (always_changed || layout_changed || continuous_changed || gaps_changed || fit_changed || zoom_changed) {
+        let defaults = app.view_defaults;
+        for view in &mut app.views {
+            apply_view_pref_changes(view, &defaults, changes);
+        }
+    } else if let Some(i) = app.active {
+        let defaults = app.view_defaults;
+        apply_view_pref_changes(&mut app.views[i], &defaults, ViewPrefChanges { always_reset: false, ..changes });
+    }
+    ctx.checkbox(ui, &mut app.text_links, tl!("Open web and email addresses written in the page text"), t);
+    ctx.label_secondary(ui, tl!("Only web (http, https) and email addresses open, and PdfCraft asks first, as for other links."), t);
+    ui.add_space(6.0);
+
+    ui.horizontal(|ui| {
+        ctx.label_primary(ui, tl!("Units"), t);
+        ctx.pill_choice(
+            ui,
+            t,
+            &mut app.units,
+            &[
+                (Unit::Inches, Unit::Inches.label()),
+                (Unit::Millimetres, Unit::Millimetres.label()),
+                (Unit::Centimetres, Unit::Centimetres.label()),
+                (Unit::Points, Unit::Points.label()),
+            ],
+        );
+    });
+    ctx.label_secondary(ui, tl!("For page sizes and margins."), t);
+    ui.add_space(6.0);
+    scrolling(ui, app, t, ctx);
+}
+
+/// The scroll speed and the middle button's direction, in Card 3.
+fn scrolling(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
+    ui.horizontal(|ui| {
+        ctx.label_primary(ui, tl!("Scroll speed (mouse wheel and arrow keys)"), t);
+        ctx.pill_choice(
+            ui,
+            t,
+            &mut app.scroll_speed,
+            &[
+                (ScrollSpeed::Slow, tl_ctx!("scroll speed", ScrollSpeed::Slow.label())),
+                (ScrollSpeed::Normal, tl_ctx!("scroll speed", ScrollSpeed::Normal.label())),
+                (ScrollSpeed::Fast, tl_ctx!("scroll speed", ScrollSpeed::Fast.label())),
+            ],
+        );
+    });
+    ui.add_space(6.0);
+    ctx.checkbox(ui, &mut app.invert_middle_drag, tl!("Invert middle-button drag"), t);
+    ctx.label_secondary(ui, tl!("Panning or auto-scrolling with the middle (wheel) button moves the page the other way."), t);
+}
+
+/// Content for Card 4: Identity
+fn card_identity(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
+    ui.horizontal(|ui| {
+        let label = ctx.label_primary(ui, tl!("Name on new comments"), t);
+        ui.add(crate::widgets::line(&mut app.comment_prefs.author).desired_width(240.0).char_limit(crate::MAX_AUTHOR_CHARS)).labelled_by(label.id);
+    });
+    ctx.checkbox(ui, &mut app.comment_prefs.hide_empty_highlight_hover, tl!("Hide hover previews for highlights without comment text"), t);
+}
+
+/// Content for Card 5: Fill & Sign
+fn card_fill_and_sign(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
+    ctx.checkbox(ui, &mut app.flatten_fill_sign_on_save, tl!("Flatten Fill & Sign when saving"), t);
+    ui.add_enabled_ui(!app.flatten_fill_sign_on_save, |ui| {
+        ctx.checkbox(ui, &mut app.ask_to_lock_signatures, tl!("Otherwise, ask on the first save after a signature is placed"), t);
+    });
+    ctx.label_secondary(ui, tl!("Text, marks and signatures become part of the page. Other comments stay editable."), t);
+    ui.add_space(8.0);
+    date_format(ui, app, t, ctx);
+}
+
+/// Content for Card 6: JavaScript
+fn card_javascript(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
+    let mut on = app.session.javascript();
+    if ctx.checkbox(ui, &mut on, tl!("Enable Acrobat JavaScript"), t).changed() {
+        app.session.set_javascript(on);
+    }
+    ctx.label_secondary(
+        ui,
+        tl!(
+            "Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work."
+        ),
+        t,
+    );
+}
+
+/// Preferences dialog buttons: OK on the right. Returns true to close.
+pub(crate) fn preferences_buttons(ui: &mut egui::Ui) -> bool {
+    ui.add_space(10.0);
+    let mut close = false;
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if widgets::pill_button(ui, tl!("OK"), true).clicked() {
+                close = true;
+            }
+        });
+    });
+    close
+}
+
+/// Fill & Sign date pattern and date language picker.
+fn date_format(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
+    use pdfcraft_engine::dates::{DATE_FORMATS, DATE_LANGUAGES, MAX_DATE_FORMAT_CHARS};
+    ctx.label(ui, tl!("Date format"), theme::semibold(12.5), t.text);
+    let sample = |app: &PdfCraftApp, f: &str| format!("{}   {f}", app.date_text(Some(f)).unwrap_or_default());
+    ui.horizontal(|ui| {
+        let label = ctx.label_primary(ui, tl!("Fill & Sign dates"), t);
+        let current = app.session.date_format().to_string();
+        let selected = if DATE_FORMATS.contains(&current.as_str()) { sample(app, &current) } else { tl!("Custom").to_string() };
+        craft_ui::ComboBox::from_id_salt("date-format")
+            .selected_text(selected)
+            .width(240.0)
+            .show_ui(ui, |ui| {
+                for f in DATE_FORMATS {
+                    if ui.selectable_label(current == f, sample(app, f)).clicked() && app.session.set_date_format(f).is_ok() {
+                        app.date_format_draft = None;
+                        ui.close();
+                    }
+                }
+            })
+            .response
+            .labelled_by(label.id);
+    });
+    ui.horizontal(|ui| {
+        let label = ctx.label_primary(ui, tl!("Pattern"), t);
+        let mut text = app.date_format_draft.clone().unwrap_or_else(|| app.session.date_format().to_string());
+        let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(160.0).char_limit(MAX_DATE_FORMAT_CHARS)).labelled_by(label.id);
+        if edit.changed() {
+            let _ = app.session.set_date_format(&text);
+            app.date_format_draft = Some(text.clone());
+        }
+        if !edit.has_focus() && pdfcraft_engine::dates::check_date_format(&text).is_ok() {
+            app.date_format_draft = None;
+        }
+        match app.date_text(Some(&text)) {
+            Ok(today) => {
+                let today_str = crate::i18n::fmt(tl!("Today: {date}"), &[("date", &today)]);
+                ctx.label_secondary(ui, &today_str, t);
+            }
+            Err(e) => {
+                ctx.label(ui, &e, theme::regular(13.0), Color32::from_rgb(0xD1, 0x3B, 0x3B));
+            }
+        };
+    });
+    let bad = app.date_text(None).map(|today| pdfcraft_engine::dates::unwritable(&today)).unwrap_or_default();
+    if !bad.is_empty() {
+        let bad_msg = crate::i18n::fmt(
+            tl!("{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy."),
+            &[("chars", &bad)],
+        );
+        ctx.label(ui, &bad_msg, theme::regular(13.0), Color32::from_rgb(0xD1, 0x3B, 0x3B));
+    }
+    ui.horizontal(|ui| {
+        let label = ctx.label_primary(ui, tl!("Language"), t);
+        let (follow, selected, current, names) = {
+            let drawable = |text: &str| picker_text_is_drawable(ui, text);
+            let interface = crate::i18n::current().picker_name(drawable);
+            let follow = crate::i18n::fmt(tl!("Same as interface ({language})"), &[("language", interface)]);
+            let current = app.session.date_language().map(str::to_string);
+            let selected = DATE_LANGUAGES
+                .iter()
+                .find(|l| current.as_deref() == Some(l.code))
+                .map_or_else(|| follow.clone(), |l| date_language_picker_name(l, drawable).to_string());
+            let names = DATE_LANGUAGES.iter().map(|l| (l, date_language_picker_name(l, drawable))).collect::<Vec<_>>();
+            (follow, selected, current, names)
+        };
+        craft_ui::ComboBox::from_id_salt("date-language")
+            .selected_text(selected)
+            .width(240.0)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(current.is_none(), follow).clicked() && app.session.set_date_language(None).is_ok() {
+                    ui.close();
+                }
+                for (l, name) in &names {
+                    if ui.selectable_label(current.as_deref() == Some(l.code), *name).clicked() && app.session.set_date_language(Some(l.code)).is_ok()
+                    {
+                        ui.close();
+                    }
+                }
+            })
+            .response
+            .labelled_by(label.id);
+    });
+    let date_help = crate::i18n::fmt(
+        tl!(
+            "yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is."
+        ),
+        &[("escape", "\\")],
+    );
+    ctx.label_secondary(ui, &date_help, t);
+}
+
+/// Reading colours settings: presets, preview and custom replacement options.
+fn reading_colours_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
+    ctx.label(ui, tl!("Reading colours"), theme::semibold(13.0), t.text);
+    let mode = app.reading_colors.mode_name();
+    ui.horizontal_wrapped(|ui| {
+        for (name, label, colors) in [
+            ("off", "Off", pdfcraft_render::ReadingColors::default()),
+            ("black-on-white", "Black on white", pdfcraft_render::ReadingColors::BLACK_ON_WHITE),
+            ("white-on-black", "White on black", pdfcraft_render::ReadingColors::WHITE_ON_BLACK),
+            ("yellow-on-black", "Yellow on black", pdfcraft_render::ReadingColors::YELLOW_ON_BLACK),
+            ("green-on-black", "Green on black", pdfcraft_render::ReadingColors::GREEN_ON_BLACK),
+        ] {
+            let params = colors.params.unwrap_or(pdfcraft_render::ReadingParams {
+                text: [0, 0, 0],
+                background: [255, 255, 255],
+                only_black: false,
+                line_art: true,
+            });
+            ui.vertical(|ui| {
+                ui.set_width(100.0);
+                let sample = RichText::new("Aa").size(20.0).color(Color32::from_rgb(params.text[0], params.text[1], params.text[2]));
+                let button = egui::Button::new(sample)
+                    .fill(Color32::from_rgb(params.background[0], params.background[1], params.background[2]))
+                    .min_size(vec2(90.0, 40.0))
+                    .stroke(Stroke::new(if mode == name { 2.0 } else { 1.0 }, if mode == name { t.accent } else { t.border }));
+                let response = ui.add(button);
+                response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, mode == name, tl!(label)));
+                if response.clicked() {
+                    app.set_reading_colors(colors);
+                }
+                ctx.label(ui, tl!(label), theme::regular(12.0), t.text);
+            });
+        }
+    });
+    ui.add_space(4.0);
+    if let Some(params) = app.reading_colors.params {
+        let text = Color32::from_rgb(params.text[0], params.text[1], params.text[2]);
+        let background = Color32::from_rgb(params.background[0], params.background[1], params.background[2]);
+        egui::Frame::new().fill(background).inner_margin(12.0).corner_radius(CornerRadius::same(6)).show(ui, |ui| {
+            ui.set_min_width((ui.available_width() - 24.0).max(0.0));
+            ctx.label(ui, tl!("Reading colours"), theme::semibold(16.0), text);
+            ctx.label(ui, tl!("Colours are remapped while rendering; the document itself never changes."), theme::regular(13.0), text);
+        });
+    } else {
+        ctx.label_primary(ui, tl!("Original"), t);
+    }
+    egui::CollapsingHeader::new(tl!("Custom")).default_open(mode == "custom").show(ui, |ui| {
+        let mut colors = if app.reading_colors.params.is_some() { app.reading_colors } else { pdfcraft_render::ReadingColors::BLACK_ON_WHITE };
+        let mut changed = false;
+        if let Some(params) = colors.params.as_mut() {
+            ui.horizontal(|ui| {
+                let text = ctx.label_primary(ui, tl!("Text"), t);
+                changed |= ui.color_edit_button_srgb(&mut params.text).labelled_by(text.id).changed();
+                let background = ctx.label_primary(ui, tl!("Page background"), t);
+                changed |= ui.color_edit_button_srgb(&mut params.background).labelled_by(background.id).changed();
+            });
+            changed |= ctx.checkbox(ui, &mut params.only_black, tl!("Only change the colour of black text or line art"), t).changed();
+            changed |= ctx.checkbox(ui, &mut params.line_art, tl!("Change the colour of line art as well as text"), t).changed();
+        }
+        if changed {
+            app.set_reading_colors(colors);
+        }
+    });
+    ctx.label_secondary(ui, tl!("Colours are remapped while rendering; the document itself never changes."), t);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_match_ranges_case_insensitive() {
+        let text = "Hide hover previews for highlights without comment text";
+        let ranges = find_match_ranges(text, "hide hover");
+        assert_eq!(ranges, vec![(0, 10)]);
+        assert_eq!(text.get(ranges[0].0..ranges[0].1), Some("Hide hover"));
+
+        let text2 = "Highlight fields and highlight text";
+        let ranges2 = find_match_ranges(text2, "highlight");
+        assert_eq!(ranges2.len(), 2);
+        assert_eq!(text2.get(ranges2[0].0..ranges2[0].1), Some("Highlight"));
+        assert_eq!(text2.get(ranges2[1].0..ranges2[1].1), Some("highlight"));
+
+        let ranges3 = find_match_ranges(text, "not found");
+        assert!(ranges3.is_empty());
+
+        let ranges4 = find_match_ranges(text, "");
+        assert!(ranges4.is_empty());
+    }
+
+    #[test]
+    fn test_find_match_ranges_turkish_i() {
+        let text = "Doldur ve İmzala";
+        let ranges = find_match_ranges(text, "imzala");
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(text.get(ranges[0].0..ranges[0].1), Some("İmzala"));
+
+        let ranges2 = find_match_ranges(text, "İMZALA");
+        assert_eq!(ranges2.len(), 1);
+        assert_eq!(text.get(ranges2[0].0..ranges2[0].1), Some("İmzala"));
+
+        let text2 = "Doldur ve imzala";
+        let ranges3 = find_match_ranges(text2, "İmzala");
+        assert_eq!(ranges3.len(), 1);
+        assert_eq!(text2.get(ranges3[0].0..ranges3[0].1), Some("imzala"));
+
+        let ranges4 = find_match_ranges(text, "ımzala");
+        assert_eq!(ranges4.len(), 1);
+        assert_eq!(text.get(ranges4[0].0..ranges4[0].1), Some("İmzala"));
+    }
+}
+>>>>>>> upstream/main

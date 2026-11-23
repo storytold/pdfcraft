@@ -120,6 +120,7 @@ use dialogs::marks_ui;
 use dialogs::pageboxes;
 use dialogs::printer_marks_ui;
 use dialogs::protect;
+use dialogs::rename_ui;
 use dialogs::standards_ui;
 use dialogs::word_count_ui;
 pub use home::folders_ui;
@@ -250,6 +251,11 @@ pub struct PdfCraftApp {
     pub(crate) status_captions_lang: Option<i18n::Lang>,
     pub views: Vec<DocView>,
     pub(crate) closed_tabs: Vec<String>,
+    /// The Rename dialog's name being typed.
+    pub(crate) rename_draft: Option<rename_ui::RenameDraft>,
+    /// A name typed in Rename whose "Save and Rename" save did not go through; the dialog opens
+    /// again with it on the next frame.
+    pub(crate) rename_returned: rename_ui::Returned,
     /// `None` shows the Home tab.
     pub active: Option<usize>,
     /// The active document during the previous frame, so a deferred keyboard Save from that frame
@@ -327,7 +333,16 @@ pub struct PdfCraftApp {
     /// view the other way. Off by default.
     pub invert_middle_drag: bool,
     /// Preferences ▸ Animation effects: on, off, or as the system's animation setting says.
+<<<<<<< HEAD
     pub animation_effects: craft::theme::MotionChoice,
+=======
+    pub animation_effects: motion::AnimationEffects,
+    /// Preferences ▸ Esc leaves full screen (on by default). Off, only ⌘L / Ctrl+L leaves it, as
+    /// for a kiosk display; Esc still closes the find bar and the like.
+    pub full_screen_escape_exits: bool,
+    /// Whether the system asked for no animations, and how the desktop app asks it.
+    pub motion: motion::Motion,
+>>>>>>> upstream/main
     /// Interface language preference: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
     pub language: String,
     /// Preferences ▸ Interface size as a factor, or `None` for the usual size.
@@ -475,6 +490,7 @@ pub struct PdfCraftApp {
     pub script_messages: std::collections::VecDeque<pdfcraft_engine::js::Message>,
     /// Form script messages the waiting queue had no room for, since a notice last said how many.
     pub script_messages_dropped: u64,
+<<<<<<< HEAD
     /// The form script message a notice shows now, drawn with its title and icon (#4293).
     pub(crate) script_shown: Option<js_ui::ScriptShown>,
     /// The notices posted since the last pass, which `notices::show` hands to the toast service.
@@ -487,6 +503,24 @@ pub struct PdfCraftApp {
     pub(crate) progress_requests: Vec<notices::ProgressRequest>,
     /// The progress card of each background job that shows one.
     pub(crate) progress_cards: std::collections::HashMap<crate::notices::ProgressKey, craft::ui::runtime::toast::ToastId>,
+=======
+    /// The left-out count the toast is saying now ([`Self::next_script_message`]): put back to be
+    /// said again if another notice replaces the toast before it has been shown its time.
+    pub toast_dropped: u64,
+    /// Whether the macOS title bar is drawn by us (traffic lights over our tab strip).
+    pub integrated_titlebar: bool,
+    /// Whether AppKit put those traffic lights at the right end of the title bar, as it does when
+    /// the system language is right-to-left (`None` until a window has said).
+    pub titlebar_lights_right: Option<bool>,
+    /// Set when the desktop leaves the window frame to the app (GNOME on Wayland): the tab strip
+    /// carries these window buttons and the window's edges resize it.
+    pub window_controls: Option<window_controls::Layout>,
+    /// Preferences ▸ Use system title bar: where `window_controls` is set, give the window back
+    /// winit's frame instead of drawing the header bar (#1001).
+    pub system_title_bar: bool,
+    /// Whether the window currently has the app's header bar (`None` until the first frame).
+    app_frame_shown: Option<bool>,
+>>>>>>> upstream/main
     pub password_prompt: Option<PasswordPrompt>,
     /// Whole-document text copies (#2639) reading their pages off the UI thread.
     pub(crate) text_copies: Queue<DocId, String>,

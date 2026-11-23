@@ -10,6 +10,7 @@ pub(crate) enum Action {
     Close(u64),
     Reopen,
     Reveal(DocId),
+    Rename(DocId),
     /// Split right (or down) with a tab, by its view key.
     Split {
         tab: u64,
@@ -73,7 +74,97 @@ impl crate::PdfCraftApp {
             }
             Action::Reveal(id) => {
                 if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
+<<<<<<< HEAD
                     reveal_on_jobs(self, PathBuf::from(path));
+=======
+                    self.reveal_path(std::path::Path::new(&path));
+                }
+                #[cfg(target_arch = "wasm32")]
+                let _ = id;
+            }
+            Action::Rename(id) => self.start_rename(id),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// Blocking: call it from a worker thread ([`crate::PdfCraftApp::reveal_path`]).
+fn reveal(path: &std::path::Path) -> Result<(), String> {
+    // Absolute paths also prevent a filename starting with '-' becoming an option.
+    let path = std::path::absolute(path).map_err(|e| e.to_string())?;
+    if !path.try_exists().map_err(|e| e.to_string())? {
+        return Err("The file no longer exists".into());
+    }
+    let platform = std::env::consts::OS;
+    let run =
+        |program: &str, args: &[std::ffi::OsString]| reveal_process(program, args).output().map(|o| o.status.success()).map_err(|e| e.to_string());
+    reveal_via(platform, &path, run)
+}
+
+/// The process that runs `program` with `args`. Windows: `reveal_command` already quotes what
+/// Explorer needs quoted, and Rust's own quoting of an argument with a space breaks `/select,`
+/// (#2579), so the arguments go on the command line as written.
+#[cfg(not(target_arch = "wasm32"))]
+fn reveal_process(program: &str, args: &[std::ffi::OsString]) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        for arg in args {
+            command.raw_arg(arg);
+        }
+    }
+    #[cfg(not(windows))]
+    command.args(args);
+    command
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn reveal_via(
+    platform: &str,
+    path: &std::path::Path,
+    mut run: impl FnMut(&str, &[std::ffi::OsString]) -> Result<bool, String>,
+) -> Result<(), String> {
+    let (program, args) = reveal_command(platform, path)?;
+    if run(program, &args).unwrap_or(false) {
+        return Ok(());
+    }
+    if matches!(platform, "linux" | "freebsd") {
+        // FileManager1 is optional. If absent, open the containing folder with xdg-open.
+        let parent = path.parent().ok_or("The file has no parent directory")?;
+        if run("xdg-open", &[parent.as_os_str().into()])? {
+            return Ok(());
+        }
+    }
+    Err("Could not reveal the file in the system file manager".into())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn reveal_command(platform: &str, path: &std::path::Path) -> Result<(&'static str, Vec<std::ffi::OsString>), String> {
+    match platform {
+        "windows" => {
+            // Explorer reads `/select,"<object>"`: the path quoted after the comma (#2579). Quoting
+            // the whole argument instead ("/select,C:\a b.pdf", what an ordinary argument with a
+            // space becomes) opens Documents. A Windows path can't contain `"`, so the quotes
+            // can't be closed early; one that does is refused.
+            if path.as_os_str().as_encoded_bytes().contains(&b'"') {
+                return Err("The file name can't be shown in File Explorer".into());
+            }
+            let mut selection = std::ffi::OsString::from("/select,\"");
+            selection.push(path);
+            selection.push("\"");
+            Ok(("explorer.exe", vec![selection]))
+        }
+        "macos" => Ok(("open", vec!["-R".into(), path.as_os_str().into()])),
+        "linux" | "freebsd" => {
+            let mut uri = String::from("array:string:file://");
+            for b in path.as_os_str().as_encoded_bytes() {
+                if b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'_' | b'.' | b'~') {
+                    uri.push(char::from(*b));
+                } else {
+                    use std::fmt::Write as _;
+                    let _ = write!(uri, "%{b:02X}");
+>>>>>>> upstream/main
                 }
             }
         }
