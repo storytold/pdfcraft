@@ -382,9 +382,14 @@ impl DocView {
         self.zoom = self.zoom.clamp(0.08, 64.0);
     }
 
-    /// Width of the scroll content. Single-page view sizes it to the page it shows, so a
-    /// wider page elsewhere in the document can't push the shown one off-centre.
+    /// Width of the scroll content: what the pages need, or `avail_w` when that is wider.
     pub(super) fn content_width(&self, info: &DocInfo, avail_w: f32) -> f32 {
+        self.needed_content_width(info).max(avail_w)
+    }
+
+    /// Width the pages need with their side gutters. Single-page view sizes it to the page it
+    /// shows, so a wider page elsewhere in the document can't push the shown one off-centre.
+    pub(super) fn needed_content_width(&self, info: &DocInfo) -> f32 {
         // Full screen in two-page view is as wide as the spread it shows, as `fit_zoom` sized it:
         // two pages side by side, or a page alone with the room of a spread (a cover keeps its
         // blank slot). Room for twice the document's widest page would centre a narrower spread
@@ -395,13 +400,13 @@ impl DocView {
                 [a, b] => (a.0 + b.0) * s,
                 _ => spread.iter().map(|p| p.0).fold(0.0, f32::max) * s * 2.0,
             };
-            return (w + self.page_gap() + 2.0 * self.side()).max(avail_w);
+            return w + self.page_gap() + 2.0 * self.side();
         }
         let single = (self.layout == PageLayout::Single && !self.continuous).then(|| self.current.min(info.pages.len().saturating_sub(1)));
         let shown = info.pages.iter().enumerate().filter(|&(i, _)| single.is_none_or(|c| c == i));
         let max_w = shown.map(|(_, p)| self.display_size(p).0).fold(0.0, f32::max);
         let per_row = if self.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
-        (max_w * self.zoom * PT * per_row + 2.0 * self.side()).max(avail_w)
+        max_w * self.zoom * PT * per_row + 2.0 * self.side()
     }
 
     /// Page rects in content coordinates (origin at the scroll content's top-left).

@@ -673,6 +673,11 @@ pub struct DocView {
     /// Per-axis line-wheel state; horizontal input cannot extend a vertical burst.
     wheel_boost_x: crate::wheel_boost::WheelBoost,
     wheel_boost_y: crate::wheel_boost::WheelBoost,
+    /// The axis the current touchpad gesture is locked to, and until when (#2803).
+    scroll_axis: Option<ScrollAxis>,
+    scroll_axis_until: f64,
+    /// How far the current gesture moved before it picked its axis.
+    scroll_axis_moved: Vec2,
     /// Touchpad momentum after the fingers lift (#531).
     fling: crate::fling::Fling,
     pub(crate) auto_scroll: crate::autoscroll::AutoScroll,
@@ -1146,6 +1151,9 @@ impl DocView {
             wheel_frame: None,
             wheel_boost_x: Default::default(),
             wheel_boost_y: Default::default(),
+            scroll_axis: None,
+            scroll_axis_until: 0.0,
+            scroll_axis_moved: Vec2::ZERO,
             fling: Default::default(),
             auto_scroll: Default::default(),
             selected: BTreeSet::new(),
@@ -1359,6 +1367,9 @@ impl DocView {
         self.wheel_boost_x.reset();
         self.wheel_boost_y.reset();
         self.wheel_motion.reset();
+        self.scroll_axis = None;
+        self.scroll_axis_until = 0.0;
+        self.scroll_axis_moved = Vec2::ZERO;
     }
 }
 
@@ -2363,6 +2374,57 @@ fn single_page_paging(ui: &egui::Ui, view: &mut DocView, cx: &PagingCx<'_>) -> (
     (single_paging, edge_turned)
 }
 
+/// The axis a touchpad gesture scrolls on (#2803).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScrollAxis {
+    Vertical,
+    Horizontal,
+}
+
+/// How long a gesture keeps its axis after its last movement, for platforms that send no end phase.
+const AXIS_LOCK_SECS: f64 = 0.15;
+
+/// The least movement, in points, that picks a gesture's axis. A first sample of a point or two
+/// says little about the swipe's direction and would lock the wrong axis for the whole gesture.
+const AXIS_LOCK_MIN: f32 = 4.0;
+
+/// Locks a precise (touchpad) gesture to one axis (#2803): while a swipe scrolls vertically, its
+/// sideways wobble is dropped, so the page does not drift. The axis is picked once the gesture has
+/// moved [`AXIS_LOCK_MIN`] in all, so slow samples add up. It holds through the glide after the
+/// lift, and a new gesture or a pause of [`AXIS_LOCK_SECS`] unlocks it. Shift turns it sideways.
+/// While the lock holds, the gesture cannot pan diagonally.
+fn lock_scroll_axis(view: &mut DocView, events: &[egui::Event], now: f64) {
+    for event in events {
+        let egui::Event::MouseWheel { unit, delta, modifiers, phase, source } = event else { continue };
+        let precise = *unit == egui::MouseWheelUnit::Point || matches!(source, egui::MouseWheelSource::Trackpad | egui::MouseWheelSource::Momentum);
+        if !precise || modifiers.command || modifiers.ctrl || !delta.is_finite() {
+            continue;
+        }
+        if *phase == egui::TouchPhase::Start || now > view.scroll_axis_until {
+            view.scroll_axis = None;
+            view.scroll_axis_moved = Vec2::ZERO;
+        }
+        // The lift keeps the axis for the glide that follows it (`sideways_motion`).
+        if matches!(phase, egui::TouchPhase::End | egui::TouchPhase::Cancel) {
+            continue;
+        }
+        // Shift turns the wheel sideways, as `wheel_boost::accumulate` folds it, and asks for
+        // sideways panning: it takes over a vertical lock.
+        let delta = if modifiers.shift { vec2(delta.x + delta.y, 0.0) } else { *delta };
+        if modifiers.shift && delta.x != 0.0 {
+            view.scroll_axis = Some(ScrollAxis::Horizontal);
+        }
+        if view.scroll_axis.is_none() {
+            view.scroll_axis_moved += delta;
+            let (x, y) = (view.scroll_axis_moved.x.abs(), view.scroll_axis_moved.y.abs());
+            if x.max(y) >= AXIS_LOCK_MIN && x != y {
+                view.scroll_axis = Some(if y > x { ScrollAxis::Vertical } else { ScrollAxis::Horizontal });
+            }
+        }
+        view.scroll_axis_until = now + AXIS_LOCK_SECS;
+    }
+}
+
 /// This frame's wheel motion over the page view, after paging and motion integration.
 struct Wheel {
     precise_scroll: Vec2,
@@ -2417,6 +2479,12 @@ fn read_wheel(ui: &mut egui::Ui, view: &mut DocView, avail: Rect, single_paging:
         crate::wheel_boost::accumulate(&events, line_points, single_paging)
     };
     let mut precise_scroll = input.precise;
+    lock_scroll_axis(view, &events, now);
+    match view.scroll_axis {
+        Some(ScrollAxis::Vertical) => precise_scroll.x = 0.0,
+        Some(ScrollAxis::Horizontal) => precise_scroll.y = 0.0,
+        None => {}
+    }
     let mut line_base = input.line;
     if precise_scroll.x != 0.0 {
         view.wheel_boost_x.reset();
@@ -2717,12 +2785,14 @@ struct ScrollGeometry<'a> {
     avail: Rect,
     middle_gesture: bool,
     hand: bool,
+    /// The pages are wider than the area: it scrolls sideways (#2803).
+    hscroll: bool,
 }
 
 /// The page view's scroll area, with the offset this frame's jumps, drags and zoom anchor ask for.
 fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry<'_>) -> egui::ScrollArea {
-    let ScrollGeometry { rects, y_shift, content_w, content_h, avail, middle_gesture, hand } = *geometry;
-    let mut scroll = egui::ScrollArea::both().auto_shrink([false, false]).scroll_source(egui::scroll_area::ScrollSource {
+    let ScrollGeometry { rects, y_shift, content_w, content_h, avail, middle_gesture, hand, hscroll } = *geometry;
+    let mut scroll = egui::ScrollArea::new([hscroll, true]).auto_shrink([false, false]).scroll_source(egui::scroll_area::ScrollSource {
         drag: if middle_gesture {
             egui::scroll_area::DragScroll::Never
         } else if hand {
@@ -3195,7 +3265,7 @@ fn hold_sharp_renders(ui: &egui::Ui, view: &mut DocView, scale: f32) -> bool {
 /// A destination's position (bookmarks, links) refines `goto`: its point at the window's top-left,
 /// or the centre of a /FitR rectangle at the window's centre.
 fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry: &ScrollGeometry<'_>) -> egui::ScrollArea {
-    let ScrollGeometry { rects, y_shift, content_w, content_h, avail, .. } = *geometry;
+    let ScrollGeometry { rects, y_shift, content_w, content_h, avail, hscroll, .. } = *geometry;
     if let Some((page, fx, fy, rel)) = view.goto_point.take() {
         let r = rects[page.min(rects.len() - 1)];
         // Within the content, so an unreachable point never shows a frame scrolled past the end.
@@ -3207,7 +3277,22 @@ fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry:
             scroll = scroll.vertical_scroll_offset((r.top() - y_shift + fy * r.height() - rel.y).clamp(0.0, max_y));
         }
     }
+    // The last offset set this frame. Jumps, drags, zoom anchors and destinations may ask for a
+    // sideways offset; with nothing to scroll sideways the pages stay centred (#2803).
+    if !hscroll {
+        scroll = scroll.horizontal_scroll_offset(0.0);
+    }
     scroll
+}
+
+/// This frame's precise wheel, coarse wheel and glide motion, without the sideways part when the
+/// pages have nothing to scroll sideways, and with the glide kept to the axis its touchpad
+/// gesture was locked to (#2803).
+fn sideways_motion(view: &DocView, hscroll: bool, precise: Vec2, coarse: Vec2, glide: Vec2) -> (Vec2, Vec2, Vec2) {
+    let keep_x = |v: Vec2, keep: bool| if keep { v } else { vec2(0.0, v.y) };
+    let glide_x = hscroll && view.scroll_axis != Some(ScrollAxis::Vertical);
+    let glide = if view.scroll_axis == Some(ScrollAxis::Horizontal) { vec2(glide.x, 0.0) } else { glide };
+    (keep_x(precise, hscroll), keep_x(coarse, hscroll), keep_x(glide, glide_x))
 }
 
 /// Where the `shown` pages sit in the scroll content, as how far the content starts into the
@@ -3231,6 +3316,27 @@ fn vertical_placement(continuous: bool, rects: &[Rect], shown: &[usize], view_he
 fn fits_height(r: Rect, view_height: f32, pixels_per_point: f32) -> bool {
     let slack = if pixels_per_point.is_finite() && pixels_per_point > 0.0 { 0.5 / pixels_per_point } else { 0.0 };
     r.height() <= view_height + slack
+}
+
+/// The width the pages have, and whether they need to scroll sideways (#2803). A vertical scroll
+/// bar that takes room (not floating) narrows the area when the content is taller than it:
+/// content as wide as the whole area would then be a bar's width too wide and drift sideways.
+/// Pages within a point of the width count as fitting, so rounding never turns scrolling on.
+fn page_width(ui: &egui::Ui, view: &DocView, info: &DocInfo, avail: Rect) -> (f32, bool) {
+    let needed = view.needed_content_width(info);
+    let mut width = avail.width();
+    // Hidden scroll bars take no room.
+    let bar = if view.interface.hidden.window_ui { 0.0 } else { ui.spacing().scroll.allocated_width() };
+    if bar > 0.0 {
+        let ppp = ui.ctx().pixels_per_point();
+        let rects = view.layout(info, needed.max(width), ppp);
+        let shown: Vec<usize> = if view.continuous { (0..rects.len()).collect() } else { shown_row(view, &rects) };
+        let (_, height) = vertical_placement(view.continuous, &rects, &shown, avail.height(), view.margin(), ppp);
+        if height > avail.height() {
+            width = (width - bar).max(0.0);
+        }
+    }
+    (width, needed > width + 1.0)
 }
 
 /// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
@@ -3339,7 +3445,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.viewport_screen = avail;
     let (auto_delta, edge_delta) = auto_scroll_deltas(ui, view, avail, unobstructed, invert_middle);
 
-    let content_w = view.content_width(info, avail.width());
+    let (page_w, hscroll) = page_width(ui, view, info, avail);
+    let content_w = view.content_width(info, page_w);
     let rects = view.layout(info, content_w, ui.ctx().pixels_per_point());
     // When not scrolling continuously, only one row is shown at a time: the current page, or the
     // current two-page spread (with the cover rule). These indices drive paging, which pages are
@@ -3362,6 +3469,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let wheel_scrolled = precise_scroll != Vec2::ZERO || line_base != Vec2::ZERO || coarse_scroll != Vec2::ZERO || has_page;
     let motion = GlideCx { now, may_glide, key_scroll, key_side, auto_delta, zoom_delta, edge_delta, wheel_scrolled };
     let glide = step_glide(ui, view, avail, &motion);
+    let (precise_scroll, coarse_scroll, glide) = sideways_motion(view, hscroll, precise_scroll, coarse_scroll, glide);
     // The wheel may have turned the page above: draw the row it turned to. Measured from the old
     // row, the jump to the new page scrolled both out of view, a blank frame on every turn forward.
     let row = shown_row(view, &rects);
@@ -3372,7 +3480,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut scroll = page_scroll_area(
         ui,
         view,
-        &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand: app.quick_tool == QuickTool::Hand },
+        &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand: app.quick_tool == QuickTool::Hand, hscroll },
     );
     let ppp = ui.ctx().pixels_per_point();
     let scale = view.render_scale(ppp);
@@ -3432,7 +3540,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     view.move_background.prepare(ui.ctx(), doc, &view.content, scale);
 
-    scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });
+    scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand, hscroll });
     let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
     let prepare_tab_order = (preparing && view.prepare.show_tab_numbers).then(|| crate::forms_ui::tab_order(&form, info));
     let env = PageEnv {
