@@ -2,7 +2,6 @@
 //! frame is invisible to a component trial, so the whole app runs here.
 
 use egui_kittest::Harness;
-use pdfcraft_ui_egui::PdfCraftApp;
 
 #[test]
 fn a_document_tab_shows_its_pages_for_a_few_frames() {

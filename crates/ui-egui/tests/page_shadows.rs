@@ -239,16 +239,10 @@ fn new_app() -> pdfcraft_ui_egui::PdfCraftApp {
 
 /// The app's command and option entry points with the harness's own context (L-208).
 trait AppHarness {
-    fn execute(&mut self, id: &str) -> bool;
     fn set_option(&mut self, key: &str, value: &str) -> Result<(), String>;
 }
 
 impl AppHarness for egui_kittest::Harness<'_, pdfcraft_ui_egui::PdfCraftApp> {
-    fn execute(&mut self, id: &str) -> bool {
-        let ctx = self.ctx.clone();
-        self.state_mut().execute(&ctx, id)
-    }
-
     fn set_option(&mut self, key: &str, value: &str) -> Result<(), String> {
         let ctx = self.ctx.clone();
         self.state_mut().set_option(&ctx, key, value)

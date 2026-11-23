@@ -1,8 +1,6 @@
 //! Set-layer-visibility actions (`SetOCGState`) on links and push buttons show and hide layers,
 //! as the Layers panel does.
 
-use std::sync::Arc;
-
 use egui::Pos2;
 use egui::accesskit::Role;
 use egui_kittest::Harness;

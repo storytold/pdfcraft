@@ -660,7 +660,6 @@ fn always_use_my_default_zoom_and_page_layout_survives_a_restart() {
 
 #[test]
 fn preferences_turn_on_always_use_my_default_zoom_and_page_layout() {
-    use egui_kittest::kittest::Queryable;
     let mut h = harness(&[]);
     assert!(h.execute("app.preferences"));
     h.run_steps(3);
@@ -670,7 +669,6 @@ fn preferences_turn_on_always_use_my_default_zoom_and_page_layout() {
 
 #[test]
 fn preferences_turn_on_always_use_my_default_zoom_and_page_layout_updates_open_documents() {
-    use egui_kittest::kittest::Queryable;
     let mut h = harness(&[("continuous", "off"), ("zoom", "50")]);
     let ctx_h = h.ctx.clone();
     h.state_mut().open_bytes(&ctx_h, "second.pdf", None, PAGES.to_vec()).expect("opens");
@@ -695,7 +693,6 @@ fn preferences_turn_on_always_use_my_default_zoom_and_page_layout_updates_open_d
 
 #[test]
 fn preferences_toggle_continuous_scrolling_updates_active_document() {
-    use egui_kittest::kittest::Queryable;
     let mut h = harness(&[("default-continuous", "off"), ("continuous", "off")]);
     assert!(!h.state().view_defaults.continuous);
     assert!(!h.state().views[0].continuous());
@@ -708,7 +705,6 @@ fn preferences_toggle_continuous_scrolling_updates_active_document() {
 
 #[test]
 fn preferences_during_full_screen_updates_saved_normal_display_and_restores_on_exit() {
-    use egui_kittest::kittest::Queryable;
     use pdfcraft_ui_egui::canvas::Fit;
 
     let mut h = harness(&[("continuous", "off"), ("zoom", "50")]);
@@ -750,7 +746,6 @@ fn preferences_during_full_screen_updates_saved_normal_display_and_restores_on_e
 
 #[test]
 fn preferences_toggle_continuous_during_full_screen_updates_saved_normal_display() {
-    use egui_kittest::kittest::Queryable;
     use pdfcraft_ui_egui::canvas::Fit;
 
     let mut h = harness(&[("default-continuous", "off"), ("continuous", "off")]);
@@ -787,8 +782,6 @@ fn preferences_toggle_continuous_during_full_screen_updates_saved_normal_display
 
 #[test]
 fn preferences_with_always_default_view_on_toggling_continuous_preserves_custom_zoom() {
-    use egui_kittest::kittest::Queryable;
-
     let mut h = harness(&[("always-default-view", "on"), ("default-continuous", "off"), ("continuous", "off"), ("zoom", "200")]);
     assert!(h.state().always_default_view);
     assert!(!h.state().view_defaults.continuous);
@@ -807,7 +800,6 @@ fn preferences_with_always_default_view_on_toggling_continuous_preserves_custom_
 
 #[test]
 fn preferences_set_the_default_zoom() {
-    use egui_kittest::kittest::Queryable;
     let mut h = harness(&[]);
     assert!(h.execute("app.preferences"));
     h.run_steps(3);
@@ -1866,56 +1858,6 @@ fn compare_page_with_raster(h: &mut Harness<'static, PdfCraftApp>, pdf: &[u8], z
     (sum as f64 / n as f64, worst)
 }
 
-/// A 1200 pt square page of fine lines (0.5 pt every 1.7 pt): tiled at 300 %, whole-page at 150 %.
-fn fine_grid_pdf() -> Vec<u8> {
-    let mut content = String::from("0 g\n");
-    for i in 0..670 {
-        let v = 30.0 + 1.7 * i as f32;
-        content.push_str(&format!("{v} 30 0.5 1140 re 30 {v} 1140 0.5 re\n"));
-    }
-    content.push_str("f\n");
-    format!(
-        "%PDF-1.7
-1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
-2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
-3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 1200 1200] /Contents 4 0 R >> endobj
-4 0 obj << /Length {} >> stream
-{content}
-endstream endobj
-trailer << /Root 1 0 R >>
-%%EOF",
-        content.len()
-    )
-    .into_bytes()
-}
-
-fn grid_harness(pdf: Vec<u8>, zoom: &str) -> Harness<'static, PdfCraftApp> {
-    Harness::builder().with_size(egui::vec2(1000.0, 800.0)).build_eframe(move |cc| {
-        crate::support::install_runtime(&cc.egui_ctx);
-        {
-            let mut app = crate::control::new_app();
-            app.open_bytes(&egui::Context::default(), "grid.pdf", None, pdf.clone()).expect("opens");
-            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-            app.set_option(&egui::Context::default(), "panel", "none").unwrap();
-            app.set_option(&egui::Context::default(), "zoom", zoom).unwrap();
-            app
-        }
-    })
-}
-
-/// Detail in the middle of the window: the summed difference between neighbouring pixels.
-fn centre_detail(h: &mut Harness<'static, PdfCraftApp>) -> u64 {
-    let img = h.render().expect("renders");
-    let (cx, cy) = (img.width() / 2, img.height() / 2);
-    let mut sum = 0u64;
-    for y in cy - 100..cy + 100 {
-        for x in cx - 150..cx + 150 {
-            sum += u64::from(img.get_pixel(x, y)[0].abs_diff(img.get_pixel(x + 1, y)[0]));
-        }
-    }
-    sum
-}
-
 #[test]
 fn sidebar_collapse_and_resize_preserves_scroll_position() {
     use pdfcraft_ui_egui::canvas::Fit;
@@ -2610,7 +2552,7 @@ fn delete_with_a_menu_open_and_escape_closing_a_thumbnail_menu_leave_the_pages_p
     let page_2 = h.get_by_label("Page 2").rect().center();
     click_with(&mut h, page_2, Modifiers::COMMAND);
     let selected = h.state().views[0].selected.clone();
-    assert_eq!(selected.items.iter().copied().collect::<Vec<_>>(), [0, 1], "⌘-click picked pages 1 and 2");
+    assert_eq!(selected.items.to_vec(), [0, 1], "⌘-click picked pages 1 and 2");
     let thumb = h.get_by_label("Page 2").rect().center();
     crate::support::open_menu(&mut h, "View");
     h.hover_at(thumb);
