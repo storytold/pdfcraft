@@ -95,7 +95,8 @@ fn clicking_pinned_tool_card_selects_it() {
     h.run_steps(3);
     assert!(h.state().pinned_tools.is_empty());
     assert!(h.query_by_role_and_label(egui::accesskit::Role::ListBox, "Pinned Tools").is_none());
-    h.get_by_label_contains("Pinned Tools");
+    // The heading is a section named for the list, so more than one node carries the name.
+    assert!(h.query_all_by_label_contains("Pinned Tools").count() >= 1);
 
     // Pinned again, a click on the tile selects the tool.
     h.state_mut().pin_tool("redact");

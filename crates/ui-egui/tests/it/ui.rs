@@ -40,8 +40,8 @@ fn home_shows_welcome_and_tools() {
     let h = harness(|_| {});
     h.get_by_label_contains("Welcome to PdfCraft");
     assert!(h.query_all_by_label("Organize pages").count() >= 2, "tool list + home card");
-    // The start screen's own Open button, beside the menu bar's.
-    assert!(h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Open…").count() >= 2, "Home offers Open");
+    // Home has no Open button of its own (the title bar's stays), as production's.
+    assert!(h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Open…").count() >= 1, "Open stays reachable");
 }
 
 /// Starting the app makes its Home and navigation rail icons available to the renderer.
