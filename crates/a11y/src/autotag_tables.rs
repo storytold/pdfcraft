@@ -3,15 +3,16 @@
 //! Single-line text objects on one baseline form a row; within a row, objects closer than one font
 //! size join one chunk, and a wider gap separates two. Three or more consecutive rows of at least
 //! two chunks, each at most [`ROW_GAP_EM`] font sizes below the one before and with a chunk that
-//! overlaps or nearly touches a chunk of the rows above it, are a candidate: rows that share no
-//! column with those above start another. Its chunks' horizontal spans, merged where they overlap or, from different rows, nearly touch, are
-//! its columns. A candidate is a table when it has at least two columns, no row has two chunks in
-//! one column, every column holds text in at least two rows, in each column at least two cells and
-//! at least half of them share a left edge, a right edge or a centre to within [`ALIGN_EM`] font
-//! sizes, each column's cells average at most [`MAX_MEAN_CELL_CHARS`] characters, and no other text
-//! lies among its rows (a wrapped line, or text whose place is unknown, drawn between its cells);
-//! otherwise it stays paragraphs and is reported for review. A column of prose lines set on the
-//! rows' baselines beside a table therefore keeps the whole block paragraphs.
+//! overlaps or nearly touches a chunk of any row above it in the block, are a candidate; a row that
+//! shares no column with the block starts another. A candidate's chunks' horizontal spans, merged
+//! where they overlap or, from different rows, nearly touch, are its columns. A candidate is a
+//! table when it has at least two columns, no row has two chunks in one column, every column holds
+//! text in at least two rows, in each column at least two cells and at least half of them share a
+//! left edge, a right edge or a centre to within [`ALIGN_EM`] font sizes, each column's cells
+//! average at most [`MAX_MEAN_CELL_CHARS`] characters, and no other text lies among its rows (a
+//! wrapped line, or text whose place is unknown, drawn between its cells); otherwise it stays
+//! paragraphs and is reported for review. A column of prose lines set on the rows' baselines beside
+//! a table therefore keeps the whole block paragraphs.
 //! The first row is a header row when it is bold and the others are not, or when it is set apart
 //! by a gap at least [`APART_RATIO`] times every other row gap. Ruling lines are not read, and
 //! cells that span rows or columns are not recognised.
