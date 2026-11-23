@@ -720,7 +720,17 @@ impl MarkedContent {
             if tail.iter().any(|s| s.glyph_count > 0) {
                 let mut items = tail.into_iter();
                 if let Some(mut first) = items.next() {
+                    // Caret geometry keeps one baseline per run: glyphs of one ActualText span on
+                    // another baseline or direction can't be placed on it, so the run keeps none
+                    // and the editor uses its fallback.
+                    let (dir, _, _, across) = first.span();
+                    let mut one_baseline = true;
                     for item in items {
+                        let (item_dir, _, _, item_across) = item.span();
+                        one_baseline &= (dir.0 - item_dir.0).abs() < 1e-3
+                            && (dir.1 - item_dir.1).abs() < 1e-3
+                            && (across - item_across).abs() < 0.1
+                            && first.state.vertical.is_some() == item.state.vertical.is_some();
                         first.glyph_count = first.glyph_count.saturating_add(item.glyph_count);
                         first.extra_ops.push(item.op);
                         first.extra_ops.extend(item.extra_ops);
@@ -733,6 +743,9 @@ impl MarkedContent {
                         first.frame = union(first.frame, item.frame);
                         first.ink.extend(item.ink);
                         first.characters.extend(item.characters);
+                    }
+                    if !one_baseline {
+                        first.characters.clear();
                     }
                     first.extra_ops.extend([open, index]);
                     // Only right-to-left ActualText is already in typing order and must stay out of

@@ -10970,6 +10970,26 @@ fn content_refresh_lists_match_the_storages_an_edit_touches() {
     assert_eq!(Session::content_refresh_lists(None), (true, true), "undo/redo re-read both");
 }
 
+/// An unchanged paragraph's caret layout is its source geometry, so its draft raster is the page
+/// as it is, source TJ spacing included, not a rewrite that drops that spacing.
+#[test]
+fn unchanged_draft_preview_is_the_page_with_its_source_tj_spacing() {
+    let mut s = Session::new();
+    let page = one_line_page("/Font << /F1 4 0 R >>", "BT /F1 20 Tf 20 150 Td [(AV) -800 (AV)] TJ ET");
+    let id = s.open("kerned.pdf", None, Arc::new(page), None).unwrap();
+    let doc = s.get(id).unwrap();
+    let text = doc.text_blocks(0).remove(0).editor_text;
+    let style = pdfcraft_edit::BlockStyle::default();
+    let preview = doc.text_edit_draft_preview(0, 0, &text, &style).unwrap().render_background(1.0).unwrap();
+    let page = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), Default::default()).render(pdfcraft_render::RenderRequest {
+        page: 0,
+        scale: 1.0,
+        ..Default::default()
+    });
+    assert!(preview.error.is_none() && page.error.is_none());
+    assert!(preview.rgba == page.rgba, "the unchanged draft must look like the page");
+}
+
 /// Recognized text is an invisible text layer on its page, so applying it refreshes like any
 /// other content edit, not by re-inspecting the whole document (#6310): on a 567-page file with
 /// 60,102 font resources one word took 2.4 s, the full refresh nearly all of it. The page tree,

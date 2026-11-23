@@ -43,6 +43,10 @@ fn scanned_with(words: Vec<PlacedWord>) -> (Session, pdfcraft_engine::DocId) {
 fn word_pixels(s: &Session, id: pdfcraft_engine::DocId) -> Vec<[u8; 3]> {
     let doc = s.get(id).unwrap();
     let out = PageRenderer::new(doc.bytes.clone(), Default::default()).render(RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    in_word(&out)
+}
+
+fn in_word(out: &pdfcraft_render::RenderedPage) -> Vec<[u8; 3]> {
     assert!(out.error.is_none(), "{:?}", out.error);
     let mut px = Vec::new();
     for y in WORD[1] + 2..WORD[3] - 2 {
@@ -77,6 +81,20 @@ fn editing_an_ocr_word_covers_the_scan_and_shows_the_new_text() {
     // The scanned word is covered in the paper's colour; the new letters are in the ink's.
     assert!(paper * 10 > px.len() * 4, "mostly paper now: {paper} of {}", px.len());
     assert!(ink * 100 > px.len() * 3, "the new text shows in the scan's ink colour: {ink} of {}", px.len());
+}
+
+/// The inline editor's PDF draft shows what Apply writes: the scanned word covered, the new
+/// text in the scan's ink.
+#[test]
+fn the_draft_preview_of_an_ocr_word_covers_the_scan_as_apply_does() {
+    let (s, id) = scanned();
+    let doc = s.get(id).unwrap();
+    let preview = doc.text_edit_draft_preview(0, 0, "Jane", &Default::default()).unwrap();
+    let px = in_word(&preview.render_background(1.0).unwrap());
+    let paper = px.iter().filter(|p| near(**p, PAPER)).count();
+    let ink = px.iter().filter(|p| near(**p, INK)).count();
+    assert!(paper * 10 > px.len() * 4, "mostly paper in the draft: {paper} of {}", px.len());
+    assert!(ink * 100 > px.len() * 3, "the draft shows in the scan's ink colour: {ink} of {}", px.len());
 }
 
 #[test]

@@ -15698,3 +15698,37 @@ fn draft_caret_geometry_excludes_untouched_fractional_text() {
     assert!(!layout.rows.is_empty(), "untouched text must not invalidate draft caret positions");
     assert!(layout.draft_rect.unwrap()[1] > 650.0);
 }
+
+#[test]
+fn draft_caret_geometry_refuses_actual_text_across_baselines() {
+    let doc = text_page("/Span << /ActualText (AB) >> BDC BT /F1 12 Tf 72 700 Td (A) Tj 0 -20 Td (B) Tj ET EMC");
+    let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+    let layout = text::text_edit_layout(&doc, 0, 0, &block.editor_text, &BlockStyle::default()).unwrap();
+    assert!(layout.rows.is_empty(), "one row can't hold glyphs from two baselines: {:?}", layout.rows);
+    // A same-baseline span (a ligature) keeps its geometry.
+    let doc = text_page("/Span << /ActualText (AB) >> BDC BT /F1 12 Tf 72 700 Td (A) Tj (B) Tj ET EMC");
+    let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+    let layout = text::text_edit_layout(&doc, 0, 0, &block.editor_text, &BlockStyle::default()).unwrap();
+    assert_eq!(layout.rows.len(), 1);
+    assert_eq!(layout.rows[0].characters.len(), 2);
+}
+
+#[test]
+fn many_repeated_untouched_lines_never_count_as_draft_text() {
+    // 2,000 identical untouched runs, drawn in the same order before and after the rewrite. Their
+    // matching must stay within its bound and never measure them as part of the draft.
+    let mut content = String::from("BT /F1 12 Tf 72 780 Td (Edit this heading) Tj ET\n");
+    for i in 0..2000 {
+        content.push_str(&format!("BT /F1 2 Tf {} {} Td (x) Tj ET\n", 72 + (i % 20) * 24, 700 - (i / 20) * 6));
+    }
+    let doc = text_page(&content);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.iter().filter(|l| l.text == "x").count() >= 2000, "the scenario needs the repeated runs as lines");
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let index = blocks.iter().position(|b| b.editor_text == "Edit this heading").unwrap();
+    let layout = text::text_edit_layout(&doc, 0, index, "Edited", &BlockStyle::default()).unwrap();
+    assert!(!layout.overflow, "untouched text made a fitting edit overflow");
+    let draft = layout.draft_rect.unwrap();
+    assert!(draft[1] > 770.0, "draft bounds include untouched text: {draft:?}");
+    assert!(!layout.rows.is_empty());
+}

@@ -141,10 +141,12 @@ pub(crate) fn prepare_draft(
     // Subtract the untouched runs by value, rather than by operator offsets: a rewrite may
     // split BT/ET or add font resources. A multiset also handles coincident repeated text.
     let key = |line: &TextLine| (line.text.clone(), line.font.clone(), line.size.to_bits(), line.color.map(f64::to_bits));
-    let mut untouched = std::collections::BTreeMap::new();
+    // Each key keeps its rectangles in page order, with a cursor past the ones already matched:
+    // the rewrite draws untouched runs in the same order, so matching usually costs one comparison.
+    let mut untouched: std::collections::BTreeMap<_, (usize, Vec<Option<[f64; 4]>>)> = std::collections::BTreeMap::new();
     for (index, line) in lines.iter().enumerate() {
         if !source.lines.contains(&index) {
-            untouched.entry(key(line)).or_insert_with(Vec::new).push(line.rect);
+            untouched.entry(key(line)).or_default().1.push(Some(line.rect));
         }
     }
     let mut draft = doc.clone();
@@ -152,20 +154,36 @@ pub(crate) fn prepare_draft(
     let mut rect: Option<[f64; 4]> = None;
     let mut written = Vec::new();
     // Repeated identical strings at many different positions must not make matching quadratic
-    // without a bound. Exhaustion conservatively leaves runs unmatched (and caret fallback).
+    // without a bound. Once the bound is spent, an unmatched run may be untouched page text, so
+    // the draft's bounds are unknown: report none, rather than unrelated text as the draft.
     let mut comparisons = 1_000_000_usize;
     for line in text_lines(&draft, page)? {
-        if let Some(rects) = untouched.get_mut(&key(&line))
-            && let Some(index) = rects.iter().take(comparisons).position(|rect| {
-                comparisons -= 1;
+        if let Some((start, rects)) = untouched.get_mut(&key(&line)) {
+            let mut found = None;
+            for (index, slot) in rects.iter().enumerate().skip(*start) {
+                let Some(left) = comparisons.checked_sub(1) else { break };
+                comparisons = left;
+                let Some(r) = slot else { continue };
                 // Restoring a text matrix during rewriting rounds its operands. Bitwise
                 // comparison mistakes unaffected paragraphs for draft text, invalidating all
                 // caret rows. This tolerance is far below a visible displacement in PDF points.
-                rect.iter().zip(line.rect).all(|(a, b)| (a - b).abs() <= 0.001)
-            })
-        {
-            rects.swap_remove(index);
-            continue;
+                if r.iter().zip(line.rect).all(|(a, b)| (a - b).abs() <= 0.001) {
+                    found = Some(index);
+                    break;
+                }
+            }
+            if let Some(index) = found {
+                if let Some(slot) = rects.get_mut(index) {
+                    *slot = None;
+                }
+                while rects.get(*start).is_some_and(Option::is_none) {
+                    *start += 1;
+                }
+                continue;
+            }
+            if comparisons == 0 {
+                return Ok((draft, TextEditLayout { source_rect: source.rect, draft_rect: None, overflow: false, rows: Vec::new() }));
+            }
         }
         // Spaces typed after a row's last word are drawn but show nothing, so an upright row is
         // measured to the end of its last word: they don't make a draft overflow (#4199).

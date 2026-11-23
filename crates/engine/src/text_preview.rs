@@ -20,11 +20,15 @@ pub struct TextDraftSource {
     page: usize,
     block: usize,
     config: RenderConfig,
+    /// The page's size and turn, to sample an OCR paragraph's scan colours on the worker.
+    info: Option<pdfcraft_render::PageInfo>,
 }
 
 pub struct TextDraftSession {
     session: pdfcraft_edit::TextSession,
     config: RenderConfig,
+    /// The paper and ink colours of an OCR paragraph's scan, which Apply covers it with.
+    ocr: Option<([f64; 3], [f64; 3])>,
 }
 
 pub struct PreparedTextDraft {
@@ -36,7 +40,8 @@ impl TextDraftSource {
     pub fn open(&self) -> Result<TextDraftSession, String> {
         guard(|| {
             let session = pdfcraft_edit::TextSession::open(&self.cos, self.page, self.block).map_err(|e| e.to_string())?;
-            Ok(TextDraftSession { session, config: self.config.clone() })
+            let ocr = self.info.as_ref().and_then(|info| crate::scan_colours::sample(&self.cos, info, self.page, session.source()));
+            Ok(TextDraftSession { session, config: self.config.clone(), ocr })
         })?
     }
 }
@@ -44,7 +49,23 @@ impl TextDraftSource {
 impl TextDraftSession {
     pub fn prepare(&self, text: &str, style: &pdfcraft_edit::BlockStyle) -> Result<PreparedTextDraft, String> {
         guard(|| {
-            let (cos, layout) = self.session.prepare(text, style).map_err(|e| e.to_string())?;
+            // An OCR paragraph is drafted as Apply writes it: over a cover of the scan's paper,
+            // in its ink, and only the changed words (`ocr_text_style`).
+            let source = self.session.source();
+            let (cos, layout) = match self.ocr.filter(|_| style.cover.is_none()) {
+                Some(colours) => match crate::session::ocr_text_style(colours, source, text, style.clone()) {
+                    Some(style) => self.session.prepare(text, &style),
+                    // The same words: Apply leaves the page as it is.
+                    None => {
+                        let plain = pdfcraft_edit::BlockStyle::default();
+                        let (cos, unchanged) = self.session.prepare(&source.editor_text, &plain).map_err(|e| e.to_string())?;
+                        let layout = if text == source.editor_text { Ok(unchanged) } else { self.session.layout(text, &plain) };
+                        layout.map(|layout| (cos, layout))
+                    }
+                },
+                None => self.session.prepare(text, style),
+            }
+            .map_err(|e| e.to_string())?;
             let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())?);
             Ok(PreparedTextDraft { layout, preview: TextEditPreview { page: self.session.page(), bytes, config: self.config.clone() } })
         })?
@@ -167,7 +188,7 @@ impl Document {
     pub fn text_draft_source(&self, page: usize, block: usize) -> Result<TextDraftSource, String> {
         guard(|| {
             let editor = self.editor.as_ref().ok_or("the document can't be read")?;
-            Ok(TextDraftSource { cos: editor.cos.clone(), page, block, config: self.config.clone() })
+            Ok(TextDraftSource { cos: editor.cos.clone(), page, block, config: self.config.clone(), info: self.info.pages.get(page).cloned() })
         })?
     }
 
