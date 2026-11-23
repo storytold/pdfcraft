@@ -1071,6 +1071,9 @@ impl PdfCraftApp {
         let (id, place) = (view.id, view.place());
         // Another tab showing the same document (split view) keeps it open.
         if !self.views.iter().any(|v| v.id == id) {
+            if self.read_aloud.source.as_ref().is_some_and(|s| s.0 == id) {
+                self.stop_read_aloud();
+            }
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
                 if self.closed_tabs.len() == 10 {

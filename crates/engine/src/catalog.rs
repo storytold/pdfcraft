@@ -477,6 +477,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 item("Automatically tag PDF", "tag", "a11y.autotag", Ready),
                 item("Tag form fields", "tag", "a11y.autotag_fields", Ready),
                 item("Change reading options", "book-open", "a11y.reading_options", Ready),
+                item("Read out loud", "book-open", "a11y.read_aloud", Ready),
                 item("Check for accessibility", "accessibility", "a11y.check", Ready),
                 item("Find untagged content", "search", "a11y.find_untagged", Ready),
                 item("Open accessibility report", "file-text", "a11y.report", Ready),
