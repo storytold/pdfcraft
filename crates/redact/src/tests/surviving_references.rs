@@ -1091,6 +1091,31 @@ fn a_content_stream_named_where_nothing_draws_it_leaves_though_a_form_draws_that
     assert!(under(&mut saved, 1, &[[90.0, 90.0, 170.0, 115.0]]) > 0, "the unmarked page lost the form Outer draws");
 }
 
+/// The unmarked page reaches the original only through a tiling pattern or a soft mask's group
+/// it selects, whether or not it then paints with it. Selecting paints nothing, and what is
+/// painted with it isn't followed: keeping the original could leave the marked text in the file,
+/// and pointing it at the copy could change the page. Apply refuses (#7922).
+#[test]
+fn a_content_stream_reached_only_through_a_selected_pattern_or_soft_mask_refuses_the_redaction() {
+    let pattern = "/Resources << /Font << /F1 6 0 R >> /Pattern << /P 9 0 R >> >>";
+    let mask = "/Resources << /Font << /F1 6 0 R >> /ExtGState << /GS << /SMask << /S /Luminosity /G 5 0 R >> >> >> >>";
+    let tile = stream(
+        "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300 /Resources << /Font << /F1 6 0 R >> /XObject << /S 5 0 R >> >>",
+        b"/S Do",
+    );
+    let cases = [
+        ("a pattern selected and never painted", pattern, b"/Pattern cs /P scn".as_slice(), vec![tile.clone()]),
+        ("a pattern painted", pattern, b"/Pattern cs /P scn 0 0 300 300 re f".as_slice(), vec![tile]),
+        ("a soft mask selected and never painted", mask, b"q /GS gs Q".as_slice(), vec![]),
+        ("a soft mask painted", mask, b"q /GS gs 0 0 300 300 re f Q".as_slice(), vec![]),
+    ];
+    for (case, resources, content, extra) in cases {
+        let mut doc = content_another_page_names("", resources, content, extra);
+        let out = apply(&mut doc, None);
+        assert!(matches!(out, Err(RedactError::Residue(_))), "{case}: {out:?}");
+    }
+}
+
 /// An unmarked annotation shows the original itself, as its normal appearance or a state of its
 /// down appearance, and no `Do` draws it: it stays for that annotation (#7922).
 #[test]

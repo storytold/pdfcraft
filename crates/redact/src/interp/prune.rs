@@ -258,13 +258,25 @@ fn appearances(doc: &Document, page: &Dict) -> Vec<ObjRef> {
     found
 }
 
-/// The form XObjects some page draws (#7922): with `Do`, as an annotation's appearance, or as a
-/// soft mask's group, from its content, its annotations' appearances and the forms, tiling
-/// patterns and Type 3 glyphs those draw in turn ([`FormWalk`]). A page with no resources
-/// anywhere is read too, for its annotations' appearances. Fails closed, as [`unlink_doomed`]
-/// does, when that can't be told: a page listed twice in the page tree, a stream that won't
-/// decode, or the budget spent.
-pub(crate) fn forms_pages_draw(doc: &Document) -> Result<HashSet<ObjRef>, RedactError> {
+/// The form XObjects the pages draw ([`forms_pages_draw`]).
+#[derive(Default)]
+pub(crate) struct FormsDrawn {
+    /// Forms a page paints whenever it is shown: drawn with `Do` from its content, or shown as
+    /// one of its annotations' appearances, and the forms those draw with `Do` in turn.
+    pub(crate) painted: HashSet<ObjRef>,
+    /// Forms reached only through a tiling pattern, a soft mask's group or a Type 3 font's glyphs
+    /// that some content selects (`scn`, `gs`, `Tf`). Selecting one paints nothing by itself, and
+    /// what is painted with it isn't followed, so such a form may or may not be shown.
+    pub(crate) selected: HashSet<ObjRef>,
+}
+
+/// The form XObjects some page draws (#7922), from its content, its annotations' appearances and
+/// the forms, tiling patterns, soft masks and Type 3 glyphs those draw in turn ([`FormWalk`]),
+/// sorted into those it paints and those it only selects. A page with no resources anywhere is
+/// read too, for its annotations' appearances. Fails closed, as [`unlink_doomed`] does, when that
+/// can't be told: a page listed twice in the page tree, a stream that won't decode, or the budget
+/// spent.
+pub(crate) fn forms_pages_draw(doc: &Document) -> Result<FormsDrawn, RedactError> {
     let pages: Vec<ObjRef> = pdfcraft_model::pages(doc).iter().map(|p| p.obj).collect();
     let index: HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (*p, i)).collect();
     let (holders, whole) = resource_holders(doc);
@@ -285,7 +297,7 @@ pub(crate) fn forms_pages_draw(doc: &Document) -> Result<HashSet<ObjRef>, Redact
     if !bare.is_empty() {
         groups.push((Dict::default(), bare));
     }
-    let mut forms = HashSet::new();
+    let mut forms = FormsDrawn::default();
     for (res, users) in groups {
         FormWalk::new(doc, res, &mut forms).pages(&users, &index).ok_or(RedactError::Residue(1))?;
     }
@@ -324,24 +336,26 @@ impl Uses {
 /// stream uses is looked up where that stream draws from, as the interpreter reads it: its own
 /// /Resources, or, with none, those of what draws it (a Type 3 glyph: its font's, then those).
 /// So a name nothing uses in a dictionary keeps nothing, though a stream drawing from another
-/// dictionary uses the same name there. Each stream is decoded once, and each visit of a stream
-/// from a dictionary is charged to one budget.
+/// dictionary uses the same name there. Each stream is decoded once, and walked once for each
+/// dictionary it draws from and each of [`FormsDrawn`]'s sets it counts towards; every walk is
+/// charged to one budget, which bounds the total.
 struct FormWalk<'a> {
     doc: &'a Document,
     /// The resource dictionaries streams draw from, the pages' first.
     scopes: Vec<Dict>,
     /// The dictionary each stream or Type 3 font with /Resources of its own has in `scopes`.
     owned: HashMap<ObjRef, usize>,
-    /// Streams still to visit, each with the dictionary of what draws it.
-    pending: Vec<(ObjRef, usize)>,
-    visited: HashSet<(ObjRef, usize)>,
+    /// Streams still to visit, each with the dictionary of what draws it, and whether it is
+    /// reached only through a selection ([`FormsDrawn::selected`]).
+    pending: Vec<(ObjRef, usize, bool)>,
+    visited: HashSet<(ObjRef, usize, bool)>,
     uses: HashMap<ObjRef, Rc<Uses>>,
     budget: DecodeBudget,
-    forms: &'a mut HashSet<ObjRef>,
+    forms: &'a mut FormsDrawn,
 }
 
 impl<'a> FormWalk<'a> {
-    fn new(doc: &'a Document, res: Dict, forms: &'a mut HashSet<ObjRef>) -> Self {
+    fn new(doc: &'a Document, res: Dict, forms: &'a mut FormsDrawn) -> Self {
         let (owned, pending, visited, uses) = Default::default();
         Self { doc, scopes: vec![res], owned, pending, visited, uses, budget: DecodeBudget::page(), forms }
     }
@@ -353,14 +367,13 @@ impl<'a> FormWalk<'a> {
             let dict = doc.get(*page).as_dict().cloned().unwrap_or_default();
             let (_, content) = page_streams(doc, &dict, index.get(page).copied().unwrap_or(0)).ok()?;
             // One stream may end with a name its `Do` begins the next with: read them as one.
-            self.follow(0, &Uses::of(Pieces::join(&content).data()))?;
+            self.follow(0, &Uses::of(Pieces::join(&content).data()), false)?;
             for look in appearances(doc, &dict) {
-                self.forms.insert(look);
-                self.pending.push((look, 0));
+                self.reach(look, 0, false);
             }
         }
-        while let Some((r, outer)) = self.pending.pop() {
-            if !self.visited.insert((r, outer)) {
+        while let Some((r, outer, selected)) = self.pending.pop() {
+            if !self.visited.insert((r, outer, selected)) {
                 continue;
             }
             let obj = doc.resolve(&Object::Ref(r));
@@ -380,9 +393,16 @@ impl<'a> FormWalk<'a> {
                 Some(own) => self.own(r, own),
                 None => outer,
             };
-            self.follow(scope, &used)?;
+            self.follow(scope, &used, selected)?;
         }
         Some(())
+    }
+
+    /// Note the form `r`, drawn from `scope`, and queue it.
+    fn reach(&mut self, r: ObjRef, scope: usize, selected: bool) {
+        let set = if selected { &mut self.forms.selected } else { &mut self.forms.painted };
+        set.insert(r);
+        self.pending.push((r, scope, selected));
     }
 
     /// The place in `scopes` of `res`, the /Resources `owner` has of its own.
@@ -394,7 +414,9 @@ impl<'a> FormWalk<'a> {
     }
 
     /// Queue what a stream drawing from `scope` draws with `used`, and note the forms among it.
-    fn follow(&mut self, scope: usize, used: &Uses) -> Option<()> {
+    /// What a pattern, soft mask or font draws is reached only through a selection, as is all
+    /// that a stream already reached that way (`selected`) draws.
+    fn follow(&mut self, scope: usize, used: &Uses, selected: bool) -> Option<()> {
         let doc = self.doc;
         let res = self.scopes.get(scope).cloned().unwrap_or_default();
         let stream = |o: &Object| match &*doc.resolve(o) {
@@ -404,22 +426,20 @@ impl<'a> FormWalk<'a> {
         let xobjects = res_dict(doc, &res, b"XObject");
         for r in used.xobjects.iter().filter_map(|n| xobjects.get(n)).filter_map(Object::as_ref) {
             if stream(&Object::Ref(r)).is_some_and(|d| d.name(b"Subtype") == Some(b"Form")) {
-                self.forms.insert(r);
-                self.pending.push((r, scope));
+                self.reach(r, scope, selected);
             }
         }
         let patterns = res_dict(doc, &res, b"Pattern");
         for r in used.patterns.iter().filter_map(|n| patterns.get(n)).filter_map(Object::as_ref) {
             if stream(&Object::Ref(r)).is_some_and(|d| d.int(b"PatternType") == Some(1)) {
-                self.pending.push((r, scope));
+                self.pending.push((r, scope, true));
             }
         }
         let states = res_dict(doc, &res, b"ExtGState");
         for gs in used.states.iter().filter_map(|n| states.get(n)) {
             let mask = doc.resolve(gs).as_dict().and_then(|g| g.get(b"SMask")).map(|m| doc.resolve(m));
             if let Some(r) = mask.as_ref().and_then(|m| m.as_dict()).and_then(|m| m.reference(b"G")) {
-                self.forms.insert(r);
-                self.pending.push((r, scope));
+                self.reach(r, scope, true);
             }
         }
         let fonts = res_dict(doc, &res, b"Font");
@@ -444,7 +464,7 @@ impl<'a> FormWalk<'a> {
                 },
             };
             let procs = font.get(b"CharProcs").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned()).unwrap_or_default();
-            self.pending.extend(procs.iter().filter_map(|(_, v)| v.as_ref()).map(|r| (r, glyphs)));
+            self.pending.extend(procs.iter().filter_map(|(_, v)| v.as_ref()).map(|r| (r, glyphs, true)));
         }
         Some(())
     }

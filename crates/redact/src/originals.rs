@@ -19,17 +19,18 @@ use crate::RedactError;
 const MAX_DIRECT_DEPTH: usize = 256;
 
 /// `replaced` pairs each original content stream of a redacted page with its redacted copy.
-/// An original some page still lists in `/Contents`, or draws as a form XObject (with `Do`, each
-/// name looked up where the stream using it draws from, or as an annotation's appearance or a
-/// soft mask's group: [`crate::interp::forms_pages_draw`]), stays: that page shows what it holds, and is left as it
-/// was. Every other reference to an original, from any object a full save writes or from the
+/// An original some page still lists in `/Contents`, or paints as a form XObject (with `Do`, each
+/// name looked up where the stream using it draws from, or as an annotation's appearance:
+/// [`crate::interp::forms_pages_draw`]), stays: that page shows what it holds, and is left as
+/// it was. Every other reference to an original, from any object a full save writes or from the
 /// trailer, is pointed at its copy.
 ///
 /// # Errors
 ///
 /// [`RedactError::TooDeep`] for an object nested past [`MAX_DIRECT_DEPTH`], and
 /// [`RedactError::Residue`] if an original is a form XObject and what the pages draw can't be
-/// told, or an original is still reachable afterwards.
+/// told, an original is reached only through a pattern, soft mask or Type 3 font some content
+/// selects, or an original is still reachable afterwards.
 pub(crate) fn release(doc: &mut Document, replaced: &[(ObjRef, ObjRef)]) -> Result<(), RedactError> {
     if replaced.is_empty() {
         return Ok(());
@@ -56,9 +57,15 @@ pub(crate) fn release(doc: &mut Document, replaced: &[(ObjRef, ObjRef)]) -> Resu
     let is_form =
         |num: u32| matches!(&*doc.get(ObjRef::new(num, doc.generation(num))), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form"));
     if copies.keys().any(|&num| is_form(num)) {
-        for form in crate::interp::forms_pages_draw(doc)? {
-            copies.remove(&form.num);
+        let forms = crate::interp::forms_pages_draw(doc)?;
+        let painted: HashSet<u32> = forms.painted.iter().map(|f| f.num).collect();
+        // An original reached only through a pattern, soft mask or Type 3 font some page selects
+        // may or may not be shown: keeping it could leave the marked text in the file, and
+        // pointing it at the copy could change what that page shows. Refuse instead.
+        if forms.selected.iter().any(|f| copies.contains_key(&f.num) && !painted.contains(&f.num)) {
+            return Err(RedactError::Residue(1));
         }
+        copies.retain(|num, _| !painted.contains(num));
         if copies.is_empty() {
             return Ok(());
         }
