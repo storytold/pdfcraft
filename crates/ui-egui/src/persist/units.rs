@@ -113,7 +113,15 @@ fn detect() -> Option<Unit> {
     if let Some(unit) = windows_measure().and_then(|v| unit_for_imeasure(&v)) {
         return Some(unit);
     }
-    ["LC_ALL", "LC_MEASUREMENT", "LANG"].iter().find_map(|var| std::env::var(var).ok().filter(|v| !v.is_empty()).and_then(|v| unit_for_tag(&v)))
+    unit_from_environment(|var| std::env::var(var).ok())
+}
+
+/// Select the first nonempty locale before reading its region: a regionless `LC_ALL=C`
+/// still overrides `LC_MEASUREMENT` and `LANG`, just as it does for the paper size.
+#[cfg(any(test, not(target_arch = "wasm32")))]
+fn unit_from_environment(var: impl Fn(&str) -> Option<String>) -> Option<Unit> {
+    let locale = ["LC_ALL", "LC_MEASUREMENT", "LANG"].iter().find_map(|name| var(name).filter(|v| !v.is_empty()))?;
+    unit_for_tag(&locale)
 }
 
 /// The unit for the Windows `iMeasure` value (Region ▸ Measurement system): "0" metric, "1" U.S.
@@ -145,7 +153,25 @@ fn detect() -> Option<Unit> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Unit, unit_for_imeasure, unit_for_tag};
+    use super::{Unit, unit_for_imeasure, unit_for_tag, unit_from_environment};
+
+    #[test]
+    fn measurement_locale_precedence() {
+        let env = |pairs: &[(&str, &str)]| {
+            let pairs: Vec<(String, String)> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            move |name: &str| pairs.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+        };
+        for locale in ["C", "C.UTF-8", "POSIX", "en"] {
+            assert_eq!(unit_from_environment(env(&[("LC_ALL", locale), ("LC_MEASUREMENT", "de_DE"), ("LANG", "en_US")])), None);
+            assert_eq!(unit_from_environment(env(&[("LC_MEASUREMENT", locale), ("LANG", "de_DE")])), None);
+        }
+        assert_eq!(unit_from_environment(env(&[("LC_ALL", "de_DE"), ("LC_MEASUREMENT", "en_US"), ("LANG", "en_US")])), Some(Unit::Millimetres));
+        assert_eq!(unit_from_environment(env(&[("LC_ALL", ""), ("LC_MEASUREMENT", "en_US"), ("LANG", "de_DE")])), Some(Unit::Inches));
+        assert_eq!(unit_from_environment(env(&[("LC_MEASUREMENT", ""), ("LANG", "de_DE")])), Some(Unit::Millimetres));
+        assert_eq!(unit_from_environment(env(&[("LANG", "fr_FR")])), Some(Unit::Millimetres));
+        assert_eq!(unit_from_environment(env(&[("LC_ALL", ""), ("LC_MEASUREMENT", ""), ("LANG", "")])), None);
+        assert_eq!(unit_from_environment(env(&[])), None);
+    }
 
     #[test]
     fn region_decides_the_unit() {
