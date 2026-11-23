@@ -1,10 +1,10 @@
 //! Format text, laid out as Acrobat's panel: the font across the panel; size, colour, lists and
 //! alignment; bold, italic, underline, superscript and subscript; line and paragraph spacing;
 //! horizontal scale and character spacing. One panel serves a paragraph being edited (with the
-//! fonts already on its page and the spacing controls) and added text (the standard families,
-//! size, colour, style, alignment and character spacing). What PdfCraft can't apply yet (lists,
-//! or line and paragraph spacing and scale for added text) is shown
-//! disabled and says so.
+//! fonts already on its page and the spacing controls) and added text (built-in families, bundled
+//! Inter, system fonts and the user's own, size, colour, style, alignment and character spacing).
+//! What PdfCraft can't apply yet (lists, or line and paragraph spacing and scale for added text)
+//! is shown disabled and says so.
 //!
 //! The icons are Lucide's (clean-room.md and licences.md); only the arrangement follows Acrobat.
 
@@ -30,13 +30,27 @@ pub(crate) enum FontChoice {
     Load,
     /// A font file installed on this computer.
     Installed(std::path::PathBuf),
+    /// The bundled Inter face: Cyrillic, Greek and the Latin letters the standard fonts lack.
+    Inter,
+}
+
+/// Installed document faces the font list offers, grouped by where they came from.
+#[derive(Default)]
+pub(crate) struct FontLibrary {
+    /// Faces discovered in the system's font folders (only openly licensed, embeddable ones).
+    pub system: Vec<pdfcraft_engine::text_fonts::FontFile>,
+    /// Faces the user added, kept in the app's own font folder.
+    pub user: Vec<pdfcraft_engine::text_fonts::FontFile>,
+    /// A scan is still running; an empty list is not yet the answer.
+    pub loading: bool,
 }
 
 /// What the font list offers and shows.
 pub(crate) struct Fonts<'a> {
-    /// The fonts on the paragraph's page (resource, face); `None` for added text, which has the
-    /// standard families only.
+    /// The fonts on the paragraph's page (resource, face); `None` for added text.
     pub sources: Option<&'a [(String, String)]>,
+    /// The installed faces, when they have been discovered.
+    pub library: Option<&'a FontLibrary>,
     /// The name the list shows for the current choice.
     pub shown: String,
     pub mixed_size: bool,
@@ -167,98 +181,62 @@ pub(crate) fn panel(
                     }
                     ui.separator();
                 }
+                let group = |ui: &mut egui::Ui, title: &str| {
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(title).small().color(ui.visuals().text_color().gamma_multiply(0.6)));
+                };
+                group(ui, tl!("Built-in"));
                 for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
-                    if ui.selectable_label(fonts.sources.is_none() && look.family == f, f.label()).clicked() {
+                    if ui.selectable_label(fonts.sources.is_none() && look.font.is_none() && look.family == f, f.label()).clicked() {
                         out.font = Some(FontChoice::Family(f));
                     }
                 }
-                if fonts.sources.is_some() {
-                    ui.separator();
-                    if ui.selectable_label(false, tl!("Load font…")).clicked() {
-                        out.font = Some(FontChoice::Load);
+                if pdfcraft_fonts::DocumentFont::inter().is_some()
+                    && ui.selectable_label(look.font.as_ref().is_some_and(|font| font.family() == "Inter"), tl!("Inter (Cyrillic, Greek)")).clicked()
+                {
+                    out.font = Some(FontChoice::Inter);
+                }
+                if let Some(library) = fonts.library {
+                    group(ui, tl!("System fonts"));
+                    if library.system.is_empty() {
+                        ui.label(if library.loading {
+                            tl!("Finding document fonts…").to_string()
+                        } else {
+                            tl!("No openly licensed system fonts found.").to_string()
+                        });
                     }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    ui.menu_button(tl!("Installed fonts…"), |ui| {
-                        ui.set_min_width(260.0);
-                        let reload = ui.button(tl!("Reload")).clicked();
-                        match crate::files::installed_font_files(ui.ctx(), reload) {
-                            Some(list) if list.is_empty() => {
-                                ui.label(tl!("No openly licensed document fonts found. Load a font file."));
-                            }
-                            Some(list) => {
-                                let search_id = ui.scope_id().with("installed-font-search");
-                                let mut query = ui.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
-                                ui.horizontal(|ui| {
-                                    let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
-                                    crate::icons::paint(ui, icon_rect, "search", 13.0, ui.visuals().text_color().gamma_multiply(0.6));
-                                    let resp = ui.add(
-                                        egui::TextEdit::singleline(&mut query).hint_text(tl!("Search…")).desired_width(ui.available_width() - 8.0),
-                                    );
-                                    if resp.changed() {
-                                        ui.data_mut(|d| d.insert_temp(search_id, query.clone()));
-                                    }
-                                });
-                                ui.separator();
-
-                                let query_lower = query.trim().to_lowercase();
-                                let mut families: std::collections::BTreeMap<&str, Vec<&pdfcraft_engine::text_fonts::FontFile>> =
-                                    std::collections::BTreeMap::new();
-                                for font in &list {
-                                    if query_lower.is_empty()
-                                        || font.family.to_lowercase().contains(&query_lower)
-                                        || font.face.to_lowercase().contains(&query_lower)
-                                    {
-                                        families.entry(&font.family).or_default().push(font);
-                                    }
-                                }
-
-                                if families.is_empty() {
-                                    ui.label(tl!("No openly licensed document fonts found. Load a font file."));
-                                } else {
-                                    egui::ScrollArea::vertical().max_height(350.0).show(ui, |ui| {
-                                        for (family, faces) in families {
-                                            if faces.len() == 1 {
-                                                if let Some(&font) = faces.first() {
-                                                    let label =
-                                                        if font.face != font.family && !font.face.is_empty() { font.face.as_str() } else { family };
-                                                    if ui.button(label).clicked() {
-                                                        out.font = Some(FontChoice::Installed(font.path.clone()));
-                                                        ui.close();
-                                                    }
-                                                }
-                                            } else {
-                                                ui.menu_button(family, |ui| {
-                                                    ui.set_min_width(180.0);
-                                                    for font in faces {
-                                                        let label = font
-                                                            .face
-                                                            .strip_prefix(family)
-                                                            .map(str::trim)
-                                                            .filter(|s| !s.is_empty())
-                                                            .unwrap_or(&font.face);
-                                                        if ui.button(label).clicked() {
-                                                            out.font = Some(FontChoice::Installed(font.path.clone()));
-                                                            ui.close();
-                                                        }
-                                                    }
-                                                });
-                                            }
-                                        }
-                                    });
-                                }
-                            }
-                            None => {
-                                ui.label(tl!("Finding document fonts…"));
-                            }
+                    for font in &library.system {
+                        let label = if font.face.is_empty() { &font.family } else { &font.face };
+                        if ui.selectable_label(false, label).clicked() {
+                            out.font = Some(FontChoice::Installed(font.path.clone()));
+                            ui.close();
                         }
-                    });
-                    ui.add_space(4.0);
+                    }
+                    group(ui, tl!("Your fonts"));
+                    if library.user.is_empty() {
+                        ui.label(if library.loading { tl!("Finding document fonts…").to_string() } else { tl!("No added fonts yet.").to_string() });
+                    }
+                    for font in &library.user {
+                        let label = if font.face.is_empty() { &font.family } else { &font.face };
+                        if ui.selectable_label(false, label).clicked() {
+                            out.font = Some(FontChoice::Installed(font.path.clone()));
+                            ui.close();
+                        }
+                    }
+                }
+                ui.separator();
+                if ui.selectable_label(false, if fonts.sources.is_some() { tl!("Load font…") } else { tl!("Add font file…") }).clicked() {
+                    out.font = Some(FontChoice::Load);
                 }
             })
             .response
     });
     font_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), tl!("Font")));
-    font_resp.on_hover_text(format!("{}\n{}", tl!("Font"), tl!("Thai and Arabic use regular fallback fonts when available.")));
+    font_resp.on_hover_text(format!(
+        "{}\n{}",
+        tl!("Font"),
+        tl!("Cyrillic, Greek, Thai and Arabic use built-in fallback faces when no font is chosen.")
+    ));
     ui.add_space(4.0);
 
     // Size and colour | bullets, numbering and alignment.
@@ -656,7 +634,7 @@ mod typed_size_tests {
                     ready = true;
                     return;
                 }
-                let fonts = Fonts { sources: Some(&[]), shown: tl!("Mixed").into(), mixed_size: true };
+                let fonts = Fonts { sources: Some(&[]), library: None, shown: tl!("Mixed").into(), mixed_size: true };
                 panel(ui, &Tokens::get(ui.ctx()), look, None, fonts, None);
             },
             AddedText::default(),

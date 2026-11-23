@@ -46,10 +46,20 @@ fn parse(doc: &Document, d: &Dict) -> Option<Content> {
                         .map(|a| a.iter().take(crate::paragraph_align::count(&text)).map(|v| v.as_int().map(|c| align_from(Some(c)))).collect())
                 })
                 .unwrap_or_default();
+            let font = d.get(b"FontData").and_then(|o| {
+                with_resolved(doc, o, |resolved| match resolved {
+                    Object::Stream(s) => s
+                        .decoded_within(pdfcraft_fonts::MAX_DOCUMENT_FONT_BYTES as usize)
+                        .ok()
+                        .and_then(|bytes| pdfcraft_fonts::DocumentFont::new(bytes).ok()),
+                    _ => None,
+                })
+            });
             let mut t = AddedText {
                 rect,
                 text,
                 family,
+                font,
                 bold,
                 italic,
                 size: d.get(b"Size").and_then(Object::as_f64).unwrap_or(12.0),
@@ -179,13 +189,13 @@ fn validate(c: &Content) -> Result<(), EditError> {
             if (r[2] - r[0]).abs() < 1.0 {
                 return Err(EditError::Invalid("the text box is too narrow".into()));
             }
-            if t.text.chars().any(is_thai) && pdfcraft_fonts::document_thai_font().is_none() {
+            if t.font.is_none() && t.text.chars().any(is_thai) && pdfcraft_fonts::document_thai_font().is_none() {
                 return Err(thai_error(GlyphError::NoFont, &t.text));
             }
             // Without the Arabic face, `draw` decides for the Arabic letters themselves (#403): a new
             // item is refused with what's missing, and one that already holds Arabic stays movable.
             // Everything else in it is drawn in the standard font, so it still has to fit.
-            let undrawable = if t.text.chars().any(shaped_arabic) && pdfcraft_fonts::document_arabic_font().is_none() {
+            let undrawable = if t.font.is_none() && t.text.chars().any(shaped_arabic) && pdfcraft_fonts::document_arabic_font().is_none() {
                 t.text.split('\n').find_map(|line| {
                     line.chars()
                         .find(|c| !(shaped_arabic(*c) || is_thai(*c) && pdfcraft_fonts::thai_has(*c) || pdfcraft_fonts::win_ansi_encodable(*c)))
@@ -235,7 +245,7 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
     doc.update_dict(p.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(pres)))?;
     let mut sd = Dict::new();
     sd.set(b"PCMark".to_vec(), Object::name(TAG));
-    let mut added = params(c);
+    let mut added = params(doc, c);
     if user_unit != 1.0 {
         added.set(b"UserUnit".to_vec(), Object::Real(user_unit));
     }
@@ -336,8 +346,11 @@ fn own_fonts(doc: &Document, obj: ObjRef) -> Vec<Vec<u8>> {
     let limit = pdfcraft_cos::MAX_PAGE_DECODED.max(s.raw.len().saturating_mul(16));
     let Ok(data) = s.decoded_within(limit) else { return Vec::new() };
     // Each name once: a stream that repeats a name is not copied out once per use.
-    let names: std::collections::BTreeSet<&[u8]> =
-        data.split(u8::is_ascii_whitespace).filter_map(|w| w.strip_prefix(b"/")).filter(|w| w.starts_with(b"PCAr")).collect();
+    let names: std::collections::BTreeSet<&[u8]> = data
+        .split(u8::is_ascii_whitespace)
+        .filter_map(|w| w.strip_prefix(b"/"))
+        .filter(|w| w.starts_with(b"PCAr") || w.starts_with(b"PCCu"))
+        .collect();
     names.into_iter().map(<[u8]>::to_vec).collect()
 }
 

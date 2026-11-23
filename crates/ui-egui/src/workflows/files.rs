@@ -4,6 +4,7 @@
 //! (a blocking picker crashes the app on macOS), browsers through `requests`.
 
 use crate::file_filter::AddFilterAnyCase as _;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use pdfcraft_engine::{DocId, Edit, SplitBy};
@@ -14,6 +15,10 @@ use crate::PdfCraftApp;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FilePurpose {
     TextFont {
+        page: usize,
+    },
+    /// A font for the added text box being typed on `page`.
+    AddedTextFont {
         page: usize,
     },
     Combine,
@@ -90,10 +95,89 @@ pub(crate) fn installed_font_files(ctx: &egui::Context, reload: bool) -> Option<
     files.lock().ok().and_then(|f| f.files.clone())
 }
 
+/// Where fonts the user added are kept. Portable mode keeps them beside the app, so a portable
+/// install carries its fonts; otherwise the platform's per-user data folder holds them.
+pub(crate) fn user_font_dir() -> Option<PathBuf> {
+    if let Some(dir) = crate::portable::data_dir() {
+        return Some(dir.join("fonts"));
+    }
+    #[cfg(windows)]
+    {
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from).map(|d| d.join("PdfCraft").join("fonts"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::env::var_os("HOME").map(PathBuf::from).map(|d| d.join("Library/Application Support/PdfCraft/fonts"))
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(PathBuf::from).map(|d| d.join(".local/share")))
+            .map(|d| d.join("pdfcraft/fonts"))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
+}
+
+/// Discover the faces the user added, off the GUI thread like the system scan.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn user_font_files(ctx: &egui::Context, reload: bool) -> Option<Vec<pdfcraft_engine::text_fonts::FontFile>> {
+    use std::sync::{Mutex, OnceLock};
+    type Files = Arc<Mutex<FontScanCache>>;
+    static CACHE: OnceLock<Files> = OnceLock::new();
+    let files = CACHE.get_or_init(|| Arc::new(Mutex::new(FontScanCache::default())));
+    let start = files.lock().is_ok_and(|mut state| state.begin(reload));
+    if start {
+        let result = files.clone();
+        let ctx = ctx.clone();
+        if std::thread::Builder::new()
+            .name("user-font-discovery".into())
+            .spawn(move || {
+                let roots: Vec<PathBuf> = user_font_dir().into_iter().collect();
+                let fonts = discover_fonts_safely(move || pdfcraft_engine::text_fonts::discover(&roots));
+                if let Ok(mut result) = result.lock() {
+                    result.finish(fonts);
+                }
+                ctx.request_repaint();
+            })
+            .is_err()
+            && let Ok(mut result) = files.lock()
+        {
+            result.finish(Vec::new());
+        }
+    }
+    files.lock().ok().and_then(|f| f.files.clone())
+}
+
+/// Validate a chosen font and keep a copy in [`user_font_dir`], so the "Your fonts" list offers
+/// it next launch. Returns the stored path; a font already stored under the same name is replaced
+/// with the same bytes.
+pub(crate) fn save_user_font(bytes: &[u8]) -> Result<PathBuf, String> {
+    let font = pdfcraft_fonts::DocumentFont::new(bytes.to_vec())?;
+    let dir = user_font_dir().ok_or("no writable folder for added fonts")?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("couldn't create the font folder: {e}"))?;
+    let stem: String = format!("{}-{}", font.family(), font.face())
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let stem = if stem.is_empty() { format!("font-{:016x}", font.key()) } else { stem };
+    let path = dir.join(format!("{stem}-{:08x}.ttf", font.key() as u32));
+    std::fs::write(&path, font.bytes()).map_err(|e| format!("couldn't save the font: {e}"))?;
+    Ok(path)
+}
+
+/// Read a font file the user picked for a text box. The bytes are validated as document input.
+pub(crate) fn load_user_font(path: &Path) -> Result<pdfcraft_fonts::DocumentFont, String> {
+    pdfcraft_fonts::DocumentFont::from_path(path)
+}
+
 /// The picker for `purpose`: PDFs, and for Create and Insert also what they convert.
 fn files_picker(purpose: FilePurpose) -> rfd::AsyncFileDialog {
     let dialog = rfd::AsyncFileDialog::new();
-    if matches!(purpose, FilePurpose::TextFont { .. }) {
+    if matches!(purpose, FilePurpose::TextFont { .. } | FilePurpose::AddedTextFont { .. }) {
         return dialog.add_filter_any_case("TrueType / OpenType font", &["ttf", "otf"]);
     }
     if purpose == FilePurpose::RedactWords {
@@ -128,7 +212,7 @@ pub struct ReplaceDraft {
 impl FilePurpose {
     /// Insert and Replace edit the active document, at its selection.
     pub(crate) fn edits_active_document(self) -> bool {
-        matches!(self, Self::InsertPages | Self::ReplacePages | Self::TextFont { .. })
+        matches!(self, Self::InsertPages | Self::ReplacePages | Self::TextFont { .. } | Self::AddedTextFont { .. })
     }
 }
 
@@ -423,7 +507,7 @@ impl PdfCraftApp {
                 self.notify_fmt("{name} is too large for a word list (at most 1 MB).", &[("name", &name)]);
                 return;
             }
-            let read = if matches!(purpose, FilePurpose::TextFont { .. }) {
+            let read = if matches!(purpose, FilePurpose::TextFont { .. } | FilePurpose::AddedTextFont { .. }) {
                 use std::io::Read;
                 std::fs::File::open(p).and_then(|f| {
                     let mut bytes = Vec::new();
@@ -583,6 +667,55 @@ impl PdfCraftApp {
                     ed.fonts = crate::edit_text_ui::install_source_fonts(&ctx, doc, page);
                     self.views[index].line_editor = Some(ed);
                 }
+                if bytes.as_slice() != pdfcraft_fonts::INTER_REGULAR {
+                    let _ = save_user_font(bytes.as_slice());
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(ctx) = &self.ctx {
+                        let _ = user_font_files(ctx, true);
+                    }
+                }
+            }
+            FilePurpose::AddedTextFont { page } => {
+                let Some((_, bytes)) = files.into_iter().next() else { return };
+                let font = match pdfcraft_fonts::DocumentFont::new(bytes.clone()) {
+                    Ok(font) => font,
+                    Err(e) => {
+                        self.notify_fmt("That font can't be used: {e}", &[("e", &e)]);
+                        return;
+                    }
+                };
+                let _ = save_user_font(bytes.as_slice());
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(ctx) = &self.ctx {
+                    let _ = user_font_files(ctx, true);
+                }
+                let Some((index, id)) = self.active_ids() else { return };
+                let editing = if let Some(draft) = self.views[index].content.draft.as_mut().filter(|d| d.page == page) {
+                    draft.style.font = Some(font.clone());
+                    draft.focus = true;
+                    true
+                } else {
+                    false
+                };
+                // With no open box, the chosen file applies to the selected text box.
+                if !editing && let Some((selected_page, selected)) = self.views[index].content.selected {
+                    let text = self.session.get(id).and_then(|doc| {
+                        let item = doc.added().iter().filter(|a| a.page == selected_page).nth(selected)?;
+                        match &item.content {
+                            pdfcraft_engine::AddedContent::Text(text) => Some(text.clone()),
+                            _ => None,
+                        }
+                    });
+                    if let Some(mut text) = text {
+                        text.font = Some(font.clone());
+                        let _ = self.apply_edit(Edit::UpdateContent {
+                            page: selected_page,
+                            index: selected,
+                            content: pdfcraft_engine::AddedContent::Text(text),
+                        });
+                    }
+                }
+                self.text_style.font = Some(font);
             }
             FilePurpose::Combine => self.stage_combine(files),
             FilePurpose::InsertPages => self.insert_files(files),

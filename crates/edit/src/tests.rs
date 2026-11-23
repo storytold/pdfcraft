@@ -1666,6 +1666,67 @@ fn added_hebrew_text_is_drawn_right_to_left_and_stays_searchable() {
 }
 
 #[test]
+fn added_cyrillic_and_greek_text_use_the_bundled_face_and_stay_searchable() {
+    let mut doc = fixture();
+    let text =
+        AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "Привет, Γειά σου — café".into(), size: 14.0, ..AddedText::default() };
+    assert_eq!(first_undrawable(&text), None, "the bundled Inter face draws Cyrillic and Greek");
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    let doc = reopen(&doc);
+    let stored = Content::Text(AddedText { rect: super::added::text_rect(&text), ..text.clone() });
+    assert_eq!(list_added(&doc)[0].content, stored);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap()).as_dict().unwrap().clone();
+    let shaped: Vec<_> = fonts.iter().filter(|(k, _)| k.starts_with(b"PCAr")).map(|(_, v)| doc.resolve(v).as_dict().unwrap().clone()).collect();
+    assert!(!shaped.is_empty(), "the Cyrillic and Greek letters are drawn from Type 3 fonts");
+    let mut mapped = String::new();
+    for f in &shaped {
+        assert_eq!(f.name(b"Subtype"), Some(&b"Type3"[..]));
+        mapped += &String::from_utf8_lossy(&stream_bytes(&doc, f.get(b"ToUnicode").unwrap()).unwrap());
+    }
+    for letter in ["041F", "0440", "0438", "0432", "0435", "0393", "03B5", "03B9"] {
+        assert!(mapped.contains(&format!("<{letter}>")), "{letter} in {mapped}");
+    }
+    let logical: String = text.text.encode_utf16().map(|u| format!("{u:04X}")).collect();
+    let item = streams(&doc, 0).into_iter().find(|s| s.contains(&format!("/ActualText <FEFF{logical}>")));
+    assert!(item.is_some(), "copying gets the typed text back");
+}
+
+#[test]
+fn added_text_in_a_chosen_full_face_keeps_that_face_after_reopen() {
+    let font = pdfcraft_fonts::DocumentFont::new(include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec())
+        .expect("the bundled Inter face is an open-licensed document font");
+    let text = AddedText {
+        rect: [72.0, 600.0, 400.0, 700.0],
+        text: "Привет, мир — Γειά".into(),
+        font: Some(font.clone()),
+        size: 14.0,
+        ..AddedText::default()
+    };
+    assert_eq!(first_undrawable(&text), None, "the chosen face draws every character");
+    let mut doc = fixture();
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    let doc = reopen(&doc);
+    let Content::Text(restored) = &list_added(&doc)[0].content else { panic!() };
+    assert_eq!(restored.font.as_ref(), Some(&font), "the full program is saved beside the item");
+    assert_eq!(restored.text, text.text);
+    let item = streams(&doc, 0).into_iter().find(|s| s.contains("/ActualText")).expect("the item draws its text");
+    assert!(item.contains("/PCAr"), "the chosen face is drawn from Type 3 glyphs: {item}");
+    let p = &pdfcraft_model::pages(&doc)[0];
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap()).as_dict().unwrap().clone();
+    let shaped: Vec<_> = fonts.iter().filter(|(k, _)| k.starts_with(b"PCAr")).map(|(_, v)| doc.resolve(v).as_dict().unwrap().clone()).collect();
+    let mut mapped = String::new();
+    for f in &shaped {
+        mapped += &String::from_utf8_lossy(&stream_bytes(&doc, f.get(b"ToUnicode").unwrap()).unwrap());
+    }
+    for letter in ["041F", "0440", "0438", "0432", "0435"] {
+        assert!(mapped.contains(letter), "{letter} in {mapped}");
+    }
+}
+
+#[test]
 fn odd_hebrew_text_never_panics() {
     let mut doc = fixture();
     let long = "שלום עולם ".repeat(2_000);

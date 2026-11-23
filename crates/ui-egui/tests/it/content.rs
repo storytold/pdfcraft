@@ -73,7 +73,7 @@ fn texts(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
 }
 
 #[test]
-fn text_tool_drafts_grow_for_latin_and_arabic() {
+fn text_tool_drafts_grow_for_new_latin_and_arabic() {
     let _gpu = gpu();
     for text in ["Wide words ".repeat(8), "سلام عليكم ".repeat(8)] {
         let mut h = harness();
@@ -85,7 +85,7 @@ fn text_tool_drafts_grow_for_latin_and_arabic() {
         h.event(egui::Event::Text(text.clone()));
         h.run_steps(4);
         let draft = h.state().views[0].content.draft.as_ref().unwrap();
-        assert!(draft.rect[2] - draft.rect[0] > before[2] - before[0] + 10.0, "the editor grows before wrapping: {}", text);
+        assert!(draft.rect[2] - draft.rect[0] > before[2] - before[0] + 10.0, "a new box grows before wrapping: {}", text);
         assert!(draft.rect[2] <= 300.0 && draft.rect[1] < before[1], "the frame stays on the page and grows vertically");
         if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
             let language = if text.starts_with("Wide") { "latin" } else { "arabic" };
@@ -102,6 +102,56 @@ fn text_tool_drafts_grow_for_latin_and_arabic() {
         assert_eq!(saved.text, text.trim_end());
         assert!(saved.rect[2] - saved.rect[0] > before[2] - before[0] + 10.0, "Save uses the grown width");
     }
+}
+
+#[test]
+fn retyping_an_existing_text_box_keeps_its_width() {
+    let _gpu = gpu();
+    let mut h = harness();
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText {
+        page: 0,
+        text: pdfcraft_engine::AddedText { rect: [40.0, 195.0, 240.0, 210.0], text: "Original".into(), ..Default::default() },
+    }));
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    // The box's centre, in page screen coordinates (the test page is 300 x 400).
+    let point = at(&h, 140.0, 400.0 - 202.5);
+    click(&mut h, point);
+    let before = h.state().views[0].content.draft.as_ref().expect("the box opens for retyping").rect;
+    let replacement = "A much longer replacement line that keeps the same box width";
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text(replacement.into()));
+    h.run_steps(4);
+    let draft = h.state().views[0].content.draft.as_ref().unwrap();
+    assert!((draft.rect[2] - draft.rect[0] - (before[2] - before[0])).abs() < 0.01, "retyping keeps the box width");
+    h.get_by_label("Done adding text").click();
+    h.run_steps(3);
+    let pdfcraft_engine::AddedContent::Text(saved) = &added(&h)[0].content else { panic!() };
+    assert_eq!(saved.text, replacement);
+    assert!((saved.rect[2] - saved.rect[0] - (before[2] - before[0])).abs() < 0.01, "the saved box keeps its width");
+}
+
+#[test]
+fn a_new_text_box_takes_russian_and_saves_it() {
+    let _gpu = gpu();
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    let point = at(&h, 40.0, 300.0);
+    click(&mut h, point);
+    h.event(egui::Event::Text("Привет, мир".into()));
+    h.run_steps(4);
+    let draft = h.state().views[0].content.draft.as_ref().expect("the box stays open");
+    assert!(draft.rect[2] > draft.rect[0], "the box is still on the page");
+    assert!(draft.style.font.is_none(), "the bundled fallback draws it without a chosen file");
+    h.get_by_label("Done adding text").click();
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["Привет, мир"]);
+    let saved = added(&h).into_iter().find_map(|a| match a.content {
+        pdfcraft_engine::AddedContent::Text(t) => Some(t),
+        _ => None,
+    });
+    assert!(saved.is_some_and(|t| t.text == "Привет, мир"));
 }
 
 #[test]

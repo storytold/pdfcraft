@@ -34,6 +34,38 @@ pub(crate) fn editor_font(look: &pdfcraft_engine::AddedText, size: f32) -> FontI
     FontId::new(size, family)
 }
 
+/// The editor's font for `look`: the full face the user chose when there is one, else the
+/// interface face. A chosen program is registered in egui's atlas for the next pass; until then
+/// the fallback face is used, and the caller repaints.
+pub(crate) fn editor_font_for(ctx: &egui::Context, look: &pdfcraft_engine::AddedText, size: f32) -> FontId {
+    match look.font.as_ref().and_then(|font| install_custom_font(ctx, font)) {
+        Some(name) => FontId::new(size, FontFamily::Name(name.into())),
+        None => editor_font(look, size),
+    }
+}
+
+/// Register a chosen full face in egui's atlas under a name of its content key. Only the face the
+/// open box is drawn with stays installed, so opening many boxes never accumulates programs.
+fn install_custom_font(ctx: &egui::Context, font: &pdfcraft_fonts::DocumentFont) -> Option<String> {
+    let name = format!("pdf-added-{:016x}", font.key());
+    let family = FontFamily::Name(name.clone().into());
+    if ctx.fonts(|f| f.definitions().families.contains_key(&family)) {
+        return Some(name);
+    }
+    let mut definitions = ctx.fonts(|f| f.definitions().clone());
+    definitions.font_data.retain(|key, _| !key.starts_with("pdf-added-"));
+    definitions.families.retain(|family, _| !matches!(family, FontFamily::Name(key) if key.starts_with("pdf-added-")));
+    definitions.font_data.insert(name.clone(), Arc::new(egui::FontData::from_owned(font.bytes().to_vec())));
+    let mut stack = vec![name.clone()];
+    if let Some(fallback) = definitions.families.get(&FontFamily::Proportional) {
+        stack.extend(fallback.iter().cloned());
+    }
+    definitions.families.insert(FontFamily::Name(name.clone().into()), stack);
+    ctx.set_fonts(definitions);
+    ctx.request_repaint();
+    Some(name)
+}
+
 pub(super) fn color32(color: [f64; 3]) -> Color32 {
     Color32::from_rgb(
         (color[0].clamp(0.0, 1.0) * 255.0).round() as u8,

@@ -1,15 +1,16 @@
 //! pdfcraft-fonts — font metrics and encodings for generated appearances (L2).
 //!
-//! Standard-14 advance widths are exact (`Std14`, ISO 32000-2 Annex D). What remains approximate
-//! is everything that needs a font *program*: this crate reads font dictionaries, never embedded
-//! programs, so it has no glyph outlines for document fonts and cannot subset or re-embed. That
-//! is phase F 4.2 in docs/plan/execution-plan.md.
+//! Standard-14 advance widths are exact (`Std14`, ISO 32000-2 Annex D). Explicitly selected,
+//! openly licensed font programs are validated and embeddable through [`embedding`]; a full face
+//! whose outlines are only needed for one added text item is kept by [`DocumentFont`] and drawn as
+//! Type 3 glyphs. The standard-14 metrics remain the fallback for text written without one.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(test)]
 mod cjk_scripts;
 mod craft;
+pub mod document_font;
 pub mod embedding;
 pub mod fallback;
 pub mod pdf;
@@ -26,6 +27,7 @@ pub use craft::{
 pub use craft_pdf::fonts::{
     Std14, Std14Match, UnicodeCMap, encodings, first_non_win_ansi, fits_win_ansi, win_ansi, win_ansi_byte, win_ansi_char, win_ansi_encodable,
 };
+pub use document_font::{DocumentFont, MAX_BYTES as MAX_DOCUMENT_FONT_BYTES};
 pub use plan::{MAX_PLAN_GLYPHS, MAX_TYPE3_GLYPHS, PlannedType3, TextPlan};
 pub use script::{
     GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, craft_glyph, face_has, japanese_glyph, japanese_glyph_from,

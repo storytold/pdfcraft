@@ -35,16 +35,22 @@ only the rows it covers. Changing the whole paragraph's formatting, width or pos
 every row.
 
 Add Text also opens existing text when it is clicked; a blank-space click starts a new item.
-Both text tools retype an added text item with one click. Draft boxes grow to the page edge
-before wrapping, and the saved item uses that width. A single visual source row grows across font/style boundaries;
+Both text tools retype an added text item with one click. A new draft box grows rightwards until
+the page edge before wrapping; retyping an item that already exists keeps the width it was given
+and wraps inside it, so opening it again never makes the frame jump wider. A single visual source
+row grows across font/style boundaries;
 multi-row paragraphs retain their existing wrap width. Retyping uses a preview with only
 that added item's old drawing removed, so deleted draft characters do not show underneath.
 
 A subset font contains only some of the original face's glyphs. A new character cannot be
-reconstructed from a glyph the PDF does not contain. **Load font…** imports an openly licensed,
-embeddable standalone `.ttf` or `.otf` face. **Installed fonts…** discovers eligible user-installed
-faces on request, off the UI thread; the document-font menu selects resources already on the
-page. Select **Keep source fonts** to preserve each run's original face. A matching full face
+reconstructed from a glyph the PDF does not contain. The font list groups **Built-in** (the
+standard families and the bundled Inter face, which draws Cyrillic and Greek), **System fonts**
+(openly licensed, embeddable faces found in the system's font folders, scanned at startup off the
+UI thread) and **Your fonts** (faces added in the app, kept in its own font folder for the next
+launch). **Add font file…** imports an openly licensed, embeddable standalone `.ttf` or `.otf`
+face. A newly typed text box can use any of them; the chosen program is written beside the item,
+so saving and reopening needs no installed font. The document-font menu also selects resources
+already on the page. Select **Keep source fonts** to preserve each run's original face. A matching full face
 completes its subsets automatically, including new Chinese characters. When the PDF itself embeds
 the complete program of a paragraph's font (not a subset) and its licence allows editable
 embedding, a character the font's encoding can't show is drawn with that same program. A

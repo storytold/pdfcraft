@@ -6,6 +6,7 @@ use super::{
     Content, Dict, Document, EditError, GlyphError, GlyphOutline, Object, PdfString, ShapedScript, align_code, literal, matrix_number, n,
     shaped_glyph, win_ansi,
 };
+use pdfcraft_cos::Stream;
 use pdfcraft_fonts::shaped_text::{self, ShapedFonts};
 
 fn font_name(base: &str) -> String {
@@ -37,15 +38,47 @@ fn placed(t: &AddedText, r: [f64; 4], paragraphs: &[usize], i: usize, w: f64, sp
     (x, tw)
 }
 
-/// Draw a text item that has Arabic, Hebrew or Thai in it. Each line is laid out in display order; their glyphs
-/// come from Type 3 fonts drawn from the craft-fonts face's outlines (no font file is embedded),
-/// with a ToUnicode map for copy and search. Other text uses the item's standard font.
+/// Draw a text item that has Arabic, Hebrew, Thai, or Cyrillic/Greek letters the standard fonts
+/// lack. Each line is laid out in display order; their glyphs come from Type 3 fonts drawn from
+/// the craft-fonts or bundled faces' outlines (no font file is embedded), with a ToUnicode map for
+/// copy and search. Other text uses the item's standard font.
 fn draw_shaped(doc: &mut Document, t: &AddedText, taken: &Dict, fonts: &mut Dict, out: &mut Vec<u8>) -> Result<(), EditError> {
     let laid = wrapped(t)
         .into_iter()
         .map(|(line, rtl, paragraph)| shaped_layout(t, &line, rtl).map(|(pieces, w)| (line, rtl, paragraph, pieces, w)))
         .collect::<Result<Vec<_>, _>>()?;
     draw_laid_shaped(doc, t, &laid, taken, fonts, out, shaped_glyph)
+}
+
+/// Draw a text item in a full face the user chose: each line is shaped by that program and its
+/// glyphs become one Type 3 glyph (the line's outline), with the line's text in `/ToUnicode` and
+/// `/ActualText`. The face owns the whole item, so no standard font is mixed in.
+fn draw_custom(doc: &mut Document, t: &AddedText, taken: &Dict, fonts: &mut Dict, out: &mut Vec<u8>) -> Result<(), EditError> {
+    let Some(font) = &t.font else {
+        return Err(EditError::Invalid("no chosen font".into()));
+    };
+    let bytes = font.bytes();
+    let family = font.family().to_owned();
+    let laid = wrapped(t)
+        .into_iter()
+        .map(|(line, rtl, paragraph)| {
+            if line.is_empty() {
+                return Ok((line, rtl, paragraph, Vec::<Piece>::new(), 0.0));
+            }
+            let run = pdfcraft_fonts::source_shaping::shape(bytes, &line)
+                .map_err(|e| EditError::Invalid(format!("{family} can't show \"{line}\": {e}")))?;
+            let glyphs: Vec<_> = run.glyphs.iter().map(|g| (g.id.to_u32(), g.position)).collect();
+            let count = line.chars().count();
+            // `ShapedFonts::show` adds one character spacing after each cluster; this line is one
+            // cluster, so carry the other `count - 1` gaps in its advance.
+            let extra = if count > 0 { t.char_spacing * (count - 1) as f64 / t.size.max(0.01) } else { 0.0 };
+            let clusters =
+                vec![pdfcraft_fonts::ShapedCluster { script: ShapedScript::Custom, glyphs, advance: run.advance + extra, text: line.clone() }];
+            let width = run.advance * t.size + t.char_spacing * count as f64;
+            Ok((line, rtl, paragraph, vec![Piece::Shaped(clusters)], width))
+        })
+        .collect::<Result<Vec<_>, EditError>>()?;
+    draw_laid_shaped(doc, t, &laid, taken, fonts, out, |_, id| pdfcraft_fonts::face_glyph(bytes, id))
 }
 
 /// [`draw_shaped`] for lines that are already laid out. `outline` is the source of glyph outlines
@@ -70,6 +103,7 @@ pub(super) fn draw_laid_shaped(
             ShapedScript::Hebrew => hebrew_error(e, &c.text),
             ShapedScript::Thai => thai_error(e, &c.text),
             ShapedScript::Latin => EditError::Invalid(pdfcraft_fonts::shaped_text::latin_message(e, &c.text)),
+            ShapedScript::Custom => EditError::Invalid(format!("the chosen font can't show \"{}\"", c.text)),
         })?;
     out.extend(format!("BT {}\n", t.fill_op()).bytes());
     if t.char_spacing != 0.0 {
@@ -121,6 +155,13 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
     )
     .into_bytes();
     match c {
+        Content::Text(t) if t.font.is_some() => {
+            let mut fonts = Dict::new();
+            draw_custom(doc, t, taken, &mut fonts, &mut out)?;
+            res.set(b"Font".to_vec(), Object::Dict(fonts));
+            out.extend_from_slice(b"Q\n");
+            return Ok((out, res));
+        }
         Content::Text(t) => {
             let base = t.family.base_font(t.bold, t.italic);
             let name = font_name(base);
@@ -137,6 +178,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
             if t.text.chars().any(is_thai)
                 || face_or_new(is_arabic, pdfcraft_fonts::document_arabic_font().is_some())
                 || face_or_new(is_hebrew, pdfcraft_fonts::document_hebrew_font(false).is_some())
+                || t.text.chars().any(pdfcraft_fonts::shaped_text::latin_fallback)
             {
                 draw_shaped(doc, t, taken, &mut fonts, &mut out)?;
                 res.set(b"Font".to_vec(), Object::Dict(fonts));
@@ -196,7 +238,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
     Ok((out, res))
 }
 
-pub(super) fn params(c: &Content) -> Dict {
+pub(super) fn params(doc: &mut Document, c: &Content) -> Dict {
     let mut d = Dict::new();
     let arr = |v: &[f64]| Object::Array(v.iter().map(|x| Object::Real(*x)).collect());
     match c {
@@ -204,6 +246,13 @@ pub(super) fn params(c: &Content) -> Dict {
             d.set(b"Kind".to_vec(), Object::name("Text"));
             d.set(b"Text".to_vec(), PdfString::text(&t.text));
             d.set(b"Font".to_vec(), Object::name(t.family.base_font(t.bold, t.italic)));
+            // The full program a user chose, so reopening keeps the same face for editing. It is
+            // only written for items that have one; standard-font items stay small.
+            if let Some(font) = &t.font {
+                d.set(b"FontFamily".to_vec(), Object::String(PdfString::text(font.family())));
+                let stream = Stream::flate(Dict::new(), font.bytes());
+                d.set(b"FontData".to_vec(), Object::Ref(doc.add(Object::Stream(stream))));
+            }
             d.set(b"Size".to_vec(), Object::Real(t.size));
             d.set(b"Color".to_vec(), arr(&t.color));
             // The ink beside its RGB look, which a reader that knows no ink keeps showing.

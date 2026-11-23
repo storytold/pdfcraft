@@ -494,6 +494,8 @@ pub struct PdfCraftApp {
     /// Preferences: web and email addresses written as plain page text open on a click, like
     /// links (#4207).
     pub text_links: bool,
+    /// The startup scan for installed document fonts has been started (it runs off the UI thread).
+    font_scan_started: bool,
     /// Preferences: open every document at Default zoom and Default page display, whatever
     /// layout or zoom it asks for (#1618).
     pub always_default_view: bool,
