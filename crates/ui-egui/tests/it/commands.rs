@@ -282,6 +282,7 @@ fn shortcuts_run_registered_commands() {
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Read);
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn ctrl_m_opens_the_comments_panel_and_keeps_it_open() {
     for os in [OperatingSystem::Windows, OperatingSystem::Nix] {
@@ -332,6 +333,103 @@ fn mac_command_m_stays_available_for_minimize() {
     h.get_by_label("⌘S"); // Positive control: the macOS shortcut rows really rendered.
     assert!(h.query_by_label("⌘M").is_none());
     assert!(h.query_by_label("Comments panel").is_none(), "an unbound command has no shortcuts-help row");
+}
+
+/// A macOS harness with "Match Command shortcuts by key position" chosen or not.
+fn mac_harness(match_by_position: bool) -> Harness<'static, PdfCraftApp> {
+    let mut h = harness();
+    h.ctx.set_os(OperatingSystem::Mac);
+    h.state_mut().dvorak_qwerty_command = match_by_position;
+    h.run_steps(2);
+    h
+}
+
+/// Command with the physical V key on the Dvorak-QWERTY layout: it reports logical K.
+fn dvorak_command_v(h: &mut Harness<'static, PdfCraftApp>) {
+    h.event(egui::Event::Key { key: Key::K, physical_key: Some(Key::V), pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
+}
+
+#[test]
+fn dvorak_command_k_opens_palette_by_default() {
+    // Ordinary macOS Dvorak sends the same pair: its Cmd+K keeps the logical shortcut.
+    let mut h = mac_harness(false);
+    dvorak_command_v(&mut h);
+    h.run_steps(2);
+    assert!(h.state().palette_open, "without the preference, Cmd+K opens the palette");
+}
+
+#[test]
+fn dvorak_command_v_does_not_open_palette() {
+    // With the preference on, physical Cmd+V (logical K) is paste, not Cmd+K.
+    let mut h = mac_harness(true);
+    dvorak_command_v(&mut h);
+    // The paste asks for the clipboard on a later pass, as Edit ▸ Paste does.
+    let mut asked = false;
+    for _ in 0..4 {
+        h.step();
+        asked |= support::asked_for_the_clipboard(&h);
+    }
+    assert!(asked, "physical Cmd+V runs paste, which asks for the clipboard");
+    assert!(!h.state().palette_open, "physical Cmd+V must not open the Cmd+K palette");
+}
+
+#[test]
+fn dvorak_preference_is_ignored_off_macos() {
+    // Other platforms keep the logical key, whatever the preference says.
+    let mut h = harness();
+    h.ctx.set_os(OperatingSystem::Nix);
+    h.state_mut().dvorak_qwerty_command = true;
+    h.run_steps(2);
+    dvorak_command_v(&mut h);
+    h.run_steps(2);
+    assert!(h.state().palette_open, "off macOS, Ctrl+K (logical K) opens the palette");
+}
+
+#[test]
+fn dvorak_preference_leaves_a_press_without_command_alone() {
+    // Typing K on Dvorak is physical V with no Command: it must not paste or open anything.
+    let mut h = mac_harness(true);
+    h.event(egui::Event::Key { key: Key::K, physical_key: Some(Key::V), pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    let mut asked = false;
+    for _ in 0..4 {
+        h.step();
+        asked |= support::asked_for_the_clipboard(&h);
+    }
+    assert!(!asked, "a press without Command never asks for the clipboard");
+    assert!(!h.state().palette_open);
+}
+
+/// Undo a page rotation with Ctrl+Z (Command on Windows and Linux) pressed on a layout whose
+/// logical Z sits on another physical key. Those layouts keep their logical shortcuts.
+#[cfg(not(target_os = "macos"))]
+fn undo_rotation_pressed_on(physical: Key) -> Harness<'static, PdfCraftApp> {
+    let mut h = harness();
+    h.state_mut().run_command("page.rotate");
+    h.run_steps(3);
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().info.pages[0].rotation, 90);
+    h.event(egui::Event::Key { key: Key::Z, physical_key: Some(physical), pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
+    h.run_steps(3);
+    h
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn azerty_ctrl_z_still_undoes() {
+    // AZERTY puts Z on the physical W key.
+    let h = undo_rotation_pressed_on(Key::W);
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.info.pages[0].rotation, 0, "Ctrl+Z on AZERTY is undo");
+    assert_eq!(doc.can_undo(), None);
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn qwertz_ctrl_z_still_undoes() {
+    // QWERTZ puts Z on the physical Y key.
+    let h = undo_rotation_pressed_on(Key::Y);
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.info.pages[0].rotation, 0, "Ctrl+Z on QWERTZ is undo");
+    assert_eq!(doc.can_undo(), None);
 }
 
 #[test]
@@ -766,4 +864,24 @@ fn ctrl_tab_steps_through_the_tabs_in_order_and_wraps_around() {
     for doc in h.state().session.docs() {
         assert!(!doc.dirty, "switching tabs changes no document");
     }
+}
+
+#[test]
+fn macos_azerty_cmd_z_still_undoes() {
+    // With the preference on, physical Cmd+V (logical K) must not open the palette, and the
+    // AZERTY Cmd+Z after it keeps its logical key.
+    let mut h = mac_harness(true);
+    dvorak_command_v(&mut h);
+    h.run_steps(2);
+    assert!(!h.state().palette_open, "physical Cmd+V must not open the Cmd+K palette");
+
+    // AZERTY puts Z on the physical W key. Cmd+Z is still undo, not a remapped shortcut.
+    h.state_mut().run_command("page.rotate");
+    h.run_steps(3);
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().info.pages[0].rotation, 90);
+    h.event(egui::Event::Key { key: Key::Z, physical_key: Some(Key::W), pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
+    h.run_steps(3);
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.info.pages[0].rotation, 0, "Cmd+Z on AZERTY is undo");
+    assert_eq!(doc.can_undo(), None);
 }

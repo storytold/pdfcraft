@@ -491,6 +491,10 @@ pub struct PdfCraftApp {
     /// Preferences: tell the user, above the pages, that a document is secured (its security
     /// settings restrict changes). Off only hides that notice (#4035); kept in the settings.
     pub show_secured_notice: bool,
+    /// Preferences (macOS only, off by default): match Command shortcuts by physical key position,
+    /// for the "Dvorak - QWERTY ⌘" layout, where Command reports QWERTY letters. Off, shortcuts
+    /// follow the logical key, as on every platform.
+    pub dvorak_qwerty_command: bool,
     /// Preferences: web and email addresses written as plain page text open on a click, like
     /// links (#4207).
     pub text_links: bool,

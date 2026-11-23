@@ -860,6 +860,21 @@ impl PdfCraftApp {
         // suppress document shortcuts. Text editors retain their own undo/redo handling.
         let typing = ctx.text_edit_focused();
         let mac = mac_shortcuts(ctx);
+        // Paste is no registered command: the platform answers ⌘V with a paste only when the key's
+        // logical letter is V, and with the preference on this press arrives as logical K. So take
+        // the press, which ⌘K must not see, and ask for the clipboard as Edit ▸ Paste does.
+        if mac && self.dvorak_qwerty_command {
+            let taken = ctx.input_mut(|i| match dvorak_qwerty_command_press(&i.events, Modifiers::COMMAND, Some(Key::V)) {
+                Some((index, _)) => {
+                    i.events.remove(index);
+                    true
+                }
+                None => false,
+            });
+            if taken {
+                ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            }
+        }
         let mut specs: Vec<_> = COMMANDS.iter().filter_map(|c| c.shortcut_for(mac).map(|s| (c, s))).collect();
         specs.sort_by_key(|(_, s)| std::cmp::Reverse(s.modifier_count()));
         for (spec, s) in specs {
@@ -898,7 +913,22 @@ impl PdfCraftApp {
             if s.mac_ctrl {
                 m |= Modifiers::CTRL;
             }
-            if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, key))) {
+            // Only with the opt-in preference, on macOS, does a Command letter follow the physical key.
+            let qwerty_command = mac && m.command && self.dvorak_qwerty_command;
+            if ctx.input_mut(|i| {
+                // With the preference on, a Command press whose physical key is the Dvorak-QWERTY
+                // letter for its logical key (physical V, logical K) belongs to the physical key:
+                // that press runs the shortcut on the physical key and is consumed once, and the
+                // logical key's shortcut does not see it. Every other press consumes as usual.
+                match qwerty_command.then(|| dvorak_qwerty_command_press(&i.events, m, None)).flatten() {
+                    Some((index, physical)) if physical == key => {
+                        i.events.remove(index);
+                        true
+                    }
+                    Some(_) => false,
+                    None => i.consume_shortcut(&KeyboardShortcut::new(m, key)),
+                }
+            }) {
                 self.dispatch_command(ctx, spec.id);
             }
         }
@@ -933,6 +963,56 @@ fn altgr_pressed(input: &egui::InputState, key: egui::Key) -> bool {
         .events
         .iter()
         .any(|e| matches!(e, egui::Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.ctrl && modifiers.alt))
+}
+
+/// The first press in `events` with `command` held whose logical key is the Dvorak letter for its
+/// physical key (physical V, logical K): the index of that event and its physical key. With
+/// `only` given, just a press on that physical key counts. Only the opt-in "Match Command
+/// shortcuts by key position" preference looks for these.
+fn dvorak_qwerty_command_press(events: &[egui::Event], command: egui::Modifiers, only: Option<egui::Key>) -> Option<(usize, egui::Key)> {
+    events.iter().enumerate().find_map(|(index, event)| match event {
+        egui::Event::Key { key, physical_key: Some(physical), pressed: true, modifiers, .. }
+            if modifiers.matches_logically(command)
+                && physical != key
+                && only.is_none_or(|only| only == *physical)
+                && is_dvorak_qwerty_remap(*physical, *key) =>
+        {
+            Some((index, *physical))
+        }
+        _ => None,
+    })
+}
+
+/// On macOS with "Dvorak - QWERTY ⌘", holding Command should report QWERTY letters, but the
+/// system reports Dvorak letters instead. This identifies that specific remapping by checking
+/// whether `logical` is the Dvorak letter for physical `physical`. Other layouts (AZERTY,
+/// QWERTZ, …) keep their logical shortcuts because their logical key is not the Dvorak letter
+/// for the physical key. Ordinary Dvorak sends the same pair, so this only runs when the user
+/// has chosen the preference.
+fn is_dvorak_qwerty_remap(physical: egui::Key, logical: egui::Key) -> bool {
+    matches!(
+        (physical, logical),
+        (egui::Key::R, egui::Key::P)
+            | (egui::Key::T, egui::Key::Y)
+            | (egui::Key::Y, egui::Key::F)
+            | (egui::Key::U, egui::Key::G)
+            | (egui::Key::I, egui::Key::C)
+            | (egui::Key::O, egui::Key::R)
+            | (egui::Key::P, egui::Key::L)
+            | (egui::Key::S, egui::Key::O)
+            | (egui::Key::D, egui::Key::E)
+            | (egui::Key::F, egui::Key::U)
+            | (egui::Key::G, egui::Key::I)
+            | (egui::Key::H, egui::Key::D)
+            | (egui::Key::J, egui::Key::H)
+            | (egui::Key::K, egui::Key::T)
+            | (egui::Key::L, egui::Key::N)
+            | (egui::Key::X, egui::Key::Q)
+            | (egui::Key::C, egui::Key::J)
+            | (egui::Key::V, egui::Key::K)
+            | (egui::Key::B, egui::Key::X)
+            | (egui::Key::N, egui::Key::B)
+    )
 }
 
 /// The tab after `current` of `count` (before it when `forward` is false), wrapping around. From
