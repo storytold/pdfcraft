@@ -1030,3 +1030,29 @@ fn a_page_range_redaction_is_not_followed_up_as_a_selection() {
     assert_eq!(app.views[0].comments.selected, None, "no mark selected");
     assert!(app.views[0].comments.editing.is_none(), "no editor opened");
 }
+
+/// One-shot highlighting follows the current multi-page selection without entering a tool.
+#[test]
+fn highlight_selection_once_marks_every_page_in_one_undo_step() {
+    let mut h = three_pages();
+    let (from, to) = (glyph_on(&h, 0, 7), glyph_on(&h, 1, 10));
+    drag(&mut h, from, to);
+    let tool = h.state().quick_tool;
+    let panel = h.state().right;
+    assert!(h.state_mut().execute("comment.highlight_selection"));
+    h.run_steps(3);
+    let pages = |h: &Harness<'static, PdfCraftApp>| {
+        let app = h.state();
+        app.session.get(app.views[0].id).unwrap().info.annotations.iter().filter(|a| a.subtype == "Highlight").map(|a| a.page).collect::<Vec<_>>()
+    };
+    assert_eq!(pages(&h), [0, 1]);
+    assert_eq!(h.state().quick_tool, tool);
+    assert_eq!(h.state().right, panel);
+    assert!(h.state().views[0].selected_text().is_none());
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert!(pages(&h).is_empty(), "one undo removes both pages' highlights");
+    h.state_mut().redo();
+    h.run_steps(3);
+    assert_eq!(pages(&h), [0, 1]);
+}

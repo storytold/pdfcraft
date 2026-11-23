@@ -5985,3 +5985,77 @@ fn ctrl_selected_lines_nudge_together_and_undo() {
     h.run_steps(2);
     assert_eq!(comments(&h).iter().map(|a| a.rect).collect::<Vec<_>>(), before);
 }
+
+#[test]
+fn highlight_selection_once_preserves_the_tool_and_is_undoable() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+    for tool in [QuickTool::Select, QuickTool::Hand] {
+        let mut h = harness(move |app| {
+            app.comment_prefs.set_color(CommentTool::Highlight, [0.2, 0.6, 0.8]);
+            app.comment_prefs.set_opacity(CommentTool::Highlight, 0.45);
+        });
+        h.state_mut().quick_tool = tool;
+        assert!(!h.state_mut().execute("comment.highlight_selection"), "requires selected text");
+        assert_eq!(h.state().quick_tool, tool);
+        h.state_mut().views[0].select_text(0, 4, 8);
+        assert!(h.state_mut().execute("comment.highlight_selection"));
+        h.run_steps(2);
+        let c = comments(&h);
+        assert_eq!(c.len(), 1);
+        assert_eq!((c[0].subtype.as_str(), c[0].quads.len()), ("Highlight", 1));
+        assert_eq!(c[0].color, Some([0.2, 0.6, 0.8]));
+        let props = h.state().session.get(h.state().views[0].id).unwrap().comment_props(0, 0).unwrap();
+        assert!((props.opacity - 0.45).abs() < 1e-6);
+        assert_eq!(h.state().quick_tool, tool);
+        assert_eq!(h.state().right, None, "one-time highlighting does not open Comments");
+        assert!(!h.state_mut().execute("comment.highlight_selection"), "selection was consumed");
+        h.state_mut().undo();
+        h.run_steps(2);
+        assert!(comments(&h).is_empty());
+        h.state_mut().redo();
+        h.run_steps(2);
+        assert_eq!(comments(&h).len(), 1);
+        assert_eq!(h.state().quick_tool, tool);
+    }
+}
+
+#[test]
+fn highlight_selection_once_shortcut_keeps_select_active() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    h.state_mut().views[0].open_find();
+    h.run_steps(2);
+    let field = h.state().views[0].find_input_id();
+    h.ctx.memory_mut(|m| m.request_focus(field));
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::K);
+    h.run_steps(2);
+    assert!(comments(&h).is_empty(), "typing focus keeps the shortcut out of the document");
+    assert!(!h.state().palette_open, "the less-specific command-palette shortcut must not take it");
+    h.ctx.memory_mut(|m| m.surrender_focus(field));
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::K);
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), 1);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+}
+
+#[test]
+fn highlight_selection_once_respects_document_permissions() {
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(TEXT_FIXTURE.to_vec())).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: 0b0100,
+        encrypt_metadata: true,
+        seed: [5; 32],
+    })
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let mut h = harness_with_bytes(bytes, |_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    assert!(!h.state_mut().execute("comment.highlight_selection"));
+    assert!(comments(&h).is_empty());
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+}

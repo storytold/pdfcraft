@@ -191,3 +191,15 @@ to 16 and directory entries to 32,768. Cyclic includes are skipped.
   embeds a font that is not an `ATTRIBUTION.toml` entry.
 - The ArtCraft name, wordmark and logos in `docs/brand/` are trademarks of the ArtCraft Team, not open
   source (terms in `docs/brand/LICENSE-brand.txt`); they stay in PdfCraft, unmodified.
+
+## Highlight selected text once
+
+Edit > Highlight selected text (once), **Cmd+Shift+K** on macOS or **Ctrl+Shift+K** elsewhere,
+applies the current Highlight style to selected text without choosing the Highlight tool or
+opening the Comments panel. A selection across pages produces one undo step. The command is
+disabled until the selected pages' text is loaded and readable, and it respects annotation
+permissions. It leaves text-entry shortcuts to the focused field.
+
+The opt-in UI control channel exposes it as `ui.command` with id `comment.highlight_selection`.
+For scripts without a view selection, the existing `comment_add` automation tool can create a
+highlight by text search.
