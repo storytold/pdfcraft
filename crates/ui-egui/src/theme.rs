@@ -409,6 +409,12 @@ fn font_definitions_for_platform(prefer_hans: bool, platform: FontPolicyPlatform
         stack.extend(fallback.iter().cloned());
         fonts.families.insert(FontFamily::Name(fam.into()), stack);
     }
+    let mut math = fallback;
+    if let Some(ubuntu) = math.iter().position(|name| name == "Ubuntu-Light") {
+        let ubuntu = math.remove(ubuntu);
+        math.insert(0, ubuntu);
+    }
+    fonts.families.insert(FontFamily::Name("math".into()), math);
     fonts
 }
 
