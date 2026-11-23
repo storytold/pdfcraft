@@ -123,7 +123,9 @@ pub(crate) fn shared_catalog(mac: bool) -> Option<AppCatalog> {
 /// app's tracked states (`PdfCraftApp::command_states`) only when one changed, so the runtime reads them again only then.
 pub(crate) fn command_input(app: &mut PdfCraftApp, ctx: &egui::Context) -> CommandInput {
     let gated = menus::gated(app);
-    let mut input = CommandInput::new().gate(CommandGate::new(gated, |gated, _| !*gated));
+    // Edit ▸ Paste asks the platform for the clipboard in the pass the row is picked, as production's menu did, and
+    // reaches the app with what it holds, as ⌘V does.
+    let mut input = CommandInput::new().gate(CommandGate::new(gated, |gated, _| !*gated)).paste_reads_clipboard(true);
     if let Some(catalog) = shared_catalog(super::mac_shortcuts(ctx)) {
         input = input.catalog(catalog);
     }
