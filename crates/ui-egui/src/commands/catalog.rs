@@ -7,7 +7,8 @@ use std::sync::OnceLock;
 use craft::keymap::{Key, Mods};
 use craft::menu::Chord;
 use craft::ui::runtime::commands::{
-    AppCatalog, Binding, CommandDef, CommandDefError, CommandGate, CommandInput, CommandKind, CommandRef, CommandState, ModalRule, Scope,
+    AppCatalog, Binding, CommandDef, CommandDefError, CommandGate, CommandInput, CommandKind, CommandRef, CommandState, CommandStates, ModalRule,
+    Scope,
 };
 use pdfcraft_engine::commands::{self as engine, CommandSpec};
 
@@ -118,10 +119,11 @@ pub(crate) fn shared_catalog(mac: bool) -> Option<AppCatalog> {
     cell.get_or_init(|| catalog(mac).ok()).clone()
 }
 
-/// The command state for this frame: the gate, the catalog and a state row for every command.
-pub(crate) fn command_input(app: &PdfCraftApp, ctx: &egui::Context) -> CommandInput {
+/// The command state for this frame: the gate, the catalog and a state row for every command. The rows go into the
+/// app's tracked states (`PdfCraftApp::command_states`) only when one changed, so the runtime reads them again only then.
+pub(crate) fn command_input(app: &mut PdfCraftApp, ctx: &egui::Context) -> CommandInput {
     let gated = menus::gated(app);
-    let mut input = CommandInput::new().gate(CommandGate::new(move |_| !gated));
+    let mut input = CommandInput::new().gate(CommandGate::new(gated, |gated, _| !*gated));
     if let Some(catalog) = shared_catalog(super::mac_shortcuts(ctx)) {
         input = input.catalog(catalog);
     }
@@ -130,11 +132,15 @@ pub(crate) fn command_input(app: &PdfCraftApp, ctx: &egui::Context) -> CommandIn
     commands.extend((0..app.recent.len()).map(|index| CommandRef::with_params("file.open_recent", serde_json::json!({ "index": index }))));
     commands.extend((0..app.views.len()).map(|index| CommandRef::with_params(DOCUMENT, serde_json::json!({ "index": index }))));
     commands.extend(PANELS.iter().map(|(_, name, _)| CommandRef::with_params(PANEL, serde_json::json!({ "panel": name }))));
+    let mut states = CommandStates::new();
     for command in commands {
         let state = state_of(app, ctx, &command, gated);
-        input = input.state(command, state);
+        states.set(command, state);
     }
-    input
+    if *app.command_states != states {
+        *app.command_states = states;
+    }
+    input.states(&app.command_states)
 }
 
 fn state_of(app: &PdfCraftApp, ctx: &egui::Context, command: &CommandRef, gated: bool) -> CommandState {

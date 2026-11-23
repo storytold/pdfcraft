@@ -258,6 +258,7 @@ impl PdfCraftApp {
             panes: Default::default(),
             dock: std::sync::Arc::new(side_panels::default_workspace(craft::behavior::DockSide::End)),
             dock_specs: Default::default(),
+            command_states: Default::default(),
             rail_side: craft::behavior::DockSide::End,
             session: Session::new(),
             status_captions_lang: None,
