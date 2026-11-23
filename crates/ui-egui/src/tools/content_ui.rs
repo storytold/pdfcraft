@@ -777,6 +777,7 @@ pub(crate) fn editor(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, in
                     .hint_text(tl!("Type text"))
                     .id(input)
                     .show(ui);
+                crate::edit_text_ui::narrow_double_click(ui, input, &t.text, &output);
                 let resp = output.response;
                 if let Some(cursor) = output.cursor_range {
                     let chars = cursor.as_sorted_char_range();
