@@ -2792,6 +2792,220 @@ fn full_screen_shows_one_fitted_page_and_clicks_turn_it() {
     assert!(h.query_by_label("Select (V)").is_some(), "the quick tools are back");
 }
 
+fn full_screen_touch_harness() -> Harness<'static, PdfCraftApp> {
+    let mut h = harness(&[("layout", "continuous"), ("zoom", "50")]);
+    assert!(h.state_mut().execute("view.full_screen"));
+    h.run_steps(6);
+    assert!(h.state().full_screen);
+    assert!(h.query_by_label("Exit full screen").is_none(), "full screen is clear on entry");
+    h
+}
+
+fn full_screen_top_edge(h: &Harness<'static, PdfCraftApp>) -> egui::Pos2 {
+    let viewport = h.state().views[0].viewport_rect();
+    egui::pos2(viewport.center().x, viewport.top() + 2.0)
+}
+
+fn reveal_full_screen_touch_exit(h: &mut Harness<'static, PdfCraftApp>) -> egui::Pos2 {
+    let start = full_screen_top_edge(h);
+    crate::support::input::touch_drag(h, start, start + egui::vec2(0.0, 96.0));
+    h.query_by_role_and_label(egui::accesskit::Role::Button, "Exit full screen")
+        .expect("a top-edge touch swipe reveals an exit from full screen")
+        .rect()
+        .center()
+}
+
+#[test]
+fn a_touch_swipe_exposes_an_exit_from_full_screen() {
+    let mut h = full_screen_touch_harness();
+    let exit = reveal_full_screen_touch_exit(&mut h);
+    assert_eq!(h.state().views[0].current, 0, "the swipe does not turn the page");
+    crate::support::input::touch_tap(&mut h, exit);
+    assert!(!h.state().full_screen);
+    assert_eq!(h.state().views[0].current, 0, "tapping Exit does not turn the page");
+    assert!(h.state().views[0].continuous());
+    assert!((h.state().views[0].zoom - 0.5).abs() < 1e-3);
+    assert!(h.query_by_label("Exit full screen").is_none());
+}
+
+fn full_screen_touch_in_one_pass(h: &mut Harness<'static, PdfCraftApp>, start: egui::Pos2, end: egui::Pos2) {
+    let touch = |phase, pos| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos, force: None };
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    h.input_mut().events.extend([
+        touch(TouchPhase::Start, start),
+        egui::Event::PointerMoved(start),
+        button(start, true),
+        touch(TouchPhase::Move, end),
+        egui::Event::PointerMoved(end),
+        touch(TouchPhase::End, end),
+        button(end, false),
+        egui::Event::PointerGone,
+    ]);
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    h.state_mut().prepare_raw_input(&ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+}
+
+#[test]
+fn a_touch_swipe_in_one_pass_exposes_an_exit_from_full_screen() {
+    let mut h = full_screen_touch_harness();
+    let start = full_screen_top_edge(&h);
+    full_screen_touch_in_one_pass(&mut h, start, start + egui::vec2(0.0, 96.0));
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, 0, "a coalesced swipe does not turn the page");
+    assert!(
+        h.query_by_role_and_label(egui::accesskit::Role::Button, "Exit full screen").is_some(),
+        "a complete native touch swipe in one input pass reveals the exit"
+    );
+}
+
+#[test]
+fn a_touch_swipe_in_one_pass_over_the_exit_button_does_not_extend_its_timeout() {
+    let mut h = full_screen_touch_harness();
+    reveal_full_screen_touch_exit(&mut h);
+    h.run_steps(12);
+    let button = h.get_by_label("Exit full screen").rect();
+    let start = egui::pos2(button.center().x, button.top() + 2.0);
+    assert!(start.y < full_screen_top_edge(&h).y + 20.0, "the control overlaps the edge strip");
+    full_screen_touch_in_one_pass(&mut h, start, start + egui::vec2(0.0, 96.0));
+    let focused = h.ctx.memory(|memory| memory.focused());
+    if let Some(id) = focused {
+        h.ctx.memory_mut(|memory| memory.surrender_focus(id));
+    }
+    h.run_steps(11);
+    assert!(h.state().full_screen);
+    assert!(h.query_by_label("Exit full screen").is_none(), "the swipe over the control did not restart the timeout");
+}
+
+#[test]
+fn a_touch_tap_in_one_pass_turns_the_page_without_showing_the_exit() {
+    let mut h = full_screen_touch_harness();
+    let start = full_screen_top_edge(&h);
+    full_screen_touch_in_one_pass(&mut h, start, start);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 1);
+    assert!(h.state().full_screen);
+    assert!(h.query_by_label("Exit full screen").is_none());
+}
+
+fn full_screen_text_harness() -> Harness<'static, PdfCraftApp> {
+    let stream = "BT /F1 24 Tf 96 642 Td (Sample floor plan) Tj ET\nBT /F1 13 Tf 96 606 Td (Draw a crop around the region to keep.) Tj ET\n";
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj\n\
+         4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n\
+         5 0 obj << /Length {} >> stream\n{stream}endstream\nendobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        stream.len()
+    );
+    let mut h = Harness::builder().with_size(egui::vec2(1100.0, 780.0)).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("synthetic.pdf", None, pdf.into_bytes()).unwrap();
+        app
+    });
+    h.run_steps(8);
+    assert!(h.state_mut().execute("view.full_screen"));
+    h.run_steps(8);
+    assert!(h.state().views[0].selected_text().is_none());
+    h
+}
+
+#[test]
+fn a_full_screen_exit_swipe_leaves_page_text_unselected() {
+    let mut h = full_screen_text_harness();
+    reveal_full_screen_touch_exit(&mut h);
+    assert!(h.state().views[0].selected_text().is_none(), "the fullscreen exit swipe must not select page text");
+    assert!(h.query_by_label("Add comment").is_none(), "the selection bar stays closed");
+
+    let page = rect(&h, 0).unwrap();
+    let scale = page.height() / 792.0;
+    let start = page.min + egui::vec2(100.0, 142.0) * scale;
+    let end = start + egui::vec2(115.0, 0.0) * scale;
+    h.hover_at(start);
+    h.run_steps(1);
+    h.drag_at(start);
+    h.run_steps(1);
+    h.hover_at(end);
+    h.run_steps(1);
+    h.drop_at(end);
+    h.run_steps(4);
+    assert!(h.state().views[0].selected_text().is_some(), "a mouse drag below the strip still selects text");
+}
+
+#[test]
+fn a_one_pass_full_screen_exit_swipe_leaves_page_text_unselected() {
+    let mut h = full_screen_text_harness();
+    let start = full_screen_top_edge(&h);
+    full_screen_touch_in_one_pass(&mut h, start, start + egui::vec2(0.0, 96.0));
+    h.run_steps(3);
+    assert!(h.query_by_label("Exit full screen").is_some());
+    assert!(h.state().views[0].selected_text().is_none(), "the one-pass swipe leaves page text unselected");
+    assert!(h.query_by_label("Add comment").is_none(), "the selection bar stays closed");
+}
+
+#[test]
+fn an_ordinary_top_edge_tap_in_full_screen_turns_the_page() {
+    let mut h = full_screen_touch_harness();
+    let top = full_screen_top_edge(&h);
+    crate::support::input::touch_tap(&mut h, top);
+    assert!(h.state().full_screen);
+    assert!(h.query_by_label("Exit full screen").is_none());
+    assert_eq!(h.state().views[0].current, 1, "a tap in the edge strip still reaches the page");
+}
+
+#[test]
+fn the_full_screen_touch_exit_accepts_keyboard_focus_and_activation() {
+    let mut h = full_screen_touch_harness();
+    reveal_full_screen_touch_exit(&mut h);
+    h.key_press(Key::Tab);
+    h.run_steps(2);
+    assert!(h.get_by_label("Exit full screen").is_focused(), "Tab reaches the exit");
+    h.run_steps(24);
+    assert!(h.query_by_label("Exit full screen").is_some_and(|button| button.is_focused()), "a focused exit is still available after the timeout");
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(!h.state().full_screen);
+    assert_eq!(h.state().views[0].current, 0, "Enter goes to the button");
+}
+
+#[test]
+fn the_full_screen_touch_exit_hides_on_timeout_and_a_page_tap() {
+    let mut h = full_screen_touch_harness();
+    reveal_full_screen_touch_exit(&mut h);
+    h.run_steps(24);
+    assert!(h.query_by_label("Exit full screen").is_none(), "the exit times out");
+    assert!(h.state().full_screen);
+    reveal_full_screen_touch_exit(&mut h);
+    let page = rect(&h, 0).unwrap();
+    let blank = egui::pos2(page.center().x, page.top() + page.height() * 0.75);
+    crate::support::input::touch_tap(&mut h, blank);
+    assert!(h.query_by_label("Exit full screen").is_none(), "tapping the page hides the exit");
+    assert!(h.state().full_screen);
+    assert_eq!(h.state().views[0].current, 1, "the ordinary tap still turns the page");
+}
+
+#[test]
+fn the_full_screen_touch_exit_ignores_non_edge_and_mouse_drags() {
+    let mut h = full_screen_touch_harness();
+    let top = full_screen_top_edge(&h);
+    let start = top + egui::vec2(0.0, 60.0);
+    let delta = egui::vec2(0.0, 96.0);
+    crate::support::input::touch_drag(&mut h, start, start + delta);
+    assert!(h.query_by_label("Exit full screen").is_none());
+    h.hover_at(top);
+    h.run_steps(1);
+    h.drag_at(top);
+    h.run_steps(1);
+    h.hover_at(top + delta);
+    h.run_steps(1);
+    h.drop_at(top + delta);
+    h.run_steps(4);
+    assert!(h.query_by_label("Exit full screen").is_none(), "a mouse drag from the edge is not a touch swipe");
+}
+
 /// #2070 review: full screen survives the file being reloaded (Esc still brings the display from
 /// before back), and a document opened in full screen takes its own initial view first, so Esc
 /// comes back to that and full screen stays one spread at a time.

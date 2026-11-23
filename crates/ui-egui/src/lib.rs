@@ -372,6 +372,7 @@ pub struct PdfCraftApp {
     space_hand: Option<QuickTool>,
     /// The tool before full screen, given back on leaving it (see [`Self::apply_full_screen`]).
     full_screen_tool: Option<QuickTool>,
+    full_screen_touch: app::FullScreenTouch,
     /// Comment author, per-tool colours and widths, pin.
     pub comment_prefs: comments::CommentPrefs,
     pub(crate) hotbar: hotbar::Hotbar,
