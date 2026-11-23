@@ -167,6 +167,8 @@ fn sign_with_created_id(h: &mut Harness<'static, PdfCraftApp>, dir: &std::path::
     h.get_by_label("At least one signature has problems.");
 }
 
+/// The Signatures panel's one-click trust makes the signature valid without an edit, and the Certificate Viewer shows
+/// the signer as trusted for its signatures.
 fn trust_signer_and_inspect_certificate(h: &mut Harness<'static, PdfCraftApp>) {
     // Signatures panel: expand, trust the signer → valid.
     h.get_by_label_contains("Signed by Grace Hopper").click();
@@ -199,7 +201,8 @@ fn trust_signer_and_inspect_certificate(h: &mut Harness<'static, PdfCraftApp>) {
     h.get_by_label("Trust").click();
     h.run_steps(2);
 
-    h.get_by_label("This certificate is in your list of trusted certificates.");
+    // One click trusted the signer as a signer only (#6758).
+    h.get_by_label("You trust signatures made with this certificate. It does not vouch for any other certificate.");
     h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(2);
@@ -276,13 +279,14 @@ fn verify_dirty_snapshot_close(h: &mut Harness<'static, PdfCraftApp>) {
     assert_eq!(h.state().views.len(), 1);
 }
 
+/// Trusted signers and the digital ID list survive saving and restoring the settings.
 fn assert_trust_and_id_persist(h: &Harness<'static, PdfCraftApp>) {
     // Trusted certificates and the ID list persist.
     let saved = h.state().persist();
     let mut fresh = PdfCraftApp::new();
     fresh.set_option("language", "en").unwrap();
     fresh.restore(&saved);
-    assert_eq!((fresh.digital_ids.len(), fresh.session.trusted_certificates().len()), (1, 1));
+    assert_eq!((fresh.digital_ids.len(), fresh.session.trusted_signers().len()), (1, 1));
 }
 
 #[test]

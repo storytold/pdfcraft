@@ -376,9 +376,19 @@ impl Automation {
         Err(bad(kinds))
     }
 
+    /// The `sign_trust` tool: add certificates to the trust store under one scope (roots by default, or signers only),
+    /// or clear it, and revalidate every open document.
     pub(crate) fn sign_trust(&mut self, a: &Args) -> Result<Value> {
-        let mut certs: Vec<Certificate> =
-            if a.opt_bool("clear")?.unwrap_or(false) { Vec::new() } else { self.session.trusted_certificates().to_vec() };
+        // What the certificates are trusted for (#6758): as roots, which vouch for every
+        // certificate they may issue and are timestamp authorities, or as signers only, as the
+        // Signatures panel's "Add to trusted certificates" trusts them.
+        let as_signers = match a.opt_str("scope")?.unwrap_or("root") {
+            "root" => false,
+            "signer" => true,
+            other => return Err(bad(format!("scope must be \"root\" or \"signer\", not {other:?}"))),
+        };
+        let mut trust = if a.opt_bool("clear")?.unwrap_or(false) { pdfcraft_engine::TrustStore::default() } else { self.session.trust().clone() };
+        let certs: &mut Vec<Certificate> = if as_signers { &mut trust.signers } else { &mut trust.certs };
         // Which certificates are already in, by their bytes: a set, so a bundle of many distinct
         // certificates isn't compared against every one before it.
         let mut known: std::collections::HashSet<Vec<u8>> = certs.iter().map(|c| c.raw.clone()).collect();
@@ -407,7 +417,16 @@ impl Automation {
                 }
             }
         }
-        self.session.set_trusted_certificates(certs);
-        Ok(json!({ "trusted": self.session.trusted_certificates().iter().map(cert_json).collect::<Vec<_>>() }))
+        if !as_signers {
+            // A root is trusted as a signer too, so it needs no second entry.
+            let roots: std::collections::HashSet<&[u8]> = trust.certs.iter().map(|c| c.raw.as_slice()).collect();
+            let signers = trust.signers.iter().filter(|c| !roots.contains(c.raw.as_slice())).cloned().collect();
+            trust.signers = signers;
+        }
+        self.session.set_trust(trust);
+        Ok(json!({
+            "trusted": self.session.trusted_certificates().iter().map(cert_json).collect::<Vec<_>>(),
+            "trusted_signers": self.session.trusted_signers().iter().map(cert_json).collect::<Vec<_>>(),
+        }))
     }
 }
