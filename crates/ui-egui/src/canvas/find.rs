@@ -31,6 +31,9 @@ pub struct Find {
     pub replacement: String,
     /// Focus the Replace field on the next frame.
     pub focus_replace: bool,
+    /// A match to select once its page's text is known: (page, first glyph). Set when a folder
+    /// search result opens this document, so the view shows that match rather than the first.
+    pub target: Option<(usize, usize)>,
 }
 
 /// What a text layer arriving after a search began may do with the automatic choice.
@@ -133,6 +136,44 @@ impl DocView {
             f.auto_page = Some(p);
             self.flash_match(p);
         }
+        self.select_find_target();
+    }
+
+    /// Search for `query` and show the match that starts at glyph `start` on `page` (0-based), as
+    /// a folder search found it. The search shows in the Search panel; until that page's text
+    /// arrives, the view waits on the page and the match is picked when it does.
+    pub fn reveal_match(&mut self, query: &str, case_sensitive: bool, whole_words: bool, page: usize, start: usize) {
+        let f = self.find.get_or_insert_with(Find::default);
+        f.query = query.to_owned();
+        f.case_sensitive = case_sensitive;
+        f.whole_words = whole_words;
+        f.in_panel = true;
+        f.replacing = false;
+        f.target = Some((page, start));
+        self.go_to_page(page);
+        self.rerun_find();
+        // The page's text isn't read yet, and the automatic choice may have gone to a match on
+        // another page: stay on this one, without following, until the target is picked.
+        if self.find.as_ref().is_some_and(|f| f.target.is_some()) {
+            self.go_to_page(page);
+        }
+    }
+
+    /// Select the pending [`Find::target`] once its page's text is known: the match starting at
+    /// its glyph, else the nearest one on that page (a file that changed since it was searched).
+    fn select_find_target(&mut self) {
+        let Some(f) = self.find.as_mut() else { return };
+        let Some((page, start)) = f.target else { return };
+        if !self.texts.contains_key(&page) {
+            return;
+        }
+        f.target = None;
+        let nearest = f.matches.iter().enumerate().filter(|(_, (p, _))| *p == page).min_by_key(|(_, (_, r))| r.start.abs_diff(start)).map(|(i, _)| i);
+        if let Some(i) = nearest {
+            f.current = Some(i);
+            f.stop_following();
+            self.flash_match(page);
+        }
     }
 
     pub(super) fn refresh_find_page(&mut self, page: usize) {
@@ -158,6 +199,7 @@ impl DocView {
                 f.auto_page = Some(p);
                 self.flash_match(p);
             }
+            self.select_find_target();
             return;
         }
         // A match the user picked keeps its identity, exactly as before automatic following.
@@ -167,6 +209,7 @@ impl DocView {
         // pulled back by that late match.
         let preserved = previous.as_ref().and_then(|k| f.matches.iter().position(|m| m == k));
         f.current = preserved.or_else(|| f.first_at_or_after(self.current));
+        self.select_find_target();
     }
 
     /// Go to match `i` (the Search panel's results).

@@ -265,6 +265,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-23 (M12, #5439):** The folder search moves into the Search panel (⇧⌘F) as its second scope, "Look in: This document / A folder", and Edit ▸ Search a folder… leaves the menu. Its results stay in the panel while each is opened, and an opened result selects its own match in the file (the engine now reports each match's first glyph), centred as a find step centres one, not only its page. With no document open, Advanced search opens the folder search as a dialog, and choosing a result there moves the search to the panel beside the file. Estimates unchanged.
 - **2026-11-16 (M5, #3741):** Ctrl+M opens Comments on Windows/Linux and repeated activation keeps it open. macOS leaves Command+M unbound for Minimize. Dispatch, menus, palette, shortcut help and control/headless metadata resolve the platform-specific registry binding. Mapping and real-input regressions are retained through the rebase; estimates unchanged.
 - **2026-11-03 (M3, #3669):** A drag across a table selects its rows, as Preview does, instead of reading order's detour down each column; a cell padded with spaces reads with the next cell of its row. Synthetic render and UI drag regressions; estimates unchanged.
 
@@ -317,6 +318,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-11-02 (M3, #5708):** Pages shorter than the window sit in its middle, one page or row at a time and when scrolling continuously with every page in view.
 - **2026-11-02 (M3, #5716):** A snapshot is drawn at 300 ppi, or at the zoom if that is finer, so one taken zoomed out stays readable; an area too large for one 4096-pixel tile comes out as fine as a tile allows (about 147 ppi for 2000 pt). A choice of resolution and a selection that stays active remain.
 - **2026-11-02 (M14, #5737, #5460):** Preferences can turn off the update check at start. It stays on by default, and Help ▸ Check for updates still asks.
+- **2026-11-01 (M12, #5439):** Edit ▸ Search a folder… and the `folder_search` tool search every PDF in a folder, one file at a time, through the render pool's watchdog. A result opens its file at its page. Links are skipped during enumeration; replacement after enumeration remains a TOCTOU risk. Encrypted, damaged, oversized and slow files are listed. A 30-minute overall search budget now covers blocking folder enumeration through a separate worker and per-page waits; cancelled/stuck workers can retain PDF bytes. No index or built-in file browser yet.
 
 - **2026-11-01 (M7, #5657):** Header/footer, watermark and background additions and replacements stage the complete call before committing. Synthetic later-page failures preserve exact incremental bytes, object count, dirty state and allocation cursor; success controls retain other marks and shared/inherited resources. Estimates unchanged.
 

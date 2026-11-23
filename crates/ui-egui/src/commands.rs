@@ -570,14 +570,11 @@ impl PdfCraftApp {
                 self.reveal_tools();
                 self.notify_tr("Click text or an image to edit it");
             }
-            "edit.advanced_search" => {
-                if let Some(i) = self.active {
-                    let f = self.views[i].find.get_or_insert_with(Default::default);
-                    f.in_panel = true;
-                    f.focus = true;
-                    self.choose_right_panel(Some(crate::RightPanel::Search));
-                }
-            }
+            #[cfg(not(target_arch = "wasm32"))]
+            "edit.search_folder" => self.search_panel(true),
+            #[cfg(target_arch = "wasm32")]
+            "edit.search_folder" => self.notify_tr("Searching a folder needs the desktop app"),
+            "edit.advanced_search" => self.search_panel(false),
             "export.all_images" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::AllImages)),
             "edit.text" => {
                 self.quick_tool = crate::QuickTool::AddText;

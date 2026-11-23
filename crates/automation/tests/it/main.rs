@@ -11,6 +11,7 @@ mod batch_secrets;
 mod button_caption;
 mod document_actions;
 mod find_text;
+mod folder_search;
 mod form_bulk;
 mod hostile_args;
 mod link_javascript;

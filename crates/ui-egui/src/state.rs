@@ -203,6 +203,8 @@ pub enum Dialog {
     RenameFile,
     /// Pin tools to Home: selection modal.
     PinTool,
+    /// Edit ▸ Search a folder.
+    FolderSearch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

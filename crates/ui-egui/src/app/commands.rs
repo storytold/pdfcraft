@@ -203,6 +203,32 @@ impl PdfCraftApp {
         }
     }
 
+    /// Edit ▸ Advanced Search: the Search panel, on the folder half when `folder`. With no
+    /// document open there is no panel, so the folder search shows in a dialog instead.
+    pub(crate) fn search_panel(&mut self, folder: bool) {
+        let Some(i) = self.active.filter(|&i| i < self.views.len()) else {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.dialog = Some(crate::Dialog::FolderSearch);
+            }
+            #[cfg(target_arch = "wasm32")]
+            self.notify_tr("Open a document first");
+            return;
+        };
+        let f = self.views[i].find.get_or_insert_with(Default::default);
+        f.in_panel = true;
+        f.focus = true;
+        if folder {
+            let query = f.query.clone();
+            self.folder_search.show_folder(Some(&query));
+        }
+        // The panel takes over from the dialog, with the same search and results.
+        if self.dialog == Some(crate::Dialog::FolderSearch) {
+            self.dialog = None;
+        }
+        self.choose_right_panel(Some(crate::RightPanel::Search));
+    }
+
     /// F4: closes the side panel, or reopens the one open last.
     pub(crate) fn toggle_side_panel(&mut self) {
         self.choose_right_panel(if self.right.is_some() { None } else { Some(self.last_right) });
