@@ -18,6 +18,12 @@ use crate::{PdfCraftApp, icons, widgets};
 
 mod dialog;
 mod panel;
+#[cfg(target_os = "linux")]
+mod token_jobs;
+#[cfg(target_os = "linux")]
+pub(crate) use token_jobs::TokenDiscovery;
+#[cfg(target_os = "linux")]
+pub use token_jobs::TokenSigning;
 
 #[cfg(test)]
 use dialog::detail_lines;
@@ -30,6 +36,10 @@ pub use panel::{CertTab, CertViewer, PanelAction, certificate_pem};
 /// its password is asked for at each signing.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DigitalIdEntry {
+    /// Public discovery-time card binding; never persisted.
+    #[cfg(target_os = "linux")]
+    #[serde(skip)]
+    pub signing_identity: Option<sign::pkcs11::SigningIdentity>,
     pub path: String,
     pub name: String,
     pub issuer: String,
@@ -39,6 +49,10 @@ pub struct DigitalIdEntry {
     /// greyed with the reason, and never selectable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unusable: Option<String>,
+    /// The PKCS #11 token's label ("Rutoken ECP #2", "test", …): shown next to the store name
+    /// in the chooser, while the certificate's display name stays the identity's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,6 +139,7 @@ pub struct SignDraft {
     pub step: SignStep,
     pub selected: Option<usize>,
     pub password: String,
+    pub pin: crate::secret_pin::SecretPin,
     pub reason: String,
     pub location: String,
     pub appearance: Appearance,
@@ -149,6 +164,7 @@ impl SignDraft {
             step: if ids.is_empty() { SignStep::Configure } else { SignStep::Choose },
             selected: ids.iter().position(|e| e.unusable.is_none()),
             password: String::new(),
+            pin: Default::default(),
             reason: String::new(),
             location: String::new(),
             appearance: Appearance::default(),
@@ -276,12 +292,15 @@ fn windows_id(reference: &str) -> Result<DigitalId, String> {
 
 pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
     DigitalIdEntry {
+        #[cfg(target_os = "linux")]
+        signing_identity: None,
         path: path.to_string(),
         name: c.display_name(),
         issuer: c.issuer.common_name().map(str::to_string).unwrap_or_else(|| c.issuer.display()),
         email: c.subject.email().unwrap_or("").to_string(),
         expires: format!("{:04}.{:02}.{:02}", c.not_after.year, c.not_after.month, c.not_after.day),
         unusable: None,
+        token: None,
     }
 }
 
@@ -289,16 +308,29 @@ pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
 #[cfg(target_os = "windows")]
 fn entry_unusable(u: &sign::windows::Unusable) -> DigitalIdEntry {
     DigitalIdEntry {
+        #[cfg(target_os = "linux")]
+        signing_identity: None,
         path: format!("windows:{}", u.fingerprint.split(' ').collect::<String>().to_ascii_lowercase()),
         name: u.subject.clone(),
         issuer: String::new(),
         email: String::new(),
         expires: String::new(),
+        token: None,
         unusable: Some(u.reason.clone()),
     }
 }
 
 impl PdfCraftApp {
+    pub(crate) fn token_signing_busy(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            self.token_signing.is_some()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
+    }
     /// Export certificate: write `c` as PEM into a chosen folder, named after its subject.
     pub(crate) fn export_certificate(&mut self, c: &Certificate) {
         let name = format!("{}.cer", crate::files::attachment_file_name(&c.display_name()));
@@ -316,6 +348,10 @@ impl PdfCraftApp {
         };
         if let SignGraphic::Image(image) = &self.sign_graphic {
             draft.image = Some(image.clone());
+        }
+        #[cfg(target_os = "linux")]
+        if self.token_discovery.is_some() && self.digital_ids.is_empty() {
+            draft.step = SignStep::Choose;
         }
         self.sign_draft = Some(draft);
         self.dialog = Some(crate::Dialog::Sign);
@@ -352,12 +388,22 @@ impl PdfCraftApp {
         if self.pickers.pending() {
             return;
         }
-        if self.dialog == Some(crate::Dialog::Sign) {
+        if self.dialog == Some(crate::Dialog::Sign) || self.token_signing_busy() {
             return;
         }
         self.presign = None;
         if self.session.get(doc).is_some_and(|d| d.undo_depth() == depth) && self.session.undo(doc).is_ok() {
             self.refresh_view_of(doc);
+        }
+    }
+
+    fn finish_signed_form(&mut self, doc: pdfcraft_engine::DocId, field: Option<&str>) {
+        // postSign changes are left unsaved. The signature has already been written.
+        let after = field.and_then(|f| self.session.run_sign_event(doc, f, pdfcraft_engine::js::SignEvent::After).err());
+        let said = self.session.take_js_output(doc);
+        self.handle_js(doc, said);
+        if let Some(e) = after {
+            self.notify_fmt("Signed and saved, but the form's postSign script couldn't finish: {e}", &[("e", &e.to_string())]);
         }
     }
 
@@ -372,7 +418,9 @@ impl PdfCraftApp {
 
     /// List OS key store signing identities (after the file-based IDs).
     fn refresh_os_key_store_ids(&mut self) {
-        self.digital_ids.retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:"));
+        let keep_tokens = cfg!(target_os = "linux") && self.os_key_store_ids;
+        self.digital_ids
+            .retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:") && (!e.path.starts_with("pkcs11:") || keep_tokens));
         #[cfg(target_os = "macos")]
         if self.os_key_store_ids {
             match sign::keychain::identities(None) {
@@ -387,6 +435,13 @@ impl PdfCraftApp {
                     }
                 }
                 Err(e) => self.notify_fmt("The Keychain's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.token_discovery = None;
+            if self.os_key_store_ids {
+                self.start_token_discovery();
             }
         }
         #[cfg(target_os = "windows")]
@@ -421,7 +476,11 @@ impl PdfCraftApp {
     /// disk. Keychain and Windows store IDs belong to the OS and are listed again on every
     /// signing, so they can't be removed here. The open dialog's selection follows the list.
     pub fn remove_digital_id(&mut self, index: usize) -> bool {
-        if self.digital_ids.get(index).is_none_or(|e| e.path.starts_with("keychain:") || e.path.starts_with("windows:")) {
+        if self
+            .digital_ids
+            .get(index)
+            .is_none_or(|e| e.path.starts_with("keychain:") || e.path.starts_with("windows:") || e.path.starts_with("pkcs11:"))
+        {
             return false;
         }
         self.digital_ids.remove(index);
@@ -497,6 +556,9 @@ impl PdfCraftApp {
 
     /// Sign as …: open the ID, sign, save the signed file (Save As), and show it.
     fn finish_signing(&mut self) -> Result<(), String> {
+        let pin = self.sign_draft.as_mut().map(|d| std::mem::take(&mut d.pin)).unwrap_or_default();
+        #[cfg(not(target_os = "linux"))]
+        let _ = &pin;
         // What's typed in a form field is signed with the document (#166). A rejected value keeps
         // the dialog open; the notice says why.
         if !self.commit_form_typing() {
@@ -505,16 +567,21 @@ impl PdfCraftApp {
         let Some((_, doc_id)) = self.active_ids() else { return Err("no document".into()) };
         let d = self.sign_draft.as_ref().ok_or("nothing to sign")?;
         let entry = d.selected.and_then(|i| self.digital_ids.get(i)).filter(|e| e.unusable.is_none()).cloned().ok_or("Choose a digital ID.")?;
-        let id = if entry.path.starts_with("keychain:") {
-            keychain_id(&entry.path)?
-        } else if entry.path.starts_with("windows:") {
-            windows_id(&entry.path)?
+        let token = entry.path.starts_with("pkcs11:");
+        let id = if token {
+            None
         } else {
-            let bytes = std::fs::read(&entry.path).map_err(|e| format!("{}: {e}", entry.path))?;
-            sign::pkcs12::open(&bytes, &d.password).map_err(|e| match e {
-                sign::SignError::WrongPassword => "The password is incorrect.".to_string(),
-                e => e.to_string(),
-            })?
+            Some(if entry.path.starts_with("keychain:") {
+                keychain_id(&entry.path)?
+            } else if entry.path.starts_with("windows:") {
+                windows_id(&entry.path)?
+            } else {
+                let bytes = std::fs::read(&entry.path).map_err(|e| format!("{}: {e}", entry.path))?;
+                sign::pkcs12::open(&bytes, &d.password).map_err(|e| match e {
+                    sign::SignError::WrongPassword => "The password is incorrect.".to_string(),
+                    e => e.to_string(),
+                })?
+            })
         };
         let some = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
         // Only a visible signature shows its graphic.
@@ -523,6 +590,12 @@ impl PdfCraftApp {
             _ => None,
         };
         let choice = d.graphic.clone();
+        #[cfg(target_os = "linux")]
+        let token_retry = token.then(|| {
+            let mut retry = d.clone();
+            zeroize::Zeroize::zeroize(&mut retry.password);
+            retry
+        });
         let opts = SignOptions {
             field: d.field.clone(),
             page: d.page,
@@ -548,11 +621,18 @@ impl PdfCraftApp {
             if !app.commit_typing_in(doc_id) {
                 return Err(String::new());
             }
+            if token {
+                #[cfg(target_os = "linux")]
+                return app.start_token_signing(doc_id, entry, pin, opts, token_retry.ok_or("Choose a smartcard.")?, path);
+                #[cfg(not(target_os = "linux"))]
+                return Err("Smartcard signing requires Linux.".into());
+            }
+            let id = id.as_ref().ok_or("Choose a digital ID.")?;
             // The form's preSign step (run when signing began) is signed with it; if signing fails
             // the step stays pending, and is taken back if signing ends without a signature.
             let field = opts.field.clone();
             let pending = app.presign.take();
-            let signed = match app.session.sign(doc_id, &id, opts) {
+            let signed = match app.session.sign(doc_id, id, opts) {
                 Ok(s) => s,
                 Err(e) => {
                     app.presign = pending;
@@ -568,11 +648,6 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             app.watch.known_now(doc_id, &path.to_string_lossy());
             app.session.mark_signed(doc_id, signed, Some(path.to_string_lossy().into_owned())).map_err(|e| e.to_string())?;
-            // Then its postSign scripts; what they change is a change after signing, to save.
-            // What they say shows once signing is done, after the notice that it was saved.
-            // The file is signed and saved by now: a postSign step that fails is said, not a failure.
-            let after = field.as_deref().and_then(|f| app.session.run_sign_event(doc_id, f, pdfcraft_engine::js::SignEvent::After).err());
-            let said = app.session.take_js_output(doc_id);
             #[cfg(target_os = "macos")]
             crate::macos_association::repair(&path);
             app.sign_graphic = choice;
@@ -581,10 +656,7 @@ impl PdfCraftApp {
             }
             app.right = Some(crate::RightPanel::Signatures);
             app.notify_fmt("Signed and saved to {path}", &[("path", &path.display().to_string())]);
-            app.handle_js(doc_id, said);
-            if let Some(e) = after {
-                app.notify_fmt("Signed and saved, but the form's postSign script couldn't finish: {e}", &[("e", &e.to_string())]);
-            }
+            app.finish_signed_form(doc_id, field.as_deref());
             Ok(())
         };
         match self.save_override.clone() {
@@ -761,9 +833,8 @@ impl PdfCraftApp {
             return;
         }
         let from = doc.name.clone();
-        let bytes = doc.bytes[..end].to_vec();
         let name = format!("{} (signed version)", Self::file_stem(&from));
-        match self.session.open(format!("{name}.pdf"), None, std::sync::Arc::new(bytes), doc.password.clone().as_deref()) {
+        match self.session.open_document_snapshot(id, end, format!("{name}.pdf")) {
             Ok(new) => {
                 // The reading-colours preference is app-wide: the newly opened copy starts with it.
                 self.session.set_reading_colors(new, self.reading_colors);
@@ -928,7 +999,17 @@ mod tests {
     }
 
     fn listed(path: &str, name: &str) -> DigitalIdEntry {
-        DigitalIdEntry { path: path.into(), name: name.into(), issuer: String::new(), email: String::new(), expires: String::new(), unusable: None }
+        DigitalIdEntry {
+            #[cfg(target_os = "linux")]
+            signing_identity: None,
+            path: path.into(),
+            name: name.into(),
+            issuer: String::new(),
+            email: String::new(),
+            expires: String::new(),
+            unusable: None,
+            token: None,
+        }
     }
 
     /// Issue #1396: an imported ID can be taken off the list (its file stays), the dialog's

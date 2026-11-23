@@ -415,6 +415,15 @@ impl PdfCraftApp {
         let Some(store) = self.recovery.clone() else { return };
         for key in keys {
             let Some(meta) = self.recoverable.iter().find(|m| &m.key == key).cloned() else { continue };
+            if self.password_prompt.as_ref().and_then(|p| p.recovered.as_ref()).is_some_and(|m| &m.key == key)
+                || self.certificate_prompt.as_ref().and_then(|p| p.pending.recovered.as_ref()).is_some_and(|m| &m.key == key)
+            {
+                continue;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.pending_opens.iter().any(|p| p.recovered.as_ref().is_some_and(|m| &m.key == key)) {
+                continue;
+            }
             #[cfg(not(target_arch = "wasm32"))]
             if self.ctx.is_some() && !self.run_inline {
                 self.startup_superseded = true;
@@ -441,25 +450,21 @@ impl PdfCraftApp {
                     continue;
                 }
             };
-            match self.open_bytes(&meta.name, None, bytes) {
-                Ok(()) if self.password_prompt.is_none() => self.finish_recovery(&meta),
-                // Encrypted: the password prompt opens it, and finishes its recovery once it
-                // does. The association travels with the prompt, so cancelling it cannot hand
-                // this snapshot's path to the next document that is unlocked (#813).
-                Ok(()) => {
-                    if let Some(prompt) = self.password_prompt.as_mut() {
-                        prompt.recovered = Some(meta.clone());
-                    }
-                }
-                Err(e) => self.notify_fmt("Couldn't recover {name}: {e}", &[("name", &meta.name), ("e", &e.to_string())]),
+            if let Err(e) = self.recover_bytes(bytes, &meta) {
+                self.notify_fmt("Couldn't recover {name}: {e}", &[("name", &meta.name), ("e", &e)]);
             }
         }
-        self.recoverable.retain(|m| !keys.contains(&m.key));
     }
 
-    /// The most recently opened tab came from `meta`: keep its recovery entry and path.
-    pub(crate) fn finish_recovery(&mut self, meta: &RecoveryMeta) {
-        let Some(id) = self.views.last().map(|v| v.id) else { return };
+    pub(crate) fn keep_recovery_offered(&mut self, meta: RecoveryMeta) {
+        if !self.recoverable.iter().any(|entry| entry.key == meta.key) {
+            self.recoverable.push(meta);
+        }
+    }
+
+    /// Attach a snapshot's original path and recovery key to the tab opened from it.
+    pub(crate) fn finish_recovery(&mut self, id: pdfcraft_engine::DocId, meta: &RecoveryMeta) {
+        self.recoverable.retain(|entry| entry.key != meta.key);
         self.session.mark_recovered(id, meta.path.clone());
         if meta.path.is_some() {
             self.recovered_paths.insert(id);
@@ -530,6 +535,53 @@ mod idle_tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn review_regression_recovery_keeps_certificate_and_clear_snapshots_separate() {
+        use pdfcraft_cos::{Algorithm, Document, SaveOptions, SecurityHandler};
+        let dir = TestDir::new();
+        let mut app = PdfCraftApp::new();
+        let store = RecoveryStore::new(dir.path());
+        let clear_bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
+        let mut cos = Document::open(clear_bytes.clone()).unwrap();
+        let handler = SecurityHandler::create_public_key(Algorithm::Aes256, vec![b"test envelope".to_vec()], &[7; 20], true).unwrap();
+        cos.set_public_key_encryption(handler, [9; 16]).unwrap();
+        let encrypted_bytes = pdfcraft_cos::write_full(&cos, &SaveOptions::default()).unwrap();
+        let meta = |key: &str, encrypted| RecoveryMeta {
+            key: key.into(),
+            name: format!("{key}.pdf"),
+            path: Some(format!("{key}.pdf")),
+            saved_at: 0,
+            encrypted,
+            instance: None,
+        };
+        let first = meta("first", true);
+        let clear = meta("clear", false);
+        let later = meta("later", true);
+        for (entry, bytes) in [(&first, encrypted_bytes.as_slice()), (&clear, clear_bytes.as_slice()), (&later, encrypted_bytes.as_slice())] {
+            store.write(entry, bytes).unwrap();
+        }
+        app.recovery = Some(store);
+        app.recoverable = vec![first.clone(), clear.clone(), later.clone()];
+        app.recover(&[first.key.clone(), clear.key.clone(), later.key.clone()]);
+        assert_eq!(app.views.len(), 1);
+        let clear_id = app.views[0].id;
+        assert_eq!(app.recovery_keys.get(&clear_id), Some(&clear.key));
+        assert_eq!(app.session.get(clear_id).unwrap().path, clear.path);
+        assert_eq!(app.recoverable, vec![first.clone(), later.clone()]);
+
+        let prompt = app.certificate_prompt.take().unwrap().pending;
+        assert_eq!(prompt.recovered.as_ref(), Some(&first));
+        let resolver = |params: &pdfcraft_cos::EncryptDict, _: &[u8]| {
+            SecurityHandler::open_public_key(params.clone(), &[7; 20], -1).map_err(|e| pdfcraft_cos::CosError::Security(e.to_string()))
+        };
+        let prepared = app.session.prepare_open_with_security_resolver(&first.name, None, prompt.bytes.clone(), &resolver).unwrap();
+        app.finish_certificate_open(prompt, prepared).unwrap();
+        let first_id = app.views[1].id;
+        assert_eq!(app.recovery_keys.get(&first_id), Some(&first.key));
+        assert_eq!(app.session.get(first_id).unwrap().path, first.path);
+        assert_eq!(app.recoverable, vec![later]);
     }
 
     /// Folders made at the same moment on parallel threads, as the tests make theirs, are each

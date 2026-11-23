@@ -109,7 +109,23 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
 
 /// Draw the active modal dialog and apply the action the user chose.
 fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    #[cfg(target_os = "linux")]
+    {
+        app.poll_token_discovery();
+        if app.show_token_signing(ctx) {
+            return;
+        }
+    }
     password(app, ctx);
+    crate::certificate_ui::show_open(app, ctx);
+    if app.dialog != Some(Dialog::Sign)
+        && let Some(d) = &mut app.sign_draft
+    {
+        d.pin.clear();
+    }
+    if app.dialog != Some(Dialog::ProtectCertificates) {
+        app.certificate_protect = Default::default();
+    }
     save_prompt(app, ctx);
     link_prompt(app, ctx);
     remote_link_prompt(app, ctx);
@@ -487,6 +503,10 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.close = req.apply || cancel;
             return false;
         }
+        Dialog::ProtectCertificates => {
+            req.close = crate::certificate_ui::protect_body(ui, app);
+            return false;
+        }
         Dialog::Protect => {
             let (go, cancel) = crate::protect::body(ui, app, &t);
             req.apply = go;
@@ -757,13 +777,16 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
                     }
                 }
                 Some(sec) => {
-                    row(ui, "Security method", tl!("Password security").to_string());
+                    row(ui, "Security method", if sec.certificate { tl!("Certificate security") } else { tl!("Password security") }.to_string());
                     row(ui, "Encryption", sec.method.clone());
                     row(
                         ui,
                         "Opened with",
                         if sec.pending {
                             tl!("— (protection is applied when you save)").to_string()
+                        } else if sec.certificate {
+                            if sec.permissions.owner { tl!("Certificate recipient with full control") } else { tl!("Certificate recipient") }
+                                .to_string()
                         } else if sec.owner {
                             tl!("Owner password (no restrictions apply)").to_string()
                         } else {
@@ -777,7 +800,7 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
                                 req.link_command = Some("protect.unlock");
                             }
                             if ui.button(tl!("Change settings…")).clicked() {
-                                req.link_command = Some("protect.password");
+                                req.link_command = Some(if sec.certificate { "protect.certificate" } else { "protect.password" });
                             }
                             if ui.button(tl!("Remove security")).clicked() {
                                 req.link_command = Some("protect.remove");
@@ -2219,6 +2242,9 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
         // disk asks about that): it stays.
         if app.dialog == Some(dialog) {
             app.dialog = None;
+            if dialog == Dialog::Sign {
+                app.sign_draft = None;
+            }
         }
         if dialog == Dialog::AttachmentDescription {
             app.attachment_description_draft = None;

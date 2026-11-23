@@ -149,9 +149,23 @@ impl LazyStructure {
         if !source.repair_log().is_empty() && !source.rebuilt_unlinked_update() {
             return Err("the structure requires compatibility repair".into());
         }
+        Self::from_document(source)
+    }
+
+    pub(crate) fn from_document(source: Document) -> std::result::Result<Self, String> {
         let trailer = convert_dict(source.trailer(), 0).map_err(|e| e.to_string())?;
         let objects = source.object_numbers().into_iter().map(|n| (n, OnceLock::new())).collect();
         Ok(Self { source, trailer, objects, failed: AtomicBool::new(false) })
+    }
+
+    pub(crate) fn decoded_attachment(&self, (number, generation): ObjectId) -> std::result::Result<Vec<u8>, String> {
+        if self.source.generation(number) != generation {
+            return Err("the embedded stream reference has the wrong generation".into());
+        }
+        let object = self.source.try_get(number).map_err(|e| e.to_string())?;
+        let CosObject::Stream(stream) = object.as_ref() else { return Err("the embedded file has no data stream".into()) };
+        // COS already applied the crypt filter when it loaded the object.
+        stream.decoded_strict_within(1 << 30).map_err(|e| e.to_string())
     }
 
     pub(crate) fn failed(&self) -> bool {

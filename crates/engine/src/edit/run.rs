@@ -1,13 +1,14 @@
 use super::{
     AddedContent, Arc, Edit, EditError, FieldValue, ImageEdit, NewAnnotation, Shape, a11y, copy_image, decode_data_file, embed_image, fit_picture,
-    image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, strip_xfa, unrestricted, xfa, xfa_after_data_change,
+    image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, strip_xfa, xfa, xfa_after_data_change,
 };
 use crate::SourceProblem;
 use crate::sources::{comment_source, import_pdf_comments};
 use pdfcraft_content::Matrix;
 
-/// Whether the opening password allows an edit (§7.6.4.2, Table 22).
-pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), EditError> {
+/// Whether the authenticated permissions allow an edit. Security control is separate
+/// from content rights for public-key recipients (§7.6.5).
+pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions, security_control: bool) -> Result<(), EditError> {
     match edit {
         Edit::RotatePages { .. }
         | Edit::DeletePages { .. }
@@ -87,8 +88,8 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
                 Err(EditError::NotPermitted("filling in form fields"))
             }
         }
-        Edit::Protect(_) | Edit::RemoveProtection => {
-            if unrestricted(p) {
+        Edit::Protect(_) | Edit::ProtectCertificates(_) | Edit::RemoveProtection => {
+            if security_control {
                 Ok(())
             } else {
                 Err(EditError::NotPermitted("changing security"))
@@ -102,7 +103,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         // Converting to PDF/A takes the encryption off (PDF/A forbids it), so on an encrypted
         // document it is a change of security (#3921).
         Edit::ConvertPdfA { .. } => {
-            if unrestricted(p) {
+            if security_control {
                 Ok(())
             } else {
                 Err(EditError::NotPermitted("removing the encryption, which PDF/A forbids"))
@@ -174,7 +175,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
                 Err(EditError::NotPermitted("changes to the document"))
             }
         }
-        Edit::Batch { edits, .. } => edits.iter().try_for_each(|e| check_permission(e, p)),
+        Edit::Batch { edits, .. } => edits.iter().try_for_each(|e| check_permission(e, p, security_control)),
     }
 }
 
@@ -267,6 +268,8 @@ pub(crate) struct EditCtx {
     /// Whether the viewer highlights form fields, for `app.runtimeHighlight`.
     pub(crate) highlight: bool,
     pub(crate) date: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) now: Option<i64>,
     /// Today in local time, for date tokens.
     pub(crate) today: (i64, u32, u32),
     pub(crate) seed: u64,
@@ -335,6 +338,8 @@ impl EditCtx {
             pages: 0,
             highlight: false,
             date: now.map(pdfcraft_cos::pdf_date),
+            #[cfg(not(target_arch = "wasm32"))]
+            now,
             today: (1970, 1, 1),
             seed,
             count: 0,
@@ -350,7 +355,7 @@ impl EditCtx {
 
     /// 32 bytes of entropy for new encryption keys, salts and generated owner passwords from the
     /// platform CSPRNG. Fails closed when secure randomness is unavailable.
-    fn entropy(&mut self) -> Result<[u8; 32], EditError> {
+    pub(crate) fn entropy(&mut self) -> Result<[u8; 32], EditError> {
         let mut out = [0u8; 32];
         (self.rng)(&mut out).map_err(|e| EditError::Protection(format!("no secure randomness available: {e}")))?;
         if out == [0u8; 32] {
@@ -1145,6 +1150,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             let n = pdfcraft_model::pages(doc).len();
             pdfcraft_edit::flatten_fill_sign(doc, &(0..n).collect::<Vec<_>>())?;
         }
+        Edit::ProtectCertificates(p) => crate::certificate_security::protect(doc, p, cx)?,
         Edit::Protect(p) => {
             p.validate()?;
             let seed = cx.entropy()?;

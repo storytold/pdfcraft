@@ -17,6 +17,8 @@ pub enum SourceProblem {
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum EditError {
+    #[error("The selected card changed or is no longer uniquely available. Refresh cards and select it again.")]
+    TokenChanged,
     #[error("no such document")]
     NoDocument,
     #[error("this document can't be edited: {0}")]
@@ -75,6 +77,9 @@ pub enum EditError {
 
 impl From<pdfcraft_sign::SignError> for EditError {
     fn from(e: pdfcraft_sign::SignError) -> Self {
-        EditError::Sign(e.to_string())
+        match e {
+            pdfcraft_sign::SignError::TokenChanged => EditError::TokenChanged,
+            other => EditError::Sign(other.to_string()),
+        }
     }
 }

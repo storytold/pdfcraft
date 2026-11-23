@@ -204,7 +204,7 @@ fn a_picture_left_out_for_the_pages_allowance_draws_on_the_next_page() {
     pdf.extend(image(7, 1));
     pdf.extend(image(8, 2));
     pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
-    let pdf = parse(&Arc::new(pdf), None).expect("parses");
+    let pdf = parse(&Arc::new(pdf), &RenderConfig::default()).expect("parses");
     /// A page's pixels and the warnings it reported.
     type Drawn = (Vec<u8>, Vec<RenderWarning>);
     let black = |(rgba, _): &Drawn, x: usize| match &rgba[((20 * 40 + x) * 4)..][..4] {

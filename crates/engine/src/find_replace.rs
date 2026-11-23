@@ -160,7 +160,7 @@ impl Document {
         // What Edit text checks: the document's permissions.
         let probe = Edit::EditTextBlock { page: 0, block: 0, text: String::new(), style: Default::default() };
         if let Some(p) = editor.cos.permissions() {
-            check_permission(&probe, &p)?;
+            check_permission(&probe, &p, self.allows_security_change())?;
         }
         if query.find.split_whitespace().next().is_none() {
             return Err(EditError::Invalid("there is nothing to find".into()));

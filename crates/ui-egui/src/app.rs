@@ -195,6 +195,7 @@ impl PdfCraftApp {
             system_title_bar: false,
             app_frame_shown: None,
             password_prompt: None,
+            certificate_prompt: None,
             document_copy: None,
             unlock_prompt: None,
             full_screen: false,
@@ -230,6 +231,12 @@ impl PdfCraftApp {
             summary_sort: Default::default(),
             sign_draft: None,
             presign: None,
+            #[cfg(target_os = "linux")]
+            token_signing: None,
+            #[cfg(target_os = "linux")]
+            token_signing_sequence: 0,
+            #[cfg(target_os = "linux")]
+            token_discovery: None,
             digital_ids: Vec::new(),
             sig_expanded: Vec::new(),
             a11y_options: a11y_ui::A11yOptions::default(),
@@ -263,6 +270,7 @@ impl PdfCraftApp {
             tags_state: Default::default(),
             a11y_skipped: Default::default(),
             alt_draft: Default::default(),
+            // Device discovery begins only after an explicit signing-dialog action.
             os_key_store_ids: false,
             cert_viewer: None,
             space_audit: Vec::new(),
@@ -333,6 +341,7 @@ impl PdfCraftApp {
             pending_window: None,
             pending_remote_link: None,
             protect_draft: Default::default(),
+            certificate_protect: Default::default(),
             text_style_draft: Default::default(),
             boxes_draft: Default::default(),
             marks_draft: Default::default(),
@@ -455,9 +464,11 @@ impl PdfCraftApp {
         if self.script_pending.as_ref().is_some_and(|pending| pending.has_prompt()) {
             return true;
         }
-        self.dialog.is_some()
+        self.token_signing_busy()
+            || self.dialog.is_some()
             || self.close_request.is_some()
             || self.password_prompt.is_some()
+            || self.certificate_prompt.is_some()
             || self.unlock_prompt.is_some()
             || self.pending_link.is_some()
             || self.pending_remote_link.is_some()
@@ -638,7 +649,11 @@ impl PdfCraftApp {
         let native = ctx.native_pixels_per_point().unwrap_or(1.0);
         ui_scale::sync(ctx, ui_scale::zoom(self.ui_scale, self.system_text_scale, native), &mut self.ui_scale_applied);
         // Remember user work even if its tab is subsequently closed or Home is selected.
-        self.startup_superseded |= !self.views.is_empty() || self.combine_showing() || self.dialog.is_some() || self.password_prompt.is_some();
+        self.startup_superseded |= !self.views.is_empty()
+            || self.combine_showing()
+            || self.dialog.is_some()
+            || self.password_prompt.is_some()
+            || self.certificate_prompt.is_some();
         // Also done in `raw_input_hook`, before input; here for hosts that don't call the hook.
         self.scroll_speed.set_line_speed(ctx);
         // Motion reads this frame's wheel input, so it begins in `ui`, in a known UI phase:
@@ -679,6 +694,7 @@ impl PdfCraftApp {
         let opening = false;
         if !opening
             && self.password_prompt.is_none()
+            && self.certificate_prompt.is_none()
             && self.image_import.is_none()
             && self.dialog.is_none()
             && self.close_request.is_none()

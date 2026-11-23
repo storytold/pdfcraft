@@ -119,6 +119,7 @@ pub enum Dialog {
     PageProps,
     /// Protect Using Password.
     Protect,
+    ProtectCertificates,
     /// Bookmarks ▸ New bookmarks from text styles (#1693).
     BookmarksFromTextStyles,
     /// Set Page Boxes (crop, trim, bleed, art, media).
@@ -279,7 +280,7 @@ pub(crate) struct DocumentCopyJob {
     pub(crate) pages: Vec<CopyPage>,
     span: Option<crate::canvas::TextSpan>,
     bytes: std::sync::Arc<Vec<u8>>,
-    password: Option<std::sync::Arc<str>>,
+    config: pdfcraft_render::RenderConfig,
 }
 
 impl DocumentCopyJob {
@@ -291,7 +292,16 @@ impl DocumentCopyJob {
                 None => CopyPage::ToRead,
             })
             .collect();
-        DocumentCopyJob { pages, span: None, bytes: doc.bytes.clone(), password: doc.password.as_deref().map(std::sync::Arc::from) }
+        DocumentCopyJob {
+            pages,
+            span: None,
+            bytes: doc.bytes.clone(),
+            config: pdfcraft_render::RenderConfig {
+                password: doc.password.as_deref().map(std::sync::Arc::from),
+                authenticated: doc.render_config().authenticated,
+                ..Default::default()
+            },
+        }
     }
 
     /// A copy of the reading-order text `span` covers: its pages as [`Self::of`] takes them, every
@@ -335,7 +345,7 @@ impl DocumentCopyJob {
                 CopyPage::Read(t) => push(part(page, &t)),
                 CopyPage::ToRead => {
                     let r = renderer.get_or_insert_with(|| {
-                        let config = pdfcraft_render::RenderConfig { password: self.password.clone(), ..Default::default() };
+                        let config = self.config.clone();
                         pdfcraft_render::PageRenderer::new(self.bytes.clone(), config)
                     });
                     let req = pdfcraft_render::RenderRequest {

@@ -105,6 +105,10 @@ fn main() -> ExitCode {
     }
     // aws-lc detects the CPU's features here, where it used to before `main` (`init_crypto`).
     pdfcraft_engine::sign::init_crypto();
+    #[cfg(target_os = "linux")]
+    if let Some(code) = pdfcraft_engine::sign::pkcs11::worker_if_requested() {
+        return code;
+    }
     // `std::env::args` panics on an argument that is not UTF-8 ("called `Result::unwrap()` on an
     // `Err` value"), which a Latin-1 file name is, and it panics while collecting them: even
     // `--help` ended that way. Such a name cannot be passed on either, since the paths here are

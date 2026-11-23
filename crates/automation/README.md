@@ -363,3 +363,9 @@ updates the same one-word-per-UTF-8-line format OCR Verify uses. Omit add/remove
 The explicit path honors `--root`, including symlink confinement; choose the appropriate
 per-language file used by the UI. Entries are case-insensitive and duplicate-free. Invalid
 or oversized inputs fail before writing (65,536 words, 4 MiB, at most 1,024 bytes per word).
+
+On Linux, `sign_token_ids` lists PKCS #11 signing certificates for `sign_document`.
+`encryption_token_ids` lists recipient certificates for `doc_open_token`.
+`doc_protect_certificates` applies certificate encryption to an open document, which
+`doc_save` writes. A PIN comes from the reader or the CLI host environment
+(`PDFCRAFT_PKCS11_PIN`), and is never accepted in tool arguments.

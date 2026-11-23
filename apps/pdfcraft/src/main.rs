@@ -208,6 +208,10 @@ fn main() -> eframe::Result {
     }
     // aws-lc detects the CPU's features here, where it used to before `main` (`init_crypto`).
     pdfcraft_engine::sign::init_crypto();
+    #[cfg(target_os = "linux")]
+    if let Some(code) = pdfcraft_engine::sign::pkcs11::worker_if_requested() {
+        std::process::exit(if code == std::process::ExitCode::SUCCESS { 0 } else { 1 });
+    }
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
     if let Some(result) = craft_update::self_update::finish(&pdfcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {

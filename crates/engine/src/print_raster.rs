@@ -27,7 +27,7 @@ pub fn rasterize(doc: &Document, pages: &[usize], raster: &Raster, content: Cont
     // configured state on paper, as in a print that goes out as vectors.
     config.for_print = true;
     let (printed, layers) = guard(|| -> Result<(Vec<u8>, Option<Vec<pdfcraft_render::Layer>>), String> {
-        let mut cos = pdfcraft_cos::Document::open_with_password(src.bytes.clone(), config.password.as_deref()).map_err(|e| e.to_string())?;
+        let mut cos = config.open_document(src.bytes.clone()).map_err(|e| e.to_string())?;
         pdfcraft_print::keep_printed(&mut cos, content);
         // The layers as the vector print sets them: as shown, then the Print event's auto state.
         let layers = print_layer_states(&cos, &doc.info.layers);

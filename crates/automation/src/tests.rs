@@ -176,10 +176,10 @@ fn stop_at_limit_ends_at_a_lone_match_without_reading_the_distant_tail() {
     // #5328: "Page 1" is only on page 1 (every other readable page reads "Page 2"), and the last
     // page fails, so only a search that runs on to the end hears about it.
     let requested = std::cell::RefCell::new(Vec::new());
-    let mut extract = |bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]| {
+    let mut extract = |bytes: &Arc<Vec<u8>>, config: pdfcraft_render::RenderConfig, pages: &[usize]| {
         requested.borrow_mut().extend_from_slice(pages);
-        let filler = extract_parallel(bytes, password.clone(), &[1]).remove(0).1;
-        let first = extract_parallel(bytes, password, &[0]).remove(0).1;
+        let filler = extract_parallel(bytes, config.clone(), &[1]).remove(0).1;
+        let first = extract_parallel(bytes, config, &[0]).remove(0).1;
         pages
             .iter()
             .map(|&p| {

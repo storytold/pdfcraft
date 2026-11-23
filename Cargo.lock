@@ -1579,7 +1579,7 @@ dependencies = [
 [[package]]
 name = "craft-pdf"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=9eb02be84f21898e247daeb2af5827c9fe85a3a0#9eb02be84f21898e247daeb2af5827c9fe85a3a0"
+source = "git+https://github.com/joshuashaffer/craft-libs?rev=f091420754c70e5d09133a3834e5aaaee3de4961#f091420754c70e5d09133a3834e5aaaee3de4961"
 dependencies = [
  "aes",
  "bytemuck",
@@ -1591,6 +1591,7 @@ dependencies = [
  "hayro-syntax",
  "js-sys",
  "md-5 0.11.0",
+ "sha1 0.11.0",
  "sha2 0.11.1",
  "stringprep",
  "thiserror 2.0.21",
@@ -1695,7 +1696,7 @@ dependencies = [
 [[package]]
 name = "craft-stream-codecs"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=9eb02be84f21898e247daeb2af5827c9fe85a3a0#9eb02be84f21898e247daeb2af5827c9fe85a3a0"
+source = "git+https://github.com/joshuashaffer/craft-libs?rev=f091420754c70e5d09133a3834e5aaaee3de4961#f091420754c70e5d09133a3834e5aaaee3de4961"
 dependencies = [
  "fax",
  "hayro-ccitt",
@@ -2029,6 +2030,26 @@ checksum = "3633a51a39c69ebbaa4feaa694bd83d241e4093901c84a0963b19d9bb3f0cf8f"
 dependencies = [
  "crypto-bigint",
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "cryptoki"
+version = "0.12.0"
+source = "git+https://github.com/parallaxsecond/rust-cryptoki?rev=2e4ff5d717f46f90785496949c08599b589b8e32#2e4ff5d717f46f90785496949c08599b589b8e32"
+dependencies = [
+ "bitflags 2.13.2",
+ "cryptoki-sys",
+ "libloading",
+ "log",
+ "secrecy",
+]
+
+[[package]]
+name = "cryptoki-sys"
+version = "0.5.0"
+source = "git+https://github.com/parallaxsecond/rust-cryptoki?rev=2e4ff5d717f46f90785496949c08599b589b8e32#2e4ff5d717f46f90785496949c08599b589b8e32"
+dependencies = [
+ "libloading",
 ]
 
 [[package]]
@@ -3319,7 +3340,7 @@ dependencies = [
 [[package]]
 name = "hayro"
 version = "0.7.1"
-source = "git+https://github.com/storytold/craft-libs?rev=9eb02be84f21898e247daeb2af5827c9fe85a3a0#9eb02be84f21898e247daeb2af5827c9fe85a3a0"
+source = "git+https://github.com/joshuashaffer/craft-libs?rev=f091420754c70e5d09133a3834e5aaaee3de4961#f091420754c70e5d09133a3834e5aaaee3de4961"
 dependencies = [
  "bytemuck",
  "hayro-interpret",
@@ -3339,7 +3360,7 @@ checksum = "9f4d0e94ddd48749f06bbe4e5389fb9799a0c45bcaf00495042076ef05e3241a"
 [[package]]
 name = "hayro-cmap"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=9eb02be84f21898e247daeb2af5827c9fe85a3a0#9eb02be84f21898e247daeb2af5827c9fe85a3a0"
+source = "git+https://github.com/joshuashaffer/craft-libs?rev=f091420754c70e5d09133a3834e5aaaee3de4961#f091420754c70e5d09133a3834e5aaaee3de4961"
 dependencies = [
  "brotli",
  "hayro-postscript",
@@ -3348,7 +3369,7 @@ dependencies = [
 [[package]]
 name = "hayro-interpret"
 version = "0.7.0"
-source = "git+https://github.com/storytold/craft-libs?rev=9eb02be84f21898e247daeb2af5827c9fe85a3a0#9eb02be84f21898e247daeb2af5827c9fe85a3a0"
+source = "git+https://github.com/joshuashaffer/craft-libs?rev=f091420754c70e5d09133a3834e5aaaee3de4961#f091420754c70e5d09133a3834e5aaaee3de4961"
 dependencies = [
  "bitflags 2.13.2",
  "hayro-cmap",
@@ -3366,7 +3387,7 @@ dependencies = [
 [[package]]
 name = "hayro-jbig2"
 version = "0.3.0"
-source = "git+https://github.com/storytold/craft-libs?rev=9eb02be84f21898e247daeb2af5827c9fe85a3a0#9eb02be84f21898e247daeb2af5827c9fe85a3a0"
+source = "git+https://github.com/joshuashaffer/craft-libs?rev=f091420754c70e5d09133a3834e5aaaee3de4961#f091420754c70e5d09133a3834e5aaaee3de4961"
 dependencies = [
  "fearless_simd",
  "hayro-ccitt",
@@ -3384,12 +3405,12 @@ dependencies = [
 [[package]]
 name = "hayro-postscript"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e7873217287876f76a045550369c90a541693c33#e7873217287876f76a045550369c90a541693c33"
+source = "git+https://github.com/joshuashaffer/craft-libs?rev=f091420754c70e5d09133a3834e5aaaee3de4961#f091420754c70e5d09133a3834e5aaaee3de4961"
 
 [[package]]
 name = "hayro-syntax"
 version = "0.7.2"
-source = "git+https://github.com/storytold/craft-libs?rev=9eb02be84f21898e247daeb2af5827c9fe85a3a0#9eb02be84f21898e247daeb2af5827c9fe85a3a0"
+source = "git+https://github.com/joshuashaffer/craft-libs?rev=f091420754c70e5d09133a3834e5aaaee3de4961#f091420754c70e5d09133a3834e5aaaee3de4961"
 dependencies = [
  "flate2",
  "hayro-ccitt",
@@ -5009,6 +5030,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "tempfile",
+ "zeroize",
 ]
 
 [[package]]
@@ -5106,6 +5128,7 @@ dependencies = [
 name = "pdfcraft-engine"
 version = "0.22.0"
 dependencies = [
+ "aws-lc-rs",
  "chrono",
  "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "craft-docpath",
@@ -5146,6 +5169,7 @@ dependencies = [
  "thiserror 2.0.21",
  "unicode-segmentation",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -5398,6 +5422,7 @@ dependencies = [
  "chrono",
  "craft-pkcs7",
  "crypto-bigint",
+ "cryptoki",
  "des",
  "ecdsa",
  "ed25519-dalek",
@@ -5416,8 +5441,11 @@ dependencies = [
  "rc2",
  "ripemd",
  "rsa",
+ "rustix 1.1.6",
  "rustls-cng",
  "security-framework",
+ "serde",
+ "serde_json",
  "sha1 0.11.0",
  "sha2 0.11.1",
  "sha3",
@@ -6800,6 +6828,15 @@ dependencies = [
  "der 0.8.2",
  "hybrid-array",
  "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "secrecy"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
+dependencies = [
  "zeroize",
 ]
 

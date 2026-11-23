@@ -12,11 +12,15 @@ pub mod der;
 pub mod dss;
 #[cfg(test)]
 mod ec512;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod envelope;
 pub mod graphic;
 #[cfg(target_os = "macos")]
 pub mod keychain;
 pub mod keys;
 pub mod pdf;
+#[cfg(target_os = "linux")]
+pub mod pkcs11;
 pub mod pkcs12;
 pub mod revocation;
 pub mod status_layers;
@@ -49,6 +53,8 @@ pub fn init_crypto() {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SignError {
+    #[error("The selected card changed or is no longer uniquely available. Refresh cards and select it again.")]
+    TokenChanged,
     #[error("malformed data: {0}")]
     Malformed(String),
     #[error("not supported: {0}")]

@@ -107,6 +107,7 @@ impl PdfCraftApp {
                 skip.iter().map(|p| absolute(p)).chain(self.recoverable.iter().filter_map(|m| m.path.as_deref().map(absolute))).collect();
             let mut active = None;
             let mut prompt = self.password_prompt.take();
+            let mut card_prompt = self.certificate_prompt.take();
             for f in &last.files {
                 let open = |app: &Self| {
                     app.views.iter().any(|v| app.session.get(v.id).and_then(|d| d.path.as_deref()).map(absolute).as_deref() == Some(f.path.as_str()))
@@ -116,8 +117,15 @@ impl PdfCraftApp {
                 }
                 let before = self.views.len();
                 self.open_path(&f.path);
-                if let Some(p) = self.password_prompt.take() {
+                if let Some(p) = self.password_prompt.take()
+                    && card_prompt.is_none()
+                {
                     prompt.get_or_insert(p);
+                }
+                if let Some(p) = self.certificate_prompt.take()
+                    && prompt.is_none()
+                {
+                    card_prompt.get_or_insert(p);
                 }
                 if self.views.len() > before
                     && let Some(view) = self.views.last_mut()
@@ -129,6 +137,7 @@ impl PdfCraftApp {
                 }
             }
             self.password_prompt = prompt;
+            self.certificate_prompt = card_prompt;
             if active.is_some() {
                 self.active = active;
             }

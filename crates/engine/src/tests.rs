@@ -628,7 +628,7 @@ fn a_3d_model_needs_the_comments_permission_and_changes_the_comments() {
         name: String::new(),
     };
     let p = pdfcraft_cos::Permissions { bits: 0, owner: false, revision: 3 };
-    assert_eq!(check_permission(&edit, &p), Err(EditError::NotPermitted("comments")));
+    assert_eq!(check_permission(&edit, &p, false), Err(EditError::NotPermitted("comments")));
     assert_eq!(crate::history::scope_of(&edit), crate::history::Scope::Comments);
 }
 
@@ -3798,7 +3798,7 @@ fn the_renderer_check_refuses_text_still_shown_under_a_mark() {
     let model = pdfcraft_model::pages(&cos);
     let marks: Vec<_> = pdfcraft_redact::marks(&cos).into_iter().filter_map(|m| model.get(m.page).map(|p| (p.obj, m))).collect();
     let refused = |cos: &pdfcraft_cos::Document| {
-        let shown = shown_under_redactions(cos, &marks, &[], None);
+        let shown = shown_under_redactions(cos, &marks, &[], &pdfcraft_render::RenderConfig::default());
         matches!(shown, Err(EditError::Redact(pdfcraft_redact::RedactError::Residue(n))) if n > 0)
     };
     assert!(refused(&cos));
@@ -8196,11 +8196,12 @@ fn measurement_edits_are_transactional_and_honour_annotation_permissions() {
     session.redo(id).unwrap();
     assert_eq!(session.get(id).unwrap().bytes, before);
     let p = pdfcraft_cos::Permissions { bits: 0, owner: false, revision: 3 };
-    assert_eq!(check_permission(&Edit::AddMeasurement(m), &p), Err(EditError::NotPermitted("comments")));
+    assert_eq!(check_permission(&Edit::AddMeasurement(m), &p, false), Err(EditError::NotPermitted("comments")));
     assert_eq!(
         check_permission(
             &Edit::SetMeasurementScale { page: 0, bbox: [0.0, 0.0, 100.0, 100.0], name: "Detail".into(), scale: measure::Scale::default() },
-            &p
+            &p,
+            false
         ),
         Err(EditError::NotPermitted("comments"))
     );
@@ -15764,4 +15765,23 @@ fn inline_conversions_refuse_office_documents_without_running_libreoffice() {
     }
     assert_eq!(s.convert_to_pdf_inline("notes.txt", &Arc::new(b"hello".to_vec())).unwrap().0, SourceKind::Text);
     assert!(s.as_pdf_inline("scan.jpg", &Arc::new(jpeg_bytes())).unwrap().starts_with(b"%PDF-"));
+}
+
+mod certificate_security;
+
+#[test]
+fn prepared_signature_uses_an_immutable_snapshot_and_the_session_clock() {
+    let mut session = Session::new().with_clock(|| 1_800_000_000);
+    let doc = session.open("snapshot.pdf", None, Arc::new(fixture(1)), None).unwrap();
+    session.apply(doc, Edit::SetInfo { key: "Title".into(), value: "Snapshot title".into() }).unwrap();
+    let job = session.prepare_sign(doc, SignOptions::default()).unwrap();
+    session.apply(doc, Edit::SetInfo { key: "Title".into(), value: "Later unsaved title".into() }).unwrap();
+    let identity =
+        sign::pkcs12::open(&std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap(), "test").unwrap();
+    let signed = std::thread::spawn(move || job.sign(&identity)).join().unwrap().unwrap();
+    let reopened = session.open("signed.pdf", None, signed, None).unwrap();
+    assert_eq!(session.get(reopened).unwrap().info_value("Title").as_deref(), Some("Snapshot title"));
+    assert_eq!(session.get(doc).unwrap().info_value("Title").as_deref(), Some("Later unsaved title"));
+    assert!(session.get(doc).unwrap().dirty);
+    assert_eq!(session.get(reopened).unwrap().signatures[0].date.as_deref(), Some("D:20270115080000Z"));
 }

@@ -643,6 +643,7 @@ pub struct OcrGuard {
 pub struct OcrJob {
     bytes: Arc<Vec<u8>>,
     password: Option<String>,
+    authenticated: Option<pdfcraft_render::AuthenticatedDocument>,
     infos: Vec<PageInfo>,
     /// Per page: the render scale (pixels per point) that shows its images at their own
     /// resolution, if it has any.
@@ -711,7 +712,10 @@ impl OcrJob {
     /// batch flow's "Skip files that already contain text" probe. A failed probe never
     /// enables a skip, so a page whose text cannot be read counts as no text there.
     pub fn has_text(&self) -> bool {
-        let mut r = PageRenderer::new(self.bytes.clone(), RenderConfig { password: self.password.as_deref().map(Arc::from), ..Default::default() });
+        let mut r = PageRenderer::new(
+            self.bytes.clone(),
+            RenderConfig { password: self.password.as_deref().map(Arc::from), authenticated: self.authenticated.clone(), ..Default::default() },
+        );
         self.pages.iter().any(|&page| {
             let t = r.render(RenderRequest { page, kind: RequestKind::Text, scale: 1.0, ..Default::default() });
             page_has_text(t.text.as_ref())
@@ -738,8 +742,12 @@ impl OcrJob {
     /// Read the pages one at a time, preparing each page's image and recognising it separately:
     /// the web build prepares pages on the page and recognises them in Web Workers.
     pub fn steps(self) -> OcrSteps {
-        let config =
-            RenderConfig { password: self.password.as_deref().map(Arc::from), hide_comments: self.settings.native_text_only, ..Default::default() };
+        let config = RenderConfig {
+            password: self.password.as_deref().map(Arc::from),
+            authenticated: self.authenticated.clone(),
+            hide_comments: self.settings.native_text_only,
+            ..Default::default()
+        };
         let renderer = PageRenderer::new(self.bytes.clone(), config);
         OcrSteps { job: self, renderer, next: 0 }
     }
@@ -1002,7 +1010,16 @@ impl Session {
             })
             .collect();
         let guard = OcrGuard { doc: id, pages: all, revisions: doc.revision_ends().len(), bytes: doc.bytes.clone() };
-        Some(OcrJob { bytes: doc.bytes.clone(), password: doc.password.clone(), infos: doc.info.pages.clone(), native, pages, settings, guard })
+        Some(OcrJob {
+            bytes: doc.bytes.clone(),
+            password: doc.password.clone(),
+            authenticated: doc.config.authenticated.clone(),
+            infos: doc.info.pages.clone(),
+            native,
+            pages,
+            settings,
+            guard,
+        })
     }
 
     /// Add the words found by [`OcrJob::run`] as one undoable step. Returns the number of words.

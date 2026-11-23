@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+zeroize = "1.8"
 pdfcraft-engine = { workspace = true }
 pdfcraft-cos = { workspace = true }
 pdfcraft-render = { workspace = true }

@@ -265,6 +265,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-22 (M8/M9, PR #5492):** Rebased on main after PDF parsing and rendering moved to shared `craft-pdf`. The certificate security handler and authenticated stream parsing now travel with the shared library. The app retains Linux smartcard signing, reader PIN pads and certificate opening. Pending certificate security reports the active writer rights, and certificate mismatches have their own opening error. Both regressions failed before the fixes and passed after restoration. The local port passed 12 focused certificate tests, the signing snapshot test, native and WASM compilation, and the layer, asset and parity checks. Broader PKCS #11 hardware and PDF profile coverage remain partial.
+
 - **2026-11-16 (M5, #3741):** Ctrl+M opens Comments on Windows/Linux and repeated activation keeps it open. macOS leaves Command+M unbound for Minimize. Dispatch, menus, palette, shortcut help and control/headless metadata resolve the platform-specific registry binding. Mapping and real-input regressions are retained through the rebase; estimates unchanged.
 - **2026-11-03 (M3, #3669):** A drag across a table selects its rows, as Preview does, instead of reading order's detour down each column; a cell padded with spaces reads with the next cell of its row. Synthetic render and UI drag regressions; estimates unchanged.
 

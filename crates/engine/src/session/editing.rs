@@ -2,8 +2,8 @@
 use super::check_refresh_panic;
 use super::{
     Arc, DocId, Document, Edit, EditCtx, EditError, Label, MAX_UNDO, ObjectKind, OnceLock, RenderPool, SaveOptions, Scope, Session,
-    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, carry_verdict_marks, check_permission, comment_list, display_bytes, display_config, guard, info_fields,
-    inspect, js, keys_after, note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions, signatures_of, sync_xfa_state,
+    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, carry_verdict_marks, check_permission, comment_list, display_bytes, display_config, guard, info_fields, js,
+    keys_after, note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions, signatures_of, sync_xfa_state,
     undrawn_notices, uses_scripts, write_incremental, xfa, xfa_sync_datasets,
 };
 use crate::{EditNotice, MarkKind, print_preview_layers};
@@ -164,9 +164,10 @@ impl Session {
         cx.today = today;
         let reason = doc.read_only_reason.clone().unwrap_or_default();
         let signed = doc.is_signed();
+        let security_control = doc.allows_security_change();
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
         if let Some(p) = editor.cos.permissions() {
-            check_permission(&edit, &p)?;
+            check_permission(&edit, &p, security_control)?;
         }
         let Some(edit) = prepare_ocr_text_edit(editor, &doc.info, edit) else {
             return Ok(None);
@@ -196,6 +197,11 @@ impl Session {
             take_xfa_output(doc, cx.xfa_out, cx.xfa_ran_away);
             return Ok(None);
         }
+        let keys = guard(|| keys_after(&edit, &next))
+            .map_err(EditError::Reopen)
+            .and_then(|result| result)
+            .inspect_err(|_| discard_edit_callbacks(&cx))?
+            .unwrap_or_else(|| editor.keys.clone());
         // Redaction removed what its own interpreter places under the marks. The marks were drawn
         // over the page as the renderer shows it, so the renderer has the last word: on every
         // apply the edit ran, a batch's included.
@@ -212,7 +218,12 @@ impl Session {
                     "a batch that deletes a page with a redaction mark and adds pages can't be verified; the document was not changed".into(),
                 ));
             }
-            guard(|| shown_under_redactions(&next, &cx.redaction_marks, &cx.redaction_overlays, doc.password.as_deref()))
+            let credentials = pdfcraft_render::RenderConfig {
+                password: keys.render.as_deref().map(Arc::from),
+                authenticated: keys.authenticated.clone(),
+                ..Default::default()
+            };
+            guard(|| shown_under_redactions(&next, &cx.redaction_marks, &cx.redaction_overlays, &credentials))
                 .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))
                 .inspect_err(|_| discard_edit_callbacks(&cx))?;
         }
@@ -336,7 +347,6 @@ impl Session {
             notices.push(EditNotice::RedactionIdentification(cx.redaction_identification));
         }
         let previous = std::mem::replace(&mut editor.cos, next);
-        let keys = keys_after(&edit).unwrap_or_else(|| editor.keys.clone());
         let previous_keys = std::mem::replace(&mut editor.keys, keys);
         editor.undo.push((label, previous, previous_keys, scope));
         if editor.undo.len() > MAX_UNDO {
@@ -473,6 +483,7 @@ impl Session {
         if let Some(e) = doc.editor.as_ref() {
             doc.password = e.keys.render.clone();
             doc.config.password = e.keys.render.as_deref().map(Arc::from);
+            doc.config.authenticated = e.keys.authenticated.clone();
         }
     }
 
@@ -634,7 +645,13 @@ impl Session {
             editor.cos.bytes().clone()
         };
         // The edit must still leave a file the viewer can open; anything else rolls back above.
-        pdfcraft_render::check_pages(bytes.clone(), doc.password.as_deref(), doc.info.pages.len()).map_err(|e| EditError::Reopen(e.to_string()))?;
+        pdfcraft_render::check_pages_with_credentials(
+            bytes.clone(),
+            doc.password.as_deref(),
+            doc.config.authenticated.as_ref(),
+            doc.info.pages.len(),
+        )
+        .map_err(|e| EditError::Reopen(e.to_string()))?;
         let (touches_added, touches_marks) = Self::content_refresh_lists(edit);
         if touches_added || touches_marks {
             doc.marker_scan = OnceLock::new();
@@ -712,7 +729,8 @@ impl Session {
         } else {
             editor.cos.bytes().clone()
         };
-        let info = inspect(bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
+        let info = pdfcraft_render::inspect_with_credentials(bytes.clone(), doc.password.as_deref(), doc.config.authenticated.as_ref())
+            .map_err(|e| EditError::Reopen(e.to_string()))?;
         // Keep the user's layer choices where the layers still exist.
         let mut info = info;
         if renumbered {
