@@ -4970,6 +4970,7 @@ dependencies = [
  "pdfcraft-model",
  "proptest",
  "thiserror 2.0.21",
+ "unicode-bidi",
 ]
 
 [[package]]
