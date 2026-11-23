@@ -167,14 +167,16 @@ struct Shown {
 
 impl Shown {
     fn show(&mut self, state: &State, bytes: &[u8]) {
+        // A vertical font's glyphs advance down the page, invisible or not, so the text after
+        // them is placed where the extents do not follow.
+        self.unbounded |= state.vertical;
         let Some(metrics) = state.metrics.as_ref().filter(|_| !state.invisible) else {
             self.unbounded |= state.metrics.is_none();
             return;
         };
-        // Codes without a Unicode mapping still paint glyphs, and a vertical font's glyphs
-        // advance down the page: either way the text's extent is not known.
+        // Codes without a Unicode mapping still paint glyphs: the text's extent is not known.
         let unmapped = metrics.codes(bytes).iter().any(|&(code, _)| metrics.text_of(code).is_none());
-        self.unbounded |= state.vertical || unmapped;
+        self.unbounded |= unmapped;
         let text = metrics.decode(bytes);
         let chars = text.chars().filter(|c| !c.is_whitespace()).count();
         if chars == 0 {
@@ -194,10 +196,10 @@ impl Shown {
             return;
         }
         self.keep(&text);
-        let (run, declared) = advance(state, metrics, bytes);
-        self.unbounded |= !declared;
+        let run = advance(state, metrics, bytes);
+        self.unbounded |= !run.declared;
         let (low, high) = (state.rise, state.rise + state.size);
-        for along in [0.0, run] {
+        for along in run.span {
             let (x, y) = (e + along * a, f + along * b);
             self.reach(x + low * c, y + low * d);
             self.reach(x + high * c, y + high * d);
@@ -247,15 +249,31 @@ impl Shown {
     }
 }
 
-/// The text width `bytes` advances by, in unscaled text space (§9.4.4), and whether the font
-/// declares every glyph's width.
-fn advance(state: &State, metrics: &Metrics, bytes: &[u8]) -> (f64, bool) {
+/// How far a string's glyphs move and reach along the text line, in unscaled text space (§9.4.4).
+struct Run {
+    /// The advance past the string.
+    width: f64,
+    /// The lowest and highest points any glyph or the advance reaches: negative spacing can
+    /// pull glyphs back over each other, so the ends of the run alone do not bound them.
+    /// Non-finite when the spacing or size is.
+    span: [f64; 2],
+    /// Whether the font declares every glyph's width.
+    declared: bool,
+}
+
+fn advance(state: &State, metrics: &Metrics, bytes: &[u8]) -> Run {
     let [char_spacing, word_spacing, scale] = state.spacing;
-    let (width, declared) = metrics.codes(bytes).into_iter().fold((0.0, true), |(sum, declared), (code, len)| {
+    let (mut at, mut low, mut high, mut declared) = (0.0f64, 0.0f64, 0.0f64, true);
+    for (code, len) in metrics.codes(bytes) {
+        let glyph = metrics.width(code) * state.size;
+        (low, high) = (low.min(at).min(at + glyph), high.max(at).max(at + glyph));
         let word = if metrics.is_space(code, len) { word_spacing } else { 0.0 };
-        (sum + metrics.width(code) * state.size + char_spacing + word, declared && metrics.width_declared(code))
-    });
-    (width * scale, declared)
+        at += glyph + char_spacing + word;
+        declared &= metrics.width_declared(code);
+    }
+    // `min` and `max` drop a NaN, but once `at` is not finite it stays so: pass it on instead.
+    let span = if at.is_finite() { [low.min(at), high.max(at)] } else { [at, at] };
+    Run { width: at * scale, span: span.map(|v| v * scale), declared }
 }
 
 /// Whether `font` writes vertically: a Type 0 font whose `/Encoding` is a predefined CMap name
@@ -278,7 +296,7 @@ fn show(state: &mut State, object: Option<&mut Shown>, bytes: &[u8]) {
     if let Some(o) = object {
         o.show(state, bytes);
     }
-    let moved = state.metrics.as_ref().map_or(0.0, |m| advance(state, m, bytes).0);
+    let moved = state.metrics.as_ref().map_or(0.0, |m| advance(state, m, bytes).width);
     state.tm = Matrix::translate(moved, 0.0).then(&state.tm);
 }
 
@@ -609,6 +627,24 @@ mod tests {
         let found = walk_type0(b"BT /F1 12 Tf 72 760 Td (Header) Tj /U 12 Tf 0 -360 Td <00410042> Tj ET BT /H 12 Tf 72 760 Td <00410042> Tj ET");
         assert_eq!((found[0].text.as_str(), found[0].extent), ("Header", None));
         assert_eq!(rounded(found[1].extent), Some([72.0, 760.0, 96.0, 772.0]), "mapped Type 0 text keeps its extent");
+    }
+
+    #[test]
+    fn text_after_invisible_vertical_text_has_no_extent() {
+        // The invisible glyph moves the text 360 units down the page before "Body" is shown.
+        let found = walk_type0(b"BT /V 360 Tf 3 Tr 72 760 Td <0041> Tj /F1 12 Tf 0 Tr (Body) Tj ET BT /F1 12 Tf 72 760 Td (Body) Tj ET");
+        assert_eq!((found[0].text.as_str(), found[0].extent), ("Body", None));
+        assert!(found[1].extent.is_some());
+    }
+
+    #[test]
+    fn spacing_past_f64_leaves_no_extent() {
+        // Tc and Tw near f64::MAX each overflow to infinity and cancel to NaN on the first space.
+        let big = format!("1.0e{}", 999);
+        let found =
+            walk(format!("BT /F1 10 Tf {big} Tc -{big} Tw 72 760 Td ( Body) Tj ET BT /F1 10 Tf 0 Tc 0 Tw 72 760 Td ( Body) Tj ET").as_bytes());
+        assert_eq!((found[0].text.as_str(), found[0].extent), (" Body", None));
+        assert!(found[1].extent.is_some());
     }
 
     #[test]

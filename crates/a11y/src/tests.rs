@@ -226,6 +226,32 @@ fn autotag_text_leaves_turned_text_that_runs_out_of_the_band_tagged() {
     assert_eq!(running_text(&doc).unwrap(), []);
 }
 
+/// Turned body text whose negative character spacing brings each line's advance back to zero
+/// still has glyphs running down the page from the header band: it is not running text.
+#[test]
+fn autotag_text_leaves_turned_text_pulled_back_by_negative_spacing_tagged() {
+    // A is 12 units wide and advances 6 at Tc -6; B is 0 wide and advances -6. Thirty of each
+    // end where they began, but the A glyphs reach 186 units down from y 760.
+    let body = format!("BT /F1 12 Tf -6 Tc 0 -1 1 0 72 760 Tm ({}{}) Tj ET", "A".repeat(30), "B".repeat(30));
+    let font = "<< /Type /Font /Subtype /Type1 /BaseFont /HouseFont /FirstChar 65 /LastChar 66 /Widths [1000 0] >>";
+    let leaf = |contents: usize| format!("<< /Type /Page /Parent 2 0 R /Contents {contents} 0 R >>");
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+            leaf(5),
+            leaf(6),
+            stream(&body),
+            stream(&body),
+            font.into(),
+        ],
+        "",
+    );
+    assert_eq!(running_text(&doc).unwrap(), []);
+    let result = autotag_text(&mut doc).unwrap();
+    assert_eq!((result.headers, result.footers, result.paragraphs), (0, 0, 2));
+}
+
 #[test]
 fn autotag_text_leaves_a_single_page_header_tagged() {
     let mut doc = pdf(
