@@ -718,6 +718,7 @@ fn os_store_identities_are_not_persisted() {
         app.digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
             path: path.into(),
             name: "Signer".into(),
+            sign_name: "Signer".into(),
             issuer: "Test issuer".into(),
             email: String::new(),
             expires: "2030.01.01".into(),
@@ -743,6 +744,7 @@ fn windows_store_identity_does_not_ask_for_a_file_password() {
     h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
         path: "windows:No Such Signer".into(),
         name: "Store signer".into(),
+        sign_name: "Store signer".into(),
         issuer: "Test issuer".into(),
         email: String::new(),
         expires: "2030.01.01".into(),
@@ -773,6 +775,7 @@ fn long_digital_id_names_stay_inside_the_picker() {
     h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
         path: "windows:No Such Signer".into(),
         name: long.clone(),
+        sign_name: long.clone(),
         issuer: long,
         email: String::new(),
         expires: "2030.01.01".into(),
@@ -810,6 +813,7 @@ fn an_unusable_id_is_shown_with_its_reason_and_cannot_be_chosen() {
     h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
         path: "store-test:broken".into(),
         name: "Broken signer".into(),
+        sign_name: "Broken signer".into(),
         issuer: String::new(),
         email: String::new(),
         expires: String::new(),
@@ -830,6 +834,7 @@ fn an_unusable_id_is_shown_with_its_reason_and_cannot_be_chosen() {
     h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
         path: "store-test:fine".into(),
         name: "Working signer".into(),
+        sign_name: "Working signer".into(),
         issuer: "Test issuer".into(),
         email: String::new(),
         expires: "2030.01.01".into(),
