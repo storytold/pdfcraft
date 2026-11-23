@@ -1,6 +1,7 @@
 //! Invisible format characters in a page's text: no font has a glyph for them and they take no
-//! room, so the text read for editing leaves them out, and asking a font for one never fails an
-//! edit.
+//! room, so where nothing is drawn for them the text read for editing leaves them out, and an edit
+//! there doesn't ask a font for one. A glyph drawn for one (a Unicode chart's box) keeps its text
+//! (`MarkedContent::end`), whatever [`InvisibleMarks`] would leave out.
 //!
 //! Chrome's PDFs (Google Docs exports included) give every run an `/ActualText` that wraps its
 //! text in U+202D LEFT-TO-RIGHT OVERRIDE and U+202C POP DIRECTIONAL FORMATTING. Read as they
@@ -21,10 +22,11 @@ pub(crate) struct InvisibleMarks {
 }
 
 impl InvisibleMarks {
-    /// The marks `text` leaves out. U+061C ARABIC LETTER MARK is in the Arabic block but is a
-    /// control, not a right-to-left letter.
+    /// The marks `text` leaves out. Only a letter counts as right-to-left: not the punctuation of
+    /// those scripts' blocks (U+060C ARABIC COMMA in Latin text), nor U+061C ARABIC LETTER MARK,
+    /// which is a control.
     pub(crate) fn of(text: &str) -> Self {
-        Self { bidi: !text.chars().any(|c| crate::bidi::is_rtl(c) && !crate::bidi::is_bidi_control(c)) }
+        Self { bidi: !text.chars().any(|c| crate::bidi::is_rtl(c) && c.is_alphabetic()) }
     }
 
     pub(crate) fn drops(self, c: char) -> bool {
@@ -54,6 +56,11 @@ mod tests {
         assert!(!hebrew.drops('\u{200F}') && !hebrew.drops('\u{202B}'));
         assert!(hebrew.drops('\u{200B}') && hebrew.drops('\u{FEFF}'));
         assert!(InvisibleMarks::of("\u{061C}abc").drops('\u{061C}'), "U+061C is no right-to-left letter");
+        // Right-to-left punctuation in Latin text is no right-to-left letter either.
+        for punctuation in ['\u{060C}', '\u{061F}', '\u{05BE}'] {
+            let text = format!("\u{202D}Hello{punctuation} world\u{202C}");
+            assert_eq!(InvisibleMarks::of(&text).strip(&text), format!("Hello{punctuation} world"), "U+{:04X}", u32::from(punctuation));
+        }
         let latin = InvisibleMarks::of("\u{202D}abc\u{202C}");
         assert!(latin.drops('\u{202D}') && latin.drops('\u{202C}') && latin.drops('\u{2066}') && latin.drops('\u{200E}'));
         for kept in ['\u{200C}', '\u{200D}', '\u{FE0F}', '\u{00AD}', ' ', 'a'] {

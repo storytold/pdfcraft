@@ -15722,6 +15722,37 @@ fn right_to_left_actual_text_keeps_its_bidi_controls() {
     assert!(lines.iter().any(|l| l.contains('\u{202B}') && l.contains("שלום")), "{lines:?}");
 }
 
+/// A Unicode chart draws a box for each format character it lists, with that character as the
+/// box's `/ActualText` (PDFBOX-2294's TaroUTR50SortedList112.pdf, U+2060 to U+2069), right after
+/// the label. A glyph that draws something keeps its text, so the box is never a run with no text
+/// that joins the label's line and goes with an edit of it: the edit keeps the box, or is refused
+/// as before for the character no font draws. A mark over a blank glyph (Google Docs puts U+200B
+/// on a space) is still left out.
+#[test]
+fn a_glyph_drawn_for_a_format_character_keeps_its_text() {
+    let chart = "BT /F1 12 Tf 1 0 0 1 72 700 Tm (R 2060) Tj /F2 12 Tf /Span <</ActualText <FEFF2060>>> BDC (a) Tj EMC \
+                 /F1 12 Tf ( .. 2064) Tj /F2 12 Tf /Span <</ActualText <FEFF2064>>> BDC (a) Tj EMC ET \
+                 BT /F1 12 Tf 1 0 0 1 72 650 Tm /Span <</ActualText <FEFF200B>>> BDC ( ) Tj EMC (Item) Tj ET";
+    let doc = text_page(chart);
+    let boxes = |doc: &Document| page_content(doc).matches("(a) Tj").count();
+    assert_eq!(boxes(&doc), 2);
+    let (index, label) =
+        text::text_blocks(&doc, 0).unwrap().into_iter().enumerate().find(|(_, b)| b.editor_text.contains("2060")).expect("the label paragraph");
+    let mut edited = doc.clone();
+    match text::rewrite_block(&mut edited, 0, index, Some(&label.editor_text.replacen("2060", "2061", 1)), &text::BlockStyle::default()) {
+        Ok(_) => {
+            let edited = reopen(&edited);
+            assert_eq!(boxes(&edited), 2, "an edit of the label keeps both boxes: {:?} -> {}", label.editor_text, page_content(&edited));
+        }
+        Err(e) => assert!(e.to_string().contains("U+2060"), "refused only for the box's character: {e}"),
+    }
+    let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    for (mark, name) in [('\u{2060}', "U+2060"), ('\u{2064}', "U+2064")] {
+        assert!(lines.iter().any(|l| l.contains(mark)), "the {name} box keeps its text: {lines:?}");
+    }
+    assert!(lines.iter().any(|l| l.trim() == "Item"), "the zero-width space over a space glyph is left out: {lines:?}");
+}
+
 /// Filling in a blank of a Chrome paragraph failed with "the Shippori Mincho fallback font has no
 /// glyph for U+202D": the marks, written as `/ActualText`
 /// over a space glyph at each end of the run, were in the paragraph's text and in every draft

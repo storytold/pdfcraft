@@ -734,7 +734,12 @@ impl MarkedContent {
                     // Without the invisible format characters no font draws (Chrome wraps every
                     // run's ActualText in U+202D ... U+202C), so no text read for editing, nor any
                     // draft made from it, carries them ([`super::marks`]).
-                    let logical = InvisibleMarks::of(&logical).strip(&logical).into_owned();
+                    // A glyph that draws something keeps its text, though: a Unicode chart's box for
+                    // U+2060 says U+2060. Left out, the box would join a neighbouring line with no
+                    // text standing for it, and an edit of that line would drop it from the page.
+                    let stripped = InvisibleMarks::of(&logical).strip(&logical).into_owned();
+                    let drawn = !first.ink.is_empty() && stripped.trim().is_empty() && !logical.trim().is_empty();
+                    let logical = if drawn { logical } else { stripped };
                     // Only right-to-left ActualText is already in typing order and must stay out of
                     // bidi recovery. Word and Chrome also wrap Latin ligatures mid-word.
                     first.logical_order = logical.chars().any(crate::bidi::is_rtl);
