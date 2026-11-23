@@ -92,6 +92,9 @@ impl TextBackground {
                 if let Some(worker) = &mut self.worker {
                     worker.release();
                 }
+                // The released worker publishes nothing more: no draft is in flight.
+                self.serial = None;
+                self.submitted_at = None;
                 self.settling = Some(look);
             }
             None => self.reset(None),
@@ -322,6 +325,13 @@ impl TextBackground {
         self.key.is_some_and(|(_, p, target)| (p, target) == (page, TextTarget::Block(block))) && self.shown.is_some()
     }
 
+    /// The draft raster goes under the open paragraph's editor: the paragraph has changed and a raster
+    /// is ready. Not once the draft's preview failed: the raster is of an earlier draft, whose rows can
+    /// reach past the box the editor draws the draft on, and the page shows its own text instead.
+    pub(super) fn shows_draft(&self, ed: &LineEditor) -> bool {
+        ed.has_changes() && self.draft_error.is_none() && self.ready(ed.page, ed.block)
+    }
+
     pub fn ready_added(&self, page: usize, index: usize) -> bool {
         self.key.is_some_and(|(_, p, target)| (p, target) == (page, TextTarget::Added(index))) && self.shown.is_some()
     }
@@ -338,7 +348,7 @@ impl TextBackground {
         editor: Option<&LineEditor>,
         draft: Option<&crate::content_ui::TextDraft>,
     ) {
-        let for_editor = editor.is_some_and(|ed| ed.page == page && ed.has_changes() && self.ready(page, ed.block));
+        let for_editor = editor.is_some_and(|ed| ed.page == page && self.shows_draft(ed));
         // A zoom or a turn of the view since the paragraph was applied would misplace its rows:
         // the page raster (with the old text) shows until the new one arrives instead.
         let settled =

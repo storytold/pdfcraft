@@ -1080,7 +1080,7 @@ struct ParagraphHost<'a> {
     /// A PDF draft raster shows the text: a changed draft follows its PDF geometry. Without one the
     /// editor draws the changed draft itself, so the caret follows the faces it is drawn in.
     raster: bool,
-    /// The editor draws the draft itself (its preview failed): the caret and selection always show.
+    /// The draft's PDF preview failed: the editor draws the draft itself, with its caret and selection.
     fallback: bool,
     faces: &'a BTreeMap<String, FontRef>,
     view: CanvasView,
@@ -1091,6 +1091,12 @@ struct ParagraphHost<'a> {
     /// Where the laid-out text's top left is on screen.
     origin: Pos2,
     galley: Option<Arc<egui::Galley>>,
+}
+
+/// The editor draws the changed draft itself, in the faces it lays it out with: when the draft's
+/// PDF preview failed (`fallback`), or while no PDF draft raster shows it (`raster` is false).
+fn draws_draft(fallback: bool, raster: bool, changed: bool) -> bool {
+    fallback || (changed && !raster)
 }
 
 /// The chars each row of `galley` holds, without its line break.
@@ -1146,11 +1152,17 @@ impl ParagraphHost<'_> {
         self.view.to_screen(p) - self.origin
     }
 
+    /// The editor draws the changed draft itself: its preview failed, or no PDF draft raster shows
+    /// it yet. `editor_session` draws the text by the same rule.
+    fn draws_draft(&self) -> bool {
+        draws_draft(self.fallback, self.raster, self.ed.has_changes())
+    }
+
     /// The caret and selection show over the raster of this very draft, or over the editor's own
     /// drawing of it. Over a raster of other text they would sit at another draft's places: the worker
     /// publishes the PDF ink and the exact geometry together on a later pass.
     fn marks_shown(&self) -> bool {
-        self.fallback || self.background.current(self.ed)
+        self.draws_draft() || self.background.current(self.ed)
     }
 
     /// The cursor at char `offset` on laid-out line `line`: at a soft wrap the offset ends one line
@@ -1318,7 +1330,7 @@ fn editor_session(
     // page, until a draft's preview succeeds: the user must see what they are changing, even in an
     // interface face.
     let fallback = preview_error.is_some();
-    let cover = fallback || (ed.has_changes() && !background_ready);
+    let cover = draws_draft(fallback, background_ready && !fallback, ed.has_changes());
     let layout = background.layout_for(&ctx, doc, ed, &ed.text).filter(|_| !cover);
     let laid = ParagraphCover::new(doc, ed, scale, room, draft_rect, layout, cover).show_at(ui, page_clip);
     let (faces, width, live) = (laid.faces, laid.width, laid.live);
@@ -1361,7 +1373,7 @@ fn editor_session(
     ed.selection = Some(selection);
     // PDF rasters supply the visible glyphs, including while typing: the draft's layout is drawn
     // unseen, keeping only its geometry. Without a raster of the changed text the editor draws it.
-    let visible = cover || (ed.has_changes() && !background_ready);
+    let visible = draws_draft(fallback, background_ready && !fallback, ed.has_changes());
     // Over a raster of other text the provisional layout is left out with the caret: the worker
     // publishes the PDF ink and the exact geometry together on a later pass.
     if visible || background.current(ed) {
@@ -1845,6 +1857,111 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "the closed paragraph's draft source is still held");
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
+    }
+
+    /// Typing before the first PDF raster arrives: the editor draws the draft itself, so its caret
+    /// and selection show with it. Over a raster of other text they stay hidden.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn the_editor_s_own_draft_shows_its_caret_before_the_first_raster() {
+        let (app, mut ed) = preview_app();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        let ctx = egui::Context::default();
+        // The raster store counts its frames by pass.
+        ctx.begin_pass(egui::RawInput::default());
+        let mut background = TextBackground::default();
+        let worker = worker::DraftWorker::new(&ctx).unwrap();
+        worker.pause(true);
+        background.worker = Some(worker);
+        ed.text = "Typed before the raster".into();
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        assert!(!background.ready(0, 0) && !background.current(&ed), "no raster yet");
+        let faces = BTreeMap::new();
+        let view = CanvasView::new(Rect::from_min_size(Pos2::ZERO, vec2(600.0, 800.0)), Point::new(300.0, 400.0), 1.0);
+        let mut host = ParagraphHost {
+            ctx: &ctx,
+            doc,
+            ed: &mut ed,
+            background: &mut background,
+            raster: false,
+            fallback: false,
+            faces: &faces,
+            view,
+            scale: 1.0,
+            width: 400.0,
+            origin: Pos2::ZERO,
+            galley: None,
+        };
+        assert!(host.caret(3, None).is_some(), "the draft the editor draws has its caret");
+        assert!(!host.selection_quads(0..3).is_empty(), "and its selection");
+        // A raster of other text is on screen: the marks would sit at its places.
+        host.raster = true;
+        host.galley = None;
+        assert!(host.caret(3, None).is_none());
+        assert!(host.selection_quads(0..3).is_empty());
+        background.worker.as_ref().unwrap().pause(false);
+    }
+
+    /// Applying the draft a raster shows while a redraw of it is in flight: the released worker
+    /// publishes nothing more, so nothing stays pending until the page is redrawn.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn applying_a_draft_releases_its_work_in_flight() {
+        let (app, mut ed) = preview_app();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        let ctx = egui::Context::default();
+        // The raster store counts its frames by pass.
+        ctx.begin_pass(egui::RawInput::default());
+        let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, egui::vec2(600.0, 800.0)), rot: 0, pw: 600.0, ph: 800.0 };
+        let mut background = TextBackground::default();
+        ed.text = "Draft A".into();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        while !background.current(&ed) {
+            background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        // A zoom asks for the same draft again, at the new scale.
+        background.worker.as_ref().unwrap().pause(true);
+        background.prepare(&ctx, doc, Some(&ed), None, 0.5);
+        assert!(background.pending(), "the redraw is in flight");
+        background.remember(&xf, 0, 0);
+        background.committed(&Edit::EditTextBlock { page: 0, block: 0, text: ed.text.clone(), style: ed.style() });
+        assert!(background.settling(), "the applied draft's raster stands in for it");
+        assert!(!background.pending(), "released work is not pending");
+        background.worker.as_ref().unwrap().pause(false);
+    }
+
+    /// Once a draft's preview fails, the earlier draft's raster no longer goes under the editor:
+    /// its rows can reach past the box the editor draws the draft on.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_failed_preview_takes_the_earlier_draft_raster_off_the_page() {
+        let (app, mut ed) = preview_app();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        let ctx = egui::Context::default();
+        // The raster store counts its frames by pass.
+        ctx.begin_pass(egui::RawInput::default());
+        let mut background = TextBackground::default();
+        ed.text = "A long earlier draft that runs over several rows of the paragraph box".into();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        while !background.current(&ed) {
+            background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(background.shows_draft(&ed), "the draft's raster is under the editor");
+        ed.text = "Short".into();
+        background.worker.as_ref().unwrap().pause(true);
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        background.submitted_at = Some(web_time::Instant::now() - std::time::Duration::from_secs(21));
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        assert!(background.error_for(0, 0).is_some(), "the preview timed out");
+        assert!(background.ready(0, 0), "the earlier raster is still held");
+        assert!(!background.shows_draft(&ed), "but not shown under the editor");
+        background.worker.as_ref().unwrap().pause(false);
     }
 
     #[test]

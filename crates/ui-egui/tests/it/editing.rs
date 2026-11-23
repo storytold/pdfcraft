@@ -11750,6 +11750,20 @@ fn a_modified_click_away_from_a_cropped_picture_applies_its_crop() {
     }
 }
 
+/// The open paragraph's editor lays `text` out over the PDF raster of that very draft: no draft is
+/// being prepared, and the editor's layout of it is drawn unseen. The editor draws a draft visibly
+/// in its own faces before the first raster and after a failed preview; neither has the PDF's
+/// character advances.
+fn shows_its_pdf_draft(h: &Harness<'static, PdfCraftApp>, text: &str) -> bool {
+    !h.state().render_pending()
+        && h.output().shapes.iter().any(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.text() == text => {
+                t.galley.rows.iter().all(|row| row.visuals.mesh.vertices.iter().all(|v| v.color.a() == 0))
+            }
+            _ => false,
+        })
+}
+
 #[test]
 fn inline_caret_uses_pdf_advances_before_and_after_typing() {
     let bytes = source_font_fixture_with_text("BT /F1 18 Tf 20 220 Td [(Wi) 100 (Wi)] TJ ET");
@@ -11777,11 +11791,7 @@ fn inline_caret_uses_pdf_advances_before_and_after_typing() {
             h.event(egui::Event::Text(text.into()));
             h.run_steps(3);
         }
-        assert!(crate::support::step_until(&mut h, |h| h
-            .output()
-            .shapes
-            .iter()
-            .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == text))));
+        assert!(crate::support::step_until(&mut h, |h| shows_its_pdf_draft(h, text)));
         let ed = h.state().views[0].session.line_editor.as_ref().unwrap();
         assert_eq!(ed.text, text);
         let doc = h.state().session.get(h.state().views[0].id).unwrap();
@@ -11837,11 +11847,7 @@ fn typed_caret_stays_at_the_pdf_position_after_each_draft_completes() {
         } else {
             h.event(egui::Event::Text(typed.into()));
         }
-        assert!(crate::support::step_until(&mut h, |h| h
-            .output()
-            .shapes
-            .iter()
-            .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == draft))));
+        assert!(crate::support::step_until(&mut h, |h| shows_its_pdf_draft(h, &draft)));
         let ed = h.state().views[0].session.line_editor.as_ref().unwrap();
         assert_eq!(ed.text, draft);
         let caret = ed.selection.expect("the editor has a caret").caret;
