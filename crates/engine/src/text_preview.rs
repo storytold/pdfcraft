@@ -115,6 +115,14 @@ impl Document {
     ) -> Result<pdfcraft_edit::text::TextEditLayout, String> {
         guard(|| {
             let editor = self.editor.as_ref().ok_or("the document can't be read")?;
+            // Measure the rewrite Apply makes, as the draft preview draws it: an OCR paragraph's
+            // scan cover, ink and changed words only. A draft Apply leaves as it is keeps its input.
+            let edit = crate::Edit::EditTextBlock { page, block, text: text.to_owned(), style: style.clone() };
+            let prepared = crate::session::prepare_ocr_text_edit(editor, &self.info, edit);
+            let style = match &prepared {
+                Some(crate::Edit::EditTextBlock { style, .. }) => style,
+                _ => style,
+            };
             pdfcraft_edit::text::text_edit_layout(&editor.cos, page, block, text, style).map_err(|e| e.to_string())
         })?
     }
