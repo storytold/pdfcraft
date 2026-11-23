@@ -144,7 +144,7 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         });
 
         // The list; files dropped over the window join it.
-        DropVeil::new(tl!("Drop to add the files")).show(ui, |ui, files| {
+        DropVeil::new(tl!("Drop to add the files")).show_with_files(ui, |ui, files| {
             if let Some(files) = files {
                 dropped = Some(files.files.clone());
             }
