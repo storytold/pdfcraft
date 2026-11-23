@@ -4,6 +4,7 @@ use pdfcraft_annot::{Markup, Meta, NewAnnotation, Shape, Style, TextReplacement,
 use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
 use pdfcraft_forms::{NewField, add_field, fields, set_value};
 
+use super::common::walk_xfdf;
 use super::xfdf::PDFCRAFT_NS;
 use super::*;
 
@@ -2761,4 +2762,74 @@ fn xfdf_charges_split_text_before_copying_values() {
 fn merge_csv_keeps_first_repeated_value() {
     let rows = vec![("Name".into(), vec!["first".into()]), ("Name".into(), vec!["second".into()])];
     assert_eq!(merge_csv(&[rows]), "Name\nfirst\n");
+}
+
+#[test]
+fn shared_xfdf_fields_match_retained_reader() -> Result<(), Box<dyn std::error::Error>> {
+    // Independent retained app walker remains used by annotation imports.
+    for xml in [
+        "<xfdf/>",
+        "<xfdf><fields><field name='parent'><field name='child'><value>a<!--split-->b</value><value>c</value></field></field><field name='empty'/><field name='rich'><value-richtext>skip</value-richtext></field><field name='parent.child'><value>last</value></field></fields></xfdf>",
+        "<x:xfdf xmlns:x='urn:xfdf'><x:fields><x:field name='n'><x:value>v</x:value></x:field></x:fields></x:xfdf>",
+    ] {
+        let root = parse_form_xml(xml)?;
+        let mut expected = Vec::new();
+        if let Some(fields) = root.child(craft_xml::Local("fields")) {
+            walk_xfdf(fields, "", &mut expected, 0, &mut 0)?;
+        }
+        assert_eq!(data_values(xml.as_bytes())?, expected);
+    }
+    assert!(matches!(data_values(b"<other/>"), Err(DataError::UnknownFormat)));
+    assert!(matches!(data_values(b"<xfdf a='1' a='2'/>"), Err(DataError::UnknownFormat)));
+    let deep = format!("<xfdf><fields>{}{}</fields></xfdf>", "<field name='n'>".repeat(65), "</field>".repeat(65));
+    assert!(matches!(data_values(deep.as_bytes()), Err(DataError::Malformed(_))));
+    assert_eq!(
+        data_values(b"\xef\xbb\xbf <xfdf><fields><field name='n'><value>\xff</value></field></fields></xfdf>")?,
+        vec![("n".into(), vec!["\u{fffd}".into()])]
+    );
+    Ok(())
+}
+
+#[test]
+fn xfdf_annotation_formatting_round_trips_via_shared_grammar() {
+    let mut src = blank();
+    let shape = Shape::Rectangle { rect: [24.0, 48.0, 144.0, 108.0] };
+    add_annotation(
+        &mut src,
+        &NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: "Dashed box".into(), author: "Ada".into() },
+        &Meta { id: "fmt-rt-1".into(), date: Some("D:20261119120000Z".into()) },
+    )
+    .unwrap();
+    let page = pdfcraft_model::pages(&src)[0].obj;
+    let annot_ref =
+        src.get(page).as_dict().unwrap().get(b"Annots").map(|a| src.resolve(a)).unwrap().as_array().unwrap().last().unwrap().as_ref().unwrap();
+    let mut bs = Dict::new();
+    bs.set(b"W".to_vec(), Object::Real(2.5));
+    bs.set(b"S".to_vec(), Object::name("D"));
+    bs.set(b"D".to_vec(), Object::Array(vec![Object::Real(4.0), Object::Real(2.0)]));
+    src.update_dict(annot_ref, |d| {
+        d.set(b"BS".to_vec(), Object::Dict(bs));
+        d.set(b"F".to_vec(), Object::Int(4 | 128));
+    })
+    .unwrap();
+
+    let xfdf = export_xfdf(&src, true, false, "fmt.pdf");
+    assert!(is_xfdf_comments(&xfdf), "{xfdf}");
+    assert!(xfdf.contains("style=\"dash\""), "{xfdf}");
+    assert!(xfdf.contains("dashes=\"4,2\""), "{xfdf}");
+    assert!(xfdf.contains("flags=\"print,locked\""), "{xfdf}");
+
+    let mut dst = blank();
+    let report = import_comments(&mut dst, &xfdf, None, None, None).unwrap();
+    assert_eq!(report.comments, 1, "{report:?}");
+    let dst_page = pdfcraft_model::pages(&dst)[0].obj;
+    let dst_ref =
+        dst.get(dst_page).as_dict().unwrap().get(b"Annots").map(|a| dst.resolve(a)).unwrap().as_array().unwrap().last().unwrap().as_ref().unwrap();
+    let dst_obj = dst.get(dst_ref);
+    let dst_dict = dst_obj.as_dict().unwrap();
+    assert_eq!(dst_dict.get(b"F").and_then(|f| dst.resolve(f).as_int()), Some(4 | 128));
+    let dst_bs = dst_dict.get(b"BS").map(|o| dst.resolve(o)).unwrap();
+    let dst_bs = dst_bs.as_dict().unwrap();
+    assert_eq!(dst_bs.name(b"S"), Some(b"D".as_slice()));
+    assert_eq!(dst_bs.get(b"W").and_then(|w| dst.resolve(w).as_f64()), Some(2.5));
 }

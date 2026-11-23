@@ -165,7 +165,7 @@ proptest! {
     #[test]
     fn opacity_and_flags_follow_their_rules(opacity in any::<f64>()) {
         let mut doc = blank(1);
-        let added = add_annotation(&mut doc, &comment(0, Shape::Rectangle { rect: [10.0, 10.0, 60.0, 40.0] }, Style { color: [0.5, 0.25, 0.75], opacity, width: 1.0, fill: None }, String::new(), "Ada".into()), &meta("c".into()));
+        let added = add_annotation(&mut doc, &comment(0, Shape::Rectangle { rect: [10.0, 10.0, 60.0, 40.0] }, Style { color: [0.5, 0.25, 0.75], opacity, width: 1.0, fill: None, ..Style::default() }, String::new(), "Ada".into()), &meta("c".into()));
         if !opacity.is_finite() {
             prop_assert!(added.is_err(), "a non-finite opacity ({:?}) must be refused, not written", opacity);
             return Ok(());
@@ -243,7 +243,7 @@ proptest! {
                 2 => -0.5,
                 _ => 0.0,
             };
-            add_annotation(&mut doc, &comment(0, Shape::Rectangle { rect: *r }, Style { color: [0.9, 0.1, 0.1], opacity, width: 2.0, fill: None }, format!("c{i}"), "Ada".into()), &meta(format!("k{i}")))
+            add_annotation(&mut doc, &comment(0, Shape::Rectangle { rect: *r }, Style { color: [0.9, 0.1, 0.1], opacity, width: 2.0, fill: None, ..Style::default() }, format!("c{i}"), "Ada".into()), &meta(format!("k{i}")))
                 .expect("adds");
             want_rects.push(norm(*r));
         }
@@ -333,7 +333,7 @@ proptest! {
     #[test]
     fn width_and_fill_are_written_as_they_were_given(width in -4.0f64..12.0, fill in prop::option::of(prop::array::uniform3(0.0f64..1.0))) {
         let mut doc = blank(1);
-        add_annotation(&mut doc, &comment(0, Shape::Oval { rect: [5.0, 5.0, 65.0, 35.0] }, Style { color: [1.0, 0.0, 0.0], opacity: 1.0, width, fill }, String::new(), "Ada".into()), &meta("f".into()))
+        add_annotation(&mut doc, &comment(0, Shape::Oval { rect: [5.0, 5.0, 65.0, 35.0] }, Style { color: [1.0, 0.0, 0.0], opacity: 1.0, width, fill, ..Style::default() }, String::new(), "Ada".into()), &meta("f".into()))
             .expect("adds");
         for path in [Save::Incremental, Save::FullTable] {
             let (file, reopened) = save_and_reopen(&doc, path);
@@ -360,7 +360,7 @@ proptest! {
     fn a_line_keeps_its_endpoints_and_its_rectangle_spans_them(from in prop::array::uniform2(coord()), dx in 1.0f64..300.0, dy in -300.0f64..300.0, width in 0.5f64..8.0) {
         let to = [(from[0] + dx).min(450.0), from[1] + dy];
         let mut doc = blank(1);
-        add_annotation(&mut doc, &comment(0, Shape::Line { from, to, start: LineEnding::None, end: LineEnding::OpenArrow }, Style { color: [0.0, 0.0, 0.0], opacity: 1.0, width, fill: None }, String::new(), "Ada".into()), &meta("l".into()))
+        add_annotation(&mut doc, &comment(0, Shape::Line { from, to, start: LineEnding::None, end: LineEnding::OpenArrow }, Style { color: [0.0, 0.0, 0.0], opacity: 1.0, width, fill: None, ..Style::default() }, String::new(), "Ada".into()), &meta("l".into()))
             .expect("adds");
         let span = bounds_of(&[from, to]);
         for path in [Save::Incremental, Save::FullTable, Save::FullStreams] {

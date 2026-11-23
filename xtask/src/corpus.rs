@@ -1,4 +1,4 @@
-//! The pdf.js test corpus, pinned to one commit and verified by content (AGENTS.md §2: shared
+//! The pdf.js test corpus, pinned to one commit and verified by content (clean-room.md: shared
 //! fixtures are "fetched pinned by commit and sha256-verified").
 //!
 //! Why this exists: the corpus is the evidence behind "963 of 983 files open with 0 crashes" and
