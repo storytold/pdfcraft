@@ -735,8 +735,16 @@ impl PdfCraftApp {
     /// file's revision can be byte-identical to another tab's, and a snapshot's
     /// own repeats name the snapshot itself).
     fn find_snapshot(&self, kind: SnapshotKind, from: &str, bytes: &[u8]) -> Option<usize> {
+        self.find_snapshot_except(kind, from, bytes, None)
+    }
+
+    /// [`Self::find_snapshot`], never answering tab `skip`.
+    fn find_snapshot_except(&self, kind: SnapshotKind, from: &str, bytes: &[u8], skip: Option<usize>) -> Option<usize> {
         let mut fallback = None;
         for (i, v) in self.views.iter().enumerate() {
+            if skip == Some(i) {
+                continue;
+            }
             let same_kind = v.snapshot.as_ref().is_some_and(|s| s.kind == kind);
             let same_bytes = same_kind && self.session.get(v.id).is_some_and(|d| d.bytes.as_slice() == bytes);
             if !same_bytes {
@@ -753,31 +761,66 @@ impl PdfCraftApp {
     /// Open the signed version of a signature as a new document (View signed version).
     /// A repeat reuses the tab: every click used to open another identical one.
     pub fn view_signed_version(&mut self, len: usize, revision: usize) {
-        let Some((_, id)) = self.active_ids() else { return };
-        let Some(doc) = self.session.get(id) else { return };
-        let end = len.min(doc.bytes.len());
-        if let Some(index) = self.find_snapshot(SnapshotKind::SignedVersion, &doc.name, &doc.bytes[..end]) {
+        if let Some(index) = self.signed_version_tab(len, revision, false) {
             self.active = Some(index);
-            return;
+        }
+    }
+
+    /// The tab showing the active document's first `len` bytes as its signed version: an
+    /// existing one when there is one, or a newly opened one. `None` when opening failed
+    /// (and said so). With `skip_active`, the active tab itself is never the answer, so a
+    /// comparison started from the signed-version tab gets a baseline of its own.
+    fn signed_version_tab(&mut self, len: usize, revision: usize, skip_active: bool) -> Option<usize> {
+        let (current, id) = self.active_ids()?;
+        let doc = self.session.get(id)?;
+        let end = len.min(doc.bytes.len());
+        let skip = skip_active.then_some(current);
+        if let Some(index) = self.find_snapshot_except(SnapshotKind::SignedVersion, &doc.name, &doc.bytes[..end], skip) {
+            return Some(index);
         }
         let from = doc.name.clone();
         let bytes = doc.bytes[..end].to_vec();
         let name = format!("{} (signed version)", Self::file_stem(&from));
-        match self.session.open(format!("{name}.pdf"), None, std::sync::Arc::new(bytes), doc.password.clone().as_deref()) {
+        // Without its opening scripts, so the tab shows the file exactly as it was signed.
+        match self.session.open_without_scripts(format!("{name}.pdf"), None, std::sync::Arc::new(bytes), doc.password.clone().as_deref()) {
             Ok(new) => {
                 // The reading-colours preference is app-wide: the newly opened copy starts with it.
                 self.session.set_reading_colors(new, self.reading_colors);
-                let Some(doc) = self.session.get(new) else { return };
+                let doc = self.session.get(new)?;
                 let mut view = DocView::new(new, &doc.info, self.view_defaults);
                 if self.full_screen {
                     view.enter_presentation();
                 }
                 view.snapshot = Some(Snapshot { kind: SnapshotKind::SignedVersion, revision, from });
                 self.views.push(view);
-                self.active = Some(self.views.len() - 1);
+                Some(self.views.len() - 1)
             }
-            Err(e) => self.notify_fmt("Couldn't open the signed version: {e}", &[("e", &e.to_string())]),
+            Err(e) => {
+                self.notify_fmt("Couldn't open the signed version: {e}", &[("e", &e.to_string())]);
+                None
+            }
         }
+    }
+
+    /// Compare signed version: open the version signature `index` signed (reusing its tab, as View
+    /// signed version does) and compare it with the active document in the Compare panel, side by
+    /// side when there is room. A signature without a usable byte range is refused with the
+    /// engine's reason, and nothing opens.
+    pub fn compare_signed_version(&mut self, index: usize) {
+        let Some((current, id)) = self.active_ids() else { return };
+        let version = match self.session.get(id).map(|d| d.signed_version(index)) {
+            Some(Ok(v)) => v,
+            Some(Err(e)) => return self.notify_fmt("Couldn't compare the signed version: {e}", &[("e", &e.to_string())]),
+            None => return,
+        };
+        // Started from the signed-version tab, that tab is the document compared: the
+        // baseline is another tab, so the comparison runs instead of finding itself.
+        let Some(tab) = self.signed_version_tab(version.len, version.revision, true) else { return };
+        let Some(old) = self.views.get(tab).map(|v| v.id) else { return };
+        self.active = Some(current);
+        self.compare_old = Some(old);
+        self.compare_pages.clear();
+        self.run_compare();
     }
 }
 

@@ -6591,11 +6591,11 @@ title = "Compare signed version with the current one"
 area = "H"
 tier = "P1"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["sign.panel"]
+tools = ["sign_compare_signed_version"]
+evidence = ["crates/engine/src/signed_version_tests.rs::the_signed_version_is_compared_with_the_text_added_after_signing", "crates/engine/src/signed_version_tests.rs::signatures_that_cannot_give_a_signed_version_are_refused_by_name", "crates/engine/src/signed_version_tests.rs::an_unsigned_signature_field_has_no_signed_version", "crates/automation/tests/it/sign_compare.rs::comparing_a_signed_version_with_text_added_after_signing", "crates/automation/tests/it/sign_compare.rs::signatures_without_a_signed_version_are_refused", "crates/ui-egui/tests/it/signing.rs::drawing_a_signature_creating_an_id_signing_and_trusting"]
+notes = "For one signature, the file up to the end of its /ByteRange (Session::open_signed_version, Session::compare_signed_version) is compared with the document as it is now by the existing text compare, reported as doc_compare reports it (sign_compare_signed_version, the signature named by its sign_list field or position, with visual regions on request and keep_open to hand the signed version to doc_compare_report or doc_compare_mark). The Signatures panel's Compare signed version opens the signed version's tab (reused as View signed version reuses it) and shows the differences in the Compare panel, side by side when there is room. An unsigned field, and a signature whose byte range is malformed, overflows or does not fit the file, is refused naming the signature. Missing: comparing two signed revisions with each other, a comparison of what is not page text (form field values, comments, attachments and other objects; the revision classification of sign.changes-after-signing names the kinds of change but does not list them), and a comparison of the result with Acrobat's own Compare signed version, which was not observed."
 
 [[feature]]
 id = "sign.verify-on-open"

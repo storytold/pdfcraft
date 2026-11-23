@@ -48,6 +48,14 @@ impl OpenContext {
         self
     }
 
+    /// This context with the document's opening scripts off: an XFA form's initialize and
+    /// layout scripts don't run while it is prepared. The session's own JavaScript setting is
+    /// unchanged; [`Session::open_without_scripts`] also skips the AcroForm opening scripts.
+    pub fn without_opening_scripts(mut self) -> Self {
+        self.js_off = true;
+        self
+    }
+
     /// Prepare a document without mutating the session that supplied this context.
     pub fn prepare_open(
         &self,
@@ -88,6 +96,13 @@ impl Session {
 
     /// Register a prepared document. This is the only open step that mutates the session.
     pub fn commit_open(&mut self, prepared: PreparedDocument) -> DocId {
+        let id = self.register(prepared);
+        self.run_open_scripts(id);
+        id
+    }
+
+    /// Add a prepared document to the session without running its opening scripts.
+    fn register(&mut self, prepared: PreparedDocument) -> DocId {
         self.next_id += 1;
         let id = DocId(self.next_id);
         let mut document = prepared.document;
@@ -101,7 +116,6 @@ impl Session {
             Self::draw_captions(&mut document, self.captions.clone());
         }
         self.docs.push(document);
-        self.run_open_scripts(id);
         id
     }
 
@@ -109,6 +123,20 @@ impl Session {
     pub fn open(&mut self, name: impl Into<String>, path: Option<String>, bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocId, OpenError> {
         let prepared = self.prepare_open(name, path, bytes, password)?;
         Ok(self.commit_open(prepared))
+    }
+
+    /// [`Session::open`] without the document's opening scripts: no document-level scripts, no
+    /// `/OpenAction` and no XFA initialize or layout scripts, so the document is exactly what
+    /// its bytes say. Only this document is affected; the session's JavaScript setting stays.
+    pub fn open_without_scripts(
+        &mut self,
+        name: impl Into<String>,
+        path: Option<String>,
+        bytes: Arc<Vec<u8>>,
+        password: Option<&str>,
+    ) -> Result<DocId, OpenError> {
+        let prepared = self.open_context().without_opening_scripts().prepare_open(name, path, bytes, password)?;
+        Ok(self.register(prepared))
     }
 
     /// What [`OpenContext::prepare_open`] runs inside its panic guard: read, decrypt and lay out
