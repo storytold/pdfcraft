@@ -874,6 +874,16 @@ fn backdrop_options(ui: &mut egui::Ui, t: &Tokens, d: &mut MarksDraft, doc: &pdf
     }
 }
 
+/// Extract the complete Bates token without retaining surrounding header or footer text.
+pub(crate) fn bates_token(text: &str) -> Option<&str> {
+    let start = text.find("<<Bates Number#")?;
+    let from_start = text.get(start..)?;
+    let end = from_start.find(">>")?.checked_add(2)?;
+    let token = from_start.get(..end)?;
+    // Keep one short, single-line setting even if a PDF or preferences file has a large token.
+    (token.len() <= 4096 && !token.contains(['\r', '\n'])).then_some(token)
+}
+
 /// The edit the dialog's OK makes.
 pub fn edit(d: &MarksDraft, kind: MarkKind, count: usize) -> Edit {
     let pages = d.range.pages(count);

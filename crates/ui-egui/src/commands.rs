@@ -537,11 +537,11 @@ impl PdfCraftApp {
                 self.dialog = Some(Dialog::Marks(kind));
             }
             "edit.bates" => {
-                // Bates numbering ▸ Add: the header & footer dialog with a Bates number in the
-                // bottom-right box (6 digits from 1), ready to edit.
+                // Bates numbering ▸ Add: seed the bottom-right box from the last applied
+                // token, or use six digits from 1 on first use.
                 self.marks_draft.replace = false;
                 if self.marks_draft.hf.text.iter().all(|t| !t.contains("<<Bates")) {
-                    self.marks_draft.hf.text[5] = "<<Bates Number#6#1##>>".into();
+                    self.marks_draft.hf.text[5] = self.bates_token.as_deref().unwrap_or("<<Bates Number#6#1##>>").into();
                 }
                 self.marks_draft.focused_box = 5;
                 self.marks_draft.preview = None;

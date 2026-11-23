@@ -2621,8 +2621,8 @@ milestone = "M7"
 status = "partial"
 commands = ["edit.bates", "edit.header_footer"]
 tools = ["doc_header_footer"]
-evidence = ["crates/edit/src/tests.rs::tokens_expand"]
-notes = "Bates ▸ Add opens Header & Footer with a Bates number; no multi-file batch yet"
+evidence = ["crates/edit/src/tests.rs::tokens_expand", "crates/ui-egui/tests/it/marks.rs::bates_settings_survive_restarting_the_app"]
+notes = "Bates ▸ Add opens Header & Footer with a Bates number. The dialog remembers the digits, start, prefix and suffix from the last successful Bates apply across app restarts (#7917). The next job uses the saved start without advancing the sequence. Missing: a GUI multi-file batch dialog."
 
 [[feature]]
 id = "edit.bates-multi-file"

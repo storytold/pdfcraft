@@ -336,6 +336,7 @@ impl PdfCraftApp {
             text_style_draft: Default::default(),
             boxes_draft: Default::default(),
             marks_draft: Default::default(),
+            bates_token: None,
             unmarked_page: Default::default(),
             export_draft: Default::default(),
             export_status: None,
