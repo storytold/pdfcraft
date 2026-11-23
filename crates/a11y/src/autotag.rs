@@ -2,8 +2,10 @@
 //!
 //! Each text object becomes a paragraph, or a heading when its size or weight sets it apart from
 //! the body text ([`crate::autotag_roles`]); either can be retagged with the existing tag-property
-//! tool after human review. Painted paths, shadings and images outside text objects
-//! are wrapped in `/Artifact BMC … EMC` so the resulting page passes the tagged-content check.
+//! tool after human review. Rows of single-line text objects that line up in columns become
+//! `Table` › `TR` › `TH`/`TD` ([`crate::autotag_tables`]). Painted paths, shadings and images
+//! outside text objects are wrapped in `/Artifact BMC … EMC` so the resulting page passes the
+//! tagged-content check.
 
 use std::collections::{HashMap, HashSet};
 
@@ -11,6 +13,7 @@ use pdfcraft_content::{Op, Pieces, serialize_ops};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
 
 use crate::autotag_roles::{self, Evidence};
+use crate::autotag_tables::{self, Candidate};
 
 const MAX_PAGES: usize = 1_000;
 const MAX_PAGE_BYTES: usize = 16 * 1024 * 1024;
@@ -50,6 +53,7 @@ struct Plan {
     spans: Vec<(usize, usize)>,
     evidence: Vec<Evidence>,
     artifacts: HashMap<usize, usize>,
+    tables: Vec<Candidate>,
 }
 
 fn unsupported(page: usize, reason: impl Into<String>) -> AutoTagError {
@@ -269,7 +273,9 @@ fn plan_page(
     }
     let resources = page_fonts(doc, &page.dict);
     let evidence = autotag_roles::evidence(doc, fonts, &resources, &parsed.ops, &spans);
-    Ok(Plan { page: page.obj, ops: parsed.ops, spans, evidence, artifacts })
+    // Rows are read along user-space x, which a rotated page does not display as rows.
+    let tables = if page.rotation(doc) == 0 { autotag_tables::find(&evidence) } else { Vec::new() };
+    Ok(Plan { page: page.obj, ops: parsed.ops, spans, evidence, artifacts, tables })
 }
 
 fn plan(doc: &Document) -> Result<Vec<Plan>, AutoTagError> {
@@ -361,19 +367,56 @@ fn write_structure(
     Ok(())
 }
 
+/// A block of aligned text rows found by [`table_candidates`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableCandidate {
+    /// 0-based page index.
+    pub page: usize,
+    /// `[x0, y0, x1, y1]` in user space around the rows' text.
+    pub rect: [f64; 4],
+    pub rows: usize,
+    /// Columns of a table; 0 when it is not one.
+    pub columns: usize,
+    /// The first row is tagged as header cells (`TH`, `/Scope /Column`).
+    pub header: bool,
+    /// Why the block stays paragraphs; `None` when [`autotag_text`] tags it as a table.
+    pub not_a_table: Option<&'static str>,
+}
+
+/// The blocks of aligned rows [`autotag_text`] would tag as tables, and those it leaves as
+/// paragraphs for review, in page order. Refuses what `autotag_text` refuses, and changes nothing.
+pub fn table_candidates(doc: &Document) -> Result<Vec<TableCandidate>, AutoTagError> {
+    let plans = plan(doc)?;
+    let mut out = Vec::new();
+    for (page, plan) in plans.iter().enumerate() {
+        out.extend(plan.tables.iter().map(|c| {
+            let (columns, header) = c.outcome.as_ref().map_or((0, false), |g| (g.rows.first().map_or(0, Vec::len), g.header));
+            TableCandidate { page, rect: c.rect, rows: c.rows, columns, header, not_a_table: c.outcome.as_ref().err().copied() }
+        }));
+    }
+    Ok(out)
+}
+
 /// Tag every text object in an untagged PDF as a paragraph or a heading and mark painted paths, shadings and
 /// images outside text objects as artifacts. The full structure tree, parent tree and
 /// marked-content IDs are written together. Unsupported operators are refused before any
 /// mutation. On success the caller can use tag-property edits to correct the roles after review.
 pub fn autotag_text(doc: &mut Document) -> Result<AutoTagResult, AutoTagError> {
     let plans = plan(doc)?;
-    let all: Vec<Evidence> = plans.iter().flat_map(|p| p.evidence.iter().copied()).collect();
+    // Table cells are left out of the body style and the heading levels, as they are out of the roles.
+    let in_tables: Vec<HashSet<usize>> = plans.iter().map(|p| autotag_tables::tabled(&p.tables)).collect();
+    let all: Vec<Evidence> = plans
+        .iter()
+        .zip(&in_tables)
+        .flat_map(|(p, cells)| p.evidence.iter().enumerate().filter(|(i, _)| !cells.contains(i)).map(|(_, e)| *e))
+        .collect();
     let mut roles = autotag_roles::roles(&all).into_iter();
     let mut next = doc.clone();
     let catalog = next.root().ok_or(AutoTagError::NoCatalog)?;
     let (root, document) = (next.add(Object::Null), next.add(Object::Null));
     let (mut children, mut numbers, mut tagged_pages, mut paragraphs, mut headings) = (Vec::new(), Vec::new(), 0usize, 0usize, 0usize);
     for page in plans {
+        let tables: Vec<_> = page.tables.iter().filter_map(|t| t.outcome.as_ref().ok()).collect();
         if page.spans.is_empty() && page.artifacts.is_empty() {
             continue;
         }
@@ -381,7 +424,20 @@ pub fn autotag_text(doc: &mut Document) -> Result<AutoTagResult, AutoTagError> {
         if !page.spans.is_empty() {
             let key = i64::try_from(tagged_pages).map_err(|_| AutoTagError::TooManyPages)?;
             let mut parents = Vec::with_capacity(page.spans.len());
+            let cells = autotag_tables::first_cells(&tables);
+            let mut owners = HashMap::new();
             for (mcid, (first, last)) in page.spans.iter().enumerate() {
+                if let Some(grid) = cells.get(&mcid) {
+                    let written = autotag_tables::write(&mut next, document, page.page, grid)?;
+                    children.push(Object::Ref(written.table));
+                    owners.extend(written.cells.into_iter().map(|(i, cell, kind)| (i, (cell, kind))));
+                }
+                if let Some(&(cell, kind)) = owners.get(&mcid) {
+                    parents.push(Object::Ref(cell));
+                    starts.insert(*first, (mcid, kind));
+                    ends.insert(*last);
+                    continue;
+                }
                 let role = roles.next().unwrap_or("P");
                 let mut element = Dict::new();
                 element.set(b"Type".to_vec(), Object::name("StructElem"));
