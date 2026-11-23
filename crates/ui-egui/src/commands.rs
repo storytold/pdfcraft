@@ -12,7 +12,7 @@ use crate::{
     theme::{ThemeKind, ThemePreference},
 };
 
-/// Keys the document view handles itself (`canvas::shortcuts`), for the View menu, tooltips and
+/// Keys the document view handles itself (`canvas::shortcuts`, and the key pass for its plain keys), for the View menu, tooltips and
 /// Help ▸ Keyboard shortcuts. Keep them in step with the bindings there.
 pub(crate) const ACTUAL_SIZE: Shortcut = Shortcut::cmd("1");
 pub(crate) const PAGE_LEVEL: Shortcut = Shortcut::cmd("0");

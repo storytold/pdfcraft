@@ -763,7 +763,7 @@ fn keyboard_find_step_is_explicit_and_a_late_text_layer_cannot_undo_it() {
     ctx.input_mut(|i| {
         i.events.push(egui::Event::Key { key: egui::Key::G, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
     });
-    shortcuts(&mut v, &ctx, Default::default(), true, Default::default());
+    shortcuts(&mut v, &ctx, true);
 
     assert_eq!(v.current, 2, "the keyboard step chose the next match");
     assert_eq!(v.find.as_ref().unwrap().auto_from, None, "the keyboard step is the user's choice");
@@ -2888,9 +2888,10 @@ fn a_moved_picture_is_drawn_from_the_fresh_raster_while_a_tile_is_still_stale() 
 /// editor takes this one.
 #[test]
 fn esc_with_a_field_being_filled_leaves_the_selection() {
-    let mut v = view(3, PageLayout::Single, true);
-    v.all_text = true;
-    v.forms.focus = Some(crate::forms_ui::Focus {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("three.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two", "Charlie three"])).unwrap();
+    app.views[0].all_text = true;
+    app.views[0].forms.focus = Some(crate::forms_ui::Focus {
         name: "agree".into(),
         obj: None,
         widget: 0,
@@ -2906,20 +2907,34 @@ fn esc_with_a_field_being_filled_leaves_the_selection() {
         had_focus: true,
     });
     let ctx = egui::Context::default();
-    ctx.input_mut(|i| {
-        i.events.push(egui::Event::Key {
-            key: egui::Key::Escape,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
+    let esc = |app: &mut PdfCraftApp| {
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
         });
-    });
-    shortcuts(&mut v, &ctx, Default::default(), true, Default::default());
-    assert!(v.all_text, "the selection stays while the field takes Esc");
-    v.forms.focus = None;
-    shortcuts(&mut v, &ctx, Default::default(), true, Default::default());
-    assert!(!v.all_text, "with no field being filled, Esc clears the selection");
+        let doc = app.session.get(app.views[0].id).expect("the document");
+        let cx = key_order::KeyCx {
+            ctx: &ctx,
+            keys: Default::default(),
+            doc,
+            tool: app.quick_tool,
+            preparing: false,
+            editing_content: false,
+            speed: Default::default(),
+        };
+        let mut tool = app.quick_tool;
+        key_order::run(&mut app.views[0], &cx, &mut tool);
+    };
+    esc(&mut app);
+    assert!(app.views[0].all_text, "the selection stays while the field takes Esc");
+    app.views[0].forms.focus = None;
+    esc(&mut app);
+    assert!(!app.views[0].all_text, "with no field being filled, Esc clears the selection");
 }
 
 /// Review on #4378: `FitWindow` measures the spread the view shows, its pages side by side

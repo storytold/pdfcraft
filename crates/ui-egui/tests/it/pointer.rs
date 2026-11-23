@@ -2425,3 +2425,20 @@ fn a_cut_with_a_menu_open_leaves_organize_pages_alone() {
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().info.pages.len(), 2, "no page was cut");
 }
+
+/// Escape with a link selected and Find open lets go of the link and leaves Find open for the next
+/// one. One Escape did both.
+#[test]
+fn escape_lets_go_of_the_selected_link_before_it_closes_find() {
+    let mut h = open(link_pdf(), "150", false);
+    link_tool(&mut h);
+    let on_link = at(&h, 150.0, 325.0);
+    mouse_click(&mut h, on_link);
+    assert_eq!(h.state().views[0].links.selected, Some((0, 0)));
+    h.state_mut().views[0].open_find();
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].links.selected, None, "Escape lets go of the link");
+    assert!(h.state().views[0].find.is_some(), "and leaves Find open");
+}

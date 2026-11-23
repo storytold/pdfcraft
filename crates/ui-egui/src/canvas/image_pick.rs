@@ -190,20 +190,6 @@ mod picture_tests {
         assert_eq!(pictures.ready, Some(((3, 1), Vec::new())));
     }
 
-    /// Escape takes back a click whose picture isn't known yet: it isn't selected when it is.
-    #[test]
-    fn escape_cancels_a_click_on_a_page_still_being_read() {
-        let mut app = PdfCraftApp::new();
-        app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
-        let (i, _) = app.active_ids().unwrap();
-        app.views[i].pending_pick = Some((0, [1.0, 1.0], 0));
-        let escape = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() };
-        egui::Context::default()
-            .run_ui(egui::RawInput { events: vec![escape], ..Default::default() }, |ui| app.image_pick_keys(i, ui.ctx()))
-            .drop_without_applying_deltas();
-        assert_eq!(app.views[i].pending_pick, None);
-    }
-
     /// A page (200 × 300) with a square comment over 20..80 × 20..80 and a link over 120..180 ×
     /// 220..280.
     fn page_with_a_comment_and_a_link() -> Vec<u8> {
@@ -416,17 +402,10 @@ fn write_clipboard_file(dir: &std::path::Path, name: &str, bytes: &[u8]) -> Resu
 }
 
 impl PdfCraftApp {
-    /// ⌘C / Ctrl+C copies the selected picture in its original format; Escape deselects it, or
-    /// takes back a click whose picture isn't known yet.
+    /// ⌘C / Ctrl+C copies the selected picture in its original format. (Escape is the key pass's,
+    /// `canvas::key_order`.)
     pub(crate) fn image_pick_keys(&mut self, i: usize, ctx: &egui::Context) {
         if ctx.egui_wants_keyboard_input() {
-            return;
-        }
-        if self.page_keys.pressed(ctx, egui::Key::Escape) {
-            if let Some(view) = self.views.get_mut(i) {
-                view.picked_image = None;
-                view.pending_pick = None;
-            }
             return;
         }
         let Some(picked) = self.views.get(i).and_then(|v| v.picked_image) else { return };
