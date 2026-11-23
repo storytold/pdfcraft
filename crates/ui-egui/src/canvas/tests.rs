@@ -1340,8 +1340,8 @@ fn the_selection_bar_sits_where_the_drag_ended() {
     // Forward: page 3, the last line selected there.
     let forward = Selection { page: 1, span: Span::Run { anchor: 0, head: 3, head_page: 3, head_x: None } };
     assert_eq!(anchor(forward), Some((3, 20.0)));
-    // On one page, as before: the end of the selection, whichever way it was dragged.
-    assert_eq!(anchor(Selection::run(2, 3, 0)), Some((2, 20.0)));
+    // On one page: where the drag ended (top line when dragged backward, bottom line when forward).
+    assert_eq!(anchor(Selection::run(2, 3, 0)), Some((2, 0.0)));
     assert_eq!(anchor(Selection::run(2, 0, 3)), Some((2, 20.0)));
 }
 
