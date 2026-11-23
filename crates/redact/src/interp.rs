@@ -31,7 +31,9 @@ mod prune;
 
 use layers::strip_hidden_layers;
 use prune::{clip_out, extgstate_font, prune_form_resources};
-pub(crate) use prune::{prune, prune_patterns, prune_properties, resource_ops, unlink_doomed, unlink_pruned_patterns, unlink_undrawn};
+pub(crate) use prune::{
+    forms_pages_draw, prune, prune_patterns, prune_properties, resource_ops, unlink_doomed, unlink_pruned_patterns, unlink_undrawn,
+};
 
 /// How deep this pass follows form XObjects. A form past it is removed rather than walked, which
 /// is the fail-safe choice for a redaction -- marked content inside a form we cannot read would

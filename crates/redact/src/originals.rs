@@ -1,10 +1,12 @@
 //! The content streams a redacted page no longer draws (#7922).
 //!
 //! A page whose content changes gets new stream objects, and the originals stay: another page may
-//! still draw them. Anything else that names an original -- a private catalog key, a structure
-//! element's `/Stm`, a resource name nothing draws, `/PieceInfo` -- would have a full save write
-//! the unredacted bytes. Once the other steps have run, those references are pointed at the
-//! redacted copy, and a second walk proves that no original is left for a full save to write.
+//! still draw them, in its `/Contents` or, for one that is a form XObject, with `Do`. Such an
+//! original stays, with every reference to it. Anything else that names an original -- a private
+//! catalog key, a structure element's `/Stm`, a resource name nothing draws, `/PieceInfo` -- would
+//! have a full save write the unredacted bytes. Once the other steps have run, those references
+//! are pointed at the redacted copy, and a second walk proves that no original is left for a full
+//! save to write.
 
 use std::collections::{HashMap, HashSet};
 
@@ -17,14 +19,17 @@ use crate::RedactError;
 const MAX_DIRECT_DEPTH: usize = 256;
 
 /// `replaced` pairs each original content stream of a redacted page with its redacted copy.
-/// An original some page still lists in `/Contents` stays: that page shows what it holds. Every
-/// other reference to an original, from any object a full save writes or from the trailer, is
-/// pointed at its copy.
+/// An original some page still lists in `/Contents`, or draws as a form XObject (directly, through
+/// other forms, annotation appearances or inherited resources:
+/// [`crate::interp::forms_pages_draw`]), stays: that page shows what it holds, and is left as it
+/// was. Every other reference to an original, from any object a full save writes or from the
+/// trailer, is pointed at its copy.
 ///
 /// # Errors
 ///
 /// [`RedactError::TooDeep`] for an object nested past [`MAX_DIRECT_DEPTH`], and
-/// [`RedactError::Residue`] if an original is still reachable afterwards.
+/// [`RedactError::Residue`] if an original is a form XObject and what the pages draw can't be
+/// told, or an original is still reachable afterwards.
 pub(crate) fn release(doc: &mut Document, replaced: &[(ObjRef, ObjRef)]) -> Result<(), RedactError> {
     if replaced.is_empty() {
         return Ok(());
@@ -45,6 +50,18 @@ pub(crate) fn release(doc: &mut Document, replaced: &[(ObjRef, ObjRef)]) -> Resu
     let reachable = pdfcraft_cos::reachable_objects(doc)?;
     if !copies.keys().any(|num| reachable.contains(num)) {
         return Ok(());
+    }
+    // Only a form XObject can be drawn with `Do`, and few content streams are one. What the pages
+    // draw is read only for those, and only now, as it reads every page.
+    let is_form =
+        |num: u32| matches!(&*doc.get(ObjRef::new(num, doc.generation(num))), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form"));
+    if copies.keys().any(|&num| is_form(num)) {
+        for form in crate::interp::forms_pages_draw(doc)? {
+            copies.remove(&form.num);
+        }
+        if copies.is_empty() {
+            return Ok(());
+        }
     }
     for num in reachable {
         if copies.contains_key(&num) {

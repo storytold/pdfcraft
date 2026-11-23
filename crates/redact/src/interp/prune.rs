@@ -189,6 +189,56 @@ pub(crate) fn unlink_undrawn(doc: &mut Document) -> Result<usize, RedactError> {
 /// Each stream is read once, against one budget. `None` when that can't be told: a page or
 /// stream that won't decode, or the budget spent.
 fn names_drawn(doc: &Document, res: &Dict, pages: &[ObjRef], index: &HashMap<ObjRef, usize>) -> Option<HashSet<Vec<u8>>> {
+    drawn_and_looked(doc, res, pages, index).map(|(drawn, _)| drawn)
+}
+
+/// The form XObjects some page draws with `Do` (#7922): through the resources it inherits or has
+/// of its own, its annotations' appearances, and the forms, patterns, Type 3 glyphs and soft masks
+/// those reach, with a name [`names_drawn`] finds used, in any resource dictionary it looked
+/// through. A page with no resources anywhere is read too, for its annotations' appearances.
+/// Going by name keeps more than it must, never less. Fails closed, as [`unlink_doomed`] does,
+/// when that can't be told: a page listed twice in the page tree, a stream that won't decode, or
+/// the budget spent.
+pub(crate) fn forms_pages_draw(doc: &Document) -> Result<HashSet<ObjRef>, RedactError> {
+    let pages: Vec<ObjRef> = pdfcraft_model::pages(doc).iter().map(|p| p.obj).collect();
+    let index: HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (*p, i)).collect();
+    let (holders, whole) = resource_holders(doc);
+    if !whole {
+        return Err(RedactError::Residue(1));
+    }
+    let mut groups: Vec<(Dict, Vec<ObjRef>)> = Vec::new();
+    let mut covered = HashSet::new();
+    for (node, users) in holders {
+        if users.is_empty() {
+            continue;
+        }
+        let res = doc.get(node).as_dict().and_then(|d| d.get(b"Resources")).and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
+        covered.extend(users.iter().copied());
+        groups.push((res, users));
+    }
+    let bare: Vec<ObjRef> = pages.into_iter().filter(|p| !covered.contains(p)).collect();
+    if !bare.is_empty() {
+        groups.push((Dict::default(), bare));
+    }
+    let mut forms = HashSet::new();
+    for (res, users) in groups {
+        let (drawn, looked) = drawn_and_looked(doc, &res, &users, &index).ok_or(RedactError::Residue(1))?;
+        for dict in &looked {
+            for (name, x) in res_dict(doc, dict, b"XObject").iter() {
+                if drawn.contains(name)
+                    && let Some(r) = x.as_ref()
+                    && matches!(&*doc.get(r), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form"))
+                {
+                    forms.insert(r);
+                }
+            }
+        }
+    }
+    Ok(forms)
+}
+
+/// [`names_drawn`], with every resource dictionary it looked through.
+fn drawn_and_looked(doc: &Document, res: &Dict, pages: &[ObjRef], index: &HashMap<ObjRef, usize>) -> Option<(HashSet<Vec<u8>>, Vec<Dict>)> {
     let mut drawn = HashSet::new();
     let mut note = |data: &[u8]| {
         for op in pdfcraft_content::parse(data).ops.iter().filter(|op| op.is("Do")) {
@@ -248,7 +298,7 @@ fn names_drawn(doc: &Document, res: &Dict, pages: &[ObjRef], index: &HashMap<Obj
             dicts.push(own);
         }
     }
-    Some(drawn)
+    Some((drawn, dicts))
 }
 
 /// The content streams the resource dictionary `res` lists: its form XObjects, its tiling
