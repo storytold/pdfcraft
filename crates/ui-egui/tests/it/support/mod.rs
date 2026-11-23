@@ -128,3 +128,10 @@ pub fn open_shortcuts_from_the_help_menu(h: &mut Harness<'static, PdfCraftApp>) 
     h.run_steps(4);
     assert!(h.state().dialog.is_some(), "Keyboard shortcuts is open");
 }
+
+/// The image-resize preview's live size, as exposed to assistive technology.
+pub fn image_resize_status(h: &Harness<'static, PdfCraftApp>) -> Option<(String, egui::Rect)> {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let node = h.query_all_by(|node| node.role() == egui::accesskit::Role::Status && node.live() == egui::accesskit::Live::Polite).next()?;
+    Some((node.accesskit_node().label()?, node.rect()))
+}

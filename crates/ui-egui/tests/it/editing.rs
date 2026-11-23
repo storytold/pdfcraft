@@ -11350,6 +11350,51 @@ fn affine_review_harness(bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
 }
 
 #[test]
+fn resizing_a_rotated_existing_image_reports_physical_size_at_each_zoom() {
+    use pdfcraft_ui_egui::{ImageHandle, canvas::ImageObb, units::Unit};
+
+    let pdf = affine_review_image_fixture([84.0, 36.0, -16.0, 48.0, 145.0, 110.0], None, 90);
+    let mut pdf = pdfcraft_cos::Document::open(std::sync::Arc::new(pdf)).unwrap();
+    let page = pdfcraft_model::pages(&pdf).remove(0).obj;
+    pdf.update_dict(page, |dict| dict.set(b"UserUnit".to_vec(), pdfcraft_cos::Object::Int(2))).unwrap();
+    let bytes = pdfcraft_cos::write_full(&pdf, &Default::default()).unwrap();
+
+    let mut readouts = Vec::new();
+    for zoom in ["55", "100"] {
+        let mut h = affine_review_harness(bytes.clone());
+        h.state_mut().units = Unit::Millimetres;
+        h.state_mut().set_option("zoom", zoom).unwrap();
+        h.run_steps(4);
+        let view = &h.state().views[0];
+        let id = view.id;
+        let doc = h.state().session.get(id).unwrap();
+        assert_eq!(doc.page_user_unit(0), 2.0);
+        assert_eq!(doc.info.pages[0].rotation, 90);
+        let before = doc.page_images(0)[0].matrix;
+        let obb = ImageObb::from_image(&doc.page_images(0)[0], &view.page_xform(0).unwrap(), &doc.info, 0);
+        let grip = obb.handle_pos(ImageHandle::TopRight);
+        let to = grip + (grip - obb.screen_center) * 0.25;
+        h.hover_at(grip);
+        h.run_steps(1);
+        h.drag_at(grip);
+        h.run_steps(1);
+        h.hover_at(to);
+        h.run_steps(2);
+
+        let (preview, _) = crate::support::image_resize_status(&h).expect("the oriented resize exposes its size");
+        assert_eq!(h.state().session.get(id).unwrap().page_images(0)[0].matrix, before);
+        h.drop_at(to);
+        h.run_steps(3);
+        let [a, b, c, d, ..] = h.state().session.get(id).unwrap().page_images(0)[0].matrix;
+        assert_ne!([a, b, c, d], before[..4]);
+        let expected = Unit::Millimetres.size(a.hypot(b) * 2.0, c.hypot(d) * 2.0);
+        assert_eq!(preview, expected, "the preview uses the resized frame in physical points at {zoom}%");
+        readouts.push(preview);
+    }
+    assert_eq!(readouts[0], readouts[1], "zoom does not change the physical dimensions");
+}
+
+#[test]
 fn affine_review_resize_out_and_back_preserves_saved_placement() {
     for (matrix, clip, rotation) in [
         ([100.0, 0.0, 0.0, 100.0, 100.0, 100.0], None, 0),
