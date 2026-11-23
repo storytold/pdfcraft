@@ -129,6 +129,82 @@ pub fn document_url(raw: &str) -> Result<String, BlockedLink> {
     Ok(url.to_string())
 }
 
+/// The message an email address (`mailto:`) starts in the email app, read the way RFC 6068 spells
+/// it, so the user can see what it holds before the app opens: recipients, subject and body,
+/// percent-decoded. Only for showing; the address itself goes to the email app unchanged.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MailDraft {
+    /// The addresses before `?` and those of every `to=` field, in order.
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
+    /// Shown too: the email app adds them without saying so in the message.
+    pub bcc: Vec<String>,
+    /// The first `subject=` field, or empty.
+    pub subject: String,
+    /// The first `body=` field, or empty. Line breaks are `\n`.
+    pub body: String,
+}
+
+/// Whether `url` is an email address (`mailto:`, in any case).
+pub fn is_mail_address(url: &str) -> bool {
+    url.trim_start().get(..7).is_some_and(|s| s.eq_ignore_ascii_case("mailto:"))
+}
+
+/// Read what email address `url` writes ([`MailDraft`]); `None` when it isn't a `mailto:`
+/// address. Check it with [`document_url`] first: this only reads it. Field names are matched in
+/// any case; fields other than `to`, `cc`, `bcc`, `subject` and `body` are not shown. Characters
+/// that could hide text (see [`hides_text`]), except a line break in the body, show as `�`.
+pub fn mail_draft(url: &str) -> Option<MailDraft> {
+    if !is_mail_address(url) {
+        return None;
+    }
+    let rest = url.trim().get(7..)?;
+    // A fragment is not part of an email address (RFC 6068 §2).
+    let rest = rest.split('#').next().unwrap_or_default();
+    let (addresses, fields) = rest.split_once('?').unwrap_or((rest, ""));
+    let decode = |s: &str, line_breaks: bool| -> String {
+        let text = String::from_utf8_lossy(&percent_decode(s.as_bytes())).replace("\r\n", "\n");
+        text.chars().map(|c| if hides_text(c) && !(line_breaks && c == '\n') { '\u{FFFD}' } else { c }).collect()
+    };
+    let list = |s: &str| -> Vec<String> { split_addresses(&decode(s, false)) };
+    let mut draft = MailDraft { to: list(addresses), ..MailDraft::default() };
+    let (mut subject, mut body) = (None, None);
+    for field in fields.split('&') {
+        let (name, value) = field.split_once('=').unwrap_or((field, ""));
+        match decode(name, false).to_ascii_lowercase().as_str() {
+            "to" => draft.to.extend(list(value)),
+            "cc" => draft.cc.extend(list(value)),
+            "bcc" => draft.bcc.extend(list(value)),
+            "subject" => subject = subject.or_else(|| Some(decode(value, false))),
+            "body" => body = body.or_else(|| Some(decode(value, true))),
+            _ => {}
+        }
+    }
+    draft.subject = subject.unwrap_or_default();
+    draft.body = body.unwrap_or_default();
+    Some(draft)
+}
+
+/// The addresses of a comma-separated list, trimmed, empty ones left out. A comma inside a quoted
+/// local part (`"a,b"@example.org`, where `\` escapes the next character) is part of the address.
+fn split_addresses(list: &str) -> Vec<String> {
+    let (mut out, mut start, mut quoted, mut escaped) = (Vec::new(), 0, false, false);
+    for (i, c) in list.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            ',' if !quoted => {
+                out.extend(list.get(start..i));
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.extend(list.get(start..));
+    out.into_iter().map(str::trim).filter(|a| !a.is_empty()).map(String::from).collect()
+}
+
 /// Maximum decoded GoToR file-spec size retained by inspection and accepted by the resolver.
 pub const MAX_REMOTE_DOCUMENT_PATH_BYTES: usize = 4096;
 

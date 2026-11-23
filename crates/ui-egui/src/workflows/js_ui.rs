@@ -46,7 +46,7 @@ pub(crate) fn scripts_off_notice() -> String {
 impl PdfCraftApp {
     /// Act on what scripts produced in document `id`: alerts are shown, console output goes to
     /// the console, print and page requests are carried out, links wait for the user's permission
-    /// (form submissions are reported, never sent).
+    /// (form submissions are never sent: an email one is offered as a draft, others explained).
     pub fn handle_js(&mut self, id: DocId, out: JsOutput) {
         let view = self.views.iter().position(|v| v.id == id);
         // A script that ran away turned the form's scripts off: calculations and buttons stop
@@ -85,10 +85,7 @@ impl PdfCraftApp {
                 }
                 Request::OpenDoc(path) => self.request_script_document(id, &path),
                 Request::LaunchUrl(u) => self.request_document_url(&u, crate::LinkOrigin::Script),
-                Request::Submit(u) => self.notify_fmt(
-                    "The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.",
-                    &[("u", &u)],
-                ),
+                Request::Submit(u) => self.request_form_submit(id, &u, crate::LinkOrigin::Script, None),
                 Request::SaveAs => {
                     if let Some(i) = view {
                         self.save_view(i, crate::SaveTarget::As);

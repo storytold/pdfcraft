@@ -233,10 +233,10 @@ pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, identi
             set_layers(app, index, &changes, preserve_rb);
         }
         B::Alert(m) => app.notify(m),
-        B::Submit(url) => app.notify_fmt(
-            "{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.",
-            &[("name", name), ("url", &url)],
-        ),
+        B::Submit(url) => {
+            let id = app.views[index].id;
+            app.request_form_submit(id, &url, crate::LinkOrigin::Button, Some(name));
+        }
         B::ImportIcon => app.choose_field_image_target(app.views[index].id, name, Some(identity)),
         B::Script(js) => {
             let id = app.views[index].id;

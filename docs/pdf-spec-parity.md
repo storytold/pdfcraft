@@ -91,7 +91,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | Sound, Movie, Rendition, GoTo3DView, RichMediaExecute | yes | none (P3) |
 | Hide | yes | yes |
 | Named | yes | safe list (print, page navigation) |
-| SubmitForm | yes | explained, not sent |
+| SubmitForm | yes | partial: a `mailto:` address opens a draft in the email app after offering to save, for the user to attach the PDF; a web address is explained, not sent |
 | ResetForm | yes | yes |
 | ImportData | yes | via Import form data, not as an action |
 | JavaScript | yes | yes in fields and buttons (sandboxed); document actions none |

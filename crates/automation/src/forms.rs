@@ -458,6 +458,35 @@ impl Automation {
         self.apply(a, Edit::ResetForm { names })
     }
 
+    /// Press a push button that submits the form, as the app does, sending nothing (#7693).
+    pub(crate) fn form_submit(&self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::form_scripts::ButtonAction;
+        use pdfcraft_engine::links::{document_url, is_mail_address, mail_draft};
+        let name = a.str("field")?;
+        let doc = self.doc(a)?;
+        let field = doc.form.iter().find(|f| f.name == name).ok_or_else(|| bad(format!("no field named {name:?}")))?;
+        let Some(ButtonAction::Submit(url)) = &field.button else {
+            return Err(bad(format!("{name:?} is not a push button whose action submits the form (form_actions lists its actions)")));
+        };
+        if !is_mail_address(url) {
+            return Ok(json!({
+                "field": name,
+                "submit": url,
+                "email": null,
+                "reason": "PdfCraft doesn't send form data to a web address; save the document to keep the entries",
+            }));
+        }
+        let url = document_url(url).map_err(|e| failed(format!("PdfCraft won't open this email address: {e}")))?;
+        let draft = mail_draft(&url).unwrap_or_default();
+        Ok(json!({
+            "field": name,
+            "submit": url,
+            "email": { "url": url, "to": draft.to, "cc": draft.cc, "bcc": draft.bcc, "subject": draft.subject, "body": draft.body },
+            "unsaved": doc.dirty || doc.path.is_none(),
+            "attach": doc.name,
+        }))
+    }
+
     pub(crate) fn form_add_field(&mut self, a: &Args) -> Result<Value> {
         let page = self.page(a)?;
         let doc = self.doc(a)?;

@@ -622,7 +622,7 @@ fn a_link_prompt_above_a_save_prompt_owns_its_keys() {
         });
         h.run_steps(3);
         h.state_mut().pending_link =
-            Some(pdfcraft_ui_egui::PendingLink { url: "https://example.org".to_owned(), origin: pdfcraft_ui_egui::LinkOrigin::Link });
+            Some(pdfcraft_ui_egui::PendingLink { url: "https://example.org".to_owned(), origin: pdfcraft_ui_egui::LinkOrigin::Link, submit: None });
         h.run_steps(3);
         h.key_press(key);
         h.run_steps(3);

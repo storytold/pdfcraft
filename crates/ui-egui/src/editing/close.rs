@@ -157,7 +157,7 @@ impl PdfCraftApp {
                 // frame when the user has to choose where. A failed or cancelled save keeps the
                 // document open.
                 let ctx = ctx.clone();
-                self.save_then(index, SaveTarget::InPlace, move |app| {
+                self.save_then(index, SaveTarget::InPlace, move |app, _| {
                     if let Some(i) = app.asking_tab(id) {
                         app.close_and_continue(&ctx, i, req);
                     }

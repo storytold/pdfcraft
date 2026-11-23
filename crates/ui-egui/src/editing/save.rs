@@ -2,6 +2,10 @@ use super::{PdfCraftApp, StagingName, staging_suffixes};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::file_filter::AddFilterAnyCase as _;
 
+/// What runs once a document is written, given the name of the file written (see
+/// [`PdfCraftApp::save_then`]).
+type AfterSave = Box<dyn FnOnce(&mut PdfCraftApp, &str) + Send>;
+
 /// A save held back by [`Dialog::OverwriteChanged`](crate::Dialog::OverwriteChanged): the file
 /// on disk is another version than the document came from (#2166).
 #[cfg(not(target_arch = "wasm32"))]
@@ -10,7 +14,7 @@ pub struct PendingOverwrite {
     pub dest: String,
     target: SaveTarget,
     /// What was to run once the document is written (close its tab, quit).
-    after: Box<dyn FnOnce(&mut PdfCraftApp) + Send>,
+    after: AfterSave,
 }
 
 /// A save held back by [`Dialog::LockSignatures`](crate::Dialog::LockSignatures) (#2149).
@@ -18,7 +22,7 @@ pub struct PendingLock {
     pub id: pdfcraft_engine::DocId,
     target: SaveTarget,
     /// What was to run once the document is written (close its tab, quit).
-    after: Box<dyn FnOnce(&mut PdfCraftApp) + Send>,
+    after: AfterSave,
 }
 
 /// Where Save writes.
@@ -43,12 +47,14 @@ impl PdfCraftApp {
     /// to ask where (a new document, or Save As) it returns `false` and saves on a later frame,
     /// once the user has chosen.
     pub fn save_view(&mut self, index: usize, target: SaveTarget) -> bool {
-        self.save_then(index, target, |_| {})
+        self.save_then(index, target, |_, _| {})
     }
 
     /// [`Self::save_view`], then `after` once the document is written: now, or on a later frame
     /// when the user had to choose where. `after` never runs when the save fails or is cancelled.
-    pub(crate) fn save_then(&mut self, index: usize, target: SaveTarget, after: impl FnOnce(&mut Self) + Send + 'static) -> bool {
+    /// It gets the name of the file written, which in the web build is the download's name and
+    /// not the document's: after Apply redactions that one has `_Redacted`.
+    pub(crate) fn save_then(&mut self, index: usize, target: SaveTarget, after: impl FnOnce(&mut Self, &str) + Send + 'static) -> bool {
         // What's typed in a field is part of what's saved (#166).
         if let Some(id) = self.views.get(index).map(|v| v.id)
             && !self.commit_typing_in(id)
@@ -161,7 +167,7 @@ impl PdfCraftApp {
                     if !to_host {
                         self.notify_fmt("Downloaded {name}", &[("name", &name)]);
                     }
-                    after(self);
+                    after(self, &name);
                     true
                 }
                 Err(e) if to_host => {
@@ -182,7 +188,7 @@ impl PdfCraftApp {
     /// `pending_overwrite` behind [`Dialog::OverwriteChanged`](crate::Dialog::OverwriteChanged).
     /// Returns `true` if written now.
     #[cfg(not(target_arch = "wasm32"))]
-    fn save_doc_to_then(&mut self, id: pdfcraft_engine::DocId, dest: &str, target: SaveTarget, after: Box<dyn FnOnce(&mut Self) + Send>) -> bool {
+    fn save_doc_to_then(&mut self, id: pdfcraft_engine::DocId, dest: &str, target: SaveTarget, after: AfterSave) -> bool {
         let own = self.session.get(id).and_then(|d| d.path.as_deref()).is_some_and(|p| crate::same_file(p, dest));
         if own && self.watch.disk_differs(id, dest, self.session.get(id).map(|d| d.saved_bytes())) {
             self.pending_overwrite = Some(PendingOverwrite { id, dest: dest.to_string(), target, after });
@@ -191,7 +197,7 @@ impl PdfCraftApp {
         }
         let saved = self.save_doc_to(id, dest, target);
         if saved {
-            after(self);
+            after(self, &short_name(dest));
         }
         saved
     }
@@ -201,7 +207,7 @@ impl PdfCraftApp {
     pub(crate) fn overwrite_changed_file(&mut self) {
         let Some(p) = self.pending_overwrite.take() else { return };
         if self.save_doc_to(p.id, &p.dest, p.target) {
-            (p.after)(self);
+            (p.after)(self, &short_name(&p.dest));
         }
     }
 

@@ -325,3 +325,53 @@ fn hosts_are_shown_as_the_browser_receives_them() {
         assert_eq!(document_url(bad), Err(B::Malformed), "{bad}");
     }
 }
+
+#[test]
+fn an_email_address_reads_as_the_message_it_starts() {
+    use super::{MailDraft, mail_draft};
+    let url = "MAILTO:forms@example.org,%20b@example.org?Subject=Ref%2042%20Form%20Response&to=c@example.org&cc=d@example.org&BCC=e@example.org&body=Line%201%0D%0A%0D%0ALine%203&subject=second&x-mailer=y#frag";
+    assert_eq!(
+        mail_draft(url),
+        Some(MailDraft {
+            to: vec!["forms@example.org".into(), "b@example.org".into(), "c@example.org".into()],
+            cc: vec!["d@example.org".into()],
+            bcc: vec!["e@example.org".into()],
+            subject: "Ref 42 Form Response".into(),
+            body: "Line 1\n\nLine 3".into(),
+        })
+    );
+    // `+` is a plain character in an email address, not a space.
+    assert_eq!(mail_draft("mailto:a+b@example.org?subject=1+1").map(|d| (d.to, d.subject)), Some((vec!["a+b@example.org".into()], "1+1".into())));
+    assert_eq!(mail_draft("mailto:"), Some(MailDraft::default()));
+    assert_eq!(mail_draft("mailto:?body"), Some(MailDraft::default()), "a field without a value is empty");
+    assert_eq!(mail_draft("https://example.org/?to=a@example.org"), None);
+    assert_eq!(mail_draft("mail:a@example.org"), None);
+    assert_eq!(mail_draft("mailt"), None, "shorter than the scheme");
+    assert_eq!(mail_draft("mailtö:x"), None, "a multibyte character where the scheme ends");
+}
+
+#[test]
+fn an_email_draft_shows_hidden_characters_and_keeps_only_body_line_breaks() {
+    use super::mail_draft;
+    let d = mail_draft("mailto:a@example.org?subject=Pay%E2%80%AEtxt.exe%0Anow&body=a%09b%0Ac%E2%80%8Bd").unwrap();
+    assert_eq!(d.subject, "Pay\u{FFFD}txt.exe\u{FFFD}now", "a bidirectional override and a line break can't hide in the subject");
+    assert_eq!(d.body, "a\u{FFFD}b\nc\u{FFFD}d");
+    // Invalid UTF-8 and a stray `%` are shown, not dropped.
+    let d = mail_draft("mailto:a@example.org?subject=%FF%zz").unwrap();
+    assert_eq!(d.subject, "\u{FFFD}%zz");
+}
+
+#[test]
+fn a_comma_in_a_quoted_local_part_is_part_of_the_address() {
+    use super::mail_draft;
+    let to = |url: &str| mail_draft(url).map(|d| d.to);
+    assert_eq!(to("mailto:%22a%2Cb%22@example.org"), Some(vec!["\"a,b\"@example.org".into()]));
+    assert_eq!(to("mailto:a@example.org,b@example.org"), Some(vec!["a@example.org".into(), "b@example.org".into()]));
+    // An escaped quote doesn't end the quoted part, so the comma after it stays in the address.
+    assert_eq!(
+        to("mailto:%22a%5C%22%2Cb%22@example.org,c@example.org?to=%22d,e%22@example.org"),
+        Some(vec!["\"a\\\",b\"@example.org".into(), "c@example.org".into(), "\"d,e\"@example.org".into()])
+    );
+    // An unclosed quote keeps the rest as one address rather than guessing where it ends.
+    assert_eq!(to("mailto:%22a,b@example.org"), Some(vec!["\"a,b@example.org".into()]));
+}
