@@ -19,6 +19,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut panel_edit: Option<pdfcraft_engine::Edit> = None;
     let mut field_properties = None;
     let mut panel_command: Option<&'static str> = None;
+    let mut comment_types_changed = false;
     let mut sig_action: Option<crate::sign_ui::PanelAction> = None;
     let mut a11y_action: Option<crate::a11y_ui::PanelAction> = None;
     let mut compare_action: Option<crate::compare_ui::PanelAction> = None;
@@ -93,7 +94,16 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         }
                         // Right to left: close, "…", filter, search (Acrobat's order left to right).
                         if panel == RightPanel::Comments {
+                            // Session is the source of the type filter (reload and
+                            // comments_hide_types update it). Compare the view's copy first, then
+                            // refresh it, so an automation change still counts as a change and the
+                            // selection clear runs. The user may then edit the refreshed list.
+                            let before = view.comments.hidden_types.clone();
+                            view.comments.hidden_types = doc.hidden_comment_types().to_vec();
+                            let session_changed = view.comments.hidden_types != before;
+                            let before_edit = view.comments.hidden_types.clone();
                             panel_command = crate::comments_panel::header_controls(ui, info, view, doc.comments_hidden());
+                            comment_types_changed = session_changed || view.comments.hidden_types != before_edit;
                         }
                         if panel == RightPanel::Comments
                             && icons::button(ui, "search", 26.0, view.comments.search.is_some(), tl!("Search comments")).clicked()
@@ -479,6 +489,17 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     if reset_layers && app.session.reset_layers(id) {
         app.views[index].invalidate_content();
+    }
+    if comment_types_changed {
+        let types = app.views.get(index).map(|v| v.comments.hidden_types.clone()).unwrap_or_default();
+        let changed = app.session.set_hidden_comment_types(id, &types);
+        if let (Some(view), Some(doc)) = (app.views.get_mut(index), app.session.get(id)) {
+            view.comments.hidden_types = doc.hidden_comment_types().to_vec();
+            view.comments.drop_hidden_selection(&doc.info.annotations);
+            if changed {
+                view.invalidate_content();
+            }
+        }
     }
     match nav {
         Some(Nav::Page(p)) => app.views[index].go_to_page(p),

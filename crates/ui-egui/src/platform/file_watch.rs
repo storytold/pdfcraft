@@ -482,6 +482,9 @@ impl PdfCraftApp {
                 self.placed_signatures.remove(&id);
                 if let (Some(view), Some(doc)) = (self.views.get_mut(i), self.session.get(id)) {
                     view.document_replaced(&doc.info);
+                    // document_replaced builds a fresh CommentView; keep the type filter the
+                    // session preserved across the reload so the panel matches the page.
+                    view.comments.hidden_types = doc.hidden_comment_types().to_vec();
                 }
                 // What the form's scripts said while it opened, as on opening.
                 let out = self.session.take_js_output(id);

@@ -223,12 +223,31 @@ impl PdfCraftApp {
             }
         }
         self.sync_views();
+        self.sync_hidden_comment_types();
         if let Some(v) = self.active.and_then(|i| self.views.get_mut(i)) {
             self.panes.focus = v.pane.place;
             if v.pane.shown_seq != self.panes.top_seq || self.panes.top_seq == 0 {
                 self.panes.top_seq = self.panes.top_seq.saturating_add(1);
                 v.pane.shown_seq = self.panes.top_seq;
             }
+        }
+    }
+
+    /// Keep every view's type filter and selection in step with the session, including when the
+    /// Comments panel is closed and when `comments_hide_types` changed the session alone.
+    fn sync_hidden_comment_types(&mut self) {
+        for i in 0..self.views.len() {
+            let Some(id) = self.views.get(i).map(|v| v.id) else { continue };
+            let Some(doc) = self.session.get(id) else { continue };
+            let types = doc.hidden_comment_types();
+            if self.views.get(i).is_none_or(|v| v.comments.hidden_types.as_slice() == types) {
+                continue;
+            }
+            let types = types.to_vec();
+            let Some(view) = self.views.get_mut(i) else { continue };
+            view.comments.hidden_types = types;
+            view.comments.drop_hidden_selection(&doc.info.annotations);
+            view.invalidate_content();
         }
     }
 
@@ -250,9 +269,12 @@ impl PdfCraftApp {
             // The view the change came through: the active one, else the first (as the code that
             // made the change finds a document's tab).
             let acting = self.active.filter(|&a| self.views.get(a).is_some_and(|v| v.id == id)).unwrap_or(k);
+            let hidden_types = doc.hidden_comment_types().to_vec();
             for (j, v) in self.views.iter_mut().enumerate() {
                 if j != acting && v.id == id {
                     v.follow_document(&doc.info);
+                    v.comments.hidden_types = hidden_types.clone();
+                    v.comments.drop_hidden_selection(&doc.info.annotations);
                 }
             }
         }

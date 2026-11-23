@@ -1332,6 +1332,8 @@ impl DocView {
         v.notice_dismissed = self.notice_dismissed;
         v.scripts_off_noted = self.scripts_off_noted;
         v.full_screen_fill = self.full_screen_fill;
+        // The type filter lives on the session; keep the panel's copy so both panes agree.
+        v.comments.hidden_types = self.comments.hidden_types.clone();
         v.goto = Some((self.current, 0.0));
         v
     }
@@ -1385,6 +1387,8 @@ struct PageEnv<'a> {
     can_fill: bool,
     can_modify: bool,
     comments_hidden: bool,
+    /// Comment types the session hides on the page (the Comments panel type filter).
+    hidden_comment_types: &'a [String],
     content_h: f32,
     content_w: f32,
     /// The custom stamp's line, filled in now (#1741).
@@ -1764,7 +1768,23 @@ fn cached_edit_images<'a>(view: &'a mut DocView, doc: &pdfcraft_engine::Document
 }
 
 fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i: usize) {
-    let PageEnv { allowed, comments_hidden, doc, editing_content, info, keys, ppp, prefs, rects, redact_mark, scale, t, tool, .. } = frame.env;
+    let PageEnv {
+        allowed,
+        comments_hidden,
+        hidden_comment_types,
+        doc,
+        editing_content,
+        info,
+        keys,
+        ppp,
+        prefs,
+        rects,
+        redact_mark,
+        scale,
+        t,
+        tool,
+        ..
+    } = frame.env;
     let PageFrame { ptr, origin, visible, pressed, pointer, .. } = *frame;
     let r = snap_to_pixels(rects[i].translate(origin.to_vec2()), ppp);
     if !r.intersects(visible.expand(400.0)) {
@@ -1805,7 +1825,19 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     if frame.env.text_links {
         view.refresh_text_links(i);
     }
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark, keys };
+    let pcx = comments::PageCx {
+        page: i,
+        xf: &xf,
+        ptr,
+        info,
+        tool,
+        prefs,
+        allowed,
+        hidden: comments_hidden,
+        hidden_types: hidden_comment_types,
+        redact_mark,
+        keys,
+    };
     // A cancelled press takes nothing until the button is up, though the page's menu still opens
     // where a right-click is. A page full screen doesn't show yet takes nothing at all. (A press
     // there gives nothing on the page an owner, so its release, once the page is in, takes nothing
@@ -3395,6 +3427,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let can_copy = doc.allows_copying();
     let can_paste_comments = app.comment_clipboard.is_some();
     let comments_hidden = doc.comments_hidden();
+    let hidden_comment_types = doc.hidden_comment_types();
     let form = doc.form.clone();
     let generation = doc.edit_generation();
     let can_fill = doc.allows_form_filling();
@@ -3452,6 +3485,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         can_fill,
         can_modify,
         comments_hidden,
+        hidden_comment_types,
         content_h,
         content_w,
         custom_line: &custom_line,

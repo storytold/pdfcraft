@@ -1661,15 +1661,68 @@ fn the_panel_filters_and_sorts() {
     h.run_steps(2);
     let ovals = h.query_all_by_label("Oval").count();
     assert!(ovals >= 1);
-    h.state_mut().views[0].comments.hidden_types.push("Oval".into());
+    let id = h.state().views[0].id;
+    h.state_mut().session.set_hidden_comment_types(id, &["Oval".into()]);
     h.run_steps(2);
     assert_eq!(h.query_all_by_label("Oval").count(), ovals - 1, "the oval's card is filtered out");
     assert!(h.query_all_by_label("Rectangle").count() >= 1);
-    h.state_mut().views[0].comments.hidden_types.clear();
+    h.state_mut().session.set_hidden_comment_types(id, &[]);
     h.state_mut().views[0].comments.sort = pdfcraft_ui_egui::comments::SortBy::Type;
     h.run_steps(2);
     // Grouped by type: a group header names each type.
     assert_eq!(h.query_all_by_label("Oval").count(), ovals + 1, "a group header was added");
+}
+
+/// Hiding a type through the session (as `comments_hide_types` does) clears matching selection
+/// even with the Comments panel closed, and forgets a clicked group member of that type.
+#[test]
+fn hiding_a_type_clears_a_hidden_group_member_with_the_panel_closed() {
+    let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |app| app.set_option("panel", "none").unwrap());
+    click_pt(&mut h, (220.0, 150.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the group is selected");
+    let id = h.state().views[0].id;
+    h.state_mut().session.set_hidden_comment_types(id, &["Oval".into()]);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the visible rectangle stays selected");
+    // Without clearing the remembered oval member, Delete would remove the Circle; with it
+    // cleared, Delete removes the Square.
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    let mut shapes: Vec<String> = comments(&h).iter().filter(|a| a.subtype != "Text").map(|a| a.subtype.clone()).collect();
+    shapes.sort();
+    assert_eq!(shapes, vec!["Circle".to_string()], "Delete acted on the rectangle, not the forgotten oval");
+}
+
+/// When the handle comment's type is hidden and other comments remain in `also`, one of them
+/// takes the handles so keyboard Delete and comment.copy still have a target.
+#[test]
+fn hiding_the_handle_promotes_a_remaining_also_selection() {
+    let mut h = harness(|app| {
+        app.set_option("panel", "none").unwrap();
+        app.set_option("quick", "square").unwrap();
+    });
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    h.state_mut().set_option("quick", "highlight").unwrap();
+    drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    let (square, highlight) = {
+        let c = comments(&h);
+        let square = c.iter().find(|a| a.subtype == "Square").expect("square").index;
+        let highlight = c.iter().find(|a| a.subtype == "Highlight").expect("highlight").index;
+        (square, highlight)
+    };
+    {
+        let c = &mut h.state_mut().views[0].comments;
+        c.selected = Some((0, square));
+        c.also = vec![(0, highlight)];
+    }
+    let id = h.state().views[0].id;
+    h.state_mut().session.set_hidden_comment_types(id, &["Rectangle".into()]);
+    h.run_steps(2);
+    let c = &h.state().views[0].comments;
+    assert_eq!(c.selected, Some((0, highlight)), "the remaining highlight takes the handles");
+    assert!(c.also.is_empty());
 }
 
 // Contributor-original PDF. Two roots deliberately share /NM; the replies (on another page,

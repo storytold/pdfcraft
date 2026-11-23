@@ -40,6 +40,15 @@ fn clear_shifted_page_comment_state(view: &mut crate::DocView, shifted_from: usi
     }
 }
 
+/// Drop a comment the type filter hides from a selection just assigned, and don't reveal an
+/// empty one. The acting view's filter already matches the session, so the frame sync leaves it.
+fn drop_hidden_new_selection(view: &mut crate::DocView, info: &pdfcraft_render::DocInfo) {
+    view.comments.drop_hidden_selection(&info.annotations);
+    if view.comments.selected.is_none() {
+        view.comments.reveal = false;
+    }
+}
+
 /// Keeps the pages (or comment) the user acted on selected, where they now are. `annots_before`
 /// is the page's annotations before a delete or a paste of comments (empty for other edits);
 /// `across_pages`, for markup on a text selection across pages, the page that selection ends on.
@@ -91,11 +100,16 @@ fn select_after_edit(
             view.comments.clear_selection();
             view.comments.selected = newest.map(|n| (a.page, n));
             view.comments.reveal = true;
+            // The filter already matches, so nothing else drops a hidden type, and this is the
+            // view the edit was applied on. A hidden comment must not stay selected.
+            drop_hidden_new_selection(view, info);
             // A new highlight opens its note for typing straight away, as in Acrobat,
-            // unless a note typed into another card is still unsaved.
+            // unless a note typed into another card is still unsaved. A hidden highlight has
+            // already left the selection, so its note stays closed.
             if let (pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, .. }, Some(n)) = (&a.shape, newest)
                 && a.contents.is_empty()
                 && view.comments.editing.is_none()
+                && view.comments.selected == Some((a.page, n))
             {
                 view.comments.open_editor(a.page, n, String::new());
             }
@@ -132,6 +146,7 @@ fn select_after_edit(
                 view.comments.also = new;
                 view.comments.reveal = true;
             }
+            drop_hidden_new_selection(view, info);
         }
         _ => {}
     }
@@ -1775,6 +1790,202 @@ mod content_page_tests {
         assert_eq!(content_page(&moved), Some(3));
         assert_eq!(content_page(&Edit::RotatePages { pages: vec![0], degrees: 90 }), None);
         assert_eq!(content_page(&Edit::SetInfo { key: "Title".into(), value: "x".into() }), None);
+    }
+}
+
+#[cfg(test)]
+mod hidden_selection_tests {
+    use pdfcraft_engine::{DocId, Edit, Markup, NewAnnotation, Shape, Style};
+    use pdfcraft_render::{Annotation, DocInfo, PageInfo};
+
+    use super::select_after_edit;
+    use crate::QuickTool;
+    use crate::canvas::{DocView, ViewDefaults};
+    use crate::comments::CommentTool;
+
+    fn annot(index: usize, subtype: &str, name: &str) -> Annotation {
+        Annotation {
+            page: 0,
+            subtype: subtype.into(),
+            author: None,
+            contents: None,
+            modified: None,
+            name: Some(name.into()),
+            in_reply_to: None,
+            parent: None,
+            grouped: false,
+            rect: [0.0, 0.0, 10.0, 10.0],
+            color: None,
+            index,
+            state: None,
+            quads: Vec::new(),
+            locked: false,
+            intent: None,
+            fill_sign: false,
+            no_rotate: false,
+            points: Vec::new(),
+            text_box: None,
+            popup: None,
+        }
+    }
+
+    fn on_page(index: usize, page: usize, subtype: &str, name: &str) -> Annotation {
+        Annotation { page, ..annot(index, subtype, name) }
+    }
+
+    fn view(annotations: Vec<Annotation>, hidden: &[&str]) -> DocView {
+        let pages = annotations.iter().map(|a| a.page).max().unwrap_or(0) + 1;
+        let info = DocInfo {
+            pages: (0..pages)
+                .map(|_| PageInfo { width: 200.0, height: 100.0, label: String::new(), crop: [0.0, 0.0, 200.0, 100.0], rotation: 0 })
+                .collect(),
+            annotations,
+            ..Default::default()
+        };
+        let mut view = DocView::new(DocId(1), &info, ViewDefaults::default());
+        view.comments.hidden_types = hidden.iter().map(|t| (*t).to_string()).collect();
+        view
+    }
+
+    fn added(shape: Shape) -> Edit {
+        Edit::AddAnnotation(NewAnnotation { page: 0, shape, style: Style::default(), contents: String::new(), author: String::new() })
+    }
+
+    fn highlight_on(page: usize) -> Edit {
+        Edit::AddAnnotation(NewAnnotation {
+            page,
+            shape: Shape::TextMarkup { kind: Markup::Highlight, quads: vec![[0.0, 0.0, 10.0, 0.0, 0.0, 10.0, 10.0, 10.0]] },
+            style: Style::default(),
+            contents: String::new(),
+            author: String::new(),
+        })
+    }
+
+    /// Drawing an oval while Oval is hidden must not leave it selected.
+    #[test]
+    fn a_new_comment_of_a_hidden_type_is_not_selected() {
+        let info_annots = vec![annot(0, "Square", "rect"), annot(1, "Circle", "oval")];
+        let info = DocInfo {
+            pages: vec![PageInfo { width: 200.0, height: 100.0, label: String::new(), crop: [0.0, 0.0, 200.0, 100.0], rotation: 0 }],
+            annotations: info_annots,
+            ..Default::default()
+        };
+        let mut view = view(vec![annot(0, "Square", "old")], &["Oval"]);
+        view.comments.selected = Some((0, 0));
+        select_after_edit(&mut view, &added(Shape::Oval { rect: [0.0; 4] }), &info, &[], QuickTool::Select, None);
+        assert!(view.comments.selected.is_none(), "the new oval is a hidden type");
+        assert!(view.comments.also.is_empty());
+        assert!(!view.comments.reveal, "nothing was selected to reveal");
+    }
+
+    /// A visible type added while another type is hidden replaces the selection.
+    #[test]
+    fn a_new_comment_of_a_visible_type_stays_selected() {
+        let info = DocInfo {
+            pages: vec![PageInfo { width: 200.0, height: 100.0, label: String::new(), crop: [0.0, 0.0, 200.0, 100.0], rotation: 0 }],
+            annotations: vec![annot(0, "Circle", "oval"), annot(1, "Square", "rect")],
+            ..Default::default()
+        };
+        let mut view = view(Vec::new(), &["Oval"]);
+        view.comments.selected = Some((0, 0));
+        select_after_edit(&mut view, &added(Shape::Rectangle { rect: [0.0; 4] }), &info, &[], QuickTool::Select, None);
+        assert_eq!(view.comments.selected, Some((0, 1)));
+        assert!(view.comments.reveal);
+    }
+
+    /// A highlight of a hidden type is not selected and does not open its note.
+    #[test]
+    fn a_new_highlight_of_a_hidden_type_does_not_open_its_note() {
+        let info = DocInfo {
+            pages: vec![PageInfo { width: 200.0, height: 100.0, label: String::new(), crop: [0.0, 0.0, 200.0, 100.0], rotation: 0 }],
+            annotations: vec![annot(0, "Highlight", "mark")],
+            ..Default::default()
+        };
+        let mut view = view(Vec::new(), &["Highlight"]);
+        select_after_edit(&mut view, &highlight_on(0), &info, &[], QuickTool::Comment(CommentTool::Highlight), None);
+        assert!(view.comments.selected.is_none());
+        assert!(view.comments.editing.is_none(), "the note of a hidden highlight stays closed");
+    }
+
+    /// A visible highlight is selected and its empty note opens.
+    #[test]
+    fn a_new_highlight_of_a_visible_type_opens_its_note() {
+        let info = DocInfo {
+            pages: vec![PageInfo { width: 200.0, height: 100.0, label: String::new(), crop: [0.0, 0.0, 200.0, 100.0], rotation: 0 }],
+            annotations: vec![annot(0, "Highlight", "mark")],
+            ..Default::default()
+        };
+        let mut view = view(Vec::new(), &["Oval"]);
+        select_after_edit(&mut view, &highlight_on(0), &info, &[], QuickTool::Comment(CommentTool::Highlight), None);
+        assert_eq!(view.comments.selected, Some((0, 0)));
+        assert!(view.comments.editing.is_some(), "the note opens");
+    }
+
+    /// A paste that mixes a hidden type with a visible one selects only the visible copies.
+    #[test]
+    fn a_paste_keeps_only_copies_of_a_visible_type() {
+        let before = vec![annot(0, "Square", "old")];
+        let info = DocInfo {
+            pages: vec![PageInfo { width: 200.0, height: 100.0, label: String::new(), crop: [0.0, 0.0, 200.0, 100.0], rotation: 0 }],
+            annotations: vec![annot(0, "Square", "old"), annot(1, "Circle", "pasted-oval"), annot(2, "Square", "pasted-rect")],
+            ..Default::default()
+        };
+        let mut view = view(before.clone(), &["Oval"]);
+        let edit = Edit::PasteComments { xfdf: String::new(), page: 0, offset: None };
+        select_after_edit(&mut view, &edit, &info, &before, QuickTool::Select, None);
+        assert_eq!(view.comments.selected, Some((0, 2)), "the pasted rectangle");
+        assert!(view.comments.also.is_empty(), "the pasted oval is a hidden type");
+    }
+
+    /// Pasting only a hidden type selects nothing.
+    #[test]
+    fn a_paste_of_only_a_hidden_type_selects_nothing() {
+        let before = vec![annot(0, "Square", "old")];
+        let info = DocInfo {
+            pages: vec![PageInfo { width: 200.0, height: 100.0, label: String::new(), crop: [0.0, 0.0, 200.0, 100.0], rotation: 0 }],
+            annotations: vec![annot(0, "Square", "old"), annot(1, "Circle", "pasted-oval")],
+            ..Default::default()
+        };
+        let mut view = view(before.clone(), &["Oval"]);
+        let edit = Edit::PasteComments { xfdf: String::new(), page: 0, offset: None };
+        select_after_edit(&mut view, &edit, &info, &before, QuickTool::Select, None);
+        assert!(view.comments.selected.is_none() && view.comments.also.is_empty());
+    }
+
+    /// Markup across pages follows the same rule: a hidden type is not selected on the page the drag ended on.
+    #[test]
+    fn a_hidden_highlight_across_pages_is_not_selected() {
+        let info = DocInfo {
+            pages: vec![
+                PageInfo { width: 200.0, height: 100.0, label: String::new(), crop: [0.0, 0.0, 200.0, 100.0], rotation: 0 },
+                PageInfo { width: 200.0, height: 100.0, label: String::new(), crop: [0.0, 0.0, 200.0, 100.0], rotation: 0 },
+            ],
+            annotations: vec![on_page(0, 0, "Highlight", "a"), on_page(0, 1, "Highlight", "b")],
+            ..Default::default()
+        };
+        let mut view = view(Vec::new(), &["Highlight"]);
+        let edit = Edit::Batch { label: String::new(), edits: vec![highlight_on(0), highlight_on(1)] };
+        select_after_edit(&mut view, &edit, &info, &[], QuickTool::Comment(CommentTool::Highlight), Some(1));
+        assert!(view.comments.selected.is_none());
+        assert!(view.comments.editing.is_none());
+    }
+
+    /// A visible highlight across pages still selects the part on the page the drag ended on and opens its note.
+    #[test]
+    fn a_visible_highlight_across_pages_stays_selected() {
+        let info = DocInfo {
+            pages: vec![
+                PageInfo { width: 200.0, height: 100.0, label: String::new(), crop: [0.0, 0.0, 200.0, 100.0], rotation: 0 },
+                PageInfo { width: 200.0, height: 100.0, label: String::new(), crop: [0.0, 0.0, 200.0, 100.0], rotation: 0 },
+            ],
+            annotations: vec![on_page(0, 0, "Highlight", "a"), on_page(0, 1, "Highlight", "b")],
+            ..Default::default()
+        };
+        let mut view = view(Vec::new(), &["Oval"]);
+        let edit = Edit::Batch { label: String::new(), edits: vec![highlight_on(0), highlight_on(1)] };
+        select_after_edit(&mut view, &edit, &info, &[], QuickTool::Comment(CommentTool::Highlight), Some(1));
+        assert_eq!(view.comments.selected, Some((1, 0)));
+        assert!(view.comments.editing.is_some());
     }
 }
 

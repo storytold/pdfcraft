@@ -183,7 +183,8 @@ pub struct CommentView {
     pub add_box: String,
     /// The Comments panel's search query (`None`: search closed).
     pub search: Option<String>,
-    /// Comment types, authors and statuses hidden by the panel's filter.
+    /// Comment types, authors and statuses hidden by the panel's filter. A hidden type is also
+    /// left off the page (the others filter the list only).
     pub hidden_types: Vec<String>,
     pub hidden_authors: Vec<String>,
     pub hidden_statuses: Vec<String>,
@@ -359,6 +360,33 @@ impl CommentView {
         self.selected = None;
         self.also.clear();
         self.member = None;
+    }
+
+    /// Drop selected comments whose type is now hidden, and forget a clicked group member whose
+    /// type left the page. When the handle comment goes, promote one remaining visible `also`
+    /// entry the way [`Self::document_changed`] does, so Delete and comment.copy still have a
+    /// target.
+    pub(crate) fn drop_hidden_selection(&mut self, annotations: &[Annotation]) {
+        let hidden = |key: (usize, usize)| {
+            annotations.iter().any(|a| (a.page, a.index) == key && self.hidden_types.iter().any(|ty| ty == crate::comments_panel::kind_label(a)))
+        };
+        let kept = self.selected;
+        self.also.retain(|&k| !hidden(k));
+        if self.selected.is_some_and(hidden) {
+            self.selected = None;
+        }
+        if self.selected.is_none() {
+            self.selected = self.also.pop();
+        }
+        // The reply box is the selected card's draft. Promoting another comment, or clearing
+        // the selection, must not leave that draft to be posted on whatever is selected next.
+        // A pop-up draft is stored against the comment it answers, so it stays.
+        if self.selected != kept {
+            self.reply.clear();
+        }
+        if self.member.is_some_and(|((mp, mi), (gp, gi))| Some((gp, gi)) != self.selected || hidden((mp, mi))) {
+            self.member = None;
+        }
     }
 
     /// What Delete acts on: the group member clicked, while its group is still the selection,
@@ -575,6 +603,8 @@ pub(crate) struct PageCx<'a> {
     pub allowed: bool,
     /// Comments are hidden (Hide all comments): nothing to select.
     pub hidden: bool,
+    /// Types the panel's filter hid (`Oval`, `Callout`, …): those comments are not selectable.
+    pub hidden_types: &'a [String],
     /// This frame's keys as the pages see them.
     pub keys: PageKeys,
 }
@@ -606,9 +636,13 @@ impl PageCx<'_> {
         self.xf.user_rect(self.info, self.page, frame(a, self.rotation()))
     }
 
-    /// Top-level comments on this page, in inspection order.
+    /// Top-level comments on this page, in inspection order. A type the filter hid is not among them,
+    /// so it cannot be hovered or selected.
     pub(super) fn comments(&self) -> impl Iterator<Item = &Annotation> {
-        self.info.annotations.iter().filter(move |a| !self.hidden && a.page == self.page && a.is_comment() && a.subtype != "Popup")
+        self.info
+            .annotations
+            .iter()
+            .filter(move |a| !self.hidden && a.page == self.page && a.is_comment() && a.subtype != "Popup" && self.type_visible(a))
     }
 
     /// Where a comment is on screen: one rectangle, or one per marked line for text markup.
@@ -680,7 +714,7 @@ impl PageCx<'_> {
             .info
             .annotations
             .iter()
-            .filter(|a| !self.hidden && a.page == self.page && a.grouped && a.intent.as_deref() == Some("StrikeOutTextEdit"))
+            .filter(|a| !self.hidden && a.page == self.page && a.grouped && a.intent.as_deref() == Some("StrikeOutTextEdit") && self.type_visible(a))
             .filter(under)
             .filter_map(|s| {
                 let (page, index) = s.parent?;
@@ -723,9 +757,20 @@ impl PageCx<'_> {
         self.comment_at(p).or_else(|| self.member_at(p).map(|(_, p)| p))
     }
 
+    /// Whether the type filter still shows this annotation.
+    pub(super) fn type_visible(&self, a: &Annotation) -> bool {
+        !self.hidden_types.iter().any(|t| t == crate::comments_panel::kind_label(a))
+    }
+
     /// The group subordinate under `p`, where no comment is, with its group's primary.
     fn member_at(&self, p: Pos2) -> Option<(&Annotation, &Annotation)> {
-        self.group_members().into_iter().rev().find(|(m, _)| self.screen_rects(m).any(|r| r.expand(3.0).contains(p)))
+        // `get` applies the type filter to the primary, so a hidden Replace-text caret is not
+        // selected via its grouped strikeout. A hidden member (Oval under a visible Rectangle)
+        // is skipped so a click on its invisible area does not select the primary.
+        self.group_members()
+            .into_iter()
+            .rev()
+            .find(|(m, primary)| self.get(primary.index).is_some() && self.type_visible(m) && self.screen_rects(m).any(|r| r.expand(3.0).contains(p)))
     }
 
     /// The group member a click at `p` picked when it selects `selected`, its group's primary

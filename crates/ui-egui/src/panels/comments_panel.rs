@@ -38,16 +38,11 @@ pub fn subtype_label(s: &str) -> &str {
 }
 
 /// The comment type as the panel names it, telling callouts, clouds and replaced text apart by `/IT`.
+///
+/// The name is the renderer's (`comment_type_label`), so hiding a type takes the same comments
+/// out of the list and off the page. A subtype the renderer does not name keeps its own label.
 pub fn kind_label(a: &Annotation) -> &str {
-    match a.intent.as_deref() {
-        // Replace Text: the caret (`/IT /Replace`) is the group's primary; earlier builds made
-        // the strikeout primary.
-        Some("StrikeOutTextEdit" | "Replace") => "Replace text",
-        Some("FreeTextCallout") => "Callout",
-        Some("PolygonCloud") => "Cloud",
-        Some("FreeTextTypeWriter") => "Typewriter",
-        _ => subtype_label(&a.subtype),
-    }
+    pdfcraft_render::comment_type_label(&a.subtype, a.intent.as_deref(), a.grouped).unwrap_or_else(|| subtype_label(&a.subtype))
 }
 
 pub fn subtype_icon(s: &str) -> &'static str {
@@ -757,7 +752,8 @@ fn legible(c: Color32, t: &Tokens) -> Color32 {
 
 /// The Comments panel header's filter and sort controls (Acrobat: filter funnel and "…").
 /// The header's "…" (sort, hide all, summary, data exchange) and filter menus; returns a
-/// command to run.
+/// command to run. Unchecking a type hides that type on the page as well as in the list.
+/// Author, status, colour and checkmark filters still affect the list only.
 pub(crate) fn header_controls(ui: &mut egui::Ui, info: &DocInfo, view: &mut DocView, hidden: bool) -> Option<&'static str> {
     let mut command = None;
     let cv = &mut view.comments;
@@ -898,5 +894,61 @@ mod filter {
         assert!(any_contains(["IRMAK"], "ırmak"));
         assert!(any_contains(["Note"], "NOTE"));
         assert!(!any_contains(["Ayşe Yılmaz"], "mehmet"));
+    }
+}
+
+#[cfg(test)]
+mod kind {
+    use super::kind_label;
+    use pdfcraft_render::Annotation;
+
+    fn annot(subtype: &str, intent: Option<&str>, grouped: bool) -> Annotation {
+        Annotation {
+            page: 0,
+            subtype: subtype.into(),
+            author: None,
+            contents: None,
+            modified: None,
+            name: None,
+            in_reply_to: None,
+            parent: grouped.then_some((0, 0)),
+            grouped,
+            rect: [0.0; 4],
+            color: None,
+            index: 0,
+            state: None,
+            quads: Vec::new(),
+            locked: false,
+            intent: intent.map(Into::into),
+            fill_sign: false,
+            no_rotate: false,
+            points: Vec::new(),
+            text_box: None,
+            popup: None,
+        }
+    }
+
+    #[test]
+    fn replace_and_insert_text_match_the_renderer_hide_rules() {
+        assert_eq!(kind_label(&annot("Caret", Some("Replace"), false)), "Replace text");
+        assert_eq!(kind_label(&annot("Caret", Some("Replace"), true)), "Replace text");
+        assert_eq!(kind_label(&annot("Caret", None, true)), "Replace text");
+        assert_eq!(kind_label(&annot("Caret", Some("StrikeOutTextEdit"), true)), "Replace text");
+        assert_eq!(kind_label(&annot("StrikeOut", Some("StrikeOutTextEdit"), false)), "Replace text");
+        assert_eq!(kind_label(&annot("StrikeOut", Some("StrikeOutTextEdit"), true)), "Replace text");
+        assert_eq!(kind_label(&annot("Caret", None, false)), "Insert text");
+        // An ungrouped caret keeps Insert text even with the strikeout intent. The page hides
+        // that intent as Replace text only on a StrikeOut.
+        assert_eq!(kind_label(&annot("Caret", Some("StrikeOutTextEdit"), false)), "Insert text");
+        assert_eq!(kind_label(&annot("Caret", Some("FreeTextCallout"), false)), "Insert text");
+        assert_eq!(kind_label(&annot("Caret", Some("FreeTextCallout"), true)), "Replace text");
+        assert_eq!(kind_label(&annot("Highlight", Some("StrikeOutTextEdit"), false)), "Highlight");
+        assert_eq!(kind_label(&annot("Square", Some("Replace"), false)), "Rectangle");
+        assert_eq!(kind_label(&annot("FreeText", Some("Replace"), false)), "Text box");
+        assert_eq!(kind_label(&annot("StrikeOut", None, false)), "Strikethrough");
+        assert_eq!(kind_label(&annot("FreeText", Some("FreeTextCallout"), false)), "Callout");
+        assert_eq!(kind_label(&annot("FreeText", None, false)), "Text box");
+        assert_eq!(kind_label(&annot("Polygon", Some("PolygonCloud"), false)), "Cloud");
+        assert_eq!(kind_label(&annot("Polygon", None, false)), "Polygon");
     }
 }

@@ -62,8 +62,9 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
         && page == cx.page
         && let Some(a) = cx.get(index)
     {
-        // The rest of the group is selected with its primary.
-        for (m, _) in cx.group_members().into_iter().filter(|(_, p)| p.index == index) {
+        // The rest of the group is selected with its primary. A member whose type is hidden is
+        // not on the page, so it is not outlined either.
+        for (m, _) in cx.group_members().into_iter().filter(|(m, p)| p.index == index && cx.type_visible(m)) {
             for r in cx.screen_rects(m) {
                 painter.rect_stroke(r.expand(2.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
             }

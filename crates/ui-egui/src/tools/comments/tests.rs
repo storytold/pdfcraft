@@ -105,6 +105,7 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
             prefs: &prefs,
             allowed: true,
             hidden: false,
+            hidden_types: &[],
             redact_mark: ([0.0; 3], 1.0),
             keys: Default::default(),
         };
@@ -178,6 +179,455 @@ fn a_kept_comment_is_found_where_a_delete_moved_it() {
     view.editor_focus = Some(EditorFocus::Take);
     view.annotation_deleted(&before, &DocInfo { annotations: after.clone(), ..Default::default() }, gone);
     assert_eq!((view.editing, view.editor_focus), (None, None), "the editor closes with the reply it was open on");
+}
+
+/// A type the filter hid is not a comment the page can hover or select.
+#[test]
+fn a_hidden_comment_type_is_not_selectable() {
+    let mark = |subtype: &str, index: usize| Annotation {
+        page: 0,
+        subtype: subtype.into(),
+        author: None,
+        contents: None,
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        parent: None,
+        grouped: false,
+        rect: [10.0, 10.0, 40.0, 40.0],
+        color: None,
+        index,
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: None,
+        fill_sign: false,
+        no_rotate: false,
+        points: Vec::new(),
+        text_box: None,
+        popup: None,
+    };
+    let page = PageInfo { width: 200.0, height: 100.0, label: String::new(), crop: [0.0, 0.0, 200.0, 100.0], rotation: 0 };
+    let info = DocInfo { pages: vec![page], annotations: vec![mark("Square", 0), mark("Circle", 1)], ..Default::default() };
+    let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 100.0)), rot: 0, pw: 200.0, ph: 100.0 };
+    let prefs = CommentPrefs::default();
+    let hidden = ["Oval".to_string()];
+    let cx = PageCx {
+        page: 0,
+        xf: &xf,
+        ptr: &PagePointer::default(),
+        info: &info,
+        tool: QuickTool::Select,
+        prefs: &prefs,
+        allowed: true,
+        hidden: false,
+        hidden_types: &hidden,
+        redact_mark: ([0.0; 3], 1.0),
+        keys: Default::default(),
+    };
+    let left: Vec<_> = cx.comments().map(|a| a.subtype.as_str()).collect();
+    assert_eq!(left, ["Square"]);
+}
+
+/// A hidden Replace-text group is not selected through its grouped strikeout.
+#[test]
+fn a_hidden_replace_text_group_is_not_selectable_via_its_strikeout() {
+    let annot = |index: usize, subtype: &str, intent: Option<&str>, parent: Option<(usize, usize)>, rect: [f32; 4]| Annotation {
+        page: 0,
+        subtype: subtype.into(),
+        author: None,
+        contents: None,
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        parent,
+        grouped: parent.is_some(),
+        rect,
+        color: None,
+        index,
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: intent.map(Into::into),
+        fill_sign: false,
+        no_rotate: false,
+        points: Vec::new(),
+        text_box: None,
+        popup: None,
+    };
+    let page = PageInfo { width: 200.0, height: 100.0, label: String::new(), crop: [0.0, 0.0, 200.0, 100.0], rotation: 0 };
+    let info = DocInfo {
+        pages: vec![page],
+        annotations: vec![
+            annot(0, "Caret", Some("Replace"), None, [10.0, 10.0, 20.0, 20.0]),
+            annot(1, "StrikeOut", Some("StrikeOutTextEdit"), Some((0, 0)), [40.0, 40.0, 80.0, 50.0]),
+        ],
+        ..Default::default()
+    };
+    let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 100.0)), rot: 0, pw: 200.0, ph: 100.0 };
+    let prefs = CommentPrefs::default();
+    let shown = PageCx {
+        page: 0,
+        xf: &xf,
+        ptr: &PagePointer::default(),
+        info: &info,
+        tool: QuickTool::Select,
+        prefs: &prefs,
+        allowed: true,
+        hidden: false,
+        hidden_types: &[],
+        redact_mark: ([0.0; 3], 1.0),
+        keys: Default::default(),
+    };
+    // PDF y-up → screen y-down: rect [40,40,80,50] maps near (60, 100-45) ≈ (60, 55).
+    let on_strike = pos2(60.0, 55.0);
+    let on_caret = pos2(15.0, 85.0);
+    assert_eq!(shown.click_target(on_strike).map(|a| a.index), Some(0), "the strikeout selects the caret");
+    let insert_hidden = ["Insert text".to_string()];
+    let cx = PageCx { hidden_types: &insert_hidden, ..shown };
+    assert_eq!(cx.click_target(on_caret).map(|a| a.index), Some(0), "a Replace-text caret primary stays selectable when Insert text is hidden");
+    assert_eq!(cx.click_target(on_strike).map(|a| a.index), Some(0), "its strikeout still selects the group when Insert text is hidden");
+    let hidden = ["Replace text".to_string()];
+    let cx = PageCx { hidden_types: &hidden, ..shown };
+    assert!(cx.click_target(on_strike).is_none(), "a hidden Replace-text group is not selectable");
+    assert!(cx.click_target(on_caret).is_none(), "hiding Replace text drops the caret primary too");
+}
+
+/// A legacy Replace-text caret (grouped, no `/IT /Replace`) stays selectable when Insert text is
+/// hidden, matching the renderer; a standalone Insert-text caret does not.
+#[test]
+fn a_grouped_replace_text_caret_stays_selectable_when_insert_text_is_hidden() {
+    let annot = |index: usize, subtype: &str, intent: Option<&str>, parent: Option<(usize, usize)>, rect: [f32; 4]| Annotation {
+        page: 0,
+        subtype: subtype.into(),
+        author: None,
+        contents: None,
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        parent,
+        grouped: parent.is_some(),
+        rect,
+        color: None,
+        index,
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: intent.map(Into::into),
+        fill_sign: false,
+        no_rotate: false,
+        points: Vec::new(),
+        text_box: None,
+        popup: None,
+    };
+    let page = PageInfo { width: 200.0, height: 100.0, label: String::new(), crop: [0.0, 0.0, 200.0, 100.0], rotation: 0 };
+    // Legacy layout: strikeout is primary; caret is grouped under it. Plus a standalone insert caret.
+    let info = DocInfo {
+        pages: vec![page],
+        annotations: vec![
+            annot(0, "StrikeOut", Some("StrikeOutTextEdit"), None, [10.0, 40.0, 50.0, 50.0]),
+            annot(1, "Caret", None, Some((0, 0)), [60.0, 40.0, 80.0, 60.0]),
+            annot(2, "Caret", None, None, [120.0, 40.0, 140.0, 60.0]),
+        ],
+        ..Default::default()
+    };
+    let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 100.0)), rot: 0, pw: 200.0, ph: 100.0 };
+    let prefs = CommentPrefs::default();
+    let hidden = ["Insert text".to_string()];
+    let cx = PageCx {
+        page: 0,
+        xf: &xf,
+        ptr: &PagePointer::default(),
+        info: &info,
+        tool: QuickTool::Select,
+        prefs: &prefs,
+        allowed: true,
+        hidden: false,
+        hidden_types: &hidden,
+        redact_mark: ([0.0; 3], 1.0),
+        keys: Default::default(),
+    };
+    // PDF y-up → screen y-down.
+    let on_grouped_caret = pos2(70.0, 50.0);
+    let on_insert_caret = pos2(130.0, 50.0);
+    assert_eq!(
+        cx.click_target(on_grouped_caret).map(|a| a.index),
+        Some(0),
+        "a grouped Replace-text caret stays hit-testable when Insert text is hidden"
+    );
+    assert!(cx.click_target(on_insert_caret).is_none(), "a standalone Insert-text caret is filtered");
+
+    let replace_hidden = ["Replace text".to_string()];
+    let cx = PageCx { hidden_types: &replace_hidden, ..cx };
+    assert!(cx.click_target(on_grouped_caret).is_none(), "hiding Replace text drops the grouped caret too");
+    assert_eq!(cx.click_target(on_insert_caret).map(|a| a.index), Some(2), "the Insert-text caret stays");
+}
+
+/// A caret primary with no intent is Insert text. Its grouped strikeout is Replace text, so
+/// hiding Replace text leaves the caret and must not let a click on the hidden strikeout select it.
+#[test]
+fn a_hidden_replace_strikeout_does_not_select_its_insert_caret() {
+    let annot = |index: usize, subtype: &str, intent: Option<&str>, parent: Option<(usize, usize)>, rect: [f32; 4]| Annotation {
+        page: 0,
+        subtype: subtype.into(),
+        author: None,
+        contents: None,
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        parent,
+        grouped: parent.is_some(),
+        rect,
+        color: None,
+        index,
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: intent.map(Into::into),
+        fill_sign: false,
+        no_rotate: false,
+        points: Vec::new(),
+        text_box: None,
+        popup: None,
+    };
+    let prefs = CommentPrefs::default();
+    let click = |rotation: u16, crop: [f32; 4], caret: [f32; 4], strike: [f32; 4], alone: [f32; 4], hidden: &[String], at: Pos2| -> Option<usize> {
+        let (width, height) = (crop[2] - crop[0], crop[3] - crop[1]);
+        let annotations = vec![
+            annot(0, "Caret", None, None, caret),
+            annot(1, "StrikeOut", Some("StrikeOutTextEdit"), Some((0, 0)), strike),
+            annot(2, "StrikeOut", Some("StrikeOutTextEdit"), None, alone),
+        ];
+        let page = PageInfo { width, height, label: String::new(), crop, rotation };
+        let info = DocInfo { pages: vec![page], annotations, ..Default::default() };
+        let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(width, height)), rot: 0, pw: width, ph: height };
+        let cx = PageCx {
+            page: 0,
+            xf: &xf,
+            ptr: &PagePointer::default(),
+            info: &info,
+            tool: QuickTool::Select,
+            prefs: &prefs,
+            allowed: true,
+            hidden: false,
+            hidden_types: hidden,
+            redact_mark: ([0.0; 3], 1.0),
+            keys: Default::default(),
+        };
+        cx.click_target(at).map(|a| a.index)
+    };
+    // Screen point inside a user-space rect (PDF y up, crop origin, page `/Rotate`).
+    let inside = |rotation: u16, crop: [f32; 4], rect: [f32; 4]| -> Pos2 {
+        let (cw, ch) = ((crop[2] - crop[0]).max(1.0), (crop[3] - crop[1]).max(1.0));
+        let norm = |x: f32, y: f32| {
+            let (u, v) = ((x - crop[0]) / cw, (crop[3] - y) / ch);
+            match rotation {
+                90 => (1.0 - v, u),
+                180 => (1.0 - u, 1.0 - v),
+                270 => (v, 1.0 - u),
+                _ => (u, v),
+            }
+        };
+        let (a, b) = (norm(rect[0], rect[1]), norm(rect[2], rect[3]));
+        pos2((a.0 + b.0) * 0.5 * cw, (a.1 + b.1) * 0.5 * ch)
+    };
+    let replace = ["Replace text".to_string()];
+    let insert = ["Insert text".to_string()];
+    let both = ["Replace text".to_string(), "Insert text".to_string()];
+    let layouts = [
+        (0_u16, [0.0, 0.0, 200.0, 100.0], [10.0, 70.0, 30.0, 90.0], [40.0, 40.0, 80.0, 50.0], [120.0, 40.0, 160.0, 50.0]),
+        (90, [0.0, 0.0, 200.0, 100.0], [10.0, 70.0, 30.0, 90.0], [40.0, 40.0, 80.0, 50.0], [120.0, 40.0, 160.0, 50.0]),
+        (180, [0.0, 0.0, 200.0, 100.0], [10.0, 70.0, 30.0, 90.0], [40.0, 40.0, 80.0, 50.0], [120.0, 40.0, 160.0, 50.0]),
+        (270, [0.0, 0.0, 200.0, 100.0], [10.0, 70.0, 30.0, 90.0], [40.0, 40.0, 80.0, 50.0], [120.0, 40.0, 160.0, 50.0]),
+        (0, [10.0, 20.0, 210.0, 120.0], [20.0, 90.0, 40.0, 110.0], [50.0, 60.0, 90.0, 70.0], [130.0, 60.0, 170.0, 70.0]),
+    ];
+    for (rotation, crop, caret, strike, alone) in layouts {
+        let on_caret = inside(rotation, crop, caret);
+        let on_strike = inside(rotation, crop, strike);
+        let on_alone = inside(rotation, crop, alone);
+        let at = |hidden: &[String], point: Pos2| click(rotation, crop, caret, strike, alone, hidden, point);
+        assert_eq!(at(&[], on_strike), Some(0), "rotation {rotation}: the strikeout selects its caret");
+        assert_eq!(at(&[], on_caret), Some(0), "rotation {rotation}: the caret itself");
+        assert_eq!(at(&[], on_alone), Some(2), "rotation {rotation}: an ungrouped strikeout is its own comment");
+        assert_eq!(at(&replace, on_strike), None, "rotation {rotation}: a hidden strikeout does not select the caret");
+        assert_eq!(at(&replace, on_caret), Some(0), "rotation {rotation}: the Insert-text caret stays");
+        assert_eq!(at(&replace, on_alone), None, "rotation {rotation}: an ungrouped Replace-text strikeout is hidden too");
+        assert_eq!(at(&insert, on_caret), None, "rotation {rotation}: hiding Insert text hides the caret");
+        assert_eq!(at(&insert, on_strike), None, "rotation {rotation}: the strikeout does not select a hidden caret");
+        assert_eq!(at(&insert, on_alone), Some(2), "rotation {rotation}: the Replace-text strikeout stays");
+        assert_eq!(at(&both, on_strike), None, "rotation {rotation}: both hidden");
+        assert_eq!(at(&both, on_caret), None, "rotation {rotation}: both hidden");
+        assert_eq!(at(&both, on_alone), None, "rotation {rotation}: both hidden");
+    }
+}
+
+/// A hidden group member does not select its visible primary.
+#[test]
+fn a_hidden_group_member_does_not_select_its_primary() {
+    let annot = |index: usize, subtype: &str, parent: Option<(usize, usize)>, rect: [f32; 4]| Annotation {
+        page: 0,
+        subtype: subtype.into(),
+        author: None,
+        contents: None,
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        parent,
+        grouped: parent.is_some(),
+        rect,
+        color: None,
+        index,
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: None,
+        fill_sign: false,
+        no_rotate: false,
+        points: Vec::new(),
+        text_box: None,
+        popup: None,
+    };
+    let page = PageInfo { width: 200.0, height: 100.0, label: String::new(), crop: [0.0, 0.0, 200.0, 100.0], rotation: 0 };
+    let info = DocInfo {
+        pages: vec![page],
+        annotations: vec![annot(0, "Square", None, [10.0, 10.0, 30.0, 30.0]), annot(1, "Circle", Some((0, 0)), [50.0, 40.0, 90.0, 60.0])],
+        ..Default::default()
+    };
+    let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 100.0)), rot: 0, pw: 200.0, ph: 100.0 };
+    let prefs = CommentPrefs::default();
+    let shown = PageCx {
+        page: 0,
+        xf: &xf,
+        ptr: &PagePointer::default(),
+        info: &info,
+        tool: QuickTool::Select,
+        prefs: &prefs,
+        allowed: true,
+        hidden: false,
+        hidden_types: &[],
+        redact_mark: ([0.0; 3], 1.0),
+        keys: Default::default(),
+    };
+    // PDF y-up → screen y-down: rect [50,40,90,60] maps near (70, 100-50) ≈ (70, 50).
+    let on_circle = pos2(70.0, 50.0);
+    assert_eq!(shown.click_target(on_circle).map(|a| a.index), Some(0), "the oval selects its rectangle primary");
+    let hidden = ["Oval".to_string()];
+    let cx = PageCx { hidden_types: &hidden, ..shown };
+    assert!(cx.click_target(on_circle).is_none(), "a hidden oval member does not select the rectangle");
+    assert_eq!(cx.click_target(pos2(20.0, 80.0)).map(|a| a.index), Some(0), "the rectangle itself stays selectable");
+}
+
+/// Hiding a type drops matching selection state: the clicked group member, multi-select
+/// entries, and the handle when it leaves — promoting a remaining visible `also` entry.
+#[test]
+fn drop_hidden_selection_clears_member_also_and_promotes() {
+    let annot = |index: usize, subtype: &str, parent: Option<(usize, usize)>| Annotation {
+        page: 0,
+        subtype: subtype.into(),
+        author: None,
+        contents: None,
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        parent,
+        grouped: parent.is_some(),
+        rect: [10.0, 10.0, 40.0, 40.0],
+        color: None,
+        index,
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: None,
+        fill_sign: false,
+        no_rotate: false,
+        points: Vec::new(),
+        text_box: None,
+        popup: None,
+    };
+    let annotations = vec![annot(0, "Square", None), annot(1, "Circle", Some((0, 0))), annot(2, "Highlight", None), annot(3, "Underline", None)];
+
+    // A clicked Oval under a visible Rectangle is forgotten once Oval is hidden.
+    let mut view = CommentView { selected: Some((0, 0)), member: Some(((0, 1), (0, 0))), ..CommentView::default() };
+    view.hidden_types = vec!["Oval".into()];
+    view.drop_hidden_selection(&annotations);
+    assert_eq!(view.selected, Some((0, 0)), "the visible rectangle keeps the handles");
+    assert!(view.member.is_none(), "Delete must not act on the hidden oval");
+
+    // Hiding the handle promotes a remaining visible multi-select entry.
+    let mut view = CommentView { selected: Some((0, 0)), also: vec![(0, 2), (0, 3)], ..CommentView::default() };
+    view.hidden_types = vec!["Rectangle".into()];
+    view.drop_hidden_selection(&annotations);
+    assert_eq!(view.selected, Some((0, 3)), "one remaining visible also entry takes the handles");
+    assert_eq!(view.also, vec![(0, 2)], "the other visible also entry stays");
+
+    // Hidden also entries leave; when every selected comment is hidden, selection is empty.
+    let mut view = CommentView { selected: Some((0, 2)), also: vec![(0, 1), (0, 3)], ..CommentView::default() };
+    view.hidden_types = vec!["Highlight".into(), "Oval".into(), "Underline".into()];
+    view.drop_hidden_selection(&annotations);
+    assert!(view.selected.is_none() && view.also.is_empty(), "nothing visible remains selected");
+}
+
+/// The reply box belongs to the comment that has the handles. Promoting another comment must
+/// not keep that draft; a draft stored against a comment's own identity stays with it.
+#[test]
+fn hiding_the_handle_drops_a_reply_draft_that_belonged_to_it() {
+    let annot = |index: usize, subtype: &str| Annotation {
+        page: 0,
+        subtype: subtype.into(),
+        author: None,
+        contents: None,
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        parent: None,
+        grouped: false,
+        rect: [10.0, 10.0, 40.0, 40.0],
+        color: None,
+        index,
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: None,
+        fill_sign: false,
+        no_rotate: false,
+        points: Vec::new(),
+        text_box: None,
+        popup: None,
+    };
+    let annotations = vec![annot(0, "Square"), annot(1, "Circle"), annot(2, "Highlight"), annot(3, "Underline")];
+    let popup_on_rectangle = Some((0, 0, "popup draft".into()));
+
+    let mut view = CommentView {
+        selected: Some((0, 0)),
+        also: vec![(0, 2)],
+        reply: "rectangle draft".into(),
+        popup_reply: popup_on_rectangle.clone(),
+        ..CommentView::default()
+    };
+    view.hidden_types = vec!["Rectangle".into()];
+    view.drop_hidden_selection(&annotations);
+    assert_eq!(view.selected, Some((0, 2)), "the highlight takes the handles");
+    assert!(view.reply.is_empty(), "the rectangle's draft is not posted onto the highlight");
+    assert_eq!(view.popup_reply, popup_on_rectangle, "a pop-up draft stays with the comment it answers");
+
+    let mut view = CommentView { selected: Some((0, 0)), also: vec![(0, 1), (0, 3)], reply: "stays".into(), ..CommentView::default() };
+    view.hidden_types = vec!["Oval".into()];
+    view.drop_hidden_selection(&annotations);
+    assert_eq!(view.selected, Some((0, 0)), "the rectangle keeps the handles");
+    assert_eq!(view.also, vec![(0, 3)]);
+    assert_eq!(view.reply, "stays", "the draft stays while its comment stays selected");
+
+    let mut view = CommentView { selected: Some((0, 0)), reply: "gone".into(), ..CommentView::default() };
+    view.hidden_types = vec!["Rectangle".into()];
+    view.drop_hidden_selection(&annotations);
+    assert!(view.selected.is_none() && view.reply.is_empty(), "a hidden comment takes its draft with it");
+
+    let mut view = CommentView { selected: Some((0, 2)), also: vec![(0, 1), (0, 3)], reply: "highlight draft".into(), ..CommentView::default() };
+    view.hidden_types = vec!["Highlight".into(), "Oval".into()];
+    view.drop_hidden_selection(&annotations);
+    assert_eq!(view.selected, Some((0, 3)));
+    assert!(view.also.is_empty());
+    assert!(view.reply.is_empty(), "promoting past a hidden also entry still drops the old draft");
 }
 
 use pdfcraft_render::TextGlyph;
@@ -585,6 +1035,7 @@ fn markup_comment_markers_skip_rounded_inverted_clamp_bounds() {
             prefs: &prefs,
             allowed: true,
             hidden: false,
+            hidden_types: &[],
             redact_mark: ([0.0; 3], 1.0),
             keys: crate::page_keys::PageKeys::new(false),
         };
@@ -614,6 +1065,7 @@ fn markup_comment_markers_stay_inside_turned_and_zoomed_pages() {
                 prefs: &prefs,
                 allowed: true,
                 hidden: false,
+                hidden_types: &[],
                 redact_mark: ([0.0; 3], 1.0),
                 keys: crate::page_keys::PageKeys::new(false),
             };
@@ -850,6 +1302,7 @@ fn the_hover_outline_goes_round_what_a_press_would_take() {
         prefs: &prefs,
         allowed: true,
         hidden: false,
+        hidden_types: &[],
         redact_mark: ([0.0; 3], 1.0),
         keys: Default::default(),
     };
@@ -882,6 +1335,7 @@ fn comment_marker_wins_over_an_overlapping_body_for_pick_and_hover() {
         prefs: &prefs,
         allowed: true,
         hidden: false,
+        hidden_types: &[],
         redact_mark: ([0.0; 3], 1.0),
         keys: crate::page_keys::PageKeys::new(false),
     };
