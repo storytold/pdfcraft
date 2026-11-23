@@ -284,10 +284,16 @@ fn hebrew_candidates() -> Vec<PathBuf> {
     if cfg!(windows) {
         ["segoeui.ttf", "arial.ttf", "tahoma.ttf", "david.ttf"].iter().map(|f| windows_fonts().join(f)).collect()
     } else if cfg!(target_os = "macos") {
-        ["/System/Library/Fonts/SFHebrew.ttf", "/System/Library/Fonts/ArialHB.ttc", "/Library/Fonts/Arial Unicode.ttf"]
-            .iter()
-            .map(PathBuf::from)
-            .collect()
+        [
+            "/System/Library/Fonts/SFHebrew.ttf",
+            "/System/Library/Fonts/ArialHB.ttc",
+            "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/Library/Fonts/Arial Unicode.ttf",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect()
     } else {
         unix_fonts(&[
             "google-noto/NotoSansHebrew-Regular.ttf",
