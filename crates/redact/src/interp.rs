@@ -1233,6 +1233,59 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
     (out, removed)
 }
 
+/// `Do` of an image, with the same return value as [`xobject`].
+fn image_xobject(
+    doc: &mut Document,
+    scope: &mut Scope<'_>,
+    r: ObjRef,
+    name: Vec<u8>,
+    gs: &Gs,
+    xobjects: &mut Dict,
+    out: &mut Output,
+) -> Option<Option<Op>> {
+    let obj = doc.get(r);
+    let Object::Stream(s) = &*obj else { return None };
+    let b = gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]);
+    if !scope.hits(b) || scope.mode == Mode::Verify {
+        return None;
+    }
+    if scope.covered(b) {
+        scope.report.images_removed += 1;
+        out.replaced.push(name);
+        out.doomed.push(r);
+        return Some(None);
+    }
+    match image::clear(doc, s, &gs.ctm, scope.rects, &mut *scope.images) {
+        Ok(None) => None,
+        Ok(Some(new)) => {
+            let nr = doc.add(Object::Stream(new));
+            let n = fresh_name(scope, xobjects);
+            xobjects.set(n.clone(), Object::Ref(nr));
+            out.xobjects.push((n.clone(), nr));
+            out.replaced.push(name);
+            out.doomed.push(r);
+            scope.report.images_cleared += 1;
+            Some(Some(Op::new("Do", vec![Object::Name(n)])))
+        }
+        // In a soft mask's group the image shapes the mask wherever it lies, so dropping
+        // it would change what the mask lets paint far outside the mark (#7884).
+        Err(()) if scope.in_mask => {
+            out.error = Some(CosError::Syntax {
+                offset: 0,
+                detail: "an image in a soft mask's group under a mark can't be cleared, and removing it would change the mask outside the mark"
+                    .into(),
+            });
+            None
+        }
+        Err(()) => {
+            scope.report.images_removed += 1;
+            out.replaced.push(name);
+            out.doomed.push(r);
+            Some(None)
+        }
+    }
+}
+
 /// `Do`: `None` = leave the operator alone; `Some(None)` = drop it; `Some(Some(op))` = replace it.
 fn xobject(
     doc: &mut Document,
@@ -1262,48 +1315,7 @@ fn xobject(
             out.doomed.push(r);
             Some(None)
         }
-        Some(b"Image") => {
-            let b = gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]);
-            if !scope.hits(b) || scope.mode == Mode::Verify {
-                return None;
-            }
-            if scope.covered(b) {
-                scope.report.images_removed += 1;
-                out.replaced.push(name);
-                out.doomed.push(r);
-                return Some(None);
-            }
-            match image::clear(doc, s, &gs.ctm, scope.rects, &mut *scope.images) {
-                Ok(None) => None,
-                Ok(Some(new)) => {
-                    let nr = doc.add(Object::Stream(new));
-                    let n = fresh_name(scope, xobjects);
-                    xobjects.set(n.clone(), Object::Ref(nr));
-                    out.xobjects.push((n.clone(), nr));
-                    out.replaced.push(name);
-                    out.doomed.push(r);
-                    scope.report.images_cleared += 1;
-                    Some(Some(Op::new("Do", vec![Object::Name(n)])))
-                }
-                // In a soft mask's group the image shapes the mask wherever it lies, so dropping
-                // it would change what the mask lets paint far outside the mark (#7884).
-                Err(()) if scope.in_mask => {
-                    out.error = Some(CosError::Syntax {
-                        offset: 0,
-                        detail:
-                            "an image in a soft mask's group under a mark can't be cleared, and removing it would change the mask outside the mark"
-                                .into(),
-                    });
-                    None
-                }
-                Err(()) => {
-                    scope.report.images_removed += 1;
-                    out.replaced.push(name);
-                    out.doomed.push(r);
-                    Some(None)
-                }
-            }
-        }
+        Some(b"Image") => image_xobject(doc, scope, r, name, gs, xobjects, out),
         Some(b"Form") => {
             // Read as the proof reads it, entries by reference included: read as the identity, a
             // form moved onto a mark would be tested against the wrong place and never walked.
