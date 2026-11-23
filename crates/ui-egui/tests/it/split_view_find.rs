@@ -44,6 +44,43 @@ fn each_panes_find_input_has_its_own_id() {
     assert!(h.state().views[0].find.as_ref().unwrap().query.is_empty());
 }
 
+#[test]
+fn each_panes_replace_input_keeps_its_own_focus_and_text() {
+    let mut h = harness();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Backslash);
+    h.run_steps(4);
+    assert_eq!(h.state().views.len(), 2);
+    let id = h.state().views[0].id;
+    let original = h.state().session.get(id).unwrap().bytes.clone();
+    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::EditText;
+    for view in &mut h.state_mut().views {
+        view.open_find();
+        let find = view.find.as_mut().unwrap();
+        find.query = "__split_replace_focus__".into();
+        find.focus = false;
+        view.open_replace();
+    }
+    h.run_steps(4);
+
+    // Both rows are open; the second pane asked for the Replace focus last.
+    h.event(egui::Event::Text("dog".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().views[1].find.as_ref().unwrap().replacement, "dog");
+    assert!(h.state().views[0].find.as_ref().unwrap().replacement.is_empty());
+
+    // Focusing the first row must not share its text or focus with the second.
+    h.state_mut().views[0].open_replace();
+    h.run_steps(2);
+    h.event(egui::Event::Text("cat".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].find.as_ref().unwrap().replacement, "cat");
+    assert_eq!(h.state().views[1].find.as_ref().unwrap().replacement, "dog");
+    // No Enter or Replace action: these events only edit the replacement fields.
+    let doc = h.state().session.get(id).unwrap();
+    assert_eq!(doc.bytes, original);
+    assert!(!doc.dirty && doc.can_undo().is_none(), "typing in Replace must not edit the document");
+}
+
 /// With the same document in both panes, Find and Close act on the second pane, the one in use.
 #[test]
 fn find_and_close_act_on_the_second_pane() {
