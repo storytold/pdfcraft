@@ -29,7 +29,7 @@ let layer = visible_text_layer(&placed, &plan);          // visible text: the ed
 - **The tesseract process is fenced in.** The program comes from a user-configured location or
   the PATH, never from document data (the engine validates a configured path as an absolute
   path to an existing executable file before it is used). The language code is allow-listed
-  (`tesseract::language_code`, 12 codes) before anything reaches a process; the page image
+  (`tesseract::language_code`, 13 codes) before anything reaches a process; the page image
   goes to a private temp file (a fresh 0700 directory holding a 0600 file on Unix) that is
   deleted afterwards; the run has a 120 s timeout, a 64 MiB output cap and a 50 000-word
   reading cap (an incomplete reading is rejected rather than applied); every failure comes back through `OcrError` with its cause named. A configured

@@ -42,6 +42,7 @@ pub const LANGUAGE_CODES: &[(&str, &str)] = &[
     ("ko", "kor"),
     ("ar", "ara"),
     ("nl", "nld"),
+    ("vi", "vie"),
 ];
 
 /// English names for [`LANGUAGE_CODES`] (dropdowns show code + name).
@@ -58,6 +59,7 @@ pub const LANGUAGE_NAMES: &[(&str, &str)] = &[
     ("ko", "Korean"),
     ("ar", "Arabic"),
     ("nl", "Dutch"),
+    ("vi", "Vietnamese"),
 ];
 
 /// Map a settings language code to a Tesseract one: trimmed, case-insensitive, allow-listed;
@@ -65,6 +67,16 @@ pub const LANGUAGE_NAMES: &[(&str, &str)] = &[
 pub fn language_code(code: &str) -> &'static str {
     let c = code.trim().to_ascii_lowercase();
     LANGUAGE_CODES.iter().find(|(k, _)| *k == c).map(|(_, v)| *v).unwrap_or("eng")
+}
+
+/// Map a tessdata code reported by `tesseract --list-langs` (e.g. `"vie"`) to its ISO 639-1
+/// code and English name when it is in [`LANGUAGE_CODES`]; unknown codes keep themselves.
+fn map_installed_lang(tess_code: String) -> (String, String) {
+    if let Some((iso, _)) = LANGUAGE_CODES.iter().find(|(_, t)| *t == tess_code.as_str()) {
+        let name = LANGUAGE_NAMES.iter().find(|(k, _)| k == iso).map_or(*iso, |(_, n)| *n);
+        return ((*iso).to_string(), name.to_string());
+    }
+    (tess_code.clone(), tess_code)
 }
 
 /// The user-configured program location, when valid: `$PDFCRAFT_TESSERACT` (a user
@@ -309,13 +321,7 @@ impl TesseractCli {
         if codes.is_empty() {
             return Err(OcrError::NoTesseract("--list-langs reported no languages".into()));
         }
-        Ok(codes
-            .into_iter()
-            .map(|c| {
-                let name = LANGUAGE_NAMES.iter().find(|(k, _)| *k == c.as_str()).map(|(_, n)| (*n).to_string()).unwrap_or_else(|| c.clone());
-                (c, name)
-            })
-            .collect())
+        Ok(codes.into_iter().map(map_installed_lang).collect())
     }
 
     /// The program's first `--version` line (named by `ocr_status`); `None` when the program
@@ -685,14 +691,25 @@ mod tests {
         assert_eq!(language_code("ja"), "jpn");
         assert_eq!(language_code("ko"), "kor");
         assert_eq!(language_code("nl"), "nld");
+        assert_eq!(language_code("vi"), "vie");
+        assert_eq!(language_code(" VI "), "vie", "Vietnamese trimmed, case-insensitive");
         assert_eq!(language_code("klingon"), "eng", "unknown → eng");
         assert_eq!(language_code(""), "eng");
         // The security property: whatever the settings say, only allow-listed codes reach a
         // process.
-        for code in ["en", "de", "fr", "es", "it", "pt", "ru", "zh", "ja", "ko", "ar", "nl", "klingon", "", " eng ", "EN/;rm"] {
+        for code in ["en", "de", "fr", "es", "it", "pt", "ru", "zh", "ja", "ko", "ar", "nl", "vi", "klingon", "", " eng ", "EN/;rm"] {
             let mapped = language_code(code);
             assert!(LANGUAGE_CODES.iter().any(|(_, v)| *v == mapped), "{code:?} → {mapped:?} is not allow-listed");
         }
+        assert_eq!(LANGUAGE_CODES.len(), LANGUAGE_NAMES.len());
+    }
+
+    #[test]
+    fn installed_tessdata_codes_map_to_iso_and_name() {
+        assert_eq!(map_installed_lang("eng".into()), ("en".into(), "English".into()));
+        assert_eq!(map_installed_lang("vie".into()), ("vi".into(), "Vietnamese".into()));
+        assert_eq!(map_installed_lang("chi_sim".into()), ("zh".into(), "Chinese (Simplified)".into()));
+        assert_eq!(map_installed_lang("osd".into()), ("osd".into(), "osd".into()));
     }
 
     #[test]

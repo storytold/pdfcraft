@@ -9440,6 +9440,35 @@ fn ocr_tools_make_a_scan_searchable() {
     assert!(a.call("edit_undo", &json!({ "doc": scan })).is_err(), "ocr_words changes nothing, so there is no undo");
 }
 
+#[test]
+fn ocr_language_validation_depends_on_engine_and_accepts_vietnamese_for_tesseract() {
+    let dir = workdir("ocr-lang-vi");
+    let mut a = auto(&dir);
+    let status = ok(&mut a, "ocr_status", json!({}));
+    assert!(
+        status["languages"].as_array().is_some_and(|ls| ls.iter().any(|l| l["code"] == "vi" && l["name"] == "Vietnamese")),
+        "ocr_status advertises Vietnamese: {status}"
+    );
+    assert_eq!(status["engines"][0]["languages"], json!(["en"]), "{status}");
+    assert!(
+        status["engines"][1]["languages"].as_array().is_some_and(|ls| ls.iter().any(|l| l == "vi")),
+        "tesseract engine advertises Vietnamese: {status}"
+    );
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // Built-in `ocrs` (the default engine) rejects Vietnamese as an invalid argument.
+    assert!(matches!(a.call("ocr_recognize", &json!({ "doc": doc, "language": "vi" })), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(a.call("ocr_recognize", &json!({ "doc": doc, "engine": "ocrs", "language": "vi" })), Err(ToolError::InvalidArgs(_))));
+    // Unknown language is rejected for Tesseract too.
+    assert!(matches!(a.call("ocr_recognize", &json!({ "doc": doc, "engine": "tesseract", "language": "xx" })), Err(ToolError::InvalidArgs(_))));
+    // Tesseract accepts `"vi"` past argument validation (if tesseract is absent it fails with
+    // `Failed`, not `InvalidArgs`).
+    match a.call("ocr_recognize", &json!({ "doc": doc, "engine": "tesseract", "language": "vi" })) {
+        Err(ToolError::InvalidArgs(msg)) => panic!("tesseract must accept 'vi', got InvalidArgs: {msg}"),
+        Ok(_) | Err(ToolError::Failed(_)) => {}
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
 /// An editable-text recognition writes a NEW file of visible text, never the source.
 #[test]
 fn ocr_recognize_editable_output_writes_visible_text() {

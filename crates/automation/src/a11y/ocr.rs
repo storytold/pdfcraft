@@ -11,15 +11,6 @@ impl Automation {
         if let Some(d) = a.opt_num("dpi")? {
             settings.dpi = d.clamp(72.0, 600.0) as f32;
         }
-        if let Some(l) = a.opt_str("language")? {
-            if !pdfcraft_engine::ocr::LANGUAGES.iter().any(|x| x.0 == l) {
-                return Err(ToolError::InvalidArgs(format!(
-                    "unsupported language {l:?} (supported: {})",
-                    pdfcraft_engine::ocr::LANGUAGES.iter().map(|(c, _)| *c).collect::<Vec<_>>().join(", ")
-                )));
-            }
-            settings.language = l.into();
-        }
         if let Some(e) = a.opt_str("engine")? {
             settings.engine = match e.trim().to_ascii_lowercase().as_str() {
                 "ocrs" => EngineChoice::Ocrs,
@@ -27,6 +18,17 @@ impl Automation {
                 "auto" | "automatic" | "ensemble" => EngineChoice::Auto,
                 other => return Err(ToolError::InvalidArgs(format!("unsupported engine {other:?} (ocrs, tesseract or auto)"))),
             };
+        }
+        if let Some(l) = a.opt_str("language")? {
+            let supported = pdfcraft_engine::ocr::languages_for(settings.engine);
+            if !supported.iter().any(|x| x.0 == l) {
+                return Err(ToolError::InvalidArgs(format!(
+                    "unsupported language {l:?} for engine {:?} (supported: {})",
+                    settings.engine.name(),
+                    supported.iter().map(|(c, _)| *c).collect::<Vec<_>>().join(", ")
+                )));
+            }
+            settings.language = l.into();
         }
         settings.strategy = match a.opt_str("strategy")? {
             Some(s) => match s.trim().to_ascii_lowercase().as_str() {
@@ -522,11 +524,16 @@ impl Automation {
     pub(crate) fn ocr_status(&self) -> Result<Value> {
         use pdfcraft_engine::ocr;
         let dirs: Vec<String> = ocr::Models::search_dirs().iter().map(|d| d.to_string_lossy().into_owned()).collect();
-        let langs: Vec<Value> = ocr::LANGUAGES.iter().map(|(c, n)| json!({ "code": c, "name": n })).collect();
+        let langs: Vec<Value> = ocr::TESSERACT_LANGUAGES.iter().map(|(c, n)| json!({ "code": c, "name": n })).collect();
         let engines: Vec<Value> = ocr::engines_status()
             .iter()
             .map(|e| {
-                let mut v = json!({ "id": e.id, "available": e.available });
+                let engine_langs = if e.id == "ocrs" { ocr::LANGUAGES } else { ocr::TESSERACT_LANGUAGES };
+                let mut v = json!({
+                    "id": e.id,
+                    "available": e.available,
+                    "languages": engine_langs.iter().map(|(c, _)| *c).collect::<Vec<_>>(),
+                });
                 if let Some(p) = &e.program {
                     v["path"] = json!(p);
                 }
