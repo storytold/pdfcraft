@@ -181,6 +181,7 @@ use workflows::optimize_ui;
 use workflows::print_paper;
 use workflows::print_ui;
 use workflows::scan_clean_ui;
+use workflows::twain_scan_ui;
 use workflows::web_print;
 
 /// A background job queue of the app, built over the host's jobs and the app's wake.
@@ -617,6 +618,9 @@ pub struct PdfCraftApp {
     pub scan_clean_draft: scan_clean_ui::ScanCleanDraft,
     pub scan_clean_run: Option<scan_clean_ui::ScanCleanRun>,
     pub(crate) scan_cleans: Queue<DocId, Result<pdfcraft_engine::scan_clean::ScanCleaned, pdfcraft_engine::EditError>>,
+    pub twain_scan_draft: twain_scan_ui::TwainScanDraft,
+    pub twain_scan_run: Option<twain_scan_ui::TwainScanRun>,
+    pub twain_discovery_run: Option<twain_scan_ui::TwainDiscoveryRun>,
     /// Pages copied or cut in Organize Pages, ready to paste (into any document).
     pub page_clipboard: Option<PageClip>,
     /// Copied comments (XFDF), to paste into this or another document (M14).

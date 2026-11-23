@@ -452,6 +452,9 @@ impl PdfCraftApp {
             optimize_run: None,
             scan_clean_draft: scan_clean_ui::ScanCleanDraft::default(),
             scan_clean_run: None,
+            twain_scan_draft: twain_scan_ui::TwainScanDraft::default(),
+            twain_scan_run: None,
+            twain_discovery_run: None,
             page_clipboard: None,
             comment_clipboard: None,
             object_clipboard: None,
@@ -812,6 +815,7 @@ impl PdfCraftApp {
         self.poll_ocr(ctx);
         self.poll_optimize();
         self.poll_scan_clean();
+        self.poll_twain_scan(ctx);
         self.poll_action();
         // The OCR Verify screen's runs and re-reads may have finished while no frame was drawn.
         let verify = self.verify_jobs.counts();

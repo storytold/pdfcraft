@@ -263,6 +263,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
         sections: &[ToolSection {
             title: "Recognize text",
             items: &[
+                item("From scanner…", "scan", "scan.from_scanner", Ready),
                 item("In this file", "scan-text", "ocr.recognize", Ready),
                 item("In multiple files", "files", "ocr.recognize_batch", Ready),
                 item("Enhance scanned file", "sparkles", "ocr.enhance", Ready),

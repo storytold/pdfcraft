@@ -6658,6 +6658,14 @@ name = "pdfcraft-testkit"
 version = "0.22.0"
 
 [[package]]
+name = "pdfcraft-twain"
+version = "0.22.0"
+dependencies = [
+ "log",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "pdfcraft-ui-egui"
 version = "0.22.0"
 dependencies = [
@@ -6695,6 +6703,7 @@ dependencies = [
  "pdfcraft-ocr",
  "pdfcraft-platform",
  "pdfcraft-render",
+ "pdfcraft-twain",
  "pdfcraft-xfa",
  "plist",
  "proptest",
