@@ -66,7 +66,7 @@ pub(super) fn draw_laid_shaped(
     taken: &Dict,
     fonts: &mut Dict,
     out: &mut Vec<u8>,
-    japanese: Option<&'static pdfcraft_fonts::CraftFont>,
+    japanese: Option<&'static pdfcraft_fonts::EmbeddedFace>,
     outline: impl Fn(ShapedScript, u32) -> Result<GlyphOutline, GlyphError>,
 ) -> Result<(), EditError> {
     let r = text_rect(t);

@@ -37,7 +37,7 @@ pub enum ShapedScript {
 }
 
 impl ShapedScript {
-    pub fn font(self) -> Option<&'static crate::CraftFont> {
+    pub fn font(self) -> Option<&'static crate::EmbeddedFace> {
         match self {
             Self::Arabic => crate::document_arabic_font(),
             Self::Hebrew => crate::document_hebrew_font(false),
@@ -141,14 +141,14 @@ pub fn japanese_has(c: char) -> bool {
 }
 
 /// Whether `face` has a glyph for `c` (false for a face without a readable character map).
-pub fn japanese_has_from(face: &crate::CraftFont, c: char) -> bool {
+pub fn japanese_has_from(face: &crate::EmbeddedFace, c: char) -> bool {
     FontRef::new(face.bytes).is_ok_and(|font| font.charmap().map(c).is_some())
 }
 
 /// Shape Japanese text with the explicitly selected craft-fonts face: one cluster per character,
 /// with a combining mark kept in its base character's cluster. Japanese needs no reordering, so the
 /// clusters come in typing order. [`GlyphError::Missing`] when `face` lacks a character.
-pub fn shape_japanese(face: &crate::CraftFont, text: &str) -> Result<Vec<ShapedCluster>, GlyphError> {
+pub fn shape_japanese(face: &crate::EmbeddedFace, text: &str) -> Result<Vec<ShapedCluster>, GlyphError> {
     let font = FontRef::new(face.bytes).map_err(|_| GlyphError::Missing)?;
     let loc = LocationRef::default();
     let metrics = font.metrics(Size::unscaled(), loc);
@@ -200,7 +200,7 @@ fn is_variation_selector(c: char) -> bool {
 /// The bounded outline of glyph `id` of the explicitly selected craft-fonts face, with that face's
 /// own advance. Glyphs without outlines (spaces) come back empty. The companion of
 /// [`shape_japanese`], so the glyph ids and the outlines they are drawn from come from one face.
-pub fn glyph_outline_from(face: &crate::CraftFont, id: u32) -> Result<GlyphOutline, GlyphError> {
+pub fn glyph_outline_from(face: &crate::EmbeddedFace, id: u32) -> Result<GlyphOutline, GlyphError> {
     let font = FontRef::new(face.bytes).map_err(|_| GlyphError::Missing)?;
     if font.maxp().map_or(true, |m| id >= u32::from(m.num_glyphs())) {
         return Err(GlyphError::Missing);
@@ -452,7 +452,7 @@ mod japanese_tests {
     fn japanese_clusters_come_from_the_style_face_one_character_at_a_time() {
         let Some(face) = crate::document_japanese_font_for_style(false, false) else {
             eprintln!("skipping the Japanese shaping checks: built without a craft-fonts Jpan face (set CRAFT_FONTS_DIR)");
-            let no_face = crate::CraftFont { family: "", style: "", scripts: &[], bytes: &[] };
+            let no_face = crate::EmbeddedFace { family: "", style: "", scripts: &[], index: 0, bytes: &[], role: None };
             assert_eq!(shape_japanese(&no_face, "日"), Err(GlyphError::Missing));
             assert!(!japanese_has('日'));
             return;

@@ -233,7 +233,7 @@ pub(super) fn is_hebrew(c: char) -> bool {
 /// otherwise, and the bold weight when the item is bold. The first face that can draw every
 /// character the item would take from it, else the style's first face. `None` without craft-fonts
 /// (or when its revision has no `Jpan` face).
-pub(super) fn japanese_face(t: &AddedText) -> Option<&'static pdfcraft_fonts::CraftFont> {
+pub(super) fn japanese_face(t: &AddedText) -> Option<&'static pdfcraft_fonts::EmbeddedFace> {
     let faces = pdfcraft_fonts::document_japanese_fonts_for_style(t.family == Family::Times, t.bold);
     let needed: Vec<char> = t.text.chars().filter(|c| is_japanese_fallback(*c) && !is_variation_selector(*c)).collect();
     faces.iter().copied().find(|face| needed.iter().all(|c| pdfcraft_fonts::japanese_has_from(face, *c))).or_else(|| faces.first().copied())

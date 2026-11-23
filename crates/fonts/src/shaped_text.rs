@@ -210,7 +210,7 @@ impl ShapedFonts {
     pub fn new<'a>(
         clusters: impl IntoIterator<Item = &'a ShapedCluster>,
         outline: impl Fn(ShapedScript, u32) -> Result<GlyphOutline, GlyphError>,
-        japanese: Option<&'static crate::CraftFont>,
+        japanese: Option<&'static crate::EmbeddedFace>,
         taken: &Dict,
         fonts: &mut Dict,
         prefix: &str,
@@ -411,7 +411,7 @@ pub fn add_type3_font(
 fn type3_font(
     clusters: &[&ShapedCluster],
     outlines: &HashMap<(ShapedScript, u32), GlyphOutline>,
-    japanese: Option<&'static crate::CraftFont>,
+    japanese: Option<&'static crate::EmbeddedFace>,
     store: &mut dyn FnMut(Object) -> Object,
 ) -> Dict {
     let mut charprocs = Dict::new();
