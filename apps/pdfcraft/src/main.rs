@@ -320,24 +320,26 @@ fn main() -> eframe::Result {
 /// Which renderer to start with, from `PDFCRAFT_RENDERER`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RendererChoice {
-    /// wgpu, then OpenGL if wgpu can't start (unset, or anything unrecognised).
+    /// wgpu, then OpenGL if wgpu can't start (`auto`).
     Auto,
     /// wgpu only (`wgpu`): a failure is reported, not worked around.
     Wgpu,
-    /// OpenGL only (`gl`, `opengl` or `glow`): for drivers where wgpu starts but misbehaves.
+    /// OpenGL only (`gl`, `opengl` or `glow`; also unset, or anything unrecognised): wgpu's DirectX 12
+    /// path can keep a stale copy of the font texture after it is re-sent, drawing every letter
+    /// from the wrong place.
     Gl,
 }
 
 fn renderer_choice(value: Option<&str>) -> RendererChoice {
     match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
         Some("wgpu") => RendererChoice::Wgpu,
-        Some("gl" | "opengl" | "glow") => RendererChoice::Gl,
-        _ => RendererChoice::Auto,
+        Some("auto") => RendererChoice::Auto,
+        _ => RendererChoice::Gl,
     }
 }
 
-/// Whether a failed run should be retried with OpenGL: only when wgpu was tried first by choice of
-/// nobody, and it failed before the app was created (so while starting the renderer, not later).
+/// Whether a failed run should be retried with OpenGL: only when wgpu was tried first as `auto`,
+/// and it failed before the app was created (so while starting the renderer, not later).
 fn retry_with_gl(choice: RendererChoice, app_started: bool) -> bool {
     choice == RendererChoice::Auto && !app_started
 }
