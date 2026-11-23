@@ -1680,8 +1680,28 @@ fn headings_naming_one_large_string_stop_decoding_it_at_the_allowance() {
         format!("({})", "a".repeat(512 << 10)),
     ];
     objects.extend((0..count).map(|_| "<< /S /H1 /P 6 0 R /Pg 3 0 R /ActualText 7 0 R >>".to_string()));
-    let found = headings(&pdf(&objects, ""));
+    let (found, cut) = headings_with_truncation(&pdf(&objects, ""));
     assert!(!found.is_empty() && found.len() < count, "{}", found.len());
+    assert!(cut, "headings whose title the allowance turned away were dropped unreported");
+}
+
+/// A title source too large for the allowance is passed over for the next one, and the heading
+/// it names is kept and not reported as missing.
+#[test]
+fn a_title_too_large_for_the_allowance_falls_back_without_truncation() {
+    let objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>".to_string(),
+        stream("BT ET"),
+        "<< /Type /StructTreeRoot /K 6 0 R >>".to_string(),
+        "<< /S /Document /P 5 0 R /K [8 0 R] >>".to_string(),
+        format!("({})", "a".repeat((32 << 20) / 3 + 1)),
+        "<< /S /H1 /P 6 0 R /Pg 3 0 R /ActualText 7 0 R /Alt (Short) >>".to_string(),
+    ];
+    let (found, cut) = headings_with_truncation(&pdf(&objects, ""));
+    let titles: Vec<String> = found.into_iter().map(|h| h.title).collect();
+    assert_eq!((titles, cut), (vec!["Short".to_string()], false));
 }
 
 /// A tree of `count` H1 elements, each with its text and page.
