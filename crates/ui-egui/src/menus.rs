@@ -271,9 +271,10 @@ pub(crate) fn gated(app: &PdfCraftApp) -> bool {
 }
 
 /// Whether a text field has the keyboard: the one signal behind the Edit rows' state and the native
-/// menu's gate.
+/// menu's gate. A text field only, as production's `text_edit_focused`: egui's keyboard focus alone is
+/// also on an open menu's rows or a button, which would hand Edit ▸ Copy and Paste to them.
 pub(crate) fn text_editing(ctx: &egui::Context) -> bool {
-    ctx.egui_wants_keyboard_input()
+    craft::ui::runtime::windows::WindowHost::of(ctx).typing()
 }
 
 impl PdfCraftApp {
