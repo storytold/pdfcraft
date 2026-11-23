@@ -91,7 +91,11 @@ pub(crate) fn source_faces(cx: &impl FacesCx, doc: &pdfcraft_engine::Document, p
     let mut faces = BTreeMap::new();
     for (program, (face, resource, key)) in programs.iter().zip(&keys) {
         let siblings: Vec<String> = keys.iter().filter(|(f, r, _)| f == face && r != resource).map(|(.., k)| k.clone()).collect();
-        let state = cx.document_face(key, || Some(FaceBytes::new(Arc::from(program.bytes.as_slice()), 0).chain(siblings)));
+        // The load runs as a job: it takes the face already made, so the program's bytes are copied once, here.
+        let state = cx.document_face(key, || {
+            let face = FaceBytes::new(Arc::from(program.bytes.as_slice()), 0).chain(siblings);
+            move || Some(face)
+        });
         if let FaceState::Ready(face) = state {
             faces.insert(program.resource.clone(), face);
         }
