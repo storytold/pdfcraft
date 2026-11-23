@@ -259,6 +259,16 @@ impl Automation {
     /// (Sanitize Document) when none are listed, and report how many items the listed
     /// categories lost as `removed`.
     pub(crate) fn doc_remove_hidden(&mut self, a: &Args) -> Result<Value> {
+        // What happens to digital signatures, which a sanitized rewrite can't keep (#4622).
+        let signatures = match a.opt_str("signatures")? {
+            None | Some("abort") => None,
+            Some("remove") => Some(pdfcraft_engine::SanitizeSignatures::Remove),
+            Some("flatten") => Some(pdfcraft_engine::SanitizeSignatures::Flatten),
+            Some(other) => return Err(ToolError::InvalidArgs(format!("signatures must be abort, remove or flatten, not {other:?}"))),
+        };
+        if signatures.is_some() && a.get("categories").is_some() {
+            return Err(ToolError::InvalidArgs("signatures: remove or flatten goes with Sanitize (no categories)".into()));
+        }
         let which = match a.get("categories") {
             None => None,
             Some(_) => {
@@ -282,7 +292,11 @@ impl Automation {
         let listed = which.clone().unwrap_or_else(|| HIDDEN.to_vec());
         let info = self.doc(a)?.hidden_info_of(&listed);
         let edit = match which {
-            None => Edit::Sanitize,
+            // Sanitize: with `signatures` set, the one that takes a signed document too (#4622).
+            None => match signatures {
+                Some(how) => Edit::SanitizeSigned(how),
+                None => Edit::Sanitize,
+            },
             Some(which) => {
                 if !info.is_empty() && which.iter().all(|h| info.iter().find(|c| c.0 == *h).is_none_or(|c| c.1 == 0)) {
                     return Err(failed("nothing to remove: the listed categories hold nothing (see doc_hidden_info)"));
