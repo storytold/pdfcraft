@@ -1412,6 +1412,8 @@ struct PageEnv<'a> {
     navigation_enabled: bool,
     paper: Color32,
     show_page_edge_shadows: bool,
+    /// Preferences: the validation marks over signed signatures (#4221).
+    signature_badges: bool,
     ppp: f32,
     precise_scroll: Vec2,
     prefs: &'a comments::CommentPrefs,
@@ -3475,6 +3477,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         navigation_enabled,
         paper,
         show_page_edge_shadows: app.show_page_edge_shadows,
+        signature_badges: app.show_signature_badges,
         ppp,
         precise_scroll,
         prefs,
