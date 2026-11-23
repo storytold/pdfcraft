@@ -2,8 +2,9 @@
 //!
 //! Single-line text objects on one baseline form a row; within a row, objects closer than one font
 //! size join one chunk, and a wider gap separates two. Three or more consecutive rows of at least
-//! two chunks, each at most [`ROW_GAP_EM`] font sizes below the one before, are a candidate. Its
-//! chunks' horizontal spans, merged where they overlap or, from different rows, nearly touch, are
+//! two chunks, each at most [`ROW_GAP_EM`] font sizes below the one before and with a chunk that
+//! overlaps or nearly touches a chunk of the rows above it, are a candidate: rows that share no
+//! column with those above start another. Its chunks' horizontal spans, merged where they overlap or, from different rows, nearly touch, are
 //! its columns. A candidate is a table when it has at least two columns, no row has two chunks in
 //! one column, every column holds text in at least two rows, in each column at least two cells and
 //! at least half of them share a left edge, a right edge or a centre to within [`ALIGN_EM`] font
@@ -95,7 +96,8 @@ pub(crate) fn find(objects: &[Evidence]) -> Vec<Candidate> {
     let mut block: Vec<&Row> = Vec::new();
     for row in &rows {
         let tabular = row.chunks.len() >= 2;
-        let joins = tabular && block.last().is_none_or(|above| above.y - row.y <= ROW_GAP_EM * above.size.max(row.size));
+        let joins =
+            tabular && block.last().is_none_or(|above| above.y - row.y <= ROW_GAP_EM * above.size.max(row.size) && shares_column(&block, row));
         if !joins {
             flush(&mut block, &others, &mut out);
         }
@@ -105,6 +107,13 @@ pub(crate) fn find(objects: &[Evidence]) -> Vec<Candidate> {
     }
     flush(&mut block, &others, &mut out);
     out
+}
+
+/// Whether a chunk of `row` overlaps a chunk of `block`, or comes within a gutter of one: a row
+/// group in other columns is another table, not the same one with empty cells.
+fn shares_column(block: &[&Row], row: &Row) -> bool {
+    let gutter = GUTTER_EM * row.size;
+    row.chunks.iter().any(|c| block.iter().flat_map(|r| &r.chunks).any(|o| c.x0 < o.x1 + gutter && o.x0 < c.x1 + gutter))
 }
 
 /// Text lines top to bottom, each split into chunks at gaps of a gutter's width.
@@ -724,6 +733,50 @@ mod tests {
         let mut doc = page(&content, "");
         autotag_text(&mut doc).unwrap();
         assert_eq!(kinds(&doc), table(&["TD"; 9]));
+    }
+
+    #[test]
+    fn row_groups_in_different_columns_are_two_tables() {
+        // The rows are evenly spaced, but the last three share no column with the first three.
+        let (left, right) = ([72.0, 200.0], [330.0, 440.0]);
+        let content = [
+            row("F1", 700.0, &left, &["a", "b"]),
+            row("F1", 686.0, &left, &["a", "b"]),
+            row("F1", 672.0, &left, &["a", "b"]),
+            row("F1", 658.0, &right, &["c", "d"]),
+            row("F1", 644.0, &right, &["c", "d"]),
+            row("F1", 630.0, &right, &["c", "d"]),
+        ]
+        .concat();
+        let found = table_candidates(&page(&content, "")).unwrap();
+        let shapes: Vec<_> = found.iter().map(|f| (f.rows, f.columns, f.not_a_table)).collect();
+        assert_eq!(shapes, [(3, 2, None), (3, 2, None)]);
+        let mut doc = page(&content, "");
+        autotag_text(&mut doc).unwrap();
+        let mut expected = vec!["Document".to_string()];
+        for _ in 0..2 {
+            expected.push("Table".into());
+            for _ in 0..3 {
+                expected.extend(["TR", "TD", "TD"].map(String::from));
+            }
+        }
+        assert_eq!(kinds(&doc), expected);
+    }
+
+    #[test]
+    fn rows_whose_cells_step_across_the_columns_stay_one_table() {
+        // No row fills every column, but each shares a column with the rows above it.
+        let xs = [72.0, 200.0, 330.0, 440.0];
+        let content = [
+            row("F2", 700.0, &xs, &["a", "b", "c", "d"]),
+            row("F1", 686.0, &xs, &["a", "b", "", ""]),
+            row("F1", 672.0, &xs, &["", "b", "c", ""]),
+            row("F1", 658.0, &xs, &["", "", "c", "d"]),
+        ]
+        .concat();
+        let found = table_candidates(&page(&content, "")).unwrap();
+        let shapes: Vec<_> = found.iter().map(|f| (f.rows, f.columns, f.header, f.not_a_table)).collect();
+        assert_eq!(shapes, [(4, 4, true, None)]);
     }
 
     #[test]
