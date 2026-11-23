@@ -6,6 +6,9 @@
 //! them, so a light's direction counts only up to sign. The standard does not say which frame the
 //! directions are in; they are taken in the camera's (x right, y up, z forward), so the lights stay
 //! put as a model turns.
+//!
+//! Adapted from the author's own MIT-licensed pdfcer (`crates/pdfcer-3d/src/lighting.rs` at commit
+//! `4c155aea`), which was written from the same tables.
 
 use crate::vec3::{Vec3, dot, normalize};
 
