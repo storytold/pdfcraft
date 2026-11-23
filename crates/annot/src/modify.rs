@@ -734,8 +734,8 @@ fn text_extent(d: &Dict, wrap: f64) -> [f64; 2] {
     let (_, size) = appearance::parse_da(d);
     // Each line measured in its paragraph's direction, as the appearance draws it.
     let laid = appearance::wrapped(Std14::Helvetica, &text, size, wrap.max(1.0));
-    let widest = laid.iter().map(|(l, rtl)| appearance::line_width_in(Std14::Helvetica, l, *rtl, size)).fold(0.0, f64::max);
-    let lines: Vec<String> = laid.into_iter().map(|(line, _)| line).collect();
+    let widest = laid.iter().map(|l| appearance::line_width_in(Std14::Helvetica, l, size)).fold(0.0, f64::max);
+    let lines: Vec<String> = laid.into_iter().map(|line| line.text).collect();
     [widest, appearance::text_lines_height(&lines, size)]
 }
 

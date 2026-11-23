@@ -13,7 +13,9 @@
 //! ([`first_undrawable_shaped`]); Add text, form fields, headers, footers and watermarks refuse the
 //! text, saying what to do ([`shape_refusal`]).
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 
 use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
 
@@ -227,22 +229,200 @@ fn mirrored(c: char) -> char {
     }
 }
 
+/// The embedding level a paragraph that reads right to left when `rtl` starts at.
+fn base_level(rtl: bool) -> Level {
+    if rtl { Level::rtl() } else { Level::ltr() }
+}
+
+/// A line of text as its paragraph lays it out: what it says, whether its paragraph reads right
+/// to left ([`rtl_base`]), and the embedding levels its paragraph resolved for it. UAX #9 (§3.4)
+/// resolves levels for a whole paragraph and only then reorders each line, so a line a paragraph
+/// wraps onto keeps what is open before it (an override, embedding or isolate) and what its
+/// neighbours resolve. [`wrap`] gives such lines; [`Line::new`] is a line that is its own
+/// paragraph, as an unwrapped line is.
+///
+/// Measuring ([`Line::width`]), drawing ([`Line::appearance_pieces`]), fit checks
+/// ([`Line::reach`]) and `/ActualText` ([`Line::reordered`]) all read the same levels, so they
+/// agree on every line.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Line {
+    pub text: String,
+    pub rtl: bool,
+    /// The level of each byte of `text`, resolved over its paragraph, with this line's own
+    /// trailing white space reset (rule L1); empty when the line is resolved alone (its own
+    /// paragraph, or one with nothing right to left in it).
+    levels: Vec<Level>,
+}
+
+impl Line {
+    /// `text` as a paragraph of its own that reads right to left when `rtl`.
+    pub fn new(text: impl Into<String>, rtl: bool) -> Self {
+        Self { text: text.into(), rtl, levels: Vec::new() }
+    }
+
+    /// `lines`, wrapped in order from the paragraph `para` (each a run of it, the spaces where it
+    /// broke dropped between them), with the levels `para` resolves for them in a paragraph that
+    /// reads right to left when `rtl`. A line that isn't found where it should be is resolved
+    /// alone.
+    pub fn in_paragraph(para: &str, rtl: bool, lines: Vec<String>) -> Vec<Line> {
+        // unicode-bidi indexes the first level of a paragraph, so an empty one would panic.
+        let info = (!para.is_empty()).then(|| ParagraphBidiInfo::new(para, Some(base_level(rtl))));
+        // A paragraph with nothing right to left orders each line as it would alone.
+        let Some(info) = info.filter(ParagraphBidiInfo::has_rtl) else {
+            return lines.into_iter().map(|text| Line::new(text, rtl)).collect();
+        };
+        let mut from = 0;
+        lines
+            .into_iter()
+            .map(|text| {
+                let start = if text.is_empty() { None } else { para.get(from..).and_then(|rest| rest.find(&text)).map(|i| from.saturating_add(i)) };
+                let Some(start) = start else { return Line::new(text, rtl) };
+                let end = start.saturating_add(text.len());
+                from = end;
+                // The paragraph's levels and classes for just this line, so that rule L1 (which
+                // reads nothing else) runs on the line alone, without copying the whole
+                // paragraph's levels for every line it wraps onto.
+                let (Some(levels), Some(classes)) = (info.levels.get(start..end), info.original_classes.get(start..end)) else {
+                    return Line::new(text, rtl);
+                };
+                let line = ParagraphBidiInfo {
+                    text: &text,
+                    original_classes: classes.to_vec(),
+                    levels: levels.to_vec(),
+                    paragraph_level: info.paragraph_level,
+                    is_pure_ltr: false,
+                };
+                let levels = line.reordered_levels(0..text.len());
+                if levels.len() == text.len() { Line { text, rtl, levels } } else { Line::new(text, rtl) }
+            })
+            .collect()
+    }
+
+    /// The level of each byte of the line, ready to reorder (rule L1 and those before it): its
+    /// paragraph's, or its own as a paragraph.
+    fn levels(&self) -> Cow<'_, [Level]> {
+        if !self.levels.is_empty() && self.levels.len() == self.text.len() {
+            return Cow::Borrowed(&self.levels);
+        }
+        if self.text.is_empty() {
+            return Cow::Owned(Vec::new());
+        }
+        Cow::Owned(ParagraphBidiInfo::new(&self.text, Some(base_level(self.rtl))).reordered_levels(0..self.text.len()))
+    }
+
+    /// Whether its paragraph leaves every character of the line in typing order: no level is
+    /// right to left. (A line resolved alone answers by its own text instead.)
+    fn in_typing_order(&self) -> bool {
+        self.levels.iter().all(|l| l.is_ltr())
+    }
+
+    /// The line in drawing order: [`line_pieces`], with its paragraph's levels.
+    pub fn pieces(&self) -> Result<Vec<Piece>, ShapeError> {
+        pieces_by_levels(&self.text, &self.levels())
+    }
+
+    /// [`appearance_pieces`], with its paragraph's levels.
+    pub fn appearance_pieces(&self) -> Vec<Piece> {
+        if !self.rtl && !has_shaped_script(&self.text) && self.in_typing_order() {
+            return plain(&self.text);
+        }
+        self.pieces().or_else(|_| thai_pieces(&self.text)).unwrap_or_else(|_| plain(&self.text))
+    }
+
+    /// [`line_width`], with its paragraph's levels.
+    pub fn width(&self, size: f64, latin: impl Fn(&str, f64) -> f64) -> f64 {
+        if !self.rtl && !has_shaped_script(&self.text) && self.in_typing_order() {
+            return latin(&self.text, size);
+        }
+        pieces_width(&self.appearance_pieces(), size, 0.0, latin)
+    }
+
+    /// [`line_reach`], with its paragraph's levels.
+    pub fn reach(&self) -> Option<[f64; 2]> {
+        if !has_shaped_script(&self.text) {
+            return None;
+        }
+        pieces_reach(&self.appearance_pieces())
+    }
+
+    /// Whether `pieces`, this line laid out, are painted in an order other than the one typed, so
+    /// that the line needs its typing order beside it ([`actual_text_span`]): right-to-left text
+    /// shaped in its face ([`reordered`]), or anything else a right-to-left level reversed.
+    pub fn reordered(&self, pieces: &[Piece]) -> bool {
+        reordered(pieces) || !drawn_chars(pieces).filter(|c| !is_bidi_control(*c)).eq(self.text.chars().filter(|c| !is_bidi_control(*c)))
+    }
+}
+
+/// The characters `pieces` stand for, in drawing order.
+fn drawn_chars(pieces: &[Piece]) -> impl Iterator<Item = char> + '_ {
+    pieces.iter().flat_map(|p| -> Box<dyn Iterator<Item = char> + '_> {
+        match p {
+            Piece::Latin(s) => Box::new(s.chars()),
+            Piece::Shaped(clusters) => Box::new(clusters.iter().flat_map(|c| c.text.chars())),
+        }
+    })
+}
+
+/// The runs of equal level of a line whose bytes are at `levels`, in drawing order (rule L2: from
+/// the highest level down to the lowest odd one, each stretch of runs at that level or higher is
+/// reversed), as unicode-bidi orders the runs of a line, here for levels its paragraph resolved.
+fn visual_runs(levels: &[Level]) -> Vec<Range<usize>> {
+    let mut runs: Vec<Range<usize>> = Vec::new();
+    for (i, level) in levels.iter().enumerate() {
+        match runs.last_mut() {
+            Some(run) if levels.get(run.start) == Some(level) => run.end = i.saturating_add(1),
+            _ => runs.push(i..i.saturating_add(1)),
+        }
+    }
+    let level_of = |run: &Range<usize>| levels.get(run.start).map_or(0, Level::number);
+    let highest = runs.iter().map(level_of).max().unwrap_or(0);
+    let lowest_odd = runs.iter().map(level_of).min().map_or(1, |l| l | 1);
+    let mut level = highest;
+    while level >= lowest_odd {
+        let mut i = 0;
+        while i < runs.len() {
+            if runs.get(i).is_some_and(|run| level_of(run) < level) {
+                i += 1;
+                continue;
+            }
+            let mut end = i.saturating_add(1);
+            while runs.get(end).is_some_and(|run| level_of(run) >= level) {
+                end = end.saturating_add(1);
+            }
+            if let Some(stretch) = runs.get_mut(i..end) {
+                stretch.reverse();
+            }
+            i = end;
+        }
+        // `level` is at least `lowest_odd`, which is odd, so at least 1: the loop ends at 0.
+        level = level.saturating_sub(1);
+    }
+    runs
+}
+
 /// `line` in drawing order (the Unicode bidirectional algorithm, UAX #9), in a paragraph that
 /// reads right to left when `rtl` ([`rtl_base`]): its Arabic, Hebrew and Thai shaped in their
 /// faces, the rest left to the standard font. A right-to-left run comes out reversed, its brackets
-/// mirrored; direction marks steer the order and are dropped.
+/// mirrored; direction marks steer the order and are dropped. The line is a paragraph of its own;
+/// a line a paragraph wraps onto is laid out with that paragraph's levels ([`Line::pieces`]).
 ///
 /// The one layout for text PdfCraft writes: Add text, text boxes, Fill & Sign text, form fields,
 /// headers, footers and watermarks call it, so they agree on what is shaped, in which face, and
 /// in what order.
 pub fn line_pieces(line: &str, rtl: bool) -> Result<Vec<Piece>, ShapeError> {
-    // unicode-bidi indexes the first level of a line, so an empty one would panic.
+    Line::new(line, rtl).pieces()
+}
+
+/// `line` in drawing order, its bytes at `levels` (one each, ready to reorder).
+fn pieces_by_levels(line: &str, levels: &[Level]) -> Result<Vec<Piece>, ShapeError> {
     if line.is_empty() {
         return Ok(Vec::new());
     }
-    let base = if rtl { Level::rtl() } else { Level::ltr() };
-    let info = ParagraphBidiInfo::new(line, Some(base));
-    let (levels, runs) = info.visual_runs(0..line.len());
+    // [`Line::levels`] gives one per byte; anything else is left in typing order, never dropped.
+    if levels.len() != line.len() {
+        return Ok(plain(line));
+    }
+    let runs = visual_runs(levels);
     let mut pieces = Vec::new();
     for run in runs {
         let run_rtl = levels.get(run.start).is_some_and(Level::is_rtl);
@@ -334,16 +514,18 @@ fn space_width(para: &str, size: f64, latin: &impl Fn(&str, f64) -> f64) -> f64 
 
 /// `text` wrapped `width` wide at `size` for a box that draws its lines with [`line_pieces`]: each
 /// line with whether its paragraph reads right to left ([`rtl_base`]; every line of a paragraph
-/// takes its paragraph's direction). Words are measured as they will be drawn ([`line_width`]),
-/// the spaces between them at their widest (`space_width`), and a mark stays on its letter.
-pub fn wrap(text: &str, size: f64, width: f64, latin: impl Fn(&str, f64) -> f64) -> Vec<(String, bool)> {
+/// takes its paragraph's direction) and the levels its paragraph resolves for it ([`Line`]), so a
+/// line keeps an override, embedding or isolate opened on an earlier one. Words are measured as
+/// they will be drawn ([`line_width`]), the spaces between them at their widest (`space_width`),
+/// and a mark stays on its letter.
+pub fn wrap(text: &str, size: f64, width: f64, latin: impl Fn(&str, f64) -> f64) -> Vec<Line> {
     let mut out = Vec::new();
     // A CRLF pair is one break, a lone CR or LF is one break each (as `wrap_with` reads them).
     for para in text.replace("\r\n", "\n").split(['\n', '\r']) {
         let rtl = rtl_base(para);
         let space = space_width(para, size, &latin);
         let measure = |s: &str, size: f64| if s == " " { space } else { line_width(s, rtl, size, &latin) };
-        out.extend(crate::wrap_with(para, size, width, measure).into_iter().map(|line| (line, rtl)));
+        out.extend(Line::in_paragraph(para, rtl, crate::wrap_with(para, size, width, measure)));
     }
     out
 }
@@ -584,7 +766,7 @@ pub fn fallback_appearance_lines(lines: &[String], thai: bool, latin: bool, font
 /// as direct objects, whose streams [`store_streams`] moves into the document with the appearance.
 /// Every line is left to the standard font, whose encoder writes `?` for what it can't draw, when
 /// a glyph can't be read.
-pub fn shaped_appearance_lines(lines: &[(String, bool)], fonts: &mut Dict) -> (Vec<Vec<Piece>>, ShapedFonts) {
+pub fn shaped_appearance_lines(lines: &[Line], fonts: &mut Dict) -> (Vec<Vec<Piece>>, ShapedFonts) {
     fallback_shaped_lines(lines, true, false, fonts)
 }
 
@@ -592,9 +774,9 @@ pub fn shaped_appearance_lines(lines: &[(String, bool)], fonts: &mut Dict) -> (V
 /// Thai from the script faces ([`appearance_pieces`]), else each line whole; and with `latin`,
 /// the Latin, Greek and Cyrillic characters the standard fonts lack from the bundled Inter face
 /// ([`fallback_pieces`]), what is left to the standard font split again.
-pub fn fallback_shaped_lines(lines: &[(String, bool)], shaped: bool, latin: bool, fonts: &mut Dict) -> (Vec<Vec<Piece>>, ShapedFonts) {
-    let pieces = lines.iter().map(|(l, rtl)| with_latin_fallback(if shaped { appearance_pieces(l, *rtl) } else { plain(l) }, latin)).collect();
-    appearance_fonts(pieces, lines.iter().map(|(l, _)| l.as_str()), fonts)
+pub fn fallback_shaped_lines(lines: &[Line], shaped: bool, latin: bool, fonts: &mut Dict) -> (Vec<Vec<Piece>>, ShapedFonts) {
+    let pieces = lines.iter().map(|l| with_latin_fallback(if shaped { l.appearance_pieces() } else { plain(&l.text) }, latin)).collect();
+    appearance_fonts(pieces, lines.iter().map(|l| l.text.as_str()), fonts)
 }
 
 /// `pieces` with, when `latin`, each piece left to the standard font split by [`fallback_pieces`]
@@ -1020,13 +1202,13 @@ mod tests {
     #[test]
     fn wrapped_lines_take_their_paragraphs_direction() {
         let chars = |s: &str, size: f64| s.chars().count() as f64 * size;
-        assert_eq!(wrap("one two\r\nthree", 1.0, 5.0, chars), [("one".to_string(), false), ("two".into(), false), ("three".into(), false)]);
-        assert_eq!(wrap("", 1.0, 5.0, chars), [(String::new(), false)]);
+        let laid = |text: &str, width: f64| -> Vec<(String, bool)> { wrap(text, 1.0, width, chars).into_iter().map(|l| (l.text, l.rtl)).collect() };
+        assert_eq!(laid("one two\r\nthree", 5.0), [("one".to_string(), false), ("two".into(), false), ("three".into(), false)]);
+        assert_eq!(laid("", 5.0), [(String::new(), false)]);
         // Each paragraph on its own: the Latin one after an Arabic one still reads left to right,
         // and a Latin word that wraps inside the Arabic paragraph keeps that paragraph's direction.
-        let laid = wrap("سلام\nabc", 1.0, 100.0, chars);
-        assert_eq!(laid.iter().map(|(_, rtl)| *rtl).collect::<Vec<_>>(), [true, false]);
-        let laid = wrap("سلام abcdefghij", 1.0, 10.5, chars);
+        assert_eq!(laid("سلام\nabc", 100.0).iter().map(|(_, rtl)| *rtl).collect::<Vec<_>>(), [true, false]);
+        let laid = laid("سلام abcdefghij", 10.5);
         assert_eq!(laid.last(), Some(&("abcdefghij".to_string(), true)), "{laid:?}");
     }
 
@@ -1052,7 +1234,7 @@ mod tests {
             // What refuses instead says which script and what to do, whichever line has it.
             assert_eq!(shape_refusal(&format!("fine\r\n{line}")), Some(script_message(script, GlyphError::NoFont, text)));
             let mut fonts = Dict::new();
-            let (pieces, _) = shaped_appearance_lines(&[(line.clone(), false)], &mut fonts);
+            let (pieces, _) = shaped_appearance_lines(&[Line::new(line.clone(), false)], &mut fonts);
             assert_eq!((pieces, fonts.iter().count()), (vec![vec![Piece::Latin(line)]], 0));
         }
     }
@@ -1094,7 +1276,7 @@ mod tests {
             let [bottom, top] = line_reach("سلام").unwrap();
             assert!(bottom < 0.0 && top > 0.0, "{bottom} {top}");
             let mut fonts = Dict::new();
-            let (pieces, shaped) = shaped_appearance_lines(&[("test بت".into(), false), ("plain".into(), false)], &mut fonts);
+            let (pieces, shaped) = shaped_appearance_lines(&[Line::new("test بت", false), Line::new("plain", false)], &mut fonts);
             assert!(matches!(&pieces[..], [first, second] if first.len() == 2 && second == &[Piece::Latin("plain".into())]), "{pieces:?}");
             let cluster = clusters([pieces[0].as_slice()]).next().unwrap();
             assert!(shaped.code(cluster).is_some_and(|(name, _)| name.starts_with("PCAr")) && fonts.iter().count() == 1);
@@ -1136,6 +1318,47 @@ mod tests {
         assert!(line_width(&line, false, 10.0, |_, _| 0.0) > 0.0 && line_reach(&line).is_some(), "the Thai is still measured as drawn");
     }
 
+    /// Levels are resolved for the whole paragraph before each wrapped line is reordered (UAX #9
+    /// §3.4): a right-to-left override opened before a Hebrew word still reverses the Latin a
+    /// paragraph wraps onto its next line, until the override closes, whichever way the paragraph
+    /// reads. The line keeps what was typed for `/ActualText`, and is measured as it is drawn.
+    /// The Latin needs no face, so this holds in every build.
+    #[test]
+    fn a_wrapped_line_keeps_its_paragraphs_levels() {
+        let chars = |s: &str, size: f64| s.chars().count() as f64 * size;
+        let letters = |pieces: &[Piece]| drawn_chars(pieces).filter(char::is_ascii_alphabetic).collect::<String>();
+        for (para, first) in
+            [("\u{202E}שלום עולם ABC DEF\u{202C}", "\u{202E}שלום עולם"), ("go \u{202E}שלום עולם ABC DEF\u{202C}", "go \u{202E}שלום עולם")]
+        {
+            let rtl = rtl_base(para);
+            assert_eq!(rtl, !para.starts_with("go"), "{para:?}");
+            let laid = Line::in_paragraph(para, rtl, vec![first.into(), "ABC DEF\u{202C}".into()]);
+            let next = &laid[1];
+            assert_eq!((next.text.as_str(), next.rtl), ("ABC DEF\u{202C}", rtl));
+            // Drawn right to left, as the paragraph has it; alone, the line would read left to right.
+            assert_eq!(letters(&next.pieces().unwrap()), "FEDCBA", "{para:?}");
+            assert_eq!(letters(&next.appearance_pieces()), "FEDCBA", "{para:?}");
+            assert_eq!(letters(&line_pieces(&next.text, rtl).unwrap()), "ABCDEF", "{para:?}");
+            assert!(next.reordered(&next.appearance_pieces()) && !Line::new("ABC DEF", rtl).reordered(&appearance_pieces("ABC DEF", rtl)));
+            // Measured as drawn: its space may come from a script face, never wider than wrapping counted.
+            assert!(next.width(1.0, chars) <= 7.0 && next.width(1.0, chars) == pieces_width(&next.appearance_pieces(), 1.0, 0.0, chars));
+            // The shared wrapper gives the same lines, in the narrowest box (in tenths) that breaks there.
+            let breaks_there = |l: &Vec<Line>| l.iter().map(|l| l.text.as_str()).eq([first, "ABC DEF\u{202C}"]);
+            let wrapped = (10..300).map(|w| wrap(para, 1.0, f64::from(w) / 10.0, chars)).find(breaks_there).expect(para);
+            assert_eq!(letters(&wrapped[1].appearance_pieces()), "FEDCBA", "{para:?}");
+        }
+        // Where the override closes on the wrapped line, the paragraph's own order takes over: `AB`
+        // still reversed, `CD` a left-to-right run of the right-to-left paragraph (alone, the line
+        // would read `ABCD`). A line that isn't in the paragraph is resolved alone, and an empty
+        // one draws nothing.
+        let laid =
+            Line::in_paragraph("\u{202E}שלום AB\u{202C} CD", true, vec!["\u{202E}שלום".into(), "AB\u{202C} CD".into(), "XY".into(), String::new()]);
+        assert_eq!(letters(&laid[1].pieces().unwrap()), "CDBA");
+        assert_eq!(letters(&laid[2].pieces().unwrap()), "XY");
+        assert_eq!(laid[3].pieces().unwrap(), []);
+        assert_eq!(Line::in_paragraph("", true, vec![String::new()])[0].pieces().unwrap(), []);
+    }
+
     /// A space inside a right-to-left run is drawn from the script face, between Latin words from
     /// the standard font: wrapping counts the wider, so no line is drawn wider than it was measured.
     #[test]
@@ -1149,8 +1372,8 @@ mod tests {
         for width in [60.0, 75.0, 90.0, 120.0] {
             let laid = wrap(text, 10.0, width, latin);
             assert!(laid.len() > 1, "{laid:?}");
-            for (line, rtl) in &laid {
-                let drawn = pieces_width(&appearance_pieces(line, *rtl), 10.0, 0.0, latin);
+            for line in &laid {
+                let drawn = pieces_width(&line.appearance_pieces(), 10.0, 0.0, latin);
                 assert!(drawn <= width + 1e-6, "{line:?} is {drawn} wide in {width}");
             }
         }

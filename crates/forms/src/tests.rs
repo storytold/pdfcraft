@@ -1485,14 +1485,15 @@ fn arabic_and_hebrew_a_field_font_cannot_hold_are_shaped_right_to_left() {
         // none wider than the room, the reordered ones with what was typed on them.
         let room = 300.0 - 2.0 * left;
         let lines = wrap(&format!("{long}\nplain"), 12.0, room, helv);
-        assert!(lines.len() > 3 && lines.last() == Some(&("plain".to_string(), false)), "{lines:?}");
+        assert!(lines.len() > 3 && lines.last().is_some_and(|l| (l.text.as_str(), l.rtl) == ("plain", false)), "{lines:?}");
         let (ap, starts) = drawn(&doc, "note");
         assert!(!ap.contains('?') && ap.contains("(plain) Tj") && ap.contains("(end) Tj"), "{script}: {ap}");
         assert_eq!(ap.matches("/ActualText").count(), lines.len() - 1, "{script}: {ap}");
         let mut rows: Vec<f64> = starts.iter().map(|p| p[1]).collect();
         rows.dedup();
         assert_eq!(rows.len(), lines.len(), "{script}: {rows:?}");
-        for ((line, rtl), y) in lines.iter().zip(&rows) {
+        for (laid, y) in lines.iter().zip(&rows) {
+            let (line, rtl) = (&laid.text, &laid.rtl);
             assert!(!*rtl || ap.contains(&actual_text_span(line)), "{script}: {line:?} in {ap}");
             let first = starts.iter().find(|p| p[1] == *y).unwrap()[0];
             assert!((first - left).abs() < 2e-3 && line_width(line, *rtl, 12.0, helv) <= room + 1e-6, "{script}: {line:?} from {first}");
@@ -1513,6 +1514,55 @@ fn arabic_and_hebrew_a_field_font_cannot_hold_are_shaped_right_to_left() {
         // A comb field's cells are not shaped: the value is kept, drawn as `?` and reported.
         set_value(&mut doc, "comb", &FieldValue::Text(word.chars().take(4).collect())).unwrap();
         assert_eq!(undrawn_fields(&doc), [("comb".to_string(), word.chars().next().unwrap())]);
+    }
+}
+
+/// A paragraph's embedding levels hold across a soft wrap (UAX #9 §3.4: levels are resolved for
+/// the paragraph, then each line is reordered). A right-to-left override opened before a Hebrew
+/// word still reverses `ABC DEF` when the box wraps it onto the next line, in a paragraph that
+/// reads right to left and in one that reads left to right, and that line keeps what was typed
+/// (`/ActualText`) for copy and search.
+#[test]
+fn a_bidi_override_holds_across_a_soft_wrap_in_a_multiline_field() {
+    use pdfcraft_fonts::helvetica_width;
+    use pdfcraft_fonts::shaped_text::{actual_text_span, wrap};
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        return;
+    }
+    let helv = |s: &str, size: f64| helvetica_width(s, size);
+    for (before, value) in [("", "\u{202E}שלום עולם ABC DEF\u{202C}"), ("go ", "go \u{202E}שלום עולם ABC DEF\u{202C}")] {
+        let first = format!("{before}\u{202E}שלום עולם");
+        let rest = "ABC DEF\u{202C}";
+        // The narrowest box the shared layout wraps there, before `ABC`; its padding is 3 pt a side.
+        let breaks_there = |room: &f64| wrap(value, 12.0, *room, helv).iter().map(|l| l.text.as_str()).eq([first.as_str(), rest]);
+        let room = (20..300).map(f64::from).find(breaks_there).expect(value);
+        let objs: Vec<String> = vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+            "<< /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+            format!(
+                "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /Ff 4096 /DA (/Helv 12 Tf 0 g) /Rect [50 400 {} 500] /P 3 0 R >>",
+                56.0 + room
+            ),
+        ];
+        let mut doc = document(&objs);
+        set_value(&mut doc, "note", &FieldValue::Text(value.into())).unwrap();
+        assert!(undrawn_fields(&doc).is_empty(), "{value:?}");
+        let doc = reopen(&doc);
+        let all = fields(&doc);
+        let wd = doc.get(field(&all, "note").widgets[0].obj).as_dict().unwrap().clone();
+        let n = wd.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+        let Object::Stream(s) = &*doc.get(n) else { panic!() };
+        let ap = String::from_utf8_lossy(&s.decoded().unwrap()).into_owned();
+        // The continuation line, from its typing order to the end of its span.
+        let span = actual_text_span(rest);
+        let at = ap.find(&span).unwrap_or_else(|| panic!("{value:?}: the wrapped line keeps what was typed: {ap}"));
+        let line = &ap[at..at + ap[at..].find("EMC").unwrap()];
+        // Still under the override: drawn right to left, `FED` first, never in typing order.
+        let (fed, cba) = (line.find("(FED").expect(line), line.find("CBA)").expect(line));
+        assert!(fed < cba && !line.contains("(ABC") && !line.contains("DEF)"), "{value:?}: {line}");
     }
 }
 

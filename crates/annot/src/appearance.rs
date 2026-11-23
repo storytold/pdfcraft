@@ -16,7 +16,7 @@
 //! program is bundled).
 
 use pdfcraft_cos::{Dict, Object, PdfString, Stream};
-use pdfcraft_fonts::shaped_text;
+use pdfcraft_fonts::shaped_text::{self, Line};
 use pdfcraft_fonts::{first_undrawable, literal, win_ansi};
 
 /// The width of `text` at `size` in Helvetica, as captions, labels and stamps are measured (with
@@ -31,13 +31,13 @@ pub fn text_width(text: &str, size: f64) -> f64 {
 /// the layout Add text uses). For a line of a wrapped paragraph use [`line_width_in`], which takes
 /// the paragraph's direction.
 pub fn text_width_in(face: pdfcraft_fonts::Std14, text: &str, size: f64) -> f64 {
-    line_width_in(face, text, shaped_text::rtl_base(text), size)
+    line_width_in(face, &Line::new(text, shaped_text::rtl_base(text)), size)
 }
 
-/// [`text_width_in`] for a line of a paragraph that reads right to left when `rtl`, as
-/// [`wrapped`] gives it.
-pub(crate) fn line_width_in(face: pdfcraft_fonts::Std14, line: &str, rtl: bool, size: f64) -> f64 {
-    shaped_text::line_width(line, rtl, size, |s, size| face.text_width(s, size))
+/// [`text_width_in`] for a line of a paragraph, as [`wrapped`] gives it: in its paragraph's
+/// direction and with the levels its paragraph resolves for it.
+pub(crate) fn line_width_in(face: pdfcraft_fonts::Std14, line: &Line, size: f64) -> f64 {
+    line.width(size, |s, size| face.text_width(s, size))
 }
 
 /// `text` wrapped `width` wide as a Helvetica text box draws it; a mark stays on its letter.
@@ -48,11 +48,12 @@ pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
 /// [`wrap`] for a text box whose other text is in the standard `face`: the lines its appearance
 /// draws.
 pub fn wrap_in(face: pdfcraft_fonts::Std14, text: &str, size: f64, width: f64) -> Vec<String> {
-    wrapped(face, text, size, width).into_iter().map(|(line, _)| line).collect()
+    wrapped(face, text, size, width).into_iter().map(|line| line.text).collect()
 }
 
-/// [`wrap_in`], each line with whether its paragraph reads right to left.
-pub(crate) fn wrapped(face: pdfcraft_fonts::Std14, text: &str, size: f64, width: f64) -> Vec<(String, bool)> {
+/// [`wrap_in`], each line with whether its paragraph reads right to left and the levels its
+/// paragraph resolves for it ([`Line`]).
+pub(crate) fn wrapped(face: pdfcraft_fonts::Std14, text: &str, size: f64, width: f64) -> Vec<Line> {
     shaped_text::wrap(text, size, width, |s, size| face.text_width(s, size))
 }
 
@@ -60,12 +61,13 @@ pub(crate) fn wrapped(face: pdfcraft_fonts::Std14, text: &str, size: f64, width:
 /// and below the last (0.3), or further where shaped text reaches (Thai stacked marks, Arabic and
 /// Hebrew marks and descenders), so the box is sized to their ink and doesn't clip them.
 fn reach(lines: &[String]) -> [f64; 2] {
-    ends_reach(lines.first().map(String::as_str), lines.last().map(String::as_str))
+    let line = |l: &String| Line::new(l.as_str(), shaped_text::rtl_base(l));
+    ends_reach(lines.first().map(line).as_ref(), lines.last().map(line).as_ref())
 }
 
 /// [`reach`] from a box's first and last line.
-fn ends_reach(first: Option<&str>, last: Option<&str>) -> [f64; 2] {
-    let ink = |line: Option<&str>| line.and_then(shaped_text::line_reach);
+fn ends_reach(first: Option<&Line>, last: Option<&Line>) -> [f64; 2] {
+    let ink = |line: Option<&Line>| line.and_then(Line::reach);
     [ink(first).map_or(0.9, |r| r[1].max(0.9)), ink(last).map_or(0.3, |r| (-r[0]).max(0.3))]
 }
 
@@ -1590,7 +1592,7 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     ));
     let mut out = c.into_bytes();
     let laid = wrapped(face, &text, size, width);
-    let [up, down] = ends_reach(laid.first().map(|(l, _)| l.as_str()), laid.last().map(|(l, _)| l.as_str()));
+    let [up, down] = ends_reach(laid.first(), laid.last());
     let mut y = rect[3] - pad - size * up;
     if round {
         // As `text_lines_height` sizes the lines.
@@ -1627,20 +1629,20 @@ struct TextArea {
 /// draws them (Type 3 fonts built into `fonts`, the form's font resources, whose streams
 /// `apply_appearance` stores in the document); the rest, and what a face can't draw (as `?`,
 /// which `undrawable_text` reports), in the box's standard `face`.
-fn show_text_lines(out: &mut Vec<u8>, laid: &[(String, bool)], fonts: &mut Dict, face: pdfcraft_fonts::Std14, size: f64, q: i64, area: TextArea) {
+fn show_text_lines(out: &mut Vec<u8>, laid: &[Line], fonts: &mut Dict, face: pdfcraft_fonts::Std14, size: f64, q: i64, area: TextArea) {
     let mut y = area.top;
     let (pieces, shaped) = shaped_text::shaped_appearance_lines(laid, fonts);
     let mut current = None;
-    for (pieces, (line, _)) in pieces.iter().zip(laid) {
+    for (pieces, line) in pieces.iter().zip(laid) {
         if y < area.bottom {
             break;
         }
         // Right-to-left text shaped in its face is painted in drawing order: its typing order goes
         // with it, so copy and search read the line as `/Contents` has it. A line drawn as `?`
         // gets none: what can be copied is what can be seen.
-        let reordered = shaped_text::reordered(pieces);
+        let reordered = line.reordered(pieces);
         if reordered {
-            out.extend(shaped_text::actual_text_span(line).bytes());
+            out.extend(shaped_text::actual_text_span(&line.text).bytes());
         }
         let lw = shaped_text::pieces_width(pieces, size, 0.0, |s, size| face.text_width(s, size));
         let x = match q {

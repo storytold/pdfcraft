@@ -33,7 +33,7 @@
 
 use pdfcraft_cos::{Dict, Document, Object, Stream};
 use pdfcraft_fonts::pdf::Metrics;
-use pdfcraft_fonts::shaped_text::{self, Piece, ShapedFonts};
+use pdfcraft_fonts::shaped_text::{self, Line, Piece, ShapedFonts};
 use pdfcraft_fonts::{UnicodeCMap, cjk_width, helvetica_width, literal, win_ansi, wrap_with};
 
 use crate::{Field, FieldKind, Widget, acroform, flags};
@@ -154,8 +154,8 @@ impl TextBox {
         let rest = if shaped { latin_part(&shown, self.multiline) } else { shown.clone() };
         let latin = !self.font.as_ref().is_some_and(|enc| holds_except(enc, &rest, self.multiline, false));
         let font = self.font.as_ref().filter(|enc| holds_except(enc, &rest, self.multiline, latin)).unwrap_or(&FontText::WinAnsi);
-        let line_width = |line: &str, rtl: bool, size: f64| text_line_width(font, shaped, latin, line, rtl, size);
-        let width_of = |t: &str, size: f64| line_width(t, shaped && shaped_text::rtl_base(t), size);
+        let line_width = |line: &Line, size: f64| text_line_width(font, shaped, latin, line, size);
+        let width_of = |t: &str, size: f64| line_width(&Line::new(t, shaped && shaped_text::rtl_base(t)), size);
         // The smallest an automatic size goes ([`auto_text_size_by`]).
         let size = self.size.unwrap_or(4.0);
         if self.multiline {
@@ -168,12 +168,12 @@ impl TextBox {
             let lines = wrapped(font, shaped, latin, &shown, size, self.inner_w);
             let top = first_line_top(shaped, &lines);
             let mut above = 0.0;
-            let inside = lines.iter().all(|(l, _)| {
+            let inside = lines.iter().all(|l| {
                 let fits = (top + above + line_descent(shaped, l)) * size <= self.inner_h + 2.0 + 0.01;
                 above += 1.15;
                 fits
             });
-            inside && lines.iter().all(|(l, rtl)| line_width(l, *rtl, size) <= self.inner_w + 0.01)
+            inside && lines.iter().all(|l| line_width(l, size) <= self.inner_w + 0.01)
         } else {
             // A line break in a single-line value is drawn as a space.
             let line: String = shown.chars().map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c }).collect();
@@ -785,18 +785,18 @@ pub fn value_overflow(doc: &Document, f: &Field, w: &Widget) -> Option<Overflow>
 /// How far a line's ink reaches below and above its baseline (em), where shaped text (Thai
 /// stacks, Arabic and Hebrew marks and descenders) reaches past the form font's (Helvetica's)
 /// -0.207 and 0.718; `None` when the line isn't `shaped` or has no such text.
-fn shaped_ink(shaped: bool, line: &str) -> Option<[f64; 2]> {
-    shaped.then(|| shaped_text::line_reach(line)).flatten().map(|[lo, hi]| [lo.min(-0.207), hi.max(0.718)])
+fn shaped_ink(shaped: bool, line: &Line) -> Option<[f64; 2]> {
+    shaped.then(|| line.reach()).flatten().map(|[lo, hi]| [lo.min(-0.207), hi.max(0.718)])
 }
 
 /// How far a multi-line value's first line hangs below the padded top (em): by its ascent, higher
 /// for stacked marks.
-fn first_line_top(shaped: bool, lines: &[(String, bool)]) -> f64 {
-    lines.first().and_then(|(l, _)| shaped_ink(shaped, l)).map_or(0.85, |[_, hi]| hi.max(0.85))
+fn first_line_top(shaped: bool, lines: &[Line]) -> f64 {
+    lines.first().and_then(|l| shaped_ink(shaped, l)).map_or(0.85, |[_, hi]| hi.max(0.85))
 }
 
 /// How far a multi-line value's line reaches below its baseline (em).
-fn line_descent(shaped: bool, line: &str) -> f64 {
+fn line_descent(shaped: bool, line: &Line) -> f64 {
     shaped_ink(shaped, line).map_or(0.207, |[lo, _]| -lo)
 }
 
@@ -851,19 +851,19 @@ fn standard_width(enc: &FontText, latin: bool, text: &str, size: f64) -> f64 {
 /// The width of `line` at `size` as the appearance draws it, in a paragraph that reads right to
 /// left when `rtl`: in `enc` ([`standard_width`] with `latin`), and with `shaped` ([`shapes`]) its
 /// Arabic, Hebrew and Thai by their faces' shaped advances.
-fn text_line_width(enc: &FontText, shaped: bool, latin: bool, line: &str, rtl: bool, size: f64) -> f64 {
+fn text_line_width(enc: &FontText, shaped: bool, latin: bool, line: &Line, size: f64) -> f64 {
     let standard = |s: &str, size: f64| standard_width(enc, latin, s, size);
-    if shaped { shaped_text::line_width(line, rtl, size, standard) } else { standard(line, size) }
+    if shaped { line.width(size, standard) } else { standard(&line.text, size) }
 }
 
 /// A multi-line value wrapped `width` wide as [`text_line_width`] measures it: each line with whether
 /// its paragraph reads right to left (never, unless `shaped`).
-fn wrapped(enc: &FontText, shaped: bool, latin: bool, text: &str, size: f64, width: f64) -> Vec<(String, bool)> {
+fn wrapped(enc: &FontText, shaped: bool, latin: bool, text: &str, size: f64, width: f64) -> Vec<Line> {
     let standard = |s: &str, size: f64| standard_width(enc, latin, s, size);
     if shaped {
         shaped_text::wrap(text, size, width, standard)
     } else {
-        wrap_with(text, size, width, standard).into_iter().map(|line| (line, false)).collect()
+        wrap_with(text, size, width, standard).into_iter().map(|line| Line::new(line, false)).collect()
     }
 }
 
@@ -903,7 +903,7 @@ fn multiline_auto_size(enc: &FontText, shaped: bool, latin: bool, text: &str, wi
                 let top = first_line_top(shaped, &lines);
                 let mut above = 0.0;
                 let mut reach = lines.len() as f64 * 1.15;
-                for (line, _) in &lines {
+                for line in &lines {
                     reach = reach.max(top + above + line_descent(shaped, line));
                     above += 1.15;
                 }
@@ -1009,9 +1009,9 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
         None => ("Helv".to_string(), helvetica(), FontText::WinAnsi),
     };
     // Measured with the pieces that are drawn: a line in its paragraph's direction.
-    let line_width = |line: &str, rtl: bool, size: f64| text_line_width(&enc, shaped, latin, line, rtl, size);
-    let width_of = |text: &str, size: f64| line_width(text, shaped && shaped_text::rtl_base(text), size);
-    let shaped_ink = |line: &str| shaped_ink(shaped, line);
+    let line_width = |line: &Line, size: f64| text_line_width(&enc, shaped, latin, line, size);
+    let width_of = |text: &str, size: f64| line_width(&Line::new(text, shaped && shaped_text::rtl_base(text)), size);
+    let shaped_ink = |line: &Line| shaped_ink(shaped, line);
     let (mut c, bw) = frame(doc, &wd, width, height);
     let pad = 2.0 + bw;
     let inner_w = (width - 2.0 * pad).max(1.0);
@@ -1020,9 +1020,9 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     // The lines to draw (where, what, and whether the paragraph reads right to left), drawn once
     // all are known: their shaped text shares fonts.
     let mut shown: Vec<ShownLine> = Vec::new();
-    let mut show = |x: f64, y: f64, text: &str, rtl: bool| shown.push(ShownLine { x, y, text: one_line(text), rtl });
-    let x_for = |text: &str, rtl: bool, size: f64| -> f64 {
-        let tw = line_width(text, rtl, size);
+    let mut show = |x: f64, y: f64, line: Line| shown.push(ShownLine { x, y, line });
+    let x_for = |line: &Line, size: f64| -> f64 {
+        let tw = line_width(line, size);
         match q {
             1 => pad + (inner_w - tw) / 2.0,
             2 => width - pad - tw,
@@ -1050,7 +1050,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                 if picked.binary_search(&i).is_ok() {
                     c.push_str(&format!("0.6 0.75 0.86 rg\n{} {} {} {} re f\n", n(bw), n(y - line), n(width - 2.0 * bw), n(line)));
                 }
-                show(pad, y - line + size * 0.25, display, false);
+                show(pad, y - line + size * 0.25, Line::new(one_line(display), false));
                 y -= line;
             }
         }
@@ -1065,7 +1065,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                 let mut y = height - pad - size * first_line_top(shaped, &lines);
                 // The lines whose descent stays inside the border; the rest are cut off.
                 let mut room = 0;
-                for (line, rtl) in &lines {
+                for line in &lines {
                     if y < -size {
                         break;
                     }
@@ -1073,12 +1073,12 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                     if y - descent * size >= bw - 0.01 {
                         room += 1;
                     }
-                    show(x_for(line, *rtl, size), y, line, *rtl);
+                    show(x_for(line, size), y, line.clone());
                     y -= size * 1.15;
                 }
                 if room < lines.len() {
                     overflow = Some(Overflow::Tall { lines: lines.len(), room, size });
-                } else if let Some(tw) = lines.iter().map(|(l, rtl)| line_width(l, *rtl, size)).filter(|tw| *tw > inner_w + 0.01).reduce(f64::max) {
+                } else if let Some(tw) = lines.iter().map(|l| line_width(l, size)).filter(|tw| *tw > inner_w + 0.01).reduce(f64::max) {
                     // A character wider than the box is a line of its own, still cut at the sides.
                     overflow = Some(Overflow::Wide { width: tw, room: inner_w, size });
                 }
@@ -1093,7 +1093,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                 }
                 // Centre Helvetica's ascent (0.718) and descent (0.207) vertically, or the reach of
                 // shaped marks and descenders, which an automatic size also keeps inside the padding.
-                let reach = shaped_ink(&text);
+                let reach = shaped_ink(&Line::new(text.clone(), rtl));
                 if let Some([lo, hi]) = reach
                     && da.size == 0.0
                 {
@@ -1114,14 +1114,14 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                     c.push_str(&comb_dividers(doc, &wd, width, height, cells));
                     for (i, ch) in text.chars().take(cells).enumerate() {
                         let s = ch.to_string();
-                        show(cell * i as f64 + (cell - width_of(&s, size)) / 2.0, y, &s, false);
+                        show(cell * i as f64 + (cell - width_of(&s, size)) / 2.0, y, Line::new(s, false));
                     }
                 } else {
                     let tw = width_of(&text.replace(['\n', '\r'], " "), size);
                     if overflow.is_none() && tw > inner_w + 0.01 {
                         overflow = Some(Overflow::Wide { width: tw, room: inner_w, size });
                     }
-                    show(x_for(&text, rtl, size), y, &text, rtl);
+                    show(x_for(&Line::new(text.clone(), rtl), size), y, Line::new(one_line(&text), rtl));
                 }
             }
         }
@@ -1160,8 +1160,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
 struct ShownLine {
     x: f64,
     y: f64,
-    text: String,
-    rtl: bool,
+    line: Line,
 }
 
 /// The text operators for the `shown` lines at `size`, in the field's font `font_name` (`font`,
@@ -1182,19 +1181,19 @@ fn draw_lines(
     let mut fonts = Dict::new();
     fonts.set(font_name.as_bytes().to_vec(), font);
     let (pieces, faces) = if shaped || latin {
-        let laid: Vec<(String, bool)> = shown.iter().map(|l| (l.text.clone(), l.rtl)).collect();
+        let laid: Vec<Line> = shown.iter().map(|l| l.line.clone()).collect();
         shaped_text::fallback_shaped_lines(&laid, shaped, latin, &mut fonts)
     } else {
-        (shown.iter().map(|l| vec![Piece::Latin(l.text.clone())]).collect(), ShapedFonts::default())
+        (shown.iter().map(|l| vec![Piece::Latin(l.line.text.clone())]).collect(), ShapedFonts::default())
     };
     let mut body = Vec::new();
     let mut current = None;
     for (line, pieces) in shown.iter().zip(&pieces) {
         // Right-to-left text shaped in its face is painted in drawing order: its typing order
         // goes with it, so copy and search read the line as the value has it.
-        let reordered = shaped_text::reordered(pieces);
+        let reordered = line.line.reordered(pieces);
         if reordered {
-            body.extend(shaped_text::actual_text_span(&line.text).bytes());
+            body.extend(shaped_text::actual_text_span(&line.line.text).bytes());
         }
         faces.show_line(&mut body, pieces, line.x, line.y, size, font_name, |s| enc.encode(s), |s| enc.width(s, size), &mut current);
         if reordered {

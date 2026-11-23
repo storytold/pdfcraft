@@ -61,7 +61,9 @@ set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
   (`shaped_text`) embeds outlines, so reopening does not depend on installed fonts: Add text,
   text boxes, Fill & Sign text, form fields, headers, footers and watermarks all write with it
   (`shaped_text::line_pieces` is the one layout: bidirectional order, then Arabic, Hebrew and
-  Thai shaped in their faces; `shaped_appearance_lines` for appearances, whose glyph streams
+  Thai shaped in their faces; `shaped_text::wrap` gives `Line`s that keep the embedding levels
+  their paragraph resolves, so a wrapped line is ordered as part of its paragraph, UAX #9 §3.4;
+  `shaped_appearance_lines` for appearances, whose glyph streams
   `store_streams` moves into the document). Without a script's face a text box draws `?` and
   marks its comment; the others refuse the text (`shape_refusal`). `wrap_with` never breaks a line before a Thai mark.
 - `craft_glyph(face, ch)` and `face_has(bytes, ch)`: bounded outlines and glyph coverage for any bundled face.

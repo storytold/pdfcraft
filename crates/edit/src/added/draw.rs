@@ -43,7 +43,7 @@ fn placed(t: &AddedText, r: [f64; 4], paragraphs: &[usize], i: usize, w: f64, sp
 fn draw_shaped(doc: &mut Document, t: &AddedText, taken: &Dict, fonts: &mut Dict, out: &mut Vec<u8>) -> Result<(), EditError> {
     let laid = wrapped(t)
         .into_iter()
-        .map(|(line, rtl, paragraph)| shaped_layout(t, &line, rtl).map(|(pieces, w)| (line, rtl, paragraph, pieces, w)))
+        .map(|(line, paragraph)| shaped_layout(t, &line).map(|(pieces, w)| (line.text, line.rtl, paragraph, pieces, w)))
         .collect::<Result<Vec<_>, _>>()?;
     draw_laid_shaped(doc, t, &laid, taken, fonts, out, shaped_glyph)
 }
@@ -149,8 +149,8 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
                 out.extend(format!("{} Tc\n", n(t.char_spacing)).bytes());
             }
             let all = wrapped(t);
-            let paragraphs: Vec<usize> = all.iter().map(|(_, _, p)| *p).collect();
-            for (i, (line, ..)) in all.iter().enumerate() {
+            let paragraphs: Vec<usize> = all.iter().map(|(_, p)| *p).collect();
+            for (i, line) in all.iter().map(|(line, _)| &line.text).enumerate() {
                 let w = latin_width(t, line);
                 // Baseline: 0.8 em below the line top.
                 let y = r[3] - (i as f64 * 1.2 + 0.95) * t.size;

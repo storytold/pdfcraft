@@ -17,7 +17,7 @@ pub(super) fn latin_width(t: &AddedText, s: &str) -> f64 {
 
 /// The lines of a text item after wrapping to its box width.
 pub fn lines(t: &AddedText) -> Vec<String> {
-    wrapped(t).into_iter().map(|(line, ..)| line).collect()
+    wrapped(t).into_iter().map(|(line, _)| line.text).collect()
 }
 
 #[cfg(test)]
@@ -27,8 +27,8 @@ thread_local! {
 }
 
 /// [`lines`], each with whether its paragraph runs right to left (its first strong character
-/// does) and which paragraph it is in.
-pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
+/// does) and the levels its paragraph resolves for it ([`Line`]), and which paragraph it is in.
+pub(super) fn wrapped(t: &AddedText) -> Vec<(Line, usize)> {
     #[cfg(test)]
     WRAP_CALLS.with(|c| c.set(c.get().saturating_add(1)));
     let width = (t.rect[2] - t.rect[0]).max(t.size);
@@ -41,7 +41,7 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
             && !rtl_script
             && let Ok(lines) = thai_lines(t, para, width)
         {
-            out.extend(lines.into_iter().map(|line| (line, false, index)));
+            out.extend(Line::in_paragraph(para, false, lines).into_iter().map(|line| (line, index)));
             continue;
         }
         let rtl = rtl_script && unicode_bidi::get_base_direction(para) == unicode_bidi::Direction::Rtl;
@@ -52,6 +52,7 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
         let measure = |s: &str| if rtl_script || thai { shaped_width(t, s, rtl) } else { latin_width(t, s) };
         let space = measure(" ");
         let (mut line, mut line_w) = (String::new(), 0.0);
+        let mut lines = Vec::new();
         // Widths add up (the standard-14 widths have no kerning), so each word is measured once
         // and appended in place: a line that never fills (negative character spacing) stays
         // linear instead of being copied and measured again for every word.
@@ -59,7 +60,7 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
             let word_w = measure(word);
             let candidate_w = if line.is_empty() { word_w } else { line_w + space + word_w };
             if !line.is_empty() && candidate_w > width {
-                out.push((std::mem::take(&mut line), rtl, index));
+                lines.push(std::mem::take(&mut line));
                 line.push_str(word);
                 line_w = word_w;
             } else {
@@ -70,7 +71,9 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
                 line_w = candidate_w;
             }
         }
-        out.push((line, rtl, index));
+        lines.push(line);
+        // Levels are resolved for the whole paragraph, then each line is ordered (UAX #9 §3.4).
+        out.extend(Line::in_paragraph(para, rtl, lines).into_iter().map(|line| (line, index)));
     }
     out
 }
@@ -81,7 +84,7 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
 /// broken inside, at shaped cluster boundaries, which never detach a tone or vowel mark from its
 /// base.
 fn thai_lines(t: &AddedText, para: &str, width: f64) -> Result<Vec<String>, EditError> {
-    let (pieces, _) = shaped_layout(t, para, false)?;
+    let (pieces, _) = shaped_layout(t, &Line::new(para, false))?;
     let mut atoms = Vec::new();
     for piece in pieces {
         match piece {
@@ -173,8 +176,8 @@ fn thai_words(atoms: Vec<(String, f64)>) -> Vec<Vec<(String, f64)>> {
     words
 }
 
+use pdfcraft_fonts::shaped_text::{Line, ShapeError, is_bidi_control, script_message};
 pub(super) use pdfcraft_fonts::shaped_text::{Piece, is_arabic, is_hebrew, is_thai};
-use pdfcraft_fonts::shaped_text::{ShapeError, is_bidi_control, line_pieces, script_message};
 
 /// The first character of `t` that would be drawn as `?`: outside WinAnsiEncoding and not drawn
 /// with the craft-fonts Arabic (#125) or Hebrew (#128) face, or Arabic or Hebrew that the face can't
@@ -200,8 +203,8 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
         return t.text.split('\n').find_map(pdfcraft_fonts::first_non_win_ansi);
     }
     // What `shaped_layout` leaves to the standard font, exactly as `draw_shaped` splits it.
-    wrapped(t).into_iter().find_map(|(line, rtl, _)| {
-        let (pieces, _) = shaped_layout(t, &line, rtl).ok()?;
+    wrapped(t).into_iter().find_map(|(line, _)| {
+        let (pieces, _) = shaped_layout(t, &line).ok()?;
         pdfcraft_fonts::shaped_text::pieces_undrawable(&pieces)
     })
 }
@@ -218,10 +221,11 @@ pub(super) fn shaped_arabic(c: char) -> bool {
     is_arabic(c) && !is_bidi_control(c)
 }
 
-/// A line of a shaped-text item in drawing order ([`line_pieces`], which text boxes and Fill & Sign
-/// text draw with too), and its width at the item's size. `rtl` is its paragraph's direction.
-pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec<Piece>, f64), EditError> {
-    let pieces = line_pieces(line, rtl).map_err(|e| shape_error(&e))?;
+/// A line of a shaped-text item in drawing order ([`Line::pieces`], the layout text boxes and Fill &
+/// Sign text draw with too, in its paragraph's direction and levels), and its width at the item's
+/// size.
+pub(super) fn shaped_layout(t: &AddedText, line: &Line) -> Result<(Vec<Piece>, f64), EditError> {
+    let pieces = line.pieces().map_err(|e| shape_error(&e))?;
     let width = pdfcraft_fonts::shaped_text::pieces_width(&pieces, t.size, t.char_spacing, |s, _| latin_width(t, s));
     Ok((pieces, width))
 }
@@ -229,7 +233,7 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
 /// The width of `s` in a shaped-text item; the item's font's estimate if it can't be shaped (drawing
 /// then reports why).
 pub(crate) fn shaped_width(t: &AddedText, s: &str, rtl: bool) -> f64 {
-    shaped_layout(t, s, rtl).map(|(_, w)| w).unwrap_or_else(|_| latin_width(t, s))
+    shaped_layout(t, &Line::new(s, rtl)).map(|(_, w)| w).unwrap_or_else(|_| latin_width(t, s))
 }
 
 fn shape_error(e: &ShapeError) -> EditError {
