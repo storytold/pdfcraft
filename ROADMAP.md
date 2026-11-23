@@ -1,6 +1,6 @@
 # PdfCraft roadmap
 
-> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** patch (M5 #3741: Ctrl+M opens Comments on Windows/Linux without toggling it closed; macOS leaves Command+M for Minimize; platform-specific shortcut surfaces and regressions retained; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-11-23 · **Last updated:** 2026-11-23 · **Change:** minor (measured numbers refreshed at v0.22.0, cut from `main` `4f23ee1c`: checklist and code size, with issues and releases as of 2026-11-23; estimated readiness and hours not re-judged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
@@ -29,7 +29,7 @@ and add a line to the [progress log](#progress-log); when a gap closes, remove i
 
 | | Value | Kind |
 |---|---|---|
-| **Feature breadth** | **≈ 73%** tier-weighted (64.1% unweighted: 473 shipped + 124 partial of 835; P0 94.6%) | measured at v0.21.0 (2026-11-11): recounted with `cargo xtask parity`'s rules |
+| **Feature breadth** | **≈ 73%** tier-weighted (64.4% unweighted: 475 shipped + 128 partial of 837; P0 94.6%) | measured at v0.22.0 (2026-11-23): recounted with `cargo xtask parity`'s rules |
 | Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.3% unweighted; P0 95.3%) | measured 2026-10-26, not recomputed ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, full Acrobat Pro | **≈ 50%** (45–53%) | estimated, weighted sum over [dimensions](#by-dimension) |
 | **Ready for real work**, mainstream practitioner | **≈ 55%** (50–60%) | estimated ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
@@ -41,13 +41,13 @@ The ready-for-real-work numbers and hours were last judged on 2026-10-10 (locali
 2026-10-13); only the measured rows were refreshed on 2026-11-09. A full re-measure is due.
 
 **Why alpha:** all six of Acrobat Pro's everyday workflows can be completed end to end on macOS
-(the [alpha gate](docs/roadmap.md#alpha-gate)), and users praise them (20.4k stars and 7.5k forks on
-2026-11-11; ≈ 217k downloads of 0.4–0.5 alone; switching reports such as #179). Two are only partial:
+(the [alpha gate](docs/roadmap.md#alpha-gate)), and users praise them (21.5k stars and 7.8k forks on
+2026-11-23; ≈ 217k downloads of 0.4–0.5 alone; switching reports such as #179). Two are only partial:
 editing (CJK and right-to-left only in part) and convert and share (Office→PDF only through an installed LibreOffice; Word export
 loses layout, #773; password-protected files open in Acrobat since #836, #774). Those, unmeasured
-quality against Acrobat, the borrowed `hayro` renderer and 1,680 open issues (74 marked
-`priority: critical`, on 2026-11-11; 245 on 2026-10-10) keep it far from beta. The latest release is
-v0.21.1 (2026-11-12), a bug-fix release that leaves the checklist as v0.21.0 had it.
+quality against Acrobat, the borrowed `hayro` renderer and 2,006 open issues (102 marked
+`priority: critical`, on 2026-11-23; 245 on 2026-10-10) keep it far from beta. The latest release is
+v0.22.0 (2026-11-23).
 
 ### Readiness by audience
 
@@ -63,7 +63,7 @@ Hours are calibrated as in [Effort and calibration](docs/target-app-parity.md#ef
 
 | Dimension | Ready | Weight | Remaining (h) | Doc |
 |---|---|---|---|---|
-| Features (14 areas) | ≈ 49% depth (2026-10-10) · ≈ 73% tier-weighted breadth (2026-11-11) | 40% | 610–1,100 | [target-app-parity.md](docs/target-app-parity.md#by-feature-area) |
+| Features (14 areas) | ≈ 49% depth (2026-10-10) · ≈ 73% tier-weighted breadth (2026-11-23) | 40% | 610–1,100 | [target-app-parity.md](docs/target-app-parity.md#by-feature-area) |
 | UI/UX fidelity | ≈ 55% | 10% | 30–60 | [ui-parity.md](docs/ui-parity.md) |
 | File formats and conversion | ≈ 40% | 12% | 120–220 (within features) | [file-format-parity.md](docs/file-format-parity.md) |
 | PDF specification and standards | ≈ 60% | 8% | 150–260 (within features) | [pdf-spec-parity.md](docs/pdf-spec-parity.md) |
@@ -78,22 +78,22 @@ Hours are calibrated as in [Effort and calibration](docs/target-app-parity.md#ef
 
 ## Features
 
-| Area | Breadth (measured at v0.21.0, 2026-11-11) | Ready (estimated 2026-10-10) | Remaining (h) |
+| Area | Breadth (measured at v0.22.0, 2026-11-23) | Ready (estimated 2026-10-10) | Remaining (h) |
 |---|---|---|---|
-| A Core model and fidelity | 78.8% | 70% | 25–45 |
+| A Core model and fidelity | 79.2% | 70% | 25–45 |
 | B View and navigation | 66.7% | 55% | 110–190 |
-| C Content editing | 61.9% | 30% | 100–180 |
-| D Organize pages | 73.8% | 70% | 12–25 |
+| C Content editing | 62.7% | 30% | 100–180 |
+| D Organize pages | 75.0% | 70% | 12–25 |
 | E Comments and review | 85.1% | 70% | 12–25 |
 | F Forms and JavaScript | 81.6% | 65% | 40–75 |
 | G Protect, redact, sanitize | 62.8% | 55% | 15–30 |
-| H Digital signatures | 62.2% | 45% | 40–70 |
+| H Digital signatures | 63.3% | 45% | 40–70 |
 | I Scan and OCR | 44.2% | 15% | 40–75 |
 | J Create and export | 42.9% | 25% | 55–100 |
 | K Optimize and standards | 44.8% | 20% | 65–115 |
-| L Print | 53.8% | 35% | 30–55 |
+| L Print | 53.7% | 35% | 30–55 |
 | M Accessibility | 72.1% | 30% | 40–70 |
-| N Automation, preferences, misc | 34.2% | 35% | 25–45 |
+| N Automation, preferences, misc | 34.9% | 35% | 25–45 |
 
 What's strong and missing in each: [target-app-parity.md](docs/target-app-parity.md#by-feature-area).
 
@@ -119,8 +119,8 @@ Twelve key languages: the share of the 2,897 strings in the i18n report's denomi
 
 Also shipped: Traditional Chinese, Russian, Bulgarian, Telugu, Hungarian, Ukrainian, Italian,
 Kazakh, Polish, Slovenian, Greek, Turkish, Lithuanian, Finnish, Albanian, Catalan, Romanian,
-Norwegian Bokmål, Persian, Central Kurdish, Thai, Lao and Czech: **23 more catalogs**
-(35 interface languages including English).
+Norwegian Bokmål, Persian, Central Kurdish, Thai, Lao, Czech and Bosnian: **24 more catalogs**
+(36 interface languages including English).
 
 ## Upcoming
 
@@ -142,6 +142,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 Newest first: the date, what moved, and the new overall estimate.
 
+- **2026-11-23 (status docs):** Measured numbers refreshed at v0.22.0 (`main` at `4f23ee1c`): 837 counted features, 475 shipped and 128 partial, 64.4% unweighted and ≈ 73% tier-weighted (64.1% and ≈ 73% at v0.21.0), P0 94.6%. GitHub on the same day: 2,006 open and 1,612 closed issues (102 `priority: critical`), 21.5k stars, latest release v0.22.0. README, docs/target-app-parity.md, docs/gaps.md and docs/roadmap.md brought in line, including the checklist's 7 changes in v0.22.0 (renaming the file from its tab and line and paragraph spacing shipped; JavaScript page actions, page templates, colour handling when printing, FieldMDP checks and two full-screen preferences partial), the patched renderer now coming from the shared craft-libs (#2068) and Bosnian as the 36th interface language. Estimated readiness and hours not re-judged.
 - **2026-11-16 (M5, #3741):** Ctrl+M opens Comments on Windows/Linux and repeated activation keeps it open. macOS leaves Command+M unbound for Minimize. Dispatch, menus, palette, shortcut help and control/headless metadata resolve the platform-specific registry binding. Mapping and real-input regressions are retained through the rebase; estimates unchanged.
 - **2026-11-11 (status docs):** Measured numbers refreshed at v0.21.0 (`main` at `3650f01f`): 835 counted features, 473 shipped and 124 partial, 64.1% unweighted and ≈ 73% tier-weighted (62.8% and ≈ 72% at v0.20.0), P0 94.6%. GitHub on the same day: 1,680 open and 1,456 closed issues (74 `priority: critical`), 20.4k stars, latest release v0.21.0. README, docs/target-app-parity.md, docs/gaps.md and docs/roadmap.md brought in line, including the checklist's 14 status changes in v0.21.0 (comment pop-ups and connector lines, printer marks, colour conversion and printing a selected area shipped; Create PDF from Office, find and replace in edit mode, document actions, the portfolio file list and page setup partial). Estimated readiness and hours not re-judged.
 - **2026-11-10 (M4, #4594):** Reconcile current main and keep the original draft-safety entry in this progress log instead of duplicating it in the shared roadmap header. Preserve inactive password cleanup and the Properties guard; behavior and estimates unchanged.
@@ -705,6 +706,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-23 | minor | Measured numbers refreshed at v0.22.0, `main` at 4f23ee1c (breadth ≈ 73% tier-weighted, 64.4% unweighted; areas A, C, D, H, L and N; 2,006 open issues; 21.5k stars; 36 interface languages; v0.22.0). Estimated readiness and hours not re-judged. |
 | 2026-11-16 | patch | M5 #3741: Ctrl+M opens Comments on Windows/Linux without toggling it closed; macOS leaves Command+M for Minimize; platform-specific shortcut surfaces and regressions retained; estimates unchanged. |
 | 2026-11-15 | minor | craft-libs cutover for codecs, XFA XML, crypt/filters/COS/export/XFDF, PRC and ZIP; print colour management for pictures; M7 line replacement keeps source fonts; auto-tag headings by size and weight; arrow-key comment moves; stream-filter JPEG export; form, signature, optimize, redaction, measurement, PRC-normal and CMYK fixes; v0.21.1 Flatpak fix; estimates unchanged. |
 | 2026-11-12 | patch | Latest release v0.21.1 (bug fixes); its checklist matches v0.21.0, so the measured numbers stand. |

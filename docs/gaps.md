@@ -1,6 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
-> **Last reviewed:** 2026-11-11 · **Last updated:** 2026-11-11 · **Change:** minor (gaps 2, 6, 7, 8, 10, 11, 14, 15, 16, 18, 19 and 24 brought up to date at v0.21.0, cut from `main` `3650f01f`; earlier header notes moved into the revision history; hours not re-judged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-11-23 · **Last updated:** 2026-11-23 · **Change:** minor (gaps 2, 6, 10, 15, 18 and 19 brought up to date at v0.22.0, cut from `main` `4f23ee1c`; hours not re-judged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Every known shortfall, one entry each, ranked by what it costs users. This is the work list: agents
 choose from the top unless the owner says otherwise, and prefer these over new P2/P3 checklist
@@ -50,9 +50,11 @@ update the numbers.
 
 - **Missing:** our own renderer (M2: `model` crate, font engine, DisplayList devices, ADR-0004), or
   an owner decision to adopt another engine; and any measurement of rendering against Acrobat.
-- **Evidence:** pages are drawn by vendored `hayro` 0.7 with local patches numbered up to about 100 in
-  `hayro-interpret`, 31 in `hayro`, 17 in `hayro-jbig2` and 45 in `hayro-syntax` at v0.21.0
-  (`vendor/README.md`; 26, 15, 3 and 17 on 2026-10-12), so the borrowed renderer is diverging further; `lopdf` still
+- **Evidence:** pages are drawn by a patched `hayro` 0.7. Since v0.22.0 it comes from the shared
+  storytold/craft-libs (`craft-pdf`, #2068) instead of `vendor/`; at v0.21.0, the last release that
+  vendored it, its local patches were numbered up to about 100 in `hayro-interpret`, 31 in `hayro`,
+  17 in `hayro-jbig2` and 45 in `hayro-syntax` (`vendor/README.md`; 26, 15, 3 and 17 on
+  2026-10-12), so the borrowed renderer is diverging further; `lopdf` still
   backs document inspection. All 7 rendering P0 features are `partial`. User reports: TikZ pattern
   fills drawn wrong ([#794](https://github.com/storytold/pdfcraft/issues/794)), blurry text at
   1080p/1440p ([#730](https://github.com/storytold/pdfcraft/issues/730)), fixed zoom sizes differ
@@ -132,10 +134,12 @@ update the numbers.
 
 - **Missing:** fixes for the reports of wrong results in features marked `shipped` that are still open
   (not recounted since 2026-10-10; the whole #799–#821 batch below closed that day), plus triage of the rest of the open issues (≈ 220 on 2026-10-10, far more now).
-- **Evidence (2026-11-11):** 1,680 open and 1,456 closed issues; 470 open issues carry `bug`, 74
-  `priority: critical` and 285 `priority: high`. The critical ones cluster on Windows printing
-  (#5661, #5870, #6060, #6201, #6372), on launching (#5239, #6500) and on two
-  possible data-loss reports (#6119, #6062).
+- **Evidence (2026-11-23):** 2,006 open and 1,612 closed issues; 692 open issues carry `bug`, 102
+  `priority: critical` and 322 `priority: high`. The critical ones cluster on saving (on macOS,
+  saving over an existing file fails on its extended attributes, os error 34: #7258, #7289, #7509,
+  #7869), on printing (#5661, #5870, #6372, #6864), on launching (#5239, #6983, #7847, #7876), on
+  security findings in signing and redaction (#7884, #7885, #7918, #7926) and on two possible
+  data-loss reports (#6119, #6062).
 - **Evidence (2026-10-10):** 245 open issues. The first batch of `fix(...)` reports, all 23 of
   #799–#821, was closed on 2026-10-10. A later
   batch keeps a cloudy comment flatten cannot draw (#1317), leaves a refused text-box restyle or
@@ -221,11 +225,12 @@ update the numbers.
 
 - **Missing:** PKCS #11 tokens, and smart cards on Linux (CAC/PIV cards sign through the macOS
   Keychain since #968, and through the Windows store); timestamp-server preferences;
-  fetching OCSP/CRL online for LTV; FieldMDP and locking fields on signing; the OS trust store; EU
+  fetching OCSP/CRL online for LTV; locking fields on signing (FieldMDP locks are checked when
+  validating); the OS trust store; EU
   Trusted Lists; signature graphics and saved appearances; compare signed version; signing in the
   browser.
-- **Evidence:** `sign.pkcs11`, `sign.timestamp-servers`, `sign.field-mdp`, `sign.os-trust`,
-  `sign.eutl` planned; `sign.pades-bt`, `sign.ltv`, `sign.ocsp-crl` partial (caller-supplied
+- **Evidence:** `sign.pkcs11`, `sign.timestamp-servers`, `sign.os-trust`, `sign.eutl` planned;
+  `sign.field-mdp` partial since v0.22.0 (locks are checked, not written); `sign.pades-bt`, `sign.ltv`, `sign.ocsp-crl` partial (caller-supplied
   evidence). Users ask for Acrobat-like validation
   ([#824](https://github.com/storytold/pdfcraft/issues/824),
   [#775](https://github.com/storytold/pdfcraft/issues/775),
@@ -346,11 +351,12 @@ update the numbers.
 ### 15. Forms: JavaScript object model, actions, submit, XFA depth
 
 - **Missing:** the wider Acrobat JavaScript object model (annotations, layers, dialogs), the other
-  document actions (Will Close, Did Save, Did Print, page open and close), the Actions tab triggers
+  document actions (Will Close, Did Save, Did Print), page actions other than JavaScript, the Actions tab triggers
   that run JavaScript, form submission, the debugger, barcode fields, rich-text values; XFA
   flattening and complete dynamic-form fidelity.
 - **Evidence:** `form.js-host` and `form.document-actions` partial (open, before save and before
-  print run); `form.submit-form`, `edit.action-javascript`, `form.js-debugger`, `form.xfa-flatten`
+  print run); `organize.page-actions` (JavaScript page open and close actions) and
+  `organize.page-templates` (scripts spawn and hide template pages) partial since v0.22.0; `form.submit-form`, `edit.action-javascript`, `form.js-debugger`, `form.xfa-flatten`
   planned; XFA layout, FormCalc and data partial.
 - **Estimate:** 40–75 h. **Doc:** [pdf-spec-parity.md](pdf-spec-parity.md).
 
@@ -372,18 +378,20 @@ update the numbers.
 
 ### 18. Print production tools absent
 
-- **Missing at v0.21.0:** Output Preview, separations, total area coverage, overprint preview, ink
-  manager, flattener preview, colour management settings; print as image; PostScript output.
-  Fix hairlines, printer marks (Print production ▸ Add printer marks…) and colour conversion
-  (Print production ▸ Convert colours) are in.
-- **Evidence:** 15 print-production features planned at v0.21.0 (L area; 17 at v0.20.0).
+- **Missing at v0.22.0:** Output Preview, separations, total area coverage, overprint preview, ink
+  manager, flattener preview, colour management settings; PostScript output. Fix hairlines,
+  printer marks (Print production ▸ Add printer marks…), colour conversion (Print production ▸
+  Convert colours) and printing as an image are in. Colour handling when printing is partial: pages
+  can be converted into an RGB or grey printer profile through `doc_print` (#6269), and the Print
+  dialog has no Color Handling choice yet.
+- **Evidence:** 15 print-production features planned at v0.22.0, as at v0.21.0 (L area; 17 at v0.20.0).
 - **Estimate:** 25–45 h (part of the L area's 30–55). **Doc:** [target-app-parity.md](target-app-parity.md).
 
 ### 19. Preferences mostly missing
 
 - **Missing:** most of Acrobat's twenty or so preference pages (General, Documents, Commenting, Forms, Identity,
   Signatures, Security, Measuring, Units and guides, Convert, …). Today: Interface language,
-  Documents and view (including how many recent files to keep), Identity, Fill & Sign, JavaScript,
+  Documents and view (including how many recent files to keep, and two full-screen options), Identity, Fill & Sign, JavaScript,
   Animation effects and the update check at start.
 - **Estimate:** 15–25 h. **Doc:** [ui-parity.md](ui-parity.md).
 
@@ -429,6 +437,7 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-23 | minor | Brought up to date at v0.22.0 (`main` at 4f23ee1c): gap 2 (the patched renderer now comes from the shared craft-libs, #2068), 6 (2,006 open issues, 102 critical, now also clustering on saving and on security findings), 10 (FieldMDP locks checked when validating), 15 (JavaScript page actions and page templates partial), 18 (colour handling when printing partial; printing as an image, shipped long before, no longer listed as missing), 19 (two full-screen preferences). Hours not re-judged. |
 | 2026-11-11 | minor | Gap 8: known residual risk for the LibreOffice sidecar (Impress has no link-update setting; the soffice process isn't network-sandboxed). Sandboxing tracked in #6953. Estimates unchanged. |
 | 2026-11-11 | minor | Brought up to date at v0.21.0 (`main` at 3650f01f): gap 2 (renderer patch counts), 6 (1,680 open issues, 74 critical; three of the listed critical reports closed), 15 (document actions partial), 16 (movable comment pop-ups and connector lines shipped), 18 (printer marks and colour conversion shipped; 15 print-production features planned). Hours not re-judged. |
 | 2026-11-09 | minor | Brought up to date at v0.20.0 (`main` at 9ee213ef): gap 2 (renderer patch counts; #841 still open), 5 (catalog share), 6 (1,774 open issues, 74 critical; estimate due), 7 (Tesseract, web OCR shipped, deskew and rotation partial), 8 (PowerPoint export partial), 10 (smart cards through the macOS Keychain), 11 (summary title matches the section), 14 (Hindi, Indonesian and Korean catalogs ship), 16 (quick tools partial), 19 (Preferences). Hours not re-judged. Earlier header notes moved into this table. |
