@@ -890,7 +890,7 @@ fn redact_page_content(
     let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     // What the walk leaves of the page's allowance, the cleanups below spend.
     let (out, mut budget) = {
-        let mut scope = Scope::new(rects, Mode::Apply, report, budget, images).with_removed_room(*removed_room);
+        let mut scope = Scope::new(rects, Mode::Apply, report, budget, images).with_removed_room(*removed_room).with_page_box(page.crop(doc));
         let out = process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY);
         scope.flush();
         removed_text.append(&mut scope.removed_text);

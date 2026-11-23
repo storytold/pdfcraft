@@ -81,6 +81,71 @@ fn an_image_in_a_soft_mask_group_that_cant_be_cleared_refuses_the_page() {
 }
 
 #[test]
+fn an_inline_image_in_a_soft_mask_group_under_a_mark_refuses_the_page() {
+    // As above, with the group drawing its page-sized image inline, which is never cleared.
+    let group = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >>",
+        b"q 300 0 0 300 0 0 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \xff EI Q",
+    );
+    let mut doc = one_page(
+        b"q /GS1 gs 0 0 0 RG 2 w 200 200 m 280 280 l S Q",
+        "/ExtGState << /GS1 << /SMask << /S /Luminosity /BC [0] /G 7 0 R >> >> >>",
+        vec![group],
+    );
+    mark(&mut doc, 0, &[MARK], "");
+    assert!(apply(&mut doc, None).is_err(), "the image went, and with it what the mask lets paint outside the mark");
+}
+
+/// The samples of the image in [`reaching_mask_image`]'s group.
+const PIXELS: &[u8; 16] = b"MASK-SECRET-PIXL";
+
+/// A page that paints through a luminosity mask whose group, with the box `bbox`, draws an image
+/// that can't be cleared, from (-50, -50) to (350, 350): past every edge of the 300 pt page. The
+/// image is drawn inline, or as an XObject (object 8) with a soft mask of its own (object 9).
+fn reaching_mask_image(bbox: &str, inline: bool) -> Document {
+    let draw: &[u8] = if inline { b"BI /W 16 /H 1 /CS /G /BPC 8 ID MASK-SECRET-PIXL EI Q" } else { b"/Im0 Do Q" };
+    let group = stream(
+        &format!(
+            "/Type /XObject /Subtype /Form /BBox {bbox} /Group << /S /Transparency /CS /DeviceGray >> /Resources << /XObject << /Im0 8 0 R >> >>"
+        ),
+        [b"q 400 0 0 400 -50 -50 cm ".as_slice(), draw].concat(),
+    );
+    let image = stream("/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /SMask 9 0 R", PIXELS);
+    let alpha = stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"\xff");
+    one_page(
+        b"q /GS1 gs 0 0 0 RG 2 w 200 200 m 280 280 l S Q",
+        "/ExtGState << /GS1 << /SMask << /S /Luminosity /BC [0] /G 7 0 R >> >> >>",
+        vec![group, image, alpha],
+    )
+}
+
+#[test]
+fn a_soft_mask_group_image_under_a_mark_wherever_it_can_show_goes() {
+    // Only what lies off the page, or outside the group's box, escapes the mark: the mask is the
+    // same there with the image or without it.
+    for inline in [false, true] {
+        for (bbox, rect) in [("[-100 -100 400 400]", [0.0, 0.0, 300.0, 300.0]), ("[0 0 300 250]", [0.0, 0.0, 300.0, 250.0])] {
+            let mut doc = reaching_mask_image(bbox, inline);
+            mark(&mut doc, 0, &[rect], "");
+            let r = apply(&mut doc, None).unwrap_or_else(|e| panic!("inline {inline}, box {bbox}: {e}"));
+            assert!(r.images_removed > 0, "inline {inline}, box {bbox}: {r:?}");
+            let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+            assert!(!bytes.windows(PIXELS.len()).any(|w| w == PIXELS), "inline {inline}, box {bbox}: the image's samples stay in the saved file");
+        }
+    }
+}
+
+#[test]
+fn a_soft_mask_group_image_past_a_mark_on_the_page_still_refuses_it() {
+    // The image also reaches off the page, but it shows above the mark too, inside the group's box.
+    for inline in [false, true] {
+        let mut doc = reaching_mask_image("[-100 -100 400 400]", inline);
+        mark(&mut doc, 0, &[[-100.0, -100.0, 400.0, 250.0]], "");
+        assert!(apply(&mut doc, None).is_err(), "inline {inline}: the image went, and with it what the mask lets paint above the mark");
+    }
+}
+
+#[test]
 fn a_soft_mask_group_without_resources_does_not_keep_the_original_through_the_copied_ones() {
     // The group draws with the page's resources, which list the state naming the original group,
     // and an image the group does not draw, so the rewritten group gets a pruned copy of them.

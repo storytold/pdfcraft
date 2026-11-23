@@ -221,6 +221,12 @@ pub(crate) struct Scope<'a> {
     /// of going, as removing it would change the mask, and so what it lets paint, everywhere it
     /// reaches, not only under the mark (#7884).
     in_mask: bool,
+    /// The page's visible box (its crop box) in default user space, when known: nothing drawn
+    /// outside it shows.
+    page_box: Option<[f64; 4]>,
+    /// Walking a soft mask's group: where what it draws can change what shows, the page's visible
+    /// box within the group's `/BBox` (and those of the groups it is nested in), when known.
+    mask_shows: Option<[f64; 4]>,
     /// Form entries and decoded bytes left for this page, its content streams already charged:
     /// shared forms drawn from other shared forms would otherwise multiply the work with every
     /// level.
@@ -254,8 +260,17 @@ impl<'a> Scope<'a> {
             used_names: Vec::new(),
             depth: 0,
             in_mask: false,
+            page_box: None,
+            mask_shows: None,
             budget,
         }
+    }
+
+    /// The page's visible box, `[x0 y0 x1 y1]` in default user space: an image in a soft mask's
+    /// group that reaches past a mark only off the page goes as one under the mark would.
+    pub fn with_page_box(mut self, page_box: [f64; 4]) -> Self {
+        self.page_box = Some(page_box);
+        self
     }
 
     /// What is left of the page's allowance once the content is walked, for the cleanups after it
@@ -318,6 +333,20 @@ impl<'a> Scope<'a> {
 
     fn covered(&self, b: [f64; 4]) -> bool {
         self.rects.iter().any(|r| contains(*r, b, 0.01))
+    }
+
+    /// Whether an image with bounds `b` lies under a mark everywhere removing it would change what
+    /// shows. In a soft mask's group that is only the part of it that can show: outside the page
+    /// or the group's box, the mask is the same with the image or without it. Elsewhere the whole
+    /// image counts.
+    fn image_covered(&self, b: [f64; 4]) -> bool {
+        let Some(s) = self.mask_shows else { return self.covered(b) };
+        if !b.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        let c = [b[0].max(s[0]), b[1].max(s[1]), b[2].min(s[2]), b[3].min(s[3])];
+        // Nothing of it can show at all, or what can is under a mark.
+        c[0] >= c[2] || c[1] >= c[3] || self.covered(c)
     }
 
     /// Which regions a glyph box counts as under? Any real overlap does (more than a fifth of
@@ -902,15 +931,27 @@ impl Walk {
         None
     }
 
-    /// An inline image under a region is removed (or counted, when verifying).
+    /// An inline image under a region is removed (or counted, when verifying). In a soft mask's
+    /// group, one that reaches past the marks where it can show refuses the page instead, as an
+    /// image XObject that can't be cleared does: removing it would change the mask there (#7884).
     fn inline_image(gs: &Gs, scope: &mut Scope<'_>, out: &mut Output, op: Op, piece: &mut Piece) -> Option<Op> {
         // An image mask paints with the fill colour, pattern included.
         uses_patterns(out, gs, true, false);
-        if !scope.hits(gs.ctm.bbox([0.0, 0.0, 1.0, 1.0])) {
+        let b = gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]);
+        if !scope.hits(b) {
             return Some(op);
         }
         if scope.mode == Mode::Verify {
             out.residue += 1;
+            return Some(op);
+        }
+        if scope.in_mask && !scope.image_covered(b) {
+            out.error = Some(CosError::Syntax {
+                offset: 0,
+                detail:
+                    "an inline image in a soft mask's group under a mark can't be cleared, and removing it would change the mask outside the mark"
+                        .into(),
+            });
             return Some(op);
         }
         scope.report.images_removed += 1;
@@ -964,9 +1005,10 @@ impl Walk {
         held.set(GROUP.to_vec(), Object::Ref(group));
         let draw = Op::new("Do", vec![Object::Name(GROUP.to_vec())]);
         let mut inner = Output::default();
-        let outer = std::mem::replace(&mut scope.in_mask, true);
+        let shows = mask_shows(doc, group, &self.gs.ctm, scope.mask_shows.or(scope.page_box));
+        let outer = (std::mem::replace(&mut scope.in_mask, true), std::mem::replace(&mut scope.mask_shows, shows));
         let walked = xobject(doc, scope, &draw, &self.gs, resources, &mut held, &mut inner);
-        scope.in_mask = outer;
+        (scope.in_mask, scope.mask_shows) = outer;
         // What the walk found, as for a form; the new XObject name is not this scope's.
         self.out.residue += inner.residue;
         self.out.vertical |= inner.vertical;
@@ -1233,6 +1275,25 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
     (out, removed)
 }
 
+/// Where a soft mask's `group`, drawn at `ctm`, can change what shows: `outer` (the page's visible
+/// box, or the region of the group it is nested in) within the group's `/BBox`, outside which the
+/// mask is its backdrop whatever the group draws. A `/Matrix` or `/BBox` that can't be read leaves
+/// `outer`; `None` when neither is known.
+fn mask_shows(doc: &Document, group: ObjRef, ctm: &Matrix, outer: Option<[f64; 4]>) -> Option<[f64; 4]> {
+    let obj = doc.get(group);
+    let own = match &*obj {
+        Object::Stream(s) => match (crate::verify::matrix_of(doc, &s.dict), crate::verify::bbox_of(doc, &s.dict)) {
+            (Ok(m), Ok(Some(b))) => Some(m.then(ctm).bbox(b)),
+            _ => None,
+        },
+        _ => None,
+    };
+    match (outer, own) {
+        (Some(a), Some(b)) => Some([a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])]),
+        (a, b) => a.or(b),
+    }
+}
+
 /// `Do` of an image, with the same return value as [`xobject`].
 fn image_xobject(
     doc: &mut Document,
@@ -1249,7 +1310,7 @@ fn image_xobject(
     if !scope.hits(b) || scope.mode == Mode::Verify {
         return None;
     }
-    if scope.covered(b) {
+    if scope.image_covered(b) {
         scope.report.images_removed += 1;
         out.replaced.push(name);
         out.doomed.push(r);
