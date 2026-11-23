@@ -14,10 +14,10 @@ const EDIT_CONTENT_SHOWN: usize = 5;
 const EDIT_OTHER_TOOLS: [&str; 3] = ["combine", "redact", "form"];
 
 /// Edit a PDF, laid out as Acrobat's Edit panel: the title with Preferences and Close; Format text
-/// while text is being edited or added; Modify page as a row of icon buttons and Organize pages;
+/// while text is being edited or added; Modify page as a row of icon buttons, Organize pages and Crop pages;
 /// Add content with the rarer items under More; and Other options, the neighbouring tools.
 /// Edit text & images itself is on the floating toolbar, and on from the moment Edit opens.
-/// Every item comes from the catalogue, so its label, icon and availability have one source.
+/// Labels, icons and availability come from the tool catalogue or the command registry.
 pub(super) fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static ToolGroup) {
     let items = || g.sections.iter().flat_map(|s| s.items.iter());
     let item = |command: &str| items().find(|i| i.command == command);
@@ -78,6 +78,14 @@ pub(super) fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g
                 tool = Some("organize");
             } else {
                 run = Some("page.organize");
+            }
+        }
+
+        if let Some(spec) = pdfcraft_engine::commands::command("page.crop") {
+            let enabled = app.command_enabled(spec);
+            let resp = ui.add_enabled_ui(enabled, |ui| edit_row(ui, t, spec.icon, tl!(spec.label), Availability::Ready)).inner;
+            if resp.clicked() {
+                run = Some(spec.id);
             }
         }
 
@@ -164,14 +172,17 @@ pub(super) fn actions_menu(
 /// item is muted and says when it ships when hovered.
 fn edit_row(ui: &mut egui::Ui, t: &Tokens, icon: &str, label: &str, availability: Availability) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, resp.enabled(), label));
     let press = theme::Press::track(ui, &resp);
     press.wash(ui, rect, 6, false);
     let body = rect.translate(press.offset());
-    let ready = availability == Availability::Ready;
+    let ready = resp.enabled() && availability == Availability::Ready;
     let fg = if ready { t.text } else { t.text_muted };
     icons::paint(ui, Rect::from_min_size(body.min + vec2(6.0, 8.0), vec2(18.0, 18.0)), icon, 17.0, if ready { t.text } else { t.text_faint });
     row_label(ui, label, theme::regular(13.5), fg, body.left_center() + vec2(34.0, 0.0), rect.width() - 42.0);
+    if resp.has_focus() {
+        ui.painter().rect_stroke(rect, 6.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+    }
     let resp = theme::hand(resp);
     match availability {
         Availability::Ready => resp,

@@ -522,6 +522,71 @@ fn edit_a_pdf_from_all_tools_turns_on_editing() {
     assert_eq!(h.state().quick_tool, QuickTool::Select, "no editing tool in Read mode");
 }
 
+fn edit_panel_crop<'h>(h: &'h Harness<'static, PdfCraftApp>) -> egui_kittest::Node<'h> {
+    // The document quick toolbar also exposes Crop pages. Query the Modify page section.
+    let rotate = h.get_by_label("Rotate pages").rect();
+    let organize = h.get_by_label("Organize pages").rect();
+    let text = h.get_by_label("Text").rect();
+    h.query_all_by_label("Crop pages")
+        .find(|button| {
+            let at = button.rect().center();
+            (organize.left()..=organize.right()).contains(&at.x) && (rotate.top()..text.top()).contains(&at.y)
+        })
+        .expect("Modify page in Edit a PDF offers Crop pages")
+}
+
+#[test]
+fn crop_pages_is_reachable_from_edit_a_pdf() {
+    use pdfcraft_ui_egui::QuickTool;
+
+    for keyboard in [false, true] {
+        let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+        h.get_by_label("Edit a PDF").click();
+        h.run_steps(3);
+        assert_eq!(h.state().quick_tool, QuickTool::EditText);
+        let crop = edit_panel_crop(&h);
+        assert_eq!(crop.accesskit_node().role(), egui::accesskit::Role::Button);
+        assert!(!crop.accesskit_node().is_disabled());
+        if keyboard {
+            h.get_by_label("Organize pages").focus();
+            h.run_steps(2);
+            h.key_press(egui::Key::Tab);
+            h.run_steps(2);
+            assert!(edit_panel_crop(&h).is_focused(), "Tab moves from Organize pages to Crop pages");
+            h.key_press(egui::Key::Enter);
+        } else {
+            crop.click();
+        }
+        h.run_steps(3);
+        assert_eq!(h.state().quick_tool, QuickTool::Crop);
+        assert!(!h.state().views[0].organize, "the page stays in view for drawing the crop");
+        assert!(h.state().toast.as_ref().is_some_and(|(text, _)| text.contains("Set Page Boxes")), "the existing crop hint is shown");
+    }
+}
+
+#[test]
+fn crop_pages_in_edit_a_pdf_respects_page_assembly_permissions() {
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(FIXTURE.to_vec())).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: 0b0100,
+        encrypt_metadata: true,
+        seed: [5; 32],
+    })
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let mut h = harness(move |app| app.open_bytes("restricted.pdf", None, bytes).expect("restricted fixture opens"));
+    h.get_by_label("Edit a PDF").click();
+    h.run_steps(3);
+    let crop = edit_panel_crop(&h);
+    assert!(crop.accesskit_node().is_disabled());
+    crop.click();
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::EditText);
+}
+
 /// Opening a document with Read as the default mode puts down the tool in use, as entering Read
 /// mode from the mode bar does: the hidden toolbar would leave no way to see or change it.
 #[test]
