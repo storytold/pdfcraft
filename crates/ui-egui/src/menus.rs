@@ -515,6 +515,8 @@ pub(crate) fn frame(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let gate = Gate::default().modal(gated(app)).text_editing(text_editing(ctx));
     let clicks = app.native_menu.as_mut().map(|native| {
         native.set_gate(gate);
+        // The menu events since the last frame: clicks for `take_clicks`, key equivalents for egui.
+        native.poll(ctx);
         native.take_clicks(ctx)
     });
     for command in clicks.unwrap_or_default() {
