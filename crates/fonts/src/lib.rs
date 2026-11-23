@@ -20,7 +20,7 @@ mod shaping;
 pub mod source_shaping;
 pub use craft::{
     CRAFT_FONTS, EmbeddedFace, SHIPPORI_MINCHO, document_arabic_font, document_devanagari_font, document_hebrew_font, document_japanese_font,
-    document_japanese_font_for_style, document_japanese_fonts_for_style, document_latin_fonts, document_thai_font, ui_arabic_fonts, ui_chinese_fonts,
+    document_japanese_font_for_style, document_japanese_fonts_for_style, document_korean_fonts, document_latin_fonts, document_thai_font, ui_arabic_fonts, ui_chinese_fonts,
     ui_cjk_fonts, ui_devanagari_fonts, ui_hebrew_fonts, ui_japanese_fonts, ui_telugu_fonts, ui_thai_fonts,
 };
 pub use craft_pdf::fonts::{

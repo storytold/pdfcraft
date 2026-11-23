@@ -373,6 +373,27 @@ mod tests {
         assert!(fallback_face(&[], &['a'], has).is_none());
     }
 
+    /// #2114: the Japanese faces have no Hangul, so a replacement with some takes it from the Korean
+    /// face, which then also draws its Latin letters and digits. Without a Korean face in the build
+    /// there is nothing to check.
+    #[test]
+    fn hangul_text_takes_the_korean_fallback_face() {
+        let korean = pdfcraft_fonts::document_korean_fonts();
+        let Some(first) = korean.first() else {
+            eprintln!("skipping: built without a craft-fonts Korean face (set CRAFT_FONTS_DIR to run it)");
+            return;
+        };
+        let (faces, hebrew) = fallback::type3_faces("2026.04 ~ 운영중", crate::added::Family::Helvetica, false).unwrap();
+        assert!(!hebrew);
+        assert!(std::ptr::eq(faces[0], *first));
+        let chars: Vec<char> = "2026.04 ~ 운영중안녕".chars().collect();
+        let face = fallback_face(&faces, &chars, |face, ch| pdfcraft_fonts::japanese_glyph_from(face, ch).is_ok()).unwrap();
+        assert!(chars.iter().all(|ch| pdfcraft_fonts::japanese_glyph_from(face, *ch).is_ok()), "{} lacks one of them", face.family);
+        // Text without Hangul keeps the Japanese faces first.
+        let (plain, _) = fallback::type3_faces("あいう", crate::added::Family::Helvetica, false).unwrap();
+        assert!(plain.first().is_none_or(|f| !std::ptr::eq(*f, *first)));
+    }
+
     #[test]
     fn hebrew_and_japanese_fallback_shards_are_recognized_as_ours() {
         static HEBR: &[&str] = &["Hebr"];
