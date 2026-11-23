@@ -10,6 +10,23 @@ pub(crate) struct OptionSpec {
     pub(crate) takes_value: bool,
 }
 
+/// A value option after validation, skipping operands according to the command's spec so a
+/// password such as `--page` cannot stand in for the real page option. The first real one wins.
+pub(crate) fn option_value<'a>(args: &'a [String], specs: &[OptionSpec], name: &str) -> Option<&'a str> {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if let Some(spec) = specs.iter().find(|spec| spec.name == arg)
+            && spec.takes_value
+        {
+            let value = args.next().map(String::as_str);
+            if spec.name == name {
+                return value;
+            }
+        }
+    }
+    None
+}
+
 /// The options whose value is a file or folder. Only these refuse a value that is another
 /// option: a file named `--password` is never what was meant, while a password can be anything
 /// (`--password --page` is a password of `--page`, which tests/text.rs pins), and so can a title.
@@ -145,4 +162,46 @@ pub(crate) fn positional<'a>(args: &'a [String], specs: &[OptionSpec]) -> Vec<&'
         }
     }
     out
+}
+
+#[cfg(test)]
+mod option_value_tests {
+    use super::{EXTRACT_OPTIONS, RENDER_OPTIONS, SPLIT_OPTIONS, option_value, validate_options};
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn password_operands_do_not_shadow_real_options() {
+        for (command, specs, name, value) in [
+            ("render", RENDER_OPTIONS, "--page", "2"),
+            ("render", RENDER_OPTIONS, "--dpi", "144"),
+            ("render", RENDER_OPTIONS, "--out", "page.png"),
+            ("extract", EXTRACT_OPTIONS, "--pages", "1"),
+            ("split", SPLIT_OPTIONS, "--every", "1"),
+            ("split", SPLIT_OPTIONS, "--before", "2"),
+            ("split", SPLIT_OPTIONS, "--out-dir", "parts"),
+        ] {
+            for input in [["--password", name, name, value], [name, value, "--password", name]] {
+                let input = args(&input);
+                validate_options(command, &input, specs).unwrap();
+                assert_eq!(option_value(&input, specs, name), Some(value), "{command}: {input:?}");
+                assert_eq!(option_value(&input, specs, "--password"), Some(name));
+            }
+            let absent = args(&["--password", name, "file.pdf"]);
+            validate_options(command, &absent, specs).unwrap();
+            assert_eq!(option_value(&absent, specs, name), None, "{command}: no real {name}");
+        }
+    }
+
+    #[test]
+    fn empty_and_option_shaped_passwords_keep_first_real_option_semantics() {
+        for password in ["", "--password"] {
+            let input = args(&["--password", password, "--page", "2", "--page", "1"]);
+            validate_options("render", &input, RENDER_OPTIONS).unwrap();
+            assert_eq!(option_value(&input, RENDER_OPTIONS, "--password"), Some(password));
+            assert_eq!(option_value(&input, RENDER_OPTIONS, "--page"), Some("2"));
+        }
+    }
 }
