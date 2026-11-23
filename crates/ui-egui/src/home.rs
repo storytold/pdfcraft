@@ -206,6 +206,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
             }
             let mut open = None;
+            let mut pin = None;
             let mut remove = None;
             #[cfg(not(target_arch = "wasm32"))]
             let mut reveal = None;
@@ -239,6 +240,25 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 } else {
                     press.wash(ui, rect, 8, false);
                 }
+                // Pin or unpin this file so it stays at the top of Recent across Clear (#4772).
+                // Sized and separated from Remove with 12pt margins so touch users don't misclick.
+                let pin_rect = Rect::from_center_size(rect.right_center() - vec2(68.0, 0.0), vec2(32.0, 32.0));
+                let p = ui.interact(pin_rect, ui.scope_id().with(("pin-recent", &r.path)), Sense::click());
+                let (label, hover) = if r.pinned {
+                    (crate::i18n::fmt(tl!("Unpin {name} from Recent"), &[("name", &r.name)]), tl!("Unpin from Recent"))
+                } else {
+                    (crate::i18n::fmt(tl!("Pin {name} to Recent"), &[("name", &r.name)]), tl!("Pin to Recent"))
+                };
+                p.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+                if hovered || r.pinned || p.has_focus() {
+                    if p.hovered() || p.has_focus() {
+                        ui.painter().rect_filled(pin_rect, CornerRadius::same(6), t.pressed);
+                    }
+                    icons::paint(ui, pin_rect.shrink(8.0), "pin", 16.0, if r.pinned { t.accent_text } else { t.icon });
+                }
+                if p.on_hover_text(hover).clicked() {
+                    pin = Some(r.path.clone());
+                }
                 if hovered {
                     // Remove just this file from the list (#430); the file itself is untouched.
                     let x_rect = Rect::from_center_size(rect.right_center() - vec2(26.0, 0.0), vec2(28.0, 28.0));
@@ -261,9 +281,9 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     22.0,
                     egui::Color32::from_rgb(0xE0, 0x3E, 0x3E),
                 );
-                // Room on the right for the remove button.
+                // Room on the right for the pin and remove buttons.
                 let detail = ui.painter().text(
-                    body.right_center() - vec2(48.0, 0.0),
+                    body.right_center() - vec2(96.0, 0.0),
                     Align2::RIGHT_CENTER,
                     format!("{}  ·  {}", crate::i18n::trn(crate::i18n::current(), r.pages as u64, "{n} page", "{n} pages"), human_size(r.size)),
                     theme::regular(12.0),
@@ -279,6 +299,12 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             }
             if let Some(p) = open {
                 app.open_recent(&p);
+            }
+            if let Some(p) = pin {
+                if let Some(r) = app.recent.iter_mut().find(|r| r.path == p) {
+                    r.pinned = !r.pinned;
+                }
+                app.recent.sort_by_key(|r| !r.pinned);
             }
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(p) = reveal {
@@ -345,7 +371,8 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         for chord in [(egui::Modifiers::NONE, egui::Key::Menu), (egui::Modifiers::SHIFT, egui::Key::F10)] {
             let mut h = review_home_harness();
-            h.state_mut().recent = vec![crate::RecentFile { name: "notes.pdf".into(), path: "/nowhere/notes.pdf".into(), pages: 2, size: 2048 }];
+            h.state_mut().recent =
+                vec![crate::RecentFile { name: "notes.pdf".into(), path: "/nowhere/notes.pdf".into(), pages: 2, size: 2048, pinned: false }];
             h.run_steps(3);
             assert!(!egui::Popup::is_any_open(&h.ctx));
             h.get_by_label("notes.pdf").focus();
@@ -356,6 +383,7 @@ mod tests {
         }
     }
 
+    /// Verify that translated tool card descriptions wrap without overlapping the action label.
     #[test]
     fn translated_card_description_leaves_room_for_the_action() {
         if !crate::i18n::needs_catalogs() {

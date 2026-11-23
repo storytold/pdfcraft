@@ -469,6 +469,9 @@ pub struct PdfCraftApp {
     /// tab coming to the front (Home, a document, Combine files) puts the view away.
     all_tools_tab: (Option<DocId>, bool),
     pub recent: Vec<RecentFile>,
+    /// The file most recently added to `recent`: pinned files sort first there, so its head is
+    /// not always the last file opened (#4772). Not saved; after a restart the head is used.
+    pub(crate) last_recent: Option<String>,
     /// How many recent files to keep, 0 for no list (Preferences ▸ Documents and view, #5572).
     pub recent_limit: usize,
     /// Preferences: reopen the files that were open when PdfCraft last closed (#442).
