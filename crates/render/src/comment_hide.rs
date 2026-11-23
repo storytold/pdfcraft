@@ -18,11 +18,11 @@ const MAX_TYPE_BYTES: usize = 64;
 const MAX_HIDDEN_ANNOTS: usize = 10_000;
 
 /// One skip rule: PDF `/Subtype`, optional `/IT`, and optional `/RT /Group`.
-#[derive(Clone, Debug)]
-struct HideRule {
-    subtype: String,
-    intent: Option<String>,
-    except_intents: Vec<String>,
+#[derive(Clone, Copy)]
+struct HideRule<'a> {
+    subtype: &'a str,
+    intent: Option<&'a str>,
+    except_intents: &'a [&'a str],
     grouped: Option<bool>,
 }
 
@@ -37,8 +37,8 @@ pub fn normalize_hidden_comment_types<S: AsRef<str>>(names: &[S]) -> Result<Vec<
     let mut out = Vec::with_capacity(names.len());
     for name in names {
         let label = canonical_label(name.as_ref())?;
-        if !out.contains(&label) {
-            out.push(label);
+        if !out.iter().any(|existing| existing == label) {
+            out.push(label.to_owned());
         }
     }
     out.sort();
@@ -50,59 +50,49 @@ pub fn normalize_hidden_comment_types<S: AsRef<str>>(names: &[S]) -> Result<Vec<
 /// type filter wins.
 ///
 /// `page` scopes the scan to that page index so a hostile `/Annots` list on an earlier page
-/// cannot starve later pages of their filter. Pass `None` only when a caller needs every page
-/// at once; each page then has its own cap.
-pub(crate) fn hidden_type_overrides(pdf: &Pdf, names: &[String], page: Option<usize>) -> Vec<(i32, i32, bool)> {
-    let rules = comment_hide_rules(names);
+/// cannot starve later pages of their filter.
+pub(crate) fn hidden_type_overrides(pdf: &Pdf, names: &[String], page: usize) -> Vec<(i32, i32, bool)> {
+    let rules: Vec<_> = names
+        .iter()
+        .take(MAX_TYPES)
+        .filter_map(|name| canonical_label(name).ok())
+        .flat_map(|label| {
+            let known = rules_for(label);
+            let custom = known.is_empty().then(|| rule(label, None, &[], None));
+            known.iter().copied().chain(custom)
+        })
+        .collect();
     if rules.is_empty() {
         return Vec::new();
     }
+    let Some(page_obj) = pdf.pages().get(page) else { return Vec::new() };
+    let Some(annots) = page_obj.raw().get::<Array<'_>>(ANNOTS) else { return Vec::new() };
     let mut out = Vec::new();
-    for (index, page_obj) in pdf.pages().iter().enumerate() {
-        if page.is_some_and(|p| p != index) {
-            continue;
-        }
-        let Some(annots) = page_obj.raw().get::<Array<'_>>(ANNOTS) else {
-            continue;
-        };
-        let xref = page_obj.xref();
-        let mut hidden_on_page = 0;
-        for item in annots.raw_iter() {
-            if hidden_on_page >= MAX_HIDDEN_ANNOTS {
-                break;
-            }
-            let (annot, obj) = match item {
-                MaybeRef::Ref(r) => match xref.get::<Dict<'_>>(r.into()) {
-                    Some(d) => (d, Some(r)),
-                    None => continue,
-                },
-                MaybeRef::NotRef(Object::Dict(_)) => continue,
-                MaybeRef::NotRef(_) => continue,
-            };
-            let Some(r) = obj else { continue };
-            if !rule_matches(&annot, &rules) {
-                continue;
-            }
-            out.push((r.obj_number, r.gen_number, false));
-            hidden_on_page += 1;
-        }
-        if page.is_some() {
+    let xref = page_obj.xref();
+    let mut hidden_on_page = 0;
+    for item in annots.raw_iter() {
+        if hidden_on_page >= MAX_HIDDEN_ANNOTS {
             break;
         }
+        let (annot, obj) = match item {
+            MaybeRef::Ref(r) => match xref.get::<Dict<'_>>(r.into()) {
+                Some(d) => (d, Some(r)),
+                None => continue,
+            },
+            MaybeRef::NotRef(Object::Dict(_)) => continue,
+            MaybeRef::NotRef(_) => continue,
+        };
+        let Some(r) = obj else { continue };
+        if !rule_matches(&annot, &rules) {
+            continue;
+        }
+        out.push((r.obj_number, r.gen_number, false));
+        hidden_on_page += 1;
     }
     out
 }
 
-fn comment_hide_rules(names: &[String]) -> Vec<HideRule> {
-    let mut rules = Vec::new();
-    for name in names.iter().take(MAX_TYPES) {
-        let Ok(label) = canonical_label(name) else { continue };
-        rules.extend(rules_for(&label));
-    }
-    rules
-}
-
-fn rule_matches(annot: &Dict<'_>, rules: &[HideRule]) -> bool {
+fn rule_matches(annot: &Dict<'_>, rules: &[HideRule<'_>]) -> bool {
     let subtype = annot.get::<Name<'_>>(SUBTYPE);
     if matches!(subtype.as_deref(), Some(b"Widget" | b"Link")) {
         return false;
@@ -112,9 +102,9 @@ fn rule_matches(annot: &Dict<'_>, rules: &[HideRule]) -> bool {
     rules.iter().any(|rule| field_matches(subtype.as_deref(), intent.as_deref(), grouped, rule))
 }
 
-fn field_matches(subtype: Option<&[u8]>, intent: Option<&[u8]>, grouped: bool, rule: &HideRule) -> bool {
+fn field_matches(subtype: Option<&[u8]>, intent: Option<&[u8]>, grouped: bool, rule: &HideRule<'_>) -> bool {
     subtype == Some(rule.subtype.as_bytes())
-        && match &rule.intent {
+        && match rule.intent {
             Some(it) => intent == Some(it.as_bytes()),
             None => !rule.except_intents.iter().any(|except| intent == Some(except.as_bytes())),
         }
@@ -132,36 +122,14 @@ pub fn comment_type_label(subtype: &str, intent: Option<&str>, grouped: bool) ->
     if matches!(subtype, "Widget" | "Link" | "Popup") {
         return None;
     }
-    // More specific names first. The rules themselves do not overlap; the order keeps a
-    // callout, a cloud and Replace text from depending on that staying true.
-    const LABELS: &[&str] = &[
-        "Callout",
-        "Typewriter",
-        "Cloud",
-        "Replace text",
-        "Insert text",
-        "Strikethrough",
-        "Text box",
-        "Polygon",
-        "Note",
-        "Rectangle",
-        "Oval",
-        "Drawing",
-        "Polyline",
-        "Attachment",
-        "Highlight",
-        "Underline",
-        "Squiggly",
-        "Line",
-        "Stamp",
-        "Redact",
-        "Sound",
-    ];
     let intent = intent.map(str::as_bytes);
-    LABELS.iter().copied().find(|label| rules_for(label).iter().any(|rule| field_matches(Some(subtype.as_bytes()), intent, grouped, rule)))
+    COMMENT_TYPES
+        .iter()
+        .find(|(_, rules)| rules.iter().any(|rule| field_matches(Some(subtype.as_bytes()), intent, grouped, rule)))
+        .map(|(label, _)| *label)
 }
 
-fn canonical_label(name: &str) -> Result<String, &'static str> {
+fn canonical_label(name: &str) -> Result<&str, &'static str> {
     let name = name.trim();
     if name.is_empty() || name.len() > MAX_TYPE_BYTES || name.chars().any(char::is_control) {
         return Err("a comment type must be 1–64 characters");
@@ -190,45 +158,45 @@ fn canonical_label(name: &str) -> Result<String, &'static str> {
         "redact" | "redaction" => "Redact",
         "sound" => "Sound",
         "widget" | "link" | "popup" => return Err("fields, links and pop-ups are not comment types"),
-        _ => return Ok(name.to_string()),
+        _ => name,
     };
-    Ok(label.to_string())
+    Ok(label)
 }
 
-fn rules_for(label: &str) -> Vec<HideRule> {
-    match label {
-        "Note" => vec![rule("Text", None, &[], None)],
-        "Text box" => vec![rule("FreeText", None, &["FreeTextCallout", "FreeTextTypeWriter"], None)],
-        "Callout" => vec![rule("FreeText", Some("FreeTextCallout"), &[], None)],
-        "Typewriter" => vec![rule("FreeText", Some("FreeTextTypeWriter"), &[], None)],
-        "Strikethrough" => vec![rule("StrikeOut", None, &["StrikeOutTextEdit"], None)],
-        // Replace text: the strikeout, a caret grouped under it (older layout), and the caret
-        // that is the group's primary (`/IT /Replace`, no `/RT /Group`).
-        "Replace text" => vec![
-            rule("StrikeOut", Some("StrikeOutTextEdit"), &[], None),
-            rule("Caret", None, &[], Some(true)),
-            rule("Caret", Some("Replace"), &[], None),
-        ],
-        // Insert text: an ungrouped caret that is not a Replace-text primary.
-        "Insert text" => vec![rule("Caret", None, &["Replace"], Some(false))],
-        "Rectangle" => vec![rule("Square", None, &[], None)],
-        "Oval" => vec![rule("Circle", None, &[], None)],
-        "Drawing" => vec![rule("Ink", None, &[], None)],
-        "Polyline" => vec![rule("PolyLine", None, &[], None)],
-        "Attachment" => vec![rule("FileAttachment", None, &[], None)],
-        "Cloud" => vec![rule("Polygon", Some("PolygonCloud"), &[], None)],
-        "Polygon" => vec![rule("Polygon", None, &["PolygonCloud"], None)],
-        other => vec![rule(other, None, &[], None)],
-    }
+const COMMENT_TYPES: &[(&str, &[HideRule<'static>])] = &[
+    ("Note", &[rule("Text", None, &[], None)]),
+    ("Text box", &[rule("FreeText", None, &["FreeTextCallout", "FreeTextTypeWriter"], None)]),
+    ("Callout", &[rule("FreeText", Some("FreeTextCallout"), &[], None)]),
+    ("Typewriter", &[rule("FreeText", Some("FreeTextTypeWriter"), &[], None)]),
+    ("Strikethrough", &[rule("StrikeOut", None, &["StrikeOutTextEdit"], None)]),
+    // Replace text can use a strikeout primary or a caret primary.
+    (
+        "Replace text",
+        &[rule("StrikeOut", Some("StrikeOutTextEdit"), &[], None), rule("Caret", None, &[], Some(true)), rule("Caret", Some("Replace"), &[], None)],
+    ),
+    ("Insert text", &[rule("Caret", None, &["Replace"], Some(false))]),
+    ("Rectangle", &[rule("Square", None, &[], None)]),
+    ("Oval", &[rule("Circle", None, &[], None)]),
+    ("Drawing", &[rule("Ink", None, &[], None)]),
+    ("Polyline", &[rule("PolyLine", None, &[], None)]),
+    ("Attachment", &[rule("FileAttachment", None, &[], None)]),
+    ("Cloud", &[rule("Polygon", Some("PolygonCloud"), &[], None)]),
+    ("Polygon", &[rule("Polygon", None, &["PolygonCloud"], None)]),
+    ("Highlight", &[rule("Highlight", None, &[], None)]),
+    ("Underline", &[rule("Underline", None, &[], None)]),
+    ("Squiggly", &[rule("Squiggly", None, &[], None)]),
+    ("Line", &[rule("Line", None, &[], None)]),
+    ("Stamp", &[rule("Stamp", None, &[], None)]),
+    ("Redact", &[rule("Redact", None, &[], None)]),
+    ("Sound", &[rule("Sound", None, &[], None)]),
+];
+
+fn rules_for(label: &str) -> &'static [HideRule<'static>] {
+    COMMENT_TYPES.iter().find(|(name, _)| *name == label).map_or(&[], |(_, rules)| *rules)
 }
 
-fn rule(subtype: &str, intent: Option<&str>, except: &[&str], grouped: Option<bool>) -> HideRule {
-    HideRule {
-        subtype: subtype.to_string(),
-        intent: intent.map(str::to_string),
-        except_intents: except.iter().map(|s| (*s).to_string()).collect(),
-        grouped,
-    }
+const fn rule<'a>(subtype: &'a str, intent: Option<&'a str>, except_intents: &'a [&'a str], grouped: Option<bool>) -> HideRule<'a> {
+    HideRule { subtype, intent, except_intents, grouped }
 }
 
 #[cfg(test)]

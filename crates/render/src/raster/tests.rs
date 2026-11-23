@@ -2846,6 +2846,17 @@ fn hiding_one_comment_type_leaves_the_others() {
         (px(&shown, 25, 25), px(&shown, 65, 25), px(&shown, 105, 25), px(&shown, 145, 25), px(&shown, 185, 25), px(&shown, 25, 75)),
         (green.clone(), red.clone(), yellow.clone(), magenta.clone(), cyan.clone(), blue.clone())
     );
+    let pdf = parse(&Arc::new(marks.clone()), None).expect("the fixture parses");
+    let config = RenderConfig {
+        hidden_comment_types: Arc::new(vec!["Oval".into()]),
+        annotations: Arc::new(vec![(12, 0, true), (10, 0, true), (10, 0, false), (10, 1, false)]),
+        ..RenderConfig::default()
+    };
+    assert_eq!(
+        config.settings_for_page(Some((&pdf, 0))).annotation_overrides.as_slice(),
+        &[(12, 0, false), (10, 0, true), (10, 1, false)],
+        "type hiding wins, and configured overrides keep the first entry for each object generation",
+    );
     let ovals = render(&marks, &["circle"]);
     assert_eq!(px(&ovals, 65, 25), white, "an oval is hidden by its PDF name");
     assert_eq!(px(&ovals, 25, 25), green, "the rectangle stays");
@@ -2972,7 +2983,7 @@ trailer << /Root 1 0 R >>
 %%EOF";
     let pool = RenderPool::new(Arc::new(ONE_PAGE.to_vec()), 1, RenderConfig::default());
     let flag = lock(&pool.shared.stop).first().cloned().expect("one worker");
-    let settings = worker_settings(&pool.config, &flag, None, None);
+    let settings = worker_settings(&pool.config, &flag, None);
     assert!(settings.cancelled.as_ref().is_some_and(|c| Arc::ptr_eq(c, &flag)));
     let shapes = Pdf::new(Arc::new(ONE_PAGE.to_vec())).expect("parses");
     let text = Pdf::new(Arc::new(TEXT.to_vec())).expect("parses");

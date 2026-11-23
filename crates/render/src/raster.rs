@@ -125,23 +125,21 @@ impl RenderConfig {
     /// tries bundled Japanese faces, then opt-in installed CJK faces, then standard substitutes.
     /// Passwords belong to parser construction; request-specific preview overrides are applied
     /// by `render_page`, which also preserves the caller's warning and cancellation hooks.
-    ///
-    /// When `pdf` is set, comment types in [`Self::hidden_comment_types`] become
-    /// `annotation_overrides` (shown = false) so the shared interpreter skips them.
-    /// `page` limits the type-filter scan to that page when set.
     fn settings(&self) -> InterpreterSettings {
-        self.settings_with_pdf(None, None)
+        self.settings_for_page(None)
     }
 
-    fn settings_with_pdf(&self, pdf: Option<&Pdf>, page: Option<usize>) -> InterpreterSettings {
+    /// A page request adds type-filter overrides only for its own annotations.
+    fn settings_for_page(&self, page: Option<(&Pdf, usize)>) -> InterpreterSettings {
         let defaults = InterpreterSettings::default();
         let standard = defaults.font_resolver.clone();
         let system_fonts = self.system_fonts;
-        let annotation_overrides = match pdf {
-            Some(pdf) if !self.hidden_comment_types.is_empty() => {
+        let annotation_overrides = match page {
+            Some((pdf, page)) if !self.hidden_comment_types.is_empty() => {
                 let mut overrides = crate::comment_hide::hidden_type_overrides(pdf, &self.hidden_comment_types, page);
+                let mut seen: std::collections::HashSet<_> = overrides.iter().map(|&(number, generation, _)| (number, generation)).collect();
                 for entry in self.annotations.iter() {
-                    if !overrides.iter().any(|(num, generation, _)| *num == entry.0 && *generation == entry.1) {
+                    if seen.insert((entry.0, entry.1)) {
                         overrides.push(*entry);
                     }
                 }
@@ -579,15 +577,13 @@ pub struct PageRenderer {
     bytes: Arc<Vec<u8>>,
     config: RenderConfig,
     pdf: Option<Pdf>,
-    settings: InterpreterSettings,
     stats: RenderStats,
 }
 
 impl PageRenderer {
     pub fn new(bytes: Arc<Vec<u8>>, config: RenderConfig) -> Self {
         let pdf = parse(&bytes, config.password.as_deref());
-        let settings = config.settings_with_pdf(pdf.as_ref(), None);
-        Self { bytes, config, pdf, settings, stats: RenderStats { parser_builds: 1, ..RenderStats::default() } }
+        Self { bytes, config, pdf, stats: RenderStats { parser_builds: 1, ..RenderStats::default() } }
     }
 
     pub fn page_count(&self) -> usize {
@@ -603,8 +599,11 @@ impl PageRenderer {
     pub fn filtered_text(&mut self, page: usize, filter: crate::text::TextFilter) -> Result<crate::PageText, String> {
         let pdf = self.pdf.as_ref().ok_or("the document could not be parsed")?;
         self.stats.text_interpretations = self.stats.text_interpretations.saturating_add(1);
-        catch_unwind(AssertUnwindSafe(|| crate::text::extract_page_filtered(pdf, page, &self.settings, filter)))
-            .map_err(|e| format!("text extraction failed: {}", panic_message(&e)))?
+        catch_unwind(AssertUnwindSafe(|| {
+            let settings = self.config.settings_for_page(Some((pdf, page)));
+            crate::text::extract_page_filtered(pdf, page, &settings, filter)
+        }))
+        .map_err(|e| format!("text extraction failed: {}", panic_message(&e)))?
     }
 
     /// Render one page. Never panics.
@@ -629,7 +628,7 @@ impl PageRenderer {
         let cache = RenderCache::new();
         let warnings = Arc::new(Mutex::new(Vec::new()));
         // Scope the type filter to this page so a hostile Annots list elsewhere cannot starve it.
-        let page_settings = self.config.settings_with_pdf(Some(pdf), Some(req.page));
+        let page_settings = self.config.settings_for_page(Some((pdf, req.page)));
         let settings = warning_settings(&page_settings, warnings.clone());
         let r = render_page(pdf, &cache, &settings, &self.config, req);
         let warnings = take_warnings(&warnings);
