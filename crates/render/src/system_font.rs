@@ -7,7 +7,7 @@
 //! first (see `japanese_fallback` in `raster.rs`); this module is the last resort: one face
 //! already installed on this machine, used for the viewer only (`RenderConfig::system_fonts`, off
 //! for exports, printing and OCR). It is read at runtime and never embedded or shipped
-//! (AGENTS.md §1.4), Noto CJK and Source Han are left out on purpose (§1.1), and
+//! (docs/development.md "Fonts and attribution"), Noto CJK and Source Han are left out on purpose (clean-room.md), and
 //! `PDFCRAFT_SYSTEM_FONTS=0` turns it off, as for the interface font.
 
 use std::collections::HashMap;

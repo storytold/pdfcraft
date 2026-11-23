@@ -70,7 +70,7 @@ ignore = [
 ]
 
 # egui's default UI fonts (Ubuntu-Light, Hack, emoji-icon-font): font licences on the AGENTS.md
-# §1.2 allowlist, attributed in ATTRIBUTION.toml as dependency-bundled assets.
+# licences.md allowlist, attributed in ATTRIBUTION.toml as dependency-bundled assets.
 [[licenses.exceptions]]
 crate = "epaint_default_fonts"
 allow = ["OFL-1.1", "Ubuntu-font-1.0"]

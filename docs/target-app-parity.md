@@ -129,7 +129,7 @@ xychart-beta horizontal
 
 - **Target identified from the installed app.** `/Applications/Adobe Acrobat DC/Adobe Acrobat.app`,
   `CFBundleShortVersionString` 26.002.21931. Inspected without launching it and without opening
-  anything inside `Contents/Resources/JavaScripts/` (clean-room rules, `AGENTS.md` §2): the
+  anything inside `Contents/Resources/JavaScripts/` (clean-room rules, clean-room.md): the
   `Info.plist` `CFBundleDocumentTypes` (the formats it opens: see
   [file-format-parity.md](file-format-parity.md)), the `.lproj` folder names (24 localizations,
   plus the MEA/MEH/NAF Middle East and North Africa editions named in `Resources/Sequences/`), the
@@ -304,7 +304,7 @@ full parity in that area.
 | **All** | **835** | **473** | **124** | **64.1%** | **≈ 49%** | **610–1,100** | Plus 175–325 h of cross-cutting work (dimension table) |
 
 Shipped features rest on thin evidence: 103 of 473 cite exactly one test at v0.21.0 (141 of 423 on
-2026-10-10), 103 shipped features have no automation tool yet (`xtask parity`'s note, `AGENTS.md` §3), and only a handful cite
+2026-10-10), 103 shipped features have no automation tool yet (`xtask parity`'s note, app-agents.md rule 14), and only a handful cite
 an external oracle (`pdftotext`, `pdfsig`, OpenSSL, `qpdf --check`, a corpus).
 
 The two places where the checklist lagged reality on 2026-10-10, `misc.localization` and
