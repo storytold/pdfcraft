@@ -21,6 +21,7 @@ mod comments;
 mod content;
 mod conventions;
 pub mod file_access;
+mod folder_search;
 mod forms;
 mod hairlines;
 mod layers;

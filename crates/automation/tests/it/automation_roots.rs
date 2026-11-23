@@ -171,6 +171,7 @@ fn tools_that_read_a_path_are_held_to_the_read_root() {
         ("sign_document", json!({"doc": 1, "id": secret, "out": out})),
         ("text_font_import", json!({"doc": 1, "page": 1, "path": gone})),
         ("text_font_files", json!({"directories": [s(&base.join("outside"))]})),
+        ("folder_search", json!({"path": s(&base.join("outside")), "query": "SECRET"})),
     ] {
         refused(&mut server, tool, args, "outside the read root");
     }
