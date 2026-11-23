@@ -391,7 +391,10 @@ pub(crate) fn show(
         let editor = TextEditor::new(f.name.clone(), &mut host, Bind::bound(selection))
             .id_salt((f.obj, widget))
             .mode(if multiline { EditorMode::FieldLines } else { EditorMode::FieldLine })
-            .esc_commits(false);
+            .esc_commits(false)
+            // The field's part handed the editor the focus: going back there when the session ends would open the
+            // field again, so an ended session leaves the focus as production does.
+            .returns_focus(false);
         let editor = if f.has(field_flags::PASSWORD) { editor.masked() } else { editor };
         let out = ui.push_id((&f.name, f.obj, widget), |ui| editor.show_at(ui, rect)).inner;
         ended = out.ended;
