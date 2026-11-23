@@ -314,6 +314,15 @@ fn import_pages_mapped(
                 d.set(b"Annots".to_vec(), Object::Array(out));
                 continue;
             }
+            // Its list of plates names pages: the copies made here, not copies of the pages.
+            if k.as_slice() == b"SeparationInfo" {
+                let pages = copier.pages.clone();
+                let mut copy = |v: &Object| copier.copy_value(dst, v, None);
+                if let Some(info) = crate::separation::copy_info(src, v, &pages, new, repeat, &mut copy)? {
+                    d.set(k.clone(), info);
+                }
+                continue;
+            }
             d.set(k.clone(), copier.copy_value(dst, v, None)?);
         }
         if let Some(r) = resources {

@@ -3176,6 +3176,18 @@ evidence = ["crates/organize/src/tests.rs::combine_nests_source_bookmarks_and_ke
 notes = ""
 
 [[feature]]
+id = "organize.preserve-separations"
+title = "Keep preseparated page sets consistent when deleting, extracting, splitting and combining"
+area = "D"
+tier = "P2"
+milestone = "M4"
+status = "shipped"
+commands = []
+tools = ["page_delete", "page_extract", "doc_split", "doc_combine"]
+evidence = ["crates/organize/src/tests/separation.rs::deleting_a_plate_leaves_the_others_listing_only_each_other", "crates/organize/src/tests/separation.rs::extracting_a_plate_brings_no_other_plate_along", "crates/organize/src/tests/separation.rs::extracting_and_splitting_list_only_the_plates_that_came_along", "crates/organize/src/tests/separation.rs::combining_keeps_each_file_s_set_to_its_own_copies", "crates/organize/src/tests/separation.rs::a_copied_plate_is_a_set_of_its_own", "crates/automation/tests/it/separation_info.rs::extracted_and_remaining_plates_list_only_pages_of_their_own_file"]
+notes = "Each plate's /SeparationInfo /Pages keeps only pages of the same file: deleted plates leave the list, copies list only the plates copied with them, and a repeated copy is a set of its own. Lists are repaired, never refused; colorant names are not checked."
+
+[[feature]]
 id = "organize.field-name-conflicts"
 title = "Rename or merge colliding field names when combining"
 area = "D"
