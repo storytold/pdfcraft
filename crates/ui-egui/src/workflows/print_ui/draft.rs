@@ -76,6 +76,16 @@ pub struct PrintDraft {
     /// Print as image (Acrobat's Advanced Print Setup) at `dpi`.
     pub as_image: bool,
     pub dpi: f64,
+    /// Color Handling: the profile the pictures are converted into, with the intent and black
+    /// point compensation; `None` leaves colour to the printer. A profile prints as image without
+    /// changing `as_image`, so going back to the printer restores the user's own choice.
+    pub colour: Option<print::colour::ManagedColour>,
+    /// The installed file `colour` was read from.
+    pub colour_path: Option<std::path::PathBuf>,
+    /// The installed profiles Color Handling offers, listed the first time it is shown.
+    pub colour_profiles: Option<Vec<print::colour::InstalledProfile>>,
+    /// Why the profile last chosen can't be printed into.
+    pub colour_error: Option<String>,
     /// Index into the paper list: the standard sizes, then `custom_papers`.
     pub paper: usize,
     /// Paper sizes added with Custom…, kept with the settings.
@@ -160,6 +170,10 @@ impl Default for PrintDraft {
             content: Content::DocumentAndMarkups,
             as_image: false,
             dpi: 300.0,
+            colour: None,
+            colour_path: None,
+            colour_profiles: None,
+            colour_error: None,
             paper: 0,
             custom_papers: Vec::new(),
             custom_new: None,
@@ -507,9 +521,31 @@ impl PrintDraft {
         })
     }
 
-    /// Print as image: pictures at the chosen resolution, grey when grayscale is asked for.
+    /// Print as image: pictures at the chosen resolution, grey when grayscale is asked for, and
+    /// converted into the Color Handling profile when there is one (which always prints as image).
     fn raster(&self) -> Option<print::Raster> {
-        self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale, colour: None })
+        (self.as_image || self.colour.is_some()).then(|| print::Raster { dpi: self.dpi, grayscale: self.grayscale, colour: self.colour.clone() })
+    }
+
+    /// Color Handling: print into the profile in the file at `path`, or leave colour to the
+    /// printer (`None`). A profile that can't be printed into keeps the choice as it was and says
+    /// why in `colour_error`.
+    pub fn choose_colour_profile(&mut self, path: Option<&std::path::Path>) {
+        self.colour_error = None;
+        let Some(path) = path else {
+            self.colour = None;
+            self.colour_path = None;
+            return;
+        };
+        match print::colour::PrinterProfile::read(path) {
+            Ok(profile) => {
+                let (intent, black_point) =
+                    self.colour.as_ref().map_or((print::colour::Intent::RelativeColorimetric, true), |c| (c.intent, c.black_point));
+                self.colour = Some(print::colour::ManagedColour { profile, intent, black_point });
+                self.colour_path = Some(path.to_path_buf());
+            }
+            Err(e) => self.colour_error = Some(e),
+        }
     }
 
     /// Whether multiple pages per sheet should be cut and stacked into sorted piles.
