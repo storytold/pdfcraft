@@ -60,11 +60,12 @@ fn kind(c: char) -> Kind {
 /// The word's characters in the order they are drawn, left to right. A recognized word holds
 /// its text in logical order (the order it is read and typed in), but a PDF shows text in
 /// visual order, and that is what the text extractor expects: for a right-to-left word the
-/// first letter is the rightmost. So a word with a right-to-left letter is drawn back to
-/// front, except that a number or a left-to-right word inside it keeps its own order, by the
-/// rules the extractor reads them back with in a right-to-left line. Without this an Arabic
-/// or Hebrew word read back, searched or copied comes out reversed. A word with no
-/// right-to-left letter is drawn as it is.
+/// first letter is the rightmost. So a word with a right-to-left character (a letter, or
+/// punctuation of a right-to-left script such as the Arabic comma) is drawn back to front,
+/// except that a number or a left-to-right word inside it keeps its own order, by the rules
+/// the extractor reads them back with in a right-to-left line. Without this an Arabic or
+/// Hebrew word read back, searched or copied comes out reversed. A word with no
+/// right-to-left character is drawn as it is.
 ///
 /// A word is ordered on its own, as part of a right-to-left line. Where the extractor goes
 /// by the rest of the line (a right-to-left word in a left-to-right line, or next to a

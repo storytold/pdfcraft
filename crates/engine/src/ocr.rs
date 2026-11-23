@@ -2037,13 +2037,13 @@ mod tests {
     /// layer draws them in visual order, which the extractor turns back into reading order.
     /// Drawn in logical order, each word came back reversed ("مسب" for "بسم") and no search
     /// found it. A number or a left-to-right word inside a right-to-left word keeps its own
-    /// order, and a word with no right-to-left letter is drawn as before.
+    /// order, and a word with no right-to-left character is drawn as before.
     #[test]
     fn right_to_left_words_read_back_from_the_searchable_layer_as_recognized() {
         // A word with its left edge and width; a line of them as a scan shows it (the first
         // word of a right-to-left line is the rightmost), and its baseline.
         type Placed = (&'static str, f64, f64);
-        let lines: [(&[Placed], f64); 5] = [
+        let lines: [(&[Placed], f64); 6] = [
             (&[("تاريخ", 150.0, 30.0), ("الجلسة", 110.0, 35.0), ("2026", 80.0, 25.0), ("رقم", 55.0, 20.0)], 280.0),
             // Brackets and the Arabic comma on right-to-left words.
             (&[("قال", 150.0, 15.0), ("(نص)", 125.0, 20.0), ("هنا،", 100.0, 20.0), ("ثم", 85.0, 10.0)], 265.0),
@@ -2053,8 +2053,11 @@ mod tests {
             // The Arabic percent sign reads on with the letters; a left-to-right word keeps
             // its hyphen and its digit, between brackets that stay with the letters.
             (&[("بنسبة١٥٪", 150.0, 35.0), ("ملف(PDF-A4)", 95.0, 50.0), ("بسم", 70.0, 20.0)], 235.0),
-            // No right-to-left letter: drawn as before, the full stop where it was.
-            (&[("Agreement", 20.0, 35.0), ("No.", 60.0, 13.0), ("42", 78.0, 8.0)], 220.0),
+            // A number with the Arabic comma after it: no right-to-left letter, but the comma
+            // is a right-to-left character and stays on the number's reading side.
+            (&[("في", 150.0, 10.0), ("عام", 125.0, 20.0), ("2026،", 95.0, 25.0), ("تم", 75.0, 15.0)], 220.0),
+            // No right-to-left character: drawn as before, the full stop where it was.
+            (&[("Agreement", 20.0, 35.0), ("No.", 60.0, 13.0), ("42", 78.0, 8.0)], 205.0),
         ];
         let words: Vec<PlacedWord> = lines
             .iter()
