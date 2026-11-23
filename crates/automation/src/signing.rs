@@ -176,9 +176,87 @@ impl Automation {
         Ok(json!({ "path": path.to_string_lossy(), "certificate": cert_json(&id.certificate) }))
     }
 
-    /// The digital ID `id` names: a .p12/.pfx file opened with `password`, or an OS key store
-    /// identity (`keychain:` on macOS, `windows:` on Windows).
+    /// The PKCS #11 modules a call names, or the middleware installed on the machine. Under
+    /// `--root`, a module must be inside it: loading a native library is a stronger act than
+    /// reading a file.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn pkcs11_modules(&self, a: &Args) -> Result<Vec<std::path::PathBuf>> {
+        // Loading a PKCS #11 module runs its code in this process, so there is no implicit
+        // loading: the call names its modules, or the environment does.
+        // Loading a PKCS #11 module runs its code in this process. Under --root only the
+        // launcher's choice (the environment) may introduce it, never the call: an agent with
+        // read access to a folder must not be able to run a library from it.
+        if (self.root.is_some() || self.roots.is_some()) && a.get("modules").is_some() {
+            return Err(bad(
+                "under --root, PKCS #11 modules come from PDFCRAFT_PKCS11_MODULES (the launcher's choice), not from the call: loading a module runs its code",
+            ));
+        }
+        let Some(value) = a.get("modules") else {
+            let configured = sign::pkcs11::configured_modules();
+            if configured.is_empty() {
+                let found = sign::pkcs11::default_modules();
+                let hint = if found.is_empty() {
+                    "no module was found on this machine".to_string()
+                } else {
+                    format!("found: {}", found.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "))
+                };
+                return Err(bad(format!("no PKCS #11 module configured: pass modules, or set PDFCRAFT_PKCS11_MODULES ({hint})")));
+            }
+            return Ok(configured);
+        };
+        let list = value.as_array().ok_or_else(|| bad("modules must be an array of module paths"))?;
+        if list.is_empty() {
+            return Err(bad("modules must not be empty: name at least one module, or leave it out for the installed ones"));
+        }
+        list.iter()
+            .map(|v| {
+                let path = v.as_str().ok_or_else(|| bad("modules must be an array of module paths"))?;
+                // A module that is named but missing is reported by the loader, in the listing's
+                // problems, rather than refused before anything is tried.
+                self.resolve_for(path, crate::file_access::Access::Read, true)
+            })
+            .collect()
+    }
+
+    /// The card's PIN, read from the environment variable `pin_env` names. It is never an
+    /// argument and never echoed: arguments are logged by callers, the environment is not.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn pkcs11_pin(a: &Args) -> Result<Option<zeroize::Zeroizing<String>>> {
+        let Some(name) = a.opt_str("pin_env")? else { return Ok(None) };
+        if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return Err(bad("pin_env must name an environment variable (letters, digits and _)"));
+        }
+        match std::env::var(name) {
+            Ok(pin) if !pin.is_empty() => Ok(Some(zeroize::Zeroizing::new(pin))),
+            Ok(_) => Err(bad(format!("pin_env names {name}, which is empty"))),
+            Err(_) => Err(bad(format!("pin_env names {name}, which is not set"))),
+        }
+    }
+
+    /// The digital ID `id` names: a .p12/.pfx file opened with `password`, an OS key store
+    /// identity (`keychain:` on macOS, `windows:` on Windows), or a card's identity
+    /// (`pkcs11:` on every desktop platform).
     fn open_id(&self, a: &Args) -> Result<DigitalId> {
+        if let Some(r) = a.str("id")?.strip_prefix("pkcs11:") {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let modules = self.pkcs11_modules(a)?;
+                if modules.is_empty() {
+                    return Err(bad("no PKCS#11 module found: install the card's middleware, set PDFCRAFT_PKCS11_MODULES, or pass modules"));
+                }
+                let pin = Self::pkcs11_pin(a)?;
+                return sign::pkcs11::find(&format!("pkcs11:{r}"), &modules, pin).map_err(|e| match e {
+                    // Only a card that needs a PIN gets the hint: a missing identity has its own
+                    // message and must not send the agent looking for a PIN.
+                    sign::SignError::Crypto(m) if m.contains("needs the card's PIN") => {
+                        bad(format!("{m}: pass pin_env naming an environment variable that holds it"))
+                    }
+                    e => failed(e),
+                });
+            }
+            #[cfg(target_arch = "wasm32")]
+            return Err(bad("pkcs11: identities need the desktop app; the browser signs with a digital ID file"));
+        }
         // A macOS Keychain identity: "keychain:<fingerprint>" or "keychain:<common name>".
         if let Some(r) = a.str("id")?.strip_prefix("keychain:") {
             #[cfg(target_os = "macos")]

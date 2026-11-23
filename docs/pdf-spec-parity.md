@@ -112,7 +112,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | Seed values | yes | none |
 | Validation: chain, key usage, EKU, critical extensions, changes after signing, signed version | yes | yes; name constraints and issuer critical extensions missing |
 | Trust: own store, OS store, AATL, EUTL | yes | own store only; AATL out of scope; OS and EUTL planned |
-| Smart cards and tokens (PKCS #11, CryptoTokenKit) | yes | Windows CNG store (with PIN prompt) only |
+| Smart cards and tokens (PKCS #11, CryptoTokenKit) | yes | PKCS #11 (CNS, CIE, PIV, any token) on Linux, FreeBSD and Windows; Windows CNG store with PIN prompts; Keychain and CryptoTokenKit on macOS |
 
 ## Subset standards
 
