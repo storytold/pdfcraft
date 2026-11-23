@@ -1,6 +1,6 @@
 # UI and interaction parity
 
-> **Last reviewed:** 2026-10-29 · **Last updated:** 2026-10-29 · **Change:** minor (full screen plays page transitions and display times, hides a still pointer, and a right-click or Shift+Enter goes back a page #379) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-11-14 · **Last updated:** 2026-11-14 · **Change:** minor (Preferences is a window with its categories beside the settings, and the page display, zoom and tools panel side are picture tiles #2264) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How PdfCraft's tools, panels, shortcuts and feel compare with Acrobat Pro's current interface (the
 2023+ "new Acrobat": All tools pane on the left, quick-action toolbar, Home view). Behaviour is
@@ -80,7 +80,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Field Properties (General, Appearance, Position, Options, Actions, Format, Validate, Calculate, Signed) | yes | all but Signed | partial |
 | Comment properties and properties bar | yes | yes; a text box's text, border and fill and a shape's line and fill each take an opacity of their own (Acrobat: one per comment); text boxes and typed text take an oval or a circle for their border (Acrobat: a rectangle) | shipped |
 | Select several comments; copy and paste comments between documents | yes | yes: ⌘/Ctrl-click adds, Delete, a drag, Properties and Colour act on all, ⌘C/⌘V as XFDF (also across PdfCraft processes) | shipped |
-| Preferences | ≈ 20 pages | Interface language, Documents and view, Identity, Fill & Sign, JavaScript | partial (gap 19) |
+| Preferences | ≈ 20 pages | A window with the categories in a list beside the settings (General, Appearance, Page display, Accessibility, Commenting, Fill & Sign, JavaScript), in-situ search over them, and page display, zoom and tools panel side chosen from picture tiles | partial (gap 19) |
 
 ## Revision history
 
@@ -90,6 +90,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | 2026-10-24 | minor | → / ← scroll a page wider than the window sideways before turning it, by the current page's or spread's edges in continuous view; ⌘→ / ⌘← turn at once |
 | 2026-10-24 | minor | Comment Properties sets a text box's text, border and fill opacity and a shape's line and fill opacity each on its own (Acrobat: one per comment); Make Properties Default carries them into the tool |
 | 2026-10-21 | minor | Pages inspector thumbnail sizing (#3808), separate from page and Organize zoom; view setting retained on reload and exposed through UI control. Not persisted between sessions. |
+| 2026-10-26 | minor | Preferences: categories in a list beside the settings, picture tiles for page display, zoom, tools panel side and workspace; every label wraps, the list moves to the right in Arabic (#2264). No new preference pages. |
 | 2026-10-15 | minor | A selected field nudges with the arrow keys in Prepare a form: a point, Shift ten points, one undo step per press (#2608) |
 | 2026-10-14 | minor | Full screen shows one fitted page (or spread) at a time on black with click and key paging, as Acrobat's Full Screen Mode (#379, #1459, #1353) |
 | 2026-10-11 | minor | Column select shipped (#740, PR #765); several objects move together on one page (#844, PR #907); Shift-⌘-G goes back (#810, PR #835) |

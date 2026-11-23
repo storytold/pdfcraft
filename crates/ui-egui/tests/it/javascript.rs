@@ -212,9 +212,8 @@ fn document_scripts_and_preferences() {
     h.run_steps(2);
     let id = h.state().active_ids().unwrap().1;
     assert_eq!(h.state().session.get(id).unwrap().document_scripts()[0].0, "init");
-    h.state_mut().dialog = Some(Dialog::Preferences);
+    h.state_mut().set_option("dialog", "preferences:javascript").unwrap();
     h.run_steps(2);
-    // Below the fold in a 900-point window: the preferences scroll to it.
     h.get_by_label("Enable Acrobat JavaScript").scroll_to_me();
     h.run_steps(4);
     h.get_by_label("Enable Acrobat JavaScript").click();

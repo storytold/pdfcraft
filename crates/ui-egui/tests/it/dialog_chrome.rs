@@ -280,7 +280,10 @@ fn a_dialog_keeps_its_own_height_after_a_taller_one() {
         };
         let fresh = show(&mut h, dialog);
         let prefs = show(&mut h, Dialog::Preferences);
-        assert!(prefs.height() > fresh.height() + 20.0, "{dialog:?} {fresh:?} isn't shorter than Preferences {prefs:?}");
+        // Preferences sizes itself to the window and caps its height (#2264), so it is no longer
+        // the taller of the pair. What matters is that the two differ, so a shared modal that kept
+        // the last size would still be caught here.
+        assert!((prefs.height() - fresh.height()).abs() > 20.0, "{dialog:?} {fresh:?} and Preferences {prefs:?} are the same height");
         let after = show(&mut h, dialog);
         assert!((after.height() - fresh.height()).abs() < 1.0, "{dialog:?} {fresh:?}, after Preferences {after:?}");
     }

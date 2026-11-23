@@ -157,7 +157,7 @@ fn checkbox_and_multiple_documents_do_not_edit_pdf_state() {
             )
         })
         .collect();
-    h.state_mut().set_option("dialog", "preferences").unwrap();
+    h.state_mut().set_option("dialog", "preferences:appearance").unwrap();
     h.run_steps(3);
     let checkbox = h.get_by_label("Show Page Edge Shadows");
     checkbox.click();

@@ -27,9 +27,10 @@ fn preferences_gear_is_right_of_theme_and_opens_preferences() {
     assert!(gear.left() >= theme.right());
     h.get_by_label("Preferences").click();
     h.run_steps(6);
-    assert!(h.query_by_label("Appearance mode").is_some());
-    assert!(h.query_by_label("Light theme").is_some());
-    assert!(h.query_by_label("Dark theme").is_some());
+    // It opens on the category chosen last, General on a fresh start (#2264); the theme
+    // button's right-click menu goes straight to Appearance.
+    assert!(h.query_by_label("Interface language").is_some());
+    assert_eq!(h.state().preferences_page, pdfcraft_ui_egui::PrefsPage::General);
     assert_eq!(preference(&h), "System");
 }
 
