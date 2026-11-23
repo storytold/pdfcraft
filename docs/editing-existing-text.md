@@ -32,6 +32,12 @@ logically ordered text, caret positions and line breaks use the draft's PDF char
 including character spacing, horizontal scaling and kerning. Ligature advances are divided
 between their Unicode scalars. Vertical, rotated or ambiguous reading-order mappings retain
 the existing editor geometry. The frame shows the live extent as text grows or shrinks.
+On desktop, one worker per view prepares and renders drafts outside the UI thread. It keeps
+only the latest queued text/style/zoom and reuses the opened paragraph session. Layout and
+preview share one rewrite and arrive together; obsolete results are discarded. While a draft
+is pending, the last completed raster stays visible and provisional caret/selection marks are
+hidden. The web build uses the same combined preparation synchronously. The whole page is
+still rasterized; unchanged-region rendering is not implemented.
 Rows a text edit doesn't reach keep their original operators, so their kerning, `TJ` word
 gaps and glyph widths stay exactly as they were. Only rows whose characters changed, or that
 moved because an earlier row wrapped, are rewritten, and formatting a selection rewrites

@@ -120,10 +120,23 @@ pub(crate) fn layout_draft(
     text: &str,
     style: &BlockStyle,
 ) -> Result<TextEditLayout, EditError> {
+    prepare_draft(doc, page, lines, source, block, text, style).map(|(_, layout)| layout)
+}
+
+/// Rewrite once, then derive both caret geometry and preview bytes from that same draft.
+pub(crate) fn prepare_draft(
+    doc: &Document,
+    page: usize,
+    lines: &[TextLine],
+    source: &TextBlock,
+    block: usize,
+    text: &str,
+    style: &BlockStyle,
+) -> Result<(Document, TextEditLayout), EditError> {
     if text == source.editor_text && *style == BlockStyle::default() {
         let selected: Vec<_> = source.lines.iter().filter_map(|i| lines.get(*i).cloned()).collect();
         let rows = super::caret::draft_rows(text, &selected, source.rect, source.size * 1.5);
-        return Ok(TextEditLayout { source_rect: source.rect, draft_rect: Some(source.rect), overflow: false, rows });
+        return Ok((doc.clone(), TextEditLayout { source_rect: source.rect, draft_rect: Some(source.rect), overflow: false, rows }));
     }
     // Subtract the untouched runs by value, rather than by operator offsets: a rewrite may
     // split BT/ET or add font resources. A multiset also handles coincident repeated text.
@@ -171,5 +184,5 @@ pub(crate) fn layout_draft(
         .is_some_and(|r| r[0] < source.rect[0] - 0.5 || r[1] < source.rect[1] - 0.5 || r[2] > source.rect[2] + 0.5 || r[3] > source.rect[3] + 0.5);
     let leading = style.line_spacing.unwrap_or(1.5) * style.size.unwrap_or(source.size);
     let rows = super::caret::draft_rows(text, &written, source.rect, leading);
-    Ok(TextEditLayout { source_rect: source.rect, draft_rect: rect, overflow, rows })
+    Ok((draft, TextEditLayout { source_rect: source.rect, draft_rect: rect, overflow, rows }))
 }

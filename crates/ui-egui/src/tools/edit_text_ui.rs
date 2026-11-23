@@ -20,6 +20,7 @@ use crate::page_router::{Hit, Owner, PagePress, ParagraphPart};
 mod background;
 mod image;
 mod layout;
+mod worker;
 
 pub(crate) use background::TextBackground;
 pub use image::{CropMode, DragTarget, ImageAction, ImageDrag, ImageHandle, ImageSelection};
@@ -1075,7 +1076,7 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, i
                 ed.rect.width().max(1.0)
             };
             ui.set_width(width);
-            let measured = draft_galley(ui, ed, &ed.text, scale, width, view.text_background.layout_for(doc, ed, &ed.text));
+            let measured = draft_galley(ui, ed, &ed.text, scale, width, view.text_background.layout_for(ui.ctx(), doc, ed, &ed.text));
             ed.overflow = ed.has_changes() && (measured.rect.width() > ed.rect.width() + 1.5 || measured.rect.height() > ed.rect.height() + 1.5);
             let visible = Rect::from_min_size(ed.rect.min, measured.rect.size().max(egui::vec2(1.0, 1.0)));
             // Unsupported source programs use an interface fallback whose glyph advances
@@ -1121,12 +1122,13 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, i
                         text.as_str(),
                         scale,
                         wrap_width,
-                        view.text_background.layout_for(doc, &snapshot, text.as_str()),
+                        view.text_background.layout_for(ui.ctx(), doc, &snapshot, text.as_str()),
                     ))
                 };
                 let before = ed.text.clone();
                 let input = input_id(place);
                 ed.claim_typing(ui.ctx(), view_id, place);
+                let start_paint = ui.painter().add(egui::Shape::Noop);
                 let output = egui::TextEdit::multiline(&mut ed.text)
                     .id(input)
                     .font(font.clone())
@@ -1137,6 +1139,15 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, i
                     .desired_width(width)
                     .desired_rows(rows)
                     .show(ui);
+                let end_paint = ui.painter().add(egui::Shape::Noop);
+                if !view.text_background.current(ed) {
+                    // TextEdit still receives every keystroke, but its provisional caret and
+                    // selection must not appear over a raster of different text. The worker
+                    // publishes the PDF ink and exact geometry together on the next repaint.
+                    for index in start_paint.0.saturating_add(1)..end_paint.0 {
+                        ui.painter().set(egui::layers::ShapeIdx(index), egui::Shape::Noop);
+                    }
+                }
                 // The editor paints over the page with no visible label; name it for assistive tech.
                 output.response.response.clone().accessible_name(tl!("Text editing line"));
                 if ed.has_changes() && background_ready {
@@ -1928,14 +1939,10 @@ C", &picked
         let doc = app.session.get(id).unwrap();
         let bytes = doc.bytes.clone();
         background.prepare(&ctx, doc, Some(&ed), None, 1.0);
-        let pool = background.renderer.as_ref().unwrap();
-        pool.set_queue(vec![pdfcraft_render::RenderRequest { page: 0, scale: 1.0, tag: 999, ..Default::default() }]);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let preview = loop {
-            if let Some(out) = pool.try_recv()
-                && out.request.tag == 999
-            {
-                break out;
+            if let Some(reply) = background.worker.as_mut().unwrap().poll() {
+                break reply.result.unwrap().page;
             }
             assert!(std::time::Instant::now() < deadline, "draft render timed out");
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -1949,6 +1956,87 @@ C", &picked
         let applied = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
         assert!(applied.error.is_none());
         assert!(preview.rgba == applied.rgba, "typing must draw the PDF's glyphs, just as Apply does");
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn typing_queues_only_the_latest_draft_without_waiting_for_preparation() {
+        let (app, mut ed) = preview_app();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        let ctx = egui::Context::default();
+        let mut background = TextBackground::default();
+        let worker = worker::DraftWorker::new(&ctx).unwrap();
+        worker.pause(true);
+        background.worker = Some(worker);
+        let start = std::time::Instant::now();
+        for n in 0..50 {
+            ed.text = format!("Latest draft {n}");
+            background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+            assert!(background.layout_for(&ctx, doc, &ed, &ed.text).is_none());
+            assert!(!background.current(&ed));
+        }
+        eprintln!("50 UI draft submissions: {:?}", start.elapsed());
+        assert_eq!(background.worker.as_ref().unwrap().queued(), (Some(ed.text.clone()), 0), "one latest request; no frame-thread preparation");
+        assert!(background.pending());
+        background.worker.as_ref().unwrap().pause(false);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !background.current(&ed) {
+            background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert_eq!(background.worker.as_ref().unwrap().queued().1, 1);
+        assert!(!background.pending());
+        let exact = doc.text_edit_layout(0, 0, &ed.text, &ed.style()).unwrap();
+        assert_eq!(background.layout_for(&ctx, doc, &ed, &ed.text), Some(&exact));
+        let texture = background.texture.as_ref().unwrap().id();
+        background.worker.as_ref().unwrap().pause(true);
+        ed.text = "cancelled draft".into();
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        assert_eq!(background.texture.as_ref().unwrap().id(), texture, "last completed raster stays while typing");
+        background.prepare(&ctx, doc, None, None, 1.0);
+        assert_eq!(background.worker.as_ref().unwrap().queued().0, None, "cancel discards the queued draft");
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        background.submitted_at = Some(web_time::Instant::now() - std::time::Duration::from_secs(21));
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        assert!(!background.pending(), "timed-out preview does not keep the app waiting");
+        assert!(background.error_for(0, 0).is_some());
+        assert_eq!(ed.text, "cancelled draft", "the watchdog preserves typing");
+        background.prepare(&ctx, doc, None, None, 1.0);
+        assert!(!background.ready(0, 0));
+        background.worker.as_ref().unwrap().pause(false);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_completed_old_draft_cannot_replace_a_new_generation() {
+        let (mut app, mut ed) = preview_app();
+        let id = app.views[0].id;
+        let ctx = egui::Context::default();
+        let mut background = TextBackground::default();
+        let worker = worker::DraftWorker::new(&ctx).unwrap();
+        worker.pause_publication(true);
+        background.worker = Some(worker);
+        ed.text = "old draft".into();
+        background.prepare(&ctx, app.session.get(id).unwrap(), Some(&ed), None, 1.0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !background.worker.as_ref().unwrap().publishing() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        app.session.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: "New source".into(), style: Default::default() }).unwrap();
+        ed.text = "latest draft".into();
+        let doc = app.session.get(id).unwrap();
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        assert!(!background.current(&ed) && !background.ready(0, 0));
+        background.worker.as_ref().unwrap().pause_publication(false);
+        while !background.current(&ed) {
+            background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert_eq!(background.layout_for(&ctx, doc, &ed, &ed.text), Some(&doc.text_edit_layout(0, 0, &ed.text, &ed.style()).unwrap()));
+        assert_eq!(background.worker.as_ref().unwrap().queued().1, 2);
     }
 
     #[test]
