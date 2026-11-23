@@ -1876,6 +1876,20 @@ fn tracked_text_keeps_words_in_paragraphs_and_objects() {
     }
 }
 
+/// A line reports the horizontal scaling it is drawn at, which the Edit text preview needs: its
+/// `size` is the height alone. TCPDF sets `Tz` in a text object of its own before the one that
+/// shows the text; text state outlives `ET` (ISO 32000-2 §9.3.1).
+#[test]
+fn a_line_reports_the_horizontal_scale_it_is_drawn_at() {
+    let doc = text_page("BT 54 Tz ET BT /F1 10 Tf 72 700 Td (Condensed) Tj ET BT 100 Tz ET BT /F1 10 Tf 72 650 Td (Plain) Tj ET");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let scale = |t: &str| lines.iter().find(|l| l.text == t).map(text::TextLine::horizontal_scale);
+    assert_eq!(scale("Condensed"), Some(0.54));
+    assert_eq!(scale("Plain"), Some(1.0));
+    let condensed = lines.iter().find(|l| l.text == "Condensed").unwrap();
+    assert!((condensed.size - 10.0).abs() < 1e-9, "the size is the height, not narrowed: {}", condensed.size);
+}
+
 #[test]
 fn single_glyph_words_and_cells_are_not_tracking() {
     for (content, expected) in [
