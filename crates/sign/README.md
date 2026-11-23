@@ -34,8 +34,10 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   the caller's (`TimestampAuthority` — this crate never opens a socket). Validation verifies
   embedded tokens; when the TSA chains to the trust store it reports the trusted time in
   `SignatureInfo::timestamp_time`, which then anchors certificate-validity and revocation
-  checks. An untrusted TSA's time is reported as an unverified timestamp and never used as the
-  validation time (the signer's claimed time is). `timestamp::respond` is the TSA-side signer behind the
+  checks. Without a trusted timestamp those checks run at the current time: an untrusted TSA's
+  time is reported as an unverified timestamp, and the signer's own claimed time (CMS
+  signingTime, else `/M`) is kept in `SignatureInfo::signing_time` for display only; neither is
+  used as the validation time. `timestamp::respond` is the TSA-side signer behind the
   deterministic test authority.
 - **Document timestamps and LTV:** `timestamp_document` appends a standalone RFC 3161
   document timestamp (`/ETSI.RFC3161`) covering the whole file; validation discovers and
