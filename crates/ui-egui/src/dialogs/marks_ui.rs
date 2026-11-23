@@ -515,8 +515,9 @@ fn choice(options: impl IntoIterator<Item = (String, String)>, default: &str) ->
     ParamKind::choice(options.into_iter().map(|(id, label)| (id, label.into())).collect(), Some(default.to_string()))
 }
 
+/// A percent row: production shows one decimal and the sign ("100.0%").
 fn percent(key: &str, label: &'static str, default: f64) -> Param {
-    Param::new(key, label, ParamKind::range(0.0, 100.0, default, Default::default()))
+    Param::new(key, label, ParamKind::range(0.0, 100.0, default, Default::default())).decimals(1).unit(UnitKind::Percent)
 }
 
 /// The six text boxes of Header & Footer: the box with focus is kept under `hf.focused`, which
@@ -623,8 +624,12 @@ fn rows(kind: MarkKind, g: &Geometry) -> Vec<Param> {
         }
         MarkKind::Background => {
             let source = [("colour".to_string(), tl!("From colour").to_string()), ("file".to_string(), tl!("File").to_string())];
-            rows.push(Param::new("source", tl!("Source"), ParamKind::radio(source.map(|(i, l)| (i, l.into())).to_vec(), Some("colour".into()))));
-            rows.push(Param::new("marks.bg.colour", tl!("Colour"), ParamKind::color(None)).enabled_when("source", "colour"));
+            // Production's line: From colour with its well right after it, then File; no caption over the options.
+            rows.push(
+                Param::new("source", tl!("Source"), ParamKind::radio(source.map(|(i, l)| (i, l.into())).to_vec(), Some("colour".into())))
+                    .options_in_row(),
+            );
+            rows.push(Param::new("marks.bg.colour", tl!("Colour"), ParamKind::color(None)).enabled_when("source", "colour").under_option("colour"));
             file_rows(&mut rows);
             rows.push(percent("bg.opacity", tl!("Opacity"), 100.0));
             // Offered only once the backdrop check finds a white backdrop: its label names the pages, and the pass

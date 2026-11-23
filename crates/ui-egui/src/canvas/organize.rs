@@ -168,7 +168,7 @@ pub(super) fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document,
             // PLAN: assumed `Props::tooltip(impl Into<Tooltip>)` and `TooltipSpec -> Tooltip`.
             let hint = craft::ui::contract::TooltipSpec::new(tl!("Save these pages as one PDF")).disabled_text(tl!("No changes to save"));
             save |= Button::new(tl!("Save pages")).variant(Variant::PRIMARY).enabled(dirty).tooltip(hint).show(ui).clicked();
-            close |= Button::new(tl!("Close")).variant(Variant::GHOST).icon(IconId::new("x")).show(ui).clicked();
+            close |= Button::new(tl!("Close")).variant(Variant::GHOST).icon(IconId::new("close")).show(ui).clicked();
         })
         .show(cx.ui, |ui, _| {
             Text::new(label.clone()).show(ui);

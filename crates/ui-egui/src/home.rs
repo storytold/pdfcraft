@@ -94,7 +94,7 @@ impl ItemSource<usize> for Tools {
 fn tool_tile(g: &'static ToolGroup, unpinnable: bool) -> Tile<'static> {
     let hue = DataColor::new(egui::Color32::from_rgb(g.hue[0], g.hue[1], g.hue[2]));
     let tile = Tile::new(tl!(g.label).to_string()).icon(IconId::new(g.icon)).hue(hue);
-    if unpinnable { tile.action(IconId::new("x"), CommandRef::new("home.unpin_tool")) } else { tile }
+    if unpinnable { tile.action(IconId::new("close"), CommandRef::new("home.unpin_tool")) } else { tile }
 }
 
 /// A grid of the tools `groups`; a click selects a tool and, with `unpinnable`, the hover action unpins it.
@@ -167,7 +167,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         Row::new().show(ui, |ui, _| {
                             brand::mark(ui, PictureSize::Thumb(ThumbSize::Medium));
                             let _ = Text::new(tl!("Join the ArtCraft community").to_string()).role(TypeRole::Heading).show(ui);
-                            if clicked(&IconButton::new(IconId::new("x")).id_salt("community-close").label(tl!("Close")).show(ui)) {
+                            if clicked(&IconButton::new(IconId::new("close")).id_salt("community-close").label(tl!("Close")).show(ui)) {
                                 asked.borrow_mut().push(Asked::CloseCommunityCard);
                             }
                         });

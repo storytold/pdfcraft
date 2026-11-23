@@ -1050,12 +1050,12 @@ fn draft_session(
     // Hung below the box (above when there is no room), in place of production's bar beside it; the
     // warning for text the fonts can't draw is its first member.
     let corners = [paper.left_top(), paper.right_top(), paper.right_bottom(), paper.left_bottom()].map(|p| body.view.to_doc(p));
-    let _ = TaskBar::fixed(tl!("Text box actions"), &corners).show(ui, body.rect, |ui, _| {
+    let _ = TaskBar::fixed(tl!("Text box actions"), &corners).compact(true).show(ui, body.rect, |ui, _| {
         if let Some(c) = blocked {
             let _ = Text::new(undrawable_message(c)).tone(Tone::Bad).show(ui);
         }
         done = IconButton::new(IconId::new("check")).label(tl!("Done adding text")).show(ui).clicks > 0;
-        discard = IconButton::new(IconId::new("x")).label(tl!("Discard this text (Esc)")).show(ui).clicks > 0;
+        discard = IconButton::new(IconId::new("close")).label(tl!("Discard this text (Esc)")).show(ui).clicks > 0;
     });
     if discard || ended == Some(EditorEnd::Cancel) {
         cv.draft = None;

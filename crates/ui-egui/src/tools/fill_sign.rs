@@ -550,7 +550,7 @@ pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp)
                     cx.with_draw(|draw| paint_signature(cx.painter.ctx(), draw, rect, saved, DataColor::new(cx.ink())));
                 })
                 .action_named(IconId::new("pencil"), CommandRef::new(slot.change_id), ctx_less_label("Change {what}", slot.what))
-                .action_named(IconId::new("x"), CommandRef::new(slot.remove_id), ctx_less_label("Remove saved {what}", slot.what))
+                .action_named(IconId::new("close"), CommandRef::new(slot.remove_id), ctx_less_label("Remove saved {what}", slot.what))
         });
     for event in out.response.events {
         command = match event {

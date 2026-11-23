@@ -55,7 +55,7 @@ fn build_dialog(fields: &mut DialogFields, base: ScanCleanSettings, count: usize
         )
         .full_width(),
         Param::section(tl!("Pages")),
-        PageRangeOptions::param("pages", tl!("Pages"), count, current, PageRangeChoices::Current),
+        PageRangeOptions::param("pages", tl!("Pages"), count, current, PageRangeChoices::CurrentFromTo),
         Param::section(tl!("Filters")),
         Param::new("level", tl!("Background removal"), ParamKind::range(0.0, max, f64::from(base.level), SliderScale::Linear))
             .decimals(0)

@@ -548,12 +548,14 @@ impl PdfCraftApp {
         // Every parameter dialog lays out as a document dialog: inline captions, shaded groups, buttons across the foot.
         root.values.set(craft::ui::patterns::form_dialogs::DialogLayout(craft::ui::patterns::form_dialogs::ParamLayout::Document));
         // PdfCraft's looks, opt-in over the framework's defaults: the filled dropdown triangle, shrinking document
-        // tabs with the modified dot, quiet (ghost) Cancel and Don't Save, and the theme's page insets.
+        // tabs with the modified dot, quiet (ghost) Cancel and Don't Save, the theme's page insets and the note
+        // pop-up's flat Reply button.
         root.values
             .set(craft::ui::controls::disclosure::DropdownArrow::Triangle)
             .set(craft::ui::tabs::DocumentTabLook::Shrinking)
             .set(craft::ui::sections::DialogButtonLook::Quiet)
-            .set(craft::pages::ui::PageInsets::Theme);
+            .set(craft::pages::ui::PageInsets::Theme)
+            .set(craft::review::ui::thread::NoteReplyLook::Flat);
         root.motion = self.animation_effects;
         // Today is the session's day, the one its date formats and Fill & Sign's Date tool use: the calendars ring it
         // and pick it.

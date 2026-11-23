@@ -97,9 +97,15 @@ impl SplitFacts {
                     Some("pages".into()),
                 ),
             )
-            .disabled_options(unavailable),
-            Param::new("pages", tl!("Pages per file"), ParamKind::int(Some(1), Some(self.count.max(1) as i64), 1)).enabled_when("mode", "pages"),
-            Param::new("size", tl!("At most (MB)"), ParamKind::number(Some(0.05), Some(2000.0), 2.0, 0.1, 2)).enabled_when("mode", "size"),
+            .disabled_options(unavailable)
+            // Production stacks the ways with no caption, each one's setting under it.
+            .stacked_options(),
+            Param::new("pages", tl!("Pages per file"), ParamKind::int(Some(1), Some(self.count.max(1) as i64), 1))
+                .enabled_when("mode", "pages")
+                .under_option("pages"),
+            Param::new("size", tl!("At most (MB)"), ParamKind::number(Some(0.05), Some(2000.0), 2.0, 0.1, 2))
+                .enabled_when("mode", "size")
+                .under_option("size"),
         ];
         ParamDialog::new(SPLIT, tl!("Split document"), params)
             .ok_label(tl!("Split").into())
