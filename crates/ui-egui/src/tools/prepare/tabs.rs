@@ -371,6 +371,10 @@ pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft) {
     }
 }
 
+/// The most lines the script box grows to before its text scrolls inside it: about the 180 points production's box
+/// stopped at. Without it a long script would grow the box past what any layout can show.
+const SCRIPT_LINES: usize = 10;
+
 /// The custom calculation script's box, with the 256 KiB rule on what it edits.
 fn custom_script(ui: &mut egui::Ui, js: &mut String, refused: &mut bool) {
     let label = tl!("Custom calculation script:");
@@ -381,7 +385,7 @@ fn custom_script(ui: &mut egui::Ui, js: &mut String, refused: &mut bool) {
             crate::i18n::fmt(tl!("This script is too long to edit here ({kib} KiB); its start is shown. It is kept as it is."), &[("kib", &kib)]);
         let start = js.get(..js.floor_char_boundary(MAX_EDITED_SCRIPT)).unwrap_or_default().to_string();
         Field::new(label).id_salt("calc-script").help(Help::Text(note_text.into())).show(ui, |ui, _| {
-            TextField::new(label, Bind::given(start.clone())).lines(6).mono().read_only(true).show(ui);
+            TextField::new(label, Bind::given(start.clone())).lines(6).max_lines(SCRIPT_LINES).mono().read_only(true).show(ui);
         });
         return;
     }
@@ -395,7 +399,7 @@ fn custom_script(ui: &mut egui::Ui, js: &mut String, refused: &mut bool) {
         field = field.help(Help::Status(Tone::Bad, tl!("A script edited here can be at most 256 KiB long; that change wasn't made.").into()));
     }
     field.show(ui, |ui, _| {
-        TextField::new(label, Bind::bound(&mut draft)).lines(6).mono().tab_inserts(true).placeholder("event.value = …;").show(ui);
+        TextField::new(label, Bind::bound(&mut draft)).lines(6).max_lines(SCRIPT_LINES).mono().tab_inserts(true).placeholder("event.value = …;").show(ui);
     });
     if draft != *js {
         *refused = draft.len() > MAX_EDITED_SCRIPT;
