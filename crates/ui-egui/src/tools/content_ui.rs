@@ -37,9 +37,6 @@ use crate::canvas::PageSession;
 use crate::canvas::page_parts::{Owner, PageLayer, PagePart, PagePress};
 use crate::edit_text_ui::{Typed, TypingHistory};
 
-/// The colour of the warning under text the standard fonts can't draw.
-pub(crate) const UNDRAWABLE: Color32 = Color32::from_rgb(0xD7, 0x37, 0x3F);
-
 /// The first character of a draft that can't be drawn, as the engine decides it (it refuses
 /// such text, #125): outside the standard fonts and not shaped with the Arabic face.
 pub(crate) fn undrawable(d: &TextDraft, memo: &UndrawableMemo) -> Option<char> {
@@ -994,7 +991,7 @@ fn draft_session(
     let ctx = ui.ctx().clone();
     let zoom = placed.scale as f32;
     let page_width = f64::from(doc.info.pages.get(page)?.width);
-    let editor_id = egui::Id::new(("added-text-editor", view_key));
+    let editor_id = egui::Id::unique(("added-text-editor", view_key));
     let background_ready = session.content.draft.as_ref().and_then(|d| d.index).is_some_and(|index| session.text_background.ready_added(page, index));
     let cv = &mut session.content;
     let draft = cv.draft.as_mut().filter(|d| d.page == page)?;
@@ -1278,8 +1275,7 @@ impl crate::PdfCraftApp {
         let Some(pixels) = self.session.get(id).map(|d| d.page_image_rgba(page, index)) else { return false };
         let copied = pixels.and_then(|(w, h, rgba)| {
             let image = ClipboardImage { width: w, height: h, rgba: rgba.clone() };
-            // PLAN: assumed `PdfCraftApp.clipboard: craft::platform::clipboard::Clipboard` (pdf-shell-w17); the app has none yet.
-            self.clipboard.write_image(&image).map_err(|e| e.to_string())?;
+            self.clipboard.write_image(&image).map(|_| ()).map_err(|e| e.to_string())?;
             self.last_copied_file = None;
             self.last_copied_image = Some((w, h, rgba));
             Ok((w, h))
@@ -1441,6 +1437,7 @@ impl crate::PdfCraftApp {
     }
 
     /// Paste the integration's delivered pixels without rereading a clipboard that may have changed.
+    #[cfg(test)]
     pub(crate) fn paste_received_image(&mut self, ctx: &egui::Context, page: usize, image: &egui::ColorImage) -> bool {
         self.paste_received_image_at(ctx, page, image, None)
     }
@@ -1488,6 +1485,7 @@ impl crate::PdfCraftApp {
         self.paste_image_with_system(ctx, page, rect, at, system, cfg!(not(target_arch = "wasm32")), None)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn paste_image_with_system(
         &mut self,
         ctx: &egui::Context,

@@ -115,28 +115,6 @@ impl PageXform {
         across / self.pw.max(1.0)
     }
 
-    /// Draw an image in the PDF user-space `rect` as a custom stamp's appearance draws it: turned
-    /// back by `turn` (the page /Rotate it was placed for), so with the page's own rotation it
-    /// reads upright as displayed.
-    pub(crate) fn paint_user_image(
-        &self,
-        painter: &egui::Painter,
-        tex: egui::TextureId,
-        p: &pdfcraft_render::PageInfo,
-        rect: [f64; 4],
-        turn: i64,
-        color: Color32,
-    ) {
-        let mut mesh = egui::Mesh::with_texture(tex);
-        let uvs = [pos2(0.0, 0.0), pos2(1.0, 0.0), pos2(1.0, 1.0), pos2(0.0, 1.0)];
-        for (pos, uv) in self.user_image_corners(p, rect, turn).into_iter().zip(uvs) {
-            mesh.vertices.push(egui::epaint::Vertex { pos, uv, color });
-        }
-        mesh.add_triangle(0, 1, 2);
-        mesh.add_triangle(0, 2, 3);
-        painter.add(egui::Shape::mesh(mesh));
-    }
-
     /// Where the top left, top right, bottom right and bottom left of an upright picture land on screen when it is
     /// drawn in the user-space `rect` turned back by `turn`, as [`paint_user_image`](Self::paint_user_image) draws it.
     pub(crate) fn user_image_corners(&self, p: &pdfcraft_render::PageInfo, rect: [f64; 4], turn: i64) -> [Pos2; 4] {

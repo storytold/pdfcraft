@@ -54,7 +54,7 @@ pub(crate) use area::signature_badges;
 pub(crate) use area::signature_states_changed;
 use area::{run_button, set_layers};
 use bars::{Notice, notices, page_size_hint};
-pub(crate) use cache::{BASE_SIDE, TILE_THRESHOLD, texture_image, thumbnail_rows};
+pub(crate) use cache::{BASE_SIDE, TILE_THRESHOLD, texture_image};
 pub use craft::pages::{Fit, PageDisplay, PageSpacing, ViewDefaults, display_token, parse_display_token};
 pub use find::Find;
 use find::find_bar;
@@ -1052,6 +1052,7 @@ fn picture_under(parts: &[PagePart], page: usize, at: egui::Pos2) -> Option<usiz
 }
 
 /// What a press on a part does, routed by its owner. `parts` are the pass's parts, in paint order.
+#[allow(clippy::cognitive_complexity)]
 fn route_press(
     ui: &egui::Ui,
     session: &mut PageSession,
@@ -1065,7 +1066,7 @@ fn route_press(
     if pressed_by(&press.phase, PointerButton::Secondary) {
         // With the primary button held (a comment being moved, a box drawn) the selections stay as they are.
         let held = ui.input(|i| i.pointer.primary_down());
-        let mut owner = press.owner.clone();
+        let mut owner = press.owner;
         if cx.tool == QuickTool::EditText && cx.can_modify {
             // Paragraphs, added text and an open paragraph's frame have no menu: the picture under them takes the
             // right-click (the user's ruling).
@@ -1095,7 +1096,7 @@ fn route_press(
                 return;
             }
         }
-        let mut menu_for = Some((press.page, owner.clone()));
+        let mut menu_for = Some((press.page, owner));
         // The menu is anchored on the page the right-click lies on, the first where two pages touch, whichever part
         // took it. A right-click on another part is the comments' too, unless the tool takes it (Add text, the Link
         // tool on a link, a field tool): the comment over the part is selected for its menu, or the selection cleared.
@@ -1333,7 +1334,7 @@ fn page_before(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallb
         let mut bench = page_tools::ToolBench::default();
         let mut fill = None;
         let mut area_mark = None;
-        let mut tool = page_tool(cx.chosen, tool_cx, &mut *session, &mut bench, &mut fill, &mut area_mark, &pass.press);
+        let mut tool = page_tool(cx.chosen, tool_cx, session, &mut bench, &mut fill, &mut area_mark, &pass.press);
         let reply = ToolHost::new().momentary(momentary).run(ui, pass, &mut tool);
         let mut finish = tool.finish();
         // The comment gestures the run finished: each committed one is an engine edit, one undo step per drag.
@@ -1344,7 +1345,7 @@ fn page_before(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallb
         }
         finish.apply(fill, area_mark, session, &tool_cx);
         if let Some(why) = finish.refused.take() {
-            session.objects.notice = Some(why.into());
+            session.objects.notice = Some(why);
         }
         tool_view = reply.view;
         // The Menu key's request hangs the menu at the view's centre and leaves the comments alone.
@@ -1376,6 +1377,7 @@ fn page_before(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallb
     tool_view
 }
 
+#[allow(clippy::cognitive_complexity)]
 fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbacks<'_, '_>) {
     let PageCallbacks { session, cx, out, parts, field_arrived, .. } = callbacks;
     session.placed.clear();
@@ -1431,7 +1433,7 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbac
             crate::edit_text_ui::picture_controls(ui, body, session, cx.doc, cx.info, geo),
             crate::object_ui::object_controls(ui, body, session, cx.info, parts_out.press.as_slice(), geo),
             crate::content_ui::content_controls(ui, body, session, cx.doc, added_hovered, cx.view_key),
-            crate::edit_text_ui::paragraph_controls(ui, body, session, cx.doc, &parts_out, geo, cx.tool == QuickTool::AddText),
+            crate::edit_text_ui::paragraph_controls(ui, body, session, cx.doc, parts_out, geo, cx.tool == QuickTool::AddText),
         ];
         // One edit per pass, the first control's that made one, as each control's own `or` keeps its first.
         if let Some(edit) = edits.into_iter().flatten().next() {
@@ -1612,6 +1614,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
 ///
 /// It records the pass's facts on the view for readers between frames (`textures`, `spacing`, the viewport, the
 /// canvas view, the middle-button scroll); nothing in the next pass reads them to compute its result.
+#[allow(clippy::cognitive_complexity)]
 pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mut egui::Ui) -> Option<PageViewOutput> {
     // The seam returns `None` for a tab that closes, has no pages or shows the Organize grid: no page view runs there,
     // and `PageViewOutput` cannot be built outside its crate.
@@ -1947,7 +1950,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     let field_props = prepare.properties.then(|| view.session.prepare.selected.clone()).flatten();
     let (clicked_link, javascript_link) = body_out.link.take().map_or((None, None), |(target, js)| (Some(target), js));
     // In full screen a secondary click turns the page, so the page menu must not open on it.
-    let menu_for = view.session.menu_for.as_ref().map(|(_, owner)| owner.clone());
+    let menu_for = view.session.menu_for.as_ref().map(|(_, owner)| *owner);
     let pick = if presenting {
         page_menu::PageMenuPick::default()
     } else {

@@ -23,8 +23,7 @@ use pdfcraft_engine::{
     Document, Edit, Style,
     measure::{self, Kind, NewMeasurement, PageUnit, Point, Reading, Scale},
 };
-use pdfcraft_render::DocInfo; // PLAN: assumed `pdfcraft_render::DocInfo` as the type of `Document::info` (pdf-canvas-w9 passes `cx.info`)
-use std::sync::Arc;
+// PLAN: assumed `pdfcraft_render::DocInfo` as the type of `Document::info` (pdf-canvas-w9 passes `cx.info`)
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -307,7 +306,6 @@ pub(crate) struct MeasureTool<'a> {
     view: &'a mut MeasureView,
     doc: &'a Document,
     pages: &'a PageMap<'a>,
-    info: &'a DocInfo,
     tool: Tool,
     units: crate::units::Unit,
     author: String,
@@ -319,11 +317,11 @@ pub(crate) struct MeasureTool<'a> {
 impl<'a> MeasureTool<'a> {
     /// The tool for `tool` over `view`. A different tool than the last drops the measurement in
     /// progress. `host` and `wake` build the snapping read queue on first use.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         view: &'a mut MeasureView,
         doc: &'a Document,
         pages: &'a PageMap<'a>,
-        info: &'a DocInfo,
         tool: Tool,
         units: crate::units::Unit,
         author: &str,
@@ -336,7 +334,7 @@ impl<'a> MeasureTool<'a> {
         }
         view.reads
             .get_or_insert_with(|| JobQueue::new(host.jobs_shared().clone(), wake, QueueOptions { name: "measure-snap", ..QueueOptions::default() }));
-        Self { view, doc, pages, info, tool, units, author: author.into(), hover: None, edit: None }
+        Self { view, doc, pages, tool, units, author: author.into(), hover: None, edit: None }
     }
 
     /// The measurement the tool finished this pass, for the page body to apply.
@@ -892,6 +890,7 @@ fn export_csv(app: &mut PdfCraftApp) {
 mod tests {
     use super::*;
     use craft::host::{Jobs, ManualJobs};
+    use std::sync::Arc;
 
     /// A snapping read queue that runs a job only when the test says so.
     fn manual_reads() -> JobQueue<(), PathsRead> {

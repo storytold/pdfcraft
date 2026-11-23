@@ -308,10 +308,10 @@ fn box_controls(
         match event {
             EditEvent::Begin { .. } => {
                 let cut = cut_preview(&mut session.image_serials, doc, placed, index);
-                if let Some(s) = session.image_selection.as_mut() {
-                    if s.preview.is_none() {
-                        s.preview = cut;
-                    }
+                if let Some(s) = session.image_selection.as_mut()
+                    && s.preview.is_none()
+                {
+                    s.preview = cut;
                 }
             }
             EditEvent::Commit { after, .. } => {
@@ -327,10 +327,10 @@ fn box_controls(
                 }
             }
             EditEvent::Cancel { .. } => {
-                if let Some(s) = session.image_selection.as_mut() {
-                    if s.settled.is_none() {
-                        s.preview = None;
-                    }
+                if let Some(s) = session.image_selection.as_mut()
+                    && s.settled.is_none()
+                {
+                    s.preview = None;
                 }
             }
             _ => {}
@@ -474,7 +474,7 @@ fn crop_controls(
         if hits(image) || !matches!(shown.hovered, None | Some(BoxPart::Outside)) {
             session.context_held = true;
         } else {
-            let under = placed.rect.contains(at).then(|| images.iter().rposition(|other| hits(other))).flatten();
+            let under = placed.rect.contains(at).then(|| images.iter().rposition(hits)).flatten();
             picture_context(page, under, session);
             session.menu_for = under.map(|index| (page, Owner::Picture { index }));
             return None;
@@ -751,7 +751,7 @@ pub(crate) fn picture_menu(ui: &mut egui::Ui, session: &mut PageSession, menu: &
     }
     picks.push((Pick::Ccw, "rotate-ccw", tl!("Rotate Counterclockwise")));
     picks.push((Pick::Cw, "rotate-cw", tl!("Rotate Clockwise")));
-    let icons: Vec<MenuIcon<'_>> = picks.iter().map(|(_, name, label)| MenuIcon::new(IconId::new(*name), *label)).collect();
+    let icons: Vec<MenuIcon<'_>> = picks.iter().map(|(_, name, label)| MenuIcon::new(IconId::new(name), *label)).collect();
     if let Some(picked) = MenuIconRow::new(tl!("Picture"), &icons).show(ui).picked.and_then(|i| picks.get(i)) {
         match picked.0 {
             Pick::Note => action = Some(ImageAction::AddComment(page, hit)),

@@ -10,7 +10,6 @@ use craft::ui::display::Text;
 use craft::ui::form::{Field, Help};
 use craft::ui::layout_components::Stack;
 use craft::ui::list::{List, ListRow, RowEvent, TrailingFace, TrailingPart};
-use craft::ui::notices::{Notice, NoticeLayout};
 use craft::ui::runtime::env::Label;
 use craft::ui::text::TextField;
 

@@ -127,7 +127,7 @@ fn params(count: usize, current: usize, unit: Unit) -> Vec<Param> {
     // Production sets the marks three to a line, then two: Trim, Bleed and Registration, then Colour bars and Page
     // information.
     rows.extend(marks.iter().enumerate().map(|(at, (key, label))| {
-        let row = Param::new(*key, label.clone(), ParamKind::bool(true));
+        let row = Param::new(*key, *label, ParamKind::bool(true));
         if matches!(at, 1 | 2 | 4) { row.beside_previous() } else { row }
     }));
     rows.push(Param::number("line_weight", tl!("Line weight"), 0.25, 0.25, 2).bounds(Some(0.1), Some(4.0)).unit(unit_kind(Unit::Points)));
@@ -166,7 +166,7 @@ impl PdfCraftApp {
     }
 
     /// Adds the marks when the dialog was answered with OK.
-    pub(crate) fn printer_marks_pass(&mut self, ctx: &egui::Context, _ctx: &egui::Context) {
+    pub(crate) fn printer_marks_pass(&mut self, ctx: &egui::Context) {
         let Some(answer) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(KEY)) else { return };
         let Some(result) = answer.ok() else { return };
         let per_point = self.units.per_point();

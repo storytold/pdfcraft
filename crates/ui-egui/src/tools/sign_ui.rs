@@ -22,7 +22,7 @@ pub(crate) mod tool;
 use dialog::detail_lines;
 use dialog::graphic_of;
 pub(crate) use dialog::{appearance_labels, status_captions};
-pub use panel::{CertTab, CertViewer, PanelAction, certificate_pem};
+pub use panel::{CertViewer, PanelAction, certificate_pem};
 pub(crate) use panel::{banner, panel, status_tone};
 
 /// A digital ID the app knows about (Acrobat: Digital ID files). The file stays where it is;

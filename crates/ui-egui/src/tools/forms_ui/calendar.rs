@@ -19,7 +19,7 @@ fn picked_date(text: &str, fmt: &str) -> Option<PickedDate> {
 /// words follow the interface language.
 pub(super) fn calendar(ui: &mut egui::Ui, rect: Rect, text: &str, fmt: &str, today: (i64, u32, u32), open: &mut bool) -> Option<String> {
     let before = picked_date(text, fmt);
-    let mut picked = before.clone();
+    let mut picked = before;
     let today = PickedDate::day(i32::try_from(today.0).unwrap_or(1970), u8::try_from(today.1).unwrap_or(1), u8::try_from(today.2).unwrap_or(1));
     CalendarPopover::new("Calendar", Bind::bound(&mut *open), Bind::bound(&mut picked))
         .precisions(&[DatePrecision::Day])

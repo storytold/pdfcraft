@@ -119,10 +119,8 @@ impl PagePictures {
         work: impl FnOnce() -> Vec<pdfcraft_engine::PagePicture> + Send + 'static,
     ) {
         let queue = self.queue.get_or_insert_with(|| {
-            let mut options = QueueOptions::default();
             // One search at a time: each is a full read of a page. The web has no lanes; `poll` runs the job.
-            options.lanes = if cfg!(target_arch = "wasm32") { 0 } else { 1 };
-            options.name = "page-pictures";
+            let options = QueueOptions { lanes: if cfg!(target_arch = "wasm32") { 0 } else { 1 }, name: "page-pictures", ..QueueOptions::default() };
             JobQueue::new(Arc::clone(jobs), wake.clone(), options)
         });
         queue.reprioritize(|k, priority| (*k == key).then_some(priority));

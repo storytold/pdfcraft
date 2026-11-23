@@ -259,7 +259,7 @@ fn caret_snap(
     texts: &std::collections::HashMap<usize, std::sync::Arc<pdfcraft_render::PageText>>,
     page: usize,
 ) -> Option<impl Fn(craft::behavior::kurbo::Point) -> Option<(craft::behavior::kurbo::Point, f64)> + Send + 'static> {
-    if tool != QuickTool::Comment(comments::CommentTool::Caret) || cx.rotation % 360 != 0 {
+    if tool != QuickTool::Comment(comments::CommentTool::Caret) || !cx.rotation.is_multiple_of(360) {
         return None;
     }
     if !cx.info.pages.get(page)?.rotation.is_multiple_of(360) {
@@ -362,9 +362,7 @@ pub(crate) fn page_tool<'a>(
             session.marquee_zoom.options = options;
             Arm::MarqueeZoom(&mut session.marquee_zoom)
         }
-        QuickTool::Measure(t) => {
-            Arm::Measure(MeasureTool::new(&mut session.measure, cx.doc, map, cx.info, t, cx.units, cx.author, cx.host, cx.wake.clone()))
-        }
+        QuickTool::Measure(t) => Arm::Measure(MeasureTool::new(&mut session.measure, cx.doc, map, t, cx.units, cx.author, cx.host, cx.wake.clone())),
         QuickTool::Crop => Arm::Crop(CropTool::new(cx.can_crop, &mut session.box_drag, cx.pages, cx.rotation, size)),
         QuickTool::EnhanceCamera => Arm::Camera(CameraTool::new(cx.can_modify, cx.pages, press)),
         // A Fill & Sign tool runs the comments tool over its placing: its own marks already placed are picked up,
@@ -477,7 +475,7 @@ impl<'a> PageTool<'a> {
     pub(crate) fn finish(self) -> ToolFinish {
         let mut finish = ToolFinish {
             presenter_keys: self.presenter_keys,
-            text_tool: Some(self.tool).filter(|_| self.selects_text),
+            text_tool: self.selects_text.then_some(self.tool),
             text_finished: self.released && self.selects_text,
             delete_content: self.delete_content,
             ..ToolFinish::default()
@@ -584,7 +582,7 @@ pub(crate) fn edit_text_press(
                 && let Some(target) = session.objects.target_at(index)
             {
                 session.objects.clear();
-                let mut forwarded = press.clone();
+                let mut forwarded = *press;
                 return match target.kind {
                     pdfcraft_engine::ObjectKind::Text => {
                         forwarded.owner = Owner::Paragraph { block: target.index };

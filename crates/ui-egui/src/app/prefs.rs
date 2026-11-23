@@ -1,5 +1,5 @@
 use super::settings::{self, PdfCraftSettings};
-use super::*;
+use super::{PdfCraftApp, RedactPrefs, Session, actions_ui, canvas, combine_ui, fill_sign, i18n, print_paper, print_ui, stamps_ui, ui_scale};
 use craft::theme::ModeChoice;
 use craft::window::policy::TitleBarPref;
 use pdfcraft_engine::print::names as print_names;
@@ -147,8 +147,8 @@ impl PdfCraftApp {
             default_layout: Some(canvas::display_token(self.view_defaults.display, self.view_defaults.continuous).to_string()),
             combine_columns: Some(self.combine_columns.clone()),
             combine_view: Some(self.combine_view.as_str().to_string()),
-            combine_zoom: Some(f64::from(self.combine_zoom)),
-            organize_zoom: Some(f64::from(self.organize_zoom)),
+            combine_zoom: Some(self.combine_zoom),
+            organize_zoom: Some(self.organize_zoom),
         };
         let print = settings::Print {
             print_custom_papers: json_text(&d.custom_papers),

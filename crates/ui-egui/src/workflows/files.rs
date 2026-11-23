@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use craft::docpath::names::{CopyNumbering as _, is_plain_file_name, safe_file_stem};
+use craft::docpath::names::{is_plain_file_name, safe_file_stem};
 use craft::host::{PickRequest, Picked, WriteIntent};
 use craft::ui::contract::OsFile;
 use pdfcraft_engine::{DocId, Edit, SplitBy};
@@ -82,25 +82,6 @@ fn picker_request(purpose: FilePurpose, multiple: bool) -> PickRequest {
         }
         _ => request.filter("PDF", &["pdf"]),
     }
-}
-
-/// The Replace Pages dialog: the chosen file and the ranges (1-based, inclusive).
-#[derive(Clone, Debug, PartialEq)]
-pub struct ReplaceDraft {
-    pub name: String,
-    pub bytes: Arc<Vec<u8>>,
-    pub src_pages: usize,
-    pub from: usize,
-    pub to: usize,
-    pub src_from: usize,
-    /// The selection when the dialog opened (0-based). OK replaces these pages until the
-    /// original range is edited, so a gap between selected pages is left alone.
-    pub pages: Vec<usize>,
-    /// The user changed the original from/to range, so OK uses that span.
-    pub range_edited: bool,
-    /// The document whose pages are replaced, as it was when the dialog opened: OK replaces
-    /// nothing if another document is active by then (a file opened meanwhile), or it changed.
-    pub(crate) target: Option<PickTarget>,
 }
 
 /// The document a pick edits, as it was when the picker opened. Page positions captured then
@@ -250,6 +231,8 @@ impl PdfCraftApp {
         if purpose == FilePurpose::CreateMultipleSeparate {
             if !paths.is_empty() {
                 let host = self.host.clone();
+                // The reads run once the folder is chosen, so the iterator owns the paths.
+                #[allow(clippy::unnecessary_to_owned)]
                 self.ask_separate_folder(paths.to_vec().into_iter().map(move |p| read_named(&host, &p)));
             }
             return;
@@ -743,7 +726,7 @@ fn document_folder(path: Option<&str>) -> Option<std::path::PathBuf> {
 impl PdfCraftApp {
     /// The files a pick answered, read: paths through the host's file service, browser contents
     /// as they are. A file that can't be read gives its name and why.
-    pub(crate) fn read_picked(&self, picked: Picked) -> Result<Vec<(String, Vec<u8>)>, (String, String)> {
+    pub(crate) fn read_picked(&self, picked: Picked) -> Result<Vec<(String, Vec<u8>)>, Unread> {
         match picked {
             Picked::Paths(paths) => paths
                 .iter()
@@ -895,6 +878,9 @@ impl PdfCraftApp {
         });
     }
 }
+
+/// A file that couldn't be read: its name and why.
+type Unread = (String, String);
 
 #[cfg(test)]
 mod tests {

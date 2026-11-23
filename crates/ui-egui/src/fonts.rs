@@ -40,7 +40,6 @@ fn primary_tweak(platform: FontPolicyPlatform, name: &str) -> FontTweak {
 /// fallback face's line box on the primary's, so a face with different metrics sits higher or
 /// lower than the Latin beside it. `FallbackAlign::Baseline` positions every face's glyphs from
 /// the primary face's ascent.
-
 pub fn on_interface_baseline(mut data: FontData) -> FontData {
     data.tweak.fallback_align = FallbackAlign::Baseline;
     data
@@ -65,9 +64,9 @@ pub fn ui_fonts(lang: Lang) -> UiFonts<'static> {
     emoji.monochrome = noto_emoji();
     let fonts = UiFonts::new(&SCRIPTS)
         .app_face("Inter", own_face(platform, "Inter", pdfcraft_fonts::INTER_REGULAR), &[proportional.clone(), monospace.clone()])
-        .app_face("JetBrainsMono", own_face(platform, "JetBrainsMono", JETBRAINS_MONO), &[monospace.clone()])
-        .app_face("Inter-Medium", own_face(platform, "Inter-Medium", INTER_MEDIUM), &[medium.clone()])
-        .app_face("Inter-SemiBold", own_face(platform, "Inter-SemiBold", INTER_SEMIBOLD), &[semibold.clone()])
+        .app_face("JetBrainsMono", own_face(platform, "JetBrainsMono", JETBRAINS_MONO), std::slice::from_ref(&monospace))
+        .app_face("Inter-Medium", own_face(platform, "Inter-Medium", INTER_MEDIUM), std::slice::from_ref(&medium))
+        .app_face("Inter-SemiBold", own_face(platform, "Inter-SemiBold", INTER_SEMIBOLD), std::slice::from_ref(&semibold))
         .family(Family::named(MEDIUM).weight(500))
         .family(Family::named(SEMIBOLD).weight(600))
         // As production's default fonts, with no system face: Hack draws the triangles and arrows (▸, ⇧) that

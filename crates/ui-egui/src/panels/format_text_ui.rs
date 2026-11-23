@@ -20,7 +20,7 @@ use craft::text::ui::character::{
     ParagraphValues, TextAlign as PanelAlign,
 };
 use craft::theme::Rgba;
-use craft::ui::contract::{Props as _, ShowContainer as _};
+use craft::ui::contract::ShowContainer as _;
 use craft::ui::runtime::env::Label;
 use craft::ui::sections::Section;
 use pdfcraft_engine::text_script::Script;

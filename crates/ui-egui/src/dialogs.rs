@@ -29,7 +29,6 @@ pub(crate) mod summarize;
 pub(super) mod word_count_ui;
 
 pub(crate) use prompts::shorten_middle;
-pub(crate) use properties::PropsTab;
 
 /// Drop (and zeroize) the Sign password draft once Sign is no longer the active window: Sign is a window beside the
 /// dialog host, so any dialog open on the host ends it. `host::open` and `host::open_over` call this after opening,

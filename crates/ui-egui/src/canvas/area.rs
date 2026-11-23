@@ -273,10 +273,3 @@ pub(super) fn set_layers(app: &mut PdfCraftApp, index: usize, changes: &[(LayerO
         app.views[index].invalidate_content();
     }
 }
-
-/// Full screen's click on the document, which turns the page: a primary click this frame with the
-/// view on top under it in `area`. Not page input: it is read before the pages' widget exists, and
-/// the turn waits until the pages have had the click.
-pub(super) fn presentation_click(ui: &egui::Ui, area: Rect) -> bool {
-    ui.rect_contains_pointer(area) && ui.input(|i| i.pointer.primary_clicked())
-}

@@ -1,8 +1,7 @@
 //! The JavaScript console and Document JavaScripts dialogs: one open at a time, held in `PdfCraftApp::js_dialog`.
 
 use craft::behavior::{DisplayOrder, ItemSource, Selection};
-use craft::ui::buttons::Button as _;
-use craft::ui::contract::{Bind, CollectionEvent, Props as _, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::contract::{Bind, CollectionEvent, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::dialog::Dialog;
 use craft::ui::display::{Shade, Text};
 use craft::ui::layout_components::Stack;
@@ -150,10 +149,11 @@ fn document_scripts(app: &mut PdfCraftApp, ui: &mut egui::Ui, open: &mut bool, d
                     ListRow::new(name).striped(icx.at % 2 == 1)
                 });
             // Only the pass's own pick copies; a drained event list is empty on a second pass.
-            if out.events.iter().any(|e| !matches!(e, CollectionEvent::Column(_))) && selection.lead != before {
-                if let Some((name, script)) = selection.lead.and_then(|at| scripts.get(at)) {
-                    *draft = DocJsDraft { name: name.clone(), script: script.clone() };
-                }
+            if out.events.iter().any(|e| !matches!(e, CollectionEvent::Column(_)))
+                && selection.lead != before
+                && let Some((name, script)) = selection.lead.and_then(|at| scripts.get(at))
+            {
+                *draft = DocJsDraft { name: name.clone(), script: script.clone() };
             }
         }
         TextField::new(tl!("Script"), Bind::bound(&mut draft.script)).lines(8).mono().tab_inserts(true).show(ui);

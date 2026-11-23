@@ -228,18 +228,6 @@ impl SignatureDrag {
         }
     }
 
-    /// Frees every texture the drag holds: the view goes inactive, or the document closes.
-    // PLAN: `cache.rs:387` (pdf-canvas-w10) resets the drag with `Default::default()`, which drops the layers but leaves
-    // their textures in the store until its budget evicts them; it calls `release(ctx)` first.
-    pub fn release(&mut self, ctx: &egui::Context) {
-        self.retire_layers();
-        self.retire_moving();
-        self.key = None;
-        self.aspect_ratio = None;
-        self.no_layer = None;
-        self.forget_retired(ctx);
-    }
-
     /// Drops the selected stamp's layers, keeping their textures' keys to free.
     fn retire_layers(&mut self) {
         if let Some(layers) = self.layers.take() {

@@ -1,4 +1,4 @@
-use super::*;
+use super::{DocId, LinkOrigin, OpenRequest, PdfCraftApp, PendingDestination, PendingLink, PendingRemoteLink, open_worker};
 
 impl PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]

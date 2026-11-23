@@ -150,7 +150,7 @@ impl PdfCraftApp {
     /// Each pass: the save picker's answer, and the changed-on-disk question's. Neither is the
     /// frame's input: both are taken once from where they wait, so a second pass in a frame finds
     /// nothing the first took, and no answer is applied twice.
-    pub(crate) fn save_flow_pass(&mut self, ctx: &egui::Context, _ctx: &egui::Context) {
+    pub(crate) fn save_flow_pass(&mut self, ctx: &egui::Context) {
         if let Some(step) = self.save_flow.take_pick(self.host.files(), &self.watch) {
             self.run_save_step(ctx, step);
         }

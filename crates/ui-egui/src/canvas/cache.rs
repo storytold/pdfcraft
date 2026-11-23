@@ -3,7 +3,7 @@ use craft::host::queue::{Priority, QueueCounts};
 use craft::text::find::FindMatches;
 use craft::ui::primitives::textures::TextureState;
 
-use super::{Arc, Color32, DocInfo, DocView, HashSet, PT, PageText, Range, RenderRequest, RequestKind, TextLink};
+use super::{Arc, Color32, DocView, HashSet, PT, PageText, RenderRequest, RequestKind, TextLink};
 
 /// At most this many text layers are cached beyond visible, selected and matched pages.
 /// Text layers are glyph structs, far smaller than rasters.
@@ -21,14 +21,6 @@ pub(crate) struct TextOutcome {
     text: Option<Arc<PageText>>,
     error: Option<String>,
     cut: bool,
-}
-
-/// Visible grid rows, plus one adjacent row in either direction. Work is independent of
-/// document length, including after a large scroll jump.
-pub(crate) fn thumbnail_rows(top: f32, bottom: f32, row_height: f32, rows: usize) -> Range<usize> {
-    let first = (top.max(0.0) / row_height).floor() as usize;
-    let end = (bottom.max(0.0) / row_height).ceil() as usize;
-    first.saturating_sub(1).min(rows)..end.saturating_add(1).min(rows)
 }
 
 impl DocView {
@@ -96,10 +88,6 @@ impl DocView {
         }
     }
 
-    pub(crate) fn page_text(&self, page: usize) -> Option<Arc<PageText>> {
-        self.session.texts.get(&page).cloned()
-    }
-
     /// Finds the addresses written as plain text on `page` (#4207): once per text layer, and only
     /// once the page's text is known. The addresses of text layers that were dropped or replaced
     /// are forgotten.
@@ -113,22 +101,6 @@ impl DocView {
             let found: Arc<[TextLink]> = pdfcraft_engine::text_links::find_text_links(&text).into();
             self.session.text_links.insert(page, (text, found));
         }
-    }
-
-    /// The address written as plain text on `page` under the view-space point `(x, y)` (#4207),
-    /// with its index among the page's, unless a link annotation lies over it: the annotation is
-    /// what the document asks for there. Only addresses [`Self::refresh_text_links`] found count.
-    pub(crate) fn text_link_at(&self, info: &DocInfo, page: usize, x: f32, y: f32) -> Option<(usize, &TextLink)> {
-        let (_, links) = self.session.text_links.get(&page)?;
-        let page_info = info.pages.get(page)?;
-        let (index, hit) = links.iter().enumerate().find(|(_, l)| l.contains(x, y))?;
-        let covered = info.links.iter().any(|l| l.page == page && hit.covered_by(page_info, l.rect));
-        (!covered).then_some((index, hit))
-    }
-
-    /// The address of the `index`-th text link found on `page` (#4207).
-    pub(crate) fn text_link_uri(&self, page: usize, index: usize) -> Option<String> {
-        self.session.text_links.get(&page).and_then(|(_, links)| links.get(index)).map(|l| l.uri.clone())
     }
 
     /// Whether `page`'s text layer has arrived from the renderer. Selecting text, the I-beam and

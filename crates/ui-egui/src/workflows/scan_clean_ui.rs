@@ -22,16 +22,10 @@ use crate::notices::{self, ProgressKey};
 const DIALOG_KEY: &str = "enhance-scan";
 
 /// The dialog's choices (kept between runs).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct ScanCleanDraft {
     pub range: PageRange,
     pub settings: ScanCleanSettings,
-}
-
-impl Default for ScanCleanDraft {
-    fn default() -> Self {
-        ScanCleanDraft { range: PageRange::default(), settings: ScanCleanSettings::default() }
-    }
 }
 
 /// A running clean-up: its document and the count the job and the progress card share.
@@ -123,7 +117,7 @@ impl PdfCraftApp {
     }
 
     /// Once per frame: takes the dialog's answer, remembers it and starts the run.
-    pub(crate) fn enhance_scan_pass(&mut self, ctx: &egui::Context, _ctx: &egui::Context) {
+    pub(crate) fn enhance_scan_pass(&mut self, ctx: &egui::Context) {
         let Some(DialogResult::Ok(answer)) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(DIALOG_KEY)) else { return };
         let d = &mut self.scan_clean_draft;
         if let Some(range) = PageRangeOptions::value(&answer.fields, "pages") {

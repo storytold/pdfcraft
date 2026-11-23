@@ -76,8 +76,8 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut Ui) {
     follow_active_document(app);
     keep_models_probing(ui);
     let ctx = ui.ctx().clone();
-    let pages_id = Id::new("ocr-verify-pages");
-    let text_id = Id::new("ocr-verify-text");
+    let pages_id = Id::unique("ocr-verify-pages");
+    let text_id = Id::unique("ocr-verify-text");
     let mut n = Intents::default();
 
     // PLAN: the sheet puts `command_scope` on a `Row`; only `Stack` forwards it, so a `Stack` holds the scope and a `Grid` lays the columns out.
@@ -252,7 +252,7 @@ fn options_bar(app: &mut PdfCraftApp, ui: &mut Ui, n: &mut Intents) {
         Text::new(tl!("to")).shade(Shade::Muted).show(ui);
         NumberField::new(tl!("To page"), Bind::bound(&mut to)).range(1.0..=9999.0).enabled(ranged).show(ui);
     };
-    let mut actions = |ui: &mut Ui, n: &mut Intents| {
+    let actions = |ui: &mut Ui, n: &mut Intents| {
         if wide {
             Divider::vertical().show(ui);
         }

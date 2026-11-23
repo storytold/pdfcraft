@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use craft::behavior::kurbo::Point;
 use craft::pages::ui::PageBody;
-use craft::text::ui::editor::{CaretLine, EditKind, EditorEnd, HostLine, HostRun, TextEditor, TextEditorHost, TextSelection};
+use craft::text::ui::editor::{CaretLine, EditKind, EditorEnd, HostLine, HostRun, TextEditor, TextEditorHost};
 use craft::ui::contract::{Bind, Props as _, Show as _};
 use craft::ui::runtime::focus::FocusRequest;
 use egui::{Color32, FontId, Pos2, Rect, Stroke, vec2};

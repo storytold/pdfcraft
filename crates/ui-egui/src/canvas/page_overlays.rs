@@ -223,7 +223,7 @@ impl LinksOnPage<'_> {
             .iter()
             .filter_map(|q| {
                 let mut corners: Vec<egui::Pos2> =
-                    q.chunks_exact(2).map(|c| self.xf.user_rect(self.info, self.page, [c[0], c[1], c[0], c[1]]).min).collect();
+                    q.as_chunks::<2>().0.iter().map(|c| self.xf.user_rect(self.info, self.page, [c[0], c[1], c[0], c[1]]).min).collect();
                 if !corners.iter().all(|p| p.is_finite()) {
                     return None;
                 }
@@ -272,15 +272,6 @@ impl LinksOnPage<'_> {
     /// Whether a click follows a link: `Follow` is the Select tool's mode, and nothing is drawn over the pages.
     fn follows(&self) -> bool {
         self.unobstructed && self.mode == LinkMode::Follow
-    }
-}
-
-/// The link or address `press` followed: where it goes and, for a script link, which one runs. `None` for
-/// a press that follows nothing (another owner's, not released over its part, or a click in `Edit`).
-pub(crate) fn follow_link(links: &PageLinks<'_>, press: &PagePress) -> Option<(LinkTarget, Option<(usize, usize)>)> {
-    match links.read(press)? {
-        LinkEvent::Follow { target, javascript } => Some((target, javascript)),
-        LinkEvent::Select { .. } | LinkEvent::Context { .. } => None,
     }
 }
 
@@ -417,7 +408,7 @@ impl Component for SignTabMetrics {
     type Output = SignTabMetricsOutput;
 
     fn style(cx: &StyleCx<'_>, key: SignTabMetricsStyleKey) -> SignTabMetricsStyle {
-        SignTabMetricsStyle { metrics: Metrics::new(), label_width: cx.text_width(TypeRole::Caption, &key.label) }
+        SignTabMetricsStyle { metrics: Metrics::new(), label_width: cx.text_width(TypeRole::Caption, key.label) }
     }
 
     fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {

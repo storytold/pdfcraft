@@ -477,25 +477,6 @@ impl PdfCraftApp {
         true
     }
 
-    /// Whether the keyboard is in a box typed into on the page: a paragraph being edited, or added
-    /// text.
-    // PLAN: callers still pass a ctx (`commands.rs:880`, `:882`, owner pdf-hub-w3): drop the argument there
-    pub(crate) fn page_box_focused(&self) -> bool {
-        self.active
-            .and_then(|i| self.views.get(i))
-            .is_some_and(|v| v.session.line_editor.as_ref().is_some_and(|ed| ed.focus) || v.session.content.draft.as_ref().is_some_and(|d| d.focus))
-    }
-
-    /// Whether the focused box on the page has typing its own Redo would put back: after Undo in
-    /// the box restores what the page has, Redo still belongs to the box, not the document.
-    pub(crate) fn page_box_can_redo(&self) -> bool {
-        let Some(view) = self.active.and_then(|i| self.views.get(i)) else { return false };
-        if let Some(ed) = view.session.line_editor.as_ref().filter(|ed| ed.focus) {
-            return ed.history.can_redo();
-        }
-        view.session.content.draft.as_ref().filter(|d| d.focus).is_some_and(|d| d.history.can_redo())
-    }
-
     /// Whether the box open on the page has a Redo of its own, the step
     /// [`Self::redo_in_page_box`] takes for Redo from the menu or toolbar: focus has moved to the
     /// menu by then, so unlike [`Self::page_box_can_redo`] this doesn't ask for it.

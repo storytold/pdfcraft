@@ -17,6 +17,7 @@ pub(crate) struct AttachmentOpen {
 
 impl PdfCraftApp {
     /// Opens the description editor for one attachment; a newer open replaces the old.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn open_attachment_description(
         &mut self,
         ctx: &egui::Context,

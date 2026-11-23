@@ -130,7 +130,7 @@ fn options_fields(o: &A11yOptions, pages: usize) -> DialogFields {
 
 /// The options dialog over its values.
 fn options_dialog(fields: &mut DialogFields, pages: usize, current: usize) -> ParamDialog<'_> {
-    let category = shown_category(fields);
+    let _category = shown_category(fields);
     let on = Rule::ALL.into_iter().filter(|r| fields.bool(&rule_key(*r)) == Some(true)).count();
     let heading = crate::i18n::fmt(
         tl!("Checking Options ({on} of {all} in all categories)"),

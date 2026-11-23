@@ -5,7 +5,7 @@ use craft::behavior::press::PressState;
 use craft::behavior::{CancelReason, Cursor, CursorIcon};
 use craft::pages::ui::PlacedPage;
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
-use craft::ui::primitives::{Draw, PaintShape, StrokeWidth};
+use craft::ui::primitives::Draw;
 use pdfcraft_engine::Document;
 use pdfcraft_render::DocInfo;
 

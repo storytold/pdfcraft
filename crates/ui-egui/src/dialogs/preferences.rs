@@ -8,7 +8,7 @@ use craft::theme::selection::MotionChoice;
 use craft::theme::variant::Tone;
 use craft::theme_store::SelectionChange;
 use craft::theme_store::ui::AppearancePage;
-use craft::ui::contract::{Bind, Entry, Props as _, SaveKey, Show as _};
+use craft::ui::contract::{Bind, Entry, SaveKey, Show as _};
 use craft::ui::dialog::DialogHost;
 use craft::ui::notices::{Notice, NoticeLayout};
 use craft::ui::patterns::preferences::{

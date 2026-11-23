@@ -15,7 +15,7 @@ pub(super) fn in_size_hint_zone(area: Rect, p: Pos2) -> bool {
 /// in that quadrant, as Acrobat does. Same formatter and unit as Document Properties. The pointer
 /// counts only when it is over the body in the body's own layer, so a dialog or popup above hides the hint.
 pub(super) fn page_size_hint(ui: &mut egui::Ui, body: &PageBody<'_>, page: &pdfcraft_render::PageInfo, units: crate::units::Unit) {
-    let probe = ui.interact(body.rect, ui.id().with("page-size-hint-zone"), egui::Sense::hover());
+    let probe = ui.interact(body.rect, ui.scope_id().with("page-size-hint-zone"), egui::Sense::hover());
     let inside = probe.hover_pos().is_some_and(|p| in_size_hint_zone(body.rect, p));
     if !inside {
         return;
@@ -66,6 +66,7 @@ fn bar(_tone: Tone, icon: &'static str, text: String) -> Bar<'static> {
 /// snapshot is, then pages cut at the renderer's limits, then the offer to lock a signature just
 /// placed, then the signature status bar, a form's scripts having been turned off, security,
 /// forms and warnings. None in full screen.
+#[allow(clippy::cognitive_complexity)]
 pub(super) fn notices(
     view: &mut DocView,
     doc: &pdfcraft_engine::Document,

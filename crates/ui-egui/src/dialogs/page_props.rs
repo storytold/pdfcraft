@@ -53,7 +53,7 @@ impl PdfCraftApp {
     /// One pass over the dialog: applies the chosen order when it differs from what every page has and the document
     /// is still active and as the dialog opened it. Another document becoming active, or an edit, while the dialog
     /// was open means the pages at those indices may not be the ones chosen: nothing changes and the user is told.
-    pub(crate) fn page_props_pass(&mut self, ctx: &egui::Context, _ctx: &egui::Context) {
+    pub(crate) fn page_props_pass(&mut self, ctx: &egui::Context) {
         let Some(result) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(KEY)) else { return };
         let Some(draft) = self.page_props_draft.take() else { return };
         let DialogResult::Ok(result) = result else { return };

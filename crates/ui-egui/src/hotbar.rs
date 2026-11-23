@@ -360,7 +360,7 @@ fn fill_text_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp) {
         });
     }
 
-    let (min, max) = (f64::from(crate::fill_sign::MIN_TEXT_SIZE), f64::from(crate::fill_sign::MAX_TEXT_SIZE));
+    let (min, max) = (crate::fill_sign::MIN_TEXT_SIZE, crate::fill_sign::MAX_TEXT_SIZE);
     let mut size = app.fill_text_size;
     // #1274: the size also applies to the Fill & Sign text that is selected, once per committed change (a typed
     // value, or the end of a drag), so a drag adds one undo step and not one per frame.

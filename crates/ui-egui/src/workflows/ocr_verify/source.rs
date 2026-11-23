@@ -32,7 +32,7 @@ use crate::canvas::pictures::DocPages;
 /// Where the pane publishes, each pass, the longer side of the page as it is drawn. The zoom crop
 /// reads it in the same pass, so both ask the store for one entry.
 fn side_id() -> egui::Id {
-    egui::Id::new("ocr-verify-page-side")
+    egui::Id::unique("ocr-verify-page-side")
 }
 
 /// The longer side, in points, the source pane drew the page at in this pass; `None` before the
@@ -279,7 +279,8 @@ pub(super) fn show(app: &mut PdfCraftApp, ui: &mut Ui, n: &mut Intents) {
         });
         RasterDisplay::painted(tl!("Source page"), pixels, paint).show_at(ui, body.rect);
         if let Some(pass) = tool_pass(&body.env) {
-            ToolHost::new().run(ui, &pass, &mut tool);
+            // The region tool moves no view: the drag it draws is read back from the tool below.
+            let _gesture = ToolHost::new().run(ui, &pass, &mut tool);
         }
         body.keep::<RegionMemory>().drag = tool.drag;
     });

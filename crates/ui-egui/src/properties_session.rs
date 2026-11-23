@@ -274,11 +274,6 @@ impl PdfCraftApp {
         }
     }
 
-    /// Whether a valid proposal differs from the document as opened.
-    pub(crate) fn properties_changed(&self) -> bool {
-        self.props_session.as_ref().is_some_and(|draft| draft.is_valid() && draft.original() != draft.preview())
-    }
-
     /// Check and consume once on the serialized UI command path. An engine failure retains
     /// the dialog's values and restores the uncommitted session, so the user can correct them.
     pub(crate) fn finish_properties(&mut self, ctx: &egui::Context) -> bool {

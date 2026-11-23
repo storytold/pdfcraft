@@ -48,14 +48,12 @@ pub(crate) struct ViewPane {
     pub(crate) placed: bool,
     /// When this tab was last the active one (each pane shows its latest).
     pub(crate) shown_seq: u64,
-    /// The document's render queue was last set for both of its views at once.
-    pub(crate) shared: bool,
 }
 
 impl Default for ViewPane {
     fn default() -> Self {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        Self { key: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed), place: Place::Main, placed: false, shown_seq: 0, shared: false }
+        Self { key: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed), place: Place::Main, placed: false, shown_seq: 0 }
     }
 }
 
@@ -91,16 +89,7 @@ pub struct Panes {
     pub(crate) drawing: Place,
 }
 
-impl Panes {
-    /// An egui id for something drawn once per pane (the floating tools bar): the main pane keeps
-    /// the plain id.
-    pub(crate) fn area_id(&self, name: &'static str) -> egui::Id {
-        match self.drawing {
-            Place::Main => egui::Id::unique(name),
-            place => egui::Id::unique((name, place)),
-        }
-    }
-}
+impl Panes {}
 
 impl PdfCraftApp {
     /// The tabs shown in `place`, in their strip's order (indexes into `views`).

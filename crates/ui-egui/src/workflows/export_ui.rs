@@ -159,6 +159,7 @@ pub(crate) fn open(app: &mut PdfCraftApp, ctx: &egui::Context, kind: ExportKind)
 }
 
 /// The kind of Export dialog on the host, if one is open.
+#[cfg(test)]
 pub(crate) fn open_kind(app: &PdfCraftApp) -> Option<ExportKind> {
     ExportKind::ALL.into_iter().find(|k| app.dialogs.get_by_id::<HostedParamDialog>(dialog_id(k.key())).is_some())
 }

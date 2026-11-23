@@ -390,7 +390,7 @@ impl PdfCraftApp {
             d.style = pdfcraft_engine::AddedText { aligns: std::mem::take(&mut d.style.aligns), ..updated };
             // The page has the box's text: its typing history restarts from it, even when the
             // restyle left the text as it was, so a Redo can't put undone typing back.
-            let now = crate::edit_text_ui::Typed::of(d.text.clone(), d.selection.clone(), d.style.aligns.clone());
+            let now = crate::edit_text_ui::Typed::of(d.text.clone(), d.selection, d.style.aligns.clone());
             d.history.restart(now);
         }
     }
@@ -405,7 +405,7 @@ impl PdfCraftApp {
             {
                 ed.refresh_source(block, doc.text_lines(ed.page));
                 // The page has the paragraph's text: its typing history restarts from it.
-                let now = crate::edit_text_ui::Typed::of(ed.text.clone(), ed.selection.clone(), ed.look.aligns.clone());
+                let now = crate::edit_text_ui::Typed::of(ed.text.clone(), ed.selection, ed.look.aligns.clone());
                 ed.history.restart(now);
             }
         }

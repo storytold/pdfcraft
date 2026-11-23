@@ -2,7 +2,7 @@
 
 use craft::behavior::{DisplayOrder, ItemSource};
 // PLAN: assumed `craft::ui::contract::CollectionEvent` re-export of the collection event enum.
-use craft::ui::contract::{Bind, CollectionEvent, LeadOnOpen, Show as _, ShowCollection as _, ShowContainer as _, overlay::Anchor};
+use craft::ui::contract::{Bind, CollectionEvent, LeadOnOpen, ShowCollection as _, ShowContainer as _, overlay::Anchor};
 use craft::ui::fonts::FontRef;
 use craft::ui::list::{DocumentRows, List, ListRow};
 use craft::ui::popover::{PopupList, PopupListKind};

@@ -6,8 +6,9 @@
 //! pass's `Context`, so none is lost before the first pass or from a headless caller. Nothing is mirrored every pass.
 
 use craft::ui::notices::{NoticeEnd, PostedNotice};
-use craft::ui::runtime::env::WindowKey;
-use craft::ui::runtime::toast::{self, ToastId};
+use craft::ui::runtime::toast::ToastId;
+#[cfg(test)]
+use craft::ui::runtime::{env::WindowKey, toast};
 
 use crate::PdfCraftApp;
 
@@ -60,12 +61,6 @@ pub fn title(key: ProgressKey) -> String {
     }
 }
 
-/// Queues `notice` for the next pass, which posts it. A notice raised before the first pass or by a headless caller
-/// waits here, so none is lost.
-pub fn post(app: &mut PdfCraftApp, notice: PostedNotice) {
-    app.posted_notices.push(notice);
-}
-
 /// Asks for the card of `key` to show `notice`: the first request posts it, later ones move the same card's fraction
 /// and message. A card has no timer and carries Cancel when `notice.cancellable`.
 pub fn set_progress(app: &mut PdfCraftApp, key: ProgressKey, notice: ProgressNotice) {
@@ -105,6 +100,9 @@ fn apply(app: &mut PdfCraftApp, ctx: &egui::Context, request: ProgressRequest) {
 /// How far the job of `key` has got, from its card; `None` when it has no card shown.
 // PLAN: L-206 names this `Notices::progress(&self, key: &str)`; the app has no `Notices` type, so it is a function
 // over the app's card map.
+
+/// How far the job of `key` has got, from its card; `None` when it has no card shown.
+#[cfg(test)]
 pub fn progress(app: &PdfCraftApp, ctx: &egui::Context, key: ProgressKey) -> Option<f32> {
     let id = app.progress_cards.get(&key)?;
     toast::cards(ctx, &WindowKey::main()).into_iter().find(|card| card.id == *id)?.toast.progress
@@ -112,6 +110,7 @@ pub fn progress(app: &PdfCraftApp, ctx: &egui::Context, key: ProgressKey) -> Opt
 
 /// The cards shown now, newest last.
 // PLAN: L-206 names this `Notices::posted`; see `progress`.
+#[cfg(test)]
 pub fn posted(ctx: &egui::Context) -> Vec<toast::Card> {
     toast::cards(ctx, &WindowKey::main())
 }

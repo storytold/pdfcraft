@@ -49,6 +49,7 @@ pub(super) const CARET_SIZE: f64 = 8.0;
 /// The caret is drawn upright in user space, so it only snaps on an unrotated page, where up on
 /// the page is up on screen; its size goes through the same mapping as the tip, so a page with
 /// `/UserUnit` gets a caret of the same size relative to its text.
+#[cfg(test)]
 pub(crate) fn snapped_caret(page: &PageInfo, text: &PageText, vx: f32, vy: f32) -> Option<([f64; 2], f64)> {
     if !page.rotation.is_multiple_of(360) {
         return None;

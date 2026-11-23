@@ -281,7 +281,7 @@ fn comment_props_dialog<'b>(
     if o.width.is_some() {
         let min_width = if o.font_size.is_some() { 0.0 } else { 0.5 };
         rows.push(PropertyRow::field(
-            Param::new("width", tl!("Thickness"), ParamKind::range(min_width, crate::comments::MAX_LINE_WIDTH as f64, 1.0, SliderScale::Linear))
+            Param::new("width", tl!("Thickness"), ParamKind::range(min_width, crate::comments::MAX_LINE_WIDTH, 1.0, SliderScale::Linear))
                 .decimals(1)
                 .unit(UnitKind::Points),
         ));

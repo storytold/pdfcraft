@@ -1,5 +1,7 @@
-use super::*;
-use crate::control;
+use super::{
+    DocView, Mode, PdfCraftApp, PropsTab, QuickTool, RightPanel, canvas, combine_ui, comments, dialogs, export_ui, fill_sign, i18n, measure_ui,
+    prepare, scroll_speed, ui_scale,
+};
 
 impl PdfCraftApp {
     /// Enable the UI control channel (opt-in; see [`control`]): `channel` receives the requests,
@@ -305,9 +307,6 @@ impl PdfCraftApp {
                     self.recent_colours.remember(colour);
                 }
             }
-            #[cfg(feature = "capture")]
-            // PLAN: assumed `Updates::set_source(&mut self, &str) -> Result<(), String>` (pdf-shell, shell-03 :119).
-            ("update-source", _) => self.updates.set_source(value)?,
             ("notice", Some(v)) => v.notice_dismissed = value == "off",
             ("quick", _) => {
                 // `--quick select|hand|note|freetext|highlight|underline|strikeout|ink|line|arrow|square|circle`

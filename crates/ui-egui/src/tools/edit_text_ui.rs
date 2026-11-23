@@ -207,8 +207,15 @@ impl TypingHistory {
 
     /// An alignment was picked: the alignments of the texts the box showed are stale, and a step
     /// follows the edit on the current ones instead, so Undo never takes back the pick.
+    #[cfg(test)]
     pub(crate) fn pick_align(&mut self) {
         self.seen.clear();
+    }
+
+    /// Whether an Undo would change the box.
+    #[cfg(test)]
+    pub(crate) fn can_undo(&self) -> bool {
+        self.run.is_some() || self.history.can_undo()
     }
 
     /// A format was applied: the page has `now`, and the box starts again from it, so a Redo cannot put
@@ -219,11 +226,6 @@ impl TypingHistory {
         self.composition_before = None;
         self.run = None;
         self.seen.clear();
-    }
-
-    /// Whether an Undo would change the box.
-    pub(crate) fn can_undo(&self) -> bool {
-        self.run.is_some() || self.history.can_undo()
     }
 
     /// Whether a Redo would change the box.
@@ -398,15 +400,6 @@ impl LineEditor {
     /// The box as its history sees it.
     pub(crate) fn typed(&self) -> Typed {
         Typed::of(self.text.clone(), self.selection, self.look.aligns.clone())
-    }
-
-    /// The box set to `typed`, as a step of its history leaves it. The alignments the paragraph was
-    /// opened with follow the new text, as they do for typing.
-    pub(crate) fn set_typed(&mut self, typed: Typed) {
-        let before = std::mem::replace(&mut self.text, typed.text);
-        self.look0.aligns = pdfcraft_engine::paragraph_align::remap(&before, &self.text, &self.look0.aligns);
-        self.look.aligns = typed.aligns;
-        self.selection = typed.selection;
     }
 
     /// The formatting the panel changed.
@@ -1015,6 +1008,7 @@ fn draw_move(ui: &mut egui::Ui, body: &PageBody<'_>, session: &PageSession, page
 /// release rewraps the paragraph to the new width, moving it with its left side. Not while a
 /// paragraph is open on the page, nor while the objects selected together or added content being moved
 /// hold the page.
+#[allow(clippy::too_many_arguments)]
 fn width_frame(
     ui: &mut egui::Ui,
     body: &PageBody<'_>,
@@ -1129,7 +1123,7 @@ impl ParagraphHost<'_> {
     }
 
     /// A point in document units as the laid-out text's screen pixels from its top left.
-    fn from_doc(&self, p: Point) -> Vec2 {
+    fn galley_offset(&self, p: Point) -> Vec2 {
         self.view.to_screen(p) - self.origin
     }
 
@@ -1188,7 +1182,7 @@ impl TextEditorHost for ParagraphHost<'_> {
 
     fn hit(&mut self, at: Point) -> (usize, usize) {
         let galley = self.galley();
-        let cursor = galley.cursor_from_pos(self.from_doc(at));
+        let cursor = galley.cursor_from_pos(self.galley_offset(at));
         (cursor.index.0, galley.layout_from_cursor(cursor).row)
     }
 

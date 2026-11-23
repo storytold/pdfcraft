@@ -13,7 +13,7 @@ use craft_ui::buttons::{Button, IconButton};
 use craft_ui::canvas::{CanvasTool, CropShield, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft_ui::canvas_controls::TaskBar;
 use craft_ui::choice::Segmented;
-use craft_ui::contract::{Bind, Entry, Props as _, Show as _, Styled as _, clicked};
+use craft_ui::contract::{Bind, Entry, Props as _, Show as _, clicked};
 use craft_ui::primitives::Draw;
 use craft_ui::style::Variant;
 use craft_ui::value_drag::Slider;

@@ -5,7 +5,6 @@ use craft::pages::ui::TextMark;
 use craft::text::find::{FindMatches, FindOptions};
 use craft::text::ui::find::{FindBar, FindBarState, FindRequest};
 use craft::ui::canvas_controls::TaskBar;
-use craft::ui::contract::Props as _;
 
 use super::{DocView, Rect, ViewAction};
 

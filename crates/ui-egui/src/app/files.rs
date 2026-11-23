@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    DocId, DocView, LeftPanel, Mode, OpenOutcome, OpenRequest, PasswordPrompt, PdfCraftApp, PendingOpen, RecentFile, RightPanel, UnlockPrompt,
+    canvas, i18n, open_worker,
+};
 use craft::docpath::names::safe_file_name;
 #[cfg(not(target_arch = "wasm32"))]
 use craft::host::queue::Priority;
@@ -81,7 +84,7 @@ impl PdfCraftApp {
                 // The view opened at the default zoom already.
                 M::Default => {}
                 M::ActualSize => (view.view.zoom, view.view.fit) = (1.0, canvas::Fit::None),
-                M::Percent(p) => (view.view.zoom, view.view.fit) = (f64::from(p) / 100.0, canvas::Fit::None),
+                M::Percent(p) => (view.view.zoom, view.view.fit) = (p / 100.0, canvas::Fit::None),
                 M::FitPage | M::FitVisible => view.view.fit = canvas::Fit::Page,
                 M::FitWidth => view.view.fit = canvas::Fit::Width,
                 M::FitHeight => view.view.fit = canvas::Fit::Height,
@@ -692,7 +695,7 @@ impl PdfCraftApp {
     }
 
     /// Answer the password prompt (`None` cancels).
-    pub fn submit_password(&mut self, ctx: &egui::Context, password: Option<String>) {
+    pub fn submit_password(&mut self, _ctx: &egui::Context, password: Option<String>) {
         let Some(mut p) = self.password_prompt.take() else { return };
         let Some(pw) = password.map(zeroize::Zeroizing::new) else {
             // A cancelled recovery goes back on offer; its snapshot stays in the store and must

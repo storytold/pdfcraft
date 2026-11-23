@@ -210,6 +210,7 @@ pub(super) struct Shown<'a> {
     pub rect: Rect,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn frame(
     presenter: &mut Presenter,
     body: Shown<'_>,

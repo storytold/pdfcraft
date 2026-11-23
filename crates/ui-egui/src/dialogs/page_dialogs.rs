@@ -6,7 +6,7 @@ use std::sync::Arc;
 use craft::pages::ui::{PageRangeChoices, PageRangeOptions};
 use craft::pages::{PageRange, PageScope, Subset};
 use craft::theme::variant::Tone;
-use craft::ui::contract::{Bind, Entry, Outcome as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Entry, Show as _, ShowContainer as _};
 use craft::ui::dialog::{DialogResult, dialog_id};
 use craft::ui::display::Text;
 use craft::ui::layout_components::Stack;

@@ -29,7 +29,6 @@ use craft::ui::layout_components::Stack;
 use craft::ui::list::{List, ListRow, RowEvent, TrailingFace, TrailingPart};
 use craft::ui::notices::{Notice, NoticeAction};
 use craft::ui::primitives::{HAlign, IconSpec, PaintShape, StrokeWidth, TextRun};
-use craft::ui::runtime::env::Label;
 use craft::ui::style::{ComponentStyle, StyleColor, StyleCx};
 use egui::{CornerRadius, Pos2, Rect, Response, Vec2, pos2, vec2};
 use pdfcraft_cos::ObjRef;
@@ -64,15 +63,6 @@ enum Tone {
     Late,
     /// Its formula reads its own result through other formulas.
     Loop,
-}
-
-/// The status a tone reads in on the panel.
-fn status(tone: Tone) -> Status {
-    match tone {
-        Tone::Ok => Status::Neutral,
-        Tone::Late => Status::Warn,
-        Tone::Loop | Tone::Missing => Status::Bad,
-    }
 }
 
 /// A view's calculation order, read again only after an edit (filling a field in is one), and

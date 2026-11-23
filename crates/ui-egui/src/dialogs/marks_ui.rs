@@ -525,14 +525,12 @@ fn boxes_row() -> Param {
     let companions: Vec<String> = (0..6).map(|k| format!("hf.text.{k}")).chain(["hf.focused".to_string()]).collect();
     Param::custom("hf.boxes", tl!("Header and footer text"), |ui, fields, _cx| {
         let mut out: Option<egui::Response> = None;
-        for k in 0..BOX_NAMES.len() {
+        for (k, name) in BOX_NAMES.iter().enumerate() {
             let key = format!("hf.text.{k}");
             let before = fields.text(&key).unwrap_or_default().to_owned();
             let mut text = before.clone();
             let r = ui
-                .push_id(("hf-box", k), |ui| {
-                    TextField::new(tl!(BOX_NAMES[k]), craft::ui::contract::Bind::bound(&mut text)).lines(2).show(ui).response
-                })
+                .push_id(("hf-box", k), |ui| TextField::new(tl!(name), craft::ui::contract::Bind::bound(&mut text)).lines(2).show(ui).response)
                 .inner;
             // The field's focus stop is the component: egui's focus sits on its text part.
             if craft::ui::runtime::focus::is_focused(ui.ctx(), r.id) {
@@ -679,11 +677,11 @@ type RenderKey = (DocId, u64, &'static str, usize, u32);
 /// cancels its jobs.
 pub struct MarksPreview {
     kind: MarkKind,
-    backdrops: JobQueue<(DocId, u64, Vec<usize>), Result<Vec<Option<Backdrop>>, String>>,
+    backdrops: JobQueue<BackdropKey, Result<Vec<Option<Backdrop>>, String>>,
     renders: JobQueue<RenderKey, Result<egui::ColorImage, String>>,
     /// The document without its marks of `kind`, made once per document version: `None` inside
     /// when it has none or can't be made.
-    unmarked: Option<((DocId, u64), Option<Arc<Mutex<pdfcraft_engine::UnmarkedPages>>>)>,
+    unmarked: Option<((DocId, u64), Option<SharedUnmarked>)>,
     pictures: HashMap<RenderKey, egui::TextureHandle>,
     failed: HashSet<RenderKey>,
 }
@@ -706,13 +704,6 @@ impl MarksPreview {
             pictures: HashMap::new(),
             failed: HashSet::new(),
         }
-    }
-
-    /// Whether the preview has nothing left to wait for: the pages are checked and drawn (the
-    /// automation state reads it).
-    pub fn is_ready(&self) -> bool {
-        let (b, r) = (self.backdrops.counts(), self.renders.counts());
-        b.queued + b.running + b.finished + r.queued + r.running + r.finished == 0
     }
 
     /// Takes the finished backdrop batches of this document version, records them, starts the next
@@ -961,7 +952,7 @@ impl PdfCraftApp {
 
     /// The pages (0-based) selected in view `index`.
     fn selected_pages(&self, index: usize) -> Vec<usize> {
-        self.views.get(index).map(|v| v.selected.items.iter().copied().collect()).unwrap_or_default()
+        self.views.get(index).map(|v| v.selected.items.to_vec()).unwrap_or_default()
     }
 
     /// One pass of the open marks dialog: answers its requests, reads its values into the draft,
@@ -1122,6 +1113,11 @@ impl MarksPreview {
         if replace { self.unmarked_picture(ctx, doc, page, near) } else { None }
     }
 }
+
+/// A backdrop job's key: the document, its revision and the pages.
+type BackdropKey = (DocId, u64, Vec<usize>);
+/// The document's pages without their marks, shared with the jobs that read them.
+type SharedUnmarked = Arc<Mutex<pdfcraft_engine::UnmarkedPages>>;
 
 #[cfg(test)]
 mod tests {

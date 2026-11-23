@@ -480,7 +480,7 @@ pub(crate) fn page_parts(
 /// A press of a part [`object_controls`] registered: the objects selected together, or the frame of
 /// the paragraph open for typing, which selects its box and moves it. The drag shows the move; the
 /// release past 3 points returns it as one edit, and one within 3 changes nothing.
-pub(crate) fn objects_press(session: &mut PageSession, doc: &Document, info: &DocInfo, press: &PagePress, geo: PageGeometry<'_>) -> Option<Edit> {
+pub(crate) fn objects_press(session: &mut PageSession, doc: &Document, _info: &DocInfo, press: &PagePress, geo: PageGeometry<'_>) -> Option<Edit> {
     let page = press.page;
     match press.phase {
         PressPhase::Down { .. } => {

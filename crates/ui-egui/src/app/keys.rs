@@ -1,4 +1,4 @@
-use super::*;
+use super::{PdfCraftApp, QuickTool, RightPanel, object_ui, prepare};
 
 impl PdfCraftApp {
     /// The keys the app reads itself, after the runtime has fired the catalog's commands (V and H
@@ -24,7 +24,7 @@ impl PdfCraftApp {
     /// selection and an open menu took theirs before this arm, so full screen stays while any of
     /// them is open. With Preferences ▸ Esc leaves full screen off, only ⌘L / Ctrl+L leaves it. A
     /// Combine file shown large keeps Escape for itself.
-    fn escape(&mut self, ctx: &egui::Context) {
+    fn escape(&mut self, _ctx: &egui::Context) {
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
             && view.escape_closes_find()
         {

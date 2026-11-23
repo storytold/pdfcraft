@@ -8,7 +8,7 @@ use craft::docpath::names::{CopyNumbering, unique_file_name};
 use craft::host::queue::Priority;
 use craft::host::{Files, PickRequest, Picked, WriteIntent};
 use craft::ui::buttons::Button;
-use craft::ui::contract::{Bind, Entry, Props as _, RowAlign, Show as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Entry, RowAlign, Show as _, ShowContainer as _};
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft::ui::display::{Shade, Text};
 use craft::ui::form::{Field, FieldGroup};
@@ -192,11 +192,6 @@ fn open_list(app: &mut PdfCraftApp, select: Option<String>) {
 pub(crate) fn open_wizard(app: &mut PdfCraftApp, _ctx: &egui::Context, preselect: Option<&str>) {
     let select = preselect.and_then(|n| app.all_actions().iter().find(|a| a.name == n).map(shown_name));
     open_list(app, select);
-}
-
-/// Whether the Action Wizard is on the dialog host.
-pub(crate) fn wizard_open(app: &PdfCraftApp) -> bool {
-    app.dialogs.is_open::<ActionWizardDialog>()
 }
 
 /// Opens the editor over `draft`; `original` is the name the action had when it is being edited.

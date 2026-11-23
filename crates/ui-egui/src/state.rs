@@ -1,4 +1,4 @@
-use super::*;
+use super::{DocId, DocView, comments, fill_sign, measure_ui, open_worker, prepare};
 
 /// Top-level workspace modes (Acrobat's mode bar).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

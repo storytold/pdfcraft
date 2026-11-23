@@ -170,17 +170,11 @@ fn toggles() -> impl Iterator<Item = &'static Toggle> {
 }
 
 /// What the dialog chooses: the settings and the Remove Hidden Information categories to discard.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct OptimizeDraft {
     pub settings: Settings,
     /// Remove Hidden Information categories to discard.
     pub discard: Vec<Hidden>,
-}
-
-impl Default for OptimizeDraft {
-    fn default() -> Self {
-        Self { settings: Settings::default(), discard: Vec::new() }
-    }
 }
 
 fn quality_id(compression: Compression) -> String {

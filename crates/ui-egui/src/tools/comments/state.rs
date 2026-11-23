@@ -546,23 +546,6 @@ impl PageCx<'_> {
             .chain(fallback)
     }
 
-    /// A redaction mark's areas: one per marked quad, or its rectangle.
-    pub(super) fn redact_rects(&self, a: &Annotation) -> Vec<Rect> {
-        if a.quads.is_empty() {
-            return vec![self.screen_rect(a)];
-        }
-        a.quads
-            .iter()
-            .map(|q| {
-                let xs = [q[0], q[2], q[4], q[6]];
-                let ys = [q[1], q[3], q[5], q[7]];
-                let (x0, x1) = (xs.iter().copied().fold(f32::MAX, f32::min), xs.iter().copied().fold(f32::MIN, f32::max));
-                let (y0, y1) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
-                self.xf.user_rect(self.info, self.page, [x0, y0, x1, y1])
-            })
-            .collect()
-    }
-
     /// The topmost comment's body under `p`: the one drawn last, in `/Annots` order (inspection lists
     /// comments by position, not in paint order). A Replace Text strikeout is grouped under its
     /// caret (`/RT /Group`), which holds the proposal, so the strikeout is hit as that caret: the

@@ -332,7 +332,7 @@ pub(crate) struct FillInput<'a> {
     pub author: &'a str,
     pub date_text: &'a Result<String, String>,
     pub fill_text: &'a mut Option<TypeBox>,
-    pub member: &'a mut Option<((usize, usize), (usize, usize))>,
+    pub member: &'a mut Option<(CellAt, CellAt)>,
 }
 
 /// The Fill & Sign tool over the placed pages: a click places what the tool makes and reports it
@@ -562,3 +562,6 @@ pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp)
     }
     command
 }
+
+/// A pair of indices naming one place in a grid.
+type CellAt = (usize, usize);

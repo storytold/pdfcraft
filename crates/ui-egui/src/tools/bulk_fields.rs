@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use craft::behavior::{Mixed, SelectionChange, Value, keyed};
 use craft::theme::Srgba;
 use craft::theme::variant::Tone;
-use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::contract::{Bind, CollectionEvent, Entry, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id};
 use craft::ui::display::Text;
 use craft::ui::layout_components::Stack;

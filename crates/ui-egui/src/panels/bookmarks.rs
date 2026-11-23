@@ -53,7 +53,7 @@ const MAX_DEPTH: usize = 256;
 
 /// The id of a document's bookmark list, so a new bookmark's rename can be requested from outside the panel.
 pub(crate) fn list_id(doc: pdfcraft_engine::DocId) -> egui::Id {
-    egui::Id::new(("bookmark-list", doc.0))
+    egui::Id::unique(("bookmark-list", doc.0))
 }
 
 /// Asks the bookmark list of `doc` to open the rename editor on the bookmark at `path`.

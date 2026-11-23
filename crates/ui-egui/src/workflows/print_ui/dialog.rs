@@ -61,7 +61,7 @@ impl PdfCraftApp {
         let printers = self.sync_listed();
 
         let current = self.views[i].current();
-        let selected: Vec<usize> = self.views[i].selected.items.iter().copied().collect();
+        let selected: Vec<usize> = self.views[i].selected.items.to_vec();
         let mut keep = std::mem::take(&mut self.print_draft);
         // Leaving Label gives back the paper it replaced (#3564), before the layout resets below.
         if keep.handling == Handling::Label {
@@ -149,7 +149,7 @@ impl PdfCraftApp {
     }
 
     /// The page sizes and labels of the document.
-    fn page_geometry(&self, id: pdfcraft_engine::DocId) -> Option<(Vec<(f64, f64)>, Vec<String>)> {
+    fn page_geometry(&self, id: pdfcraft_engine::DocId) -> Option<(Vec<PageSize>, Vec<String>)> {
         let doc = self.session.get(id)?;
         let sizes = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
         let labels = doc.info.pages.iter().map(|p| p.label.clone()).collect();
@@ -414,3 +414,6 @@ impl PdfCraftApp {
         }
     }
 }
+
+/// A page's width and height in points.
+type PageSize = (f64, f64);

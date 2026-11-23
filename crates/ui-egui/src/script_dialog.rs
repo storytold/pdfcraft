@@ -580,7 +580,7 @@ mod review13_ui_tests {
             }
             assert!(app.script_pending.is_none());
             // The Save As the script asked for takes the queued answer on this pass.
-            app.save_flow_pass(&ctx, &ctx);
+            app.save_flow_pass(&ctx);
             assert_eq!(app.session.run_javascript(old, "comparisonKept", None).unwrap().result.as_deref(), Some("42"));
             assert_eq!(app.session.save_bytes(new).unwrap(), new_before);
             assert!(app.session.get(new).unwrap().path.is_none());

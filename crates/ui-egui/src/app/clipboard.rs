@@ -2,7 +2,7 @@ use craft::host::queue::Priority;
 // PLAN: needs the `platform-clipboard` feature on the `craft` dependency in crates/ui-egui/Cargo.toml (owner: pdf-hub-w1); `craft::platform::clipboard` exists only with it
 use craft::platform::clipboard::{ClipboardImage, Flavor, HTML, RGBA8, TEXT};
 
-use super::*;
+use super::{CommentClip, DocId, DocView, DocumentCopyJob, PdfCraftApp, QuickTool, comments};
 
 /// Why nothing can be copied out of the document: its security doesn't allow it (Table 22,
 /// bit 5; #568).
@@ -57,14 +57,14 @@ impl PdfCraftApp {
         if let Some(text) = &content.text {
             flavors.push(Flavor::text(text.as_ref()));
         }
-        if let Some(image) = &content.image {
-            if let (Ok(width), Ok(height)) = (u32::try_from(image.size[0]), u32::try_from(image.size[1])) {
-                let mut data = Vec::new();
-                data.extend_from_slice(&width.to_le_bytes());
-                data.extend_from_slice(&height.to_le_bytes());
-                data.extend(image.pixels.iter().flat_map(egui::Color32::to_srgba_unmultiplied));
-                flavors.push(Flavor::new(RGBA8, data));
-            }
+        if let Some(image) = &content.image
+            && let (Ok(width), Ok(height)) = (u32::try_from(image.size[0]), u32::try_from(image.size[1]))
+        {
+            let mut data = Vec::new();
+            data.extend_from_slice(&width.to_le_bytes());
+            data.extend_from_slice(&height.to_le_bytes());
+            data.extend(image.pixels.iter().flat_map(egui::Color32::to_srgba_unmultiplied));
+            flavors.push(Flavor::new(RGBA8, data));
         }
         if !flavors.is_empty() {
             self.clipboard.offer_paste(flavors);

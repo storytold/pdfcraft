@@ -8,7 +8,7 @@ use craft::platform::clipboard::ClipboardImage;
 use craft::print::ui::HostedPrint;
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft::ui::canvas_controls::TaskBar;
-use craft::ui::contract::{Props as _, Show as _};
+use craft::ui::contract::Show as _;
 use craft::ui::primitives::Draw;
 use pdfcraft_render::{RenderConfig, RenderRequest, RequestKind, Tile};
 
@@ -48,11 +48,6 @@ impl<'a> SnapshotTool<'a> {
     /// The area the last release made, once.
     pub(crate) fn take_result(&mut self) -> Option<(usize, [f32; 4])> {
         self.done.take()
-    }
-
-    /// Whether a drag is running: the kept outline is put away meanwhile.
-    pub(crate) fn dragging(&self) -> bool {
-        self.drag.is_active()
     }
 }
 
@@ -238,7 +233,7 @@ impl PdfCraftApp {
     /// in `last_snapshot`), at the current zoom or [`SNAPSHOT_MIN_SCALE`] if that is finer.
     pub fn snapshot(&mut self, ctx: &egui::Context, index: usize, page: usize, view_rect: [f32; 4]) -> Result<(u32, u32), String> {
         let (w, h, rgba) = self.render_area(ctx, index, page, view_rect)?;
-        self.clipboard.write_image(&ClipboardImage { width: w, height: h, rgba: rgba.to_vec() }).map_err(|e| e.to_string())?;
+        self.clipboard.write_image(&ClipboardImage { width: w, height: h, rgba: rgba.to_vec() }).map(|_| ()).map_err(|e| e.to_string())?;
         self.last_snapshot = Some((w, h, rgba));
         self.last_snapshot_of = Some((self.views[index].id, page, view_rect));
         Ok((w, h))

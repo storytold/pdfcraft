@@ -15,7 +15,7 @@ use pdfcraft_engine::CommentOutline as O;
 use super::bridge::{self, PageMap};
 use super::state::Settling;
 use super::tool::PastePlacement;
-use super::{Annotation, CommentPrefs, DocInfo, QuickTool, color32};
+use super::{CommentPrefs, DocInfo, QuickTool, color32};
 use crate::canvas::PageSession;
 
 /// What the overlay needs besides the document: what the pointer is over.
@@ -33,6 +33,7 @@ pub(crate) struct Hover {
 /// Paints the page's comments: the annotation overlay over the pages `body` places, the outline of the comment a
 /// press under the pointer would take, and a redaction mark's fill while the pointer is over it, as Acrobat's does,
 /// so the marked area reads before anything is applied.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn show(
     ui: &mut egui::Ui,
     body: &PageBody<'_>,

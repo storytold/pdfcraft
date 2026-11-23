@@ -6,13 +6,6 @@ use super::Value;
 const STATE_THUMB_SIDE: f32 = 160.0;
 
 impl crate::PdfCraftApp {
-    /// Cancel any in-progress pointer gesture in every open view.
-    pub(crate) fn cancel_pointer_gestures(&mut self, ctx: &egui::Context) {
-        for view in &mut self.views {
-            view.cancel_pointer_gestures(ctx);
-        }
-    }
-
     /// The captured content and the target of synthetic input: active document and open
     /// dialog/prompt, never keyboard focus (the framework withdraws injected input itself when the
     /// focus moves).
@@ -37,11 +30,6 @@ impl crate::PdfCraftApp {
     /// `ui.panel`: the dock's panel request.
     pub(crate) fn panel(&mut self, reset: bool, params: &Value) -> Result<Value, String> {
         crate::side_panels::command(self, reset, params)
-    }
-
-    /// `ui.quit`: asks to quit through the quit guard; `true` when nothing holds it.
-    pub(crate) fn quit(&mut self, ctx: &egui::Context) -> bool {
-        self.request_quit(ctx)
     }
 
     /// `ui.state`: what an agent needs to aim its next request.

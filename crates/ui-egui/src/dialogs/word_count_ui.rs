@@ -66,6 +66,7 @@ impl WordCountDialog {
     }
 
     /// Whether the count for the current key has finished (with a report or an error).
+    #[cfg(test)]
     pub(crate) fn finished(&self) -> bool {
         self.shown.is_some()
     }

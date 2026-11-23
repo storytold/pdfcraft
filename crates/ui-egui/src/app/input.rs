@@ -120,7 +120,7 @@ impl PdfCraftApp {
     /// selects them. Each file is read here (its bytes, else its path); one that can't be read is
     /// named and skipped by [`Self::insert_each`], the rest are inserted.
     pub(crate) fn insert_dropped(&mut self, ctx: &egui::Context, files: Vec<OsFile>, at: usize) {
-        let read: Vec<Result<(String, Vec<u8>), (String, String)>> = files
+        let read: Vec<DroppedRead> = files
             .into_iter()
             .map(|file| {
                 let name = if file.name.is_empty() { DROPPED_NAME.to_string() } else { file.name.clone() };
@@ -137,3 +137,6 @@ impl PdfCraftApp {
         self.insert_each(ctx, read);
     }
 }
+
+/// A dropped file read: its name and bytes, or its name and why it couldn't be read.
+type DroppedRead = Result<(String, Vec<u8>), (String, String)>;

@@ -257,10 +257,8 @@ fn edge_of(workspace: &Workspace<PanelId>, panel: PanelId) -> Option<DockEdge> {
                 pending.push((&**first, depth + 1));
                 pending.push((&**second, depth + 1));
             }
-            Node::Dock { side, columns, .. } => {
-                if columns.iter().any(|column| column.panels().any(|p| *p == panel)) {
-                    return Some(*side);
-                }
+            Node::Dock { side, columns, .. } if columns.iter().any(|column| column.panels().any(|p| *p == panel)) => {
+                return Some(*side);
             }
             _ => {}
         }

@@ -1,4 +1,4 @@
-use super::*;
+use super::PdfCraftApp;
 
 use craft::ui::runtime::frame::FrameInput;
 use craft::ui::shell::embed;

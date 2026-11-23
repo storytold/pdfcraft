@@ -30,12 +30,12 @@ const DELETE: usize = 2;
 /// The grid's id: the press owner `PageThumbnails::id` takes and `cancel_page_drags` ends. One place builds it, so the
 /// two cannot drift; the pane key outlives `document_replaced`.
 fn organize_grid_id(view: &DocView) -> egui::Id {
-    egui::Id::new(("organize-grid", view.view_key()))
+    egui::Id::unique(("organize-grid", view.view_key()))
 }
 
 /// The Pages panel grid's id, built the same way as [`organize_grid_id`].
 pub(crate) fn pages_panel_grid_id(view: &DocView) -> egui::Id {
-    egui::Id::new(("pages-panel-grid", view.view_key()))
+    egui::Id::unique(("pages-panel-grid", view.view_key()))
 }
 
 impl DocView {

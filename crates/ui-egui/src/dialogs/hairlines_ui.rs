@@ -18,17 +18,11 @@ use crate::units::Unit;
 /// The dialog's key.
 const KEY: &str = "prepress.hairlines";
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct HairlinesDraft {
     /// Both widths in points (shown in the preferences' unit).
     pub settings: Hairlines,
     pub range: PageRange,
-}
-
-impl Default for HairlinesDraft {
-    fn default() -> Self {
-        Self { settings: Hairlines::default(), range: PageRange::default() }
-    }
 }
 
 impl HairlinesDraft {
@@ -98,7 +92,7 @@ impl PdfCraftApp {
     }
 
     /// Fixes the hairlines when the dialog was answered with OK.
-    pub(crate) fn fix_hairlines_pass(&mut self, ctx: &egui::Context, _ctx: &egui::Context) {
+    pub(crate) fn fix_hairlines_pass(&mut self, ctx: &egui::Context) {
         let Some(answer) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(KEY)) else { return };
         let Some(result) = answer.ok() else { return };
         let per_point = self.units.per_point();

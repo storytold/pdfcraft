@@ -128,37 +128,6 @@ fn migrate_legacy_folders() {
     }
 }
 
-/// Desktop launchers (GNOME Files, KDE Dolphin…) only recognise an app as the default handler for a
-/// mime type if its `Exec` takes URIs (`%u`/`%U`), not just paths (`%F`); the packaged `.desktop`
-/// file uses `%U` accordingly (packaging/linux/ai.storyteller.pdfcraft.desktop). Decode a local
-/// `file://` argument (`file:///path` or `file://localhost/path`) to a plain path here so the rest
-/// of the app, which only ever opens paths, is unaffected. Other schemes (`http://`, `mailto:`…),
-/// URIs naming another host, and plain paths pass through untouched.
-fn path_from_arg(arg: String) -> String {
-    let Some(rest) = arg.strip_prefix("file://") else { return arg };
-    let rest = rest.strip_prefix("localhost").unwrap_or(rest);
-    if !rest.starts_with('/') {
-        return arg;
-    }
-    // `file:///C:/x.pdf` on Windows names `C:/x.pdf`. `rest` starts with the one-byte '/', so
-    // byte 1 is a char boundary.
-    let rest = if cfg!(windows) && rest.as_bytes().get(2) == Some(&b':') { &rest[1..] } else { rest };
-    let mut out = Vec::with_capacity(rest.len());
-    let mut bytes = rest.bytes();
-    while let Some(b) = bytes.next() {
-        if b == b'%' {
-            let hex = bytes.clone().take(2).collect::<Vec<u8>>();
-            if let Some(byte) = std::str::from_utf8(&hex).ok().filter(|h| h.len() == 2).and_then(|h| u8::from_str_radix(h, 16).ok()) {
-                out.push(byte);
-                bytes.nth(1);
-                continue;
-            }
-        }
-        out.push(b);
-    }
-    String::from_utf8(out).unwrap_or(arg)
-}
-
 /// Some programs start the PDF reader with the path unquoted (`pdfcraft.exe P:\Docs\01 Contract.PDF`),
 /// so a path with spaces arrives split into several arguments (Acrobat accepts this). When an
 /// argument names no file but it and the ones after it, joined with one space, do, rejoin them
@@ -551,7 +520,7 @@ fn app_creator<'a>(
         // The system's reopen-windows choice (macOS) starts the preference; a saved choice replaces it.
         app.reopen_last_session = reopen::system_default();
         let settings = pdfcraft_ui_egui::settings::open();
-        app.apply_settings(&settings.get());
+        app.apply_settings(settings.get());
         app.attach_settings(settings);
         #[cfg(target_os = "windows")]
         if let Some(window) = cc.winit_window() {

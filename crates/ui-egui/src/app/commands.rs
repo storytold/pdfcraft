@@ -1,4 +1,4 @@
-use super::*;
+use super::{DocId, LeftPanel, Mode, PdfCraftApp, QuickTool, RightPanel, edit_text_ui};
 
 impl PdfCraftApp {
     /// Run a catalogue command. Commands that aren't implemented yet say which milestone ships them.

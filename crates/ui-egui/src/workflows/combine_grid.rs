@@ -11,7 +11,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use craft::behavior::{EditEvent, IconId, ReorderKeys, Selection, keyed};
-use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, ReorderMove, ReorderRule, ShowCollection as _, ShowContainer as _, SpaceAction};
+use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, ReorderMove, ReorderRule, ShowCollection as _, SpaceAction};
 use craft::ui::menu::Menu;
 use craft::ui::primitives::textures::{TextureState, ThumbRequest};
 use craft::ui::tile_grid::{GridEvent, GridZoom, Tile, TileActionPlace, TileGrid, TileGroup, TilePartEvent, TileZoom};
@@ -299,13 +299,10 @@ pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, checks: &[Result<us
         }
     }
     for event in shown.events {
-        match event {
-            GridEvent::GroupOpen { group, open, .. } => {
-                if let Some(CombineKey::File(id)) = rows.groups.get(group).map(|g| g.key) {
-                    actions.push(RowAction::Expand(id, open));
-                }
-            }
-            _ => {}
+        if let GridEvent::GroupOpen { group, open, .. } = event
+            && let Some(CombineKey::File(id)) = rows.groups.get(group).map(|g| g.key)
+        {
+            actions.push(RowAction::Expand(id, open));
         }
     }
     // The pick that was just made decides which kind of tile stays selected.

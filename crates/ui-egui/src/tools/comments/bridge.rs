@@ -16,9 +16,7 @@ use craft::review::{Annotation as Marked, AnnotationEdit, AnnotationId, Annotati
 use super::geometry::{CARET_SIZE, frame, on_text, reshapable, resizable};
 use super::popups::has_popup;
 use super::state::{CommentView, Composer, ComposerKind, PageCx};
-use super::{
-    Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, LineEnding, NewAnnotation, PageInfo, QuickTool, Shape, tool_for, tool_for_default,
-};
+use super::{Annotation, CommentPrefs, CommentTool, DocInfo, Edit, LineEnding, NewAnnotation, PageInfo, QuickTool, Shape, tool_for_default};
 // PLAN: assumed `PagePart::new(owner, page, shape: Vec<egui::Rect>, layer)` with `.passes_drag()`, `.tip(String)` and
 // `.cursor(CursorIcon)`, and `Owner::Comment { index }` (pdf-canvas-w9, `canvas/page_parts.rs`).
 use crate::canvas::page_parts::{Owner, PageLayer, PagePart};
@@ -359,12 +357,6 @@ fn tool_tips(tool: QuickTool) -> bool {
     !(matches!(tool, QuickTool::Fill(_)) || freehand)
 }
 
-/// Whether the page shows a tip for what lies under the pointer (a comment, a signature's badge) with `tool`: not
-/// with Fill & Sign, not while drawing freehand, and not while a comment is moved, resized or drawn.
-pub(crate) fn tips_shown(tool: QuickTool, view: &DocView) -> bool {
-    tool_tips(tool) && view.session.comments.tool.in_flight().is_none() && view.session.comments.tool.drawing().is_empty()
-}
-
 /// What hovering `a` says, as Acrobat's popups do. Replies and Fill & Sign's marks (typed text, checks, signatures)
 /// say nothing: they are page content being edited, not comments. Neither does a highlight with no text of its own,
 /// when the preferences say so.
@@ -408,8 +400,7 @@ pub(crate) fn parts(
     on_link: bool,
 ) -> Vec<PagePart> {
     let Some(screen) = pointer else { return Vec::new() };
-    let (Some(page), at) = (map.page_at(screen), ()) else { return Vec::new() };
-    let _ = at;
+    let Some(page) = map.page_at(screen) else { return Vec::new() };
     let Some(at) = map.to_page(page, screen) else { return Vec::new() };
     let anns: Vec<Marked> = annotations(info, map, QuickTool::Select, true).into_iter().filter(|a| a.page == page).collect();
     let markers = marker_boxes(map, &anns, icon_side);
@@ -645,11 +636,12 @@ fn create(a: &Marked, map: &PageMap<'_>, prefs: &CommentPrefs) -> Option<Edit> {
             kind: tool.markup()?,
             quads: a
                 .points
-                .chunks_exact(4)
-                .filter_map(|q| {
-                    let [p0, p1, p2, p3] = q else { return None };
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|[p0, p1, p2, p3]| {
                     let [u0, u1, u2, u3] = [user(*p0), user(*p1), user(*p2), user(*p3)];
-                    Some([u0[0], u0[1], u1[0], u1[1], u2[0], u2[1], u3[0], u3[1]])
+                    [u0[0], u0[1], u1[0], u1[1], u2[0], u2[1], u3[0], u3[1]]
                 })
                 .collect(),
         },

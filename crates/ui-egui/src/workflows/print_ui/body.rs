@@ -7,7 +7,7 @@
 use craft::print::ui::PrintSection;
 use craft_ui::buttons::Button;
 use craft_ui::choice::Segmented;
-use craft_ui::contract::{Bind, Entry, Outcome as _, Props as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, clicked};
 use craft_ui::layout_components::Row;
 use craft_ui::patterns::form_dialogs::{DialogFields, Param, ParamKind};
 use craft_ui::runtime::env::{Label, UnitKind};
@@ -133,7 +133,7 @@ fn button_row(key: &str, label: Label, buttons: Vec<(&'static str, Label, bool, 
 /// applies through the draft's `set_handling`; every tab but Size is off while an area is chosen.
 fn handling_tabs(d: &PrintDraft) -> Param {
     let area = d.which == Which::Area;
-    let tabs = vec![
+    let tabs = [
         (Handling::Size, lbl(tl!("Size"))),
         (Handling::Poster, lbl(tl!("Poster"))),
         (Handling::Multiple, lbl(tl!("Multiple"))),
@@ -485,6 +485,7 @@ pub(super) fn fields_from_draft(d: &PrintDraft) -> DialogFields {
 /// Applies the rows the user edited to the draft. `edited` is the keys an edit changed since the last pass: a row nobody
 /// touched leaves the draft alone, so what the app sets on the draft between passes is not overwritten by the fields'
 /// older values.
+#[allow(clippy::cognitive_complexity)]
 pub(super) fn draft_from_fields(d: &mut PrintDraft, f: &DialogFields, edited: &[String]) {
     let on = |key: &str| edited.iter().any(|e| e == key);
     let text = |key: &str| f.text(key);

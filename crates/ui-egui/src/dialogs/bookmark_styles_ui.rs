@@ -93,7 +93,7 @@ impl PdfCraftApp {
     }
 
     /// One pass over the dialog: Create makes the bookmarks and shows them in the Bookmarks panel.
-    pub(crate) fn bookmarks_from_styles_pass(&mut self, ctx: &egui::Context, _ctx: &egui::Context) {
+    pub(crate) fn bookmarks_from_styles_pass(&mut self, ctx: &egui::Context) {
         if let Some(dialog) = self.dialogs.get_by_id::<HostedParamDialog>(dialog_id(KEY)) {
             let fields = dialog.fields();
             for (n, slot) in self.text_style_draft.levels.iter_mut().enumerate() {

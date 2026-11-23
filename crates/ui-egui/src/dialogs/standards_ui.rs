@@ -10,7 +10,6 @@ use craft::ui::list::{Finding, Findings, FindingsList, FindingsSummary, Findings
 use craft::ui::patterns::form_dialogs::FormDialog;
 use craft::ui::pickers::Select;
 use craft::ui::sections::{DialogRole, FooterButton};
-use craft::ui::style::TypeRole;
 use egui::Ui;
 use pdfcraft_engine::pdfa::{Issue, Level};
 

@@ -8,16 +8,12 @@ use craft::ui::dialog::DialogResult;
 #[cfg(not(target_arch = "wasm32"))]
 use craft::update::stack_dialogs::{CheckChoice, UpdateCheckDialog};
 #[cfg(not(target_arch = "wasm32"))]
-use craft::update::updater::{Action, CheckSource, Status};
+use craft::update::updater::{Action, Status};
 
 use crate::PdfCraftApp;
 
 /// Where every PdfCraft release is listed.
 pub const RELEASES_PAGE: &str = "https://github.com/storytold/pdfcraft/releases";
-
-/// Stands in for the network in tests.
-#[cfg(not(target_arch = "wasm32"))]
-pub type UpdateSource = CheckSource;
 
 impl PdfCraftApp {
     /// Whether the app asks for a newer release on its first frame (off until the desktop app turns it on).

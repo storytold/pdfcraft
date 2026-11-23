@@ -15,18 +15,12 @@ use crate::PdfCraftApp;
 /// The dialog's key.
 const KEY: &str = "prepress.convert_colors";
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct ConvertColoursDraft {
     pub settings: ConvertColours,
     pub range: PageRange,
     /// The document `range` was chosen for.
     pub doc: Option<DocId>,
-}
-
-impl Default for ConvertColoursDraft {
-    fn default() -> Self {
-        Self { settings: ConvertColours::default(), range: PageRange::default(), doc: None }
-    }
 }
 
 impl ConvertColoursDraft {
@@ -113,7 +107,7 @@ impl PdfCraftApp {
     }
 
     /// Converts when the dialog was answered with OK.
-    pub(crate) fn convert_colours_pass(&mut self, ctx: &egui::Context, _ctx: &egui::Context) {
+    pub(crate) fn convert_colours_pass(&mut self, ctx: &egui::Context) {
         let Some(answer) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(KEY)) else { return };
         let Some(result) = answer.ok() else { return };
         self.convert_colours_draft.read(&result.fields);

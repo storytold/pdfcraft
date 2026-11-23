@@ -5,7 +5,6 @@
 //! clamps and refusals a value needs live in `PdfCraftApp::apply_settings`, so a hostile
 //! `config.toml` and a hostile legacy file reach the same code.
 
-use super::*;
 use craft::settings::{LegacyFile, SectionError, Settings};
 use craft::theme::{ModeChoice, MotionChoice};
 use craft::ui::contract::ColumnLayout;

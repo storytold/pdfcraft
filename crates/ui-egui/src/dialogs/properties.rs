@@ -18,7 +18,7 @@ use serde_json::Value;
 
 use crate::PdfCraftApp;
 use crate::properties_session::{
-    Context, LAYOUTS, MAGNIFICATIONS, NAVIGATIONS, PERCENTS, Values, custom_json, custom_pairs, description_key, magnification_id, percent_id,
+    Context, LAYOUTS, MAGNIFICATIONS, NAVIGATIONS, PERCENTS, Values, custom_json, custom_pairs, description_key, percent_id,
 };
 
 /// The host key of the Properties dialog.

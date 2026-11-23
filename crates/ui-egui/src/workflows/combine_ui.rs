@@ -9,7 +9,6 @@ use std::sync::{Arc, Mutex};
 
 use craft::behavior::EditHistory;
 use craft::behavior::selection::Selection;
-use egui::Color32;
 
 use crate::combine_grid::OpenDocuments;
 
@@ -36,10 +35,6 @@ pub(crate) use view::page;
 pub(crate) fn collection_id() -> egui::Id {
     egui::Id::unique("combine_files_collection")
 }
-
-/// Same reds and ambers as the signature status (`sign_ui`).
-pub(crate) const ERROR: Color32 = Color32::from_rgb(0xD7, 0x37, 0x3F);
-pub(crate) const WARNING: Color32 = Color32::from_rgb(0xE6, 0x86, 0x19);
 
 /// Files found in a folder are added up to this many at a time.
 #[cfg(not(target_arch = "wasm32"))]

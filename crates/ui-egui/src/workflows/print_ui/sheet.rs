@@ -47,7 +47,7 @@ pub(super) fn build(
     source: &dyn ThumbSource<PrintPage>,
     ctx: &egui::Context,
 ) -> (PrintSheet, Option<PanePager>) {
-    let SheetInput { d, sizes, labels, settings, sheets, too_much_creep, paper_px } = input;
+    let SheetInput { d, sizes: _, labels: _, settings, sheets, too_much_creep, paper_px: _ } = input;
     let count = sheets.len();
     let pager = PanePager { shown: d.sheet + 1, count, shown_label: None, back: d.sheet > 0, next: d.sheet + 1 < count, unit: PagerUnit::Sheet };
     let paper = vec2(d.paper_size().0 as f32, d.paper_size().1 as f32);

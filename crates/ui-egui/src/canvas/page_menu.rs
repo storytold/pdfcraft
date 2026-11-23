@@ -207,6 +207,7 @@ fn show_rows(ui: &mut egui::Ui, rows: Vec<PageMenuRow>, pick: &mut PageMenuPick)
 }
 
 /// One Align / Distribute / Same Size item.
+#[allow(clippy::too_many_arguments)]
 fn arrange_row(
     ui: &mut egui::Ui,
     view: &mut DocView,

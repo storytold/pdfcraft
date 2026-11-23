@@ -317,6 +317,7 @@ impl TextEditorHost for FieldHost<'_> {
 /// `at` is in the page's view space, as `PageXform::screen_to_view` gives it.
 ///
 /// PLAN: takes the context as a leading argument because the layout needs the fonts; pdf-forms-w7's `press_offset` (`forms_ui.rs:384`) calls it without one and must pass its `ui.ctx()`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn offset_at(
     ctx: &egui::Context,
     session: &PageSession,
@@ -345,6 +346,7 @@ pub(super) fn offset_at(
 ///
 /// Returns the editor's id when one was shown: it takes the key focus over when the focus arrives on
 /// the field's page part (Tab, a click or a focus request), so the keys and typing reach the text.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn show(
     ui: &mut egui::Ui,
     body: &PageBody<'_>,

@@ -1,7 +1,12 @@
 use super::state::{DocumentCopyJob, LeftPanel, LinkOrigin, Mode, PasswordPrompt, PendingLink, QuickTool, RecentFile, RightPanel, UnlockPrompt};
 #[cfg(not(target_arch = "wasm32"))]
 use super::state::{OpenOutcome, OpenRequest, PendingRemoteLink};
-use super::*;
+use super::{
+    APP_INFO, CommentClip, DocId, DocView, PdfCraftApp, PendingDestination, PendingOpen, PrintDraft, PropsTab, RedactPrefs, RedactSearchDraft,
+    Session, UPDATE_APP, a11y_ui, actions_ui, canvas, chrome, combine_ui, comments, content_ui, dialogs, edit_text_ui, export_ui, fill_sign, i18n,
+    measure_ui, object_ui, ocr_ui, ocr_verify, open_worker, panes, persist, prepare, print_paper, print_ui, recovery, rename_ui, scan_clean_ui,
+    scroll_speed, side_panels, sign_ui, stamps_ui, ui_scale, workflows,
+};
 
 use std::hash::Hash;
 use std::path::PathBuf;
@@ -839,6 +844,11 @@ impl PdfCraftApp {
         for view in &mut self.views {
             crate::canvas::organize::finish_reveal(view, &ctx);
         }
+        // A whole-document text copy read off the UI thread reaches the clipboard once its pages are read (after this
+        // pass's own copies, which replace it).
+        self.drain_text_copies(&ctx);
+        // The native menu bar (macOS): its clicks fire as commands and it takes this pass's command states, last.
+        crate::menus::frame(self, &ctx);
         // Screenshots are issued only after a settled pass that really drew the window.
         self.control_ui_pass(&ctx);
         // Addresses `open_url` queued: the runtime opens them in the browser.

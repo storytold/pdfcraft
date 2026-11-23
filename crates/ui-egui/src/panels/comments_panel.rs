@@ -54,32 +54,6 @@ pub fn kind_label(a: &Annotation) -> &str {
     }
 }
 
-pub fn subtype_icon(s: &str) -> &'static str {
-    match s {
-        "Text" => "message-square-text",
-        "Highlight" => "highlighter",
-        "Underline" => "underline",
-        "StrikeOut" => "strikethrough",
-        "Squiggly" => "spline",
-        "FreeText" => "type",
-        "Ink" => "pencil",
-        "Square" => "square",
-        "Circle" => "circle",
-        "Line" => "move-right",
-        "Polygon" | "PolyLine" => "pen-tool",
-        "Stamp" => "stamp",
-        "FileAttachment" => "paperclip",
-        "Caret" => "text-select",
-        "Redact" => "rectangle-horizontal",
-        _ => "message-square-text",
-    }
-}
-
-/// A comment's colour as `RRGGBB` (empty: none), the key the colour sort and filter use.
-pub fn color_key(a: &Annotation) -> String {
-    a.color.map(|c| format!("{:02X}{:02X}{:02X}", (c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8)).unwrap_or_default()
-}
-
 /// The number shown in the header: comments, not their replies or status changes.
 pub fn count(info: &DocInfo) -> usize {
     info.annotations.iter().filter(|a| a.is_comment()).count()

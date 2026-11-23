@@ -49,7 +49,6 @@ enum Act {
 
 /// One line of the panel's list.
 enum Line {
-    Heading(&'static str),
     Row {
         icon: &'static str,
         label: &'static str,
@@ -150,7 +149,6 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .activate(ActivateOn::Click)
         .selection(Bind::given(Selection::default()))
         .show_items(ui, &Rows(lines.len()), &mut |at, _| match lines.get(*at) {
-            Some(Line::Heading(title)) => ListRow::new(tl!(title).to_owned()).heading().ink(RowInk::Dimmed),
             Some(Line::Row { icon, label, enabled, later, space, .. }) => {
                 let mut row = ListRow::new(tl!(label).to_owned()).icon(IconSpec::svg(IconId::new(icon))).enabled(*enabled).space_above(*space);
                 if *label == "Insert" {
@@ -162,7 +160,7 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         });
     // The Insert menu hangs where it was asked for (the row's More button, a right click or a plain click on the
     // row) and stays until a pick or a click elsewhere closes it.
-    let menu_id = ui.id().with("insert-menu-at");
+    let menu_id = ui.scope_id().with("insert-menu-at");
     let mut menu_at: Option<egui::Pos2> = ui.ctx().data(|d| d.get_temp::<Option<egui::Pos2>>(menu_id)).flatten();
     for event in &out.events {
         match event {

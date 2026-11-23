@@ -12,15 +12,20 @@
 //! Everything is turned into `pdfcraft_engine::Edit`s, queued on the view as `pending_edit` and
 //! applied by the app, so each change is one undo step.
 
-use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, pos2, vec2};
+use egui::{Color32, Pos2, Rect};
 use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style};
 use pdfcraft_render::{Annotation, DocInfo, PageInfo, PageText};
 
-use craft::review::ui::annotate::{AnnotateCommand, AnnotateIcons};
 use craft::review::{AnnotationKind, AnnotationTool};
 
+use crate::QuickTool;
 use crate::canvas::{DocView, PageXform};
-use crate::{QuickTool, icons};
+#[cfg(test)]
+use crate::icons;
+#[cfg(test)]
+use craft::review::ui::annotate::{AnnotateCommand, AnnotateIcons};
+#[cfg(test)]
+use egui::{CornerRadius, Sense, Stroke, pos2, vec2};
 
 mod bridge;
 pub(crate) mod colours;
@@ -36,10 +41,9 @@ mod tool;
 use bridge::hover_tip;
 /// The comment thread of the annotation at `(page, index)`: the key the Comments panel files it under.
 pub use bridge::thread_id;
-pub(crate) use bridge::{
-    PageMap, annotations, delete_selected, edit, edit_anchor, id_of, key_of, kind_of, markers, parts, pdf_date_seconds, rgb8, screen_to_user_rect,
-    thread_key, tips, tips_shown,
-};
+pub(crate) use bridge::{PageMap, delete_selected, id_of, key_of, kind_of, parts, pdf_date_seconds, rgb8};
+#[cfg(test)]
+pub(crate) use bridge::{annotations, edit, edit_anchor, markers, screen_to_user_rect, thread_key, tips};
 pub(crate) use colours::{RecentColours, border_choice, fill_choice, palette, to_rgb};
 pub(crate) use composer::composer;
 #[cfg(test)]
@@ -50,7 +54,9 @@ pub(crate) use geometry::page_rotation;
 pub(crate) use geometry::snapped_caret;
 pub use geometry::{drawn_text_box_rect, snug_text_box_rect, text_box_rect};
 pub use menu::CanvasAction;
-pub(crate) use menu::{CommentMenuCx, MenuRights, QuickBarPick, attachment_items, context_rows, popover_from, quick_bar_controls};
+pub(crate) use menu::{CommentMenuCx, MenuRights, context_rows, popover_from, quick_bar_controls};
+#[cfg(test)]
+pub(crate) use menu::{QuickBarPick, attachment_items};
 pub(crate) use overlay::{Hover, show};
 pub(crate) use popups::note_popups;
 pub(crate) use state::PageCx;
@@ -339,6 +345,7 @@ impl CommentTool {
 
 /// Each comment tool's icon as the framework's annotate commands show it, on every surface (toolbar, flyouts,
 /// palette, menus): [`CommentTool::icon`] is the one map.
+#[cfg(test)]
 pub(crate) fn annotate_icons() -> AnnotateIcons {
     ALL.iter().fold(AnnotateIcons::new(), |set, t| set.with(AnnotateCommand::of(t.tool()), t.icon()))
 }

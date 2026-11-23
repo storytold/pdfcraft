@@ -50,7 +50,6 @@ pub mod marks {
 pub use content_ui::TextDraft;
 pub use create_ui::Clip;
 pub use sign_ui::{DigitalIdEntry, SignDraft, SignGraphic, SignStep};
-mod bidi;
 mod dialogs;
 pub use edit_text_ui::{CropMode, ImageSelection};
 mod editing;
@@ -106,9 +105,7 @@ mod workflows;
 pub(crate) use app::same_file;
 pub use app::settings;
 pub(crate) use app::{MAX_AUTHOR_CHARS, copy_refused, date_text_for_pdf, print_refused};
-use canvas::crop;
 use canvas::image_pick;
-use canvas::page_parts;
 pub use canvas::scroll_speed;
 use canvas::signature_drag;
 use canvas::zoom_snap;
@@ -119,7 +116,6 @@ use dialogs::hairlines_ui;
 use dialogs::marks_ui;
 use dialogs::pageboxes;
 use dialogs::printer_marks_ui;
-use dialogs::protect;
 use dialogs::rename_ui;
 use dialogs::standards_ui;
 use dialogs::word_count_ui;
@@ -130,7 +126,6 @@ use panels::all_tools_ui;
 use panels::comments_panel;
 use panels::format_text_ui;
 use panels::organize_panel;
-use panels::search_ui;
 pub use panels::side_panels;
 pub use persist::last_session;
 pub use persist::last_view;
@@ -144,7 +139,6 @@ use platform::open_worker;
 pub use platform::ui_scale;
 #[cfg(test)]
 use state::CopyPage;
-use state::DocumentCopyJob;
 #[cfg(not(target_arch = "wasm32"))]
 use state::OpenRequest;
 pub use state::{

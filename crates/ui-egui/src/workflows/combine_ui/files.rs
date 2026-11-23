@@ -18,10 +18,6 @@ pub enum SortKey {
 impl SortKey {
     pub const ALL: [SortKey; 5] = [SortKey::Name, SortKey::Pages, SortKey::Size, SortKey::Modified, SortKey::Warnings];
 
-    pub(super) fn index(self) -> usize {
-        self as usize
-    }
-
     pub(super) fn label(self) -> &'static str {
         match self {
             SortKey::Name => tl!("File name"),
@@ -418,11 +414,6 @@ pub(crate) enum RowAction {
     },
     /// One page's trash (`Some`), or the selected pages: out of the list.
     RemovePages(Option<(u64, usize)>),
-    /// Row `from` (and the rest of the selection, if it is selected) dropped on row `to`.
-    Drop {
-        from: usize,
-        to: usize,
-    },
     /// A grid card (and the rest of the selection, if it is selected) dropped at `gap`
     /// (0 = before the first file, n = after the last), if the list hasn't changed since the
     /// drag began.

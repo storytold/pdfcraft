@@ -314,24 +314,11 @@ impl DocView {
         self.session.selection_unread(self.geometry())
     }
 
-    /// The text selection as markup quadrilaterals in user space, one entry per page with
-    /// selected text: (page, quads). Empty when there is nothing to mark yet.
-    pub(crate) fn selection_quads(&self, info: &DocInfo) -> Vec<(usize, Vec<[f64; 8]>)> {
-        self.session.selection_quads(info, self.view.rotation)
-    }
-
     /// A reading-order selection whose pages are not all read yet: Copy reads them off the UI
     /// thread ([`crate::DocumentCopyJob::of_selection`]) rather than copying short or nothing.
     pub(crate) fn selection_waits_for_text(&self) -> Option<TextSpan> {
         let s = self.session.text.selection.filter(|_| self.selection_unread())?;
         reading_span(&s)
-    }
-
-    /// Whether the selection covers a page whose text could not be read. Nothing there can be
-    /// selected, so a redaction of the rest would leave that page's content in place: Redact
-    /// refuses such a selection rather than mark it short.
-    pub(crate) fn selection_has_unreadable_page(&self) -> bool {
-        self.session.selection_has_unreadable_page()
     }
 
     /// What a marking tool (a markup tool, Redact) marks for the text selection a drag, a
@@ -511,6 +498,7 @@ pub(super) fn bar_anchor(selection: &TextSelection, texts: &dyn PageTexts) -> Op
 /// `rotation` for where the words are shown.
 // PLAN: pdf-canvas-w8's body calls `selection_bar(ui, body, session, info, prefs, may_mark, can_copy)`; `rotation`
 // (`cx.rotation`) goes after `info`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn selection_bar(
     ui: &mut egui::Ui,
     body: &PageBody<'_>,

@@ -101,10 +101,6 @@ fn widget_rect(xforms: &[(usize, PageXform)], info: &DocInfo, form: &[FormField]
     Some((page, screen_rect(&xf, info, page, w.rect)))
 }
 
-fn kurbo_rect(r: Rect) -> KRect {
-    KRect::new(f64::from(r.min.x), f64::from(r.min.y), f64::from(r.max.x), f64::from(r.max.y))
-}
-
 fn point(p: Pos2) -> Point {
     Point::new(f64::from(p.x), f64::from(p.y))
 }
@@ -303,7 +299,7 @@ impl CanvasTool for PrepareTool<'_> {
                 self.prepare.outcome.edit = delete_selected_from(self.prepare);
                 true
             }
-            ToolKey::Nudge { direction, mods, .. } => self.nudge(vec2(direction.x as f32, direction.y as f32), mods.shift),
+            ToolKey::Nudge { direction, mods, .. } => self.nudge(vec2(direction.x, direction.y), mods.shift),
             ToolKey::Cancel if self.prepare.selected.is_some() => {
                 self.prepare.selected = None;
                 self.prepare.also.clear();
@@ -336,6 +332,7 @@ impl CanvasTool for PrepareTool<'_> {
 /// The corner handles of the anchor field, as a Free Transform box that only resizes: no rotating,
 /// skewing or distorting, and a press inside is the field part's. A corner drag's `Commit` and an
 /// arrow nudge's `Set` each become one field edit; Escape with no drag clears the selection.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn selection_box(
     ui: &mut Ui,
     body: Rect,
@@ -385,6 +382,7 @@ pub(crate) fn selection_box(
 
 /// While preparing: the fields' look on each of the placed `pages` and the selected field's resize box, over the
 /// page body at `body`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn show_overlays(
     ui: &mut Ui,
     body: Rect,

@@ -26,7 +26,6 @@ impl PdfCraftApp {
             | RowAction::MoveDown
             | RowAction::Remove
             | RowAction::RemoveFile(_)
-            | RowAction::Drop { .. }
             | RowAction::DropAt { .. }
             | RowAction::Sort(_)
             | RowAction::Unlock(_) => {
@@ -142,17 +141,6 @@ impl PdfCraftApp {
                     sel.anchor = sel.anchor.filter(|k| k.entry() != id);
                     app.combine_join_parts();
                 });
-            }
-            RowAction::Drop { from, to } => {
-                let (Some(&dragged), Some(&target)) = (ids.get(from), ids.get(to)) else { return };
-                // Dragging a selected file takes the whole selection along.
-                let moving: BTreeSet<u64> = if selected.contains(&dragged) { selected } else { BTreeSet::from([dragged]) };
-                // Dropped on the selection itself: nothing to do.
-                if moving.contains(&target) {
-                    return;
-                }
-                // Below the row when dragged down, above it when dragged up.
-                self.combine_move_to_gap(moving, if from < to { to + 1 } else { to });
             }
             RowAction::DropAt { file, revision, gap } => {
                 // The list changed under the drag (e.g. undo): the gap no longer means the same.

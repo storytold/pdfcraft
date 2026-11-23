@@ -55,7 +55,7 @@ const PICTURE: PartKey = PartKey::new("picture");
 const OBJECTS: PartKey = PartKey::new("objects");
 /// The page-part control's identity also lets the view cancel its captured press on leaving.
 pub(crate) fn control_id(view_key: u64) -> egui::Id {
-    egui::Id::new(("page-parts", view_key))
+    egui::Id::unique(("page-parts", view_key))
 }
 const FRAME: PartKey = PartKey::new("frame");
 const ADDED: PartKey = PartKey::new("added");
@@ -128,8 +128,6 @@ impl Owner {
 /// editor outrank everything on the page body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum PageLayer {
-    /// Hover-only signature validation badges.
-    Badge,
     /// Edit text's pictures.
     Picture,
     /// Edit text's paragraphs.
@@ -146,15 +144,12 @@ pub(crate) enum PageLayer {
     Placed,
     /// Handles on what is selected, and the frame band of the paragraph open for typing.
     Handle,
-    /// The open editor's own parts.
-    Editor,
 }
 
 impl PageLayer {
     /// The layer's rank in the framework's hit resolution: a higher `(level, sub)` wins where parts overlap.
     pub(crate) fn priority(self) -> HitPriority {
         let (level, sub) = match self {
-            PageLayer::Badge => (HitLevel::Body, 0),
             PageLayer::Picture => (HitLevel::Body, 1),
             PageLayer::Text => (HitLevel::Body, 2),
             PageLayer::Link => (HitLevel::Body, 3),
@@ -163,7 +158,6 @@ impl PageLayer {
             PageLayer::MovableComment => (HitLevel::Body, 6),
             PageLayer::Placed => (HitLevel::Body, 7),
             PageLayer::Handle => (HitLevel::Handle, 0),
-            PageLayer::Editor => (HitLevel::Handle, 1),
         };
         HitPriority::new(level, sub)
     }
