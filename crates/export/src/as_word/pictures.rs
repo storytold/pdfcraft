@@ -185,8 +185,16 @@ mod tests {
 
     #[test]
     fn flow_document_embeds_rotated_pixels_not_original_bytes() {
-        let page =
-            crate::layout::Page { width: 10.0, height: 10.0, blocks: Vec::new(), images: vec![sample(90.0)], background: None, rules: Vec::new() };
+        let page = crate::layout::Page {
+            width: 10.0,
+            height: 10.0,
+            blocks: Vec::new(),
+            images: vec![sample(90.0)],
+            background: None,
+            rules: Vec::new(),
+            runs: Vec::new(),
+            drawings: Vec::new(),
+        };
         let (doc, _) = super::super::flow_doc(&[page], &super::super::Meta { title: "", language: None, font: "Helvetica" });
         let bytes = doc.media.values().next().expect("picture retained");
         let pixels = image::load_from_memory(bytes).expect("PNG").into_rgba8();
@@ -211,7 +219,16 @@ mod tests {
     fn flow_budget_counts_reused_media_at_each_placement() {
         let im = sample(0.0);
         let cost = rtf_bytes(im.bytes.len()).expect("small");
-        let page = crate::layout::Page { width: 10.0, height: 10.0, blocks: Vec::new(), images: vec![im; 3], background: None, rules: Vec::new() };
+        let page = crate::layout::Page {
+            width: 10.0,
+            height: 10.0,
+            blocks: Vec::new(),
+            images: vec![im; 3],
+            background: None,
+            rules: Vec::new(),
+            runs: Vec::new(),
+            drawings: Vec::new(),
+        };
         let (doc, omitted) = super::super::flow_doc_with_budget(
             &[page],
             &super::super::Meta { title: "", language: None, font: "Helvetica" },
