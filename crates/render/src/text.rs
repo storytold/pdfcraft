@@ -194,6 +194,33 @@ impl PageText {
             .collect()
     }
 
+    /// The part of the glyph range `range` (a match) left to redact when its first `leave_first`
+    /// and last `leave_last` letters and digits stay readable (protect.redact-partial-words).
+    /// Only letters and digits count, so a separator inside the match uses up nothing. A glyph
+    /// holding several characters (a ligature) that straddles the boundary is redacted whole, so
+    /// the range errs towards hiding more. A side with 0 is left as it is, so with both 0 the whole
+    /// match goes, even one with no letters or digits. `None` when something is kept readable and
+    /// the match has no more letters and digits than that: nothing is left to redact.
+    pub fn redaction_part(&self, range: std::ops::Range<usize>, leave_first: usize, leave_last: usize) -> Option<std::ops::Range<usize>> {
+        let glyphs = self.glyphs.get(range.clone())?;
+        let counts: Vec<usize> = glyphs.iter().map(|g| g.text.chars().filter(|c| c.is_alphanumeric()).count()).collect();
+        let total: usize = counts.iter().sum();
+        if (leave_first > 0 || leave_last > 0) && total <= leave_first.saturating_add(leave_last) {
+            return None;
+        }
+        // The glyph holding the `n`th letter or digit (1-based).
+        let holding = |n: usize| {
+            let mut seen = 0;
+            counts.iter().position(|c| {
+                seen += c;
+                seen >= n
+            })
+        };
+        let start = if leave_first == 0 { 0 } else { holding(leave_first + 1)? };
+        let end = if leave_last == 0 { glyphs.len() } else { holding(total - leave_last)? + 1 };
+        (start < end).then(|| range.start + start..range.start + end)
+    }
+
     /// Index of the first glyph whose box holds a view-space point: the text under the pointer.
     pub fn glyph_at(&self, x: f32, y: f32) -> Option<usize> {
         self.glyphs.iter().position(|g| x >= g.rect[0] && x <= g.rect[2] && y >= g.rect[1] && y <= g.rect[3])

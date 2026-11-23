@@ -5879,11 +5879,11 @@ title = "Redact part of a match (e.g. all but the last four digits)"
 area = "G"
 tier = "P2"
 milestone = "M8"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["redact.search"]
+tools = ["redact_mark"]
+evidence = ["crates/automation/tests/it/automation.rs::redact_mark_can_leave_the_first_or_last_letters_and_digits_of_each_match", "crates/ui-egui/tests/it/redact.rs::redaction_search_can_leave_the_last_digits_readable", "crates/render/src/text/tests.rs::the_part_of_a_match_to_redact_keeps_only_whole_letters_and_digits_readable"]
+notes = "Find text and redact ▸ Leave readable: first / last, and redact_mark leave_first / leave_last (find, words, pattern, regex): that many letters and digits at the start or end of each match stay readable and only the rest is marked. Separators inside the match (spaces, dashes) don't count, and a ligature on the boundary is marked whole, so the mark errs towards hiding more. A match with no more letters and digits than are kept is not marked; the dialog and the tool's skipped_short say how many. Not yet: the two numbers are not remembered between runs."
 
 [[feature]]
 id = "protect.redact-folder"
