@@ -456,6 +456,10 @@ impl PdfCraftApp {
                 self.boxes_draft.seeded = None;
                 self.dialog = Some(Dialog::PageBoxes);
             }
+            "page.size" => {
+                self.size_draft.seeded = None;
+                self.dialog = Some(Dialog::PageSize);
+            }
             "page.extract" => self.open_extract_dialog(),
             "page.rotate_dialog" => {
                 if let Some(i) = active {

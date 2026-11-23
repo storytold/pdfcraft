@@ -425,6 +425,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.reverse", "Reverse pages", PAGES, None, Assembly, "arrow-up-down"),
     c("page.crop", "Crop pages", PAGES, None, Assembly, "crop"),
     c("page.boxes", "Set page boxes…", PAGES, None, Assembly, "square-dashed-mouse-pointer"),
+    c("page.size", "Change page size…", PAGES, None, Assembly, "maximize-2"),
     c("page.insert", "Insert pages from file…", PAGES, None, Assembly, "file-input"),
     c("page.replace", "Replace pages…", PAGES, None, Assembly, "replace"),
     c("page.extract", "Extract pages…", PAGES, None, PageExtraction, "file-output"),

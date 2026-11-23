@@ -3839,6 +3839,72 @@ fn duplicating_and_cropping_through_tools() {
     assert!(matches!(a.call("page_set_box", &json!({ "doc": doc, "rect": [0, 0, 10, 10] })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// #7116: page_set_size gives pages a new size and leaves what is on them at its size: the text
+/// keeps its measurements and moves only by where the placement puts the old page.
+#[test]
+fn changing_page_size_through_tools_keeps_content_unscaled() {
+    let dir = workdir("page-size");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let rect = |a: &mut Automation| -> Vec<f64> {
+        let found = ok(a, "text_find", json!({ "doc": doc, "query": "page 1" }));
+        found["matches"][0]["rects"][0].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect()
+    };
+    // Shown sizes are f32: compare to a hundredth of a point.
+    let near = |v: &Value, w: f64, h: f64| (v[0].as_f64().unwrap() - w).abs() < 0.01 && (v[1].as_f64().unwrap() - h).abs() < 0.01;
+    let before = rect(&mut a);
+    // 200 × 300 to 400 × 500, centred: everything moves 100 points right and 100 down.
+    let r = ok(&mut a, "page_set_size", json!({ "doc": doc, "pages": [1], "width": 400, "height": 500 }));
+    assert_eq!(r["page_sizes"], json!([[400.0, 500.0], [200.0, 300.0], [200.0, 300.0]]), "only page 1");
+    assert_eq!(r["cut_off"], json!([]));
+    let after = rect(&mut a);
+    for (b, n) in before.iter().zip(&after) {
+        assert!((n - b - 100.0).abs() < 0.01, "moved, not scaled: {before:?} → {after:?}");
+    }
+    let png = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
+    let Content::Png { width, height, .. } = &png[0] else { panic!("expected an image") };
+    assert_eq!((*width, *height), (400, 500));
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(rect(&mut a), before, "one undo step");
+
+    // A paper by name, turned; the top-left anchor moved 10 right and 20 down.
+    let r = ok(
+        &mut a,
+        "page_set_size",
+        json!({ "doc": doc, "paper": "A5", "orientation": "landscape", "align": "top-left", "move_right": 10, "move_down": 20 }),
+    );
+    assert!(near(&r["page_sizes"][2], 595.28, 419.53), "every page by default: {}", r["page_sizes"]);
+    let after = rect(&mut a);
+    assert!((after[0] - before[0] - 10.0).abs() < 0.01 && (after[1] - before[1] - 20.0).abs() < 0.01, "{before:?} → {after:?}");
+    assert_eq!(page_text(&mut a, doc), ["Page 1", "Page 2", "Page 3"]);
+
+    // Smaller than what showed: still done, and said.
+    let r = ok(&mut a, "page_set_size", json!({ "doc": doc, "pages": [1], "paper": "11x8.5in" }));
+    assert!(near(&r["page_sizes"][0], 792.0, 612.0), "a written size keeps its order: {}", r["page_sizes"]);
+    let r = ok(&mut a, "page_set_size", json!({ "doc": doc, "pages": [2, 3], "paper": "100x100pt" }));
+    assert_eq!(r["cut_off"], json!([2, 3]));
+    assert!(near(&r["page_sizes"][1], 100.0, 100.0), "{}", r["page_sizes"]);
+
+    // Bad requests are refused and change nothing.
+    for bad in [
+        json!({ "doc": doc, "paper": "A4", "width": 100 }),
+        json!({ "doc": doc, "width": 100 }),
+        json!({ "doc": doc }),
+        json!({ "doc": doc, "paper": "B7" }),
+        json!({ "doc": doc, "paper": "A4", "orientation": "sideways" }),
+        json!({ "doc": doc, "paper": "A4", "align": "middle" }),
+        json!({ "doc": doc, "paper": "A4", "pages": [9] }),
+    ] {
+        assert!(matches!(a.call("page_set_size", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    for bad in [json!({ "doc": doc, "width": 0.5, "height": 100 }), json!({ "doc": doc, "width": 14401, "height": 100 })] {
+        assert!(matches!(a.call("page_set_size", &bad), Err(ToolError::Failed(_))), "{bad}");
+    }
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    let page = &info["pages"][1];
+    assert!(near(&json!([page["width"], page["height"]]), 100.0, 100.0), "unchanged by the refusals: {page}");
+}
+
 #[test]
 fn headers_watermarks_and_backgrounds_through_tools() {
     let dir = workdir("marks");

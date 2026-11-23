@@ -29,7 +29,7 @@ pub mod view;
 mod xmp;
 
 pub use attachments::{add_attachment, attachment_keys, delete_attachment, mime_for_name, set_attachment_description};
-pub use boxes::{BoxSpec, PageBox, page_boxes, set_page_box};
+pub use boxes::{BoxSpec, MAX_PAGE_SIDE, PageBox, Placement, cuts_off, page_boxes, set_page_box, set_page_size};
 pub use comments::import_comments;
 pub use dedupe::dedupe_resources;
 pub use import::{

@@ -19,6 +19,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::SetTemplateHidden { .. }
         | Edit::ReplacePages { .. }
         | Edit::SetPageBox { .. }
+        | Edit::SetPageSize { .. }
         | Edit::SetTransition { .. }
         | Edit::InsertPagesFrom { .. }
         // "Assemble the document: insert, rotate or delete pages and create bookmarks" (Table 22).
@@ -581,6 +582,11 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_organize::replace_pages(doc, pages, &src, src_pages)?;
         }
         Edit::SetPageBox { pages, which, spec } => pdfcraft_organize::set_page_box(doc, pages, *which, *spec)?,
+        Edit::SetPageSize { pages, size, placement } => {
+            let views: Vec<_> = pages.iter().filter_map(|&p| pdfcraft_model::page_at(doc, p).map(|pg| (p, pg.view_matrix(doc)))).collect();
+            pdfcraft_organize::set_page_size(doc, pages, *size, *placement)?;
+            keep_added_in_place(doc, &views)?;
+        }
         Edit::SetTransition { pages, spec } => pdfcraft_organize::set_transition(doc, pages, spec)?,
         Edit::InsertPagesFrom { name, bytes, pages, at, field_conflicts } => {
             let src = crate::sources::open_source_into(name, bytes, doc)?;
@@ -1213,4 +1219,48 @@ fn run_batch(doc: &mut pdfcraft_cos::Document, edits: &[Edit], cx: &mut EditCtx)
         }
     }
     Ok(())
+}
+
+/// After Change Page Size: the page's edges moved and its content didn't, so an added item's box,
+/// kept in display space from the shown page's bottom-left corner, moves the other way and the
+/// item stays where it is drawn. `views` are (page, its view matrix before the change).
+fn keep_added_in_place(doc: &mut pdfcraft_cos::Document, views: &[(usize, [f64; 6])]) -> Result<(), EditError> {
+    let added = pdfcraft_edit::list_added(doc);
+    for &(page, old) in views {
+        let Some(new) = pdfcraft_model::page_at(doc, page).map(|p| p.view_matrix(doc)) else { continue };
+        // Where the old display origin (user-space point `old[4], old[5]`) is in the new display space.
+        let det = new[0] * new[3] - new[1] * new[2];
+        let (ux, uy) = (old[4] - new[4], old[5] - new[5]);
+        let (dx, dy) = ((new[3] * ux - new[2] * uy) / det, (new[0] * uy - new[1] * ux) / det);
+        if !(dx.is_finite() && dy.is_finite()) || (dx == 0.0 && dy == 0.0) {
+            continue;
+        }
+        for (index, item) in added.iter().filter(|a| a.page == page).enumerate() {
+            // A stream another page draws too gets a copy for this page first: rewriting it would
+            // move that page's box, and that page didn't change.
+            if added.iter().any(|a| a.obj == item.obj && a.page != page) {
+                own_copy(doc, page, item.obj)?;
+            }
+            let [x0, y0, x1, y1] = item.content.rect();
+            pdfcraft_edit::update_content(doc, page, index, &item.content.with_rect([x0 + dx, y0 + dy, x1 + dx, y1 + dy]))?;
+        }
+    }
+    Ok(())
+}
+
+/// Point `page`'s `/Contents` at a new copy of stream `obj`, leaving the other pages on `obj`.
+fn own_copy(doc: &mut pdfcraft_cos::Document, page: usize, obj: pdfcraft_cos::ObjRef) -> Result<(), EditError> {
+    let Some(p) = pdfcraft_model::page_at(doc, page) else { return Ok(()) };
+    let copy = pdfcraft_cos::Object::Ref(doc.add((*doc.get(obj)).clone()));
+    let contents = match p.dict.get(b"Contents") {
+        Some(c) if c.as_ref() == Some(obj) => copy,
+        Some(c) => match &*doc.resolve(c) {
+            pdfcraft_cos::Object::Array(a) => {
+                pdfcraft_cos::Object::Array(a.iter().map(|e| if e.as_ref() == Some(obj) { copy.clone() } else { e.clone() }).collect())
+            }
+            _ => return Ok(()),
+        },
+        None => return Ok(()),
+    };
+    doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents)).map_err(|e| EditError::Edit(pdfcraft_edit::EditError::Invalid(e.to_string())))
 }

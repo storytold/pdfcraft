@@ -19,6 +19,41 @@ pub enum Range {
     Pages(usize, usize),
 }
 
+impl Range {
+    /// The pages (0-based) of a document of `count` pages, `current` being the page shown.
+    pub fn pages(self, current: usize, count: usize) -> Vec<usize> {
+        match self {
+            Range::All => (0..count).collect(),
+            Range::Current => vec![current.min(count.saturating_sub(1))],
+            Range::Pages(a, b) => (a.max(1) - 1..b.min(count)).collect(),
+        }
+    }
+}
+
+/// All, the current page, or from one page to another, stacked.
+pub(crate) fn range_picker(ui: &mut egui::Ui, range: &mut Range, current: usize, count: usize) {
+    ui.vertical(|ui| {
+        widgets::radio_value(ui, range, Range::All, tl!("All"));
+        widgets::radio_value(ui, range, Range::Current, crate::i18n::fmt(tl!("Current page ({n})"), &[("n", &(current + 1).to_string())]));
+        let (mut a, mut b) = match *range {
+            Range::Pages(a, b) => (a, b),
+            _ => (1, count),
+        };
+        ui.horizontal(|ui| {
+            let on = matches!(range, Range::Pages(..));
+            if ui.add(widgets::radio(on, tl!("From"))).clicked() {
+                *range = Range::Pages(a, b);
+            }
+            let ra = ui.add(egui::DragValue::new(&mut a).range(1..=count));
+            ui.label(tl!("to"));
+            let rb = ui.add(egui::DragValue::new(&mut b).range(1..=count));
+            if ra.changed() || rb.changed() {
+                *range = Range::Pages(a.min(b), b.max(a));
+            }
+        });
+    });
+}
+
 /// Dialog state. Margins are kept in physical points (1/72 in): left, bottom, right, top. A page with
 /// `/UserUnit` counts each user-space unit as that many points, so they are converted per page.
 #[derive(Clone, Debug, PartialEq)]
@@ -40,11 +75,7 @@ impl Default for BoxesDraft {
 impl BoxesDraft {
     /// The pages (0-based) the dialog applies to.
     pub fn pages(&self, current: usize, count: usize) -> Vec<usize> {
-        match self.range {
-            Range::All => (0..count).collect(),
-            Range::Current => vec![current.min(count.saturating_sub(1))],
-            Range::Pages(a, b) => (a.max(1) - 1..b.min(count)).collect(),
-        }
+        self.range.pages(current, count)
     }
 
     /// The edit for the draft. `user_units` is each page's `/UserUnit` (points per user-space unit):
@@ -164,31 +195,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 }
                 ui.end_row();
                 ui.label(tl!("Pages"));
-                ui.vertical(|ui| {
-                    widgets::radio_value(ui, &mut d.range, Range::All, tl!("All"));
-                    widgets::radio_value(
-                        ui,
-                        &mut d.range,
-                        Range::Current,
-                        crate::i18n::fmt(tl!("Current page ({n})"), &[("n", &(current + 1).to_string())]),
-                    );
-                    let (mut a, mut b) = match d.range {
-                        Range::Pages(a, b) => (a, b),
-                        _ => (1, count),
-                    };
-                    ui.horizontal(|ui| {
-                        let on = matches!(d.range, Range::Pages(..));
-                        if ui.add(widgets::radio(on, tl!("From"))).clicked() {
-                            d.range = Range::Pages(a, b);
-                        }
-                        let ra = ui.add(egui::DragValue::new(&mut a).range(1..=count));
-                        ui.label(tl!("to"));
-                        let rb = ui.add(egui::DragValue::new(&mut b).range(1..=count));
-                        if ra.changed() || rb.changed() {
-                            d.range = Range::Pages(a.min(b), b.max(a));
-                        }
-                    });
-                });
+                range_picker(ui, &mut d.range, current, count);
                 ui.end_row();
             });
         });
