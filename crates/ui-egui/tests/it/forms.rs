@@ -215,6 +215,38 @@ fn a_multi_line_auto_sized_field_that_doesnt_scroll_stops_when_full() {
     assert!(tb.fits(&kept) && !tb.fits(&format!("{kept}\nline")), "as many lines as fit at 4 pt: {lines}");
 }
 
+/// #7140: Ctrl+Enter (⌘Enter) starts a new line in a multi-line field, as Enter does, and leaves
+/// the field open; in a single-line field it starts none.
+#[test]
+fn ctrl_enter_starts_a_new_line_in_a_multi_line_field() {
+    let mut h = harness();
+    set_city(&mut h, pdfcraft_engine::FieldProps { multiline: Some(true), ..Default::default() });
+    click_field(&mut h, "city", 0);
+    h.event(egui::Event::Text("Line one".into()));
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+    h.run_steps(2);
+    h.event(egui::Event::Text("two".into()));
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::Enter);
+    h.run_steps(2);
+    h.event(egui::Event::Text("three".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.name.as_str()), Some("city"), "the field stays open");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(4);
+    assert_eq!(value(&h, "city"), ["Line one\ntwo\nthree"]);
+    // A single-line field takes no line break.
+    click_field(&mut h, "name", 0);
+    h.event(egui::Event::Text("Ada".into()));
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(4);
+    assert_eq!(value(&h, "name"), ["Ada"]);
+}
+
 /// #4296: a field turned a quarter (`/MK /R` 90) is typed into where it is, with its text running
 /// up the field as the page draws it: a click near the field's top puts the caret at the end of
 /// the text, where the turned text ends, not at its start.
