@@ -1304,7 +1304,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("doc_remove_marks", "Remove header & footer, watermark, background or printer marks", "Remove every header and footer, watermark, background or printer marks PdfCraft (or a compatible tool) added. Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "kind": { "type": "string", "enum": ["header_footer", "watermark", "background", "printer_marks"] } }), &["doc", "kind"])),
-        t("doc_export_images", "Export pages as images", "Write pages as PNG, JPEG or TIFF files (`<name>_page_<n>.png|jpg|tif`) into a folder, at a resolution (default 150 dpi). JPEG and TIFF are flattened onto white paper. A page too large for the renderer at that resolution is drawn at the most it allows, listed in `lower_dpi` ({page, dpi}). Includes unsaved edits.")
+        t("doc_export_images", "Export pages as images", "Write pages as PNG, JPEG or TIFF files (`<name>_page_<n>.png|jpg|tif`) into a folder, at a resolution (default 150 dpi). JPEG and TIFF are flattened onto white paper. For TIFF, mono (default false) thresholds the page and writes a 1-bit CCITT Group 4 file; otherwise the TIFF stays 24-bit RGB with LZW. A page too large for the renderer at that resolution is drawn at the most it allows, listed in `lower_dpi` ({page, dpi}). Includes unsaved edits.")
             .cmd("export.image")
             .with(schema(
                 json!({
@@ -1312,6 +1312,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "folder": { "type": "string" },
                     "format": { "type": "string", "enum": ["png", "jpeg", "tiff"] },
                     "quality": { "type": "integer", "minimum": 1, "maximum": 100, "description": "JPEG quality (default 85)." },
+                    "mono": { "type": "boolean", "description": "For TIFF, write a 1-bit CCITT Group 4 file (default false: 24-bit RGB with LZW). Refused for PNG and JPEG." },
                     "dpi": { "type": "number", "minimum": 18, "maximum": 1200 },
                     "pages": pages("to export (default: all)"),
                 }),

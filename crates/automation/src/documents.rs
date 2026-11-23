@@ -746,12 +746,17 @@ impl Automation {
         }
         let dpi = a.opt_num("dpi")?.unwrap_or(150.0);
         let quality = a.opt_int("quality")?.unwrap_or(85).clamp(1, 100) as u8;
+        let mono = a.opt_bool("mono")?.unwrap_or(false);
         let format = match a.opt_str("format")?.unwrap_or("png") {
             "png" => pdfcraft_engine::export::ImageFormat::Png,
             "jpeg" | "jpg" => pdfcraft_engine::export::ImageFormat::Jpeg { quality },
+            "tiff" | "tif" if mono => pdfcraft_engine::export::ImageFormat::TiffG4,
             "tiff" | "tif" => pdfcraft_engine::export::ImageFormat::Tiff,
             f => return Err(ToolError::InvalidArgs(format!("unknown format {f:?} (png, jpeg, tiff)"))),
         };
+        if mono && !matches!(format, pdfcraft_engine::export::ImageFormat::TiffG4) {
+            return Err(ToolError::InvalidArgs("mono is only for TIFF: it writes a 1-bit CCITT Group 4 file".into()));
+        }
         let mut files = Vec::new();
         let mut lowered = Vec::new();
         // A write error stops the export as it is, not as a page error.
