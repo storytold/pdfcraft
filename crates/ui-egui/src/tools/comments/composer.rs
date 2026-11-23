@@ -1,4 +1,4 @@
-use super::geometry::{drawn_text_box_rect, page_rotation, text_box_rect};
+use super::geometry::{callout_knee_as_displayed, drawn_text_box_rect, page_rotation, text_box_rect};
 use super::paint::{edited_in_view, new_comment};
 use super::state::{ComposerKind, PageCx};
 use super::{
@@ -143,10 +143,14 @@ pub(crate) fn composer(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, 
         }
         ComposerKind::Callout { point } => {
             view.comments.tool_done = true;
-            // A callout's leader and box stay in user-space axes (its appearance isn't turned).
+            // The box and leader are laid out as the page is displayed, like a text box's.
+            // The knee is the 12 user-unit line main uses, measured in that displayed frame.
             let font_size = prefs.font_size(CommentTool::Callout).unwrap_or(10.0);
-            let rect = text_box_rect(c.at, &text, font_size, 0);
-            let knee = pdfcraft_engine::callout_knee(rect, point);
+            let rect = text_box_rect(c.at, &text, font_size, page_rotation(info, page));
+            let knee = match info.pages.get(page) {
+                Some(pg) => callout_knee_as_displayed(pg, rect, point),
+                None => pdfcraft_engine::callout_knee(rect, point),
+            };
             Some(new_comment(&cx, CommentTool::Callout, Shape::Callout { rect, knee, point, font_size, ending: LineEnding::OpenArrow }, text))
         }
         ComposerKind::Replace => {

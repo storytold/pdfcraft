@@ -42,6 +42,20 @@ pub(super) fn frame(a: &Annotation, rotation: u16) -> [f32; 4] {
     a.text_box.unwrap_or_else(|| a.shown_rect(rotation))
 }
 
+/// A new callout's knee for text box `rect` pointing at `point`, with the side chosen as the page
+/// displays it. Uses a rotation-only frame (user units), so [`pdfcraft_engine::CALLOUT_KNEE_LINE`]
+/// stays 12 user units even when `/UserUnit` scales the view.
+pub(crate) fn callout_knee_as_displayed(page: &PageInfo, rect: [f64; 4], point: [f64; 2]) -> [f64; 2] {
+    let m = pdfcraft_model::view_matrix_for(i64::from(page.rotation), page.crop.map(f64::from));
+    let [a, b, c, d, e, f] = m;
+    // Inverse of view_matrix_for: those rotation matrices have determinant 1.
+    let to_shown = |p: [f64; 2]| [d * (p[0] - e) - c * (p[1] - f), a * (p[1] - f) - b * (p[0] - e)];
+    let to_user = |p: [f64; 2]| [a * p[0] + c * p[1] + e, b * p[0] + d * p[1] + f];
+    let (p0, p1) = (to_shown([rect[0], rect[1]]), to_shown([rect[2], rect[3]]));
+    let shown = [p0[0].min(p1[0]), p0[1].min(p1[1]), p0[0].max(p1[0]), p0[1].max(p1[1])];
+    to_user(pdfcraft_engine::callout_knee(shown, to_shown(point)))
+}
+
 /// A callout's points while one is dragged to `to`. Its knee moves along its knee line only
 /// (Acrobat: "The knee line can be resized in one direction only; horizontal knee lines can be
 /// resized horizontally only; vertical knee lines can be resized vertically only", Acrobat DC Help,

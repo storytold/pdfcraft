@@ -1,4 +1,4 @@
-use super::geometry::reshaped;
+use super::geometry::{callout_knee_as_displayed, reshaped};
 use super::*;
 
 /// [`reshaped`] without Shift, as `changing_points` takes it.
@@ -252,6 +252,33 @@ fn the_hover_tip_skips_fill_and_sign_marks_replies_and_bare_highlights_when_aske
 
 fn near(a: Option<([f32; 2], f32)>, b: ([f32; 2], f32)) -> bool {
     a.is_some_and(|([x, y], s)| (x - b.0[0]).abs() < 1e-3 && (y - b.0[1]).abs() < 1e-3 && (s - b.1).abs() < 1e-3)
+}
+
+#[test]
+fn a_new_callout_knee_stays_twelve_user_units_under_user_unit() {
+    let page = |rotation, user_unit: f32| PageInfo {
+        width: 300.0 * user_unit,
+        height: 200.0 * user_unit,
+        label: "1".into(),
+        crop: [0.0, 0.0, 300.0, 200.0],
+        rotation,
+    };
+    let rect = [100.0, 80.0, 180.0, 120.0];
+    let point = [40.0, 100.0];
+    let gap = pdfcraft_engine::CALLOUT_KNEE_LINE;
+    for rotation in [0u16, 90, 180, 270] {
+        for unit in [1.0_f32, 2.0] {
+            let knee = callout_knee_as_displayed(&page(rotation, unit), rect, point);
+            let tb = rect;
+            let dist = match pdfcraft_engine::callout_side(tb, knee) {
+                pdfcraft_engine::CalloutSide::Left => tb[0] - knee[0],
+                pdfcraft_engine::CalloutSide::Right => knee[0] - tb[2],
+                pdfcraft_engine::CalloutSide::Top => knee[1] - tb[3],
+                pdfcraft_engine::CalloutSide::Bottom => tb[1] - knee[1],
+            };
+            assert!((dist - gap).abs() < 1e-6, "/Rotate {rotation} /UserUnit {unit}: knee {knee:?} is {dist} from the box, want {gap}");
+        }
+    }
 }
 
 #[test]
