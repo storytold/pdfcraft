@@ -163,8 +163,8 @@ fn name_key(name: &str) -> String {
     name.trim_start_matches('@').to_lowercase()
 }
 
-fn compare(a: &Contributor, b: &Contributor, mode: NameMode, key: SortKey) -> Ordering {
-    match key {
+fn compare(a: &Contributor, b: &Contributor, mode: NameMode, key: SortKey, ascending: bool) -> Ordering {
+    let order = match key {
         SortKey::Name => name_key(&a.name(mode)).cmp(&name_key(&b.name(mode))),
         SortKey::Prs => a.prs.cmp(&b.prs),
         SortKey::Commits => a.commits.cmp(&b.commits),
@@ -173,24 +173,21 @@ fn compare(a: &Contributor, b: &Contributor, mode: NameMode, key: SortKey) -> Or
         SortKey::LinesDelta => a.lines_delta().cmp(&b.lines_delta()),
         SortKey::BinaryAdded => a.binary_added.cmp(&b.binary_added),
         SortKey::BinaryDeleted => a.binary_deleted.cmp(&b.binary_deleted),
-        // A PR-only contributor (no commit date) sorts after everyone with a date.
-        SortKey::FirstCommit => dated(a.first_commit).cmp(&dated(b.first_commit)),
-        SortKey::LastCommit => dated(a.last_commit).cmp(&dated(b.last_commit)),
-    }
+        SortKey::FirstCommit => return compare_dates(a.first_commit, b.first_commit, ascending),
+        SortKey::LastCommit => return compare_dates(a.last_commit, b.last_commit, ascending),
+    };
+    if ascending { order } else { order.reverse() }
 }
 
-fn dated(d: &str) -> (bool, &str) {
-    (d.is_empty(), d)
+fn compare_dates(a: &str, b: &str, ascending: bool) -> Ordering {
+    // A PR-only contributor (no commit date) sorts last in both directions.
+    a.is_empty().cmp(&b.is_empty()).then_with(|| if ascending { a.cmp(b) } else { b.cmp(a) })
 }
 
 /// Contributors in display order. Ties fall back to the name (A–Z) so the order is stable.
 pub fn sorted(list: &[Contributor], mode: NameMode, key: SortKey, ascending: bool) -> Vec<&Contributor> {
     let mut v: Vec<&Contributor> = list.iter().collect();
-    v.sort_by(|a, b| {
-        let o = compare(a, b, mode, key);
-        let o = if ascending { o } else { o.reverse() };
-        o.then_with(|| compare(a, b, mode, SortKey::Name)).then_with(|| a.login.cmp(b.login))
-    });
+    v.sort_by(|a, b| compare(a, b, mode, key, ascending).then_with(|| compare(a, b, mode, SortKey::Name, true)).then_with(|| a.login.cmp(b.login)));
     v
 }
 
@@ -556,6 +553,16 @@ mod tests {
         assert_eq!(logins(&v), ["Bob", "alice", "carol", "zed"]);
         let v = sorted(&all, NameMode::Username, SortKey::FirstCommit, true);
         assert_eq!(logins(&v), ["Bob", "zed", "carol", "alice"]); // undated last
+    }
+
+    #[test]
+    fn contributors_without_dates_stay_last_when_sorting_newest_first() {
+        let mut all = people();
+        all[0].last_commit = "2026-01-04T00:00:00Z";
+        let first = sorted(&all, NameMode::Username, SortKey::FirstCommit, false);
+        assert_eq!(logins(&first), ["carol", "zed", "Bob", "alice"]);
+        let last = sorted(&all, NameMode::Username, SortKey::LastCommit, false);
+        assert_eq!(logins(&last), ["zed", "carol", "Bob", "alice"]);
     }
 
     #[test]
