@@ -159,3 +159,25 @@ fn editing_protection_can_require_an_open_password_too() {
     assert_eq!(auth(Some("Open-Sesame-42")), Some(pdfcraft_cos::Auth::User));
     assert_eq!(auth(Some("Boss-Key-7")), Some(pdfcraft_cos::Auth::Owner));
 }
+
+/// A password that reduces to empty under SASLprep (e.g. soft hyphens U+00AD) is rejected by
+/// validation with Apply disabled, for both Viewing and Editing roles.
+#[test]
+fn effective_empty_password_is_rejected_for_both_viewing_and_editing() {
+    // 1. Viewing role
+    let mut h = harness();
+    h.state_mut().execute("protect.password");
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::Protect));
+    h.get_by_label("Viewing");
+    type_into(&mut h, "Type Password", "\u{00AD}");
+    type_into(&mut h, "Re-type Password", "\u{00AD}");
+    h.get_by_label_contains("characters that passwords ignore");
+    assert!(h.query_by(|n| n.label().as_deref() == Some("Apply") && n.is_disabled()).is_some(), "Apply is disabled for Viewing role");
+
+    // 2. Editing role
+    h.get_by_label("Editing").click();
+    h.run_steps(2);
+    h.get_by_label_contains("characters that passwords ignore");
+    assert!(h.query_by(|n| n.label().as_deref() == Some("Apply") && n.is_disabled()).is_some(), "Apply is disabled for Editing role");
+}

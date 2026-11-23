@@ -69,6 +69,8 @@ impl ProtectDraft {
             Some("The passwords don't match.")
         } else if ascii_only(&self.password) || (self.both && ascii_only(&self.second)) {
             Some("This compatibility level supports only plain ASCII passwords.")
+        } else if self.same_to_the_file(&self.password, "") {
+            Some("The password is made only of characters that passwords ignore, such as soft hyphens.")
         } else if self.both && self.second.is_empty() {
             Some(if self.viewing { "Type a permissions password." } else { "Type a document open password." })
         } else if self.both && self.second != self.second_confirm {
@@ -364,6 +366,14 @@ mod tests {
         d.second = "\u{00AD}".into();
         d.second_confirm = "\u{00AD}".into();
         assert_eq!(d.problem(), Some("The second password is made only of characters that passwords ignore, such as soft hyphens."));
+        // The primary password must also reject an empty effective password in both viewing and editing roles.
+        d.both = false;
+        d.viewing = true;
+        d.password = "\u{00AD}".into();
+        d.confirm = "\u{00AD}".into();
+        assert_eq!(d.problem(), Some("The password is made only of characters that passwords ignore, such as soft hyphens."));
+        d.viewing = false;
+        assert_eq!(d.problem(), Some("The password is made only of characters that passwords ignore, such as soft hyphens."));
         assert_eq!(strength("abc").0, "Weak");
         assert_eq!(strength("Abcdefg1").0, "Medium");
         assert_eq!(strength("Correct-Horse-9").0, "Strong");
