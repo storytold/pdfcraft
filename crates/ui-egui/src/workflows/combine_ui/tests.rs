@@ -232,3 +232,30 @@ fn a_password_answered_after_combine_opens_behind_the_combine_tab() {
     app.combine_paths(&[]);
     assert!(app.password_prompt.as_ref().unwrap().activate, "a tool's open keeps its focus");
 }
+
+/// An open document that holds content of a PDF opened with a password (an extract of one, not
+/// encrypted itself) keeps the combined document out of autosave when Add open documents lists it,
+/// as a file unlocked in the list does.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn combining_an_open_extract_of_a_protected_pdf_is_not_autosaved() {
+    let store = crate::RecoveryStore::new(std::env::temp_dir().join(format!("pdfcraft-combine-protected-{}", std::process::id())));
+    store.clear();
+    let mut app = PdfCraftApp::new();
+    app.enable_recovery(store.clone());
+    app.open_bytes("locked.pdf", None, locked()).unwrap();
+    app.submit_password(Some("pw".into()));
+    app.extract_selection();
+    let plain = app.views.last().and_then(|v| app.session.get(v.id)).map(|d| d.bytes.as_ref().clone()).unwrap_or_default();
+    app.add_open_documents(&[1]);
+    app.combine_staged();
+    assert_eq!(app.views.last().and_then(|v| app.session.get(v.id)).map(|d| d.name.as_str()), Some("Combined.pdf"));
+    // An edited plain document in the same store is autosaved, so the store works.
+    app.open_bytes("control.pdf", None, plain).unwrap();
+    assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    app.autosave_now();
+    let names: Vec<(String, bool)> = store.list().into_iter().map(|m| (m.name, m.encrypted)).collect();
+    store.clear();
+    assert!(names.iter().any(|(name, _)| name == "control.pdf"), "the control document has no snapshot: {names:?}");
+    assert!(names.iter().all(|(name, encrypted)| *encrypted || name == "control.pdf"), "autosaved in plain text: {names:?}");
+}
