@@ -4230,6 +4230,35 @@ trailer << /Root 1 0 R >>
     assert!(matches!(a.call("accessibility_set_alt", &json!({ "doc": fd, "figure": 6, "alt": "x" })), Err(ToolError::Failed(_))));
 }
 
+/// #7459: Listing tags reads table attributes assigned through the structure class map.
+#[test]
+fn accessibility_tags_reads_table_attributes_from_classes() {
+    let dir = workdir("a11y-table-classes");
+    let pdf = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 4 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>",
+        "<< /Type /StructTreeRoot /K 5 0 R /ClassMap 10 0 R >>",
+        "<< /Type /StructElem /S /Table /P 4 0 R /K 6 0 R /C [/Unknown /First /Second] >>",
+        "<< /Type /StructElem /S /TR /P 5 0 R /K [7 0 R 8 0 R 9 0 R] >>",
+        "<< /Type /StructElem /S /TH /P 6 0 R /C /Header >>",
+        "<< /Type /StructElem /S /TH /P 6 0 R /A [<< /O /Table /Scope /Row >> 3] /C /Header /R 3 >>",
+        "<< /Type /StructElem /S /TH /P 6 0 R /A [<< /O /Layout >> 2] /C [/Unknown /Header] /R 2 >>",
+        "<< /First << /O /Table /Summary (Opening hours by day) >> /Second << /O /Table /Summary (Other) >> /Header 11 0 R >>",
+        "[<< /O /Layout >> << /O /Table /Scope /Column >>]",
+    ]);
+    std::fs::write(dir.join("classed-table.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let fd = ok(&mut a, "doc_open", json!({ "path": "classed-table.pdf" }))["doc"].as_u64().unwrap();
+    let result = ok(&mut a, "accessibility_tags", json!({ "doc": fd }));
+    let tag = |object: u64| result["tags"].as_array().unwrap().iter().find(|tag| tag["object"] == object).unwrap();
+    assert_eq!(
+        [&tag(5)["summary"], &tag(7)["scope"], &tag(8)["scope"], &tag(9)["scope"]],
+        [&json!("Opening hours by day"), &json!("Column"), &json!("Row"), &json!("Column")],
+        "table summary and header scopes must follow direct attribute and class order",
+    );
+}
+
 /// A table's summary and a header cell's scope are set through `accessibility_set_tag_property`
 /// (#4103, #4104): the summary clears the table-summary finding, both are listed with the tags,
 /// undone, and saved.
