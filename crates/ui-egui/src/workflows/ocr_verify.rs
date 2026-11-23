@@ -964,19 +964,8 @@ impl OcrVerify {
         self.message = if is_region { tl!("Re-reading the region…").to_string() } else { tl!("Re-reading the page…").to_string() };
         let p = progress.clone();
         let work = move || {
-            let result = pdfcraft_engine::ocr::recognizers(&job.settings).and_then(|r| {
-                let found = job.run(&r, |_, _| !p.lock().map(|s| s.cancel).unwrap_or(false));
-                let words: Vec<PlacedWord> = found.into_iter().flat_map(|pg| pg.words).collect();
-                if words.is_empty() {
-                    Err(if is_region {
-                        "the region re-read found no text; the existing words are unchanged".into()
-                    } else {
-                        "the re-read found no text; the existing words are unchanged".into()
-                    })
-                } else {
-                    Ok(words)
-                }
-            });
+            let result = pdfcraft_engine::ocr::recognizers(&job.settings)
+                .and_then(|r| reread_words(job.run(&r, |_, _| !p.lock().map(|s| s.cancel).unwrap_or(false)), is_region));
             if let Ok(mut s) = p.lock() {
                 s.result = Some(result);
             }
@@ -1176,12 +1165,20 @@ impl OcrVerify {
                 &[("n", &found_words.to_string()), ("m", &read.to_string()), ("t", &total.to_string())],
             )
         } else if found_words == 0 {
-            tl!("OCR complete — no text recognized on this page.").to_string()
+            // A page that could not be read says why (a language pack that is not installed,
+            // for one); "no text recognized" is for a page that was read and has none.
+            ocr_ui::unread_pages_note(&self.pages).unwrap_or_else(|| tl!("OCR complete — no text recognized on this page.").to_string())
         } else {
-            crate::i18n::fmt(
+            let mut message = crate::i18n::fmt(
                 tl!("Read {n} words on {m} of {t} pages"),
                 &[("n", &found_words.to_string()), ("m", &read.to_string()), ("t", &total.to_string())],
-            )
+            );
+            // A page that could not be read says why here, not only once it is selected.
+            if let Some(note) = ocr_ui::unread_pages_note(&self.pages) {
+                message.push_str("; ");
+                message.push_str(&note);
+            }
+            message
         };
         self.phase = Phase::ReviewReady;
         self.load_dictionary_pref();
@@ -1529,6 +1526,25 @@ fn toolbar(app: &mut PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
             n.exit = true;
         }
     });
+}
+
+/// The words a re-read found, or why the words under review stay as they are: the page
+/// could not be read (its reason is kept: a language pack removed since the reading, for one,
+/// which "found no text" would hide), or nothing was found.
+fn reread_words(found: Vec<OcrPage>, is_region: bool) -> Result<Vec<PlacedWord>, String> {
+    if let Some(why) = found.iter().find_map(|page| page.failure()) {
+        return Err(format!("{why}; the existing words are unchanged"));
+    }
+    let words: Vec<PlacedWord> = found.into_iter().flat_map(|page| page.words).collect();
+    if words.is_empty() {
+        Err(if is_region {
+            "the region re-read found no text; the existing words are unchanged".into()
+        } else {
+            "the re-read found no text; the existing words are unchanged".into()
+        })
+    } else {
+        Ok(words)
+    }
 }
 
 /// A language code's dropdown text: its name and its code ("English (en)").
@@ -3153,6 +3169,30 @@ mod tests {
         v.finished(Vec::new(), true);
         assert_eq!(v.current, 2);
         assert_eq!(v.phase, Phase::ReviewReady);
+    }
+
+    /// A run on the Verify screen says in its status why a page could not be read: alone
+    /// when nothing was read (not "no text recognized"), and after the count otherwise.
+    #[test]
+    fn a_run_that_could_not_read_a_page_says_why_in_the_status() {
+        let why = "tesseract failed: Error opening data file ara.traineddata";
+        let unread = |page| OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: Some(why.into()), notes: Vec::new() };
+        let read = OcrPage { page: 0, words: vec![word("w", Some(95.0))], already_on_page: 0, skipped: None, notes: Vec::new() };
+        let mut v = OcrVerify::default();
+        v.finished(vec![unread(0)], false);
+        assert!(v.message.contains(why) && !v.message.contains("no text recognized"), "{}", v.message);
+        v.finished(vec![read, unread(1)], false);
+        assert!(v.message.contains("1 of 2 pages") && v.message.contains(why), "{}", v.message);
+    }
+
+    /// A re-read that failed says why (the reading's language pack was removed, say), not
+    /// that it "found no text"; the words under review stay as they are either way.
+    #[test]
+    fn a_failed_reread_keeps_its_reason() {
+        let why = "tesseract failed: Error opening data file ara.traineddata";
+        let unread = OcrPage { page: 0, words: Vec::new(), already_on_page: 0, skipped: Some(why.into()), notes: Vec::new() };
+        let failed = reread_words(vec![unread], false).unwrap_err();
+        assert!(failed.contains(why) && !failed.contains("found no text"), "{failed}");
     }
 
     /// PAGE pairs the shown page's number in the document with the document's page count, the
