@@ -454,7 +454,7 @@ pub struct Batch {
     pub skipped: usize,
     pub words: usize,
     pub failed: Vec<String>,
-    /// The low-confidence notes, one per file that has such words.
+    /// The files' notes: low-confidence words, pages that could not be read.
     pub notes: Vec<String>,
     /// After a cancel: how many files were not run.
     pub not_run: Option<usize>,
@@ -515,6 +515,11 @@ impl Batch {
                 self.words += r.words();
                 if let Some(note) = crate::ocr_ui::low_confidence_note(&name, &r, self.settings.low_confidence_threshold) {
                     self.notes.push(note);
+                }
+                // Some pages were read and some were not: the copy stands, and the summary
+                // says which file, how many pages and why.
+                if let Some(note) = crate::ocr_ui::unread_pages_note(&r.pages) {
+                    self.notes.push(format!("{name}: {note}"));
                 }
             }
             Err(e) => self.failed.push(format!("{name}: {e}")),

@@ -213,6 +213,14 @@ impl Default for OcrSettings {
     }
 }
 
+/// Why [`OcrPage::skipped`] says a page was passed over for having text of its own (the
+/// skip-text-pages option).
+pub const PAGE_HAS_TEXT: &str = "the page already contains text";
+
+/// Why [`OcrPage::skipped`] and [`FileResult::file_skipped`] say a file was passed over for
+/// having text (the skip-text-files option).
+pub const FILE_HAS_TEXT: &str = "the file already contains text";
+
 /// What recognition found on one page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OcrPage {
@@ -228,6 +236,15 @@ pub struct OcrPage {
 }
 
 impl OcrPage {
+    /// Why the page could not be read, when it was skipped for anything but already having
+    /// text ([`PAGE_HAS_TEXT`], [`FILE_HAS_TEXT`]): the render or the recognition failed (a
+    /// language pack that is not installed, for one), or the region asked for is empty or
+    /// outside the page. The interface says this reason instead of counting the page as one
+    /// that "already had text".
+    pub fn failure(&self) -> Option<&str> {
+        self.skipped.as_deref().filter(|why| ![PAGE_HAS_TEXT, FILE_HAS_TEXT].contains(why))
+    }
+
     pub fn text(&self) -> String {
         self.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ")
     }
@@ -794,7 +811,7 @@ impl OcrSteps {
             .map(|t| t.glyphs.iter().filter(|g| !g.text.trim().is_empty()).map(|g| g.rect).collect())
             .unwrap_or_default();
         if settings.skip_text_pages && !settings.force_ocr && !existing.is_empty() && has_own_text(r, page) {
-            return Err(skip("the page already contains text"));
+            return Err(skip(PAGE_HAS_TEXT));
         }
         // A scan is read at its own resolution (enlarging it only blurs the letters), at
         // most the chosen one.
@@ -1207,7 +1224,9 @@ pub fn low_confidence_pages(pages: &[OcrPage], threshold: f32) -> Option<(usize,
 /// the caller's [`Session::javascript`] preference (when off, no open-time script runs).
 /// `progress` works as for [`OcrJob::run`]. A file that the skip-files option passes over comes
 /// back with [`FileResult::file_skipped`] set and its original bytes; the caller decides what to
-/// do with it, but it is never an OCR success.
+/// do with it, but it is never an OCR success. A file in which no word was read and a page
+/// could not be read ([`OcrPage::failure`]) is an error with that page's reason, for every
+/// caller: it is not a file recognized with 0 words.
 pub fn recognize_file(
     name: &str,
     bytes: Arc<Vec<u8>>,
@@ -1255,22 +1274,22 @@ impl FileJob {
             let pages = job
                 .pages
                 .iter()
-                .map(|&page| OcrPage {
-                    already_on_page: 0,
-                    page,
-                    words: Vec::new(),
-                    skipped: Some("the file already contains text".into()),
-                    notes: Vec::new(),
-                })
+                .map(|&page| OcrPage { already_on_page: 0, page, words: Vec::new(), skipped: Some(FILE_HAS_TEXT.into()), notes: Vec::new() })
                 .collect();
-            return Ok(Opened::Skipped(FileResult { bytes, pages, file_skipped: Some("the file already contains text".into()) }));
+            return Ok(Opened::Skipped(FileResult { bytes, pages, file_skipped: Some(FILE_HAS_TEXT.into()) }));
         }
         Ok(Opened::Read(Box::new(FileJob { session, id, bytes, job: Some(job) })))
     }
 
-    /// Add the words found and save: the searchable file, or the original when nothing was found.
+    /// Add the words found and save: the searchable file, or the original when nothing was
+    /// found; an error when nothing was found because a page could not be read.
     pub fn finish(mut self, pages: Vec<OcrPage>) -> Result<FileResult, String> {
         if self.session.apply_ocr(self.id, &pages).map_err(|e| e.to_string())? == 0 {
+            // No word was read and a page says why it could not be: the file was not
+            // recognized, and the caller hears the reason instead of "0 words".
+            if let Some(why) = pages.iter().find_map(|p| p.failure()) {
+                return Err(why.to_string());
+            }
             return Ok(FileResult { bytes: self.bytes, pages, file_skipped: None });
         }
         // Checked like a save before the caller writes it (#2166).
@@ -1900,6 +1919,22 @@ mod tests {
         let whole = recognize_file("t.pdf", bytes, None, force, &r, true, |_, _| true).unwrap();
         // The saved bytes carry a modification time, so two saves a second apart differ there alone.
         assert_eq!((out.pages, out.file_skipped), (whole.pages, whole.file_skipped), "the same as reading it in one call");
+    }
+
+    /// A file in which no word was read because a page could not be read is an error with
+    /// that page's reason, not a file recognized with 0 words (which a batch counted, and
+    /// wrote out unchanged); a file whose pages were passed over for having text still is.
+    #[test]
+    fn a_file_whose_pages_could_not_be_read_is_an_error() {
+        let bytes = Session::new().create_from_text("t", "Already typed here").unwrap();
+        let force = OcrSettings { force_ocr: true, ..Default::default() };
+        let finish = |skipped: &str| {
+            let Ok(Opened::Read(file)) = FileJob::open("t.pdf", bytes.clone(), None, force.clone(), true) else { panic!("the file should be read") };
+            file.finish(vec![OcrPage { page: 0, words: Vec::new(), already_on_page: 0, skipped: Some(skipped.into()), notes: Vec::new() }])
+        };
+        let why = "tesseract failed: Error opening data file ara.traineddata";
+        assert_eq!(finish(why).err().as_deref(), Some(why));
+        assert!(finish(PAGE_HAS_TEXT).is_ok_and(|out| out.words() == 0));
     }
 
     /// Two inputs of one name (from different folders, or differing only in case) would
