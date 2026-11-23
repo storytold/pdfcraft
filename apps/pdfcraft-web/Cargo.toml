@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 pdfcraft-ui-egui = { workspace = true }
 # The framework, through its facade (contract head), with the UI runtime the canvas is installed with.
-craft = { workspace = true, features = ["automation", "ui", "window"] }
+craft = { workspace = true, features = ["automation", "platform-browser", "ui", "window"] }
 # The host messages (storytold/craft-libs): one contract and one bridge for the web builds.
 # The page command API (storytold/craft-libs#413): window.pdfcraft over the UI control channel.
 craft-web-api = { git = "https://github.com/storytold/craft-libs", rev = "527c2750e37fb8bf576dc9a9e07ffc60b9d63717", version = "0.1.0" }

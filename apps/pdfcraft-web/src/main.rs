@@ -22,15 +22,20 @@ fn main() {
                 canvas,
                 options,
                 Box::new(|cc| {
-                    // PLAN: assumed pdfcraft_ui_egui::settings::open() -> Store over craft::settings::BrowserFiles on wasm32, with the former PrintCraft key migrated (pdf-shell-w9, SH-C29, L-117).
+                    // `settings::open()` is a store over `craft::settings::LocalStorageFiles` on wasm32, with the former PrintCraft key migrated.
                     let settings = pdfcraft_ui_egui::settings::open();
                     install_runtime(cc, startup_lang(settings.get().behavior.language.as_deref()))?;
                     let ctx = cc.egui_ctx.clone();
                     let wake = craft::host::Wake::new(move || ctx.request_repaint());
                     // Files to open: a `?file=` download, the embedding page's `pdfcraft:open`, a drop.
                     let (intake, opens) = craft::platform::open::FileIntake::new(wake.clone());
-                    // Picks read the browser's files; saves download, or go to the embedding page.
-                    let files = craft::web_host::files::BrowserFiles::new(wake, host::MAX_OPEN_BYTES);
+                    // Picks read the browser's files, holding at most `MAX_OPEN_BYTES` until they are taken; saves go
+                    // through the browser's save picker or download.
+                    let limits = craft::platform::browser_files::PickLimits {
+                        pending_bytes: usize::try_from(host::MAX_OPEN_BYTES).unwrap_or(usize::MAX),
+                        ..craft::platform::browser_files::PickLimits::DEFAULT
+                    };
+                    let files = craft::platform::browser_files::BrowserFiles::new(move || wake.wake()).limits(limits);
                     let app_host = craft::host::Host::builder(pdfcraft_ui_egui::APP_INFO).files(Arc::new(files)).build();
                     let mut app = PdfCraftApp::with_host(Arc::new(app_host), AppServices::system(&cc.egui_ctx, intake));
                     app.apply_settings(&settings.get());
