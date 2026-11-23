@@ -399,7 +399,13 @@ fn custom_script(ui: &mut egui::Ui, js: &mut String, refused: &mut bool) {
         field = field.help(Help::Status(Tone::Bad, tl!("A script edited here can be at most 256 KiB long; that change wasn't made.").into()));
     }
     field.show(ui, |ui, _| {
-        TextField::new(label, Bind::bound(&mut draft)).lines(6).max_lines(SCRIPT_LINES).mono().tab_inserts(true).placeholder("event.value = …;").show(ui);
+        TextField::new(label, Bind::bound(&mut draft))
+            .lines(6)
+            .max_lines(SCRIPT_LINES)
+            .mono()
+            .tab_inserts(true)
+            .placeholder("event.value = …;")
+            .show(ui);
     });
     if draft != *js {
         *refused = draft.len() > MAX_EDITED_SCRIPT;

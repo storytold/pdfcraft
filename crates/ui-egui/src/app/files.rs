@@ -143,19 +143,18 @@ impl PdfCraftApp {
         // A new document opens with the remembered Highlight fields, which its scripts read; the
         // session keeps the document in front's.
         let context = self.session.open_context().with_highlight(self.highlight_fields); // PLAN: `highlight_fields` on the app (pdf-canvas-w8)
-        let job =
-            open_worker::Job {
-                context,
-                name: request.name.clone(),
-                path: request.path.clone(),
-                password: request.password,
-                input: request.input,
-                // A named destination is looked up with the document, so the tab opens at it.
-                named: match &request.after_open {
-                    Some(pdfcraft_render::RemoteDestination::Named(name)) => Some(name.clone()),
-                    _ => None,
-                },
-            };
+        let job = open_worker::Job {
+            context,
+            name: request.name.clone(),
+            path: request.path.clone(),
+            password: request.password,
+            input: request.input,
+            // A named destination is looked up with the document, so the tab opens at it.
+            named: match &request.after_open {
+                Some(pdfcraft_render::RemoteDestination::Named(name)) => Some(name.clone()),
+                _ => None,
+            },
+        };
         self.opens.submit(token, request.priority, move |cancel| open_worker::run(job, cancel));
         self.pending_opens.push(PendingOpen {
             token,
