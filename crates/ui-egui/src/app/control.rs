@@ -205,6 +205,14 @@ impl PdfCraftApp {
                     _ => return Err("full-screen-fill must be on or off".into()),
                 };
             }
+            ("full-screen-loop", _) => {
+                let on = match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("full-screen-loop must be on or off".into()),
+                };
+                self.set_full_screen_loop(on);
+            }
             ("default-page-gaps", _) => {
                 self.view_defaults.show_page_gaps = match value {
                     "on" => true,

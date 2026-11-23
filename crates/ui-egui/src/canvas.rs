@@ -347,6 +347,8 @@ pub struct ViewDefaults {
     /// Full screen fills the screen with one page (or spread) at a time, edge to edge; off, it
     /// keeps the page display it is entered from (continuous scrolling, say: #4273).
     pub full_screen_fill: bool,
+    /// Full screen goes on from the last page to the first, as Acrobat's "Loop after last page".
+    pub full_screen_loop: bool,
 }
 
 impl Default for ViewDefaults {
@@ -360,6 +362,7 @@ impl Default for ViewDefaults {
             zoom: 1.0,
             highlight_fields: true,
             full_screen_fill: true,
+            full_screen_loop: false,
         }
     }
 }
@@ -568,6 +571,9 @@ pub struct DocView {
     /// default); off, it keeps the page display it was entered from. Set from the app's
     /// preference before full screen is entered.
     pub full_screen_fill: bool,
+    /// Full screen goes on from the last page (or spread) to the first. Set for every open view
+    /// by `PdfCraftApp::set_full_screen_loop`.
+    pub full_screen_loop: bool,
     /// Full screen's transitions, display times and pointer (see [`presenter`]).
     pub(crate) presenter: presenter::Presenter,
     pages: HashMap<usize, PageTex>,
@@ -1094,6 +1100,7 @@ impl DocView {
             interface: Default::default(),
             presentation: None,
             full_screen_fill: defaults.full_screen_fill,
+            full_screen_loop: defaults.full_screen_loop,
             presenter: Default::default(),
             pages: HashMap::new(),
             errors: HashMap::new(),
@@ -1289,6 +1296,7 @@ impl DocView {
         // Still presenting, with the display to go back to on leaving.
         fresh.presentation = self.presentation.take();
         fresh.full_screen_fill = self.full_screen_fill;
+        fresh.full_screen_loop = self.full_screen_loop;
         // A new document: none of the old one's transition, page or timer carries over.
         fresh.presenter = Default::default();
         fresh.back = std::mem::take(&mut self.back);
@@ -1332,6 +1340,7 @@ impl DocView {
         v.notice_dismissed = self.notice_dismissed;
         v.scripts_off_noted = self.scripts_off_noted;
         v.full_screen_fill = self.full_screen_fill;
+        v.full_screen_loop = self.full_screen_loop;
         v.goto = Some((self.current, 0.0));
         v
     }

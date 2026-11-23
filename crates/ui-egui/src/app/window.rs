@@ -52,6 +52,15 @@ impl PdfCraftApp {
         }
     }
 
+    /// The "Loop after last page" preference, for new documents and every open one at once, so
+    /// that it takes effect in full screen too (Preferences can be opened there).
+    pub fn set_full_screen_loop(&mut self, on: bool) {
+        self.view_defaults.full_screen_loop = on;
+        for view in &mut self.views {
+            view.full_screen_loop = on;
+        }
+    }
+
     /// Answer the Full Screen mode prompt a document raised on opening: enter it, or leave the
     /// window as it is.
     pub fn resolve_full_screen_prompt(&mut self, ctx: &egui::Context, allow: bool) {

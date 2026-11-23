@@ -241,6 +241,12 @@ impl DocView {
             PageLayout::Single if forward => (c + 1, c),
             PageLayout::Single => (c.saturating_sub(1), c),
         };
+        // Full screen with "Loop after last page" goes on from the last page or spread to the
+        // first; going back from the first stays, as in Acrobat.
+        if forward && target > last && first > 0 && self.full_screen_loop && self.presentation.is_some() {
+            self.go_to_page(0);
+            return;
+        }
         // Past either end there is nowhere to go: stay put rather than re-align the view, which
         // would scroll the page back to its top.
         if if forward { target > last } else { first == 0 } {
