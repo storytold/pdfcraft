@@ -65,12 +65,7 @@ fn bar(_tone: Tone, icon: &'static str, text: String) -> Bar<'static> {
 /// The notices above the pages, one after another: a file changed on disk first, then what a historical
 /// snapshot is, then pages cut at the renderer's limits, then the offer to lock a signature just
 /// placed, then the signature status bar, a form's scripts having been turned off, security,
-<<<<<<< HEAD
-/// forms and warnings.
-=======
 /// forms and warnings. None in full screen.
-#[allow(clippy::too_many_arguments)]
->>>>>>> upstream/main
 pub(super) fn notices(
     view: &mut DocView,
     doc: &pdfcraft_engine::Document,
@@ -82,7 +77,7 @@ pub(super) fn notices(
 ) -> Option<Notice> {
     // Full screen shows the page and nothing else (#1459), so the notice bar above the pages waits
     // until it is left; filling the screen, a bar would push the page past its bottom (#576).
-    if view.presentation.is_some() {
+    if view.presenting() {
         return None;
     }
     let info = &doc.info;

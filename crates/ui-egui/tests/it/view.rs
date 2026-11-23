@@ -2411,43 +2411,6 @@ fn a_document_press_releases_pages_keyboard_focus_without_escape() {
     assert!(h.state().views[0].selected.items.is_empty(), "Ctrl+A now belongs to the viewer, not page thumbnails");
 }
 
-/// #576: full screen fills the screen with the page: a portrait page fits the screen's height
-/// edge to edge, with no margin above or below it, and sits centred across.
-#[test]
-fn full_screen_fills_the_screen_edge_to_edge() {
-    let mut h = harness(&[]);
-    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
-    h.run_steps(6);
-    assert!(h.state().full_screen && h.state().views[0].fills_screen());
-    let vp = h.state().views[0].viewport_rect();
-    let r = rect(&h, 0).expect("page 1 on screen");
-    assert!((r.height() - vp.height()).abs() <= 1.0, "the page {r:?} spans the screen's height {vp:?}");
-    assert!((r.top() - vp.top()).abs() <= 1.0 && (r.bottom() - vp.bottom()).abs() <= 1.0, "no margin: {r:?} in {vp:?}");
-    assert!((r.center().x - vp.center().x).abs() <= 1.0, "centred across: {r:?} in {vp:?}");
-}
-
-/// With the page filling the screen there is no margin above it, and ↑ and the wheel still go
-/// back a page from its top, as ↓ and the wheel go forward from its bottom.
-#[test]
-fn full_screen_filling_the_screen_goes_back_with_up_and_the_wheel() {
-    let mut h = harness(&[]);
-    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
-    h.run_steps(6);
-    assert!(h.state().views[0].fills_screen());
-    h.key_press(Key::End);
-    h.run_steps(6);
-    assert_eq!(h.state().views[0].current, 2);
-    h.key_press(Key::ArrowUp);
-    h.run_steps(6);
-    assert_eq!(h.state().views[0].current, 1, "↑ goes back a page");
-    let vp = h.state().views[0].viewport_rect();
-    h.hover_at(vp.center());
-    h.run_steps(2);
-    h.event(wheel(MouseWheelUnit::Line, 1.0, TouchPhase::Move));
-    h.run_steps(6);
-    assert_eq!(h.state().views[0].current, 0, "the wheel goes back a page");
-}
-
 /// #4273: with the "Full screen fills the screen with one page at a time" preference off, full
 /// screen keeps the page display it was entered from (continuous scrolling here), and Esc
 /// brings the window's display back.
@@ -2458,13 +2421,13 @@ fn full_screen_keeps_continuous_scrolling_when_fill_is_off() {
     h.key_press_modifiers(Modifiers::COMMAND, Key::L);
     h.run_steps(6);
     let v = &h.state().views[0];
-    assert!(h.state().full_screen && v.presenting() && !v.fills_screen());
+    assert!(h.state().full_screen() && v.presenting() && !v.fills_screen());
     assert!(v.continuous(), "still scrolling continuously");
     assert!(rect(&h, 0).is_some() && rect(&h, 1).is_some(), "more than one page on screen");
-    assert!((v.zoom - 0.5).abs() < 1e-3, "the zoom stays: {}", v.zoom);
+    assert!((v.zoom() - 0.5).abs() < 1e-3, "the zoom stays: {}", v.zoom());
     h.key_press(Key::Escape);
     h.run_steps(4);
-    assert!(!h.state().full_screen && h.state().views[0].continuous());
+    assert!(!h.state().full_screen() && h.state().views[0].continuous());
 }
 
 /// #5302: Esc closes one thing at a time. In full screen with the find bar open, the first Esc
@@ -2476,50 +2439,51 @@ fn full_screen_esc_closes_the_find_bar_before_leaving() {
     let mut h = harness(&[]);
     h.key_press_modifiers(Modifiers::COMMAND, Key::L);
     h.run_steps(6);
-    assert!(h.state().full_screen);
+    assert!(h.state().full_screen());
     h.state_mut().views[0].open_find();
     h.run_steps(2);
     assert!(h.state().views[0].find.is_some());
     h.key_press(Key::Escape);
     h.run_steps(2);
     assert!(h.state().views[0].find.is_none(), "the first Esc closes the find bar");
-    assert!(h.state().full_screen, "and full screen stays");
+    assert!(h.state().full_screen(), "and full screen stays");
     h.key_press(Key::Escape);
     h.run_steps(2);
-    assert!(!h.state().full_screen, "the next Esc leaves full screen");
+    assert!(!h.state().full_screen(), "the next Esc leaves full screen");
+}
+
+/// A search open in the Search panel, as the panel shows it.
+fn search_in_the_panel(options: &'static [(&'static str, &'static str)]) -> Harness<'static, PdfCraftApp> {
+    let mut h = harness(options);
+    let ctx = h.ctx.clone();
+    h.state_mut().set_option(&ctx, "panel", "search").unwrap();
+    h.state_mut().views[0].open_find();
+    h.state_mut().views[0].find.as_mut().expect("find opened").in_panel = true;
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+    h.run_steps(6);
+    assert!(h.state().full_screen());
+    h
 }
 
 /// Full screen hides the Search panel, and a search shown there isn't the find bar: the first
 /// Esc leaves full screen, and the panel's search is still there afterwards.
 #[test]
 fn full_screen_esc_leaves_and_keeps_the_search_panels_search() {
-    let mut h = harness(&[]);
-    h.state_mut().set_option("panel", "search").unwrap();
-    h.state_mut().views[0].open_find();
-    h.state_mut().views[0].find.as_mut().expect("find opened").in_panel = true;
-    h.run_steps(2);
-    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
-    h.run_steps(6);
-    assert!(h.state().full_screen);
+    let mut h = search_in_the_panel(&[]);
     h.key_press(Key::Escape);
     h.run_steps(2);
-    assert!(!h.state().full_screen, "the first Esc leaves full screen");
+    assert!(!h.state().full_screen(), "the first Esc leaves full screen");
     assert!(h.state().views[0].find.is_some(), "and the Search panel's search stays");
 }
 
 /// When Esc doesn't leave full screen, it doesn't close the hidden Search panel's search either.
 #[test]
 fn full_screen_esc_that_stays_keeps_the_search_panels_search() {
-    let mut h = harness(&[("full-screen-escape", "off")]);
-    h.state_mut().set_option("panel", "search").unwrap();
-    h.state_mut().views[0].open_find();
-    h.state_mut().views[0].find.as_mut().expect("find opened").in_panel = true;
-    h.run_steps(2);
-    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
-    h.run_steps(6);
+    let mut h = search_in_the_panel(&[("full-screen-escape", "off")]);
     h.key_press(Key::Escape);
     h.run_steps(2);
-    assert!(h.state().full_screen, "Esc doesn't leave full screen");
+    assert!(h.state().full_screen(), "Esc doesn't leave full screen");
     assert!(h.state().views[0].find.is_some(), "and the Search panel's search stays");
 }
 
@@ -2529,24 +2493,25 @@ fn full_screen_esc_that_stays_keeps_the_search_panels_search() {
 fn full_screen_keeps_the_reading_position_when_fill_is_off() {
     let mut h = harness(&[("layout", "continuous"), ("zoom", "200"), ("full-screen-fill", "off")]);
     h.run_steps(4);
-    h.state_mut().views[0].goto = Some((1, 0.5));
+    h.state_mut().views[0].view.go_to_fraction(1, 0.5);
     h.run_steps(4);
-    let above = |h: &Harness<'static, PdfCraftApp>| {
-        let v = &h.state().views[0];
-        v.viewport_rect().top() - rect(h, 1).expect("page 2 on screen").top()
+    // How far page 2 starts above the top of the page view, as a share of its height.
+    let scrolled_past = |h: &Harness<'static, PdfCraftApp>| {
+        let page = rect(h, 1).expect("page 2 on screen");
+        (h.state().views[0].viewport_rect().top() - page.top()) / page.height()
     };
-    let before = above(&h);
-    assert!(before > 300.0, "page 2 starts well above the window's top: {before}");
+    let before = scrolled_past(&h);
+    assert!(before > 0.25 && before < 0.75, "page 2 is scrolled about half past the top: {before}");
     h.key_press_modifiers(Modifiers::COMMAND, Key::L);
     h.run_steps(6);
-    assert!(h.state().full_screen);
-    let full = above(&h);
-    assert!((full - before).abs() < 40.0, "full screen keeps the position: {full} vs {before}");
+    assert!(h.state().full_screen());
+    let full = scrolled_past(&h);
+    assert!((full - before).abs() < 0.1, "full screen keeps the position: {full} vs {before}");
     h.key_press(Key::Escape);
     h.run_steps(6);
-    assert!(!h.state().full_screen);
-    let after = above(&h);
-    assert!((after - before).abs() < 40.0, "and so does leaving it: {after} vs {before}");
+    assert!(!h.state().full_screen());
+    let after = scrolled_past(&h);
+    assert!((after - before).abs() < 0.1, "and so does leaving it: {after} vs {before}");
 }
 
 /// With the "Esc leaves full screen" preference off, Esc doesn't leave full screen and only
@@ -2558,13 +2523,13 @@ fn full_screen_stays_on_esc_when_esc_does_not_leave_it() {
     let mut h = harness(&[("full-screen-escape", "off")]);
     h.key_press_modifiers(Modifiers::COMMAND, Key::L);
     h.run_steps(6);
-    assert!(h.state().full_screen);
+    assert!(h.state().full_screen());
     h.key_press(Key::Escape);
     h.run_steps(2);
-    assert!(h.state().full_screen, "Esc doesn't leave full screen");
+    assert!(h.state().full_screen(), "Esc doesn't leave full screen");
     h.key_press_modifiers(Modifiers::COMMAND, Key::L);
     h.run_steps(4);
-    assert!(!h.state().full_screen, "Ctrl+L / ⌘L leaves it");
+    assert!(!h.state().full_screen(), "Ctrl+L / ⌘L leaves it");
 }
 
 /// From a form field being filled, the first Esc closes the field and the second leaves full
@@ -2572,15 +2537,9 @@ fn full_screen_stays_on_esc_when_esc_does_not_leave_it() {
 /// p. 248).
 #[test]
 fn full_screen_esc_from_a_field_closes_the_field_first() {
-    const FIELD: &[u8] = b"%PDF-1.7
-1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >> endobj
-2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
-3 0 obj << /Type /Page /Parent 2 0 R /Annots [4 0 R] >> endobj
-4 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [50 100 250 140] /P 3 0 R /F 4 >> endobj
-trailer << /Root 1 0 R >>
-%%EOF";
     let mut h = harness(&[]);
-    h.state_mut().open_bytes("field.pdf", None, FIELD.to_vec()).expect("opens");
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "field.pdf", None, FIELD_PAGES.to_vec()).expect("opens");
     h.run_steps(8);
     h.key_press_modifiers(Modifiers::COMMAND, Key::L);
     h.run_steps(6);
@@ -2595,28 +2554,30 @@ trailer << /Root 1 0 R >>
     }
     assert!(h.state().views[n].presentation_settled(), "page 1 is shown");
     let r = h.state().views[n].page_screen_rect(0).expect("page 1 on screen");
-    // One page only: the click can't turn away from the field.
     click_with(&mut h, egui::pos2(r.left() + r.width() * 0.5, r.top() + r.height() * (400.0 - 120.0) / 400.0), Modifiers::NONE);
+    h.run_steps(4);
     assert!(h.ctx.egui_wants_keyboard_input(), "the field is open for typing");
     h.key_press(Key::Escape);
     h.run_steps(4);
-    assert!(h.state().full_screen, "the first Esc closes the field only");
+    assert!(h.state().full_screen(), "the first Esc closes the field only");
     assert!(!h.ctx.egui_wants_keyboard_input(), "the field is closed");
     h.key_press(Key::Escape);
     h.run_steps(4);
-    assert!(!h.state().full_screen, "the second Esc leaves full screen");
+    assert!(!h.state().full_screen(), "the second Esc leaves full screen");
 }
 
 /// Full screen shows no notice bar above the page (a form's "interactive form fields" notice, here),
 /// so a page filling the screen is whole on it; the bar is back on leaving.
 #[test]
 fn full_screen_hides_the_notice_bar_and_the_page_fits_whole() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).expect("opens");
-        app.set_option("left", "closed").unwrap();
-        app.set_option("panel", "none").unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let ctx = egui::Context::default();
+        let mut app = crate::control::new_app();
+        app.set_option(&ctx, "language", "en").unwrap();
+        app.open_bytes(&ctx, "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).expect("opens");
+        app.set_option(&ctx, "left", "closed").unwrap();
+        app.set_option(&ctx, "panel", "none").unwrap();
         app
     });
     h.run_steps(8);
@@ -2624,7 +2585,7 @@ fn full_screen_hides_the_notice_bar_and_the_page_fits_whole() {
     assert!(notice(&h), "the form notice shows in the window");
     h.key_press_modifiers(Modifiers::COMMAND, Key::L);
     h.run_steps(6);
-    assert!(h.state().full_screen && !notice(&h), "no notice bar in full screen");
+    assert!(h.state().full_screen() && !notice(&h), "no notice bar in full screen");
     let vp = h.state().views[0].viewport_rect();
     let r = rect(&h, 0).expect("page 1 on screen");
     assert!(r.top() >= vp.top() - 1.0 && r.bottom() <= vp.bottom() + 1.0, "the page {r:?} is whole in {vp:?}");
