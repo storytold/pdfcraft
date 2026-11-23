@@ -47,6 +47,9 @@ impl PdfCraftApp {
             ("show_page_edge_shadows", _) => {
                 self.show_page_edge_shadows = value.parse::<bool>().map_err(|_| "show_page_edge_shadows must be true or false")?;
             }
+            ("keep_bookmark_zoom", _) => {
+                self.keep_bookmark_zoom = value.parse::<bool>().map_err(|_| "keep_bookmark_zoom must be true or false")?;
+            }
             ("update_check_at_start", _) => {
                 self.update_check_at_start = value.parse::<bool>().map_err(|_| "update_check_at_start must be true or false")?;
             }

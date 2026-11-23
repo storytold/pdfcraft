@@ -483,7 +483,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     match nav {
         Some(Nav::Page(p)) => app.views[index].go_to_page(p),
         Some(Nav::Dest(p, dest)) => match app.session.get(id) {
-            Some(doc) => app.views[index].go_to_dest(p, dest, &doc.info),
+            Some(doc) => app.views[index].go_to_dest_with_zoom(p, dest, &doc.info, app.keep_bookmark_zoom),
             None => app.views[index].go_to_page(p),
         },
         Some(Nav::Action(target)) => {

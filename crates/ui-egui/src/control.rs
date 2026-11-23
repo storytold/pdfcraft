@@ -30,6 +30,8 @@
 //! - `ui.command {id}`: run a registry command (as the menu would). `ui.commands` lists them.
 //! - `ui.set {key: "show_page_edge_shadows", value: "true"|"false"}` controls page
 //!   decoration app-wide; `ui.state.show_page_edge_shadows` reports the saved preference.
+//! - `ui.set {key: "keep_bookmark_zoom", value: "true"|"false"}` controls whether bookmarks
+//!   in the current PDF keep the current zoom; `ui.state.keep_bookmark_zoom` reports the choice.
 //! - `ui.set {key, value}`: view options (`--page`, `--zoom`, …), plus persistent preferences.
 //!   `select` accepts physical page numbers and ranges such as `1,12,16-18`; blank clears the
 //!   explicit selection. This is the same bounded parser as the Organize Pages field; invalid
