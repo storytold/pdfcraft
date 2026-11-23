@@ -220,7 +220,10 @@ impl crate::PdfCraftApp {
     }
 
     fn notify_interface_hidden(&mut self) {
-        let key = pdfcraft_engine::commands::command(TOGGLE).and_then(|c| c.shortcut).map(|s| s.label(cfg!(target_os = "macos"))).unwrap_or_default();
+        let key = pdfcraft_engine::commands::command(TOGGLE)
+            .and_then(|c| c.shortcut_for(cfg!(target_os = "macos")))
+            .map(|s| s.label(cfg!(target_os = "macos")))
+            .unwrap_or_default();
         self.notify_fmt("This document hides the toolbars and panels. Press {key} to show them.", &[("key", &key)]);
     }
 
