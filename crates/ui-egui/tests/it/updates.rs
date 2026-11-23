@@ -29,7 +29,7 @@ fn release(tag: &str) -> craft::update::Release {
 
 /// `Ok(Some(tag))` is a newer release, `Ok(None)` is up to date.
 fn source(answer: Result<Option<&str>, &str>) -> CheckSource {
-    let answer = answer.map(|tag| tag.map(release)).map_err(str::to_string);
+    let answer = answer.map(|tag| tag.map(release)).map_err(craft::update::CheckError::from);
     Arc::new(move || answer.clone())
 }
 
