@@ -1,24 +1,12 @@
-<<<<<<< HEAD
 //! Format text: the font; size, colour, lists and alignment; bold, italic, underline, superscript and
 //! subscript; line and paragraph spacing; horizontal scale and character spacing. One framework
 //! `FormatText` panel serves a paragraph being edited (with the fonts already on its page and the
 //! spacing controls) and added text (the standard families, size, colour, style, alignment and
-//! character spacing). What PdfCraft can't apply yet (lists, paragraph spacing, or line spacing and
+//! character spacing). What PdfCraft can't apply yet (lists, or line and paragraph spacing and
 //! scale for added text) is shown disabled and says so ([`unsupported`]).
 //!
 //! This module maps the panel's values from the thing being formatted ([`values`]) and its edits back
 //! onto it ([`apply`]); the layout, the number fields and their parsing are the framework's.
-=======
-//! Format text, laid out as Acrobat's panel: the font across the panel; size, colour, lists and
-//! alignment; bold, italic, underline, superscript and subscript; line and paragraph spacing;
-//! horizontal scale and character spacing. One panel serves a paragraph being edited (with the
-//! fonts already on its page and the spacing controls) and added text (the standard families,
-//! size, colour, style, alignment and character spacing). What PdfCraft can't apply yet (lists,
-//! or line and paragraph spacing and scale for added text) is shown
-//! disabled and says so.
-//!
-//! The icons are Lucide's (clean-room.md and licences.md); only the arrangement follows Acrobat.
->>>>>>> upstream/main
 
 use std::ops::RangeInclusive;
 
@@ -254,46 +242,13 @@ const SIZES: [f64; 16] = [4.0, 6.0, 8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0
 const LINE_SPACINGS: [f64; 7] = [1.0, 1.15, 1.2, 1.5, 2.0, 2.5, 3.0];
 const SCALES: [f64; 8] = [50.0, 75.0, 90.0, 100.0, 110.0, 125.0, 150.0, 200.0];
 const CHAR_SPACINGS: [f64; 8] = [-1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 3.0, 5.0];
-<<<<<<< HEAD
 /// What can be typed: horizontal scale in percent, character spacing in points.
 const SCALE_RANGE: std::ops::RangeInclusive<f64> = 10.0..=400.0;
 const CHAR_SPACING_RANGE: std::ops::RangeInclusive<f64> = -5.0..=50.0;
+/// The space between paragraphs the engine takes, in points.
+const PARAGRAPH_SPACING_RANGE: std::ops::RangeInclusive<f64> = 0.0..=72.0;
 /// The sizes the engine takes, in points: the bound the size field shows and `apply` enforces.
 const SIZE_RANGE: RangeInclusive<f64> = 1.0..=500.0;
-=======
-const PARAGRAPH_SPACINGS: [f64; 5] = [0.0, 6.0, 12.0, 18.0, 24.0];
-/// A row's height: the tallest control in it (the 30 pt icon buttons). Every control is centred
-/// on the row, whatever its own height, so lists, swatches and buttons line up (#3037).
-const ROW: f32 = 30.0;
-/// The gap between a row's controls.
-const GAP: f32 = 6.0;
-/// The icon naming a list or field ([`labelled_icon`]).
-const LABEL_ICON: f32 = 22.0;
-/// The button beside a number field that opens its list of common values: just an arrow, so the
-/// field keeps the room its value needs.
-const PRESET_LIST: f32 = 22.0;
-/// The room a number field keeps for its value ("-5.0 pt"), beside the arrow in its box.
-const NUMBER_MIN: f32 = 52.0;
-/// The size field's room in the row: English "Mixed", its margins and the 2 pt of its box. The
-/// field reserves room for "Mixed" so it doesn't resize while typing, but no more than this.
-/// shortcut: a longer translation of "Mixed" scrolls in the field. Upgrade by having the panel
-/// report its measured row width to the pane, if that reads badly.
-const SIZE_FIELD: f32 = 62.0;
-/// The least width the panel's widest rows need, which sets how narrow the Tools pane may be
-/// dragged. Size and alignment: the size field and its arrow (in their box), the swatch, the
-/// divider, three 30 pt buttons, and the gaps between those six. The spacing rows: two icons and
-/// two number fields with their arrows (in a box each), the space between the columns, and four
-/// gaps.
-pub(crate) const MIN_ROW: f32 = {
-    let size_row = (SIZE_FIELD + PRESET_LIST + 2.0) + 28.0 + 9.0 + 3.0 * 30.0 + 5.0 * GAP;
-    let spacing_row = 2.0 * LABEL_ICON + 2.0 * (NUMBER_MIN + PRESET_LIST + 2.0) + 8.0 + 4.0 * GAP;
-    if size_row > spacing_row { size_row } else { spacing_row }
-};
-/// What can be typed: horizontal scale in percent, character spacing in points.
-const SCALE_RANGE: std::ops::RangeInclusive<f64> = 10.0..=400.0;
-const CHAR_SPACING_RANGE: std::ops::RangeInclusive<f64> = -5.0..=50.0;
-const PARAGRAPH_SPACING_RANGE: std::ops::RangeInclusive<f64> = 0.0..=72.0;
->>>>>>> upstream/main
 
 /// What the panel shows for a [`Target`].
 pub(crate) struct Values {
@@ -367,7 +322,7 @@ pub(crate) fn values(target: &Target, fmt: Option<&SelectionFormatting>, sources
     let mut paragraph = ParagraphValues::default();
     let align = paragraphs.as_ref().map_or(look.align, |p| p.shown(look));
     paragraph.align = Some(panel_align(align));
-    paragraph.space_after = Some(0.0);
+    paragraph.space_after = Some(extras.map_or(0.0, |e| e.paragraph_spacing as f32));
 
     // A spacing of 0 is the paragraph's own.
     let line_spacing = extras.map(|e| if e.line_spacing == 0.0 { LineSpacing::Auto } else { LineSpacing::Multiple(e.line_spacing as f32) });
@@ -387,17 +342,20 @@ pub(crate) fn values(target: &Target, fmt: Option<&SelectionFormatting>, sources
     Values { character, paragraph, line_spacing, font }
 }
 
-<<<<<<< HEAD
-/// The controls `target` can't apply, each with why: the two list buttons and paragraph spacing
-/// always; underline, line spacing and scale for added text; superscript and subscript for text
+/// The controls `target` can't apply, each with why: the two list buttons always; underline, line
+/// and paragraph spacing and scale for added text; superscript and subscript for text
 /// that is not open for typing; alignment while a paragraph selection is not tidy.
 pub(crate) fn unsupported(target: &Target) -> Vec<(FormatControl, Label)> {
     let planned = || Label::from(tl!("Planned").to_string());
-    let mut out =
-        vec![(FormatControl::BulletedList, planned()), (FormatControl::NumberedList, planned()), (FormatControl::ParagraphSpacing, planned())];
+    let mut out = vec![(FormatControl::BulletedList, planned()), (FormatControl::NumberedList, planned())];
     let paragraphs = target.paragraphs();
     if target.extras().is_none() {
-        out.extend([(FormatControl::Underline, planned()), (FormatControl::LineSpacing, planned()), (FormatControl::HorizontalScale, planned())]);
+        out.extend([
+            (FormatControl::Underline, planned()),
+            (FormatControl::LineSpacing, planned()),
+            (FormatControl::ParagraphSpacing, planned()),
+            (FormatControl::HorizontalScale, planned()),
+        ]);
     }
     if paragraphs.is_none() {
         out.extend([(FormatControl::Superscript, planned()), (FormatControl::Subscript, planned())]);
@@ -588,278 +546,6 @@ fn step(look: &mut AddedText, extras: Option<&mut Extras>, paragraphs: Option<&P
             CharacterChange::HorizontalScale(v) => {
                 if let (Some(extras), Some(v)) = (extras, finite(*v, &SCALE_RANGE)) {
                     extras.scale = v;
-=======
-    // Bold, italic, underline, superscript, subscript.
-    let mut extras = extras;
-    row(ui, |ui| {
-        if icons::button(ui, "bold", 30.0, look.bold, tl!("Bold")).clicked() {
-            look.bold = !look.bold;
-        }
-        if icons::button(ui, "italic", 30.0, look.italic, tl!("Italic")).clicked() {
-            look.italic = !look.italic;
-        }
-        match extras.as_deref_mut() {
-            Some(e) => {
-                if icons::button(ui, "underline", 30.0, e.underline, tl!("Underline")).clicked() {
-                    e.underline = !e.underline;
-                }
-            }
-            None => planned(ui, "underline", tl!("Underline")),
-        }
-        if let Some(p) = &paragraphs {
-            for (script, icon, tip) in [(Script::Super, "superscript", tl!("Superscript")), (Script::Sub, "subscript", tl!("Subscript"))] {
-                let on = pdfcraft_engine::text_script::is_in(p.text, p.selection.as_ref(), script);
-                if icons::button(ui, icon, 30.0, on, tip).clicked() {
-                    out.script = Some(script);
-                }
-            }
-        } else {
-            planned(ui, "superscript", tl!("Superscript"));
-            planned(ui, "subscript", tl!("Subscript"));
-        }
-    });
-
-    // Line and paragraph spacing; horizontal scale and character spacing: two columns, each an
-    // icon and its control, `half` wide.
-    // From the font list's width, not what is left now: a row above that overflows (a long
-    // translation of "Mixed" in the size field) widens the panel's layout.
-    let half = ((width - 2.0 * LABEL_ICON - 8.0 - 3.0 * GAP) / 2.0).max(40.0);
-    let editing = extras.is_some();
-    let mut fallback = Extras::default();
-    let e = extras.as_deref_mut().unwrap_or(&mut fallback);
-    ui.add_enabled_ui(editing, |ui| {
-        row(ui, |ui| {
-            let label = labelled_icon(ui, t, "arrow-up-down", tl!("Line spacing"));
-            let own = tl!("Auto").to_string();
-            let shown = if e.line_spacing == 0.0 { own.clone() } else { number(e.line_spacing) };
-            outlined(ui, |ui| {
-                // The column is `half` wide in every language: a longer "Auto" is cut short (the
-                // menu and the tooltip have it whole).
-                ui.set_max_width(half);
-                let spacing_resp = craft_ui::ComboBox::from_id_salt("format-line-spacing")
-                    .selected_text(centred(ui, &shown))
-                    .width(half)
-                    .wrap_mode(egui::TextWrapMode::Truncate)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut e.line_spacing, 0.0, own.as_str());
-                        for v in LINE_SPACINGS {
-                            ui.selectable_value(&mut e.line_spacing, v, number(v));
-                        }
-                    })
-                    .response
-                    .labelled_by(label.id);
-                spacing_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), tl!("Line spacing")));
-                spacing_resp.on_hover_text(&shown);
-            });
-            ui.add_space(8.0);
-            let label = labelled_icon(ui, t, "pilcrow", tl!("Paragraph spacing"));
-            let spacing = Number { value: &mut e.paragraph_spacing, range: PARAGRAPH_SPACING_RANGE, speed: 0.5, suffix: " pt" };
-            number_with_presets(ui, spacing, &PARAGRAPH_SPACINGS, half, (label.id, tl!("Paragraph spacing")))
-                .on_hover_text(tl!("Between paragraphs: press Enter in the box to start one"));
-        });
-    });
-    // Any value the engine takes can be typed; the lists hold the common ones. Added text has
-    // character spacing of its own (#4245), but no scale yet.
-    row(ui, |ui| {
-        ui.add_enabled_ui(editing, |ui| {
-            let label = labelled_icon(ui, t, "move-horizontal", tl!("Horizontal scale"));
-            let scale = Number { value: &mut e.scale, range: SCALE_RANGE, speed: 1.0, suffix: " %" };
-            number_with_presets(ui, scale, &SCALES, half, (label.id, tl!("Horizontal scale")));
-        });
-        ui.add_space(8.0);
-        let label = labelled_icon(ui, t, "arrow-left-right", tl!("Character spacing"));
-        let value = if editing { &mut e.char_spacing } else { &mut look.char_spacing };
-        let spacing = Number { value, range: CHAR_SPACING_RANGE, speed: 0.1, suffix: " pt" };
-        number_with_presets(ui, spacing, &CHAR_SPACINGS, half, (label.id, tl!("Character spacing")));
-    });
-
-    out.size_committed = size_committed;
-    out.changed = out.changed || size_committed || (look.clone(), extras.as_deref().copied()) != before;
-    ui.add_space(6.0);
-    ui.separator();
-    out
-}
-
-/// Runs `add` with the panel's fields outlined and filled, so a list or number field reads as one
-/// beside the plain icon buttons around it.
-fn outlined<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    ui.scope(|ui| {
-        let t = Tokens::get(ui.ctx());
-        let w = &mut ui.visuals_mut().widgets;
-        w.inactive.weak_bg_fill = t.field;
-        w.inactive.bg_stroke = Stroke::new(1.0, t.border);
-        w.hovered.bg_stroke = Stroke::new(1.0, t.text_muted);
-        // A list's text, pad and arrow touch: its gaps would widen it past the column it is given.
-        ui.spacing_mut().icon_spacing = 0.0;
-        add(ui)
-    })
-    .inner
-}
-
-/// One row of the panel, [`ROW`] high, its controls [`GAP`] apart and centred on it.
-fn row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let size = vec2(ui.available_width(), ROW);
-    ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
-        ui.spacing_mut().item_spacing.x = GAP;
-        // A list lays itself out from the default control height and grows downward, which leaves
-        // it below the row's middle; at a list's own height it is centred like the rest.
-        let list = ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y;
-        ui.spacing_mut().interact_size.y = ui.spacing().interact_size.y.max(list);
-        add(ui)
-    })
-    .inner
-}
-
-/// A control PdfCraft doesn't have yet: its icon, disabled, saying so when hovered.
-fn planned(ui: &mut egui::Ui, icon: &str, label: &str) {
-    let _ = ui
-        .add_enabled_ui(false, |ui| icons::button(ui, icon, 30.0, false, label))
-        .inner
-        .on_disabled_hover_text(format!("{label} — {}", tl!("Planned")));
-}
-
-/// The small corner mark Acrobat puts on a button that opens a menu.
-fn flyout(ui: &egui::Ui, t: &Tokens, resp: egui::Response) -> egui::Response {
-    let r = resp.rect;
-    let tri = vec![r.right_bottom() + vec2(-3.0, -3.0), r.right_bottom() + vec2(-8.0, -3.0), r.right_bottom() + vec2(-3.0, -8.0)];
-    ui.painter().add(egui::Shape::convex_polygon(tri, t.text_faint, Stroke::NONE));
-    resp
-}
-
-/// An icon naming the list beside it, for screen readers too. Returns it, for the control it
-/// labels.
-fn labelled_icon(ui: &mut egui::Ui, t: &Tokens, icon: &str, label: &str) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(LABEL_ICON, 26.0), Sense::hover());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), label));
-    let tint = if ui.is_enabled() { t.icon } else { t.text_faint };
-    icons::paint(ui, Rect::from_center_size(rect.center(), vec2(18.0, 18.0)), icon, 17.0, tint);
-    resp.on_hover_text(label)
-}
-
-/// A value typed in a number field: what it edits, what may be typed, and how it reads.
-struct Number<'a> {
-    value: &'a mut f64,
-    range: std::ops::RangeInclusive<f64>,
-    speed: f64,
-    suffix: &'static str,
-}
-
-/// A combo box's selected text, centred in its button. The button lays out the text and then its
-/// arrow, and every growing atom takes an equal share of the room left: a pad as wide as the arrow
-/// before the text balances the arrow after it, and the text centres itself in its own share. Text
-/// longer than the list is wide (a translated "Auto") is cut short rather than widening it.
-fn centred<'a>(ui: &egui::Ui, text: &str) -> egui::Atoms<'a> {
-    use egui::AtomExt as _;
-    let pad = egui::Atom::custom(egui::IdSalt::new("combo-pad"), vec2(ui.spacing().icon_width, 0.0)).atom_grow(true);
-    let text = egui::Atom::from(text.to_string()).atom_grow(true).atom_shrink(true).atom_align(egui::Align2::CENTER_CENTER);
-    egui::Atoms::new((pad, text))
-}
-
-/// The arrow that lists a field's common values, centred on the 26-point field beside it.
-fn preset_arrow(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    let (slot, _) = ui.allocate_exact_size(vec2(PRESET_LIST, 26.0), Sense::hover());
-    let at = Rect::from_center_size(slot.center(), vec2(PRESET_LIST, PRESET_LIST));
-    ui.scope_builder(egui::UiBuilder::new().max_rect(at), |ui| icons::button(ui, "chevron-down", PRESET_LIST, false, label)).inner
-}
-
-/// One box round a value and its arrow, like a list's, so the pair reads as a single control.
-fn boxed<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let t = Tokens::get(ui.ctx());
-    let edge = if ui.is_enabled() { t.border } else { t.border.gamma_multiply(0.5) };
-    egui::Frame::new()
-        .fill(t.field)
-        .stroke(Stroke::new(1.0, edge))
-        .corner_radius(CornerRadius::same(4))
-        .show(ui, |ui| {
-            let w = &mut ui.visuals_mut().widgets;
-            for state in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
-                state.bg_stroke = Stroke::NONE;
-            }
-            w.inactive.weak_bg_fill = Color32::TRANSPARENT;
-            ui.spacing_mut().item_spacing.x = 0.0;
-            ui.spacing_mut().button_padding.x = 2.0;
-            add(ui)
-        })
-        .inner
-}
-
-/// A number field with an arrow beside it that lists common values, in `width` all told: type any
-/// value in its range, or pick one. Both are named by `label`: the icon before them and its text.
-/// Returns the field.
-fn number_with_presets(ui: &mut egui::Ui, n: Number<'_>, presets: &[f64], width: f32, label: (egui::Id, &str)) -> egui::Response {
-    boxed(ui, |ui| {
-        let field = egui::DragValue::new(&mut *n.value).range(n.range).speed(n.speed).max_decimals(2).suffix(n.suffix);
-        let field = ui.add_sized([(width - PRESET_LIST - 2.0).max(30.0), 26.0], field).labelled_by(label.0);
-        field.widget_info(|| egui::WidgetInfo::labeled(egui::Role::SpinButton, ui.is_enabled(), label.1));
-        let list = preset_arrow(ui, label.1);
-        egui::Popup::menu(&list).show(|ui| {
-            for &v in presets {
-                if ui.selectable_label(*n.value == v, number(v)).clicked() {
-                    *n.value = v;
-                    ui.close();
-                }
-            }
-        });
-        field
-    })
-}
-
-/// The text colour as a square swatch that opens the palette.
-fn colour_button(ui: &mut egui::Ui, t: &Tokens, color: [f64; 3]) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Colour")));
-    let [r, g, b] = color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
-    let fill = rect.shrink(4.0);
-    ui.painter().rect_filled(fill, CornerRadius::same(2), Color32::from_rgb(r, g, b));
-    let stroke = if resp.hovered() { t.text } else { t.border };
-    ui.painter().rect_stroke(fill, CornerRadius::same(2), Stroke::new(1.0, stroke), egui::StrokeKind::Outside);
-    crate::theme::hand(resp).on_hover_text(tl!("Colour"))
-}
-
-/// Commit a typed size once (Enter or leaving the field), rather than one undo step per key.
-/// The bounds match AddedText validation, so the panel also accepts coloured text below 8 pt.
-fn font_size_input(ui: &mut egui::Ui, size: &mut f64, mixed: bool) -> bool {
-    let mut committed = false;
-    // The panel's own padding, read before the box tightens it, so "Mixed" keeps its margins.
-    let margin = egui::Margin::from(ui.spacing().button_padding);
-    boxed(ui, |ui| {
-        let id = ui.make_persistent_id("font-size-input");
-        let initial_text = || {
-            if mixed || *size <= 0.0 { tl!("Mixed").to_string() } else { size.to_string() }
-        };
-        // A selection can become mixed without changing its representative numeric size.
-        let (previous, previous_mixed, mut text) =
-            ui.data(|d| d.get_temp::<(u64, bool, String)>(id)).unwrap_or_else(|| (size.to_bits(), mixed, initial_text()));
-        if previous != size.to_bits() || previous_mixed != mixed {
-            text = initial_text();
-        }
-        // Reserve the localized mixed label, field margins and caret without resizing while typing.
-        let font = egui::TextStyle::Body.resolve(ui.style());
-        let mixed_width = ui.painter().layout_no_wrap(tl!("Mixed").into(), font.clone(), ui.visuals().text_color()).size().x;
-        // Within the row's allowance, so a long translation ("Valeurs différentes") scrolls in the
-        // field rather than pushing the row past the pane.
-        let width = (mixed_width + margin.sum().x + 2.0).ceil().clamp(40.0, SIZE_FIELD - 2.0);
-        let field = egui::TextEdit::singleline(&mut text)
-            .id(id)
-            .font(font)
-            .margin(margin)
-            .desired_width(width)
-            .frame(egui::Frame::NONE)
-            .align(egui::Align2::CENTER_CENTER);
-        let mut response = ui.add_sized([width, 26.0], field).accessible_name(tl!("Font size:"));
-        // A long translation of "Mixed" scrolls in the field: the tooltip has it whole.
-        if mixed {
-            response = response.on_hover_text(tl!("Mixed"));
-        }
-        let cancel = (response.has_focus() || response.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Escape));
-        if cancel {
-            text = initial_text();
-            response.surrender_focus();
-        } else if response.lost_focus() || (response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
-            if let Some(value) = typed_font_size(&text) {
-                if mixed || *size != value {
-                    committed = true;
->>>>>>> upstream/main
                 }
                 None
             }
@@ -888,6 +574,12 @@ fn font_size_input(ui: &mut egui::Ui, size: &mut f64, mixed: bool) -> bool {
                     look.align = align;
                     look.aligns.clear();
                 }
+            }
+            None
+        }
+        FormatTextChange::Paragraph(ParagraphChange::SpaceAfter(space)) => {
+            if let (Some(extras), Some(space)) = (extras, finite(*space, &PARAGRAPH_SPACING_RANGE)) {
+                extras.paragraph_spacing = space;
             }
             None
         }
