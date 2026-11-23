@@ -68,6 +68,18 @@ uds_windows = "=1.2.1"
 # directly so eframe cannot replace ICON_BIG with a system-sized copy. Already in the tree
 # through eframe and covered by the workspace's winit patch.
 winit = { version = "0.30", default-features = false }
+# The software renderer (src/soft), for Remote Desktop sessions without a graphics processor.
+# It owns the window where eframe would, so it speaks to egui-winit itself (already in the tree
+# through eframe, covered by the workspace's egui patch, with the features eframe turns on), and
+# reads and writes eframe's settings file with the same `ron`.
+egui-winit = { version = "0.37", default-features = false, features = ["accesskit", "clipboard", "clipboard-image", "links", "serde"] }
+ron = "0.12.2"
+# Puts its pixels in the window through GDI and tells Windows which rectangles changed, behind a
+# safe API (the calls need unsafe, which our workspace forbids). MIT OR Apache-2.0.
+softbuffer = { version = "0.4", default-features = false }
+# Waits for wgpu to list its adapters, to tell whether the machine has a graphics processor
+# (already in the tree through eframe's wgpu renderer).
+pollster = "1.0"
 
 [build-dependencies]
 # Icon + VERSIONINFO for pdfcraft.exe; build.rs only uses it when targeting Windows.

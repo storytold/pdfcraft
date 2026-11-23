@@ -44,6 +44,8 @@ mod motion;
 mod reopen;
 mod settings;
 mod single_instance;
+#[cfg(target_os = "windows")]
+mod soft;
 mod startup;
 mod text_scale;
 #[cfg(test)]
@@ -275,13 +277,23 @@ fn main() -> eframe::Result {
         single_instance::Claim::Alone => None,
     };
     let choice = renderer_choice(std::env::var("PDFCRAFT_RENDERER").ok().as_deref());
-    let launch = Launch { files, options, control_file, create_images, combine, integrated, window_controls, two_paged };
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    let mut launch = Launch { files, options, control_file, create_images, combine, integrated, window_controls, two_paged, software: false };
     // Finder, Open With and the Dock deliver files as Apple events, not arguments; catch the one
     // that launched us as well as later ones. Lives until the event loop returns.
     #[cfg(target_os = "macos")]
     let apple_events = apple_events::AppleEvents::install();
     // Set once the app is created, which is after the renderer has started.
     let started = Rc::new(Cell::new(false));
+    // Over Remote Desktop with no graphics processor behind it, the window is drawn here and only
+    // what changed is sent (src/soft). Decided before any window exists: the system gives a
+    // process one event loop, so there is no starting again with another renderer afterwards.
+    #[cfg(target_os = "windows")]
+    if draws_in_software(choice, motion::remote_session(), has_graphics_processor) {
+        launch.software = true;
+        return run_in_software(launch, started, instance.as_ref());
+    }
+    let launch = launch;
     let first = if choice == RendererChoice::Gl { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
     let result = eframe::run_native(
         "PdfCraft",
@@ -326,14 +338,78 @@ enum RendererChoice {
     Wgpu,
     /// OpenGL only (`gl`, `opengl` or `glow`): for drivers where wgpu starts but misbehaves.
     Gl,
+    /// Drawn on the processor (`software`, `soft` or `cpu`; Windows only, wgpu elsewhere): no
+    /// graphics driver is loaded at all.
+    Software,
 }
 
 fn renderer_choice(value: Option<&str>) -> RendererChoice {
     match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
         Some("wgpu") => RendererChoice::Wgpu,
         Some("gl" | "opengl" | "glow") => RendererChoice::Gl,
+        Some("software" | "soft" | "cpu") => RendererChoice::Software,
         _ => RendererChoice::Auto,
     }
+}
+
+/// Whether the window is drawn on the processor (src/soft) rather than through wgpu or OpenGL:
+/// when `PDFCRAFT_RENDERER` asks for it, and by itself in a Remote Desktop session (`remote`) on a
+/// machine without a graphics processor, which is asked only then. There wgpu draws on the
+/// processor too (WARP), but the whole window every frame, and Remote Desktop encodes and sends
+/// every frame whole: scrolling a page crawled on Azure Virtual Desktop hosts without a GPU. At
+/// the machine's own display, and wherever there is a graphics processor, nothing changes.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn draws_in_software(choice: RendererChoice, remote: bool, has_graphics_processor: impl FnOnce() -> bool) -> bool {
+    match choice {
+        RendererChoice::Software => true,
+        RendererChoice::Auto => remote && !has_graphics_processor(),
+        RendererChoice::Wgpu | RendererChoice::Gl => false,
+    }
+}
+
+/// Whether Direct3D 12 finds anything but a software adapter. Creates and drops a wgpu instance,
+/// which takes a moment; asked only in a Remote Desktop session.
+#[cfg(target_os = "windows")]
+fn has_graphics_processor() -> bool {
+    use eframe::wgpu;
+    // The instance the window itself would be drawn with.
+    let instance = pollster::block_on(native_options(false, false, eframe::Renderer::Wgpu).wgpu_options.wgpu_setup.new_instance());
+    let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::DX12));
+    let hardware = adapters.iter().map(wgpu::Adapter::get_info).find(|info| info.device_type != wgpu::DeviceType::Cpu);
+    match &hardware {
+        Some(info) => log::info!("Remote Desktop session with a graphics processor ({}): drawing with it", info.name),
+        None => log::info!("Remote Desktop session without a graphics processor ({} software adapters)", adapters.len()),
+    }
+    hardware.is_some()
+}
+
+/// Frames a second the software renderer draws at most: nothing waits for a display there. A
+/// Remote Desktop session seldom shows more than thirty, and every frame beyond what it shows is
+/// drawn, encoded and queued for nothing.
+#[cfg(target_os = "windows")]
+fn software_frame_interval(remote: bool) -> std::time::Duration {
+    std::time::Duration::from_secs_f32(1.0 / if remote { pdfcraft_ui_egui::motion::COSTLY_FRAMES_PER_SECOND } else { 60.0 })
+}
+
+/// Runs the app drawn on the processor (src/soft), with the window and settings it would have had.
+#[cfg(target_os = "windows")]
+fn run_in_software(launch: Launch, started: Rc<Cell<bool>>, instance: Option<&single_instance::Server>) -> eframe::Result {
+    // Only the window and the settings file are taken; the renderer named here is never started.
+    let native = native_options(launch.integrated, launch.window_controls.is_some(), eframe::Renderer::Glow);
+    let remote = motion::remote_session();
+    log::info!("renderer: software{}", if remote { " (Remote Desktop session)" } else { "" });
+    let setup = soft::Setup {
+        viewport: native.viewport,
+        settings_file: native.persistence_path,
+        clipboard_shortcuts: native.clipboard_shortcuts,
+        frame_interval: software_frame_interval(remote),
+        app_creator: app_creator(launch, started, instance),
+        window_created: set_taskbar_icon,
+    };
+    soft::run(setup).map_err(|e| {
+        log::error!("the software renderer didn't start: {e}. Set PDFCRAFT_RENDERER=wgpu to draw through Direct3D instead.");
+        eframe::Error::AppCreation(e.into())
+    })
 }
 
 /// Whether a failed run should be retried with OpenGL: only when wgpu was tried first by choice of
@@ -396,6 +472,8 @@ struct Launch {
     /// The window buttons the app draws, when the desktop leaves the frame to it.
     window_controls: Option<pdfcraft_ui_egui::window_controls::Layout>,
     two_paged: bool,
+    /// The window is drawn on the processor (src/soft), not through eframe's renderers.
+    software: bool,
 }
 
 /// Whether the window is a native Wayland one (not X11 or XWayland).
@@ -458,7 +536,7 @@ fn app_creator<'a>(
     instance: Option<&'a single_instance::Server>,
     #[cfg(target_os = "macos")] apple_events: &'a apple_events::AppleEvents,
 ) -> eframe::AppCreator<'a> {
-    let Launch { files, options, control_file, create_images, combine, integrated, window_controls, two_paged } = launch;
+    let Launch { files, options, control_file, create_images, combine, integrated, window_controls, two_paged, software } = launch;
     Box::new(move |cc| {
         started.set(true);
         let mut app = PdfCraftApp::new();
@@ -521,8 +599,14 @@ fn app_creator<'a>(
                 adapter.backend
             );
             notify_software_renderer(&mut app, adapter.device_type);
+            app.motion.costly_frames = Some(costly_frames(adapter.device_type == eframe::wgpu::DeviceType::Cpu));
+        } else if software {
+            // Its own loop paces the frames (`software_frame_interval`); motion that goes on by
+            // itself asks for no more than it shows.
+            app.motion.costly_frames = Some(costly_frames(true));
         } else {
             log::info!("renderer: OpenGL (glow)");
+            app.motion.costly_frames = Some(costly_frames(false));
         }
         // A portable marker whose data folder can't be written (#157): say where settings went.
         if let Some(w) = &pdfcraft_ui_egui::portable::current().unwritable {
@@ -562,6 +646,26 @@ fn app_creator<'a>(
 fn notify_software_renderer(app: &mut PdfCraftApp, device_type: eframe::wgpu::DeviceType) {
     if device_type == eframe::wgpu::DeviceType::Cpu {
         app.notify_tr("PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.");
+    }
+}
+
+/// Whether every frame is expensive to show (`pdfcraft_ui_egui::motion::Motion::costly_frames`):
+/// the window is drawn on the processor (`cpu_drawn`), or it is shown through a Remote Desktop
+/// session, which encodes and sends every frame. Scrolling that goes on by itself then asks for
+/// thirty frames a second rather than every one.
+fn costly_frames(cpu_drawn: bool) -> pdfcraft_ui_egui::motion::FrameCostSource {
+    Box::new(move || cpu_drawn || remote_session())
+}
+
+/// Whether the window is shown through a Remote Desktop session; only Windows is asked.
+fn remote_session() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        motion::remote_session()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
     }
 }
 

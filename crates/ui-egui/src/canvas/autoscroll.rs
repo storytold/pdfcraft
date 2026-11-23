@@ -63,7 +63,7 @@ impl AutoScroll {
 
     fn update_latched(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool) -> Vec2 {
         let ctx = ui.ctx();
-        let (pointer, middle_press, middle_down, middle_released, has_release_event, cancel, cancel_button, dt) = ctx.input(|i| {
+        let (pointer, middle_press, middle_down, middle_released, has_release_event, cancel, cancel_button) = ctx.input(|i| {
             let cancel_button = [PointerButton::Primary, PointerButton::Secondary, PointerButton::Extra1, PointerButton::Extra2]
                 .into_iter()
                 .find(|button| i.pointer.button_pressed(*button));
@@ -82,9 +82,10 @@ impl AutoScroll {
                     || cancel_button.is_some()
                     || i.events.iter().any(|e| matches!(e, Event::MouseWheel { .. } | Event::Zoom(_))),
                 cancel_button,
-                i.stable_dt,
             )
         });
+        // Measured when frames are costly and capped (see `motion_dt`), so the speed holds.
+        let dt = crate::motion::motion_dt(ctx);
         self.block_input =
             self.active() || self.cancel_button.is_some() || middle_press.is_some() || middle_down || middle_released || has_release_event;
         if let Some(button) = self.cancel_button {
@@ -130,8 +131,9 @@ impl AutoScroll {
         let delta = scroll_delta(displacement, dt);
         if past_dead_zone {
             // Continuous redraws let stable_dt use measured frame time. Delayed redraws
-            // instead use predicted_dt, which can make speed depend on the actual frame rate.
-            ctx.request_repaint();
+            // instead use predicted_dt, which can make speed depend on the actual frame rate;
+            // `motion_dt` measures the time when frames are capped.
+            crate::motion::request_motion_frame(ctx);
         }
         vec2(0.0, delta)
     }

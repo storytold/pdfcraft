@@ -126,6 +126,36 @@ reach this retry instead of the uncaptured-error panic handler. This does not fi
 driver's shader compilation, and explicit `PDFCRAFT_RENDERER=wgpu` still disables the retry.
 `PDFCRAFT_RENDERER` skips it or chooses OpenGL from the start.
 
+## Software renderer and Remote Desktop
+
+On Windows PdfCraft can draw its window on the processor (`apps/pdfcraft/src/soft`), without wgpu
+or OpenGL. It is used by itself in one case: a Remote Desktop session (Azure Virtual Desktop
+included, `SM_REMOTESESSION`) on a machine where Direct3D 12 lists no adapter but a software one.
+There wgpu still starts, on WARP, but it draws and presents the whole window for every frame, and
+Remote Desktop encodes and sends every frame whole; scrolling a page was far slower than in viewers
+that paint with GDI. The software renderer keeps the window's pixels between frames, finds the
+64-pixel tiles whose triangles differ from the last frame, draws those, and tells Windows only
+those rectangles changed. Page tiles at their own size are copied row by row.
+
+`PDFCRAFT_RENDERER=software` chooses it anywhere on Windows, and `PDFCRAFT_RENDERER=wgpu` keeps
+Direct3D in a Remote Desktop session. The choice is made once, at start: a session taken over from
+the console keeps the renderer it started with. The log's `renderer:` line says `software`. If
+the software renderer can't show its first frame, PdfCraft exits with the reason in the log; it
+does not start another renderer, because Windows gives a process one event loop.
+
+It owns the window and the event loop where eframe would (`soft/runner.rs` follows eframe's
+integrations at the pinned egui revision, and reads and writes the same `app.ron`). Frames are
+paced there: at most 60 a second, 30 in a Remote Desktop session. `egui::PaintCallback`s, which
+need a GPU, are skipped; PdfCraft has none.
+
+Two things follow a Remote Desktop session whatever the renderer:
+
+- Preferences ▸ Animation effects set to *Use system setting* means no animations, so a wheel
+  notch scrolls in one frame rather than a dozen (`apps/pdfcraft/src/motion.rs`). *On* animates.
+- Motion that goes on by itself (an eased wheel notch, touchpad momentum, scrolling at an edge
+  while selecting or drawing) asks for 30 frames a second rather than every one. The same holds
+  wherever wgpu draws on the processor (`Motion::costly_frames`).
+
 ## Preferences
 
 Linux and FreeBSD store `app.ron` in `$XDG_CONFIG_HOME/pdfcraft/`, or
@@ -150,7 +180,7 @@ copies retain their current preferences locations.
 | `WGPU_BACKEND` | Graphics backend; by default Windows uses Direct3D 12, falling back to OpenGL |
 | `WGPU_DX12_PRESENTATION_SYSTEM` | Windows, Direct3D 12: `hwnd` presents through a swap chain on the window itself, which Windows stretches while the window is resized (#2738); unset or `visual`, PdfCraft presents through a DirectComposition visual |
 | `WGPU_VALIDATION_INDIRECT_CALL` | `1` turns wgpu's check of indirect draw arguments back on. PdfCraft draws nothing indirectly and turns it off, since the compute shader the check needs fails to compile on some drivers (Metal on an Intel Iris Pro), which lost the device at start-up |
-| `PDFCRAFT_RENDERER` | `gl` starts with OpenGL (glow) and never loads wgpu; `wgpu` reports a wgpu failure instead of retrying with OpenGL; unset, wgpu is retried with OpenGL when it can't start (see [Renderer fallback](#renderer-fallback)) |
+| `PDFCRAFT_RENDERER` | `gl` starts with OpenGL (glow) and never loads wgpu; `wgpu` reports a wgpu failure instead of retrying with OpenGL; `software` (Windows) draws on the processor and loads no graphics driver; unset, wgpu is retried with OpenGL when it can't start (see [Renderer fallback](#renderer-fallback)), except in a Remote Desktop session without a graphics processor, which is drawn in software (see [Software renderer and Remote Desktop](#software-renderer-and-remote-desktop)) |
 | `PDFCRAFT_TITLEBAR` | Linux: `app` draws PdfCraft's own title bar (window buttons in the tab strip, in the order of GNOME's `button-layout`, and resize edges); `system` keeps the frame winit or the desktop draws; unset, PdfCraft draws its own when the Wayland compositor draws no frames (GNOME), and leaves it to the desktop otherwise (KDE, Sway, Hyprland, X11). Where PdfCraft draws it, Preferences ▸ Use system title bar switches back to winit's frame without a restart; `system` also hides that option |
 | `PDFCRAFT_BUILD_LABEL` | Build time: a label for a local or patched build (letters, digits, inner dots), shown after the version in `--version`, About and the log (`0.7.1 (titlebar)`). `packaging/linux/package.sh` also puts it in the file names and the .rpm/.deb release (`1.titlebar`), which upgrades over the release of the same version |
 | `CRAFT_FONTS_DIR` | Build time: a [craft-fonts](https://github.com/storytold/craft-fonts) checkout to embed (Japanese fonts) |

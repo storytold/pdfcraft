@@ -264,7 +264,7 @@ pub(super) fn zoom_anchor(ui: &egui::Ui) -> Option<Pos2> {
 /// The pointer and frame time that scroll the view while a comment is drawn. Not page input: it is
 /// read before the pages' widget exists, and the pointer may be past the view's edge.
 pub(super) fn drawing_edge_pointer(ui: &egui::Ui) -> (Option<Pos2>, f32) {
-    ui.input(|i| (i.pointer.latest_pos(), i.stable_dt))
+    (ui.input(|i| i.pointer.latest_pos()), crate::motion::motion_dt(ui.ctx()))
 }
 
 /// A press anywhere, or a key, stops the touchpad's glide (#531).

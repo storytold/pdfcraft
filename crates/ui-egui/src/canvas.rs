@@ -2073,12 +2073,12 @@ fn draw_pages(
         && !single_paging
         && let Some(p) = ptr.pos
     {
-        let dy = crate::autoscroll::edge_delta(p.y, avail, ui.input(|i| i.stable_dt));
+        let dy = crate::autoscroll::edge_delta(p.y, avail, crate::motion::motion_dt(ui.ctx()));
         if dy != 0.0 {
             view.end_find_following();
             ui.scroll_with_delta_animation(vec2(0.0, dy), egui::style::ScrollAnimation::none());
             // Keep scrolling while the pointer rests there and sends no events.
-            ui.ctx().request_repaint();
+            crate::motion::request_motion_frame(ui.ctx());
         }
     }
     // The page navigated to stays current while no page shows more of itself, so the next
@@ -2443,9 +2443,9 @@ fn read_wheel(ui: &mut egui::Ui, view: &mut DocView, avail: Rect, single_paging:
         view.wheel_motion.cancel_axes(vec2(0.0, 1.0));
     }
     view.wheel_motion.cancel_axes(precise_scroll);
-    let coarse_scroll = view.wheel_motion.step(coarse_input, now, ui.input(|i| i.stable_dt), animate);
+    let coarse_scroll = view.wheel_motion.step(coarse_input, now, crate::motion::motion_dt(ui.ctx()), animate);
     if view.wheel_motion.has_pending() {
-        ui.ctx().request_repaint();
+        crate::motion::request_motion_frame(ui.ctx());
     }
     Wheel { precise_scroll, line_base, coarse_scroll, has_page, paging_owns_vertical }
 }
@@ -3104,7 +3104,7 @@ fn auto_scroll_deltas(ui: &egui::Ui, view: &mut DocView, avail: Rect, unobstruct
         Vec2::ZERO
     };
     if edge_delta != Vec2::ZERO {
-        ui.ctx().request_repaint();
+        crate::motion::request_motion_frame(ui.ctx());
     }
     (auto_delta, edge_delta)
 }
@@ -3138,7 +3138,7 @@ fn step_glide(ui: &egui::Ui, view: &mut DocView, avail: Rect, cx: &GlideCx) -> V
     }
     let glide = view.fling.step(now);
     if view.fling.gliding() {
-        ui.ctx().request_repaint();
+        crate::motion::request_motion_frame(ui.ctx());
     }
     if wheel_scrolled || auto_delta != Vec2::ZERO || edge_delta != Vec2::ZERO || glide != Vec2::ZERO {
         view.end_find_following();

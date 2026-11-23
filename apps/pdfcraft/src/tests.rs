@@ -131,6 +131,27 @@ fn opengl_is_the_fallback_unless_a_renderer_was_chosen() {
 }
 
 #[test]
+fn the_window_is_drawn_on_the_processor_only_over_remote_desktop_without_a_gpu_or_when_asked() {
+    use super::{RendererChoice, draws_in_software, renderer_choice, retry_with_gl};
+    for software in ["software", " Soft ", "CPU"] {
+        assert_eq!(renderer_choice(Some(software)), RendererChoice::Software);
+    }
+    assert!(!retry_with_gl(RendererChoice::Software, false), "a chosen renderer is not worked around");
+    let never_asked = || -> bool { panic!("the graphics processor is looked for only in a Remote Desktop session with no renderer chosen") };
+    // Asked for: anywhere. Another renderer asked for: never.
+    for remote in [false, true] {
+        assert!(draws_in_software(RendererChoice::Software, remote, never_asked));
+        assert!(!draws_in_software(RendererChoice::Wgpu, remote, never_asked));
+        assert!(!draws_in_software(RendererChoice::Gl, remote, never_asked));
+    }
+    // By itself: at the machine's own display nothing changes, with or without a GPU.
+    assert!(!draws_in_software(RendererChoice::Auto, false, never_asked));
+    // Over Remote Desktop, a host without a GPU is drawn here; one with a GPU keeps it.
+    assert!(draws_in_software(RendererChoice::Auto, true, || false));
+    assert!(!draws_in_software(RendererChoice::Auto, true, || true));
+}
+
+#[test]
 fn the_desktop_frame_is_turned_off_only_when_the_app_draws_one() {
     use super::native_options;
     assert_eq!(native_options(false, false, eframe::Renderer::Glow).viewport.decorations, None);
