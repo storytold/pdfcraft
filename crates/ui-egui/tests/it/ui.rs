@@ -2184,6 +2184,32 @@ fn a_file_opened_again_shows_its_last_view() {
     assert_eq!((app.last_views[0].page, app.last_views[0].zoom.as_str()), (1, "fit-page"));
 }
 
+/// Fit Height is kept for the last view without making it a default-zoom preference.
+#[test]
+fn fit_height_is_remembered_when_a_file_is_opened_again() {
+    use pdfcraft_ui_egui::canvas::Fit;
+    let path = std::env::temp_dir().join(format!("pdfcraft-last-view-height-{}.pdf", std::process::id())).to_string_lossy().into_owned();
+    let p = path.clone();
+    let mut h = harness(move |app| app.open_bytes("doc.pdf", Some(p), pages_fixture(3)).expect("opens"));
+    h.state_mut().views[0].set_fit(Fit::Height);
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(3);
+    let saved_open = h.state().persist();
+    h.state_mut().close_tab(0);
+    let saved_closed = h.state().persist();
+    for (label, saved) in [("open", saved_open), ("closed", saved_closed)] {
+        let p = path.clone();
+        let h = harness(move |app| {
+            app.restore(&saved);
+            assert_eq!(app.last_views[0].zoom, "fit-height", "{label}");
+            app.open_bytes("doc.pdf", Some(p), pages_fixture(3)).expect("opens");
+        });
+        let v = &h.state().views[0];
+        assert_eq!((v.current, v.fit), (1, Fit::Height), "{label}");
+        assert!(h.state().view_defaults.with_zoom("fit-height").is_none(), "the default-zoom contract stays unchanged");
+    }
+}
+
 /// #1767: a fixed zoom with a fraction comes back as it was, not rounded to a whole percent.
 #[test]
 fn a_fractional_zoom_is_remembered_exactly() {
