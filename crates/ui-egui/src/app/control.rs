@@ -5,11 +5,18 @@ use super::{
 
 impl PdfCraftApp {
     /// Enable the UI control channel (opt-in; see [`control`]): `channel` receives the requests,
-    /// and `listening` is the loopback server that feeds it on desktop (`None` on the web).
-    // PLAN: assumed the field `control_server: Option<Listening>` (pdf-hub-w1).
+    /// and `listening` is the loopback server that feeds it (`None` when something else feeds it).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn attach_control(&mut self, channel: craft::automation::ControlChannel, listening: Option<craft::automation::server::Listening>) {
         self.control = Some(channel);
         self.control_server = listening;
+    }
+
+    /// Enable the UI control channel (see [`control`]): `channel` receives the page's requests
+    /// (`window.pdfcraft`); the web has no loopback server.
+    #[cfg(target_arch = "wasm32")]
+    pub fn attach_control(&mut self, channel: craft::automation::ControlChannel) {
+        self.control = Some(channel);
     }
 
     /// Apply a named view option (`--page 3`, `--panel bookmarks`, `--theme dark`, …).

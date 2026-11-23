@@ -1,4 +1,6 @@
-use super::{DocId, DocView, comments, fill_sign, measure_ui, open_worker, prepare};
+#[cfg(not(target_arch = "wasm32"))]
+use super::open_worker;
+use super::{DocId, DocView, comments, fill_sign, measure_ui, prepare};
 
 /// Top-level workspace modes (Acrobat's mode bar).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

@@ -348,10 +348,17 @@ fn parse_app_ron_printcraft(bytes: &[u8]) -> Parsed {
     parse_app_ron(bytes, "printcraft")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_app_ron(bytes: &[u8], key: &str) -> Parsed {
     let text = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
     let json = craft::window::restore::legacy::eframe_app_ron_entry(text, key).ok_or_else(|| format!("no `{key}` entry"))?;
     Ok(import_json(&json))
+}
+
+/// The web has no `app.ron` (its [`legacy_folders`] are none), and the framework's reader of one is native.
+#[cfg(target_arch = "wasm32")]
+fn parse_app_ron(_bytes: &[u8], key: &str) -> Parsed {
+    Err(format!("no `{key}` entry: the web keeps no app.ron"))
 }
 
 /// The motion choice a saved name stands for: the last release's `on`, `off` and `system`, and the

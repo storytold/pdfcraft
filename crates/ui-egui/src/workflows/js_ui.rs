@@ -385,7 +385,7 @@ impl PdfCraftApp {
         // desktop, where starting the script sets them.
         #[cfg(target_arch = "wasm32")]
         if let Some(view) = self.views.iter().find(|v| v.id == id) {
-            let (zoom, current, highlight) = (view.zoom(), view.current(), view.highlight_fields);
+            let (zoom, current, highlight) = (view.zoom(), view.current(), view.session.highlight_fields);
             self.session.set_javascript_view(id, zoom * 100.0, highlight, current);
         }
         #[cfg(target_arch = "wasm32")]
@@ -403,7 +403,7 @@ impl PdfCraftApp {
                     errors: o.error.into_iter().collect(),
                     doc_errors: Vec::new(),
                 };
-                self.handle_js(id, out);
+                self.handle_js(ctx, id, out);
             }
             Err(e) => self.notify(e.to_string()),
         }

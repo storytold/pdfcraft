@@ -8,7 +8,6 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use craft::host::queue::{JobQueue, Priority, QueueOptions, QueueOrder};
 use craft::host::{Jobs, Wake};
-#[cfg(not(target_arch = "wasm32"))]
 use craft::print::ui::HostedPrint;
 use pdfcraft_engine::print::{self, Binding, BookletSubset, Content, Layout, Orientation, PageOrder, SizeMode, Subset, spool};
 
@@ -659,7 +658,7 @@ impl PdfCraftApp {
         let html = job.html();
         let urls = job.take_urls();
         self.print_tasks.web_last = Some((job.name.clone(), job.pdf.clone()));
-        match crate::web_print::print_in_iframe(&html, urls, self.print_tasks.web_failed.clone(), self.ctx.clone()) {
+        match crate::web_print::print_in_iframe(&html, urls, self.print_tasks.web_failed.clone(), self.wake.clone()) {
             Ok(()) => self.notify_tr("Opening the browser's print dialog…"),
             Err(e) => self.web_print_failed(&e),
         }

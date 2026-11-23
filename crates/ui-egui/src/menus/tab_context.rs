@@ -1,6 +1,7 @@
 //! PDF-tab actions. Closed history contains paths only, never bytes or passwords.
 use std::path::PathBuf;
 
+#[cfg(not(target_arch = "wasm32"))]
 use craft::host::queue::Priority;
 use pdfcraft_engine::DocId;
 
@@ -22,9 +23,16 @@ pub(crate) enum Action {
 /// blocks (a disconnected network mount, a slow `dbus-send` or `explorer.exe`), so it runs as a
 /// job on the host's queue; a failure is shown by [`PdfCraftApp::drain_reveals`] on the pass that
 /// receives the result.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn reveal_on_jobs(app: &mut crate::PdfCraftApp, path: PathBuf) {
     let target = path.clone();
     app.reveal_jobs.submit(path, Priority::VISIBLE, move |_| craft::platform::open::reveal(&target));
+}
+
+/// The browser has no file manager to show a file in: the web says so instead.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn reveal_on_jobs(app: &mut crate::PdfCraftApp, _path: PathBuf) {
+    app.notify_error("The browser can't show files in a folder.".to_string());
 }
 
 impl crate::PdfCraftApp {

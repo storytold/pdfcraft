@@ -530,6 +530,7 @@ impl PdfCraftApp {
                 return Err(format!("Could not save: {e}"));
             }
             // Our own write is not a change on disk to reload (#431).
+            #[cfg(not(target_arch = "wasm32"))]
             app.watch.known_now(doc_id, &path);
             app.session.mark_signed(doc_id, signed, Some(path.to_string_lossy().into_owned())).map_err(|e| e.to_string())?;
             // Then its postSign scripts; what they change is a change after signing, to save.
