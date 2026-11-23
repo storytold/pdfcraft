@@ -1,7 +1,15 @@
 //! Redaction code sets (Acrobat's Redaction Properties ▸ Redaction Code): the exemption codes
 //! that justify a redaction, used as its overlay text. The built-in sets are the exemptions of
 //! the U.S. Freedom of Information Act (5 U.S.C. 552(b)) and the U.S. Privacy Act
-//! (5 U.S.C. 552a(d), (j) and (k)).
+//! (5 U.S.C. 552a(d), (j) and (k)). They are read-only; the user's own sets are in
+//! [`CodeLibrary`].
+
+mod library;
+
+pub use library::{
+    CodeEdit, CodeLibrary, CodeSetError, CustomCodeSet, FILE_FORMAT, FILE_VERSION, MAX_CODE_CHARS, MAX_CODES, MAX_FILE_BYTES, MAX_NAME_CHARS,
+    MAX_SETS, Part, SetRef,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CodeSet {

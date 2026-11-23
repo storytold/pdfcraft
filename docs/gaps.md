@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-11-20 | **Last updated:** 2026-11-20 | **Change:** minor (gap 17: custom redaction code sets with Edit Codes, import and export (protect.redaction-codes shipped, #7934); estimates unchanged)
 > **Last reviewed:** 2026-11-11 | **Last updated:** 2026-11-11 | **Change:** minor (gap 8: known residual risk for the LibreOffice sidecar, sandbox tracked in #6953; estimates unchanged)
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
@@ -372,6 +373,9 @@ update the numbers.
 - **Missing:** encrypting for certificate recipients (and opening such files), security policies,
   attachment-only encryption, redaction pattern locales and partial-word redaction, folder
   redaction, protected view, URL and attachment trust.
+- **Done:** redaction code sets: the built-in FOIA and Privacy Act sets, and custom sets from
+  Redaction Properties ▸ Edit Codes, imported and exported as PdfCraft's own versioned file
+  (#7934).
 - **Estimate:** 15–30 h. **Doc:** [pdf-spec-parity.md](pdf-spec-parity.md).
 
 ### 18. Print production tools absent

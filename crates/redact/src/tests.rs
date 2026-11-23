@@ -5822,6 +5822,186 @@ fn redaction_codes_join_in_set_order_and_reject_strangers() {
     assert!(CODE_SETS.iter().all(|s| !s.codes.is_empty() && s.codes.iter().all(|c| !c.is_empty())));
 }
 
+/// Edit Codes: custom sets are created, renamed and deleted and their codes added, renamed and
+/// removed; a failed edit changes nothing, and the built-in sets refuse every edit.
+#[test]
+fn custom_code_sets_are_edited_and_built_ins_stay_read_only() {
+    use crate::codes::{CodeEdit, CodeLibrary, CodeSetError, MAX_CODE_CHARS, MAX_CODES, MAX_NAME_CHARS, MAX_SETS, Part};
+    let mut lib = CodeLibrary::default();
+    let s = |x: &str| x.to_string();
+    let create = |name: &str| CodeEdit::CreateSet { name: s(name) };
+    let add = |set: &str, code: &str| CodeEdit::AddCode { set: s(set), code: s(code) };
+    lib.apply(&create("Agency")).unwrap();
+    for code in ["A-3", "A-1", "A-2"] {
+        lib.apply(&add("Agency", code)).unwrap();
+    }
+    let set = lib.find("Agency").unwrap();
+    assert!(!set.built_in());
+    assert_eq!(set.overlay(&["A-2", "A-3"]), Ok("A-3, A-2".into()), "the set's own order");
+    assert_eq!(set.overlay(&["(b)(6)"]), Err("(b)(6)"));
+    // Built-ins come first and are found by id.
+    let keys: Vec<_> = lib.all().map(|s| s.key()).collect();
+    assert_eq!(keys, ["foia", "privacy-act", "Agency"]);
+    assert_eq!(lib.find("foia").unwrap().overlay(&["(b)(6)"]), Ok("(b)(6)".into()));
+
+    let before = lib.clone();
+    let refused = [
+        (create("agency"), CodeSetError::DuplicateSet(s("agency"))),
+        (create("U.S. FOIA"), CodeSetError::BuiltInName(s("U.S. FOIA"))),
+        (create("Foia"), CodeSetError::BuiltInName(s("Foia"))),
+        (create(""), CodeSetError::Empty(Part::Name)),
+        (create(" Agency 2"), CodeSetError::Spaces { part: Part::Name, text: s(" Agency 2") }),
+        (create("Tab\there"), CodeSetError::Control { part: Part::Name, text: s("Tab\there") }),
+        (create(&"n".repeat(MAX_NAME_CHARS + 1)), CodeSetError::TooLong { part: Part::Name, text: "n".repeat(MAX_NAME_CHARS), max: MAX_NAME_CHARS }),
+        (add("Agency", "A-1"), CodeSetError::DuplicateCode { set: s("Agency"), code: s("A-1") }),
+        (add("Agency", "line\nbreak"), CodeSetError::Control { part: Part::Code, text: s("line\nbreak") }),
+        (
+            add("Agency", &"c".repeat(MAX_CODE_CHARS + 1)),
+            CodeSetError::TooLong { part: Part::Code, text: "c".repeat(MAX_CODE_CHARS), max: MAX_CODE_CHARS },
+        ),
+        (add("Missing", "X"), CodeSetError::NoSuchSet(s("Missing"))),
+        (add("foia", "(b)(10)"), CodeSetError::BuiltIn(s("foia"))),
+        (CodeEdit::DeleteSet { name: s("U.S. Privacy Act") }, CodeSetError::BuiltIn(s("U.S. Privacy Act"))),
+        (CodeEdit::RenameSet { from: s("foia"), to: s("Mine") }, CodeSetError::BuiltIn(s("foia"))),
+        (CodeEdit::RemoveCode { set: s("privacy-act"), code: s("(d)(5)") }, CodeSetError::BuiltIn(s("privacy-act"))),
+        (CodeEdit::RenameCode { set: s("Agency"), from: s("A-1"), to: s("A-2") }, CodeSetError::DuplicateCode { set: s("Agency"), code: s("A-2") }),
+        (CodeEdit::RenameCode { set: s("Agency"), from: s("A-9"), to: s("A-0") }, CodeSetError::NoSuchCode { set: s("Agency"), code: s("A-9") }),
+        (CodeEdit::RemoveCode { set: s("Agency"), code: s("A-9") }, CodeSetError::NoSuchCode { set: s("Agency"), code: s("A-9") }),
+    ];
+    for (edit, error) in refused {
+        assert_eq!(lib.apply(&edit), Err(error), "{edit:?}");
+        assert_eq!(lib, before, "a refused edit changes nothing: {edit:?}");
+    }
+    assert!(lib.apply(&create("Tab\there")).unwrap_err().to_string().contains("control character"));
+
+    lib.apply(&CodeEdit::RenameSet { from: s("Agency"), to: s("AGENCY") }).unwrap();
+    lib.apply(&CodeEdit::RenameCode { set: s("AGENCY"), from: s("A-1"), to: s("A-1a") }).unwrap();
+    lib.apply(&CodeEdit::RemoveCode { set: s("AGENCY"), code: s("A-3") }).unwrap();
+    assert_eq!(lib.find("Agency"), None, "custom names are looked up as written");
+    assert_eq!(lib.find("AGENCY").unwrap().codes(), ["A-1a", "A-2"]);
+    lib.apply(&CodeEdit::DeleteSet { name: s("AGENCY") }).unwrap();
+    assert!(lib.custom().is_empty());
+    assert!(crate::codes::CODE_SETS.iter().all(|b| lib.find(b.id).is_some()), "the built-ins are untouched");
+
+    // Bounds: sets and codes per set.
+    for n in 0..MAX_SETS {
+        lib.apply(&create(&format!("Set {n}"))).unwrap();
+    }
+    assert_eq!(lib.apply(&create("One more")), Err(CodeSetError::TooManySets));
+    for n in 0..MAX_CODES {
+        lib.apply(&add("Set 0", &format!("C{n}"))).unwrap();
+    }
+    assert_eq!(lib.apply(&add("Set 0", "C-extra")), Err(CodeSetError::TooManyCodes(s("Set 0"))));
+}
+
+/// Import and export: our own versioned file round-trips, and an import adds all its sets or none.
+#[test]
+fn code_set_files_round_trip_and_imports_are_all_or_nothing() {
+    use crate::codes::{CodeEdit, CodeLibrary, CodeSetError, CustomCodeSet};
+    let mut lib = CodeLibrary::default();
+    lib.import(vec![CustomCodeSet::new("Agency", &["A-1", "A-2"]).unwrap(), CustomCodeSet::new("Court", &["Sealed"]).unwrap()], false).unwrap();
+    let file = lib.export(None).unwrap();
+    assert!(std::str::from_utf8(&file).unwrap().contains("\"format\": \"pdfcraft-redaction-codes\""));
+    let read = CodeLibrary::read_file(&file).unwrap();
+    assert_eq!(read, lib.custom());
+    // A byte-order mark is allowed; settings are the same form.
+    assert_eq!(CodeLibrary::read_file(&[b"\xEF\xBB\xBF".as_slice(), &file].concat()).unwrap(), read);
+    assert_eq!(CodeLibrary::from_json(&lib.to_json()).unwrap(), lib);
+    // Export some sets by name; built-ins and unknown names are refused.
+    let court = lib.export(Some(&["Court"])).unwrap();
+    assert_eq!(CodeLibrary::read_file(&court).unwrap(), [CustomCodeSet::new("Court", &["Sealed"]).unwrap()]);
+    assert_eq!(lib.export(Some(&["foia"])), Err(CodeSetError::BuiltIn("foia".into())));
+    assert_eq!(lib.export(Some(&["Nope"])), Err(CodeSetError::NoSuchSet("Nope".into())));
+
+    // A name already in use is refused unless replacing; nothing is added when one set fails.
+    let mut other = CodeLibrary::default();
+    other.apply(&CodeEdit::CreateSet { name: "court".into() }).unwrap();
+    let before = other.clone();
+    assert_eq!(other.import(read.clone(), false), Err(CodeSetError::DuplicateSet("Court".into())));
+    assert_eq!(other, before, "all or nothing");
+    assert_eq!(other.import(read.clone(), true).unwrap(), ["Agency", "Court"]);
+    assert_eq!(other.custom().len(), 2, "court was replaced by Court");
+    assert_eq!(other.find("Court").unwrap().codes(), ["Sealed"]);
+}
+
+fn bad_code_file(text: &str) -> crate::codes::CodeSetError {
+    crate::codes::CodeLibrary::read_file(text.as_bytes()).unwrap_err()
+}
+
+fn one_set_file(set: &str) -> String {
+    format!(r#"{{"format":"pdfcraft-redaction-codes","version":1,"sets":[{set}]}}"#)
+}
+
+fn located(e: crate::codes::CodeSetError) -> (String, crate::codes::CodeSetError) {
+    match e {
+        crate::codes::CodeSetError::At { at, error } => (at, *error),
+        e => panic!("expected a located error, got {e:?}"),
+    }
+}
+
+/// A code set file that isn't one, or is of a newer or unknown form, is refused whole with what
+/// was wrong; so are files past the size limit and nesting past the JSON reader's.
+#[test]
+fn hostile_code_set_files_are_refused_with_the_reason() {
+    use crate::codes::{CodeLibrary, CodeSetError, MAX_FILE_BYTES};
+    let bad = bad_code_file;
+    assert!(matches!(bad("not json"), CodeSetError::Malformed(m) if m.contains("isn't JSON")));
+    assert!(matches!(bad("[]"), CodeSetError::Malformed(_)));
+    assert!(matches!(bad(r#"{"format":"other","version":1,"sets":[]}"#), CodeSetError::Malformed(m) if m.contains("format")));
+    assert_eq!(bad(r#"{"format":"pdfcraft-redaction-codes","version":2,"sets":[]}"#), CodeSetError::NewerVersion(2));
+    assert!(matches!(bad(r#"{"format":"pdfcraft-redaction-codes","version":0,"sets":[]}"#), CodeSetError::Malformed(m) if m.contains("version")));
+    assert!(matches!(bad(r#"{"format":"pdfcraft-redaction-codes","version":"1","sets":[]}"#), CodeSetError::Malformed(_)));
+    assert!(
+        matches!(bad(r#"{"format":"pdfcraft-redaction-codes","version":1,"sets":[],"extra":1}"#), CodeSetError::Malformed(m) if m.contains("\"extra\""))
+    );
+    assert!(matches!(bad(r#"{"format":"pdfcraft-redaction-codes","version":1,"sets":{}}"#), CodeSetError::Malformed(m) if m.contains("sets")));
+    assert_eq!(CodeLibrary::read_file(&vec![b' '; MAX_FILE_BYTES + 1]), Err(CodeSetError::FileTooLarge));
+    // Deep nesting is refused by the JSON reader's own limit, not by running out of stack.
+    assert!(matches!(bad(&"[".repeat(100_000)), CodeSetError::Malformed(_)));
+    // A settings entry that isn't a library is an error, not an empty library.
+    assert!(CodeLibrary::from_json(&serde_json::json!({"sets": "x"})).is_err());
+}
+
+/// A bad set in a code set file is refused with the set it is in and what was wrong with it.
+#[test]
+fn a_bad_set_in_a_code_set_file_is_refused_where_it_is() {
+    use crate::codes::{CodeSetError, MAX_CODES, MAX_SETS};
+    let (bad, one, at) = (bad_code_file, one_set_file, located);
+    assert_eq!(at(bad(&one(r#"{"name":"","codes":[]}"#))), ("set 1".into(), CodeSetError::Empty(crate::codes::Part::Name)));
+    assert!(matches!(at(bad(&one(r#"{"name":"A","codes":["x\u0007"]}"#))).1, CodeSetError::Control { .. }));
+    assert!(matches!(at(bad(&one(r#"{"name":"A","codes":["x","x"]}"#))).1, CodeSetError::DuplicateCode { .. }));
+    assert!(matches!(at(bad(&one(r#"{"name":"A","codes":[1]}"#))).1, CodeSetError::Malformed(m) if m.contains("code 1")));
+    assert!(matches!(at(bad(&one(r#"{"name":"A"}"#))).1, CodeSetError::Malformed(m) if m.contains("codes")));
+    assert!(matches!(at(bad(&one(r#"{"name":"FOIA","codes":[]}"#))).1, CodeSetError::BuiltInName(_)));
+    assert!(
+        matches!(bad(&one(r#"{"name":"A","codes":[],"colour":"red"}"#)), CodeSetError::Malformed(m) if m.contains("set 1") && m.contains("colour"))
+    );
+    assert_eq!(at(bad(&one(r#"{"name":"A","codes":[]},{"name":"a","codes":[]}"#))), ("set 2".into(), CodeSetError::DuplicateSet("a".into())));
+    let many = vec![r#"{"name":"A","codes":[]}"#; MAX_SETS + 1].join(",");
+    assert_eq!(bad(&one(&many)), CodeSetError::TooManySets);
+    let codes = (0..=MAX_CODES).map(|n| format!("\"c{n}\"")).collect::<Vec<_>>().join(",");
+    assert!(matches!(at(bad(&one(&format!(r#"{{"name":"A","codes":[{codes}]}}"#)))).1, CodeSetError::TooManyCodes(_)));
+}
+
+/// The largest library the bounds allow, with the widest characters and escapes, is written
+/// within the file limit and reads back.
+#[test]
+fn the_largest_code_library_fits_its_file_limit() {
+    use crate::codes::{CodeLibrary, CustomCodeSet, MAX_CODE_CHARS, MAX_CODES, MAX_FILE_BYTES, MAX_NAME_CHARS, MAX_SETS};
+    let mut big = CodeLibrary::default();
+    let wide = |n: usize, len: usize| format!("{n:04}{}", "\u{10348}\"".repeat((len - 4) / 2));
+    let sets = (0..MAX_SETS)
+        .map(|n| {
+            let codes: Vec<String> = (0..MAX_CODES).map(|k| wide(k, MAX_CODE_CHARS)).collect();
+            CustomCodeSet::new(&wide(n, MAX_NAME_CHARS), &codes.iter().map(String::as_str).collect::<Vec<_>>()).unwrap()
+        })
+        .collect();
+    big.import(sets, false).unwrap();
+    let file = big.export(None).unwrap();
+    assert!(file.len() <= MAX_FILE_BYTES, "{} bytes", file.len());
+    assert_eq!(CodeLibrary::read_file(&file).unwrap(), big.custom());
+}
+
 #[test]
 fn tags_lose_what_redaction_removed() {
     let content = b"/P <</MCID 0>> BDC BT /F1 10 Tf 10 200 Td (SECRET) Tj ET EMC /P <</MCID 1>> BDC BT /F1 10 Tf 10 100 Td (Public) Tj ET EMC";

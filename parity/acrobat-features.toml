@@ -5915,11 +5915,11 @@ title = "Redaction code sets (e.g. FOIA exemptions)"
 area = "G"
 tier = "P1"
 milestone = "M8"
-status = "partial"
+status = "shipped"
 commands = ["redact.properties"]
-tools = ["redact_mark"]
-evidence = ["crates/redact/src/tests.rs::redaction_codes_join_in_set_order_and_reject_strangers", "crates/automation/tests/it/automation.rs::redacting_with_codes_through_tools", "crates/ui-egui/tests/it/redact.rs::redaction_codes_become_the_overlay_text"]
-notes = "built-in U.S. FOIA (5 U.S.C. 552(b)) and U.S. Privacy Act (552a) sets; picked codes become the overlay text, in the set's order. Missing: Edit Codes, custom code sets, import/export of code sets"
+tools = ["redact_mark", "redact_code_sets", "redact_code_set_edit", "redact_code_sets_import", "redact_code_sets_export"]
+evidence = ["crates/redact/src/tests.rs::redaction_codes_join_in_set_order_and_reject_strangers", "crates/redact/src/tests.rs::custom_code_sets_are_edited_and_built_ins_stay_read_only", "crates/redact/src/tests.rs::code_set_files_round_trip_and_imports_are_all_or_nothing", "crates/redact/src/tests.rs::hostile_code_set_files_are_refused_with_the_reason", "crates/redact/src/tests.rs::a_bad_set_in_a_code_set_file_is_refused_where_it_is", "crates/redact/src/tests.rs::the_largest_code_library_fits_its_file_limit", "crates/automation/tests/it/automation.rs::redacting_with_codes_through_tools", "crates/automation/tests/it/automation.rs::custom_redaction_code_sets_through_tools", "crates/automation/tests/it/automation.rs::redaction_code_set_files_through_tools", "crates/ui-egui/tests/it/redact.rs::redaction_codes_become_the_overlay_text", "crates/ui-egui/tests/it/redact.rs::custom_code_sets_from_edit_codes", "crates/ui-egui/tests/it/redact.rs::unreadable_saved_code_sets_are_kept_until_discarded"]
+notes = "built-in U.S. FOIA (5 U.S.C. 552(b)) and U.S. Privacy Act (552a) sets, read-only; picked codes become the overlay text, in the set's order. Redaction Properties ▸ Edit Codes: create, rename and delete custom sets; add, rename and remove their codes; import and export them as PdfCraft's own versioned JSON file (format pdfcraft-redaction-codes, version 1), checked whole on import (at most 4 MiB, 50 sets, 200 codes a set, names 80 and codes 40 characters; empty, repeated, space-padded and control-character names and codes, unknown keys and newer versions refused with the reason). Custom sets are kept in the settings (\"redaction_code_sets\"); an entry that can't be read is kept unchanged, the user is told, and Edit Codes can discard it. Automation keeps its own custom sets per session (redact_code_set_edit, redact_code_sets_import/export). Not read: code set files exported by Acrobat, whose format is not publicly specified."
 
 [[feature]]
 id = "protect.apply-redactions"

@@ -1069,7 +1069,7 @@ impl crate::PdfCraftApp {
     pub(crate) fn redact_page_image(&mut self, page: usize, index: usize) {
         let Some(rect) = self.page_image_box(page, index) else { return };
         let author = self.comment_prefs.author.clone();
-        let mark = self.redact_prefs.mark(page, vec![pdfcraft_engine::rect_quad(rect)], &author);
+        let mark = self.redact_prefs.mark(&self.redaction_codes, page, vec![pdfcraft_engine::rect_quad(rect)], &author);
         if self.apply_edit(mark) {
             self.notify_tr("The image is marked for redaction. Apply it with Redact a PDF");
         }

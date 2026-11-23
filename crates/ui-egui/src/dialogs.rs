@@ -68,6 +68,8 @@ struct Pending {
     bulk_field_props_now: bool,
     redact_now: Option<Dialog>,
     import_words: bool,
+    import_codes: bool,
+    export_codes: bool,
     print_go: bool,
     revert_now: bool,
     rename_now: bool,
@@ -221,6 +223,16 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             if !dialog_redact_props(ui, app, req) {
                 return false;
             }
+        }
+        Dialog::RedactCodes => {
+            let out = crate::redact_ui::codes_body(ui, app, &t);
+            req.import_codes = out.import;
+            req.export_codes = out.export;
+            // Close goes back to the Redaction Properties, which opened it.
+            if out.close {
+                req.next = Some(Dialog::RedactProps);
+            }
+            return false;
         }
         Dialog::RedactApply => {
             let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());
@@ -1108,9 +1120,25 @@ fn dialog_replace_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pend
 fn dialog_redact_props(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
     let t = Tokens::get(ui.ctx());
     let mut prefs = app.redact_prefs.clone();
-    let (ok, cancel) = crate::redact_ui::props_body(ui, &mut prefs, &t);
+    let (ok, cancel, edit_codes) = crate::redact_ui::props_body(ui, &mut prefs, &app.redaction_codes, &t);
+    let chose_codes = (&prefs.code_set, &prefs.codes) != (&app.redact_prefs.code_set, &app.redact_prefs.codes);
+    if let Some(kept) = app.redaction_choice_unread.as_mut() {
+        kept.touched |= chose_codes;
+    }
     app.redact_prefs = prefs;
+    if edit_codes {
+        app.open_code_editor();
+        req.next = Some(Dialog::RedactCodes);
+    }
     if ok && app.redact_prefs.remember {
+        // Defaults with a set or codes chosen here end the saved choice kept while the sets
+        // can't be read, even when they match what it was read as.
+        let chosen = app.redaction_choice_unread.as_ref().is_some_and(|kept| {
+            kept.touched || (&app.redact_prefs.code_set, &app.redact_prefs.codes) != (&app.redact_defaults.code_set, &app.redact_defaults.codes)
+        });
+        if chosen {
+            app.redaction_choice_unread = None;
+        }
         app.redact_defaults = app.redact_prefs.clone();
     }
     if cancel && let Some(before) = app.redact_before.take() {
@@ -1873,7 +1901,13 @@ fn dialog_footer(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: 
 }
 
 /// Acts on what the dialog asked for, once the modal is drawn.
-fn finish_dialog(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: &mut Pending) {
+fn finish_dialog(app: &mut PdfCraftApp, dialog: Dialog, mut modal_closed: bool, req: &mut Pending) {
+    // Edit Codes dismissed (Escape, the window's close) goes back to the Redaction Properties
+    // that opened it, as its Close button does: their draft is still waiting for OK or Cancel.
+    if dialog == Dialog::RedactCodes && modal_closed {
+        modal_closed = false;
+        req.next = Some(Dialog::RedactProps);
+    }
     finish_requests(app, dialog, modal_closed, req);
     finish_actions(app, req);
     finish_redactions_and_fields(app, req);
@@ -1979,6 +2013,14 @@ fn finish_actions(app: &mut PdfCraftApp, req: &mut Pending) {
     }
     if req.import_words {
         app.pick_files(crate::files::FilePurpose::RedactWords, false);
+    }
+    if req.import_codes {
+        // The replace choice as it is now, when Import is clicked.
+        let replace = app.code_editor.replace;
+        app.pick_files(crate::files::FilePurpose::RedactionCodes { replace }, false);
+    }
+    if req.export_codes {
+        app.export_redaction_codes();
     }
 }
 

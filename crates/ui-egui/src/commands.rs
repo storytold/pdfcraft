@@ -792,7 +792,8 @@ impl PdfCraftApp {
                     // picked; a page that could not be read refuses the whole selection.
                     match self.views[i].tool_marks(crate::QuickTool::Redact, true, None, true, &doc.info) {
                         crate::canvas::ToolMarks::Marks(marks, head) => {
-                            let edits: Vec<Edit> = marks.into_iter().map(|(page, quads)| self.redact_prefs.mark(page, quads, &author)).collect();
+                            let edits: Vec<Edit> =
+                                marks.into_iter().map(|(page, quads)| self.redact_prefs.mark(&self.redaction_codes, page, quads, &author)).collect();
                             if let Some(edit) = self.views[i].selection_marks_edit(edits, head) {
                                 self.views[i].clear_selection();
                                 self.apply_edit(edit);
@@ -818,6 +819,10 @@ impl PdfCraftApp {
             }
             "redact.properties" => {
                 self.redact_before = Some(self.redact_prefs.clone());
+                // Only a set or codes chosen in this dialog count as the user's choice.
+                if let Some(kept) = self.redaction_choice_unread.as_mut() {
+                    kept.touched = false;
+                }
                 self.dialog = Some(Dialog::RedactProps);
             }
             "redact.apply" => {
