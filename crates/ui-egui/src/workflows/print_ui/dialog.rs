@@ -137,6 +137,8 @@ impl PdfCraftApp {
         let sections = body::build(&self.print_draft, &sizes, self.units, self.print_draft.area.is_some(), no_printers);
         let mut dialog = HostedPrint::new(state, fields, sections).layout(PrintLayout::Document).held_ok();
         dialog.set_driver(DriverControls::Properties);
+        // A long fleet: the printer list searches, Save as PDF stays at its end (production 0c39992c9).
+        dialog.set_printer_search(true);
         // PLAN: assumed `dialogs::host::open<D: StackDialog>(app: &mut PdfCraftApp, dialog: D)` (pdf-dialogs-w4).
         crate::dialogs::host::open(self, dialog);
     }

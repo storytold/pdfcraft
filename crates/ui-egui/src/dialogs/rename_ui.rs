@@ -77,7 +77,7 @@ impl RenameFacts {
         let unsaved = self.unsaved;
         let title = crate::i18n::fmt(tl!("Rename “{name}”"), &[("name", &self.current)]);
         let ok = if unsaved { tl!("Save and Rename") } else { tl!("Rename") };
-        let params = vec![Param::new("name", tl!("File name"), ParamKind::text("")).hint(tl!("File name")).full_width()];
+        let params = vec![Param::new("name", tl!("File name"), ParamKind::text("")).hint(tl!("File name")).full_width().select_on_focus()];
         let reason = line.clone().filter(|_| refused);
         let mut dialog =
             ParamDialog::new(KEY, title, params).values(Bind::bound(fields)).ok_label(ok.into()).ok_enabled(ready).below(move |ui, _| {
