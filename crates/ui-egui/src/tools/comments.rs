@@ -13,6 +13,7 @@
 //! applied by the app, so each change is one undo step.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, pos2, vec2};
+use pdfcraft_engine::measure::Kind as MeasureKind;
 use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style};
 use pdfcraft_render::{Annotation, DocInfo, PageInfo, PageText};
 
@@ -322,6 +323,7 @@ pub struct CommentPrefs {
     /// `/T` of new comments (Acrobat: Preferences ▸ Identity, default the login name).
     pub author: String,
     styles: Vec<(CommentTool, Style)>,
+    measurement_styles: [Style; 3],
     /// The font size of new text boxes and callouts (Make Properties Default).
     font_sizes: Vec<(CommentTool, f64)>,
     /// Keep the tool selected after use (the pin).
@@ -337,6 +339,7 @@ impl Default for CommentPrefs {
         Self {
             author: login_name(),
             styles: ALL.iter().map(|t| (*t, Style::default_for(&t.sample()))).collect(),
+            measurement_styles: std::array::from_fn(|_| Style { color: [0.0, 0.47, 0.84], ..Style::default() }),
             font_sizes: ALL.iter().filter_map(|t| t.default_font_size().map(|s| (*t, s))).collect(),
             pinned: false,
             group_tool: [CommentTool::Note, CommentTool::Highlight, CommentTool::Ink],
@@ -346,6 +349,44 @@ impl Default for CommentPrefs {
 }
 
 impl CommentPrefs {
+    pub fn measurement_style(&self, kind: MeasureKind) -> Style {
+        let [distance, perimeter, area] = &self.measurement_styles;
+        match kind {
+            MeasureKind::Distance => distance,
+            MeasureKind::Perimeter => perimeter,
+            MeasureKind::Area => area,
+        }
+        .clone()
+    }
+
+    pub fn measurement_styles(&self) -> impl Iterator<Item = (MeasureKind, &Style)> {
+        [MeasureKind::Distance, MeasureKind::Perimeter, MeasureKind::Area].into_iter().zip(&self.measurement_styles)
+    }
+
+    /// Measurement defaults are separate from the Line/Arrow/PolyLine/Polygon comment tools.
+    /// Keep a visible stroke, as those tools do, and never restore non-finite style values.
+    pub fn set_measurement_style(&mut self, kind: MeasureKind, style: Style) {
+        let [distance, perimeter, area] = &mut self.measurement_styles;
+        let current = match kind {
+            MeasureKind::Distance => distance,
+            MeasureKind::Perimeter => perimeter,
+            MeasureKind::Area => area,
+        };
+        if style.color.iter().all(|c| c.is_finite()) {
+            current.color = style.color.map(|c| c.clamp(0.0, 1.0));
+        }
+        if style.width.is_finite() {
+            current.width = style.width.clamp(CommentTool::Line.min_width(), MAX_LINE_WIDTH);
+        }
+        if style.opacity.is_finite() {
+            current.opacity = style.opacity.clamp(0.1, 1.0);
+        }
+        if kind == MeasureKind::Area {
+            current.fill = style.fill.filter(|c| c.iter().all(|x| x.is_finite())).map(|c| c.map(|x| x.clamp(0.0, 1.0)));
+            current.fill_opacity = style.fill_opacity.filter(|o| o.is_finite()).map(|o| o.clamp(0.0, 1.0));
+        }
+    }
+
     pub fn style(&self, tool: CommentTool) -> Style {
         self.styles.iter().find(|(t, _)| *t == tool).map(|(_, s)| s.clone()).unwrap_or_default()
     }
@@ -474,11 +515,23 @@ pub(crate) fn typed_text(a: &Annotation) -> bool {
 
 /// Whether Make Current Properties Default has defaults to set from `a`.
 pub(crate) fn defaultable(a: &Annotation) -> bool {
-    tool_for(a).is_some() || typed_text(a)
+    measurement_kind(a).is_some() || tool_for(a).is_some() || typed_text(a)
+}
+
+pub(crate) fn measurement_kind(a: &Annotation) -> Option<MeasureKind> {
+    match (a.subtype.as_str(), a.intent.as_deref()) {
+        ("Line", Some("LineDimension")) => Some(MeasureKind::Distance),
+        ("PolyLine", Some("PolyLineDimension")) => Some(MeasureKind::Perimeter),
+        ("Polygon", Some("PolygonDimension")) => Some(MeasureKind::Area),
+        _ => None,
+    }
 }
 
 /// The tool that makes comments like `a` (for Make Current Properties Default).
 pub fn tool_for(a: &Annotation) -> Option<CommentTool> {
+    if measurement_kind(a).is_some() {
+        return None;
+    }
     Some(match (a.subtype.as_str(), a.intent.as_deref()) {
         ("Text", _) => CommentTool::Note,
         ("FreeText", Some("FreeTextCallout")) => CommentTool::Callout,
