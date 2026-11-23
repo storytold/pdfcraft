@@ -123,9 +123,12 @@ enum Prepared {
     Other(u8, Vec<u8>),
 }
 
+/// A name as it compares: its RDNs in order, each a sorted list of (attribute type, value).
+type PreparedName = Vec<Vec<(Vec<u8>, Prepared)>>;
+
 /// The RDNs of the DER name `raw`, in order, each its (attribute type, prepared value) pairs
 /// sorted (an RDN is a SET). `None` when `raw` is not a name.
-fn prepared(raw: &[u8]) -> Option<Vec<Vec<(Vec<u8>, Prepared)>>> {
+fn prepared(raw: &[u8]) -> Option<PreparedName> {
     let name = Tlv::parse_all(raw).ok()?.expect(tag::SEQUENCE, "Name").ok()?;
     let mut rdns = Vec::new();
     for rdn in name.children().ok()? {
