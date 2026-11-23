@@ -578,7 +578,7 @@ pub fn tools() -> Vec<ToolDef> {
             "What a text extractor would read that a human reader does not see, per page: text painted by no render mode (ISO 32000-2 §9.3.3 render modes 3/7), wholly off the displayed page, transparent or near-white filled, smaller than 1.5 pt, or carrying zero-width, bidi-control or tag Unicode characters (U+200B–200D, U+2060–2064, U+FEFF, U+202A–202E, U+2066–2069, U+E0000–E007F; emoji ZWJ sequences are flagged too, for review). A /ActualText replacement (ISO 32000-2 §14.9.4) is reported as its own actual-text finding next to the shape kinds: an extractor reads the replacement string while the reader sees whatever the source span paints, so review the pair. The audit reads with the document's password only — the view's hidden layers or comments do not remove text from it. Each finding reports the kind, an exact count, at most 8 samples and their rectangles (points from the top-left of the displayed page, like comment_list). Findings are lenses, not a verdict: nothing here says a document is safe. Fails closed: a page that cannot be read fails the audit.",
         )
         .ro()
-        .with(schema(json!({ "doc": doc(), "pages": { "type": "array", "items": { "type": "integer" } } }), &["doc"])),
+        .with(schema(json!({ "doc": doc(), "pages": pages("to audit (default: all)") }), &["doc"])),
         t(
             "doc_audit_redactions",
             "Audit faux redactions",

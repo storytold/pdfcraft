@@ -3,7 +3,7 @@
 //! before trusting what extraction returns about it. What counts as invisible is ours, not the
 //! format's; every finding says why, and none of them says the document is safe.
 //!
-//! Kinds, in the priority a glyph is counted under (each glyph under at most one of the four
+//! Kinds, in the priority a glyph is counted under (each glyph under at most one of the five
 //! shape kinds; the review lenses below are reported on top of a shape kind):
 //!
 //! - `invisible`: painted by no render mode (ISO 32000-2 §9.3.3 render modes 3 and 7, and

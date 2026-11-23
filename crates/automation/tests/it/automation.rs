@@ -4566,7 +4566,7 @@ fn auditing_invisible_content_through_tools() {
                 1 0 0 1 72 700 Tm (Visible) Tj\n\
                 3 Tr 1 0 0 1 72 650 Tm (Injected instruction) Tj\n\
                 0 Tr 1 1 1 rg 1 0 0 1 72 600 Tm (Whisper) Tj\n\
-                1 0 0 1 700 700 Tm (Offpage) Tj\n\
+                0 0 0 rg 1 0 0 1 700 700 Tm (Offpage) Tj\n\
                 ET";
     std::fs::write(dir.join("invisible.pdf"), helvetica_page(body)).unwrap();
     let mut a = auto(&dir);

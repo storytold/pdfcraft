@@ -115,12 +115,17 @@ impl<'a> Device<'a> for AuditDevice<'_> {
     }
 
     fn draw_glyph(&mut self, glyph: &Glyph<'a>, transform: Affine, glyph_transform: Affine, paint: &Paint<'a>, mode: &GlyphDrawMode) {
-        let Some(g) = self.audited_glyph(glyph, transform, glyph_transform, paint, mode) else { return };
+        let g = self.audited_glyph(glyph, transform, glyph_transform, paint, mode);
         match &mut self.actual {
             // Inside an `/ActualText` span the extractor will not read this glyph's own text;
-            // the span's merged replacement is reported on `end_marked_content`.
+            // the span's merged replacement is reported on `end_marked_content`. A glyph with
+            // no readable text of its own (no Unicode mapping, control-only) still paints, so
+            // the span's geometry and visibility record it: an extractor reads the span's
+            // replacement over such glyphs too, and dropping them would hide the span.
             Some((_, _, drawn)) => drawn.draw(&g),
-            None => (self.sink)(g),
+            // Outside a span, a glyph without readable text is nothing an extractor reads.
+            None if !g.text.is_empty() => (self.sink)(g),
+            None => {}
         }
     }
 }
@@ -152,15 +157,17 @@ impl AuditDevice<'_> {
         glyph_transform: Affine,
         paint: &Paint<'_>,
         mode: &GlyphDrawMode,
-    ) -> Option<GlyphAudit> {
+    ) -> GlyphAudit {
+        // A glyph with no Unicode mapping (or only control characters) has no readable text
+        // of its own — the empty record makes `draw_glyph` drop it outside a span and record
+        // only its geometry inside one. A /ActualText replacement over such a glyph is still
+        // what an extractor reads, so the span must not lose the glyph's paint.
         let text = match glyph.as_unicode() {
             Some(hayro::hayro_interpret::hayro_cmap::BfString::Char(c)) => c.to_string(),
             Some(hayro::hayro_interpret::hayro_cmap::BfString::String(s)) => s,
-            None => return None,
+            None => String::new(),
         };
-        if text.chars().all(char::is_control) {
-            return None;
-        }
+        let text = if text.chars().all(char::is_control) { String::new() } else { text };
         let fill = match paint {
             Paint::Color(c) => Some(c.to_rgba().to_rgba8()),
             Paint::Pattern(_) => None,
@@ -186,10 +193,10 @@ impl AuditDevice<'_> {
         if !(b.x0.is_finite() && b.y0.is_finite() && b.x1.is_finite() && b.y1.is_finite()) || b.width() > 10_000.0 || b.height() > 10_000.0 {
             // A hostile or broken transform: the text still goes to extractors, so record it
             // without a box, flagged off-page.
-            return Some(GlyphAudit { text, rect: [0.0; 4], unpainted, off_page: true, fill, actual_text: false });
+            return GlyphAudit { text, rect: [0.0; 4], unpainted, off_page: true, fill, actual_text: false };
         }
         let off_page = b.x0.max(self.page.x0) >= b.x1.min(self.page.x1) || b.y0.max(self.page.y0) >= b.y1.min(self.page.y1);
-        Some(GlyphAudit { text, rect: [b.x0 as f32, b.y0 as f32, b.x1 as f32, b.y1 as f32], unpainted, off_page, fill, actual_text: false })
+        GlyphAudit { text, rect: [b.x0 as f32, b.y0 as f32, b.x1 as f32, b.y1 as f32], unpainted, off_page, fill, actual_text: false }
     }
 }
 
@@ -273,6 +280,22 @@ mod tests {
         assert!(!replaced[0].unpainted);
         // Nothing else is recorded: the extractor reads the replacement in the span's place.
         assert_eq!(audit.glyphs.len(), 1, "{:?}", audit.glyphs);
+    }
+
+    /// `/ActualText` over glyphs with no Unicode mapping (control codes in a standard font
+    /// stand in for a custom-encoded font): the extractor still reads the replacement, so
+    /// the span must be recorded — with the geometry its source glyphs painted — rather
+    /// than dropped, or hidden injection text escapes the audit.
+    #[test]
+    fn actual_text_over_glyphs_without_unicode_is_reported() {
+        let audit = audit("BT /F1 20 Tf 1 0 0 1 100 150 Tm /Span <</ActualText (INJECTED)>> BDC (\\001\\002) Tj EMC ET");
+        let replaced: Vec<&GlyphAudit> = audit.glyphs.iter().filter(|g| g.actual_text).collect();
+        assert_eq!(replaced.len(), 1, "{:?}", audit.glyphs);
+        assert_eq!(replaced[0].text, "INJECTED");
+        assert!(!replaced[0].unpainted, "the source glyphs paint: {:?}", audit.glyphs);
+        let r = replaced[0].rect;
+        assert!(r[2] > r[0] && r[3] > r[1], "a non-degenerate box where the glyphs painted: {r:?}");
+        assert_eq!(audit.glyphs.len(), 1, "only the replacement is recorded: {:?}", audit.glyphs);
     }
 
     /// A visible glyph standing for an invisible replacement must not inherit visible flags:
