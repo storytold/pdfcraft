@@ -142,6 +142,17 @@ impl View<'_> {
         self.draft.get(at).map(|f| (at, f))
     }
 
+    /// The menu row of `act` on `key`: a file's Remove names the file, as production's menu does.
+    fn act_label(&self, act: Act, key: &CombineKey) -> String {
+        match (act, key) {
+            (Act::Remove, CombineKey::File(id)) => match self.file(*id) {
+                Some((_, file)) => crate::i18n::fmt(tl!("Remove {name}"), &[("name", &file.name)]),
+                None => act.label().to_owned(),
+            },
+            _ => act.label().to_owned(),
+        }
+    }
+
     /// The actions the tile (or header) of `key` offers, in the order its band lists them.
     fn acts(&self, key: &CombineKey) -> Vec<Act> {
         match *key {
@@ -269,7 +280,7 @@ pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, checks: &[Result<us
     // A right-click offers the tile's own actions, and Unlock… on a locked file, for the tile it was opened on.
     if let Some(key) = shown.response.menu.as_ref().map(|request| request.key) {
         let mut entries: Vec<Entry<TileRow>> =
-            view.acts(&key).into_iter().map(|act| Entry::new(TileRow::Act(act), act.label()).icon(act.icon())).collect();
+            view.acts(&key).into_iter().map(|act| Entry::new(TileRow::Act(act), view.act_label(act, &key)).icon(act.icon())).collect();
         let locked = match key {
             CombineKey::File(id) => view.file(id).is_some_and(|(_, f)| f.lock.is_some()),
             CombineKey::Page(..) => false,

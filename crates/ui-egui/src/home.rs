@@ -7,7 +7,7 @@ use craft::behavior::IconId;
 use craft::behavior::{DisplayOrder, ItemSource, SizeHint};
 use craft::keymap::CommandRef;
 use craft::theme::TypeRole;
-use craft::theme::variant::Tone;
+use craft::theme::variant::{Tone, Variant};
 use craft::ui::buttons::{Button, IconButton};
 use craft::ui::contract::{ActivateOn, CollectionEvent, Pad, Props as _, Show as _, ShowCollection as _, ShowContainer as _, clicked};
 use craft::ui::display::{PictureSize, Text};
@@ -15,6 +15,8 @@ use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::ThumbSize;
 use craft::ui::notices::Notice;
 use craft::ui::runtime::env::Env;
+use craft::ui::contract::Gap;
+use craft::ui::sections::{HeaderStrength, Section};
 use craft::ui::shell::{RecentFile, StartAction, StartPlace, StartScreen};
 use craft::ui::style::{DataColor, SurfaceKind};
 use craft::ui::tile_grid::{CaptionPlace, GridZoom, Tile, TileGrid, TilePartEvent};
@@ -147,6 +149,8 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut screen = StartScreen::new(craft::ui::contract::Bind::bound(&mut view), craft::ui::contract::Bind::bound(&mut sort), &files)
         .max_recent(app.recent_limit)
         .offers_new(false)
+        // Open is in the title bar, as in production.
+        .offers_open(false)
         .drop_hint(tl!("Files you open in PdfCraft appear here").to_string())
         .section(StartPlace::BeforeRecent, |ui, _| {
             let _ = Text::new(tl!("Welcome to PdfCraft").to_string()).role(TypeRole::Display).show(ui);
@@ -179,15 +183,25 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 let _ = Text::new(tl!("Recommended tools").to_string()).role(TypeRole::Heading).show(ui);
                 recommended_grid(ui, &recommended, &asked);
             });
-            let _ = Text::new(tl!("Pinned Tools").to_string()).role(TypeRole::Heading).show(ui);
-            if Button::new(tl!("Pin a tool…").to_string()).id_salt("pin-a-tool").show(ui).clicks > 0 {
-                asked.borrow_mut().push(Asked::PinTools);
-            }
-            if pinned_tools.is_empty() {
-                let _ = Notice::new(Tone::Neutral, tl!("Pin your favorite tools here for quick access.").to_string()).show(ui);
-            } else {
-                tool_grid(ui, tl!("Pinned Tools"), &pinned_tools, true, &asked);
-            }
+            // The heading is the page's, with "Pin a tool…" at its end, as the framework's own sections show theirs.
+            let _ = Section::fixed(tl!("Pinned Tools").to_string())
+                .strength(HeaderStrength::Heading)
+                .quiet_header()
+                .header_gap(Gap::Section)
+                .controls(|ui, _| {
+                    if Button::new(tl!("Pin a tool…").to_string()).id_salt("pin-a-tool").variant(Variant::GHOST).icon(IconId::new("pin")).show(ui).clicks
+                        > 0
+                    {
+                        asked.borrow_mut().push(Asked::PinTools);
+                    }
+                })
+                .show(ui, |ui, _| {
+                    if pinned_tools.is_empty() {
+                        let _ = Notice::new(Tone::Neutral, tl!("Pin your favorite tools here for quick access.").to_string()).show(ui);
+                    } else {
+                        tool_grid(ui, tl!("Pinned Tools"), &pinned_tools, true, &asked);
+                    }
+                });
         })
         .section(StartPlace::AfterSections, |ui, _| {
             let _ = Text::new(tl!("Privacy").to_uppercase()).role(TypeRole::Label).show(ui);
