@@ -184,8 +184,11 @@ redacted are left untouched.
 
 A redacted page's content goes into new stream objects; the original stays only while a page
 still shows it: lists it in `/Contents`, or, when the original is a form XObject, draws it with
-`Do` (directly, through other forms, annotation appearances or inherited resources, found by
-name as for unlinking undrawn XObjects). Such a page is left as it was. Any other reference to it
+`Do` (directly, through other forms, patterns, Type 3 glyphs, soft masks, annotation appearances
+or inherited resources), shows it as an annotation's appearance or paints it as a soft mask's
+group. Each name is looked up where the stream using it draws from, as the interpreter reads
+it, so the same name in a dictionary nothing draws from keeps nothing. Such a page is left as it
+was. Any other reference to it
 that a full save would follow (a private catalog key, a structure element's `/Stm`, `/PieceInfo`,
 a resource name nothing draws, the trailer) is pointed at the redacted copy. A walk of what a
 full save writes then proves no such original is left, or `apply` fails with

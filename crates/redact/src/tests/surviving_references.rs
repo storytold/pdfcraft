@@ -1048,8 +1048,11 @@ fn a_content_stream_another_page_draws_as_a_form_stays_after_redaction() {
     ];
     for (case, mut doc) in in_content {
         assert!(apply(&mut doc, None).unwrap().glyphs > 0, "{case}: nothing was redacted");
-        assert_eq!(under(&mut doc, 0, &mark_rect), 0, "{case}: the marked page still shows it");
-        assert!(under(&mut doc, 1, &mark_rect) > 0, "{case}: the unmarked page lost the text it draws");
+        let mut saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        for (when, doc) in [("in memory", &mut doc), ("after a full save", &mut saved)] {
+            assert_eq!(under(doc, 0, &mark_rect), 0, "{case}, {when}: the marked page still shows it");
+            assert!(under(doc, 1, &mark_rect) > 0, "{case}, {when}: the unmarked page lost the text it draws");
+        }
     }
     let mut appearance = content_another_page_names(
         "",
@@ -1066,6 +1069,44 @@ fn a_content_stream_another_page_draws_as_a_form_stays_after_redaction() {
     let mut undrawn = content_another_page_names("", own, b"", vec![]);
     assert!(apply(&mut undrawn, None).unwrap().glyphs > 0);
     assert!(!full_save_holds(&undrawn, b"SECRETTOKEN"), "a name the unmarked page never draws keeps the original");
+}
+
+/// The unmarked page names the original /S but draws only /Outer, which draws its own /S, another
+/// form. A name is looked up where the stream using it draws from, so the page's /S, which
+/// nothing draws, doesn't keep the original in the file, and Outer's form stays (#7922).
+#[test]
+fn a_content_stream_named_where_nothing_draws_it_leaves_though_a_form_draws_that_name() {
+    let mut doc = content_another_page_names(
+        "",
+        "/Resources << /Font << /F1 6 0 R >> /XObject << /S 5 0 R /Outer 9 0 R >> >>",
+        b"/Outer Do",
+        vec![
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 6 0 R >> /XObject << /S 10 0 R >> >>", b"/S Do"),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"BT /F1 10 Tf 100 100 Td (OUTERSHOWS) Tj ET"),
+        ],
+    );
+    assert!(apply(&mut doc, None).unwrap().glyphs > 0, "nothing was redacted");
+    assert!(!full_save_holds(&doc, b"SECRETTOKEN"), "a name only a form's own resources draw kept the page's original");
+    let mut saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert!(under(&mut saved, 1, &[[90.0, 90.0, 170.0, 115.0]]) > 0, "the unmarked page lost the form Outer draws");
+}
+
+/// An unmarked annotation shows the original itself, as its normal appearance or a state of its
+/// down appearance, and no `Do` draws it: it stays for that annotation (#7922).
+#[test]
+fn a_content_stream_an_annotation_shows_as_its_appearance_stays_after_redaction() {
+    for (case, ap) in [("normal", "/N 5 0 R"), ("down, by state", "/D << /On 5 0 R >>")] {
+        let mut doc = content_another_page_names(
+            "",
+            "/Annots [9 0 R]",
+            b"",
+            vec![format!("<< /Type /Annot /Subtype /Square /Rect [0 0 300 300] /AP << {ap} >> >>").into_bytes()],
+        );
+        assert!(apply(&mut doc, None).unwrap().glyphs > 0, "{case}: nothing was redacted");
+        assert_eq!(under(&mut doc, 0, &[[90.0, 90.0, 170.0, 115.0]]), 0, "{case}: the marked page still shows it");
+        // Only the annotation still names the original.
+        assert!(full_save_holds(&doc, b"SECRETTOKEN"), "{case}: the annotation lost the appearance it shows");
+    }
 }
 
 /// The control: another page draws the same content stream, so the original stays with it.

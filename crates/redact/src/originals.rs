@@ -19,9 +19,9 @@ use crate::RedactError;
 const MAX_DIRECT_DEPTH: usize = 256;
 
 /// `replaced` pairs each original content stream of a redacted page with its redacted copy.
-/// An original some page still lists in `/Contents`, or draws as a form XObject (directly, through
-/// other forms, annotation appearances or inherited resources:
-/// [`crate::interp::forms_pages_draw`]), stays: that page shows what it holds, and is left as it
+/// An original some page still lists in `/Contents`, or draws as a form XObject (with `Do`, each
+/// name looked up where the stream using it draws from, or as an annotation's appearance or a
+/// soft mask's group: [`crate::interp::forms_pages_draw`]), stays: that page shows what it holds, and is left as it
 /// was. Every other reference to an original, from any object a full save writes or from the
 /// trailer, is pointed at its copy.
 ///
