@@ -12,7 +12,8 @@ use craft::ui::contract::{Bind, Entry, Props as _, SaveKey, Show as _};
 use craft::ui::dialog::DialogHost;
 use craft::ui::notices::{Notice, NoticeLayout};
 use craft::ui::patterns::preferences::{
-    GroupSpec, PageSpec, PrefValue, PreferencesMode, PreferencesModel, PreferencesState, PreferencesWindow, RowKind, RowSpec,
+    GroupSpec, PageSpec, PrefValue, PreferencesDraft, PreferencesLayout, PreferencesMode, PreferencesModel, PreferencesState, PreferencesWindow, RowKind,
+    RowSpec,
 };
 use craft::ui::runtime::env::Label;
 use craft::ui::text::TextField;
@@ -195,7 +196,11 @@ impl PdfCraftApp {
         let ctx = ui.ctx().clone();
         let output = {
             let mut prefs = Prefs::new(self, draft, selection, host, answers, &ctx);
-            PreferencesWindow::new(Bind::bound(state)).mode(PreferencesMode::Live).remember(SaveKey::new("pdfcraft.preferences")).show(ui, &mut prefs)
+            PreferencesWindow::new(Bind::bound(state))
+                .mode(PreferencesMode::Live)
+                .layout(PreferencesLayout::Cards)
+                .remember(SaveKey::new("pdfcraft.preferences"))
+                .show(ui, &mut prefs)
         };
         if let Some(request) = output.pick_color {
             let answers = Arc::clone(answers);
@@ -514,6 +519,71 @@ impl PreferencesModel for Prefs<'_> {
         *self.selection != before
     }
 
+    fn reset_page(&mut self, page: &str) {
+        let fresh = PrefsDraft::defaults();
+        let d = &mut *self.draft;
+        match page {
+            "general" => {
+                d.language = fresh.language;
+                i18n::set_current(Lang::from_pref(&d.language));
+                d.ui_scale = fresh.ui_scale;
+                d.tools_right = fresh.tools_right;
+                d.rail_right = fresh.rail_right;
+                d.animation = fresh.animation;
+                d.reopen_last_session = fresh.reopen_last_session;
+                d.restore_last_view = fresh.restore_last_view;
+                d.reload_changed_files = fresh.reload_changed_files;
+                d.update_check_at_start = fresh.update_check_at_start;
+                d.show_secured_notice = fresh.show_secured_notice;
+                d.recent_limit = fresh.recent_limit;
+                d.system_title_bar = fresh.system_title_bar;
+            }
+            "appearance" => {
+                *self.selection = SelectionChange::default();
+                d.show_page_edge_shadows = fresh.show_page_edge_shadows;
+                d.reading_colors = fresh.reading_colors;
+                d.highlight_fields = fresh.highlight_fields;
+            }
+            "documents" => {
+                d.default_mode = fresh.default_mode;
+                d.view_defaults = fresh.view_defaults;
+                d.full_screen_fill = fresh.full_screen_fill;
+                d.full_screen_escape_exits = fresh.full_screen_escape_exits;
+                d.always_default_view = fresh.always_default_view;
+                d.text_links = fresh.text_links;
+                d.units = fresh.units;
+                d.scroll_speed = fresh.scroll_speed;
+                d.invert_middle_drag = fresh.invert_middle_drag;
+            }
+            "comment" => {
+                d.author = fresh.author;
+                d.hide_empty_highlight_hover = fresh.hide_empty_highlight_hover;
+            }
+            "fill" => {
+                d.flatten_fill_sign_on_save = fresh.flatten_fill_sign_on_save;
+                d.ask_to_lock_signatures = fresh.ask_to_lock_signatures;
+                d.date_format = fresh.date_format;
+                d.date_language = fresh.date_language;
+            }
+            "javascript" => d.javascript = fresh.javascript,
+            _ => {}
+        }
+    }
+
+    fn nested(&mut self, ui: &mut Ui) {
+        self.host.run(ui);
+        let answered = self.answers.lock().map(|mut queue| std::mem::take(&mut *queue)).unwrap_or_default();
+        for (key, colour) in answered {
+            self.set_color(&key, colour);
+        }
+    }
+
+    fn nested_open(&self) -> bool {
+        !self.host.is_empty()
+    }
+}
+
+impl PreferencesDraft for Prefs<'_> {
     fn differs(&self) -> bool {
         *self.draft != PrefsDraft::from_app(self.app) || *self.selection != SelectionChange::default()
     }
@@ -592,69 +662,6 @@ impl PreferencesModel for Prefs<'_> {
     fn cancel(&mut self) {
         i18n::set_current(Lang::from_pref(&self.app.language));
         *self.selection = SelectionChange::default();
-    }
-
-    fn reset_page(&mut self, page: &str) {
-        let fresh = PrefsDraft::defaults();
-        let d = &mut *self.draft;
-        match page {
-            "general" => {
-                d.language = fresh.language;
-                i18n::set_current(Lang::from_pref(&d.language));
-                d.ui_scale = fresh.ui_scale;
-                d.tools_right = fresh.tools_right;
-                d.rail_right = fresh.rail_right;
-                d.animation = fresh.animation;
-                d.reopen_last_session = fresh.reopen_last_session;
-                d.restore_last_view = fresh.restore_last_view;
-                d.reload_changed_files = fresh.reload_changed_files;
-                d.update_check_at_start = fresh.update_check_at_start;
-                d.show_secured_notice = fresh.show_secured_notice;
-                d.recent_limit = fresh.recent_limit;
-                d.system_title_bar = fresh.system_title_bar;
-            }
-            "appearance" => {
-                *self.selection = SelectionChange::default();
-                d.show_page_edge_shadows = fresh.show_page_edge_shadows;
-                d.reading_colors = fresh.reading_colors;
-                d.highlight_fields = fresh.highlight_fields;
-            }
-            "documents" => {
-                d.default_mode = fresh.default_mode;
-                d.view_defaults = fresh.view_defaults;
-                d.full_screen_fill = fresh.full_screen_fill;
-                d.full_screen_escape_exits = fresh.full_screen_escape_exits;
-                d.always_default_view = fresh.always_default_view;
-                d.text_links = fresh.text_links;
-                d.units = fresh.units;
-                d.scroll_speed = fresh.scroll_speed;
-                d.invert_middle_drag = fresh.invert_middle_drag;
-            }
-            "comment" => {
-                d.author = fresh.author;
-                d.hide_empty_highlight_hover = fresh.hide_empty_highlight_hover;
-            }
-            "fill" => {
-                d.flatten_fill_sign_on_save = fresh.flatten_fill_sign_on_save;
-                d.ask_to_lock_signatures = fresh.ask_to_lock_signatures;
-                d.date_format = fresh.date_format;
-                d.date_language = fresh.date_language;
-            }
-            "javascript" => d.javascript = fresh.javascript,
-            _ => {}
-        }
-    }
-
-    fn nested(&mut self, ui: &mut Ui) {
-        self.host.run(ui);
-        let answered = self.answers.lock().map(|mut queue| std::mem::take(&mut *queue)).unwrap_or_default();
-        for (key, colour) in answered {
-            self.set_color(&key, colour);
-        }
-    }
-
-    fn nested_open(&self) -> bool {
-        !self.host.is_empty()
     }
 }
 
@@ -799,7 +806,7 @@ impl Prefs<'_> {
             )
             .enabled(!d.flatten_fill_sign_on_save),
             RowSpec::new("fill.date_preset", tl!("Fill & Sign dates"), RowKind::choice(preset, presets)).keywords(tl!("Date format")),
-            RowSpec::new("fill.date_pattern", tl!("Pattern"), RowKind::Custom).keywords(tl!("Date format")).help(t.date_help.as_str()),
+            RowSpec::new("fill.date_pattern", tl!("Pattern"), RowKind::CustomRows).keywords(tl!("Date format")).help(t.date_help.as_str()),
             RowSpec::new("fill.date_language", tl!("Language"), RowKind::choice(language, languages)).keywords(tl!("Date format")),
         ];
         PageSpec::new("fill", tl!("Fill & Sign"), rows)
