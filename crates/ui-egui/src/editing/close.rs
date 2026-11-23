@@ -155,7 +155,9 @@ impl PdfCraftApp {
     /// Returns false while the save/discard/cancel questions need a decision, or while an OCR
     /// review is still to be accepted or rejected.
     pub(crate) fn request_quit(&mut self, ctx: &egui::Context) -> bool {
-        if self.hold_for_any_ocr_review() {
+        // A Save or Open panel (on macOS a sheet on this window) is answered first: the "save
+        // changes?" question would open behind it, out of reach. Quit again after.
+        if self.picks_pending() || self.hold_for_any_ocr_review() {
             ctx.request_repaint();
             return false;
         }
@@ -176,6 +178,10 @@ impl PdfCraftApp {
     /// has unsaved changes (text typed into a field counts), with the question asked; otherwise
     /// the window closes and nothing is left to recover.
     pub(crate) fn close_requested(&mut self, ctx: &egui::Context) -> CloseDecision {
+        // A file panel is answered first, as in `request_quit`.
+        if self.picks_pending() {
+            return CloseDecision::Hold;
+        }
         if self.hold_for_any_ocr_review() {
             if self.close_guard.as_ref().is_some_and(|g| g.scope() == CloseScope::Quit) {
                 self.close_guard = None;
