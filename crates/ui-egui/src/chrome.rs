@@ -63,11 +63,26 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     // image of the usual one: Home beside the lights, the tabs and Open after it, and the
     // Discord, shortcuts and theme buttons at the far end.
     let mirrored = mac && app.titlebar_lights_right == Some(true);
-    let (left, right) = match (mac, mirrored) {
+    let fullscreen = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
+    let controls = app.window_controls.clone().filter(|_| app.draws_window_frame() && !fullscreen).unwrap_or_else(|| window_controls::Layout {
+        left: Vec::new(),
+        right: Vec::new(),
+        style: window_controls::Style::default(),
+    });
+    let (mut left, mut right) = match (mac, mirrored) {
         (true, false) => (MAC_CONTENT_LEFT as i8, 10),
         (true, true) => (10, MAC_CONTENT_LEFT as i8),
         (false, _) => (8, 10),
     };
+    // Let Breeze's outer click target reach the screen corner in a maximized window.
+    if controls.style == window_controls::Style::Breeze {
+        if !controls.left.is_empty() {
+            left = 0;
+        }
+        if !controls.right.is_empty() {
+            right = 0;
+        }
+    }
     let (row, far_end) = if mirrored {
         (Layout::right_to_left(Align::Center), Layout::left_to_right(Align::Center))
     } else {
@@ -88,19 +103,12 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
             }
-            // GNOME on Wayland: the strip is the header bar, with the window buttons at its ends.
-            let fullscreen = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
-            let controls = app
-                .window_controls
-                .clone()
-                .filter(|_| app.draws_window_frame() && !fullscreen)
-                .unwrap_or_else(|| window_controls::Layout { left: Vec::new(), right: Vec::new() });
             ui.allocate_ui_with_layout(ui.available_size_before_wrap(), row, |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 if !controls.left.is_empty() {
                     ui.scope(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
-                        window_controls::buttons(ui, &controls.left);
+                        window_controls::buttons(ui, &controls.left, controls.style, window_controls::End::Left);
                     });
                     ui.add_space(window_controls::SIDE_GAP - 4.0);
                 }
@@ -112,7 +120,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 let controls_width = ui.fonts_mut(|f| f.layout_no_wrap("Discord".into(), theme::medium(13.0), t.text).size().x)
                     + 3.0 * button
                     + 54.0
-                    + window_controls::width(&controls.right);
+                    + window_controls::width(&controls.right, controls.style);
                 // Open stays in sight after the tabs: its icon, text and padding, and the gaps around it.
                 let open_width = ui.fonts_mut(|f| f.layout_no_wrap(tl!("Open").into(), theme::medium(13.0), t.text).size().x) + 38.0 + 12.0;
                 let mut tabs_width = (ui.available_width() - controls_width - open_width).max(0.0);
@@ -297,10 +305,13 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     if !controls.right.is_empty() {
                         // Laid out left to right inside the right-to-left run, so they read in
                         // the desktop's order.
-                        let size = egui::vec2(window_controls::width(&controls.right) - window_controls::SIDE_GAP, window_controls::BUTTON);
+                        let size = egui::vec2(
+                            window_controls::width(&controls.right, controls.style) - window_controls::SIDE_GAP,
+                            window_controls::height(controls.style, full.height()),
+                        );
                         ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
                             ui.spacing_mut().item_spacing.x = 0.0;
-                            window_controls::buttons(ui, &controls.right);
+                            window_controls::buttons(ui, &controls.right, controls.style, window_controls::End::Right);
                         });
                         ui.add_space(window_controls::SIDE_GAP - 4.0);
                     }

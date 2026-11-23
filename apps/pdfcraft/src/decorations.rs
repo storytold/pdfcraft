@@ -1,23 +1,36 @@
 //! Who draws the window frame on Linux.
 //!
-//! Wayland compositors that draw frames for their clients offer `zxdg_decoration_manager_v1`
-//! (KDE, Sway, Hyprland, COSMIC). GNOME doesn't: it leaves the frame to the app, and winit then
-//! drew an imitation of GNOME's. Without that protocol PdfCraft turns winit's frame off and draws
-//! a header bar like GNOME's own apps (`pdfcraft_ui_egui::window_controls`), with the window
-//! buttons GNOME's `button-layout` names. X11 window managers always draw the frame.
+//! PdfCraft integrates its window buttons into the tab strip on KDE Plasma, even though KWin can
+//! draw a separate title bar. On other desktops the app draws its own header on Wayland only when
+//! the compositor doesn't offer `zxdg_decoration_manager_v1`, as on GNOME. Otherwise the desktop
+//! draws the frame.
 //!
 //! `PDFCRAFT_TITLEBAR=app` or `=system` overrides the choice.
 
-use pdfcraft_ui_egui::window_controls::Layout;
+use pdfcraft_ui_egui::window_controls::{Layout, Style};
 
 /// The window buttons to draw in the app, or `None` when the desktop draws the frame.
 pub(crate) fn app_drawn() -> Option<Layout> {
-    let drawn = match std::env::var("PDFCRAFT_TITLEBAR").ok().as_deref().map(str::trim) {
+    let titlebar = std::env::var("PDFCRAFT_TITLEBAR").ok();
+    let desktop = if cfg!(target_os = "linux") { std::env::var("XDG_CURRENT_DESKTOP").ok() } else { None };
+    app_drawn_for(titlebar.as_deref(), desktop.as_deref(), compositor_leaves_frame_to_app, button_layout)
+}
+
+fn app_drawn_for(
+    titlebar: Option<&str>,
+    desktop: Option<&str>,
+    compositor_leaves_frame_to_app: impl FnOnce() -> bool,
+    button_layout: impl FnOnce() -> Layout,
+) -> Option<Layout> {
+    // XDG_CURRENT_DESKTOP is a colon-separated list of desktop names.
+    let plasma = desktop.is_some_and(|names| names.split(':').any(|name| name.eq_ignore_ascii_case("KDE")));
+    let drawn = match titlebar.map(str::trim) {
         Some("app") => true,
         Some("system") => false,
-        _ => compositor_leaves_frame_to_app(),
+        _ => plasma || compositor_leaves_frame_to_app(),
     };
-    drawn.then(button_layout)
+    // Plasma's default supported buttons are on the right. GNOME's setting is unrelated there.
+    drawn.then(|| if plasma { Layout { style: Style::Breeze, ..Layout::default() } } else { button_layout() })
 }
 
 /// GNOME's button order, or minimize, maximize and close on the right when it names none.
@@ -66,5 +79,30 @@ impl wayland_client::Dispatch<wayland_client::protocol::wl_registry::WlRegistry,
         _: &wayland_client::Connection,
         _: &wayland_client::QueueHandle<Self>,
     ) {
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Layout, Style, app_drawn_for};
+
+    #[test]
+    fn plasma_integrates_the_header_even_when_kwin_offers_a_frame() {
+        let gnome_layout = || Layout::parse("close:");
+        let breeze = Some(Layout { style: Style::Breeze, ..Layout::default() });
+        assert_eq!(app_drawn_for(None, Some("KDE"), || false, gnome_layout), breeze);
+        assert_eq!(app_drawn_for(None, Some("Example:kde"), || false, gnome_layout), breeze);
+        assert_eq!(app_drawn_for(Some(" app "), Some("KDE"), || false, gnome_layout), breeze);
+    }
+
+    #[test]
+    fn explicit_system_frame_overrides_plasma_and_other_defaults_stay_intact() {
+        let gnome_layout = || Layout::parse("close:");
+        assert_eq!(app_drawn_for(Some(" system "), Some("KDE"), || true, gnome_layout), None);
+        assert_eq!(app_drawn_for(None, Some("GNOME"), || true, gnome_layout), Some(gnome_layout()));
+        for desktop in [None, Some("sway"), Some("NotKDE")] {
+            assert_eq!(app_drawn_for(None, desktop, || false, gnome_layout), None);
+        }
+        assert_eq!(app_drawn_for(Some("app"), Some("sway"), || false, gnome_layout), Some(gnome_layout()));
     }
 }

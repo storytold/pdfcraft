@@ -1,8 +1,8 @@
 use super::{PdfCraftApp, QuickTool};
 
 impl PdfCraftApp {
-    /// Whether the app draws the window's title bar, buttons and resize edges: the desktop leaves
-    /// the frame to the app and Use system title bar is off.
+    /// Whether the app draws the window's title bar, buttons and resize edges: an integrated frame
+    /// is available and Use system title bar is off.
     pub fn draws_window_frame(&self) -> bool {
         self.window_controls.is_some() && !self.system_title_bar
     }
