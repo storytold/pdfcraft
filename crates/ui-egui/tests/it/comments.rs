@@ -535,6 +535,25 @@ fn the_comment_composer_shortcut_only_posts_the_focused_editor() {
 }
 
 #[test]
+fn a_long_sticky_note_keeps_post_visible_and_saves_all_text() {
+    let mut h = harness(|app| app.set_option("quick", "note").unwrap());
+    click_pt(&mut h, (250.0, 8.0));
+    let full_text = (0..80).map(|line| format!("Long comment line {line}")).collect::<Vec<_>>().join("\n");
+    field(&h, "Add a comment").type_text(&full_text);
+    h.run_steps(2);
+
+    let viewport = h.state().views[0].viewport_rect();
+    let editor = field(&h, "Add a comment").rect();
+    let post = h.get_by_label("Post").rect();
+    assert!(editor.height() <= 321.0, "the editor is capped and scrolls: {editor:?}");
+    assert!(viewport.contains_rect(post), "Post stays visible in the viewer: {post:?}, {viewport:?}");
+
+    h.get_by_label("Post").click();
+    h.run_steps(3);
+    assert_eq!(comments(&h)[0].contents.as_deref(), Some(full_text.as_str()), "the full long comment is saved");
+}
+
+#[test]
 fn a_selection_made_first_is_marked_when_a_tool_is_picked() {
     let mut h = harness(|_| {});
     h.state_mut().views[0].select_text(0, 4, 8);

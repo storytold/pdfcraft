@@ -73,8 +73,18 @@ pub(crate) fn composer(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, 
                 ComposerKind::Replace => tl!("Replacement text"),
                 _ => tl!("Add a comment"),
             };
+            // Keep the action buttons visible for long comments. The multiline editor scrolls
+            // internally once it reaches this height, while retaining the full draft text.
+            let editor_height = (viewport.height() - 140.0).clamp(48.0, 320.0);
             let edit = ui
-                .add(egui::TextEdit::multiline(&mut c.text).hint_text(hint).desired_rows(3).desired_width(f32::INFINITY).id_salt("composer-text"))
+                .add_sized(
+                    egui::vec2(ui.available_width(), editor_height),
+                    egui::TextEdit::multiline(&mut c.text)
+                        .hint_text(hint)
+                        .desired_rows(3)
+                        .desired_width(f32::INFINITY)
+                        .id_salt("composer-text"),
+                )
                 // 0.37 kittest rejects an unnamed text input; the hint is its logical name.
                 .accessible_name(hint);
             if c.focus {
