@@ -146,7 +146,8 @@ impl PdfCraftApp {
             match delivered {
                 Ok(()) => {
                     // As the native save does: what was saved isn't asked about again (#2149).
-                    if self.session.mark_saved(id, bytes, None).is_ok() {
+                    let marked = self.session.mark_saved(id, bytes, None).is_ok();
+                    if marked {
                         self.placed_signatures.remove(&id);
                     }
                     if let Some(doc) = self.session.get(id)
@@ -160,6 +161,10 @@ impl PdfCraftApp {
                     // The host reports where the file went (and any failure) itself.
                     if !to_host {
                         self.notify_fmt("Downloaded {name}", &[("name", &name)]);
+                    }
+                    // As the native save does: Did Save runs once the bytes are delivered.
+                    if marked {
+                        self.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::DidSave);
                     }
                     after(self);
                     true
@@ -329,6 +334,9 @@ impl PdfCraftApp {
                 self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);
                 #[cfg(target_os = "macos")]
                 crate::macos_association::repair(std::path::Path::new(dest));
+                // A form's Did Save actions run once the file is written. What they change is
+                // left unsaved: the save already happened, and nothing saves it again.
+                self.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::DidSave);
                 true
             }
             Err(e) => {

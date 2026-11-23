@@ -191,7 +191,7 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("file.properties")
             .with(schema(json!({ "doc": doc() }), &["doc"])),
-        t("doc_close", "Close a document", "Close a document. Fails if it has unsaved changes unless discard_changes is true.")
+        t("doc_close", "Close a document", "Close a document. Fails if it has unsaved changes unless discard_changes is true. A form's Will Close actions run first (reported as will_close); they can't keep it open.")
             .cmd("file.close")
             .with(schema(json!({ "doc": doc(), "discard_changes": { "type": "boolean" } }), &["doc"])),
         t(

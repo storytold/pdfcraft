@@ -310,6 +310,8 @@ impl PdfCraftApp {
             recovered_paths: Default::default(),
             last_autosave: None,
             allow_quit: false,
+            will_close_ran: false,
+            will_close_left: Vec::new(),
             deferred_commands: Vec::new(),
             native_menu: None,
             menu_input: Vec::new(),

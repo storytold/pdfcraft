@@ -415,6 +415,18 @@ impl Automation {
                 out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
             }
         }
+        // Its Did Print actions run once the sheets are written or handed to the printer.
+        if self.doc(a)?.allows_printing() {
+            let did = self.session.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::DidPrint);
+            if !did.is_empty() {
+                out["did_print"] = crate::a11y::form_tools::js_output_json(&did);
+            }
+            // A Did Print script may change the document without saying anything: the summary
+            // shows it (`dirty`, `undo`), as doc_save's does after Did Save.
+            if let Some(doc) = self.session.get(id) {
+                out["document"] = crate::json::summary(doc);
+            }
+        }
         Ok(out)
     }
 }

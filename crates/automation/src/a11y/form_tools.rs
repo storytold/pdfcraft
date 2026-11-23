@@ -61,8 +61,8 @@ pub(crate) fn alert_json(m: &pdfcraft_engine::js::Message) -> Value {
     json!({ "message": m.text, "title": m.title, "icon": m.icon.name(), "buttons": m.buttons.name() })
 }
 
-/// What scripts that ran unasked (a document's Will Save or Will Print actions) showed, said
-/// or asked for, as tools report it.
+/// What scripts that ran unasked (a document's Will Save, Did Save, Will Print, Did Print or
+/// Will Close actions) showed, said or asked for, as tools report it.
 pub(crate) fn js_output_json(out: &pdfcraft_engine::js::JsOutput) -> Value {
     json!({
         "alerts": out.alerts.iter().map(alert_json).collect::<Vec<_>>(),

@@ -350,10 +350,11 @@ update the numbers.
 
 ### 15. Forms: JavaScript object model, actions, submit, XFA depth
 
-- **Missing:** the wider Acrobat JavaScript object model (annotations, layers, dialogs), document
-  actions, the Actions tab triggers that run JavaScript, form submission, the debugger, barcode
-  fields, rich-text values; XFA flattening and complete dynamic-form fidelity.
-- **Evidence:** `form.js-host` partial, `form.document-actions`, `form.submit-form`,
+- **Missing:** the wider Acrobat JavaScript object model (annotations, layers, dialogs), page
+  open/close actions (the document's open, save, print and close actions run), the Actions tab
+  triggers that run JavaScript, form submission, the debugger, barcode fields, rich-text values;
+  XFA flattening and complete dynamic-form fidelity.
+- **Evidence:** `form.js-host` and `form.document-actions` partial; `form.submit-form`,
   `edit.action-javascript`, `form.js-debugger`, `form.xfa-flatten` planned; XFA layout, FormCalc
   and data partial.
 - **Estimate:** 40–75 h. **Doc:** [pdf-spec-parity.md](pdf-spec-parity.md).
@@ -433,6 +434,7 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-20 | minor | Gap 15: a form's Will Close (`/AA /WC`), Did Save (`/AA /DS`) and Did Print (`/AA /DP`) actions run in the document's realm (the app's Close, Save and Print; `doc_close`, `doc_save`, `doc_print`); what Did Save changes stays unsaved and Will Close can't keep a document open. `form.document-actions` stays partial: page open/close actions remain. Estimates unchanged. |
 | 2026-11-11 | minor | Gap 8: known residual risk for the LibreOffice sidecar (Impress has no link-update setting; the soffice process isn't network-sandboxed). Sandboxing tracked in #6953. Estimates unchanged. |
 | 2026-10-26 | minor | Gap 8: the LibreOffice profile never updates Writer or Calc linked content on load; Impress has no such setting and the process's network access isn't sandboxed. Estimates unchanged. |
 | 2026-10-25 | minor | Gaps 5 and 14 current state: native release builds embed LXGW WenKai Lite for Simplified Chinese, while the web build has no Hans face; Arabic catalogs stay logical with explicit RTL label direction and mirrored stock chrome, while native/browser RTL input, IME and complex workflows remain unqualified. Estimates unchanged. |

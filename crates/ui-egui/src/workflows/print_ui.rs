@@ -103,13 +103,13 @@ pub(crate) struct PrintTasks {
     /// The browser print being drawn, a sheet a frame (`web_print`).
     #[cfg(target_arch = "wasm32")]
     web_job: Option<crate::web_print::WebPrintJob>,
-    /// What went wrong after the browser print page was handed over, with the print-ready PDF
-    /// to download instead.
+    /// The document the browser print being drawn (`web_job`) is of, for its Did Print actions.
     #[cfg(target_arch = "wasm32")]
-    web_failed: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-    /// The last browser print's PDF and name, for that fallback.
+    web_doc: Option<pdfcraft_engine::DocId>,
+    /// The print pages handed to the browser, each kept until its `window.print()` returns or it
+    /// fails, with its own flags, so a print settles only on its own page's outcome.
     #[cfg(target_arch = "wasm32")]
-    web_last: Option<(String, std::sync::Arc<Vec<u8>>)>,
+    web_handoffs: Vec<crate::web_print::Handoff<pdfcraft_engine::DocId>>,
 }
 
 /// The printers to offer when no [`PrinterSource`] is set: the spooler's, or in a browser its
@@ -137,10 +137,12 @@ fn printer_label(name: &str) -> String {
     if name == crate::web_print::BROWSER_PRINTER { crate::web_print::browser_printer_label().to_string() } else { name.to_string() }
 }
 
-/// A job being spooled: its printer, the sheets sent so far of how many, and its worker's news.
+/// A job being spooled: its printer, the document printed (for its Did Print actions), the
+/// sheets sent so far of how many, and its worker's news.
 #[cfg(not(target_arch = "wasm32"))]
 struct PrintJob {
     printer: String,
+    doc: pdfcraft_engine::DocId,
     sheets: Option<(usize, usize)>,
     news: std::sync::mpsc::Receiver<JobNews>,
 }
@@ -518,20 +520,24 @@ impl PdfCraftApp {
                     match job.news.try_recv() {
                         Ok(JobNews::Sent(sent, sheets)) => job.sheets = Some((sent, sheets)),
                         Ok(JobNews::Done(r)) => {
-                            finished.push((job.printer.clone(), r));
+                            finished.push((job.printer.clone(), job.doc, r));
                             break false;
                         }
                         Err(std::sync::mpsc::TryRecvError::Empty) => break true,
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            finished.push((job.printer.clone(), Err("the print job stopped unexpectedly".into())));
+                            finished.push((job.printer.clone(), job.doc, Err("the print job stopped unexpectedly".into())));
                             break false;
                         }
                     }
                 }
             });
             self.show_print_progress();
-            for (printer, result) in finished {
+            for (printer, doc, result) in finished {
+                let printed = result.is_ok();
                 self.report_print_job(&printer, result);
+                if printed {
+                    self.did_print(doc);
+                }
             }
         }
     }
@@ -612,6 +618,15 @@ impl PdfCraftApp {
         self.print_tasks.two_sided.push((name, rx));
     }
 
+    /// A form's Did Print actions, once document `id` has printed: the spooler took the job, the
+    /// print-ready PDF was written, or the browser was handed the pages. Never for a document
+    /// that may not be printed, nor for one closed meanwhile.
+    fn did_print(&mut self, id: pdfcraft_engine::DocId) {
+        if self.session.get(id).is_some_and(|d| d.allows_printing()) {
+            self.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::DidPrint);
+        }
+    }
+
     /// Report the outcome of a finished print job to the user.
     fn report_print_job(&mut self, printer: &str, result: Result<String, String>) {
         match result {
@@ -666,7 +681,7 @@ impl PdfCraftApp {
             Some(printer) if printer == crate::web_print::BROWSER_PRINTER => {
                 let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
                 match print::layout(&sizes, &settings) {
-                    Ok(sheets) => self.print_in_browser(name, bytes, sheets.iter().map(|s| s.size).collect()),
+                    Ok(sheets) => self.print_in_browser(id, name, bytes, sheets.iter().map(|s| s.size).collect()),
                     Err(e) => {
                         self.notify_error(e);
                         false
@@ -681,9 +696,9 @@ impl PdfCraftApp {
                 if let Ok(sheets) = print::layout(&sizes, &settings) {
                     print::add_cups_orientation(&mut job.options, &sheets);
                 }
-                self.send_to_printer(printer, bytes, job)
+                self.send_to_printer(id, printer, bytes, job)
             }
-            None => self.save_print_pdf(&name, bytes),
+            None => self.save_print_pdf(id, &name, bytes),
         };
         // What this printer printed with is what it starts with next time (#2001).
         if sent && to_printer {
@@ -697,7 +712,7 @@ impl PdfCraftApp {
     /// the progress card counts the sheets as they reach the spooler, and the spooler's answer
     /// arrives as a notice.
     #[cfg(not(target_arch = "wasm32"))]
-    fn send_to_printer(&mut self, printer: String, bytes: Vec<u8>, mut job: spool::Job) -> bool {
+    fn send_to_printer(&mut self, id: pdfcraft_engine::DocId, printer: String, bytes: Vec<u8>, mut job: spool::Job) -> bool {
         let (tx, rx) = std::sync::mpsc::channel();
         let ctx = self.ctx.clone();
         let spooler = self.spooler.clone();
@@ -725,17 +740,20 @@ impl PdfCraftApp {
             let _ = tx.send(JobNews::Done(result));
             repaint();
         });
-        self.print_tasks.jobs.push(PrintJob { printer, sheets: None, news: rx });
+        self.print_tasks.jobs.push(PrintJob { printer, doc: id, sheets: None, news: rx });
         self.show_print_progress();
         true
     }
 
     /// A browser has no spooler: `submit` answers at once.
     #[cfg(target_arch = "wasm32")]
-    fn send_to_printer(&mut self, printer: String, bytes: Vec<u8>, job: spool::Job) -> bool {
+    fn send_to_printer(&mut self, id: pdfcraft_engine::DocId, printer: String, bytes: Vec<u8>, job: spool::Job) -> bool {
         let result = spool::submit(&bytes, &job).map_err(|e| e.to_string());
         let ok = result.is_ok();
         self.report_print_job(&printer, result);
+        if ok {
+            self.did_print(id);
+        }
         ok
     }
 
@@ -743,11 +761,12 @@ impl PdfCraftApp {
     /// print-ready `bytes`), a sheet a frame in [`PdfCraftApp::poll_print`]. A print still being
     /// prepared is replaced. The dialog closes at once.
     #[cfg(target_arch = "wasm32")]
-    fn print_in_browser(&mut self, name: String, bytes: Vec<u8>, sheets: Vec<(f64, f64)>) -> bool {
+    fn print_in_browser(&mut self, id: pdfcraft_engine::DocId, name: String, bytes: Vec<u8>, sheets: Vec<(f64, f64)>) -> bool {
         match crate::web_print::WebPrintJob::new(bytes, sheets, name) {
             Ok(job) => {
                 let n = job.total().to_string();
                 self.print_tasks.web_job = Some(job);
+                self.print_tasks.web_doc = Some(id);
                 self.notify_fmt("Preparing {n} sheets for printing…", &[("n", &n)]);
                 if let Some(ctx) = &self.ctx {
                     ctx.request_repaint();
@@ -764,9 +783,8 @@ impl PdfCraftApp {
     /// Draw the next sheet of the browser print, and hand the finished page to the browser.
     #[cfg(target_arch = "wasm32")]
     fn poll_web_print(&mut self) {
-        let failed: Vec<String> = self.print_tasks.web_failed.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
-        if let Some(e) = failed.into_iter().next() {
-            self.web_print_failed(&e);
+        for ended in crate::web_print::Handoff::settle(&mut self.print_tasks.web_handoffs) {
+            self.web_print_settled(ended);
         }
         let Some(job) = self.print_tasks.web_job.as_mut() else { return };
         if !job.finished() {
@@ -783,26 +801,37 @@ impl PdfCraftApp {
             return;
         }
         let Some(mut job) = self.print_tasks.web_job.take() else { return };
+        let Some(id) = self.print_tasks.web_doc.take() else { return };
         let html = job.html();
         let urls = job.take_urls();
-        self.print_tasks.web_last = Some((job.name.clone(), job.pdf.clone()));
-        match crate::web_print::print_in_iframe(&html, urls, self.print_tasks.web_failed.clone(), self.ctx.clone()) {
-            Ok(()) => self.notify_tr("Opening the browser's print dialog…"),
-            Err(e) => self.web_print_failed(&e),
+        let handoff = crate::web_print::Handoff::new(id, job.name.clone(), job.pdf.clone());
+        match crate::web_print::print_in_iframe(&html, urls, handoff.failed.clone(), handoff.printed.clone(), self.ctx.clone()) {
+            // Did Print waits for this page to hand the print to the browser (settled above).
+            Ok(()) => {
+                self.print_tasks.web_handoffs.push(handoff);
+                self.notify_tr("Opening the browser's print dialog…");
+            }
+            Err(e) => self.web_print_failed(&e, &handoff.name, &handoff.pdf),
+        }
+    }
+
+    /// A browser print page has ended: run its document's Did Print actions, or report why it
+    /// didn't print.
+    #[cfg(target_arch = "wasm32")]
+    fn web_print_settled(&mut self, ended: crate::web_print::Settled<pdfcraft_engine::DocId>) {
+        match ended {
+            crate::web_print::Settled::Printed(id) => self.did_print(id),
+            crate::web_print::Settled::Failed { error, name, pdf } => self.web_print_failed(&error, &name, &pdf),
         }
     }
 
     /// The browser wouldn't print (a sandboxed frame, a picture it couldn't decode): offer the
-    /// print-ready PDF as a download instead, so the work isn't lost.
+    /// print-ready PDF (`name`, `pdf`) as a download instead, so the work isn't lost. No Did Print.
     #[cfg(target_arch = "wasm32")]
-    fn web_print_failed(&mut self, error: &str) {
-        let Some((name, pdf)) = self.print_tasks.web_last.take() else {
-            self.notify_error(error);
-            return;
-        };
+    fn web_print_failed(&mut self, error: &str, name: &str, pdf: &[u8]) {
         let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF");
         let file = format!("{stem} (print).pdf");
-        match crate::editing::download(&file, &pdf) {
+        match crate::editing::download(&file, pdf) {
             Ok(()) => self.notify_fmt("Couldn't print from the browser ({e}); downloaded {name} to print instead", &[("e", error), ("name", &file)]),
             Err(_) => self.notify_error(error),
         }
@@ -812,10 +841,11 @@ impl PdfCraftApp {
     /// ask where and write on a later frame. Returns `true` once written, or once the save picker
     /// is showing.
     #[cfg(not(target_arch = "wasm32"))]
-    fn save_print_pdf(&mut self, name: &str, bytes: Vec<u8>) -> bool {
+    fn save_print_pdf(&mut self, id: pdfcraft_engine::DocId, name: &str, bytes: Vec<u8>) -> bool {
         let write = move |app: &mut Self, path: std::path::PathBuf| match crate::editing::write_atomically(&path.to_string_lossy(), &bytes) {
             Ok(()) => {
                 app.notify_fmt("Saved the print-ready PDF to {path}", &[("path", &path.display().to_string())]);
+                app.did_print(id);
                 true
             }
             Err(e) => {
@@ -838,12 +868,13 @@ impl PdfCraftApp {
     /// Print ▸ Save as PDF in a browser: download it, as Save does (#170). There is no folder to
     /// choose and no file system to write to, so `save_override` doesn't apply.
     #[cfg(target_arch = "wasm32")]
-    fn save_print_pdf(&mut self, name: &str, bytes: Vec<u8>) -> bool {
+    fn save_print_pdf(&mut self, id: pdfcraft_engine::DocId, name: &str, bytes: Vec<u8>) -> bool {
         let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF");
         let file = format!("{stem} (print).pdf");
         match crate::editing::download(&file, &bytes) {
             Ok(()) => {
                 self.notify_fmt("Downloaded {name}", &[("name", &file)]);
+                self.did_print(id);
                 true
             }
             Err(e) => {
@@ -1043,7 +1074,7 @@ mod tests {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
-        app.print_tasks.jobs.push(PrintJob { printer: "Office".into(), sheets: None, news: rx });
+        app.print_tasks.jobs.push(PrintJob { printer: "Office".into(), doc: pdfcraft_engine::DocId(0), sheets: None, news: rx });
         app.poll_print();
         assert_eq!(app.progress_notice.as_ref().map(|p| p.label.as_str()), Some("Sending to Office…"));
 
@@ -1064,7 +1095,7 @@ mod tests {
         let other = crate::widgets::ProgressNotice { label: "Optimizing…".into(), fraction: 0.5, cancellable: true };
         app.progress_notice = Some(other.clone());
         let (tx, rx) = std::sync::mpsc::channel();
-        app.print_tasks.jobs.push(PrintJob { printer: "Office".into(), sheets: None, news: rx });
+        app.print_tasks.jobs.push(PrintJob { printer: "Office".into(), doc: pdfcraft_engine::DocId(0), sheets: None, news: rx });
         tx.send(JobNews::Sent(1, 2)).unwrap();
         app.poll_print();
         assert_eq!(app.progress_notice, Some(other));

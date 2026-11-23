@@ -245,15 +245,41 @@ pub(crate) fn blob_url(png: Vec<u8>) -> Result<String, String> {
 
 #[cfg(target_arch = "wasm32")]
 thread_local! {
-    /// The iframe of the last browser print and its pictures, removed when the browser says the
-    /// dialog closed, or at the latest when the next print starts.
-    static LAST_FRAME: std::cell::RefCell<Option<(web_sys::HtmlIFrameElement, Vec<String>)>> = const { std::cell::RefCell::new(None) };
+    /// The iframes of browser prints still on the page, each with its pictures and its `printed`
+    /// flag. A frame is removed when its print fails or the browser says its dialog closed; one
+    /// that printed in a browser that doesn't say so is removed when the next print starts. A
+    /// frame still preparing its print is never removed by a later print, so its outcome arrives.
+    static FRAMES: std::cell::RefCell<Vec<PrintFrame>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// Remove the last print's iframe and let go of its pictures.
 #[cfg(target_arch = "wasm32")]
-fn clear_last_frame() {
-    if let Some((frame, urls)) = LAST_FRAME.with(|f| f.borrow_mut().take()) {
+type PrintFrame = (web_sys::HtmlIFrameElement, Vec<String>, std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+/// Remove `frame` from the page and let go of its pictures.
+#[cfg(target_arch = "wasm32")]
+fn remove_frame(frame: &web_sys::HtmlIFrameElement) {
+    let gone: Vec<PrintFrame> = FRAMES.with(|f| {
+        let mut frames = f.borrow_mut();
+        let (gone, kept) = std::mem::take(&mut *frames).into_iter().partition(|(fr, _, _)| fr == frame);
+        *frames = kept;
+        gone
+    });
+    frame.remove();
+    for (_, urls, _) in gone {
+        revoke(&urls);
+    }
+}
+
+/// Remove the frames whose print has already been handed to the browser.
+#[cfg(target_arch = "wasm32")]
+fn clear_printed_frames() {
+    let gone: Vec<PrintFrame> = FRAMES.with(|f| {
+        let mut frames = f.borrow_mut();
+        let (gone, kept) = std::mem::take(&mut *frames).into_iter().partition(|(_, _, printed)| printed.load(std::sync::atomic::Ordering::SeqCst));
+        *frames = kept;
+        gone
+    });
+    for (frame, urls, _) in gone {
         frame.remove();
         revoke(&urls);
     }
@@ -261,17 +287,19 @@ fn clear_last_frame() {
 
 /// Open the browser's print dialog on `html` in a hidden iframe once its pictures (`urls`) are
 /// decoded. What goes wrong after this returns (a picture that won't decode, a browser that
-/// refuses to print from a frame) is pushed to `failed`, for the app to report.
+/// refuses to print from a frame) is pushed to `failed`, for the app to report; `printed` is set
+/// once `window.print()` has returned, the print handed to the browser.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn print_in_iframe(
     html: &str,
     urls: Vec<String>,
     failed: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    printed: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ctx: Option<egui::Context>,
 ) -> Result<(), String> {
     use wasm_bindgen::JsCast;
     let err = js_error;
-    clear_last_frame();
+    clear_printed_frames();
     let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
     let body = document.body().ok_or("no document body")?;
     let frame: web_sys::HtmlIFrameElement = document.create_element("iframe").map_err(err)?.dyn_into().map_err(|_| "not an iframe")?;
@@ -281,9 +309,11 @@ pub(crate) fn print_in_iframe(
     frame.set_attribute("tabindex", "-1").map_err(err)?;
     let on_load = {
         let frame = frame.clone();
+        let printed = printed.clone();
         wasm_bindgen::closure::Closure::once_into_js(move || {
             wasm_bindgen_futures::spawn_local(async move {
                 let report = |e: String| {
+                    remove_frame(&frame);
                     if let Ok(mut q) = failed.lock() {
                         q.push(e);
                     }
@@ -305,10 +335,17 @@ pub(crate) fn print_in_iframe(
                 }
                 // Clean up when the dialog closes; browsers that don't say so are cleaned up by
                 // the next print.
-                let after = wasm_bindgen::closure::Closure::once_into_js(clear_last_frame);
+                let closed = frame.clone();
+                let after = wasm_bindgen::closure::Closure::once_into_js(move || remove_frame(&closed));
                 let _ = window.add_event_listener_with_callback("afterprint", after.unchecked_ref());
-                if let Err(e) = window.print() {
-                    report(format!("the browser wouldn't open its print dialog: {}", err(e)));
+                match window.print() {
+                    Ok(()) => {
+                        printed.store(true, std::sync::atomic::Ordering::SeqCst);
+                        if let Some(ctx) = &ctx {
+                            ctx.request_repaint();
+                        }
+                    }
+                    Err(e) => report(format!("the browser wouldn't open its print dialog: {}", err(e))),
                 }
             });
         })
@@ -316,8 +353,50 @@ pub(crate) fn print_in_iframe(
     frame.add_event_listener_with_callback("load", on_load.unchecked_ref()).map_err(err)?;
     frame.set_srcdoc(html);
     body.append_child(&frame).map_err(err)?;
-    LAST_FRAME.with(|f| *f.borrow_mut() = Some((frame, urls)));
+    FRAMES.with(|f| f.borrow_mut().push((frame, urls, printed)));
     Ok(())
+}
+
+/// A print page handed to the browser ([`print_in_iframe`]), waiting for `window.print()` to
+/// return or fail. Each hand-off has its own `failed` and `printed`, so a print can't take
+/// another print's outcome; `doc` is whose Did Print actions run, `name` and `pdf` the download
+/// offered if it fails.
+pub(crate) struct Handoff<D> {
+    pub doc: D,
+    pub name: String,
+    pub pdf: std::sync::Arc<Vec<u8>>,
+    pub failed: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    pub printed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// How a [`Handoff`] ended.
+pub(crate) enum Settled<D> {
+    /// The browser took the print: run `D`'s Did Print actions.
+    Printed(D),
+    /// The print never reached the dialog: report the error and offer the PDF.
+    Failed { error: String, name: String, pdf: std::sync::Arc<Vec<u8>> },
+}
+
+impl<D> Handoff<D> {
+    pub fn new(doc: D, name: String, pdf: std::sync::Arc<Vec<u8>>) -> Self {
+        Self { doc, name, pdf, failed: Default::default(), printed: Default::default() }
+    }
+
+    /// Take every hand-off in `pending` that has ended, in the order they were handed over, and
+    /// keep the ones still waiting. A later print doesn't end an earlier one: each settles on its
+    /// own page's outcome. A failure wins: a print that reported an error never printed.
+    pub fn settle(pending: &mut Vec<Self>) -> Vec<Settled<D>> {
+        let mut ended = Vec::new();
+        for h in std::mem::take(pending) {
+            let error = h.failed.lock().ok().and_then(|mut q| (!q.is_empty()).then(|| q.remove(0)));
+            match error {
+                Some(error) => ended.push(Settled::Failed { error, name: h.name, pdf: h.pdf }),
+                None if h.printed.load(std::sync::atomic::Ordering::SeqCst) => ended.push(Settled::Printed(h.doc)),
+                None => pending.push(h),
+            }
+        }
+        ended
+    }
 }
 
 #[cfg(test)]
@@ -325,6 +404,37 @@ mod tests {
     use super::*;
 
     const LETTER: (f64, f64) = (612.0, 792.0);
+
+    fn handoff(doc: u32) -> Handoff<u32> {
+        Handoff::new(doc, format!("{doc}.pdf"), std::sync::Arc::new(vec![]))
+    }
+
+    #[test]
+    fn an_earlier_print_that_prints_late_runs_its_own_did_print_and_leaves_the_later_waiting() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let mut pending = vec![handoff(1)];
+        // Print 2 is handed over while print 1's page is still decoding.
+        pending.push(handoff(2));
+        assert!(Handoff::settle(&mut pending).is_empty(), "neither page has printed yet");
+        // Print 1's page now prints: it settles print 1, and print 2 still waits for its own page.
+        pending[0].printed.store(true, SeqCst);
+        assert!(matches!(Handoff::settle(&mut pending).as_slice(), [Settled::Printed(1)]));
+        assert!(matches!(pending.as_slice(), [h] if h.doc == 2));
+        pending[0].printed.store(true, SeqCst);
+        assert!(matches!(Handoff::settle(&mut pending).as_slice(), [Settled::Printed(2)]));
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn an_earlier_print_that_fails_late_is_reported_with_its_own_pdf() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let mut pending = vec![handoff(1), handoff(2)];
+        pending[0].failed.lock().unwrap().push("sheet 1 couldn't be prepared".into());
+        // A failure wins over printed, and the download offered is print 1's.
+        pending[0].printed.store(true, SeqCst);
+        assert!(matches!(Handoff::settle(&mut pending).as_slice(), [Settled::Failed { name, .. }] if name == "1.pdf"));
+        assert!(matches!(pending.as_slice(), [h] if h.doc == 2), "print 2 is not ended by print 1's failure");
+    }
 
     #[test]
     fn resolution_falls_with_the_sheet_count_and_long_jobs_are_refused() {

@@ -117,25 +117,29 @@ impl PdfCraftApp {
         (0..self.views.len()).find(|&i| self.has_unsaved_work(i))
     }
 
+    /// The tab close request `req` asks about next: the prompt and its answer use this one
+    /// choice, so they are about the same document. Quit leaves out a document whose only
+    /// unsaved changes its Will Close actions made ([`Self::first_dirty_beyond_will_close`]), as
+    /// deciding whether to ask does.
+    pub(crate) fn close_request_tab(&self, req: CloseRequest) -> Option<usize> {
+        match req {
+            CloseRequest::Tab(id) => self.asking_tab(id),
+            CloseRequest::Quit => self.first_dirty_beyond_will_close(),
+            CloseRequest::All => self.first_dirty(),
+        }
+    }
+
     /// Answer the save prompt: `Some(true)` save, `Some(false)` discard, `None` cancel.
     pub fn resolve_close(&mut self, ctx: &egui::Context, choice: Option<bool>) {
         let Some(req) = self.close_request.take() else { return };
         // The next question (another dirty document) starts on Save again.
         self.save_prompt_button = Default::default();
-        let index = match req {
-            CloseRequest::Tab(id) => match self.asking_tab(id) {
-                Some(i) => i,
-                None => return, // already closed
-            },
-            CloseRequest::Quit | CloseRequest::All => match self.first_dirty() {
-                Some(i) => i,
-                None => {
-                    if req == CloseRequest::Quit {
-                        self.quit(ctx);
-                    }
-                    return;
-                }
-            },
+        let Some(index) = self.close_request_tab(req) else {
+            // A tab already closed, or no document left to ask about.
+            if req == CloseRequest::Quit {
+                self.quit(ctx);
+            }
+            return;
         };
         // Quitting closes the unsaved tabs one by one (and brings each forward to save it):
         // remember what was open, and which tab was active, before the first one goes (#442).
@@ -188,7 +192,7 @@ impl PdfCraftApp {
         // A newer prompt wins: the user may have started another close while a save was pending,
         // and seen its question, which keeps counting as seen.
         if whole && self.close_request.is_none() {
-            match self.first_dirty() {
+            match self.close_request_tab(req) {
                 Some(_) => {
                     // A question about the next document is a new one.
                     self.save_prompt_seen = false;
@@ -207,7 +211,7 @@ impl PdfCraftApp {
         if self.hold_for_any_ocr_review() {
             ctx.request_repaint();
             false
-        } else if self.first_dirty().is_some() {
+        } else if self.first_dirty_beyond_will_close().is_some() {
             self.close_request = Some(CloseRequest::Quit);
             ctx.request_repaint();
             false
@@ -262,14 +266,57 @@ impl PdfCraftApp {
         }
         if !self.allow_quit && self.hold_for_any_ocr_review() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-        } else if !self.allow_quit && self.first_dirty().is_some() {
-            // `first_dirty` counts text typed into a field as an unsaved change.
+        } else if !self.allow_quit && self.first_dirty_beyond_will_close().is_some() {
+            // It counts text typed into a field as an unsaved change.
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.close_request = Some(CloseRequest::Quit);
         } else {
             // A clean quit: nothing is left to recover.
             self.shutdown_recovery();
+            self.run_will_close_on_quit();
         }
+    }
+
+    /// The window is closing with every document resolved: each open document's Will Close
+    /// actions run, once, as closing its tab runs them. They can't keep the window open, and
+    /// what they change is not offered for recovery: the user chose to close. Recovery is
+    /// cleared first, while nothing is unsaved, and no snapshot falls due on the closing frame.
+    pub(crate) fn run_will_close_on_quit(&mut self) {
+        if std::mem::replace(&mut self.will_close_ran, true) {
+            return;
+        }
+        let mut ids: Vec<pdfcraft_engine::DocId> = Vec::new();
+        for id in self.views.iter().map(|v| v.id) {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        for id in ids {
+            let before = self.session.get(id).map(|d| d.edit_generation());
+            self.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillClose);
+            // What they changed must not hold the quit: where the platform quits its own way
+            // (macOS cancels the window's close and asks again), the next close request would
+            // otherwise ask to save those changes and keep the window open. Only those changes:
+            // an edit made after a close that didn't happen asks as any other does.
+            if let Some(after) = self.session.get(id).map(|d| d.edit_generation())
+                && Some(after) != before
+            {
+                self.will_close_left.push((id, after));
+            }
+        }
+        self.last_autosave = Some(web_time::Instant::now());
+    }
+
+    /// [`Self::first_dirty`], leaving out a document whose only unsaved changes are those its
+    /// Will Close actions made when the window closed ([`Self::run_will_close_on_quit`]).
+    pub(crate) fn first_dirty_beyond_will_close(&self) -> Option<usize> {
+        (0..self.views.len()).find(|&i| {
+            let only_will_close = self.views.get(i).is_some_and(|v| {
+                !self.has_unsaved_typing(i)
+                    && self.will_close_left.iter().any(|(id, at)| *id == v.id && self.session.get(v.id).map(|d| d.edit_generation()) == Some(*at))
+            });
+            self.has_unsaved_work(i) && !only_will_close
+        })
     }
 
     /// Ask for the user's attention when the "save changes?" question opens while PdfCraft is in
