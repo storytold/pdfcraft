@@ -70,6 +70,15 @@ impl PdfCraftApp {
         }
     }
 
+    /// Show the named destination `name` that an open looked up with its document (`found`), in the tab it just
+    /// opened.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn apply_looked_up_destination(&mut self, name: String, found: Option<(usize, pdfcraft_render::DestView)>) {
+        if let Some(index) = self.views.len().checked_sub(1) {
+            self.show_destination_at(index, found_destination(found, name));
+        }
+    }
+
     /// Show `destination` in the tab at `index`: a document just opened from a link or with open
     /// parameters (#3425), or one already open that such a link or launch names. The latest request
     /// for a document wins over a named destination still being looked up.

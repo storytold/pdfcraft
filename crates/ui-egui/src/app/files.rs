@@ -144,7 +144,18 @@ impl PdfCraftApp {
         // session keeps the document in front's.
         let context = self.session.open_context().with_highlight(self.highlight_fields); // PLAN: `highlight_fields` on the app (pdf-canvas-w8)
         let job =
-            open_worker::Job { context, name: request.name.clone(), path: request.path.clone(), password: request.password, input: request.input };
+            open_worker::Job {
+                context,
+                name: request.name.clone(),
+                path: request.path.clone(),
+                password: request.password,
+                input: request.input,
+                // A named destination is looked up with the document, so the tab opens at it.
+                named: match &request.after_open {
+                    Some(pdfcraft_render::RemoteDestination::Named(name)) => Some(name.clone()),
+                    _ => None,
+                },
+            };
         self.opens.submit(token, request.priority, move |cancel| open_worker::run(job, cancel));
         self.pending_opens.push(PendingOpen {
             token,
@@ -251,7 +262,7 @@ impl PdfCraftApp {
                 }
                 Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
             },
-            open_worker::ResultKind::Prepared { bytes, result } => match *result {
+            open_worker::ResultKind::Prepared { bytes, result, named } => match *result {
                 Ok(prepared) => match self.finish_open(ctx, &pending.name, pending.path.clone(), bytes.len(), prepared, pending.activate) {
                     Ok(id) => {
                         if let Some(path) = pending.path.as_deref() {
@@ -260,8 +271,14 @@ impl PdfCraftApp {
                                 self.forget_closed_tab(path);
                             }
                         }
-                        if let Some(destination) = pending.after_open {
-                            self.apply_remote_destination(destination);
+                        match (pending.after_open, named) {
+                            // The open looked the name up with the document; a later request for another place
+                            // replaced it, and that one is shown as asked.
+                            (Some(pdfcraft_render::RemoteDestination::Named(name)), Some((looked_up, found))) if looked_up == name => {
+                                self.apply_looked_up_destination(name, found);
+                            }
+                            (Some(destination), _) => self.apply_remote_destination(destination),
+                            (None, _) => {}
                         }
                         if let Some((layout, continuous)) = pending.display_override
                             && let Some(view) = self.views.iter_mut().find(|view| view.id == id)
