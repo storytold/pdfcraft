@@ -1,7 +1,7 @@
 //! Snapshot tests of every side panel (M3): each panel opens on one synthetic document and its
 //! AccessKit tree (the roles, labels, values and states a screen reader gets) is compared with a
 //! text file in `tests/snapshots/`. Text rather than pixels: with the reported OS pinned (shortcut
-//! labels follow it) it is the same on every platform and GPU, it is not an asset (AGENTS.md §1),
+//! labels follow it) it is the same on every platform and GPU, it is not an asset (clean-room.md and licences.md),
 //! and a reviewer can read a change in the diff. Positions are left out, so moving a widget is not
 //! a change but adding, removing or renaming one is.
 //!
