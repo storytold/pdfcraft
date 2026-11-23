@@ -481,6 +481,9 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
         s.spacing.scroll.bar_width = 8.0;
         s.spacing.scroll.floating = true;
         s.spacing.scroll.floating_width = 3.0;
+        // In a long document the thumb shrinks to this. At egui's 12 points it was smaller than
+        // the pointer dragging it and seemed to vanish under it (#7016).
+        s.spacing.scroll.handle_min_length = 40.0;
         s.spacing.scroll.foreground_color = true;
         s.text_styles.insert(egui::TextStyle::Body, regular(13.0));
         s.text_styles.insert(egui::TextStyle::Button, regular(13.0));
