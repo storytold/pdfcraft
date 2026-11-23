@@ -78,9 +78,11 @@ pub struct DocInfo {
     /// Radio-button layer groups (`/OCProperties /D /RBGroups`): turning one layer of a group on
     /// turns the others off.
     pub layer_groups: Vec<Vec<(u32, u16)>>,
-    /// The Layers panel's rows: the default configuration's `/Order` (ISO 32000-2 Table 99), a
-    /// tree of layers (indices into `layers`) and labels. A layer it doesn't list isn't presented,
-    /// though it still draws in its state; no `/Order` presents none.
+    /// The Layers panel's rows: when the default configuration has an `/Order` array (ISO 32000-2
+    /// Table 99), only the tree of layers (indices into `layers`) and labels it lists (unlisted
+    /// groups are not presented, though they still draw in their state); without `/Order` (or
+    /// without `/D`, or when `/Order` is not an array), every group in `layers` at top level in
+    /// `/OCGs` order.
     pub layer_order: Vec<LayerRow>,
     pub fonts: Vec<FontInfo>,
     pub attachments: Vec<Attachment>,

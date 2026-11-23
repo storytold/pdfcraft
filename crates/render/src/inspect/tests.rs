@@ -937,10 +937,11 @@ trailer << /Root 1 0 R >>
     assert_eq!(layers, [("Red", true), ("Green", false), ("Blue", false)]);
 }
 
-/// ISO 32000-2 Table 99 `/Order`: the Layers panel presents the groups it lists, as a tree,
-/// with nested arrays one level deeper and a leading text string as a label. Groups it
-/// doesn't list are not presented (they stay in `layers` and keep their state), and without
-/// `/Order` none are. Malformed entries are skipped; cycles and depth are bounded.
+/// ISO 32000-2 Table 99 `/Order`: when `/Order` is present as an array, the Layers panel presents
+/// only the groups it lists, as a tree, with nested arrays one level deeper and a leading text
+/// string as a label (unlisted groups stay in `layers` and keep their state; an explicit empty
+/// `/Order []` presents none). Without `/Order`, every group in `/OCGs` is listed at top level.
+/// Malformed entries and groups outside `/OCGs` are skipped; cycles and depth are bounded.
 #[test]
 fn the_layers_panel_presents_the_order_tree() {
     let rows = |order: &str, extra: &str| {
@@ -972,8 +973,9 @@ trailer << /Root 1 0 R >>
     assert_eq!(rows("/Order [5 0 R 6 0 R [7 0 R]]", ""), ["A", "B", " C"]);
     // A labelled collection heads its own level, with a nested array under B.
     assert_eq!(rows("/Order [5 0 R [(Set) 6 0 R [7 0 R]] 8 0 R]", ""), ["A", "[Set]", " B", "  C", "D"]);
-    // Without /Order, or with an empty one, nothing is presented.
-    assert!(rows("", "").is_empty());
+    // Without /Order, every group in /OCGs is listed at top level; with an explicit empty /Order,
+    // nothing is presented.
+    assert_eq!(rows("", ""), ["A", "B", "C", "D"]);
     assert!(rows("/Order []", "").is_empty());
     // An indirect /Order and nested array; a group outside /OCGs, a missing object and junk
     // are skipped.
@@ -998,6 +1000,113 @@ trailer << /Root 1 0 R >>
     assert_eq!(LABEL_DECODES.with(std::cell::Cell::get) - before, 1);
     assert_eq!(got.len(), 200);
     assert!(got.iter().step_by(2).all(|s| s.len() == MAX_LAYER_LABEL_CHARS + 2), "{:?}", got.first());
+}
+
+/// #8126: when `/D` or `/Order` is missing (or `/Order` is not an array), `layer_order` lists
+/// every group in `/OCGs` at top level. An explicit `/Order` array (including `[]`) presents only
+/// what it lists while leaving unlisted groups in `layers`. Indirect `/OCProperties`, `/D`,
+/// `/OCGs`, `/Order`, and reference chains to OCGs all resolve.
+#[test]
+fn layers_without_order_fall_back_to_ocgs() {
+    let fmt_order = |info: &DocInfo| -> Vec<String> {
+        info.layer_order
+            .iter()
+            .map(|r| match &r.item {
+                LayerItem::Layer(i) => format!("{}{}", " ".repeat(r.depth), info.layers.get(*i).map_or("?", |l| l.name.as_str())),
+                LayerItem::Label(s) => format!("{}[{s}]", " ".repeat(r.depth)),
+            })
+            .collect()
+    };
+
+    // 1. OCGs without /Order (with /D specifying /OFF).
+    let no_order = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R] /D << /OFF [6 0 R] >> >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+5 0 obj << /Type /OCG /Name (Red) >> endobj
+6 0 obj << /Type /OCG /Name (Green) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let info = inspect(Arc::new(no_order.to_vec()), None).expect("opens");
+    assert_eq!(fmt_order(&info), ["Red", "Green"]);
+    assert_eq!(info.layers.iter().map(|l| (l.name.as_str(), l.visible)).collect::<Vec<_>>(), [("Red", true), ("Green", false)]);
+
+    // 2. Missing /D dictionary altogether.
+    let no_d = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R] >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+5 0 obj << /Type /OCG /Name (Background) >> endobj
+6 0 obj << /Type /OCG /Name (Foreground) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let info = inspect(Arc::new(no_d.to_vec()), None).expect("opens");
+    assert_eq!(fmt_order(&info), ["Background", "Foreground"]);
+    assert!(info.layers.iter().all(|l| l.visible && l.initial));
+
+    // 3. Non-array /Order falls back to /OCGs order.
+    let non_array_order = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R] /D << /Order null >> >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+5 0 obj << /Type /OCG /Name (Background) >> endobj
+6 0 obj << /Type /OCG /Name (Foreground) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let info = inspect(Arc::new(non_array_order.to_vec()), None).expect("opens");
+    assert_eq!(fmt_order(&info), ["Background", "Foreground"]);
+
+    // 4. Explicit empty /Order [] lists no rows, while groups remain in `layers`.
+    let empty_order = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R] /D << /Order [] >> >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+5 0 obj << /Type /OCG /Name (Red) >> endobj
+6 0 obj << /Type /OCG /Name (Green) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let info = inspect(Arc::new(empty_order.to_vec()), None).expect("opens");
+    assert!(fmt_order(&info).is_empty());
+    assert_eq!(info.layers.len(), 2);
+
+    // 5. Partial /Order with nested arrays and label strings: unlisted OCGs are NOT presented
+    // in `layer_order`, though they stay in `layers`.
+    let partial_order = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R 7 0 R 8 0 R] /D << /Order [[(Notes) 7 0 R [6 0 R]]] >> >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+5 0 obj << /Type /OCG /Name (Base) >> endobj
+6 0 obj << /Type /OCG /Name (Sub) >> endobj
+7 0 obj << /Type /OCG /Name (Top) >> endobj
+8 0 obj << /Type /OCG /Name (Extra) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let info = inspect(Arc::new(partial_order.to_vec()), None).expect("opens");
+    assert_eq!(fmt_order(&info), ["[Notes]", " Top", "  Sub"]);
+    assert_eq!(info.layers.len(), 4);
+
+    // 6. Indirect /OCProperties, /D, /OCGs, /Order, and chained OCG references (including when
+    // /OCGs names the OCG directly as 5 0 R while /OFF and /Order point through 14 0 R -> 5 0 R).
+    let indirect = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties 10 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+5 0 obj << /Type /OCG /Name (Alpha) >> endobj
+6 0 obj << /Type /OCG /Name (Beta) >> endobj
+7 0 obj << /Type /OCG /Name (Gamma) >> endobj
+10 0 obj << /OCGs 11 0 R /D 12 0 R >> endobj
+11 0 obj [5 0 R 6 0 R 7 0 R] endobj
+12 0 obj << /OFF [14 0 R] /Order 13 0 R >> endobj
+13 0 obj [[(Group) 14 0 R]] endobj
+14 0 obj 5 0 R endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let info = inspect(Arc::new(indirect.to_vec()), None).expect("opens");
+    assert_eq!(fmt_order(&info), ["[Group]", " Alpha"]);
+    assert_eq!(
+        info.layers.iter().map(|l| (l.id, l.name.as_str(), l.visible)).collect::<Vec<_>>(),
+        [((5, 0), "Alpha", false), ((6, 0), "Beta", true), ((7, 0), "Gamma", true)]
+    );
 }
 
 /// ISO 32000-2 §8.11.4.4: the View auto state (`/AS`) decides the initial state of the groups

@@ -334,8 +334,10 @@ pub(crate) fn info(d: &Document) -> Value {
             "target": link_target(i, &l.target),
         })).collect::<Vec<_>>(),
         "layers": i.layers.iter().map(|l| json!({ "name": l.name, "visible": l.visible, "initial": l.initial })).collect::<Vec<_>>(),
-        // The Layers panel's rows, the default configuration's /Order (ISO 32000-2 Table 99): a
-        // layer by its 1-based position in `layers`, or a label; `depth` 0 at the top.
+        // The Layers panel's rows: the default configuration's /Order (ISO 32000-2 Table 99) when
+        // present as an array (only what /Order lists), or every layer at depth 0 in /OCGs order
+        // when /D or /Order is absent; each row is a layer by its 1-based position in `layers`, or
+        // a label; `depth` 0 at the top.
         "layer_order": i.layer_order.iter().map(|r| match &r.item {
             pdfcraft_render::LayerItem::Layer(n) => json!({ "depth": r.depth, "layer": n.saturating_add(1), "name": i.layers.get(*n).map(|l| l.name.as_str()) }),
             pdfcraft_render::LayerItem::Label(s) => json!({ "depth": r.depth, "label": s }),

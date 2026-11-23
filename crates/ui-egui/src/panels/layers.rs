@@ -1,5 +1,5 @@
-//! The Layers panel: the default configuration's `/Order` tree with an eye column, and the panel
-//! menu's rows.
+//! The Layers panel: the default configuration's `/Order` tree (or, without `/Order`, every
+//! `/OCGs` group at top level) with an eye column, and the panel menu's rows.
 // PLAN: assumed `super::right::PanelResult` (pdf-chrome-w13).
 
 use craft::behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, SelectionChange};
@@ -77,7 +77,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
         return result;
     }
     if info.layer_order.is_empty() {
-        // ISO 32000-2 Table 99: only the groups /Order lists are presented.
+        // ISO 32000-2 Table 99: an explicit /Order that lists no groups presents none.
         empty_state(ui, "layers", tl!("This document lists no layers to show."));
         return result;
     }

@@ -11271,8 +11271,14 @@ fn doc_info_describes_set_layer_links() {
         })
     );
     assert_eq!(info["layers"], json!([{ "name": "Red", "visible": true, "initial": true }, { "name": "Green", "visible": false, "initial": false }]));
-    // No /Order: the Layers panel presents none (ISO 32000-2 Table 99), though both are layers.
-    assert_eq!(info["layer_order"], json!([]));
+    // No /Order: every layer in /OCGs is still listed in layer_order at top level (#8126).
+    assert_eq!(
+        info["layer_order"],
+        json!([
+            { "depth": 0, "layer": 1, "name": "Red" },
+            { "depth": 0, "layer": 2, "name": "Green" },
+        ])
+    );
 }
 
 /// `doc_info`'s `layer_order` follows the default configuration's /Order (ISO 32000-2 Table 99):
@@ -11301,6 +11307,64 @@ fn doc_info_lists_the_layer_order_tree() {
             { "depth": 0, "label": "Inks" },
             { "depth": 1, "layer": 1, "name": "Red" },
             { "depth": 2, "layer": 2, "name": "Green" },
+        ])
+    );
+}
+
+/// #8126: `doc_info` falls back to `/OCGs` order when `/D` or `/Order` is missing, respects an
+/// explicit empty or partial `/Order`, resolves indirect `/OCProperties`, `/D`, `/OCGs` and
+/// `/Order`, and `layer_set` toggles layers in all cases.
+#[test]
+fn doc_info_lists_layers_without_default_config_and_with_indirect_refs() {
+    let dir = workdir("layer-no-d-indirect");
+    let no_d = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [4 0 R 5 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>",
+        "<< /Type /OCG /Name (Base) >>",
+        "<< /Type /OCG /Name (Notes) >>",
+    ]);
+    std::fs::write(dir.join("no_d.pdf"), no_d).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "no_d.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(info["layers"], json!([{ "name": "Base", "visible": true, "initial": true }, { "name": "Notes", "visible": true, "initial": true }]));
+    assert_eq!(info["layer_order"], json!([{ "depth": 0, "layer": 1, "name": "Base" }, { "depth": 0, "layer": 2, "name": "Notes" }]));
+    let toggled = ok(&mut a, "layer_set", json!({ "doc": doc, "layer": "Notes", "visible": false }));
+    assert_eq!(toggled["layers"], json!([{ "name": "Base", "visible": true }, { "name": "Notes", "visible": false }]));
+
+    let empty_order = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [4 0 R 5 0 R] /D << /Order [] >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>",
+        "<< /Type /OCG /Name (Base) >>",
+        "<< /Type /OCG /Name (Notes) >>",
+    ]);
+    std::fs::write(dir.join("empty_order.pdf"), empty_order).unwrap();
+    let doc_empty = ok(&mut a, "doc_open", json!({ "path": "empty_order.pdf" }))["doc"].as_u64().unwrap();
+    let info_empty = ok(&mut a, "doc_info", json!({ "doc": doc_empty }));
+    assert_eq!(info_empty["layers"].as_array().map(Vec::len), Some(2));
+    assert_eq!(info_empty["layer_order"], json!([]));
+
+    let indirect = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties 6 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>",
+        "<< /Type /OCG /Name (First) >>",
+        "<< /Type /OCG /Name (Second) >>",
+        "<< /OCGs 7 0 R /D 8 0 R >>",
+        "[4 0 R 5 0 R]",
+        "<< /Order 9 0 R >>",
+        "[[(Group) 5 0 R]]",
+    ]);
+    std::fs::write(dir.join("indirect.pdf"), indirect).unwrap();
+    let doc2 = ok(&mut a, "doc_open", json!({ "path": "indirect.pdf" }))["doc"].as_u64().unwrap();
+    let info2 = ok(&mut a, "doc_info", json!({ "doc": doc2 }));
+    assert_eq!(
+        info2["layer_order"],
+        json!([
+            { "depth": 0, "label": "Group" },
+            { "depth": 1, "layer": 2, "name": "Second" },
         ])
     );
 }
