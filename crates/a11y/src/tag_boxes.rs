@@ -16,7 +16,8 @@ const MAX_ITEMS: usize = 65_536;
 /// How many form-content boxes are moved onto the page, over all of a page's form placements.
 const MAX_PLACED_MARKS: usize = 1 << 20;
 /// How many forms' content one page reads for `/Stm` marked content; later forms count whole.
-const MAX_FORMS_READ: usize = 256;
+/// This bounds how many forms are read; each read has the usual per-page decode limit.
+const MAX_FORMS_READ: usize = 64;
 
 /// One box a tag's content is drawn in.
 #[derive(Clone, Debug, PartialEq)]
@@ -44,7 +45,8 @@ enum Item {
 /// Marked content on a page counts what it paints (glyph boxes from the font's advance, ascent and
 /// descent; paths; images; forms). Marked content inside a form XObject (`/Stm`) counts the same,
 /// read from the form's content within its `/BBox` and moved to wherever the page places the form
-/// (the whole form when the reference has no `/MCID`, or past the 256th form a page reads), and
+/// (the whole form when the reference has no `/MCID`, past the 64th form a page reads, or when a
+/// placement passes the move limit); a sequence that paints nothing inside the `/BBox` gets no box;
 /// an object reference counts an annotation's `/Rect` or an XObject's placement. Returns
 /// `NotATag` for an object that isn't a reachable indirect tag, and `ContentLimit` beyond 65,536
 /// entries or 512 levels.
@@ -184,7 +186,10 @@ fn page_boxes(doc: &Document, page: &Dict, items: &[Item], mut f: impl FnMut([f6
         let rect = match *item {
             Item::Mark { mcid, .. } => marks.remove(&mcid),
             // A form whose content wasn't read (past the limit, or unreadable) counts whole.
-            Item::Stream { stream, mcid: Some(mcid), .. } if inner.contains_key(&stream) => placed.marks.get(&(stream, mcid)).copied(),
+            // So does a read form with a placement past the move limit.
+            Item::Stream { stream, mcid: Some(mcid), .. } if inner.contains_key(&stream) && !placed.unmoved.contains(&stream) => {
+                placed.marks.get(&(stream, mcid)).copied()
+            }
             Item::Stream { stream, .. } => placed.whole.get(&stream).copied(),
             Item::Object { object, .. } => annotation_rect(doc, object).or_else(|| placed.whole.get(&object).copied()),
         };
@@ -230,6 +235,9 @@ fn form_marks(doc: &Document, page: &Dict, items: &[Item]) -> HashMap<ObjRef, (M
         let ids = wanted.remove(&stream).unwrap_or_default();
         let target = doc.get(stream);
         let Object::Stream(s) = &*target else { continue };
+        if s.dict.name(b"Subtype") != Some(b"Form") {
+            continue;
+        }
         let Some(bbox) = form_bbox(&s.dict) else { continue };
         let matrix =
             Matrix::from_operands(s.dict.get(b"Matrix").and_then(|m| m.as_array()).map(Vec::as_slice).unwrap_or(&[])).unwrap_or(Matrix::IDENTITY);
@@ -279,11 +287,13 @@ struct Placed {
     whole: HashMap<ObjRef, [f64; 4]>,
     /// Each form's marked content (`inner` of [`placements`]) under the form's `/Matrix` and the CTM.
     marks: HashMap<(ObjRef, i64), [f64; 4]>,
+    /// Read forms with a placement past [`MAX_PLACED_MARKS`]: their marked content counts whole.
+    unmoved: HashSet<ObjRef>,
 }
 
 /// Where the page's own content places each XObject of `objects`, and the form-space boxes of
-/// `inner`, united over every placement. Past [`MAX_PLACED_MARKS`] moved boxes, later placements
-/// add only to the whole boxes.
+/// `inner`, united over every placement. A placement that would pass [`MAX_PLACED_MARKS`] moved
+/// boxes is not moved, and its form goes in `unmoved`.
 fn placements(doc: &Document, page: &Dict, objects: &HashSet<ObjRef>, inner: &HashMap<ObjRef, (Matrix, HashMap<i64, [f64; 4]>)>) -> Placed {
     let res = page.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let xobjects = res.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
@@ -311,9 +321,11 @@ fn placements(doc: &Document, page: &Dict, objects: &HashSet<ObjRef>, inner: &Ha
                     let e = out.whole.entry(r).or_insert(b);
                     *e = union(Some(*e), b);
                 }
-                if let Some((matrix, marks)) = inner.get(&r)
-                    && let Some(left) = moves_left.checked_sub(marks.len())
-                {
+                if let Some((matrix, marks)) = inner.get(&r) {
+                    let Some(left) = moves_left.checked_sub(marks.len()) else {
+                        out.unmoved.insert(r);
+                        continue;
+                    };
                     moves_left = left;
                     let to_page = matrix.then(&ctm);
                     for (id, b) in marks {

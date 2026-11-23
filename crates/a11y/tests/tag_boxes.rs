@@ -338,9 +338,28 @@ fn an_annotation_rectangle_past_f32_is_not_outlined() {
 }
 
 #[test]
+fn an_image_named_by_stm_is_not_read_as_form_content() {
+    // An image's data is not content, even with a `/BBox` and bytes that parse as operators: the
+    // reference counts the image where the page places it.
+    let doc = one_tag(
+        "q 10 0 0 10 50 50 cm /Im1 Do Q",
+        "/XObject << /Im1 21 0 R >>",
+        "<< /S /Figure /Pg 3 0 R /K << /Type /MCR /Stm 21 0 R /MCID 0 >> >>",
+        vec![(
+            21,
+            stream(
+                "/Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray /BBox [0 0 2 2]",
+                "/P << /MCID 0 >> BDC 0 0 0.5 0.5 re f EMC",
+            ),
+        )],
+    );
+    assert_eq!(only(&doc, 10), [50.0, 50.0, 60.0, 60.0]);
+}
+
+#[test]
 fn forms_past_the_read_limit_are_outlined_whole() {
-    // 257 forms, each with one sequence: the first 256 are read, the last counts as its whole form.
-    let n = 257u32;
+    // 65 forms, each with one sequence: the first 64 are read, the last counts as its whole form.
+    let n = 65u32;
     let content: String = (0..n).map(|i| format!("q 1 0 0 1 {} 0 cm /F{i} Do Q ", i * 2)).collect();
     let names: String = (0..n).map(|i| format!("/F{i} {} 0 R ", 100 + i)).collect();
     let kids: String = (0..n).map(|i| format!("<< /Type /MCR /Stm {} 0 R /MCID 0 >> ", 100 + i)).collect();
@@ -348,7 +367,7 @@ fn forms_past_the_read_limit_are_outlined_whole() {
         (0..n).map(|i| (100 + i, stream("/Type /XObject /Subtype /Form /BBox [0 0 2 30]", "/P << /MCID 0 >> BDC 0 0 1 1 re f EMC"))).collect();
     let doc = one_tag(&content, &format!("/XObject << {names}>>"), &format!("<< /S /P /Pg 3 0 R /K [{kids}] >>"), forms);
     let b = boxes(&doc, 10);
-    assert_eq!(b.len(), 257);
+    assert_eq!(b.len(), 65);
     assert_eq!(b[0].rect, [0.0, 0.0, 1.0, 1.0], "a read form: where its sequence paints");
-    assert_eq!(b[256].rect, [512.0, 0.0, 514.0, 30.0], "past the limit: the whole form");
+    assert_eq!(b[64].rect, [128.0, 0.0, 130.0, 30.0], "past the limit: the whole form");
 }
