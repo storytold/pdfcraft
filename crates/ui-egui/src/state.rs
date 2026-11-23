@@ -201,6 +201,8 @@ pub enum Dialog {
     CertificateViewer,
     /// Use a certificate ▸ Remove signature (Acrobat: Clear Signature).
     RemoveSignature,
+    /// Rename… on a document tab.
+    RenameFile,
     /// Pin tools to Home: selection modal.
     PinTool,
 }

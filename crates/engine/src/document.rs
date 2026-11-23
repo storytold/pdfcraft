@@ -82,7 +82,7 @@ pub struct Document {
 }
 
 /// Something the last successful edit did that the user should hear about, never left silent
-/// (AGENTS.md §4).
+/// (app-agents.md rule 13).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditNotice {
     /// Text stored as typed but drawn with `?`.
