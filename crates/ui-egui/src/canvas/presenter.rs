@@ -127,7 +127,9 @@ pub(super) fn frame(
     let arriving = view.presenter.turn.as_ref().map(|t| t.to_page);
     if showing != Some(page) && arriving != Some(page) {
         // A new page: play its transition from the page before, when there is one to play.
-        let plays = animates && view.layout == PageLayout::Single && view.rotation == 0;
+        // Not while scrolling: full screen that keeps a continuous display (Fill screen off,
+        // #4273) moves between pages by scrolling, with no page to turn from.
+        let plays = animates && view.layout == PageLayout::Single && !view.continuous && view.rotation == 0;
         let turn = showing.or(arriving).filter(|_| plays).and_then(|from_page| {
             let (effect, seconds) = entry(info, page).and_then(effect_of)?;
             let from = view.pages.get(&from_page)?.tex.clone();

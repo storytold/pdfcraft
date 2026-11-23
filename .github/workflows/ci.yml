@@ -46,6 +46,10 @@ jobs:
       # A missing oracle fails the job instead of printing a skip notice that reads as a pass.
       linux-env: PDFCRAFT_ORACLES_REQUIRED=1
       windows-env: PDFCRAFT_REQUIRE_WINRES=1
+      # Windows completed its 54m33s gate, then cache save hit the default 60m job cap
+      # (run 44364342368). Leave bounded room for setup and post-job cleanup.
+      # This changes no test watchdog or selection; craft-common-actions#60.
+      timeout-minutes: 90
       # Preserve the packaging regression check removed from git-sources in #7042.
       command: |
         pwsh -NoProfile -File packaging/windows/test-font-notices.ps1

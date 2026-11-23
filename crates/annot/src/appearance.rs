@@ -8,7 +8,7 @@
 //! itself; for the other values, callers that hold the document follow references first
 //! (`draw::with_direct_values`).
 //!
-//! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use a standard text
+//! The note icons are PdfCraft's own drawings (clean-room.md and licences.md). Text boxes use a standard text
 //! font with WinAnsi encoding: Helvetica, or the face their `/DA` or `/DS` asks for
 //! ([`crate::text_style`]), and draw Arabic, Hebrew and Thai from the craft-fonts faces as Type 3
 //! glyphs (`pdfcraft_fonts::shaped_text`, the layout and writer Add text uses); lines break at that face's
