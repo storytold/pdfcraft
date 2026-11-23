@@ -173,6 +173,12 @@ const PAGE_SHARE: f32 = 0.8;
 const TOOLS_WIDTH: f32 = 272.0;
 /// The Tools pane's width in a narrow window, as production opened it.
 const TOOLS_WIDTH_NARROW: f32 = 272.0;
+/// How far past the Tools pane the floating toolbar starts. Production's quick bar stood 14 points into a narrow margin
+/// and was 46 points wide, so its page-side edge was 60 points into the page area (which starts 3 points past the pane,
+/// after the splitter); the rail is 52 points wide, so it starts 10 points past the pane to end just inside that edge
+/// and leave the page's margin beyond it to the page.
+const TOOLBAR_INSET: f32 = 10.0;
+
 /// Windows narrower than this keep the Tools pane at [`TOOLS_WIDTH_NARROW`]: a wider pane would leave the page area too little.
 pub(crate) const NARROW_WINDOW: f32 = 900.0;
 
@@ -187,7 +193,7 @@ pub fn default_workspace(rail_side: DockSide) -> Workspace<PanelId> {
     let (start, end) = if rail_edge(rail_side) == DockEdge::Start { (vec![side, tools], Vec::new()) } else { (vec![tools], vec![side]) };
     let page = Node::split(Axis::X, SplitSize::Ratio(PAGE_SHARE), Node::tabs(vec![PanelId::Document], 0), Node::dock(DockEdge::End, end));
     let root = Node::split(Axis::X, SplitSize::Ratio(START_SHARE), Node::dock(DockEdge::Start, start), page);
-    let rect = egui::Rect::from_min_size(egui::pos2(TOOLS_WIDTH + 28.0, 14.0), egui::vec2(48.0, 400.0));
+    let rect = egui::Rect::from_min_size(egui::pos2(TOOLS_WIDTH + TOOLBAR_INSET, 14.0), egui::vec2(48.0, 400.0));
     let floating = Floating::new(1, toolbar, rect);
     Workspace::new(Layout::new(Some(root), vec![floating]))
 }
