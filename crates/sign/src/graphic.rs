@@ -16,6 +16,8 @@ const MAX_POINTS: usize = 300_000;
 /// Image limits: a side and the whole picture (the UI keeps signature images under 4 MP).
 const MAX_SIDE: u32 = 8192;
 const MAX_PIXELS: u64 = 1 << 24;
+/// Drawn ink is 0.7 mm wide (a ball-point pen) in PDF points, at any signature size.
+const DRAWN_INK_WIDTH_PT: f64 = 0.7 * 72.0 / 25.4;
 
 #[derive(Clone, PartialEq)]
 pub enum Graphic {
@@ -107,9 +109,8 @@ impl Graphic {
                 // Curves stay within their points and control points.
                 let controls: Vec<[f64; 2]> = curves.iter().flatten().flat_map(|[a, b, _]| [[a.0, a.1], [b.0, b.1]]).collect();
                 let b = bounds(strokes.iter().flatten().chain(&controls))?;
-                // Fill & Sign draws 1.5 pt ink on a 150 pt wide pad: 1% of the pad's width.
-                let probe = fit(b, area).0;
-                let width = (probe * 0.01).clamp(0.3, 4.0);
+                // 0.7 mm (a ball-point pen), not a fraction of the signature's size.
+                let width = DRAWN_INK_WIDTH_PT;
                 let inset = [area[0] + width / 2.0, area[1] + width / 2.0, (area[2] - width).max(0.0), (area[3] - width).max(0.0)];
                 let (k, x, y) = fit(b, inset);
                 let at = |p: (f64, f64)| format!("{} {}", n(x + (p.0 - b[0]) * k), n(y + (p.1 - b[1]) * k));
@@ -175,4 +176,28 @@ fn image_xobject(doc: &mut Document, width: u32, height: u32, rgba: &[u8]) -> Ob
         d.set(b"SMask".to_vec(), Object::Ref(mask));
     }
     doc.add(Object::Stream(Stream::flate(d, &rgb)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pdfcraft_cos::Document;
+
+    fn stroke_width(area: [f64; 4]) -> f64 {
+        let graphic = Graphic::Strokes(vec![vec![[0.2, 0.3], [0.8, 0.7]]]);
+        let (ops, _) = graphic.draw(&mut Document::new_empty(), area).unwrap();
+        let tokens: Vec<&str> = ops.split_whitespace().collect();
+        let i = tokens.iter().position(|t| *t == "w").expect("the ink operators include a stroke width");
+        tokens[i - 1].parse().expect("the stroke width is a number")
+    }
+
+    #[test]
+    fn drawn_ink_is_0_7_mm_wide_in_a_small_and_a_large_signature() {
+        let expected = 0.7 * 72.0 / 25.4;
+        let small = stroke_width([0.0, 0.0, 40.0, 20.0]);
+        let large = stroke_width([0.0, 0.0, 400.0, 200.0]);
+        assert_eq!(small, large, "ink width should not change with the signature's size");
+        assert!((small - expected).abs() < 0.01, "ink should be 0.7 mm ({expected} pt), got {small} pt");
+        assert!((large - expected).abs() < 0.01, "ink should be 0.7 mm ({expected} pt), got {large} pt");
+    }
 }
