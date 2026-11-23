@@ -56,8 +56,8 @@ pub fn state() -> State {
     STATE.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-/// Download and load the models unless that is already happening; repaint when it's done.
-pub fn start(ctx: egui::Context) {
+/// Download and load the models unless that is already happening; `wake` asks for a frame when it's done.
+pub fn start(wake: craft::host::Wake) {
     {
         let mut s = STATE.lock().unwrap_or_else(|e| e.into_inner());
         if *s == State::Loading {
@@ -75,7 +75,7 @@ pub fn start(ctx: egui::Context) {
             Err(e) => State::Failed(e),
         };
         *STATE.lock().unwrap_or_else(|e| e.into_inner()) = next;
-        ctx.request_repaint();
+        wake.wake();
     });
 }
 

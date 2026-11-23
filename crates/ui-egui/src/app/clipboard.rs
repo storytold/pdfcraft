@@ -4,6 +4,26 @@ use craft::platform::clipboard::{ClipboardImage, Flavor, HTML, RGBA8, TEXT};
 
 use super::{CommentClip, DocId, DocView, DocumentCopyJob, PdfCraftApp, QuickTool, comments};
 
+/// The browser's clipboard: a page can't read it outside a paste event, so pastes arrive as events
+/// ([`PdfCraftApp::offer_clip_content`]) and copies go out through egui's platform output, which
+/// eframe's web runner hands to the page. Only text goes out; the browser takes no other flavour from
+/// a canvas app.
+#[cfg(target_arch = "wasm32")]
+pub(super) fn web_clipboard(ctx: &egui::Context) -> craft::platform::clipboard::Clipboard {
+    use craft::platform::clipboard::{Clipboard, ClipboardError, EventClipboard};
+    let (pass, out, wake) = (ctx.clone(), ctx.clone(), ctx.clone());
+    let events = EventClipboard::new(
+        move || pass.cumulative_pass_nr(),
+        move |flavors: &[Flavor]| {
+            let (index, text) = flavors.iter().enumerate().find(|(_, f)| f.mime == TEXT).ok_or(ClipboardError::NoFormat)?;
+            out.copy_text(String::from_utf8_lossy(&text.data).into_owned());
+            Ok(index)
+        },
+    )
+    .with_wake(move || wake.request_repaint());
+    Clipboard::new(events)
+}
+
 /// Why nothing can be copied out of the document: its security doesn't allow it (Table 22,
 /// bit 5; #568).
 pub(crate) fn copy_refused() -> &'static str {

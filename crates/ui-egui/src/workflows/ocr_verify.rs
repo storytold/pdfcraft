@@ -1427,7 +1427,8 @@ fn save_editable(app: &mut PdfCraftApp, bytes: Arc<Vec<u8>>, name: String, doc: 
     #[cfg(target_arch = "wasm32")]
     {
         let _ = (&source, doc, is_source);
-        let saved = crate::editing::download(&name, &bytes);
+        // The host's file service hands a write to the page or the browser's downloads.
+        let saved = app.host.files().write(std::path::Path::new(&name), &bytes, craft::host::WriteIntent::SaveAs);
         with_state(app, |v, _| {
             if saved.is_ok() {
                 v.finish();

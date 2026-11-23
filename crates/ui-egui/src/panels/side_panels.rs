@@ -7,6 +7,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+#[cfg(not(target_arch = "wasm32"))]
 use craft::automation::dock as dock_rpc;
 use craft::behavior::dock::{
     Action, Column, DockEdge, DockError, DockPlacement, Floating, Group, Layout, Node, PanelState, Permissions, SplitSize, Target, Workspace,
@@ -810,13 +811,27 @@ pub fn command(app: &mut PdfCraftApp, reset: bool, params: &Value) -> Result<Val
 }
 
 /// `ui.dock.apply {action}`: one dock action applied to the workspace under the panels' permissions.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn dock_method(app: &mut PdfCraftApp, method: &str, params: &Value) -> Option<Result<Value, String>> {
     dock_rpc::dock_method(Arc::make_mut(&mut app.dock), &*app.dock_specs, false, method, params)
 }
 
+/// The framework's dock table is the desktop's (`craft::automation::dock`): the web answers no dock method.
+#[cfg(target_arch = "wasm32")]
+pub fn dock_method(_app: &mut PdfCraftApp, _method: &str, _params: &Value) -> Option<Result<Value, String>> {
+    None
+}
+
 /// The dock's layout for `ui.inspect`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn dock_inspect(app: &PdfCraftApp) -> Value {
     dock_rpc::inspect(&app.dock)
+}
+
+/// The dock's layout for `ui.inspect`: the web has no dock table to read it with.
+#[cfg(target_arch = "wasm32")]
+pub fn dock_inspect(_app: &PdfCraftApp) -> Value {
+    Value::Null
 }
 
 /// What [`migrate`] read from settings written before the dock.

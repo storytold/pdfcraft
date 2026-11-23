@@ -1,7 +1,6 @@
-use super::{
-    DocId, DocView, LeftPanel, Mode, OpenOutcome, OpenRequest, PasswordPrompt, PdfCraftApp, PendingOpen, RecentFile, RightPanel, UnlockPrompt,
-    canvas, i18n, open_worker,
-};
+use super::{DocId, DocView, LeftPanel, Mode, PasswordPrompt, PdfCraftApp, RecentFile, RightPanel, UnlockPrompt, canvas, i18n};
+#[cfg(not(target_arch = "wasm32"))]
+use super::{OpenOutcome, OpenRequest, PendingOpen, open_worker};
 use craft::docpath::names::safe_file_name;
 #[cfg(not(target_arch = "wasm32"))]
 use craft::host::queue::Priority;
@@ -711,7 +710,9 @@ impl PdfCraftApp {
     }
 
     /// Answer the password prompt (`None` cancels).
-    pub fn submit_password(&mut self, _ctx: &egui::Context, password: Option<String>) {
+    pub fn submit_password(&mut self, ctx: &egui::Context, password: Option<String>) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = ctx;
         let Some(mut p) = self.password_prompt.take() else { return };
         let Some(pw) = password.map(zeroize::Zeroizing::new) else {
             // A cancelled recovery goes back on offer; its snapshot stays in the store and must
@@ -751,7 +752,7 @@ impl PdfCraftApp {
     #[cfg(target_arch = "wasm32")]
     fn retry_inline(&mut self, ctx: &egui::Context, mut p: PasswordPrompt, pw: zeroize::Zeroizing<String>) {
         let after_open = p.after_open.clone();
-        let opened = self.try_open(&p.name, p.path.take(), p.bytes.clone(), Some(&pw), p.activate);
+        let opened = self.try_open(ctx, &p.name, p.path.take(), p.bytes.clone(), Some(&pw), p.activate);
         drop(pw);
         match opened {
             Err(e) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &p.name), ("e", &e.to_string())]),
@@ -764,9 +765,6 @@ impl PdfCraftApp {
                     && let Some(view) = self.views.last_mut()
                 {
                     (view.view.display, view.view.continuous) = (layout, continuous);
-                }
-                if let Some(meta) = &p.recovered {
-                    self.finish_recovery(meta);
                 }
                 if let Some(command) = p.then {
                     self.execute(ctx, command);

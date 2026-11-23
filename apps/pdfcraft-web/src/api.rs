@@ -33,7 +33,8 @@ mod web {
     use std::rc::Rc;
     use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 
-    use craft::automation::{ControlRequest, ControlResponse, Dispatch, REPLY_DEADLINE};
+    use craft::automation::protocol::REPLY_DEADLINE;
+    use craft::automation::{ControlRequest, ControlResponse, Dispatch};
     use craft_web_api::methods::Methods;
     use craft_web_api::page::{PageApi, Request};
     use serde_json::{Value, json};
