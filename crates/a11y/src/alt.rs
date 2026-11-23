@@ -27,6 +27,11 @@ pub enum AltError {
     TooLarge,
     #[error("the figure's content may be in a damaged or unreadable content stream, or after the damage, so nothing was changed")]
     Damaged,
+    #[error(
+        "figure {0}, or a tag inside it, owns an annotation or other object (an OBJR kid) that would be left pointing at a removed tag, \
+         so nothing was changed; give it alternate text instead of marking it decorative"
+    )]
+    OwnsObject(u32),
     #[error("{0}")]
     Cos(#[from] pdfcraft_cos::CosError),
 }
@@ -40,6 +45,11 @@ pub enum ArtifactError {
     NotATag(u32),
     #[error("the tag has child structure elements; mark a leaf tag instead")]
     HasChildren,
+    #[error(
+        "the tag owns an annotation or other object (an OBJR kid) that would be left pointing at a removed tag, so nothing was changed; \
+         marking such a tag as an artifact isn't supported, so keep the tag"
+    )]
+    OwnsObject,
     #[error("the tag has no direct marked content")]
     NoMarkedContent,
     #[error("the tag has no page")]
@@ -517,6 +527,9 @@ fn artifact_marked_content(
 /// leaves the structure tree (and the parent tree).
 pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> {
     let d = check_figure(doc, obj)?;
+    if owns_object(doc, &d) {
+        return Err(AltError::OwnsObject(obj.num));
+    }
     let ids: HashSet<i64> = mcids(doc, &d).into_iter().collect();
     let pages = pdfcraft_model::pages(doc);
     let pg = d.get(b"Pg").and_then(Object::as_ref).or_else(|| elements(doc).into_iter().find(|e| e.object == obj).and_then(|e| e.page));
@@ -561,6 +574,9 @@ pub fn mark_tag_artifact(doc: &mut Document, obj: ObjRef) -> Result<(), Artifact
     if has_child_structure(doc, &element.dict) {
         return Err(ArtifactError::HasChildren);
     }
+    if owns_object(doc, &element.dict) {
+        return Err(ArtifactError::OwnsObject);
+    }
     let ids: HashSet<i64> = mcids(doc, &element.dict).into_iter().collect();
     if ids.is_empty() {
         return Err(ArtifactError::NoMarkedContent);
@@ -597,6 +613,69 @@ fn has_child_structure(doc: &Document, tag: &Dict) -> bool {
         }
     }
     tag.get(b"K").is_some_and(|items| child(doc, items))
+}
+
+/// The most kids [`owns_object`] reads below one tag before it gives up and refuses.
+const MAX_OWNED_KIDS: usize = 100_000;
+
+/// Whether the tag, or a structure element below it, owns an annotation or XObject through an
+/// object reference (`/OBJR`) kid.
+///
+/// Such an object's own `/StructParent` key maps to its tag in the parent tree (ISO 32000-2
+/// §14.7.5.4), so retiring the tag may leave the object pointing at an element that is no longer in
+/// the tree, and the object untagged (#7452). The edits refuse such a tag rather than guess what
+/// should become of the object. The walk follows indirect `/K` arrays as [`elements`] does, reads
+/// each object once, and treats a subtree too large to read as owning one.
+fn owns_object(doc: &Document, tag: &Dict) -> bool {
+    let mut stack: Vec<Object> = tag.get(b"K").cloned().into_iter().collect();
+    let mut seen = HashSet::new();
+    let mut read = 0usize;
+    while let Some(item) = stack.pop() {
+        read = read.saturating_add(1);
+        if read > MAX_OWNED_KIDS {
+            return true;
+        }
+        let dict = match item {
+            Object::Array(items) => {
+                stack.extend(items);
+                continue;
+            }
+            Object::Ref(r) => {
+                if !seen.insert(r) {
+                    continue;
+                }
+                let target = doc.get(r);
+                match &*target {
+                    // An indirect /K array, or a reference to one.
+                    Object::Array(_) | Object::Ref(_) => {
+                        stack.push((*target).clone());
+                        continue;
+                    }
+                    Object::Dict(d) => d.clone(),
+                    _ => continue,
+                }
+            }
+            Object::Dict(d) => d,
+            _ => continue,
+        };
+        if is_objr(&dict) {
+            return true;
+        }
+        // A structure element below the tag leaves the tree with it, with whatever it owns.
+        if dict.contains(b"S")
+            && let Some(kids) = dict.get(b"K")
+        {
+            stack.push(kids.clone());
+        }
+    }
+    false
+}
+
+/// An object reference dictionary: `/Type /OBJR`, or, where the type is left out, an `/Obj` entry
+/// (a marked-content reference has `/MCID` and a structure element `/S` instead). An OBJR whose
+/// object is missing still counts, so such a tag is refused too.
+fn is_objr(d: &Dict) -> bool {
+    d.name(b"Type") == Some(b"OBJR".as_slice()) || (d.contains(b"Obj") && !d.contains(b"S"))
 }
 
 fn replacement_kids(doc: &Document, parent: ObjRef, obj: ObjRef) -> Result<Object, ArtifactError> {

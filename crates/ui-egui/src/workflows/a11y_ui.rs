@@ -664,8 +664,11 @@ impl PdfCraftApp {
                 edits.push(pdfcraft_engine::Edit::SetAltText { figure: f.obj.num, alt: Some(d.texts[k].clone()) });
             }
         }
-        if !edits.is_empty() {
-            self.apply_edit(pdfcraft_engine::Edit::Batch { label: "Set alternate text".into(), edits });
+        if !edits.is_empty() && !self.apply_edit(pdfcraft_engine::Edit::Batch { label: "Set alternate text".into(), edits }) {
+            // Nothing was saved (the failure is shown): keep what was typed and reopen the dialog,
+            // so a refused figure can be changed without losing the others' alternate text.
+            self.alt_draft = d;
+            self.dialog = Some(Dialog::AltText);
         }
     }
 }

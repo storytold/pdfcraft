@@ -1390,7 +1390,7 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("a11y.alt_text")
             .with(schema(json!({ "doc": doc() }), &["doc"])),
-        t("accessibility_set_alt", "Set alternate text", "Set a figure's alternate text (alt; empty or omitted clears it), or mark it decorative (decorative: true: its content becomes an artifact and the figure leaves the tags). figure is a number from accessibility_figures. Returns the figures. Undoable.")
+        t("accessibility_set_alt", "Set alternate text", "Set a figure's alternate text (alt; empty or omitted clears it), or mark it decorative (decorative: true: its content becomes an artifact and the figure leaves the tags; refused for a figure that owns an annotation or other object through an OBJR kid, directly or in a tag inside it). figure is a number from accessibility_figures. Returns the figures. Undoable.")
             .cmd("a11y.alt_text")
             .with(schema(json!({ "doc": doc(), "figure": { "type": "integer", "minimum": 1 }, "alt": { "type": "string" }, "decorative": { "type": "boolean" } }), &["doc", "figure"])),
         t("accessibility_tags", "List structure tags", "List reachable indirect structure tags in document order with PDF object number, generation, nearest indirect parent, depth, page, type, title, actual text, alternate text, language, a table's summary and a header cell's scope, one page at a time: count is how many tags match, next the offset of the following page (null at the end). types, pages and max_depth keep only some tags. Inline tag dictionaries have no stable object reference and are not listed.")
@@ -1418,7 +1418,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "property": { "type": "string", "enum": ["type", "title", "actual_text", "alternate_text", "language", "summary", "scope"] },
                 "value": { "type": "string" },
             }), &["doc", "object", "generation", "property"])),
-        t("accessibility_mark_tag_artifact", "Mark tag content as artifact", "Mark a reachable leaf structure tag's direct marked content as an artifact and remove the tag from the reading structure. Use object and generation from accessibility_tags. Tags with child structure elements, no direct marked content, content not found on its page, or content that a damaged or undecodable content stream may hide or change are rejected. Undoable.")
+        t("accessibility_mark_tag_artifact", "Mark tag content as artifact", "Mark a reachable leaf structure tag's direct marked content as an artifact and remove the tag from the reading structure. Use object and generation from accessibility_tags. Tags with child structure elements, tags that own an annotation or other object through an OBJR kid, no direct marked content, content not found on its page, or content that a damaged or undecodable content stream may hide or change are rejected. Undoable.")
             .with(schema(json!({
                 "doc": doc(), "object": { "type": "integer", "minimum": 1 },
                 "generation": { "type": "integer", "minimum": 0, "maximum": 65535 },

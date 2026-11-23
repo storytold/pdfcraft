@@ -308,6 +308,42 @@ fn setting_alternate_text_figure_by_figure() {
     assert_eq!(f[0].alt.as_deref(), Some("A grey square"));
 }
 
+/// #7452: [`FIGURES`] with the first figure also owning a link annotation through an OBJR kid,
+/// so marking it decorative is refused.
+fn figures_with_a_link() -> Vec<u8> {
+    String::from_utf8_lossy(FIGURES)
+        .replace("/StructParents 0 /Resources", "/StructParents 0 /Annots [11 0 R] /Resources")
+        .replace("/S /Figure /P 6 0 R /Pg 3 0 R /K 0 >>", "/S /Figure /P 6 0 R /Pg 3 0 R /K [0 << /Type /OBJR /Obj 11 0 R >>] >>")
+        .replace("/Nums [0 [7 0 R 8 0 R]]", "/Nums [0 [7 0 R 8 0 R] 1 7 0 R]")
+        .replace("trailer", "11 0 obj << /Type /Annot /Subtype /Link /Rect [10 10 50 50] /StructParent 1 >> endobj\ntrailer")
+        .into_bytes()
+}
+
+/// #7452: when Save & Close is refused because a figure marked decorative owns an annotation,
+/// nothing is saved and the dialog comes back with everything typed, so no alternate text is lost.
+#[test]
+fn a_refused_alt_text_save_keeps_what_was_typed() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("figures.pdf", None, figures_with_a_link()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("a11y.alt_text"));
+    h.run_steps(2);
+    h.get_by_label("Decorative figure").click();
+    h.run_steps(1);
+    h.state_mut().alt_draft.texts[1] = "A tall bar".into();
+    h.get_by_label("Save & Close").click();
+    h.run_steps(3);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.can_undo(), None, "nothing was saved");
+    assert_eq!(s.dialog, Some(Dialog::AltText), "the dialog is back");
+    assert_eq!((s.alt_draft.decorative[0], s.alt_draft.texts[1].as_str()), (true, "A tall bar"), "with what was typed");
+}
+
 #[test]
 fn tags_panel_edits_a_tag_property_and_undoes_it() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
