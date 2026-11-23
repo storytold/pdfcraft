@@ -57,6 +57,9 @@ impl PdfCraftApp {
         let eased = !self.animation_effects.reduced(None);
         options.animated_zoom = eased;
         options.eased_wheel = eased;
+        // A ⌘/Ctrl-wheel notch zooms over about a quarter of a second, as production's egui wheel did, whatever the
+        // animation setting.
+        options.eased_wheel_zoom = true;
         options
     }
 
