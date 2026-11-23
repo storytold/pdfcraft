@@ -3200,6 +3200,11 @@ fn copy_restricted_text_stays_in_the_document() {
     }
     let restyled = ok(&mut a, "text_edit", json!({ "doc": re, "page": 1, "paragraph": 1, "size": 30 }));
     assert!(!restyled.to_string().contains("Page"), "{restyled}");
+    // A header's text is listed only where copying is allowed: its index and pages still are.
+    ok(&mut a, "doc_header_footer", json!({ "doc": re, "pages": [1], "header_left": "HEADERTEXT" }));
+    let listed = ok(&mut a, "doc_header_footers", json!({ "doc": re }));
+    assert!(!listed.to_string().contains("HEADERTEXT") && listed["text_withheld"].is_string(), "{listed}");
+    assert_eq!(listed["header_footers"][0]["pages"], json!([1]));
     // A path that would carry the page's words OUT of the document — the editable output, or
     // the review word list — is refused on a copy-restricted document (no engines needed).
     match a.call("ocr_recognize", &json!({ "doc": re, "output_mode": "editable", "out": "copy.pdf" })) {
@@ -3837,6 +3842,47 @@ fn duplicating_and_cropping_through_tools() {
     assert_eq!(r["page_sizes"][0], json!([200.0, 300.0]));
     assert!(matches!(a.call("page_set_box", &json!({ "doc": doc, "margins": [150, 0, 150, 0] })), Err(ToolError::Failed(_))));
     assert!(matches!(a.call("page_set_box", &json!({ "doc": doc, "rect": [0, 0, 10, 10] })), Err(ToolError::InvalidArgs(_))));
+}
+
+#[test]
+fn header_footer_update_changes_the_one_named() {
+    let dir = workdir("marks-update");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_header_footer", json!({ "doc": doc, "pages": [1], "header_left": "FIRST" }));
+    ok(&mut a, "doc_header_footer", json!({ "doc": doc, "pages": [2, 3], "header_left": "SECOND" }));
+    let listed = ok(&mut a, "doc_header_footers", json!({ "doc": doc }));
+    assert_eq!(listed["header_footers"][0]["pages"], json!([1]));
+    assert_eq!(listed["header_footers"][1], json!({ "index": 2, "pages": [2, 3], "text": { "header_left": "SECOND" } }));
+    // Indices count from 1, as pages do. Added after listing, so index 1 is still FIRST; it
+    // shares page 1 with FIRST and must stay.
+    ok(&mut a, "doc_header_footer", json!({ "doc": doc, "pages": [1], "footer_left": "THIRD" }));
+    let updated = ok(&mut a, "doc_header_footer", json!({ "doc": doc, "update": 1, "header_left": "CHANGED" }));
+    assert_eq!(updated["header_footers"], ok(&mut a, "doc_header_footers", json!({ "doc": doc }))["header_footers"], "the indices that hold now");
+    let texts = page_text(&mut a, doc);
+    assert!(texts[0].contains("CHANGED") && !texts[0].contains("FIRST"), "{texts:?}");
+    assert!(texts[0].contains("THIRD"), "the other one on that page stays: {texts:?}");
+    assert!(texts[1].contains("SECOND") && !texts[1].contains("CHANGED"), "{texts:?}");
+    // Given pages, the update goes there instead: it leaves every page the old one was on, and
+    // the other header and footer on those pages stays.
+    let changed = updated["header_footers"].as_array().unwrap().iter().find(|m| m["text"]["header_left"] == "CHANGED").unwrap()["index"].clone();
+    ok(&mut a, "doc_header_footer", json!({ "doc": doc, "update": changed, "pages": [2], "header_left": "MOVED" }));
+    let texts = page_text(&mut a, doc);
+    assert!(!texts[0].contains("CHANGED") && !texts[0].contains("MOVED") && texts[0].contains("THIRD"), "{texts:?}");
+    assert!(texts[1].contains("MOVED") && texts[1].contains("SECOND"), "{texts:?}");
+    assert!(!texts[2].contains("MOVED") && texts[2].contains("SECOND"), "{texts:?}");
+    for bad in [
+        json!({ "doc": doc, "update": 9, "header_left": "X" }),
+        json!({ "doc": doc, "update": 0, "header_left": "X" }),
+        json!({ "doc": doc, "update": 1, "replace": true, "header_left": "X" }),
+    ] {
+        assert!(matches!(a.call("doc_header_footer", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    // The Update command changes a document: it must not run the read-only listing and report success.
+    let by_command = json!({ "id": "edit.header_footer.update", "params": { "doc": doc, "update": 1, "header_left": "VIA COMMAND" } });
+    let listed = ok(&mut a, "doc_header_footers", json!({ "doc": doc }));
+    assert!(a.call("command_run", &by_command).is_err());
+    assert_eq!(ok(&mut a, "doc_header_footers", json!({ "doc": doc })), listed);
 }
 
 #[test]

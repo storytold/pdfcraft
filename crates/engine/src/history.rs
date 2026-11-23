@@ -103,6 +103,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::PasteContent { .. }
         | Edit::PasteObjects { .. }
         | Edit::AddHeaderFooter { .. }
+        | Edit::UpdateHeaderFooter { .. }
         | Edit::AddWatermark { .. }
         | Edit::AddBackground { .. }
         | Edit::RemoveMarks { .. }

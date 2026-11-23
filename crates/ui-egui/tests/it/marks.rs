@@ -63,6 +63,69 @@ fn header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset() {
     assert!(marks(&h).is_empty());
 }
 
+/// #5785: with several headers and footers, Update reaches any of them, on the page it opens on
+/// or through the list, and changes that one alone.
+#[test]
+fn update_can_change_an_earlier_header_and_footer() {
+    use pdfcraft_engine::{Edit, HeaderFooter};
+    let mut h = harness();
+    let add = |h: &mut Harness<'static, PdfCraftApp>, pages: Vec<usize>, text: &str| {
+        let mut settings = HeaderFooter::default();
+        settings.text[1] = text.into();
+        h.state_mut().apply_edit(Edit::AddHeaderFooter { pages, settings, replace: false });
+        h.run_steps(2);
+    };
+    add(&mut h, vec![0, 1], "Earlier");
+    add(&mut h, vec![2], "Later");
+    add(&mut h, vec![0, 1, 2], "Over all");
+
+    assert!(h.state_mut().execute("edit.header_footer.update"));
+    h.run_steps(3);
+    assert_eq!(h.state().marks_draft.hf.text[1], "Over all", "the newest on the page shown");
+    // Chosen through the list, as a user would: open it, then click the earlier one.
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Which header and footer:").click();
+    h.run_steps(2);
+    h.get_by_label_contains(": Earlier").click();
+    h.run_steps(2);
+    assert_eq!(h.state().marks_draft.hf.text[1], "Earlier", "the dialog fills in from the one chosen");
+    assert_eq!(h.state().marks_draft.pages(3), [0, 1], "on its own pages");
+    h.state_mut().marks_draft.hf.text[1] = "Changed".into();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+
+    let s = h.state();
+    let texts: Vec<(String, Vec<usize>)> =
+        s.session.get(s.views[0].id).unwrap().header_footers().into_iter().map(|m| (m.settings.text[1].clone(), m.pages)).collect();
+    assert_eq!(
+        texts,
+        [("Over all".to_string(), vec![0, 1, 2]), ("Changed".to_string(), vec![0, 1]), ("Later".to_string(), vec![2])],
+        "the others are as they were"
+    );
+}
+
+/// Update shows a header and footer's size and start number as they are, even past the range
+/// the dialog's own controls step through, so changing only its text keeps them.
+#[test]
+fn update_keeps_a_size_and_start_number_the_controls_do_not_reach() {
+    use pdfcraft_engine::{Edit, HeaderFooter};
+    let mut h = harness();
+    let mut settings = HeaderFooter { font_size: 100.0, start_number: 1_000_000, ..HeaderFooter::default() };
+    settings.text[1] = "Big".into();
+    h.state_mut().apply_edit(Edit::AddHeaderFooter { pages: vec![0], settings, replace: false });
+    h.run_steps(2);
+    assert!(h.state_mut().execute("edit.header_footer.update"));
+    h.run_steps(3);
+    h.state_mut().marks_draft.hf.text[1] = "Bigger".into();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    let s = h.state();
+    let found = s.session.get(s.views[0].id).unwrap().header_footers();
+    assert_eq!(found.len(), 1);
+    assert_eq!((found[0].settings.text[1].as_str(), found[0].settings.font_size, found[0].settings.start_number), ("Bigger", 100.0, 1_000_000));
+}
+
 #[test]
 fn header_and_footer_dialog_draws_in_the_chosen_face() {
     // #3754: the dialog offers Helvetica, Times and Courier (it only said "Font: Helvetica"),

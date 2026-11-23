@@ -316,7 +316,7 @@ impl Edit {
                 ImageEdit::Ungroup => "Ungroup artwork",
             }),
             Edit::AddHeaderFooter { replace: false, .. } => Label::of("Add header & footer"),
-            Edit::AddHeaderFooter { .. } => Label::of("Update header & footer"),
+            Edit::AddHeaderFooter { .. } | Edit::UpdateHeaderFooter { .. } => Label::of("Update header & footer"),
             Edit::AddWatermark { replace: false, .. } => Label::of("Add watermark"),
             Edit::AddWatermark { .. } => Label::of("Update watermark"),
             Edit::AddBackground { replace: false, .. } => Label::of("Add background"),

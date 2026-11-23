@@ -609,6 +609,7 @@ impl Session {
             matches!(
                 e,
                 Edit::AddHeaderFooter { .. }
+                    | Edit::UpdateHeaderFooter { .. }
                     | Edit::AddWatermark { .. }
                     | Edit::AddBackground { .. }
                     | Edit::AddPrinterMarks { .. }

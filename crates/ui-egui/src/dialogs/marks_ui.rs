@@ -44,6 +44,19 @@ impl Default for PageRange {
 }
 
 impl PageRange {
+    /// The range that fits `pages` (0-based, ascending, not empty) most closely: from the first to
+    /// the last, of odd or even pages when they are every other page.
+    fn around(pages: &[usize]) -> Self {
+        let (Some(&first), Some(&last)) = (pages.first(), pages.last()) else { return Self::default() };
+        let every_other = pages.len() > 1 && pages.windows(2).all(|w| matches!(w, [a, b] if a + 2 == *b));
+        let subset = match every_other.then_some((first + 1) % 2) {
+            Some(0) => Subset::Even,
+            Some(_) => Subset::Odd,
+            None => Subset::All,
+        };
+        Self { all: false, from: first + 1, to: last + 1, subset }
+    }
+
     /// The pages (0-based) the range selects in a document of `count` pages.
     pub fn pages(&self, count: usize) -> Vec<usize> {
         let (a, b) = if self.all { (1, count) } else { (self.from.max(1), self.to.min(count)) };
@@ -203,6 +216,18 @@ pub struct MarksDraft {
     pub range: PageRange,
     /// Replace existing marks of this kind (Update).
     pub replace: bool,
+    /// Update: the headers and footers in the document, to pick the one to change (#5785).
+    pub header_footers: Vec<pdfcraft_engine::HeaderFooterMark>,
+    /// Update: pages whose header and footer records no settings (from before they were
+    /// recorded, or another tool), which only a page-wide replace reaches.
+    pub older_pages: Vec<usize>,
+    /// The document the choices were read from: OK changes no other.
+    pub update_doc: Option<pdfcraft_engine::DocId>,
+    /// Which header and footer Update changes.
+    pub updating: Option<Updating>,
+    /// The range is still the one filled in for [`Self::updating`]. It can only approximate pages
+    /// such as 1, 2 and 5: until the range is changed, OK means those pages.
+    pub range_kept: bool,
     /// Which header/footer box Insert Page Number / Insert Date type into.
     pub focused_box: usize,
     pub page_format: usize,
@@ -228,6 +253,11 @@ impl Default for MarksDraft {
             bg: Background::default(),
             range: PageRange::default(),
             replace: false,
+            header_footers: Vec::new(),
+            older_pages: Vec::new(),
+            update_doc: None,
+            updating: None,
+            range_kept: false,
             focused_box: 1,
             page_format: 0,
             date_format: 0,
@@ -239,6 +269,133 @@ impl Default for MarksDraft {
             preview: None,
         }
     }
+}
+
+/// The header and footer the Update dialog changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Updating {
+    /// One of [`MarksDraft::header_footers`], alone.
+    Recorded(usize),
+    /// Those on [`MarksDraft::older_pages`], replaced page-wide with any other there.
+    Older,
+}
+
+/// What Update reads from the document to offer its choices.
+pub struct UpdateChoices {
+    pub doc: pdfcraft_engine::DocId,
+    pub found: Vec<pdfcraft_engine::HeaderFooterMark>,
+    pub older_pages: Vec<usize>,
+    /// The header and footer added last to the current page (see `Document::newest_header_footer`).
+    pub newest: Option<Option<HeaderFooter>>,
+}
+
+impl MarksDraft {
+    /// Update opens on the newest header and footer of the current page, or else the document's
+    /// last. With none to choose (or for Add, `None`), the draft is left as it is.
+    pub fn update_choices(&mut self, choices: Option<UpdateChoices>) {
+        self.updating = None;
+        self.range_kept = false;
+        let Some(UpdateChoices { doc, found, older_pages, newest }) = choices else {
+            self.update_doc = None;
+            self.header_footers.clear();
+            self.older_pages.clear();
+            return;
+        };
+        self.update_doc = Some(doc);
+        self.header_footers = found;
+        self.older_pages = older_pages;
+        match newest {
+            Some(Some(settings)) => match self.header_footers.iter().position(|m| m.settings == settings) {
+                Some(i) => self.choose_header_footer(i),
+                None => self.choose_last(),
+            },
+            Some(None) if !self.older_pages.is_empty() => self.choose_older(),
+            _ => self.choose_last(),
+        }
+    }
+
+    fn choose_last(&mut self) {
+        match self.header_footers.len().checked_sub(1) {
+            Some(i) => self.choose_header_footer(i),
+            None if !self.older_pages.is_empty() => self.choose_older(),
+            None => {}
+        }
+    }
+
+    /// Fill the dialog with header and footer `i`.
+    pub fn choose_header_footer(&mut self, i: usize) {
+        let Some(mark) = self.header_footers.get(i) else { return };
+        self.hf = mark.settings.clone();
+        self.range = PageRange::around(&mark.pages);
+        self.updating = Some(Updating::Recorded(i));
+        self.range_kept = true;
+        self.preview = None;
+    }
+
+    /// Choose the headers and footers that record no settings. Their settings can't be read
+    /// back, so the dialog keeps what it shows.
+    pub fn choose_older(&mut self) {
+        if self.older_pages.is_empty() {
+            return;
+        }
+        self.range = PageRange::around(&self.older_pages);
+        self.updating = Some(Updating::Older);
+        self.range_kept = true;
+        self.preview = None;
+    }
+
+    /// How many headers and footers Update can choose between.
+    fn update_choice_count(&self) -> usize {
+        self.header_footers.len() + usize::from(!self.older_pages.is_empty())
+    }
+
+    /// The header and footer OK replaces alone.
+    fn updated(&self) -> Option<&pdfcraft_engine::HeaderFooterMark> {
+        match self.updating? {
+            Updating::Recorded(i) => self.header_footers.get(i),
+            Updating::Older => None,
+        }
+    }
+
+    /// The range was changed by hand: OK now means the pages it shows.
+    pub fn range_changed(&mut self) {
+        self.range_kept = false;
+    }
+
+    /// The pages (0-based) OK applies to, in a document of `count` pages.
+    pub fn pages(&self, count: usize) -> Vec<usize> {
+        let kept = match self.updating {
+            Some(Updating::Recorded(_)) => self.updated().map(|m| &m.pages),
+            Some(Updating::Older) => Some(&self.older_pages),
+            None => None,
+        };
+        match kept {
+            Some(pages) if self.replace && self.range_kept => pages.iter().copied().filter(|&p| p < count).collect(),
+            _ => self.range.pages(count),
+        }
+    }
+
+    /// Update read its choices from another document than `doc`: OK must not apply them there.
+    pub fn update_is_for_another(&self, doc: pdfcraft_engine::DocId) -> bool {
+        self.replace && self.updating.is_some() && self.update_doc.is_some_and(|d| d != doc)
+    }
+}
+
+fn older_header_footer_label(pages: &[usize]) -> String {
+    let pages = pages_phrase(pages, tl!("Page {pages}"), tl!("Pages {pages}"));
+    format!("{pages}: {}", tl!("an older header and footer (replaced with all others on those pages)"))
+}
+
+/// What the Update dialog calls a header and footer: its pages and the start of its text.
+fn header_footer_label(mark: &pdfcraft_engine::HeaderFooterMark) -> String {
+    const SHOWN_CHARS: usize = 40;
+    let pages = pages_phrase(&mark.pages, tl!("Page {pages}"), tl!("Pages {pages}"));
+    let text = mark.settings.text.iter().find(|t| !t.trim().is_empty()).map_or("", |t| t.trim());
+    let mut shown: String = text.chars().take(SHOWN_CHARS).collect();
+    if text.chars().nth(SHOWN_CHARS).is_some() {
+        shown.push('…');
+    }
+    format!("{pages}: {shown}")
 }
 
 const PAGE_FORMATS: [&str; 5] = ["<<1>>", "<<1 of n>>", "<<1/n>>", "<<Page 1>>", "<<Page 1 of n>>"];
@@ -434,29 +591,27 @@ impl UnmarkedPage {
     }
 }
 
-/// The page (0-based) the preview shows: the current one when the range selects it, otherwise the
-/// first page the range selects (the current one again when it selects none).
-fn preview_page(range: &PageRange, current: usize, count: usize) -> usize {
-    let pages = range.pages(count);
+/// The page (0-based) the preview shows: the current one when OK applies to it (`pages`),
+/// otherwise the first page it applies to (the current one again when it applies to none).
+fn preview_page(pages: &[usize], current: usize) -> usize {
     if pages.contains(&current) { current } else { pages.first().copied().unwrap_or(current) }
 }
 
 /// [`preview_page`] for the page stepped to (`stepped`), or the current page if none. A page
 /// stepped to that the range leaves out is replaced by the page shown, so widening the range again
 /// keeps that page rather than jumping back.
-fn shown_preview(range: &PageRange, stepped: &mut Option<usize>, current: usize, count: usize) -> usize {
-    let shown = preview_page(range, stepped.unwrap_or(current), count);
+fn shown_preview(pages: &[usize], stepped: &mut Option<usize>, current: usize) -> usize {
+    let shown = preview_page(pages, stepped.unwrap_or(current));
     if stepped.is_some() {
         *stepped = Some(shown);
     }
     shown
 }
 
-/// The page the preview steps to from `shown`: the range's next page after it (`forward`) or the
-/// last one before it, or `None` at either end.
-fn step_preview(range: &PageRange, shown: usize, count: usize, forward: bool) -> Option<usize> {
-    let pages = range.pages(count);
-    if forward { pages.into_iter().find(|&p| p > shown) } else { pages.into_iter().rev().find(|&p| p < shown) }
+/// The page the preview steps to from `shown`: the next page OK applies to after it (`forward`)
+/// or the last one before it, or `None` at either end.
+fn step_preview(pages: &[usize], shown: usize, forward: bool) -> Option<usize> {
+    if forward { pages.iter().copied().find(|&p| p > shown) } else { pages.iter().rev().copied().find(|&p| p < shown) }
 }
 
 /// The dialog for `kind`; returns (apply, cancel).
@@ -478,6 +633,38 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
     };
     ui.label(egui::RichText::new(title).font(theme::semibold(18.0)));
     ui.add_space(8.0);
+    if kind == MarkKind::HeaderFooter && d.replace && d.update_choice_count() > 1 {
+        ui.horizontal(|ui| {
+            let label = ui.label(tl!("Which header and footer:"));
+            let shown = match d.updating {
+                Some(Updating::Older) => older_header_footer_label(&d.older_pages),
+                _ => d.updated().map(header_footer_label).unwrap_or_default(),
+            };
+            let mut picked = None;
+            craft_ui::ComboBox::from_id_salt("mark-header-footer")
+                .selected_text(shown)
+                .show_ui(ui, |ui| {
+                    for (i, mark) in d.header_footers.iter().enumerate() {
+                        if ui.selectable_label(d.updating == Some(Updating::Recorded(i)), header_footer_label(mark)).clicked() {
+                            picked = Some(Updating::Recorded(i));
+                        }
+                    }
+                    if !d.older_pages.is_empty()
+                        && ui.selectable_label(d.updating == Some(Updating::Older), older_header_footer_label(&d.older_pages)).clicked()
+                    {
+                        picked = Some(Updating::Older);
+                    }
+                })
+                .response
+                .labelled_by(label.id);
+            match picked {
+                Some(Updating::Recorded(i)) => d.choose_header_footer(i),
+                Some(Updating::Older) => d.choose_older(),
+                None => {}
+            }
+        });
+        ui.add_space(6.0);
+    }
     match kind {
         MarkKind::HeaderFooter => {
             ui.horizontal(|ui| {
@@ -489,7 +676,8 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     }
                 });
                 ui.label(tl!("Size"));
-                ui.add(egui::DragValue::new(&mut d.hf.font_size).range(4.0..=72.0).speed(0.5));
+                // An existing header and footer may use any size applying accepts: shown as it is, not clamped.
+                ui.add(egui::DragValue::new(&mut d.hf.font_size).range(4.0..=72.0).clamp_existing_to_range(false).speed(0.5));
                 ui.add(widgets::checkbox(&mut d.hf.underline, tl!("Underline")));
                 color_button(ui, &mut d.hf.color);
                 ui.add_space(16.0);
@@ -548,7 +736,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                 }
                 ui.add_space(12.0);
                 ui.label(tl!("Start page number"));
-                ui.add(egui::DragValue::new(&mut d.hf.start_number).range(1..=999_999));
+                ui.add(egui::DragValue::new(&mut d.hf.start_number).range(1..=999_999).clamp_existing_to_range(false));
             });
             ui.add(widgets::checkbox(&mut d.hf.shrink, tl!("Shrink the page content to make room for the header and footer")));
         }
@@ -634,14 +822,19 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
     }
     ui.add_space(8.0);
     ui.label(egui::RichText::new(tl!("Page Range Options")).font(theme::semibold(12.5)));
+    let before = d.range;
     d.range.ui(ui, count);
+    if d.range != before {
+        d.range_changed();
+    }
     ui.add_space(8.0);
     // The preview: the current page (or the page stepped to), or the first one the range selects
     // if it leaves that out, drawn from its thumbnail at its displayed size (after /Rotate), the
     // frame the engine lays the marks out in. Update draws it without the marks it replaces.
-    let target = shown_preview(&d.range, &mut d.preview, current, count);
+    let applies_to = d.pages(count);
+    let target = shown_preview(&applies_to, &mut d.preview, current);
     let page = doc.info.pages.get(target).map(|p| (p.width as f64, p.height as f64)).unwrap_or((612.0, 792.0));
-    let near: Vec<usize> = [false, true].into_iter().filter_map(|forward| step_preview(&d.range, target, count, forward)).collect();
+    let near: Vec<usize> = [false, true].into_iter().filter_map(|forward| step_preview(&applies_to, target, forward)).collect();
     let unmarked = app.unmarked_page.picture(ui.ctx(), (doc, id), target, &near, kind, d.replace);
     let picture = unmarked.or_else(|| {
         app.views.get_mut(i).and_then(|view| {
@@ -726,7 +919,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 // Steps through the pages the range selects.
-                let (back, next) = (step_preview(&d.range, target, count, false), step_preview(&d.range, target, count, true));
+                let (back, next) = (step_preview(&applies_to, target, false), step_preview(&applies_to, target, true));
                 if ui.add_enabled_ui(back.is_some(), |ui| icons::button(ui, "chevron-left", 22.0, false, tl!("Previous page"))).inner.clicked() {
                     d.preview = back.or(d.preview);
                 }
@@ -742,11 +935,13 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     d.preview = next.or(d.preview);
                 }
             });
-            let n = d.range.pages(count).len();
+            let n = d.pages(count).len();
             let applies =
                 if n == 1 { tl!("Applies to 1 page").to_string() } else { crate::i18n::fmt(tl!("Applies to {n} pages"), &[("n", &n.to_string())]) };
             ui.label(egui::RichText::new(applies).small().color(t.text_faint));
-            if d.replace {
+            if d.replace && kind == MarkKind::HeaderFooter && d.updated().is_some() {
+                ui.label(egui::RichText::new(tl!("Replaces this header and footer, and no other.")).small().color(t.text_faint));
+            } else if d.replace {
                 ui.label(egui::RichText::new(tl!("Replaces the existing one on those pages.")).small().color(t.text_faint));
             }
         });
@@ -774,7 +969,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                 MarkKind::Background => !d.use_file || d.file.is_some(),
                 MarkKind::PrinterMarks => true,
             }
-            && !d.range.pages(count).is_empty();
+            && !d.pages(count).is_empty();
         if ui.add_enabled_ui(ready, |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked() {
             apply = true;
         }
@@ -876,9 +1071,12 @@ fn backdrop_options(ui: &mut egui::Ui, t: &Tokens, d: &mut MarksDraft, doc: &pdf
 
 /// The edit the dialog's OK makes.
 pub fn edit(d: &MarksDraft, kind: MarkKind, count: usize) -> Edit {
-    let pages = d.range.pages(count);
+    let pages = d.pages(count);
     match kind {
-        MarkKind::HeaderFooter => Edit::AddHeaderFooter { pages, settings: d.hf.clone(), replace: d.replace },
+        MarkKind::HeaderFooter => match d.updated().filter(|_| d.replace) {
+            Some(mark) => Edit::UpdateHeaderFooter { old: mark.settings.clone(), pages, settings: d.hf.clone() },
+            None => Edit::AddHeaderFooter { pages, settings: d.hf.clone(), replace: d.replace },
+        },
         MarkKind::Watermark => {
             let mut wm = d.wm.clone();
             if d.fit {
@@ -894,6 +1092,52 @@ pub fn edit(d: &MarksDraft, kind: MarkKind, count: usize) -> Edit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mark(pages: Vec<usize>, text: &str) -> pdfcraft_engine::HeaderFooterMark {
+        let mut settings = HeaderFooter::default();
+        settings.text[1] = text.into();
+        pdfcraft_engine::HeaderFooterMark { pages, settings }
+    }
+
+    fn updating(found: Vec<pdfcraft_engine::HeaderFooterMark>, older_pages: Vec<usize>, newest: Option<Option<HeaderFooter>>) -> MarksDraft {
+        let mut d = MarksDraft { replace: true, ..MarksDraft::default() };
+        d.update_choices(Some(UpdateChoices { doc: pdfcraft_engine::DocId(1), found, older_pages, newest }));
+        d
+    }
+
+    #[test]
+    fn update_applies_to_a_marks_own_pages_until_the_range_is_changed() {
+        let mut d = updating(vec![mark(vec![0, 1, 4], "Gappy")], vec![], None);
+        assert_eq!(d.pages(5), [0, 1, 4], "pages 1, 2 and 5, which no range shows");
+        // Changed and changed back: what the range shows now is meant, page 4 included.
+        d.range_changed();
+        assert_eq!(d.pages(5), [0, 1, 2, 3, 4]);
+        assert!(matches!(edit(&d, MarkKind::HeaderFooter, 5), Edit::UpdateHeaderFooter { pages, .. } if pages == [0, 1, 2, 3, 4]));
+    }
+
+    #[test]
+    fn update_opens_on_the_newest_on_the_page_and_offers_older_ones_too() {
+        let found = vec![mark(vec![0], "First"), mark(vec![0], "Second")];
+        let d = updating(found.clone(), vec![], Some(Some(found[0].settings.clone())));
+        assert_eq!(d.updating, Some(Updating::Recorded(0)), "the newest on the page, not the last listed");
+        // An older header and footer on page 1 (no settings) and a recorded one on page 2.
+        let mut d = updating(vec![mark(vec![1], "Recorded")], vec![0], Some(None));
+        assert_eq!((d.update_choice_count(), d.updating), (2, Some(Updating::Older)));
+        assert_eq!(d.pages(2), [0]);
+        assert!(matches!(edit(&d, MarkKind::HeaderFooter, 2), Edit::AddHeaderFooter { replace: true, .. }), "replaced page-wide");
+        d.choose_header_footer(0);
+        assert!(matches!(edit(&d, MarkKind::HeaderFooter, 2), Edit::UpdateHeaderFooter { .. }));
+    }
+
+    #[test]
+    fn update_is_refused_on_another_document() {
+        let d = updating(vec![mark(vec![0], "Mine")], vec![], None);
+        assert!(!d.update_is_for_another(pdfcraft_engine::DocId(1)));
+        assert!(d.update_is_for_another(pdfcraft_engine::DocId(2)));
+        let mut add = d.clone();
+        add.update_choices(None);
+        assert!(!add.update_is_for_another(pdfcraft_engine::DocId(2)), "Add has no document of its own");
+    }
 
     /// #5213: a mark's colour is sRGB (written as DeviceRGB), so the button shows it as is and
     /// an untouched button leaves it alone.
@@ -963,47 +1207,47 @@ mod tests {
     #[test]
     fn the_preview_shows_a_page_the_range_selects() {
         let all = PageRange::default();
-        assert_eq!(preview_page(&all, 2, 5), 2, "the current page when the range selects it");
+        assert_eq!(preview_page(&all.pages(5), 2), 2, "the current page when the range selects it");
         let even = PageRange { all: true, subset: Subset::Even, ..PageRange::default() };
-        assert_eq!(preview_page(&even, 0, 5), 1, "otherwise the first page the range selects");
+        assert_eq!(preview_page(&even.pages(5), 0), 1, "otherwise the first page the range selects");
         let later = PageRange { all: false, from: 3, to: 4, subset: Subset::All };
-        assert_eq!(preview_page(&later, 0, 5), 2);
+        assert_eq!(preview_page(&later.pages(5), 0), 2);
         let none = PageRange { all: false, from: 4, to: 2, subset: Subset::All };
-        assert_eq!(preview_page(&none, 1, 5), 1, "the current page when the range selects none");
-        assert_eq!(preview_page(&all, 0, 0), 0, "no pages at all");
+        assert_eq!(preview_page(&none.pages(5), 1), 1, "the current page when the range selects none");
+        assert_eq!(preview_page(&all.pages(0), 0), 0, "no pages at all");
     }
 
     #[test]
     fn the_preview_steps_through_the_pages_the_range_selects() {
         let odd = PageRange { all: true, subset: Subset::Odd, ..PageRange::default() };
         // Pages 1, 3 and 5 (0-based 0, 2, 4) of 5.
-        assert_eq!(step_preview(&odd, 0, 5, true), Some(2));
-        assert_eq!(step_preview(&odd, 2, 5, true), Some(4));
-        assert_eq!(step_preview(&odd, 4, 5, true), None, "the last page has no next");
-        assert_eq!(step_preview(&odd, 4, 5, false), Some(2));
-        assert_eq!(step_preview(&odd, 0, 5, false), None, "the first page has no previous");
+        assert_eq!(step_preview(&odd.pages(5), 0, true), Some(2));
+        assert_eq!(step_preview(&odd.pages(5), 2, true), Some(4));
+        assert_eq!(step_preview(&odd.pages(5), 4, true), None, "the last page has no next");
+        assert_eq!(step_preview(&odd.pages(5), 4, false), Some(2));
+        assert_eq!(step_preview(&odd.pages(5), 0, false), None, "the first page has no previous");
         // From a page the range leaves out, to the nearest one it selects on that side.
-        assert_eq!(step_preview(&odd, 1, 5, true), Some(2));
-        assert_eq!(step_preview(&odd, 1, 5, false), Some(0));
-        assert_eq!(step_preview(&odd, 0, 0, true), None, "no pages at all");
+        assert_eq!(step_preview(&odd.pages(5), 1, true), Some(2));
+        assert_eq!(step_preview(&odd.pages(5), 1, false), Some(0));
+        assert_eq!(step_preview(&odd.pages(0), 0, true), None, "no pages at all");
         // A page stepped to is previewed while the range selects it, and the range's first page
         // once a new range leaves it out.
-        assert_eq!(preview_page(&odd, 2, 5), 2);
+        assert_eq!(preview_page(&odd.pages(5), 2), 2);
         let later = PageRange { all: false, from: 4, to: 5, subset: Subset::All };
-        assert_eq!(preview_page(&later, 2, 5), 3);
+        assert_eq!(preview_page(&later.pages(5), 2), 3);
         // Narrowing the range past the page stepped to keeps the page shown instead, also once
         // the range is widened again.
         let mut stepped = Some(4);
         let first_two = PageRange { all: false, from: 1, to: 2, subset: Subset::All };
-        assert_eq!(shown_preview(&first_two, &mut stepped, 1, 5), 0);
+        assert_eq!(shown_preview(&first_two.pages(5), &mut stepped, 1), 0);
         assert_eq!(stepped, Some(0));
-        assert_eq!(shown_preview(&PageRange::default(), &mut stepped, 1, 5), 0);
+        assert_eq!(shown_preview(&PageRange::default().pages(5), &mut stepped, 1), 0);
         // A page stepped to inside the range stays; with none stepped to, the current page shows.
         let mut stepped = Some(2);
-        assert_eq!(shown_preview(&odd, &mut stepped, 0, 5), 2);
+        assert_eq!(shown_preview(&odd.pages(5), &mut stepped, 0), 2);
         assert_eq!(stepped, Some(2));
         let mut stepped = None;
-        assert_eq!(shown_preview(&odd, &mut stepped, 4, 5), 4);
+        assert_eq!(shown_preview(&odd.pages(5), &mut stepped, 4), 4);
         assert_eq!(stepped, None);
     }
 

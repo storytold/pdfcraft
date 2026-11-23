@@ -586,6 +586,33 @@ impl Automation {
         Ok(out)
     }
 
+    /// The headers and footers with recorded settings, as `doc_header_footer`'s `update` names them.
+    /// Their text is copied out only where the document allows copying, as with `doc_to_copy`.
+    pub(crate) fn header_footers(&mut self, a: &Args) -> Result<Value> {
+        let doc = self.doc(a)?;
+        let copying = doc.check_copying().is_ok();
+        let found: Vec<Value> = doc
+            .header_footers()
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                let mut out = json!({ "index": i + 1, "pages": m.pages.iter().map(|p| p + 1).collect::<Vec<_>>() });
+                if copying {
+                    let boxes = ["header_left", "header_center", "header_right", "footer_left", "footer_center", "footer_right"];
+                    let text: serde_json::Map<String, Value> =
+                        boxes.iter().zip(&m.settings.text).filter(|(_, t)| !t.is_empty()).map(|(k, t)| ((*k).to_string(), json!(t))).collect();
+                    out["text"] = Value::Object(text);
+                }
+                out
+            })
+            .collect();
+        let mut out = json!({ "header_footers": found });
+        if !copying {
+            out["text_withheld"] = json!("the document does not allow copying its text");
+        }
+        Ok(out)
+    }
+
     /// Pages whose own backdrop hides a background (see `pdfcraft_edit::backdrop`).
     pub(crate) fn backdrops(&mut self, a: &Args) -> Result<Value> {
         let n = self.doc(a)?.info.pages.len();
@@ -611,9 +638,27 @@ impl Automation {
     pub(crate) fn marks(&mut self, tool: &str, a: &Args) -> Result<Value> {
         use pdfcraft_engine::{Background, HeaderFooter, MarkKind, Watermark};
         let n = self.doc(a)?.info.pages.len();
-        let pages = match a.opt_ints("pages")? {
-            Some(_) => self.pages(a, "pages")?,
-            None => (0..n).collect(),
+        // The header and footer `update` names, as `doc_header_footers` lists it.
+        let updating = match a.opt_int("update")? {
+            Some(_) if tool != "doc_header_footer" => return Err(ToolError::InvalidArgs("update is only for doc_header_footer".into())),
+            Some(_) if a.opt_bool("replace")?.is_some() => return Err(ToolError::InvalidArgs("give update or replace, not both".into())),
+            Some(index) => {
+                let found = self.doc(a)?.header_footers();
+                // 1-based, as the listing numbers them and as `pages` are.
+                let mark = usize::try_from(index).ok().and_then(|i| i.checked_sub(1)).and_then(|i| found.get(i)).cloned();
+                let listed = found.len();
+                Some(mark.ok_or_else(|| {
+                    let range = if listed == 0 { "it lists none".to_string() } else { format!("1 to {listed}") };
+                    ToolError::InvalidArgs(format!("update must be an index doc_header_footers lists ({range}), not {index}"))
+                })?)
+            }
+            None => None,
+        };
+        let updated = updating.is_some();
+        let pages = match (a.opt_ints("pages")?, &updating) {
+            (Some(_), _) => self.pages(a, "pages")?,
+            (None, Some(mark)) => mark.pages.clone(),
+            (None, None) => (0..n).collect(),
         };
         let color =
             |key: &str, default: [f64; 3]| -> Result<[f64; 3]> { Ok(a.opt_str(key)?.map(comments::parse_color).transpose()?.unwrap_or(default)) };
@@ -644,7 +689,10 @@ impl Automation {
                     hf.start_number = s.clamp(1, u32::MAX as i64) as u32;
                 }
                 hf.shrink = a.opt_bool("shrink")?.unwrap_or(false);
-                Edit::AddHeaderFooter { pages, settings: hf, replace }
+                match updating {
+                    Some(mark) => Edit::UpdateHeaderFooter { old: mark.settings, pages, settings: hf },
+                    None => Edit::AddHeaderFooter { pages, settings: hf, replace },
+                }
             }
             "doc_watermark" => {
                 let d = Watermark::default();
@@ -713,7 +761,13 @@ impl Automation {
                 Edit::RemoveMarks { kind }
             }
         };
-        self.apply(a, edit)
+        let mut out = self.apply(a, edit)?;
+        // An update renumbers the listing (the replacement goes on top of the page), so earlier
+        // indices no longer hold: hand back the list they now refer to.
+        if updated {
+            out["header_footers"] = self.header_footers(a)?["header_footers"].take();
+        }
+        Ok(out)
     }
 
     pub(crate) fn export(&mut self, tool: &str, a: &Args) -> Result<Value> {

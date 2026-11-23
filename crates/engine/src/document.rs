@@ -589,6 +589,21 @@ impl Document {
             .marks
     }
 
+    /// The headers and footers Update can tell apart (`pdfcraft_edit::header_footers`).
+    pub fn header_footers(&self) -> Vec<pdfcraft_edit::HeaderFooterMark> {
+        self.editor.as_ref().map(|e| pdfcraft_edit::header_footers(&e.cos)).unwrap_or_default()
+    }
+
+    /// The header and footer added last to page `page` (`pdfcraft_edit::newest_header_footer`).
+    pub fn newest_header_footer(&self, page: usize) -> Option<Option<pdfcraft_edit::HeaderFooter>> {
+        self.editor.as_ref().and_then(|e| pdfcraft_edit::newest_header_footer(&e.cos, page))
+    }
+
+    /// Pages whose header and footer records no settings (`pdfcraft_edit::unrecorded_header_footer_pages`).
+    pub fn unrecorded_header_footer_pages(&self) -> Vec<usize> {
+        self.editor.as_ref().map(|e| pdfcraft_edit::unrecorded_header_footer_pages(&e.cos)).unwrap_or_default()
+    }
+
     /// Text and images added with Edit a PDF ▸ Add content (still editable).
     pub fn added(&self) -> &[pdfcraft_edit::Added] {
         &self

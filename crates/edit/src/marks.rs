@@ -160,6 +160,157 @@ impl HeaderFooter {
     }
 }
 
+/// One header and footer in a document: its settings and the pages (0-based, ascending) it is on.
+/// Marks with the same settings count as one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HeaderFooterMark {
+    pub pages: Vec<usize>,
+    pub settings: HeaderFooter,
+}
+
+/// The entry of a header and footer's content streams that keeps its settings, so Update can tell
+/// several apart and fill the dialog with the one chosen (#5785). Drawn text alone can't say
+/// which tokens made it. Private to PdfCraft (like `/PCMark`); other readers ignore it.
+pub(crate) const SETTINGS_KEY: &[u8] = b"PCHeaderFooter";
+
+/// The most bytes one recorded text box may take. A dialog box never needs more, and it bounds
+/// what listing the headers and footers of a hostile file decodes.
+const MAX_RECORDED_TEXT: usize = 16 * 1024;
+
+/// `f` of `o`, or of what it refers to: a direct value is read in place, never copied, so a large
+/// one costs nothing until it has been checked. (`Document::resolve` copies a direct value whole.)
+pub(crate) fn read<T>(doc: &Document, o: &Object, f: impl FnOnce(&Object) -> Option<T>) -> Option<T> {
+    match o {
+        Object::Ref(_) => f(&doc.resolve(o)),
+        _ => f(o),
+    }
+}
+
+/// An array of exactly `N` numbers, each resolved: a rewriting tool may make any of them indirect.
+fn numbers<const N: usize>(doc: &Document, o: &Object) -> Option<[f64; N]> {
+    read(doc, o, |array| {
+        let items = array.as_array().filter(|a| a.len() == N)?;
+        let values: Vec<f64> = items.iter().map(|v| read(doc, v, Object::as_f64)).collect::<Option<_>>()?;
+        <[f64; N]>::try_from(values).ok()
+    })
+}
+
+impl HeaderFooter {
+    /// Why [`add_header_footer`] refuses these settings, if it does. A recorded header and footer
+    /// is listed only when it passes too, so every one Update offers is one OK can apply.
+    pub(crate) fn check(&self) -> Result<(), EditError> {
+        if self.text.iter().all(|t| t.trim().is_empty()) {
+            return Err(EditError::Invalid("type the header or footer text first".into()));
+        }
+        // Measured as recorded: a box the listing would refuse to decode must not be added, or it
+        // could never be listed and updated, only replaced page-wide.
+        if self.text.iter().any(|t| pdfcraft_cos::PdfString::text(t).bytes.len() > MAX_RECORDED_TEXT) {
+            return Err(EditError::Invalid(format!("a header or footer box can hold at most {} KB of text", MAX_RECORDED_TEXT / 1024)));
+        }
+        if let Some(c) = self.first_undrawable() {
+            return Err(super::place::undrawable(c));
+        }
+        if !(self.font_size.is_finite() && self.font_size > 0.0 && self.font_size <= 200.0 && self.margins.iter().all(|m| m.is_finite() && *m >= 0.0))
+        {
+            return Err(EditError::Invalid("invalid font size or margins".into()));
+        }
+        Ok(())
+    }
+
+    /// These settings as the [`SETTINGS_KEY`] entry. The colour is recorded as drawn (see `rgb`),
+    /// so a header added with an out-of-range colour can still be listed and updated.
+    pub(crate) fn to_object(&self) -> Object {
+        let reals = |v: &[f64]| Object::Array(v.iter().copied().map(Object::Real).collect());
+        let drawn = self.color.map(|c| if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 });
+        let mut d = Dict::new();
+        d.set(b"Text".to_vec(), Object::Array(self.text.iter().map(|t| Object::String(pdfcraft_cos::PdfString::text(t))).collect()));
+        d.set(
+            b"Font".to_vec(),
+            Object::name(match self.font {
+                added::Family::Helvetica => "Helvetica",
+                added::Family::Times => "Times",
+                added::Family::Courier => "Courier",
+            }),
+        );
+        d.set(b"Size".to_vec(), Object::Real(self.font_size));
+        d.set(b"Color".to_vec(), reals(&drawn));
+        d.set(b"Underline".to_vec(), Object::Bool(self.underline));
+        d.set(b"Margins".to_vec(), reals(&self.margins));
+        d.set(b"Start".to_vec(), Object::Int(i64::from(self.start_number)));
+        d.set(b"Shrink".to_vec(), Object::Bool(self.shrink));
+        Object::Dict(d)
+    }
+
+    /// Settings back from a [`SETTINGS_KEY`] entry. `None` unless every value is one the dialog
+    /// could have written: a file can say anything here.
+    pub(crate) fn from_object(doc: &Document, o: &Object) -> Option<Self> {
+        let mut unlimited = usize::MAX;
+        Self::from_object_within(doc, o, &mut unlimited)
+    }
+
+    /// [`from_object`](Self::from_object), converting at most `budget` bytes of text, which it
+    /// takes from: `None` once that is spent. Bounds what one scan of a document converts.
+    pub(crate) fn from_object_within(doc: &Document, o: &Object, budget: &mut usize) -> Option<Self> {
+        #[cfg(test)]
+        DECODED.with(|n| n.set(n.get() + 1));
+        // Every value resolved, as a rewriting tool may make any of them indirect, and read in
+        // place: nothing is copied before it is checked.
+        read(doc, o, |o| {
+            let d = o.as_dict()?;
+            let flag = |key: &[u8]| {
+                read(doc, d.get(key)?, |v| match v {
+                    Object::Bool(b) => Some(*b),
+                    _ => None,
+                })
+            };
+            // The count and each size are checked before anything is decoded.
+            let text: Vec<String> = read(doc, d.get(b"Text")?, |texts| {
+                let texts = texts.as_array().filter(|a| a.len() == 6)?;
+                texts
+                    .iter()
+                    .map(|t| {
+                        read(doc, t, |t| {
+                            let s = t.as_string().filter(|s| s.bytes.len() <= MAX_RECORDED_TEXT)?;
+                            *budget = budget.checked_sub(s.bytes.len())?;
+                            Some(s.to_text())
+                        })
+                    })
+                    .collect()
+            })?;
+            let hf = Self {
+                text: text.try_into().ok()?,
+                font: read(doc, d.get(b"Font")?, |v| match v.as_name()? {
+                    b"Helvetica" => Some(added::Family::Helvetica),
+                    b"Times" => Some(added::Family::Times),
+                    b"Courier" => Some(added::Family::Courier),
+                    _ => None,
+                })?,
+                font_size: read(doc, d.get(b"Size")?, Object::as_f64)?,
+                color: numbers(doc, d.get(b"Color")?)?,
+                underline: flag(b"Underline")?,
+                margins: numbers(doc, d.get(b"Margins")?)?,
+                start_number: read(doc, d.get(b"Start")?, |v| u32::try_from(v.as_int()?).ok())?,
+                shrink: flag(b"Shrink")?,
+            };
+            let sane = hf.check().is_ok() && hf.color.iter().all(|c| (0.0..=1.0).contains(c));
+            sane.then_some(hf)
+        })
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many settings entries [`HeaderFooter::from_object_within`] has read on this thread.
+    pub(crate) static DECODED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The header and footer settings a [`SETTINGS_KEY`] entry records, if it records ones that
+/// [`add_header_footer`](crate::add_header_footer) would accept: what redaction matches a
+/// header's streams by, however each stores them.
+pub fn recorded_header_footer(doc: &Document, value: &Object) -> Option<HeaderFooter> {
+    HeaderFooter::from_object(doc, value)
+}
+
 /// The `cm` that shrinks a page's original content (user space) into the band `hf` leaves free,
 /// for a page shown `size` (display space) with view matrix `view` (display to user space): an
 /// even scale, centred across, the content's bottom on the footer's band.
