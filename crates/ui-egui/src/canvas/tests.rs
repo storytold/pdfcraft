@@ -375,7 +375,7 @@ fn failed(ctx: &egui::Context) -> TextureState {
 /// Page `page` on screen at 300 × 400 with `picture`, `column` places wide from the left.
 fn placed(page: usize, column: usize, picture: TextureState) -> PlacedPage {
     let rect = Rect::from_min_size(pos2(300.0 * column as f32, 0.0), vec2(300.0, 400.0));
-    PlacedPage::new(page, rect, 1.0, (0.0, 400.0), picture)
+    PlacedPage::new(page, rect, 1.0, (0.0, 400.0)).showing(picture)
 }
 
 fn page_info() -> pdfcraft_render::PageInfo {

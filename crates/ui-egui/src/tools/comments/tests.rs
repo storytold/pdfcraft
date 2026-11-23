@@ -4,7 +4,6 @@ use craft::behavior::kurbo::{Point, Vec2};
 use craft::pages::ui::PlacedPage;
 use craft::review::annotate::{AnnotationEdit, pick_at};
 use craft::review::{AnnotationId, ThreadId};
-use craft::ui::primitives::textures::TextureState;
 
 /// The screen size, in points, of a comment marker's icon.
 const ICON_POINTS: f32 = 12.0;
@@ -20,7 +19,7 @@ const SLOP: f32 = 4.0;
 
 /// The one placed page of a test: `xf`'s rectangle at `zoom`.
 fn placed_page(xf: &PageXform, zoom: f64) -> PlacedPage {
-    PlacedPage::new(0, xf.rect, zoom, (0.0, xf.rect.height()), TextureState::Missing)
+    PlacedPage::new(0, xf.rect, zoom, (0.0, xf.rect.height()))
 }
 
 /// The page map the app feeds `bridge` for `placed` pages shown turned `rotation` degrees, in a canvas view whose
