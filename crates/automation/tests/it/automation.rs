@@ -10038,14 +10038,68 @@ fn pdfa_through_tools() {
     let r = ok(&mut a, "pdfa_verify", json!({ "doc": doc }));
     assert_eq!(r["compliant"], false);
     assert!(r["issues"].as_array().unwrap().iter().any(|i| i["clause"] == "6.6.2.1"), "{r}");
+    // Its Helvetica isn't embedded, which conversion can't fix: the file isn't identified as
+    // PDF/A, the result says why, and a save writes no identification (#6845).
     let r = ok(&mut a, "pdfa_convert", json!({ "doc": doc, "level": "3b" }));
-    assert_eq!(r["declared"]["pdfa"], "PDF/A-3b", "{r}");
-    assert!(r["issues"].as_array().unwrap().iter().all(|i| i["fixable"] == false), "{r}");
+    assert_eq!(r["compliant"], false, "{r}");
+    assert!(r["declared"]["pdfa"].is_null(), "{r}");
+    assert!(r["issues"].as_array().unwrap().iter().any(|i| i["clause"] == "6.2.11.4" && i["fixable"] == false), "{r}");
+    assert!(r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().starts_with("not identified as PDF/A-3b")), "{r}");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "fonts.pdf" }));
+    let saved = std::fs::read(dir.join("fonts.pdf")).unwrap();
+    assert!(!saved.windows(7).any(|w| w == b"pdfaid:"), "the saved file declares PDF/A");
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "fonts.pdf" }))["doc"].as_u64().unwrap();
+    assert!(ok(&mut a, "pdfa_verify", json!({ "doc": reopened, "level": "3b" }))["declared"]["pdfa"].is_null());
     assert!(a.call("pdfa_verify", &json!({ "doc": doc, "level": "9z" })).is_err());
+    // A blank page has no fonts: it converts, is identified, and the identification comes off again.
+    let doc = ok(&mut a, "doc_create", json!({ "from": "blank" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "pdfa_convert", json!({ "doc": doc, "level": "3b" }));
+    assert_eq!(r["compliant"], true, "{r}");
+    assert_eq!(r["declared"]["pdfa"], "PDF/A-3b", "{r}");
+    assert!(r.get("warnings").is_none(), "{r}");
     ok(&mut a, "standards_remove_id", json!({ "doc": doc, "standard": "pdfa" }));
     let r = ok(&mut a, "pdfa_verify", json!({ "doc": doc }));
     assert!(r["declared"]["pdfa"].is_null() && !r["declared"]["output_intents"].as_array().unwrap().is_empty(), "{r}");
     assert!(matches!(a.call("standards_remove_id", &json!({ "doc": doc, "standard": "pdfa" })), Err(ToolError::Failed(_))), "nothing left");
+}
+
+/// Issue #6845: a file that already declared the requested PDF/A level keeps that identification
+/// when conversion leaves problems, so the warning says it was kept rather than saying the file
+/// isn't identified.
+#[test]
+fn pdfa_convert_reports_an_earlier_identification_it_keeps() {
+    let dir = workdir("pdfa-earlier-identification");
+    let xmp = r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/" pdfaid:part="2" pdfaid:conformance="B"/></rdf:RDF></x:xmpmeta><?xpacket end="w"?>"#;
+    let body = "BT /F1 18 Tf 20 150 Td (Archive me) Tj ET";
+    let content = format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len());
+    let metadata = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len());
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Metadata 6 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        &content,
+        &metadata,
+    ];
+    std::fs::write(dir.join("declared.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "declared.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "pdfa_verify", json!({ "doc": doc, "level": "2b" }))["declared"]["pdfa"], "PDF/A-2b");
+    // Helvetica isn't embedded, which conversion can't fix: the identification the file already
+    // had stays, so the warning says it was kept.
+    let r = ok(&mut a, "pdfa_convert", json!({ "doc": doc, "level": "2b" }));
+    assert_eq!(r["compliant"], false, "{r}");
+    assert_eq!(r["declared"]["pdfa"], "PDF/A-2b", "{r}");
+    assert!(r["issues"].as_array().unwrap().iter().any(|i| i["clause"] == "6.2.11.4"), "{r}");
+    let warnings: Vec<&str> = r["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert!(warnings.iter().any(|w| w.starts_with("kept its earlier PDF/A-2b identification")), "{r}");
+    assert!(!warnings.iter().any(|w| w.starts_with("not identified as")), "{r}");
+    // A save keeps the identification the file already had.
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "declared-saved.pdf" }));
+    let saved = std::fs::read(dir.join("declared-saved.pdf")).unwrap();
+    assert!(saved.windows(7).any(|w| w == b"pdfaid:"), "the saved file keeps the identification it had");
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "declared-saved.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "pdfa_verify", json!({ "doc": reopened, "level": "2b" }))["declared"]["pdfa"], "PDF/A-2b");
 }
 
 #[test]
@@ -12753,8 +12807,10 @@ fn convert_colours_through_tools() {
     assert_eq!(r["undo"], "Convert colours");
     assert_eq!(r["loses_conformance"], json!([]), "{r}");
     assert!(matches!(a.call("doc_convert_colours", &json!({ "doc": doc, "to": "lab" })), Err(ToolError::InvalidArgs(_))));
-    // A file that declares a standard is told what it may have lost.
-    ok(&mut a, "pdfa_convert", json!({ "doc": doc, "level": "3b" }));
+    // A file that declares a standard is told what it may have lost. A blank page has no fonts to
+    // embed, so conversion identifies it as PDF/A (#6845).
+    let doc = ok(&mut a, "doc_create", json!({ "from": "blank" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "pdfa_convert", json!({ "doc": doc, "level": "3b" }))["declared"]["pdfa"], "PDF/A-3b");
     ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "Blue", "at": [20, 40], "color": "#0000FF" }));
     let r = ok(&mut a, "doc_convert_colours", json!({ "doc": doc, "to": "cmyk", "pages": [1] }));
     let loses = r["loses_conformance"].as_array().unwrap();
