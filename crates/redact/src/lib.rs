@@ -797,17 +797,18 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         report.xfa_removed = !r.packets.is_empty();
     }
 
-    // 3c. Form actions name the annotations and fields they reset, submit or hide by reference
-    // (#7885): those references go, and any other reference that would keep a removed annotation
-    // or field in a full save refuses the redaction. Images and forms aren't checked here: one
-    // another page still draws stays on purpose.
+    // 3c. Form actions name the annotations and fields they reset, submit or hide by reference,
+    // and a field's `/Kids` can list a removed widget that names no `/Parent` (#7885): those
+    // references go, and any other reference that would keep a removed annotation or field in a
+    // full save refuses the redaction. Images and forms aren't checked here: one another page
+    // still draws stays on purpose.
     let in_form: HashSet<ObjRef> = if deleted_fields.is_empty() {
         HashSet::new()
     } else {
         pdfcraft_forms::fields(doc).iter().flat_map(|f| field_and_ancestors(doc, f.obj)).collect()
     };
     let removed: HashSet<ObjRef> = gone.into_iter().chain(deleted_fields.into_iter().filter(|f| !in_form.contains(f))).collect();
-    reachable::drop_action_targets(doc, &removed)?;
+    reachable::drop_references(doc, &removed)?;
 
     // 4. The boxes.
     for (pi, content) in overlays {

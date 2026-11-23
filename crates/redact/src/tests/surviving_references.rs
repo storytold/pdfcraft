@@ -1090,3 +1090,86 @@ fn a_removed_comment_another_reference_keeps_refuses_the_redaction() {
     assert!(matches!(refused, Err(RedactError::StillReferred { removed: 7, by: Some(8) })), "{refused:?}");
     assert_eq!(marks(&doc).len(), before, "a refused redaction changes nothing");
 }
+
+/// A reset button the mark misses resets only the redacted field (#7885). With that field gone its
+/// action must not list no fields, which readers (ours too) take for every field, the surviving
+/// ones included: it goes, and the action after it still runs.
+#[test]
+fn a_reset_action_left_with_no_field_goes_and_the_next_one_stays() {
+    let widget = |name: &str, rect: &str, rest: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T ({name}) /Rect [{rect}] /P 3 0 R {rest} >>").into_bytes()
+    };
+    let mut doc = page_with(
+        b"",
+        "/AcroForm << /Fields [7 0 R 8 0 R 9 0 R 10 0 R] >>",
+        "",
+        "/Annots [7 0 R 8 0 R 9 0 R 10 0 R]",
+        vec![
+            b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (ssn) /V (SSNSECRETV07) /Rect [10 50 100 70] /P 3 0 R >>".to_vec(),
+            b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Alice) /DV () /Rect [200 100 280 120] /P 3 0 R >>".to_vec(),
+            widget("then", "200 200 250 220", "/A 11 0 R"),
+            widget("only", "200 240 250 260", "/A << /S /ResetForm /Fields 7 0 R >>"),
+            b"<< /S /ResetForm /Fields [7 0 R] /Next << /S /Named /N /NextPage >> >>".to_vec(),
+        ],
+    );
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().fields, 1);
+    let fields = pdfcraft_forms::fields(&doc);
+    let button = |name: &str| fields.iter().find(|f| f.name == name).map(|f| f.button.clone());
+    assert_eq!(button("then"), Some(Some(pdfcraft_forms::af::ButtonAction::Named("NextPage".into()))), "the next action runs in its place");
+    assert_eq!(button("only"), Some(None), "a button that reset only the redacted field resets nothing");
+    assert!(!full_save_holds(&doc, b"SSNSECRETV07"), "the reset actions kept the redacted field");
+}
+
+/// A radio group the form lists holds its buttons in `/Kids`, each with its own `/T` and no
+/// `/Parent` (#7885): with every button under the mark, the redaction succeeds and neither the
+/// buttons nor the group's value stay in the saved file.
+#[test]
+fn a_redacted_radio_group_whose_buttons_name_no_parent_leaves_the_saved_file() {
+    let button = |rect: &str, tip: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 49152 /T (Group1) /TU ({tip}) /Rect [{rect}] /P 3 0 R /AS /Off >>").into_bytes()
+    };
+    let mut doc = page_with(
+        b"",
+        "/AcroForm << /Fields [7 0 R] >>",
+        "",
+        "/Annots [8 0 R 9 0 R]",
+        vec![
+            b"<< /FT /Btn /Ff 49152 /T (Group1) /V /RADIOSECRETV /Kids [8 0 R 9 0 R] >>".to_vec(),
+            button("10 50 30 70", "RADIOSECRETONE"),
+            button("40 50 60 70", "RADIOSECRETTWO"),
+        ],
+    );
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    apply(&mut doc, None).unwrap();
+    for secret in [b"RADIOSECRETONE".as_slice(), b"RADIOSECRETTWO", b"RADIOSECRETV"] {
+        assert!(!full_save_holds(&doc, secret), "{} stayed in the saved file", String::from_utf8_lossy(secret));
+    }
+}
+
+/// A field that is itself a widget on the page, outside the mark, holds the widgets under it in
+/// `/Kids`, each naming it as `/Parent` (#7885): the redaction succeeds and neither those widgets
+/// nor the field's value stay in the saved file.
+#[test]
+fn a_redacted_field_that_is_itself_a_widget_leaves_the_saved_file() {
+    let kid = |rect: &str, state: &str, text: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /Parent 7 0 R /Rect [{rect}] /P 3 0 R /AS /{state} /Contents ({text}) >>").into_bytes()
+    };
+    let mut doc = page_with(
+        b"",
+        "/AcroForm << /Fields [7 0 R] >>",
+        "",
+        "/Annots [7 0 R 8 0 R 9 0 R]",
+        vec![
+            b"<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 49152 /T (drink) /V /DRINKSECRETV /Rect [0 0 0 0] /P 3 0 R /Kids [8 0 R 9 0 R] >>"
+                .to_vec(),
+            kid("10 50 30 70", "DRINKSECRETV", "DRINKSECRETONE"),
+            kid("40 50 60 70", "Off", "DRINKSECRETTWO"),
+        ],
+    );
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    apply(&mut doc, None).unwrap();
+    for secret in [b"DRINKSECRETONE".as_slice(), b"DRINKSECRETTWO", b"DRINKSECRETV"] {
+        assert!(!full_save_holds(&doc, secret), "{} stayed in the saved file", String::from_utf8_lossy(secret));
+    }
+}

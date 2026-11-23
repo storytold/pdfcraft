@@ -168,9 +168,13 @@ to walk) makes `apply` fail with `RedactError::Tags` rather than leave the annot
 
 Form actions name what they act on by reference: a ResetForm or SubmitForm action's `/Fields` and a
 Hide action's `/T` lose the annotations and fields `apply` removes, wherever the action is (an
-annotation's `/A` or `/AA`, a page or the document, a `/Next` chain). Any other reference that would
-still keep a removed annotation or field in a full save makes `apply` fail with
-`RedactError::StillReferred`, which names the object holding it.
+annotation's `/A` or `/AA`, a page or the document, a `/Next` chain). A reset or submit action that
+named only removed fields goes, and the actions after it run in its place: an empty `/Fields` would
+read as every field. A field's `/Kids` loses them too (a widget or field that names no `/Parent`, or a
+field that is itself a widget outside the marks), and a field left with no kids goes with them, as an
+ancestor left without kids does. Any other reference that would still keep a removed annotation or
+field in a full save makes `apply` fail with `RedactError::StillReferred`, which names the object
+holding it.
 
 Replacement descriptions (`/Alt`, `/ActualText`, `/E`) are removed from marked-content spans
 changed by cleanup, from every structure element above them (found through both `/P` and `/K`),
