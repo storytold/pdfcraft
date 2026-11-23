@@ -2189,3 +2189,63 @@ fn each_printer_keeps_what_it_last_printed_with_across_a_restart() {
     open(&mut gone);
     assert_eq!(setup(&gone), office);
 }
+
+/// A range typed into the Pages field is what prints: clicking into the field chooses Pages
+/// (it was disabled while All was chosen, so it took no typing and the whole document printed).
+#[test]
+fn a_range_typed_into_the_pages_field_is_what_prints() {
+    use pdfcraft_ui_egui::PrintWhich;
+    let mut h = harness();
+    let bytes = h.state().session.create_blank(200.0, 300.0, 10).unwrap();
+    h.state_mut().open_bytes("ten.pdf", None, bytes.as_ref().clone()).unwrap();
+    h.run_steps(3);
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    assert_eq!(h.state().print_draft.which, PrintWhich::All);
+    h.get_by_role_and_label(Role::TextInput, "Pages").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::TextInput, "Pages").type_text("5-6");
+    h.run_steps(3);
+    assert_eq!(h.state().print_draft.which, PrintWhich::Range);
+    assert_eq!(h.state().print_draft.range, "5-6");
+    h.get_by_label("Sheet 1 of 2");
+    let out = std::env::temp_dir().join(format!("pdfcraft-print-typed-range-{}.pdf", std::process::id()));
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().print_draft.printer = None;
+    h.run_steps(1);
+    h.get_by_label("Save as PDF").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    let saved = std::fs::read(&out).expect("saved");
+    let _ = std::fs::remove_file(&out);
+    let doc = pdfcraft_cos::Document::open(std::sync::Arc::new(saved)).unwrap();
+    assert_eq!(pdfcraft_model::pages(&doc).len(), 2);
+}
+
+/// Tabbing onto and past the Pages field is not choosing Pages: an empty range would print every
+/// page instead of the Selected pages or Current page that was picked.
+#[test]
+fn tabbing_past_the_pages_field_keeps_the_earlier_choice() {
+    use pdfcraft_ui_egui::PrintWhich;
+    for start in [PrintWhich::Selected, PrintWhich::Current] {
+        let mut h = harness();
+        let bytes = h.state().session.create_blank(200.0, 300.0, 5).unwrap();
+        h.state_mut().open_bytes("five.pdf", None, bytes.as_ref().clone()).unwrap();
+        h.run_steps(3);
+        let tab = h.state().views.len() - 1;
+        h.state_mut().views[tab].select_pages(&[1, 3]);
+        assert!(h.state_mut().execute("print.dialog"));
+        h.run_steps(3);
+        h.state_mut().print_draft.which = start;
+        h.run_steps(2);
+        let mut reached = false;
+        for _ in 0..40 {
+            h.key_press(egui::Key::Tab);
+            h.run_steps(2);
+            reached |= h.get_by_role_and_label(Role::TextInput, "Pages").accesskit_node().is_focused();
+            assert_eq!(h.state().print_draft.which, start);
+        }
+        assert!(reached, "Tab never reached the Pages field");
+        assert_eq!(h.state().print_draft.range, "");
+    }
+}
