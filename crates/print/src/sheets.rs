@@ -141,6 +141,42 @@ pub struct Sheet {
     /// Page borders (Multiple) and cut marks (Poster), in sheet space: rectangles and lines.
     pub borders: Vec<[f64; 4]>,
     pub lines: Vec<[f64; 4]>,
+    /// Text printed on the sheet itself (poster tile labels).
+    pub texts: Vec<SheetText>,
+}
+
+/// One line of text on a sheet, printed in Helvetica.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SheetText {
+    /// The start of the baseline, in sheet space.
+    pub at: (f64, f64),
+    /// Font size in points.
+    pub size: f64,
+    /// Printable ASCII, so a standard 14 font draws it; anything else prints as `?`.
+    pub text: String,
+}
+
+/// The label of tile (`row`, `column`), both 0-based, of a `rows` × `columns` poster of page
+/// `page` (0-based): where the sheet goes when the poster is put together.
+pub fn poster_tile_label(page: usize, row: usize, column: usize, rows: usize, columns: usize) -> String {
+    format!("Page {}: row {} of {rows}, column {} of {columns}", page.saturating_add(1), row.saturating_add(1), column.saturating_add(1))
+}
+
+/// How far a poster label sits from the corners' cut marks and the tile's edge, in points.
+const LABEL_GAP: f64 = 4.0;
+
+/// The smallest poster label printed, in points; a sheet too narrow for it gets none.
+const MIN_LABEL_SIZE: f64 = 3.0;
+
+/// A poster label's font size: 7 pt, or smaller when the line would not fit between the
+/// corners' cut marks of a sheet `width` points wide; `None` below [`MIN_LABEL_SIZE`]. In
+/// Helvetica a label's line is narrower than 0.6 em a character (its spaces and punctuation more
+/// than make up for `m` and `w`).
+fn label_size(text: &str, width: f64) -> Option<f64> {
+    let room = width - 2.0 * MARGIN - 2.0 * LABEL_GAP;
+    let wide = 0.6 * text.len() as f64;
+    let size = if wide > 0.0 { (room / wide).min(7.0) } else { 7.0 };
+    (size >= MIN_LABEL_SIZE).then_some(size)
 }
 
 fn oriented(paper: (f64, f64), o: Orientation, landscape_wanted: bool) -> (f64, f64) {
@@ -378,7 +414,7 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                 }
             }
         }
-        Layout::Poster { scale, overlap, cut_marks } => {
+        Layout::Poster { scale, overlap, cut_marks, labels } => {
             if !(scale.is_finite() && scale > 0.0 && overlap.is_finite() && overlap >= 0.0) {
                 return Err(PrintError::Invalid("invalid tile scale or overlap".into()));
             }
@@ -415,6 +451,15 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                                 let dy = if y == y0 { -1.0 } else { 1.0 };
                                 sheet.lines.push([x + dx * 2.0, y, x + dx * (MARGIN - 2.0), y]);
                                 sheet.lines.push([x, y + dy * 2.0, x, y + dy * (MARGIN - 2.0)]);
+                            }
+                        }
+                        if labels {
+                            // In the top margin, clear of the corners' cut marks, which run up
+                            // the margin only at the tile's left and right edges.
+                            let text = poster_tile_label(p, ty, tx, ny, nx);
+                            if let Some(font_size) = label_size(&text, size.0) {
+                                let at = (MARGIN + LABEL_GAP, size.1 - MARGIN + LABEL_GAP);
+                                sheet.texts.push(SheetText { at, size: font_size, text });
                             }
                         }
                         sheets.push(sheet);

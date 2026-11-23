@@ -71,6 +71,8 @@ pub struct PrintDraft {
     pub poster_scale: f64,
     pub overlap: f64,
     pub cut_marks: bool,
+    /// Poster: each tile's page, row and column printed above it.
+    pub poster_labels: bool,
     pub orientation: Orientation,
     pub content: Content,
     /// Print as image (Acrobat's Advanced Print Setup) at `dpi`.
@@ -156,6 +158,7 @@ impl Default for PrintDraft {
             poster_scale: 200.0,
             overlap: 18.0,
             cut_marks: true,
+            poster_labels: false,
             orientation: Orientation::Auto,
             content: Content::DocumentAndMarkups,
             as_image: false,
@@ -492,7 +495,9 @@ impl PrintDraft {
                 }
             }
             Handling::Booklet => Layout::Booklet { subset: self.booklet_subset, binding: self.binding, creep: self.creep },
-            Handling::Poster => Layout::Poster { scale: self.poster_scale, overlap: self.overlap, cut_marks: self.cut_marks },
+            Handling::Poster => {
+                Layout::Poster { scale: self.poster_scale, overlap: self.overlap, cut_marks: self.cut_marks, labels: self.poster_labels }
+            }
             Handling::Label => Layout::Label { flip: self.label_flip },
         };
         Ok(print::Settings {
