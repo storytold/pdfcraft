@@ -237,7 +237,8 @@ impl ScanTabState {
                     self.load(draft, Ok(bytes));
                 }
             }
-            Picked::Cancelled | Picked::Unavailable(_) => {}
+            // Save answers (a failed write, a download) never come to an open pick.
+            Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => {}
         }
     }
 

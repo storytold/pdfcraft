@@ -193,7 +193,8 @@ impl PdfCraftApp {
                     }
                     images
                 }
-                Picked::Cancelled | Picked::Unavailable(_) => return,
+                // Save answers (a failed write, a download) never come to an open pick.
+                Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => return,
             };
             app.begin_image_import(ctx, images);
         });
