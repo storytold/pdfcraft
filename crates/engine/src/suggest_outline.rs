@@ -195,14 +195,16 @@ fn set_inline(lines: &[Line]) -> Vec<bool> {
 /// and tight leading makes stacked lines' boxes touch), side by side rather than one over the
 /// other, no smaller than `l`, in another style, at most [`BESIDE_GAP`] ems apart. A heading set
 /// beside text more than [`SIZE_TOLERANCE`] smaller is still a heading; a word set smaller than
-/// the prose around it is not.
+/// the prose around it is not. Prose whose box spans `l` on its row also counts: a producer may
+/// set a sentence as one run with a gap, and paint the bold word into the gap.
 fn beside(l: &Line, o: &Line) -> bool {
     let size = l.style.size;
     let shared = l.top.min(o.top) - l.bottom.max(o.bottom);
     let shorter = (l.top - l.bottom).min(o.top - o.bottom);
     let gap = l.left.max(o.left) - l.right.min(o.right);
+    let spans = o.left <= l.left && l.right <= o.right;
     shared >= shorter * 0.5
-        && gap >= -size * 0.25
+        && (spans || gap >= -size * 0.25)
         && gap <= size * BESIDE_GAP
         && size <= o.style.size + SIZE_TOLERANCE
         && !o.style.matches(&l.style)
@@ -335,6 +337,22 @@ mod tests {
             body(0, 656.0),
         ];
         assert_eq!(titles(&inferred(lines).0), [(1, "MUST", 0), (1, "Scope", 0)]);
+    }
+
+    #[test]
+    fn a_bold_word_painted_into_a_gap_in_one_run_of_prose_is_not_a_heading() {
+        let mut word = run(725.2, true, "MUST", 192.0, 219.0);
+        word.style.size = 10.0;
+        word.bottom = word.top - 8.0;
+        let lines = vec![
+            line(0, 760.0, 11.0, true, "MUST"),
+            body(0, 740.0),
+            run(726.0, false, "A recipient           ignore the field.", 72.0, 400.0),
+            word,
+            body(0, 712.0),
+            body(0, 698.0),
+        ];
+        assert_eq!(titles(&inferred(lines).0), [(1, "MUST", 0)]);
     }
 
     #[test]
