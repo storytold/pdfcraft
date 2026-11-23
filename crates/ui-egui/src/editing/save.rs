@@ -188,7 +188,9 @@ impl PdfCraftApp {
                     .title(tl!("Save over the changed file?").to_string())
                     .button(PromptChoice::Proceed, tl!("Save anyway").to_string())
                     .button(PromptChoice::Alternate, tl!("Save as…").to_string())
-                    .button(PromptChoice::Cancel, tl!("Cancel").to_string());
+                    .button(PromptChoice::Cancel, tl!("Cancel").to_string())
+                    // Production's order: Save as… between Cancel and Save anyway.
+                    .alternate_role(craft::ui::sections::DialogRole::Alternative);
                 let prompt = crate::dialogs::host::open(self, prompt);
                 if let Some(pending) = self.pending_save.as_mut().filter(|p| p.key == key) {
                     pending.prompt = Some(prompt);

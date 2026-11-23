@@ -64,6 +64,8 @@ pub(crate) fn ask_lock(app: &mut PdfCraftApp, pending: PendingLock) {
     .button(PromptChoice::Proceed, tl!("Lock and save").to_string())
     .button(PromptChoice::Alternate, tl!("Keep editable").to_string())
     .button(PromptChoice::Cancel, tl!("Cancel").to_string())
+    // Production's order: Keep editable between Cancel and Lock and save.
+    .alternate_role(craft::ui::sections::DialogRole::Alternative)
     .dont_show_again()
     .tag(id)
     .instance("lock-signatures");

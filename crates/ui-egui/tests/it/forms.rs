@@ -65,9 +65,9 @@ fn card_count(h: &Harness<'static, PdfCraftApp>) -> usize {
     toast::cards(&h.ctx, &WindowKey::main()).len()
 }
 
-/// Whether the "Save changes?" prompt is on screen.
+/// Whether the "Save changes?" prompt is on screen: an alert dialog, the framework's role for the question.
 fn asks_to_save(h: &Harness<'static, PdfCraftApp>) -> bool {
-    h.query_by(|n| n.role() == egui::accesskit::Role::Dialog && n.label().is_some_and(|l| l.starts_with("Save changes to “"))).is_some()
+    h.query_by(|n| n.role() == egui::accesskit::Role::AlertDialog && n.label().is_some_and(|l| l.starts_with("Save changes to “"))).is_some()
 }
 
 /// The unsaved-changes question's Save answer in the platform's words (production's wording, on every platform).

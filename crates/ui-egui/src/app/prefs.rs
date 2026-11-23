@@ -54,6 +54,9 @@ impl PdfCraftApp {
         if cfg!(target_os = "linux") {
             options.middle_button = craft::behavior::MiddleButton::AutoScroll;
         }
+        // Production's autoscroll: the speed grows with the pointer's whole distance from the mark, a release inside a
+        // short hold keeps it running, and it ends when the page view loses the keys.
+        options.middle_autoscroll = craft::ui::canvas::MiddleAutoscrollFeel::Reader;
         let eased = !self.animation_effects.reduced(None);
         options.animated_zoom = eased;
         options.eased_wheel = eased;
