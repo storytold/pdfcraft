@@ -357,6 +357,16 @@ impl Session {
         self.docs.retain(|d| d.id != id);
     }
 
+    /// Keep document `id` from being changed: every edit is refused with `reason`, as for a file
+    /// that can't be edited. A portfolio's file shown in the portfolio's own tab is read this
+    /// way, since an edit can't be saved back into the portfolio yet. Whether it is open.
+    pub fn set_read_only(&mut self, id: DocId, reason: impl Into<String>) -> bool {
+        let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) else { return false };
+        doc.editor = None;
+        doc.read_only_reason = Some(reason.into());
+        true
+    }
+
     pub fn get(&self, id: DocId) -> Option<&Document> {
         self.docs.iter().find(|d| d.id == id)
     }

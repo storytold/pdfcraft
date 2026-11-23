@@ -333,11 +333,13 @@ impl FileWatch {
 }
 
 impl PdfCraftApp {
-    /// The documents to watch: every open one with a file, while the preference is on.
+    /// The documents to watch: every open one with a file, while the preference is on. A
+    /// portfolio's tab is watched for the portfolio, whichever of its files it shows.
     fn watched(&self) -> impl Iterator<Item = (DocId, &str, Option<Stamp>, u64)> {
-        self.views.iter().filter(|_| self.reload_changed_files).filter_map(|v| {
-            let path = self.session.get(v.id)?.path.as_deref()?;
-            Some((v.id, path, self.watch.known.get(&v.id).copied(), self.watch.epoch(v.id)))
+        (0..self.views.len()).filter(|_| self.reload_changed_files).filter_map(|i| {
+            let id = self.tab_doc(i)?;
+            let path = self.session.get(id)?.path.as_deref()?;
+            Some((id, path, self.watch.known.get(&id).copied(), self.watch.epoch(id)))
         })
     }
 
@@ -354,7 +356,7 @@ impl PdfCraftApp {
             && sent.next().is_none();
         if !unchanged {
             let list: Vec<Watched> = self.watched().map(|(doc, path, known, epoch)| Watched { doc, path: path.to_owned(), known, epoch }).collect();
-            let open: Vec<DocId> = self.views.iter().map(|v| v.id).collect();
+            let open: Vec<DocId> = (0..self.views.len()).filter_map(|i| self.tab_doc(i)).collect();
             self.watch.known.retain(|doc, _| open.contains(doc));
             self.watch.basis.retain(|doc, _| open.contains(doc));
             self.watch.epoch.retain(|doc, _| open.contains(doc));
@@ -417,7 +419,7 @@ impl PdfCraftApp {
     /// A watched file has a new version: reload its document, or ask first when it has unsaved
     /// changes.
     fn file_changed(&mut self, c: Changed) {
-        let Some(i) = self.views.iter().position(|v| v.id == c.doc) else { return };
+        let Some(i) = self.tab_of_doc(c.doc) else { return };
         // A dialog acts on the active document when its OK is pressed: replacing the document
         // under it would apply the dialog to another version (#3917). Keep the newest version
         // found until the dialog closes; the checks below run then.
@@ -444,6 +446,9 @@ impl PdfCraftApp {
         }
         self.watch.known.insert(c.doc, c.stamp);
         if self.has_unsaved_work(i) {
+            // The notice bar asking about it shows on the portfolio's own pages, whose Reload
+            // reads the portfolio's file.
+            self.show_in_portfolio_tab(i, None);
             if let Some(view) = self.views.get_mut(i) {
                 view.disk_changed = true;
             }
@@ -455,7 +460,7 @@ impl PdfCraftApp {
     /// The notice bar's Reload: read the file now and replace the document, unsaved changes and
     /// all.
     fn reload_from_disk(&mut self, doc: DocId) {
-        let Some(i) = self.views.iter().position(|v| v.id == doc) else { return };
+        let Some(i) = self.tab_of_doc(doc) else { return };
         let Some(path) = self.session.get(doc).and_then(|d| d.path.clone()) else { return };
         let stamp = Stamp::at(&path);
         match std::fs::read(&path) {
@@ -473,15 +478,26 @@ impl PdfCraftApp {
     /// Open `bytes` in place of tab `i`'s document, keeping the tab and the reader's place. A
     /// version that can't be opened leaves the document as it was, and says so.
     fn reload_view(&mut self, i: usize, bytes: Arc<Vec<u8>>) {
-        let Some(id) = self.views.get(i).map(|v| v.id) else { return };
+        // A portfolio's tab reloads the portfolio, whichever file it shows, on its own pages when
+        // they can come back (a file's typing that can't be committed keeps that file shown).
+        self.show_in_portfolio_tab(i, None);
+        let Some(id) = self.tab_doc(i) else { return };
         match self.session.reload(id, bytes) {
             Ok(()) => {
+                // The files it showed came from the old version: they open again from the new
+                // one when picked.
+                self.forget_portfolio_files(i);
                 // Whatever was unsaved is gone, so there is nothing left to recover, and no
                 // signature placed since the last save is left to ask about locking (#2149).
                 self.forget_recovery(id);
                 self.placed_signatures.remove(&id);
+                // The portfolio's own view takes the new version, shown or put aside.
                 if let (Some(view), Some(doc)) = (self.views.get_mut(i), self.session.get(id)) {
-                    view.document_replaced(&doc.info);
+                    if view.id == id {
+                        view.document_replaced(&doc.info);
+                    } else if let Some((_, own)) = view.portfolio.as_mut().and_then(|p| p.parked.iter_mut().find(|(key, _)| key.is_none())) {
+                        own.document_replaced(&doc.info);
+                    }
                 }
                 // What the form's scripts said while it opened, as on opening.
                 let out = self.session.take_js_output(id);

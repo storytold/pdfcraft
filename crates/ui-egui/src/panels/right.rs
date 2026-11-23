@@ -22,6 +22,9 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut sig_action: Option<crate::sign_ui::PanelAction> = None;
     let mut a11y_action: Option<crate::a11y_ui::PanelAction> = None;
     let mut compare_action: Option<crate::compare_ui::PanelAction> = None;
+    // A portfolio's tab: the portfolio, whose files the Portfolio files panel lists, and the one shown.
+    let portfolio = app.active_portfolio().map(|(i, host)| (host, app.views[i].portfolio.as_ref().and_then(|p| p.shown.clone())));
+    let mut portfolio_action: Option<super::portfolio_files::FileAction> = None;
     let mut bm_rename = app.bookmark_rename.clone();
     let bm_editable = app.session.get(id).is_some_and(|d| d.allows_assembly() && d.read_only_reason.is_none());
     let bm_can_paste = app.bookmark_clipboard.is_some();
@@ -32,6 +35,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     {
         let Some(doc) = app.session.get(id) else { return };
         let info = &doc.info;
+        let host = portfolio.as_ref().and_then(|(h, _)| app.session.get(*h));
         let view = &mut app.views[index];
         let prefs = &app.comment_prefs;
         let sig_expanded = &mut app.sig_expanded;
@@ -60,6 +64,12 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Tags => ("Tags", None),
                     RightPanel::Search => ("Search", None),
                     RightPanel::Compare => ("Compare", compare.as_ref().filter(|c| c.new == id).map(|c| c.result.changes.len())),
+                    RightPanel::PortfolioFiles => (
+                        "Portfolio files",
+                        host.map(|h| {
+                            h.info.attachments.iter().filter(|a| matches!(a.source, pdfcraft_render::AttachmentSource::Document { .. })).count()
+                        }),
+                    ),
                 };
                 // Comments count like Acrobat (no replies); the replies go in small text below.
                 let replies = if panel == RightPanel::Comments { crate::comments_panel::reply_count(info) } else { 0 };
@@ -306,6 +316,12 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     }
                     RightPanel::Search => crate::search_ui::panel(ui, &t, view, info.pages.len()),
                     RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare, id),
+                    RightPanel::PortfolioFiles => match (host, &portfolio) {
+                        (Some(host), Some((_, shown))) => {
+                            portfolio_action = super::portfolio_files::panel(ui, &t, &host.info.attachments, shown.as_deref());
+                        }
+                        _ => empty(ui, &t, "folder-open", "This document isn't a portfolio."),
+                    },
                     RightPanel::Attachments => {
                         let attachable = doc.allows_modification() && doc.read_only_reason.is_none();
                         if attachable {
@@ -471,6 +487,11 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     if let Some((ai, open)) = attachment_action {
         app.attachment_action(id, ai, open);
+    }
+    match (portfolio_action, portfolio) {
+        (Some(super::portfolio_files::FileAction::Show(key)), _) => app.show_portfolio_file(index, Some(&key)),
+        (Some(super::portfolio_files::FileAction::Attachment(ai, open)), Some((host, _))) => app.attachment_action(host, ai, open),
+        _ => {}
     }
     if let Some((layer, visible)) = toggle_layer
         && app.session.set_layer_visible(id, layer, visible)
