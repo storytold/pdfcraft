@@ -195,12 +195,14 @@ impl SignedData {
         Ok(SignedData { certificates, signer, content, econtent_type, quirks })
     }
 
-    /// The signer's certificate among those carried.
+    /// The signer's certificate among those carried. When more than one matches the SID (two
+    /// certificates for one key can share a key identifier), the one the signed attributes name.
     pub fn signer_certificate(&self) -> Option<&Certificate> {
-        self.certificates.iter().find(|c| match &self.signer.sid {
+        let mut by_sid = self.certificates.iter().filter(|c| match &self.signer.sid {
             SignerId::IssuerSerial { issuer, serial } => &c.issuer.raw == issuer && strip(&c.serial) == strip(serial),
             SignerId::KeyId(k) => c.subject_key_id.as_ref() == Some(k),
-        })
+        });
+        by_sid.clone().find(|c| self.signed_attrs_name(c)).or_else(|| by_sid.next())
     }
 
     /// Whether the signed attributes name `cert` as the signer's certificate, when they name one.

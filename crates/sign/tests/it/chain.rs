@@ -369,10 +369,10 @@ fn an_issuer_with_an_unprocessed_critical_extension_does_not_vouch() {
     assert_eq!(names(&build_chain(&l.cert, &pool, None)), ["Leaf", "Under Constrained Root", "Name Constrained Root"]);
 }
 
-/// `cms` (a ContentInfo, possibly followed by padding) rewritten, without any private key, to name
-/// `cert` as its signer: the SID and the carried certificates change; the signed attributes and
-/// the signature value stay as they were.
-fn name_another_signer(cms: &[u8], cert: &Certificate) -> Vec<u8> {
+/// `cms` (a ContentInfo, possibly followed by padding) rewritten, without any private key, so its
+/// SID names `cert` and it carries `carried`, in that order; the signed attributes and the
+/// signature value stay as they were.
+fn name_another_signer(cms: &[u8], cert: &Certificate, carried: &[&Certificate]) -> Vec<u8> {
     let (ci, _) = der::Tlv::parse(cms).unwrap();
     let ci = ci.children().unwrap();
     let sd = ci[1].inner().unwrap().children().unwrap();
@@ -382,7 +382,8 @@ fn name_another_signer(cms: &[u8], cert: &Certificate) -> Vec<u8> {
     let mut fields: Vec<&[u8]> = signer.iter().map(|t| t.raw).collect();
     fields[1] = &sid;
     let signer = der::seq(&fields);
-    let sd = der::seq(&[version.raw, digests.raw, encap.raw, &der::tlv(tag::ctx(0), &cert.raw), &der::set_of(&[&signer])]);
+    let carried: Vec<u8> = carried.iter().flat_map(|c| c.raw.iter().copied()).collect();
+    let sd = der::seq(&[version.raw, digests.raw, encap.raw, &der::tlv(tag::ctx(0), &carried), &der::set_of(&[&signer])]);
     der::seq(&[ci[0].raw, &der::explicit(0, &sd)])
 }
 
@@ -414,7 +415,11 @@ fn another_certificate_for_the_same_key_does_not_take_the_signers_place() {
     let exts = [basic_constraints(false, None), key_usage(DIGITAL_SIGNATURE)];
     let Party { key, cert: chosen, .. } = issue_for(PrivateKey::generate_p256().unwrap(), "Alice Personal", Some(&r), FOREVER, &exts);
     let Party { key, cert: other, .. } = issue_for(key, "Alice Director of Finance", Some(&r), FOREVER, &exts);
+    // The same issuer and serial as the chosen one (the test CA numbers by name length), so the
+    // SID matches both.
+    let Party { key, cert: twin, .. } = issue_for(key, "Alice Director", Some(&r), FOREVER, &exts);
     assert_eq!(chosen.public_key, other.public_key);
+    assert_eq!((&chosen.issuer, &chosen.serial), (&twin.issuer, &twin.serial));
     let id = DigitalId { key, certificate: chosen, chain: Vec::new(), friendly_name: None };
 
     let doc = Document::open(Arc::new(fixture())).unwrap();
@@ -424,11 +429,17 @@ fn another_certificate_for_the_same_key_does_not_take_the_signers_place() {
     let check = |pdf: &[u8]| signatures(&Document::open(Arc::new(pdf.to_vec())).unwrap(), pdf, &trust).into_iter().rfind(|s| s.signed).unwrap();
     let control = check(&signed);
     assert_eq!(control.status, Status::Valid, "{:?}", control.details);
-    let swapped = rewrite_contents(&signed, |cms| name_another_signer(cms, &other));
+    let swapped = rewrite_contents(&signed, |cms| name_another_signer(cms, &other, &[&other]));
     assert_eq!(swapped.len(), signed.len());
     let s = check(&swapped);
     assert_ne!(s.status, Status::Valid, "{:?}", s.details);
     assert!(!s.signer.unwrap_or_default().contains("Director"), "the other certificate's name is not shown as the signer's");
+    // Two carried certificates the SID matches: the one the signed attributes name is the signer's,
+    // wherever it is in the list.
+    let both = rewrite_contents(&signed, |cms| name_another_signer(cms, &id.certificate, &[&twin, &id.certificate]));
+    let s = check(&both);
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert!(!s.signer.unwrap_or_default().contains("Director"), "the twin's name is not shown as the signer's");
 
     // A timestamp token names its authority's certificate the same way.
     let query = TimestampQuery::new(DigestAlg::Sha256, DigestAlg::Sha256.digest(&[b"stamped".as_slice()])).unwrap();
@@ -439,5 +450,6 @@ fn another_certificate_for_the_same_key_does_not_take_the_signers_place() {
     .unwrap();
     let token = der::Tlv::parse_all(&response).unwrap().children().unwrap()[1].raw.to_vec();
     assert!(parse_token(&token).is_ok());
-    assert!(parse_token(&name_another_signer(&token, &other)).is_err());
+    assert!(parse_token(&name_another_signer(&token, &other, &[&other])).is_err());
+    assert!(parse_token(&name_another_signer(&token, &id.certificate, &[&twin, &id.certificate])).is_ok());
 }
