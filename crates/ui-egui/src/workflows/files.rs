@@ -785,6 +785,20 @@ impl PdfCraftApp {
     /// when the user chooses the folder. `after` never runs when writing fails or is cancelled.
     /// Every name must be a plain file name ([`is_plain_file_name`]); otherwise nothing is written.
     pub(crate) fn write_files_then(&mut self, named: Vec<(String, Arc<Vec<u8>>)>, title: &str, after: impl FnOnce(&mut Self) + Send + 'static) {
+        self.write_files_as(named, title, Overwrite::Replace, after);
+    }
+
+    /// [`Self::write_files_then`], replacing a file of the same name in the folder or, with
+    /// [`Overwrite::Never`], never: a name already taken there (or by an earlier file of the same
+    /// batch, compared case-insensitively) gets " (2)", " (3)", ... before ".pdf", and the notice
+    /// says so. Downloads (web) are named by the browser.
+    pub(crate) fn write_files_as(
+        &mut self,
+        named: Vec<(String, Arc<Vec<u8>>)>,
+        title: &str,
+        overwrite: Overwrite,
+        after: impl FnOnce(&mut Self) + Send + 'static,
+    ) {
         if let Some((name, _)) = named.iter().find(|(name, _)| !is_plain_file_name(name)) {
             self.notify_fmt("Couldn't write {name}: {e}", &[("name", name), ("e", tl!("the name is not a plain file name"))]);
             return;
@@ -792,16 +806,48 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let write = move |app: &mut Self, dir: std::path::PathBuf| {
+                let mut used = std::collections::HashSet::new();
+                // The names written in place of a taken one, as written.
+                let mut numbered: Vec<String> = Vec::new();
                 for (name, bytes) in &named {
-                    if let Err(e) = crate::editing::write_atomically(&dir.join(name).to_string_lossy(), bytes) {
-                        app.notify_fmt("Couldn't write {name}: {e}", &[("name", name), ("e", &e.to_string())]);
-                        return;
+                    let written = match overwrite {
+                        Overwrite::Replace => {
+                            let path = dir.join(name);
+                            crate::editing::write_atomically(&path.to_string_lossy(), bytes).map(|()| path)
+                        }
+                        Overwrite::Never => write_new_file(&dir, name, bytes, &mut used),
+                    };
+                    match written {
+                        Ok(path) => {
+                            if let Some(written) = path.file_name().map(|n| n.to_string_lossy()).filter(|n| n != name.as_str()) {
+                                numbered.push(written.into_owned());
+                            }
+                        }
+                        Err(e) => {
+                            app.notify_fmt("Couldn't write {name}: {e}", &[("name", name), ("e", &e.to_string())]);
+                            return;
+                        }
                     }
                 }
-                if named.len() == 1 {
-                    app.notify_fmt("Wrote 1 file to {dir}", &[("dir", &dir.display().to_string())]);
-                } else {
-                    app.notify_fmt("Wrote {n} files to {dir}", &[("n", &named.len().to_string()), ("dir", &dir.display().to_string())]);
+                let dir_text = dir.display().to_string();
+                // The numbered names, the first few of them, so the reader can tell them from
+                // the files that were already there.
+                let mut shown: Vec<&str> = numbered.iter().take(5).map(String::as_str).collect();
+                if numbered.len() > shown.len() {
+                    shown.push("…");
+                }
+                let shown = shown.join(", ");
+                match (named.len(), numbered.is_empty()) {
+                    (1, true) => app.notify_fmt("Wrote 1 file to {dir}", &[("dir", &dir_text)]),
+                    (1, false) => app.notify_fmt(
+                        "Wrote 1 file to {dir}. Its name was taken, so it was written as {names} and no file was replaced.",
+                        &[("dir", &dir_text), ("names", &shown)],
+                    ),
+                    (n, true) => app.notify_fmt("Wrote {n} files to {dir}", &[("n", &n.to_string()), ("dir", &dir_text)]),
+                    (n, false) => app.notify_fmt(
+                        "Wrote {n} files to {dir}. Some names were taken, so those files were written as {names} and no file was replaced.",
+                        &[("n", &n.to_string()), ("dir", &dir_text), ("names", &shown)],
+                    ),
                 }
                 after(app);
             };
@@ -814,7 +860,7 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = title;
+            let _ = (title, overwrite);
             for (name, bytes) in &named {
                 if let Err(e) = crate::editing::download(name, bytes) {
                     self.notify_fmt("Couldn't download {name}: {e}", &[("name", name), ("e", &e.to_string())]);
@@ -870,7 +916,6 @@ impl PdfCraftApp {
             }
         };
         let safe = |t: &str| t.chars().map(|c| if c.is_alphanumeric() || " -_.,()".contains(c) { c } else { '_' }).collect::<String>();
-        let mut used = std::collections::HashSet::new();
         let named: Vec<(String, Arc<Vec<u8>>)> = parts
             .into_iter()
             .map(|(a, b, bytes)| {
@@ -881,17 +926,12 @@ impl PdfCraftApp {
                     None if a == b => format!("{stem} (page {a}).pdf"),
                     None => format!("{stem} (pages {a}-{b}).pdf"),
                 };
-                // Equal titles (or titles that sanitize alike) get (2), (3), ... so no part overwrites another; compared case-insensitively.
-                let mut unique = name.clone();
-                let mut n = 1;
-                while !used.insert(unique.to_lowercase()) {
-                    n += 1;
-                    unique = format!("{} ({n}).pdf", name.trim_end_matches(".pdf"));
-                }
-                (unique, bytes)
+                (name, bytes)
             })
             .collect();
-        self.write_files(&named, "Choose a folder for the split files");
+        // Equal titles get (2), (3), ... as they are written, and so does a name already taken in
+        // the folder: no part replaces another or a file that was there (organize.split-naming).
+        self.write_files_as(named, "Choose a folder for the split files", Overwrite::Never, |_| {});
     }
 
     /// Summarize Comments: make the summary and open it as a new document.
@@ -922,6 +962,57 @@ impl PdfCraftApp {
             Err(e) => self.notify_fmt("Couldn't open the result: {e}", &[("e", &e.to_string())]),
         }
     }
+}
+
+/// What [`PdfCraftApp::write_files_as`] does with a name already taken in the folder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Overwrite {
+    /// The new file replaces it.
+    Replace,
+    /// The new file gets the next free " (N)" name instead.
+    Never,
+}
+
+/// Write `bytes` into `dir` as `name`, or as `<stem> (2).pdf`, `<stem> (3).pdf`, ... when that
+/// is taken in `dir` or in `used` (names written earlier in the batch, lowercased): the name is
+/// reserved with an exclusive create, so a file that appears meanwhile is not replaced either.
+/// Returns the path written.
+#[cfg(not(target_arch = "wasm32"))]
+fn write_new_file(
+    dir: &std::path::Path,
+    name: &str,
+    bytes: &[u8],
+    used: &mut std::collections::HashSet<String>,
+) -> std::io::Result<std::path::PathBuf> {
+    let stem = strip_pdf(name).to_string();
+    let first = name.to_string();
+    let names = (1..)
+        .map(move |n| if n == 1 { first.clone() } else { numbered_name(&stem, n) })
+        .filter(|candidate| !used.contains(&candidate.to_lowercase()));
+    let path = pdfcraft_platform::staging::reserve_new_name(dir, names)?;
+    if let Err(e) = crate::editing::write_atomically(&path.to_string_lossy(), bytes) {
+        let _ = std::fs::remove_file(&path);
+        return Err(e);
+    }
+    used.insert(path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default());
+    Ok(path)
+}
+
+/// `<stem> (n).pdf`, with `stem` cut between characters so the name fits in the 255 bytes ext4
+/// and APFS allow (NTFS's 255 UTF-16 units are never fewer), and no dot or space left where the
+/// cut ends it. A name that fits keeps its whole stem.
+#[cfg(not(target_arch = "wasm32"))]
+fn numbered_name(stem: &str, n: u32) -> String {
+    const MAX_NAME_BYTES: usize = 255;
+    let suffix = format!(" ({n}).pdf");
+    let room = MAX_NAME_BYTES.saturating_sub(suffix.len());
+    let stem = if stem.len() <= room {
+        stem
+    } else {
+        let end = stem.char_indices().map(|(at, c)| at + c.len_utf8()).take_while(|end| *end <= room).last().unwrap_or(0);
+        stem.get(..end).unwrap_or_default().trim_end_matches(|c: char| c == '.' || c.is_whitespace())
+    };
+    format!("{stem}{suffix}")
 }
 
 pub(crate) fn strip_pdf(name: &str) -> &str {
@@ -1143,6 +1234,23 @@ impl PdfCraftApp {
 #[cfg(test)]
 mod stem_tests {
     use super::{attachment_file_name, file_stem_from_user, is_plain_file_name};
+
+    /// CodeRabbit on #7999: a stem that fills a file name still leaves room for " (N).pdf", cut
+    /// between characters, while a short stem is kept whole.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_numbered_name_fits_a_file_name() {
+        for stem in ["a".repeat(240) + " (page 1)", "文".repeat(84), format!("{}. x", "b".repeat(247))] {
+            for n in [2, 10, 9999] {
+                let name = super::numbered_name(&stem, n);
+                let suffix = format!(" ({n}).pdf");
+                assert!(name.len() <= 255 && name.ends_with(&suffix), "{} bytes: {name}", name.len());
+                let kept = name.strip_suffix(&suffix).unwrap_or_default();
+                assert!(stem.starts_with(kept) && !kept.ends_with(['.', ' ']), "{kept:?}");
+            }
+        }
+        assert_eq!(super::numbered_name("doc0 (page 1)", 2), "doc0 (page 1) (2).pdf");
+    }
 
     #[test]
     fn user_file_names_stay_inside_the_folder_and_writable_everywhere() {
