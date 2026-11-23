@@ -2178,7 +2178,8 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
     {
         let count = app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
         let units = app.session.get(id).map(|d| d.page_user_units()).unwrap_or_default();
-        let edit = app.boxes_draft.edit(app.views[i].current, count, &units);
+        // The page the dialog shows (see `pageboxes::body`), checked against the pages there now.
+        let edit = app.boxes_draft.edit(app.boxes_draft.page_or(app.views[i].current, count), count, &units);
         app.apply_edit(edit);
         app.boxes_draft.seeded = None;
     }
@@ -2222,6 +2223,11 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
         }
         if dialog == Dialog::AttachmentDescription {
             app.attachment_description_draft = None;
+        }
+        // However it closes (OK, Cancel, Escape, a click outside): opened again by any route, it
+        // is for the current page unless a new crop rectangle says otherwise.
+        if dialog == Dialog::PageBoxes {
+            app.boxes_draft.page = None;
         }
         app.discard_properties();
         app.bulk_field_props = None;

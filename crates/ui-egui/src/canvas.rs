@@ -763,6 +763,10 @@ pub struct DocView {
     marks_waiting: Option<(QuickTool, Selection)>,
     /// A crop rectangle being dragged (Crop tool).
     pub crop_drag: crate::crop::CropDrag,
+    /// A crop rectangle just drawn with the Crop tool: the page it was drawn on and the rectangle,
+    /// in that page's default user space. Set Page Boxes opens seeded from it this frame, for that
+    /// page (#5695).
+    pub crop_marquee: Option<(usize, [f64; 4])>,
     /// Enhance ▸ Camera image: the quadrilateral being placed.
     pub camera: Option<crate::camera_ui::CameraQuad>,
     /// Enhance ▸ Camera image: the page just enhanced, while the bar offers rotate, crop and
@@ -1204,6 +1208,7 @@ impl DocView {
             marks_across_pages: None,
             marks_waiting: None,
             crop_drag: None,
+            crop_marquee: None,
             camera: None,
             camera_done: None,
             sign: Default::default(),
@@ -3575,8 +3580,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         refused = Some(why);
     }
     let form_notice = view.forms.notice.take();
-    // One crop, then back to selecting (as Acrobat does).
-    let cropped = view.pending_edit.as_ref().is_some_and(|e| matches!(e, pdfcraft_engine::Edit::SetPageBox { .. }));
+    // One crop, then back to selecting (as Acrobat does). A drawn rectangle is that crop: Set
+    // Page Boxes, which it opens, applies it.
+    let cropped = view.crop_marquee.is_some() || view.pending_edit.as_ref().is_some_and(|e| matches!(e, pdfcraft_engine::Edit::SetPageBox { .. }));
     let mut tool = app.quick_tool;
     comments::keys(ui.ctx(), keys, view, info, &mut tool, allowed);
     if preparing {
@@ -3892,8 +3898,22 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     if open_boxes {
         app.boxes_draft.range = crate::pageboxes::Range::Current;
         app.boxes_draft.seeded = None;
+        app.boxes_draft.page = None;
+        // A rectangle drawn with the Crop tool fills in the crop box's margins, to adjust before
+        // OK (#5695); a double-click starts from the page's own box. The rectangle is in the
+        // coordinates of the page it was drawn on, which need not be the page current by now
+        // (the page shown most is, and the drawn one may be mostly scrolled away): seed from that
+        // page, and the dialog shows and applies to it.
+        if let Some((page, rect)) = app.views[index].crop_marquee.take() {
+            let drawn = app.session.get(app.views[index].id).and_then(|d| d.page_boxes().get(page).map(|b| (b[0], d.page_user_unit(page))));
+            if let Some((media, user_unit)) = drawn {
+                let units = app.units;
+                app.boxes_draft.seed_crop_rect(page, media, rect, user_unit, units);
+            }
+        }
         app.dialog = Some(crate::Dialog::PageBoxes);
     }
+    app.views[index].crop_marquee = None;
     if let Some((page, rect)) = open_table {
         app.field_table_draft = Some(crate::field_table_ui::FieldTableDraft::new(app.views[index].id, page, rect, &form, generation));
         app.dialog = Some(crate::Dialog::FieldTable);
