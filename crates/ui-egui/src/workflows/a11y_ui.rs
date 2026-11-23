@@ -686,17 +686,10 @@ fn figure_image(bytes: &Arc<Vec<u8>>, password: Option<&str>, shot: Option<&Figu
         w: (w * scale).ceil().max(1.0) as u32,
         h: (h * scale).ceil().max(1.0) as u32,
     };
-<<<<<<< HEAD
-    // The picture is only shown in the dialog, so it draws like the viewer (installed CJK faces
-    // for fonts the PDF doesn't embed); nothing is saved from it (AGENTS.md §1.4).
-    let config = pdfcraft_render::RenderConfig { password: password.map(Arc::from), ..Default::default() }.on_screen();
-    let mut r = pdfcraft_render::PageRenderer::new(bytes.clone(), config);
-=======
     // The picture is only shown in the panel, so it draws like the viewer (installed CJK faces
     // for fonts the PDF doesn't embed); nothing is saved from it (docs/development.md "Fonts and attribution").
-    let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() }.on_screen();
-    let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
->>>>>>> upstream/main
+    let config = pdfcraft_render::RenderConfig { password: password.map(Arc::from), ..Default::default() }.on_screen();
+    let mut r = pdfcraft_render::PageRenderer::new(bytes.clone(), config);
     let out = r.render(pdfcraft_render::RenderRequest {
         page: *page,
         kind: pdfcraft_render::RequestKind::Pixels,

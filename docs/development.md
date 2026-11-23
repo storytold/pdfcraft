@@ -178,7 +178,7 @@ to 16 and directory entries to 32,768. Cyclic includes are skipped.
   returns an error. Release builds set it (`.github/workflows/release.yml`), and `ATTRIBUTION.toml`
   lists it as a `[[build_input]]`. Code that uses `CRAFT_FONTS` works when it is empty.
 - The desktop app reads one font already installed on the machine at run time, as the last interface
-  fallback (`crates/ui-egui/src/system_fonts.rs`). The page viewer can draw a CID font of an Adobe CJK
+  fallback (`OnDemandFonts` with `SystemCandidates`, the craft font catalog). The page viewer can draw a CID font of an Adobe CJK
   collection that a PDF does not embed with an installed face, on screen only
   (`crates/render/src/system_font.rs`; `RenderConfig::system_fonts` is off by default and set by
   `RenderConfig::on_screen`). Neither font is embedded, shipped, committed or copied, and nothing drawn

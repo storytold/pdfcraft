@@ -412,7 +412,6 @@ impl PdfCraftApp {
     }
 }
 
-<<<<<<< HEAD
 /// Lets go of every thumbnail and open document of a Combine tab that closed.
 pub(crate) fn release_thumbnails(ctx: &egui::Context, tab: &CombineTab) {
     source::thumbnails(ctx).retain(ctx, |_| false);
@@ -421,12 +420,7 @@ pub(crate) fn release_thumbnails(ctx: &egui::Context, tab: &CombineTab) {
 
 /// The render configuration of a Combine thumbnail. Thumbnails are only shown on screen, so installed CJK
 /// faces may draw fonts a PDF doesn't embed, as in the viewer; the combined file itself is written from
-/// the original bytes and never from these rasters (AGENTS.md §1.4).
-=======
-/// The render configuration of a Combine thumbnail. Thumbnails are only shown on screen, so
-/// installed CJK faces may draw fonts a PDF doesn't embed, as in the viewer; the combined file
-/// itself is written from the original bytes and never from these rasters (docs/development.md "Fonts and attribution").
->>>>>>> upstream/main
+/// the original bytes and never from these rasters (docs/development.md "Fonts and attribution").
 fn thumbnail_config(password: Option<Arc<str>>) -> RenderConfig {
     RenderConfig { password, ..Default::default() }.on_screen()
 }
