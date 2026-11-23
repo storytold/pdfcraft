@@ -5,6 +5,7 @@
 use std::cell::Cell;
 
 use super::*;
+use pdfcraft_fonts::ShapedCluster;
 
 /// Regression fingerprint for the small-item fixture: drawing bytes, font map and document
 /// objects, with generated streams decoded so Flate backend selection cannot change the hash.
