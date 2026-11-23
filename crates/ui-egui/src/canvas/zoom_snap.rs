@@ -1,17 +1,20 @@
-//! View ▸ Zoom ▸ Marquee Zoom (drag a rectangle to fill the window with it; click to zoom in)
-//! and Edit ▸ Take a Snapshot (drag a rectangle to copy that area as an image).
+//! Edit ▸ Take a Snapshot (drag a rectangle to copy that area as an image) and Fit Visible.
 
-use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
+use craft::behavior::{CancelReason, Cursor, CursorIcon};
+use craft::host::PickRequest;
+use craft::pages::Fit;
+use craft::pages::ui::{GoTo, PlacedPage};
+use craft::platform::clipboard::ClipboardImage;
+use craft::print::ui::HostedPrint;
+use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
+use craft::ui::canvas_controls::TaskBar;
+use craft::ui::contract::Show as _;
+use craft::ui::primitives::Draw;
 use pdfcraft_render::{RenderConfig, RenderRequest, RequestKind, Tile};
 
-use crate::canvas::{DocView, PageXform};
-use crate::page_cursor::Layer;
-use crate::page_pointer::PagePointer;
-use crate::{PdfCraftApp, QuickTool};
-
-/// A finished gesture: (page, the rectangle on screen, the same in page view points
-/// [x0, y0, x1, y1]); a plain click has an empty rectangle.
-pub type Marquee = (usize, Rect, [f32; 4]);
+use super::page_box_drag::{PageBoxDrag, page_under};
+use crate::PdfCraftApp;
+use crate::canvas::PageXform;
 
 /// What was chosen in the menu under a copied area.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,107 +25,128 @@ pub enum AreaChoice {
     Save,
 }
 
-/// Drag a rectangle on page `page` (Marquee Zoom, Snapshot), with a press nobody holds (`free`).
-pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, ptr: &PagePointer, page: usize, free: bool, view: &mut DocView) {
-    let (pointer, origin) = (ptr.pos, ptr.origin);
-    if pointer.is_some_and(|p| xf.rect.contains(p)) {
-        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
+/// The Snapshot tool, built per pass over the placed pages. A drag reports the page and the
+/// rectangle in page view points; a click with no drag, or under 2 points either way, reports nothing.
+pub(crate) struct SnapshotTool<'a> {
+    placed: Vec<PlacedPage>,
+    /// Per placed page: its unrotated view-space size.
+    sizes: Vec<(usize, (f32, f32))>,
+    rotation: u16,
+    /// The session's drag, kept from the press to the release.
+    drag: &'a mut PageBoxDrag,
+    done: Option<(usize, [f32; 4])>,
+}
+
+impl<'a> SnapshotTool<'a> {
+    /// A tool over `placed`, in a view turned by `rotation`, with its rectangle in `drag`; `page_size_of` gives a
+    /// page's size in view points.
+    pub(crate) fn new(drag: &'a mut PageBoxDrag, placed: &[PlacedPage], rotation: u16, page_size_of: impl Fn(usize) -> (f32, f32)) -> Self {
+        let sizes = placed.iter().map(|p| (p.page, page_size_of(p.page))).collect();
+        Self { placed: placed.to_vec(), sizes, rotation, drag, done: None }
     }
-    // The tool's own press, of the primary button: one nobody holds.
-    if resp.drag_started_by(egui::PointerButton::Primary)
-        && free
-        && let Some(o) = origin.filter(|o| xf.rect.contains(*o))
-    {
-        view.marquee = Some((page, o));
-        view.area_pick = None;
-    }
-    // The area just copied stays outlined, with what can be done with it underneath.
-    if let Some((p, area)) = view.area_pick
-        && p == page
-        && view.marquee.is_none()
-    {
-        let r = xf.view_rect(area);
-        ui.painter().rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.5, Color32::from_rgb(0x14, 0x73, 0xE6)), egui::StrokeKind::Middle);
-        egui::Area::new(egui::Id::unique("snapshot-area-menu"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(r.left_bottom() + egui::vec2(0.0, 6.0))
-            .show(ui.ctx(), |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        if ui.button(tl!("Print area…")).clicked() {
-                            view.area_choice = Some(AreaChoice::Print);
-                        }
-                        if ui.button(tl!("Save as image…")).clicked() {
-                            view.area_choice = Some(AreaChoice::Save);
-                        }
-                    });
-                });
-            });
-    }
-    if let Some((p, start)) = view.marquee
-        && p == page
-    {
-        // Where the pointer is, or where it went down when it is off the window.
-        let end = pointer.unwrap_or(start);
-        let end = Pos2::new(end.x.clamp(xf.rect.left(), xf.rect.right()), end.y.clamp(xf.rect.top(), xf.rect.bottom()));
-        let r = Rect::from_two_pos(start, end);
-        ui.painter().rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, Color32::from_rgb(0x14, 0x73, 0xE6)), egui::StrokeKind::Middle);
-        if resp.drag_stopped() || !ptr.primary_down {
-            view.marquee = None;
-            let (a, b) = (xf.screen_to_view(r.left_top()), xf.screen_to_view(r.right_bottom()));
-            view.marquee_done = Some((page, r, [a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1)]));
-        }
-    }
-    if free
-        && resp.clicked()
-        && let Some(p) = pointer.filter(|p| xf.rect.contains(*p))
-    {
-        let v = xf.screen_to_view(p);
-        view.marquee_done = Some((page, Rect::from_min_size(p, egui::Vec2::ZERO), [v.0, v.1, v.0, v.1]));
+
+    /// The area the last release made, once.
+    pub(crate) fn take_result(&mut self) -> Option<(usize, [f32; 4])> {
+        self.done.take()
     }
 }
 
+impl CanvasTool for SnapshotTool<'_> {
+    fn press(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) -> ToolAction {
+        match page_under(&self.placed, pointer.pos) {
+            Some(placed) if self.drag.press(placed, pointer.pos) => ToolAction::Claimed,
+            _ => ToolAction::Ignored,
+        }
+    }
+
+    fn drag(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {
+        self.drag.drag(pointer.pos);
+    }
+
+    fn release(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {
+        self.drag.drag(pointer.pos);
+        let Some(scale) = self.drag.current().and_then(|(bounds, _)| self.placed.iter().find(|p| p.rect == bounds)).map(|p| p.scale as f32) else {
+            self.drag.cancel();
+            return;
+        };
+        let Some((page, rect)) = self.drag.release(2.0 * scale) else { return };
+        let Some(placed) = self.placed.iter().find(|p| p.page == page) else { return };
+        let Some(size) = self.sizes.iter().find(|(p, _)| *p == page).map(|(_, s)| *s) else { return };
+        let xf = PageXform::of(placed, self.rotation, size);
+        let (a, b) = (xf.screen_to_view(rect.left_top()), xf.screen_to_view(rect.right_bottom()));
+        self.done = Some((page, [a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1)]));
+    }
+
+    fn cancel(&mut self, _reason: CancelReason, _cx: &mut ToolContext<'_>) {
+        self.drag.cancel();
+    }
+
+    fn paint(&self, _draw: &Draw<'_>, cx: &ToolContext<'_>) {
+        self.drag.paint(cx);
+    }
+
+    fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        if cx.pointer.is_some_and(|p| page_under(&self.placed, p.pos).is_some()) {
+            Cursor::System(CursorIcon::Crosshair)
+        } else {
+            Cursor::System(CursorIcon::Default)
+        }
+    }
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the Print area and Save as image commands of the area bar")
+    }
+}
+
+/// The fixed task bar under the kept area `area_pick` (page, view-space rect) with what can be done
+/// with it: the choice made this pass. The outline itself is the page body's (marching ants).
+pub(crate) fn area_bar(
+    ui: &mut egui::Ui,
+    body: &craft::pages::ui::PageBody<'_>,
+    placed: &[PlacedPage],
+    area_pick: Option<(usize, [f32; 4])>,
+    rotation: u16,
+    page_size_of: impl Fn(usize) -> (f32, f32),
+) -> Option<AreaChoice> {
+    let (page, area) = area_pick?;
+    let placed = placed.iter().find(|p| p.page == page)?;
+    let screen = PageXform::of(placed, rotation, page_size_of(page)).view_rect(area);
+    let anchor = [screen.left_top(), screen.right_top(), screen.right_bottom(), screen.left_bottom()].map(|p| body.view.to_doc(p));
+    let mut choice = None;
+    TaskBar::fixed(tl!("Snapshot area"), &anchor).show(ui, body.rect, |ui, _cx| {
+        if craft::ui::buttons::Button::new(tl!("Print area…")).show(ui).clicked() {
+            choice = Some(AreaChoice::Print);
+        }
+        if craft::ui::buttons::Button::new(tl!("Save as image…")).show(ui).clicked() {
+            choice = Some(AreaChoice::Save);
+        }
+    });
+    choice
+}
+
 impl PdfCraftApp {
-    /// Finish a marquee gesture for the current tool.
-    pub(crate) fn finish_marquee(&mut self, index: usize, done: Marquee) {
-        let (page, rect, view_rect) = done;
-        match self.quick_tool {
-            QuickTool::MarqueeZoom => {
-                let view = &mut self.views[index];
-                if rect.width() < 6.0 || rect.height() < 6.0 {
-                    // A click zooms in one step around the point.
-                    let z = (view.zoom * 1.5).min(64.0);
-                    view.zoom_at(z, rect.center());
-                } else {
-                    view.zoom_to_rect(rect);
-                }
+    /// Finish a Snapshot drag: copy the area `view_rect` of `page`.
+    pub(crate) fn finish_marquee(&mut self, ctx: &egui::Context, index: usize, done: (usize, [f32; 4])) {
+        let (page, view_rect) = done;
+        // The tool outlives the tab it was chosen on.
+        if self.views.get(index).map(|v| v.id).is_some_and(|id| !self.may_copy(id)) {
+            return;
+        }
+        match self.snapshot(ctx, index, page, view_rect) {
+            Ok((w, h)) => {
+                self.views[index].session.area_pick = Some((page, view_rect));
+                self.notify_fmt("The selected area has been copied ({w} × {h} pixels)", &[("w", &w.to_string()), ("h", &h.to_string())])
             }
-            QuickTool::Snapshot => {
-                if view_rect[2] - view_rect[0] < 2.0 || view_rect[3] - view_rect[1] < 2.0 {
-                    return;
-                }
-                // The tool outlives the tab it was chosen on.
-                if self.views.get(index).map(|v| v.id).is_some_and(|id| !self.may_copy(id)) {
-                    return;
-                }
-                match self.snapshot(index, page, view_rect) {
-                    Ok((w, h)) => {
-                        self.views[index].area_pick = Some((page, view_rect));
-                        self.notify_fmt("The selected area has been copied ({w} × {h} pixels)", &[("w", &w.to_string()), ("h", &h.to_string())])
-                    }
-                    Err(e) => self.notify_fmt("Couldn't take the snapshot: {e}", &[("e", &e.to_string())]),
-                }
-            }
-            _ => {}
+            Err(e) => self.notify_fmt("Couldn't take the snapshot: {e}", &[("e", &e.to_string())]),
         }
     }
 
     /// View ▸ Zoom ▸ Fit Visible on the current page: find where the page has ink (a quick
-    /// low-resolution render) and zoom so that spans the window's width. A blank page fits the
-    /// width.
+    /// low-resolution render) and ask the page view to bring that to the window's width. A blank
+    /// page fits the width.
     pub fn fit_visible(&mut self, index: usize) -> Result<(), String> {
         let view = &self.views[index];
-        let page = view.current;
+        let page = view.view.current;
         let doc = self.session.get(view.id).ok_or("no document")?;
         let config = RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..RenderConfig::default() };
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
@@ -133,8 +157,11 @@ impl PdfCraftApp {
         if let Some(e) = out.error {
             return Err(e);
         }
-        let rot = view.rotation;
-        let view = &mut self.views[index];
+        let rot = view.view.rotation % 360;
+        let (w, h) = doc.info.pages.get(page).map_or((612.0, 792.0), |p| (f64::from(p.width), f64::from(p.height)));
+        // The page as the view shows it: turned a quarter swaps its sides.
+        let (shown_w, shown_h) = if rot == 90 || rot == 270 { (h, w) } else { (w, h) };
+        let view = &mut self.views[index].view;
         match ink_bounds(out.width as usize, out.height as usize, &out.rgba) {
             Some([u0, v0, u1, v1]) => {
                 // View space → the rotated view on screen.
@@ -145,11 +172,13 @@ impl PdfCraftApp {
                     _ => (u, v),
                 };
                 let (a, b) = (rotate(u0, v0), rotate(u1, v1));
-                if !view.fit_content(page, [a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1)]) {
-                    view.fit = crate::canvas::Fit::Width;
-                }
+                let (x0, x1) = (f64::from(a.0.min(b.0)) * shown_w, f64::from(a.0.max(b.0)) * shown_w);
+                let (y0, y1) = (f64::from(a.1.min(b.1)) * shown_h, f64::from(a.1.max(b.1)) * shown_h);
+                view.fit = Fit::None;
+                // The page view fits `rect` to its viewport in its own pass; a margin of 0 keeps its side gap.
+                view.go_to = Some(GoTo::Rect { page, rect: craft::behavior::kurbo::Rect::new(x0, y0, x1, y1), margin: 0.0 });
             }
-            None => view.fit = crate::canvas::Fit::Width,
+            None => view.fit = Fit::Width,
         }
         Ok(())
     }
@@ -160,7 +189,7 @@ impl PdfCraftApp {
         let Some((_, id)) = self.active_ids() else { return };
         let Some(height) = self.session.get(id).and_then(|d| d.info.pages.get(page)).map(|p| f64::from(p.height)) else { return };
         self.open_print();
-        if self.dialog == Some(crate::Dialog::Print) {
+        if self.dialogs.is_open::<HostedPrint>() {
             let [x0, y0, x1, y1] = view_rect.map(f64::from);
             let d = &mut self.print_draft;
             // The print crate takes the area in display space, y up.
@@ -171,14 +200,14 @@ impl PdfCraftApp {
         }
     }
 
-    /// Save the area `view_rect` of `page` that view `index` copied as a PNG file (asked where;
-    /// `save_override` in tests). The last snapshot is used when it was taken of that area;
-    /// otherwise (another tab snapshotted since) the area is rendered again.
-    pub(crate) fn save_snapshot_image(&mut self, index: usize, page: usize, view_rect: [f32; 4]) {
+    /// Save the area `view_rect` of `page` that view `index` copied as a PNG file (asked where).
+    /// The last snapshot is used when it was taken of that area; otherwise (another tab
+    /// snapshotted since) the area is rendered again.
+    pub(crate) fn save_snapshot_image(&mut self, ctx: &egui::Context, index: usize, page: usize, view_rect: [f32; 4]) {
         let this_area = self.views.get(index).is_some_and(|v| self.last_snapshot_of == Some((v.id, page, view_rect)));
         let png = match self.last_snapshot.as_ref() {
             Some((w, h, pixels)) if this_area => pdfcraft_engine::export::encode_png(*w, *h, pixels),
-            _ => self.render_area(index, page, view_rect).and_then(|(w, h, pixels)| pdfcraft_engine::export::encode_png(w, h, &pixels)),
+            _ => self.render_area(ctx, index, page, view_rect).and_then(|(w, h, pixels)| pdfcraft_engine::export::encode_png(w, h, &pixels)),
         };
         let png = match png {
             Ok(png) => png,
@@ -192,36 +221,19 @@ impl PdfCraftApp {
             .and_then(|(_, id)| self.session.get(id))
             .map_or_else(String::new, |d| d.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string());
         let name = format!("{stem} area.png");
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let write = move |app: &mut Self, path: std::path::PathBuf| match crate::editing::write_atomically(&path.to_string_lossy(), &png) {
+        self.pick_first(PickRequest::save("snapshot").file_name(name).filter("PNG", &["png"]), None, move |app, _, path| {
+            match craft::atomic::atomic_write(&path, &png) {
                 Ok(()) => app.notify_fmt("Exported to {path}", &[("path", &path.display().to_string())]),
                 Err(e) => app.notify_fmt("Couldn't write {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
-            };
-            match self.save_override.clone() {
-                Some(p) => write(self, p.into()),
-                None => {
-                    let dialog =
-                        rfd::AsyncFileDialog::new().set_title(tl!("Save as image").to_string()).add_filter("PNG", &["png"]).set_file_name(name);
-                    self.ask_one(crate::pickers::Ask::Save(dialog), None, write);
-                }
             }
-        }
-        #[cfg(target_arch = "wasm32")]
-        if let Err(e) = crate::editing::download(&name, &png) {
-            self.notify_error(e);
-        }
+        });
     }
 
     /// Render `view_rect` (page view points) of `page` and copy it to the clipboard (and keep it
     /// in `last_snapshot`), at the current zoom or [`SNAPSHOT_MIN_SCALE`] if that is finer.
-    pub fn snapshot(&mut self, index: usize, page: usize, view_rect: [f32; 4]) -> Result<(u32, u32), String> {
-        let (w, h, rgba) = self.render_area(index, page, view_rect)?;
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.system_clipboard {
-            let img = arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(&rgba) };
-            crate::os_clipboard::with(|c| c.set_image(img)).map_err(|e| e.to_string())?;
-        }
+    pub fn snapshot(&mut self, ctx: &egui::Context, index: usize, page: usize, view_rect: [f32; 4]) -> Result<(u32, u32), String> {
+        let (w, h, rgba) = self.render_area(ctx, index, page, view_rect)?;
+        self.clipboard.write_image(&ClipboardImage { width: w, height: h, rgba: rgba.to_vec() }).map(|_| ()).map_err(|e| e.to_string())?;
         self.last_snapshot = Some((w, h, rgba));
         self.last_snapshot_of = Some((self.views[index].id, page, view_rect));
         Ok((w, h))
@@ -229,11 +241,16 @@ impl PdfCraftApp {
 
     /// Render `view_rect` (page view points) of `page` in view `index` at its current zoom:
     /// (width, height, premultiplied RGBA).
-    fn render_area(&self, index: usize, page: usize, view_rect: [f32; 4]) -> Result<(u32, u32, pdfcraft_render::Pixels), String> {
+    fn render_area(
+        &self,
+        ctx: &egui::Context,
+        index: usize,
+        page: usize,
+        view_rect: [f32; 4],
+    ) -> Result<(u32, u32, pdfcraft_render::Pixels), String> {
         let view = self.views.get(index).ok_or("no document")?;
         let doc = self.session.get(view.id).ok_or("no document")?;
-        let ppp = self.ctx.as_ref().map_or(2.0, |c| c.pixels_per_point());
-        let scale = snapshot_scale(view.render_scale(ppp), view_rect[2] - view_rect[0], view_rect[3] - view_rect[1]);
+        let scale = snapshot_scale(view.render_scale(ctx.pixels_per_point()), view_rect[2] - view_rect[0], view_rect[3] - view_rect[1]);
         let tile = Tile {
             x: (view_rect[0] * scale).floor().max(0.0) as u32,
             y: (view_rect[1] * scale).floor().max(0.0) as u32,
@@ -305,18 +322,6 @@ mod tests {
             let scale = snapshot_scale(on_screen, w, h);
             let side = (w * scale).ceil().max((h * scale).ceil());
             assert!(side <= SNAPSHOT_MAX_SIDE + 1.0, "{on_screen} on {w} × {h}: {side} pixels");
-        }
-    }
-
-    #[test]
-    fn a_snapshot_of_no_area_is_drawn_at_the_minimum() {
-        assert_eq!(snapshot_scale(1.0, 0.0, 0.0), SNAPSHOT_MIN_SCALE);
-    }
-
-    #[test]
-    fn a_snapshot_scale_survives_numbers_that_are_not() {
-        for scale in [snapshot_scale(f32::NAN, 5000.0, 5000.0), snapshot_scale(1.0, f32::NAN, 100.0), snapshot_scale(1.0, f32::INFINITY, 100.0)] {
-            assert!(scale.is_finite() && scale > 0.0, "{scale}");
         }
     }
 

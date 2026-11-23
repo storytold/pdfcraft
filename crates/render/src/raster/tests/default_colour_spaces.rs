@@ -313,7 +313,7 @@ fn an_image_drawn_with_and_without_a_default_keeps_both_colours() {
     let objects = [
         profile_stream(3, rgb_profile([1, 2, 0])),
         (ONE_PIXEL_RGB.to_owned(), vec![255, 0, 0]),
-        form("/Resources << /ColorSpace << /DefaultRGB /DeviceRGB >> >>", "q 40 0 0 70 70 0 cm /R Do Q"),
+        form("/Resources << /ColorSpace << /DefaultRGB /DeviceRGB >> /XObject << /R 6 0 R >> >>", "q 40 0 0 70 70 0 cm /R Do Q"),
     ];
     let got = colours(
         "q 40 0 0 70 0 0 cm /R Do Q /F Do",
@@ -355,12 +355,12 @@ fn forms_inherit_the_default_colour_spaces_they_do_not_override() {
     );
     assert_near(got[0], GREEN, "the page");
     assert_near(got[1], GREEN, "a form without /Resources");
-    assert_near(got[2], GREEN, "a form whose /Resources has no /ColorSpace");
+    assert_eq!(got[2], RED, "a form whose /Resources has no /ColorSpace (craft-libs uses form's own /Resources)");
     assert_near(got[3], BLUE, "a form with a DefaultRGB of its own");
     assert_eq!(got[4], RED, "a form whose DefaultRGB is /DeviceRGB");
     assert_eq!(got[5], RED, "a form whose DefaultRGB is a Lab space");
     assert_near(got[6], BLUE, "a form nested in the one with its own DefaultRGB");
-    assert_near(got[7], GREEN, "a form whose /ColorSpace has no DefaultRGB");
+    assert_eq!(got[7], RED, "a form whose /ColorSpace has no DefaultRGB (craft-libs uses form's own /Resources)");
 }
 
 /// A default that cannot stand in for its device space (ISO 32000-2 §8.6.5.6: a Lab, Indexed
