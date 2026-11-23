@@ -461,9 +461,14 @@ fn page_keys_still_work_with_a_check_box_or_radio_button_focused() {
     h.run_steps(4);
     assert_eq!(h.state().views[0].current, 0);
     assert_eq!(focused(&h), None, "the box let go of the focus");
+    let top = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(0).map(|r| r.top());
+    let before = top(&h);
     h.key_press(egui::Key::Space);
     h.run_steps(3);
     assert_eq!(value(&h, "agree"), ["Yes"]);
+    assert_ne!(top(&h), before, "Space scrolls the pages instead (#7483)");
+    h.key_press(egui::Key::Home);
+    h.run_steps(4);
     // A radio button keeps the arrows for its group, so → selects B instead of turning the page.
     click_field(&mut h, "pick", 0);
     h.key_press(egui::Key::ArrowRight);

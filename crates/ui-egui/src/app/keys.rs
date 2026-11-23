@@ -4,6 +4,13 @@ use crate::page_keys::PageKeys;
 impl PdfCraftApp {
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
         use egui::Key;
+        // A Space let go under a dialog or prompt is no tap: the pages never see it released. One
+        // still held when it closes stays no tap until it is let go. Cancelled here, ahead of
+        // every return below, whichever modal (the save prompt, a script's prompt over it, the
+        // others) has the keyboard.
+        if self.modal_open() {
+            self.cancel_space_tap(ctx);
+        }
         // "Save changes?" is modal: its keys are its own (⌘D is Don't save there, not Document
         // properties; Escape cancels it rather than clearing a selection), and nothing may run
         // underneath it. They are read here, before the canvas can consume them.
@@ -33,6 +40,7 @@ impl PdfCraftApp {
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
             && view.auto_scroll.escape(ctx)
         {
+            self.cancel_space_tap(ctx);
             return;
         }
         // The in-window menu bar holds the keys while one of its menus is open or it has the
@@ -64,7 +72,7 @@ impl PdfCraftApp {
             if page_chords && chords {
                 self.select_all_keys(i, ctx);
             }
-            self.tool_keys(i, ctx);
+            let space = self.tool_keys(i, ctx);
             let keys = self.page_keys;
             if self.quick_tool == QuickTool::EditText
                 && let Some(doc) = self.session.get(self.views[i].id).filter(|d| d.allows_modification())
@@ -81,7 +89,7 @@ impl PdfCraftApp {
             {
                 prepare::nudge_keys(ctx, keys, &mut self.views[i], doc);
             }
-            canvas::shortcuts(&mut self.views[i], ctx, keys, chords && page_chords, self.scroll_speed);
+            canvas::shortcuts(&mut self.views[i], ctx, keys, chords && page_chords, self.scroll_speed, space);
             self.clipboard_keys(i, ctx);
             self.image_pick_keys(i, ctx);
         }
@@ -117,15 +125,54 @@ impl PdfCraftApp {
         }
     }
 
+    /// Space's tap is cancelled: something other than the pages had the keyboard. A Space still
+    /// down stays no tap (`Some(false)`) until it is let go, so neither its repeats nor its
+    /// release step the pages once they have the keyboard again.
+    fn cancel_space_tap(&mut self, ctx: &egui::Context) {
+        self.space_tap = PageKeys::held(ctx, egui::Key::Space).then_some(false);
+    }
+
     /// The quick tools' keys, as in Acrobat: V selects, H pans, and holding Space pans until it
     /// is released. Plain letters, so not while a text field, a form field, a dialog, the palette
     /// or a menu has the keyboard.
-    fn tool_keys(&mut self, i: usize, ctx: &egui::Context) {
+    ///
+    /// Space scrolls too, as in Acrobat (#7483): pressed and let go without a press of the pointer
+    /// in between it goes a screen on, as Page Down does, and Shift+Space a screen back, as Page
+    /// Up. Neither repeats while the key is held. Returns that step for the view: `Some(true)` on,
+    /// `Some(false)` back. Full screen keeps Space and Shift+Space for its own page turning.
+    fn tool_keys(&mut self, i: usize, ctx: &egui::Context) -> Option<bool> {
         use egui::Key;
         let keys = self.page_keys;
         let free = self.dialog.is_none() && !self.palette_open && !ctx.egui_wants_keyboard_input() && self.views[i].forms.focus.is_none();
         let free = free && !keys.over();
+        // Only a Space the pages see go down and come back up is a tap: one let go while something
+        // else had the keyboard is not.
+        if !free {
+            self.cancel_space_tap(ctx);
+        }
         let (plain, space) = (ctx.input(|input| input.modifiers.is_none()), PageKeys::held(ctx, Key::Space));
+        // Space going down starts a tap, once: the key's repeats while it is held start none, even
+        // when the press that went down was one they can't see. A first press with Ctrl, Alt or ⌘
+        // is no tap until Space is let go, so letting go of the modifier first doesn't turn the
+        // repeats into one. Shift+Space steps back below.
+        if free
+            && self.space_tap.is_none()
+            && let Some(modifiers) = keys.first_press(ctx, Key::Space)
+        {
+            if modifiers.is_none() {
+                self.space_tap = Some(true);
+            } else if !modifiers.shift_only() {
+                self.space_tap = Some(false);
+            }
+        }
+        // A press with the pointer while Space is down is the Hand's drag, not a tap.
+        if self.space_tap.is_some() && ctx.input(|input| input.pointer.any_down() || input.pointer.any_pressed()) {
+            self.space_tap = Some(false);
+        }
+        let mut step = None;
+        if !space && self.space_tap.take() == Some(true) && free {
+            step = Some(true);
+        }
         if let Some(previous) = self.space_hand
             && !space
         {
@@ -134,8 +181,26 @@ impl PdfCraftApp {
                 self.quick_tool = previous;
             }
         }
+        if free && !self.views[i].presenting() {
+            // Shift+Space starts no Hand, so it scrolls back at once. Judged by the press's own
+            // modifiers, and taken so that nothing else reads it as a plain Space. Only its first
+            // press steps: the key's repeats while it is held, then its release, find a tap that
+            // isn't one (`Some(false)`), and a plain Space repeating after Shift is let go starts
+            // none.
+            let tap = &mut self.space_tap;
+            keys.take_presses(ctx, |key, modifiers| {
+                let back = key == Key::Space && modifiers.shift_only();
+                if back {
+                    if tap.is_none() {
+                        step = Some(false);
+                    }
+                    *tap = Some(false);
+                }
+                back
+            });
+        }
         if !free || !plain {
-            return;
+            return step;
         }
         if keys.pressed(ctx, Key::V) {
             self.quick_tool = QuickTool::Select;
@@ -149,5 +214,6 @@ impl PdfCraftApp {
             self.space_hand = Some(self.quick_tool);
             self.quick_tool = QuickTool::Hand;
         }
+        step
     }
 }
