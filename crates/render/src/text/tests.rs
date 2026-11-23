@@ -2519,6 +2519,23 @@ fn table_cells_several_lines_long_read_by_rows() {
     assert!(at(428.0, 542.0) < at(219.0, 578.0), "the collector of a row is read before the age in the next row");
 }
 
+/// Empty paragraphs drawn as runs of spaces, level with each other across the gutter, are no table rows: the left
+/// column's second paragraph, below its empty ones, is read before the right column.
+#[test]
+fn blank_paragraphs_level_across_the_gutter_are_no_rows() {
+    let (left, right) = NARROW_COLUMNS;
+    let blank = " ".repeat(25);
+    let mut v = Vec::new();
+    column(&mut v, &left[..3], 10.0, 10.0);
+    column(&mut v, &[blank.as_str(), blank.as_str()], 10.0, 58.0);
+    column(&mut v, &left[2..], 10.0, 100.0);
+    column(&mut v, &right[..3], 169.0, 10.0);
+    column(&mut v, &[blank.as_str(), blank.as_str()], 169.0, 58.0);
+    let text = layout(v).plain_text();
+    let read: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    assert_eq!(read, [&left[..3], &left[2..], &right[..3]].concat(), "{text:?}");
+}
+
 /// A running head over the right column and a footer under the left one stand apart from the columns' lines:
 /// the head is read first and the footer last, not between the two columns.
 #[test]
@@ -3205,6 +3222,11 @@ fn a_stamp_up_the_gutter_is_read_after_the_columns() {
     let lower = format!("BT /F2 10 Tf 12 TL 179 250 Td {}ET ", right.iter().map(|line| format!("({line}) Tj T* ")).collect::<String>());
     let text = page_text(&(column(20, &left) + &lower + axis));
     assert!(text.lines().any(|line| line == "Quantity") && text.lines().last() != Some("Quantity"), "{text:?}");
+    // The same label with three runs of spaces drawn across it, as a word processor draws empty paragraphs in a
+    // figure: they are no running text, and the label stays in place.
+    let blanks = format!("BT /F2 10 Tf 12 TL 200 344 Td {}ET ", "(                        ) Tj T* ".repeat(3));
+    let text = page_text(&(column(20, &left) + &lower + &blanks + axis));
+    assert!(text.lines().any(|line| line == "Quantity") && text.lines().rfind(|l| !l.trim().is_empty()) != Some("Quantity"), "{text:?}");
     // A label set upwards over the middle of a column's lines, as a map's labels are drawn over the text beside
     // them: read after the column too.
     let overlaid = "BT /F2 12 Tf 0 1 -1 0 100 296 Tm (Overlaid) Tj ET ";

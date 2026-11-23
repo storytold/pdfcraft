@@ -801,14 +801,23 @@ fn turned_lines_in_place(glyphs: &[Drawn], flows: &mut [Flow]) -> (Option<usize>
         b
     };
     let Some(area) = flows.get(main).map(|f| bounds(&f.ids)) else { return nothing() };
-    // The main text's lines of running text: those at least `COLUMN_EMS` heights wide, as their boxes.
+    // The main text's lines of running text: those whose visible glyphs span at least `COLUMN_EMS` heights, as the
+    // box around those glyphs. Runs of spaces (the empty paragraphs a word processor draws in a figure) are none.
     let mut running: Vec<[f32; 4]> = Vec::new();
     if let Some(flow) = flows.get(main) {
         let mut k = 0;
         while let Some(&line) = flow.line_of.get(k) {
             let end = flow.line_of.get(k..).and_then(|rest| rest.iter().position(|l| *l != line)).map_or(flow.line_of.len(), |n| k + n);
-            let b = bounds(flow.ids.get(k..end).unwrap_or_default());
-            if b[2] - b[0] >= (b[3] - b[1]) * COLUMN_EMS {
+            let visible: Vec<usize> = flow
+                .ids
+                .get(k..end)
+                .unwrap_or_default()
+                .iter()
+                .copied()
+                .filter(|&i| glyphs.get(i).is_some_and(|g| !g.2.text.trim().is_empty()))
+                .collect();
+            let b = bounds(&visible);
+            if !visible.is_empty() && b[2] - b[0] >= (b[3] - b[1]) * COLUMN_EMS {
                 running.push(b);
             }
             k = end;

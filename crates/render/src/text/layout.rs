@@ -848,7 +848,7 @@ fn column_first(
     let first_seg = |b: usize| blocks.get(b).and_then(|(members, _)| members.first()).and_then(|&s| segs.get(s));
     if let Some((last, (a, b))) = last.and_then(|l| Some((l, first_seg(l)?))).and_then(|(l, a)| Some((l, (a, first_seg(pick)?))))
         && level(&a.bbox, &b.bbox)
-        && (!parted_by_gutter(segs, a, b, gutters) || rows_go_on((blocks, segs), remaining, last, pick))
+        && (!parted_by_gutter(segs, a, b, gutters) || rows_go_on((blocks, segs), inks.1, remaining, last, pick))
     {
         return pick;
     }
@@ -863,8 +863,9 @@ fn level(a: &[f32; 4], b: &[f32; 4]) -> bool {
 
 /// Whether block `last`, just read, and block `pick`, level with it beside it, are cells of rows that go on: `last`
 /// is at most [`COLUMN_LINES`] lines, and the nearest unread block below it in its own span has an unread block
-/// level with its first line in the span of `pick`.
-fn rows_go_on((blocks, segs): (&[Block], &[Seg]), remaining: &[usize], last: usize, pick: usize) -> bool {
+/// level with its first line in the span of `pick`. Blocks of blanks (`inked` false: the empty paragraphs a word
+/// processor draws) are no cells, as they hold up no column in the block order.
+fn rows_go_on((blocks, segs): (&[Block], &[Seg]), inked: &[bool], remaining: &[usize], last: usize, pick: usize) -> bool {
     let (Some((members, lb)), Some((_, pb))) = (blocks.get(last), blocks.get(pick)) else { return false };
     if members.len() > COLUMN_LINES {
         return false;
@@ -873,15 +874,16 @@ fn rows_go_on((blocks, segs): (&[Block], &[Seg]), remaining: &[usize], last: usi
     let across = |a: &[f32; 4], b: &[f32; 4]| a[2].min(b[2]) > a[0].max(b[0]);
     // Half the height of the last line read: a block starting less than that above its bottom is not below it.
     let tol = members.last().and_then(|&s| segs.get(s)).map_or(0.0, |s| s.h * 0.5);
+    let inked = |r: usize| inked.get(r).copied().unwrap_or(true);
     let below = remaining
         .iter()
         .copied()
-        .filter(|&r| r != pick && blocks.get(r).is_some_and(|(_, rb)| rb[1] >= lb[3] - tol && across(rb, lb)))
+        .filter(|&r| r != pick && inked(r) && blocks.get(r).is_some_and(|(_, rb)| rb[1] >= lb[3] - tol && across(rb, lb)))
         .min_by(|a, b| blocks[*a].1[1].total_cmp(&blocks[*b].1[1]));
     let Some((below, next)) = below.and_then(|b| Some((b, first_line(b)?))) else { return false };
-    remaining
-        .iter()
-        .any(|&r| r != pick && r != below && blocks.get(r).is_some_and(|(_, rb)| across(rb, pb)) && first_line(r).is_some_and(|f| level(&f, &next)))
+    remaining.iter().any(|&r| {
+        r != pick && r != below && inked(r) && blocks.get(r).is_some_and(|(_, rb)| across(rb, pb)) && first_line(r).is_some_and(|f| level(&f, &next))
+    })
 }
 
 /// The block to read before block `pick`, or `pick` itself: a block of the column right of the gutter between two
