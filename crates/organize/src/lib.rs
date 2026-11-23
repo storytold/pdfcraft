@@ -23,6 +23,7 @@ mod outline;
 mod outline_io;
 mod pdfx;
 mod prune;
+mod separation;
 mod templates;
 mod transition;
 pub mod view;
@@ -298,6 +299,8 @@ pub fn delete_pages(doc: &mut Document, indices: &[usize]) -> Result<(), Organiz
     }
     drop_widgets(doc, widgets)?;
     drop_destinations_to(doc, &gone, &keep)?;
+    // The plates of a preseparated page that stay list only each other.
+    separation::drop_deleted_plates(doc, &keep.iter().map(|(r, _)| *r).collect::<Vec<_>>(), &gone)?;
     for r in gone {
         doc.free(r);
     }
