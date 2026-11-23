@@ -63,3 +63,19 @@ pub fn double_click<S>(h: &mut Harness<'_, S>, p: Pos2) {
     }
     h.run_steps(2);
 }
+
+/// Drops `files` on the window as the platform does: a frame with them held over the window, then
+/// the frame of the drop, which no longer holds them (egui-winit clears the hovered files on a
+/// drop). A drop with no hover before it starts no drag session, so nothing would take it.
+pub fn drop_files<S>(h: &mut Harness<'_, S>, files: impl IntoIterator<Item = egui::DroppedFileHandle>) {
+    let files: Vec<egui::DroppedFileHandle> = files.into_iter().collect();
+    let held = files.iter().map(|file| {
+        let path = file.path();
+        egui::HoveredFile { path: (!path.as_os_str().is_empty()).then(|| path.to_path_buf()), mime: String::new() }
+    });
+    h.input_mut().hovered_files = held.collect();
+    h.step();
+    h.input_mut().hovered_files.clear();
+    h.input_mut().dropped_files.extend(files);
+    h.step();
+}

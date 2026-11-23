@@ -1,4 +1,9 @@
-use super::{Arc, BTreeMap, Color32, FontFamily, FontId, LineEditor, Rect};
+use craft::ui::fonts::{FaceBytes, FaceState, FontRef};
+use craft::ui::primitives::FacesCx;
+
+use egui::{Color32, FontFamily, FontId};
+
+use super::{Arc, BTreeMap, LineEditor, Rect};
 
 /// The look shown for a paragraph: the family and weight guessed from its PDF font name.
 pub(super) fn source_look(base_font: &str, size: f64, color: [f64; 3], detected_bold: bool, detected_italic: bool) -> pdfcraft_engine::AddedText {
@@ -66,48 +71,46 @@ pub(crate) fn editor_fill(text: Color32) -> Color32 {
     if contrast(text, Color32::WHITE) >= contrast(text, DARK_EDITOR_FILL) { Color32::WHITE } else { DARK_EDITOR_FILL }
 }
 
-/// One TextEdit lays out all source runs; its caret and selection span the whole region.
-pub(crate) fn install_source_fonts(ctx: &egui::Context, doc: &pdfcraft_engine::Document, page: usize) -> BTreeMap<String, String> {
-    // Bundled replacement selectors are menu choices, never source resource names. Installing
-    // an unused choice would make even a standard-font editor wait a frame for its font atlas.
+/// The faces of `page`'s embedded font programs that are ready to draw, by the page's font resource.
+/// One editor lays out every source run, so each run takes the face of its own resource. A face still
+/// being added (or one that cannot load) is left out, and its runs use the interface family for that
+/// pass. Bundled replacement selectors are menu choices, never source resource names, so they are
+/// never asked for.
+///
+/// The key carries the program's length: resource names such as `F1` repeat across documents.
+/// Word-created PDFs often split one face into several subsets: each face chains the page's other
+/// subsets of the same face, so a character one subset lacks takes a sibling's glyph before the
+/// interface family's.
+pub(crate) fn source_faces(cx: &impl FacesCx, doc: &pdfcraft_engine::Document, page: usize) -> BTreeMap<String, FontRef> {
     let programs: Vec<_> = doc.text_editor_fonts(page).into_iter().filter(|font| !font.choice_only).collect();
-    let mut definitions = ctx.fonts(|f| f.definitions().clone());
-    // Only the current editor's document fonts live in the atlas. Never accumulate the
-    // programs of previously opened files or add them to the interface's default families.
-    definitions.font_data.retain(|name, _| !name.starts_with("pdf-source-"));
-    definitions.families.retain(|family, _| !matches!(family, FontFamily::Name(name) if name.starts_with("pdf-source-")));
-    let mut families = BTreeMap::new();
-    for (index, program) in programs.iter().enumerate() {
-        let name = format!("pdf-source-{index}");
-        definitions.font_data.insert(name.clone(), Arc::new(egui::FontData::from_owned(program.bytes.clone())));
-        families.insert(program.resource.clone(), name);
-    }
-    for program in &programs {
-        let Some(name) = families.get(&program.resource) else { continue };
-        // Word-created PDFs often split one face into several subsets. Use all of the
-        // document's matching subsets before falling back for newly inserted characters.
-        let mut stack = vec![name.clone()];
-        stack.extend(
-            programs
-                .iter()
-                .filter(|p| {
-                    pdfcraft_fonts::embedding::face_key(&p.face) == pdfcraft_fonts::embedding::face_key(&program.face)
-                        && p.resource != program.resource
-                })
-                .filter_map(|p| families.get(&p.resource).cloned()),
-        );
-        if let Some(fallback) = definitions.families.get(&FontFamily::Proportional) {
-            stack.extend(fallback.iter().cloned());
+    // Each program's face key, its resource and its document-face key.
+    let keys: Vec<(String, &str, String)> = programs
+        .iter()
+        .map(|p| (pdfcraft_fonts::embedding::face_key(&p.face), p.resource.as_str(), format!("pdf-source-{}-{}", p.resource, p.bytes.len())))
+        .collect();
+    let mut faces = BTreeMap::new();
+    for (program, (face, resource, key)) in programs.iter().zip(&keys) {
+        let siblings: Vec<String> = keys.iter().filter(|(f, r, _)| f == face && r != resource).map(|(.., k)| k.clone()).collect();
+        // The load runs as a job: it takes the face already made, so the program's bytes are copied once, here.
+        let state = cx.document_face(key, || {
+            let face = FaceBytes::new(Arc::from(program.bytes.as_slice()), 0).chain(siblings);
+            move || Some(face)
+        });
+        if let FaceState::Ready(face) = state {
+            faces.insert(program.resource.clone(), face);
         }
-        definitions.families.insert(FontFamily::Name(name.clone().into()), stack);
     }
-    if !families.is_empty() {
-        ctx.set_fonts(definitions);
-    }
-    families
+    faces
 }
 
-pub(super) fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32) -> egui::text::LayoutJob {
+pub(super) fn editor_job(
+    ctx: &egui::Context,
+    ed: &LineEditor,
+    faces: &BTreeMap<String, FontRef>,
+    text: &str,
+    scale: f32,
+    width: f32,
+) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     // An unchanged PDF row already has an authoritative line break. Do not rewrap it
     // because font rounding or a fallback face measures a fraction of a pixel wider.
@@ -154,11 +157,12 @@ pub(super) fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32,
             let mut font = editor_font(&look, (look.size as f32 * scale).clamp(1.0, 300.0));
             let original_face =
                 ed.look.family == ed.look0.family && !ed.family_chosen && ed.look.bold == ed.look0.bold && ed.look.italic == ed.look0.italic;
-            let embedded = original_face && ed.fonts.contains_key(&line.font);
-            if embedded && let Some(name) = ed.fonts.get(&line.font) {
-                font.family = FontFamily::Name(name.clone().into());
+            let source_face = faces.get(&line.font).filter(|_| original_face);
+            let embedded = source_face.is_some();
+            if let Some(face) = source_face {
+                font.family = face.family();
             }
-            let native_width = ui.fonts_mut(|f| f.layout_no_wrap(line.text.clone(), font.clone(), Color32::BLACK).size().x);
+            let native_width = ctx.fonts_mut(|f| f.layout_no_wrap(line.text.clone(), font.clone(), Color32::BLACK).size().x);
             let target_width = ((line.rect[2] - line.rect[0]) * look.size / base.max(0.01)) as f32 * scale;
             let spacing = if original_face { (target_width - native_width) / line.text.chars().count().saturating_sub(1).max(1) as f32 } else { 0.0 };
             job.append(
@@ -201,18 +205,19 @@ pub(super) fn unseen(mut galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
 /// PDF row breaks and character advances drive the invisible editor geometry. A PDF's
 /// source font can differ from every interface font, even inside a single word.
 pub(super) fn draft_galley(
-    ui: &egui::Ui,
+    ctx: &egui::Context,
     ed: &LineEditor,
+    faces: &BTreeMap<String, FontRef>,
     text: &str,
     scale: f32,
     width: f32,
     layout: Option<&pdfcraft_engine::TextEditLayout>,
 ) -> Arc<egui::Galley> {
-    let fallback = || editor_galley(ui, ed, text, scale, width);
+    let fallback = || editor_galley(ctx, ed, faces, text, scale, width);
     let Some(layout) = layout.filter(|l| !l.rows.is_empty()) else { return fallback() };
-    let mut job = editor_job(ui, ed, text, scale, f32::INFINITY);
+    let mut job = editor_job(ctx, ed, faces, text, scale, f32::INFINITY);
     job.halign = egui::Align::LEFT;
-    let mut galley = ui.fonts_mut(|f| f.layout_job(job.clone()));
+    let mut galley = ctx.fonts_mut(|f| f.layout_job(job.clone()));
     let mut rows = Vec::new();
     for draft in &layout.rows {
         let Some(content) = text.get(draft.range.clone()) else { return fallback() };
@@ -234,7 +239,7 @@ pub(super) fn draft_galley(
                 Some(section)
             })
             .collect();
-        let piece = ui.fonts_mut(|f| f.layout_job(part));
+        let piece = ctx.fonts_mut(|f| f.layout_job(part));
         let Some(mut placed) = piece.rows.first().cloned() else { return fallback() };
         let row = Arc::make_mut(&mut placed.row);
         if row.glyphs.len() != draft.characters.len() || !row.glyphs.iter().map(|g| g.chr).eq(content.chars()) {
@@ -253,12 +258,11 @@ pub(super) fn draft_galley(
             glyph.font_ascent = ascent;
             glyph.font_height = height;
             glyph.line_height = height;
-            // Selection recolours the glyph's vertex range even when its ink is hidden.
-            // All ranges must be empty after removing the glyph mesh below.
+            // The glyph mesh is removed below, so every glyph's vertex range must be empty.
             glyph.first_vertex = 0;
         }
         row.size = egui::vec2(((draft.rect[2] - draft.rect[0]) * f64::from(scale)) as f32, height.max(1.0));
-        // The page raster supplies the ink. Only glyph metrics are used by TextEdit.
+        // The page raster supplies the ink. Only glyph metrics are used by the editor.
         row.visuals = Default::default();
         rows.push(placed);
     }
@@ -266,7 +270,7 @@ pub(super) fn draft_galley(
     g.rows = rows;
     let bounds = g.rows.iter().fold(Rect::NOTHING, |r, row| r.union(Rect::from_min_size(row.pos, row.size)));
     g.rect = Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(bounds.right().max(0.0), bounds.bottom().max(0.0)));
-    // TextEdit adds selection rectangles later; keep their logical area visible to culling.
+    // Keep the rows' logical area visible to culling.
     g.mesh_bounds = bounds;
     g.num_vertices = 0;
     g.num_indices = 0;
@@ -275,11 +279,18 @@ pub(super) fn draft_galley(
 
 /// Align the editable galley's baselines to the source rows instead of egui's interface
 /// leading. Glyphs, meshes, caret and selection receive the same transform.
-pub(super) fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32) -> Arc<egui::Galley> {
-    let mut job = editor_job(ui, ed, text, scale, width);
+pub(super) fn editor_galley(
+    ctx: &egui::Context,
+    ed: &LineEditor,
+    faces: &BTreeMap<String, FontRef>,
+    text: &str,
+    scale: f32,
+    width: f32,
+) -> Arc<egui::Galley> {
+    let mut job = editor_job(ctx, ed, faces, text, scale, width);
     let centered = job.halign == egui::Align::Center;
     job.halign = egui::Align::LEFT;
-    let mut galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+    let mut galley = ctx.fonts_mut(|fonts| fonts.layout_job(job));
     let Some((block, lines)) = &ed.source else { return galley };
     let sources: Vec<_> = block
         .rows
@@ -484,10 +495,4 @@ fn place_on_source_words(g: &mut egui::Galley, block: &pdfcraft_engine::TextBloc
         }
         row.size.x = row.glyphs.iter().map(|g| g.pos.x + g.advance_width).fold(row.size.x.min(0.0), f32::max);
     }
-}
-
-/// Caret colour that stays visible on a field filled with `fill`: black on light fills, white on dark ones.
-pub(crate) fn caret_color_on(fill: Color32) -> Color32 {
-    let luma = 299 * u32::from(fill.r()) + 587 * u32::from(fill.g()) + 114 * u32::from(fill.b());
-    if luma > 127_500 { Color32::BLACK } else { Color32::WHITE }
 }
