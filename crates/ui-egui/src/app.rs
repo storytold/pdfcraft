@@ -297,13 +297,9 @@ impl PdfCraftApp {
             show_page_edge_shadows: true,
             scroll_speed: scroll_speed::ScrollSpeed::default(),
             invert_middle_drag: false,
-<<<<<<< HEAD
             animation_effects: craft::theme::MotionChoice::System,
-=======
-            animation_effects: motion::AnimationEffects::default(),
             full_screen_escape_exits: true,
-            motion: motion::Motion::default(),
->>>>>>> upstream/main
+            full_screen_fill: true,
             language: i18n::AUTO.to_string(),
             ui_scale: None,
             title_bar_choice: Default::default(),
@@ -368,21 +364,12 @@ impl PdfCraftApp {
             pinned_tools: Vec::new(),
             script_messages: std::collections::VecDeque::new(),
             script_messages_dropped: 0,
-<<<<<<< HEAD
             script_shown: None,
             posted_notices: Vec::new(),
             last_edit_refusal: None,
             notices: craft::ui::notices::NoticeCenter::new(),
             progress_requests: Vec::new(),
             progress_cards: Default::default(),
-=======
-            toast_dropped: 0,
-            integrated_titlebar: false,
-            titlebar_lights_right: None,
-            window_controls: None,
-            system_title_bar: false,
-            app_frame_shown: None,
->>>>>>> upstream/main
             password_prompt: None,
             unlock_prompt: None,
             screen_mode: Default::default(),
@@ -796,22 +783,8 @@ impl PdfCraftApp {
         if self.ocr_verify.awaiting_models.is_some() {
             workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll_models);
         }
-<<<<<<< HEAD
-        self.settle_presign(ctx);
-=======
-        // So may a page or region re-read's worker.
-        if self.ocr_verify.reread.is_some() {
-            workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll_reread);
-        }
-        self.process_file_requests();
-        #[cfg(not(target_arch = "wasm32"))]
-        self.process_picked();
         self.reopen_returned_rename();
-        self.settle_presign();
-        // Last, after everything that can open or answer the "save changes?" question.
-        self.attend_save_prompt(ctx);
-        self.sync_native_menu(ctx);
->>>>>>> upstream/main
+        self.settle_presign(ctx);
         self.sync_titles(ctx);
     }
 

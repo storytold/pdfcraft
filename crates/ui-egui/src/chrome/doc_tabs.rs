@@ -70,6 +70,19 @@ pub(crate) fn strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, place: Place) {
                 app.active = None;
                 app.combine_tab.focused = true;
             }
+            // Double-clicking a saved document's tab renames its file, as in Finder and File Explorer.
+            DocumentTabsEvent::Activated(StripTab::View(key)) => {
+                let saved = app
+                    .tab_with_key(key)
+                    .and_then(|i| app.views.get(i))
+                    .map(|v| v.id)
+                    .filter(|id| app.session.get(*id).is_some_and(|d| d.path.is_some()));
+                if let Some(id) = saved
+                    && cfg!(not(target_arch = "wasm32"))
+                {
+                    app.start_rename(id);
+                }
+            }
             DocumentTabsEvent::CloseRequested(StripTab::View(key)) => app.tab_action(ui.ctx(), Action::Close(key)),
             DocumentTabsEvent::CloseRequested(StripTab::Combine) => app.close_combine_tab(ui.ctx()),
             DocumentTabsEvent::Reordered { documents, before, .. } => {
@@ -131,6 +144,11 @@ pub(crate) fn strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, place: Place) {
             && let Some(id) = doc
         {
             chosen = Some(Action::Reveal(id));
+        }
+        if MenuItem::new(tl!("Rename…").to_string()).enabled(CAN_REVEAL && path.is_some()).show(ui).ran
+            && let Some(id) = doc
+        {
+            chosen = Some(Action::Rename(id));
         }
     });
     if menu.output.closed.is_some() && target.is_some() {
