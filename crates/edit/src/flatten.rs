@@ -696,8 +696,24 @@ fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&
     let mut known = HashMap::new();
     let survivors: Vec<Object> =
         fields.iter().filter(|f| f.as_ref().is_none_or(|r| keep(doc, r, widgets, on_page, &mut known, 0).0)).cloned().collect();
-    if survivors.len() == fields.len() && widgets.is_empty() {
+    // A field taken out of a kept parent's `/Kids` leaves `/Fields` as long as it was, and still
+    // needs `/CO` and `/SigFlags` cleaned.
+    let removed_any = known.values().any(|&(survives, _)| !survives);
+    if survivors.len() == fields.len() && widgets.is_empty() && !removed_any {
         return Ok(()); // only looked for fields on no page, and there were none
+    }
+    // Every field left in the tree, however deep: `known` stops at the depth cutoff, so walk the
+    // kept tree again from `/Fields`, each node once (a cycle ends where it began).
+    let mut surviving: HashSet<ObjRef> = HashSet::new();
+    let mut stack: Vec<ObjRef> = survivors.iter().filter_map(Object::as_ref).collect();
+    while let Some(r) = stack.pop() {
+        if widgets.contains(&r) || matches!(known.get(&r), Some(&(false, _))) || !surviving.insert(r) {
+            continue;
+        }
+        let Some(d) = doc.get(r).as_dict().cloned() else { continue };
+        if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
+            stack.extend(kids.iter().filter_map(Object::as_ref));
+        }
     }
     af_dict.set(b"Fields".to_vec(), Object::Array(survivors));
     // #2670: the calculation order keeps only the fields that are left, and goes once it is empty.
@@ -705,7 +721,6 @@ fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&
     // freed (that would null the other references) nor rewritten (they would see the shorter
     // list). A shortened order is the form's own direct array; once nothing refers to the old
     // object, a full save leaves it out.
-    let surviving: HashSet<ObjRef> = known.iter().filter(|(_, (survives, _))| *survives).map(|(&r, _)| r).collect();
     if let Some(co_obj) = af_dict.get(b"CO").cloned() {
         let co_array = doc.resolve(&co_obj).as_array().cloned().unwrap_or_default();
         let before = co_array.len();

@@ -835,6 +835,64 @@ endstream",
     assert_eq!(order.as_array().map(|a| a.len()), Some(2), "the shared array still lists both fields");
 }
 
+/// #2670: a signature field kept deeper than the pruning cutoff still counts as left, so it keeps
+/// its `/CO` entry and the form keeps `/SigFlags`.
+#[test]
+fn flattening_keeps_a_deep_signature_field_in_the_calculation_order_and_sigflags() {
+    let levels = 66;
+    let page = stream("", " ");
+    // 5: the flattened widget; 6…: the chain; then the signed widget at its end, on the page.
+    let leaf = 6 + levels;
+    let mut objs: Vec<String> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] /CO [5 0 R {leaf} 0 R] /SigFlags 3 >> >>"),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R {leaf} 0 R] >>"),
+        page,
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (calc) /Rect [10 10 150 40] /F 4 /AP << /N {} 0 R >> >>", leaf + 1),
+    ];
+    for i in 0..levels {
+        objs.push(format!("<< /T (n{i}) /Kids [{} 0 R] >>", 7 + i));
+    }
+    objs.push("<< /Type /Annot /Subtype /Widget /FT /Sig /T (sig) /V << /Type /Sig >> /Rect [10 50 150 80] /F 4 >>".into());
+    objs.push("<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>\nstream\n\nendstream".into());
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let mut doc = build(&objs);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1, "only calc is drawn; the signed field has no appearance");
+    let doc = reopen(&doc);
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let af_dict = af.as_dict().unwrap();
+    let co = doc.resolve(af_dict.get(b"CO").expect("the deep field stays in the calculation order"));
+    let co: Vec<_> = co.as_array().unwrap().iter().filter_map(|o| o.as_ref()).collect();
+    assert_eq!(co, [pdfcraft_cos::ObjRef::new(leaf as u32, 0)]);
+    assert!(af_dict.contains(b"SigFlags"), "the deep signature field is still there");
+}
+
+/// #2670: flattening every page takes a field on no page out of its kept parent's `/Kids`. Nothing
+/// is drawn and `/Fields` keeps its length, but `/CO` and `/SigFlags` still lose that field.
+#[test]
+fn flattening_cleans_the_calculation_order_and_sigflags_of_an_orphan_under_a_kept_parent() {
+    let page = stream("", " ");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] /CO [6 0 R 7 0 R] /SigFlags 1 >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [6 0 R] >>",
+        &page,
+        "<< /FT /Tx /T (parent) /Kids [6 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /V (Ada) /Rect [10 10 150 40] /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /T (orphan) /Parent 5 0 R /Rect [10 50 150 80] /F 4 >>",
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 0, "the kept widget has no appearance to draw");
+    let doc = reopen(&doc);
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let af_dict = af.as_dict().unwrap();
+    let co = doc.resolve(af_dict.get(b"CO").expect("the kept widget stays in the calculation order"));
+    let co: Vec<_> = co.as_array().unwrap().iter().filter_map(|o| o.as_ref()).collect();
+    assert_eq!(co, [pdfcraft_cos::ObjRef::new(6, 0)], "the orphan left the calculation order");
+    assert!(!af_dict.contains(b"SigFlags"), "no signature field is left");
+}
+
 /// #1794: a form field whose widget has no usable appearance (none stored, or none for its
 /// selected state) has nothing to draw. Flattening used to remove it anyway, losing its value
 /// with no ink in its place. It stays, in the page and in the form, like a comment that can't be
