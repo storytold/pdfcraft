@@ -898,6 +898,132 @@ fn editing_a_callout_refits_the_box_and_keeps_the_leader() {
     assert_eq!(ap_content(&doc, d).matches(" Tj").count(), appearance::wrap(long, 12.0, 200.0 - 2.0 * 4.0).len(), "nothing is clipped");
 }
 
+/// Editing a callout on a turned page grows its displayed height (user-space width for
+/// `/PCTextRotate` 90/270; user-space height for 180), so a second line is not clipped and the
+/// displayed top stays put.
+#[test]
+fn editing_a_callout_on_a_turned_page_grows_the_displayed_height() {
+    let text_box = |doc: &Document, i: usize| {
+        let d = &list(doc, 0)[i];
+        let r = rect(d);
+        let rd: Vec<f64> = d.get(b"RD").unwrap().as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect();
+        [r[0] + rd[0], r[1] + rd[1], r[2] - rd[2], r[3] - rd[3]]
+    };
+    let displayed = |turn: i64, tb: [f64; 4]| {
+        let (w, h) = (tb[2] - tb[0], tb[3] - tb[1]);
+        if matches!(turn, 90 | 270) { (h, w) } else { (w, h) }
+    };
+    // User-space boxes that display as 120 × 18 (one line tall).
+    let boxes = [
+        (90, [300.0, 500.0, 318.0, 620.0], [280.0, 520.0], [240.0, 460.0]),
+        (180, [300.0, 500.0, 420.0, 518.0], [280.0, 480.0], [240.0, 460.0]),
+        (270, [300.0, 500.0, 318.0, 620.0], [280.0, 520.0], [240.0, 460.0]),
+    ];
+    for (turn, rect, knee, point) in boxes {
+        let mut doc = fixture();
+        let page = page_refs(&doc).unwrap()[0];
+        doc.update_dict(page, |d| d.set(b"Rotate".to_vec(), Object::Int(turn))).unwrap();
+        let c = add_annotation(&mut doc, &new(0, Shape::Callout { rect, knee, point, font_size: 10.0, ending: LineEnding::OpenArrow }), &meta("c"))
+            .unwrap();
+        assert_eq!(list(&doc, 0)[c].get(b"PCTextRotate").and_then(Object::as_int), Some(turn));
+        let before = text_box(&doc, c);
+        let (before_w, before_h) = displayed(turn, before);
+        assert!((before_w - 120.0).abs() < 0.01 && (before_h - 18.0).abs() < 0.01, "{turn}: {before:?}");
+        set_contents(&mut doc, 0, c, "hello\nhello", &meta("")).unwrap();
+        let after = text_box(&doc, c);
+        let (disp_w, disp_h) = displayed(turn, after);
+        assert!((disp_w - 120.0).abs() < 0.01, "{turn}: wrap width stayed, got {after:?}");
+        assert!(disp_h > 18.0 + 1.0, "{turn}: displayed height grew past one line, got {after:?}");
+        // Displayed top: for 180 the user-space bottom; for 90/270 the user-space edge that maps to it.
+        let top_before = {
+            let [a, b, c, d, e, f] = pdfcraft_model::view_matrix_for(turn, before);
+            // Inverse is not needed: compare the user-space image of displayed (0, before_h).
+            let map = |dx: f64, dy: f64| [a * dx + c * dy + e, b * dx + d * dy + f];
+            map(0.0, before_h)
+        };
+        let top_after = {
+            let [a, b, c, d, e, f] = pdfcraft_model::view_matrix_for(turn, after);
+            let map = |dx: f64, dy: f64| [a * dx + c * dy + e, b * dx + d * dy + f];
+            map(0.0, disp_h)
+        };
+        assert!(
+            (top_before[0] - top_after[0]).abs() < 0.01 && (top_before[1] - top_after[1]).abs() < 0.01,
+            "{turn}: displayed top moved {top_before:?} → {top_after:?}"
+        );
+        assert_eq!(ap_content(&doc, &list(&doc, 0)[c]).matches(" Tj").count(), 2, "{turn}: both lines drawn");
+    }
+}
+
+/// A hand-enlarged circle on a turned page keeps its displayed size when the text gets shorter,
+/// and still grows when more lines need room (0 / 90 / 180 / 270).
+#[test]
+fn a_hand_enlarged_circle_on_a_turned_page_keeps_its_displayed_height() {
+    let displayed = |turn: i64, r: &[f64]| {
+        let (w, h) = (r[2] - r[0], r[3] - r[1]);
+        if matches!(turn, 90 | 270) { (h, w) } else { (w, h) }
+    };
+    for turn in [0, 90, 180, 270] {
+        let mut doc = fixture();
+        let page = page_refs(&doc).unwrap()[0];
+        if turn != 0 {
+            doc.update_dict(page, |d| d.set(b"Rotate".to_vec(), Object::Int(turn))).unwrap();
+        }
+        let w = appearance::text_width("3", 10.0);
+        // Snug ~20×20 around the digit, then enlarge a little by hand (still shorter than three lines).
+        let (box_rect, big) = match turn {
+            90 | 270 => ([100.0, 680.0, 120.0, 690.0 + w], [95.0, 675.0, 130.0, 700.0 + w]),
+            _ => ([100.0, 680.0, 110.0 + w, 700.0], [95.0, 675.0, 115.0 + w, 710.0]),
+        };
+        let mut typed = new(0, Shape::Typewriter { rect: box_rect, font_size: 10.0 });
+        (typed.contents, typed.style.width, typed.style.border_shape) = ("3".into(), 1.0, BorderShape::Circle);
+        let t = add_annotation(&mut doc, &typed, &meta("t")).unwrap();
+        if turn != 0 {
+            assert_eq!(list(&doc, 0)[t].get(b"PCTextRotate").and_then(Object::as_int), Some(turn));
+        }
+        set_rect(&mut doc, 0, t, big, &meta("")).unwrap();
+        let before = rect(&list(&doc, 0)[t]);
+        let (_, before_h) = displayed(turn, &before);
+        assert!(before_h > 20.0, "{turn}: hand enlarge took effect, got {before_h}");
+        set_contents(&mut doc, 0, t, "4", &meta("")).unwrap();
+        let after_short = rect(&list(&doc, 0)[t]);
+        let (_, after_h) = displayed(turn, &after_short);
+        assert!((after_h - before_h).abs() < 0.01, "{turn}: shortened text kept displayed height {before_h} → {after_h}");
+        set_contents(&mut doc, 0, t, "hello\nhello\nhello\nhello\nhello", &meta("")).unwrap();
+        let after_tall = rect(&list(&doc, 0)[t]);
+        let (_, tall_h) = displayed(turn, &after_tall);
+        assert!(tall_h > before_h + 1.0, "{turn}: more lines grew displayed height {before_h} → {tall_h}");
+    }
+}
+
+/// Shrinking the font on a turned text box must not shrink its displayed height (0 / 90 / 180 / 270).
+#[test]
+fn shrinking_font_on_a_turned_text_box_keeps_displayed_height() {
+    let displayed = |turn: i64, r: &[f64]| {
+        let (w, h) = (r[2] - r[0], r[3] - r[1]);
+        if matches!(turn, 90 | 270) { (h, w) } else { (w, h) }
+    };
+    for turn in [0, 90, 180, 270] {
+        let mut doc = fixture();
+        let page = page_refs(&doc).unwrap()[0];
+        if turn != 0 {
+            doc.update_dict(page, |d| d.set(b"Rotate".to_vec(), Object::Int(turn))).unwrap();
+        }
+        let box_rect = match turn {
+            90 | 270 => [100.0, 600.0, 112.0, 720.0],
+            _ => [100.0, 680.0, 220.0, 692.0],
+        };
+        let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: box_rect, font_size: 12.0 }), &meta("t")).unwrap();
+        set_contents(&mut doc, 0, t, "one two three four five six seven eight", &meta("")).unwrap();
+        set_font_size(&mut doc, 0, t, 24.0, &meta("")).unwrap();
+        let grown = rect(&list(&doc, 0)[t]);
+        let (_, grown_h) = displayed(turn, &grown);
+        set_font_size(&mut doc, 0, t, 6.0, &meta("")).unwrap();
+        let shrunk = rect(&list(&doc, 0)[t]);
+        let (_, shrunk_h) = displayed(turn, &shrunk);
+        assert!(shrunk_h + 0.01 >= grown_h, "{turn}: displayed height must not shrink {grown_h} → {shrunk_h}");
+    }
+}
+
 #[test]
 fn real_annotation_flags_do_not_lock_comments() {
     let mut doc = fixture();
@@ -4748,6 +4874,41 @@ fn a_pop_up_rect_with_reversed_corners_is_put_in_order_and_a_huge_one_is_none() 
     set_popup(&mut doc, 0, note, None, Some(true), &meta("n1")).unwrap();
     let given = popup(&doc).expect("the pop-up reads again");
     assert!(given.open && given.rect.iter().all(|v| v.is_finite()), "{given:?}");
+}
+
+#[test]
+fn callout_on_a_turned_page_is_drawn_upright_as_displayed() {
+    let mut doc = fixture();
+    let page = page_refs(&doc).unwrap()[0];
+    doc.update_dict(page, |d| d.set(b"Rotate".to_vec(), Object::Int(90))).unwrap();
+    let co = add_annotation(
+        &mut doc,
+        &new(
+            0,
+            Shape::Callout {
+                rect: [300.0, 500.0, 340.0, 620.0],
+                knee: [260.0, 520.0],
+                point: [220.0, 460.0],
+                font_size: 10.0,
+                ending: LineEnding::OpenArrow,
+            },
+        ),
+        &meta("co"),
+    )
+    .unwrap();
+    let doc = reopen(&doc);
+    let callout = &list(&doc, 0)[co];
+    assert_eq!(callout.get(b"PCTextRotate").and_then(Object::as_int), Some(90));
+    let r = rect(callout);
+    let nref = callout.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|a| a.reference(b"N"))).unwrap();
+    let obj = doc.get(nref);
+    let Object::Stream(s) = &*obj else { panic!("AP is not a stream") };
+    let m: Vec<f64> = s.dict.get(b"Matrix").expect("form is turned by a /Matrix").as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect();
+    assert_eq!(m, vec![0.0, 1.0, -1.0, 0.0, r[2], r[1]]);
+    // The leader starts at the pointed-at spot, mapped from user space into the displayed frame.
+    let ap = ap_content(&doc, callout);
+    let start = format!("{} {} m", n(460.0 - r[1]), n(r[2] - 220.0));
+    assert!(ap.contains(&start), "{start} in {ap}");
 }
 
 #[test]

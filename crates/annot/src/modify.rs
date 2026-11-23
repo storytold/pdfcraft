@@ -326,7 +326,7 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
         } else {
             let d = annot_dict(doc, r);
             let circle = text_box_of(&d).filter(|_| BorderShape::of(&d) == BorderShape::Circle);
-            fitted_box(doc, r, text).map(|fit| circle.map_or(fit, |old| [fit[0], fit[1].min(old[1]), fit[2], fit[3]]))
+            fitted_box(doc, r, text).map(|fit| circle.map_or(fit, |old| keep_displayed_height(&d, fit, old)))
         };
         match fit {
             Some(rect) => apply_text_box(doc, r, rect, meta, true)?,
@@ -337,8 +337,10 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
 }
 
 /// The rectangle a FreeText annotation's text box needs for `text`: the current wrap width and
-/// top edge stay and the height fits the wrapped lines, as at creation. `None` keeps the old
-/// rectangle (the box can't be measured, so only the appearance is redrawn).
+/// top edge stay and the height fits the wrapped lines, as at creation. On a turned page
+/// (`/PCTextRotate` 90, 180 or 270) those are the displayed sides, so more lines grow the
+/// displayed height. `None` keeps the old rectangle (the box can't be measured, so only the
+/// appearance is redrawn).
 fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
     let d = annot_dict(doc, r);
     let nums = |key: &[u8]| -> Option<Vec<f64>> { d.get(key)?.as_array()?.iter().map(|o| o.as_f64()).collect() };
@@ -356,17 +358,54 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
     } else {
         text_box_of(&d).unwrap_or(rect)
     };
-    let (x0, top) = (tb[0].min(tb[2]), tb[1].max(tb[3]));
-    let w = tb[2] - tb[0];
-    let w = if w.is_finite() && w >= 1.0 {
-        w
+    let tb = normalize(tb);
+    let turn = appearance::text_turn(&d);
+    let (disp_w, disp_h) = displayed_sides(&d, tb);
+    let w = if disp_w.is_finite() && disp_w >= 1.0 {
+        disp_w
     } else {
         // No usable old width: fall back to the creation-time width (at most 300 pt).
         let longest = text.lines().map(|l| measure(l, size)).fold(0.0, f64::max);
         (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0)
     };
     let height = appearance::text_lines_height(&pdfcraft_fonts::wrap_with(text, size, (w - 2.0 * pad).max(1.0), measure), size);
-    Some([x0, top - height - 2.0 * pad - 2.0, x0 + w, top])
+    let needed = height + 2.0 * pad + 2.0;
+    Some(box_from_displayed_top_left(turn, tb, w, needed, disp_h))
+}
+
+/// User-space box of displayed size `w`×`h`, keeping the displayed top and left of `tb`.
+/// `disp_h` is `tb`'s current displayed height (so the top edge of `tb` maps to `disp_h`).
+fn box_from_displayed_top_left(turn: i64, tb: [f64; 4], w: f64, h: f64, disp_h: f64) -> [f64; 4] {
+    let tb = normalize(tb);
+    if matches!(turn, 90 | 180 | 270) {
+        let [a, b, c, d, e, f] = pdfcraft_model::view_matrix_for(turn, tb);
+        let map = |dx: f64, dy: f64| [a * dx + c * dy + e, b * dx + d * dy + f];
+        let (y0, y1) = (disp_h - h, disp_h);
+        let pts = [map(0.0, y0), map(w, y0), map(0.0, y1), map(w, y1)];
+        let xs = pts.map(|p| p[0]);
+        let ys = pts.map(|p| p[1]);
+        [
+            xs.into_iter().fold(f64::INFINITY, f64::min),
+            ys.into_iter().fold(f64::INFINITY, f64::min),
+            xs.into_iter().fold(f64::NEG_INFINITY, f64::max),
+            ys.into_iter().fold(f64::NEG_INFINITY, f64::max),
+        ]
+    } else {
+        [tb[0], tb[3] - h, tb[0] + w, tb[3]]
+    }
+}
+
+/// Prefer `fit`'s displayed top, left and width; keep at least `old`'s displayed height so a
+/// hand-enlarged circle or text box does not shrink when its text or font gets smaller.
+fn keep_displayed_height(d: &Dict, fit: [f64; 4], old: [f64; 4]) -> [f64; 4] {
+    let fit = normalize(fit);
+    let (fit_w, fit_h) = displayed_sides(d, fit);
+    let (_, old_h) = displayed_sides(d, old);
+    let h = fit_h.max(old_h);
+    if (h - fit_h).abs() < 1e-9 {
+        return fit;
+    }
+    box_from_displayed_top_left(appearance::text_turn(d), fit, fit_w, h, fit_h)
 }
 
 /// Reply to a comment; returns the reply's index in the page's `/Annots`.
@@ -1284,9 +1323,9 @@ pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, m
         (true, Some(fit)) => apply_text_box(doc, r, fit, meta, false),
         (false, Some(fit)) => {
             let cur = annot_dict(doc, r);
-            // Keep the top and sides; only the bottom edge moves, and only downwards.
+            // Keep the displayed top and sides; only grow the displayed height, never shrink it.
             match text_box_of(&cur) {
-                Some(old) if !cur.contains(b"CL") => apply_text_box(doc, r, [fit[0], fit[1].min(old[1]), fit[2], fit[3]], meta, false),
+                Some(old) if !cur.contains(b"CL") => apply_text_box(doc, r, keep_displayed_height(&cur, fit, old), meta, false),
                 _ => apply_text_box(doc, r, fit, meta, false),
             }
         }
