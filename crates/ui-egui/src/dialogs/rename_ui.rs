@@ -188,6 +188,7 @@ impl PdfCraftApp {
                     *closed = new.clone();
                 }
                 // The renamed file is the version the document came from: not a change on disk.
+                #[cfg(not(target_arch = "wasm32"))]
                 self.watch.known_now(id, std::path::Path::new(&new));
                 self.notify_fmt("Renamed to {name}", &[("name", &name)]);
             }

@@ -1,7 +1,6 @@
-use super::{
-    DocId, DocView, LeftPanel, Mode, OpenOutcome, OpenRequest, PasswordPrompt, PdfCraftApp, PendingOpen, RecentFile, RightPanel, UnlockPrompt,
-    canvas, i18n, open_worker,
-};
+use super::{DocId, DocView, LeftPanel, Mode, PasswordPrompt, PdfCraftApp, RecentFile, RightPanel, UnlockPrompt, canvas, i18n};
+#[cfg(not(target_arch = "wasm32"))]
+use super::{OpenOutcome, OpenRequest, PendingOpen, open_worker};
 use craft::docpath::names::safe_file_name;
 #[cfg(not(target_arch = "wasm32"))]
 use craft::host::queue::Priority;
@@ -143,8 +142,18 @@ impl PdfCraftApp {
         // A new document opens with the remembered Highlight fields, which its scripts read; the
         // session keeps the document in front's.
         let context = self.session.open_context().with_highlight(self.highlight_fields); // PLAN: `highlight_fields` on the app (pdf-canvas-w8)
-        let job =
-            open_worker::Job { context, name: request.name.clone(), path: request.path.clone(), password: request.password, input: request.input };
+        let job = open_worker::Job {
+            context,
+            name: request.name.clone(),
+            path: request.path.clone(),
+            password: request.password,
+            input: request.input,
+            // A named destination is looked up with the document, so the tab opens at it.
+            named: match &request.after_open {
+                Some(pdfcraft_render::RemoteDestination::Named(name)) => Some(name.clone()),
+                _ => None,
+            },
+        };
         self.opens.submit(token, request.priority, move |cancel| open_worker::run(job, cancel));
         self.pending_opens.push(PendingOpen {
             token,
@@ -251,7 +260,7 @@ impl PdfCraftApp {
                 }
                 Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
             },
-            open_worker::ResultKind::Prepared { bytes, result } => match *result {
+            open_worker::ResultKind::Prepared { bytes, result, named } => match *result {
                 Ok(prepared) => match self.finish_open(ctx, &pending.name, pending.path.clone(), bytes.len(), prepared, pending.activate) {
                     Ok(id) => {
                         if let Some(path) = pending.path.as_deref() {
@@ -260,8 +269,14 @@ impl PdfCraftApp {
                                 self.forget_closed_tab(path);
                             }
                         }
-                        if let Some(destination) = pending.after_open {
-                            self.apply_remote_destination(destination);
+                        match (pending.after_open, named) {
+                            // The open looked the name up with the document; a later request for another place
+                            // replaced it, and that one is shown as asked.
+                            (Some(pdfcraft_render::RemoteDestination::Named(name)), Some((looked_up, found))) if looked_up == name => {
+                                self.apply_looked_up_destination(name, found);
+                            }
+                            (Some(destination), _) => self.apply_remote_destination(destination),
+                            (None, _) => {}
                         }
                         if let Some((layout, continuous)) = pending.display_override
                             && let Some(view) = self.views.iter_mut().find(|view| view.id == id)
@@ -695,7 +710,9 @@ impl PdfCraftApp {
     }
 
     /// Answer the password prompt (`None` cancels).
-    pub fn submit_password(&mut self, _ctx: &egui::Context, password: Option<String>) {
+    pub fn submit_password(&mut self, ctx: &egui::Context, password: Option<String>) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = ctx;
         let Some(mut p) = self.password_prompt.take() else { return };
         let Some(pw) = password.map(zeroize::Zeroizing::new) else {
             // A cancelled recovery goes back on offer; its snapshot stays in the store and must
@@ -735,7 +752,7 @@ impl PdfCraftApp {
     #[cfg(target_arch = "wasm32")]
     fn retry_inline(&mut self, ctx: &egui::Context, mut p: PasswordPrompt, pw: zeroize::Zeroizing<String>) {
         let after_open = p.after_open.clone();
-        let opened = self.try_open(&p.name, p.path.take(), p.bytes.clone(), Some(&pw), p.activate);
+        let opened = self.try_open(ctx, &p.name, p.path.take(), p.bytes.clone(), Some(&pw), p.activate);
         drop(pw);
         match opened {
             Err(e) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &p.name), ("e", &e.to_string())]),
@@ -748,9 +765,6 @@ impl PdfCraftApp {
                     && let Some(view) = self.views.last_mut()
                 {
                     (view.view.display, view.view.continuous) = (layout, continuous);
-                }
-                if let Some(meta) = &p.recovered {
-                    self.finish_recovery(meta);
                 }
                 if let Some(command) = p.then {
                     self.execute(ctx, command);

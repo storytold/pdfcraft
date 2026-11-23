@@ -7,6 +7,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+#[cfg(not(target_arch = "wasm32"))]
 use craft::automation::dock as dock_rpc;
 use craft::behavior::dock::{
     Action, Column, DockEdge, DockError, DockPlacement, Floating, Group, Layout, Node, PanelState, Permissions, SplitSize, Target, Workspace,
@@ -173,6 +174,12 @@ const PAGE_SHARE: f32 = 0.8;
 const TOOLS_WIDTH: f32 = 272.0;
 /// The Tools pane's width in a narrow window, as production opened it.
 const TOOLS_WIDTH_NARROW: f32 = 272.0;
+/// How far past the Tools pane the floating toolbar starts. Production's quick bar stood 14 points into a narrow margin
+/// and was 46 points wide, so its page-side edge was 60 points into the page area (which starts 3 points past the pane,
+/// after the splitter); the rail is 52 points wide, so it starts 10 points past the pane to end just inside that edge
+/// and leave the page's margin beyond it to the page.
+const TOOLBAR_INSET: f32 = 10.0;
+
 /// Windows narrower than this keep the Tools pane at [`TOOLS_WIDTH_NARROW`]: a wider pane would leave the page area too little.
 pub(crate) const NARROW_WINDOW: f32 = 900.0;
 
@@ -187,7 +194,7 @@ pub fn default_workspace(rail_side: DockSide) -> Workspace<PanelId> {
     let (start, end) = if rail_edge(rail_side) == DockEdge::Start { (vec![side, tools], Vec::new()) } else { (vec![tools], vec![side]) };
     let page = Node::split(Axis::X, SplitSize::Ratio(PAGE_SHARE), Node::tabs(vec![PanelId::Document], 0), Node::dock(DockEdge::End, end));
     let root = Node::split(Axis::X, SplitSize::Ratio(START_SHARE), Node::dock(DockEdge::Start, start), page);
-    let rect = egui::Rect::from_min_size(egui::pos2(TOOLS_WIDTH + 28.0, 14.0), egui::vec2(48.0, 400.0));
+    let rect = egui::Rect::from_min_size(egui::pos2(TOOLS_WIDTH + TOOLBAR_INSET, 14.0), egui::vec2(48.0, 400.0));
     let floating = Floating::new(1, toolbar, rect);
     Workspace::new(Layout::new(Some(root), vec![floating]))
 }
@@ -804,13 +811,27 @@ pub fn command(app: &mut PdfCraftApp, reset: bool, params: &Value) -> Result<Val
 }
 
 /// `ui.dock.apply {action}`: one dock action applied to the workspace under the panels' permissions.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn dock_method(app: &mut PdfCraftApp, method: &str, params: &Value) -> Option<Result<Value, String>> {
     dock_rpc::dock_method(Arc::make_mut(&mut app.dock), &*app.dock_specs, false, method, params)
 }
 
+/// The framework's dock table is the desktop's (`craft::automation::dock`): the web answers no dock method.
+#[cfg(target_arch = "wasm32")]
+pub fn dock_method(_app: &mut PdfCraftApp, _method: &str, _params: &Value) -> Option<Result<Value, String>> {
+    None
+}
+
 /// The dock's layout for `ui.inspect`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn dock_inspect(app: &PdfCraftApp) -> Value {
     dock_rpc::inspect(&app.dock)
+}
+
+/// The dock's layout for `ui.inspect`: the web has no dock table to read it with.
+#[cfg(target_arch = "wasm32")]
+pub fn dock_inspect(_app: &PdfCraftApp) -> Value {
+    Value::Null
 }
 
 /// What [`migrate`] read from settings written before the dock.

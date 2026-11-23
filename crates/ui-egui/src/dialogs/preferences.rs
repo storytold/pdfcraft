@@ -199,6 +199,8 @@ impl PdfCraftApp {
             PreferencesWindow::new(Bind::bound(state))
                 .mode(PreferencesMode::Live)
                 .layout(PreferencesLayout::Cards)
+                // Production applies each row as it changes, and Escape closes the window with the typing kept.
+                .escape_keeps_typing()
                 .remember(SaveKey::new("pdfcraft.preferences"))
                 .show(ui, &mut prefs)
         };

@@ -274,18 +274,18 @@ fn show_rail_over(app: &mut PdfCraftApp, ui: &mut egui::Ui, toolbar: &Tracked<Ve
     if !app.hotbar.drawer_open {
         return;
     }
-    let Some(opener) = output.edit_toolbar.as_ref() else {
-        app.hotbar.drawer_open = false;
-        return;
-    };
     let groups = drawer_groups();
     let toolbar: &[ToolSlot<String>] = toolbar;
-    let drawer = ToolbarDrawer::new(output.response.rect, &groups, toolbar, output.dropped)
+    let mut drawer = ToolbarDrawer::new(output.response.rect, &groups, toolbar, output.dropped)
         .kind(DrawerKind::Searchable)
-        .opened_by(opener)
-        // A tool that is on the toolbar only inside a group still drags from the drawer, as in production.
-        .grouped_tools_drag()
-        .show(ui);
+        // A tool held only inside a group stays draggable, so it can get a slot of its own (L-323).
+        .grouped_tools_drag();
+    // The pass a drop adds a slot lays the Edit Toolbar button out anew and has no response for it yet: the drawer
+    // stays open, anchored to the rail, and finds its opener again next pass.
+    if let Some(opener) = output.edit_toolbar.as_ref() {
+        drawer = drawer.opened_by(opener);
+    }
+    let drawer = drawer.show(ui);
     let defaults = slots_with(app, &[]);
     let mut edited: Option<Vec<ToolSlot<String>>> = None;
     for edit in &drawer.edits {
