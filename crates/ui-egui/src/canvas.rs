@@ -10,7 +10,9 @@ use std::sync::Arc;
 
 use craft::behavior::{CanvasView, PointerButton, PressPhase, Selection};
 use craft::host::queue::{JobQueue, QueueOptions};
-use craft::pages::ui::{PageBody, PageView, PageViewOutput, PageViewState, PlacedPage, TextMark, TextMarks, TextSelectState, TextSelection};
+use craft::pages::ui::{
+    GoToPlace, PageBody, PageView, PageViewOutput, PageViewState, PlacedPage, TextMark, TextMarks, TextSelectState, TextSelection,
+};
 use craft::review::ui::annotate::AnnotateWords;
 use craft::ui::canvas::{ContextRequest, Momentary, NavigationOptions, PageBorder, PasteboardColor, ToolHost};
 use craft::ui::contract::{Props as _, Show as _};
@@ -1722,8 +1724,8 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     });
     let veiled = page_overlays::veiled(view);
     // Shadows only with the preference on, and only between gaps: they would darken the page before when pages touch.
-    // Full screen filling the screen: the page alone on black, edge to edge (#576), so no shadow either. The framework's
-    // edge-to-edge spacing (PageView::fill_screen, L-314) is owed; until it lands the page keeps the view's margins.
+    // Full screen filling the screen: the page alone on black, edge to edge (#576, PageView::fill_screen), so no shadow
+    // either.
     let fill_screen = view.fills_screen();
     let border = if view.view.page_gaps && app.show_page_edge_shadows && !fill_screen { PageBorder::DropShadow } else { PageBorder::None };
     let keep = view.session.presenter.keep_pages();
@@ -1830,6 +1832,9 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
                 .border(border)
                 .pasteboard(surround)
                 .keep(&keep)
+                // Production's Go To: the page gap above the page's top.
+                .go_to_place(GoToPlace::GapAbove)
+                .fill_screen(fill_screen)
                 .show_at_with(ui, rect, &mut callbacks, page_before, page_body)
         })
         .inner;
@@ -1859,6 +1864,11 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     }
     match view.session.pending_page.take() {
         Some((page, Some(rect))) => view.reveal_rect(page, rect, info),
+        // A page already on screen in a continuous view (an object selected on it, Set Page Boxes' page) becomes the
+        // current page where it stands: a Go To would scroll it to the gap above its top (GoToPlace::GapAbove).
+        Some((page, None)) if view.view.continuous && view.session.placed.iter().any(|placed| placed.page == page) => {
+            view.view.current = page;
+        }
         Some((page, None)) => view.go_to_page(page),
         None => {}
     }

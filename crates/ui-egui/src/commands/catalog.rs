@@ -145,7 +145,8 @@ pub(crate) fn command_input(app: &mut PdfCraftApp, ctx: &egui::Context) -> Comma
 
 fn state_of(app: &PdfCraftApp, ctx: &egui::Context, command: &CommandRef, gated: bool) -> CommandState {
     let enabled = enabled(app, ctx, command);
-    let mut state = CommandState::new().enabled(enabled);
+    // L-72: on a control whose label shows whole, the tooltip is the hint alone (with the chord), as production's.
+    let mut state = CommandState::new().enabled(enabled).hint_alone(true);
     if let Some(checked) = checked(app, command) {
         state = state.checked(checked);
     }

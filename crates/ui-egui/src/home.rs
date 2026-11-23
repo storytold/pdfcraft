@@ -148,6 +148,10 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let (mut view, mut sort) = (app.recent_view, app.recent_sort);
     let mut screen = StartScreen::new(craft::ui::contract::Bind::bound(&mut view), craft::ui::contract::Bind::bound(&mut sort), &files)
         .max_recent(app.recent_limit)
+        // Production's start screen: heading-strength section titles (Clear recent beside Recent) and the pinned
+        // folders above the recent files.
+        .heading_sections()
+        .pinned_first()
         .offers_new(false)
         // Open is in the title bar, as in production.
         .offers_open(false)

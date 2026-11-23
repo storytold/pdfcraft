@@ -280,7 +280,12 @@ fn show_rail_over(app: &mut PdfCraftApp, ui: &mut egui::Ui, toolbar: &Tracked<Ve
     };
     let groups = drawer_groups();
     let toolbar: &[ToolSlot<String>] = toolbar;
-    let drawer = ToolbarDrawer::new(output.response.rect, &groups, toolbar, output.dropped).kind(DrawerKind::Searchable).opened_by(opener).show(ui);
+    let drawer = ToolbarDrawer::new(output.response.rect, &groups, toolbar, output.dropped)
+        .kind(DrawerKind::Searchable)
+        .opened_by(opener)
+        // A tool that is on the toolbar only inside a group still drags from the drawer, as in production.
+        .grouped_tools_drag()
+        .show(ui);
     let defaults = slots_with(app, &[]);
     let mut edited: Option<Vec<ToolSlot<String>>> = None;
     for edit in &drawer.edits {

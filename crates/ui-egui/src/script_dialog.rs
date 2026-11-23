@@ -73,7 +73,8 @@ fn alert_prompt(run: DocId, document: &str, message: &Message) -> (StandardPromp
     }
     prompt = prompt.button(PromptChoice::Proceed, if yes_no { tl!("Yes").to_string() } else { tl!("OK").to_string() });
     if yes_no {
-        prompt = prompt.button(PromptChoice::Alternate, tl!("No").to_string());
+        // Production's order: No between Cancel and Yes.
+        prompt = prompt.button(PromptChoice::Alternate, tl!("No").to_string()).alternate_role(craft::ui::sections::DialogRole::Alternative);
     }
     // One script runs at a time and its prompt closes before the next opens, so the run names the instance.
     let prompt = prompt.button(PromptChoice::Cancel, tl!("Cancel").to_string()).instance(("script.prompt", run.0));
