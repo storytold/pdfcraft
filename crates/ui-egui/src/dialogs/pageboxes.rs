@@ -73,27 +73,10 @@ impl Default for BoxesDraft {
 }
 
 impl BoxesDraft {
-<<<<<<< HEAD
-    /// The edit setting the box on `pages` (0-based).
-    pub fn edit(&self, pages: Vec<usize>) -> Edit {
-        let spec =
-            if self.margins.iter().all(|m| *m == 0.0) && self.which != PageBox::Media { BoxSpec::Remove } else { BoxSpec::Margins(self.margins) };
-        Edit::SetPageBox { pages, which: self.which, spec }
-=======
-    /// The pages (0-based) the dialog applies to.
-    pub fn pages(&self, current: usize, count: usize) -> Vec<usize> {
-        match self.range {
-            Range::All => (0..count).collect(),
-            Range::Current => vec![current.min(count.saturating_sub(1))],
-            Range::Pages(a, b) => (a.max(1) - 1..b.min(count)).collect(),
-        }
-    }
-
-    /// The edit for the draft. `user_units` is each page's `/UserUnit` (points per user-space unit):
-    /// the margins are physical, the page box is written in user space, so pages with different
-    /// units get their own margins in one undo step.
-    pub fn edit(&self, current: usize, count: usize, user_units: &[f64]) -> Edit {
-        let pages = self.pages(current, count);
+    /// The edit setting the box on `pages` (0-based). `user_units` is each page's `/UserUnit` (points
+    /// per user-space unit): the margins are physical, the page box is written in user space, so pages
+    /// with different units get their own margins in one undo step.
+    pub fn edit(&self, pages: Vec<usize>, user_units: &[f64]) -> Edit {
         if self.margins.iter().all(|m| *m == 0.0) && self.which != PageBox::Media {
             return Edit::SetPageBox { pages, which: self.which, spec: BoxSpec::Remove };
         }
@@ -116,13 +99,12 @@ impl BoxesDraft {
         // Worded as the single edit is (`Edit::label`), so one undo step reads the same either way.
         let label = if self.which == PageBox::Crop { "Crop pages" } else { "Set page boxes" };
         Edit::Batch { label: label.into(), edits }
->>>>>>> upstream/main
     }
 }
 
 /// The margins (left, bottom, right, top) of `which` inside the media box, in physical points: the
 /// page's user-space differences times its `/UserUnit`, so the dialog shows what is written back.
-fn margins_of(b: &[[f64; 4]; 5], which: PageBox, user_unit: f64) -> [f64; 4] {
+fn page_margins(b: &[[f64; 4]; 5], which: PageBox, user_unit: f64) -> [f64; 4] {
     let (m, x) = (b[0], b[box_index(which)]);
     if which == PageBox::Media {
         return [0.0; 4];
@@ -140,14 +122,14 @@ fn box_index(b: PageBox) -> usize {
     }
 }
 
-<<<<<<< HEAD
 /// The margins the rows of `f` hold, in points.
 fn margins_of(f: &DialogFields) -> [f64; 4] {
     MARGIN_KEYS.map(|k| f.number(k).unwrap_or(0.0).max(0.0))
 }
 
-/// Draws the media box and the new box inside it, to scale.
-fn paint_preview(cx: &craft::ui::primitives::ContentPainterCx<'_>, rect: Rect, media: [f64; 4], margins: [f64; 4]) {
+/// Draws the media box and the new box inside it, to scale. The media box is in user space and the
+/// margins in physical points, so they are drawn divided by the page's `/UserUnit`, `page_unit`.
+fn paint_preview(cx: &craft::ui::primitives::ContentPainterCx<'_>, rect: Rect, media: [f64; 4], margins: [f64; 4], page_unit: f64) {
     let (w, h) = ((media[2] - media[0]).max(1.0), (media[3] - media[1]).max(1.0));
     let s = (rect.width() / w as f32).min(rect.height() / h as f32);
     let page = Rect::from_center_size(rect.center(), vec2(w as f32 * s, h as f32 * s));
@@ -159,7 +141,7 @@ fn paint_preview(cx: &craft::ui::primitives::ContentPainterCx<'_>, rect: Rect, m
         Stroke::new(cx.stroke_width(StrokeWidth::Thin), egui::Color32::from_gray(120)),
         egui::StrokeKind::Outside,
     );
-    let [l, bo, ri, to] = margins.map(|v| v as f32 * s);
+    let [l, bo, ri, to] = margins.map(|v| (v / page_unit) as f32 * s);
     let inner = Rect::from_min_max(pos2(page.left() + l, page.top() + to), pos2(page.right() - ri, page.bottom() - bo));
     if inner.is_positive() {
         cx.painter.rect_stroke(
@@ -172,8 +154,8 @@ fn paint_preview(cx: &craft::ui::primitives::ContentPainterCx<'_>, rect: Rect, m
 }
 
 /// The rows of the dialog for a document of `count` pages with `current` on screen; `media` is the current page's
-/// media box.
-fn params(count: usize, current: usize, media: Option<[f64; 4]>) -> Vec<Param> {
+/// media box and `page_unit` its `/UserUnit`.
+fn params(count: usize, current: usize, media: Option<[f64; 4]>, page_unit: f64) -> Vec<Param> {
     let boxes = BOXES.iter().map(|(_, id, name)| (id.to_string(), (*name).into())).collect();
     let units: Vec<NumberUnit> = Unit::ALL.iter().map(|u| NumberUnit::new(unit_id(*u), unit_kind(*u), u.label(), 1.0 / u.per_point())).collect();
     let unit_choices = Unit::ALL.iter().map(|u| (unit_id(*u).to_string(), u.label().into())).collect();
@@ -183,28 +165,6 @@ fn params(count: usize, current: usize, media: Option<[f64; 4]>) -> Vec<Param> {
     ];
     for (label, key) in [(tl!("Top"), "top"), (tl!("Bottom"), "bottom"), (tl!("Left"), "left"), (tl!("Right"), "right")] {
         rows.push(Param::number_in_units(key, label, 0.0, 1.0, 3, "unit", units.clone()).bounds(Some(0.0), Some(10_000.0)));
-=======
-/// Draw the dialog body; returns (apply, cancel).
-pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
-    let Some((i, id)) = app.active_ids() else { return (false, true) };
-    let current = app.views[i].current;
-    let Some(doc) = app.session.get(id) else { return (false, true) };
-    let boxes = doc.page_boxes();
-    let page_unit = doc.page_user_unit(current);
-    let count = boxes.len().max(1);
-    let units = app.units;
-    let d = &mut app.boxes_draft;
-    // Opening the dialog starts in the unit chosen in Preferences.
-    if d.seeded.is_none() {
-        d.unit = units;
-    }
-    // Seed the margins from the current page's box when the dialog opens or the box changes.
-    if d.seeded != Some((current, d.which))
-        && let Some(b) = boxes.get(current)
-    {
-        d.margins = margins_of(b, d.which, page_unit);
-        d.seeded = Some((current, d.which));
->>>>>>> upstream/main
     }
     rows.push(
         Param::custom("zero", "", |ui, fields, _| {
@@ -213,57 +173,6 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 for key in MARGIN_KEYS {
                     fields.set(key, 0.0);
                 }
-<<<<<<< HEAD
-=======
-                ui.label("");
-                if ui.button(tl!("Set to zero")).clicked() {
-                    d.margins = [0.0; 4];
-                }
-                ui.end_row();
-                ui.label(tl!("Pages"));
-                ui.vertical(|ui| {
-                    widgets::radio_value(ui, &mut d.range, Range::All, tl!("All"));
-                    widgets::radio_value(
-                        ui,
-                        &mut d.range,
-                        Range::Current,
-                        crate::i18n::fmt(tl!("Current page ({n})"), &[("n", &(current + 1).to_string())]),
-                    );
-                    let (mut a, mut b) = match d.range {
-                        Range::Pages(a, b) => (a, b),
-                        _ => (1, count),
-                    };
-                    ui.horizontal(|ui| {
-                        let on = matches!(d.range, Range::Pages(..));
-                        if ui.add(widgets::radio(on, tl!("From"))).clicked() {
-                            d.range = Range::Pages(a, b);
-                        }
-                        let ra = ui.add(egui::DragValue::new(&mut a).range(1..=count));
-                        ui.label(tl!("to"));
-                        let rb = ui.add(egui::DragValue::new(&mut b).range(1..=count));
-                        if ra.changed() || rb.changed() {
-                            d.range = Range::Pages(a.min(b), b.max(a));
-                        }
-                    });
-                });
-                ui.end_row();
-            });
-        });
-        ui.add_space(16.0);
-        // Preview: the media box and the new box, to scale.
-        if let Some(b) = boxes.get(current) {
-            let m = b[0];
-            let (w, h) = ((m[2] - m[0]).max(1.0), (m[3] - m[1]).max(1.0));
-            let s = (180.0 / w.max(h)) as f32;
-            let (r, _) = ui.allocate_exact_size(vec2(200.0, 200.0), egui::Sense::hover());
-            let page = Rect::from_center_size(r.center(), vec2(w as f32 * s, h as f32 * s));
-            ui.painter().rect_filled(page, CornerRadius::ZERO, Color32::WHITE);
-            ui.painter().rect_stroke(page, CornerRadius::ZERO, Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
-            let [l, bo, ri, to] = d.margins.map(|v| (v / page_unit) as f32 * s);
-            let inner = Rect::from_min_max(pos2(page.left() + l, page.top() + to), pos2(page.right() - ri, page.bottom() - bo));
-            if inner.is_positive() {
-                ui.painter().rect_stroke(inner, CornerRadius::ZERO, Stroke::new(1.5, t.accent), egui::StrokeKind::Middle);
->>>>>>> upstream/main
             }
             out.response.clone()
         })
@@ -278,7 +187,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         rows.push(
             Param::custom("preview", "", move |ui, fields, _| {
                 let margins = margins_of(fields);
-                Picture::painter(label.clone(), aspect, move |cx, rect| paint_preview(cx, rect, media, margins))
+                Picture::painter(label.clone(), aspect, move |cx, rect| paint_preview(cx, rect, media, margins, page_unit))
                     .extent(PictureSize::Sample(ThumbSize::Large))
                     .show(ui)
             })
@@ -297,16 +206,12 @@ impl PdfCraftApp {
         let boxes = doc.page_boxes();
         let count = boxes.len().max(1);
         let page = boxes.get(current).copied();
+        let page_unit = doc.page_user_unit(current);
         let d = &mut self.boxes_draft;
         // Opening the dialog starts in the unit chosen in Preferences.
         d.unit = self.units;
         if let Some(b) = page {
-            let (m, x) = (b[0], b[box_index(d.which)]);
-            d.margins = if d.which == PageBox::Media {
-                [0.0; 4]
-            } else {
-                [x[0] - m[0], x[1] - m[1], m[2] - x[2], m[3] - x[3]].map(|v| (v.max(0.0) * 100.0).round() / 100.0)
-            };
+            d.margins = page_margins(&b, d.which, page_unit);
         }
         d.seeded = Some((current, d.which));
         if current_only {
@@ -321,7 +226,7 @@ impl PdfCraftApp {
         fields.set("range", PageRangeOptions::field_value(&d.range));
         let media = page.map(|b| b[0]);
         let dialog = HostedParamDialog::new(ctx, KEY, fields, move |fields| {
-            ParamDialog::new(KEY, tl!("Set Page Boxes"), params(count, current, media)).values(Bind::bound(fields))
+            ParamDialog::new(KEY, tl!("Set Page Boxes"), params(count, current, media, page_unit)).values(Bind::bound(fields))
         });
         crate::dialogs::host::open(self, dialog);
     }
@@ -331,7 +236,7 @@ impl PdfCraftApp {
         let Some(answer) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(KEY)) else { return };
         let Some(result) = answer.ok() else { return };
         let Some((i, id)) = self.active_ids() else { return };
-        let count = self.session.get(id).map_or(0, |d| d.info.pages.len());
+        let (count, user_units) = self.session.get(id).map_or((0, Vec::new()), |d| (d.info.pages.len(), d.page_user_units()));
         let current = self.views[i].current();
         let f = &result.fields;
         let d = &mut self.boxes_draft;
@@ -346,7 +251,7 @@ impl PdfCraftApp {
             d.range = range;
         }
         let pages = d.range.pages(count, current, &[]);
-        let edit = d.edit(pages);
+        let edit = d.edit(pages, &user_units);
         d.seeded = None;
         self.apply_edit(ctx, edit);
     }
@@ -359,22 +264,12 @@ mod tests {
     #[test]
     fn zero_margins_remove_the_box_except_for_the_media_box() {
         let mut d = BoxesDraft::default();
-<<<<<<< HEAD
-        assert!(matches!(d.edit(vec![0, 1]), Edit::SetPageBox { spec: BoxSpec::Remove, .. }));
+        assert!(matches!(d.edit(vec![0, 1], &[]), Edit::SetPageBox { spec: BoxSpec::Remove, .. }));
         d.margins = [72.0, 0.0, 0.0, 0.0];
-        assert!(matches!(d.edit(vec![0]), Edit::SetPageBox { spec: BoxSpec::Margins(_), which: PageBox::Crop, .. }));
+        assert!(matches!(d.edit(vec![0], &[]), Edit::SetPageBox { spec: BoxSpec::Margins(_), which: PageBox::Crop, .. }));
         d.margins = [0.0; 4];
         d.which = PageBox::Media;
-        assert!(matches!(d.edit(vec![0]), Edit::SetPageBox { spec: BoxSpec::Margins(_), which: PageBox::Media, .. }));
-=======
-        assert_eq!(d.pages(2, 5), [0, 1, 2, 3, 4]);
-        d.range = Range::Current;
-        assert_eq!(d.pages(2, 5), [2]);
-        d.range = Range::Pages(2, 9);
-        assert_eq!(d.pages(0, 5), [1, 2, 3, 4]);
-        assert!(matches!(d.edit(0, 5, &[]), Edit::SetPageBox { spec: BoxSpec::Remove, .. }));
-        d.margins = [72.0, 0.0, 0.0, 0.0];
-        assert!(matches!(d.edit(0, 5, &[]), Edit::SetPageBox { spec: BoxSpec::Margins(_), which: PageBox::Crop, .. }));
+        assert!(matches!(d.edit(vec![0], &[]), Edit::SetPageBox { spec: BoxSpec::Margins(_), which: PageBox::Media, .. }));
     }
 
     /// Two pages of 432 x 360 points, the first with `/UserUnit` 1 and the second with 2, opened in a session.
@@ -396,13 +291,12 @@ mod tests {
         let (mut session, id) = session_with_user_units();
         let units = session.get(id).unwrap().page_user_units();
         assert_eq!(units, [1.0, 2.0]);
-        let mut d = BoxesDraft { which: PageBox::Crop, margins: [36.0; 4], range: Range::Current, ..Default::default() };
-        session.apply(id, d.edit(1, 2, &units)).unwrap();
+        let d = BoxesDraft { which: PageBox::Crop, margins: [36.0; 4], ..Default::default() };
+        session.apply(id, d.edit(vec![1], &units)).unwrap();
         let b = session.get(id).unwrap().page_boxes();
         assert_eq!(b[1][1], [18.0, 18.0, 414.0, 342.0], "UserUnit 2: 36 points are 18 user units");
         assert_eq!(b[0][1], [0.0, 0.0, 432.0, 360.0], "the page outside the range is untouched");
-        d.range = Range::Pages(1, 1);
-        session.apply(id, d.edit(0, 2, &units)).unwrap();
+        session.apply(id, d.edit(vec![0], &units)).unwrap();
         assert_eq!(session.get(id).unwrap().page_boxes()[0][1], [36.0, 36.0, 396.0, 324.0], "UserUnit 1 keeps the margin as typed");
     }
 
@@ -410,8 +304,8 @@ mod tests {
     fn pages_with_different_user_units_get_their_own_margins_in_one_step() {
         let (mut session, id) = session_with_user_units();
         let units = session.get(id).unwrap().page_user_units();
-        let d = BoxesDraft { which: PageBox::Crop, margins: [36.0; 4], range: Range::All, ..Default::default() };
-        session.apply(id, d.edit(0, 2, &units)).unwrap();
+        let d = BoxesDraft { which: PageBox::Crop, margins: [36.0; 4], ..Default::default() };
+        session.apply(id, d.edit(vec![0, 1], &units)).unwrap();
         let doc = session.get(id).unwrap();
         let b = doc.page_boxes();
         assert_eq!(b[0][1], [36.0, 36.0, 396.0, 324.0]);
@@ -429,8 +323,7 @@ mod tests {
         let doc = session.get(id).unwrap();
         let mut boxes = doc.page_boxes()[1];
         boxes[1] = [18.0, 18.0, 414.0, 342.0];
-        assert_eq!(margins_of(&boxes, PageBox::Crop, 2.0), [36.0; 4], "18 user units on a UserUnit 2 page are half an inch");
-        assert_eq!(margins_of(&boxes, PageBox::Media, 2.0), [0.0; 4]);
->>>>>>> upstream/main
+        assert_eq!(page_margins(&boxes, PageBox::Crop, 2.0), [36.0; 4], "18 user units on a UserUnit 2 page are half an inch");
+        assert_eq!(page_margins(&boxes, PageBox::Media, 2.0), [0.0; 4]);
     }
 }
