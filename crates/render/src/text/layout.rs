@@ -832,10 +832,11 @@ fn column_bands_again(columns: &mut Bands, segs: &[Seg], found: &[[f32; 4]]) {
 }
 
 /// The block to read next where `pick` is the block order's choice after block `last`: `pick`, or the block that
-/// [`before_next_column`] puts before it. A block level with the first line of the one just read is the next
-/// cell of its row, and stays `pick`, when no gutter is found between the two, or when the one just read is at
-/// most [`COLUMN_LINES`] lines (an entry of a list set in two columns, each beside its counterpart): a column's
-/// paragraph before a formula is longer.
+/// [`before_next_column`] puts before it. A block whose first line is level with the one just read is the next
+/// cell of its row, and stays `pick`, when no gutter is found between the two, or when the rows go on
+/// ([`rows_go_on`]): the one just read is at most [`COLUMN_LINES`] lines, and the next block below it has a block
+/// level with it beside `pick` too (a table of cells several lines long). A column's paragraph followed by a
+/// formula is no row, however short: the formula has nothing level with it in the next column.
 fn column_first(
     (blocks, segs): (&[Block], &[Seg]),
     inks: (&[(f32, f32)], &[bool]),
@@ -845,15 +846,42 @@ fn column_first(
     pick: usize,
 ) -> usize {
     let first_seg = |b: usize| blocks.get(b).and_then(|(members, _)| members.first()).and_then(|&s| segs.get(s));
-    if let Some((a, b)) = last.and_then(first_seg).zip(first_seg(pick)) {
-        let shared = a.bbox[3].min(b.bbox[3]) - a.bbox[1].max(b.bbox[1]);
-        let short = last.and_then(|l| blocks.get(l)).is_some_and(|(members, _)| members.len() <= COLUMN_LINES);
-        if shared > 0.3 * (a.bbox[3] - a.bbox[1]).max(b.bbox[3] - b.bbox[1]) && (short || !parted_by_gutter(segs, a, b, gutters)) {
-            return pick;
-        }
+    if let Some((last, (a, b))) = last.and_then(|l| Some((l, first_seg(l)?))).and_then(|(l, a)| Some((l, (a, first_seg(pick)?))))
+        && level(&a.bbox, &b.bbox)
+        && (!parted_by_gutter(segs, a, b, gutters) || rows_go_on((blocks, segs), remaining, last, pick))
+    {
+        return pick;
     }
     column_bands_again(columns, segs, gutters.found());
     before_next_column(blocks, inks, remaining, &columns.1, pick)
+}
+
+/// Whether two lines' boxes are level: they share at least 30% of the taller one's height.
+fn level(a: &[f32; 4], b: &[f32; 4]) -> bool {
+    a[3].min(b[3]) - a[1].max(b[1]) > 0.3 * (a[3] - a[1]).max(b[3] - b[1])
+}
+
+/// Whether block `last`, just read, and block `pick`, level with it beside it, are cells of rows that go on: `last`
+/// is at most [`COLUMN_LINES`] lines, and the nearest unread block below it in its own span has an unread block
+/// level with its first line in the span of `pick`.
+fn rows_go_on((blocks, segs): (&[Block], &[Seg]), remaining: &[usize], last: usize, pick: usize) -> bool {
+    let (Some((members, lb)), Some((_, pb))) = (blocks.get(last), blocks.get(pick)) else { return false };
+    if members.len() > COLUMN_LINES {
+        return false;
+    }
+    let first_line = |b: usize| blocks.get(b).and_then(|(m, _)| m.first()).and_then(|&s| segs.get(s)).map(|s| s.bbox);
+    let across = |a: &[f32; 4], b: &[f32; 4]| a[2].min(b[2]) > a[0].max(b[0]);
+    // Half the height of the last line read: a block starting less than that above its bottom is not below it.
+    let tol = members.last().and_then(|&s| segs.get(s)).map_or(0.0, |s| s.h * 0.5);
+    let below = remaining
+        .iter()
+        .copied()
+        .filter(|&r| r != pick && blocks.get(r).is_some_and(|(_, rb)| rb[1] >= lb[3] - tol && across(rb, lb)))
+        .min_by(|a, b| blocks[*a].1[1].total_cmp(&blocks[*b].1[1]));
+    let Some((below, next)) = below.and_then(|b| Some((b, first_line(b)?))) else { return false };
+    remaining
+        .iter()
+        .any(|&r| r != pick && r != below && blocks.get(r).is_some_and(|(_, rb)| across(rb, pb)) && first_line(r).is_some_and(|f| level(&f, &next)))
 }
 
 /// The block to read before block `pick`, or `pick` itself: a block of the column right of the gutter between two

@@ -2435,6 +2435,90 @@ fn a_column_with_formulas_is_read_before_the_next_column() {
     assert!(late.is_empty(), "{} letters of the left column read after the right column began, from {:?} down", late.len(), late.first());
 }
 
+/// A short paragraph is no list entry: three lines in each column, a formula in the left one well below them, and
+/// three more lines in each. The right column's first paragraph, level with the left one's and as short, is not
+/// the next cell of a row, and waits for the formula and the rest of the left column.
+#[test]
+fn a_short_paragraph_before_a_formula_keeps_the_column_order() {
+    let (left, right) = NARROW_COLUMNS;
+    let mut v = Vec::new();
+    column(&mut v, &left[..3], 10.0, 10.0);
+    column(&mut v, &right[..3], 169.0, 10.0);
+    word(&mut v, "x = y + z", 40.0, 70.0, 6.0);
+    column(&mut v, &left[2..], 10.0, 100.0);
+    column(&mut v, &right[2..], 169.0, 100.0);
+    let want = [&left[..3], &["x = y + z"], &left[2..], &right[..3], &right[2..]].concat().join("\n");
+    assert_eq!(layout(v).plain_text(), want);
+}
+
+/// The lines of the lower part of a table of fossil localities in three columns, as their left and right edges,
+/// their tops and where their word gaps fall: each row a locality, its quadrangle and coordinates, its age and its
+/// collector, each cell up to three lines of 8 pt text.
+const LOCALITY_TABLE: [(f32, f32, f32, &str); 44] = [
+    (46.0, 130.0, 506.0, "xxxxxxxxx xxx xxxxxxxxxx"),
+    (219.0, 260.0, 506.0, "xxxx xxxxxxx"),
+    (428.0, 553.0, 506.0, "xxxxxxxxx xx xxxx xxxxxxxxxxx xxxxxxxxxx"),
+    (46.0, 166.0, 515.0, "xxx xxxxxxxxx xxx xxxx xxxxxxxxxx xx"),
+    (428.0, 477.0, 515.0, "xx xxxx xxxxxxx"),
+    (428.0, 510.0, 524.0, "xxxx xxxxxx xxxx xxxxxx"),
+    (46.0, 132.0, 542.0, "xxxxxxxxx xxx  xxxxxxxxxx"),
+    (219.0, 403.0, 542.0, "xxxxx xxxx xxxxx xx xxxxxxxxx xxxxx xxxx xxxxxxxx xxxxxx"),
+    (428.0, 553.0, 542.0, "xxxxxxxxx xx xxxx xxxxxxxxxxx xxxxxxxxxx"),
+    (46.0, 166.0, 551.0, "xxx xxxxxxxxx xxx xxxx xxxxxxxxxx xx"),
+    (428.0, 477.0, 551.0, "xx xxxx xxxxxxx"),
+    (428.0, 510.0, 560.0, "xxxx xxxxxx xxxx xxxxxx"),
+    (46.0, 118.0, 578.0, "xxxxx xxx xxxxxxxxxx"),
+    (219.0, 377.0, 578.0, "xx xxxxxxxxxx xxxx xxxx xxxxx xxxx xx xxxxx xx"),
+    (428.0, 535.0, 578.0, "xxxxxx xxxx xxx xxxxxxx xxx xxxxxx"),
+    (46.0, 166.0, 587.0, "xxx xxxxxxxxx xxx xxxx xxxxxxxxxx xx"),
+    (219.0, 393.0, 587.0, "xxxxxxxxx xxxxx xxxx xxxx xxxxxxxxxxxx xxxxxxxx xxxxxx"),
+    (428.0, 451.0, 587.0, "xxxxxxx"),
+    (46.0, 118.0, 605.0, "xxxxx xxx xxxxxxxxxx"),
+    (219.0, 376.0, 605.0, "xx xxxxxxxxx xxxxx xxxxxx xxxxxxxxxxxxxxxx xxxxxx"),
+    (428.0, 535.0, 605.0, "xxxxxx xxxx xxx xxxxxxx xxx xxxxxx"),
+    (46.0, 166.0, 614.0, "xxx xxxxxxxxx xxx xxxx xxxxxxxxxx xx"),
+    (428.0, 451.0, 614.0, "xxxxxxx"),
+    (46.0, 118.0, 632.0, "xxxxx xxx xxxxxxxxxx"),
+    (219.0, 377.0, 632.0, "xx xxxxxxxxxx xxxx xxxx xxxxx xxxx xx xxxxx xx"),
+    (428.0, 535.0, 632.0, "xxxxxx xxxx xxx xxxxxxx xxx xxxxxx"),
+    (46.0, 166.0, 641.0, "xxx xxxxxxxxx xxx xxxx xxxxxxxxxx xx"),
+    (219.0, 393.0, 641.0, "xxxxxxxxx xxxxx xxxx xxxx xxxxxxxxxxxx xxxxxxxx xxxxxx"),
+    (428.0, 536.0, 641.0, "xxxxxxx xxxx xxxxxx xxxx xxxxxx"),
+    (46.0, 118.0, 659.0, "xxxxx xxx xxxxxxxxxx"),
+    (219.0, 376.0, 659.0, "xx xxxxxxxxx xxxxx xxxxxx xxxxxxxxxxxxxxxx xxxxxx"),
+    (428.0, 535.0, 659.0, "xxxxxx xxxx xxx xxxxxxx xxx xxxxxx"),
+    (46.0, 166.0, 668.0, "xxx xxxxxxxxx xxx xxxx xxxxxxxxxx xx"),
+    (428.0, 451.0, 668.0, "xxxxxxx"),
+    (46.0, 118.0, 686.0, "xxxxx xxx xxxxxxxxxx"),
+    (219.0, 376.0, 686.0, "xx xxxxxxxxx xxxxx xxxxxx xxxxxxxxxxxxxxxx xxxxxx"),
+    (428.0, 535.0, 686.0, "xxxxxx xxxx xxx xxxxxxx xxx xxxxxx"),
+    (46.0, 166.0, 695.0, "xxx xxxxxxxxx xxx xxxx xxxxxxxxxx xx"),
+    (428.0, 449.0, 695.0, "xxxxxx"),
+    (46.0, 118.0, 713.0, "xxxxx xxx xxxxxxxxxx"),
+    (219.0, 376.0, 713.0, "xx xxxxxxxxx xxxxx xxxxxx xxxxxxxxxxxxxxxx xxxxxx"),
+    (428.0, 535.0, 713.0, "xxxxxx xxxx xxx xxxxxxx xxx xxxxxx"),
+    (46.0, 166.0, 722.0, "xxx xxxxxxxxx xxx xxxx xxxxxxxxxx xx"),
+    (428.0, 451.0, 722.0, "xxxxxxx"),
+];
+
+/// The cells of a table's rows several lines long, with a gutter between its columns: the next row goes on beside
+/// the cell just read, so the cell level with it is the next cell of its row, though it is right of a gutter and
+/// the cell just read is short.
+#[test]
+fn table_cells_several_lines_long_read_by_rows() {
+    let mut v = Vec::new();
+    for (x0, x1, y, text) in LOCALITY_TABLE {
+        let advance = (x1 - x0) / text.chars().count().max(1) as f32;
+        for (k, c) in text.chars().enumerate() {
+            v.push(tilted(&c.to_string(), [x0 + k as f32 * advance, y], [1.0, 0.0], [0.0, 1.0], advance, 8.0));
+        }
+    }
+    let t = layout(v);
+    // Where each line starts reading.
+    let at = |x0: f32, y: f32| t.glyphs.iter().position(|g| g.rect[0] == x0 && g.rect[1] == y).unwrap_or_else(|| panic!("a line at {x0}, {y}"));
+    assert!(at(428.0, 542.0) < at(219.0, 578.0), "the collector of a row is read before the age in the next row");
+}
+
 /// A running head over the right column and a footer under the left one stand apart from the columns' lines:
 /// the head is read first and the footer last, not between the two columns.
 #[test]
@@ -3098,7 +3182,8 @@ fn turned_text_keeps_its_place_in_the_reading_order() {
 }
 
 /// A stamp set up the gutter between two columns of running text is read after them, not between two lines of
-/// a column, where its box on the page would put it. A turned label beside one line keeps its place.
+/// a column, where its box on the page would put it, and so is a label drawn across a column's lines. A turned label
+/// beside one line keeps its place, and so does a chart's axis label with running text on one side of it only.
 #[test]
 fn a_stamp_up_the_gutter_is_read_after_the_columns() {
     let column = |x: u32, lines: &[&str]| {
@@ -3114,6 +3199,21 @@ fn a_stamp_up_the_gutter_is_read_after_the_columns() {
     let label = "BT /F2 12 Tf 0 1 -1 0 180 320 Tm (No) Tj ET ";
     let text = page_text(&(column(20, &left) + &column(179, &right) + label));
     assert!(text.lines().any(|line| line == "No") && text.lines().last() != Some("No"), "{text:?}");
+    // A chart's axis label set upwards in the right column, beside the left column's lines but with no running text
+    // on its other side (the right column goes on below the chart): read where it stands, not after the columns.
+    let axis = "BT /F2 12 Tf 0 1 -1 0 260 296 Tm (Quantity) Tj ET ";
+    let lower = format!("BT /F2 10 Tf 12 TL 179 250 Td {}ET ", right.iter().map(|line| format!("({line}) Tj T* ")).collect::<String>());
+    let text = page_text(&(column(20, &left) + &lower + axis));
+    assert!(text.lines().any(|line| line == "Quantity") && text.lines().last() != Some("Quantity"), "{text:?}");
+    // A label set upwards over the middle of a column's lines, as a map's labels are drawn over the text beside
+    // them: read after the column too.
+    let overlaid = "BT /F2 12 Tf 0 1 -1 0 100 296 Tm (Overlaid) Tj ET ";
+    let text = page_text(&(column(20, &left) + overlaid));
+    assert_eq!(text, [&left[..], &["Overlaid"]].concat().join("\n"));
+    // The stamp up the gutter beside a figure in the right column, which goes on below it: right against the left
+    // column's lines, it is read after the columns still.
+    let text = page_text(&(column(20, &left) + &lower + stamp));
+    assert_eq!(text.lines().last(), Some("Revised."), "{text:?}");
 }
 
 #[test]
