@@ -3626,3 +3626,26 @@ fn waiting_marks_are_dropped_when_their_pages_change() {
     assert_eq!(v.tool_marks(QuickTool::Redact, false, Some(0), true, &now), ToolMarks::None, "nothing marked");
     assert_eq!(app.session.get(id).unwrap().redaction_marks(), 0);
 }
+
+/// A folder search result names one match on its page. Opening it selects that match, not the
+/// page's first or the document's first, even when the page's text arrives after other pages'.
+#[test]
+fn a_revealed_match_is_the_one_named_even_when_its_page_reads_last() {
+    let mut v = view(3, PageLayout::Single, true);
+    v.current = 0;
+    v.texts.insert(0, Arc::new(find_test_text("sample on the first page")));
+    let ctx = egui::Context::default();
+    let text = "one sample, two sample";
+    let second = text.rfind("sample").unwrap();
+    v.reveal_match("sample", false, false, 1, second);
+    assert_eq!(v.current, 1, "the view waits on the match's page");
+    assert!(v.find.as_ref().unwrap().in_panel, "the search shows in the Search panel");
+    v.last_queue = [2, 1].map(|page| find_text_result(page, "").request).to_vec();
+    v.receive_result(&ctx, find_text_result(2, "sample on the last page"));
+    v.receive_result(&ctx, find_text_result(1, text));
+    let f = v.find.as_ref().unwrap();
+    let (page, range) = f.matches[f.current.unwrap()].clone();
+    assert_eq!((page, range.start), (1, second), "the second match on the page, as the result named");
+    assert!(f.target.is_none(), "chosen once; later layers leave the reader's place alone");
+    assert_eq!(v.current, 1);
+}

@@ -613,6 +613,7 @@ impl PdfCraftApp {
                 worker.set_context(ctx);
             }
             self.poll_pending_opens();
+            self.reveal_pending_hit();
             self.show_reveal_errors();
             self.poll_pending_destinations();
         }

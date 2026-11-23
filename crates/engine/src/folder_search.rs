@@ -83,6 +83,9 @@ impl Options {
 pub struct Match {
     /// 0-based.
     pub page: usize,
+    /// The match's first glyph in the page's text, as `PageText::find_opts` counts it, so a
+    /// viewer that searches the opened file the same way can pick out this very match.
+    pub start: usize,
     pub before: String,
     pub text: String,
     pub after: String,
@@ -607,6 +610,7 @@ fn collect(text: &PageText, page: usize, query: &str, options: &Options, room: u
         let (start, end) = (range.start.min(glyphs), range.end.min(glyphs));
         matches.push(Match {
             page,
+            start,
             before: excerpt(text, start.saturating_sub(CONTEXT)..start),
             text: excerpt(text, start..end),
             after: excerpt(text, end..end.saturating_add(CONTEXT).min(glyphs)),

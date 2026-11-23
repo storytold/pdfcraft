@@ -289,7 +289,7 @@ fn close_ends_the_dialog() {
 }
 
 #[test]
-fn the_edit_menu_offers_it_with_no_document_open() {
+fn advanced_search_with_no_document_open_searches_a_folder() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
@@ -297,7 +297,53 @@ fn the_edit_menu_offers_it_with_no_document_open() {
     });
     h.run_steps(3);
     support::open_menu(&mut h, "Edit");
-    support::menu_row(&h, "Search a folder…").click();
+    support::menu_row(&h, "Advanced search…").click();
     h.run_steps(4);
     assert_eq!(h.state().dialog, Some(Dialog::FolderSearch));
+}
+
+#[test]
+fn the_search_panel_keeps_folder_results_while_each_one_is_opened() {
+    let folder = TempFolder::new();
+    let a = folder.write("a.pdf", &fixture(3));
+    let b = folder.write("b.pdf", &fixture(2));
+    let mut h = harness();
+    h.state_mut().open_bytes("other.pdf", None, fixture(1)).unwrap();
+    h.run_steps(4);
+    h.state_mut().execute("edit.advanced_search");
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, None, "with a document open, the Search panel takes over from the dialog");
+    assert_eq!(h.state().right, Some(pdfcraft_ui_egui::RightPanel::Search));
+    h.get_by_role_and_label(Role::RadioButton, "A folder").click();
+    h.run_steps(3);
+    search(&mut h, &folder.path(), "Page");
+    h.get_by_label_contains("Files with matches: 2.");
+
+    result_row(&h, "a.pdf, Page 3:").click();
+    support::wait_until(&mut h, "a.pdf's match to be selected", |app| {
+        app.views.len() == 2 && app.views[1].find.as_ref().is_some_and(|f| f.current.is_some())
+    });
+    let path = |h: &Harness<'static, PdfCraftApp>| {
+        let view = &h.state().views[h.state().active.unwrap()];
+        h.state().session.get(view.id).and_then(|d| d.path.clone())
+    };
+    assert_eq!(path(&h), Some(a));
+    assert_eq!(selected_match_in(h.state()), Some(2), "the match is selected, on its page");
+
+    // Still in the panel: the next result is a click away.
+    result_row(&h, "b.pdf, Page 2:").click();
+    support::wait_until(&mut h, "b.pdf's match to be selected", |app| {
+        app.views.len() == 3 && app.views[2].find.as_ref().is_some_and(|f| f.current.is_some())
+    });
+    assert_eq!(path(&h), Some(b));
+    assert_eq!(selected_match_in(h.state()), Some(1));
+    result_row(&h, "a.pdf, Page 2:").click();
+    support::wait_until(&mut h, "a.pdf's other match to be selected", |app| app.active == Some(1) && selected_match_in(app) == Some(1));
+    assert_eq!(h.state().views.len(), 3, "an open file's tab is reused");
+}
+
+/// The page of the match the active file's own search has selected.
+fn selected_match_in(app: &PdfCraftApp) -> Option<usize> {
+    let find = app.views[app.active?].find.as_ref()?;
+    find.matches.get(find.current?).map(|(page, _)| *page)
 }

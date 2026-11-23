@@ -31,7 +31,42 @@ struct Job {
     cancel: Arc<AtomicBool>,
 }
 
+/// What the Search panel searches: the document in front, or every PDF in a folder.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Scope {
+    #[default]
+    Document,
+    Folder,
+}
+
+/// The query and options a search ran with, kept apart from the fields, which may have changed
+/// since: an opened result is searched for again exactly as it was found.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Searched {
+    query: String,
+    case_sensitive: bool,
+    whole_words: bool,
+}
+
+/// A result the user chose: the file, and the match to show in it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Hit {
+    pub(crate) path: String,
+    pub(crate) page: usize,
+    pub(crate) start: usize,
+    pub(crate) query: String,
+    pub(crate) case_sensitive: bool,
+    pub(crate) whole_words: bool,
+}
+
+/// What the folder half of the Search panel asks of the app.
+pub(crate) enum PanelAction {
+    Browse,
+    Open(Hit),
+}
+
 pub(crate) struct State {
+    pub(crate) scope: Scope,
     folder: String,
     query: String,
     subfolders: bool,
@@ -43,11 +78,17 @@ pub(crate) struct State {
     files: Vec<FileMatches>,
     skipped: Vec<Skipped>,
     outcome: Option<Result<Summary, String>>,
+    searched: Searched,
+    /// The result last chosen, to show the match it names once its file is open.
+    pending: Option<Hit>,
+    /// The result last chosen, marked in the list so the reader keeps their place in it.
+    chosen: Option<(String, usize, usize)>,
 }
 
 impl Default for State {
     fn default() -> Self {
         Self {
+            scope: Scope::Document,
             folder: String::new(),
             query: String::new(),
             subfolders: true,
@@ -59,11 +100,30 @@ impl Default for State {
             files: Vec::new(),
             skipped: Vec::new(),
             outcome: None,
+            searched: Searched::default(),
+            pending: None,
+            chosen: None,
         }
     }
 }
 
 impl State {
+    /// The text in the Search field.
+    pub(crate) fn query(&self) -> &str {
+        &self.query
+    }
+
+    /// The folder half of the Search panel opens: it takes the document search's text when it
+    /// has none of its own, so switching scope keeps what the reader typed.
+    pub(crate) fn show_folder(&mut self, query: Option<&str>) {
+        self.scope = Scope::Folder;
+        if self.query.trim().is_empty()
+            && let Some(query) = query
+        {
+            self.query = query.chars().take(folder_search::MAX_QUERY_CHARS).collect();
+        }
+    }
+
     /// Ask a running search to end; it does at its next page, and what it found stays.
     pub(crate) fn stop(&mut self) {
         if let Some(job) = &self.job {
@@ -103,6 +163,10 @@ impl State {
         self.files.clear();
         self.skipped.clear();
         self.outcome = None;
+        self.pending = None;
+        self.chosen = None;
+        // Trimmed, as the engine searches for it.
+        self.searched = Searched { query: self.query.trim().to_owned(), case_sensitive: self.case_sensitive, whole_words: self.whole_words };
         // Pass the folder path unchanged: a directory name can legitimately end in a space. The
         // readiness check trims only to detect an empty field.
         let mut options = Options::new(self.folder.clone(), self.query.clone());
@@ -227,105 +291,207 @@ fn excerpt(found: &folder_search::Match, width: f32, t: &Tokens) -> LayoutJob {
     job
 }
 
-/// Draw the dialog. Returns `true` to close it.
+/// The fields and options; `narrow` stacks them for the side panel. Returns whether Browse… was
+/// pressed and whether Enter left the Search field.
+fn form(ui: &mut egui::Ui, state: &mut State, narrow: bool) -> (bool, bool) {
+    let mut choose = false;
+    let mut enter = false;
+    if narrow {
+        let label = ui.label(egui::RichText::new(tl!("Folder")).color(Tokens::get(ui.ctx()).text_muted));
+        ui.add(widgets::line(&mut state.folder).desired_width(f32::INFINITY)).labelled_by(label.id);
+        // The web build has no folders to choose from.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            choose = widgets::pill_button(ui, tl!("Browse…"), false).clicked();
+        }
+        let label = ui.label(egui::RichText::new(tl!("Search")).color(Tokens::get(ui.ctx()).text_muted));
+        let field =
+            ui.add(widgets::line(&mut state.query).char_limit(folder_search::MAX_QUERY_CHARS).desired_width(f32::INFINITY)).labelled_by(label.id);
+        enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        ui.add(widgets::checkbox(&mut state.subfolders, tl!("Include subfolders")));
+        ui.add(widgets::checkbox(&mut state.whole_words, tl!("Whole words only")));
+        ui.add(widgets::checkbox(&mut state.case_sensitive, tl!("Case-sensitive")));
+    } else {
+        // A grid cell has no width of its own for `desired_width` to ask for.
+        let field_size = egui::vec2(420.0, 30.0);
+        egui::Grid::new("folder-search-fields").num_columns(3).show(ui, |ui| {
+            let label = ui.label(tl!("Folder"));
+            ui.add_sized(field_size, widgets::line(&mut state.folder)).labelled_by(label.id);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                choose = widgets::pill_button(ui, tl!("Browse…"), false).clicked();
+            }
+            ui.end_row();
+            let label = ui.label(tl!("Search"));
+            let field = ui.add_sized(field_size, widgets::line(&mut state.query).char_limit(folder_search::MAX_QUERY_CHARS)).labelled_by(label.id);
+            enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            ui.end_row();
+        });
+        ui.horizontal(|ui| {
+            ui.add(widgets::checkbox(&mut state.subfolders, tl!("Include subfolders")));
+            ui.add(widgets::checkbox(&mut state.whole_words, tl!("Whole words only")));
+            ui.add(widgets::checkbox(&mut state.case_sensitive, tl!("Case-sensitive")));
+        });
+    }
+    (choose, enter)
+}
+
+/// Search, or Stop while a search runs. `enter` starts a search as the button does.
+fn search_button(ui: &mut egui::Ui, state: &mut State, inline: bool, enter: bool) {
+    let ready = !state.folder.trim().is_empty() && !state.query.trim().is_empty();
+    if state.job.is_some() {
+        if widgets::pill_button(ui, tl!("Stop"), false).clicked() {
+            state.stop();
+        }
+    } else if ui.add_enabled_ui(ready, |ui| widgets::pill_button(ui, tl!("Search"), true)).inner.clicked() || (ready && enter) {
+        state.start(ui.ctx(), inline);
+        state.poll();
+    }
+}
+
+/// The status lines, the results by file and page, and what was not searched. Returns the
+/// result clicked.
+fn results(ui: &mut egui::Ui, state: &State, t: &Tokens) -> Option<Hit> {
+    let mut open = None;
+    for file in &state.files {
+        ui.add_space(6.0);
+        let name = file.path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let path = file.path.to_string_lossy();
+        ui.label(egui::RichText::new(&name).font(theme::semibold(13.0))).on_hover_text(path.as_ref());
+        let mut last_page = None;
+        for found in &file.matches {
+            if last_page != Some(found.page) {
+                ui.label(
+                    egui::RichText::new(fmt(tl!("Page {label}"), &[("label", &found.page.saturating_add(1).to_string())]))
+                        .small()
+                        .color(t.text_faint),
+                );
+                last_page = Some(found.page);
+            }
+            let job = excerpt(found, ui.available_width(), t);
+            // Include the file and page in the screen-reader label; the visible row already
+            // groups matches under those headings, but an individual button needs its own name.
+            let page_label = fmt(tl!("Page {label}"), &[("label", &found.page.saturating_add(1).to_string())]);
+            let accessible = format!("{name}, {page_label}: {} {} {}", found.before, found.text, found.after);
+            let selected = state.chosen.as_ref().is_some_and(|(p, page, start)| p.as_str() == path && *page == found.page && *start == found.start);
+            if ui.add(egui::Button::selectable(selected, job).wrap()).accessible_name(accessible).on_hover_text(tl!("Go to this result")).clicked() {
+                open = Some(Hit {
+                    path: path.clone().into_owned(),
+                    page: found.page,
+                    start: found.start,
+                    query: state.searched.query.clone(),
+                    case_sensitive: state.searched.case_sensitive,
+                    whole_words: state.searched.whole_words,
+                });
+            }
+        }
+    }
+    if !state.skipped.is_empty() {
+        ui.add_space(8.0);
+        egui::CollapsingHeader::new(fmt(tl!("Not searched: {n}"), &[("n", &state.skipped.len().to_string())])).show(ui, |ui| {
+            for file in state.skipped.iter().take(MAX_SKIPPED_SHOWN) {
+                ui.label(file.path.to_string_lossy());
+                ui.label(egui::RichText::new(reason(&file.reason)).small().color(t.text_muted));
+            }
+            if state.skipped.len() > MAX_SKIPPED_SHOWN {
+                ui.label(tl!("The rest are left out of this list."));
+            }
+        });
+    }
+    open
+}
+
+/// Draw the dialog, the folder search with no document open. Returns `true` to close it.
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> bool {
     let t = Tokens::get(ui.ctx());
     app.folder_search.poll();
     ui.label(egui::RichText::new(tl!("Search a folder")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     let inline = app.run_inline;
-    let mut choose = false;
     let state = &mut app.folder_search;
-    let running = state.job.is_some();
-    let mut enter = false;
-    // A grid cell has no width of its own for `desired_width` to ask for.
-    let field_size = egui::vec2(420.0, 30.0);
-    egui::Grid::new("folder-search-fields").num_columns(3).show(ui, |ui| {
-        let label = ui.label(tl!("Folder"));
-        ui.add_sized(field_size, widgets::line(&mut state.folder)).labelled_by(label.id);
-        // The web build has no folders to choose from.
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            choose = widgets::pill_button(ui, tl!("Browse…"), false).clicked();
-        }
-        ui.end_row();
-        let label = ui.label(tl!("Search"));
-        let field = ui.add_sized(field_size, widgets::line(&mut state.query).char_limit(folder_search::MAX_QUERY_CHARS)).labelled_by(label.id);
-        enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        ui.end_row();
-    });
-    ui.horizontal(|ui| {
-        ui.add(widgets::checkbox(&mut state.subfolders, tl!("Include subfolders")));
-        ui.add(widgets::checkbox(&mut state.whole_words, tl!("Whole words only")));
-        ui.add(widgets::checkbox(&mut state.case_sensitive, tl!("Case-sensitive")));
-    });
+    let (choose, enter) = form(ui, state, false);
     ui.add_space(6.0);
-    let ready = !state.folder.trim().is_empty() && !state.query.trim().is_empty();
     let mut close = false;
     ui.horizontal(|ui| {
-        if running {
-            if widgets::pill_button(ui, tl!("Stop"), false).clicked() {
-                state.stop();
-            }
-        } else if ui.add_enabled_ui(ready, |ui| widgets::pill_button(ui, tl!("Search"), true)).inner.clicked() || (ready && enter) {
-            state.start(ui.ctx(), inline);
-            state.poll();
-        }
+        search_button(ui, state, inline, enter);
         close = widgets::pill_button(ui, tl!("Close"), false).clicked();
     });
     ui.add_space(6.0);
     for line in state.status() {
         ui.label(line);
     }
-    let mut open = None;
     // A scroll area starts from the room a modal offered last frame: ask for all of it at once.
     let height = (ui.ctx().content_rect().height() - RESULTS_MARGIN).clamp(MIN_RESULTS_HEIGHT, RESULTS_HEIGHT);
-    egui::ScrollArea::vertical().max_height(height).min_scrolled_height(height).auto_shrink([false, true]).show(ui, |ui| {
-        for file in &state.files {
-            ui.add_space(6.0);
-            let name = file.path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-            ui.label(egui::RichText::new(&name).font(theme::semibold(13.0))).on_hover_text(file.path.to_string_lossy());
-            let mut last_page = None;
-            for found in &file.matches {
-                if last_page != Some(found.page) {
-                    ui.label(
-                        egui::RichText::new(fmt(tl!("Page {label}"), &[("label", &found.page.saturating_add(1).to_string())]))
-                            .small()
-                            .color(t.text_faint),
-                    );
-                    last_page = Some(found.page);
-                }
-                let job = excerpt(found, ui.available_width(), &t);
-                // Include the file and page in the screen-reader label; the visible row already
-                // groups matches under those headings, but an individual button needs its own name.
-                let page_label = fmt(tl!("Page {label}"), &[("label", &found.page.saturating_add(1).to_string())]);
-                let accessible = format!("{name}, {page_label}: {} {} {}", found.before, found.text, found.after);
-                if ui.add(egui::Button::selectable(false, job).wrap()).accessible_name(accessible).on_hover_text(tl!("Go to this result")).clicked() {
-                    open = Some((file.path.to_string_lossy().into_owned(), found.page));
-                }
-            }
-        }
-        if !state.skipped.is_empty() {
-            ui.add_space(8.0);
-            egui::CollapsingHeader::new(fmt(tl!("Not searched: {n}"), &[("n", &state.skipped.len().to_string())])).show(ui, |ui| {
-                for file in state.skipped.iter().take(MAX_SKIPPED_SHOWN) {
-                    ui.label(file.path.to_string_lossy());
-                    ui.label(egui::RichText::new(reason(&file.reason)).small().color(t.text_muted));
-                }
-                if state.skipped.len() > MAX_SKIPPED_SHOWN {
-                    ui.label(tl!("The rest are left out of this list."));
-                }
-            });
-        }
-    });
+    let open = egui::ScrollArea::vertical()
+        .max_height(height)
+        .min_scrolled_height(height)
+        .auto_shrink([false, true])
+        .show(ui, |ui| results(ui, state, &t))
+        .inner;
     if choose {
         choose_folder(app);
     }
-    if let Some((path, page)) = open {
-        app.open_at_page(&path, page);
+    if let Some(hit) = open {
+        // The results move to the Search panel beside the opened file, to go on from there.
+        app.folder_search.scope = Scope::Folder;
+        app.choose_right_panel(Some(crate::RightPanel::Search));
+        app.open_hit(hit);
         return true;
     }
     close
+}
+
+/// Draw the folder half of the Search panel: the same form and results as the dialog, stacked,
+/// and staying open while the reader goes from one result to the next.
+pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, state: &mut State, inline: bool) -> Option<PanelAction> {
+    state.poll();
+    let mut action = None;
+    let (choose, enter) = form(ui, state, true);
+    if choose {
+        action = Some(PanelAction::Browse);
+    }
+    ui.add_space(6.0);
+    search_button(ui, state, inline, enter);
+    ui.add_space(6.0);
+    for line in state.status() {
+        ui.label(egui::RichText::new(line).font(theme::semibold(12.5)));
+    }
+    if let Some(hit) = results(ui, state, t) {
+        action = Some(PanelAction::Open(hit));
+    }
+    action
+}
+
+/// Whether the Search panel shows the folder search, or will once the result chosen has opened.
+pub(crate) fn shown_in_panel(app: &PdfCraftApp) -> bool {
+    app.right == Some(crate::RightPanel::Search)
+        && app.folder_search.scope == Scope::Folder
+        && (app.active_ids().is_some() || app.folder_search.pending.is_some())
+}
+
+impl PdfCraftApp {
+    /// Show a folder search result: its file's tab, or the file opened, with the match selected.
+    pub(crate) fn open_hit(&mut self, hit: Hit) {
+        self.folder_search.chosen = Some((hit.path.clone(), hit.page, hit.start));
+        self.open_at_page(&hit.path, hit.page);
+        self.folder_search.pending = Some(hit);
+        self.reveal_pending_hit();
+    }
+
+    /// Select the chosen result's match once its file has a tab (opening it can take a while).
+    pub(crate) fn reveal_pending_hit(&mut self) {
+        let Some(hit) = self.folder_search.pending.as_ref() else { return };
+        let Some(index) = self.tab_showing(&hit.path) else { return };
+        let Some(hit) = self.folder_search.pending.take() else { return };
+        // The folder search stays in the panel; the opened file's own search runs behind it.
+        self.choose_right_panel(Some(crate::RightPanel::Search));
+        self.active = Some(index);
+        self.views[index].reveal_match(&hit.query, hit.case_sensitive, hit.whole_words, hit.page, hit.start);
+    }
+
+    pub(crate) fn choose_search_folder(&mut self) {
+        choose_folder(self);
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -208,11 +208,11 @@ pub const COMMANDS: &[CommandSpec] = &[
     ct("edit.undo", "Undo", EDIT, Some(Shortcut::cmd("Z")), Undo, "undo-2"),
     ct("edit.redo", "Redo", EDIT, Some(Shortcut::cmd_shift("Z")), Redo, "redo-2"),
     c("edit.find", "Find…", EDIT, Some(Shortcut::cmd("F")), Document, "search"),
-    c("edit.search_folder", "Search a folder…", EDIT, None, Nothing, "search"),
+    c("edit.search_folder", "Search a folder…", None, None, Nothing, "search"),
     // Find and replace, in Edit text mode (the Find box's Replace row). Not ⌘H/Ctrl+H: macOS
     // takes ⌘H to hide the app, and Ctrl+H is Read mode on Windows and Linux (as in Acrobat).
     c("edit.replace", "Replace…", EDIT, Some(Shortcut::cmd_shift("H")), Modification, "replace"),
-    c("edit.advanced_search", "Advanced search…", EDIT, Some(Shortcut::cmd_shift("F")), Document, "search"),
+    c("edit.advanced_search", "Advanced search…", EDIT, Some(Shortcut::cmd_shift("F")), Nothing, "search"),
     c("view.palette", "Find tools and commands…", VIEW, Some(Shortcut::cmd("K")), Nothing, "search"),
     // Page display: View ▸ Page display and the rail's button list the base layouts as radios and
     // continuous scrolling as a checkbox, so `menu = None` keeps them out of the generated menus.

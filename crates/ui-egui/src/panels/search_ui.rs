@@ -1,19 +1,52 @@
 //! Edit ▸ Advanced Search (⇧⌘F): the search in a side panel that lists every match with its
-//! context, page by page; click a result to go to it. It shares the find bar's search.
+//! context, page by page; click a result to go to it. It shares the find bar's search. It can
+//! also search every PDF in a folder (`folder_search_ui`); a result opens its file, or goes to its
+//! tab, with the match selected, and the results stay here for the next one.
 
 use egui::text::LayoutJob;
 use egui::{Color32, FontId, TextFormat};
 
 use crate::canvas::DocView;
+use crate::folder_search_ui::{PanelAction, Scope, State as FolderSearch};
 use crate::theme::{self, Tokens};
 use crate::widgets;
 
 /// Glyphs of context shown on each side of a match.
 const CONTEXT: usize = 36;
 
-/// Draw the Search panel with its query, options, progress and clickable result excerpts.
-pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: usize) {
+/// Draw the Search panel: where to search, then that search's query, options, progress and
+/// clickable result excerpts.
+pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: usize, folder: &mut FolderSearch, inline: bool) -> Option<PanelAction> {
     crate::widgets::begin_dialog(ui);
+    let mut scope = folder.scope;
+    ui.label(egui::RichText::new(tl!("Look in")).color(t.text_muted));
+    ui.horizontal(|ui| {
+        widgets::radio_value(ui, &mut scope, Scope::Document, tl!("This document"));
+        widgets::radio_value(ui, &mut scope, Scope::Folder, tl!("A folder"));
+    });
+    ui.add_space(6.0);
+    if scope != folder.scope {
+        match scope {
+            Scope::Folder => folder.show_folder(view.find.as_ref().map(|f| f.query.as_str())),
+            Scope::Document => {
+                folder.scope = Scope::Document;
+                let f = view.find.get_or_insert_with(Default::default);
+                if f.query.trim().is_empty() {
+                    f.query = folder.query().to_owned();
+                }
+                f.focus = true;
+            }
+        }
+    }
+    if folder.scope == Scope::Folder {
+        return crate::folder_search_ui::panel(ui, t, folder, inline);
+    }
+    document(ui, t, view, pages);
+    None
+}
+
+/// The search of the document in front.
+fn document(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: usize) {
     let searched = view.texts.len() + view.text_failed.len();
     let Some(find) = view.find.as_mut() else { return };
     find.in_panel = true;

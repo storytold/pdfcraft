@@ -117,7 +117,8 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if app.dialog != Some(Dialog::WordCount) {
         app.word_count_draft.cancel();
     }
-    if app.dialog != Some(Dialog::FolderSearch) {
+    // The search runs while the dialog or the Search panel's folder half shows its results.
+    if app.dialog != Some(Dialog::FolderSearch) && !crate::folder_search_ui::shown_in_panel(app) {
         app.folder_search.stop();
         app.folder_search.poll();
     }
@@ -2215,7 +2216,8 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
     // Protect / Remove security replace the Properties dialog.
     let replaces = req.link_command.is_some_and(|c| c.starts_with("protect.")) || req.open_revision.is_some();
     if modal_closed || req.close || replaces {
-        if dialog == Dialog::FolderSearch {
+        // Unless a result moved the search to the Search panel beside the file it opened.
+        if dialog == Dialog::FolderSearch && !crate::folder_search_ui::shown_in_panel(app) {
             app.folder_search.stop();
         }
         // Only now: the number in Preferences can pass through 0 on its way to the one wanted.

@@ -1479,7 +1479,7 @@ status = "partial"
 commands = ["edit.advanced_search"]
 tools = ["text_find"]
 evidence = ["crates/ui-egui/tests/it/viewer.rs::advanced_search_lists_results_with_context"]
-notes = "in the current document, as a side panel; searching other open documents, folders and indexes is still to come"
+notes = "a side panel that searches the current document or every PDF in a folder (Look in: This document / A folder; view.search-folder); searching other open documents and indexes is still to come"
 
 [[feature]]
 id = "view.search-folder"
@@ -1490,8 +1490,8 @@ milestone = "M12"
 status = "partial"
 commands = ["edit.search_folder"]
 tools = ["folder_search"]
-evidence = ["crates/engine/src/folder_search/tests.rs::matches_come_by_file_and_page_with_the_text_around_them", "crates/automation/tests/it/folder_search.rs::a_search_stays_inside_the_root", "crates/ui-egui/tests/it/folder_search.rs::a_result_opens_its_file_at_its_page"]
-notes = "Edit ▸ Search a folder… and folder_search read every PDF in a folder and its subfolders, one file at a time, with Whole words only and Case-sensitive; a result opens its file at its page. Links are not followed. Every encrypted file is skipped and listed, including one that opens with no password, so no password can be entered and no text of a file that forbids copying comes back. Damaged files, files over 512 MiB and files that time out are listed too. Stops at 1000 matches (the tool can be asked for up to 10000) and 10000 folder entries, and a new search is refused while 9 threads from earlier ones still run. A 30-minute overall budget covers directory listing and page waits; abandoned workers may retain up to 512 MiB per PDF. The dialog has Browse… to pick a folder. Still missing: an index (view.search-index), boolean and proximity search (view.search-boolean), searching bookmarks and comments, and the built-in file browser the issue also asks for (#5439)."
+evidence = ["crates/engine/src/folder_search/tests.rs::matches_come_by_file_and_page_with_the_text_around_them", "crates/automation/tests/it/folder_search.rs::a_search_stays_inside_the_root", "crates/ui-egui/tests/it/folder_search.rs::a_result_opens_its_file_at_its_page", "crates/ui-egui/tests/it/folder_search.rs::the_search_panel_keeps_folder_results_while_each_one_is_opened", "crates/ui-egui/src/canvas/tests.rs::a_revealed_match_is_the_one_named_even_when_its_page_reads_last"]
+notes = "The Search panel's A folder scope (⇧⌘F; a dialog with no document open) and folder_search read every PDF in a folder and its subfolders, one file at a time, with Whole words only and Case-sensitive; a result opens its file, or goes to its tab, with its match selected, and the results stay in the panel for the next one. Links are not followed. Every encrypted file is skipped and listed, including one that opens with no password, so no password can be entered and no text of a file that forbids copying comes back. Damaged files, files over 512 MiB and files that time out are listed too. Stops at 1000 matches (the tool can be asked for up to 10000) and 10000 folder entries, and a new search is refused while 9 threads from earlier ones still run. A 30-minute overall budget covers directory listing and page waits; abandoned workers may retain up to 512 MiB per PDF. Browse… picks a folder. Still missing: an index (view.search-index), boolean and proximity search (view.search-boolean), searching bookmarks and comments, and the built-in file browser the issue also asks for (#5439)."
 
 [[feature]]
 id = "view.search-boolean"
