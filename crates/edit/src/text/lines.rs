@@ -602,14 +602,14 @@ fn compatible_word(line: &TextLine, shown: &Shown) -> bool {
         && a.fill.iter().zip(&b.fill).all(|(a, b)| a.op == b.op && a.operands == b.operands)
 }
 
-/// The line `s` continues, or a new one: `last` is the previous run of the same stream
-/// (`bt`, baseline, end x, size).
 /// Whether `s` is set in a `Tf` size of the same sign as the line's: a line's size is the
 /// magnitude, and a run that mirrors its glyphs the other way is not the same line of text.
 fn same_size_sign(l: &TextLine, s: &Shown) -> bool {
     l.origin.state.font.as_ref().is_none_or(|(_, size)| (*size < 0.0) == (s.state.size < 0.0))
 }
 
+/// The line `s` continues, or a new one: `last` is the previous run of the same stream
+/// (`bt`, baseline, end x, size).
 fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream: usize) {
     let joins = last.is_some_and(|pen| {
         let bt = pen.bt;
