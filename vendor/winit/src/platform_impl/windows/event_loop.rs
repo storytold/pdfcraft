@@ -44,7 +44,7 @@ use windows_sys::Win32::UI::Input::Touch::{
 use windows_sys::Win32::UI::Input::{RAWINPUT, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetCursorPos,
-    GetMenu, LoadCursorW, MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW,
+    GetAncestor, GetForegroundWindow, GetMenu, LoadCursorW, MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW,
     RegisterClassExW, RegisterWindowMessageA, SetCursor, SetWindowPos, TranslateMessage,
     CREATESTRUCTW, GIDC_ARRIVAL, GIDC_REMOVAL, GWL_STYLE, GWL_USERDATA, HTCAPTION, HTCLIENT,
     MINMAXINFO, MNC_CLOSE, MSG, MWMO_INPUTAVAILABLE, NCCALCSIZE_PARAMS, PM_REMOVE, PT_PEN,
@@ -61,6 +61,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_SIZE, WM_SIZING, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TOUCH, WM_WINDOWPOSCHANGED,
     WM_WINDOWPOSCHANGING, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW, WS_EX_LAYERED,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_OVERLAPPED, WS_POPUP, WS_VISIBLE,
+    GA_ROOT, WindowFromPoint,
 };
 
 use crate::dpi::{PhysicalPosition, PhysicalSize};
@@ -209,6 +210,7 @@ impl<T: 'static> EventLoop<T> {
             thread_msg_target,
             Default::default(),
         );
+        raw_input::register_mouse_for_inactive_windows(thread_msg_target);
 
         Ok(EventLoop {
             user_event_sender,
@@ -2564,6 +2566,25 @@ unsafe extern "system" fn thread_event_target_callback(
     result
 }
 
+fn inactive_window_under_cursor() -> Option<HWND> {
+    let mut point = POINT { x: 0, y: 0 };
+    if unsafe { GetCursorPos(&mut point) } == false.into() {
+        return None;
+    }
+
+    let window = unsafe { WindowFromPoint(point) };
+    if window == 0 {
+        return None;
+    }
+
+    let root = unsafe { GetAncestor(window, GA_ROOT) };
+    if root == 0 || root == unsafe { GetForegroundWindow() } {
+        return None;
+    }
+
+    Some(root)
+}
+
 unsafe fn handle_raw_input(userdata: &ThreadMsgTargetData, data: RAWINPUT) {
     use crate::event::DeviceEvent::{Button, Key, Motion, MouseMotion, MouseWheel};
     use crate::event::ElementState::{Pressed, Released};
@@ -2608,6 +2629,16 @@ unsafe fn handle_raw_input(userdata: &ThreadMsgTargetData, data: RAWINPUT) {
                 device_id,
                 event: MouseWheel { delta: LineDelta(0.0, delta) },
             });
+            if let Some(window) = inactive_window_under_cursor() {
+                userdata.send_event(Event::WindowEvent {
+                    window_id: RootWindowId(WindowId(window)),
+                    event: WindowEvent::MouseWheel {
+                        device_id: DEVICE_ID,
+                        delta: LineDelta(0.0, delta),
+                        phase: TouchPhase::Moved,
+                    },
+                });
+            }
         }
         if util::has_flag(button_flags as u32, RI_MOUSE_HWHEEL) {
             let button_data = unsafe { mouse.Anonymous.Anonymous.usButtonData } as i16;
@@ -2616,6 +2647,16 @@ unsafe fn handle_raw_input(userdata: &ThreadMsgTargetData, data: RAWINPUT) {
                 device_id,
                 event: MouseWheel { delta: LineDelta(delta, 0.0) },
             });
+            if let Some(window) = inactive_window_under_cursor() {
+                userdata.send_event(Event::WindowEvent {
+                    window_id: RootWindowId(WindowId(window)),
+                    event: WindowEvent::MouseWheel {
+                        device_id: DEVICE_ID,
+                        delta: LineDelta(delta, 0.0),
+                        phase: TouchPhase::Moved,
+                    },
+                });
+            }
         }
 
         let button_state = raw_input::get_raw_mouse_button_state(button_flags as u32);
