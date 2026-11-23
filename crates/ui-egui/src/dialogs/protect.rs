@@ -14,8 +14,9 @@ use crate::{PdfCraftApp, widgets};
 pub struct ProtectDraft {
     /// `true`: password required for Viewing; `false`: for Editing.
     pub viewing: bool,
-    /// A `Zeroizing` string zeroes on drop, so the typed password doesn't linger in freed
-    /// memory while the dialog is open or after it closes.
+    /// A `Zeroizing` string zeroes on drop, so the password this draft holds doesn't linger
+    /// in freed memory after the dialog closes. (While the dialog is open, egui's own widget
+    /// state keeps its copies of what is being typed; that is egui's, and clears with it.)
     pub password: Zeroizing<String>,
     pub confirm: Zeroizing<String>,
     pub advanced: bool,

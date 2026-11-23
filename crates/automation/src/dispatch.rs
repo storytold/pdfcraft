@@ -944,7 +944,7 @@ impl Automation {
                         .collect(),
                     // No module (no p11-kit, no PDFCRAFT_PKCS11_MODULE): most Linux machines
                     // have no token — an empty listing, not an error.
-                    Err(pdfcraft_engine::sign::SignError::Crypto(e)) if e.contains("no PKCS #11 module") => Vec::new(),
+                    Err(e) if e.is_missing_module() => Vec::new(),
                     Err(e) => return Err(failed(e)),
                 };
                 #[cfg(not(target_os = "linux"))]

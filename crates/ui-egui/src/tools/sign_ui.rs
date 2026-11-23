@@ -418,7 +418,7 @@ impl PdfCraftApp {
                 }
                 // No module (no p11-kit, no PDFCRAFT_PKCS11_MODULE): most Linux machines
                 // have no token, that's not an error worth a notice.
-                Err(sign::SignError::Crypto(e)) if e.contains("no PKCS #11 module") => {}
+                Err(e) if e.is_missing_module() => {}
                 Err(e) => self.notify_fmt("The token digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
             }
         }
