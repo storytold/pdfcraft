@@ -572,25 +572,25 @@ fn rows(kind: MarkKind, g: &Geometry) -> Vec<Param> {
     match kind {
         MarkKind::HeaderFooter => {
             rows.push(Param::new("font", tl!("Font:"), choice(FACES.iter().map(|(id, f)| ((*id).to_string(), f.label().to_string())), "helvetica")));
-            rows.push(Param::number("hf.size", tl!("Size"), 12.0, 0.5, 1).bounds(Some(4.0), Some(72.0)));
-            rows.push(Param::new("hf.underline", tl!("Underline"), ParamKind::bool(false)));
-            rows.push(Param::new("marks.hf.colour", tl!("Colour"), ParamKind::color(None)));
+            rows.push(Param::number("hf.size", tl!("Size"), 12.0, 0.5, 1).bounds(Some(4.0), Some(72.0)).beside_previous());
+            rows.push(Param::new("hf.underline", tl!("Underline"), ParamKind::bool(false)).beside_previous());
+            rows.push(Param::new("marks.hf.colour", tl!("Colour"), ParamKind::color(None)).beside_previous());
             let m = g.units;
             for (k, label) in [(0, tl!("Top margin")), (1, tl!("Bottom margin")), (2, tl!("Left margin")), (3, tl!("Right margin"))] {
                 // Up to 10 inches, whatever the unit.
-                rows.push(
-                    Param::number(format!("hf.margin.{k}"), label, 0.0, m.kind.step(), m.decimals)
-                        .unit(m.kind)
-                        .bounds(Some(0.0), Some(720.0 * m.per)),
-                );
+                let margin = Param::number(format!("hf.margin.{k}"), label, 0.0, m.kind.step(), m.decimals)
+                    .unit(m.kind)
+                    .bounds(Some(0.0), Some(720.0 * m.per));
+                // The four margins stand on one line.
+                rows.push(if k == 0 { margin } else { margin.beside_previous() });
             }
             rows.push(boxes_row());
             let list = |formats: &[&str]| {
                 formats.iter().enumerate().map(|(k, f)| (k.to_string(), f.trim_matches(['<', '>']).to_string())).collect::<Vec<_>>()
             };
             rows.push(Param::new("page_format", tl!("Page number format"), choice(list(&PAGE_FORMATS), "0")));
-            rows.push(Param::new("date_format", tl!("Date format"), choice(list(&DATE_FORMATS), "0")));
-            rows.push(Param::new("hf.start", tl!("Start page number"), ParamKind::int(Some(1), Some(999_999), 1)));
+            rows.push(Param::new("date_format", tl!("Date format"), choice(list(&DATE_FORMATS), "0")).beside_previous());
+            rows.push(Param::new("hf.start", tl!("Start page number"), ParamKind::int(Some(1), Some(999_999), 1)).beside_previous());
             rows.push(Param::new("shrink", tl!("Shrink the page content to make room for the header and footer"), ParamKind::bool(false)));
         }
         MarkKind::Watermark => {

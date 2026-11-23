@@ -754,6 +754,7 @@ fn item_controls(
     let out = TransformBox::text_frame(tl!("Added text frame"), Bind::given(state), doc_rect(&body.view, frame, applied))
         .rules(rules)
         .session_arrows(false)
+        .round_handles(true)
         .show_at(ui, body.rect);
     if out.discard {
         session.content.selected = None;

@@ -361,6 +361,7 @@ pub(crate) fn selection_box(
         .rules(rules)
         .reference_point(false)
         .inside_moves(false)
+        .round_handles(true)
         .show_at(ui, body);
     let mut edit = None;
     for event in &shown.edit.events {

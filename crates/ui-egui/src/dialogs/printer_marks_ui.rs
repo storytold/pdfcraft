@@ -124,14 +124,20 @@ fn params(count: usize, current: usize, unit: Unit) -> Vec<Param> {
         .companions(MARKS)
         .full_width(),
     ];
-    rows.extend(marks.map(|(key, label)| Param::new(key, label, ParamKind::bool(true))));
+    // Production sets the marks three to a line, then two: Trim, Bleed and Registration, then Colour bars and Page
+    // information.
+    rows.extend(marks.iter().enumerate().map(|(at, (key, label))| {
+        let row = Param::new(*key, label.clone(), ParamKind::bool(true));
+        if matches!(at, 1 | 2 | 4) { row.beside_previous() } else { row }
+    }));
     rows.push(Param::number("line_weight", tl!("Line weight"), 0.25, 0.25, 2).bounds(Some(0.1), Some(4.0)).unit(unit_kind(Unit::Points)));
     rows.push(Param::new("make_room", tl!("Widen the page to make room"), ParamKind::bool(true)));
     rows.push(
         Param::number("room", tl!("Room on each side"), 36.0 * k, 1.0 * k, 2)
             .bounds(Some(0.0), Some(PrinterMarks::MAX_ROOM * k))
             .unit(unit_kind(unit))
-            .enabled_when("make_room", true),
+            .enabled_when("make_room", true)
+            .beside_previous(),
     );
     rows.push(Param::read_only_text("trim_note", "", tl!("The trim box is kept where it is, so the printed page cuts the same.")).full_width());
     rows.push(PageRangeOptions::param("range", tl!("Pages"), count, current, PageRangeChoices::CurrentFromTo));
