@@ -151,6 +151,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .offers_new(false)
         // Open is in the title bar, as in production.
         .offers_open(false)
+        .pinned_title(tl!("Folders").to_string())
         .drop_hint(tl!("Files you open in PdfCraft appear here").to_string())
         .section(StartPlace::BeforeRecent, |ui, _| {
             let _ = Text::new(tl!("Welcome to PdfCraft").to_string()).role(TypeRole::Display).show(ui);
