@@ -38,7 +38,7 @@ fn static_xfa_pdf(text: &str) -> Vec<u8> {
         .obj("<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 400 300] >>")
         .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
         .obj("<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>")
-        .stream("", &format!("BT /F1 12 Tf 20 150 Td ({text}) Tj ET"))
+        .stream("", format!("BT /F1 12 Tf 20 150 Td ({text}) Tj ET"))
         .stream("", config)
         .stream("", "<template/>")
         .build()
