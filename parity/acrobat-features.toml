@@ -2656,9 +2656,9 @@ tier = "P2"
 milestone = "M12"
 status = "planned"
 commands = []
-tools = []
+tools = ["spell_check_comments"]
 evidence = []
-notes = ""
+notes = "Started, still planned: the spell_check_comments tool checks comment and reply text against a word list the caller gives (plus the user's own words) and suggests words one edit away. No dictionary ships, no on-screen squiggles or Check Spelling dialog yet, and form fields and edited text are not checked (form fields: #4262)."
 
 [[feature]]
 id = "edit.spell-dictionaries"

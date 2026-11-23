@@ -5004,6 +5004,7 @@ dependencies = [
  "pdfcraft-platform",
  "pdfcraft-prc-render",
  "pdfcraft-render",
+ "pdfcraft-spell",
  "pdfcraft-xfa",
  "rustix 1.1.6",
  "serde_json",
@@ -5424,6 +5425,10 @@ dependencies = [
  "thiserror 2.0.21",
  "zeroize",
 ]
+
+[[package]]
+name = "pdfcraft-spell"
+version = "0.21.1"
 
 [[package]]
 name = "pdfcraft-testkit"
