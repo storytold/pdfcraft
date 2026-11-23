@@ -4,6 +4,42 @@ pub(crate) fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)
 }
 
+/// Whether `name` appears as an option token in `args` (skipping values of `takes_value` options).
+pub(crate) fn has_flag(args: &[String], specs: &[OptionSpec], name: &str) -> bool {
+    let mut i = 0;
+    while let Some(a) = args.get(i) {
+        if a == name {
+            return true;
+        }
+        match specs.iter().find(|spec| spec.name == a.as_str()) {
+            Some(spec) if spec.takes_value => i += 2,
+            _ => i += 1,
+        }
+    }
+    false
+}
+
+/// Returns the operand of the last occurrence of value-taking `--name`, skipping operands of other
+/// options (`--password --out input.pdf --out out.pdf` returns `Ok(Some("out.pdf"))`). Returns
+/// `Err` if `--name` appears at the end of `args` without a value.
+pub(crate) fn value_of_flag<'a>(command: &str, args: &'a [String], specs: &[OptionSpec], name: &str) -> Result<Option<&'a str>, CliError> {
+    let mut i = 0;
+    let mut result = None;
+    while let Some(a) = args.get(i) {
+        if a == name {
+            let val = args.get(i + 1).map(String::as_str).ok_or_else(|| needs_value(command, name, None))?;
+            result = Some(val);
+            i += 2;
+            continue;
+        }
+        match specs.iter().find(|spec| spec.name == a.as_str()) {
+            Some(spec) if spec.takes_value => i += 2,
+            _ => i += 1,
+        }
+    }
+    Ok(result)
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct OptionSpec {
     pub(crate) name: &'static str,
@@ -119,6 +155,14 @@ pub(crate) const RUN_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--report", takes_value: false },
 ];
 
+pub(crate) const ADAPTIVE_COMPRESS_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--out", takes_value: true },
+    OptionSpec { name: "--password", takes_value: true },
+    OptionSpec { name: "--no-binarize", takes_value: false },
+    OptionSpec { name: "--max-pixels", takes_value: true },
+    OptionSpec { name: "--json", takes_value: false },
+];
+
 pub(crate) const UI_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--control", takes_value: true }, OptionSpec { name: "--out", takes_value: true }];
 
 #[cfg(feature = "mcp")]
@@ -145,4 +189,18 @@ pub(crate) fn positional<'a>(args: &'a [String], specs: &[OptionSpec]) -> Vec<&'
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn value_of_flag_skips_password_operand() {
+        let args: Vec<String> = ["--password", "--out", "input.pdf", "--out", "compressed.pdf"].iter().map(|s| s.to_string()).collect();
+        let specs = [OptionSpec { name: "--password", takes_value: true }, OptionSpec { name: "--out", takes_value: true }];
+        assert_eq!(value_of_flag("adaptive-compress", &args, &specs, "--out").unwrap(), Some("compressed.pdf"));
+        let dangling: Vec<String> = ["--max-pixels"].iter().map(|s| s.to_string()).collect();
+        assert!(value_of_flag("adaptive-compress", &dangling, &specs, "--max-pixels").is_err());
+    }
 }
