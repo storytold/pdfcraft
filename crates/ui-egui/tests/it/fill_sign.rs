@@ -159,6 +159,117 @@ fn clicking_elsewhere_with_add_text_keeps_the_typed_text() {
     assert!(h.state().views[0].fill_text.as_ref().is_some_and(|t| t.text.is_empty()), "a new, empty box is open");
 }
 
+/// Inject a finite but out-of-bounds border colour: the UI can draw it, while the real
+/// annotation validator refuses it. Both commits below still come from real pointer input.
+fn refused_text_placement(start_another: bool) -> (Harness<'static, PdfCraftApp>, pdfcraft_ui_egui::fill_sign::TypeBox) {
+    let mut h = harness();
+    {
+        let app = h.state_mut();
+        app.fill_text_size = 18.0;
+        app.fill_text_color = [0.2, 0.4, 0.6];
+        app.fill_text_border = 1.5;
+        app.fill_text_border_color = Some([0.6, 0.2, 0.3]);
+        app.fill_text_border_shape = pdfcraft_engine::BorderShape::Oval;
+        assert!(app.execute("sign.fill.text"));
+    }
+    click(&mut h, 50.0, 300.0);
+    h.event(egui::Event::Text(" \nKeep this\n\nfor retry\n ".into()));
+    h.run_steps(2);
+    let draft = {
+        let draft = h.state_mut().views[0].fill_text.as_mut().unwrap();
+        draft.border.color = Some([10_000_001.0, 0.2, 0.3]);
+        draft.clone()
+    };
+    let id = h.state().views[0].id;
+    let before = h.state().session.get(id).unwrap().bytes.clone();
+    if start_another {
+        click(&mut h, 50.0, 150.0);
+    } else {
+        commit_typed_text(&mut h);
+    }
+    assert!(h.state().toast.as_ref().is_some_and(|(text, _)| text.contains("invalid style")), "the engine refused the real placement");
+    assert!(items(&h).is_empty());
+    let doc = h.state().session.get(id).unwrap();
+    assert_eq!(doc.bytes, before);
+    assert!(doc.can_undo().is_none() && !doc.dirty, "failure adds no undo step or document change");
+    let mut kept = h.state().views[0].fill_text.as_ref().expect("the refused draft remains editable").clone();
+    kept.focus = draft.focus; // Focus requests are consumed by the following UI pass.
+    assert_eq!(kept, draft, "text, page, position, size, colour and border survive");
+    h.get_by_label("Text to place");
+    (h, draft)
+}
+
+fn retry_refused_text(start_another: bool) {
+    let shots = std::env::var_os("PDFCRAFT_FILL_SIGN_DRAFT_SHOTS").is_some();
+    let _gpu = shots.then(gpu);
+    let (mut h, draft) = refused_text_placement(start_another);
+    if shots {
+        let name = if start_another { "pdfcraft-7724-new-box.png" } else { "pdfcraft-7724-click-away.png" };
+        h.render().unwrap().save(std::env::temp_dir().join(name)).unwrap();
+    }
+    h.state_mut().views[0].fill_text.as_mut().unwrap().border.color = Some([0.6, 0.2, 0.3]);
+    h.run_steps(2);
+    commit_typed_text(&mut h);
+    assert!(h.state().views[0].fill_text.is_none(), "success clears the submitted draft");
+    assert_eq!(items(&h), [("FreeText".to_owned(), Some(draft.text.clone()))], "retry creates exactly one annotation");
+    h.run_steps(4);
+    assert_eq!(items(&h).len(), 1, "later frames do not place the draft again");
+    let id = h.state().views[0].id;
+    let props = h.state().session.get(id).unwrap().comment_props(draft.page, 0).unwrap();
+    assert_eq!(
+        (props.font_size, props.width, props.border_color, props.border_shape),
+        (Some(draft.size), Some(draft.border.width), Some([0.6, 0.2, 0.3]), Some(draft.border.shape))
+    );
+    assert_eq!(h.state().session.get(id).unwrap().info.annotations[0].color, Some(draft.color.map(|v| v as f32)));
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(2);
+    assert!(items(&h).is_empty());
+    assert!(h.state().session.get(id).unwrap().can_undo().is_none(), "placement was one undo step");
+    assert!(h.state_mut().execute("edit.redo"));
+    h.run_steps(2);
+    assert_eq!(items(&h), [("FreeText".to_owned(), Some(draft.text))]);
+}
+
+#[test]
+fn failed_fill_text_click_away_keeps_the_draft_for_retry() {
+    retry_refused_text(false);
+}
+
+#[test]
+fn failed_fill_text_new_box_keeps_the_draft_for_retry() {
+    retry_refused_text(true);
+}
+
+#[test]
+fn failed_fill_text_placement_can_be_cancelled() {
+    let (mut h, _) = refused_text_placement(true);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(4);
+    assert!(h.state().views[0].fill_text.is_none(), "Escape intentionally discards the refused draft");
+    assert!(items(&h).is_empty());
+}
+
+#[test]
+fn failed_fill_text_placement_still_blocks_save_without_losing_text() {
+    let (mut h, draft) = refused_text_placement(false);
+    let path = std::env::temp_dir().join(format!("pdfcraft-refused-fill-text-{}.pdf", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    h.state_mut().save_override = Some(path.to_string_lossy().into_owned());
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+    let mut kept = h.state().views[0].fill_text.as_ref().unwrap().clone();
+    kept.focus = draft.focus;
+    assert_eq!(kept, draft, "save-time refusal retains the same complete draft");
+    assert!(!path.exists(), "a refused placement cannot be saved as an empty document");
+    assert!(items(&h).is_empty());
+    h.state_mut().views[0].fill_text.as_mut().unwrap().border.color = Some([0.6, 0.2, 0.3]);
+    assert!(h.state_mut().save_active(SaveTarget::InPlace));
+    assert!(h.state().views[0].fill_text.is_none());
+    let saved = std::fs::read(&path).unwrap();
+    let reopened = harness_bytes(&saved);
+    assert_eq!(items(&reopened), [("FreeText".to_owned(), Some(draft.text))], "Save retries the full text, including outer blank lines");
+    std::fs::remove_file(path).unwrap();
+}
+
 /// Escape steps back out of a Fill & Sign tool as out of a comment tool: the first press closes
 /// the open type box, the next one leaves the Text tool for Select, so a click opens no new box.
 #[test]

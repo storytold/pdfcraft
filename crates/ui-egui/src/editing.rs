@@ -541,7 +541,7 @@ impl PdfCraftApp {
     }
 
     /// Apply any edit a view queued this frame (organize toolbar, keys).
-    /// Returns false when a field refused the typing queued for it (its editor is open again).
+    /// Returns false when a field or Fill & Sign placement refused the typing queued for it.
     pub(crate) fn process_pending_edits(&mut self) -> bool {
         let Some(i) = self.active else { return true };
         // Split view: the other pane's tab can hold an edit too (its field committed when the
@@ -927,11 +927,18 @@ impl PdfCraftApp {
         }
     }
 
-    /// Apply the edit queued on tab `i` (the active one). Returns false only when it was a
-    /// field's typing and the field refused it (#166): the editor reopens with the text, and the
-    /// user has been told why, so the typing isn't lost and the caller can stop.
+    /// Apply the edit queued on tab `i` (the active one). Refused field typing or Fill & Sign
+    /// placement keeps its editor open and stops the caller from saving behind it.
     fn apply_queued_edit(&mut self, i: usize) -> bool {
-        let Some(edit) = self.views.get_mut(i).and_then(|v| v.pending_edit.take()) else { return true };
+        let text_placement = self.views.get_mut(i).and_then(|v| v.fill_text_placement.take());
+        let Some(edit) = self.views.get_mut(i).and_then(|v| v.pending_edit.take()) else {
+            self.finish_fill_text_placement(i, text_placement, false, false);
+            return true;
+        };
+        // Another page editor can replace the queued edit. Only this draft's actual placement
+        // may clear it; accepting an unrelated edit must leave the user's text available.
+        let placing_text =
+            text_placement.is_some() && self.views.get(i).and_then(|v| v.fill_text.as_ref()).is_some_and(|draft| places_fill_text(&edit, draft));
         let signature_page = self.views.get_mut(i).and_then(|v| v.fill_signature_page.take());
         let doc_id = self.views.get(i).map(|v| v.id);
         let committed = self.views.get_mut(i).and_then(|v| v.forms.committed.take());
@@ -939,7 +946,9 @@ impl PdfCraftApp {
             (Edit::SetFieldValue { name, .. }, Some(draft)) => *name == draft.name,
             _ => false,
         };
-        if self.apply_edit(edit) {
+        let applied = self.apply_edit(edit);
+        self.finish_fill_text_placement(i, text_placement, placing_text, applied);
+        if applied {
             if signature_page.is_some()
                 && let Some(id) = doc_id
             {
@@ -978,13 +987,26 @@ impl PdfCraftApp {
             return true;
         }
         if !typed {
-            return true;
+            return !placing_text;
         }
         if let (Some(mut draft), Some(view)) = (committed, self.views.get_mut(i)) {
             draft.request_focus = true;
             view.forms.focus = Some(draft);
         }
         false
+    }
+
+    fn finish_fill_text_placement(&mut self, i: usize, placement: Option<crate::fill_sign::TextPlacement>, submitted: bool, applied: bool) {
+        let Some(placement) = placement else { return };
+        let Some(view) = self.views.get_mut(i) else { return };
+        if submitted && applied {
+            view.fill_text = placement.next;
+        } else if let Some(draft) = view.fill_text.as_mut() {
+            draft.focus = true;
+        }
+        if let Some(ctx) = &self.ctx {
+            ctx.request_repaint();
+        }
     }
 
     /// [`Self::commit_form_typing`] for document `id`, which may not be the active tab (a save
@@ -1070,8 +1092,7 @@ impl PdfCraftApp {
     /// the file (and can be flattened) instead of being left on the screen.
     fn commit_open_fill_text(&mut self, i: usize, id: pdfcraft_engine::DocId) -> bool {
         let Some(tb) = self.views.get(i).and_then(|v| v.fill_text.clone()) else { return true };
-        let text = tb.text.trim().to_string();
-        if text.is_empty() {
+        if tb.text.trim().is_empty() {
             if let Some(view) = self.views.get_mut(i) {
                 view.fill_text = None;
             }
@@ -1080,7 +1101,7 @@ impl PdfCraftApp {
         let author = self.comment_prefs.author.clone();
         let rotation = self.session.get(id).map_or(0, |doc| crate::comments::page_rotation(&doc.info, tb.page));
         let look = crate::fill_sign::TypedLook { color: tb.color, border: tb.border };
-        let edit = crate::fill_sign::typed_with(tb.page, tb.at, &text, tb.size, rotation, &author, look);
+        let edit = crate::fill_sign::typed_with(tb.page, tb.at, &tb.text, tb.size, rotation, &author, look);
         if self.apply_edit(edit) {
             if let Some(view) = self.views.get_mut(i) {
                 view.fill_text = None;
@@ -1239,6 +1260,19 @@ fn one_page_changed(
     } else {
         view.comments.document_changed(info);
     }
+}
+
+/// `frame_overlays` can group the directly queued placement with a pop-up's edit. Inspect
+/// those direct batch members too, without recursively walking arbitrary edit trees.
+fn places_fill_text(edit: &Edit, draft: &crate::fill_sign::TypeBox) -> bool {
+    let edits = match edit {
+        Edit::Batch { edits, .. } => edits.as_slice(),
+        _ => std::slice::from_ref(edit),
+    };
+    edits.iter().any(|edit| {
+        matches!(edit, Edit::AddAnnotation(a)
+            if a.page == draft.page && a.contents == draft.text && matches!(a.shape, pdfcraft_engine::Shape::Typewriter { .. }))
+    })
 }
 
 fn comment_page(edit: &Edit) -> Option<usize> {
@@ -1443,6 +1477,36 @@ fn typing_step(ctx: &egui::Context, id: egui::Id, text: &str, undo: bool) -> Opt
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod fill_text_placement_tests {
+    use super::*;
+
+    #[test]
+    fn a_batched_fill_text_placement_finishes_the_draft_once() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("form.pdf", None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
+        let draft = crate::fill_sign::TypeBox {
+            page: 0,
+            at: [30.0, 100.0],
+            text: "Retried text".into(),
+            size: 10.0,
+            color: [0.0; 3],
+            border: crate::fill_sign::TextBorder::NONE,
+            focus: false,
+        };
+        let placement = crate::fill_sign::typed(0, draft.at, &draft.text, draft.size, 0, "test");
+        let view = &mut app.views[0];
+        view.fill_text = Some(draft);
+        view.fill_text_placement = Some(crate::fill_sign::TextPlacement { next: None });
+        view.pending_edit = Some(Edit::Batch { label: "Place text".into(), edits: vec![placement] });
+        assert!(app.apply_queued_edit(0));
+        assert!(app.views[0].fill_text.is_none());
+        assert!(app.apply_queued_edit(0));
+        let doc = app.session.get(app.views[0].id).unwrap();
+        assert_eq!(doc.info.annotations.iter().filter(|a| a.contents.as_deref() == Some("Retried text")).count(), 1);
+    }
+}
 
 #[cfg(test)]
 mod revert_draft_tests {
