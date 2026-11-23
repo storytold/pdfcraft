@@ -191,6 +191,7 @@ impl Edit {
             Edit::ReversePages { .. } => Label::of("Reverse pages"),
             Edit::InsertBlankPage { .. } => Label::of("Insert blank page"),
             Edit::DuplicatePages { pages, .. } => plural("Duplicate page", "Duplicate pages", pages.len()),
+            Edit::SplitPages { pages, .. } => plural("Split page into parts", "Split pages into parts", pages.len()),
             Edit::SpawnTemplate { name, .. } => Label::with("Add a page from template {name}", name.as_str()),
             Edit::SetTemplateHidden { name, hidden: false } => Label::with("Show template {name}", name.as_str()),
             Edit::SetTemplateHidden { name, hidden: true } => Label::with("Hide template {name}", name.as_str()),

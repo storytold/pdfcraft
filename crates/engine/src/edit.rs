@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::{
     AddedContent, AddedText, Background, BorderShape, BoxSpec, EditError, FieldProps, FieldValue, FillMark, Hairlines, HeaderFooter, Hidden,
     ImageEdit, InitialView, Label, LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget,
-    PageBox, PrinterMarks, Protection, ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image,
+    PageBox, PageSplit, PrinterMarks, Protection, ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image,
     decode_data_file, embed_image, field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, strip_xfa,
     unrestricted, xfa, xfa_after_data_change,
 };
@@ -45,6 +45,10 @@ pub enum Edit {
         pages: Vec<usize>,
         at: Option<usize>,
     },
+    /// Split pages into multiple sub-pages (e.g. 50% vertical split for 2-up spreads, horizontal, grid).
+    SplitPages {
+        pages: Vec<usize>,
+        split: PageSplit,
     /// A copy of page template `name` inserted at `at` (clamped to the end), as JavaScript's
     /// `Template.spawn` adds it (#1429). `rename` puts the copy's fields under `P<at>.<name>`;
     /// without it they are more widgets of the template's fields.
