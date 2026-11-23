@@ -2165,3 +2165,15 @@ fn a_dropped_codespace_range_is_reported() {
     assert!(parse_cmap(b"1 begincodespacerange <00> <FFFF> endcodespacerange").2);
     assert!(!parse_cmap(b"2 begincodespacerange <0000> <FFFF> <0000> <FFFF> endcodespacerange").2);
 }
+
+/// The predefined CMaps that write vertically are `V` and those named `…-V`; `H`, `…-H` and other
+/// names don't.
+#[test]
+fn a_predefined_cmap_writes_vertically_by_its_name() {
+    for name in ["V", "Identity-V", "UniJIS-UCS2-V", "EUC-V", "90ms-RKSJ-V"] {
+        assert!(vertical_cmap_name(name.as_bytes()), "{name}");
+    }
+    for name in ["H", "Identity-H", "UniJIS-UCS2-H", "EUC-H", "", "-", "VV", "v", "V-H"] {
+        assert!(!vertical_cmap_name(name.as_bytes()), "{name}");
+    }
+}
