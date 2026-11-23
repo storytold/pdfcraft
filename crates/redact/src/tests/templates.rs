@@ -107,3 +107,22 @@ fn a_password_on_a_hidden_template_leaves_with_form_fields() {
     remove_hidden(&mut doc, &[Hidden::FormFields]).unwrap();
     assert!(!full_save_holds(&doc, b"TYPEDPW8842"), "the password value is still in the file");
 }
+
+/// A hostile `/Templates` tree: many kids, each naming one shared `/Names` array of many pairs.
+/// Its values cost the walk as its nodes do, so it is read within the budget rather than once per
+/// kid, and the template it names still counts, so Apply refuses it.
+#[test]
+fn kids_sharing_one_long_names_array_are_read_within_the_budget() {
+    const KIDS: usize = 400;
+    const PAIRS: usize = 400;
+    let pairs: Vec<String> = (0..PAIRS).map(|i| format!("(t{i}) 7 0 R")).collect();
+    let kids: Vec<String> = (0..KIDS).map(|i| format!("{} 0 R", 11 + i)).collect();
+    let mut extra = template_drawing(b"BT /F1 12 Tf 20 150 Td (Spare sheet) Tj ET");
+    extra.push(format!("[{}]", pairs.join(" ")).into_bytes());
+    extra.push(format!("<< /Kids [{}] >>", kids.join(" ")).into_bytes());
+    extra.extend((0..KIDS).map(|_| b"<< /Names 9 0 R >>".to_vec()));
+    let doc = with_names(b"BT /F1 12 Tf 20 150 Td (Public) Tj ET", "<< /Templates 10 0 R >>", extra);
+    let (n, _) = crate::sanitize::hidden_templates(&doc);
+    assert!(n > 0, "the template still counts");
+    assert!(n < KIDS * PAIRS, "every kid's copy of the shared array was read: {n}");
+}

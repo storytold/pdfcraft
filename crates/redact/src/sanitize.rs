@@ -146,12 +146,13 @@ fn name_tree_len_seen(doc: &Document, node: &Dict, depth: usize, seen: &mut std:
     n
 }
 
-/// The values of a name tree, within the budget of [`name_tree_len`], and whether the walk was
-/// cut short (so the tree may hold more than was read).
-fn name_tree_values(doc: &Document, node: &Dict) -> (Vec<Object>, bool) {
-    let (mut out, mut seen, mut visited) = (Vec::new(), std::collections::HashSet::new(), 0);
-    let cut = name_tree_values_seen(doc, node, 0, &mut seen, &mut visited, &mut out);
-    (out, cut)
+/// Calls `f` on each value of a name tree, within the budget of [`name_tree_len`]: each value
+/// costs a step as each node does, so kids sharing one long `/Names` array can't make the walk
+/// read more values than the budget. Returns whether the walk was cut short (so the tree may hold
+/// more than was read).
+fn name_tree_values(doc: &Document, node: &Dict, f: &mut impl FnMut(&Object)) -> bool {
+    let (mut seen, mut visited) = (std::collections::HashSet::new(), 0);
+    name_tree_values_seen(doc, node, 0, &mut seen, &mut visited, f)
 }
 
 fn name_tree_values_seen(
@@ -160,7 +161,7 @@ fn name_tree_values_seen(
     depth: usize,
     seen: &mut std::collections::HashSet<ObjRef>,
     visited: &mut usize,
-    out: &mut Vec<Object>,
+    f: &mut impl FnMut(&Object),
 ) -> bool {
     *visited = visited.saturating_add(1);
     if depth > 32 || *visited > NAME_TREE_NODE_BUDGET {
@@ -169,7 +170,13 @@ fn name_tree_values_seen(
     if let Some(names) = node.get(b"Names").map(|n| doc.resolve(n))
         && let Some(names) = names.as_array()
     {
-        out.extend(names.iter().skip(1).step_by(2).cloned());
+        for value in names.iter().skip(1).step_by(2) {
+            *visited = visited.saturating_add(1);
+            if *visited > NAME_TREE_NODE_BUDGET {
+                return true;
+            }
+            f(value);
+        }
     }
     let mut cut = false;
     let kids = node.get(b"Kids").map(|k| doc.resolve(k));
@@ -187,7 +194,7 @@ fn name_tree_values_seen(
             other => other.as_dict(),
         };
         match kid {
-            Some(kid) => cut |= name_tree_values_seen(doc, kid, depth + 1, seen, visited, out),
+            Some(kid) => cut |= name_tree_values_seen(doc, kid, depth + 1, seen, visited, f),
             None => *visited = visited.saturating_add(1),
         }
     }
@@ -201,15 +208,21 @@ fn name_tree_values_seen(
 /// counts one more), and whether the `/Pages` tree names any.
 pub(crate) fn hidden_templates(doc: &Document) -> (usize, bool) {
     let Some(names) = catalog(doc).and_then(|(_, cat)| sub(doc, &cat, b"Names")) else { return (0, false) };
-    let is_page = |v: &Object| doc.resolve(v).as_dict().is_some();
+    // A value written in place is read where it is, not copied.
+    let is_page = |v: &Object| match v {
+        Object::Ref(r) => doc.get(*r).as_dict().is_some(),
+        other => other.as_dict().is_some(),
+    };
     let templates = sub(doc, &names, b"Templates").map_or(0, |t| {
-        let (values, cut) = name_tree_values(doc, &t);
-        values.iter().filter(|v| is_page(v)).count() + usize::from(cut)
+        let mut n = 0usize;
+        let cut = name_tree_values(doc, &t, &mut |v| n += usize::from(is_page(v)));
+        n + usize::from(cut)
     });
     let outside = sub(doc, &names, b"Pages").map_or(0, |t| {
-        let (values, cut) = name_tree_values(doc, &t);
         let tree: std::collections::HashSet<ObjRef> = pdfcraft_model::pages(doc).into_iter().map(|p| p.obj).collect();
-        values.iter().filter(|v| is_page(v) && !v.as_ref().is_some_and(|r| tree.contains(&r))).count() + usize::from(cut)
+        let mut n = 0usize;
+        let cut = name_tree_values(doc, &t, &mut |v| n += usize::from(is_page(v) && !v.as_ref().is_some_and(|r| tree.contains(&r))));
+        n + usize::from(cut)
     });
     (templates + outside, outside > 0)
 }
