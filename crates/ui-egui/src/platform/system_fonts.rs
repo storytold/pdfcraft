@@ -77,7 +77,7 @@ fn load(need: Need) -> Option<Arc<FontData>> {
         Need::Hans => (HANS_PROBE, MAX_HAN_BYTES),
         Need::Hant => (HANT_PROBE, MAX_HAN_BYTES),
     };
-    candidates(need).iter().find_map(|path| read(path, probe, max))
+    candidates(need).iter().find_map(|path| read_face(path, probe, max, noto_cjk_face(path, need)))
 }
 
 /// The installed fallback face for Devanagari (Hindi), read once. `None` when it is turned off
@@ -337,11 +337,26 @@ fn han_candidates(traditional: bool) -> Vec<PathBuf> {
         // Microsoft YaHei / JhengHei, then the older SimSun / MingLiU collections.
         let files: &[&str] =
             if traditional { &["msjh.ttc", "msyh.ttc", "mingliu.ttc", "simsun.ttc"] } else { &["msyh.ttc", "msjh.ttc", "simsun.ttc", "mingliu.ttc"] };
-        files.iter().map(|f| windows_fonts().join(f)).collect()
+        let mut list: Vec<PathBuf> = files.iter().map(|f| windows_fonts().join(f)).collect();
+        // Noto installed for the current user only lives under LOCALAPPDATA. Try the
+        // region-specific face before the multi-language collection so Simplified
+        // text does not take Japanese glyph shapes from the collection.
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            let user_fonts = PathBuf::from(local).join(r"Microsoft\Windows\Fonts");
+            let noto: &[&str] = if traditional {
+                &["NotoSansCJKtc-Regular.otf", "NotoSansCJK-Regular.ttc"]
+            } else {
+                &["NotoSansCJKsc-Regular.otf", "NotoSansCJK-Regular.ttc"]
+            };
+            list.extend(noto.iter().map(|f| user_fonts.join(f)));
+        }
+        // System-wide collection as a last resort.
+        list.push(windows_fonts().join("NotoSansCJK-Regular.ttc"));
+        list
     } else if cfg!(target_os = "macos") {
         macos_han_candidates(traditional)
     } else {
-        unix_fonts(&[
+        let mut files: Vec<&str> = vec![
             "truetype/wqy/wqy-microhei.ttc",
             "wenquanyi/wqy-microhei/wqy-microhei.ttc",
             "wqy-microhei/wqy-microhei.ttc",
@@ -353,7 +368,40 @@ fn han_candidates(traditional: bool) -> Vec<PathBuf> {
             "droid/DroidSansFallbackFull.ttf",
             "truetype/arphic/uming.ttc",
             "arphic-uming/uming.ttc",
-        ])
+        ];
+        // Noto's language-specific OTFs cover the full CJK repertoire, so the
+        // glyph probe cannot tell Simplified from Traditional: whichever OTF
+        // comes first wins for both. Try the interface language's own face
+        // first, and the multi-language collection (Japanese first) last.
+        let noto = if traditional {
+            &[
+                "opentype/noto/NotoSansCJKtc-Regular.otf",
+                "noto-cjk/NotoSansCJKtc-Regular.otf",
+                "NotoSansCJKtc-Regular.otf",
+                "opentype/noto/NotoSansCJKsc-Regular.otf",
+                "noto-cjk/NotoSansCJKsc-Regular.otf",
+                "NotoSansCJKsc-Regular.otf",
+                "opentype/noto/NotoSansCJK-Regular.ttc",
+                "noto-cjk/NotoSansCJK-Regular.ttc",
+                "google-noto-cjk/NotoSansCJK-Regular.ttc",
+                "NotoSansCJK-Regular.ttc",
+            ]
+        } else {
+            &[
+                "opentype/noto/NotoSansCJKsc-Regular.otf",
+                "noto-cjk/NotoSansCJKsc-Regular.otf",
+                "NotoSansCJKsc-Regular.otf",
+                "opentype/noto/NotoSansCJKtc-Regular.otf",
+                "noto-cjk/NotoSansCJKtc-Regular.otf",
+                "NotoSansCJKtc-Regular.otf",
+                "opentype/noto/NotoSansCJK-Regular.ttc",
+                "noto-cjk/NotoSansCJK-Regular.ttc",
+                "google-noto-cjk/NotoSansCJK-Regular.ttc",
+                "NotoSansCJK-Regular.ttc",
+            ]
+        };
+        files.extend_from_slice(noto);
+        unix_fonts(&files)
     }
 }
 
@@ -405,7 +453,7 @@ fn windows_fonts() -> PathBuf {
     dir.join("Fonts")
 }
 
-fn unix_fonts(files: &'static [&'static str]) -> Vec<PathBuf> {
+fn unix_fonts(files: &[&str]) -> Vec<PathBuf> {
     #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
     static INSTALLED: OnceLock<Vec<PathBuf>> = OnceLock::new();
     #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
@@ -424,12 +472,44 @@ fn unix_fonts(files: &'static [&'static str]) -> Vec<PathBuf> {
 }
 
 fn unix_candidates(files: &[&str], installed: &[PathBuf]) -> Vec<PathBuf> {
-    let mut paths: Vec<_> =
-        ["/usr/share/fonts", "/usr/local/share/fonts"].iter().flat_map(|dir| files.iter().map(move |f| Path::new(dir).join(f))).collect();
-    // Fontconfig may point into /nix/store or a user's font directory. Keep the existing
-    // candidate names and their preference order; this does not select arbitrary fonts.
+    // The multi-language Noto Sans CJK collection must be tried before an
+    // opposite-region OTF, so its interface-language face (2 for Simplified,
+    // 3 for Traditional) is used when the matching OTF is absent. Keep it after
+    // the first run of OTFs sharing one file name, which are the matching-region
+    // faces, and before any later opposite-region OTF.
+    let mut ordered: Vec<&str> = Vec::new();
+    let mut ttc: Vec<&str> = Vec::new();
     for file in files {
+        if Path::new(file).file_name() == Some(std::ffi::OsStr::new("NotoSansCJK-Regular.ttc")) {
+            ttc.push(*file);
+        } else {
+            ordered.push(*file);
+        }
+    }
+    let insert_at = if let Some(first) = ordered.iter().position(|f| Path::new(f).extension().is_some_and(|e| e == "otf")) {
+        let target = Path::new(ordered[first]).file_name();
+        let mut end = first;
+        while end < ordered.len() && Path::new(ordered[end]).extension().is_some_and(|e| e == "otf") && Path::new(ordered[end]).file_name() == target
+        {
+            end += 1;
+        }
+        end
+    } else {
+        ordered.len()
+    };
+    ordered.splice(insert_at..insert_at, ttc);
+
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for file in ordered {
         let name = Path::new(file).file_name();
+        for dir in ["/usr/share/fonts", "/usr/local/share/fonts"] {
+            paths.push(Path::new(dir).join(file));
+        }
+        // Fontconfig may point into /nix/store or a user's font directory. Keep the existing
+        // candidate names and their preference order; this does not select arbitrary fonts.
+        // Installed copies of a file are tried right after that file's hardcoded locations,
+        // before the next candidate name, so a per-user face stays ahead of the collection
+        // that follows it in `files`.
         for path in installed.iter().filter(|p| p.file_name() == name) {
             if !paths.contains(path) {
                 paths.push(path.clone());
@@ -440,12 +520,17 @@ fn unix_candidates(files: &[&str], installed: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 fn read(path: &Path, probe: char, max: u64) -> Option<Arc<FontData>> {
+    read_face(path, probe, max, None)
+}
+
+/// [`read`], trying face `first` before the others.
+fn read_face(path: &Path, probe: char, max: u64, first: Option<u32>) -> Option<Arc<FontData>> {
     let meta = std::fs::metadata(path).ok()?;
     if !meta.is_file() || meta.len() > max {
         return None;
     }
     let bytes = std::fs::read(path).ok()?;
-    let index = face_with(&bytes, probe)?;
+    let index = face_preferring(&bytes, probe, first)?;
     let mut data = FontData::from_owned(bytes);
     data.index = index;
     log::info!("interface font fallback: {} (face {index})", path.display());
@@ -454,9 +539,30 @@ fn read(path: &Path, probe: char, max: u64) -> Option<Arc<FontData>> {
 
 /// The first face of the file that parses and maps `c`. egui parses fonts with the same skrifa,
 /// so a face accepted here is one it can load.
+#[cfg(test)]
 fn face_with(bytes: &[u8], c: char) -> Option<u32> {
+    face_preferring(bytes, c, None)
+}
+
+/// [`face_with`], but `first` is tried before the rest of the collection.
+fn face_preferring(bytes: &[u8], c: char, first: Option<u32>) -> Option<u32> {
     use skrifa::MetadataProvider as _;
-    (0..MAX_FACES).find(|&index| skrifa::FontRef::from_index(bytes, index).is_ok_and(|font| font.charmap().map(c).is_some()))
+    let maps = |index: u32| skrifa::FontRef::from_index(bytes, index).is_ok_and(|font| font.charmap().map(c).is_some());
+    first.filter(|&index| maps(index)).or_else(|| (0..MAX_FACES).find(|&index| maps(index)))
+}
+
+/// Noto Sans CJK's `.ttc` holds five faces in the order JP, KR, SC, TC, HK. Simplified and
+/// Traditional text want faces 2 and 3, and the first face with the probe glyph may be the
+/// Japanese one.
+fn noto_cjk_face(path: &Path, need: Need) -> Option<u32> {
+    if path.file_name() != Some(std::ffi::OsStr::new("NotoSansCJK-Regular.ttc")) {
+        return None;
+    }
+    match need {
+        Need::Hans => Some(2),
+        Need::Hant => Some(3),
+        Need::Other => None,
+    }
 }
 
 #[cfg(test)]
@@ -469,9 +575,17 @@ mod tests {
         let noto = PathBuf::from("/custom/fonts/NotoSansArabic-Regular.ttf");
         let dejavu = PathBuf::from("/nix/store/font/share/fonts/truetype/DejaVuSans.ttf");
         let installed = [dejavu.clone(), PathBuf::from("/custom/fonts/SourceHanSans.ttf"), noto.clone(), dejavu.clone()];
-        let mut expected = unix_candidates(&names, &[]);
-        expected.extend([noto, dejavu]);
-        assert_eq!(unix_candidates(&names, &installed), expected);
+        assert_eq!(
+            unix_candidates(&names, &installed),
+            vec![
+                Path::new("/usr/share/fonts").join("noto/NotoSansArabic-Regular.ttf"),
+                Path::new("/usr/local/share/fonts").join("noto/NotoSansArabic-Regular.ttf"),
+                noto.clone(),
+                Path::new("/usr/share/fonts").join("truetype/dejavu/DejaVuSans.ttf"),
+                Path::new("/usr/local/share/fonts").join("truetype/dejavu/DejaVuSans.ttf"),
+                dejavu.clone(),
+            ]
+        );
     }
 
     #[test]
@@ -506,7 +620,59 @@ mod tests {
         for need in [Need::Other, Need::Hans, Need::Hant] {
             let list = candidates(need);
             assert!(!list.is_empty(), "{need:?}");
-            assert!(list.iter().all(|p| p.extension().is_some_and(|e| e == "ttf" || e == "ttc")), "{need:?}");
+            assert!(list.iter().all(|p| p.extension().is_some_and(|e| e == "ttf" || e == "ttc" || e == "otf")), "{need:?}");
+        }
+    }
+
+    #[test]
+    fn noto_cjk_collection_uses_the_interface_language_face() {
+        let ttc = Path::new("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+        assert_eq!(noto_cjk_face(ttc, Need::Hans), Some(2));
+        assert_eq!(noto_cjk_face(ttc, Need::Hant), Some(3));
+        assert_eq!(noto_cjk_face(ttc, Need::Other), None);
+        assert_eq!(noto_cjk_face(Path::new("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"), Need::Hans), None);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn hans_candidates_include_noto_sans_cjk() {
+        let list = han_candidates(false);
+        assert!(
+            list.iter().any(|p| p.to_string_lossy().contains("NotoSansCJK")),
+            "Simplified Chinese candidates must try an installed Noto Sans CJK face: {list:?}"
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn hans_candidates_include_noto_sans_cjk_review_regression_1() {
+        let list = han_candidates(false);
+        // The Simplified Chinese OTF face must be tried before the multi-language
+        // Noto Sans CJK collection, whose first face is Japanese; otherwise
+        // Simplified interface text can take Japanese glyph shapes from the
+        // collection. The per-user OTF candidate exists only when LOCALAPPDATA is
+        // set on Windows; without it there is no ordering problem to assert.
+        let sc_otf = list.iter().position(|p| p.file_name().is_some_and(|n| n == "NotoSansCJKsc-Regular.otf"));
+        let ttc = list.iter().position(|p| p.file_name().is_some_and(|n| n == "NotoSansCJK-Regular.ttc"));
+        if let Some(i) = sc_otf {
+            assert!(
+                ttc.is_none_or(|j| i < j),
+                "Simplified Chinese candidates must try NotoSansCJKsc-Regular.otf before NotoSansCJK-Regular.ttc: {list:?}"
+            );
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn hant_candidates_try_tc_before_sc() {
+        // For Traditional Chinese, the TC Noto face must precede the SC one:
+        // both cover the Traditional probe, so whichever comes first wins, and
+        // the SC face would give the wrong regional glyph shapes.
+        let list = han_candidates(true);
+        let tc_otf = list.iter().position(|p| p.file_name().is_some_and(|n| n == "NotoSansCJKtc-Regular.otf"));
+        let sc_otf = list.iter().position(|p| p.file_name().is_some_and(|n| n == "NotoSansCJKsc-Regular.otf"));
+        if let (Some(i), Some(j)) = (tc_otf, sc_otf) {
+            assert!(i < j, "Traditional Chinese candidates must try NotoSansCJKtc-Regular.otf before NotoSansCJKsc-Regular.otf: {list:?}");
         }
     }
 
@@ -725,5 +891,54 @@ mod tests {
         let pos = |name: &str| list.iter().position(|p| p.ends_with(name));
         assert!(pos("STHeiti Medium.ttc") < pos("PingFangUI.ttc"));
         assert!(pos("PingFangUI.ttc").is_some());
+    }
+
+    #[test]
+    fn hans_candidates_include_noto_sans_cjk_review_regression_1_review_regression_1() {
+        // `unix_candidates` appends installed paths per file after every hardcoded
+        // path, so an installed NotoSansCJKsc-Regular.otf lands after the hardcoded
+        // NotoSansCJK-Regular.ttc. That breaks the Simplified-before-collection
+        // ordering `han_candidates` relies on on Unix.
+        let files = &["NotoSansCJKsc-Regular.otf", "NotoSansCJK-Regular.ttc"];
+        let installed = &[PathBuf::from("/custom/fonts/NotoSansCJKsc-Regular.otf")];
+        let list = unix_candidates(files, installed);
+        let sc_otf: Vec<usize> =
+            list.iter().enumerate().filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJKsc-Regular.otf")).map(|(i, _)| i).collect();
+        let ttc: Vec<usize> =
+            list.iter().enumerate().filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJK-Regular.ttc")).map(|(i, _)| i).collect();
+        assert!(
+            sc_otf.iter().all(|i| ttc.iter().all(|j| i < j)),
+            "every NotoSansCJKsc-Regular.otf candidate must precede every NotoSansCJK-Regular.ttc candidate: {list:?}"
+        );
+    }
+
+    #[test]
+    fn hans_candidates_include_noto_sans_cjk_review_regression_1_review_regression_2() {
+        // Reproduce the Unix ordering through `unix_candidates`: the opposite-region
+        // OTF is appended before the multi-language collection, so the collection's
+        // preferred face is never tried first.
+        let files = &["NotoSansCJKsc-Regular.otf", "NotoSansCJKtc-Regular.otf", "NotoSansCJK-Regular.ttc"];
+        let installed = &[PathBuf::from("/custom/fonts/NotoSansCJKtc-Regular.otf")];
+        let list = unix_candidates(files, installed);
+        let ttc: Vec<usize> =
+            list.iter().enumerate().filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJK-Regular.ttc")).map(|(i, _)| i).collect();
+        let opposite: Vec<usize> =
+            list.iter().enumerate().filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJKtc-Regular.otf")).map(|(i, _)| i).collect();
+        assert!(
+            ttc.iter().all(|i| opposite.iter().all(|j| i < j)),
+            "Simplified Chinese candidates must try NotoSansCJK-Regular.ttc before NotoSansCJKtc-Regular.otf: {list:?}"
+        );
+
+        let files = &["NotoSansCJKtc-Regular.otf", "NotoSansCJKsc-Regular.otf", "NotoSansCJK-Regular.ttc"];
+        let installed = &[PathBuf::from("/custom/fonts/NotoSansCJKsc-Regular.otf")];
+        let list = unix_candidates(files, installed);
+        let ttc: Vec<usize> =
+            list.iter().enumerate().filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJK-Regular.ttc")).map(|(i, _)| i).collect();
+        let opposite: Vec<usize> =
+            list.iter().enumerate().filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJKsc-Regular.otf")).map(|(i, _)| i).collect();
+        assert!(
+            ttc.iter().all(|i| opposite.iter().all(|j| i < j)),
+            "Traditional Chinese candidates must try NotoSansCJK-Regular.ttc before NotoSansCJKsc-Regular.otf: {list:?}"
+        );
     }
 }
