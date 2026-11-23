@@ -451,6 +451,7 @@ impl PdfCraftApp {
             autosave,
             recovered_paths: Default::default(),
             native_menu: None,
+            window_menu_bar: Default::default(),
             window_title: String::new(),
             page_title: String::new(),
             control: None,

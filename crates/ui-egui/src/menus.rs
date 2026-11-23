@@ -483,12 +483,14 @@ impl PdfCraftApp {
 
     /// The menu bar drawn in the window (Windows, Linux, the web, and macOS when the native one
     /// couldn't be installed), where the top bar starts. A chosen command fires through the board.
-    pub(crate) fn menu_bar_ui(&self, ui: &mut egui::Ui) {
+    pub(crate) fn menu_bar_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let bar = craft::menu::layout(&self.menu_bar(&ctx), Target::current(), &layout_options()).bar;
         let modal = gated(self);
-        let bar = craft::ui::contract::Tracked::new(bar);
-        craft::menu::MenuBarUi::new(&bar).target(Target::current()).keyboard(!modal).icons(false).compact(true).show(ui);
+        if *self.window_menu_bar != bar {
+            *self.window_menu_bar = bar;
+        }
+        craft::menu::MenuBarUi::new(&self.window_menu_bar).target(Target::current()).keyboard(!modal).icons(false).compact(true).show(ui);
     }
 
     /// Install the native menu bar (macOS), once, from the eframe app creator. `false` when

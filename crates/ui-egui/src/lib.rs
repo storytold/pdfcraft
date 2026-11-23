@@ -652,6 +652,8 @@ pub struct PdfCraftApp {
     recovered_paths: std::collections::HashSet<DocId>,
     /// The native menu bar (macOS), while it is installed; the in-window bar shows otherwise.
     pub(crate) native_menu: Option<craft::menu::NativeMenu>,
+    /// The in-window menu bar's model, kept across passes so its revision moves only when a menu changed.
+    pub(crate) window_menu_bar: craft::ui::contract::Tracked<craft::menu::MenuBar>,
     /// The window title last sent to the platform.
     pub window_title: String,
     /// The web page's title last set: the window title, but always with the file's name.
