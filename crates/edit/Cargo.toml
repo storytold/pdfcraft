@@ -24,6 +24,9 @@ unicode-bidi = "0.3"
 # Thai word boundaries for rewrapping and Add text (dictionary data compiled in, no LSTM model);
 # the ICU4X 2.3 crates it builds on are already in the tree.
 icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
+# NFD to NFC for the text of headers, footers and watermarks (decomposed NFD text from macOS,
+# copy-paste, or specific IME settings); already locked via stringprep so no new package enters Cargo.lock.
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 hayro-syntax = { workspace = true }
