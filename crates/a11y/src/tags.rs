@@ -182,6 +182,8 @@ fn tag_type_name(doc: &Document, d: &Dict) -> Option<Vec<u8>> {
 pub fn tags(doc: &Document) -> Vec<TagInfo> {
     let pages = pdfcraft_model::pages(doc);
     let page_index: std::collections::HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
+    let class_map = alt::tree_root(doc).and_then(|root| root.get(b"ClassMap").map(|o| doc.resolve(o)));
+    let class_map = class_map.as_deref().and_then(Object::as_dict);
     alt::elements(doc)
         .into_iter()
         .filter_map(|e| {
@@ -194,8 +196,8 @@ pub fn tags(doc: &Document) -> Vec<TagInfo> {
                 actual_text: text(doc, &e.dict, b"ActualText"),
                 alt: text(doc, &e.dict, b"Alt"),
                 language: text(doc, &e.dict, b"Lang"),
-                summary: table_attribute(doc, &e.dict, b"Summary").and_then(|o| o.as_string().map(PdfString::to_text)),
-                scope: table_attribute(doc, &e.dict, b"Scope").and_then(|o| o.as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
+                summary: table_attribute(doc, &e.dict, class_map, b"Summary").and_then(|o| o.as_string().map(PdfString::to_text)),
+                scope: table_attribute(doc, &e.dict, class_map, b"Scope").and_then(|o| o.as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
                 page: e.page.and_then(|p| page_index.get(&p).copied()),
             })
         })
@@ -317,14 +319,33 @@ fn is_table_attributes(doc: &Document, o: &Object) -> bool {
     o.as_dict().and_then(|d| d.get(b"O")).map(|v| doc.resolve(v)).as_deref().and_then(Object::as_name) == Some(b"Table")
 }
 
-/// The value of `key` in the first Table attribute object of tag `d` that has it.
-fn table_attribute(doc: &Document, d: &Dict, key: &[u8]) -> Option<Object> {
-    attribute_entries(doc, d)
-        .0
-        .iter()
-        .map(|(o, _)| doc.resolve(o))
-        .filter(|o| is_table_attributes(doc, o))
-        .find_map(|o| o.as_dict()?.get(key).map(|v| (*doc.resolve(v)).clone()).filter(|v| !matches!(v, Object::Null)))
+/// The first Table attribute value for `key`: direct /A attributes take precedence, then
+/// the attributes from each class in /C order.
+fn table_attribute(doc: &Document, d: &Dict, class_map: Option<&Dict>, key: &[u8]) -> Option<Object> {
+    let value_in = |attribute: &Object| {
+        let attribute = doc.resolve(attribute);
+        if !is_table_attributes(doc, &attribute) {
+            return None;
+        }
+        let value = doc.resolve(attribute.as_dict()?.get(key)?);
+        (!matches!(*value, Object::Null)).then(|| (*value).clone())
+    };
+    attribute_entries(doc, d).0.iter().find_map(|(attribute, _)| value_in(attribute)).or_else(|| {
+        let class_map = class_map?;
+        let classes = doc.resolve(d.get(b"C")?);
+        let classes = match &*classes {
+            Object::Array(items) => items.as_slice(),
+            name => std::slice::from_ref(name),
+        };
+        classes.iter().find_map(|class| {
+            let name = doc.resolve(class);
+            let attributes = doc.resolve(class_map.get(name.as_name()?)?);
+            match &*attributes {
+                Object::Array(items) => items.iter().find_map(value_in),
+                attribute => value_in(attribute),
+            }
+        })
+    })
 }
 
 /// Set `key` in the Table attribute object of `object`'s `/A` entry that holds it (else the first
