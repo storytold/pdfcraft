@@ -67,6 +67,8 @@ struct Turn {
 pub(crate) struct PresentAt {
     pub(crate) current: usize,
     pub(crate) display: PageDisplay,
+    /// Whether the pages scroll continuously (full screen that keeps the window's display).
+    pub(crate) continuous: bool,
     pub(crate) rotation: u16,
 }
 
@@ -225,14 +227,10 @@ pub(super) fn frame(
     let arriving = presenter.turn.as_ref().map(|t| t.to_page);
     if showing != Some(page) && arriving != Some(page) {
         // A new page: play its transition from the page before, when there is one to play.
-<<<<<<< HEAD
-        let plays = animates && at.display == PageDisplay::Single && at.rotation == 0;
-        let remembered = presenter.picture.filter(|_| showing.is_some());
-=======
         // Not while scrolling: full screen that keeps a continuous display (Fill screen off,
         // #4273) moves between pages by scrolling, with no page to turn from.
-        let plays = animates && view.layout == PageLayout::Single && !view.continuous && view.rotation == 0;
->>>>>>> upstream/main
+        let plays = animates && at.display == PageDisplay::Single && !at.continuous && at.rotation == 0;
+        let remembered = presenter.picture.filter(|_| showing.is_some());
         let turn = showing.or(arriving).filter(|_| plays).and_then(|from_page| {
             let (effect, seconds) = entry(info, page).and_then(effect_of)?;
             let from = placed(from_page).and_then(|p| p.picture.shown()).or(remembered)?;

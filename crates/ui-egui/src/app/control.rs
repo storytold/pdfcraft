@@ -137,7 +137,7 @@ impl PdfCraftApp {
                 };
             }
             ("full-screen-fill", _) => {
-                self.view_defaults.full_screen_fill = match value {
+                self.full_screen_fill = match value {
                     "on" => true,
                     "off" => false,
                     _ => return Err("full-screen-fill must be on or off".into()),
