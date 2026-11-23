@@ -371,3 +371,23 @@ fn forms_past_the_read_limit_are_outlined_whole() {
     assert_eq!(b[0].rect, [0.0, 0.0, 1.0, 1.0], "a read form: where its sequence paints");
     assert_eq!(b[64].rect, [128.0, 0.0, 130.0, 30.0], "past the limit: the whole form");
 }
+
+#[test]
+fn a_form_placed_past_the_move_limit_is_outlined_whole() {
+    // 1,024 sequences in one form, placed 1,025 times: the last placement would pass 2^20 moved
+    // boxes, so every sequence counts as the whole form over all its placements.
+    let n = 1024u32;
+    let form: String = (0..n).map(|i| format!("/P << /MCID {i} >> BDC {i} 0 1 1 re f EMC ")).collect();
+    let mut content = "/Fm1 Do ".repeat(n as usize);
+    content.push_str("q 1 0 0 1 1000 1000 cm /Fm1 Do Q");
+    let kids: String = (0..n).map(|i| format!("<< /Type /MCR /Stm 21 0 R /MCID {i} >> ")).collect();
+    let doc = one_tag(
+        &content,
+        "/XObject << /Fm1 21 0 R >>",
+        &format!("<< /S /P /Pg 3 0 R /K [{kids}] >>"),
+        vec![(21, stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 {n} 1]"), &form))],
+    );
+    let b = boxes(&doc, 10);
+    assert_eq!(b.len(), 1024);
+    assert!(b.iter().all(|t| t.rect == [0.0, 0.0, 2024.0, 1001.0]), "{:?}", &b[..2]);
+}

@@ -46,7 +46,8 @@ enum Item {
 /// descent; paths; images; forms). Marked content inside a form XObject (`/Stm`) counts the same,
 /// read from the form's content within its `/BBox` and moved to wherever the page places the form
 /// (the whole form when the reference has no `/MCID`, past the 64th form a page reads, or when a
-/// placement passes the move limit); a sequence that paints nothing inside the `/BBox` gets no box;
+/// placement passes the move limit); a `/Stm` object that isn't a form (no `/Subtype /Form`) counts
+/// whole where the page places it; a sequence that paints nothing inside the `/BBox` gets no box;
 /// an object reference counts an annotation's `/Rect` or an XObject's placement. Returns
 /// `NotATag` for an object that isn't a reachable indirect tag, and `ContentLimit` beyond 65,536
 /// entries or 512 levels.
