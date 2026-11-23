@@ -8,7 +8,7 @@ impl Host for crate::PdfCraftApp {
         }
     }
 
-    /// The input target: active document, open dialog/prompt, palette and find state.
+    /// The input target: active document, open dialog/prompt, palette, find and console state.
     ///
     /// Synthetic input admitted for one generation is never replayed into another document or
     /// dialog. Only these identities are hashed, never text or document content.
@@ -20,6 +20,8 @@ impl Host for crate::PdfCraftApp {
         // in another after focus moves. Only the id value is hashed, never text.
         let focused = self.ctx.as_ref().and_then(|ctx| ctx.memory(|m| m.focused())).map(|id| id.value());
         focused.hash(&mut hasher);
+        // The embedded console can cover the document, so toggling it invalidates queued input.
+        self.console_open().hash(&mut hasher);
         hasher.finish()
     }
 
@@ -154,6 +156,7 @@ impl Host for crate::PdfCraftApp {
             "right_panel": self.right.map(|r| format!("{r:?}")),
             "hidden_interface": self.hidden_interface().to_json(),
             "dialog": self.dialog.map(|d| format!("{d:?}")),
+            "js_console_open": self.console_open(),
             "palette_open": self.palette_open,
             "theme": format!("{:?}", self.theme),
             "theme_preference": self.theme_preference,
@@ -201,5 +204,26 @@ impl Host for crate::PdfCraftApp {
     #[cfg(target_arch = "wasm32")]
     fn open(&mut self, _path: &str) -> Reply {
         Err("ui.open needs a file system; on the web, drop the file on the page".into())
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn console_visibility_changes_input_target_but_not_capture() {
+        let mut app = crate::PdfCraftApp::new();
+        let closed_input = app.input_epoch();
+        let capture = app.capture_epoch();
+
+        app.open_console();
+        let open_input = app.input_epoch();
+        assert_ne!(open_input, closed_input);
+        assert_eq!(app.capture_epoch(), capture);
+
+        app.close_console();
+        assert_eq!(app.input_epoch(), closed_input);
+        assert_eq!(app.capture_epoch(), capture);
     }
 }
