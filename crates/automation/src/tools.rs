@@ -1156,6 +1156,19 @@ pub fn tools() -> Vec<ToolDef> {
             &["doc", "comments"],
         )),
         t(
+            "comments_cut",
+            "Cut comments",
+            "Copy these comments as comments_copy does and delete them, each with its pop-up and replies, as one undo step: what Cut does. Returns the XFDF to paste with comments_paste. `comments`: [[page, index], …], 1-based as comment_list reports them. A locked comment, or a document that doesn't allow changes, refuses the cut and nothing is deleted.",
+        )
+        .destructive()
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "comments": { "type": "array", "items": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 2, "maxItems": 2 }, "minItems": 1 }
+            }),
+            &["doc", "comments"],
+        )),
+        t(
             "comments_paste",
             "Paste comments",
             "Add the comments of an XFDF text (from comments_copy) to `page` as new comments: copies under names of their own, so nothing in the document is replaced and pasting twice gives two sets; replies keep their copied parent. `at` [x, y] (points, origin at the top-left of the displayed page, y down, as comment_add takes them) puts the centre of the copies' bounding box there; without it they keep their positions. Undoable.",

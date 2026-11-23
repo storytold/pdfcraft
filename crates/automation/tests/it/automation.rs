@@ -14664,6 +14664,39 @@ fn comments_copy_and_paste_between_documents_through_tools() {
     assert_eq!(ok(&mut a, "comment_list", json!({ "doc": src }))["comments"].as_array().unwrap().len(), 2, "the source is untouched");
 }
 
+/// Cut comments through the tools: the XFDF comments_copy would return, and the comments gone
+/// with their replies as one undo step; a locked comment refuses the cut and nothing goes (#8153).
+#[test]
+fn comments_cut_copies_and_deletes_as_one_step_through_tools() {
+    let dir = workdir("comments-cut");
+    let mut a = auto(&dir);
+    let src = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "comment_add", json!({ "doc": src, "page": 2, "type": "note", "at": [30, 30], "contents": "Please review", "author": "Ada" }));
+    ok(&mut a, "comment_add", json!({ "doc": src, "page": 2, "type": "rectangle", "rect": [20, 20, 80, 60], "contents": "Box" }));
+    ok(&mut a, "comment_reply", json!({ "doc": src, "page": 2, "index": 1, "text": "Done", "author": "Bob" }));
+    let listed = ok(&mut a, "comment_list", json!({ "doc": src, "page": 2 }));
+    let pairs: Vec<Value> = listed["comments"].as_array().unwrap().iter().map(|c| json!([c["page"], c["index"]])).collect();
+    assert_eq!(pairs.len(), 2, "{listed}");
+    let copied = ok(&mut a, "comments_copy", json!({ "doc": src, "comments": pairs }));
+    let cut = ok(&mut a, "comments_cut", json!({ "doc": src, "comments": pairs }));
+    assert_eq!(cut["comments"], 2);
+    assert_eq!(cut["xfdf"], copied["xfdf"], "what Copy would have copied");
+    assert_eq!(cut["undo"], "Cut comments");
+    assert!(ok(&mut a, "comment_list", json!({ "doc": src }))["comments"].as_array().unwrap().is_empty(), "both comments went");
+    // The cut comments paste back, with the reply.
+    let dst = ok(&mut a, "doc_open", json!({ "path": "b.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "comments_paste", json!({ "doc": dst, "page": 1, "xfdf": cut["xfdf"] }))["comments"], 3);
+    // One undo step brings both back.
+    ok(&mut a, "edit_undo", json!({ "doc": src }));
+    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": src }))["comments"].as_array().unwrap().len(), 2);
+    // A locked comment refuses the cut, and the other listed with it stays too.
+    let first = pairs[0].clone();
+    ok(&mut a, "comment_lock", json!({ "doc": src, "page": first[0], "index": first[1] }));
+    assert!(a.call("comments_cut", &json!({ "doc": src, "comments": pairs })).is_err(), "a locked comment can't be cut");
+    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": src }))["comments"].as_array().unwrap().len(), 2, "nothing was deleted");
+    assert!(matches!(a.call("comments_cut", &json!({ "doc": src, "comments": [[2]] })), Err(ToolError::InvalidArgs(_))));
+}
+
 /// A bitmap Type 3 font drawn with a flipped font matrix under a flipped text matrix (as TeX's
 /// bitmap fonts are): `text_lines` boxes a line by its glyphs' `d1` boxes (ISO 32000-2 §9.6.4),
 /// as high as the ink, not a 0.09-point sliver.

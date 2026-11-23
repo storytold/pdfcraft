@@ -570,7 +570,7 @@ fn moved(ids: &[AnnotationId], delta: Vec2, map: &PageMap<'_>, info: &DocInfo) -
 /// The edit deleting `raw` (one undo step for several): locked and stale slots are dropped, later positions go first
 /// so each deletion leaves the earlier ones where they are.
 fn delete_edit(raw: Vec<(usize, usize)>, info: &DocInfo) -> Option<Edit> {
-    let mut keys: Vec<(usize, usize)> = raw.into_iter().filter(|(page, index)| engine(info, *page, *index).is_some_and(|a| !a.locked)).collect();
+    let mut keys = unlocked(raw, info);
     keys.sort_unstable_by(|a, b| b.cmp(a));
     keys.dedup();
     match keys.as_slice() {
@@ -586,9 +586,19 @@ fn delete_edit(raw: Vec<(usize, usize)>, info: &DocInfo) -> Option<Edit> {
 /// The edit that deletes every selected comment, and clears the selection. A group's member picked on the page, with
 /// its group the selection alone, goes by itself, as Acrobat deletes the member clicked ([`CommentView::target`]).
 pub(crate) fn delete_selected(cv: &mut CommentView, info: &DocInfo) -> Option<Edit> {
+    delete_edit(take_selection(cv), info)
+}
+
+/// The selected comments [`delete_selected`] deletes, and the selection cleared.
+pub(crate) fn take_selection(cv: &mut CommentView) -> Vec<(usize, usize)> {
     let raw = if cv.selection().len() <= 1 { cv.target().into_iter().collect() } else { cv.selection() };
     cv.clear_selection();
-    delete_edit(raw, info)
+    raw
+}
+
+/// The slots of `raw` that are comments and not locked, which Delete takes.
+pub(crate) fn unlocked(raw: Vec<(usize, usize)>, info: &DocInfo) -> Vec<(usize, usize)> {
+    raw.into_iter().filter(|(page, index)| engine(info, *page, *index).is_some_and(|a| !a.locked)).collect()
 }
 
 fn erased(ids: &[AnnotationId], path: &[Point], radius: f64, map: &PageMap<'_>, info: &DocInfo) -> Option<Edit> {

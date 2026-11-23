@@ -151,13 +151,20 @@ impl PdfCraftApp {
         self.may_copy(id) && self.copy_page_image(sel.page, sel.index)
     }
 
-    /// Cut on the canvas: objects selected in Edit a PDF, else the selected image.
+    /// Cut on the canvas: objects selected in Edit a PDF; with no text selected, the selected
+    /// comments with their replies (#8153); else the selected image.
     pub(crate) fn cut_from_canvas(&mut self, ctx: &egui::Context, i: usize) -> bool {
         if self.views.get(i).is_some_and(|v| v.session.forms.focus.is_some() || v.organize) {
             return false;
         }
         if self.quick_tool == QuickTool::EditText && self.views.get(i).is_some_and(|v| v.session.objects.count() > 0) {
             return self.copy_objects(ctx, i, true);
+        }
+        // As Copy: a selection across pages still being read is selected text all the same.
+        let text_selected =
+            self.views.get(i).is_some_and(|v| v.selection_waits_for_text().is_some() || v.selected_text().is_some_and(|t| !t.is_empty()));
+        if !text_selected && !self.is_preparing() && self.views.get(i).is_some_and(|v| v.session.comments.primary().is_some()) {
+            return self.cut_selected_comments(ctx, i);
         }
         if let Some(sel) = self.views.get(i).and_then(|v| v.session.image_selection.clone())
             && let Some(id) = self.views.get(i).map(|v| v.id)
@@ -364,6 +371,32 @@ impl PdfCraftApp {
         }
     }
 
+    /// Cut the selected comments of tab `i`: copy them as [`Self::copy_selected_comments`] does,
+    /// then delete what Delete would, as one undo step. A document that doesn't allow comments to
+    /// change refuses, and then nothing is copied. Locked comments are copied and stay, as Delete
+    /// leaves them.
+    pub(crate) fn cut_selected_comments(&mut self, ctx: &egui::Context, i: usize) -> bool {
+        let Some(id) = self.views.get(i).map(|v| v.id) else { return false };
+        if self.session.get(id).is_some_and(|d| !d.allows_annotation()) {
+            self.notify_error(tl!("The document's security settings don't allow this change"));
+            return false;
+        }
+        if !self.copy_selected_comments(i) {
+            return false;
+        }
+        let (Some(view), Some(doc)) = (self.views.get_mut(i), self.session.get(id)) else { return false };
+        let keys = comments::unlocked(comments::take_selection(&mut view.session.comments), &doc.info);
+        // Each deletion still names its comment after the ones before it took their pop-ups and
+        // replies, wherever those sit on the page.
+        let mut edits = doc.annotation_deletions(&keys);
+        let edit = match edits.len() {
+            0 => return true,
+            1 => edits.remove(0),
+            _ => pdfcraft_engine::Edit::Batch { label: tl!("Delete comments").to_owned(), edits },
+        };
+        self.apply_edit(ctx, edit)
+    }
+
     /// Paste copied comments (`text`, XFDF from the system clipboard, or else the app's
     /// clipboard) into tab `i`. With `at` (a page and a user-space point, from the page's menu)
     /// the bundle is placed at once, centred there; otherwise it hangs on the pointer as one
@@ -556,5 +589,26 @@ mod review_tests {
         assert_eq!(jobs.waiting(), 1, "the selection's copy started");
         assert!(app.comment_clipboard.is_none(), "the comment was not copied");
         assert!(writes.lock().unwrap().is_empty(), "no comment payload reached the clipboard");
+    }
+
+    /// Cut, as Copy, leaves the selected comments alone while a text selection waits for its
+    /// pages' text: it neither copies nor deletes them (#8153).
+    #[test]
+    fn a_selection_waiting_for_its_text_keeps_cut_off_a_selected_comment() {
+        let ctx = &egui::Context::default();
+        let (mut app, writes) = app_with_clipboard();
+        let shape = pdfcraft_engine::Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] };
+        let style = pdfcraft_engine::Style::default_for(&shape);
+        let note = pdfcraft_engine::NewAnnotation { page: 0, shape, style, contents: String::new(), author: String::new() };
+        assert!(app.apply_edit(ctx, pdfcraft_engine::Edit::AddAnnotation(note)));
+        app.views[0].session.comments.select_only((0, 0));
+        app.views[0].session.texts.clear();
+        app.views[0].select_text(0, 0, 0);
+        assert!(app.views[0].selection_waits_for_text().is_some());
+        app.execute(ctx, "edit.cut");
+        let id = app.views[0].id;
+        assert_eq!(app.session.get(id).unwrap().info.annotations.len(), 1, "the comment stays");
+        assert!(app.comment_clipboard.is_none(), "the comment was not copied");
+        assert!(writes.lock().unwrap().is_empty(), "nothing reached the clipboard");
     }
 }

@@ -13504,6 +13504,25 @@ fn an_xfa_form_imports_comments_from_a_pdf_with_binary_bytes_before_its_header()
     assert!(contents.contains(&Some("from the review".to_string())), "{contents:?}");
 }
 
+/// Deleting several comments in one batch deletes each one meant, even when a pop-up sits before
+/// its comment in `/Annots` (#8153): with `[P, B, A, U]`, P the pop-up of A, deleting B and A
+/// takes P with A and leaves U, where indices counted from the end named U for B once P was gone.
+#[test]
+fn deleting_several_comments_deletes_each_one_meant_whatever_their_pop_ups_order() {
+    let bytes = pdf_with_annots(&[
+        b"<< /Type /Annot /Subtype /Popup /Rect [100 100 180 160] /Parent 6 0 R /P 3 0 R >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [10 10 40 40] /Contents (B) /P 3 0 R >>",
+        b"<< /Type /Annot /Subtype /Text /Rect [50 50 70 70] /Contents (A) /Popup 4 0 R /P 3 0 R >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [10 200 40 230] /Contents (U) /P 3 0 R >>",
+    ]);
+    let mut s = Session::new();
+    let id = s.open("popup-first.pdf", None, Arc::new(bytes), None).unwrap();
+    let edits = s.get(id).unwrap().annotation_deletions(&[(0, 1), (0, 2)]);
+    s.apply(id, Edit::Batch { label: "Delete comments".into(), edits }).unwrap();
+    let left: Vec<_> = s.get(id).unwrap().info.annotations.iter().map(|a| a.contents.clone()).collect();
+    assert_eq!(left, vec![Some("U".to_string())], "B and A went, A's pop-up with it, and U stayed");
+}
+
 /// A one-page 200 × 300 document whose page lists `annots` (objects 4, 5, …).
 fn pdf_with_annots(annots: &[&[u8]]) -> Vec<u8> {
     let list: String = (0..annots.len()).map(|i| format!("{} 0 R ", i + 4)).collect();
