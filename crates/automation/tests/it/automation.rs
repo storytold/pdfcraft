@@ -14854,3 +14854,49 @@ fn grouped_existing_thai_body_edits_saves_reopens_and_undo_restores_original_gly
     assert_eq!(page_text(&mut a, reopened), [new, old]);
     assert_eq!(ok(&mut a, "content_list", json!({"doc":reopened}))["count"], 0, "editing existing text must not create Add Text objects");
 }
+
+#[test]
+fn a_comment_body_takes_formatting_through_the_tools_and_keeps_it_when_saved() {
+    let dir = workdir("comment-body-formatting");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [20, 20], "contents": "Check", "author": "Ada" }));
+    let listed = ok(&mut a, "comment_list", json!({"doc": doc}));
+    assert!(listed["comments"][0].get("body").is_none());
+    let body = json!([
+        { "text": "Bold", "bold": true, "color": "#FF0000", "size": 18 },
+        { "text": " and " },
+        { "text": "slanted", "italic": true, "underline": true },
+        { "text": "2", "script": "super" },
+    ]);
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 1, "index": 1, "body": body }));
+    ok(&mut a, "doc_save", json!({"doc": doc, "path": "body.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path": "body.pdf"}))["doc"].as_u64().unwrap();
+    let comment = &ok(&mut a, "comment_list", json!({"doc": reopened}))["comments"][0];
+    assert_eq!(comment["contents"], "Bold and slanted2");
+    assert_eq!(comment["body"][0], json!({ "text": "Bold", "bold": true, "color": "#FF0000", "size": 18.0 }));
+    assert_eq!(comment["body"][2], json!({ "text": "slanted", "italic": true, "underline": true }));
+    assert_eq!(comment["body"][3], json!({ "text": "2", "script": "super" }));
+    for bad in [
+        json!([{ "text": "x", "script": "up" }]),
+        json!([{ "text": "x", "script": 3 }]),
+        json!([{ "text": "x", "color": false }]),
+        json!([{ "text": "x", "size": 0 }]),
+        json!("x"),
+        json!([{ "bold": true }]),
+    ] {
+        assert!(a.call("comment_edit", &json!({ "doc": reopened, "page": 1, "index": 1, "body": bad })).is_err());
+    }
+    // Missing or null script/color keep the defaults; only a wrong type is refused.
+    ok(&mut a, "comment_edit", json!({ "doc": reopened, "page": 1, "index": 1, "body": [{ "text": "plain", "script": null, "color": null }] }));
+    assert_eq!(ok(&mut a, "comment_list", json!({"doc": reopened}))["comments"][0]["contents"], "plain");
+    // Replies keep the same body round-trip as top-level comments, including entities before CJK.
+    ok(&mut a, "comment_reply", json!({ "doc": reopened, "page": 1, "index": 1, "text": "ok", "author": "Bob" }));
+    let listed = ok(&mut a, "comment_list", json!({"doc": reopened}));
+    let reply_id = listed["comments"][0]["replies"][0]["id"].as_str().unwrap().to_string();
+    let reply_body = json!([{ "text": "&日本語", "italic": true }, { "text": "<日本語", "bold": true }]);
+    ok(&mut a, "comment_edit", json!({ "doc": reopened, "id": reply_id, "body": reply_body }));
+    let listed = ok(&mut a, "comment_list", json!({"doc": reopened}));
+    assert_eq!(listed["comments"][0]["replies"][0]["body"], reply_body);
+    assert_eq!(listed["comments"][0]["replies"][0]["contents"], "&日本語<日本語");
+}

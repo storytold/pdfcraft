@@ -5695,3 +5695,142 @@ endstream",
     assert!(list(&doc, 0)[0].contains(b"AAPL:AKExtras"));
     assert!(doc.repair_log().is_empty(), "{:?}", doc.repair_log());
 }
+
+fn formatted_runs() -> Vec<Run> {
+    vec![
+        Run { bold: true, color: Some([1.0, 0.0, 0.0]), size: Some(18.0), ..Run::plain("Heading\n") },
+        Run::plain("Plain & <safe> "),
+        Run { italic: true, underline: true, ..Run::plain("slanted") },
+        Run { script: Script::Super, ..Run::plain("2") },
+        Run { script: Script::Sub, ..Run::plain("i") },
+    ]
+}
+
+#[test]
+fn a_comment_body_keeps_bold_colour_size_italic_underline_and_scripts_after_saving() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 700.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    set_rich_contents(&mut doc, 0, note, &formatted_runs(), &meta("n")).unwrap();
+    let doc = reopen(&doc);
+    let d = &list(&doc, 0)[note];
+    assert_eq!(d.get(b"Contents").and_then(Object::as_string).map(PdfString::to_text).as_deref(), Some("Heading\nPlain & <safe> slanted2i"));
+    assert_eq!(rich_contents(&doc, 0, note).unwrap(), Some(formatted_runs()));
+}
+
+#[test]
+fn a_comment_body_refuses_what_it_cannot_hold_and_stays_as_it_was() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 700.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    for size in [0.0, 401.0, f64::NAN, f64::INFINITY] {
+        let runs = [Run { size: Some(size), ..Run::plain("x") }];
+        assert!(matches!(set_rich_contents(&mut doc, 0, note, &runs, &meta("n")), Err(AnnotError::Invalid(_))), "{size}");
+    }
+    let many = vec![Run::plain("x"); MAX_BODY_RUNS + 1];
+    assert!(set_rich_contents(&mut doc, 0, note, &many, &meta("n")).is_err());
+    let long = [Run::plain(&"x".repeat(MAX_BODY_CHARS + 1))];
+    assert!(set_rich_contents(&mut doc, 0, note, &long, &meta("n")).is_err());
+    assert_eq!(rich_contents(&doc, 0, note).unwrap(), None);
+    assert_eq!(list(&doc, 0)[note].get(b"Contents").and_then(Object::as_string).map(PdfString::to_text).as_deref(), Some("hello"));
+}
+
+#[test]
+fn a_text_box_keeps_its_own_rich_text_and_plain_edits_drop_a_bodys_formatting() {
+    let mut doc = fixture();
+    let style = Style { color: [0.0, 0.0, 0.0], opacity: 1.0, width: 1.0, fill: None, ..Style::default() };
+    let shape = Shape::TextBox { rect: [50.0, 600.0, 200.0, 640.0], font_size: 12.0 };
+    let boxed = add_annotation(&mut doc, &NewAnnotation { page: 0, shape, style, contents: "box".into(), author: "Ada".into() }, &meta("t")).unwrap();
+    assert!(matches!(set_rich_contents(&mut doc, 0, boxed, &[Run::plain("x")], &meta("t")), Err(AnnotError::Unsupported(_))));
+
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 700.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    set_rich_contents(&mut doc, 0, note, &[Run { bold: true, ..Run::plain("b") }], &meta("n")).unwrap();
+    set_contents(&mut doc, 0, note, "plain again", &meta("n")).unwrap();
+    assert_eq!(rich_contents(&doc, 0, note).unwrap(), None);
+}
+
+#[test]
+fn a_hostile_rc_is_read_without_panicking() {
+    for rc in ["<", "<p", "<span style=\"font-size:9999pt;color:#zz\">x</span>", "&#xFFFFFFFF;&#1114112;&", "</p></p></b>", "<b><b><i>é</"] {
+        let mut doc = fixture();
+        let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 700.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+        let (_, r) = annot_ref(&mut doc, 0, note).unwrap();
+        doc.update_dict(r, |d| d.set(b"RC".to_vec(), PdfString::text(rc))).unwrap();
+        let _ = rich_contents(&doc, 0, note).unwrap();
+    }
+}
+
+#[test]
+fn a_comment_body_keeps_a_leading_newline_in_its_formatting() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 700.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    let runs = [Run { bold: true, ..Run::plain("\nA") }];
+    set_rich_contents(&mut doc, 0, note, &runs, &meta("n")).unwrap();
+    assert_eq!(rich_contents(&doc, 0, note).unwrap(), Some(runs.to_vec()));
+}
+
+#[test]
+fn a_comment_body_refuses_markup_that_would_not_fit_back_in() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 700.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    // Many short bold lines stay under the character limit but inflate past the /RC byte bound.
+    let text = "x\n".repeat(50_000);
+    let runs = [Run { bold: true, ..Run::plain(&text) }];
+    assert!(matches!(set_rich_contents(&mut doc, 0, note, &runs, &meta("n")), Err(AnnotError::Invalid(_))));
+    assert_eq!(list(&doc, 0)[note].get(b"Contents").and_then(Object::as_string).map(PdfString::to_text).as_deref(), Some("hello"));
+}
+
+#[test]
+fn a_hostile_rc_of_bare_ampersands_stays_readable() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 700.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    let (_, r) = annot_ref(&mut doc, 0, note).unwrap();
+    let rc = format!("<?xml version=\"1.0\"?><body><p>{}</p></body>", "&".repeat(100_000));
+    let plain = "&".repeat(100_000);
+    doc.update_dict(r, |d| {
+        d.set(b"Contents".to_vec(), PdfString::text(&plain));
+        d.set(b"RC".to_vec(), PdfString::text(&rc));
+    })
+    .unwrap();
+    // Must finish promptly: entity search is bounded, so this is not quadratic in the ampersands.
+    assert_eq!(rich_contents(&doc, 0, note).unwrap(), Some(vec![Run::plain(&plain)]));
+}
+
+#[test]
+fn an_overlong_rich_text_node_is_refused_entirely() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 700.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    let (_, r) = annot_ref(&mut doc, 0, note).unwrap();
+    let plain = "x".repeat(MAX_BODY_CHARS + 1);
+    let rc = format!("<?xml version=\"1.0\"?><body><p>{plain}</p></body>");
+    doc.update_dict(r, |d| {
+        d.set(b"Contents".to_vec(), PdfString::text(&plain));
+        d.set(b"RC".to_vec(), PdfString::text(&rc));
+    })
+    .unwrap();
+    assert_eq!(rich_contents(&doc, 0, note).unwrap(), None);
+}
+
+#[test]
+fn a_comment_body_keeps_entities_before_non_ascii_text() {
+    // Entity names are short ASCII, but the 11-byte scan window can land inside a following
+    // CJK character; flooring that window must still decode the entity.
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 700.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    let reply = add_reply(&mut doc, 0, note, "r", "Bob", &meta("r")).unwrap();
+    for (index, text) in [(note, "&日本語"), (note, "<日本語"), (note, ">日本語"), (note, "\"日本語"), (reply, "&日本語"), (reply, "<日本語")]
+    {
+        let runs = [Run { bold: true, ..Run::plain(text) }];
+        set_rich_contents(&mut doc, 0, index, &runs, &meta("e")).unwrap();
+        assert_eq!(rich_contents(&doc, 0, index).unwrap(), Some(runs.to_vec()), "{text}");
+    }
+    // Numeric references (hex and decimal) before non-ASCII must decode the same way.
+    for (entity, plain) in [("&#x65E5;日本語", "日日本語"), ("&#26085;日本語", "日日本語"), ("&apos;日本語", "'日本語")] {
+        let (_, r) = annot_ref(&mut doc, 0, note).unwrap();
+        let rc = format!("<?xml version=\"1.0\"?><body><p><span style=\"font-weight:bold\">{entity}</span></p></body>");
+        doc.update_dict(r, |d| {
+            d.set(b"Contents".to_vec(), PdfString::text(plain));
+            d.set(b"RC".to_vec(), PdfString::text(&rc));
+        })
+        .unwrap();
+        assert_eq!(rich_contents(&doc, 0, note).unwrap(), Some(vec![Run { bold: true, ..Run::plain(plain) }]), "{entity}");
+    }
+}
