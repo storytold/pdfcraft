@@ -217,6 +217,10 @@ pub(crate) struct Scope<'a> {
     fonts: HashMap<Vec<u8>, Rc<Metrics>>,
     used_names: Vec<Vec<u8>>,
     depth: usize,
+    /// Walking a soft mask's group: an image in it that can't be cleared refuses the page instead
+    /// of going, as removing it would change the mask, and so what it lets paint, everywhere it
+    /// reaches, not only under the mark (#7884).
+    in_mask: bool,
     /// Form entries and decoded bytes left for this page, its content streams already charged:
     /// shared forms drawn from other shared forms would otherwise multiply the work with every
     /// level.
@@ -249,6 +253,7 @@ impl<'a> Scope<'a> {
             fonts: HashMap::new(),
             used_names: Vec::new(),
             depth: 0,
+            in_mask: false,
             budget,
         }
     }
@@ -942,7 +947,8 @@ impl Walk {
     /// would be, so verification counts what of it lies under a mark, and apply points the
     /// operator at a copy of the ExtGState whose group is the rewritten copy, leaving the original
     /// for other pages and placements. A group apply can't read would go, which would leave the
-    /// mask without its group; the page is refused instead.
+    /// mask without its group, and an image in it that can't be cleared would go too, changing the
+    /// mask far outside the mark; the page is refused instead.
     fn soft_mask(&mut self, doc: &mut Document, scope: &mut Scope<'_>, resources: &Dict, mut op: Op, piece: &mut Piece) -> Op {
         // Sanitizing walks for hidden content of its own; only the marks are looked for here.
         if scope.everywhere() || scope.rects.is_empty() {
@@ -958,7 +964,9 @@ impl Walk {
         held.set(GROUP.to_vec(), Object::Ref(group));
         let draw = Op::new("Do", vec![Object::Name(GROUP.to_vec())]);
         let mut inner = Output::default();
+        let outer = std::mem::replace(&mut scope.in_mask, true);
         let walked = xobject(doc, scope, &draw, &self.gs, resources, &mut held, &mut inner);
+        scope.in_mask = outer;
         // What the walk found, as for a form; the new XObject name is not this scope's.
         self.out.residue += inner.residue;
         self.out.vertical |= inner.vertical;
@@ -1276,6 +1284,17 @@ fn xobject(
                     out.doomed.push(r);
                     scope.report.images_cleared += 1;
                     Some(Some(Op::new("Do", vec![Object::Name(n)])))
+                }
+                // In a soft mask's group the image shapes the mask wherever it lies, so dropping
+                // it would change what the mask lets paint far outside the mark (#7884).
+                Err(()) if scope.in_mask => {
+                    out.error = Some(CosError::Syntax {
+                        offset: 0,
+                        detail:
+                            "an image in a soft mask's group under a mark can't be cleared, and removing it would change the mask outside the mark"
+                                .into(),
+                    });
+                    None
                 }
                 Err(()) => {
                     scope.report.images_removed += 1;

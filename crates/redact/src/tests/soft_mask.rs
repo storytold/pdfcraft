@@ -61,6 +61,26 @@ fn verification_counts_an_unreadable_soft_mask_group_under_a_mark() {
 }
 
 #[test]
+fn an_image_in_a_soft_mask_group_that_cant_be_cleared_refuses_the_page() {
+    // A stroke far from the mark paints through a luminosity mask whose group (object 7) draws one
+    // page-sized image (object 8) with a soft mask of its own (object 9), which can't be cleared.
+    // Dropping the image would leave the black backdrop and hide the stroke everywhere.
+    let group = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >> /Resources << /XObject << /Im0 8 0 R >> >>",
+        b"q 300 0 0 300 0 0 cm /Im0 Do Q",
+    );
+    let image = stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /SMask 9 0 R", b"\xff");
+    let alpha = stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"\xff");
+    let mut doc = one_page(
+        b"q /GS1 gs 0 0 0 RG 2 w 200 200 m 280 280 l S Q",
+        "/ExtGState << /GS1 << /SMask << /S /Luminosity /BC [0] /G 7 0 R >> >> >>",
+        vec![group, image, alpha],
+    );
+    mark(&mut doc, 0, &[MARK], "");
+    assert!(apply(&mut doc, None).is_err(), "the image went, and with it what the mask lets paint outside the mark");
+}
+
+#[test]
 fn a_soft_mask_group_without_resources_does_not_keep_the_original_through_the_copied_ones() {
     // The group draws with the page's resources, which list the state naming the original group,
     // and an image the group does not draw, so the rewritten group gets a pruned copy of them.
