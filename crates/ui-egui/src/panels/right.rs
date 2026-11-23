@@ -22,6 +22,9 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut sig_action: Option<crate::sign_ui::PanelAction> = None;
     let mut a11y_action: Option<crate::a11y_ui::PanelAction> = None;
     let mut compare_action: Option<crate::compare_ui::PanelAction> = None;
+    // A portfolio's tab: the portfolio, whose files the Portfolio files panel lists, and the one shown.
+    let portfolio = app.active_portfolio().map(|(i, host)| (host, app.views[i].portfolio.as_ref().and_then(|p| p.shown.clone())));
+    let mut portfolio_action: Option<super::portfolio_files::FileAction> = None;
     let mut bm_rename = app.bookmark_rename.clone();
     let bm_editable = app.session.get(id).is_some_and(|d| d.allows_assembly() && d.read_only_reason.is_none());
     let bm_can_paste = app.bookmark_clipboard.is_some();
@@ -32,6 +35,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     {
         let Some(doc) = app.session.get(id) else { return };
         let info = &doc.info;
+        let host = portfolio.as_ref().and_then(|(h, _)| app.session.get(*h));
         let view = &mut app.views[index];
         let prefs = &app.comment_prefs;
         let sig_expanded = &mut app.sig_expanded;
@@ -60,6 +64,12 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Tags => ("Tags", None),
                     RightPanel::Search => ("Search", None),
                     RightPanel::Compare => ("Compare", compare.as_ref().filter(|c| c.new == id).map(|c| c.result.changes.len())),
+                    RightPanel::PortfolioFiles => (
+                        "Portfolio files",
+                        host.map(|h| {
+                            h.info.attachments.iter().filter(|a| matches!(a.source, pdfcraft_render::AttachmentSource::Document { .. })).count()
+                        }),
+                    ),
                 };
                 // Comments count like Acrobat (no replies); the replies go in small text below.
                 let replies = if panel == RightPanel::Comments { crate::comments_panel::reply_count(info) } else { 0 };
@@ -306,6 +316,12 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     }
                     RightPanel::Search => crate::search_ui::panel(ui, &t, view, info.pages.len()),
                     RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare, id),
+                    RightPanel::PortfolioFiles => match (host, &portfolio) {
+                        (Some(host), Some((_, shown))) => {
+                            portfolio_action = super::portfolio_files::panel(ui, &t, &host.info.attachments, shown.as_deref());
+                        }
+                        _ => empty(ui, &t, "folder-open", "This document isn't a portfolio."),
+                    },
                     RightPanel::Attachments => {
                         let attachable = doc.allows_modification() && doc.read_only_reason.is_none();
                         if attachable {
@@ -318,6 +334,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         if info.attachments.is_empty() {
                             empty(ui, &t, "paperclip", "This document has no attachments.");
                         }
+                        let mut rows = Vec::with_capacity(info.attachments.len());
                         for (ai, a) in info.attachments.iter().enumerate() {
                             let is_pdf = a.name.to_lowercase().ends_with(".pdf");
                             // Only an attachment of the document itself can be deleted here.
@@ -325,78 +342,75 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 pdfcraft_render::AttachmentSource::Document { key } if attachable => Some(key),
                                 _ => None,
                             };
+                            let on_page = match a.source {
+                                pdfcraft_render::AttachmentSource::Annotation { page, .. } => crate::i18n::fmt(
+                                    tl!("on page {label}"),
+                                    &[("label", info.pages.get(page).map(|p| p.label.as_str()).unwrap_or("?"))],
+                                ),
+                                pdfcraft_render::AttachmentSource::Document { .. } => String::new(),
+                            };
+                            let row = super::file_rows::FileRow {
+                                name: &a.name,
+                                icon: "paperclip",
+                                details: vec![a.size.map(human_size).unwrap_or_default(), on_page, a.description.clone().unwrap_or_default()],
+                                selected: false,
+                                buttons_width: 70.0,
+                            };
                             // The whole row answers a double-click and a right-click (#3466), below
                             // its buttons, which still take their own clicks.
-                            let mut buttons: Vec<egui::Response> = Vec::new();
-                            let row = ui.scope_builder(egui::UiBuilder::new().sense(Sense::click()), |ui| {
-                                egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 6)).show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.add(icons::image("paperclip", 16.0, t.icon));
-                                        ui.vertical(|ui| {
-                                            ui.set_width(ui.available_width() - 70.0);
-                                            // Not selectable, so a click on the name or the details reaches the row.
-                                            ui.add(
-                                                egui::Label::new(egui::RichText::new(&a.name).font(theme::medium(13.0))).truncate().selectable(false),
-                                            );
-                                            let mut meta = a.size.map(human_size).unwrap_or_default();
-                                            if let pdfcraft_render::AttachmentSource::Annotation { page, .. } = a.source {
-                                                let on_page = crate::i18n::fmt(
-                                                    tl!("on page {label}"),
-                                                    &[("label", info.pages.get(page).map(|p| p.label.as_str()).unwrap_or("?"))],
-                                                );
-                                                meta = format!("{meta}  ·  {on_page}");
-                                            }
-                                            if let Some(d) = &a.description {
-                                                meta = format!("{meta}  ·  {d}");
-                                            }
-                                            ui.add(
-                                                egui::Label::new(egui::RichText::new(meta).color(t.text_faint).small()).truncate().selectable(false),
-                                            );
-                                        });
-                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                            let save = icons::button(ui, "file-down", 28.0, false, tl!("Save attachment…"));
-                                            if save.clicked() {
-                                                attachment_action = Some((ai, false));
-                                            }
-                                            buttons.push(save);
-                                            if is_pdf {
-                                                let open = icons::button(ui, "file-input", 28.0, false, tl!("Open in a new tab"));
-                                                if open.clicked() {
-                                                    attachment_action = Some((ai, true));
-                                                }
-                                                buttons.push(open);
-                                            }
-                                            if let Some(key) = deletable {
-                                                let delete = icons::button(ui, "trash-2", 28.0, false, tl!("Delete attachment"));
-                                                if delete.clicked() {
-                                                    panel_edit = Some(pdfcraft_engine::Edit::DeleteAttachment { key: key.clone() });
-                                                }
-                                                buttons.push(delete);
-                                            }
-                                        });
-                                    });
-                                })
-                            });
-                            // A double-click opens a PDF in a new tab, as Acrobat opens an attachment;
-                            // any other file is saved, since PdfCraft opens only PDFs.
-                            if row.response.double_clicked() {
-                                attachment_action = Some((ai, is_pdf));
-                            }
-                            // A right-click on one of the row's buttons is a right-click on the row:
-                            // the union keeps the row's id, so it is one menu either way.
-                            let menu = buttons.into_iter().fold(row.response.clone(), |row, button| row | button);
-                            menu.context_menu(|ui| {
+                            let buttons = |ui: &mut egui::Ui| {
+                                let mut buttons = Vec::new();
+                                let save = icons::button(ui, "file-down", 28.0, false, tl!("Save attachment…"));
+                                if save.clicked() {
+                                    attachment_action = Some((ai, false));
+                                }
+                                buttons.push(save);
+                                if is_pdf {
+                                    let open = icons::button(ui, "file-input", 28.0, false, tl!("Open in a new tab"));
+                                    if open.clicked() {
+                                        attachment_action = Some((ai, true));
+                                    }
+                                    buttons.push(open);
+                                }
+                                if let Some(key) = deletable {
+                                    let delete = icons::button(ui, "trash-2", 28.0, false, tl!("Delete attachment"));
+                                    if delete.clicked() {
+                                        panel_edit = Some(pdfcraft_engine::Edit::DeleteAttachment { key: key.clone() });
+                                    }
+                                    buttons.push(delete);
+                                }
+                                buttons
+                            };
+                            // What the row's menu chose; the buttons above write the same actions.
+                            let mut menu_pick = None;
+                            let input = super::file_rows::show(ui, &t, &row, buttons, |ui| {
                                 if is_pdf && ui.button(tl!("Open in a new tab")).clicked() {
-                                    attachment_action = Some((ai, true));
+                                    menu_pick = Some(MenuPick::Open);
                                     ui.close();
                                 }
                                 if ui.button(tl!("Save attachment…")).clicked() {
-                                    attachment_action = Some((ai, false));
+                                    menu_pick = Some(MenuPick::Save);
                                     ui.close();
                                 }
-                                if let Some(key) = deletable
-                                    && ui.button(tl!("Edit description")).clicked()
-                                {
+                                if deletable.is_some() && ui.button(tl!("Edit description")).clicked() {
+                                    menu_pick = Some(MenuPick::Describe);
+                                    ui.close();
+                                }
+                                if deletable.is_some() && ui.button(tl!("Delete attachment")).clicked() {
+                                    menu_pick = Some(MenuPick::Delete);
+                                    ui.close();
+                                }
+                            });
+                            // A double-click, or Enter on the focused row, opens a PDF in a new tab,
+                            // as Acrobat opens an attachment; any other file is saved, since
+                            // PdfCraft opens only PDFs.
+                            if input.activated {
+                                attachment_action = Some((ai, is_pdf));
+                            }
+                            match (menu_pick, deletable) {
+                                (Some(MenuPick::Open), _) => attachment_action = Some((ai, true)),
+                                (Some(MenuPick::Save), _) => attachment_action = Some((ai, false)),
+                                (Some(MenuPick::Describe), Some(key)) => {
                                     app.attachment_description_draft = Some((
                                         id,
                                         doc.edit_generation(),
@@ -406,16 +420,15 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                         a.has_description,
                                     ));
                                     app.dialog = Some(crate::Dialog::AttachmentDescription);
-                                    ui.close();
                                 }
-                                if let Some(key) = deletable
-                                    && ui.button(tl!("Delete attachment")).clicked()
-                                {
-                                    panel_edit = Some(pdfcraft_engine::Edit::DeleteAttachment { key: key.clone() });
-                                    ui.close();
+                                (Some(MenuPick::Delete), Some(key)) => {
+                                    panel_edit = Some(pdfcraft_engine::Edit::DeleteAttachment { key: key.clone() })
                                 }
-                            });
+                                _ => {}
+                            }
+                            rows.push(input.response);
                         }
+                        super::file_rows::arrows(ui, &rows);
                     }
                 });
             });
@@ -471,6 +484,11 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     if let Some((ai, open)) = attachment_action {
         app.attachment_action(id, ai, open);
+    }
+    match (portfolio_action, portfolio) {
+        (Some(super::portfolio_files::FileAction::Show(key)), _) => app.show_portfolio_file(index, Some(&key)),
+        (Some(super::portfolio_files::FileAction::Attachment(ai, open)), Some((host, _))) => app.attachment_action(host, ai, open),
+        _ => {}
     }
     if let Some((layer, visible)) = toggle_layer
         && app.session.set_layer_visible(id, layer, visible)
@@ -671,6 +689,15 @@ fn field_rows<'a>(fields: &'a [pdfcraft_render::Field], form: &[pdfcraft_engine:
         }
     }
     rows
+}
+
+/// An entry of an attachment's menu in the Attachments panel.
+#[derive(Clone, Copy)]
+enum MenuPick {
+    Open,
+    Save,
+    Describe,
+    Delete,
 }
 
 #[cfg(test)]
