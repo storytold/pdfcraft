@@ -1374,7 +1374,7 @@ dependencies = [
  "craft-dialogs",
  "craft-docpath",
  "craft-draw",
- "craft-font-catalog 0.1.0",
+ "craft-font-catalog",
  "craft-font-manager",
  "craft-host",
  "craft-i18n",
@@ -1634,25 +1634,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "craft-font-catalog"
-version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=527c2750e37fb8bf576dc9a9e07ffc60b9d63717#527c2750e37fb8bf576dc9a9e07ffc60b9d63717"
-dependencies = [
- "harfrust 0.13.3",
- "kurbo 0.13.1",
- "skrifa 0.47.0",
- "thiserror 2.0.21",
- "unicode-bidi",
- "unicode-segmentation",
- "windows-registry",
-]
-
-[[package]]
 name = "craft-font-manager"
 version = "0.1.0"
 dependencies = [
  "craft-behavior",
- "craft-font-catalog 0.1.0",
+ "craft-font-catalog",
  "craft-font-store",
  "craft-fonts-build",
  "craft-host",
@@ -1671,7 +1657,7 @@ version = "0.1.0"
 dependencies = [
  "cap-primitives",
  "craft-atomic",
- "craft-font-catalog 0.1.0",
+ "craft-font-catalog",
  "flate2",
  "log",
  "ruzstd",
@@ -2268,7 +2254,7 @@ dependencies = [
  "accesskit",
  "craft-behavior",
  "craft-codepage",
- "craft-font-catalog 0.1.0",
+ "craft-font-catalog",
  "craft-fonts-build",
  "craft-host",
  "craft-i18n",
@@ -2484,7 +2470,6 @@ dependencies = [
 [[package]]
 name = "craft-xfa"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3#23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3"
 dependencies = [
  "craft-xml",
 ]
@@ -2492,7 +2477,6 @@ dependencies = [
 [[package]]
 name = "craft-xfdf"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=1546550b0d4b79b8156a1fefaac8b3b317a4aee0#1546550b0d4b79b8156a1fefaac8b3b317a4aee0"
 dependencies = [
  "craft-xml",
  "thiserror 2.0.21",
@@ -6264,7 +6248,7 @@ dependencies = [
  "chrono",
  "craft-cms",
  "craft-docpath",
- "craft-font-catalog 0.1.0 (git+https://github.com/storytold/craft-libs?rev=527c2750e37fb8bf576dc9a9e07ffc60b9d63717)",
+ "craft-font-catalog",
  "craft-image-codecs",
  "craft-tiff",
  "getrandom 0.4.3",
