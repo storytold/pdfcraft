@@ -11,6 +11,7 @@
   <key>CFBundleLocalizations</key>
   <array>
     <string>en</string>
+    <string>he</string>
     <string>ja</string>
     <string>zh-Hans</string>
     <string>zh-Hant</string>
