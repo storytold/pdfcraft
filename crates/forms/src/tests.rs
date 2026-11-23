@@ -1387,6 +1387,35 @@ fn hebrew_and_greek_in_one_field_are_both_drawn() {
     }
 }
 
+/// The rows of a wrapped multi-line value: one row per line the shared layout wrapped, each from
+/// the left edge (/Q 0) and no wider than `room`. A line mixing in Latin carries what was typed on
+/// it (`/ActualText`); one of right-to-left words alone reads back from its glyphs and carries
+/// nothing.
+fn wrapped_rows_are_laid_out_as_wrapped(
+    script: &str,
+    ap: &str,
+    starts: &[[f64; 2]],
+    lines: &[pdfcraft_fonts::shaped_text::Line],
+    left: f64,
+    room: f64,
+) {
+    use pdfcraft_fonts::shaped_text::{actual_text_span, line_width};
+    let mixes = |l: &pdfcraft_fonts::shaped_text::Line| l.rtl && l.text.chars().any(|c| c.is_ascii_alphabetic());
+    let mixed = lines.iter().filter(|l| mixes(l)).count();
+    assert!(mixed > 0 && mixed < lines.len() - 1, "{script}: {lines:?}");
+    assert_eq!(ap.matches("/ActualText").count(), mixed, "{script}: {ap}");
+    let mut rows: Vec<f64> = starts.iter().map(|p| p[1]).collect();
+    rows.dedup();
+    assert_eq!(rows.len(), lines.len(), "{script}: {rows:?}");
+    for (laid, y) in lines.iter().zip(&rows) {
+        let line = &laid.text;
+        assert_eq!(ap.contains(&actual_text_span(line)), mixes(laid), "{script}: {line:?} in {ap}");
+        let first = starts.iter().find(|p| p[1] == *y).unwrap()[0];
+        let width = line_width(line, laid.rtl, 12.0, pdfcraft_fonts::helvetica_width);
+        assert!((first - left).abs() < 2e-3 && width <= room + 1e-6, "{script}: {line:?} from {first}");
+    }
+}
+
 /// Arabic and Hebrew typed into a field whose `/DA` font (Helvetica, WinAnsi) can't hold them go
 /// through the layout Add text and text boxes use, where they were drawn as `?`: shaped in the
 /// script face (Type 3 glyphs beside the field's font, which draws the Latin and the digits),
@@ -1482,22 +1511,14 @@ fn arabic_and_hebrew_a_field_font_cannot_hold_are_shaped_right_to_left() {
             assert!(starts.last().unwrap()[0] < starts_at + width, "{script} {name}: {starts:?} in {width}");
         }
         // The multi-line value: the lines the shared layout wraps, each from the left edge (/Q 0),
-        // none wider than the room, the reordered ones with what was typed on them.
+        // none wider than the room. A line mixing in Latin carries what was typed on it; one of
+        // right-to-left words alone reads back from its glyphs and carries nothing.
         let room = 300.0 - 2.0 * left;
         let lines = wrap(&format!("{long}\nplain"), 12.0, room, helv);
         assert!(lines.len() > 3 && lines.last().is_some_and(|l| (l.text.as_str(), l.rtl) == ("plain", false)), "{lines:?}");
         let (ap, starts) = drawn(&doc, "note");
         assert!(!ap.contains('?') && ap.contains("(plain) Tj") && ap.contains("(end) Tj"), "{script}: {ap}");
-        assert_eq!(ap.matches("/ActualText").count(), lines.len() - 1, "{script}: {ap}");
-        let mut rows: Vec<f64> = starts.iter().map(|p| p[1]).collect();
-        rows.dedup();
-        assert_eq!(rows.len(), lines.len(), "{script}: {rows:?}");
-        for (laid, y) in lines.iter().zip(&rows) {
-            let (line, rtl) = (&laid.text, &laid.rtl);
-            assert!(!*rtl || ap.contains(&actual_text_span(line)), "{script}: {line:?} in {ap}");
-            let first = starts.iter().find(|p| p[1] == *y).unwrap()[0];
-            assert!((first - left).abs() < 2e-3 && line_width(line, *rtl, 12.0, helv) <= room + 1e-6, "{script}: {line:?} from {first}");
-        }
+        wrapped_rows_are_laid_out_as_wrapped(script, &ap, &starts, &lines, left, room);
         // The fit check measures what the appearance draws.
         let all = fields(&doc);
         let f = field(&all, "name");
@@ -1748,7 +1769,8 @@ fn a_combo_box_refuses_arabic_and_hebrew_it_cannot_draw_as_a_text_field_does() {
             if has_face {
                 set_value(&mut doc, name, &value).unwrap();
                 let ap = appearance(&doc, name);
-                assert!(!ap.contains('?') && ap.contains("/ActualText"), "{script} {name} {value:?}: {ap}");
+                // Right-to-left letters and digits read back from their glyphs: no `/ActualText`.
+                assert!(!ap.contains('?') && ap.contains("/PCAr") && !ap.contains("/ActualText"), "{script} {name} {value:?}: {ap}");
                 assert!(undrawn_fields(&doc).is_empty() && !need_appearances(&doc), "{script} {name}");
             } else {
                 let err = set_value(&mut doc, name, &value).unwrap_err();

@@ -20,7 +20,9 @@ Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends on `pdfcraft-cos`,
   of its stacked marks and descenders; a build without a Thai face refuses it
   (`AnnotError::Undrawable`) instead of drawing `?`. Arabic and Hebrew there go through the
   layout Add text uses (`shaped_text::line_pieces`: the bidirectional algorithm, then shaping in
-  the craft-fonts Arab and Hebr faces), each line carrying its typing order as `/ActualText`; a
+  the craft-fonts Arab and Hebr faces), a line its glyphs can't give back (Latin in it, a direction
+  control) carrying its typing order as `/ActualText`, right-to-left words alone read back from
+  their glyphs; a
   build without the face draws them as `?` and marks the comment, as before. Other text it can't
   draw (in a text box, callout, Fill & Sign text, line caption, measurement label or dynamic
   stamp's by-line; `appearance::undrawable_text`) is kept as typed and drawn as `?`, and the comment is marked with

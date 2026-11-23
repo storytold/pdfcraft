@@ -62,8 +62,9 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   Unicode CMap; otherwise Helvetica (WinAnsi). Arabic, Hebrew and Thai in a text field or combo
   box that the font can't hold go through the layout Add text and text boxes use
   (`pdfcraft_fonts::shaped_text::line_pieces`: the bidirectional algorithm, then shaping in the
-  craft-fonts faces), drawn beside the field's font, keeping `/DA`; a right-to-left line carries
-  its typing order as `/ActualText`, and wrapping, automatic size, `/Q`, overflow and
+  craft-fonts faces), drawn beside the field's font, keeping `/DA`; a right-to-left line its glyphs
+  can't give back (Latin in it, a direction control) carries its typing order as `/ActualText`
+  (right-to-left words alone are read back from their glyphs), and wrapping, automatic size, `/Q`, overflow and
   `TextBox::fits` measure the shaped pieces that are drawn. `/Q` is followed as written (as a text
   box follows its own): right-to-left text is not moved to the right edge. A build without the
   script's face refuses the value; comb fields and list boxes are not shaped. Any other value or

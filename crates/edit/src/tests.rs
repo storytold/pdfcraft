@@ -7065,7 +7065,8 @@ fn arabic_and_hebrew_headers_footers_and_watermarks_are_shaped_right_to_left() {
         ("Arabic", "سلام", "صفحة <<1>> سلام", pdfcraft_fonts::document_arabic_font().is_some()),
         ("Hebrew", "שלום", "עמוד <<1>> שלום", pdfcraft_fonts::document_hebrew_font(false).is_some()),
     ] {
-        let footer = HeaderFooter { text: [blank(), blank(), blank(), blank(), typed.into(), blank()], ..HeaderFooter::default() };
+        let mixed = format!("{word} PdfCraft");
+        let footer = HeaderFooter { text: [mixed.clone(), blank(), blank(), blank(), typed.into(), blank()], ..HeaderFooter::default() };
         let wm = Watermark { text: format!("{word}\nDRAFT"), ..Watermark::default() };
         if !has_face {
             let mut doc = fixture();
@@ -7074,7 +7075,7 @@ fn arabic_and_hebrew_headers_footers_and_watermarks_are_shaped_right_to_left() {
                 assert!(matches!(&err, EditError::Invalid(m) if m.contains(script) && m.contains("CRAFT_FONTS_DIR")), "{err:?}");
             }
             assert!(!doc.is_modified(), "nothing is written when the font is missing");
-            assert_eq!((footer.first_undrawable(), wm.first_undrawable()), (typed.chars().next(), word.chars().next()));
+            assert_eq!((footer.first_undrawable(), wm.first_undrawable()), (mixed.chars().next(), word.chars().next()));
             continue;
         }
         assert_eq!((footer.first_undrawable(), wm.first_undrawable()), (None, None), "{script}");
@@ -7085,17 +7086,33 @@ fn arabic_and_hebrew_headers_footers_and_watermarks_are_shaped_right_to_left() {
         for (k, page) in [0usize, 2].into_iter().enumerate() {
             let drawn = streams(&doc, page).concat();
             assert!(drawn.contains("/PCAr") && drawn.contains("(DRAFT) Tj") && !drawn.contains("(?"), "{script}: {drawn}");
-            // Each reordered line carries what was typed; the Latin line needs nothing.
+            // A line its glyphs read back from (the footer, the watermark's word) carries no
+            // `/ActualText`; the header mixing in Latin carries what was typed; the Latin line needs
+            // nothing.
             let line = typed.replace("<<1>>", &(k + 1).to_string());
-            let span = actual_text_span(&line);
-            assert!(drawn.contains(&span) && drawn.contains(&actual_text_span(word)), "{script}: {drawn}");
-            assert_eq!(drawn.matches("/ActualText").count(), 2, "{script}: {drawn}");
+            assert!(drawn.contains(&actual_text_span(&mixed)), "{script}: {drawn}");
+            assert_eq!(drawn.matches("/ActualText").count(), 1, "{script}: {drawn}");
             // The footer's shows, left to right: the page number is in the standard font, between
             // the two words, and the line is centred by the width of what is drawn.
-            let shows = drawn.split(&span).nth(1).and_then(|rest| rest.split("EMC").next()).unwrap();
-            let xs: Vec<f64> = shows.split(" Tm").filter_map(|s| s.rsplit(' ').nth(1)?.parse().ok()).collect();
+            let number_show = format!("({}) Tj", k + 1);
+            let at = drawn.find(&number_show).unwrap();
+            let (from, to) = (drawn[..at].rfind("BT").unwrap(), at + drawn[at..].find("ET").unwrap());
+            let shows = &drawn[from..to];
+            // Each show's `x y Tm`, and the footer's baseline: the page number's.
+            let tms: Vec<(f64, f64, usize)> = shows
+                .match_indices(" Tm")
+                .filter_map(|(i, _)| {
+                    let mut it = shows[..i].rsplit(' ');
+                    let y = it.next()?.parse().ok()?;
+                    Some((it.next()?.parse().ok()?, y, i))
+                })
+                .collect();
+            let number_at = shows.find(&number_show).unwrap();
+            let baseline = tms.iter().rev().find(|(.., i)| *i < number_at).map(|(_, y, _)| *y).unwrap();
+            let footer: Vec<&(f64, f64, usize)> = tms.iter().filter(|(_, y, _)| *y == baseline).collect();
+            let xs: Vec<f64> = footer.iter().map(|(x, ..)| *x).collect();
             assert!(xs.len() > 4 && xs.windows(2).all(|w| w[0] < w[1]), "{script}: {shows}");
-            let number = shows.split(&format!("({}) Tj", k + 1)).next().unwrap().matches(" Tm").count();
+            let number = footer.iter().filter(|(.., i)| *i < number_at).count();
             assert!(number > 2 && number < xs.len() - 1, "{script}: the number is show {number} of {}: {shows}", xs.len());
             let (w, _) = pdfcraft_model::pages(&doc)[page].display_size(&doc);
             let tw = line_width(&line, true, 8.0, |s, size| added::Family::Helvetica.width(s, size, false, false));
@@ -7104,7 +7121,7 @@ fn arabic_and_hebrew_headers_footers_and_watermarks_are_shaped_right_to_left() {
         // The typing order nested in the mark goes with it.
         assert_eq!(remove_marks(&mut doc, &[0, 2], MarkKind::HeaderFooter).unwrap(), 2);
         assert_eq!(marks_present(&doc), [MarkKind::Watermark]);
-        assert_eq!(streams(&doc, 0).concat().matches("/ActualText").count(), 1, "the watermark's is left");
+        assert_eq!(streams(&doc, 0).concat().matches("/ActualText").count(), 0, "the header's went with it");
     }
 }
 

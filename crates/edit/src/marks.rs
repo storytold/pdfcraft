@@ -5,8 +5,9 @@ use super::{Dict, Document, EditError, Object, Rgb, added};
 /// The text of a header, footer or text watermark, laid out as Add text and text boxes lay theirs
 /// out (`shaped_text::line_pieces`): Arabic, Hebrew and Thai shaped in the craft-fonts faces and
 /// drawn as Type 3 fonts, added to the document once and to each page the mark goes on, beside
-/// the page font that draws the rest. Right-to-left runs are painted in drawing order, and such a
-/// line carries its typing order (`/ActualText`), so copy and search read what was typed.
+/// the page font that draws the rest. Right-to-left runs are painted in drawing order; a line its
+/// glyphs can't give back (Latin in it, a direction control) carries its typing order
+/// (`/ActualText`), so copy and search read what was typed.
 ///
 /// Each line is a paragraph of its own, reading right to left when its first strong letter does.
 /// Where it goes is the mark's choice alone (a header's left, centre or right box; a watermark's
@@ -70,8 +71,9 @@ impl MarkText {
         current: &mut Option<usize>,
     ) {
         // `new` shaped every line drawn, so this shapes; the pieces are those `width` measured.
-        let pieces = shaped_text::appearance_pieces(line, shaped_text::rtl_base(line));
-        let reordered = shaped_text::reordered(&pieces);
+        let rtl = shaped_text::rtl_base(line);
+        let pieces = shaped_text::appearance_pieces(line, rtl);
+        let reordered = shaped_text::Line::new(line, rtl).reordered(&pieces);
         if reordered {
             out.extend(shaped_text::actual_text_span(line).bytes());
         }

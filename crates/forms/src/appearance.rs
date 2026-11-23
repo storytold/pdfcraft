@@ -20,8 +20,10 @@
 //! Arabic, Hebrew and Thai that the `/DA` font can't hold (it isn't a simple font that encodes
 //! them) are drawn in a text field or combo box as Add text and text boxes draw them
 //! (`pdfcraft_fonts::shaped_text::line_pieces`): shaped in the craft-fonts faces as Type 3 glyphs
-//! beside the field's font, which draws the rest, right-to-left runs in drawing order with the
-//! line's typing order beside it (`/ActualText`), so copy and search read what was typed. The
+//! beside the field's font, which draws the rest, right-to-left runs in drawing order. A line its
+//! glyphs can't give back (Latin in it, a direction control) has its typing order beside it
+//! (`/ActualText`), so copy and search read what was typed; right-to-left words alone are read
+//! back from their glyphs (`Line::reordered`). The
 //! same pieces are measured, wrapped, sized and drawn. `/Q` is followed as it is, as in a text
 //! box: right-to-left text is not moved to the right edge on its own. A build without a script's
 //! face refuses the value, saying what to do ([`script_refusal`]), as it always refused Thai. Comb
@@ -1165,7 +1167,7 @@ struct ShownLine {
 
 /// The text operators for the `shown` lines at `size`, in the field's font `font_name` (`font`,
 /// written with `enc`); with `shaped`, their Arabic, Hebrew and Thai from the script faces in
-/// drawing order, a reordered line with its typing order beside it (`/ActualText`); and with
+/// drawing order, a line its glyphs can't give back with its typing order beside it (`/ActualText`); and with
 /// `latin`, the Latin, Greek and Cyrillic characters the standard fonts lack from the bundled
 /// Inter face. Returns the font resources they use, and the first character drawn as `?` because
 /// no font here holds it, for the caller to report.

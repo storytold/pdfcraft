@@ -347,9 +347,40 @@ impl Line {
 
     /// Whether `pieces`, this line laid out, are painted in an order other than the one typed, so
     /// that the line needs its typing order beside it ([`actual_text_span`]): right-to-left text
-    /// shaped in its face ([`reordered`]), or anything else a right-to-left level reversed.
+    /// shaped in its face ([`reordered`]), or anything else a right-to-left level reversed. A line
+    /// whose drawing order reads back to what was typed on its own ([`Self::reads_back_from_drawing`])
+    /// doesn't.
     pub fn reordered(&self, pieces: &[Piece]) -> bool {
+        if self.reads_back_from_drawing() {
+            return false;
+        }
         reordered(pieces) || !drawn_chars(pieces).filter(|c| !is_bidi_control(*c)).eq(self.text.chars().filter(|c| !is_bidi_control(*c)))
+    }
+
+    /// Whether the line's drawing order gives back its typing order with no other order possible:
+    /// a line of a right-to-left paragraph with no left-to-right letter and no direction control,
+    /// its right-to-left letters at the paragraph's level and its numbers one above (UAX #9 with no
+    /// embedding or override reaching it). A reader rebuilds such a line from its glyphs alone, so
+    /// it is written without `/ActualText`: some readers (poppler's) turn the `/ActualText` of
+    /// right-to-left text around again, and read it backwards.
+    fn reads_back_from_drawing(&self) -> bool {
+        use unicode_bidi::{BidiClass, bidi_class};
+        if !self.rtl || self.text.chars().any(|c| is_bidi_control(c) || bidi_class(c) == BidiClass::L) {
+            return false;
+        }
+        let levels = self.levels();
+        let mut any_rtl = false;
+        let fits = self.text.char_indices().all(|(i, c)| {
+            let Some(level) = levels.get(i) else { return false };
+            match bidi_class(c) {
+                BidiClass::R | BidiClass::AL => {
+                    any_rtl = true;
+                    level.number() == 1
+                }
+                _ => level.number() <= 2,
+            }
+        });
+        fits && any_rtl
     }
 }
 
@@ -1357,6 +1388,29 @@ mod tests {
         assert_eq!(letters(&laid[2].pieces().unwrap()), "XY");
         assert_eq!(laid[3].pieces().unwrap(), []);
         assert_eq!(Line::in_paragraph("", true, vec![String::new()])[0].pieces().unwrap(), []);
+    }
+
+    /// A right-to-left line its glyphs alone read back from goes without `/ActualText`, which
+    /// some readers turn around again: right-to-left words with their marks, punctuation and
+    /// numbers. A line with a left-to-right letter, a direction control, or an override reaching
+    /// it from an earlier line keeps it, as does one of a left-to-right paragraph.
+    #[test]
+    fn only_a_line_its_glyphs_cant_give_back_carries_actual_text() {
+        for plain in ["مركز المدينة", "שלום עולם", "مَرْحَبًا بِكُم", "שָׁלוֹם", "نعم، لا", "عام 2026", "سنة ١٤٤٧", "(שלום)"]
+        {
+            let line = Line::new(plain, true);
+            assert!(line.reads_back_from_drawing() && !line.reordered(&[]), "{plain:?}");
+        }
+        for (text, rtl) in
+            [("مركز PdfCraft 2026", true), ("\u{202D}שלום\u{202C}", true), ("שלום\u{200F}", true), ("שלום עולם", false), ("2026", true), ("", true)]
+        {
+            assert!(!Line::new(text, rtl).reads_back_from_drawing(), "{text:?} rtl={rtl}");
+        }
+        // A left-to-right override opened on the line before draws `עולם` left to right.
+        let laid = Line::in_paragraph("\u{202D}שלום עולם\u{202C}", true, vec!["\u{202D}שלום".into(), "עולם\u{202C}".into()]);
+        assert!(!laid[1].reads_back_from_drawing(), "the override reaches the wrapped line");
+        let laid = Line::in_paragraph("שלום עולם", true, vec!["שלום".into(), "עולם".into()]);
+        assert!(laid.iter().all(Line::reads_back_from_drawing), "a plain paragraph's wrapped lines");
     }
 
     /// A space inside a right-to-left run is drawn from the script face, between Latin words from
