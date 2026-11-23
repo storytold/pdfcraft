@@ -19,7 +19,7 @@ use egui::{Align, Color32, CornerRadius, FontId, Pos2, Rect, pos2, vec2};
 use pdfcraft_engine::{Document, FormField, FormFieldKind, FormWidget, field_flags, form_appearance};
 use pdfcraft_render::DocInfo;
 
-use super::{Focus, PAPER, TextFrame, commit, editable_combo, field_screen_font, focused_field, list_pick_edit, widget_rect};
+use super::{FIELD_FILL, FOCUS_BLUE, Focus, TextFrame, commit, editable_combo, field_screen_font, focused_field, list_pick_edit, widget_rect};
 use crate::canvas::{PageGeometry, PageSession};
 
 /// Where a field's text is laid out: its frame on the page and the screen points per page point.
@@ -381,7 +381,9 @@ pub(crate) fn show(
         let mut host = FieldHost { ctx: ui.ctx().clone(), view: body.view, field: f, widget: w, geo, room, text, caret: selection.caret, laid: None };
         // PLAN: paints through an egui `Painter` with black text, as pdf-forms-w7's `paint_page` does; both move to the `Draw` tokens and the field's `/DA` colour together.
         let painter = ui.painter_at(rect.intersect(body.rect));
-        painter.rect_filled(rect, CornerRadius::ZERO, PAPER);
+        painter.rect_filled(rect, CornerRadius::ZERO, FIELD_FILL);
+        // The field being typed in carries a blue border, as production draws it.
+        painter.rect_stroke(rect, CornerRadius::ZERO, egui::Stroke::new(1.5, FOCUS_BLUE), egui::StrokeKind::Inside);
         host.with(|laid, _| laid.paint(&painter));
         let multiline = f.kind == FormFieldKind::Text && f.has(field_flags::MULTILINE);
         let editor = TextEditor::new(f.name.clone(), &mut host, Bind::bound(selection))
