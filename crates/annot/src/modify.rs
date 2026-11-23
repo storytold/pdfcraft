@@ -1432,7 +1432,9 @@ fn pair_points(d: &Dict, key: &[u8]) -> Option<Vec<[f64; 2]>> {
 ///
 /// The caret is the group's primary: it holds `replacement` in `/Contents` and has `/IT
 /// /Replace`. The strikeout is its subordinate (`/IRT` to the caret, `/RT /Group`, `/IT
-/// /StrikeOutTextEdit`) with no `/Contents`, since a reader ignores a subordinate's text.
+/// /StrikeOutTextEdit`) whose `/Contents` is `original`, the struck-out text, when it is known:
+/// a reader ignores a subordinate's text as a comment, so the proposal still lists once, with
+/// the replacement, and a viewer can show both together.
 /// Groups written before this the other way round (the strikeout primary, the text only on
 /// the caret) still list their text: see `pdfcraft_render::fill_group_text`.
 ///
@@ -1441,7 +1443,7 @@ fn pair_points(d: &Dict, key: &[u8]) -> Option<Vec<[f64; 2]>> {
 /// resolves names (Acrobat, and our own importer) loses the pair. `caret_meta` is a second id
 /// from the caller, so the edit stays deterministic.
 pub fn add_text_replacement(doc: &mut Document, replacement: TextReplacement<'_>) -> Result<usize, AnnotError> {
-    let TextReplacement { page, quads, replacement, author, strike, caret, strike_meta: meta, caret_meta } = replacement;
+    let TextReplacement { page, quads, replacement, original, author, strike, caret, strike_meta: meta, caret_meta } = replacement;
     let last = *quads.last().ok_or_else(|| AnnotError::Invalid("select the text to replace first".into()))?;
     let s = add_annotation(
         doc,
@@ -1476,7 +1478,11 @@ pub fn add_text_replacement(doc: &mut Document, replacement: TextReplacement<'_>
         d.set(b"IT".to_vec(), Object::name("StrikeOutTextEdit"));
         d.set(b"IRT".to_vec(), Object::Ref(cr));
         d.set(b"RT".to_vec(), Object::name("Group"));
-        d.remove(b"Contents");
+        if original.trim().is_empty() {
+            d.remove(b"Contents");
+        } else {
+            d.set(b"Contents".to_vec(), PdfString::text(original));
+        }
     })?;
     Ok(c)
 }

@@ -436,10 +436,12 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
         if let Ok([(page, quads)]) = <[_; 1]>::try_from(view.selection_quads(cx.info))
             && page == cx.page
         {
+            let original = view.selected_text().unwrap_or_default();
             view.clear_selection();
             let last = quads.last().copied().unwrap_or_default();
             let at = [last[2].max(last[6]), last[1].max(last[3])];
             view.comments.replace = Some(quads);
+            view.comments.replace_original = original;
             view.comments.composer = Some(Composer { page, at, kind: ComposerKind::Replace, text: String::new(), focus: true });
         }
         return;

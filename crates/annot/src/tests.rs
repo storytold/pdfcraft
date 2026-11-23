@@ -1597,6 +1597,34 @@ fn cloud_ys(path: &str) -> Vec<f64> {
 }
 
 #[test]
+fn replace_text_keeps_the_struck_text_on_the_strikeout() {
+    let mut doc = fixture();
+    let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
+    let style = Style::default();
+    add_text_replacement(
+        &mut doc,
+        TextReplacement {
+            page: 0,
+            quads: &quads,
+            replacement: "new words",
+            original: "old words",
+            author: "Ada",
+            strike: &style,
+            caret: &style,
+            strike_meta: &meta("r"),
+            caret_meta: &meta("r-caret"),
+        },
+    )
+    .unwrap();
+    let doc = reopen(&doc);
+    let a = list(&doc, 0);
+    let strike = a.iter().find(|d| d.name(b"Subtype") == Some(b"StrikeOut")).unwrap();
+    assert_eq!(text(strike, b"Contents").as_str(), "old words");
+    let caret = a.iter().find(|d| d.name(b"Subtype") == Some(b"Caret")).unwrap();
+    assert_eq!(text(caret, b"Contents").as_str(), "new words");
+}
+
+#[test]
 fn replace_text_groups_a_strikeout_and_a_caret() {
     let mut doc = fixture();
     let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
@@ -1608,6 +1636,7 @@ fn replace_text_groups_a_strikeout_and_a_caret() {
             page: 0,
             quads: &quads,
             replacement: "new words",
+            original: "",
             author: "Ada",
             strike: &red,
             caret: &blue,
@@ -1665,6 +1694,7 @@ fn replace_text_groups_a_strikeout_and_a_caret() {
                 page: 0,
                 quads: &[],
                 replacement: "x",
+                original: "",
                 author: "Ada",
                 strike: &red,
                 caret: &blue,
@@ -1901,6 +1931,7 @@ fn restyling_a_replace_text_pair_restyles_both_members() {
         page: 0,
         quads: &quads,
         replacement: "new words",
+        original: "",
         author: "Ada",
         strike: &red,
         caret: &red,

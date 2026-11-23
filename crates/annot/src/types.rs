@@ -624,6 +624,8 @@ pub struct TextReplacement<'a> {
     pub page: usize,
     pub quads: &'a [[f64; 8]],
     pub replacement: &'a str,
+    /// The text being replaced, kept on the strikeout so the proposal reads "original -> replacement"; empty when unknown.
+    pub original: &'a str,
     pub author: &'a str,
     pub strike: &'a Style,
     pub caret: &'a Style,
