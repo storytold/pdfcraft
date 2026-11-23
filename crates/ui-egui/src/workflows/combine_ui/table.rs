@@ -1,367 +1,298 @@
-use super::files::{Columns, Lock, RowAction, SortKey};
-use super::parts::{ago, utc_stamp};
-use super::{
-    Align, Color32, Column, CornerRadius, ERROR, Layout, Modifiers, PdfCraftApp, Rect, Sense, Stroke, TableBuilder, Tokens, WARNING, icons, theme,
-    vec2,
+use std::cell::RefCell;
+use std::time::SystemTime;
+
+use craft::behavior::{ColumnKey, ColumnWidth, DisplayOrder, EditEvent, IconId, ItemSource, ReorderKeys};
+use craft::theme::variant::Tone;
+use craft::ui::contract::{
+    Bind, CollectionEvent, ColumnEvent, ColumnLayout, ColumnSort, ColumnSpec, Entry, Props as _, ReorderMove, ReorderRule, ShowCollection as _,
+    SpaceAction,
 };
+use craft::ui::list::{CellStatus, ListRow, RowEvent};
+use craft::ui::menu::Menu;
+use craft::ui::table::Table;
+use craft::ui::text::TextField;
 
-/// A column heading being dragged to a new place.
-#[derive(Clone, Copy)]
-struct HeadingDrag(SortKey);
+// PLAN: assumed `CombineKey::{File(u64), Page(u64, usize)}` in `files` (pdf-workflows-w5)
+use super::files::{CombineFile, CombineKey, Lock, RowAction, SortKey};
+use super::parts::utc_stamp;
+use crate::PdfCraftApp;
 
-enum HeadingEvent {
-    Sort(SortKey),
-    /// Put column `kind` before (or after) column `to`.
-    Move {
-        kind: SortKey,
-        to: SortKey,
-        after: bool,
-    },
-    Reset,
+const NAME: ColumnKey = ColumnKey::new("name");
+const PAGES: ColumnKey = ColumnKey::new("pages");
+const SIZE: ColumnKey = ColumnKey::new("size");
+const MODIFIED: ColumnKey = ColumnKey::new("modified");
+const WARNINGS: ColumnKey = ColumnKey::new("warnings");
+
+/// The column of a sort key; the one place the two vocabularies meet.
+fn column_of(key: SortKey) -> ColumnKey {
+    match key {
+        SortKey::Name => NAME,
+        SortKey::Pages => PAGES,
+        SortKey::Size => SIZE,
+        SortKey::Modified => MODIFIED,
+        SortKey::Warnings => WARNINGS,
+    }
 }
 
-/// What the table reports besides row actions.
-#[derive(Default)]
-pub(super) struct TableEvents {
-    pub(super) action: Option<RowAction>,
-    pub(super) range_focused: bool,
-    pub(super) range_changed: bool,
+fn sort_key_of(column: &ColumnKey) -> Option<SortKey> {
+    SortKey::ALL.into_iter().find(|key| column_of(*key) == *column)
 }
 
-/// The file table.
-pub(super) fn table(
-    app: &mut PdfCraftApp,
-    ui: &mut egui::Ui,
-    t: &Tokens,
-    checks: &[Result<usize, String>],
-    selected: &[bool],
-    conflicts: &[Vec<(String, String)>],
-    twice: &[bool],
-) -> TableEvents {
-    let mut events = TableEvents::default();
-    let dragging = egui::DragAndDrop::has_payload_of_type::<usize>(ui.ctx());
-    // Until the user resizes a column, the widths follow the window.
-    let gap = ui.spacing().item_spacing.x;
-    let available = ui.available_width() - 18.0 - gap * 6.0;
-    if app.combine_columns.widths.is_none() && (available - app.combine_tab.fitted).abs() > 1.0 {
-        app.combine_tab.fitted = available;
-        app.combine_tab.layout = app.combine_tab.layout.wrapping_add(1);
+/// The layout the last release kept in its settings: `order`, every sort key once by its name, and
+/// optionally `widths`, one number per key in the keys' own order. `None` for anything else (a
+/// repeated key, a wrong count, a width that is not a positive number), which leaves the default.
+pub(crate) fn columns_from_legacy(value: &serde_json::Value) -> Option<ColumnLayout> {
+    let object = value.as_object()?;
+    let order =
+        object.get("order")?.as_array()?.iter().map(|name| serde_json::from_value::<SortKey>(name.clone()).ok()).collect::<Option<Vec<_>>>()?;
+    let complete = order.len() == SortKey::ALL.len() && SortKey::ALL.iter().all(|key| order.contains(key));
+    if !complete {
+        return None;
     }
-    let widths = app.combine_columns.resolved(available);
-    let rows = Rows { checks, selected, twice, conflicts, dragging, sort: app.combine_tab.sort };
-    let mut heading_event = None;
-    let mut shown = None;
-    egui::ScrollArea::horizontal().id_salt("combine-files-h").show(ui, |ui| {
-        table_body(ui, TableBody { app, theme: t, rows: &rows, widths, events: &mut events, heading_event: &mut heading_event, shown: &mut shown })
-    });
-    // A column resized by hand keeps its width from now on.
-    if let Some(shown) = shown
-        && shown.iter().zip(&widths).any(|(a, b)| (a - b).abs() > 0.5)
-    {
-        app.combine_columns.widths = Some(shown);
-    }
-    match heading_event {
-        Some(HeadingEvent::Sort(key)) => events.action = Some(RowAction::Sort(key)),
-        Some(HeadingEvent::Move { kind, to, after }) => {
-            let mut order: Vec<SortKey> = app.combine_columns.order.iter().copied().filter(|k| *k != kind).collect();
-            let at = order.iter().position(|k| *k == to).map_or(order.len(), |p| if after { p + 1 } else { p });
-            order.insert(at, kind);
-            if let Ok(order) = <[SortKey; 5]>::try_from(order) {
-                app.combine_columns.order = order;
-                app.combine_tab.layout = app.combine_tab.layout.wrapping_add(1);
+    let widths = match object.get("widths") {
+        None | Some(serde_json::Value::Null) => Vec::new(),
+        Some(widths) => {
+            let widths = widths.as_array()?;
+            if widths.len() != SortKey::ALL.len() {
+                return None;
             }
+            let mut pairs = Vec::new();
+            for (key, width) in SortKey::ALL.into_iter().zip(widths) {
+                let width = width.as_f64().filter(|w| w.is_finite() && *w > 0.0)?;
+                pairs.push((column_of(key), width as f32));
+            }
+            pairs
         }
-        Some(HeadingEvent::Reset) => {
-            app.combine_columns = Columns::default();
-            app.combine_tab.fitted = 0.0;
-        }
-        None => {}
-    }
-    events
-}
-
-/// What every row needs to know.
-struct Rows<'a> {
-    checks: &'a [Result<usize, String>],
-    selected: &'a [bool],
-    twice: &'a [bool],
-    /// What combining would rename of this file's form fields (the field-name conflict preview).
-    conflicts: &'a [Vec<(String, String)>],
-    dragging: bool,
-    sort: Option<(SortKey, bool)>,
-}
-
-/// A column heading: the whole cell sorts by its column when clicked, moves the column when
-/// dragged, and offers Reset columns on a right-click.
-fn heading(ui: &mut egui::Ui, t: &Tokens, key: SortKey, sort: Option<(SortKey, bool)>) -> Option<HeadingEvent> {
-    let text = key.label();
-    let rect = ui.max_rect();
-    let response = ui.allocate_rect(rect, Sense::click_and_drag());
-    let arrow = sort.filter(|(k, _)| *k == key).map(|(_, ascending)| ascending);
-    let state = match arrow {
-        Some(true) => tl!("sorted ascending"),
-        Some(false) => tl!("sorted descending"),
-        None => "",
     };
-    let a11y = if state.is_empty() { text.to_owned() } else { format!("{text}, {state}") };
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &a11y));
-    let being_dragged = egui::DragAndDrop::payload::<HeadingDrag>(ui.ctx()).is_some_and(|p| p.0 == key);
-    if being_dragged || response.is_pointer_button_down_on() {
-        ui.painter().rect_filled(rect, CornerRadius::same(4), t.pressed);
-    } else if response.hovered() {
-        ui.painter().rect_filled(rect, CornerRadius::same(4), t.hover);
+    Some(ColumnLayout { order: order.into_iter().map(column_of).collect(), widths, hidden: Vec::new() })
+}
+
+/// The files as a collection source, keyed by id, in the order of the list.
+struct Files<'a> {
+    ids: &'a [u64],
+    names: &'a [String],
+}
+
+impl DisplayOrder<CombineKey> for Files<'_> {
+    fn len(&self) -> usize {
+        self.ids.len()
     }
-    let colour = if arrow.is_some() { t.text } else { t.text_muted };
-    let galley = ui.painter().layout_no_wrap(text.to_owned(), theme::medium(12.5), colour);
-    let text_pos = egui::pos2(rect.left() + 4.0, rect.center().y - galley.size().y / 2.0);
-    let text_w = galley.size().x;
-    ui.painter().with_clip_rect(rect).galley(text_pos, galley, colour);
-    if let Some(ascending) = arrow {
-        let r = Rect::from_center_size(egui::pos2(rect.left() + text_w + 14.0, rect.center().y), vec2(12.0, 12.0));
-        icons::paint(ui, r, if ascending { "chevron-up" } else { "chevron-down" }, 12.0, t.text);
+
+    fn key(&self, at: usize) -> CombineKey {
+        CombineKey::File(self.ids.get(at).copied().unwrap_or_default())
     }
-    if response.drag_started() {
-        egui::DragAndDrop::set_payload(ui.ctx(), HeadingDrag(key));
-    }
-    // Another heading dragged over this one: a line where it would go.
-    let after = |r: &egui::Response| r.ctx.pointer_latest_pos().is_some_and(|p| p.x > rect.center().x);
-    if let Some(dragged) = response.dnd_hover_payload::<HeadingDrag>()
-        && dragged.0 != key
-    {
-        let x = if after(&response) { rect.right() } else { rect.left() };
-        ui.painter().with_clip_rect(rect.expand(3.0)).vline(x, rect.y_range(), Stroke::new(2.5, t.accent));
-    }
-    let mut event = None;
-    if let Some(dragged) = response.dnd_release_payload::<HeadingDrag>()
-        && dragged.0 != key
-    {
-        event = Some(HeadingEvent::Move { kind: dragged.0, to: key, after: after(&response) });
-    }
-    let response = response
-        .on_hover_cursor(if being_dragged { egui::CursorIcon::Grabbing } else { egui::CursorIcon::PointingHand })
-        .on_hover_text(tl!("Click to sort, drag to move the column. Drag its edge to resize it."));
-    response.context_menu(|ui| {
-        if ui.button(tl!("Reset columns")).clicked() {
-            event = Some(HeadingEvent::Reset);
-            ui.close();
+
+    fn index_of(&self, key: &CombineKey) -> Option<usize> {
+        match key {
+            CombineKey::File(id) => self.ids.iter().position(|held| held == id),
+            _ => None,
         }
-    });
-    if response.clicked() {
-        event = Some(HeadingEvent::Sort(key));
     }
-    event
+
+    fn text(&self, at: usize) -> Option<std::borrow::Cow<'_, str>> {
+        self.names.get(at).map(|name| std::borrow::Cow::Borrowed(name.as_str()))
+    }
 }
 
-/// Draw the Combine files table body: reorder handles, editable page ranges with validation, file metadata
-/// and per-row warnings.
-struct TableBody<'a> {
-    app: &'a mut PdfCraftApp,
-    theme: &'a Tokens,
-    rows: &'a Rows<'a>,
-    widths: [f32; 5],
-    events: &'a mut TableEvents,
-    heading_event: &'a mut Option<HeadingEvent>,
-    shown: &'a mut Option<[f32; 5]>,
+impl ItemSource<CombineKey> for Files<'_> {}
+
+/// What a row shows, worked out before the table runs so its row closure borrows nothing mutable.
+struct RowData {
+    name: String,
+    range: String,
+    editable: bool,
+    range_tip: String,
+    range_count: String,
+    size: String,
+    modified: Option<(u64, String)>,
+    status: Option<(Tone, String, String)>,
+    locked: Option<Lock>,
 }
 
-fn table_body(ui: &mut egui::Ui, context: TableBody<'_>) {
-    let TableBody { app, theme: t, rows, widths, events, heading_event, shown } = context;
-    let n = app.combine_draft.len();
-    let order = app.combine_columns.order;
-    // The heading being dragged follows the pointer.
-    if let (Some(dragged), Some(pos)) = (egui::DragAndDrop::payload::<HeadingDrag>(ui.ctx()), ui.ctx().pointer_latest_pos()) {
-        let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("combine-heading-drag")));
-        let galley = painter.layout_no_wrap(dragged.0.label().to_owned(), theme::medium(12.5), t.text);
-        let r = Rect::from_min_size(pos + vec2(10.0, 8.0), galley.size() + vec2(16.0, 8.0));
-        painter.rect(r, CornerRadius::same(4), t.card, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
-        painter.galley(r.min + vec2(8.0, 4.0), galley, t.text);
-    }
-    let mut builder = TableBuilder::new(ui)
-        // Columns moved, reset or refitted: a new table state, built from `widths`.
-        .id_salt(("combine-files", app.combine_tab.layout))
-        .striped(true)
-        .sense(Sense::click())
-        .auto_shrink([false, true])
-        .cell_layout(Layout::left_to_right(Align::Center))
-        .column(Column::exact(18.0));
-    for kind in order {
-        builder = builder.column(Column::initial(widths[kind.index()]).at_least(kind.min_width()).resizable(true).clip(true));
-    }
-    builder
-        .header(26.0, |mut row| {
-            row.col(|_| {});
-            for kind in order {
-                row.col(|ui| {
-                    if let Some(e) = heading(ui, t, kind, rows.sort) {
-                        *heading_event = Some(e);
-                    }
-                });
+fn row_data(app: &mut PdfCraftApp, checks: &[Result<usize, String>]) -> Vec<RowData> {
+    let conflicts = app.combine_conflicts.per_file.clone();
+    let twice = app.combine_tab.duplicate_warnings(&app.combine_draft);
+    let now = SystemTime::now();
+    app.combine_draft
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            let check = checks.get(i).cloned().unwrap_or(Ok(f.pages));
+            let mut errors: Vec<String> = f.problem.iter().cloned().collect();
+            if let Err(e) = &check {
+                errors.push(e.clone());
+            }
+            let mut warnings = f.notes.clone();
+            if twice.get(i).copied().unwrap_or(false) {
+                warnings.push(tl!("Added more than once").to_string());
+            }
+            if let Some(renames) = conflicts.get(i).filter(|r| !r.is_empty()) {
+                let list = renames.iter().take(3).map(|(old, new)| format!("{old} → {new}")).collect::<Vec<_>>().join(", ");
+                warnings.push(crate::i18n::fmt(
+                    &crate::i18n::trn(
+                        crate::i18n::current(),
+                        renames.len() as u64,
+                        "{n} field name collides with earlier files and will be renamed: {list}",
+                        "{n} field names collide with earlier files and will be renamed: {list}",
+                    ),
+                    &[("list", &list)],
+                ));
+            }
+            let all = errors.iter().chain(&warnings).cloned().collect::<Vec<_>>().join("\n");
+            let status = match (errors.first(), warnings.first()) {
+                (Some(e), _) => Some((Tone::Bad, e.clone(), all)),
+                (None, Some(w)) => Some((Tone::Warn, w.clone(), all)),
+                (None, None) => None,
+            };
+            let range_tip = match &check {
+                Err(e) => e.clone(),
+                Ok(k) => {
+                    let of = crate::i18n::fmt(tl!("{k} of {n}"), &[("k", &k.to_string()), ("n", &f.pages.to_string())]);
+                    let what = crate::i18n::fmt(tl!("Pages of {name} to combine, e.g. 1-3, 6"), &[("name", &f.name)]);
+                    format!("{what} ({of})")
+                }
+            };
+            let range_count = if f.problem.is_some() {
+                "—".to_string()
+            } else {
+                let k = check.as_ref().map_or_else(|_| "?".to_string(), usize::to_string);
+                crate::i18n::fmt(tl!("{k} of {n}"), &[("k", &k), ("n", &f.pages.to_string())])
+            };
+            RowData {
+                name: f.name.clone(),
+                range: f.range.clone(),
+                editable: f.problem.is_none(),
+                range_tip,
+                range_count,
+                size: crate::panels::human_size(f.bytes.len()),
+                modified: f.modified.map(|m| (now.duration_since(m).map_or(0, |d| d.as_secs()), utc_stamp(m))),
+                status,
+                locked: f.lock,
             }
         })
-        .body(|mut body| {
-            if !body.ui_mut().is_sizing_pass() {
-                let w = body.widths();
-                let mut out = widths;
-                for (kind, width) in order.iter().zip(w.iter().skip(1)) {
-                    out[kind.index()] = *width;
-                }
-                *shown = Some(out);
-            }
-            for i in 0..n {
-                let Some(f) = app.combine_draft.get_mut(i) else { break };
-                let check = rows.checks.get(i).cloned().unwrap_or(Ok(f.pages));
-                body.row(32.0, |mut row| {
-                    row.set_selected(rows.selected.get(i).copied().unwrap_or(false));
-                    // Drag handle.
-                    row.col(|ui| {
-                        let id = ui.scope_id().with(("combine-drag", f.id));
-                        ui.dnd_drag_source(id, i, |ui| {
-                            let (rect, resp) = ui.allocate_exact_size(vec2(12.0, 18.0), Sense::hover());
-                            grip(ui, rect, if resp.hovered() || rows.dragging { t.text_muted } else { t.text_faint });
-                        })
-                        .response
-                        .on_hover_cursor(egui::CursorIcon::Grab)
-                        .on_hover_text(tl!("Drag to reorder"));
-                    });
-                    for kind in order {
-                        row.col(|ui| match kind {
-                            SortKey::Name => {
-                                ui.add(icons::image("file-text", 16.0, t.icon));
-                                // A file name is file/path chrome: explicitly LTR, extension last.
-                                crate::widgets::label_ltr_truncated(ui, f.name.clone(), theme::regular(13.0), t.text);
-                            }
-                            // The range field and how many pages it takes.
-                            SortKey::Pages => {
-                                crate::widgets::begin_dialog(ui);
-                                let edit = ui.add_enabled(
-                                    f.problem.is_none(),
-                                    crate::widgets::line(&mut f.range).frame(egui::Frame::NONE).hint_text(tl!("All pages")).desired_width(88.0),
-                                );
-                                // A visible field on plain and striped rows alike; red when the range is wrong.
-                                let border = if check.is_err() { Stroke::new(1.5, ERROR) } else { Stroke::new(1.0, t.border) };
-                                ui.painter().rect_stroke(edit.rect, CornerRadius::same(4), border, egui::StrokeKind::Inside);
-                                if let Err(e) = &check {
-                                    edit.clone().on_hover_text(e);
-                                } else {
-                                    edit.clone()
-                                        .on_hover_text(crate::i18n::fmt(tl!("Pages of {name} to combine, e.g. 1-3, 6"), &[("name", &f.name)]));
-                                }
-                                if edit.gained_focus() {
-                                    events.range_focused = true;
-                                    events.action = Some(RowAction::Click(i, Modifiers::NONE));
-                                }
-                                if edit.changed() {
-                                    events.range_changed = true;
-                                }
-                                let count = match (&check, f.problem.is_some()) {
-                                    (_, true) => "—".to_string(),
-                                    (Ok(k), _) => crate::i18n::fmt(tl!("{k} of {n}"), &[("k", &k.to_string()), ("n", &f.pages.to_string())]),
-                                    (Err(_), _) => crate::i18n::fmt(tl!("? of {n}"), &[("n", &f.pages.to_string())]),
-                                };
-                                ui.label(egui::RichText::new(count).small().color(if check.is_err() { ERROR } else { t.text_faint }));
-                            }
-                            SortKey::Size => {
-                                ui.label(egui::RichText::new(crate::panels::human_size(f.bytes.len())).color(t.text_muted));
-                            }
-                            SortKey::Modified => match f.modified {
-                                Some(m) => {
-                                    ui.label(egui::RichText::new(ago(m)).color(t.text_muted)).on_hover_text(utc_stamp(m));
-                                }
-                                None => {
-                                    ui.label(egui::RichText::new("—").color(t.text_faint));
-                                }
-                            },
-                            // Blocking problems first, in red.
-                            SortKey::Warnings => {
-                                let mut errors: Vec<String> = f.problem.iter().cloned().collect();
-                                if let Err(e) = &check {
-                                    errors.push(e.clone());
-                                }
-                                let mut warnings = f.notes.clone();
-                                if rows.twice.get(i).copied().unwrap_or(false) {
-                                    warnings.push(tl!("Added more than once").to_string());
-                                }
-                                if let Some(renames) = rows.conflicts.get(i).filter(|r| !r.is_empty()) {
-                                    let shown: Vec<String> = renames.iter().take(3).map(|(old, new)| format!("{old} → {new}")).collect();
-                                    let list = shown.join(", ");
-                                    warnings.push(crate::i18n::fmt(
-                                        &crate::i18n::trn(
-                                            crate::i18n::current(),
-                                            renames.len() as u64,
-                                            "{n} field name collides with earlier files and will be renamed: {list}",
-                                            "{n} field names collide with earlier files and will be renamed: {list}",
-                                        ),
-                                        &[("list", &list)],
-                                    ));
-                                }
-                                let (icon, colour, first) = match (errors.first(), warnings.first()) {
-                                    (Some(e), _) => ("circle-x", ERROR, e.clone()),
-                                    (None, Some(w)) => ("triangle-alert", WARNING, w.clone()),
-                                    (None, None) => return,
-                                };
-                                let all = errors.iter().chain(&warnings).cloned().collect::<Vec<_>>().join("\n");
-                                ui.add(icons::image(icon, 15.0, colour));
-                                if f.lock.is_some() {
-                                    let link =
-                                        ui.add(egui::Link::new(egui::RichText::new(tl!("Unlock…")).color(t.accent))).on_hover_text(match f.lock {
-                                            Some(Lock::Permissions) => tl!("Enter the permissions password to allow combining"),
-                                            _ => tl!("Enter the password that opens it"),
-                                        });
-                                    if link.clicked() {
-                                        events.action = Some(RowAction::Unlock(Some(i), link.rect.left_bottom() + vec2(0.0, 6.0)));
-                                    }
-                                }
-                                ui.add(
-                                    egui::Label::new(egui::RichText::new(first).color(if colour == ERROR { ERROR } else { t.text }))
-                                        .truncate()
-                                        .selectable(false),
-                                )
-                                .on_hover_text(all);
-                            }
-                        });
-                    }
-                    let response = row.response();
-                    if f.lock.is_some() {
-                        let at = response.rect.left_bottom();
-                        response.context_menu(|ui| {
-                            if ui
-                                .add(egui::Button::image_and_text(icons::image("lock-open", 15.0, ui.visuals().text_color()), tl!("Unlock…")))
-                                .clicked()
-                            {
-                                events.action = Some(RowAction::Unlock(Some(i), at));
-                                ui.close();
-                            }
-                        });
-                    }
-                    if response.clicked() {
-                        let modifiers = response.ctx.input(|i| i.modifiers);
-                        events.action = Some(RowAction::Click(i, modifiers));
-                    }
-                    // A row dragged over this one goes where the line is drawn.
-                    if let Some(from) = response.dnd_hover_payload::<usize>().map(|p| *p) {
-                        let r = response.rect;
-                        let y = if from > i { r.top() } else { r.bottom() };
-                        if from != i {
-                            response.ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("combine-drop-line"))).hline(
-                                r.x_range(),
-                                y,
-                                Stroke::new(2.0, t.accent),
-                            );
-                        }
-                    }
-                    if let Some(from) = response.dnd_release_payload::<usize>().map(|p| *p) {
-                        events.action = Some(RowAction::Drop { from, to: i });
-                    }
-                });
-            }
-        });
+        .collect()
 }
 
-/// Six dots: the drag handle.
-fn grip(ui: &egui::Ui, rect: Rect, colour: Color32) {
-    for dx in [-2.5, 2.5] {
-        for dy in [-5.0, 0.0, 5.0] {
-            ui.painter().circle_filled(rect.center() + vec2(dx, dy), 1.4, colour);
+fn columns() -> Vec<ColumnSpec> {
+    vec![
+        ColumnSpec::new(NAME, SortKey::Name.label(), ColumnWidth::fill(1.0)).sortable().movable().resizable(),
+        ColumnSpec::new(PAGES, SortKey::Pages.label(), ColumnWidth::Content).sortable().movable().resizable(),
+        ColumnSpec::new(SIZE, SortKey::Size.label(), ColumnWidth::Content).numeric().first_descending().sortable().movable().resizable(),
+        ColumnSpec::new(MODIFIED, SortKey::Modified.label(), ColumnWidth::Content).first_descending().sortable().movable().resizable(),
+        ColumnSpec::new(WARNINGS, SortKey::Warnings.label(), ColumnWidth::fill(1.0)).sortable().movable().resizable(),
+    ]
+}
+
+/// Where a reorder lands, as the `DropAt` the list takes: the first moved file's id and the gap in the list as it
+/// is. `ReorderMove::to` counts in the list without the moved files, so the gap is the position of the file now at
+/// `to` (or the end).
+fn drop_at(ids: &[u64], moved: &ReorderMove<CombineKey>) -> Option<(u64, usize)> {
+    let ids_of: Vec<u64> = moved
+        .keys
+        .iter()
+        .filter_map(|key| match key {
+            CombineKey::File(id) => Some(*id),
+            _ => None,
+        })
+        .collect();
+    let first = *ids_of.first()?;
+    let rest: Vec<u64> = ids.iter().copied().filter(|id| !ids_of.contains(id)).collect();
+    let gap = match rest.get(moved.to) {
+        Some(target) => ids.iter().position(|id| id == target)?,
+        None => ids.len(),
+    };
+    Some((first, gap))
+}
+
+/// The file table; what it reports as a row action.
+pub(super) fn table(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> Option<RowAction> {
+    let checks: Vec<Result<usize, String>> = app.combine_draft.iter_mut().map(CombineFile::selection).collect();
+    let rows = row_data(app, &checks);
+    let ids: Vec<u64> = app.combine_draft.iter().map(|f| f.id).collect();
+    let names: Vec<String> = rows.iter().map(|r| r.name.clone()).collect();
+    let sort = app.combine_tab.sort.map(|(key, ascending)| ColumnSort::new(column_of(key), !ascending));
+    let revision = app.combine_tab.revision;
+    let edits: RefCell<Vec<(usize, EditEvent<String>)>> = RefCell::new(Vec::new());
+    let source = Files { ids: &ids, names: &names };
+
+    let out = Table::<CombineKey>::new(tl!("Files"), columns())
+        .id(super::collection_id())
+        .request_focus(craft::ui::runtime::focus::FocusRequest::WhenNone)
+        .sort(sort)
+        .selection(Bind::bound(&mut app.combine_tab.selection))
+        .column_layout(Bind::bound(&mut app.combine_columns))
+        .plain_header_menu(true)
+        .reorder(ReorderRule::new().keys(ReorderKeys::AltArrows))
+        .deletable(true)
+        .space(SpaceAction::Preview)
+        .show_items(ui, &source, &mut |_, icx| {
+            let at = icx.at;
+            let Some(row) = rows.get(at) else { return ListRow::new("") };
+            let mut list = ListRow::new(row.name.clone()).cells(icx.cells()).striped(icx.row.striped);
+            // Keep every draft, including invalid ranges, so the row can show its validation error as the user types.
+            let field = TextField::new(tl!("Pages"), Bind::given(row.range.clone())).placeholder(tl!("All pages")).enabled(row.editable);
+            let edits = &edits;
+            list = list.cell_field(PAGES, field, move |output| {
+                edits.borrow_mut().extend(output.events.into_iter().map(|event| (at, event)));
+            });
+            list = list
+                .cell_field_suffix(PAGES, row.range_count.clone())
+                .cell_muted(PAGES)
+                .cell_tip(PAGES, row.range_tip.clone())
+                .cell(SIZE, row.size.clone());
+            list = match &row.modified {
+                Some((age, stamp)) => list.cell(MODIFIED, icx.env.relative_age(*age, craft::i18n::AgeStyle::Short)).cell_tip(MODIFIED, stamp.clone()),
+                None => list.cell(MODIFIED, "—"),
+            };
+            if let Some((tone, first, all)) = &row.status {
+                let mut status = CellStatus::new(*tone, first.clone()).tip(all.clone());
+                if row.locked.is_some() {
+                    status = status.action(tl!("Unlock…"));
+                }
+                list = list.cell_status(WARNINGS, status);
+            }
+            list
+        });
+
+    let mut action = None;
+    for (at, event) in edits.into_inner() {
+        let Some(f) = app.combine_draft.get_mut(at) else { continue };
+        if let EditEvent::Update { value, .. } | EditEvent::Commit { after: value, .. } | EditEvent::Set { after: value, .. } = &event {
+            f.range.clone_from(value);
+        }
+        app.combine_range_edit(&event);
+    }
+    for event in out.events {
+        match event {
+            CollectionEvent::Selection(_) => app.combine_keep_one_kind(),
+            CollectionEvent::Column(ColumnEvent::Sort { key, .. }) => {
+                if let Some(key) = sort_key_of(&key) {
+                    action = Some(RowAction::Sort(key));
+                }
+            }
+            CollectionEvent::Reorder(EditEvent::Commit { after: moved, .. } | EditEvent::Set { after: moved, .. }) => {
+                if let Some((file, gap)) = drop_at(&ids, &moved) {
+                    action = Some(RowAction::DropAt { file, revision, gap });
+                }
+            }
+            CollectionEvent::Delete(_) => action = Some(RowAction::Remove),
+            CollectionEvent::Preview(_) => action = Some(RowAction::PreviewSelected),
+            CollectionEvent::Item(CombineKey::File(id), RowEvent::CellAction { column, .. }) if column == WARNINGS => {
+                action = Some(RowAction::Unlock(Some(id)));
+            }
+            _ => {}
         }
     }
+    // A locked file's row offers Unlock… on a right-click, for the row it was opened on.
+    let locked = out.menu.as_ref().and_then(|request| match request.key {
+        CombineKey::File(id) => ids.iter().position(|i| *i == id).and_then(|at| rows.get(at)).filter(|row| row.locked.is_some()).map(|_| id),
+        CombineKey::Page(..) => None,
+    });
+    if let Some(id) = locked {
+        let entries = [Entry::new(id, tl!("Unlock…")).icon(IconId::new("lock-open"))];
+        if let Some(id) = Menu::context(tl!("File"), &out.response).pick(ui, &entries).picked {
+            action = Some(RowAction::Unlock(Some(id)));
+        }
+    }
+    action
 }
