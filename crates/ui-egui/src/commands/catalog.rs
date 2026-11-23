@@ -124,8 +124,11 @@ pub(crate) fn shared_catalog(mac: bool) -> Option<AppCatalog> {
 pub(crate) fn command_input(app: &mut PdfCraftApp, ctx: &egui::Context) -> CommandInput {
     let gated = menus::gated(app);
     // Edit ▸ Paste asks the platform for the clipboard in the pass the row is picked, as production's menu did, and
-    // reaches the app with what it holds, as ⌘V does.
-    let mut input = CommandInput::new().gate(CommandGate::new(gated, |gated, _| !*gated)).paste_reads_clipboard(true);
+    // reaches the app with what it holds, as ⌘V does. Organize pastes its own picked pages and Prepare Form its own
+    // fields, at once, as `run_fired` sends them.
+    let organize = app.active.and_then(|i| app.views.get(i)).is_some_and(|v| v.organize);
+    let reads_clipboard = !organize && !app.is_preparing();
+    let mut input = CommandInput::new().gate(CommandGate::new(gated, |gated, _| !*gated)).paste_reads_clipboard(reads_clipboard);
     if let Some(catalog) = shared_catalog(super::mac_shortcuts(ctx)) {
         input = input.catalog(catalog);
     }
