@@ -5472,6 +5472,74 @@ fn escape_with_a_fill_tool_deselects_every_comment_then_drops_the_tool() {
     assert_eq!(h.state().quick_tool, QuickTool::Select);
 }
 
+/// Acrobat's mini toolbar on a selected comment: the bar over a selected highlight recolours and
+/// fades it in place, one undo step each; a locked comment shows no bar.
+#[test]
+fn the_style_bar_recolours_and_fades_the_selected_highlight() {
+    let mut h = harness(|app| app.set_option("quick", "highlight").unwrap());
+    let (a, b) = {
+        let v = &h.state().views[0];
+        (v.glyph_screen_pos(0, 4).expect("text layer"), v.glyph_screen_pos(0, 14).expect("glyph"))
+    };
+    drag(&mut h, a, b);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the new highlight is selected");
+    let props = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).expect("document").comment_props(0, 0).expect("props")
+    };
+    assert_eq!((props(&h).color, props(&h).opacity), (Some([1.0, 0.94, 0.0]), 1.0), "the existing highlight opacity default stays unchanged");
+    // One row here: the controls wrap only in a pane narrower than they are.
+    let tops: Vec<f32> = h.query_all_by_label_contains("Comment colour: ").map(|n| n.rect().top()).collect();
+    assert_eq!(tops.len(), 6);
+    assert!(tops.iter().all(|t| (t - tops[0]).abs() < 0.5), "one row of swatches: {tops:?}");
+
+    h.get_by_label("Comment colour: Blue").click();
+    h.run_steps(3);
+    assert_eq!(props(&h).color, Some([0.0, 0.47, 0.84]));
+    {
+        let s = h.state();
+        assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Change comment properties"), "one undo step");
+    }
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(props(&h).color, Some([1.0, 0.94, 0.0]), "one undo restores the yellow");
+    h.state_mut().redo();
+    h.run_steps(2);
+    assert_eq!(props(&h).color, Some([0.0, 0.47, 0.84]), "redo restores the blue");
+
+    // Undo and redo let the selection go: select the highlight again (with the Select tool; a
+    // markup tool's click marks text, it doesn't pick comments) and the bar is back.
+    assert_eq!(h.state().views[0].comments.selected, None, "undo and redo let the selection go");
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    click(&mut h, a);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "selected again");
+    h.get_by_label("Comment colour: Blue");
+
+    // Hide all comments: the bar goes at once, while the comment is still selected; shown again,
+    // it is back.
+    let id = h.state().views[0].id;
+    assert!(h.state_mut().session.set_hide_comments(id, true));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the selection is still there");
+    assert!(h.query_by_label("Comment colour: Blue").is_none(), "no bar over hidden comments");
+    assert!(h.state_mut().session.set_hide_comments(id, false));
+    h.run_steps(2);
+    h.get_by_label("Comment colour: Blue");
+
+    assert!(h.query_by_label("Comment opacity").is_none(), "opacity lives in preset settings");
+    h.state_mut().set_option("highlight-palette", r##"[{"color":[1,0.94,0],"opacity":1},{"color":[0,0.47,0.84],"opacity":0.45}]"##).unwrap();
+    h.run_steps(2);
+    h.get_by_label("Comment colour: Blue").click();
+    h.run_steps(3);
+    assert!((props(&h).opacity - 0.45).abs() < 1e-9, "the preset applies its opacity with its color");
+
+    // Locked comments refuse restyling, so they get no bar.
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::LockAnnotation { page: 0, index: 0, locked: true }));
+    h.run_steps(3);
+    assert!(h.query_by_label("Comment colour: Blue").is_none(), "no bar over a locked comment");
+}
+
 /// A square drawn and selected with the Select tool.
 fn selected_square() -> Harness<'static, PdfCraftApp> {
     let mut h = harness(|app| app.set_option("quick", "square").unwrap());
@@ -5959,6 +6027,324 @@ fn properties_dialog_makes_the_text_box_font_size_default() {
         post_text(&mut fresh, "Third");
         assert_eq!(font_size_of_last(&fresh).font_size, Some(size), "{quick}: the default font size persisted");
     }
+}
+
+/// With several comments selected, a swatch on the bar recolours every one of them as one step,
+/// as the context menu's Colour does.
+#[test]
+fn the_style_bar_recolours_every_selected_comment() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    for (a, b) in [((20.0, 20.0), (60.0, 60.0)), ((100.0, 20.0), (140.0, 60.0)), ((180.0, 20.0), (220.0, 60.0))] {
+        drag_pt(&mut h, a, b);
+    }
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    click_pt(&mut h, (40.0, 40.0));
+    click_pt_with(&mut h, (120.0, 40.0), egui::Modifiers::COMMAND);
+    click_pt_with(&mut h, (200.0, 40.0), egui::Modifiers::COMMAND);
+    assert_eq!(h.state().views[0].comments.selection().len(), 3);
+    h.get_by_label("Comment colour: Blue (3 selected)").click();
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    let colours = |h: &Harness<'static, PdfCraftApp>| -> Vec<Option<[f64; 3]>> {
+        let s = h.state();
+        (0..3).map(|i| s.session.get(id).unwrap().comment_props(0, i).unwrap().color).collect()
+    };
+    assert_eq!(colours(&h), vec![Some([0.0, 0.47, 0.84]); 3], "all three blue");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Change comment properties"), "one step");
+    // The keys did not change, so the selection, and the bar over it, stay for the next choice.
+    assert_eq!(h.state().views[0].comments.selection().len(), 3, "the selection survives the recolour");
+    h.get_by_label("Comment colour: Blue (3 selected)");
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(colours(&h), vec![Some([0.89, 0.13, 0.13]); 3], "one undo gives all three their red back");
+}
+
+/// A locked comment among the selected takes no style: the bar's choice goes to the others alone,
+/// as an edit the engine accepts (it refuses a style change to a locked comment, and with it the
+/// whole batch), and the label counts the comments the choice reaches.
+#[test]
+fn the_style_bar_leaves_a_locked_comment_in_the_selection_alone() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    for (a, b) in [((20.0, 20.0), (60.0, 60.0)), ((100.0, 20.0), (140.0, 60.0))] {
+        drag_pt(&mut h, a, b);
+    }
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::LockAnnotation { page: 0, index: 1, locked: true }));
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    // The locked one first; the handles go to the comment clicked last.
+    click_pt(&mut h, (120.0, 40.0));
+    click_pt_with(&mut h, (40.0, 40.0), egui::Modifiers::COMMAND);
+    assert_eq!((h.state().views[0].comments.selected, h.state().views[0].comments.also.clone()), (Some((0, 0)), vec![(0, 1)]));
+    assert!(h.query_by_label("Comment colour: Blue (2 selected)").is_none(), "the locked comment isn't counted");
+    h.get_by_label("Comment colour: Blue").click();
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    let colour = |h: &Harness<'static, PdfCraftApp>, i: usize| h.state().session.get(id).unwrap().comment_props(0, i).unwrap().color;
+    assert_eq!(colour(&h, 0), Some([0.0, 0.47, 0.84]), "the unlocked comment is blue");
+    assert_eq!(colour(&h, 1), Some([0.89, 0.13, 0.13]), "the locked one keeps its red");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Change comment properties"), "one step");
+}
+
+/// Existing highlights can be restyled while reading with Hand, without changing the saved
+/// tool defaults. The colour and opacity survive a save and a new document session.
+#[test]
+fn the_style_bar_opens_on_existing_highlights_with_the_hand_tool() {
+    let mut h = harness(|app| {
+        app.comment_prefs.set_opacity(pdfcraft_ui_egui::comments::CommentTool::Highlight, 0.7);
+        app.set_option("quick", "highlight").unwrap();
+    });
+    let (a, b) = {
+        let v = &h.state().views[0];
+        (v.glyph_screen_pos(0, 4).unwrap(), v.glyph_screen_pos(0, 14).unwrap())
+    };
+    drag(&mut h, a, b);
+    let id = h.state().views[0].id;
+    let bytes = h.state_mut().session.save_bytes(id).unwrap().as_ref().clone();
+    let mut h = harness_with_bytes(bytes, |app| app.set_option("quick", "hand").unwrap());
+    let r = comments(&h)[0].rect;
+    click_pt(&mut h, ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "Hand selects an existing highlight");
+    h.get_by_label("Comment colour: Blue").click();
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    let props = h.state().session.get(id).unwrap().comment_props(0, 0).unwrap();
+    assert_eq!(props.color, Some([0.0, 0.47, 0.84]));
+    assert_eq!(props.opacity, 1.0, "the chosen preset supplies its opacity");
+    assert_eq!(h.state().quick_tool, QuickTool::Hand);
+    assert_eq!(h.state().comment_prefs.style(pdfcraft_ui_egui::comments::CommentTool::Highlight).opacity, 1.0);
+    let bytes = h.state_mut().session.save_bytes(id).unwrap().as_ref().clone();
+    let mut fresh = harness_with_bytes(bytes, |app| app.set_option("quick", "hand").unwrap());
+    let r = comments(&fresh)[0].rect;
+    click_pt(&mut fresh, ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0));
+    fresh.get_by_label("Comment colour: Blue");
+    let props = fresh.state().session.get(fresh.state().views[0].id).unwrap().comment_props(0, 0).unwrap();
+    assert_eq!(props.color, Some([0.0, 0.47, 0.84]));
+    assert_eq!(props.opacity, 1.0);
+    click_pt(&mut fresh, (260.0, 20.0));
+    assert!(fresh.query_by_label("Edit highlight palette").is_none(), "clicking the page dismisses the toolbar");
+}
+
+/// Hand keeps page panning even when a drag starts over a selected movable comment.
+#[test]
+fn the_style_bar_keeps_hand_drags_as_page_pans() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (40.0, 170.0), (140.0, 130.0));
+    h.state_mut().set_option("quick", "hand").unwrap();
+    h.state_mut().set_option("layout", "continuous").unwrap();
+    h.state_mut().set_option("zoom", "600").unwrap();
+    h.run_steps(4);
+    click_pt(&mut h, (90.0, 150.0));
+    h.get_by_label("Comment colour: Blue");
+    let before = h.state().views[0].page_screen_rect(0).unwrap();
+    let rect = comments(&h)[0].rect;
+    let id = h.state().views[0].id;
+    let undo = h.state().session.get(id).unwrap().can_undo().map(str::to_owned);
+    let from = at(&h, 90.0, 150.0);
+    drag(&mut h, from, from - egui::vec2(0.0, 150.0));
+    let after = h.state().views[0].page_screen_rect(0).unwrap();
+    assert!(before.top() - after.top() > 80.0, "Hand pans over the comment: {before:?} -> {after:?}");
+    assert_eq!(comments(&h)[0].rect, rect, "the annotation did not move or resize");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo().map(str::to_owned), undo);
+    assert!(h.state().views[0].comments.gesture.is_none());
+}
+
+/// Deletion from the final toolbar button participates in ordinary PDF undo and saving.
+#[test]
+fn the_palette_bin_deletes_a_highlight_and_undo_restores_it() {
+    let mut h = harness(|app| app.set_option("quick", "highlight").unwrap());
+    let (a, b) = {
+        let v = &h.state().views[0];
+        (v.glyph_screen_pos(0, 4).unwrap(), v.glyph_screen_pos(0, 14).unwrap())
+    };
+    drag(&mut h, a, b);
+    let bin = h.get_by_label("Delete selected comments").rect();
+    let settings = h.get_by_label("Edit highlight palette").rect();
+    assert!(bin.left() > settings.right(), "bin is the rightmost control");
+    h.get_by_label("Delete selected comments").click();
+    h.run_steps(3);
+    assert!(comments(&h).is_empty());
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), 1);
+    h.state_mut().redo();
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    let bytes = h.state_mut().session.save_bytes(id).unwrap().as_ref().clone();
+    let fresh = harness_with_bytes(bytes, |_| {});
+    assert!(comments(&fresh).is_empty(), "deletion survives reopening");
+}
+
+/// Editing the shared palette changes no PDF; Save persists the chosen count and default.
+#[test]
+fn the_palette_editor_saves_colors_default_and_count_and_can_cancel() {
+    use pdfcraft_ui_egui::comments::{CommentTool, palette::parse_hex};
+    let mut h = selected_square();
+    let before = comments(&h)[0].clone();
+    h.get_by_label("Edit highlight palette").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::HighlightPalette));
+    h.get_by_label("Hex 2").focus();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.get_by_label("Hex 2").type_text("#123456");
+    h.run_steps(2);
+    h.get_by_label("Make color 2 default").click();
+    h.run_steps(2);
+    h.get_by_label("Remove color 3").click();
+    h.run_steps(2);
+    h.get_by_label("Save palette").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(h.state().comment_prefs.highlight_palette().len(), 5);
+    assert_eq!(h.state().comment_prefs.style(CommentTool::Highlight).color, parse_hex("#123456").unwrap());
+    assert_eq!(comments(&h)[0].color, before.color, "settings did not recolor the selected comment");
+    let saved = h.state().persist();
+    h.get_by_label("Edit highlight palette").click();
+    h.run_steps(2);
+    h.get_by_label("Make color 2 default").click();
+    h.run_steps(2);
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert_eq!(h.state().persist(), saved, "Cancel discards the draft");
+    let mut fresh = harness(move |app| {
+        app.restore(&saved);
+        app.set_option("quick", "highlight").unwrap();
+    });
+    let (a, b) = {
+        let v = &fresh.state().views[0];
+        (v.glyph_screen_pos(0, 4).unwrap(), v.glyph_screen_pos(0, 14).unwrap())
+    };
+    drag(&mut fresh, a, b);
+    let id = fresh.state().views[0].id;
+    let props = fresh.state().session.get(id).unwrap().comment_props(0, 0).unwrap();
+    assert!(props.color.unwrap().iter().zip(parse_hex("#123456").unwrap()).all(|(a, b)| (*a - b).abs() < 1e-9));
+    assert_eq!(fresh.query_all_by_label_contains("Comment colour: ").count(), 5);
+}
+
+#[test]
+fn a_palette_preset_applies_color_and_opacity_as_one_undo_step() {
+    let mut h = selected_square();
+    let id = h.state().views[0].id;
+    let before = h.state().session.get(id).unwrap().comment_props(0, 0).unwrap();
+    h.state_mut().set_option("highlight-palette", r##"[{"color":"#112233","opacity":0.35},{"color":"#66CC99","opacity":0.65}]"##).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label_contains("Comment colour: ").count(), 2);
+    assert!(h.query_by_label("Comment opacity").is_none());
+    h.get_by_label("Comment colour: #66CC99").click();
+    h.run_steps(3);
+    let p = h.state().session.get(id).unwrap().comment_props(0, 0).unwrap();
+    assert_eq!(p.color, pdfcraft_ui_egui::comments::palette::parse_hex("#66CC99"));
+    assert_eq!(p.opacity, 0.65);
+    h.state_mut().undo();
+    h.run_steps(3);
+    let p = h.state().session.get(id).unwrap().comment_props(0, 0).unwrap();
+    assert_eq!((p.color, p.opacity), (before.color, before.opacity));
+}
+
+#[test]
+fn the_palette_bin_refuses_a_selection_containing_a_locked_comment() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    for (a, b) in [((20.0, 20.0), (60.0, 60.0)), ((100.0, 20.0), (140.0, 60.0))] {
+        drag_pt(&mut h, a, b);
+    }
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::LockAnnotation { page: 0, index: 1, locked: true }));
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    click_pt(&mut h, (120.0, 40.0));
+    click_pt_with(&mut h, (40.0, 40.0), egui::Modifiers::COMMAND);
+    assert!(h.get_by_label("Delete selected comments").accesskit_node().is_disabled());
+    assert_eq!(comments(&h).len(), 2);
+}
+
+/// The bar dismisses on page or chrome clicks even while Highlight remains selected.
+#[test]
+fn the_palette_toolbar_dismisses_outside_and_reopens_on_a_highlight() {
+    let mut h = harness(|app| {
+        app.set_option("quick", "highlight").unwrap();
+        app.comment_prefs.pinned = true;
+    });
+    let (a, b) = {
+        let v = &h.state().views[0];
+        (v.glyph_screen_pos(0, 4).unwrap(), v.glyph_screen_pos(0, 14).unwrap())
+    };
+    drag(&mut h, a, b);
+    h.get_by_label("Edit highlight palette");
+    h.get_by_label("Comment colour: Blue").click();
+    h.run_steps(3);
+    h.get_by_label("Edit highlight palette");
+    click_pt(&mut h, (260.0, 20.0));
+    assert!(h.query_by_label("Edit highlight palette").is_none(), "blank page click hides the bar with Highlight active");
+    assert_eq!(comments(&h).len(), 1, "dismiss did not create or delete a highlight");
+    h.state_mut().set_option("quick", "hand").unwrap();
+    h.run_steps(2);
+    click(&mut h, a);
+    h.get_by_label("Edit highlight palette");
+    // Click the page-number field in the chrome, outside the toolbar and outside the page.
+    let field = h.get_by_label("Current page").rect().center();
+    click(&mut h, field);
+    assert!(h.query_by_label("Edit highlight palette").is_none(), "chrome click dismisses too");
+    click(&mut h, a);
+    h.get_by_label("Edit highlight palette");
+}
+
+#[test]
+fn the_palette_bin_protects_locked_replies_and_deletes_multiple_comments_atomically() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    for (a, b) in [((20.0, 20.0), (60.0, 60.0)), ((100.0, 20.0), (140.0, 60.0))] {
+        drag_pt(&mut h, a, b);
+    }
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::ReplyToAnnotation { page: 0, index: 0, text: "Reply".into(), author: "Tester".into() }));
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::LockAnnotation { page: 0, index: 2, locked: true }));
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    click_pt(&mut h, (40.0, 40.0));
+    assert!(h.get_by_label("Delete selected comments").accesskit_node().is_disabled());
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::LockAnnotation { page: 0, index: 2, locked: false }));
+    h.run_steps(2);
+    click_pt_with(&mut h, (120.0, 40.0), egui::Modifiers::COMMAND);
+    h.get_by_label("Delete selected comments").click();
+    h.run_steps(3);
+    assert!(comments(&h).is_empty());
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), 3, "one undo restores both comments and the reply");
+}
+
+#[test]
+fn the_palette_settings_open_without_a_document_and_escape_cancels() {
+    let mut h = harness(|app| {
+        app.set_option("home", "").unwrap();
+        app.set_option("dialog", "highlight-palette").unwrap();
+    });
+    let original = h.state().comment_prefs.highlight_palette().to_vec();
+    h.get_by_label("Make color 2 default").click();
+    h.run_steps(2);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(h.state().comment_prefs.highlight_palette(), original);
+}
+
+#[test]
+fn palette_count_controls_and_opacity_are_saved_without_changing_the_document() {
+    let mut h = selected_square();
+    h.get_by_label("Edit highlight palette").click();
+    h.run();
+    h.get_by_label("Fewer colors").click_accesskit();
+    h.run();
+    h.get_by_label("Fewer colors").click_accesskit();
+    h.run();
+    h.get_by_label("More colors").click_accesskit();
+    h.run();
+    assert_eq!(h.get_by_label("Colors in toolbar").accesskit_node().numeric_value(), Some(5.0));
+    h.get_by_label("Opacity 1").set_value_accesskit(35.0);
+    h.run();
+    h.get_by_label("Save palette").click();
+    h.run();
+    assert_eq!(h.state().comment_prefs.highlight_palette().len(), 5);
+    assert!(h.state().comment_prefs.highlight_palette()[0].opacity < 1.0);
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().comment_props(0, 0).unwrap().opacity, 1.0);
 }
 
 #[test]
