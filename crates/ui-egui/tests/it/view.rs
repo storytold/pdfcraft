@@ -2561,7 +2561,9 @@ fn full_screen_esc_from_a_field_closes_the_field_first() {
     h.key_press(Key::Escape);
     h.run_steps(4);
     assert!(h.state().full_screen(), "the first Esc closes the field only");
-    assert!(!h.ctx.egui_wants_keyboard_input(), "the field is closed");
+    // Full screen hands the keyboard to the page view once nothing holds it, so the closed field is read from the
+    // session rather than from egui's keyboard claim.
+    assert!(h.state().views[n].session.forms.focus.is_none(), "the field is closed");
     h.key_press(Key::Escape);
     h.run_steps(4);
     assert!(!h.state().full_screen(), "the second Esc leaves full screen");

@@ -61,7 +61,7 @@ fn window_body(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     });
     let veil = DropVeil::new(tl!("Drop to open the files"));
     let veil = if organize { veil.positional() } else { veil };
-    let _ = veil.show(ui, |ui, files| {
+    let _ = veil.show_with_files(ui, |ui, files| {
         if let Some(files) = files {
             dropped = Some(files.files.clone());
         }
