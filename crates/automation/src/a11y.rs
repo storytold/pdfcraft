@@ -526,6 +526,37 @@ impl Automation {
         )
     }
 
+    /// Where a tag's content and its descendants' content is drawn, per box and per page, in
+    /// top-left-origin points on the displayed page.
+    pub(crate) fn accessibility_tag_boxes(&self, a: &Args) -> Result<Value> {
+        let object = u32::try_from(a.int("object")?).map_err(|_| ToolError::InvalidArgs("object must be a positive tag object number".into()))?;
+        let generation = u16::try_from(a.int("generation")?)
+            .map_err(|_| ToolError::InvalidArgs("generation must be a PDF object generation from accessibility_tags".into()))?;
+        let doc = self.doc(a)?;
+        let page = a
+            .opt_int("page")?
+            .map(|p| usize::try_from(p).ok().filter(|p| (1..=doc.info.pages.len()).contains(p)).map(|p| p - 1))
+            .map(|p| p.ok_or_else(|| ToolError::InvalidArgs(format!("page must be from 1 to {}", doc.info.pages.len()))))
+            .transpose()?;
+        let boxes: Vec<_> = doc
+            .tag_boxes(pdfcraft_cos::ObjRef { num: object, generation })
+            .map_err(failed)?
+            .into_iter()
+            .filter(|b| page.is_none_or(|p| b.page == p))
+            .collect();
+        // Top-left-origin points on the displayed page.
+        let view = |b: &pdfcraft_engine::a11y::TagBox| {
+            let info = doc.info.pages.get(b.page)?;
+            let (u, v) = (info.user_to_view(b.rect[0] as f32, b.rect[1] as f32), info.user_to_view(b.rect[2] as f32, b.rect[3] as f32));
+            let r = |x: f32| (f64::from(x) * 100.0).round() / 100.0;
+            Some([r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))])
+        };
+        let list: Vec<Value> = boxes.iter().filter_map(|b| Some(json!({ "page": b.page + 1, "rect": view(b)? }))).collect();
+        let pages: Vec<Value> =
+            pdfcraft_engine::a11y::tag_page_bounds(&boxes).iter().filter_map(|b| Some(json!({ "page": b.page + 1, "bounds": view(b)? }))).collect();
+        Ok(json!({ "count": list.len(), "boxes": list, "pages": pages }))
+    }
+
     pub(crate) fn accessibility_set_tag_property(&mut self, a: &Args) -> Result<Value> {
         let object = u32::try_from(a.int("object")?).map_err(|_| ToolError::InvalidArgs("object must be a positive tag object number".into()))?;
         if object == 0 {

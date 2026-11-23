@@ -968,6 +968,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         redact_mark,
         t,
         table_preview,
+        tag_highlight,
         tool,
         unobstructed,
         ..
@@ -992,6 +993,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     }
     crate::image_pick::drop_stale(doc, view);
     crate::image_pick::paint(painter, &xf, i, info, view);
+    crate::tags_ui::paint_page(painter, t, &xf, i, info, tag_highlight);
     // A cancelled press ends no selection: no markup or redaction is made from it, nor from a
     // page full screen doesn't show yet.
     if !view.press_cancelled && !veiled(view) {

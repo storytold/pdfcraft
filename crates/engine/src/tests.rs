@@ -1999,6 +1999,16 @@ fn an_encrypted_document_without_an_editor_allows_neither_copying_nor_printing()
     assert!(s.get(plain).unwrap().allows_copying(), "an unencrypted document is not restricted");
 }
 
+/// Tags panel ▸ Highlight content (#7070): with no structure read there is no tag to outline,
+/// so the headless tool refuses the object rather than reporting no boxes.
+#[test]
+fn tag_boxes_without_an_editor_refuse_the_object() {
+    let (mut s, id) = session_with(1);
+    s.doc_mut(id).unwrap().editor = None;
+    let object = pdfcraft_cos::ObjRef::new(1, 0);
+    assert_eq!(s.get(id).unwrap().tag_boxes(object), Err(crate::a11y::TagError::NotATag(object)));
+}
+
 /// Table 22, bit 3 (#2669): a document that forbids printing disables Print up front instead
 /// of refusing once the dialog is confirmed. Low-resolution printing (bit 3 on, bit 12 off) is
 /// still printing, and the owner password lifts the restriction.

@@ -186,7 +186,7 @@ pub(crate) fn page_content_within(doc: &Document, page: &Dict, budget: &mut Deco
     out
 }
 
-fn union(a: Option<[f64; 4]>, b: [f64; 4]) -> [f64; 4] {
+pub(crate) fn union(a: Option<[f64; 4]>, b: [f64; 4]) -> [f64; 4] {
     match a {
         Some(a) => [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])],
         None => b,
@@ -223,7 +223,7 @@ fn close(marks: &mut Vec<Mark>, matching: &mut usize, out: &mut HashMap<i64, [f6
 
 /// The page-space box a `Do` operator paints: a form's transformed `/BBox`, or the unit square for an image.
 /// `None` when the operand is not a resolvable XObject or the form's box is malformed.
-fn xobject_bbox(doc: &Document, xobjects: &Dict, op: &pdfcraft_content::Op, top: &Matrix) -> Option<[f64; 4]> {
+pub(crate) fn xobject_bbox(doc: &Document, xobjects: &Dict, op: &pdfcraft_content::Op, top: &Matrix) -> Option<[f64; 4]> {
     let r = op.name(0).and_then(|n| xobjects.get(n)).and_then(Object::as_ref)?;
     Some(match &*doc.get(r) {
         Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form") => {

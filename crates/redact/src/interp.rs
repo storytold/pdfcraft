@@ -338,22 +338,6 @@ fn res_dict(doc: &Document, res: &Dict, key: &[u8]) -> Dict {
     res.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default()
 }
 
-/// Does this font write vertically? Only a Type0 (composite) font can: its `/Encoding` is a
-/// predefined CMap name ending in `-V` (Identity-V and the like), or an embedded CMap stream
-/// whose `/WMode` is 1 (ISO 32000-2 §9.7.5).
-fn is_vertical(doc: &Document, font: &Dict) -> bool {
-    // `/Subtype` may be written by reference (#6750).
-    let subtype = font.get(b"Subtype").map(|s| doc.resolve(s));
-    if subtype.as_deref().and_then(Object::as_name) != Some(b"Type0".as_slice()) {
-        return false;
-    }
-    match font.get(b"Encoding").map(|e| doc.resolve(e)).as_deref() {
-        Some(Object::Name(n)) => n.ends_with(b"-V"),
-        Some(Object::Stream(s)) => s.dict.int(b"WMode") == Some(1),
-        _ => false,
-    }
-}
-
 fn fresh_name(scope: &mut Scope<'_>, xobjects: &Dict) -> Vec<u8> {
     let mut i = scope.used_names.len() + 1;
     loop {
@@ -757,7 +741,7 @@ impl Walk {
         self.gs.size = op.nums::<1>().map_or(self.gs.size, |[size]| size);
         let Some(name) = op.operands.len().checked_sub(2).and_then(|i| op.name(i)) else { return };
         let font_dict = self.fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
-        self.gs.vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
+        self.gs.vertical = font_dict.as_ref().is_some_and(|d| pdfcraft_fonts::pdf::writes_vertically(doc, d));
         self.gs.type3_inherits = font_dict.as_ref().is_some_and(|d| type3_without_resources(doc, d));
         self.gs.font = match scope.fonts.get(name) {
             Some(f) => f.clone(),

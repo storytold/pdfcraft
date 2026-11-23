@@ -174,7 +174,7 @@ fn text(doc: &Document, d: &pdfcraft_cos::Dict, key: &[u8]) -> Option<String> {
     d.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(PdfString::to_text))
 }
 
-fn tag_type_name(doc: &Document, d: &Dict) -> Option<Vec<u8>> {
+pub(crate) fn tag_type_name(doc: &Document, d: &Dict) -> Option<Vec<u8>> {
     d.get(b"S").map(|s| doc.resolve(s)).and_then(|s| s.as_name().map(<[u8]>::to_vec))
 }
 
