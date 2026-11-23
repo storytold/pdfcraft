@@ -21,7 +21,7 @@ impl Automation {
         };
         let colors = ReadingColors::parse(mode, a.opt_str("text")?, a.opt_str("background")?, a.opt_bool("only_black")?, a.opt_bool("line_art")?)
             .map_err(ToolError::InvalidArgs)?;
-        if self.session.set_reading_colors(id, colors) {
+        if self.session_for_mut(id)?.set_reading_colors(id, colors) {
             // Cached renderers baked the old setting into their config; page_render must re-read it.
             self.renderers.remove(&id);
         }

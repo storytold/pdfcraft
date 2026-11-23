@@ -195,6 +195,13 @@ pub fn tools() -> Vec<ToolDef> {
             .cmd("file.close")
             .with(schema(json!({ "doc": doc(), "discard_changes": { "type": "boolean" } }), &["doc"])),
         t(
+            "doc_detach",
+            "Detach a document into its own window session",
+            "Move an open document into a separate session, as tearing a tab into its own window does on the desktop. The document keeps its id, unsaved edits and history. doc_list reports window 0 for the primary session and 1+ for each detached session. Further tools still address it by doc id.",
+        )
+            .cmd("file.detach_tab")
+            .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t(
             "doc_save",
             "Save a document",
             "Save to its own file (an incremental update, which keeps signatures valid) or to a new path (a full rewrite). The write is atomic. flatten_fill_sign bakes Fill & Sign text, marks and signatures into the page first and removes those annotations; other comments and form fields stay. Omit it, or pass false, to leave them editable.",

@@ -52,6 +52,9 @@ pollster = "1.0"
 winit = { version = "0.30", default-features = false, features = ["wayland"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+# Viewport HWND for tear-off drops (`TearOffHwndHooks` in src/main.rs). Same crate as the
+# unix-not-macos target; without it the Windows build cannot compile the hook.
+raw-window-handle = "0.6"
 # Which GPU drives which display (EnumDisplayDevices), so the window is drawn on the GPU that
 # shows it (issue #378). Safe wrappers over Win32; only the `user` feature (which brings `kernel` with it),
 # and `advapi` for the session id that names the single-instance socket (#3338).

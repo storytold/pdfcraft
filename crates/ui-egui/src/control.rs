@@ -14,6 +14,7 @@
 //! Methods (JSON in, JSON out):
 //! - `ui.state`: open documents, active document, page, zoom, page errors, mode, panels, dialog,
 //!   notice and observed window dimensions in logical points.
+//!   `managed_windows` gives native drop regions and desktop-pixel origins for cross-window drags.
 //! - `ui.inspect {query?, role?, focused?, limit?}`: widgets in tree order with `id` (a string), `role`, `label`,
 //!   `value`, `rect` (points), `enabled`, `toggled`, `selected`, `clickable`, `focusable`, `focused`, `depth`.
 //! - `ui.click {id}` | `{label}` | `{x, y, button?}`: click a widget (by its AccessKit action) or a
@@ -223,7 +224,7 @@ pub struct Control {
 /// Install the control channel on `ctx`: returns the app half and a client.
 pub fn attach(ctx: &egui::Context) -> (Control, ControlClient) {
     let shared = Arc::new(Mutex::new(Shared::default()));
-    ctx.add_plugin(ControlPlugin { shared: shared.clone() });
+    ctx.add_plugin(ControlPlugin { shared: shared.clone(), viewport: ctx.viewport_id(), pass_viewports: Vec::new() });
     ctx.enable_accesskit();
     let (tx, rx) = channel();
     (Control { rx, shared, pending: Vec::new(), deferred: VecDeque::new() }, ControlClient { tx, ctx: ctx.clone() })
@@ -612,5 +613,68 @@ mod pointer_tests {
             assert!(h.state().host.views.is_empty(), "pointer probes create no document edits");
             assert_eq!(h.ctx.options(|o| o.input_options.max_click_duration), max_duration);
         }
+    }
+}
+
+#[cfg(test)]
+mod viewport_tests {
+    use super::*;
+    use egui::Plugin as _;
+
+    #[test]
+    fn control_input_remains_in_its_attached_window() {
+        let ctx = egui::Context::default();
+        let (control, _client) = attach(&ctx);
+        let shared = control.shared.clone();
+        control.inject(vec![vec![egui::Event::Text("root only".into())]], web_time::Instant::now()).unwrap();
+        let mut plugin = ControlPlugin { shared: shared.clone(), viewport: egui::ViewportId::ROOT, pass_viewports: Vec::new() };
+        let ctx = egui::Context::default();
+        let mut child = egui::RawInput { viewport_id: egui::ViewportId::from_hash_of("child"), ..Default::default() };
+        plugin.input_hook(&ctx, &mut child);
+        assert!(child.events.is_empty());
+        assert_eq!(shared.lock().unwrap().inject.len(), 1);
+        let mut root = egui::RawInput::default();
+        plugin.input_hook(&ctx, &mut root);
+        assert_eq!(root.events, vec![egui::Event::Text("root only".into())]);
+        assert!(shared.lock().unwrap().inject.is_empty());
+    }
+
+    /// Child viewport output must not advance the root pass count or replace its accessibility tree.
+    #[test]
+    fn nested_child_output_does_not_claim_the_root_pass() {
+        use accesskit::{Node, NodeId, Role, TreeId, TreeInfo, TreeUpdate};
+
+        let ctx = egui::Context::default();
+        let (control, _client) = attach(&ctx);
+        let shared = control.shared.clone();
+        let mut plugin = ControlPlugin { shared: shared.clone(), viewport: egui::ViewportId::ROOT, pass_viewports: Vec::new() };
+
+        let mut root_input = egui::RawInput::default();
+        plugin.input_hook(&ctx, &mut root_input);
+        let mut root_output = egui::FullOutput::default();
+        root_output.platform_output.accesskit_update = Some(TreeUpdate {
+            nodes: vec![(NodeId(1), Node::new(Role::Window))],
+            tree: Some(TreeInfo::new(NodeId(1))),
+            tree_id: TreeId::ROOT,
+            focus: NodeId(1),
+        });
+        plugin.output_hook(&ctx, &mut root_output);
+        assert_eq!(shared.lock().unwrap().passes, 1);
+        assert_eq!(shared.lock().unwrap().root, Some(NodeId(1)));
+
+        let mut child_input = egui::RawInput { viewport_id: egui::ViewportId::from_hash_of("child"), ..Default::default() };
+        plugin.input_hook(&ctx, &mut child_input);
+        let mut child_output = egui::FullOutput::default();
+        child_output.platform_output.accesskit_update = Some(TreeUpdate {
+            nodes: vec![(NodeId(99), Node::new(Role::Button))],
+            tree: Some(TreeInfo::new(NodeId(99))),
+            tree_id: TreeId::ROOT,
+            focus: NodeId(99),
+        });
+        // After end_pass egui reports ROOT again; ownership comes from the input/output pair.
+        plugin.output_hook(&ctx, &mut child_output);
+        assert_eq!(shared.lock().unwrap().passes, 1, "child output must not count as a root pass");
+        assert_eq!(shared.lock().unwrap().root, Some(NodeId(1)), "root accessibility tree stays");
+        assert!(!shared.lock().unwrap().nodes.contains_key(&NodeId(99)));
     }
 }

@@ -260,16 +260,17 @@ impl Automation {
         let location = a.opt_str("location")?.map(str::to_string);
         let contact = a.opt_str("contact")?.map(str::to_string);
         let signing = field.clone();
-        let scripted = signing.as_deref().is_some_and(|f| {
-            self.session.sign_event_scripted(doc_id, f, SignEvent::Before) || self.session.sign_event_scripted(doc_id, f, SignEvent::After)
-        });
+        let session = self.session_for(doc_id)?;
+        let scripted = signing
+            .as_deref()
+            .is_some_and(|f| session.sign_event_scripted(doc_id, f, SignEvent::Before) || session.sign_event_scripted(doc_id, f, SignEvent::After));
         // Each field's value and whether it is read-only, to tell what the preSign scripts changed.
         let values = |me: &Automation| -> std::collections::BTreeMap<String, (Vec<String>, bool)> {
-            me.session.get(doc_id).map(|d| d.form.iter().map(|f| (f.name.clone(), (f.value.clone(), f.read_only()))).collect()).unwrap_or_default()
+            me.document(doc_id).map(|d| d.form.iter().map(|f| (f.name.clone(), (f.value.clone(), f.read_only()))).collect()).unwrap_or_default()
         };
         let was = values(self);
         let before = match &signing {
-            Some(f) if run_scripts => self.session.run_sign_event(doc_id, f, SignEvent::Before).map_err(failed)?,
+            Some(f) if run_scripts => self.session_for_mut(doc_id)?.run_sign_event(doc_id, f, SignEvent::Before).map_err(failed)?,
             _ => false,
         };
         let changed: Vec<Value> = if before {
@@ -286,7 +287,7 @@ impl Automation {
         };
         let opts =
             SignOptions { field, page, rect, reason, location, contact, certify, appearance, appearance_labels, graphic, ..SignOptions::default() };
-        let signed = self.session.sign(doc_id, &id, opts).map_err(|e| match e {
+        let signed = self.session_for_mut(doc_id)?.sign(doc_id, &id, opts).map_err(|e| match e {
             // A graphic the signer refuses is the caller's to fix.
             pdfcraft_engine::EditError::Sign(m) if m.starts_with("the signature graphic") => bad(m),
             e => failed(e),
@@ -296,8 +297,8 @@ impl Automation {
             Err(e) => {
                 // Not signed: what the preSign scripts did is taken back.
                 if before {
-                    let _ = self.session.undo(doc_id);
-                    let _ = self.session.take_js_output(doc_id);
+                    let _ = self.session_for_mut(doc_id)?.undo(doc_id);
+                    let _ = self.session_for_mut(doc_id)?.take_js_output(doc_id);
                 }
                 return Err(e);
             }
@@ -305,23 +306,23 @@ impl Automation {
         if let Err(e) = write_atomic(&out, &signed) {
             // Not saved, so not signed: what the preSign scripts did is taken back too.
             if before {
-                let _ = self.session.undo(doc_id);
-                let _ = self.session.take_js_output(doc_id);
+                let _ = self.session_for_mut(doc_id)?.undo(doc_id);
+                let _ = self.session_for_mut(doc_id)?.take_js_output(doc_id);
             }
             return Err(e);
         }
         let path = out.to_string_lossy().into_owned();
-        self.session.mark_signed(doc_id, signed.clone(), Some(path.clone())).map_err(failed)?;
+        self.session_for_mut(doc_id)?.mark_signed(doc_id, signed.clone(), Some(path.clone())).map_err(failed)?;
         // Then its postSign scripts; what they change is a change after signing, not saved yet.
         // The file is signed and saved by now: a postSign step that fails is reported, not an error.
         let (after, after_error) = match &signing {
-            Some(f) if run_scripts => match self.session.run_sign_event(doc_id, f, SignEvent::After) {
+            Some(f) if run_scripts => match self.session_for_mut(doc_id)?.run_sign_event(doc_id, f, SignEvent::After) {
                 Ok(ran) => (ran, None),
                 Err(e) => (true, Some(format!("the postSign step couldn't finish: {e}"))),
             },
             _ => (false, None),
         };
-        let mut scripts = self.session.take_js_output(doc_id);
+        let mut scripts = self.session_for_mut(doc_id)?.take_js_output(doc_id);
         scripts.errors.extend(after_error);
         let doc = self.doc(a)?;
         let newest = doc.signatures.iter().filter(|s| s.signed).max_by_key(|s| s.revision).cloned();

@@ -124,7 +124,7 @@ impl Automation {
             return Err(ToolError::InvalidArgs("max_side must be between 1 and 4096".into()));
         }
         let page = usize::try_from(page).ok().and_then(|p| p.checked_sub(1)).ok_or_else(|| failed("page must be at least 1"))?;
-        let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
+        let doc = self.document(id).ok_or_else(|| failed("no such document"))?;
         let size = doc.info.pages.get(page).ok_or_else(|| failed("page is out of range"))?;
         let side = size.width.max(size.height);
         if !side.is_finite() || side <= 0.0 {

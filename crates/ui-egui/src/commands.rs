@@ -98,6 +98,7 @@ impl PdfCraftApp {
                 }))
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
             && match spec.id {
+                "file.detach_tab" => self.active_ids().is_some_and(|(_, id)| self.can_detach_tab(id)),
                 "comment.copy" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.comments.selected.is_some()),
                 "comment.paste" => self.comment_clipboard.is_some(),
                 "view.previous_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.back.is_empty()),
@@ -128,6 +129,15 @@ impl PdfCraftApp {
 
     /// Why the command can't run right now, for the user.
     fn disabled_reason(&self, spec: &CommandSpec) -> String {
+        if spec.id == "file.detach_tab" {
+            if self.active_ids().is_none() {
+                return tl!("Open a document first").to_string();
+            }
+            if !self.managed_windows {
+                return tl!("Moving a tab into its own window needs a desktop window host").to_string();
+            }
+            return tl!("This tab can't be moved right now").to_string();
+        }
         match spec.needs {
             commands::Needs::Undo => tl!("Nothing to undo").to_string(),
             commands::Needs::Redo => tl!("Nothing to redo").to_string(),
@@ -208,6 +218,11 @@ impl PdfCraftApp {
                 }
             }
             "file.close_all" => self.close_all(),
+            "file.detach_tab" => {
+                if let Some((_, doc)) = self.active_ids() {
+                    self.request_detach_tab(doc, None);
+                }
+            }
             "file.revert" => self.dialog = Some(Dialog::Revert),
             "file.properties" => self.dialog = Some(Dialog::Properties(PropsTab::Description)),
             "file.word_count" => self.dialog = Some(Dialog::WordCount),

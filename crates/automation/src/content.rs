@@ -296,11 +296,11 @@ impl Automation {
         let to_doc = match a.opt_int("to_doc")? {
             Some(d) => {
                 let d = u64::try_from(d).map_err(|_| bad("to_doc must be positive"))?;
-                self.session.get(pdfcraft_engine::DocId(d)).ok_or_else(|| failed(format!("no open document with id {d} (see doc_list)")))?.id
+                self.document(pdfcraft_engine::DocId(d)).ok_or_else(|| failed(format!("no open document with id {d} (see doc_list)")))?.id
             }
             None => from,
         };
-        let doc = self.session.get(to_doc).ok_or_else(|| failed("the document is no longer open"))?;
+        let doc = self.document(to_doc).ok_or_else(|| failed("the document is no longer open"))?;
         let n = doc.info.pages.len();
         let to_page = match a.opt_int("to_page")? {
             Some(p) => usize::try_from(p)

@@ -30,7 +30,7 @@ impl Automation {
             )));
         }
         let id = self.doc(a)?.id;
-        let found = self.session.count_hairlines(id, &pages, &settings);
+        let found = self.session_for(id)?.count_hairlines(id, &pages, &settings);
         if found.lines == 0 {
             return Ok(json!({ "fixed": 0, "pages": 0, "elsewhere": 0 }));
         }

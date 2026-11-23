@@ -93,6 +93,17 @@ impl DocView {
         Some(p.xyz_for_view(keep_x.then_some(x), keep_y.then_some(y)))
     }
 
+    /// A new viewport has no scroll-area state. Keep a pending goto or match centre, otherwise
+    /// restore the fraction of the current page already scrolled past before the transfer.
+    pub(crate) fn restore_transferred_page(&mut self) {
+        if self.goto.is_some() || self.goto_point.is_some() {
+            return;
+        }
+        let (page, fraction) = self.reading_position();
+        self.current = page;
+        self.goto = Some((page, fraction));
+    }
+
     pub fn go_to_page(&mut self, page: usize) {
         let page = page.min(self.page_count.saturating_sub(1));
         self.end_find_following();
@@ -614,7 +625,9 @@ fn sliver(pixels_per_point: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::sliver;
+    use super::*;
+    use crate::canvas::xform::PageXform;
+    use egui::{Pos2, Rect};
 
     #[test]
     fn a_sliver_is_one_physical_pixel() {
@@ -624,5 +637,51 @@ mod tests {
         for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
             assert_eq!(sliver(bad), 1.0, "{bad}");
         }
+    }
+
+    fn scrolled_view(fraction: f32) -> DocView {
+        let info = pdfcraft_render::DocInfo {
+            pages: vec![pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }],
+            ..Default::default()
+        };
+        let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, Default::default());
+        let height = 800.0;
+        view.viewport_screen = Rect::from_min_size(Pos2::ZERO, vec2(600.0, 400.0));
+        view.screen_xforms =
+            vec![(0, PageXform { rect: Rect::from_min_size(pos2(0.0, -fraction * height), vec2(600.0, height)), rot: 0, pw: 300.0, ph: 400.0 })];
+        view.goto = None;
+        view.goto_point = None;
+        view
+    }
+
+    /// A settled mid-page scroll is restored as a reading fraction, not the page top.
+    #[test]
+    fn restore_transferred_page_keeps_the_reading_fraction() {
+        let mut view = scrolled_view(0.4);
+        view.restore_transferred_page();
+        let (page, fraction) = view.goto.expect("reading fraction restored");
+        assert_eq!(page, 0);
+        assert!((fraction - 0.4).abs() < 1e-4, "{fraction}");
+        assert!(view.goto_point.is_none());
+    }
+
+    /// A pending match centre survives transfer; restore must not clear it with go_to_page.
+    #[test]
+    fn restore_transferred_page_keeps_a_pending_goto_point() {
+        let mut view = scrolled_view(0.4);
+        view.goto = None;
+        view.goto_point = Some((0, Some(0.5), Some(0.25), vec2(100.0, 50.0)));
+        view.restore_transferred_page();
+        assert!(view.goto.is_none());
+        assert_eq!(view.goto_point, Some((0, Some(0.5), Some(0.25), vec2(100.0, 50.0))));
+    }
+
+    /// An explicit pending page destination is left alone.
+    #[test]
+    fn restore_transferred_page_keeps_a_pending_goto() {
+        let mut view = scrolled_view(0.4);
+        view.goto = Some((0, 0.75));
+        view.restore_transferred_page();
+        assert_eq!(view.goto, Some((0, 0.75)));
     }
 }

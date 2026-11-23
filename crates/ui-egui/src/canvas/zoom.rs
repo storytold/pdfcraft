@@ -61,7 +61,7 @@ impl DocView {
 
     /// Where the reader is, as of the last frame: the page at the top of the document area and
     /// the fraction of it scrolled past, or the top of the current page when no page is there.
-    fn reading_position(&self) -> (usize, f32) {
+    pub(super) fn reading_position(&self) -> (usize, f32) {
         let top = self.viewport_screen.top();
         self.screen_xforms
             .iter()

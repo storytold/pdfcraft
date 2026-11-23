@@ -35,7 +35,7 @@ impl Automation {
         }
         let mut changed = false;
         for i in targets {
-            changed |= self.session.set_layer_visible(id, i, visible);
+            changed |= self.session_for_mut(id)?.set_layer_visible(id, i, visible);
         }
         if changed {
             // The cached renderer drew with the old visibility; page_render must read it again.

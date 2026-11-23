@@ -89,7 +89,7 @@ impl Automation {
             pts[i] = x.as_f64().filter(|f| f.is_finite()).ok_or_else(|| ToolError::InvalidArgs(BAD.into()))?;
         }
         let scale = f64::from(
-            self.session.ocr_job(id, &[page], settings.clone()).ok_or_else(|| failed("the document could not be read"))?.render_scale(page),
+            self.session_for(id)?.ocr_job(id, &[page], settings.clone()).ok_or_else(|| failed("the document could not be read"))?.render_scale(page),
         );
         let px: Vec<f32> = pts.iter().map(|p| scale * p).map(|p| if p.is_finite() { p } else { 0.0 }).map(|p| p as f32).collect();
         Ok(Some([px[0], px[1], px[2], px[3]]))
@@ -248,7 +248,7 @@ impl Automation {
                 self.doc_to_copy(a)?;
                 // A write: the file does not exist yet, and write_atomic makes its folder.
                 let out = self.resolve(a.str("out")?, true)?;
-                if let Some(source) = self.session.get(id).and_then(|d| d.path.clone())
+                if let Some(source) = self.document(id).and_then(|d| d.path.clone())
                     && let (Ok(a), Ok(b)) = (std::fs::canonicalize(&out), std::fs::canonicalize(&source))
                     && a == b
                 {
@@ -268,15 +268,15 @@ impl Automation {
         let recognizers = pdfcraft_engine::ocr::recognizers(&settings).map_err(failed)?;
         match out {
             None => {
-                let (found, out) = self.session.with_own_js_output(id, |s| s.recognize_text(id, &pages, settings)).map_err(failed)?;
+                let (found, out) = self.session_for_mut(id)?.with_own_js_output(id, |s| s.recognize_text(id, &pages, settings)).map_err(failed)?;
                 let warnings = out.errors;
                 let words = found.iter().map(|p| p.words.len()).sum::<usize>();
                 Ok(with_warnings(json!({ "words": words, "pages": Self::ocr_pages_json(&found, copy) }), warnings))
             }
             Some(out) => {
-                let job = self.session.ocr_job(id, &pages, settings).ok_or_else(|| failed("the document could not be read"))?;
+                let job = self.session_for(id)?.ocr_job(id, &pages, settings).ok_or_else(|| failed("the document could not be read"))?;
                 let found = job.run(&recognizers, |_, _| true);
-                let bytes = self.session.editable_ocr_bytes(id, &found).map_err(failed)?;
+                let bytes = self.session_for_mut(id)?.editable_ocr_bytes(id, &found).map_err(failed)?;
                 // recognition can take minutes: a file created meanwhile is refused, not replaced
                 if let Some(folder) = out.parent() {
                     std::fs::create_dir_all(folder).map_err(failed)?;
@@ -311,9 +311,9 @@ impl Automation {
             return Err(failed("at most 8 OCR reviews may be retained; discard one first"));
         }
         let recognizers = pdfcraft_engine::ocr::recognizers(&settings).map_err(failed)?;
-        let job = self.session.ocr_job(id, &pages, settings.clone()).ok_or_else(|| failed("the document could not be read"))?;
+        let job = self.session_for(id)?.ocr_job(id, &pages, settings.clone()).ok_or_else(|| failed("the document could not be read"))?;
         let infos: std::collections::HashMap<usize, pdfcraft_render::PageInfo> =
-            self.session.get(id).map(|d| d.info.pages.clone()).unwrap_or_default().into_iter().enumerate().collect();
+            self.document(id).map(|d| d.info.pages.clone()).unwrap_or_default().into_iter().enumerate().collect();
         let guard = job.guard.clone();
         let found = job.run(&recognizers, |_, _| true);
         if found.len() > 65536 {
@@ -448,7 +448,8 @@ impl Automation {
                 if a.get("out").is_some() {
                     return Err(ToolError::InvalidArgs("out is only for editable output".into()));
                 }
-                let count = self.session.apply_ocr_checked(id, &pages, &review.guard).map_err(failed)?;
+                let guard = review.guard.clone();
+                let count = self.session_for_mut(id)?.apply_ocr_checked(id, &pages, &guard).map_err(failed)?;
                 json!({ "applied": count, "review": handle })
             }
             "editable" => {
@@ -457,8 +458,7 @@ impl Automation {
                 self.doc_to_copy(a)?;
                 let target = self.resolve(a.str("out")?, true)?;
                 if self
-                    .session
-                    .get(id)
+                    .document(id)
                     .and_then(|d| d.path.as_deref())
                     .and_then(|p| std::fs::canonicalize(p).ok())
                     .as_ref()
@@ -470,7 +470,7 @@ impl Automation {
                 if target.exists() {
                     return Err(failed(format!("out already exists ({}); choose a path that does not exist yet", target.to_string_lossy())));
                 }
-                let bytes = self.session.editable_ocr_bytes(id, &pages).map_err(failed)?;
+                let bytes = self.session_for_mut(id)?.editable_ocr_bytes(id, &pages).map_err(failed)?;
                 write_atomic(&target, &bytes)?;
                 json!({ "out": target.to_string_lossy(), "review": handle, "words": pages.iter().map(|p| p.words.len()).sum::<usize>() })
             }

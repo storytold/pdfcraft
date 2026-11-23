@@ -167,16 +167,22 @@ impl Automation {
         let other = a.int("other")?;
         let old = u64::try_from(other)
             .ok()
-            .and_then(|o| self.session.get(pdfcraft_engine::DocId(o)))
+            .and_then(|o| self.document(pdfcraft_engine::DocId(o)))
             .map(|d| d.id)
             .ok_or_else(|| ToolError::InvalidArgs(format!("no open document {other}")))?;
+        // Compare runs on one session: both documents must live in the same window.
+        let new_session = self.session_index(new);
+        let old_session = self.session_index(old);
+        if new_session != old_session {
+            return Err(failed("both documents must be in the same window to compare"));
+        }
         Ok((old, new))
     }
 
     pub(crate) fn doc_compare(&self, a: &Args) -> Result<Value> {
         use pdfcraft_engine::compare::Kind;
         let (old, new) = self.compare_ids(a)?;
-        let c = self.session.compare(old, new).map_err(failed)?;
+        let c = self.session_for(new)?.compare(old, new).map_err(failed)?;
         let limit = a.opt_int("limit")?.unwrap_or(500).max(1) as usize;
         let r2 = |r: &[f64; 4]| r.map(|v| (v * 100.0).round() / 100.0);
         let side =
@@ -188,7 +194,12 @@ impl Automation {
             .map(|ch| json!({ "kind": ch.kind.label().to_lowercase(), "old": side(&ch.old), "new": side(&ch.new) }))
             .collect();
         let visual: Vec<Value> = if a.opt_bool("visual")?.unwrap_or(false) {
-            self.session.compare_visual(old, new, 72.0).map_err(failed)?.iter().map(|(p, r)| json!({ "page": p + 1, "rect": r2(r) })).collect()
+            self.session_for(new)?
+                .compare_visual(old, new, 72.0)
+                .map_err(failed)?
+                .iter()
+                .map(|(p, r)| json!({ "page": p + 1, "rect": r2(r) }))
+                .collect()
         } else {
             Vec::new()
         };
@@ -206,7 +217,7 @@ impl Automation {
 
     pub(crate) fn doc_compare_report(&self, a: &Args) -> Result<Value> {
         let (old, new) = self.compare_ids(a)?;
-        let bytes = self.session.compare_report(old, new).map_err(failed)?;
+        let bytes = self.session_for(new)?.compare_report(old, new).map_err(failed)?;
         let path = self.resolve(a.str("path")?, true)?;
         write_atomic(&path, &bytes)?;
         Ok(json!({ "path": path.to_string_lossy(), "bytes": bytes.len() }))
@@ -214,7 +225,7 @@ impl Automation {
 
     pub(crate) fn doc_compare_mark(&mut self, a: &Args) -> Result<Value> {
         let (old, new) = self.compare_ids(a)?;
-        let (n, out) = self.session.with_own_js_output(new, |s| s.mark_differences(old, new)).map_err(failed)?;
+        let (n, out) = self.session_for_mut(new)?.with_own_js_output(new, |s| s.mark_differences(old, new)).map_err(failed)?;
         Ok(with_warnings(json!({ "comments": n }), out.errors))
     }
 }

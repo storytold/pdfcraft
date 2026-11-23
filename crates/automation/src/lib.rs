@@ -86,6 +86,8 @@ struct OcrReview {
 /// A headless PdfCraft session driven by tool calls.
 pub struct Automation {
     session: Session,
+    /// Extra sessions that hold documents moved out of the primary session (`doc_detach`).
+    windows: Vec<Session>,
     root: Option<PathBuf>,
     /// The read and write folders of `--automation-read-root` / `--automation-write-root`.
     roots: Option<Arc<file_access::AutomationRoots>>,
@@ -116,6 +118,7 @@ impl Automation {
     pub fn new() -> Self {
         Self {
             session: Session::new(),
+            windows: Vec::new(),
             root: None,
             roots: None,
             renderers: HashMap::new(),

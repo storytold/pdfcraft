@@ -172,7 +172,7 @@ impl Automation {
             annotations: a.opt_bool("annotations")?.unwrap_or(false),
         };
         let id = self.doc(a)?.id;
-        let found = self.session.count_colours(id, &pages, &settings);
+        let found = self.session_for(id)?.count_colours(id, &pages, &settings);
         if found.colours == 0 && found.images == 0 {
             return Ok(json!({ "colours": 0, "images": 0, "images_left": found.images_left, "pages": 0, "loses_conformance": [] }));
         }
@@ -389,11 +389,11 @@ impl Automation {
         };
         // The document's Will Print actions run first: what they change is printed (#269).
         let scripts = if self.doc(a)?.allows_printing() {
-            self.session.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillPrint)
+            self.session_for_mut(id)?.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillPrint)
         } else {
             Default::default()
         };
-        let bytes = self.session.print_pdf(id, &settings).map_err(failed)?;
+        let bytes = self.session_for_mut(id)?.print_pdf(id, &settings).map_err(failed)?;
         let mut out = json!({ "sheets": sheets, "pages": settings.pages.len(), "bytes": bytes.len() });
         if let Some(c) = settings.raster.as_ref().and_then(|r| r.colour.as_ref()) {
             out["color_management"] =

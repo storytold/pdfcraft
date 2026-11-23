@@ -64,6 +64,10 @@ const MAX_QUEUED_BATCHES: usize = 512;
 /// The egui plugin half of the control channel.
 pub struct ControlPlugin {
     pub(super) shared: Arc<Mutex<Shared>>,
+    pub(super) viewport: egui::ViewportId,
+    /// Viewport ownership for each nested pass, paired from input_hook to output_hook.
+    /// egui pops the child viewport before output_hook, so `ctx.viewport_id()` is unusable there.
+    pub(super) pass_viewports: Vec<egui::ViewportId>,
 }
 
 impl egui::Plugin for ControlPlugin {
@@ -74,6 +78,10 @@ impl egui::Plugin for ControlPlugin {
     /// Inject admitted control batches into the current pass, dropping stale requests, applying cancellations
     /// and scheduling repaints.
     fn input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        self.pass_viewports.push(input.viewport_id);
+        if input.viewport_id != self.viewport {
+            return;
+        }
         let Ok(mut s) = self.shared.lock() else { return };
         expire_input(&mut s, web_time::Instant::now());
         if std::mem::take(&mut s.cancel_pointer) {
@@ -125,6 +133,10 @@ impl egui::Plugin for ControlPlugin {
     /// Record presented passes and the accesskit tree and focus after a pass, so control replies observe only
     /// drawn frames.
     fn output_hook(&mut self, ctx: &egui::Context, output: &mut egui::FullOutput) {
+        let completed = self.pass_viewports.pop();
+        if completed != Some(self.viewport) {
+            return;
+        }
         let Ok(mut s) = self.shared.lock() else { return };
         s.in_pass = false;
         // A discarded pass is layout work, not a frame the agent can observe. Only count passes
