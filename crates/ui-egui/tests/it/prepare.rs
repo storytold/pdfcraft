@@ -1241,6 +1241,36 @@ fn actions_tab_edits_the_script_of_an_existing_action() {
     );
 }
 
+/// A long script scrolls inside its box: the dialog keeps its OK button on screen, and the
+/// script is added whole (#7294).
+#[test]
+fn actions_tab_scrolls_a_long_script_and_keeps_ok_on_screen() {
+    use pdfcraft_engine::{FieldAction, FieldTrigger};
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    h.get_by_label("Actions").click();
+    h.run_steps(2);
+    let script: String = (0..200).map(|i| format!("var line{i} = {i};\n")).collect();
+    let d = h.state_mut().field_props.as_mut().unwrap();
+    d.new_action = pdfcraft_ui_egui::prepare::ActionDraft { trigger: FieldTrigger::OnBlur, kind: 0, text: script.clone() };
+    h.run_steps(3);
+    // The window `harness` builds.
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0));
+    for label in ["Add", "OK", "Cancel"] {
+        let rect = h.get_by_label(label).rect();
+        assert!(screen.contains_rect(rect), "{label} at {rect:?} is off the {screen:?} window");
+    }
+    h.get_by_label("Add").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let s = h.state();
+    assert_eq!(s.session.get(s.views[0].id).unwrap().field_actions("city"), [(FieldTrigger::OnBlur, FieldAction::JavaScript(script))]);
+}
+
 /// One page with a push button "go": Mouse Up runs a script with a link chained after it, On Blur
 /// runs another script.
 fn chained_action_fixture() -> Vec<u8> {
