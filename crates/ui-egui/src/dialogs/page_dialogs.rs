@@ -211,7 +211,12 @@ fn rotate_dialog<'b>(fields: &'b mut DialogFields, count: usize, current: usize)
         })
         .opens_with(FieldValue::Text("both".into())),
     ];
-    ParamDialog::new(ROTATE, tl!("Rotate Pages"), params).ok_enabled(valid).remember(SaveKey::new("pdfcraft.page_rotate")).values(Bind::bound(fields))
+    // Production's captions stand in one column, the Pages and Rotate groups beside theirs.
+    ParamDialog::new(ROTATE, tl!("Rotate Pages"), params)
+        .caption_column(true)
+        .ok_enabled(valid)
+        .remember(SaveKey::new("pdfcraft.page_rotate"))
+        .values(Bind::bound(fields))
 }
 
 /// The label styles Number pages offers.

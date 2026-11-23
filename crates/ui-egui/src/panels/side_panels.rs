@@ -622,8 +622,13 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
     let mut panels = Panels { app: &mut *app };
     // The side panels' icons are production's rail: they stay beside the expanded column, a click on one opens its
     // panel docked, and a click on the open panel's icon closes it.
-    let config =
-        DockConfig::default().native_windows(false).iconic_mode(IconicMode::Rail).titled_headers(true).tab_close_buttons(true).floating_grip(true);
+    let config = DockConfig::default()
+        .native_windows(false)
+        .iconic_mode(IconicMode::Rail)
+        .titled_headers(true)
+        .tab_close_buttons(true)
+        .floating_grip(true)
+        .floating_rounded_body(true);
     let area = DockArea::new("Dock", Bind::given(workspace), &specs, &mut panels, config).hide(HidePanels::Except(&shown)).top_inset(inset);
     let output = match anchor {
         Some(panel) => area.rail_footer(panel).show(ui),

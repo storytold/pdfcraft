@@ -515,9 +515,9 @@ fn choice(options: impl IntoIterator<Item = (String, String)>, default: &str) ->
     ParamKind::choice(options.into_iter().map(|(id, label)| (id, label.into())).collect(), Some(default.to_string()))
 }
 
-/// A percent row: production shows one decimal and the sign ("100.0%").
+/// A percent row: production shows one decimal and the sign ("100.0%"), beside a short slider.
 fn percent(key: &str, label: &'static str, default: f64) -> Param {
-    Param::new(key, label, ParamKind::range(0.0, 100.0, default, Default::default())).decimals(1).unit(UnitKind::Percent)
+    Param::new(key, label, ParamKind::range(0.0, 100.0, default, Default::default())).decimals(1).unit(UnitKind::Percent).short_slider()
 }
 
 /// The six text boxes of Header & Footer: the box with focus is kept under `hf.focused`, which
@@ -638,7 +638,10 @@ fn rows(kind: MarkKind, g: &Geometry) -> Vec<Param> {
         }
         MarkKind::PrinterMarks => {}
     }
-    rows.push(PageRangeOptions::param("range", tl!("Page Range Options"), g.count, g.current, PageRangeChoices::Acrobat));
+    // Production's Background and Watermark put the range on one line with no page count; Header & Footer keeps
+    // Acrobat's rows.
+    let choices = if matches!(kind, MarkKind::Background | MarkKind::Watermark) { PageRangeChoices::Line } else { PageRangeChoices::Acrobat };
+    rows.push(PageRangeOptions::param("range", tl!("Page Range Options"), g.count, g.current, choices));
     rows
 }
 
