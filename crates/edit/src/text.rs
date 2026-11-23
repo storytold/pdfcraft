@@ -239,6 +239,7 @@ mod tests {
             reflow_text: text.into(),
             spans: Vec::new(),
             invisible: false,
+            clips: false,
         }
     }
 
