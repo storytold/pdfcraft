@@ -87,7 +87,7 @@ fn standard_annotations_captions_restyle_move_and_unknown_keys() {
     let normal = d.resolve(ap.as_dict().unwrap().get(b"N").unwrap());
     let Object::Stream(stream) = normal.as_ref() else { panic!("appearance missing") };
     let stream = String::from_utf8(stream.decoded().unwrap()).unwrap();
-    assert!(stream.contains("(10.000 m) Tj"), "{stream}");
+    assert!(stream.contains("(Room 1: 10.000 m) Tj"), "{stream}");
     pdfcraft_annot::move_annotation(&mut d, 0, 0, 50.0, 60.0, &meta).unwrap();
     assert_eq!(list(&d).measurements[0].points, vec![[50.0, 60.0], [53.0, 64.0]]);
     close(list(&d).measurements[0].reading.value, 10.0);
@@ -664,7 +664,7 @@ fn compound_and_fractional_scales_read_label_and_carry_into_new_measurements() {
     m.scale = scale.clone();
     add(&mut d, &m, &Meta { date: None, id: "plan".into() }).unwrap();
     let (_, dict) = annot(&d, 0, 0).unwrap();
-    assert_eq!(text(&d, &dict, b"Contents"), "3 ft 6 1/2 in");
+    assert_eq!(text(&d, &dict, b"Contents"), "Room 1: 3 ft 6 1/2 in");
     let saved = d.resolve(dict.get(b"Measure").unwrap());
     let saved_d = d.resolve(saved.as_dict().unwrap().get(b"D").unwrap());
     let inches = saved_d.as_array().unwrap()[1].as_dict().unwrap().clone();
@@ -708,4 +708,45 @@ fn a_compound_y_keeps_its_units_and_cyx() {
     }
     overflow_y.y = 2.0;
     assert!(overflow_y.dictionary().is_err());
+}
+
+#[test]
+fn on_page_caption_shows_the_detail_label_when_set() {
+    let mut d = fixture("", "", &[]);
+    let mut labeled = new(Kind::Distance, vec![[0.0, 0.0], [1.25, 0.0]]);
+    labeled.scale = Scale::new(2.0, "m", 2).unwrap();
+    labeled.label = "006-1".into();
+    add(&mut d, &labeled, &Meta::default()).unwrap();
+    let mut unlabeled = new(Kind::Distance, vec![[0.0, 10.0], [1.25, 10.0]]);
+    unlabeled.scale = Scale::new(2.0, "m", 2).unwrap();
+    unlabeled.label = String::new();
+    add(&mut d, &unlabeled, &Meta::default()).unwrap();
+
+    let (_, labeled_dict) = annot(&d, 0, 0).unwrap();
+    assert_eq!(text(&d, &labeled_dict, b"Contents"), "006-1: 2.50 m");
+    assert_eq!(text(&d, &labeled_dict, b"PCMeasureValue"), "006-1: 2.50 m");
+    assert_eq!(text(&d, &labeled_dict, b"PCMeasureLabel"), "006-1");
+    let (_, unlabeled_dict) = annot(&d, 0, 1).unwrap();
+    assert_eq!(text(&d, &unlabeled_dict, b"Contents"), "2.50 m");
+    assert_eq!(text(&d, &unlabeled_dict, b"PCMeasureValue"), "2.50 m");
+    assert_eq!(text(&d, &unlabeled_dict, b"PCMeasureLabel"), "");
+
+    let appearance = |doc: &Document, index: usize| -> String {
+        let (_, dict) = annot(doc, 0, index).unwrap();
+        let ap = doc.resolve(dict.get(b"AP").unwrap());
+        let normal = doc.resolve(ap.as_dict().unwrap().get(b"N").unwrap());
+        let Object::Stream(stream) = normal.as_ref() else { panic!("appearance missing") };
+        String::from_utf8(stream.decoded().unwrap()).unwrap()
+    };
+    let labeled_ap = appearance(&d, 0);
+    assert!(labeled_ap.contains("(006-1: 2.50 m) Tj"), "{labeled_ap}");
+    let unlabeled_ap = appearance(&d, 1);
+    assert!(unlabeled_ap.contains("(2.50 m) Tj"), "{unlabeled_ap}");
+    assert!(!unlabeled_ap.contains("006-1"), "{unlabeled_ap}");
+
+    let listing = list(&d);
+    assert_eq!(listing.measurements[0].label, "006-1");
+    assert_eq!(listing.measurements[0].reading.label, "2.50 m");
+    assert_eq!(listing.measurements[1].label, "");
+    assert_eq!(listing.measurements[1].reading.label, "2.50 m");
 }
