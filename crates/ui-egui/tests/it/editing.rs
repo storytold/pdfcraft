@@ -3582,6 +3582,7 @@ fn switching_from_a_narrow_editor_keeps_one_frame_and_a_wide_heading_on_one_line
         h.run_steps(1);
         h.drop_at(point);
         h.run_steps(4);
+        settle_draft(&mut h);
         if y == 128.0 {
             assert_eq!(h.state().views[0].line_editor.as_ref().unwrap().text, "Mono\nText", "opening a paragraph keeps its source line breaks");
             h.key_press(Key::Escape);
@@ -3815,6 +3816,13 @@ fn text_typed_into_an_open_paragraph_counts_as_unsaved_work() {
     h.state_mut().views[0].line_editor.as_mut().unwrap().text = "Top".into();
     h.run_steps(1);
     assert_eq!(h.state().first_dirty(), None, "a draft equal to the page text is not unsaved work");
+}
+
+/// Wait for the open paragraph's PDF draft: the editor shows its text and caret once the
+/// draft worker has published the raster and geometry for it, which takes a variable time.
+fn settle_draft(h: &mut Harness<'static, PdfCraftApp>) {
+    support::wait_until(h, "the PDF draft of the open paragraph", |app| !app.render_pending());
+    h.run_steps(1);
 }
 
 /// Dark pixels in `r`: glyph ink on a white page.
@@ -4429,6 +4437,7 @@ fn text_tool_mixed_style_row_grows_in_the_editor_and_saved_pdf() {
     h.key_press_modifiers(Modifiers::COMMAND, Key::End);
     h.event(egui::Event::Text(" with more words".into()));
     h.run_steps(4);
+    settle_draft(&mut h);
     let galley = h
         .output()
         .shapes
@@ -6453,6 +6462,7 @@ fn one_editor_contains_mixed_styles_and_visual_rows() {
     h.run_steps(1);
     h.drop_at(point);
     h.run_steps(6);
+    settle_draft(&mut h);
     assert_eq!(h.state().views[0].line_editor.as_ref().unwrap().text, "Heading\nPlain bold words\nLast row");
     let galley = h
         .output()
@@ -6469,7 +6479,7 @@ fn one_editor_contains_mixed_styles_and_visual_rows() {
     assert!(galley.job.sections.iter().any(|s| s.format.font_id.size > galley.job.sections.last().unwrap().format.font_id.size));
     let original_text = h.state().views[0].line_editor.as_ref().unwrap().text.clone();
     h.state_mut().views[0].line_editor.as_mut().unwrap().text.push_str("\nAdditional row\nAnother row");
-    h.run_steps(3);
+    settle_draft(&mut h);
     let visible = h
         .output()
         .shapes
@@ -6535,6 +6545,7 @@ fn the_caret_on_a_small_row_is_as_tall_as_that_row() {
     };
     click(&mut h, screen(30.0, 245.0));
     assert!(h.state().views[0].line_editor.is_some(), "the region opens");
+    settle_draft(&mut h);
     let row = h.state().session.get(h.state().views[0].id).unwrap().text_lines(0).into_iter().find(|l| l.text == "Last row").unwrap().rect;
     click(&mut h, screen(40.0, ((row[1] + row[3]) / 2.0) as f32));
     let row_height = (row[3] - row[1]) as f32 * k;
@@ -6817,6 +6828,7 @@ fn inline_editor_preserves_source_font_and_previews_live_bounds() {
     h.run_steps(1);
     h.drop_at(point);
     h.run_steps(8);
+    settle_draft(&mut h);
     assert!(!h.state().views[0].line_editor.as_ref().unwrap().overflow);
     let shape = h
         .output()
@@ -6848,18 +6860,18 @@ fn inline_editor_preserves_source_font_and_previews_live_bounds() {
     };
     let original_frame = frame(&h);
     h.state_mut().views[0].line_editor.as_mut().unwrap().text.push_str("\nExtra row that does not fit\nAnother row");
-    h.run_steps(3);
+    settle_draft(&mut h);
     assert!(h.state().views[0].line_editor.as_ref().unwrap().overflow);
     let expanded = frame(&h);
     assert!(expanded.bottom() > original_frame.bottom() + 20.0, "the frame visibly expands around the extra rows");
     assert_eq!(expanded.left(), original_frame.left());
     assert_eq!(expanded.top(), original_frame.top());
     h.state_mut().views[0].line_editor.as_mut().unwrap().text = "Stable source text".into();
-    h.run_steps(3);
+    settle_draft(&mut h);
     let reduced = frame(&h);
     assert!(reduced.bottom() < original_frame.bottom() - 20.0, "deleting a row visibly shrinks the block");
     h.state_mut().views[0].line_editor.as_mut().unwrap().text.push_str("\nExtra row that does not fit\nAnother row");
-    h.run_steps(3);
+    settle_draft(&mut h);
     if let Ok(path) = std::env::var("PDFCRAFT_OVERFLOW_FRAME_SHOT") {
         h.render().unwrap().save(path).unwrap();
     }
