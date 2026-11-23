@@ -269,7 +269,7 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc"],
             )),
-        t("folder_search", "Search a folder", "Search the text of every PDF in a folder (with its subfolders unless subfolders is false), one file at a time, without opening them as documents or changing anything. Links are not followed. Returns matches by file with pages from 1 and the text around each match. A file that could not be searched, or not all of it, is listed under skipped with a reason: link_or_special_file, too_large, unreadable, damaged, secured (every encrypted file), too_slow or pages_unread. stopped is match_limit or too_many_slow_files when the search ended early, and folder_cut_short means the folder held more than 10000 entries or went past 64 levels.")
+        t("folder_search", "Search a folder", "Search the text of every PDF in a folder (with its subfolders unless subfolders is false), one file at a time, without opening them as documents or changing anything. Links are not followed. Returns matches by file with pages from 1 and the text around each match. A file that could not be searched, or not all of it, is listed under skipped with a reason: link_or_special_file, too_large, unreadable, damaged, secured (every encrypted file), dynamic_xfa (a dynamic XFA form, whose text is only laid out when the form is opened), too_slow or pages_unread. stopped is match_limit or too_many_slow_files when the search ended early, and folder_cut_short means the folder held more than 10000 entries or went past 64 levels.")
             .ro()
             .cmd("edit.search_folder")
             .with(schema(json!({

@@ -105,6 +105,10 @@ pub enum Skip {
     Damaged(String),
     /// Encrypted, even with no password to open it: its text may not be for copying.
     Secured,
+    /// A dynamic XFA form still showing its placeholder pages. Its visible text is laid out from
+    /// the XFA template when the form is opened, which folder search does not do, so its raw pages
+    /// hold only placeholder text the user never sees. Skipped rather than returning it.
+    DynamicXfa,
     /// Ran out of time; any matches before that are kept.
     TooSlow,
     /// These many pages could not be read.
@@ -120,6 +124,7 @@ impl Skip {
             Self::Unreadable(_) => "unreadable",
             Self::Damaged(_) => "damaged",
             Self::Secured => "secured",
+            Self::DynamicXfa => "dynamic_xfa",
             Self::TooSlow => "too_slow",
             Self::PagesUnread(_) => "pages_unread",
         }
@@ -590,10 +595,23 @@ fn load(path: &Path) -> Opened {
     };
     match inspect(bytes.clone(), None) {
         Ok(info) if info.encrypted => Opened::Skip(Skip::Secured),
+        Ok(_) if is_dynamic_xfa(&bytes) => Opened::Skip(Skip::DynamicXfa),
         Ok(info) => Opened::File(bytes, info.pages.len()),
         Err(OpenError::NeedsPassword | OpenError::WrongPassword) => Opened::Skip(Skip::Secured),
         Err(error) => Opened::Skip(Skip::Damaged(error.to_string())),
     }
+}
+
+/// A dynamic XFA form shows placeholder pages until its template is laid out, which folder search
+/// does not do; reading its raw pages would return placeholder text the user never sees. Detecting
+/// it needs the COS document, read leniently: a parse that fails or panics on untrusted input is
+/// taken as "not a dynamic XFA form", so a readable file is never wrongly skipped.
+fn is_dynamic_xfa(bytes: &Arc<Vec<u8>>) -> bool {
+    let bytes = bytes.clone();
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        pdfcraft_cos::Document::open(bytes).map(|doc| pdfcraft_xfa::is_dynamic(&doc)).unwrap_or(false)
+    }))
+    .unwrap_or(false)
 }
 
 /// Add the page's matches, up to `room` in all. Returns whether any had to be left out.

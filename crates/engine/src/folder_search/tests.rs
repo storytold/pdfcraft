@@ -295,6 +295,18 @@ fn the_listing_stops_collecting_as_soon_as_it_is_cancelled() {
 }
 
 #[test]
+fn a_dynamic_xfa_form_is_skipped_and_the_rest_is_still_searched() {
+    // Its visible text is laid out from the XFA template only when opened; the raw pages hold
+    // placeholder text the user never sees, so the form is skipped rather than returned.
+    let folder = Folder::new();
+    let xfa = folder.write("a-form.pdf", &pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::fields_template("")));
+    folder.write("b.pdf", &pdf(&["needle"]));
+    let found = run(&Options::new(&folder.0, "needle"));
+    assert_eq!(reasons(&found, &xfa), [&Skip::DynamicXfa], "a dynamic XFA form is skipped, not read as placeholder text: {:?}", found.skipped);
+    assert_eq!(found.summary.matches, 1, "a normal PDF in the same search still returns its match");
+}
+
+#[test]
 fn the_whole_file_time_limit_expires_while_waiting_for_a_slow_page() {
     // One page slow (about 4 s) but under the page watchdog; a nonzero whole-file budget runs out
     // while waiting for it, not between pages. The matches found so far are kept.

@@ -203,6 +203,7 @@ fn reason(skip: &Skip) -> String {
         Skip::TooLarge => tl!("Larger than 512 MiB").to_string(),
         Skip::Unreadable(why) | Skip::Damaged(why) => fmt(tl!("Couldn't be read: {reason}"), &[("reason", why)]),
         Skip::Secured => tl!("Secured").to_string(),
+        Skip::DynamicXfa => tl!("A dynamic XFA form, read only when opened").to_string(),
         Skip::TooSlow => tl!("Took too long to read").to_string(),
         Skip::PagesUnread(pages) => fmt(tl!("Pages that couldn't be read: {n}"), &[("n", &pages.to_string())]),
     }
