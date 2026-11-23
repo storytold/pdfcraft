@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
 use pdfcraft_ui_egui::updates::UpdateSource;
 
@@ -212,6 +212,41 @@ fn settings_from_the_old_opt_in_leave_the_check_at_start_on() {
     let mut app = PdfCraftApp::new();
     app.restore(r#"{"check_updates_at_start": false}"#);
     assert!(app.update_check_at_start, "a key of the removed option decides nothing");
+}
+
+#[test]
+fn host_policy_disables_startup_and_manual_checks_and_greys_out_the_preference() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.set_update_check_policy(false);
+        app.set_startup_update_check(true);
+        app.restore(r#"{"update_check_at_start": true}"#);
+        app.set_update_source(Arc::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(release("v99.0.0")))
+        }));
+        app
+    });
+
+    run_until_asked(&mut h, &calls, std::time::Duration::from_millis(500));
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "policy blocks the startup check");
+    assert!(!h.state_mut().execute("help.check_updates"), "policy disables manual checks");
+    h.run_steps(4);
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "manual command does not reach the source");
+
+    h.state_mut().execute("app.preferences");
+    h.run_steps(3);
+    let checkbox = h.get_by_label("Check for updates when PdfCraft starts");
+    let node = checkbox.accesskit_node();
+    assert!(node.is_disabled(), "policy greys out the preference");
+    assert_eq!(node.toggled(), Some(false.into()), "policy shows the option unchecked");
+    checkbox.click();
+    h.run_steps(2);
+    assert!(h.state().update_check_at_start, "the disabled preference cannot change");
 }
 
 #[test]

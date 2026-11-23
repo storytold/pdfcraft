@@ -19,6 +19,8 @@ pub type UpdateSource = CheckSource;
 pub(crate) struct Updates {
     #[cfg(not(target_arch = "wasm32"))]
     updater: Updater,
+    /// Whether host policy permits any update check.
+    pub(crate) checks_enabled: bool,
     /// The Updates dialog is showing.
     pub(crate) open: bool,
     /// Ask for a newer release at start, unless Preferences says not to; the desktop app turns
@@ -56,6 +58,7 @@ impl Default for Updates {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
             updater: Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")),
+            checks_enabled: true,
             open: false,
             #[cfg(not(target_arch = "wasm32"))]
             startup_check: false,
@@ -67,6 +70,32 @@ impl Default for Updates {
             close_queued: false,
         }
     }
+}
+
+/// Whether host policy allows update checks. On Windows a DWORD one disables checks; a missing
+/// value, any other value, or a registry read failure leaves the user's preference in control.
+fn system_update_check_policy() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use winsafe::{HKEY, RegistryValue, co::RRF};
+        let value = HKEY::LOCAL_MACHINE
+            .RegGetValue(Some("SOFTWARE\\Policies\\PdfCraft"), Some("DisableUpdateCheck"), RRF::RT_REG_DWORD)
+            .ok()
+            .and_then(|value| match value {
+                RegistryValue::Dword(value) => Some(value),
+                _ => None,
+            });
+        update_check_policy_allows(value)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        true
+    }
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn update_check_policy_allows(value: Option<u32>) -> bool {
+    value != Some(1)
 }
 
 impl Updates {
@@ -110,6 +139,24 @@ impl Updates {
 }
 
 impl PdfCraftApp {
+    /// Reads the platform's update-check policy and applies it to this app.
+    pub fn apply_system_update_policy(&mut self) {
+        self.set_update_check_policy(system_update_check_policy());
+    }
+
+    /// Sets the host's update-check policy. When disabled, neither automatic nor manual checks run.
+    pub fn set_update_check_policy(&mut self, enabled: bool) {
+        self.updates.checks_enabled = enabled;
+        if !enabled {
+            self.updates.open = false;
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.updates.startup_check = false;
+                self.updates.check_requested = false;
+            }
+        }
+    }
+
     /// Whether the app asks for a newer release on its first frame (off until the desktop app turns it on).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_startup_update_check(&mut self, on: bool) {
@@ -124,6 +171,9 @@ impl PdfCraftApp {
 
     /// Help ▸ Check for updates: ask for the latest release and show the outcome.
     pub fn check_for_updates(&mut self) {
+        if !self.updates.checks_enabled {
+            return;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.updates.open = true;
@@ -141,12 +191,17 @@ impl PdfCraftApp {
         {
             let Some(ctx) = self.ctx.clone() else { return };
             // Settled on the first frame: a preference turned on later waits for the next start.
-            let at_start = std::mem::take(&mut self.updates.startup_check) && self.update_check_at_start;
             let updates = &mut self.updates;
-            if std::mem::take(&mut updates.check_requested) {
-                updates.updater.check_now(&ctx);
-            } else if at_start {
-                updates.updater.check_at_start(&ctx);
+            if !updates.checks_enabled {
+                updates.startup_check = false;
+                updates.check_requested = false;
+            } else {
+                let at_start = std::mem::take(&mut updates.startup_check) && self.update_check_at_start;
+                if std::mem::take(&mut updates.check_requested) {
+                    updates.updater.check_now(&ctx);
+                } else if at_start {
+                    updates.updater.check_at_start(&ctx);
+                }
             }
             updates.updater.tick(&ctx);
         }
@@ -221,6 +276,14 @@ mod tests {
     use pdfcraft_engine::{Edit, FieldValue};
     use std::path::PathBuf;
     use std::sync::Arc;
+
+    #[test]
+    fn update_check_policy_only_disables_on_a_one_dword() {
+        assert!(update_check_policy_allows(None));
+        assert!(update_check_policy_allows(Some(0)));
+        assert!(!update_check_policy_allows(Some(1)));
+        assert!(update_check_policy_allows(Some(2)));
+    }
 
     /// An app with one open document holding a form, and with `dirty` an unsaved change to it.
     fn app(dirty: bool) -> PdfCraftApp {
