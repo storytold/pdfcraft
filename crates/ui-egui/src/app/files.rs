@@ -404,7 +404,7 @@ impl PdfCraftApp {
         if self.full_screen()
             && let Some(view) = self.views.last_mut()
         {
-            view.enter_presentation();
+            view.enter_full_screen(self.full_screen_fill);
         }
         // Full screen is asked for, never taken: a document can't put the app in full screen on
         // its own (the prompt is `ask_full_screen`'s).

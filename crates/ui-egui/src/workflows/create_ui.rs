@@ -117,7 +117,7 @@ impl PdfCraftApp {
         let mut view = crate::DocView::new(id, info, self.view_defaults, self.highlight_fields);
         // PLAN: assumed `full_screen() -> bool` (pdf-shell-w8)
         if self.full_screen() {
-            view.enter_presentation();
+            view.enter_full_screen(self.full_screen_fill);
         }
         self.views.push(view);
         self.active = Some(self.views.len() - 1);

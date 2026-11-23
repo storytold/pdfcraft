@@ -9,7 +9,7 @@
 
 use craft::keymap::{Key, Mods};
 use craft::menu::{
-    Chord, CommandRef, Document, Gate, Item, ItemRole, ItemState, Labeled, Layout, LayoutOptions, Menu, MenuBar, MenuRole, Node, Target,
+    Chord, CommandRef, Document, Gate, Item, ItemRole, ItemState, Layout, LayoutOptions, Menu, MenuBar, MenuRole, Node, Target,
 };
 use craft::ui::runtime::commands::{FireSource, fire, resolve};
 use pdfcraft_engine::catalog::{Availability, TOOL_GROUPS};
@@ -243,12 +243,17 @@ fn english_label(command: &CommandRef) -> Option<String> {
     FILL.iter().find(|(id, _)| *id == command.id).map(|(_, label)| (*label).to_owned())
 }
 
-fn english(labeled: Labeled<'_>) -> Option<String> {
-    match labeled {
-        Labeled::Command(command) => english_label(command),
-        Labeled::Title(shown) => TITLES.iter().find(|t| tl!(t) == shown).map(|t| (*t).to_owned()),
-        // `Labeled` is non-exhaustive: a kind of label the bar adds later has no English name here.
-        _ => None,
+/// Puts the English names on the menu model, for the bar's mnemonics and the Help search.
+fn name_in_english(nodes: &mut [Node]) {
+    for node in nodes {
+        match node {
+            Node::Item(item) => item.english = english_label(&item.command),
+            Node::Submenu { label, english, children, .. } => {
+                *english = TITLES.iter().find(|t| tl!(t) == label.as_str()).map(|t| (*t).to_owned());
+                name_in_english(children);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -372,6 +377,10 @@ impl PdfCraftApp {
             Menu::new(tl!("Help"), craft::menu::tidy(help)).role(MenuRole::Help),
         ])
         .documents(self.menu_documents());
+        for menu in &mut bar.menus {
+            menu.english = TITLES.iter().find(|t| tl!(t) == menu.title.as_str()).map(|t| (*t).to_owned());
+            name_in_english(&mut menu.children);
+        }
         bar.tag_item(&CommandRef::new("help.about"), ItemRole::About);
         bar.tag_item(&CommandRef::new("app.preferences"), ItemRole::Settings);
         bar.tag_item(&CommandRef::new(QUIT), ItemRole::Quit);
@@ -475,7 +484,8 @@ impl PdfCraftApp {
         let ctx = ui.ctx().clone();
         let bar = craft::menu::layout(&self.menu_bar(&ctx), Target::current(), &layout_options()).bar;
         let modal = gated(self);
-        craft::menu::MenuBarUi::new(&bar).keyboard(!modal).icons(false).compact(true).english(&english).show(ui);
+        let bar = craft::ui::contract::Tracked::new(bar);
+        craft::menu::MenuBarUi::new(&bar).target(Target::current()).keyboard(!modal).icons(false).compact(true).show(ui);
     }
 
     /// Install the native menu bar (macOS), once, from the eframe app creator. `false` when

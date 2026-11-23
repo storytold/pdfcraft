@@ -288,7 +288,7 @@ pub fn open() -> Store {
     };
     #[cfg(target_arch = "wasm32")]
     let options = craft::settings::OpenOptions::new(craft::settings::Location::Dir(PathBuf::from(PdfCraftSettings::APP_ID)))
-        .files(std::sync::Arc::new(craft::settings::BrowserFiles));
+        .files(std::sync::Arc::new(craft::settings::LocalStorageFiles::new(4 << 20)));
     Store::open_with(options).0
 }
 

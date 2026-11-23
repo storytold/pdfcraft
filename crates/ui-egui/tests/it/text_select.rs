@@ -630,6 +630,31 @@ fn full_screen_double_click_selects_a_word_and_stays_on_the_page() {
     assert_eq!(h.state().views[0].current(), 0, "no page turn after leaving");
 }
 
+/// L-318 (#5302): Esc closes one thing at a time. In full screen with a text selection the first Esc clears the
+/// selection and full screen stays; the second leaves it.
+#[test]
+fn full_screen_escape_clears_the_text_selection_before_it_leaves() {
+    let (mut h, _) = harness_with(two_lines(), |_| {});
+    h.state_mut().set_full_screen(true);
+    crate::support::wait_until(&mut h, "the page in full screen", |app| app.views[0].glyph_screen_pos(0, 5).is_some() && !app.render_pending());
+    let at = h.state().views[0].glyph_screen_pos(0, 5).expect("text layer");
+    h.hover_at(at);
+    h.run_steps(1);
+    click(&mut h, at);
+    click(&mut h, at);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick"));
+    h.run_steps(30);
+
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().views[0].selected_text().is_none(), "the first Esc clears the selection");
+    assert!(h.state().full_screen(), "and full screen stays");
+
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(!h.state().full_screen(), "the second Esc leaves full screen");
+}
+
 /// A quick drag can be off its page by the frame egui calls it a drag, in the gap or on the next
 /// page: the selection still starts where the button went down and runs on to the pointer.
 #[test]

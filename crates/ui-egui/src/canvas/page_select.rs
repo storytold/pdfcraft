@@ -141,15 +141,14 @@ impl CanvasTool for PageSelectTool<'_> {
         self.text.cancel(reason, cx);
     }
 
-    /// Escape lets go of the picked picture, or of a click whose picture is not known yet, before it clears the text.
+    /// Escape lets go of the picked picture, or of a click whose picture is not known yet, before it clears the text; clearing the text takes it.
     fn key(&mut self, key: &ToolKey, cx: &mut ToolContext<'_>) -> bool {
         if matches!(key, ToolKey::Cancel) && self.picks.held() {
             self.picks.let_go();
             return true;
         }
-        if matches!(key, ToolKey::Cancel) && !self.column {
-            return false;
-        }
+        // Esc clears a text selection (Select All too) and counts as taken, so full screen stays until the next Esc
+        // (#5302, L-318): the text tool answers true only when it had a selection to clear.
         self.text.key(key, cx)
     }
 

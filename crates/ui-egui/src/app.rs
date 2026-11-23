@@ -783,7 +783,7 @@ impl PdfCraftApp {
         if self.ocr_verify.awaiting_models.is_some() {
             workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll_models);
         }
-        self.reopen_returned_rename();
+        self.reopen_returned_rename(ctx);
         self.settle_presign(ctx);
         self.sync_titles(ctx);
     }

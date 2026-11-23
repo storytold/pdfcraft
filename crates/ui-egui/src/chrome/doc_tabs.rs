@@ -80,7 +80,7 @@ pub(crate) fn strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, place: Place) {
                 if let Some(id) = saved
                     && cfg!(not(target_arch = "wasm32"))
                 {
-                    app.start_rename(id);
+                    app.start_rename(ui.ctx(), id);
                 }
             }
             DocumentTabsEvent::CloseRequested(StripTab::View(key)) => app.tab_action(ui.ctx(), Action::Close(key)),

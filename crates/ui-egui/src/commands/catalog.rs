@@ -189,6 +189,7 @@ fn enabled(app: &PdfCraftApp, ctx: &egui::Context, command: &CommandRef) -> bool
         "file.close" if !has_doc && super::mac_shortcuts(ctx) && !cfg!(target_arch = "wasm32") => true,
         "edit.copy" if organize => enabled_id("page.copy"),
         "edit.copy" if view.is_some_and(|v| v.session.picked_image.is_some()) => doc.is_some_and(|d| d.allows_copying()),
+        "edit.copy" if app.is_preparing() && view.is_some_and(|v| v.session.comments.primary().is_some() && v.selected_text().is_none_or(|t| t.is_empty())) => false,
         "edit.copy" | CUT if edit_objects && view.is_some_and(|v| v.session.image_selection.is_some()) => {
             doc.is_some_and(|d| d.allows_copying() && (command.id != CUT || d.allows_modification()))
         }

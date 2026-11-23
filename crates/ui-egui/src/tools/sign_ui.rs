@@ -675,7 +675,7 @@ impl PdfCraftApp {
                 let Some(doc) = self.session.get(new) else { return };
                 let mut view = DocView::new(new, &doc.info, self.view_defaults, self.highlight_fields);
                 if self.full_screen() {
-                    view.enter_presentation();
+                    view.enter_full_screen(self.full_screen_fill);
                 }
                 view.snapshot = Some(Snapshot { kind: SnapshotKind::Revision, revision: n, from });
                 self.views.push(view);
@@ -727,7 +727,7 @@ impl PdfCraftApp {
                 let Some(doc) = self.session.get(new) else { return };
                 let mut view = DocView::new(new, &doc.info, self.view_defaults, self.highlight_fields);
                 if self.full_screen() {
-                    view.enter_presentation();
+                    view.enter_full_screen(self.full_screen_fill);
                 }
                 view.snapshot = Some(Snapshot { kind: SnapshotKind::SignedVersion, revision, from });
                 self.views.push(view);

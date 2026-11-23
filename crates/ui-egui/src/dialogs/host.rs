@@ -52,6 +52,7 @@ fn windows(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 /// so every pass runs whatever is open.
 fn results(app: &mut PdfCraftApp, ctx: &egui::Context) {
     // Dialogs.
+    app.rename_pass(ctx);
     app.properties_pass(ctx);
     app.page_dialogs_pass(ctx);
 

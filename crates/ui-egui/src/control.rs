@@ -119,7 +119,7 @@ impl PdfCraftApp {
     fn answer(&mut self, ctx: &egui::Context, req: &ControlRequest) -> Reply {
         let (method, params) = (req.method.as_str(), &req.params);
         let host = WindowHost::of(ctx);
-        if let Some(queued) = input_method(method, params, &host, ViewportId::ROOT, &|_| None) {
+        if let Some(queued) = input_method(method, params, &host, ViewportId::ROOT, &|_, _| None) {
             return match queued {
                 Ok(()) => {
                     self.control_epoch = self.capture_epoch();

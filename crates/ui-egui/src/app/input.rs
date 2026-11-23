@@ -51,6 +51,9 @@ impl PdfCraftApp {
                     drop((paths, action));
                     bring_to_front(ctx);
                 }
+                Intake::Quit => {
+                    self.request_quit(ctx);
+                }
                 Intake::Bytes { name, bytes } => {
                     let name = if name.is_empty() { DROPPED_NAME.to_string() } else { name };
                     self.startup_files.push((name, bytes));
