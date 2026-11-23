@@ -1108,7 +1108,8 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
     style_one(doc, r, change.clone(), meta)?;
     for (o, d) in before {
         let caret = d.name(b"Subtype") == Some(b"Caret");
-        let part = StyleChange { color: change.color, opacity: change.opacity, width: change.width.filter(|_| caret), endings: None };
+        let part =
+            StyleChange { color: change.color, opacity: change.opacity, width: change.width.filter(|_| caret), endings: None, round_corners: None };
         let unchanged = part.color.is_none() && part.opacity.is_none() && part.width.is_none();
         if unchanged {
             continue;
@@ -1144,7 +1145,7 @@ fn replace_text_partners(doc: &Document, page: usize, r: ObjRef) -> Result<Vec<O
 
 /// [`set_style`] on one annotation.
 fn style_one(doc: &mut Document, r: ObjRef, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
-    let StyleChange { color, opacity, width, endings } = change;
+    let StyleChange { color, opacity, width, endings, round_corners } = change;
     unlocked(doc, r)?;
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
@@ -1161,6 +1162,9 @@ fn style_one(doc: &mut Document, r: ObjRef, change: StyleChange, meta: &Meta) ->
         if (callout && ends.len() != 1) || (pair && ends.len() != 2) || (!callout && !pair) {
             return Err(AnnotError::Invalid("this comment has no line endings to change".into()));
         }
+    }
+    if round_corners.is_some() && subtype != "Highlight" {
+        return Err(AnnotError::Invalid("only highlights have round corners".into()));
     }
     refuse_foreign_text(doc, &d)?;
     let free_text = subtype == "FreeText";
@@ -1217,6 +1221,13 @@ fn style_one(doc: &mut Document, r: ObjRef, change: StyleChange, meta: &Meta) ->
                 }
             } else if let (Some(start), Some(end)) = (ends.first(), ends.get(1)) {
                 d.set(b"LE".to_vec(), ending_pair(*start, *end));
+            }
+        }
+        if let Some(round) = round_corners {
+            if round {
+                d.set(b"PCRoundCorners".to_vec(), Object::Bool(true));
+            } else {
+                d.remove(b"PCRoundCorners");
             }
         }
         ensure_ending_room(d);
