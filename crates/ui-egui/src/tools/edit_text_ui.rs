@@ -1046,6 +1046,7 @@ fn width_frame(
     let output = TransformBox::text_frame(tl!("Width").to_string(), Bind::given(state), start)
         .id(width_frame_id(ui, page, block))
         .rules(rules)
+        .round_handles(true)
         .show_at(ui, body.rect);
     if output.clicked.is_some_and(|(_, point)| b.contains(body.view.to_screen(point))) {
         *clicked = Some(block);

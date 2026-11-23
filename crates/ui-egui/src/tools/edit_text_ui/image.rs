@@ -297,6 +297,7 @@ fn box_controls(
         .rules(rules)
         .reference_point(false)
         .rotate_zone(RotateZone::Knob)
+        .round_handles(true)
         // The arrow keys nudge through the tool (`EditTextTool::key`).
         .session_arrows(false)
         .show_at(ui, body.rect);
