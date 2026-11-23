@@ -598,6 +598,52 @@ fn selected_text_menu_opens_at_the_end_of_selected_text() {
     assert!((bar.right() - end_rect.right()).abs() < 16.0, "bar right edge {} should be near end glyph right {}", bar.right(), end_rect.right());
 }
 
+/// A backward same-page multiline selection (anchor on a lower line, head on an upper line)
+/// must anchor the toolbar to the head's line, not the last line of the selection.
+/// Regression for the bug where `bar_anchor` only recognised backward as cross-page.
+#[test]
+fn selected_text_menu_anchors_to_head_on_backward_same_page_multiline_selection() {
+    // Two lines on one page: "The quick brown fox" (glyphs 0-18) then "jumps over the dog" (19+).
+    let content = "BT /F1 14 Tf 20 150 Td (The quick brown fox) Tj 0 -24 Td (jumps over the dog) Tj ET";
+    let two_line_pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R \
+         /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    )
+    .into_bytes();
+    let mut h = harness_with_bytes(two_line_pdf, |_| {});
+    // Wait for the second line's glyphs to be available.
+    crate::support::wait_until(&mut h, "text layer with two lines", |app| app.views[0].glyph_screen_pos(0, 20).is_some());
+    // Backward drag: anchor=25 (on "over", second line), head=4 (on "quick", first line).
+    // The toolbar should follow the head — the first line — not the last line of the selection.
+    let head_glyph = 4; // "quick" on the first line
+    let anchor_glyph = 25; // "over" on the second line
+    h.state_mut().views[0].select_text(0, anchor_glyph, head_glyph);
+    h.run_steps(3);
+    let head_rect = h.state().views[0].glyph_screen_rect(0, head_glyph).unwrap();
+    let anchor_rect = h.state().views[0].glyph_screen_rect(0, anchor_glyph).unwrap();
+    let id = egui::Id::unique(("text-selection-actions", h.state().views[0].view_key()));
+    let bar = h.ctx.memory(|m| m.area_rect(id)).expect("the selection bar is shown");
+    // The bar must be near the head (first line), above the anchor (second line).
+    assert!(
+        bar.top() < anchor_rect.top(),
+        "bar top {} should be above the anchor line top {} (bar must follow the head, not anchor)",
+        bar.top(),
+        anchor_rect.top()
+    );
+    assert!(
+        (bar.bottom() - head_rect.bottom()).abs() < 48.0,
+        "bar bottom {} should be near the head line bottom {}",
+        bar.bottom(),
+        head_rect.bottom()
+    );
+}
+
 #[test]
 fn selected_text_menu_does_not_spawn_when_using_comment_box() {
     let mut h = harness(|_| {});

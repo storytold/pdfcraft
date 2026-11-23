@@ -422,13 +422,18 @@ pub(crate) fn one_undo_step(mut edits: Vec<Edit>) -> Option<Edit> {
 }
 
 /// Where the selection bar goes: next to the selected text where the drag ended, which is on
-/// screen. Forward, the last rectangle on the head's page; backward across pages, the first one
-/// there. Otherwise (a column, or nothing selected on the head's page) the last rectangle on the
-/// last page with text selected.
+/// screen. Forward, the last rectangle on the head's page; backward (the head is earlier in
+/// reading order than the anchor, on the same page or across pages), the first one on the
+/// head's page. Otherwise (a column, or nothing selected on the head's page) the last rectangle
+/// on the last page with text selected.
 pub(super) fn bar_anchor(selection: &Selection, texts: &[(usize, &Arc<PageText>)]) -> Option<(usize, [f32; 4])> {
     let at_head = selection.text_span().and_then(|span| {
-        let Span::Run { head_page, .. } = selection.span else { return None };
-        let backward = span.start.0 == head_page && span.start.0 != span.end.0;
+        let Span::Run { head_page, head, .. } = selection.span else { return None };
+        // The selection is backward when the head (where the drag released) is earlier in reading
+        // order than the anchor (where the drag started). `span.start` is the earlier end by
+        // construction, so backward ⟺ (head_page, head) == span.start. This covers both a
+        // same-page drag upward across lines and a cross-page drag to an earlier page.
+        let backward = (head_page, head) == span.start;
         let (_, text) = texts.iter().find(|(p, _)| *p == head_page)?;
         let rects = selection.rects_on(head_page, text);
         let rect = if backward { rects.first() } else { rects.last() };
