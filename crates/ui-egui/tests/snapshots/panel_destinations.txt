@@ -1,0 +1,7 @@
+Label = "Destinations"
+Label = "1"
+Button "Close" [off]
+Button "Destination options" [off]
+Button "Name"
+Button "Page"
+Button "Summary"

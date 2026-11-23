@@ -2,7 +2,7 @@
 
 > Integration update 2026-10-30: lossless JBIG2 generic and exact-copy symbol coding are included; no lossy substitution. Combined tests passed at bdf5620; the subsequent review fixes require fresh CI.
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (subset standards: the PDF/A rows name 2b and 3b only, and the PDF/X row says what is there — the identification is carried through Combine and can be removed; no verifier, no converter) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-09 · **Change:** minor (§12.3: named destinations are edited in the Destinations panel; earlier: subset standards: the PDF/A rows name 2b and 3b only, and the PDF/X row says what is there — the identification is carried through Combine and can be removed; no verifier, no converter) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How much of ISO 32000-2 (PDF 2.0) and the PDF subset standards PdfCraft implements, set against
 what Acrobat Pro implements. This is PdfCraft's equivalent of a "geometry" or "codec" checklist:
@@ -36,7 +36,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | §9 | Text and fonts: Type 1, TrueType, OpenType/CFF, Type 3, CID-keyed, CMaps, ToUnicode | full | **borrowed** rendering; own text extraction (word-F1 0.98); standard-14 metrics for generated appearances; embedded fonts reused for editing, else Helvetica | `view.render-type3`, `view.render-cid-fonts` partial; no own font engine; no font embedding/subsetting for arbitrary new text beyond craft-fonts Japanese |
 | §10 | Rendering: transfer functions, halftones, overprint, smoothness | full | borrowed; no overprint preview | `print.overprint-preview` planned |
 | §11 | Transparency: blend modes, soft masks, groups, knockout | full | borrowed (knockout shipped) | `view.render-transparency` partial |
-| §12.1–12.3 | Viewer preferences, page layout, page labels, outlines, destinations | full | **own**: initial view, page labels, bookmarks edit and from structure, named destinations rewired on copy | named-destination editing panel planned |
+| §12.1–12.3 | Viewer preferences, page layout, page labels, outlines, destinations | full | **own**: initial view, page labels, bookmarks edit and from structure, named destinations rewired on copy, and listed, added, set, renamed and deleted in the Destinations panel (the `/Names /Dests` tree and the PDF 1.1 `/Dests` dictionary) | named-destination edits rewrite the tree as one node and are refused for a tree nested deeper than 32 levels or larger than 100,000 nodes |
 | §12.4 | Page transitions, thumbnails, articles, presentations | full | `/Trans` and `/Dur` read and listed by `doc_info`, not played; thumbnails discarded or kept | `organize.page-transitions` partial, `view.articles-panel` planned |
 | §12.5 | Annotations | 28 types | see table below | |
 | §12.6 | Actions | 19 types | see table below | |
@@ -132,6 +132,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | minor | §12.3: the Destinations panel lists, adds, sets, renames and deletes named destinations of the `/Names /Dests` tree and the PDF 1.1 `/Dests` dictionary; the editing panel is no longer listed as planned |
 | 2026-11-05 | minor | Subset standards: the PDF/A rows name 2b and 3b only, and the PDF/X row says what is there — the identification is carried through Combine and can be removed; no verifier, no converter. No feature status changed |
 | 2026-10-30 | minor | §7.4: JBIG2 decoding (`hayro-jbig2`) in `pdfcraft-filters`, which `Document::decoded_image` uses with the image's `/JBIG2Globals`: export reads JBIG2 behind other filters too, and redaction clears pixels in JBIG2 images instead of removing them whole (one whose page isn't its size still is) |
 | 2026-10-26 | minor | §7.4: redaction clears pixels in CCITT fax images through the CCITT decoder, instead of removing them whole (Group 4 and Group 3 off bytes; Group 3 on bytes is still removed whole, as the bootstrap renderer may draw it as other rows than the decoder reads) |
