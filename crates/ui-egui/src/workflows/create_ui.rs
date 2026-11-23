@@ -467,6 +467,15 @@ mod tests {
         fn last_folder(&self, purpose: &str) -> Option<PathBuf> {
             self.inner.last_folder(purpose)
         }
+        fn save(&self, request: PickRequest, bytes: Vec<u8>) -> PickId {
+            self.inner.save(request, bytes)
+        }
+        fn can_pick(&self) -> bool {
+            self.inner.can_pick()
+        }
+        fn browser_saves(&self) -> bool {
+            self.inner.browser_saves()
+        }
     }
 
     #[test]
