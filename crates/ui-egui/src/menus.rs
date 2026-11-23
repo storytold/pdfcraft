@@ -474,9 +474,13 @@ impl PdfCraftApp {
     pub(crate) fn native_bar(&self, ctx: &egui::Context) -> Layout {
         let mut layout = craft::menu::mac_layout(&self.menu_bar(ctx), &layout_options());
         let mut bar = craft::ui::contract::Tracked::new(std::mem::take(&mut layout.bar));
+        // While a file panel is up, the Edit menu's text items stay on: macOS hands their keys (⌘Z,
+        // ⌘C, …) to the panel's file name field (craft-window), where a greyed item would only beep.
+        let panel = self.picks_pending();
         craft::menu::apply_state(&mut bar, |command| {
             let resolved = resolve(ctx, command.clone());
-            ItemState::default().enabled(resolved.enabled).checked(resolved.checked)
+            let field = panel && PANEL_FIELD_COMMANDS.contains(&command.id.as_str());
+            ItemState::default().enabled(resolved.enabled || field).checked(resolved.checked)
         });
         layout.bar = bar.into_inner();
         layout
@@ -505,6 +509,9 @@ impl PdfCraftApp {
         self.native_menu.is_some()
     }
 }
+
+/// The Edit commands a native file panel's text field takes while the panel is up.
+const PANEL_FIELD_COMMANDS: [&str; 6] = ["edit.undo", "edit.redo", "edit.cut", "edit.copy", "edit.paste", "edit.select_all"];
 
 /// The native menu's per-frame turn: its gate, its clicks fired as commands, then its bar brought in
 /// step with the app, last, after this frame's changes.
