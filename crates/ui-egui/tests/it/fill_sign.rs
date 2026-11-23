@@ -697,6 +697,71 @@ fn fill_text_colour_survives_preview_commit_settings_and_save() {
 }
 
 #[test]
+fn checkmark_colour_is_picked_in_the_quick_bar_recolours_the_selected_mark_and_is_saved() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.check");
+    h.run_steps(2);
+    click(&mut h, 50.0, 350.0);
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(2);
+    let pick = |h: &mut Harness<'static, PdfCraftApp>, swatch: &str| {
+        h.get_by_label("Colour").click();
+        h.run_steps(2);
+        h.get_by_label(swatch).click();
+        h.run_steps(3);
+    };
+    pick(&mut h, "Blue");
+    assert_eq!(h.state().fill_mark_color, [0.0, 0.47, 0.84]);
+    assert_eq!(h.state().fill_text_color, [0.0; 3], "text keeps its own colour");
+    click(&mut h, 120.0, 350.0);
+    // The marks, left to right: their place in /Annots and their colour.
+    let marks = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let mut v: Vec<_> = s
+            .session
+            .get(s.views[0].id)
+            .unwrap()
+            .info
+            .annotations
+            .iter()
+            .filter(|a| a.fill_sign && a.subtype == "Stamp")
+            .map(|a| (a.rect[0] as i32, a.index, a.color))
+            .collect();
+        v.sort_by_key(|m| m.0);
+        v.into_iter().map(|(_, index, color)| (index, color)).collect::<Vec<_>>()
+    };
+    let colours = |h: &Harness<'static, PdfCraftApp>| marks(h).into_iter().map(|m| m.1).collect::<Vec<_>>();
+    let (black, blue, red) = (Some([0.0f32; 3]), Some([0.0f32, 0.47, 0.84]), Some([0.89f32, 0.13, 0.13]));
+    assert_eq!(colours(&h), [black, blue], "the first stays black, the next is blue");
+
+    // With a mark selected, the colour also recolours it, in one undo step.
+    let first = marks(&h)[0].0;
+    h.state_mut().views[0].comments.selected = Some((0, first));
+    h.run_steps(2);
+    pick(&mut h, "Red");
+    assert_eq!(colours(&h), [red, blue]);
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert_eq!(colours(&h), [black, blue], "undo puts the old colour back");
+    h.state_mut().execute("edit.redo");
+    h.run_steps(2);
+
+    // The colour is saved with the mark.
+    let bytes = h.state().session.save_bytes(h.state().views[0].id).unwrap();
+    assert_eq!(colours(&harness_bytes(&bytes)), [red, blue], "kept on save and reopen");
+
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert_eq!(restored.fill_mark_color, [0.89, 0.13, 0.13], "kept across launches");
+    for bad in
+        [r#"{"fill_mark_color":[2,0,0]}"#, r#"{"fill_mark_color":[0,0]}"#, r#"{"fill_mark_color":"blue"}"#, r#"{"fill_mark_color":[0,null,0]}"#]
+    {
+        restored.restore(bad);
+        assert_eq!(restored.fill_mark_color, [0.89, 0.13, 0.13], "invalid settings keep the colour: {bad}");
+    }
+}
+
+#[test]
 fn the_type_box_grows_as_text_is_typed() {
     let mut h = harness();
     h.state_mut().execute("sign.fill.text");
