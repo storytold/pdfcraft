@@ -248,54 +248,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "anstream"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "824a212faf96e9acacdbd09febd34438f8f711fb84e09a8916013cd7815ca28d"
-dependencies = [
- "anstyle",
- "anstyle-parse",
- "anstyle-query",
- "anstyle-wincon",
- "colorchoice",
- "is_terminal_polyfill",
- "utf8parse",
-]
-
-[[package]]
 name = "anstyle"
 version = "1.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
-
-[[package]]
-name = "anstyle-parse"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52ce7f38b242319f7cabaa6813055467063ecdc9d355bbb4ce0c68908cd8130e"
-dependencies = [
- "utf8parse",
-]
-
-[[package]]
-name = "anstyle-query"
-version = "1.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
-dependencies = [
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "anstyle-wincon"
-version = "3.0.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
-dependencies = [
- "anstyle",
- "once_cell_polyfill",
- "windows-sys 0.61.2",
-]
 
 [[package]]
 name = "anyhow"
@@ -1133,6 +1089,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "chardetng"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13de944a44b5064ee5d3a5ceccc49a41bfec50f2580e66f82e87703acdb88b53"
+dependencies = [
+ "cfg-if",
+ "encoding_rs",
+ "memchr",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1166,46 +1133,6 @@ dependencies = [
  "libc",
  "libloading",
 ]
-
-[[package]]
-name = "clap"
-version = "4.6.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa8876b300ab35ba921adea3dfd70157a46249b33f95c9084ae5709785478946"
-dependencies = [
- "clap_builder",
- "clap_derive",
-]
-
-[[package]]
-name = "clap_builder"
-version = "4.6.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec0797fb7aeb1406c84efac526901f7ec3ead2124f946b494e72879d4b54704d"
-dependencies = [
- "anstream",
- "anstyle",
- "clap_lex",
- "strsim",
-]
-
-[[package]]
-name = "clap_derive"
-version = "4.6.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9c751b79415d4e559e3d1fcf128e09e720eb673a06d26cf6f392d37d75b66e0"
-dependencies = [
- "heck",
- "proc-macro2",
- "quote",
- "syn 3.0.6",
-]
-
-[[package]]
-name = "clap_lex"
-version = "1.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0921b3876b3a1df8a1c9f912e7f94342458022c2e84288015893d83c4d62a79"
 
 [[package]]
 name = "clipboard-win"
@@ -1289,12 +1216,6 @@ name = "color_quant"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d7b894f5411737b7867f4827955924d7c254fc9f4d91a6aad6b097804b1018b"
-
-[[package]]
-name = "colorchoice"
-version = "1.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "combine"
@@ -1493,6 +1414,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "craft-behavior",
+ "craft-control",
  "craft-host",
  "craft-keymap",
  "craft-platform",
@@ -1519,6 +1441,8 @@ dependencies = [
  "craft-host",
  "craft-keymap",
  "craft-theme",
+ "craft-tracked",
+ "craft-ui-macros",
  "emath",
  "kurbo 0.13.1",
  "serde",
@@ -1540,6 +1464,17 @@ dependencies = [
  "egui",
  "kurbo 0.13.1",
  "serde",
+]
+
+[[package]]
+name = "craft-cfb"
+version = "0.1.0"
+
+[[package]]
+name = "craft-cloud-ui"
+version = "0.1.0"
+dependencies = [
+ "egui",
 ]
 
 [[package]]
@@ -1574,6 +1509,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-control"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-csv"
 version = "0.1.0"
 dependencies = [
@@ -1594,6 +1538,7 @@ dependencies = [
  "block2 0.6.2",
  "craft-atomic",
  "craft-behavior",
+ "craft-browse",
  "craft-host",
  "craft-i18n",
  "craft-platform",
@@ -1606,6 +1551,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "raw-window-handle",
  "rfd",
+ "serde_json",
  "zbus",
 ]
 
@@ -1614,6 +1560,25 @@ name = "craft-docpath"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "craft-docx"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "craft-drawingml",
+ "craft-math",
+ "craft-offcrypto",
+ "craft-opc",
+ "craft-wordmodel",
+ "craft-xml",
+ "log",
+ "quick-xml 0.41.0",
+ "thiserror 2.0.21",
+ "unicode-bidi",
+ "zeroize",
 ]
 
 [[package]]
@@ -1632,6 +1597,17 @@ dependencies = [
  "kurbo 0.13.1",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "craft-drawingml"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "craft-xml",
+ "kurbo 0.13.1",
+ "log",
+ "serde",
 ]
 
 [[package]]
@@ -1678,6 +1654,7 @@ dependencies = [
  "craft-behavior",
  "craft-font-catalog 0.1.0",
  "craft-font-store",
+ "craft-fonts-build",
  "craft-host",
  "craft-i18n",
  "craft-theme",
@@ -1727,6 +1704,9 @@ dependencies = [
 [[package]]
 name = "craft-html"
 version = "0.1.0"
+dependencies = [
+ "craft-mime",
+]
 
 [[package]]
 name = "craft-i18n"
@@ -1806,11 +1786,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-jsonrpc"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "craft-keymap"
 version = "0.1.0"
 dependencies = [
  "craft-host",
  "craft-i18n",
+ "craft-tracked",
+ "craft-ui-macros",
  "craft-xml",
  "egui",
  "serde",
@@ -1831,7 +1820,15 @@ name = "craft-math"
 version = "0.1.0"
 dependencies = [
  "craft-xml",
+ "roxmltree 0.21.2",
  "serde",
+]
+
+[[package]]
+name = "craft-mcp-server"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
@@ -1863,12 +1860,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-metafile"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "image",
+ "kurbo 0.13.1",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-mime"
 version = "0.1.0"
 dependencies = [
+ "chardetng",
  "chrono",
  "craft-codepage",
  "encoding_rs",
+]
+
+[[package]]
+name = "craft-offcrypto"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "base64 0.23.1",
+ "craft-cfb",
+ "craft-xml",
+ "getrandom 0.3.4",
+ "hmac 0.13.0",
+ "sha1 0.11.0",
+ "sha2 0.11.1",
+ "thiserror 2.0.21",
+ "zeroize",
 ]
 
 [[package]]
@@ -1901,9 +1925,12 @@ name = "craft-pdf"
 version = "0.1.0"
 dependencies = [
  "aes",
+ "bytemuck",
  "chrono",
  "craft-stream-codecs",
  "flate2",
+ "hayro",
+ "hayro-interpret",
  "hayro-syntax",
  "js-sys",
  "md-5 0.11.0",
@@ -1966,9 +1993,11 @@ dependencies = [
  "log",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "rfd",
  "serde",
  "serde_json",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
  "web-time",
  "windows",
@@ -1976,6 +2005,20 @@ dependencies = [
  "x11rb",
  "xcap",
  "zbus",
+]
+
+[[package]]
+name = "craft-pptx"
+version = "0.1.0"
+dependencies = [
+ "craft-drawingml",
+ "craft-opc",
+ "craft-xml",
+ "kurbo 0.13.1",
+ "log",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1991,15 +2034,20 @@ name = "craft-print"
 version = "0.1.0"
 dependencies = [
  "craft-behavior",
+ "craft-host",
  "craft-theme",
  "craft-ui",
  "craft-winprint-gdi",
  "egui",
+ "js-sys",
  "log",
  "miniz_oxide 0.9.1",
  "roxmltree 0.21.2",
+ "serde",
  "serde_json",
  "tempfile",
+ "wasm-bindgen",
+ "web-sys",
  "winprint 0.2.1 (git+https://github.com/storytold/winprint.rs?rev=8ae097ef941b432b0e7671b1ec3a506800e65e57)",
  "winsafe",
 ]
@@ -2025,6 +2073,7 @@ dependencies = [
  "craft-host",
  "craft-i18n",
  "craft-keymap",
+ "craft-pages",
  "craft-theme",
  "craft-ui",
  "egui",
@@ -2038,7 +2087,11 @@ name = "craft-rtf"
 version = "0.1.0"
 dependencies = [
  "craft-codepage",
+ "craft-flow",
+ "craft-metafile",
+ "craft-wordmodel",
  "encoding_rs",
+ "image",
 ]
 
 [[package]]
@@ -2048,6 +2101,7 @@ dependencies = [
  "craft-atomic",
  "craft-host",
  "dirs",
+ "log",
  "serde",
  "serde_json",
  "toml",
@@ -2122,6 +2176,8 @@ name = "craft-theme"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.2",
+ "craft-tracked",
+ "craft-ui-macros",
  "ecolor",
  "log",
  "serde",
@@ -2174,9 +2230,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-tracked"
+version = "0.1.0"
+
+[[package]]
 name = "craft-ui"
 version = "0.1.0"
 dependencies = [
+ "craft-cloud-ui",
  "craft-ui-canvas",
  "craft-ui-contract",
  "craft-ui-panels",
@@ -2206,6 +2267,7 @@ version = "0.1.0"
 dependencies = [
  "accesskit",
  "craft-behavior",
+ "craft-codepage",
  "craft-font-catalog 0.1.0",
  "craft-fonts-build",
  "craft-host",
@@ -2216,20 +2278,22 @@ dependencies = [
  "craft-settings",
  "craft-svg",
  "craft-theme",
+ "craft-tracked",
  "craft-ui-macros",
  "craft-window",
  "egui",
- "egui_kittest",
  "epaint_default_fonts",
  "flate2",
- "image",
  "inventory",
- "libtest-mimic",
  "log",
+ "scoped-tls",
  "serde",
+ "serde_json",
+ "siphasher",
  "skrifa 0.44.0",
  "smallvec",
  "toml",
+ "typeid",
  "wasm-bindgen-futures",
  "web-time",
 ]
@@ -2296,6 +2360,7 @@ dependencies = [
  "craft-window",
  "eframe",
  "egui",
+ "raw-window-handle",
  "serde",
  "web-time",
 ]
@@ -2414,6 +2479,23 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "craft-xfa"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3#23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3"
+dependencies = [
+ "craft-xml",
+]
+
+[[package]]
+name = "craft-xfdf"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=1546550b0d4b79b8156a1fefaac8b3b317a4aee0#1546550b0d4b79b8156a1fefaac8b3b317a4aee0"
+dependencies = [
+ "craft-xml",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2867,7 +2949,7 @@ dependencies = [
 [[package]]
 name = "ecolor"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=e9711ca9b69772f875ae0d1cef1977ff8c16234d#e9711ca9b69772f875ae0d1cef1977ff8c16234d"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 dependencies = [
  "bytemuck",
  "emath",
@@ -2903,7 +2985,7 @@ version = "0.1.0-alpha.2"
 [[package]]
 name = "eframe"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=e9711ca9b69772f875ae0d1cef1977ff8c16234d#e9711ca9b69772f875ae0d1cef1977ff8c16234d"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -2941,7 +3023,7 @@ dependencies = [
 [[package]]
 name = "egui"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=e9711ca9b69772f875ae0d1cef1977ff8c16234d#e9711ca9b69772f875ae0d1cef1977ff8c16234d"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 dependencies = [
  "accesskit",
  "ahash",
@@ -2962,7 +3044,7 @@ dependencies = [
 [[package]]
 name = "egui-wgpu"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=e9711ca9b69772f875ae0d1cef1977ff8c16234d#e9711ca9b69772f875ae0d1cef1977ff8c16234d"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -2981,7 +3063,7 @@ dependencies = [
 [[package]]
 name = "egui-winit"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=e9711ca9b69772f875ae0d1cef1977ff8c16234d#e9711ca9b69772f875ae0d1cef1977ff8c16234d"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 dependencies = [
  "accesskit_winit",
  "arboard",
@@ -3008,7 +3090,7 @@ dependencies = [
 [[package]]
 name = "egui_extras"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=e9711ca9b69772f875ae0d1cef1977ff8c16234d#e9711ca9b69772f875ae0d1cef1977ff8c16234d"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 dependencies = [
  "ahash",
  "egui",
@@ -3022,7 +3104,7 @@ dependencies = [
 [[package]]
 name = "egui_glow"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=e9711ca9b69772f875ae0d1cef1977ff8c16234d#e9711ca9b69772f875ae0d1cef1977ff8c16234d"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 dependencies = [
  "bytemuck",
  "egui",
@@ -3035,7 +3117,7 @@ dependencies = [
 [[package]]
 name = "egui_kittest"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=e9711ca9b69772f875ae0d1cef1977ff8c16234d#e9711ca9b69772f875ae0d1cef1977ff8c16234d"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 dependencies = [
  "eframe",
  "egui",
@@ -3078,7 +3160,7 @@ dependencies = [
 [[package]]
 name = "emath"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=e9711ca9b69772f875ae0d1cef1977ff8c16234d#e9711ca9b69772f875ae0d1cef1977ff8c16234d"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 dependencies = [
  "bytemuck",
  "serde",
@@ -3171,7 +3253,7 @@ dependencies = [
 [[package]]
 name = "epaint"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=e9711ca9b69772f875ae0d1cef1977ff8c16234d#e9711ca9b69772f875ae0d1cef1977ff8c16234d"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -3198,7 +3280,7 @@ dependencies = [
 [[package]]
 name = "epaint_default_fonts"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=e9711ca9b69772f875ae0d1cef1977ff8c16234d#e9711ca9b69772f875ae0d1cef1977ff8c16234d"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 
 [[package]]
 name = "equator"
@@ -3241,12 +3323,6 @@ name = "error-code"
 version = "3.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b5343afd4a8365a643ac588dab4cf234a190c7f6c88c9f6dd6ffe00837661b7"
-
-[[package]]
-name = "escape8259"
-version = "0.5.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f1f0d310082fd5de539d4f41601182241147498444a7695c520288a0cdbead6"
 
 [[package]]
 name = "euclid"
@@ -3704,9 +3780,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 5.3.0",
  "wasip2",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -4657,12 +4735,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
 
 [[package]]
-name = "is_terminal_polyfill"
-version = "1.70.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
-
-[[package]]
 name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4907,18 +4979,6 @@ dependencies = [
  "bindgen",
  "cc",
  "system-deps",
-]
-
-[[package]]
-name = "libtest-mimic"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14e6ba06f0ade6e504aff834d7c34298e5155c6baca353cc6a4aaff2f9fd7f33"
-dependencies = [
- "anstream",
- "anstyle",
- "clap",
- "escape8259",
 ]
 
 [[package]]
@@ -5869,12 +5929,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
-name = "once_cell_polyfill"
-version = "1.70.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
-
-[[package]]
 name = "oneshot"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6025,7 +6079,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "craft",
  "craft-update",
@@ -6050,7 +6104,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-a11y"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "pdfcraft-content",
  "pdfcraft-cos",
@@ -6061,19 +6115,20 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-annot"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "hayro-syntax",
  "pdfcraft-cos",
  "pdfcraft-fonts",
  "pdfcraft-geom",
  "pdfcraft-model",
+ "proptest",
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "pdfcraft-audit"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "pdfcraft-content",
  "pdfcraft-cos",
@@ -6084,13 +6139,17 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-automation"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "base64 0.23.1",
  "craft",
  "craft-cms",
+ "craft-docx",
  "craft-image-codecs",
+ "craft-jsonrpc",
+ "craft-mcp-server",
  "craft-prc",
+ "craft-wordmodel",
  "flate2",
  "pdfcraft-cos",
  "pdfcraft-engine",
@@ -6109,7 +6168,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-cli"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "base64 0.23.1",
  "craft",
@@ -6127,11 +6186,11 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-compare"
-version = "0.21.1"
+version = "0.22.0"
 
 [[package]]
 name = "pdfcraft-content"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "craft-pdf",
  "hayro-syntax",
@@ -6139,7 +6198,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-cos"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "craft-pdf",
  "hayro-syntax",
@@ -6153,7 +6212,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-create"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "craft-image-codecs",
  "craft-jpeg",
@@ -6173,7 +6232,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-crypt"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "craft-pdf",
  "proptest",
@@ -6181,7 +6240,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-edit"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "hayro-syntax",
  "icu_segmenter",
@@ -6200,7 +6259,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-engine"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "chrono",
  "craft-cms",
@@ -6239,6 +6298,7 @@ dependencies = [
  "pdfcraft-testkit",
  "pdfcraft-xfa",
  "pdfcraft-xfdf",
+ "rustix 1.1.6",
  "thiserror 2.0.21",
  "unicode-segmentation",
  "url",
@@ -6246,20 +6306,24 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-export"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
+ "craft-docx",
+ "craft-html",
  "craft-markdown",
  "craft-mime",
- "craft-opc",
+ "craft-pptx",
  "craft-rtf",
+ "craft-wordmodel",
  "craft-xml",
  "craft-zip",
  "flate2",
+ "image",
 ]
 
 [[package]]
 name = "pdfcraft-filters"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "craft-pdf",
  "proptest",
@@ -6268,9 +6332,10 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-fonts"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "craft-fonts-build",
+ "craft-pdf",
  "harfrust 0.12.0",
  "pdfcraft-cos",
  "skrifa 0.44.0",
@@ -6279,7 +6344,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-forms"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "hayro-syntax",
  "pdfcraft-content",
@@ -6292,11 +6357,11 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-geom"
-version = "0.21.1"
+version = "0.22.0"
 
 [[package]]
 name = "pdfcraft-js"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "boa_engine",
  "chrono",
@@ -6304,7 +6369,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-measure"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "pdfcraft-annot",
  "pdfcraft-content",
@@ -6317,14 +6382,14 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-model"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "pdfcraft-cos",
 ]
 
 [[package]]
 name = "pdfcraft-ocr"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "craft-image-codecs",
  "ocrs",
@@ -6339,7 +6404,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-ocr-worker"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "js-sys",
  "pdfcraft-ocr",
@@ -6349,7 +6414,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-optimize"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "craft-image-codecs",
  "craft-jpeg",
@@ -6367,11 +6432,11 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-oracle"
-version = "0.21.1"
+version = "0.22.0"
 
 [[package]]
 name = "pdfcraft-organize"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "hayro-syntax",
  "pdfcraft-content",
@@ -6382,7 +6447,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-platform"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "async-channel",
  "futures-lite",
@@ -6393,7 +6458,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-prc-render"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "craft-prc",
  "flate2",
@@ -6402,7 +6467,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-preflight"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "craft-cms",
  "craft-xml",
@@ -6414,7 +6479,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-print"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "craft-cms",
  "craft-print",
@@ -6430,7 +6495,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-redact"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "aho-corasick",
  "craft-xml",
@@ -6454,9 +6519,10 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-render"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "bytemuck",
+ "craft-pdf",
  "flate2",
  "getrandom 0.4.3",
  "hayro",
@@ -6478,7 +6544,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-sign"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "aes",
  "aws-lc-rs",
@@ -6518,11 +6584,11 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-testkit"
-version = "0.21.1"
+version = "0.22.0"
 
 [[package]]
 name = "pdfcraft-ui-egui"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "arboard",
  "base64 0.23.1",
@@ -6581,7 +6647,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-web"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "craft",
  "craft-web-api",
@@ -6597,10 +6663,11 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-xfa"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "base64 0.23.1",
  "craft-image-codecs",
+ "craft-xfa",
  "craft-xml",
  "pdfcraft-cos",
  "pdfcraft-fonts",
@@ -6610,10 +6677,11 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-xfdf"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "base64 0.23.1",
  "craft-csv",
+ "craft-xfdf",
  "craft-xml",
  "pdfcraft-annot",
  "pdfcraft-cos",
@@ -8618,12 +8686,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "strsim"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
-
-[[package]]
 name = "strum"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9421,12 +9483,6 @@ name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
-
-[[package]]
-name = "utf8parse"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
@@ -10977,17 +11033,17 @@ dependencies = [
 [[patch.unused]]
 name = "egui_demo_lib"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=e9711ca9b69772f875ae0d1cef1977ff8c16234d#e9711ca9b69772f875ae0d1cef1977ff8c16234d"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 
 [[patch.unused]]
 name = "egui_inspection"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=e9711ca9b69772f875ae0d1cef1977ff8c16234d#e9711ca9b69772f875ae0d1cef1977ff8c16234d"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 
 [[patch.unused]]
 name = "egui_system_font_provider"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=e9711ca9b69772f875ae0d1cef1977ff8c16234d#e9711ca9b69772f875ae0d1cef1977ff8c16234d"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 
 [[patch.unused]]
 name = "krilla"

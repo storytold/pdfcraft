@@ -12,6 +12,7 @@ use craft::ui::canvas_controls::{SelectionOutline, TaskBar};
 use craft::ui::contract::{Access, Bind, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Show as _};
 use craft::ui::display::Divider;
 use craft::ui::menu::{Menu, MenuIcon, MenuIconRow, MenuItem};
+use craft::ui::primitives::Serials;
 use craft::ui::style::{ComponentStyle, Metrics, StyleCx};
 
 pub(crate) use pdfcraft_content::Matrix;
@@ -192,14 +193,14 @@ fn affine_between(from: [Point; 4], to: [Point; 4]) -> impl Fn(Point) -> Point {
 
 /// The picture's own decoded pixels, as the preview's texture: they cover the picture's whole
 /// frame, so the preview follows the box whatever else the page shows there.
-fn cut_preview(doc: &pdfcraft_engine::Document, placed: &PlacedPage, index: usize) -> Option<PreviewTextures> {
+fn cut_preview(serials: &mut Serials, doc: &pdfcraft_engine::Document, placed: &PlacedPage, index: usize) -> Option<PreviewTextures> {
     let (w, h, rgba) = doc.page_image_rgba(placed.page, index).ok()?;
     let size = [usize::try_from(w).ok()?, usize::try_from(h).ok()?];
     if size[0] == 0 || size[1] == 0 || rgba.len() != size[0].checked_mul(size[1])?.checked_mul(4)? {
         return None;
     }
     let image = egui::ColorImage::from_rgba_premultiplied(size, &rgba);
-    Some(PreviewTextures::new(format!("picture-{}-{index}", placed.page), PreviewPixels::new(image, [1.0, 1.0])))
+    Some(PreviewTextures::new(serials, format!("picture-{}-{index}", placed.page), PreviewPixels::new(image, [1.0, 1.0])))
 }
 
 /// `r`, in the canvas's document space, as the page's 0..1 coordinates.
@@ -306,7 +307,7 @@ fn box_controls(
     for event in shown.edit.events.iter() {
         match event {
             EditEvent::Begin { .. } => {
-                let cut = cut_preview(doc, placed, index);
+                let cut = cut_preview(&mut session.image_serials, doc, placed, index);
                 if let Some(s) = session.image_selection.as_mut() {
                     if s.preview.is_none() {
                         s.preview = cut;

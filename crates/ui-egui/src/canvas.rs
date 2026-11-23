@@ -359,6 +359,8 @@ pub struct PageSession {
     pub(crate) move_background: crate::content_ui::MoveBackground,
     pub(crate) objects: crate::object_ui::ObjectSelection,
     pub image_selection: Option<crate::edit_text_ui::ImageSelection>,
+    /// Tells each picture preview cut for a gesture from the one before it under the same name.
+    pub(crate) image_serials: craft::ui::primitives::Serials,
     /// Select tool: the picture clicked, to copy in its original format.
     pub picked_image: Option<crate::image_pick::PickedImage>,
     /// A click (page, user-space point, document generation) whose picture is still being looked for.
@@ -444,6 +446,7 @@ impl PageSession {
             move_background: Default::default(),
             objects: Default::default(),
             image_selection: None,
+            image_serials: Default::default(),
             picked_image: None,
             pending_pick: None,
             pictures: Default::default(),
@@ -1716,9 +1719,10 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     });
     let veiled = page_overlays::veiled(view);
     // Shadows only with the preference on, and only between gaps: they would darken the page before when pages touch.
-    let border = if view.view.page_gaps && app.show_page_edge_shadows { PageBorder::DropShadow } else { PageBorder::None };
-    // Full screen filling the screen: the page alone on black, edge to edge (#576).
+    // Full screen filling the screen: the page alone on black, edge to edge (#576), so no shadow either. The framework's
+    // edge-to-edge spacing (PageView::fill_screen, L-314) is owed; until it lands the page keeps the view's margins.
     let fill_screen = view.fills_screen();
+    let border = if view.view.page_gaps && app.show_page_edge_shadows && !fill_screen { PageBorder::DropShadow } else { PageBorder::None };
     let keep = view.session.presenter.keep_pages();
     if view.momentary_options != navigation {
         view.momentary = Momentary::new(navigation);
@@ -1822,7 +1826,6 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
                 .navigation(navigation)
                 .border(border)
                 .pasteboard(surround)
-                .fill_screen(fill_screen)
                 .keep(&keep)
                 .show_at_with(ui, rect, &mut callbacks, page_before, page_body)
         })

@@ -219,7 +219,7 @@ fn create_params(file: &str, categories: &[String]) -> Vec<Param> {
             let mut value = fields.text(CATEGORY).unwrap_or_default().to_owned();
             let shown = ComboBox::new(tl!("Category"), Bind::bound(&mut value), &entries).placeholder(tl!("My stamps")).show(ui);
             fields.set(CATEGORY, value);
-            shown.response
+            shown.edit.response
         }),
         Param::new(NAME, tl!("Name"), ParamKind::text("")),
         // A dynamic stamp (#1741): a line under the picture, filled in when it is placed.

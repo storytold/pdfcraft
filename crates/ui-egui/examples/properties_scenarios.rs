@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use craft::ui::dialog::dialog_id;
 use craft::ui::patterns::form_dialogs::HostedParamDialog;
+use craft::ui::runtime::{env::WindowKey, toast};
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -90,12 +91,13 @@ struct Adapter {
 impl Adapter {
     /// Open two independent fixtures and create a deterministic 60 Hz headless UI harness.
     fn new(artifacts: Option<PathBuf>) -> Result<Self, String> {
-        let mut app = PdfCraftApp::new();
-        app.set_option(&egui::Context::default(), "language", "en")?;
+        let ctx = egui::Context::default();
+        let mut app = PdfCraftApp::new(&ctx);
+        app.set_option(&ctx, "language", "en")?;
         let mut originals = Vec::new();
         for (name, title) in [("A.pdf", "Original"), ("B.pdf", "Second document")] {
             let bytes = fixture(title)?;
-            app.open_bytes(name, None, bytes.as_ref().clone()).map_err(|e| e.to_string())?;
+            app.open_bytes(&ctx, name, None, bytes.as_ref().clone()).map_err(|e| e.to_string())?;
             let id = app.active_ids().map(|(_, id)| id).ok_or("fixture did not open")?;
             originals.push((id, bytes));
         }
@@ -187,7 +189,8 @@ impl Adapter {
                 if self.properties_open() {
                     return Err("properties dialog is already open".into());
                 }
-                self.h.state_mut().run_command("file.properties");
+                let ctx = self.h.ctx.clone();
+                self.h.state_mut().run_command(&ctx, "file.properties");
             }
             Event::Type { field, value } => self.type_text(&field, &value)?,
             Event::Click { label } => self.click(&label)?,
@@ -227,7 +230,8 @@ impl Adapter {
                 if (if undo { doc.can_undo() } else { doc.can_redo() }).is_none() {
                     return Err("history action is unavailable".into());
                 }
-                self.h.state_mut().run_command(if undo { "edit.undo" } else { "edit.redo" });
+                let ctx = self.h.ctx.clone();
+                self.h.state_mut().run_command(&ctx, if undo { "edit.undo" } else { "edit.redo" });
             }
             Event::SaveReopen => {
                 let id = self.active()?;
@@ -269,8 +273,8 @@ impl Adapter {
         });
         json!({
             "error": error, "properties_open": self.properties_open(), "active": doc.map(|d| &d.name),
-            // PLAN: assumed `app.notices.posted()` lists the posted notices, newest last, each with a `text` (L-206)
-            "notice": app.notices.posted().last().map(|notice| notice.text.to_string()),
+            // The newest notice card the main window shows, by its text.
+            "notice": toast::cards(&self.h.ctx, &WindowKey::main()).last().map(|card| card.toast.message.as_str().to_owned()),
             "document": doc.map(document_state), "draft": draft, "original_bytes": original_bytes,
             "reopened": self.reopened,
         })

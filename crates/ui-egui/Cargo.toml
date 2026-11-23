@@ -58,7 +58,7 @@ skrifa = "0.44"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Help ▸ Check for updates: the facade's update crate builds only natively.
-craft = { workspace = true, features = ["update"] }
+craft = { workspace = true, features = ["update", "platform-clipboard-system"] }
 # Control-channel tokens.
 getrandom = "0.4"
 # Create ▸ Clipboard (images; already in the tree through egui-winit).

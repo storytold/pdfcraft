@@ -4,6 +4,7 @@
 //! The workspace is the one record of which panels are open and where they sit. Settings written
 //! by earlier versions (`side_panels`, `docking`) are read once by [`migrate`].
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use craft::automation::dock as dock_rpc;
@@ -14,7 +15,7 @@ use craft::behavior::{Axis, DockSide, IconId};
 use craft::keymap::CommandRef;
 use craft::ui::buttons::IconButton;
 use craft::ui::contract::{Bind, BodyCx, PlainData, Props as _, Show as _};
-use craft::ui::docking::{DockConfig, DockPanels, GroupAt, HidePanels, IconicMode, PanelSpec, PanelSpecs};
+use craft::ui::docking::{DockConfig, DockPanels, GroupAt, HidePanels, IconicMode, PanelKey, PanelSpec, PanelSpecs};
 use craft::ui::menu::PanelRow;
 use craft::ui::patterns::dock::DockArea;
 use craft::ui::primitives::IconSpec;
@@ -595,8 +596,6 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
     };
     let inset = app.notice_inset;
     // The specs leave the app while its panels borrow it, and come back with their revision.
-    let specs = std::mem::take(&mut app.dock_specs);
-    let mut panels = Panels { app: &mut *app };
     // Home and Combine have no side panel and no toolbar, and Read mode hides the tools and the quick toolbar, not the
     // navigation panels. A document that hides the window controls keeps the quick toolbar on its pages; full screen
     // hides it (`hotbar_hidden`), and so does the expanded All tools view, which takes the pages' place.
@@ -607,6 +606,15 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
         PanelId::Tools => !read && !expanded,
         _ => active && !expanded && listed(panel),
     };
+    // The panels shown, as the set the dock keeps; its revision moves only when the set changes.
+    let keep: BTreeSet<PanelKey> =
+        [PanelId::Tools, PanelId::Toolbar, PanelId::Document].iter().chain(SIDE.iter()).filter(|panel| shown(panel)).map(PanelKey::of).collect();
+    if *app.dock_shown != keep {
+        *app.dock_shown = keep;
+    }
+    let shown = std::mem::take(&mut app.dock_shown);
+    let specs = std::mem::take(&mut app.dock_specs);
+    let mut panels = Panels { app: &mut *app };
     // The side panels' icons are production's rail: they stay beside the expanded column, a click on one opens its
     // panel docked, and a click on the open panel's icon closes it.
     let config =
@@ -617,6 +625,7 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
         None => area.show(ui),
     };
     app.dock_specs = specs;
+    app.dock_shown = shown;
     let before = right_of(&app.dock);
     let actions: Vec<_> = output.actions.into_iter().chain(output.requested).collect();
     if !actions.is_empty() {

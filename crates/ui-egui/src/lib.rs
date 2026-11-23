@@ -249,6 +249,8 @@ pub struct PdfCraftApp {
     pub(crate) command_states: craft::ui::contract::Tracked<craft::ui::runtime::commands::CommandStates>,
     /// What the dock reads of the panels' specs, refreshed before each dock pass.
     pub(crate) dock_specs: craft::ui::contract::Tracked<side_panels::DockSpecs>,
+    /// The dock panels shown this pass (the rest hidden), moved only when the set changes.
+    pub(crate) dock_shown: craft::ui::contract::Tracked<std::collections::BTreeSet<craft::ui::docking::PanelKey>>,
     /// The side the rail of panel buttons sits on.
     pub rail_side: craft::behavior::DockSide,
     pub session: Session,
