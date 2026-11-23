@@ -440,7 +440,7 @@ mod idle_tests {
         frame(&mut app, &ctx, base + Duration::from_secs(119));
         assert_eq!(std::fs::read(&copy).unwrap(), first);
         frame(&mut app, &ctx, base + Duration::from_secs(120));
-        assert_eq!(copies(&folder), [copy.clone()], "the same document replaces its existing snapshot");
+        assert_eq!(copies(&folder), std::slice::from_ref(&copy), "the same document replaces its existing snapshot");
         let second = std::fs::read(&copy).unwrap();
         assert_ne!(second, first);
         let mut recovered = pdfcraft_engine::Session::new();
@@ -480,7 +480,7 @@ mod idle_tests {
 #[cfg(test)]
 mod sidecar_tests {
     use super::idle_tests::{TestDir, app_in};
-    use super::*;
+
     use crate::SaveTarget;
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
@@ -491,7 +491,7 @@ mod sidecar_tests {
     /// the document's file from then on.
     #[test]
     fn the_first_save_after_recovering_asks_instead_of_writing_the_sidecars_path() {
-        let ctx = &egui::Context::default();
+        let _ctx = &egui::Context::default();
         let ctx = &egui::Context::default();
         let dir = TestDir::new();
         let folder = dir.path().join("recovery");

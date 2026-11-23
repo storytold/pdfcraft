@@ -8,7 +8,7 @@ use craft::ui::runtime::toast;
 use egui::Pos2;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT as _, Queryable, by};
+use egui_kittest::kittest::{NodeT as _, Queryable};
 use pdfcraft_ui_egui::field_table_ui::FieldTableDialog;
 use pdfcraft_ui_egui::prepare::FieldPropsDialog;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};

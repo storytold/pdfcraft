@@ -222,8 +222,8 @@ mod picture_tests {
     fn click_still_being_looked_into(h: &mut Harness<'static, PdfCraftApp>, at: &impl Fn(f32, f32) -> egui::Pos2) {
         click(h, at(100.0, 150.0));
         h.run_steps(2);
-        let test = std::thread::current().name().and_then(|n| n.rsplit("::").next()).unwrap_or_default().to_owned();
-        let s = h.state();
+        let _test = std::thread::current().name().and_then(|n| n.rsplit("::").next()).unwrap_or_default().to_owned();
+        let _s = h.state();
         assert!(h.state().views[0].session.pending_pick.is_some(), "the click waits for its page");
     }
 

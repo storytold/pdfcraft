@@ -6,7 +6,7 @@
 use crate::support;
 use crate::support::AppHarness as _;
 use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT, Queryable};
+use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::SignatureStatus;
 use pdfcraft_ui_egui::{PdfCraftApp, SignStep};
 

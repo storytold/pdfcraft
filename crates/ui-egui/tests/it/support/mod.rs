@@ -149,14 +149,6 @@ pub fn install_runtime(ctx: &egui::Context) {
     embed::install(ctx, spec, &pdfcraft_ui_egui::fonts::ui_fonts(i18n::Lang::EN)).expect("the runtime installs on a fresh context");
 }
 
-pub fn host_harness(host: Arc<Host>, clipboard: RecordingClipboard) -> Harness<'static, PdfCraftApp> {
-    let app = PdfCraftApp::with_host(host, services(clipboard));
-    Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
-        crate::support::install_runtime(&cc.egui_ctx);
-        app
-    })
-}
-
 /// A clipboard backend the tests share: what the app writes is read back through the clone the test keeps.
 #[derive(Clone, Default)]
 pub struct RecordingClipboard {
@@ -341,7 +333,6 @@ pub trait AppHarness {
     fn set_option(&mut self, key: &str, value: &str) -> Result<(), String>;
     fn undo(&mut self);
     fn redo(&mut self);
-    fn run_command(&mut self, id: &str);
     fn submit_password(&mut self, password: Option<String>);
     fn run_button_script(&mut self, id: pdfcraft_engine::DocId, field: &str, script: &str);
     fn snapshot(&mut self, index: usize, page: usize, view_rect: [f32; 4]) -> Result<(u32, u32), String>;
@@ -367,11 +358,6 @@ impl AppHarness for Harness<'_, PdfCraftApp> {
     fn redo(&mut self) {
         let ctx = self.ctx.clone();
         self.state_mut().redo(&ctx);
-    }
-
-    fn run_command(&mut self, id: &str) {
-        let ctx = self.ctx.clone();
-        self.state_mut().run_command(&ctx, id);
     }
 
     fn submit_password(&mut self, password: Option<String>) {

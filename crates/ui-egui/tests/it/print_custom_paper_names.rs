@@ -2,7 +2,6 @@
 //! standard size would be found first and a printer's custom paper (#2001) would come back as it.
 
 use crate::print::{harness, restore};
-use pdfcraft_ui_egui::PdfCraftApp;
 use std::sync::Arc;
 
 #[test]

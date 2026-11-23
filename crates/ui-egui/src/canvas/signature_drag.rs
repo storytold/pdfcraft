@@ -565,7 +565,6 @@ fn stamp_tile(p: &PageInfo, rect: [f32; 4], scale: f32) -> Option<(f32, Tile)> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use egui::Pos2;
 

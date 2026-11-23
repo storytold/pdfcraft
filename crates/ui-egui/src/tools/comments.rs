@@ -25,7 +25,7 @@ use crate::icons;
 #[cfg(test)]
 use craft::review::ui::annotate::{AnnotateCommand, AnnotateIcons};
 #[cfg(test)]
-use egui::{CornerRadius, Sense, Stroke, pos2, vec2};
+use egui::{pos2, vec2};
 
 mod bridge;
 pub(crate) mod colours;
@@ -42,12 +42,8 @@ use bridge::hover_tip;
 /// The comment thread of the annotation at `(page, index)`: the key the Comments panel files it under.
 pub use bridge::thread_id;
 pub(crate) use bridge::{PageMap, delete_selected, id_of, key_of, kind_of, parts, pdf_date_seconds, rgb8};
-#[cfg(test)]
-pub(crate) use bridge::{annotations, edit, edit_anchor, markers, screen_to_user_rect, thread_key, tips};
 pub(crate) use colours::{RecentColours, border_choice, fill_choice, palette, to_rgb};
 pub(crate) use composer::composer;
-#[cfg(test)]
-use composer::edited_in_view;
 pub(crate) use geometry::caret_snap;
 pub(crate) use geometry::page_rotation;
 #[cfg(test)]
@@ -55,8 +51,6 @@ pub(crate) use geometry::snapped_caret;
 pub use geometry::{drawn_text_box_rect, snug_text_box_rect, text_box_rect};
 pub use menu::CanvasAction;
 pub(crate) use menu::{CommentMenuCx, MenuRights, context_rows, popover_from, quick_bar_controls};
-#[cfg(test)]
-pub(crate) use menu::{QuickBarPick, attachment_items};
 pub(crate) use overlay::{Hover, show};
 pub(crate) use popups::note_popups;
 pub(crate) use state::PageCx;
