@@ -1062,7 +1062,8 @@ trailer << /Root 1 0 R >>
     h.get_by_label("Details").click();
     h.run_steps(3);
     assert_eq!(shown_properties_tab(&h), Some(PropsTab::Advanced.index()), "Document Properties opens on the Advanced tab");
-    h.get_by_label("Repair log");
+    // The section and its heading both carry the name.
+    assert!(h.query_all_by_label("Repair log").next().is_some(), "the repair log shows");
 }
 
 #[test]

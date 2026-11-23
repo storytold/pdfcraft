@@ -1690,7 +1690,8 @@ fn fonts_tab_lists_fonts_and_embedding() {
     let mut h = form_harness();
     h.set_option("dialog", "fonts").unwrap();
     h.run_steps(4);
-    h.get_by_label("Helvetica");
+    // The row and its label both carry the name.
+    assert!(h.query_all_by_label("Helvetica").next().is_some(), "the font is listed");
     h.get_by_label_contains("Not embedded");
 }
 

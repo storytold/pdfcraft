@@ -10427,7 +10427,8 @@ fn format_panel_shows_selection_size_and_updates_after_font_applied() {
     // Apply Times to the selection
     font_node.click();
     h.run_steps(2);
-    h.get_by_label("Times").click();
+    // The row and its first cell both carry the name: the row is the first.
+    h.query_all_by_label("Times").next().expect("the Times row").click();
     h.run_steps(4);
 
     // Font combo box for the whole block is now Mixed because Heading is Helvetica and Paragraph is Times

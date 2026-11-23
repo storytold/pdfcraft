@@ -212,7 +212,8 @@ fn trust_signer_and_inspect_certificate(h: &mut Harness<'static, PdfCraftApp>) {
     h.run_steps(2);
     h.get_by_label("Details").click();
     h.run_steps(2);
-    h.get_by_label("SHA-256 digest");
+    // The row and its label both carry the name.
+    assert!(h.query_all_by_label("SHA-256 digest").next().is_some(), "the digest row shows");
     h.run_steps(2);
     h.get_by_label("Trust").click();
     h.run_steps(2);

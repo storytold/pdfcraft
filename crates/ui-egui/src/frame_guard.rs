@@ -209,7 +209,8 @@ mod tests {
         assert_eq!(app.active, Some(1));
         assert!(app.dialogs.open_dialogs().is_empty(), "the dialog that was showing is dropped");
         assert_eq!(app.panicking_frames, 0, "a frame that draws resets the count");
-        h.get_by_label_contains("injected Ui panic");
+        // The notice card and its text both carry the message.
+        assert!(h.query_all_by_label_contains("injected Ui panic").next().is_some(), "the panic is reported");
         assert_eq!(snapshots(&store), 1, "the edited tab was snapshotted for recovery at once");
     }
 
