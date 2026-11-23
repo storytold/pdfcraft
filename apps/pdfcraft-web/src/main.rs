@@ -86,7 +86,7 @@ fn main() {
                     // channel keeps the accessibility tree of every frame.
                     if query_param("control").is_some() {
                         let (requests, receiver) = std::sync::mpsc::channel();
-                        app.attach_control(receiver, None);
+                        app.attach_control(craft::automation::ControlChannel::new(receiver));
                         api::install(requests);
                     }
                     Ok(Box::new(app))

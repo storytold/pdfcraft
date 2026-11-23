@@ -9,8 +9,11 @@ use crate::PdfCraftApp;
 mod close;
 pub(crate) mod save;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use craft::dialogs::save::SaveTarget;
 pub use save::PendingLock;
+#[cfg(target_arch = "wasm32")]
+pub use save::SaveTarget;
 #[cfg(test)]
 use save::unredacted_file_name;
 

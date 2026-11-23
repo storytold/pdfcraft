@@ -516,7 +516,7 @@ impl PdfCraftApp {
                 && pdfcraft_engine::ocr::engine_unavailable_reason(EngineChoice::Ocrs).is_some()
                 && crate::ocr_web::state() == crate::ocr_web::State::NotStarted
             {
-                crate::ocr_web::start(ctx.clone());
+                crate::ocr_web::start(self.wake.clone());
             }
         }
         // The Output folder row's Choose… asks for a folder; the answer fills the row.
@@ -592,10 +592,8 @@ impl PdfCraftApp {
     fn await_ocr_models(&mut self, scan: &ScanToRead) {
         self.views[scan.view].auto_ocr_awaiting_models.insert(scan.page, scan.generation);
         #[cfg(target_arch = "wasm32")]
-        if crate::ocr_web::state() == crate::ocr_web::State::NotStarted
-            && let Some(ctx) = self.ctx.clone()
-        {
-            crate::ocr_web::start(ctx);
+        if crate::ocr_web::state() == crate::ocr_web::State::NotStarted {
+            crate::ocr_web::start(self.wake.clone());
             self.notify(tl!("Downloading the text recognition models…"));
         }
     }
@@ -672,7 +670,7 @@ impl PdfCraftApp {
         {
             let web = Some(crate::ocr_web::Pages::new(job.steps()));
             self.ocr_run = Some(OcrRun { doc: id, count, guard, automatic: auto, editable, web, web_result: None });
-            self.poll_ocr();
+            self.poll_ocr(ctx);
         }
         #[cfg(not(target_arch = "wasm32"))]
         self.run_ocr_job(ctx, id, job, settings, count, guard, auto, editable);
@@ -731,7 +729,7 @@ impl PdfCraftApp {
             }
         }
         #[cfg(target_arch = "wasm32")]
-        self.ocr_files_into(files, settings);
+        self.ocr_files_into(ctx, files, settings);
     }
 
     /// [`Self::ocr_files`] once the folder for the searchable files is known.
@@ -790,7 +788,7 @@ impl PdfCraftApp {
                 return;
             }
             self.start_web_batch(files, settings);
-            self.poll_ocr();
+            self.poll_ocr(ctx);
         }
         #[cfg(not(target_arch = "wasm32"))]
         self.run_ocr_files(ctx, files, settings, dir);
@@ -834,11 +832,7 @@ impl PdfCraftApp {
                 self.notify(failed(&e));
             }
             // Not loading and not loaded (nothing has started the download): start it.
-            crate::ocr_web::State::NotStarted => {
-                if let Some(ctx) = self.ctx.clone() {
-                    crate::ocr_web::start(ctx);
-                }
-            }
+            crate::ocr_web::State::NotStarted => crate::ocr_web::start(self.wake.clone()),
         }
     }
 
@@ -900,10 +894,8 @@ impl PdfCraftApp {
         if pdfcraft_engine::ocr::engine_unavailable_reason(engine).is_none() {
             return false;
         }
-        if crate::ocr_web::state() != crate::ocr_web::State::Loading
-            && let Some(ctx) = self.ctx.clone()
-        {
-            crate::ocr_web::start(ctx);
+        if crate::ocr_web::state() != crate::ocr_web::State::Loading {
+            crate::ocr_web::start(self.wake.clone());
         }
         self.notify(tl!("Downloading the text recognition models…"));
         true
@@ -911,20 +903,19 @@ impl PdfCraftApp {
 
     /// The web build: advance the pages being read in Web Workers.
     #[cfg(target_arch = "wasm32")]
-    fn pump_web_ocr(&mut self) {
+    fn pump_web_ocr(&mut self, ctx: &egui::Context) {
         self.start_waiting_web_batch();
         if self.views.iter().any(|v| !v.auto_ocr_awaiting_models.is_empty())
             && pdfcraft_engine::ocr::engine_unavailable_reason(EngineChoice::Ocrs).is_none()
         {
             self.ocr_models_loaded();
         }
-        let Some(ctx) = self.ctx.clone() else { return };
         let mut busy = false;
         if let Some(run) = self.ocr_run.as_mut()
             && let Some(pages) = run.web.as_mut()
         {
             busy = true;
-            let found = pages.pump(run.count.cancelled(), &ctx);
+            let found = pages.pump(run.count.cancelled(), ctx);
             run.count.set(pages.done(), pages.total());
             if let Some(found) = found {
                 run.web_result = Some(Ok(found));
@@ -935,7 +926,7 @@ impl PdfCraftApp {
         if let Some(batch) = self.ocr_web_batch.as_mut() {
             busy = true;
             let count = self.ocr_batch.clone();
-            let finished = batch.pump(count.as_ref().is_some_and(|c| c.cancelled()), &ctx);
+            let finished = batch.pump(count.as_ref().is_some_and(|c| c.cancelled()), self.host.files(), ctx);
             if let Some(count) = &count {
                 let (_, total) = count.read();
                 count.set(batch.done(), total);
@@ -954,14 +945,14 @@ impl PdfCraftApp {
             // The workers answer between frames: keep looking.
             ctx.request_repaint_after(std::time::Duration::from_millis(200));
         } else {
-            crate::ocr_web::close_idle_workers(&ctx);
+            crate::ocr_web::close_idle_workers(ctx);
         }
     }
 
     /// Show progress; apply the result once the job is done.
     pub(crate) fn poll_ocr(&mut self, ctx: &egui::Context) {
         #[cfg(target_arch = "wasm32")]
-        self.pump_web_ocr();
+        self.pump_web_ocr(ctx);
         self.poll_ocr_batch();
         self.poll_ocr_run(ctx);
     }

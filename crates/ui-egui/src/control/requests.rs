@@ -1,6 +1,7 @@
 use craft::automation::Reply;
 use craft::automation::files::pick_method;
 use craft::automation::screenshot::CaptureGeometry;
+#[cfg(not(target_arch = "wasm32"))]
 use craft::automation::window::window_method;
 use craft::ui::runtime::windows::WindowHost;
 use egui::ViewportId;
@@ -15,6 +16,8 @@ pub(super) fn handle(app: &mut PdfCraftApp, ctx: &egui::Context, method: &str, p
     if let Some(result) = crate::side_panels::dock_method(app, method, p) {
         return Reply::from_result(result);
     }
+    // The window table (size, position, minimise) is the desktop's: the page owns the web build's window.
+    #[cfg(not(target_arch = "wasm32"))]
     if let Some(result) = window_method(&host, ViewportId::ROOT, method, p) {
         return match result {
             Ok(_) => Reply::AfterInput,

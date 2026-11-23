@@ -1,11 +1,12 @@
 use super::state::{DocumentCopyJob, LeftPanel, LinkOrigin, Mode, PasswordPrompt, PendingLink, QuickTool, RecentFile, RightPanel, UnlockPrompt};
 #[cfg(not(target_arch = "wasm32"))]
 use super::state::{OpenOutcome, OpenRequest, PendingRemoteLink};
+#[cfg(not(target_arch = "wasm32"))]
+use super::{APP_INFO, PendingDestination, PendingOpen, UPDATE_APP, open_worker, recovery};
 use super::{
-    APP_INFO, CommentClip, DocId, DocView, PdfCraftApp, PendingDestination, PendingOpen, PrintDraft, PropsTab, RedactPrefs, RedactSearchDraft,
-    Session, UPDATE_APP, a11y_ui, actions_ui, canvas, chrome, combine_ui, comments, content_ui, dialogs, edit_text_ui, export_ui, fill_sign, i18n,
-    measure_ui, object_ui, ocr_ui, ocr_verify, open_worker, panes, persist, prepare, print_paper, print_ui, recovery, rename_ui, scan_clean_ui,
-    scroll_speed, side_panels, sign_ui, stamps_ui, ui_scale, workflows,
+    CommentClip, DocId, DocView, PdfCraftApp, PrintDraft, PropsTab, RedactPrefs, RedactSearchDraft, Session, a11y_ui, actions_ui, canvas, chrome,
+    combine_ui, comments, content_ui, dialogs, edit_text_ui, export_ui, fill_sign, i18n, measure_ui, object_ui, ocr_ui, ocr_verify, panes, persist,
+    prepare, print_paper, print_ui, rename_ui, scan_clean_ui, scroll_speed, side_panels, sign_ui, stamps_ui, ui_scale, workflows,
 };
 
 use std::hash::Hash;
@@ -14,10 +15,13 @@ use std::sync::Arc;
 
 use craft::host::queue::{JobQueue, QueueOptions};
 use craft::host::{Host, Wake};
-use craft::platform::autosave::{Autosave, RecoveryStore};
+use craft::platform::autosave::Autosave;
+#[cfg(not(target_arch = "wasm32"))]
+use craft::platform::autosave::RecoveryStore;
 use craft::platform::clipboard::Clipboard;
 use craft::platform::open::FileIntake;
 use craft::ui::runtime::env::{RootEnv, Scale};
+#[cfg(not(target_arch = "wasm32"))]
 use craft::ui::shell::embed;
 
 mod clipboard;
@@ -30,6 +34,8 @@ mod keys;
 mod links;
 pub(crate) mod picks;
 mod prefs;
+// Reloading a document whose file changed on disk; the web watches no files.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod reload;
 pub mod settings;
 mod window;
@@ -105,7 +111,6 @@ impl AppServices {
             let watch = craft::platform::watch::FileWatch::new(wake.clone());
             Self::new(wake, clipboard, recovery::prepare_platform_recovery_dir(), None, intake, watch)
         }
-        // PLAN: assumed clipboard::web_clipboard(&egui::Context) -> Clipboard, the browser's event clipboard (pdf-shell-w17).
         #[cfg(target_arch = "wasm32")]
         {
             Self::new(wake, clipboard::web_clipboard(ctx), None, intake)
@@ -219,6 +224,7 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             watch,
         } = services;
+        #[cfg(not(target_arch = "wasm32"))]
         let store = recovery_dir.and_then(|dir| match RecoveryStore::open(dir) {
             Ok(store) => Some(Arc::new(store)),
             Err(e) => {
@@ -226,8 +232,16 @@ impl PdfCraftApp {
                 None
             }
         });
+        #[cfg(not(target_arch = "wasm32"))]
         let recovered = store.as_ref().map(|s| s.leftovers()).unwrap_or_default();
+        #[cfg(not(target_arch = "wasm32"))]
         let autosave = Autosave::new(store.is_some().then(|| std::time::Duration::from_secs_f64(recovery::AUTOSAVE_SECS)));
+        // The browser keeps no recovery folder: autosave is off on the web, and nothing is offered.
+        #[cfg(target_arch = "wasm32")]
+        let (recovered, autosave) = {
+            let _ = recovery_dir;
+            (Vec::new(), Autosave::new(None))
+        };
         Self {
             #[cfg(not(target_arch = "wasm32"))]
             // PLAN: assumed open_worker::queue(&Host, Wake) -> JobQueue<u64, ResultKind> (pdf-shell-w13).
@@ -366,6 +380,7 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             launch_display_target: None,
             picks: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
             save_flow: Default::default(),
             pending_save: None,
             pinned: Default::default(),
@@ -446,6 +461,7 @@ impl PdfCraftApp {
             clipboard,
             page_props_draft: None,
             form_preview: false,
+            #[cfg(not(target_arch = "wasm32"))]
             recovery: store,
             recovered,
             autosave,
@@ -455,6 +471,7 @@ impl PdfCraftApp {
             window_title: String::new(),
             page_title: String::new(),
             control: None,
+            #[cfg(not(target_arch = "wasm32"))]
             control_server: None,
             control_epoch: 0,
             bookmark_clipboard: None,
@@ -702,7 +719,10 @@ impl eframe::App for PdfCraftApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        #[cfg(not(target_arch = "wasm32"))]
         embed::before_ui(ui.ctx(), frame);
+        #[cfg(target_arch = "wasm32")]
+        let _ = frame;
         self.begin_ui();
         // The native file panels the host's file service asked for, over this window.
         #[cfg(not(target_arch = "wasm32"))]

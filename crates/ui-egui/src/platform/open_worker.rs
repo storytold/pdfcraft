@@ -24,6 +24,9 @@ pub(crate) enum ResultKind {
     Prepared {
         bytes: Arc<Vec<u8>>,
         result: Box<Result<PreparedDocument, OpenError>>,
+        /// The named destination the open was asked to show and what the document's name tree says of it, looked
+        /// up here with the document so the tab opens at it (#3425).
+        named: Option<(String, Option<(usize, pdfcraft_render::DestView)>)>,
     },
     ReadFailed(String),
     RemoteFailed(String),
@@ -38,6 +41,8 @@ pub(crate) struct Job {
     pub path: Option<String>,
     pub password: Option<zeroize::Zeroizing<String>>,
     pub input: Input,
+    /// The named destination to look up once the document is prepared.
+    pub named: Option<String>,
 }
 
 /// The queue that prepares opens: one lane, oldest first, so files open in the order they were
@@ -86,8 +91,13 @@ fn prepare(job: Job, cancel: &Cancel) -> ResultKind {
         Some(SourceKind::Office) => return ResultKind::Converted(pdfcraft_engine::office_to_pdf(&job.name, &bytes).map_err(|e| e.to_string())),
         Some(SourceKind::Pdf) | None => {}
     }
-    let result = job.context.prepare_open(job.name, job.path, bytes.clone(), job.password.as_deref().map(String::as_str));
-    ResultKind::Prepared { bytes, result: Box::new(result) }
+    let password = job.password.as_deref().map(String::as_str);
+    let result = job.context.prepare_open(job.name, job.path, bytes.clone(), password);
+    let named = job
+        .named
+        .filter(|_| result.is_ok() && !cancel.is_cancelled())
+        .map(|name| (name.clone(), pdfcraft_render::named_destination(bytes.clone(), password, &name)));
+    ResultKind::Prepared { bytes, result: Box::new(result), named }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

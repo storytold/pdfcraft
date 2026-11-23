@@ -1,4 +1,6 @@
-use super::{DocId, LinkOrigin, OpenRequest, PdfCraftApp, PendingDestination, PendingLink, PendingRemoteLink, open_worker};
+use super::{DocId, LinkOrigin, PdfCraftApp, PendingLink};
+#[cfg(not(target_arch = "wasm32"))]
+use super::{OpenRequest, PendingDestination, PendingRemoteLink, open_worker};
 
 impl PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]
@@ -67,6 +69,15 @@ impl PdfCraftApp {
     pub(super) fn apply_remote_destination(&mut self, destination: pdfcraft_render::RemoteDestination) {
         if let Some(index) = self.views.len().checked_sub(1) {
             self.apply_destination_at(index, destination);
+        }
+    }
+
+    /// Show the named destination `name` that an open looked up with its document (`found`), in the tab it just
+    /// opened.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn apply_looked_up_destination(&mut self, name: String, found: Option<(usize, pdfcraft_render::DestView)>) {
+        if let Some(index) = self.views.len().checked_sub(1) {
+            self.show_destination_at(index, found_destination(found, name));
         }
     }
 

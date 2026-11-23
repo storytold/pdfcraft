@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 # The framework facade with the crates the UI uses (owed by pdf-hub-w1, which owns this manifest).
-craft = { workspace = true, features = ["ui", "ui-app","draw", "pages", "print", "review", "dialogs", "docpath", "font-catalog", "text", "text-font-picker", "text-find", "font-manager", "theme-store", "imaging", "window", "settings", "platform", "platform-clipboard", "atomic", "automation", "keymap", "menu", "quit", "web-host"] }
+craft = { workspace = true, features = ["ui", "ui-app","draw", "pages", "print", "review", "docpath", "font-catalog", "text", "text-font-picker", "text-find", "font-manager", "theme-store", "imaging", "window", "settings", "platform", "platform-clipboard", "atomic", "automation", "keymap", "menu", "quit", "web-host"] }
 edit-session = { workspace = true }
 craft-ui = { workspace = true }
 # The menus: native on macOS, an egui bar elsewhere, from one definition (menus.rs).
@@ -57,8 +57,10 @@ unicode-bidi = "0.3"
 skrifa = "0.44"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# Help ▸ Check for updates: the facade's update crate builds only natively.
-craft = { workspace = true, features = ["update", "platform-clipboard-system"] }
+# Help ▸ Check for updates: the facade's update crate builds only natively. The file service and the save flow
+# (`dialogs`) sit on rfd's blocking panels and threads, so they are native too; the web saves through the
+# platform's BrowserFiles (`editing/save.rs`).
+craft = { workspace = true, features = ["update", "platform-clipboard-system", "dialogs"] }
 # Control-channel tokens.
 getrandom = "0.4"
 # Create ▸ Clipboard (images; already in the tree through egui-winit).

@@ -1,11 +1,42 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::PathBuf;
+use std::sync::Arc;
 
-use craft::dialogs::save::{SaveDocument, SaveStep, SaveTarget};
+#[cfg(not(target_arch = "wasm32"))]
+use craft::dialogs::save::{SaveDocument, SaveStep};
 use craft::host::{FileFilter, WriteIntent};
+#[cfg(target_arch = "wasm32")]
+use craft::host::{PickId, PickRequest, Picked};
+#[cfg(not(target_arch = "wasm32"))]
 use craft::ui::dialog::{DialogId, PromptChoice, StandardPrompt};
 use pdfcraft_engine::DocId;
 
 use super::PdfCraftApp;
+#[cfg(not(target_arch = "wasm32"))]
+use super::SaveTarget;
+
+/// Where a save writes, on the web. The desktop's is the framework save flow's
+/// (`craft::dialogs::save::SaveTarget`); craft-dialogs builds only natively (rfd's blocking panels,
+/// threads), so the web keeps the same three answers here.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SaveTarget {
+    /// File › Save: the document's own file; asks for one when it has none.
+    InPlace,
+    /// File › Save As: always asks; the document takes the new file.
+    As,
+    /// File › Save a Copy: always asks; the document keeps its own file.
+    Copy,
+}
+
+/// A web save the browser's save picker holds ([`craft::host::Files::save`]): the bytes went with the
+/// request, so the answer only says where they ended up.
+#[cfg(target_arch = "wasm32")]
+struct BrowserSave {
+    ticket: PickId,
+    bytes: Arc<Vec<u8>>,
+}
 
 /// What runs once a save has ended one way or the other, given the context of the pass it ends on.
 type SaveThen = Box<dyn FnOnce(&mut PdfCraftApp, &egui::Context)>;
@@ -34,14 +65,21 @@ pub struct PendingSave {
     /// Whether the content held applied redactions, and whether it restored saved ones, when the
     /// save proposed its name: a change while the picker was open makes that name wrong.
     // PLAN: the decision names `(usize, usize)` counts; the rule compares these two facts, as the old continuation did (`save.rs:112-113`), so a further Apply alone does not ask again
+    // The web asks nothing between the name and the write: its bytes go with the picker.
+    #[cfg(not(target_arch = "wasm32"))]
     redactions: (bool, bool),
     /// The changed-on-disk question on screen, answered in [`PdfCraftApp::save_flow_pass`].
+    #[cfg(not(target_arch = "wasm32"))]
     prompt: Option<DialogId>,
+    /// The browser's save picker, on the web.
+    #[cfg(target_arch = "wasm32")]
+    browser: Option<BrowserSave>,
 }
 
 impl PendingSave {
     /// The changed-on-disk question is on screen or answered and not yet taken: the document must
     /// stay the version the user was asked about until the save takes the answer.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn asking(&self) -> bool {
         self.prompt.is_some()
     }
@@ -122,8 +160,33 @@ impl PdfCraftApp {
         // anyone who can write the recovery folder can name any file there (#3923). An email
         // attachment's temporary copy asks too: that is the flow's own rule.
         let target = if not_delivered || unredacted || self.recovered_paths.contains(&id) { SaveTarget::As } else { target };
-        let document = SaveDocument {
+        let pending = PendingSave {
             key: id,
+            after: Some(Box::new(after)),
+            failed: Some(Box::new(failed)),
+            #[cfg(not(target_arch = "wasm32"))]
+            redactions: (redacted, unredacted),
+            #[cfg(not(target_arch = "wasm32"))]
+            prompt: None,
+            #[cfg(target_arch = "wasm32")]
+            browser: None,
+        };
+        self.start_save(ctx, pending, name, path, saved, target)
+    }
+
+    /// Hands the save to the framework's save flow: the picker, the changed-on-disk question, then the write.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_save(
+        &mut self,
+        ctx: &egui::Context,
+        mut pending: PendingSave,
+        name: String,
+        path: Option<String>,
+        saved: Arc<Vec<u8>>,
+        target: SaveTarget,
+    ) -> bool {
+        let document = SaveDocument {
+            key: pending.key,
             name,
             path: path.map(PathBuf::from),
             extension: "pdf".into(),
@@ -134,22 +197,108 @@ impl PdfCraftApp {
         let step = self.save_flow.start(self.host.files(), &self.watch, document, target);
         if step == SaveStep::Busy {
             self.notify_tr("Finish the save in progress before starting another.");
-            failed(self, ctx);
+            if let Some(failed) = pending.failed.take() {
+                failed(self, ctx);
+            }
             return false;
         }
-        self.pending_save = Some(PendingSave {
-            key: id,
-            after: Some(Box::new(after)),
-            failed: Some(Box::new(failed)),
-            redactions: (redacted, unredacted),
-            prompt: None,
-        });
+        self.pending_save = Some(pending);
         self.run_save_step(ctx, step)
+    }
+
+    /// The web's save: the document's own file goes to the page or the downloads now; anything else
+    /// is written through the browser's save picker ([`craft::host::Files::save`], the platform's
+    /// BrowserFiles), which falls back to a download, and answers on a later pass
+    /// ([`Self::save_flow_pass`]). Nothing on the page can change behind the app's back, so there is
+    /// no changed-on-disk question.
+    #[cfg(target_arch = "wasm32")]
+    fn start_save(
+        &mut self,
+        ctx: &egui::Context,
+        mut pending: PendingSave,
+        name: String,
+        path: Option<String>,
+        _saved: Arc<Vec<u8>>,
+        target: SaveTarget,
+    ) -> bool {
+        let id = pending.key;
+        if self.pending_save.is_some() {
+            self.notify_tr("Finish the save in progress before starting another.");
+            if let Some(failed) = pending.failed.take() {
+                failed(self, ctx);
+            }
+            return false;
+        }
+        if target == SaveTarget::InPlace
+            && let Some(path) = path
+        {
+            let saved = self.save_doc_to(ctx, id, Path::new(&path), target);
+            let then = if saved { pending.after.take() } else { pending.failed.take() };
+            if let Some(then) = then {
+                then(self, ctx);
+            }
+            return saved;
+        }
+        let Some((_, bytes)) = self.document_bytes(ctx, id, target, None) else {
+            if let Some(failed) = pending.failed.take() {
+                failed(self, ctx);
+            }
+            return false;
+        };
+        let file_name = if name.to_ascii_lowercase().ends_with(".pdf") { name } else { format!("{name}.pdf") };
+        let mut request = PickRequest::save("document").file_name(file_name).suggested_extension("pdf");
+        request.filters = vec![FileFilter::new("PDF", &["pdf"])];
+        let ticket = self.host.files().save(request, bytes.to_vec());
+        pending.browser = Some(BrowserSave { ticket, bytes });
+        self.pending_save = Some(pending);
+        false
+    }
+
+    /// The browser's save picker answered: where the bytes went, a failure or a cancel.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn save_flow_pass(&mut self, ctx: &egui::Context) {
+        let Some(ticket) = self.pending_save.as_ref().and_then(|p| p.browser.as_ref()).map(|b| b.ticket) else { return };
+        let Some(picked) = self.host.files().take_answer(ticket) else { return };
+        let Some(mut pending) = self.pending_save.take() else { return };
+        let Some(browser) = pending.browser.take() else { return };
+        let id = pending.key;
+        let name = self.session.get(id).map(|d| d.name.clone()).unwrap_or_default();
+        let saved = match picked {
+            // The picker wrote the file the user chose; the document takes its name.
+            Picked::Paths(paths) => match paths.first() {
+                Some(path) => {
+                    let saved = self.finish_save(ctx, id, browser.bytes, Some(path.to_string_lossy().into_owned()));
+                    if saved {
+                        self.notify_fmt("Saved {name}", &[("name", &short_name(path))]);
+                    }
+                    saved
+                }
+                None => false,
+            },
+            // A download names no file the app could write again: the document keeps its own.
+            Picked::Downloaded(file) => {
+                let saved = self.finish_save(ctx, id, browser.bytes, None);
+                if saved {
+                    self.notify_fmt("Downloaded {name}", &[("name", &file)]);
+                }
+                saved
+            }
+            Picked::Failed(e) => {
+                self.notify_fmt("Couldn't save {name}: {e}", &[("name", &name), ("e", &e)]);
+                false
+            }
+            Picked::Cancelled | Picked::Unavailable(_) | Picked::Contents(_) => false,
+        };
+        let then = if saved { pending.after.take() } else { pending.failed.take() };
+        if let Some(then) = then {
+            then(self, ctx);
+        }
     }
 
     /// Each pass: the save picker's answer, and the changed-on-disk question's. Neither is the
     /// frame's input: both are taken once from where they wait, so a second pass in a frame finds
     /// nothing the first took, and no answer is applied twice.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn save_flow_pass(&mut self, ctx: &egui::Context) {
         if let Some(step) = self.save_flow.take_pick(self.host.files(), &self.watch) {
             self.run_save_step(ctx, step);
@@ -173,6 +322,7 @@ impl PdfCraftApp {
     }
 
     /// Carry out what the save flow asked for next. Returns `true` if the document was written.
+    #[cfg(not(target_arch = "wasm32"))]
     fn run_save_step(&mut self, ctx: &egui::Context, step: SaveStep<DocId>) -> bool {
         match step {
             SaveStep::Write { key, path, target } => self.write_step(ctx, key, &path, target),
@@ -208,6 +358,7 @@ impl PdfCraftApp {
     }
 
     /// The flow's Write step: write document `id` to `path`, then run what waited on the save.
+    #[cfg(not(target_arch = "wasm32"))]
     fn write_step(&mut self, ctx: &egui::Context, id: DocId, path: &Path, target: SaveTarget) -> bool {
         // An Apply redactions or an Undo of one while the picker was open makes the name it
         // proposed wrong: ask again with the name for the current content.
@@ -314,35 +465,8 @@ impl PdfCraftApp {
     /// written. The service writes atomically on the desktop and hands the bytes to the page or
     /// the browser's downloads on the web.
     fn save_doc_to(&mut self, ctx: &egui::Context, id: DocId, dest: &Path, target: SaveTarget) -> bool {
-        // Save As answers on a later pass: commit what was typed meanwhile, too (#166), even if
-        // another tab is active by then.
-        if !self.commit_typing_in(ctx, id) || !self.flatten_fill_sign_for_save(ctx, id) {
-            return false;
-        }
         let dest_text = dest.to_string_lossy().into_owned();
-        let recovered = self.recovered_paths.contains(&id);
-        let Some((name, full)) = self.session.get(id).map(|d| {
-            // Save As to another file and a recovered document are clean copies, without earlier
-            // revisions that may retain deleted pages or replaced text (#2165, #3923). A signed
-            // document stays incremental so its signatures keep covering the file.
-            let full = (target != SaveTarget::InPlace || recovered)
-                && !d.path.as_deref().is_some_and(|p| crate::same_file(p, &dest_text))
-                && d.read_only_reason.is_none()
-                && !d.is_signed();
-            (d.name.clone(), full)
-        }) else {
-            self.notify_tr("The document was closed before it could be saved.");
-            return false;
-        };
-        self.run_document_actions(ctx, id, pdfcraft_engine::js::DocumentScriptEvent::WillSave);
-        let bytes = if full { self.session.save_full_bytes(id) } else { self.session.save_bytes(id) };
-        let bytes = match bytes.and_then(|b| self.session.check_save(id, &b).map(|()| b)) {
-            Ok(b) => b,
-            Err(e) => {
-                self.notify_fmt("Couldn't save {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
-                return false;
-            }
-        };
+        let Some((_, bytes)) = self.document_bytes(ctx, id, target, Some(&dest_text)) else { return false };
         let intent = if target == SaveTarget::InPlace { WriteIntent::Save } else { WriteIntent::SaveAs };
         let to_page = match self.host.files().write(dest, &bytes, intent) {
             Ok(to_page) => to_page,
@@ -352,8 +476,64 @@ impl PdfCraftApp {
             }
         };
         // Our own write is not a change on disk to reload (#431), and the flow is free again.
+        #[cfg(not(target_arch = "wasm32"))]
         self.save_flow.written(&mut self.watch, id, dest);
-        match self.session.mark_saved(id, bytes, Some(dest_text.clone())) {
+        if !self.finish_save(ctx, id, bytes, Some(dest_text)) {
+            return false;
+        }
+        // A page that took the bytes reports where they went itself; the browser's downloads say
+        // nothing, so the notice does.
+        if !to_page {
+            let short = short_name(dest);
+            if cfg!(target_arch = "wasm32") {
+                self.notify_fmt("Downloaded {name}", &[("name", &short)]);
+            } else {
+                self.notify_fmt("Saved {name}", &[("name", &short)]);
+            }
+        }
+        #[cfg(target_os = "macos")]
+        crate::macos_association::repair(dest);
+        true
+    }
+
+    /// The bytes a save of document `id` writes, with the document's name; `None` (with a notice
+    /// when something failed) when nothing should be written. Commits what is typed and runs the
+    /// document's Will Save actions first. `dest` is the file being written, when known.
+    fn document_bytes(&mut self, ctx: &egui::Context, id: DocId, target: SaveTarget, dest: Option<&str>) -> Option<(String, Arc<Vec<u8>>)> {
+        // Save As answers on a later pass: commit what was typed meanwhile, too (#166), even if
+        // another tab is active by then.
+        if !self.commit_typing_in(ctx, id) || !self.flatten_fill_sign_for_save(ctx, id) {
+            return None;
+        }
+        let recovered = self.recovered_paths.contains(&id);
+        let Some((name, full)) = self.session.get(id).map(|d| {
+            // Save As to another file and a recovered document are clean copies, without earlier
+            // revisions that may retain deleted pages or replaced text (#2165, #3923). A signed
+            // document stays incremental so its signatures keep covering the file.
+            let full = (target != SaveTarget::InPlace || recovered)
+                && !d.path.as_deref().is_some_and(|p| dest.is_some_and(|dest| crate::same_file(p, dest)))
+                && d.read_only_reason.is_none()
+                && !d.is_signed();
+            (d.name.clone(), full)
+        }) else {
+            self.notify_tr("The document was closed before it could be saved.");
+            return None;
+        };
+        self.run_document_actions(ctx, id, pdfcraft_engine::js::DocumentScriptEvent::WillSave);
+        let bytes = if full { self.session.save_full_bytes(id) } else { self.session.save_bytes(id) };
+        match bytes.and_then(|b| self.session.check_save(id, &b).map(|()| b)) {
+            Ok(b) => Some((name, b)),
+            Err(e) => {
+                self.notify_fmt("Couldn't save {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
+                None
+            }
+        }
+    }
+
+    /// The document `id` was written as `bytes`: it is saved now, under `path` when it takes a new
+    /// file. Returns `true` unless reopening the written bytes failed.
+    fn finish_save(&mut self, ctx: &egui::Context, id: DocId, bytes: Arc<Vec<u8>>, path: Option<String>) -> bool {
+        match self.session.mark_saved(id, bytes, path) {
             Ok(()) => {
                 self.forget_recovery(id);
                 self.placed_signatures.remove(&id);
@@ -370,18 +550,6 @@ impl PdfCraftApp {
                     view.redactions_undone_after_save = 0;
                     view.saved_redactions_cut_off = false;
                 }
-                // A page that took the bytes reports where they went itself; the browser's
-                // downloads say nothing, so the notice does.
-                if !to_page {
-                    let short = short_name(dest);
-                    if cfg!(target_arch = "wasm32") {
-                        self.notify_fmt("Downloaded {name}", &[("name", &short)]);
-                    } else {
-                        self.notify_fmt("Saved {name}", &[("name", &short)]);
-                    }
-                }
-                #[cfg(target_os = "macos")]
-                crate::macos_association::repair(dest);
                 true
             }
             Err(e) => {

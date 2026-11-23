@@ -471,7 +471,9 @@ pub struct PdfCraftApp {
     launch_display_target: Option<DocId>,
     /// The file picks asked of the host's file service and not answered yet.
     pub(crate) picks: app::picks::Picks,
-    /// Where a save that asks first (Save As, a replace question) stands.
+    /// Where a save that asks first (Save As, a replace question) stands. The web saves through the
+    /// browser's own picker instead ([`editing::save::PendingSave`]).
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) save_flow: craft::dialogs::save::SaveFlow<DocId>,
     /// A save waiting for the answer to a question it asked.
     pub(crate) pending_save: Option<editing::save::PendingSave>,
@@ -642,8 +644,9 @@ pub struct PdfCraftApp {
     /// Prepare a form ▸ Preview: fill the form instead of editing its fields.
     pub form_preview: bool,
     /// Where autosaves go (`None`: autosave off, e.g. on the web and in tests).
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) recovery: Option<std::sync::Arc<craft::platform::autosave::RecoveryStore>>,
-    /// Copies an earlier run left, offered for recovery.
+    /// Copies an earlier run left, offered for recovery (none on the web, which keeps no recovery folder).
     pub(crate) recovered: Vec<craft::platform::autosave::RecoveryEntry>,
     /// When each document is due for its next autosave.
     pub(crate) autosave: craft::platform::autosave::Autosave,
@@ -661,6 +664,7 @@ pub struct PdfCraftApp {
     /// The UI control channel, when enabled (`--control`; off by default).
     control: Option<craft::automation::ControlChannel>,
     /// The control server, while it listens (the desktop app's `--control`).
+    #[cfg(not(target_arch = "wasm32"))]
     control_server: Option<craft::automation::server::Listening>,
     /// Changes whenever what injected input aims at changes, so the control channel withdraws
     /// input aimed at what was there before.

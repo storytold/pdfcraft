@@ -147,6 +147,7 @@ impl PdfCraftApp {
     ///
     /// The deadline is monotonic (`web_time::Instant`): egui's input clock does not advance
     /// during a hidden `run_logic`, so using it would stall autosave or restart its interval.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn autosave_tick(&mut self, ctx: &egui::Context, now: web_time::Instant) {
         if self.recovery.is_none() {
             return;
@@ -158,6 +159,10 @@ impl PdfCraftApp {
             ctx.request_repaint_after(deadline.saturating_duration_since(now));
         }
     }
+
+    /// The web keeps no recovery folder: nothing is autosaved.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn autosave_tick(&mut self, _ctx: &egui::Context, _now: web_time::Instant) {}
 
     /// Opens the offer for the first entry a previous run left, once nothing else (a password
     /// prompt of an entry just recovered) is in front, and acts on the answer. Called once per
