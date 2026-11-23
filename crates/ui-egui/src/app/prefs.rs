@@ -188,6 +188,7 @@ impl PdfCraftApp {
         v["hotbar"] = serde_json::to_value(&self.hotbar).unwrap_or_default();
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
+        v["dvorak_qwerty_command"] = serde_json::Value::Bool(self.dvorak_qwerty_command);
         v["text_links"] = serde_json::Value::Bool(self.text_links);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language;
@@ -272,6 +273,9 @@ impl PdfCraftApp {
         }
         if let Some(on) = v["show_secured_notice"].as_bool() {
             self.show_secured_notice = on;
+        }
+        if let Some(on) = v["dvorak_qwerty_command"].as_bool() {
+            self.dvorak_qwerty_command = on;
         }
         if let Some(on) = v["text_links"].as_bool() {
             self.text_links = on;
@@ -585,5 +589,32 @@ impl PdfCraftApp {
             let certs = pems.iter().filter_map(|p| pdfcraft_engine::sign::x509::load_certificates(p.as_bytes()).ok()).flatten().collect();
             self.apply_trusted_certificates(certs);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::PdfCraftApp;
+
+    #[test]
+    fn match_command_by_position_survives_save_and_restore() {
+        let mut app = PdfCraftApp::new();
+        assert!(!app.dvorak_qwerty_command, "off by default");
+        app.dvorak_qwerty_command = true;
+        let saved = app.persist();
+        let mut restored = PdfCraftApp::new();
+        restored.restore(&saved);
+        assert!(restored.dvorak_qwerty_command);
+    }
+
+    #[test]
+    fn match_command_by_position_ignores_a_non_bool_value() {
+        let mut app = PdfCraftApp::new();
+        app.restore(r#"{"dvorak_qwerty_command":"yes"}"#);
+        assert!(!app.dvorak_qwerty_command, "a string is not a setting");
+        app.restore(r#"{"dvorak_qwerty_command":true}"#);
+        assert!(app.dvorak_qwerty_command);
+        app.restore(r#"{"dvorak_qwerty_command":1}"#);
+        assert!(app.dvorak_qwerty_command, "a number keeps the value it had");
     }
 }

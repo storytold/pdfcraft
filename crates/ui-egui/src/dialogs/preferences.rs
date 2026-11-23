@@ -662,6 +662,11 @@ fn card_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut 
     #[cfg(not(target_arch = "wasm32"))]
     ctx.checkbox(ui, &mut app.update_check_at_start, tl!("Check for updates when PdfCraft starts"), t);
     ctx.checkbox(ui, &mut app.show_secured_notice, tl!("Show a notice when a document is secured"), t);
+    if crate::commands::mac_shortcuts(ui.ctx()) {
+        ctx.checkbox(ui, &mut app.dvorak_qwerty_command, tl!("Match Command shortcuts by key position"), t).on_hover_text(tl!(
+            "For the macOS Dvorak - QWERTY ⌘ layout: Command shortcuts follow the QWERTY key position, so Command+V pastes on Dvorak. Leave off for ordinary Dvorak."
+        ));
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
