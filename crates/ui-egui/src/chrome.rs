@@ -26,6 +26,8 @@ pub(crate) const HOME_ICON: &str = "home";
 /// The shell carries out every screen-mode change; the mode it ends the pass with goes back to the
 /// app, which does the presentation work in one place.
 pub(crate) fn shell(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    // Production's dialogs end with their buttons: no close x in the title row.
+    craft::ui::dialog::set_close_button(ui.ctx(), false);
     let hidden = app.hidden_interface();
     let modes_visible = !hidden.mode_bar(app.native_menu.is_some());
     let window_ui = !hidden.window_ui;
@@ -94,11 +96,7 @@ fn title_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let theme_label = format!("{}: {theme_label}", tl!("Display theme"));
     let out = TitleBar::new()
         .trailing(|ui, _| {
-            Button::command("help.discord")
-                .label("Discord")
-                .icon(IconId::new("messages-square"))
-                .tooltip(tl!("Join the ArtCraft Discord"))
-                .show(ui);
+            Button::command("help.discord").label("Discord").icon(IconId::new("messages-square")).tooltip(tl!("Join the ArtCraft Discord")).show(ui);
             IconButton::command(IconId::new("circle-help"), "help.shortcuts").show(ui);
             let theme_button = IconButton::command(IconId::new(theme_icon), ThemeChoice::NextMode.command()).label(theme_label.clone()).show(ui);
             let opener = theme_button.response().clone();

@@ -288,7 +288,7 @@ pub(crate) fn follow_link(links: &PageLinks<'_>, press: &PagePress) -> Option<(L
 fn link_part(owner: Owner, page: usize, shape: HitShape, tip: Option<String>) -> PagePart {
     let part = PagePart::new(owner, page, shape, PageLayer::Link).cursor(CursorIcon::PointingHand).passes_drag();
     match tip {
-        Some(tip) => part.tip_now(tip),
+        Some(tip) => part.tip_now(tip).tip_below(),
         None => part,
     }
 }

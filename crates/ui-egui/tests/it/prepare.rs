@@ -791,12 +791,15 @@ fn choice_option_actions_are_available_without_hover() {
     use pdfcraft_engine::{Edit, NewField};
     let mut h = harness();
     let ctx = h.ctx.clone();
-    h.state_mut().apply_edit(&ctx, Edit::AddField {
-        page: 0,
-        rect: [40.0, 260.0, 240.0, 310.0],
-        kind: NewField::Combo { options: vec!["Apple".into(), "Banana".into()], editable: false },
-        name: Some("fruit".into()),
-    });
+    h.state_mut().apply_edit(
+        &ctx,
+        Edit::AddField {
+            page: 0,
+            rect: [40.0, 260.0, 240.0, 310.0],
+            kind: NewField::Combo { options: vec!["Apple".into(), "Banana".into()], editable: false },
+            name: Some("fruit".into()),
+        },
+    );
     open_props(&mut h, "fruit");
     tab(&mut h, "Options");
     h.get_by_label("Delete Apple");

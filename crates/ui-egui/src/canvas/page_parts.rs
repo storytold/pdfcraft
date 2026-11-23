@@ -183,6 +183,7 @@ pub(crate) struct PagePart {
     pub(crate) layer: PageLayer,
     cursor: Option<CursorIcon>,
     tip: Option<(String, TooltipWhen)>,
+    tip_below: bool,
     stacking: Option<u32>,
     passes_drag: bool,
     context_only: bool,
@@ -201,6 +202,7 @@ impl PagePart {
             layer,
             cursor: None,
             tip: None,
+            tip_below: false,
             stacking: None,
             passes_drag: false,
             context_only: false,
@@ -230,6 +232,13 @@ impl PagePart {
     #[must_use]
     pub(crate) fn cursor(mut self, cursor: CursorIcon) -> Self {
         self.cursor = Some(cursor);
+        self
+    }
+
+    /// The tip stands below the part, clear of its text, as production's link target does, not beside the pointer.
+    #[must_use]
+    pub(crate) fn tip_below(mut self) -> Self {
+        self.tip_below = true;
         self
     }
 
@@ -444,7 +453,8 @@ impl Component for PageParts<'_> {
                 builder = builder.cursor(cursor);
             }
             if let Some((tip, when)) = &part.tip {
-                builder = builder.tooltip(TooltipSpec::new(Label::from(tip.clone())).at(TooltipAt::Pointer).when(*when));
+                let at = if part.tip_below { TooltipAt::Control } else { TooltipAt::Pointer };
+                builder = builder.tooltip(TooltipSpec::new(Label::from(tip.clone())).at(at).when(*when));
             }
             if part.focusable {
                 builder.focusable();

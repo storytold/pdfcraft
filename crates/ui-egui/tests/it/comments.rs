@@ -3977,10 +3977,12 @@ fn an_uncoloured_notes_popup_uses_the_yellow_note_default() {
     let x1 = window.right().min(pixels.width() as f32) as u32;
     let y0 = window.top().max(0.0) as u32;
     let y1 = (window.top() + 16.0).min(pixels.height() as f32) as u32;
-    let yellow = (y0..y1).any(|y| (x0..x1).any(|x| {
-        let [r, g, b, _] = pixels.get_pixel(x, y).0;
-        r > 200 && g > 150 && b < 150
-    }));
+    let yellow = (y0..y1).any(|y| {
+        (x0..x1).any(|x| {
+            let [r, g, b, _] = pixels.get_pixel(x, y).0;
+            r > 200 && g > 150 && b < 150
+        })
+    });
     assert!(yellow, "a note without a colour has a yellow popup header");
 }
 

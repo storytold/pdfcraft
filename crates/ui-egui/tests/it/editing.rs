@@ -1047,7 +1047,12 @@ fn save_prompt_fits_the_smallest_window_whatever_the_name() {
         assert!(inside(title_rect), "{start}…: the title rect {title_rect:?} leaves the screen");
         let opening = format!("Save changes to “{start}");
         assert!(
-            h.query_all_by(|n| n.label().or(n.value()).is_some_and(|l| l.starts_with(&opening) && l.contains('…') && l.contains(".pdf” before closing?"))).next().is_some(),
+            h.query_all_by(|n| n
+                .label()
+                .or(n.value())
+                .is_some_and(|l| l.starts_with(&opening) && l.contains('…') && l.contains(".pdf” before closing?")))
+                .next()
+                .is_some(),
             "{start}…: the title keeps the start and the extension"
         );
         for button in [save_answer(), "Cancel", dont_save()] {

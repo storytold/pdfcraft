@@ -263,11 +263,8 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft) {
                 format!("{}, {then}", act.describe())
             };
             let delete = Label::from(crate::i18n::fmt(tl!("Delete {o}"), &[("o", tl!(tr.label()))]));
-            let mut item = ListRow::new(format!("{}: {summary}", tl!(tr.label()))).trailing_part(
-                DELETE,
-                TrailingFace::Strong(tl!("Delete").into()),
-                delete,
-            );
+            let mut item =
+                ListRow::new(format!("{}: {summary}", tl!(tr.label()))).trailing_part(DELETE, TrailingFace::Strong(tl!("Delete").into()), delete);
             if !editing && matches!(act, pdfcraft_engine::FieldAction::JavaScript(_)) {
                 item = item.trailing_part(EDIT, TrailingFace::Strong(tl!("Edit").into()), tl!("Edit"));
             }

@@ -523,8 +523,11 @@ impl PdfCraftApp {
         let direction = if lang.rtl() { craft_i18n::Direction::Rtl } else { craft_i18n::Direction::Ltr };
         let system = craft::ui::runtime::env::system_text_scale(ctx).unwrap_or(1.0);
         let native = ctx.native_pixels_per_point().unwrap_or(1.0);
-        let mut root =
-            RootEnv::new().mode(self.theme_preference).density(craft::theme::Size::Comfortable).direction(direction).scale(Scale::new(crate::ui_scale::zoom(self.ui_scale, system, native)));
+        let mut root = RootEnv::new()
+            .mode(self.theme_preference)
+            .density(craft::theme::Size::Comfortable)
+            .direction(direction)
+            .scale(Scale::new(crate::ui_scale::zoom(self.ui_scale, system, native)));
         if let Ok(theme) = craft::theme::ThemeId::parse("craft.graphite") {
             root.set_theme(theme);
         }

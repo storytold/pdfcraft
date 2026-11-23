@@ -62,10 +62,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
     let Some(find) = view.find.as_mut() else { return result };
     find.in_panel = true;
     Text::new(tl!("What word or phrase would you like to search for?").to_string()).show(ui);
-    let field = TextField::search(tl!("Search").to_string(), Bind::bound(&mut find.query))
-        .placeholder(tl!("Search"))
-        .select_on_focus()
-        .show(ui);
+    let field = TextField::search(tl!("Search").to_string(), Bind::bound(&mut find.query)).placeholder(tl!("Search")).select_on_focus().show(ui);
     // The bar was asked for (⇧⌘F, also with the panel open): the field takes the focus once.
     if find.bar.taken() {
         focus::request(ui.ctx(), FocusTarget::Id(field.response.id));

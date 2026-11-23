@@ -9,13 +9,13 @@ use craft::keymap::CommandRef;
 use craft::theme::TypeRole;
 use craft::theme::variant::{Tone, Variant};
 use craft::ui::buttons::{Button, IconButton};
+use craft::ui::contract::Gap;
 use craft::ui::contract::{ActivateOn, CollectionEvent, Pad, Props as _, Show as _, ShowCollection as _, ShowContainer as _, clicked};
 use craft::ui::display::{PictureSize, Text};
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::ThumbSize;
 use craft::ui::notices::Notice;
 use craft::ui::runtime::env::Env;
-use craft::ui::contract::Gap;
 use craft::ui::sections::{HeaderStrength, Section};
 use craft::ui::shell::{RecentFile, StartAction, StartPlace, StartScreen};
 use craft::ui::style::{DataColor, SurfaceKind};
@@ -190,7 +190,12 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 .quiet_header()
                 .header_gap(Gap::Section)
                 .controls(|ui, _| {
-                    if Button::new(tl!("Pin a tool…").to_string()).id_salt("pin-a-tool").variant(Variant::GHOST).icon(IconId::new("pin")).show(ui).clicks
+                    if Button::new(tl!("Pin a tool…").to_string())
+                        .id_salt("pin-a-tool")
+                        .variant(Variant::GHOST)
+                        .icon(IconId::new("pin"))
+                        .show(ui)
+                        .clicks
                         > 0
                     {
                         asked.borrow_mut().push(Asked::PinTools);

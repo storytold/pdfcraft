@@ -102,11 +102,21 @@ fn paint_preview(cx: &craft::ui::primitives::ContentPainterCx<'_>, rect: Rect, m
     let page = Rect::from_center_size(rect.center(), vec2(w as f32 * s, h as f32 * s));
     // The page is paper: white, whatever the theme.
     cx.painter.rect_filled(page, CornerRadius::ZERO, egui::Color32::WHITE);
-    cx.painter.rect_stroke(page, CornerRadius::ZERO, Stroke::new(cx.stroke_width(StrokeWidth::Thin), egui::Color32::from_gray(120)), egui::StrokeKind::Outside);
+    cx.painter.rect_stroke(
+        page,
+        CornerRadius::ZERO,
+        Stroke::new(cx.stroke_width(StrokeWidth::Thin), egui::Color32::from_gray(120)),
+        egui::StrokeKind::Outside,
+    );
     let [l, bo, ri, to] = margins.map(|v| v as f32 * s);
     let inner = Rect::from_min_max(pos2(page.left() + l, page.top() + to), pos2(page.right() - ri, page.bottom() - bo));
     if inner.is_positive() {
-        cx.painter.rect_stroke(inner, CornerRadius::ZERO, Stroke::new(cx.stroke_width(StrokeWidth::Medium), egui::Color32::from_rgb(38, 115, 230)), egui::StrokeKind::Middle);
+        cx.painter.rect_stroke(
+            inner,
+            CornerRadius::ZERO,
+            Stroke::new(cx.stroke_width(StrokeWidth::Medium), egui::Color32::from_rgb(38, 115, 230)),
+            egui::StrokeKind::Middle,
+        );
     }
 }
 
@@ -144,7 +154,9 @@ fn params(count: usize, current: usize, media: Option<[f64; 4]>) -> Vec<Param> {
         rows.push(
             Param::custom("preview", "", move |ui, fields, _| {
                 let margins = margins_of(fields);
-                Picture::painter(label.clone(), aspect, move |cx, rect| paint_preview(cx, rect, media, margins)).extent(PictureSize::Sample(ThumbSize::Large)).show(ui)
+                Picture::painter(label.clone(), aspect, move |cx, rect| paint_preview(cx, rect, media, margins))
+                    .extent(PictureSize::Sample(ThumbSize::Large))
+                    .show(ui)
             })
             .full_width(),
         );

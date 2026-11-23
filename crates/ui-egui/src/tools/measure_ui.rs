@@ -659,9 +659,9 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let fields = scale_fields(state);
     let before = state.ratio_text.clone();
     let ratio_text = &mut state.ratio_text;
-    let typed = Field::new(tl!("Drawing scale")).id_salt("measure-ratio").show(ui, |ui, _| {
-        TextField::new(tl!("Scale"), Bind::bound(ratio_text)).submits().show(ui)
-    });
+    let typed = Field::new(tl!("Drawing scale"))
+        .id_salt("measure-ratio")
+        .show(ui, |ui, _| TextField::new(tl!("Scale"), Bind::bound(ratio_text)).submits().show(ui));
     state.ratio_dirty |= state.ratio_text != before;
     if typed.inner.as_ref().is_some_and(|t| t.submitted || t.response.lost_focus()) && std::mem::take(&mut state.ratio_dirty) {
         match parse_ratio(&state.ratio_text) {
@@ -670,9 +670,9 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         }
     }
     let ratios: Vec<Entry<String>> = RATIOS.iter().map(|&n| Entry::new(format_ratio(n), format_ratio(n))).collect();
-    let common = Field::new(tl!("Common scales")).id_salt("measure-common").show(ui, |ui, _| {
-        Select::new(tl!("Common scales"), Bind::given(state.ratio_text.clone()), &ratios).show(ui)
-    });
+    let common = Field::new(tl!("Common scales"))
+        .id_salt("measure-common")
+        .show(ui, |ui, _| Select::new(tl!("Common scales"), Bind::given(state.ratio_text.clone()), &ratios).show(ui));
     if let Some(text) = common.inner.as_ref().and_then(|c| c.value())
         && let Some(n) = parse_ratio(text)
         && *text != state.ratio_text

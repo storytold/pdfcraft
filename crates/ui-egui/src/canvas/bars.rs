@@ -25,7 +25,10 @@ pub(super) fn page_size_hint(ui: &mut egui::Ui, body: &PageBody<'_>, page: &pdfc
     // Shrink-wrapped to its text, a little in from the corner, as production's pill sits.
     let font = egui::TextStyle::Body.resolve(ui.style());
     let wide = ui.painter().layout_no_wrap(text.to_string(), font, egui::Color32::WHITE).size().x + 40.0;
-    let corner = egui::Rect::from_min_max(egui::pos2(body.rect.min.x + 10.0, body.rect.min.y), egui::pos2(body.rect.min.x + 10.0 + wide, body.rect.max.y - 10.0));
+    let corner = egui::Rect::from_min_max(
+        egui::pos2(body.rect.min.x + 10.0, body.rect.min.y),
+        egui::pos2(body.rect.min.x + 10.0 + wide, body.rect.max.y - 10.0),
+    );
     let builder = egui::UiBuilder::new().max_rect(corner).layout(egui::Layout::bottom_up(egui::Align::Min)).sense(egui::Sense::hover());
     ui.scope_builder(builder, |ui| {
         Bar::new(Tone::Neutral, text).layout(NoticeLayout::Card).icon(NoticeIcon::None).show(ui);

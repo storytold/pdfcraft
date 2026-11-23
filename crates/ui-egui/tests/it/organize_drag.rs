@@ -61,9 +61,13 @@ fn selected_pages_keep_actions_without_pointer_hover() {
 #[test]
 fn organize_header_paints_a_close_label() {
     let h = organize();
-    assert!(h.output().shapes.iter().any(|shape| {
-        matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Close" && !text.galley.elided)
-    }), "the Organize header must show the Close label");
+    assert!(
+        h.output()
+            .shapes
+            .iter()
+            .any(|shape| { matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Close" && !text.galley.elided) }),
+        "the Organize header must show the Close label"
+    );
 }
 
 fn page_texts(app: &PdfCraftApp) -> Vec<String> {

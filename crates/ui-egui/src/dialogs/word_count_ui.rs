@@ -117,7 +117,9 @@ impl StackDialog for WordCountDialog {
         let WordCountDialog { options, shown, done, key, .. } = self;
         let close = FooterButton::new(tl!("Close").to_string(), DialogRole::Cancel);
         let out = FormDialog::new(tl!("Word count").to_string(), Bind::bound(options)).shaped(|d| d.buttons([close])).show(ui, |ui, _, o| {
-            if key.is_none() && let Some(Err(error)) = shown {
+            if key.is_none()
+                && let Some(Err(error)) = shown
+            {
                 Text::new(error.clone()).show(ui);
                 return true;
             }

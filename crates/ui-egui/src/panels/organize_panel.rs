@@ -11,11 +11,11 @@
 use craft::behavior::{IconId, Selection};
 use craft::pages::ui::PageRangeField;
 use craft::ui::buttons::IconButton;
+use craft::ui::contract::overlay::Anchor;
 use craft::ui::contract::{ActivateOn, Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::layout_components::Row;
-use craft::ui::contract::overlay::Anchor;
-use craft::ui::menu::Menu;
 use craft::ui::list::{List, ListRow, RowInk};
+use craft::ui::menu::Menu;
 use craft::ui::primitives::IconSpec;
 use pdfcraft_engine::Edit;
 
@@ -180,7 +180,8 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             Entry::new(2u8, tl!("Duplicate pages").to_owned()),
         ];
         let mut open = true;
-        let picked = Menu::context(tl!("Insert").to_owned(), &out.response).anchor(Anchor::Point(at)).open(Bind::bound(&mut open)).pick(ui, &entries).picked;
+        let picked =
+            Menu::context(tl!("Insert").to_owned(), &out.response).anchor(Anchor::Point(at)).open(Bind::bound(&mut open)).pick(ui, &entries).picked;
         match picked {
             Some(0) => act = Some(Act::Edit(Box::new(Edit::InsertBlankPage { at: last.saturating_add(1), width: w, height: h }))),
             Some(1) => act = Some(Act::View(ViewAction::InsertFromFile)),
