@@ -66,6 +66,14 @@ pub fn ui_telugu_fonts() -> Vec<&'static CraftFont> {
     CRAFT_FONTS.iter().filter(|f| f.covers("Telu")).collect()
 }
 
+/// The `Taml` craft-fonts faces for Tamil interface text (the Tamil catalog, file names, document
+/// titles), in manifest order. Empty when built without craft-fonts or when its revision has no
+/// Tamil face; a desktop build then falls back to one font already installed on the machine
+/// (`SYSTEM_TAMIL_FALLBACK`), and the web build shows replacement boxes.
+pub fn ui_tamil_fonts() -> Vec<&'static CraftFont> {
+    CRAFT_FONTS.iter().filter(|f| f.covers("Taml")).collect()
+}
+
 /// Thai faces shared by the interface and PDF text writer.
 pub fn ui_thai_fonts() -> Vec<&'static CraftFont> {
     CRAFT_FONTS.iter().filter(|f| f.covers("Thai")).collect()
