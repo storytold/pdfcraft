@@ -116,7 +116,7 @@ fn byte_range(added: &[u8], alg: pdfcraft_cos::Algorithm) -> [usize; 4] {
 #[test]
 fn signed_encrypted_documents_cover_their_earlier_revision() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
-    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![id.certificate.clone()], ..TrustStore::default() };
     for alg in ALL_ALGORITHMS {
         let base = protected(alg, -1);
         let doc = open_pw(&base, None);

@@ -69,7 +69,7 @@ fn edit_after(signed: &[u8], f: impl FnOnce(&mut Document)) -> Vec<u8> {
 /// The certification signature of `bytes`: its status and modification verdict.
 fn verdict(bytes: &[u8]) -> (Status, Modification) {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
-    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![id.certificate.clone()], ..TrustStore::default() };
     let s = signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed && s.certify.is_some()).unwrap();
     (s.status, s.modification)
 }
