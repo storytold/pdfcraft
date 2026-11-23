@@ -3825,6 +3825,35 @@ fn settle_draft(h: &mut Harness<'static, PdfCraftApp>) {
     h.run_steps(1);
 }
 
+/// A draft whose PDF preview fails is drawn by the editor itself, visibly: the raster on screen
+/// is of other text, and the user must see what they are changing.
+#[test]
+fn a_draft_whose_preview_fails_is_shown_in_the_editor() {
+    let bytes = source_font_fixture_with_text("BT /F1 24 Tf 20 220 Td (Top) Tj ET BT /F2 24 Tf 20 120 Td (Bottom) Tj ET");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("boxes.pdf", None, bytes).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let k = r.width() / 300.0;
+    click_at(&mut h, egui::pos2(r.left() + 30.0 * k, r.top() + (300.0 - 228.0) * k));
+    // No PDF font draws an emoji (the interface's emoji face does), so the preview fails.
+    h.state_mut().views[0].line_editor.as_mut().unwrap().text = "Top \u{1F600}".into();
+    settle_draft(&mut h);
+    let drawn = h.output().shapes.iter().any(|shape| match &shape.shape {
+        egui::Shape::Text(t) if t.galley.text() == "Top \u{1F600}" => {
+            t.galley.rows.iter().any(|row| row.visuals.mesh.vertices.iter().any(|v| v.color.a() > 0))
+        }
+        _ => false,
+    });
+    assert!(drawn, "the draft whose preview failed is not visible");
+}
+
 /// Dark pixels in `r`: glyph ink on a white page.
 fn ink(pixels: &image::RgbaImage, r: egui::Rect) -> usize {
     let (x0, y0, x1, y1) = (r.left().max(0.0) as u32, r.top().max(0.0) as u32, r.right() as u32, r.bottom() as u32);

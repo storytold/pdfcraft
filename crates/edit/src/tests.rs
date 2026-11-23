@@ -15732,3 +15732,18 @@ fn many_repeated_untouched_lines_never_count_as_draft_text() {
     assert!(draft[1] > 770.0, "draft bounds include untouched text: {draft:?}");
     assert!(!layout.rows.is_empty());
 }
+
+#[test]
+fn inferred_spaces_get_no_caret_geometry_past_the_page_budget() {
+    // The first run spends the page's whole caret geometry budget, so the spaced runs after it
+    // have none: the spaces inferred between them must not get any either.
+    let mut content = format!("BT /F1 1 Tf 10 700 Td ({}) Tj ET\nBT /F1 12 Tf 72 600 Td", "x".repeat(131_072));
+    for _ in 0..200 {
+        content.push_str(" (a) Tj 20 0 Td");
+    }
+    content.push_str(" ET");
+    let doc = text_page(&content);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let spaced = lines.iter().find(|l| l.text.starts_with("a a")).unwrap();
+    assert_eq!(spaced.caret_positions(), 0, "inferred spaces were given geometry past the page budget");
+}

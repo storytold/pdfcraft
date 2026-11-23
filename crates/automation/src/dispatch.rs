@@ -16,6 +16,17 @@ pub enum Content {
 /// moves to `(a·x + c·y + e, b·x + d·y + f)`) → the same motion in PDF user space, which is
 /// what `ImageEdit::Transform` applies after the image's placement. Both spaces are related by
 /// an affine map, so three corners of the crop box pin the result down.
+/// The draft text `text_edit_layout` and `page_render`'s `draft_paragraph` measure and draw: as
+/// `text_edit` writes it, a width-only change reflows the paragraph (`reflow_text`, which rejoins
+/// soft wraps) and no change at all keeps it as the editor shows it.
+pub(super) fn draft_text<'a>(a: &'a Args, source: &'a pdfcraft_engine::TextBlock) -> Result<&'a str> {
+    Ok(match a.opt_str("text")? {
+        Some(text) => text,
+        None if a.get("width").is_some() => &source.reflow_text,
+        None => &source.editor_text,
+    })
+}
+
 fn view_transform_to_user(info: &pdfcraft_render::PageInfo, m: [f64; 6]) -> Result<[f64; 6]> {
     let [a, b, c, d, e, f] = m;
     let det = a * d - b * c;
@@ -587,7 +598,7 @@ impl Automation {
                 let blocks = doc.text_blocks(page);
                 let index = self.paragraph_index(doc.id, page, k, &blocks)?;
                 let source = blocks.get(index).ok_or_else(|| ToolError::InvalidArgs("paragraph is out of range".into()))?;
-                let text = a.opt_str("text")?.unwrap_or(&source.editor_text);
+                let text = draft_text(&a, source)?;
                 let style = pdfcraft_engine::BlockStyle {
                     size: a.opt_num("size")?,
                     width: a.opt_num("width")?,

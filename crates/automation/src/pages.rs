@@ -90,7 +90,7 @@ impl Automation {
             let blocks = doc.text_blocks(page);
             let index = self.paragraph_index(doc.id, page, paragraph, &blocks)?;
             let source = blocks.get(index).ok_or_else(|| ToolError::InvalidArgs("paragraph is out of range".into()))?;
-            let text = a.opt_str("text")?.unwrap_or(&source.editor_text);
+            let text = super::dispatch::draft_text(a, source)?;
             let style = pdfcraft_engine::BlockStyle {
                 size: a.opt_num("size")?,
                 width: a.opt_num("width")?,

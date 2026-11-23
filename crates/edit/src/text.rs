@@ -147,6 +147,12 @@ pub struct TextLine {
 }
 
 impl TextLine {
+    /// How many caret positions the line holds.
+    #[cfg(test)]
+    pub(crate) fn caret_positions(&self) -> usize {
+        self.characters.len()
+    }
+
     /// Refuses editing a line whose font's writing mode couldn't be read (§9.7.4.3).
     fn ensure_editable(&self) -> Result<(), EditError> {
         self.unreadable_mode.as_ref().map_or(Ok(()), |why| Err(EditError::Invalid(why.clone())))

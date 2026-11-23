@@ -1098,14 +1098,18 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, i
             }
             // White, unless the text is too pale to read on white (white text from a coloured
             // banner, #913): then a dark box, with a caret that shows on it.
-            let fill = if background_ready { Color32::TRANSPARENT } else { editor_fill(text_color) };
+            // Once a draft's PDF preview fails, the editor draws the draft itself, on its own
+            // box over the page, until a draft's preview succeeds: the user must see what they
+            // are changing, even in an interface face.
+            let fallback = preview_error.is_some();
+            let fill = if background_ready && !fallback { Color32::TRANSPARENT } else { editor_fill(text_color) };
             // PDF rasters supply all visible glyphs, including while typing. egui only lays
             // out the caret and selection; its fallback face must never cover the PDF text.
             let unchanged = !ed.has_changes();
             egui::Frame::NONE.show(ui, |ui| {
                 // The PDF draft (or the page while it is pending) keeps the background visible
                 // through the editor. Choose a caret that contrasts with the text's background.
-                ui.visuals_mut().text_cursor.stroke.color = if background_ready || unchanged {
+                ui.visuals_mut().text_cursor.stroke.color = if (background_ready || unchanged) && !fallback {
                     if luminance(text_color) < 0.5 { Color32::BLACK } else { Color32::WHITE }
                 } else {
                     caret_color_on(fill)
@@ -1116,18 +1120,20 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, i
                 let rows = 1;
                 let snapshot = ed.clone();
                 let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
-                    unseen(draft_galley(
+                    let galley = draft_galley(
                         ui,
                         &snapshot,
                         text.as_str(),
                         scale,
                         wrap_width,
                         view.text_background.layout_for(ui.ctx(), doc, &snapshot, text.as_str()),
-                    ))
+                    );
+                    if fallback { galley } else { unseen(galley) }
                 };
                 let before = ed.text.clone();
                 let input = input_id(place);
                 ed.claim_typing(ui.ctx(), view_id, place);
+                let cover = ui.painter().add(egui::Shape::Noop);
                 let start_paint = ui.painter().add(egui::Shape::Noop);
                 let output = egui::TextEdit::multiline(&mut ed.text)
                     .id(input)
@@ -1140,7 +1146,9 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, i
                     .desired_rows(rows)
                     .show(ui);
                 let end_paint = ui.painter().add(egui::Shape::Noop);
-                if !view.text_background.current(ed) {
+                if fallback {
+                    ui.painter().set(cover, egui::Shape::rect_filled(ed.rect.expand(1.0).union(output.response.rect), CornerRadius::ZERO, fill));
+                } else if !view.text_background.current(ed) {
                     // TextEdit still receives every keystroke, but its provisional caret and
                     // selection must not appear over a raster of different text. The worker
                     // publishes the PDF ink and exact geometry together on the next repaint.
@@ -1150,7 +1158,7 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, i
                 }
                 // The editor paints over the page with no visible label; name it for assistive tech.
                 output.response.response.clone().accessible_name(tl!("Text editing line"));
-                if ed.has_changes() && background_ready {
+                if ed.has_changes() && background_ready && !fallback {
                     reveal = true;
                 }
                 drew_editor = true;
@@ -2037,6 +2045,74 @@ C", &picked
         }
         assert_eq!(background.layout_for(&ctx, doc, &ed, &ed.text), Some(&doc.text_edit_layout(0, 0, &ed.text, &ed.style()).unwrap()));
         assert_eq!(background.worker.as_ref().unwrap().queued().1, 2);
+    }
+
+    /// Applying a draft whose preview timed out must not leave the previous draft's raster up as
+    /// its look; applying the draft the raster shows still does.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn only_the_raster_of_the_applied_draft_stands_in_for_it() {
+        let (app, mut ed) = preview_app();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        let ctx = egui::Context::default();
+        let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, egui::vec2(600.0, 800.0)), rot: 0, pw: 600.0, ph: 800.0 };
+        let shown = |background: &mut TextBackground, ed: &LineEditor| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            background.prepare(&ctx, doc, Some(ed), None, 1.0);
+            while !background.current(ed) {
+                background.prepare(&ctx, doc, Some(ed), None, 1.0);
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        };
+        let applied = |ed: &LineEditor| Edit::EditTextBlock { page: 0, block: 0, text: ed.text.clone(), style: ed.style() };
+        // Draft A is drawn, draft B times out: the texture still shows A.
+        let mut background = TextBackground::default();
+        ed.text = "Draft A".into();
+        shown(&mut background, &ed);
+        ed.text = "Draft B".into();
+        let worker = background.worker.as_ref().unwrap();
+        worker.pause(true);
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        background.submitted_at = Some(web_time::Instant::now() - std::time::Duration::from_secs(21));
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        assert!(background.error_for(0, 0).is_some(), "the preview of B timed out");
+        background.remember(&xf, 0, 0);
+        background.committed(&applied(&ed));
+        assert!(!background.settling(), "A's raster stood in for applied draft B");
+        background.worker.as_ref().unwrap().pause(false);
+        // The draft on screen is the one applied: its raster stays up until the page is redrawn.
+        let mut background = TextBackground::default();
+        shown(&mut background, &ed);
+        background.remember(&xf, 0, 0);
+        background.committed(&applied(&ed));
+        assert!(background.settling());
+    }
+
+    /// Closing the paragraph releases the worker's session and the document snapshot it holds,
+    /// while the worker itself stays for the next paragraph.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn closing_the_editor_releases_the_draft_session() {
+        let (app, mut ed) = preview_app();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        let ctx = egui::Context::default();
+        let mut background = TextBackground::default();
+        ed.text = "A changed draft".into();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        while !background.current(&ed) {
+            background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let source = std::sync::Arc::downgrade(background.source().unwrap());
+        background.prepare(&ctx, doc, None, None, 1.0);
+        assert!(background.worker.is_some(), "the worker stays for the next paragraph");
+        while source.upgrade().is_some() {
+            assert!(std::time::Instant::now() < deadline, "the closed paragraph's draft source is still held");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
     }
 
     #[test]

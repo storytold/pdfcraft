@@ -498,7 +498,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
             let gap = last.map_or(0.0, |(_, pen)| pen.continues(&s, 0.0).1);
             let spaced = gap - s.tracking > l.size * s.state.scale.abs() * 0.2 && !l.text.ends_with(' ') && !s.text.starts_with(' ');
             if spaced {
-                if l.characters.len() < 131_072 {
+                if l.characters.len() < 131_072 && has_caret_geometry(&s) {
                     l.characters.push(super::caret::CharacterPosition { ch: ' ', left: l.rect[2], right: s.start_x });
                 }
                 l.text.push(' ');
@@ -624,7 +624,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
         let gap = last.map_or(0.0, |pen| pen.continues(&s, 0.0).1);
         let spaced = gap - s.tracking > l.size * s.state.scale.abs() * 0.2 && !l.text.ends_with(' ') && !s.text.starts_with(' ');
         if spaced {
-            if l.characters.len() < 131_072 {
+            if l.characters.len() < 131_072 && has_caret_geometry(&s) {
                 l.characters.push(super::caret::CharacterPosition { ch: ' ', left: l.rect[2], right: s.start_x });
             }
             l.text.push(' ');
@@ -925,4 +925,11 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
     }
     lines.retain(|l| !l.text.trim().is_empty());
     Ok((lines, w.budget.truncated))
+}
+
+/// Whether run `s` has caret geometry for all its text. An inferred space before it gets
+/// geometry only then: the space is no use to a caret without the run's, and this bounds the
+/// spaces by the runs that spent the page's geometry budget (`Carry::characters_left`).
+fn has_caret_geometry(s: &Shown) -> bool {
+    !s.characters.is_empty() && s.characters.len() == s.text.chars().count()
 }

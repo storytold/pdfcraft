@@ -21,6 +21,9 @@ pub(crate) struct TextBackground {
     scale: f32,
     draft_key: Option<(String, pdfcraft_engine::BlockStyle)>,
     render_key: Option<(String, pdfcraft_engine::BlockStyle)>,
+    /// The draft the texture shows: set only when one is uploaded, so a draft whose preview
+    /// failed or timed out never passes for the one on screen.
+    texture_key: Option<(String, pdfcraft_engine::BlockStyle)>,
     draft_layout: Option<pdfcraft_engine::TextEditLayout>,
     draft_error: Option<String>,
     /// This frame's place for the PDF draft under the open paragraph's editor. It stays
@@ -59,17 +62,18 @@ impl TextBackground {
     /// draft raster until the page is rendered again; any other edit ends both.
     pub fn committed(&mut self, edit: &Edit) {
         let look = self.look.take().filter(|look| {
-            matches!(edit, Edit::EditTextBlock { page, block, .. } if (look.page, look.block) == (*page, *block))
+            // Only a raster of the applied text and style stands in for it.
+            matches!(edit, Edit::EditTextBlock { page, block, text, style }
+                if (look.page, look.block) == (*page, *block)
+                    && self.texture_key.as_ref().is_some_and(|(shown, shown_style)| shown == text && shown_style == style))
                 && self.key.is_some_and(|(_, page, target)| (page, target) == (look.page, TextTarget::Block(look.block)))
                 && self.texture.is_some()
-                && self.serial.is_none()
-                && self.draft_key == self.render_key
         });
         match look {
             Some(look) => {
                 self.retire_renderer();
                 if let Some(worker) = &mut self.worker {
-                    worker.cancel();
+                    worker.release();
                 }
                 self.settling = Some(look);
             }
@@ -94,7 +98,7 @@ impl TextBackground {
         let retiring = std::mem::take(&mut self.retiring);
         let mut worker = self.worker.take();
         if let Some(worker) = &mut worker {
-            worker.cancel();
+            worker.release();
         }
         *self = Self { key, retiring, worker, ..Default::default() };
     }
@@ -147,6 +151,7 @@ impl TextBackground {
                         } else {
                             self.texture = Some(ctx.load_texture("text-editor-background", image, egui::TextureOptions::LINEAR));
                         }
+                        self.texture_key = self.render_key.clone();
                         self.draft_error = None;
                     }
                     Err(error) => {
@@ -251,6 +256,16 @@ impl TextBackground {
             }
         }
         if self.serial.is_none() && self.draft_key == self.render_key { self.draft_layout.as_ref() } else { None }
+    }
+
+    #[cfg(test)]
+    pub(super) fn settling(&self) -> bool {
+        self.settling.is_some()
+    }
+
+    #[cfg(test)]
+    pub(super) fn source(&self) -> Option<&Arc<pdfcraft_engine::TextDraftSource>> {
+        self.source.as_ref()
     }
 
     pub fn current(&self, ed: &LineEditor) -> bool {

@@ -27,6 +27,9 @@ struct Queue {
     request: Option<(u64, Request)>,
     reply: Option<Reply>,
     shutdown: bool,
+    /// The editor closed: drop the session (and the document snapshot it holds) once the work
+    /// in flight is done.
+    release: bool,
     #[cfg(test)]
     paused: bool,
     #[cfg(test)]
@@ -113,6 +116,18 @@ impl DraftWorker {
         queue.reply = None;
     }
 
+    /// Cancel, and release the session of the paragraph that was open: the worker stays for the
+    /// next paragraph, but the closed one's document snapshot must not stay with it.
+    pub fn release(&mut self) {
+        self.cancel();
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.session = None;
+        }
+        self.queue.0.lock().unwrap_or_else(PoisonError::into_inner).release = true;
+        self.queue.1.notify_one();
+    }
+
     pub fn poll(&mut self) -> Option<Reply> {
         // Keep the existing single-threaded web build functional. Native preparation and
         // rendering both run on the worker; the web build still performs one combined pass.
@@ -161,11 +176,16 @@ fn run(shared: Arc<(Mutex<Queue>, Condvar)>, ctx: egui::Context) {
         let (serial, request) = {
             let (lock, ready) = &*shared;
             let mut queue = lock.lock().unwrap_or_else(PoisonError::into_inner);
-            while (queue.request.is_none() || paused(&queue)) && !queue.shutdown {
+            while (queue.request.is_none() || paused(&queue)) && !queue.shutdown && !queue.release {
                 queue = ready.wait(queue).unwrap_or_else(PoisonError::into_inner);
             }
             if queue.shutdown {
                 return;
+            }
+            if std::mem::take(&mut queue.release) {
+                drop(queue);
+                session = None;
+                continue;
             }
             let Some(request) = queue.request.take() else { continue };
             request

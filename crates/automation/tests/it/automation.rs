@@ -13696,6 +13696,26 @@ fn narrowing_then_widening_keeps_a_typed_double_space_through_tools() {
     }
 }
 
+/// A width-only draft measures and draws what `text_edit` writes for that width: the paragraph
+/// reflowed, its soft wraps rejoined, not kept as the editor's rows.
+#[test]
+fn width_only_drafts_reflow_as_text_edit_does() {
+    let dir = workdir("draft-width-reflow");
+    std::fs::write(dir.join("a.pdf"), helvetica_page("BT /F1 24 Tf 20 150 Td (One Two) Tj ET")).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "width": 45.0 }));
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({ "doc": doc, "page": 1 }))["paragraphs"][0]["editor_text"], "One\nTwo");
+    let wide = json!({ "doc": doc, "page": 1, "paragraph": 1, "width": 200.0 });
+    let layout = ok(&mut a, "text_edit_layout", wide.clone());
+    let render = json!({ "doc": doc, "page": 1, "dpi": 72 });
+    let preview = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72, "draft_paragraph": 1, "width": 200.0 })).unwrap();
+    ok(&mut a, "text_edit", wide);
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({ "doc": doc, "page": 1 }))["paragraphs"][0]["editor_text"], "One Two");
+    assert_eq!(layout["rows"].as_array().unwrap().len(), 1, "the draft keeps the soft wrap: {layout}");
+    assert_eq!(preview, a.call("page_render", &render).unwrap(), "the draft preview differs from the applied width");
+}
+
 fn paragraph_texts(a: &mut Automation, doc: u64) -> Vec<String> {
     ok(a, "text_paragraphs", json!({ "doc": doc, "page": 1 }))["paragraphs"]
         .as_array()
