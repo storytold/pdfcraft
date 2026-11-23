@@ -29,6 +29,21 @@ fn pdf(pages: &[&str]) -> Vec<u8> {
     raw_pdf(&pages.iter().map(|text| format!("BT /F1 12 Tf 20 150 Td ({text}) Tj ET")).collect::<Vec<_>>())
 }
 
+/// An XFA form the inspector classes static (#3180): no AcroForm fields, but a configuration that
+/// forbids dynamic rendering, so the PDF page — carrying `text` — is the form, not a placeholder.
+fn static_xfa_pdf(text: &str) -> Vec<u8> {
+    let config = r#"<config xmlns="http://www.xfa.org/schema/xci/3.0/"><acrobat><acrobat7><dynamicRender>forbidden</dynamicRender></acrobat7></acrobat></config>"#;
+    Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [] /XFA [(config) 6 0 R (template) 7 0 R] >> >>")
+        .obj("<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 400 300] >>")
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>")
+        .stream("", &format!("BT /F1 12 Tf 20 150 Td ({text}) Tj ET"))
+        .stream("", config)
+        .stream("", "<template/>")
+        .build()
+}
+
 /// Long enough for a first page on a busy machine, and far short of `slow_pdf`'s second.
 const PAGE_LIMIT: Duration = Duration::from_millis(300);
 
@@ -304,6 +319,18 @@ fn a_dynamic_xfa_form_is_skipped_and_the_rest_is_still_searched() {
     let found = run(&Options::new(&folder.0, "needle"));
     assert_eq!(reasons(&found, &xfa), [&Skip::DynamicXfa], "a dynamic XFA form is skipped, not read as placeholder text: {:?}", found.skipped);
     assert_eq!(found.summary.matches, 1, "a normal PDF in the same search still returns its match");
+}
+
+#[test]
+fn a_config_static_xfa_form_without_fields_stays_searchable() {
+    // No AcroForm fields, but the XFA configuration forbids dynamic rendering, so the inspector
+    // classes it static and its visible pages are the form: folder search must still read it,
+    // not skip it as dynamic XFA.
+    let folder = Folder::new();
+    folder.write("a-static.pdf", &static_xfa_pdf("needle"));
+    let found = run(&Options::new(&folder.0, "needle"));
+    assert!(found.skipped.is_empty(), "a config-static XFA form is not skipped: {:?}", found.skipped);
+    assert_eq!(found.summary.matches, 1, "its visible text stays searchable");
 }
 
 #[test]
