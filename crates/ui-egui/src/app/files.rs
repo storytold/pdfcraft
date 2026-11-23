@@ -454,10 +454,7 @@ impl PdfCraftApp {
         if let Some(p) = path {
             #[cfg(target_os = "macos")]
             macos_association::repair(std::path::Path::new(&p));
-            self.recent.retain(|r| r.path != p);
-            self.recent_check.opened(&p);
-            self.recent.insert(0, RecentFile { name: name.to_string(), path: p, pages, size });
-            self.recent.truncate(self.recent_limit);
+            self.record_recent(RecentFile { name: name.to_string(), path: p, pages, size });
         }
         // What the form's scripts said while it opened (messages, errors) shows now, not with
         // the next edit.
@@ -790,6 +787,45 @@ impl PdfCraftApp {
         }
     }
 
+    /// A file just read from disk goes to the front of history, replacing any row for the same file.
+    fn record_recent(&mut self, entry: RecentFile) {
+        self.recent_check.opened(&entry.path);
+        self.promote_recent(entry);
+    }
+
+    /// Put `entry` at the front of history, replacing any row for the same file.
+    fn promote_recent(&mut self, entry: RecentFile) {
+        self.recent.retain(|r| !same_file(&r.path, &entry.path));
+        self.recent.insert(0, entry);
+        self.recent.truncate(self.recent_limit);
+    }
+
+    /// Activate an existing tab and move its file to the front of history, keeping its edits.
+    ///
+    /// Nothing is read from disk here, so the row describes the saved file as far as is known:
+    /// while the document has unsaved edits, a row the file already has keeps its page count and
+    /// size, and only a file with no row (after Clear Recent Files) is described from memory.
+    /// Nor does a tab prove its file still exists, so the path is queued for the missing-file
+    /// check instead of being recorded as opened.
+    fn focus_open_tab(&mut self, index: usize) {
+        self.active = Some(index);
+        let entry = self.views.get(index).and_then(|view| self.session.get(view.id)).and_then(|doc| {
+            let mut entry = RecentFile { name: doc.name.clone(), path: doc.path.clone()?, pages: doc.info.pages.len(), size: doc.bytes.len() };
+            if doc.dirty
+                && let Some(saved) = self.recent.iter().find(|r| same_file(&r.path, &entry.path))
+            {
+                entry.pages = saved.pages;
+                entry.size = saved.size;
+            }
+            Some(entry)
+        });
+        let Some(entry) = entry else { return };
+        if self.recent_limit > 0 {
+            self.recent_check.focused(&entry.path);
+        }
+        self.promote_recent(entry);
+    }
+
     /// The tab already showing the file at `path` (the same path, or one that names the same
     /// file once made absolute).
     pub(crate) fn tab_showing(&self, path: &str) -> Option<usize> {
@@ -800,7 +836,7 @@ impl PdfCraftApp {
     /// Open Recent and the Home view's list share this).
     pub fn open_recent(&mut self, path: &str) {
         if let Some(i) = self.tab_showing(path) {
-            self.active = Some(i);
+            self.focus_open_tab(i);
         } else {
             #[cfg(not(target_arch = "wasm32"))]
             self.open_path(path);
@@ -822,6 +858,7 @@ impl PdfCraftApp {
         self.open_path_request(path, then, None)
     }
 
+    /// Reuse, join or open a local file, retaining any requested tool and launch display mode.
     #[cfg(not(target_arch = "wasm32"))]
     fn open_path_request(&mut self, path: &str, then: Option<&'static str>, display_override: Option<(canvas::PageLayout, bool)>) -> OpenOutcome {
         // `manual.pdf#nameddest=Intro`, as a help system starts a PDF reader (#3425): the file,
@@ -846,7 +883,7 @@ impl PdfCraftApp {
         // and the tool it was opened for runs on it. One still being opened is left to that.
         if let Some(i) = self.tab_showing(path) {
             self.startup_superseded = true;
-            self.active = Some(i);
+            self.focus_open_tab(i);
             if let Some((layout, continuous)) = display_override
                 && let Some(view) = self.views.get_mut(i)
             {
