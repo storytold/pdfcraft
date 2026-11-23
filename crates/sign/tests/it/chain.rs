@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use pdfcraft_cos::Document;
+use pdfcraft_sign::cms::EssCertId;
 use pdfcraft_sign::der::{self, Time, tag};
 use pdfcraft_sign::keys::DigestAlg;
 use pdfcraft_sign::pkcs12::DigitalId;
@@ -452,4 +453,27 @@ fn another_certificate_for_the_same_key_does_not_take_the_signers_place() {
     assert!(parse_token(&token).is_ok());
     assert!(parse_token(&name_another_signer(&token, &other, &[&other])).is_err());
     assert!(parse_token(&name_another_signer(&token, &id.certificate, &[&twin, &id.certificate])).is_ok());
+}
+
+/// The issuer a signing-certificate attribute gives is compared as a name (RFC 5280 §7.1), not as
+/// bytes: written in the other string type or case it is still the certificate's issuer; with its
+/// RDNs in another order it is another name.
+#[test]
+fn the_signing_certificate_attribute_gives_the_issuer_as_a_name() {
+    let r = root();
+    let cert = end_entity("Leaf", &r).cert;
+    let named_by = |rdns: &[&[u8]]| EssCertId {
+        digest: DigestAlg::Sha256,
+        hash: DigestAlg::Sha256.digest(&[cert.raw.as_slice()]),
+        issuer: Some(der::seq(rdns)),
+        serial: Some(cert.serial.clone()),
+    };
+    let rdn = |oid: &str, value: Vec<u8>| der::set_of(&[&der::seq(&[&der::oid(oid), &value])]);
+    // The issuer has C as a PrintableString and O and CN as UTF8Strings.
+    let c = rdn("2.5.4.6", der::utf8("us"));
+    let o = rdn("2.5.4.10", der::printable("CHAIN  TESTS"));
+    let cn = rdn("2.5.4.3", der::printable("test root"));
+    assert_ne!(der::seq(&[&c, &o, &cn]), cert.issuer.raw);
+    assert!(named_by(&[&c, &o, &cn]).names(&cert), "the same name in other string types and case");
+    assert!(!named_by(&[&cn, &o, &c]).names(&cert), "the same RDNs in reverse order");
 }

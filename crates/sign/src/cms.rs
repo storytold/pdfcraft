@@ -63,7 +63,7 @@ impl EssCertId {
     pub fn names(&self, cert: &Certificate) -> bool {
         self.digest.digest(&[cert.raw.as_slice()]) == self.hash
             && self.serial.as_deref().is_none_or(|s| strip(s) == strip(&cert.serial))
-            && self.issuer.as_deref().is_none_or(|i| i == cert.issuer.raw.as_slice())
+            && self.issuer.as_deref().is_none_or(|i| cert.issuer.same_as(i))
     }
 }
 
