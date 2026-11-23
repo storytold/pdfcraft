@@ -38,6 +38,7 @@ pub mod js;
 mod layers;
 pub mod links;
 mod live_scripts;
+mod mark_picture;
 pub mod model3d;
 mod object_clip;
 pub mod ocr;
@@ -77,6 +78,7 @@ pub use links::{
     MAX_REMOTE_DOCUMENT_BYTES, RemoteDocumentPathError, read_remote_document, remote_document_path_is_absolute, resolve_remote_document_path,
 };
 pub use live_scripts::{MAX_TIMER_RUNS, ScriptRun};
+pub use mark_picture::{MAX_MARK_PICTURE_SIDE, MarkPicture, mark_picture};
 pub use pdfcraft_edit::strip_subset_tag;
 pub use rich_copy::RichCopy;
 pub use signature_image::{ImageSignaturePreview, SignatureImage};
