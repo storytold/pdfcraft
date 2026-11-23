@@ -1512,6 +1512,44 @@ fn advanced_search_lists_results_with_context() {
     assert!(!h.state().views[i].find.as_ref().unwrap().in_panel);
 }
 
+/// The Search panel heads each page's results with the page's label, as the page box does.
+#[test]
+fn advanced_search_heads_results_with_page_labels() {
+    let mut h = harness();
+    let i = h.state().active.unwrap();
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::NumberPages {
+        from: 0,
+        to: 1,
+        style: pdfcraft_engine::LabelStyle::LowerRoman,
+        prefix: String::new(),
+        first: 1,
+    });
+    h.run_steps(2);
+    let labels: Vec<String> = {
+        let s = h.state();
+        s.session.get(s.views[i].id).unwrap().info.pages.iter().map(|p| p.label.clone()).collect()
+    };
+    assert_eq!(labels, ["i", "ii"]);
+    assert!(h.state_mut().execute("edit.advanced_search"));
+    h.run_steps(2);
+    h.state_mut().views[i].find.as_mut().unwrap().query = "pages".into();
+    // Background rendering and text extraction can take seconds on a loaded CI runner (FreeBSD VM).
+    for _ in 0..3000 {
+        h.run_steps(2);
+        if h.state().views[i].find.as_ref().is_some_and(|f| f.matches.len() == 2) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(2);
+    h.get_by_label("2 instances");
+    h.get_by_label("Page i");
+    h.get_by_label("Page ii");
+    for number in ["Page 1", "Page 2"] {
+        assert!(h.query_by_label(number).is_none(), "{number}: the label, not the page number");
+    }
+}
+
 #[test]
 fn optimizer_audits_space_usage() {
     let mut h = harness();
