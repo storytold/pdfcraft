@@ -97,6 +97,26 @@ fn the_draft_preview_of_an_ocr_word_covers_the_scan_as_apply_does() {
     assert!(ink * 100 > px.len() * 3, "the draft shows in the scan's ink colour: {ink} of {}", px.len());
 }
 
+/// The draft's layout is measured from the rewrite Apply makes of an OCR phrase (only its
+/// changed words redrawn, over the scan), not from a rewrite of the whole phrase.
+#[test]
+fn the_draft_layout_of_an_ocr_phrase_matches_what_apply_writes() {
+    let (mut s, id) = scanned_with(vec![word("Wide", 10.0, 40.0, 70.0), word("apart", 45.5, 75.0, 70.0), word("words", 80.5, 110.0, 70.0)]);
+    let blocks = s.get(id).unwrap().text_blocks(0);
+    assert_eq!(blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["Wide apart words"], "one OCR phrase");
+    let draft = "Wide apart word";
+    let layout = s.get(id).unwrap().text_edit_layout(0, 0, draft, &Default::default()).unwrap();
+    s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: draft.into(), style: Default::default() }).unwrap();
+    let lines = s.get(id).unwrap().text_lines(0);
+    let last = lines.iter().filter(|l| l.text.contains("word")).map(|l| l.rect[2]).fold(f64::NEG_INFINITY, f64::max);
+    let draft_end = layout.draft_rect.expect("the draft is measured")[2];
+    assert!((last - draft_end).abs() < 1.0, "the draft is measured to {draft_end}, the applied text ends at {last}");
+    // Caret rows, when there are any, come from that same rewrite.
+    if let Some(caret_end) = layout.rows.last().and_then(|row| row.characters.last()) {
+        assert!((last - caret_end[1]).abs() < 1.0, "the caret ends at {}, the applied text at {last}", caret_end[1]);
+    }
+}
+
 #[test]
 fn an_explicit_colour_is_kept_for_the_new_text() {
     let (mut s, id) = scanned();
