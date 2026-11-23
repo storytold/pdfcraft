@@ -471,10 +471,12 @@ impl PdfCraftApp {
     /// bar.
     pub(crate) fn native_bar(&self, ctx: &egui::Context) -> Layout {
         let mut layout = craft::menu::mac_layout(&self.menu_bar(ctx), &layout_options());
-        craft::menu::apply_state(&mut layout.bar, |command| {
+        let mut bar = craft::ui::contract::Tracked::new(std::mem::take(&mut layout.bar));
+        craft::menu::apply_state(&mut bar, |command| {
             let resolved = resolve(ctx, command.clone());
             ItemState::default().enabled(resolved.enabled).checked(resolved.checked)
         });
+        layout.bar = bar.into_inner();
         layout
     }
 
