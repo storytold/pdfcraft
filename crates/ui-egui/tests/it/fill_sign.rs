@@ -976,6 +976,116 @@ fn browse_image(h: &mut Harness<'static, PdfCraftApp>, path: &std::path::Path) {
     h.state_mut().pick_override = Some(vec![path.to_string_lossy().into_owned()]);
     h.get_by_label("Browse…").click();
     h.run_steps(3);
+    if h.state().signature_draft.image_import.is_some() {
+        settle_image(h);
+    }
+}
+
+fn settle_image(h: &mut Harness<'static, PdfCraftApp>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
+        h.run_steps(2);
+        let draft = &h.state().signature_draft;
+        if draft.saved().is_some() || draft.image_import.as_ref().is_some_and(|d| d.problem.is_some()) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("image cleanup did not finish: {:?}", h.state().signature_draft);
+}
+
+/// Rebuilding a preview while dragging must not move the modal or the rail under the pointer.
+#[test]
+fn image_signature_sensitivity_keeps_the_dialog_and_slider_stationary() {
+    let path = signature_file("sensitivity-layout");
+    let image = pdfcraft_engine::SignatureImage::from_bytes(&std::fs::read(&path).unwrap()).unwrap();
+    for language in ["en", "it"] {
+        let mut h = harness();
+        h.state_mut().set_option("language", language).unwrap();
+        h.state_mut().signature = Some(SavedSig::Image(image.clone()));
+        h.state_mut().execute("sign.fill.signature.change");
+        h.state_mut().signature_draft.image_import.as_mut().unwrap().options.remove_background = true;
+        h.run_steps(8);
+        let card = |h: &Harness<'_, PdfCraftApp>| h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::unique("dialog").with("card"))).unwrap();
+        let original_card = card(&h);
+        let rail = h.get_by_role(egui::accesskit::Role::Slider).rect();
+        h.hover_at(rail.center());
+        h.run_steps(1);
+        h.drag_at(rail.center());
+        for fraction in [0.0, 0.04, 0.09, 0.1, 0.5, 0.95, 1.0, 0.5] {
+            h.hover_at(egui::pos2(egui::lerp(rail.x_range(), fraction), rail.center().y));
+            for _ in 0..4 {
+                h.run_steps(1);
+                assert_eq!(card(&h), original_card, "{language}, drag {fraction}");
+                assert_eq!(h.get_by_role(egui::accesskit::Role::Slider).rect(), rail, "{language}, slider moved");
+            }
+        }
+        h.drop_at(rail.center());
+        settle_image(&mut h);
+        assert_eq!(card(&h), original_card, "{language}, completed preview");
+        assert!(h.state().signature_draft.saved().is_some());
+        h.state_mut().signature_draft.image = None;
+        h.state_mut().signature_draft.image_import.as_mut().unwrap().problem =
+            Some("No signature was found. Adjust the ink sensitivity or keep the original image.".into());
+        h.run_steps(4);
+        assert_eq!(card(&h), original_card, "{language}, error overlay");
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+/// Image import previews transparent ink, restores the original and places an undoable signature.
+#[test]
+fn image_signature_cleanup_removes_haze_and_can_restore_the_original() {
+    let _gpu = gpu();
+    let path = std::env::temp_dir().join(format!("pdfcraft-signature-haze-{}.png", std::process::id()));
+    let mut rgba = image::RgbaImage::from_pixel(200, 80, image::Rgba([0, 0, 128, 5]));
+    for y in 25..55 {
+        for x in 30..170 {
+            if !(28..52).contains(&y) || !(33..167).contains(&x) {
+                rgba.put_pixel(x, y, image::Rgba([10, 10, 10, 220]));
+            }
+        }
+    }
+    rgba.save(&path).unwrap();
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    h.get_by_label("Image").click();
+    h.run_steps(2);
+    browse_image(&mut h, &path);
+    let wait = |h: &mut Harness<'static, PdfCraftApp>| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while std::time::Instant::now() < deadline {
+            h.run_steps(2);
+            if h.state().signature_draft.saved().is_some() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("cleanup did not finish: {:?}", h.state().signature_draft);
+    };
+    wait(&mut h);
+    let cleaned = h.state().signature_draft.image.clone().unwrap();
+    assert_eq!(cleaned.rgba()[3], 0);
+    h.get_by_label("Remove background").click();
+    wait(&mut h);
+    assert_eq!(h.state().signature_draft.image.as_ref().unwrap().rgba()[3], 5, "restore source alpha");
+    h.get_by_label("Remove background").click();
+    wait(&mut h);
+    assert_eq!(h.state().signature_draft.image.as_ref().unwrap(), &cleaned, "recompute from source, not previous output");
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        h.render().unwrap().save(format!("{dir}/signature-cleanup-dialog.png")).unwrap();
+    }
+    h.get_by_label("Apply").click();
+    h.run_steps(3);
+    click(&mut h, 40.0, 200.0);
+    assert_eq!(items(&h).len(), 1);
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.image_signature_preview(0, 0).unwrap().unwrap().image, cleaned);
+    h.state_mut().execute("edit.undo");
+    h.run_steps(3);
+    assert!(items(&h).is_empty());
+    std::fs::remove_file(path).unwrap();
 }
 
 #[test]
@@ -2013,6 +2123,8 @@ fn scanned_signatures_are_framed_cleaned_adjusted_placed_and_remembered() {
     assert_eq!((scan.photo.size(), scan.frame), ([800, 600], one_word));
 
     // A photo with nothing in the frame says so instead of offering an empty signature.
+    let card = || h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::unique("dialog").with("card"))).unwrap();
+    let preview_card = card();
     {
         let d = &mut h.state_mut().signature_draft;
         let scan = d.scan.as_mut().unwrap();
@@ -2023,6 +2135,11 @@ fn scanned_signatures_are_framed_cleaned_adjusted_placed_and_remembered() {
     assert!(h.state().signature_draft.saved().is_none());
     assert!(h.state().signature_draft.scan.as_ref().unwrap().problem.as_ref().unwrap().contains("No signature was found"));
     h.get_by_label("No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.");
+    assert_eq!(
+        h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::unique("dialog").with("card"))).unwrap(),
+        preview_card,
+        "a scan error must not resize the centred dialog"
+    );
     {
         let d = &mut h.state_mut().signature_draft;
         let scan = d.scan.as_mut().unwrap();
@@ -2126,7 +2243,8 @@ fn photos_and_images_dropped_on_the_signature_pad_are_imported_not_opened() {
     h.state_mut().signature_draft.image = None;
     h.input_mut().dropped_files.push(std::sync::Arc::new(Dropped("photo.png".into(), std::fs::read(&photo).unwrap())));
     h.run_steps(3);
-    assert!(h.state().signature_draft.image.is_some(), "the Image tab takes the picture as it is");
+    settle_image(&mut h);
+    assert!(h.state().signature_draft.image.is_some(), "the Image tab cleans the imported picture");
     h.input_mut().dropped_files.push(std::sync::Arc::new(Dropped("broken.png".into(), b"broken".to_vec())));
     h.run_steps(3);
     assert!(h.state().signature_draft.image.is_some(), "an invalid file keeps the previous draft");
