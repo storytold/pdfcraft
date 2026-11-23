@@ -53,6 +53,16 @@ fn gpu() -> std::sync::MutexGuard<'static, ()> {
 }
 
 #[test]
+fn deployment_can_disable_the_automatic_update_check_at_startup() {
+    use std::ffi::OsStr;
+
+    assert!(super::startup_update_check_enabled(None));
+    assert!(super::startup_update_check_enabled(Some(OsStr::new("0"))));
+    assert!(super::startup_update_check_enabled(Some(OsStr::new(""))));
+    assert!(!super::startup_update_check_enabled(Some(OsStr::new("1"))));
+}
+
+#[test]
 fn a_control_channel_that_cant_be_published_stops_the_app() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-app-control-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
