@@ -238,8 +238,9 @@ fn split_again_or_closing_a_panes_last_tab_ends_split_view() {
         focus: false,
     };
     h.state_mut().views[second].fill_text = Some(typed);
+    let second_key = h.state().views[second].view_key();
     h.state_mut().request_close_tab(second);
-    assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Tab(id)), "the typing is asked about");
+    assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Tab { id, key: second_key }), "the typing is asked about");
     let ctx = h.ctx.clone();
     h.state_mut().resolve_close(&ctx, Some(false));
     h.run_steps(3);
@@ -358,4 +359,72 @@ fn the_active_panes_line_is_drawn_under_an_open_menu() {
         .expect("the tab's menu is painted");
     assert!(rects[menu].rect.intersects(line_rect), "the menu crosses the line: {:?} {line_rect:?}", rects[menu].rect);
     assert!(line < menu, "the line was painted over the open menu");
+}
+
+/// Detach identifies the tab by view key, so tearing off the second twin of a document leaves the
+/// first docked (DocId lookup would have detached the first instead).
+#[test]
+fn detaching_the_second_split_twin_leaves_the_first_docked() {
+    let mut h = harness(&["a.pdf"]);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Backslash);
+    h.run_steps(3);
+    assert_eq!(places(&h), [Place::Main, Place::Second]);
+    let (first_key, second_key) = (h.state().views[0].view_key(), h.state().views[1].view_key());
+    h.state_mut().detach_tab_by_key(second_key);
+    h.run_steps(3);
+    let first = h.state().views.iter().find(|v| v.view_key() == first_key).expect("first twin stays");
+    let second = h.state().views.iter().find(|v| v.view_key() == second_key).expect("second twin stays");
+    assert!(!first.detached, "first twin stays docked");
+    assert!(second.detached, "second twin is the one torn off");
+    assert_eq!(h.state().active.map(|i| h.state().views[i].view_key()), Some(first_key));
+}
+
+/// Ending split view must not treat a detached Main twin as a docked duplicate of the Second pane.
+#[test]
+fn unsplitting_with_a_detached_main_twin_promotes_the_docked_second() {
+    let mut h = harness(&["a.pdf"]);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Backslash);
+    h.run_steps(3);
+    let (main_key, second_key) = (h.state().views[0].view_key(), h.state().views[1].view_key());
+    h.state_mut().detach_tab_by_key(main_key);
+    h.run_steps(3);
+    assert!(h.state().panes.split.is_none(), "no docked Main keeps the split alive");
+    assert_eq!(h.state().views.len(), 2, "neither twin is dropped");
+    let main = h.state().views.iter().find(|v| v.view_key() == main_key).expect("detached main");
+    let second = h.state().views.iter().find(|v| v.view_key() == second_key).expect("promoted second");
+    assert!(main.detached);
+    assert!(!second.detached);
+    assert_eq!(second.place(), Place::Main, "docked Second becomes Main instead of closing");
+    assert!(h.state().pane_front(Place::Main).is_some_and(|i| h.state().views[i].view_key() == second_key));
+    assert!(h.state().pane_front(Place::Main).is_some_and(|i| !h.state().views[i].detached));
+}
+
+/// A dirty detached twin's close question carries that view's key, so Don't save closes it and not
+/// its docked twin.
+#[test]
+fn closing_a_dirty_detached_twin_closes_that_view_not_its_docked_twin() {
+    let mut h = harness(&["a.pdf"]);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Backslash);
+    h.run_steps(3);
+    let (main_key, second_key, id) = (h.state().views[0].view_key(), h.state().views[1].view_key(), h.state().views[0].id);
+    h.state_mut().detach_tab_by_key(second_key);
+    h.run_steps(3);
+    let det = h.state().views.iter().position(|v| v.view_key() == second_key).expect("detached twin");
+    let typed = pdfcraft_ui_egui::fill_sign::TypeBox {
+        page: 0,
+        at: [40.0, 40.0],
+        text: "typed".into(),
+        size: 10.0,
+        color: [0.0; 3],
+        border: Default::default(),
+        focus: false,
+    };
+    h.state_mut().views[det].fill_text = Some(typed);
+    h.state_mut().request_close_tab(det);
+    assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Tab { id, key: second_key }), "prompt names the detached twin");
+    let ctx = h.ctx.clone();
+    h.state_mut().resolve_close(&ctx, Some(false));
+    h.run_steps(3);
+    assert!(h.state().views.iter().all(|v| v.view_key() != second_key), "detached twin closed");
+    assert!(h.state().views.iter().any(|v| v.view_key() == main_key), "docked twin kept");
 }

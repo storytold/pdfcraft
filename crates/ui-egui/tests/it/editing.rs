@@ -1056,7 +1056,7 @@ fn save_prompt_stays_inside_the_screen_for_a_long_filename() {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         app.open_bytes(name, None, fixture(1)).expect("fixture opens");
-        app.close_request = Some(CloseRequest::Tab(app.views[0].id));
+        app.close_request = Some(CloseRequest::Tab { id: app.views[0].id, key: app.views[0].view_key() });
         app
     });
     h.run_steps(4);
@@ -1094,7 +1094,7 @@ fn save_prompt_fits_the_smallest_window_whatever_the_name() {
             let mut app = PdfCraftApp::new();
             app.set_option("language", "en").unwrap();
             app.open_bytes(&name, None, fixture(1)).expect("fixture opens");
-            app.close_request = Some(CloseRequest::Tab(app.views[0].id));
+            app.close_request = Some(CloseRequest::Tab { id: app.views[0].id, key: app.views[0].view_key() });
             app
         });
         h.run_steps(4);
@@ -1259,7 +1259,7 @@ fn a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone() {
         "/Root 1 0 R >>\nstartxref",
         "/Root 1 0 R /Info << /Client#20name (Acme) /Project#20 (Padded) /Dept#E9 (Sales) /Project (Apollo) /Revision 4 >> >>\nstartxref",
     );
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+    let mut h = Harness::builder().allow_missing_glyphs().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         app.open_bytes("doc.pdf", None, pdf.into_bytes()).expect("fixture opens");

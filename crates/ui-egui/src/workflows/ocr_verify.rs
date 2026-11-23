@@ -3243,7 +3243,8 @@ mod tests {
         let (mut app, a) = reviewing_the_first_of_three();
         let ctx = egui::Context::default();
         app.active = Some(2);
-        app.close_and_continue(&ctx, 0, crate::CloseRequest::Tab(a));
+        let a_key = app.views[0].view_key();
+        app.close_and_continue(&ctx, 0, crate::CloseRequest::Tab { id: a, key: a_key });
         assert_eq!(app.views.len(), 3, "the reviewed document stays open");
         assert_eq!(app.active, Some(0), "and comes to the front");
         assert_eq!(app.ocr_verify.text_of((0, 0)), Some("Edited"), "with its review as it was");
@@ -3254,7 +3255,7 @@ mod tests {
         assert_eq!(app.views.len(), 3, "Quit closes nothing either");
         assert!(!app.allow_quit && app.quit_session.is_none(), "and the quit is called off");
         assert!(app.ocr_verify.reject());
-        app.close_and_continue(&ctx, 0, crate::CloseRequest::Tab(a));
+        app.close_and_continue(&ctx, 0, crate::CloseRequest::Tab { id: a, key: a_key });
         assert_eq!(app.views.len(), 2, "after Reject the document closes");
     }
 

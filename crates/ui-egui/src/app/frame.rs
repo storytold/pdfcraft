@@ -99,8 +99,8 @@ impl PdfCraftApp {
         self.combine_thumbs_frame(ctx);
         // Retire hidden documents before admitting the visible documents' textures, so the
         // three cache limits apply to the application, regardless of how many tabs are open.
-        // On screen: the active tab, the comparison's old file side by side with it, and what
-        // split view's other pane shows.
+        // On screen: the active tab, the comparison's old file side by side with it, what
+        // split view's other pane shows, and a tab torn out into its own window.
         let shown = self.views_on_screen();
         let shown_docs: std::collections::HashSet<DocId> = shown.iter().filter_map(|&i| self.views.get(i)).map(|v| v.id).collect();
         for (i, view) in self.views.iter_mut().enumerate() {
@@ -130,6 +130,33 @@ impl PdfCraftApp {
                     }
                 }
                 _ => DocView::finish_shared_render_frame(ctx, &doc.info, &doc.renderer, &mut self.views, &group),
+            }
+        }
+        // Detached viewports share the same whole-page raster budget as docked ones: if shown
+        // views together retain more than one application-wide page allowance, release detached
+        // (lowest priority) rasters until the total fits.
+        self.enforce_shared_raster_budget(&shown);
+    }
+
+    /// Cap aggregate page raster memory across all shown views (including detached) to one
+    /// [`crate::canvas::cache::page_budget`] derived from the largest on-screen page among them.
+    fn enforce_shared_raster_budget(&mut self, shown: &[usize]) {
+        let largest = shown.iter().filter_map(|&i| self.views.get(i)).map(|v| v.largest_visible_page_bytes()).fold(0usize, usize::max);
+        let cap = DocView::shared_page_budget(largest);
+        let total =
+            |app: &Self| shown.iter().filter_map(|&i| app.views.get(i)).map(|v| v.raster_memory().page_bytes).fold(0usize, usize::saturating_add);
+        if total(self) <= cap {
+            return;
+        }
+        // Prefer releasing detached views; keep docked panes' rasters when possible.
+        let mut victims: Vec<usize> = shown.iter().copied().filter(|&i| self.views.get(i).is_some_and(|v| v.detached)).collect();
+        victims.sort_by_key(|&i| std::cmp::Reverse(self.views.get(i).map(|v| v.raster_memory().page_bytes).unwrap_or(0)));
+        for i in victims {
+            if total(self) <= cap {
+                break;
+            }
+            if let Some(view) = self.views.get_mut(i) {
+                view.release_rasters();
             }
         }
     }

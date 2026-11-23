@@ -75,7 +75,7 @@ pub(super) fn rgba_bytes(width: usize, height: usize) -> usize {
     width.saturating_mul(height).saturating_mul(4)
 }
 
-pub(super) fn texture_bytes(tex: &TextureHandle) -> usize {
+pub(crate) fn texture_bytes(tex: &TextureHandle) -> usize {
     let [w, h] = tex.size();
     rgba_bytes(w, h)
 }
@@ -122,7 +122,7 @@ pub(super) fn thumbnail_scale(width: f32, height: f32, density: f32) -> f32 {
 /// bytes: [`BUDGET_PAGES`] such rasters, kept between [`PAGE_BYTES`] and [`MAX_PAGE_BYTES`].
 /// The raster's size follows the zoom, the display density and the page; a tiled page is on
 /// screen as a small backdrop, so it does not raise the allowance.
-pub(super) fn page_budget(largest: usize) -> usize {
+pub(crate) fn page_budget(largest: usize) -> usize {
     largest.saturating_mul(BUDGET_PAGES).clamp(PAGE_BYTES, MAX_PAGE_BYTES)
 }
 
@@ -138,6 +138,16 @@ impl DocView {
             thumbnail_demand: self.thumb_demand.len(),
             pending_requests: self.last_queue.len(),
         }
+    }
+
+    /// Byte size of the largest whole-page raster currently on screen in this view.
+    pub(crate) fn largest_visible_page_bytes(&self) -> usize {
+        self.pages.iter().filter(|(p, _)| self.frame_visible.contains(p)).map(|(_, p)| texture_bytes(&p.tex)).fold(0usize, usize::max)
+    }
+
+    /// Application-wide whole-page raster allowance for a given largest on-screen page size.
+    pub(crate) fn shared_page_budget(largest_visible_page_bytes: usize) -> usize {
+        page_budget(largest_visible_page_bytes)
     }
 
     /// Pages whose content was cut at the renderer's limits, so part of each is not drawn and

@@ -393,6 +393,100 @@ impl PdfCraftApp {
         self.active.and_then(|i| self.views.get(i).map(|v| (i, v.id)))
     }
 
+    /// Returns the index of the nearest docked (non-detached) view to `target`.
+    /// Searches at or after `target` first, then before `target`.
+    pub(crate) fn nearest_docked_tab(&self, target: usize) -> Option<usize> {
+        if let Some(idx) = (target..self.views.len()).find(|&i| self.views.get(i).is_some_and(|v| !v.detached)) {
+            return Some(idx);
+        }
+        let limit = target.min(self.views.len());
+        (0..limit).rfind(|&i| self.views.get(i).is_some_and(|v| !v.detached))
+    }
+
+    /// Detaches the first view of document `id` into its own window (document-ID control API;
+    /// prefer [`Self::detach_tab_by_key`] / [`Self::detach_view_at`] when a specific twin is known).
+    pub fn detach_tab(&mut self, id: DocId) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = id;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(i) = self.views.iter().position(|v| v.id == id) {
+                self.detach_view_at(i);
+            }
+        }
+    }
+
+    /// Detaches the view with key `key` into its own window.
+    pub fn detach_tab_by_key(&mut self, key: u64) {
+        if let Some(i) = self.tab_with_key(key) {
+            self.detach_view_at(i);
+        }
+    }
+
+    /// Detaches the view at `index` into its own window (view.multiple-windows).
+    pub fn detach_view_at(&mut self, index: usize) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = index;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.views.len() <= 1 {
+                return;
+            }
+            let Some(view) = self.views.get_mut(index) else { return };
+            view.detached = true;
+            if self.active == Some(index) || self.active.is_some_and(|a| self.views.get(a).is_some_and(|v| v.detached)) {
+                self.active = self.nearest_docked_tab(index);
+            }
+        }
+    }
+
+    /// Re-attaches a detached document tab back to the main window's tab strip (first matching
+    /// view of `id`). Prefer [`Self::attach_view_at`] when a specific twin is known.
+    pub fn attach_tab(&mut self, id: DocId) {
+        if let Some(i) = self.views.iter().position(|v| v.id == id) {
+            self.attach_view_at(i);
+        }
+    }
+
+    /// Re-attaches the view at `index` back to the main window's tab strip.
+    pub fn attach_view_at(&mut self, index: usize) {
+        if let Some(view) = self.views.get_mut(index) {
+            view.detached = false;
+            self.active = Some(index);
+        }
+    }
+
+    /// Returns the list of document IDs that are currently detached in separate window viewports.
+    pub fn detached_viewports(&self) -> Vec<DocId> {
+        self.views.iter().filter(|v| v.detached).map(|v| v.id).collect()
+    }
+
+    /// Returns whether the specified document tab is currently detached.
+    pub fn is_tab_detached(&self, id: DocId) -> bool {
+        self.views.iter().find(|v| v.id == id).is_some_and(|v| v.detached)
+    }
+
+    /// Whether an active close request acts modally over the main window. Detached save prompts
+    /// remain isolated to their respective child viewports.
+    pub(crate) fn is_close_modal_active(&self) -> bool {
+        match self.close_request {
+            Some(crate::CloseRequest::Tab { key, .. }) => self.tab_with_key(key).is_some_and(|i| self.views.get(i).is_some_and(|v| !v.detached)),
+            Some(crate::CloseRequest::Quit | crate::CloseRequest::All) => true,
+            None => false,
+        }
+    }
+
+    /// Whether an active close request represents a save prompt inside a detached child window.
+    pub(crate) fn is_detached_save_prompt_open(&self) -> bool {
+        match self.close_request {
+            Some(crate::CloseRequest::Tab { key, .. }) => self.tab_with_key(key).is_some_and(|i| self.views.get(i).is_some_and(|v| v.detached)),
+            _ => false,
+        }
+    }
     /// Whether something over the pages has the keyboard: what covers them
     /// ([`Self::covers_pages`]), the hotbar's tools window, a popup, a menu of the menu bar, or the
     /// bar holding the keyboard (Alt, F10).
@@ -456,12 +550,35 @@ impl PdfCraftApp {
             return true;
         }
         self.dialog.is_some()
-            || self.close_request.is_some()
+            || self.is_close_modal_active()
             || self.password_prompt.is_some()
             || self.unlock_prompt.is_some()
             || self.pending_link.is_some()
             || self.pending_remote_link.is_some()
             || self.updates.open
+    }
+
+    fn sync_input_blocking(&mut self, ctx: &egui::Context) {
+        // Scrolling and group-drag previews are transient: never resume after changing tabs,
+        // opening a modal/palette, or returning to a window that lost focus.
+        let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
+        for (index, view) in self.views.iter_mut().enumerate() {
+            let shut = if view.detached {
+                matches!(self.close_request, Some(crate::CloseRequest::Tab { key, .. }) if key == view.view_key())
+                    || matches!(self.close_request, Some(crate::CloseRequest::Quit | crate::CloseRequest::All))
+            } else {
+                blocked || self.active != Some(index)
+            };
+            view.objects.set_input_blocked(shut);
+            if shut {
+                view.auto_scroll.cancel();
+                // Edit text and Add text's drags end while their input is blocked rather than wait, to
+                // land wherever the pointer is once it opens again.
+                if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
+                    view.cancel_edit_text_gestures();
+                }
+            }
+        }
     }
 
     /// Show `msg` in the toast now, in place of whatever it showed. Script messages still waiting
@@ -762,24 +879,10 @@ impl PdfCraftApp {
         self.hotbar.close_hidden_picker(ctx, self.hotbar_hidden());
         self.page_keys = page_keys::PageKeys::new(self.over_pages(ctx));
         self.shortcuts(ctx);
-        // Scrolling and group-drag previews are transient: never resume after changing tabs,
-        // opening a modal/palette, or returning to a window that lost focus.
-        let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
-        for (index, view) in self.views.iter_mut().enumerate() {
-            let shut = blocked || self.active != Some(index);
-            view.objects.set_input_blocked(shut);
-            if shut {
-                view.auto_scroll.cancel();
-                // Edit text and Add text's drags end while their input is blocked rather than wait, to
-                // land wherever the pointer is once it opens again.
-                if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
-                    view.cancel_edit_text_gestures();
-                }
-            }
-        }
+        self.sync_input_blocking(ctx);
         // A field that refused its value this frame keeps the shortcut from saving or printing
         // behind the user's back; so does a save prompt opened since.
-        if self.process_pending_edits() && self.close_request.is_none() {
+        if self.process_pending_edits() && !self.is_close_modal_active() {
             for (id, doc) in deferred {
                 // Only in the document the shortcut was pressed in.
                 if self.active_ids().map(|(_, active)| active) == doc {
@@ -865,6 +968,7 @@ impl PdfCraftApp {
             // Notices too: a refused field value or a failed save must be seen in full screen.
             self.show_progress(&ctx);
             widgets::toast(self, &ctx);
+            self.show_detached_windows(&ctx);
             self.finish_render_frame(&ctx);
             if let Some(mut control) = self.control.take() {
                 control.finish_frame(&ctx, self);
@@ -898,6 +1002,8 @@ impl PdfCraftApp {
             dialogs::show(self, &ctx);
             self.show_progress(&ctx);
             widgets::toast(self, &ctx);
+            // Detached windows keep rendering and answering their own close prompts during Verify.
+            self.show_detached_windows(&ctx);
             self.finish_render_frame(&ctx);
             if let Some(mut control) = self.control.take() {
                 control.finish_frame(&ctx, self);
@@ -927,6 +1033,7 @@ impl PdfCraftApp {
         dialogs::show(self, &ctx);
         self.show_progress(&ctx);
         widgets::toast(self, &ctx);
+        self.show_detached_windows(&ctx);
         self.finish_render_frame(&ctx);
         // Screenshots are issued only after a settled pass that really drew the window.
         if let Some(mut control) = self.control.take() {
@@ -934,4 +1041,139 @@ impl PdfCraftApp {
             self.control = Some(control);
         }
     }
+}
+
+impl PdfCraftApp {
+    /// Viewport id for a detached view, keyed by [`crate::DocView::view_key`] so split twins do
+    /// not collide when both are torn off.
+    pub fn detached_viewport_id(key: u64) -> egui::ViewportId {
+        egui::ViewportId::from_hash_of(("detached-view", key))
+    }
+
+    /// After a sync action that briefly selected a detached view, put `active` back on a docked tab.
+    pub(crate) fn restore_docked_active_if_detached(&mut self, origin: usize) {
+        if self.views.get(origin).is_some_and(|v| v.detached) {
+            self.active = self.nearest_docked_tab(origin);
+        }
+    }
+
+    /// Shows any detached document windows in their own viewports (view.multiple-windows).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn show_detached_windows(&mut self, ctx: &egui::Context) {
+        // Keys stay stable if a close removes another view mid-loop.
+        let detached_keys: Vec<u64> = self.views.iter().filter(|v| v.detached).map(|v| v.view_key()).collect();
+        if detached_keys.is_empty() {
+            return;
+        }
+        for key in detached_keys {
+            let Some(idx) = self.tab_with_key(key) else { continue };
+            let Some(doc_id) = self.views.get(idx).map(|v| v.id) else { continue };
+            let is_dirty = self.session.get(doc_id).is_some_and(|d| d.dirty);
+            let display_name = self.session.get(doc_id).map(|d| d.display_name()).unwrap_or_default();
+            let title = crate::canvas::tab_label(self, idx).unwrap_or(display_name);
+            // View key, not DocId: two detached twins of one document must not share a viewport.
+            let viewport_id = Self::detached_viewport_id(key);
+            let builder = egui::ViewportBuilder::default()
+                .with_title(format!("{title} — PdfCraft"))
+                .with_inner_size([900.0, 700.0])
+                .with_min_inner_size([400.0, 300.0]);
+
+            let mut reattach = false;
+            let mut close_clean = false;
+
+            ctx.show_viewport_immediate(viewport_id, builder, |child_ui, _class| {
+                let close_requested =
+                    child_ui.input(|i| i.viewport().close_requested() || i.raw.viewports.get(&viewport_id).is_some_and(|v| v.close_requested()));
+                if close_requested && !self.allow_quit {
+                    // OCR review holds close even when the document has no unsaved changes.
+                    if self.hold_close_for_ocr_review(idx) {
+                        child_ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                    } else if self.has_unsaved_work(idx) {
+                        child_ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                        if self.close_request.is_none() {
+                            self.close_request = Some(crate::CloseRequest::Tab { id: doc_id, key });
+                        }
+                    } else {
+                        close_clean = true;
+                        return;
+                    }
+                }
+                let t = theme::Tokens::get(child_ui.ctx());
+                egui::Panel::top("detached_header").frame(egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin::symmetric(8, 4))).show(
+                    child_ui,
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(&title).font(theme::semibold(13.0)));
+                            if is_dirty {
+                                ui.label(egui::RichText::new(tl!("(edited)")).font(theme::regular(11.0)).color(t.text_muted));
+                            }
+                            if let (Some(view), Some(doc)) = (self.views.get(idx), self.session.get(doc_id)) {
+                                let p = view.current.saturating_add(1).to_string();
+                                let n = doc.info.pages.len().to_string();
+                                let zoom = format!("{:.0}", view.zoom * 100.0);
+                                let readout = i18n::fmt(tl!("Page {p} of {n} • {zoom}%"), &[("p", &p), ("n", &n), ("zoom", &zoom)]);
+                                ui.label(egui::RichText::new(readout).font(theme::regular(11.0)).color(t.text_muted));
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button(tl!("Re-attach Tab")).clicked() {
+                                    reattach = true;
+                                }
+                            });
+                        });
+                    },
+                );
+
+                egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(child_ui, |ui| {
+                    crate::canvas::document_area(self, idx, ui);
+                });
+
+                self.process_pending_edits_for(idx);
+
+                // Block undo/redo while Quit/All is pending, or while this view's own Tab prompt is
+                // open. Another detached document may still undo while a different Tab prompt shows.
+                let block_undo = match self.close_request {
+                    Some(crate::CloseRequest::Quit | crate::CloseRequest::All) => true,
+                    Some(crate::CloseRequest::Tab { key: k, .. }) => k == key,
+                    None => false,
+                };
+                if !block_undo {
+                    let redo = child_ui.input_mut(|i| {
+                        i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z))
+                            || i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::Z))
+                            || i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y))
+                            || i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::Y))
+                    });
+                    let undo = !redo
+                        && child_ui.input_mut(|i| {
+                            i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z))
+                                || i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::Z))
+                        });
+                    if redo {
+                        self.redo_in(idx);
+                    } else if undo {
+                        self.undo_in(idx);
+                    }
+                }
+                if matches!(self.close_request, Some(crate::CloseRequest::Tab { key: k, .. }) if k == key) {
+                    if let Some(choice) = crate::dialogs::save_prompt_key(child_ui.ctx(), &mut self.save_prompt_button) {
+                        self.resolve_close(child_ui.ctx(), choice);
+                    }
+                    if matches!(self.close_request, Some(crate::CloseRequest::Tab { key: k, .. }) if k == key) {
+                        crate::dialogs::show_save_prompt_modal(self, child_ui.ctx(), idx);
+                    }
+                }
+            });
+
+            if reattach {
+                if let Some(i) = self.tab_with_key(key) {
+                    self.attach_view_at(i);
+                }
+            } else if close_clean && let Some(i) = self.tab_with_key(key) {
+                self.close_tab(i);
+            }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn show_detached_windows(&mut self, _ctx: &egui::Context) {}
 }

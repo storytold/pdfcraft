@@ -3,27 +3,33 @@ use crate::page_keys::PageKeys;
 
 impl PdfCraftApp {
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.viewport_id() != egui::ViewportId::ROOT {
+            return;
+        }
         use egui::Key;
         // "Save changes?" is modal: its keys are its own (⌘D is Don't save there, not Document
         // properties; Escape cancels it rather than clearing a selection), and nothing may run
         // underneath it. They are read here, before the canvas can consume them.
         if self.close_request.is_some() {
-            // These dialogs are drawn after the save prompt and own the keyboard while open.
-            // Don't let Escape or Return resolve unsaved work underneath one.
-            #[cfg(not(target_arch = "wasm32"))]
-            if self.script_pending.as_ref().is_some_and(|pending| pending.has_prompt()) {
+            // A detached window draws its own save prompt. The main window must not answer it.
+            if !self.is_detached_save_prompt_open() {
+                // These dialogs are drawn after the save prompt and own the keyboard while open.
+                // Don't let Escape or Return resolve unsaved work underneath one.
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.script_pending.as_ref().is_some_and(|pending| pending.has_prompt()) {
+                    return;
+                }
+                let covered = self.pending_link.is_some()
+                    || self.pending_remote_link.is_some()
+                    || self.pending_full_screen.is_some()
+                    || self.updates.open
+                    || self.dialog.is_some()
+                    || self.unlock_prompt.is_some();
+                if !covered && let Some(choice) = dialogs::save_prompt_key(ctx, &mut self.save_prompt_button) {
+                    self.resolve_close(ctx, choice);
+                }
                 return;
             }
-            let covered = self.pending_link.is_some()
-                || self.pending_remote_link.is_some()
-                || self.pending_full_screen.is_some()
-                || self.updates.open
-                || self.dialog.is_some()
-                || self.unlock_prompt.is_some();
-            if !covered && let Some(choice) = dialogs::save_prompt_key(ctx, &mut self.save_prompt_button) {
-                self.resolve_close(ctx, choice);
-            }
-            return;
         }
         // The other dialogs and prompts are modal too (⌘W closed the file behind Preferences,
         // #870).
@@ -60,6 +66,7 @@ impl PdfCraftApp {
         {
             self.set_full_screen(ctx, false);
         }
+        let detached_prompt_open = self.is_detached_save_prompt_open();
         if let Some(i) = self.active {
             if page_chords && chords {
                 self.select_all_keys(i, ctx);
@@ -81,7 +88,7 @@ impl PdfCraftApp {
             {
                 prepare::nudge_keys(ctx, keys, &mut self.views[i], doc);
             }
-            canvas::shortcuts(&mut self.views[i], ctx, keys, chords && page_chords, self.scroll_speed);
+            canvas::shortcuts(&mut self.views[i], ctx, keys, chords && page_chords, self.scroll_speed, detached_prompt_open);
             self.clipboard_keys(i, ctx);
             self.image_pick_keys(i, ctx);
         }
