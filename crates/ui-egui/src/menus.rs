@@ -475,7 +475,7 @@ impl PdfCraftApp {
         let ctx = ui.ctx().clone();
         let bar = craft::menu::layout(&self.menu_bar(&ctx), Target::current(), &layout_options()).bar;
         let modal = gated(self);
-        craft::menu::MenuBarUi::new(&bar).keyboard(!modal).english(&english).show(ui);
+        craft::menu::MenuBarUi::new(&bar).keyboard(!modal).icons(false).english(&english).show(ui);
     }
 
     /// Install the native menu bar (macOS), once, from the eframe app creator. `false` when

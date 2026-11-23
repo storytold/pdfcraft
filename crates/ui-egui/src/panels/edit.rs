@@ -183,9 +183,8 @@ impl craft::behavior::ItemSource<usize> for Stamps {
 /// page to place it.
 pub(super) fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     use pdfcraft_engine::{StampGroup, StampKind};
-    // Titled as production's panel is: Back to All tools, the name and Close.
-    let commands = vec![HeaderCommand::new(IconId::new("chevron-left"), "tools.all")];
-    let shown = Panel::new(tl!("Add a stamp").to_string()).titled().commands(commands).actions([HeaderAction::Close]).show(ui, |ui, _| {
+    // The dock's group header already names the tool and closes it; a second title here showed "Add a stamp" twice.
+    let shown = Panel::new(tl!("Add a stamp").to_string()).show(ui, |ui, _| {
         Stack::new().scroll(Scroll::vertical()).show(ui, |ui, _| {
             Text::new(tl!("Choose a stamp, then click on the page to place it.").to_string()).shade(Shade::Faint).show(ui);
             let titles = [

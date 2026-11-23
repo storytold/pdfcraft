@@ -185,7 +185,7 @@ pub(crate) fn measure_rail(app: &mut PdfCraftApp, ui: &egui::Ui, width: f32) -> 
     let toolbar = slots(app);
     let current = current_tool(app);
     let last_used = last_used(app);
-    let mut rail = ToolRail::new(tl!("Toolbar").to_string(), &toolbar, &current, &last_used).edit_toolbar(tl!("Edit toolbar").to_string());
+    let mut rail = ToolRail::new(tl!("Toolbar").to_string(), &toolbar, &current, &last_used).edit_toolbar(tl!("Edit toolbar").to_string()).edit_icon(IconId::new("settings"));
     if app.hotbar.drawer_open {
         rail = rail.editing();
     }
@@ -219,7 +219,7 @@ pub(crate) fn show_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let current = current_tool(app);
     let last_used = last_used(app);
     let editing = app.hotbar.drawer_open;
-    let mut rail = ToolRail::new(tl!("Toolbar").to_string(), &toolbar, &current, &last_used).edit_toolbar(tl!("Edit toolbar").to_string());
+    let mut rail = ToolRail::new(tl!("Toolbar").to_string(), &toolbar, &current, &last_used).edit_toolbar(tl!("Edit toolbar").to_string()).edit_icon(IconId::new("settings"));
     if editing {
         rail = rail.editing();
     }

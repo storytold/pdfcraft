@@ -261,10 +261,10 @@ impl PdfCraftApp {
             return;
         }
         let name = self.session.get(doc).map(|d| d.name.clone()).unwrap_or_default();
-        let remaining = self.close_guard.as_ref().map_or(1, |g| g.remaining());
         let shown = crate::dialogs::shorten_middle(&name, 80);
+        // Production asks about each document in turn, with no Apply to All box (`remaining(1)` leaves it out).
         // The question as production words it, on every platform: the name in the title, the consequence as a note.
-        let dialog = UnsavedChangesDialog::new(scope, shown.clone()).remaining(remaining);
+        let dialog = UnsavedChangesDialog::new(scope, shown.clone()).remaining(1);
         let dialog = if scope == CloseScope::Revert {
             dialog
         } else {

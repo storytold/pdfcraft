@@ -330,7 +330,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
         popover_from(
             ui,
             tl!("Line thickness"),
-            |ui| IconButton::new(IconId::new("sliders-horizontal")).label(tl!("Line thickness")).show(ui).response,
+            |ui| IconButton::new(IconId::new("adjustments")).label(tl!("Line thickness")).show(ui).response,
             |ui| {
                 let mut w = style.width;
                 SliderField::new(tl!("Line thickness"), Bind::bound(&mut w), tool.min_width()..=super::MAX_LINE_WIDTH).step(0.5).unit("pt").show(ui);

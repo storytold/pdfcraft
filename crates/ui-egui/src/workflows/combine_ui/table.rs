@@ -221,6 +221,7 @@ pub(super) fn table(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> Option<RowActio
         .sort(sort)
         .selection(Bind::bound(&mut app.combine_tab.selection))
         .column_layout(Bind::bound(&mut app.combine_columns))
+        .plain_header_menu(true)
         .reorder(ReorderRule::new().keys(ReorderKeys::AltArrows))
         .deletable(true)
         .space(SpaceAction::Preview)

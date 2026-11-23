@@ -1826,7 +1826,8 @@ fn delete_one_reply_row() {
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.event(egui::Event::Text("Right reply, reworded".into()));
     h.run_steps(2);
-    h.query_all_by_label("Post").find(|n| !n.accesskit_node().is_disabled()).expect("the editor's Post").click();
+    // The document's own Save sits earlier in the tree than the editor's.
+    h.query_all_by_label("Save").filter(|n| !n.accesskit_node().is_disabled()).last().expect("the editor's Save").click();
     h.run_steps(3);
     assert_eq!(texts(&h), ["The comment", "Right reply, reworded", "Accepted set by Ben"]);
 
@@ -2062,8 +2063,8 @@ fn the_panel_reveals_edits_and_reopens_a_late_thread_without_changing_its_replie
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.event(egui::Event::Text("Late root edited exactly".into()));
     h.run_steps(2);
-    // The Comments panel's inline editor commits with its own Post button right beneath the Edit field.
-    h.query_all_by_role_and_label(Role::Button, "Post")
+    // The Comments panel's inline editor commits with its own Save button right beneath the Edit field.
+    h.query_all_by_role_and_label(Role::Button, "Save")
         .filter(|n| n.rect().top() >= editor_bottom - 2.0)
         .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
         .expect("inline edit Post button")
@@ -4369,7 +4370,7 @@ fn edit_composer_preserves_only_typewriter_whitespace(kind: u8) {
     if shots {
         h.render().unwrap().save(format!("/tmp/5954-composer-{kind}.png")).unwrap();
     }
-    h.get_all_by_label("Post").last().unwrap().click();
+    h.get_all_by_label("Save").last().unwrap().click();
     h.run_steps(3);
     assert!(h.state().views[0].session.comments.composer.is_none());
     let id = h.state().views[0].id;
