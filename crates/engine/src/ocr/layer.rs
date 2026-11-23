@@ -67,10 +67,11 @@ fn kind(c: char) -> Kind {
 /// Hebrew word read back, searched or copied comes out reversed. A word with no
 /// right-to-left character is drawn as it is.
 ///
-/// A word is ordered on its own, as part of a right-to-left line. Where the extractor goes
-/// by the rest of the line (a right-to-left word in a left-to-right line, or next to a
-/// left-to-right word), the letters still read back in order, but punctuation or a number
-/// attached to the word can come back on its other side.
+/// A word is ordered on its own, as part of a right-to-left line; the caller leaves a page
+/// with no right-to-left letter alone. Where the extractor goes by the rest of the line (a
+/// left-to-right line on a page that also has right-to-left text, or a left-to-right word
+/// next to this one), a right-to-left word's letters still read back in order, but what is
+/// attached to them (punctuation, a number) can come back on its other side.
 fn visual_order(text: &str) -> Vec<char> {
     let mut chars: Vec<char> = text.chars().collect();
     let mut kinds: Vec<Kind> = chars.iter().copied().map(kind).collect();
@@ -200,8 +201,12 @@ pub(crate) fn add_text(doc: &mut Document, page: usize, words: &[PlacedWord]) ->
     // `pdfcraft_ocr::text_layer` (#3029), the text is drawn inside `q … Q` so the invisible
     // rendering mode cannot leak into later content streams on the page.
     let mut content = String::from("/OCR BMC\nq\nBT\n3 Tr\n");
+    // Only a page that has a right-to-left letter is reordered. On any other page the extractor
+    // reads every line left to right, so each word is drawn as it was recognized, a stray
+    // right-to-left punctuation mark included.
+    let right_to_left = words.iter().any(|w| w.text.chars().any(|c| kind(c) == Kind::Rtl && c.is_alphabetic()));
     for w in words {
-        let glyphs = visual_order(&w.text);
+        let glyphs: Vec<char> = if right_to_left { visual_order(&w.text) } else { w.text.chars().collect() };
         let count = glyphs.len();
         if count == 0 || w.up[0].hypot(w.up[1]) <= 0.0 || w.across[0].hypot(w.across[1]) <= 0.0 {
             continue;

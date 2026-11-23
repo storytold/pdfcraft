@@ -2080,6 +2080,22 @@ mod tests {
             let recognized = line.iter().map(|(word, _, _)| *word).collect::<Vec<_>>().join(" ");
             assert!(text.contains(&recognized), "{recognized:?} in {text:?}");
         }
+        // A page with no right-to-left letter is written as before, whatever its words hold:
+        // a stray Arabic comma in a left-to-right line stays where it was read.
+        let id = s.open("latin.pdf", None, Arc::new(fixture(1)), None).unwrap();
+        let words = [("Total", 20.0, 25.0), ("A،B", 50.0, 15.0), ("paid", 70.0, 20.0)]
+            .map(|(text, x, width)| PlacedWord {
+                text: text.to_string(),
+                origin: [x, 280.0],
+                across: [width, 0.0],
+                up: [0.0, 8.0],
+                confidence: None,
+                source: "tesseract".into(),
+            })
+            .to_vec();
+        s.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+        let text = crate::tests::page_texts(&s, id)[0].clone();
+        assert!(text.contains("Total A،B paid"), "{text:?}");
     }
 
     /// The fontless searchable layer retains its original pixels, handles multiple code
