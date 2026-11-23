@@ -2719,9 +2719,18 @@ fn destinations_set_the_zoom_mode_and_the_point_to_show() {
     assert_eq!((v.zoom, v.goto_point), (64.0, None));
     v.go_to_dest(0, DestView::Fit, &info);
     assert_eq!((v.fit, v.goto_point), (Fit::Page, None));
+    v.fit = Fit::None;
+    v.go_to_dest(0, DestView::FitB, &info);
+    assert_eq!((v.fit, v.goto_point), (Fit::Page, None));
     v.go_to_dest(0, DestView::FitH { top: Some(100.0) }, &info);
     assert_eq!((v.fit, v.goto_point), (Fit::Width, Some((0, None, Some(0.75), vec2(SIDE, 0.0)))));
+    v.fit = Fit::None;
+    v.go_to_dest(0, DestView::FitBH { top: Some(100.0) }, &info);
+    assert_eq!((v.fit, v.goto_point), (Fit::Width, Some((0, None, Some(0.75), vec2(SIDE, 0.0)))));
     v.go_to_dest(0, DestView::FitV { left: Some(75.0) }, &info);
+    assert_eq!((v.fit, v.goto_point), (Fit::Height, Some((0, Some(0.25), None, vec2(SIDE, 0.0)))));
+    v.fit = Fit::None;
+    v.go_to_dest(0, DestView::FitBV { left: Some(75.0) }, &info);
     assert_eq!((v.fit, v.goto_point), (Fit::Height, Some((0, Some(0.25), None, vec2(SIDE, 0.0)))));
     // /FitR: the zoom that fits a 100×50 pt rectangle in an 800×600 window, centred.
     (v.viewport_w, v.viewport_h) = (800.0, 600.0);
