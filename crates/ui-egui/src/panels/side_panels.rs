@@ -187,7 +187,7 @@ pub fn default_workspace(rail_side: DockSide) -> Workspace<PanelId> {
     let page = Node::split(Axis::X, SplitSize::Ratio(PAGE_SHARE), Node::tabs(vec![PanelId::Document], 0), Node::dock(DockEdge::End, end));
     let root = Node::split(Axis::X, SplitSize::Ratio(START_SHARE), Node::dock(DockEdge::Start, start), page);
     let rect = egui::Rect::from_min_size(egui::pos2(TOOLS_WIDTH + 28.0, 14.0), egui::vec2(48.0, 400.0));
-    let floating = Floating::new(toolbar, rect).with_id(1);
+    let floating = Floating::new(1, toolbar, rect);
     Workspace::new(Layout::new(Some(root), vec![floating]))
 }
 

@@ -105,7 +105,7 @@ pub(super) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 /// What the palette searches: the menus' commands, each ready tool group, and the catalogue items
 /// that are not commands of their own.
 fn palette_entries(app: &PdfCraftApp, ctx: &egui::Context) -> Vec<HelpEntry> {
-    let mut entries = app.menu_bar(ctx).help_entries(Target::current(), &crate::menus::layout_options(), None);
+    let mut entries = app.menu_bar(ctx).help_entries(Target::current(), &crate::menus::layout_options());
     for group in TOOL_GROUPS {
         if group.availability == Availability::Ready {
             // PLAN: assumed `tool.group` reads a `group` parameter (pdf-chrome-w9)

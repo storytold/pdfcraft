@@ -296,7 +296,7 @@ impl PdfCraftApp {
                 })
                 .collect()
         };
-        let file = {
+        let mut file = {
             let mut nodes = Vec::new();
             for node in list(FILE, &mut used) {
                 // Open Recent is the live recent list; Create, Export and Protect follow Combine,
@@ -343,7 +343,7 @@ impl PdfCraftApp {
         )];
         sign.extend(list(SIGN, &mut used));
         let window = list(WINDOW, &mut used);
-        let help = list(HELP, &mut used);
+        let mut help = list(HELP, &mut used);
         let mut view = vec![
             Node::submenu(tl!("Zoom"), list(ZOOM, &mut used)),
             Node::submenu(tl!("Rotate view"), list(&[ROTATE_CW, ROTATE_CCW], &mut used)),
@@ -368,13 +368,16 @@ impl PdfCraftApp {
         view.push(Node::Separator);
         view.push(Node::submenu(tl!("Tools"), self.tools_menu(&used, mac)));
         view.extend(list(&["view.palette"], &mut used));
+        for nodes in [&mut file, &mut edit, &mut view, &mut sign, &mut help] {
+            craft::menu::tidy(nodes);
+        }
         let mut bar = MenuBar::new(vec![
-            Menu::new(tl!("File"), craft::menu::tidy(file)).role(MenuRole::File),
-            Menu::new(tl!("Edit"), craft::menu::tidy(edit)).role(MenuRole::Edit),
-            Menu::new(tl!("View"), craft::menu::tidy(view)).role(MenuRole::View),
-            Menu::new(tl!("Sign"), craft::menu::tidy(sign)),
+            Menu::new(tl!("File"), file).role(MenuRole::File),
+            Menu::new(tl!("Edit"), edit).role(MenuRole::Edit),
+            Menu::new(tl!("View"), view).role(MenuRole::View),
+            Menu::new(tl!("Sign"), sign),
             Menu::new(tl!("Window"), window).role(MenuRole::Window),
-            Menu::new(tl!("Help"), craft::menu::tidy(help)).role(MenuRole::Help),
+            Menu::new(tl!("Help"), help).role(MenuRole::Help),
         ])
         .documents(self.menu_documents());
         for menu in &mut bar.menus {
@@ -516,9 +519,12 @@ pub(crate) fn frame(app: &mut PdfCraftApp, ctx: &egui::Context) {
     for command in clicks.unwrap_or_default() {
         fire(ctx, command, FireSource::Menu);
     }
+    // The layout is built every frame from the commands' state; keyed on its bar, the native menus are laid out
+    // again only when that changed (or a menu event flipped an item).
     let layout = app.native_bar(ctx);
+    let key = layout.bar.clone();
     if let Some(native) = app.native_menu.as_mut() {
-        for clash in native.sync(layout) {
+        for clash in native.sync_with(&key, move || layout) {
             log::info!("menu shortcut {:?} kept by {} over {} ({})", clash.shortcut, clash.command.id, clash.system, clash.resolution);
         }
     }

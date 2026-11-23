@@ -4,7 +4,7 @@ use craft::keymap::CommandRef;
 use craft::theme::Srgba;
 use craft::ui::buttons::IconButton;
 use craft::ui::choice::Swatch;
-use craft::ui::contract::{Bind, Entry, Props as _, Show};
+use craft::ui::contract::{Bind, Entry, Props as _, Show, Tracked};
 use craft::ui::docking::{DockGrid, PanelSpec};
 use craft::ui::form::SliderField;
 use craft::ui::pickers::Select;
@@ -47,6 +47,12 @@ pub(crate) struct Hotbar {
     /// Whether the drawer that edits the toolbar is open.
     #[serde(skip)]
     drawer_open: bool,
+    /// The rail's slots as last shown, written only when they change, so a settled rail repaints its last run.
+    #[serde(skip)]
+    rail_slots: Tracked<Vec<ToolSlot<String>>>,
+    /// The tool each slot showed last, as the rail was last given it; written only when it changes.
+    #[serde(skip)]
+    rail_last_used: Tracked<LastUsed<String>>,
 }
 
 impl Hotbar {
@@ -183,17 +189,38 @@ pub(crate) fn rail_cells(app: &PdfCraftApp) -> usize {
     slots(app).len()
 }
 
+/// The rail's slots and last-used tools as `app` stands, taken out of the app while the rail's footer borrows it
+/// ([`keep_rail_model`] puts them back). Each is written only when it changed, keeping its revision otherwise.
+fn take_rail_model(app: &mut PdfCraftApp) -> (Tracked<Vec<ToolSlot<String>>>, Tracked<LastUsed<String>>) {
+    let (now_slots, now_last) = (slots(app), last_used(app));
+    let mut kept = (std::mem::take(&mut app.hotbar.rail_slots), std::mem::take(&mut app.hotbar.rail_last_used));
+    if *kept.0 != now_slots {
+        *kept.0 = now_slots;
+    }
+    if *kept.1 != now_last {
+        *kept.1 = now_last;
+    }
+    kept
+}
+
+/// Puts back what [`take_rail_model`] took.
+fn keep_rail_model(app: &mut PdfCraftApp, (slots, last_used): (Tracked<Vec<ToolSlot<String>>>, Tracked<LastUsed<String>>)) {
+    app.hotbar.rail_slots = slots;
+    app.hotbar.rail_last_used = last_used;
+}
+
 /// Measures the toolbar and active tool controls so the dock gives the rail its full height.
 pub(crate) fn measure_rail(app: &mut PdfCraftApp, ui: &egui::Ui, width: f32) -> f32 {
     app.hotbar.normalize();
-    let toolbar = slots(app);
+    let model = take_rail_model(app);
     let current = current_tool(app);
-    let last_used = last_used(app);
-    let mut rail = ToolRail::new(tl!("Toolbar").to_string(), &toolbar, &current, &last_used).edit_toolbar(tl!("Edit toolbar").to_string()).edit_icon(IconId::new("settings"));
+    let mut rail = ToolRail::new(tl!("Toolbar").to_string(), &model.0, &current, &model.1).edit_toolbar(tl!("Edit toolbar").to_string()).edit_icon(IconId::new("settings"));
     if app.hotbar.drawer_open {
         rail = rail.editing();
     }
-    rail.measure_rail(ui, width, |ui, _footer| footer_controls(ui, app)).y
+    let height = rail.measure_rail(ui, width, |ui, _footer| footer_controls(ui, app)).y;
+    keep_rail_model(app, model);
+    height
 }
 
 // Every conversion between the engine's `f64` colour and the framework's goes through these two.
@@ -219,11 +246,16 @@ fn open_picker(
 /// the user did: a drawer pick runs its command, a drawer edit changes the tool list.
 pub(crate) fn show_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     app.hotbar.normalize();
-    let toolbar = slots(app);
+    let model = take_rail_model(app);
+    show_rail_over(app, ui, &model.0, &model.1);
+    keep_rail_model(app, model);
+}
+
+/// [`show_rail`] over the rail's slots `toolbar` and its last-used tools `last_used`.
+fn show_rail_over(app: &mut PdfCraftApp, ui: &mut egui::Ui, toolbar: &Tracked<Vec<ToolSlot<String>>>, last_used: &Tracked<LastUsed<String>>) {
     let current = current_tool(app);
-    let last_used = last_used(app);
     let editing = app.hotbar.drawer_open;
-    let mut rail = ToolRail::new(tl!("Toolbar").to_string(), &toolbar, &current, &last_used).edit_toolbar(tl!("Edit toolbar").to_string()).edit_icon(IconId::new("settings"));
+    let mut rail = ToolRail::new(tl!("Toolbar").to_string(), toolbar, &current, last_used).edit_toolbar(tl!("Edit toolbar").to_string()).edit_icon(IconId::new("settings"));
     if editing {
         rail = rail.editing();
     }
@@ -243,11 +275,12 @@ pub(crate) fn show_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         return;
     };
     let groups = drawer_groups();
-    let drawer = ToolbarDrawer::new(output.response.rect, &groups, &toolbar, output.dropped).kind(DrawerKind::Searchable).opened_by(opener).show(ui);
+    let toolbar: &[ToolSlot<String>] = toolbar;
+    let drawer = ToolbarDrawer::new(output.response.rect, &groups, toolbar, output.dropped).kind(DrawerKind::Searchable).opened_by(opener).show(ui);
     let defaults = slots_with(app, &[]);
     let mut edited: Option<Vec<ToolSlot<String>>> = None;
     for edit in &drawer.edits {
-        let base = edited.as_deref().unwrap_or(&toolbar);
+        let base = edited.as_deref().unwrap_or(toolbar);
         edited = Some(apply_toolbar_edit(base, edit, &defaults));
     }
     if let Some(edited) = edited {
