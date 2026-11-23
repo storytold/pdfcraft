@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
 use pdfcraft_engine::DocId;
-use pdfcraft_engine::ocr::{EngineChoice, LANGUAGES, MergeStrategy, OcrPage, OcrSettings, OutputMode};
+use pdfcraft_engine::ocr::{EngineChoice, LANGUAGES, MergeStrategy, OcrOutput, OcrPage, OcrSettings, OutputMode};
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
@@ -31,6 +31,8 @@ pub struct OcrDraft {
     pub language: String,
     /// "Downsample to" resolution.
     pub dpi: u32,
+    /// Searchable Image (downsampled to `dpi`) or Searchable Image (Exact).
+    pub output: OcrOutput,
     /// Also recognize pages that already have text (pictures on them; their text isn't added again).
     pub text_pages: bool,
     /// Which engine reads the pages.
@@ -71,6 +73,7 @@ impl Default for OcrDraft {
             denoise: false,
             binarize: false,
             output_mode: OutputMode::default(),
+            output: OcrOutput::Exact,
             skip_text_files: false,
             skip_text_pages: true,
             force_ocr: false,
@@ -92,6 +95,7 @@ impl OcrDraft {
             denoise: self.denoise,
             binarize: self.binarize,
             output_mode: self.output_mode,
+            output: self.output,
             skip_text_files: self.skip_text_files,
             skip_text_pages: self.skip_text_pages && !self.text_pages,
             force_ocr: self.force_ocr,
@@ -123,6 +127,14 @@ impl OcrDraft {
         if let Some(m) = v["output_mode"].as_str() {
             self.output_mode = OutputMode::parse(m);
         }
+        if let Some(o) = v["output"].as_str().and_then(OcrOutput::from_name) {
+            self.output = o;
+        }
+        // Only a resolution the dialog offers: anything else keeps the default, so a damaged or
+        // foreign value can't make a run reduce the scans below what was chosen.
+        if let Some(dpi) = v["dpi"].as_u64().and_then(|d| u32::try_from(d).ok()).filter(|d| DPI_CHOICES.contains(d)) {
+            self.dpi = dpi;
+        }
         for (key, flag) in
             [("auto_rotate", &mut self.auto_rotate), ("deskew", &mut self.deskew), ("denoise", &mut self.denoise), ("binarize", &mut self.binarize)]
         {
@@ -153,6 +165,8 @@ impl OcrDraft {
                 MergeStrategy::RoverVote => "rover",
             },
             "output_mode": self.output_mode.name(),
+            "output": self.output.name(),
+            "dpi": self.dpi,
             "auto_rotate": self.auto_rotate,
             "deskew": self.deskew,
             "denoise": self.denoise,
@@ -199,10 +213,14 @@ pub type WaitingFiles = (Vec<(String, Vec<u8>)>, OcrSettings);
 
 pub struct OcrRun {
     pub doc: DocId,
+
     pub progress: Arc<Mutex<OcrProgress>>,
     /// What the document looked like when the job started: a result is applied only while it
     /// still does (the dialog closes on Go, so the user can edit, or redact, while this runs).
     pub guard: pdfcraft_engine::ocr::OcrGuard,
+    /// What the run was asked for: the output decides what happens to the images when the
+    /// result is applied.
+    pub settings: OcrSettings,
     /// Set for a run Edit started on a scanned page, not asked for: it shows no progress, says nothing
     /// when it found no words (a page with text of its own is skipped, and Edit must not make noise),
     /// and its result waits for Read mode and dialogs and is dropped if the document changed.
@@ -220,8 +238,9 @@ pub struct OcrRun {
 pub struct AutoOcr {
     /// The page it reads (0-based), when it was started.
     pub page: usize,
-    /// The document's edit generation when it was started: a result is for those bytes only, and
-    /// any later change (a page deleted or moved, say) may put a different page at that index.
+    /// The document's content generation when it was started: a result is for that content only,
+    /// and any later change (a page deleted or moved, say) may put a different page at that index.
+    /// Saving is not a change.
     pub generation: u64,
 }
 
@@ -232,6 +251,10 @@ pub(crate) fn keep_asking_while_probing(ctx: &egui::Context) {
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
     }
 }
+
+/// The resolutions Searchable Image (downsampled) offers, and the only ones restored from the
+/// preferences.
+const DPI_CHOICES: [u32; 4] = [600, 300, 150, 72];
 
 /// The dialog's height outside its scrolling settings: the title, a notice of up to two lines,
 /// the Cancel / Recognize text row and the modal's own margins.
@@ -322,16 +345,33 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                     });
                     ui.end_row();
                     ui.label(tl!("Output"));
-                    let mode_name = match d.output_mode {
-                        OutputMode::Searchable => tl!("Searchable Image (Exact)"),
-                        OutputMode::EditableText => tl!("Editable text"),
+                    let mode_name = match (d.output_mode, d.output) {
+                        (OutputMode::Searchable, OcrOutput::Exact) => tl!("Searchable Image (Exact)"),
+                        (OutputMode::Searchable, OcrOutput::Downsampled) => tl!("Searchable Image"),
+                        (OutputMode::EditableText, _) => tl!("Editable text"),
                     };
                     craft_ui::ComboBox::from_id_salt("ocr-output").selected_text(mode_name).width(220.0).show_ui(ui, |ui| {
                         let s = ui
-                            .selectable_label(d.output_mode == OutputMode::Searchable, tl!("Searchable Image (Exact)"))
+                            .selectable_label(
+                                d.output_mode == OutputMode::Searchable && d.output == OcrOutput::Exact,
+                                tl!("Searchable Image (Exact)"),
+                            )
                             .on_hover_text(tl!("Adds invisible text over each word; the page image is not changed"));
                         if s.clicked() {
                             d.output_mode = OutputMode::Searchable;
+                            d.output = OcrOutput::Exact;
+                        }
+                        let dsm = ui
+                            .selectable_label(
+                                d.output_mode == OutputMode::Searchable && d.output == OcrOutput::Downsampled,
+                                tl!("Searchable Image"),
+                            )
+                            .on_hover_text(tl!(
+                                "Adds invisible text over each word and reduces scan images above the Downsample to resolution to it, for a smaller file"
+                            ));
+                        if dsm.clicked() {
+                            d.output_mode = OutputMode::Searchable;
+                            d.output = OcrOutput::Downsampled;
                         }
                         let e = ui
                             .selectable_label(d.output_mode == OutputMode::EditableText, tl!("Editable text"))
@@ -343,7 +383,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                     ui.end_row();
                     ui.label(tl!("Downsample to"));
                     craft_ui::ComboBox::from_id_salt("ocr-dpi").selected_text(format!("{} dpi", d.dpi)).width(220.0).show_ui(ui, |ui| {
-                        for v in [600, 300, 150, 72] {
+                        for v in DPI_CHOICES {
                             ui.selectable_value(&mut d.dpi, v, format!("{v} dpi"));
                         }
                     });
@@ -485,6 +525,8 @@ impl PdfCraftApp {
         // a page with real text and a background picture is left alone.
         settings.skip_text_pages = true;
         settings.native_text_only = true;
+        // Edit only makes the words editable: it never changes the scan itself.
+        settings.output = OcrOutput::Exact;
         self.start_ocr_pages(scan.doc, &[scan.page], settings, true);
     }
 
@@ -562,7 +604,7 @@ impl PdfCraftApp {
     fn start_ocr_pages(&mut self, id: DocId, pages: &[usize], settings: OcrSettings, automatic: bool) {
         // What an automatic run's result must still fit when it arrives (see `AutoOcr`).
         let auto = if automatic {
-            pages.first().map(|&page| AutoOcr { page, generation: self.session.get(id).map_or(0, |d| d.edit_generation()) })
+            pages.first().map(|&page| AutoOcr { page, generation: self.session.get(id).map_or(0, |d| d.content_generation()) })
         } else {
             None
         };
@@ -573,7 +615,7 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         {
             let web = Some(crate::ocr_web::Pages::new(job.steps()));
-            self.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: auto, editable, web });
+            self.ocr_run = Some(OcrRun { doc: id, progress, guard, settings, automatic: auto, editable, web });
             self.poll_ocr();
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -596,6 +638,9 @@ impl PdfCraftApp {
         let p = progress.clone();
         // A failure is written on the worker thread: in the UI's language.
         let lang = crate::i18n::current();
+        // The worker takes the settings to build its engines; the run keeps its own copy, which is
+        // what the apply does with the images.
+        let run_settings = settings.clone();
         let work = move || {
             crate::i18n::set_current(lang);
             let result = recognize_guarded(|| {
@@ -617,7 +662,7 @@ impl PdfCraftApp {
         } else {
             std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work).ok();
         }
-        self.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: auto, editable });
+        self.ocr_run = Some(OcrRun { doc: id, progress, guard, settings: run_settings, automatic: auto, editable });
         self.poll_ocr();
     }
 
@@ -854,7 +899,9 @@ impl PdfCraftApp {
             if let Some(Ok(mut s)) = progress.as_ref().map(|b| b.lock()) {
                 s.done = batch.done();
                 if finished {
-                    s.message = Some(batch_summary(batch.ok, batch.words, batch.skipped, &batch.failed, &batch.notes, batch.not_run));
+                    let mut msg = batch_summary(batch.ok, batch.words, batch.skipped, &batch.failed, &batch.notes, batch.not_run);
+                    msg.push_str(&batch.images.summary());
+                    s.message = Some(msg);
                 }
             }
             if finished {
@@ -897,7 +944,8 @@ impl PdfCraftApp {
             }
         }
         let Some(run) = self.ocr_run.as_ref() else { return };
-        let (doc, progress, auto, guard, editable) = (run.doc, run.progress.clone(), run.automatic, run.guard.clone(), run.editable);
+        let (doc, progress, auto, guard, settings, editable) =
+            (run.doc, run.progress.clone(), run.automatic, run.guard.clone(), run.settings.clone(), run.editable);
         let automatic = auto.is_some();
         let mut s = match progress.lock() {
             Ok(s) => s,
@@ -939,7 +987,7 @@ impl PdfCraftApp {
         // page deleted or moved, say) its page index may now name another page: drop it, and let
         // the page in view be judged again.
         if let Some(a) = auto
-            && self.session.get(doc).map(|d| d.edit_generation()) != Some(a.generation)
+            && self.session.get(doc).map(|d| d.content_generation()) != Some(a.generation)
         {
             if let Some(view) = self.views.iter_mut().find(|v| v.id == doc) {
                 view.auto_ocr_tried.remove(&a.page);
@@ -965,9 +1013,11 @@ impl PdfCraftApp {
         let read = found.iter().filter(|p| p.skipped.is_none()).count();
         let skipped = found.len() - read;
         // The guard refuses a result that no longer fits its document (the user edited, or
-        // redacted, while the worker was out); its reason says so.
-        match self.session.apply_ocr_checked(doc, &found, &guard) {
-            Ok(words) => {
+        // redacted, while the worker was out); its reason says so. The settings say what the apply
+        // does to the images.
+        match self.session.apply_ocr_checked_with(doc, &found, &guard, &settings) {
+            Ok(applied) => {
+                let words = applied.words;
                 if let Some(info) = self.session.get(doc).map(|d| d.info.clone())
                     && let Some(view) = self.views.iter_mut().find(|v| v.id == doc)
                 {
@@ -990,6 +1040,16 @@ impl PdfCraftApp {
                     } else {
                         crate::i18n::fmt(tl!("; {n} pages already had text"), &[("n", &skipped.to_string())])
                     });
+                }
+                if let Some(images) = &applied.images {
+                    if images.resampled > 0 || !images.skipped.is_empty() {
+                        msg.push_str(&images_part(images.resampled, images.skipped.len()));
+                    }
+                    // A signed document is refused as a whole: one reason for the document, not a
+                    // count of images left alone.
+                    if images.refused.is_some() {
+                        msg.push_str(tl!("; the document is signed, so its images were left as they are"));
+                    }
                 }
                 // The pages' own notes (the editable output's unrenderable-character warning,
                 // for one) are part of the result: said here, not dropped.
@@ -1020,6 +1080,7 @@ pub(crate) fn run_batch_files(
 ) -> String {
     let total = files.len();
     let (mut ok, mut skipped, mut words, mut failed, mut notes) = (0usize, 0usize, 0usize, Vec::new(), Vec::new());
+    let mut images = BatchImages::default();
     let mut not_run: Option<usize> = None;
     for (i, (name, bytes)) in files.into_iter().enumerate() {
         if progress.lock().map(|s| s.cancel).unwrap_or(false) {
@@ -1039,13 +1100,52 @@ pub(crate) fn run_batch_files(
                     if let Some(note) = low_confidence_note(&name, &res, settings.low_confidence_threshold) {
                         notes.push(note);
                     }
+                    images.add(&res);
                 }
                 Err(e) => failed.push(format!("{name}: {e}")),
             },
             Err(e) => failed.push(format!("{name}: {e}")),
         }
     }
-    batch_summary(ok, words, skipped, &failed, &notes, not_run)
+    let mut msg = batch_summary(ok, words, skipped, &failed, &notes, not_run);
+    msg.push_str(&images.summary());
+    msg
+}
+
+/// What downsampling did over a batch, counted from each file that was written (a file whose
+/// copy failed to save or download is not counted). The native batch and the web one both
+/// report it after [`batch_summary`].
+#[derive(Default)]
+pub(crate) struct BatchImages {
+    resampled: usize,
+    left_alone: usize,
+    signed: usize,
+}
+
+impl BatchImages {
+    pub(crate) fn add(&mut self, res: &pdfcraft_engine::ocr::FileResult) {
+        if let Some(i) = &res.images {
+            self.resampled += i.resampled;
+            self.left_alone += i.skipped.len();
+            if i.refused.is_some() {
+                self.signed += 1;
+            }
+        }
+    }
+
+    /// The part of the summary after the files; empty when no image was looked at.
+    pub(crate) fn summary(&self) -> String {
+        let mut msg = String::new();
+        if self.resampled > 0 || self.left_alone > 0 {
+            msg.push_str(&images_part(self.resampled, self.left_alone));
+        }
+        if self.signed == 1 {
+            msg.push_str(tl!("; 1 signed file kept its images"));
+        } else if self.signed > 1 {
+            msg.push_str(&crate::i18n::fmt(tl!("; {n} signed files kept their images"), &[("n", &self.signed.to_string())]));
+        }
+        msg
+    }
 }
 
 /// The batch's low-confidence note for one file: its words at or under `threshold` (60 by
@@ -1080,6 +1180,21 @@ fn batch_summary(ok: usize, words: usize, skipped: usize, failed: &[String], not
     msg
 }
 
+/// What downsampling did, appended to a Recognize Text summary: how many images were reduced
+/// and how many above the resolution were left as they are (the reasons are in the tool's
+/// report; the toast keeps to the count).
+fn images_part(resampled: usize, left_alone: usize) -> String {
+    let mut s = if resampled == 1 {
+        crate::i18n::fmt(tl!("; 1 image downsampled"), &[])
+    } else {
+        crate::i18n::fmt(tl!("; {n} images downsampled"), &[("n", &resampled.to_string())])
+    };
+    if left_alone > 0 {
+        s.push_str(&crate::i18n::fmt(tl!(" ({n} left as they are)"), &[("n", &left_alone.to_string())]));
+    }
+    s
+}
+
 /// "Recognize text failed: {e}", in the current language.
 fn failed(e: &str) -> String {
     crate::i18n::fmt(tl!("{label} failed: {e}"), &[("label", tl!("Recognize text")), ("e", e)])
@@ -1104,6 +1219,48 @@ mod tests {
         let img = craft_image_codecs::Image::from_u8(8, 8, craft_image_codecs::ChannelLayout::Rgba, [250, 250, 250, 255].repeat(64)).unwrap();
         let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
         Session::new().create_from_images(&[("scan.png".into(), png)]).unwrap().to_vec()
+    }
+
+    /// The image counts after the files, which the web batch reports too: they add up over the
+    /// written files, and a batch that looked at no image says nothing about images.
+    #[test]
+    fn batch_images_add_up_over_the_written_files() {
+        let file = |resampled: usize, left_alone: usize, signed: bool| {
+            let mut res = pdfcraft_engine::ocr::FileResult {
+                bytes: Arc::new(Vec::new()),
+                pages: Vec::new(),
+                file_skipped: None,
+                images: Some(Default::default()),
+            };
+            if let Some(i) = res.images.as_mut() {
+                i.resampled = resampled;
+                i.skipped = vec!["CMYK".into(); left_alone];
+                i.refused = signed.then(|| "signed".into());
+            }
+            res
+        };
+        let mut images = BatchImages::default();
+        images.add(&pdfcraft_engine::ocr::FileResult { images: None, ..file(0, 0, false) });
+        assert_eq!(images.summary(), "");
+        images.add(&file(2, 1, false));
+        images.add(&file(1, 0, false));
+        images.add(&file(0, 0, true));
+        assert_eq!(images.summary(), "; 3 images downsampled (1 left as they are); 1 signed file kept its images");
+        images.add(&file(0, 0, true));
+        assert!(images.summary().ends_with("; 2 signed files kept their images"), "{}", images.summary());
+    }
+
+    /// One recognised word on page 1, as a finished run would hand it over.
+    fn scanned_page() -> pdfcraft_engine::ocr::OcrPage {
+        let word = pdfcraft_engine::ocr::PlacedWord {
+            text: "scanned".into(),
+            origin: [10.0, 100.0],
+            across: [60.0, 0.0],
+            up: [0.0, 12.0],
+            confidence: None,
+            source: "ocrs".into(),
+        };
+        pdfcraft_engine::ocr::OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() }
     }
 
     fn app_with(pdf: Vec<u8>) -> PdfCraftApp {
@@ -1196,7 +1353,7 @@ mod tests {
             source: "ocrs".into(),
         };
         let finished = |app: &PdfCraftApp, automatic: bool| {
-            let generation = app.session.get(app.active_ids().unwrap().1).unwrap().edit_generation();
+            let generation = app.session.get(app.active_ids().unwrap().1).unwrap().content_generation();
             let page = pdfcraft_engine::ocr::OcrPage { page: 0, words: vec![word()], already_on_page: 0, skipped: None, notes: Vec::new() };
             let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
             let guard = app.session.ocr_guard(app.active_ids().unwrap().1).unwrap();
@@ -1204,6 +1361,7 @@ mod tests {
                 doc: app.active_ids().unwrap().1,
                 progress,
                 guard,
+                settings: OcrSettings::default(),
                 automatic: automatic.then_some(AutoOcr { page: 0, generation }),
                 editable: false,
             }
@@ -1231,6 +1389,66 @@ mod tests {
         app.poll_ocr();
         assert_eq!(label(&app).as_deref(), Some("Recognize text"));
     }
+    /// The dialog's Searchable Image output reaches the run: its result reduces the 600 dpi scan
+    /// to the Downsample to resolution in the same undo step, and the summary says so. A run Edit
+    /// starts never touches the images, whatever the dialog says.
+    #[test]
+    fn searchable_image_output_downsamples_when_the_result_is_applied() {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(1200, 1200, |x, y| image::Rgb([(x % 251) as u8, (y % 241) as u8, 128])))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let pdf = Session::new()
+            .create_from_images_with_resolution(&[("scan.png".into(), png.into_inner())], pdfcraft_engine::ImageResolution::Dpi(600.0))
+            .unwrap();
+        let mut app = app_with(pdf.to_vec());
+        app.ocr_draft.output = OcrOutput::Downsampled;
+        app.ocr_draft.dpi = 300;
+        assert_eq!(app.ocr_draft.settings().output, OcrOutput::Downsampled);
+        let id = app.active_ids().unwrap().1;
+        let page = pdfcraft_engine::ocr::OcrPage {
+            page: 0,
+            words: vec![pdfcraft_engine::ocr::PlacedWord {
+                text: "scanned".into(),
+                origin: [10.0, 100.0],
+                across: [60.0, 0.0],
+                up: [0.0, 12.0],
+                confidence: None,
+                source: "ocrs".into(),
+            }],
+            already_on_page: 0,
+            skipped: None,
+            notes: Vec::new(),
+        };
+        let run = |app: &PdfCraftApp, settings: OcrSettings, automatic: Option<AutoOcr>| OcrRun {
+            doc: id,
+
+            progress: Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page.clone()])), cancel: false })),
+            guard: app.session.ocr_guard(id).unwrap(),
+            settings,
+            automatic: automatic.map(|a| AutoOcr { generation: app.session.get(id).unwrap().content_generation(), ..a }),
+            editable: false,
+        };
+        let width = |app: &PdfCraftApp| app.session.get(id).unwrap().page_images(0)[0].width;
+        assert_eq!(width(&app), 1200);
+        // Edit's own run: words only.
+        app.mode = Mode::Edit;
+        let mut auto_settings = app.ocr_draft.settings();
+        auto_settings.output = OcrOutput::Exact;
+        app.ocr_run = Some(run(&app, auto_settings, Some(AutoOcr { page: 0, generation: 0 })));
+        app.poll_ocr();
+        assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"));
+        assert_eq!(width(&app), 1200, "Edit never changes the scan");
+        // The user's run with Searchable Image.
+        app.ocr_run = Some(run(&app, app.ocr_draft.settings(), None));
+        app.poll_ocr();
+        assert_eq!(width(&app), 600);
+        let toast = app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(toast.contains("1 image downsampled"), "{toast}");
+        app.session.undo(id).unwrap();
+        assert_eq!(width(&app), 1200, "one undo step brings the image back");
+    }
+
     /// A run's result is for the document as it was when the run started. Once the document has
     /// changed, a result of Edit's is dropped, not applied to whatever page now has its index, and
     /// the page may be judged again.
@@ -1238,7 +1456,7 @@ mod tests {
     fn the_result_of_an_automatic_run_is_dropped_once_the_document_has_changed() {
         let mut app = app_with(scan());
         let id = app.active_ids().unwrap().1;
-        let generation = app.session.get(id).unwrap().edit_generation();
+        let generation = app.session.get(id).unwrap().content_generation();
         let page = pdfcraft_engine::ocr::OcrPage {
             page: 0,
             words: vec![pdfcraft_engine::ocr::PlacedWord {
@@ -1255,7 +1473,14 @@ mod tests {
         };
         let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
         let guard = app.session.ocr_guard(id).unwrap();
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: Some(AutoOcr { page: 0, generation }), editable: false });
+        app.ocr_run = Some(OcrRun {
+            doc: id,
+            progress,
+            guard,
+            settings: OcrSettings::default(),
+            automatic: Some(AutoOcr { page: 0, generation }),
+            editable: false,
+        });
         app.views[0].auto_ocr_tried.insert(0);
         // The document changes while the run is out.
         let img = craft_image_codecs::Image::from_u8(8, 8, craft_image_codecs::ChannelLayout::Rgba, [250, 250, 250, 255].repeat(64)).unwrap();
@@ -1265,6 +1490,114 @@ mod tests {
         assert!(app.ocr_run.is_none(), "the run is over");
         assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Add image"), "its result was not applied");
         assert!(!app.views[0].auto_ocr_tried.contains(&0), "the page may be judged again");
+    }
+
+    /// Saving while a run is out changes nothing the result depends on: it is still applied.
+    #[test]
+    fn the_result_of_a_run_survives_a_save() {
+        let mut app = app_with(scan());
+        let id = app.active_ids().unwrap().1;
+        let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![scanned_page()])), cancel: false }));
+        let guard = app.session.ocr_guard(id).unwrap();
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, settings: OcrSettings::default(), automatic: None, editable: false });
+        // The document is saved while the run is out.
+        let bytes = app.session.save_bytes(id).unwrap();
+        app.session.mark_saved(id, bytes, None).unwrap();
+        app.poll_ocr();
+        assert!(app.ocr_run.is_none(), "the run is over");
+        assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"), "its result was applied");
+    }
+
+    /// The same holds for a document that has edits to save: saving writes it afresh (new bytes,
+    /// and a new revision when it is saved on top of the old file), which is still no change to
+    /// what it holds, so a run begun on it is applied.
+    #[test]
+    fn the_result_of_a_run_on_an_edited_document_survives_a_save() {
+        let blank = Session::new().create_blank(595.0, 842.0, 1).unwrap().to_vec();
+        let mut app = app_with(blank);
+        let id = app.active_ids().unwrap().1;
+        app.session.apply(id, Edit::InsertBlankPage { at: 1, width: 595.0, height: 842.0 }).unwrap();
+        let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![scanned_page()])), cancel: false }));
+        let guard = app.session.ocr_guard(id).unwrap();
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, settings: OcrSettings::default(), automatic: None, editable: false });
+        // The edited document is saved while the run is out.
+        let bytes = app.session.save_bytes(id).unwrap();
+        app.session.mark_saved(id, bytes, None).unwrap();
+        app.poll_ocr();
+        assert!(app.ocr_run.is_none(), "the run is over");
+        let toast = app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"), "its result was applied; {toast}");
+    }
+
+    /// A run the user asked for is held to the same rule: once a page has been moved while it was
+    /// out, its result would put the words on, and downsample the images of, the page that now
+    /// has the index it read. It is dropped, and the user is told why.
+    #[test]
+    fn the_result_of_a_user_run_is_dropped_once_the_document_has_changed() {
+        let blank = Session::new().create_blank(595.0, 842.0, 1).unwrap().to_vec();
+        let mut app = app_with(blank);
+        app.set_option("language", "en").unwrap();
+        app.quick_tool = QuickTool::Select;
+        let id = app.active_ids().unwrap().1;
+        // Page 1 is a 600 dpi scan, page 2 a scan the user did not ask to read.
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(1200, 1200, |x, y| image::Rgb([(x % 251) as u8, (y % 241) as u8, 128])))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let png = Arc::new(png.into_inner());
+        app.session.apply(id, Edit::AddImage { page: 0, rect: Some([0.0, 0.0, 144.0, 144.0]), name: "a.png".into(), bytes: png.clone() }).unwrap();
+        app.session.apply(id, Edit::InsertBlankPage { at: 1, width: 595.0, height: 842.0 }).unwrap();
+        app.session.apply(id, Edit::AddImage { page: 1, rect: Some([0.0, 0.0, 144.0, 144.0]), name: "b.png".into(), bytes: png }).unwrap();
+        let page = scanned_page();
+        let settings = OcrSettings { output: OcrOutput::Downsampled, dpi: 300.0, ..Default::default() };
+        let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
+        let guard = app.session.ocr_guard(id).unwrap();
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, settings, automatic: None, editable: false });
+        // The pages swap places while the run is out.
+        app.session.apply(id, Edit::ReversePages { pages: vec![0, 1] }).unwrap();
+        let label = app.session.get(id).unwrap().can_undo().map(String::from);
+        app.poll_ocr();
+        assert!(app.ocr_run.is_none(), "the run is over");
+        assert_eq!(app.session.get(id).unwrap().can_undo().map(String::from), label, "its result was not applied");
+        let widths: Vec<u32> = (0..2).map(|p| app.session.get(id).unwrap().page_images(p)[0].width).collect();
+        assert_eq!(widths, [1200, 1200], "no page had its image downsampled");
+        let toast = app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(toast.contains("document changed"), "{toast}");
+    }
+
+    /// A signed document keeps its images. The summary says so once, for the document, and
+    /// does not count the refusal as one image left as it is (#5126 review).
+    #[test]
+    fn a_signed_document_is_not_counted_as_one_image_left_as_it_is() {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(1200, 1200, |x, y| image::Rgb([(x % 251) as u8, (y % 241) as u8, 128])))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let mut s = Session::new();
+        let pdf =
+            s.create_from_images_with_resolution(&[("scan.png".into(), png.into_inner())], pdfcraft_engine::ImageResolution::Dpi(600.0)).unwrap();
+        let unsigned = s.open("scan.pdf", None, pdf, None).unwrap();
+        let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+        let digital_id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
+        let opts = pdfcraft_engine::SignOptions { page: 0, rect: Some([20.0, 20.0, 180.0, 60.0]), ..Default::default() };
+        let signed = s.sign(unsigned, &digital_id, opts).unwrap();
+        let mut app = app_with(signed.to_vec());
+        app.set_option("language", "en").unwrap();
+        app.quick_tool = QuickTool::Select;
+        let id = app.active_ids().unwrap().1;
+        assert!(app.session.get(id).unwrap().is_signed());
+        let page = scanned_page();
+        let settings = OcrSettings { output: OcrOutput::Downsampled, dpi: 300.0, ..Default::default() };
+
+        let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
+        let guard = app.session.ocr_guard(id).unwrap();
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, settings, automatic: None, editable: false });
+        app.poll_ocr();
+        let toast = app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(toast.starts_with("Recognized 1 word"), "{toast}");
+        assert!(!toast.contains("left as they are)"), "the document is not one image: {toast}");
+        assert!(!toast.contains("images downsampled"), "no image was looked at: {toast}");
+        assert!(toast.contains("the document is signed"), "{toast}");
     }
 
     #[test]
@@ -1295,7 +1628,7 @@ mod tests {
         let guard = app.session.ocr_guard(id).unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 3, ..Default::default() }));
         poison(&progress);
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, settings: OcrSettings::default(), automatic: None, editable: false });
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the next run isn't refused as already running");
         let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
@@ -1425,6 +1758,25 @@ mod tests {
         assert_eq!(e.output_folder.as_deref(), Some("kept"), "an empty value is not a folder");
     }
 
+    /// The downsampling resolution is remembered with the output it belongs to: Downsampled at
+    /// 600 dpi comes back at 600, not at the 300 default. Only an offered resolution is restored
+    /// (#5126 review).
+    #[test]
+    fn the_downsampling_resolution_is_persisted_with_the_output() {
+        let mut d = OcrDraft { output: OcrOutput::Downsampled, dpi: 600, ..OcrDraft::default() };
+        let mut r = OcrDraft::default();
+        r.apply_pref(&d.to_pref());
+        assert_eq!((r.output, r.dpi), (OcrOutput::Downsampled, 600));
+        d.dpi = 72;
+        r.apply_pref(&d.to_pref());
+        assert_eq!(r.dpi, 72);
+        for odd in [serde_json::json!(301), serde_json::json!(0), serde_json::json!(-300), serde_json::json!("600"), serde_json::json!(1u64 << 40)] {
+            let mut e = OcrDraft::default();
+            e.apply_pref(&serde_json::json!({ "dpi": odd }));
+            assert_eq!(e.dpi, 300, "{odd} is not an offered resolution");
+        }
+    }
+
     /// "Automatic" saved without a strategy reads the way Automatic reads by default (the
     /// second engine joins when the first is unsure); an explicit choice always stands.
     #[test]
@@ -1502,7 +1854,7 @@ mod tests {
         };
         let page = OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() };
         let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, settings: OcrSettings::default(), automatic: None, editable: false });
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the run is over");
         let toast = app.toast.clone().map(|t| t.0).unwrap_or_default();
@@ -1538,7 +1890,7 @@ mod tests {
         };
         let guard = app.session.ocr_guard(id).unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, settings: OcrSettings::default(), automatic: None, editable: false });
         app.poll_ocr();
         let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
         assert!(toast.contains("3 characters had no font"), "{toast}");
@@ -1565,7 +1917,7 @@ mod tests {
         let guard = app.session.ocr_guard(id).unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
         app.ocr_draft.output_mode = pdfcraft_engine::ocr::OutputMode::EditableText;
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: true });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, settings: OcrSettings::default(), automatic: None, editable: true });
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the run is over");
         assert_eq!(app.session.get(id).unwrap().can_undo(), None, "no invisible layer was written");

@@ -103,6 +103,44 @@ impl OutputMode {
     }
 }
 
+pub use pdfcraft_optimize::ScanImages;
+
+/// Recognize Text's output: what happens to the page image under the new text.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OcrOutput {
+    /// Searchable Image (Exact): the image is left exactly as it is.
+    #[default]
+    Exact,
+    /// Searchable Image: images on the recognised pages finer than the "Downsample to"
+    /// resolution are resampled down to it, in place (smaller files; see
+    /// [`Edit::DownsampleImages`]).
+    Downsampled,
+}
+
+impl OcrOutput {
+    pub const ALL: [OcrOutput; 2] = [OcrOutput::Downsampled, OcrOutput::Exact];
+
+    /// The name tools use: `"exact"` or `"downsampled"`.
+    pub fn name(self) -> &'static str {
+        match self {
+            OcrOutput::Exact => "exact",
+            OcrOutput::Downsampled => "downsampled",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<OcrOutput> {
+        OcrOutput::ALL.into_iter().find(|o| o.name() == name)
+    }
+
+    /// What the Recognize Text dialog calls it.
+    pub fn label(self) -> &'static str {
+        match self {
+            OcrOutput::Exact => "Searchable Image (Exact)",
+            OcrOutput::Downsampled => "Searchable Image",
+        }
+    }
+}
+
 /// Recognize Text settings.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OcrSettings {
@@ -140,6 +178,8 @@ pub struct OcrSettings {
     pub binarize: bool,
     /// What to produce (searchable text layer, or a new editable document).
     pub output_mode: OutputMode,
+    /// What happens to the page images: left exactly as they are, or downsampled to `dpi`.
+    pub output: OcrOutput,
     /// Restrict recognition to this rectangle of the rendered page image, in pixels
     /// `[x0, y0, x1, y1]` (the Verify screen's "Re-OCR this region").
     pub region: Option<[f32; 4]>,
@@ -206,6 +246,7 @@ impl Default for OcrSettings {
             denoise: false,
             binarize: false,
             output_mode: OutputMode::default(),
+            output: OcrOutput::Exact,
             region: None,
             low_confidence_threshold: 60.0,
             tesseract_path: None,
@@ -633,10 +674,10 @@ fn tesseract_checking() -> String {
 pub struct OcrGuard {
     pub(crate) doc: DocId,
     pub(crate) pages: usize,
-    pub(crate) revisions: usize,
-    /// The document's working bytes when the job started; any edit rewrites them, so a shared
-    /// `Arc` pointer means "untouched".
-    pub(crate) bytes: Arc<Vec<u8>>,
+    /// The document's [`content_generation`](crate::document::Document::content_generation) when
+    /// the job started: it moves with an edit, undo, revert, reload or signing, but not with a
+    /// save, which writes the document afresh (new bytes) and changes nothing it holds.
+    pub(crate) content: u64,
 }
 
 /// Everything recognition needs from a document, detached from the session.
@@ -1001,38 +1042,62 @@ impl Session {
                     .reduce(f32::max)
             })
             .collect();
-        let guard = OcrGuard { doc: id, pages: all, revisions: doc.revision_ends().len(), bytes: doc.bytes.clone() };
+        let guard = OcrGuard { doc: id, pages: all, content: doc.content_generation() };
         Some(OcrJob { bytes: doc.bytes.clone(), password: doc.password.clone(), infos: doc.info.pages.clone(), native, pages, settings, guard })
     }
 
     /// Add the words found by [`OcrJob::run`] as one undoable step. Returns the number of words.
     pub fn apply_ocr(&mut self, id: DocId, found: &[OcrPage]) -> Result<usize, EditError> {
-        let edits: Vec<Edit> =
+        self.apply_ocr_with(id, found, &OcrSettings::default()).map(|a| a.words)
+    }
+
+    /// [`Self::apply_ocr`] with the output `settings` ask for: with
+    /// [`OcrOutput::Downsampled`], the images on the pages that were read are downsampled to
+    /// `settings.dpi` in the same undoable step.
+    pub fn apply_ocr_with(&mut self, id: DocId, found: &[OcrPage], settings: &OcrSettings) -> Result<OcrApplied, EditError> {
+        let mut edits: Vec<Edit> =
             found.iter().filter(|p| !p.words.is_empty()).map(|p| Edit::AddOcrText { page: p.page, words: p.words.clone() }).collect();
         let words = found.iter().map(|p| p.words.len()).sum();
-        if !edits.is_empty() {
-            self.apply(id, Edit::Batch { label: "Recognize text".into(), edits })?;
+        let read: Vec<usize> = found.iter().filter(|p| p.skipped.is_none()).map(|p| p.page).collect();
+        let downsample = settings.output == OcrOutput::Downsampled && !read.is_empty();
+        // Smaller images only make a smaller file in a full rewrite, which would break the
+        // signatures: a signed document keeps its images, and says why.
+        let signed = downsample && self.get(id).is_some_and(|d| d.is_signed());
+        if downsample && !signed {
+            edits.push(Edit::DownsampleImages { pages: read, ppi: f64::from(settings.dpi.clamp(72.0, 600.0)) });
         }
-        Ok(words)
+        let refused = signed.then(|| ScanImages {
+            refused: Some("the document is signed: its images are left as they are, since a smaller file needs a full rewrite, which would break the signatures".into()),
+            ..Default::default()
+        });
+        if edits.is_empty() {
+            return Ok(OcrApplied { words, images: refused });
+        }
+        let images = self.apply_reporting(id, Edit::Batch { label: "Recognize text".into(), edits })?;
+        let images = if signed {
+            refused
+        } else if downsample {
+            Some(images.scans.unwrap_or_default())
+        } else {
+            None
+        };
+        Ok(OcrApplied { words, images })
     }
 
     /// Why a job's result may not be applied to this session any more: the document was closed,
-    /// edited, re-saved, or its pages changed since the job started. `None` means it is safe.
+    /// edited, or its pages changed since the job started. Saving is not a change: it writes the
+    /// document afresh (new bytes, and a revision when saved on top of the old file), and what it
+    /// holds stays. Signing is one: it moves the content generation. `None` means it is safe.
     pub fn stale_reason(&self, guard: &OcrGuard) -> Option<String> {
         let Some(doc) = self.get(guard.doc) else {
             return Some("the document is no longer open".into());
         };
-        if !Arc::ptr_eq(&doc.bytes, &guard.bytes) {
+        if doc.content_generation() != guard.content {
             return Some("the document changed since recognition started".into());
         }
         let now = doc.info.pages.len();
         if now != guard.pages {
             return Some(format!("the page count changed from {} to {} since recognition started", guard.pages, now));
-        }
-        let revisions = doc.revision_ends().len();
-        if revisions != guard.revisions {
-            let had = guard.revisions;
-            return Some(format!("the document gained revisions ({had} → {revisions}) since recognition started"));
         }
         None
     }
@@ -1043,19 +1108,25 @@ impl Session {
     /// here; any other edit in between still makes the next apply stale.
     pub fn ocr_guard(&self, id: DocId) -> Option<OcrGuard> {
         let doc = self.get(id)?;
-        Some(OcrGuard { doc: id, pages: doc.info.pages.len(), revisions: doc.revision_ends().len(), bytes: doc.bytes.clone() })
+        Some(OcrGuard { doc: id, pages: doc.info.pages.len(), content: doc.content_generation() })
     }
 
     /// [`Self::apply_ocr`], but only while the document is still the one that was read; a stale
     /// result is refused with a named reason and nothing is written.
     pub fn apply_ocr_checked(&mut self, id: DocId, found: &[OcrPage], guard: &OcrGuard) -> Result<usize, String> {
+        self.apply_ocr_checked_with(id, found, guard, &OcrSettings::default()).map(|a| a.words)
+    }
+
+    /// [`Self::apply_ocr_checked`] with the output `settings` ask for
+    /// ([`OcrOutput::Downsampled`]): the images are reported beside the words.
+    pub fn apply_ocr_checked_with(&mut self, id: DocId, found: &[OcrPage], guard: &OcrGuard, settings: &OcrSettings) -> Result<OcrApplied, String> {
         if guard.doc != id {
             return Err("the result belongs to another document".into());
         }
         if let Some(why) = self.stale_reason(guard) {
             return Err(why);
         }
-        self.apply_ocr(id, found).map_err(|e| e.to_string())
+        self.apply_ocr_with(id, found, settings).map_err(|e| e.to_string())
     }
 
     /// The editable-text output: a NEW document with the recognized words as VISIBLE text at
@@ -1133,15 +1204,31 @@ impl Session {
 
     /// Recognise text on `pages` and add it, in one call (the CLI and agents use this).
     pub fn recognize_text(&mut self, id: DocId, pages: &[usize], settings: OcrSettings) -> Result<Vec<OcrPage>, String> {
+        self.recognize_text_reporting(id, pages, settings).map(|(found, _)| found)
+    }
+
+    /// [`Self::recognize_text`], also returning what was applied (the words, and what
+    /// [`OcrOutput::Downsampled`] did to the images).
+    pub fn recognize_text_reporting(&mut self, id: DocId, pages: &[usize], settings: OcrSettings) -> Result<(Vec<OcrPage>, OcrApplied), String> {
+        let output = settings.clone();
         let job = self.ocr_job(id, pages, settings).ok_or("no such document")?;
         if let Some(why) = self.get(id).and_then(|d| d.read_only_reason.clone()) {
             return Err(why);
         }
         let recognizers = recognizers(&job.settings)?;
         let found = job.run(&recognizers, |_, _| true);
-        self.apply_ocr(id, &found).map_err(|e| e.to_string())?;
-        Ok(found)
+        let applied = self.apply_ocr_with(id, &found, &output).map_err(|e| e.to_string())?;
+        Ok((found, applied))
     }
+}
+
+/// What [`Session::apply_ocr_with`] added and changed.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OcrApplied {
+    pub words: usize,
+    /// What downsampling did, with [`OcrOutput::Downsampled`] (`None` otherwise, or when no
+    /// page was read).
+    pub images: Option<ScanImages>,
 }
 
 /// What [`recognize_file`] did to one file.
@@ -1153,6 +1240,8 @@ pub struct FileResult {
     /// Why the whole file was left alone ("Skip files that already contain text"): a skipped
     /// file is its own result bucket, never counted as an OCR success.
     pub file_skipped: Option<String>,
+    /// What downsampling did ([`OcrOutput::Downsampled`]).
+    pub images: Option<ScanImages>,
 }
 
 impl FileResult {
@@ -1235,6 +1324,8 @@ pub struct FileJob {
     bytes: Arc<Vec<u8>>,
     /// The pages to read (taken by the caller).
     pub job: Option<OcrJob>,
+    /// What the run was asked for, kept for `finish`: what the output does to the images.
+    settings: OcrSettings,
 }
 
 /// What [`FileJob::open`] found: a file to read, or one the skip-files option passes over
@@ -1263,20 +1354,25 @@ impl FileJob {
                     notes: Vec::new(),
                 })
                 .collect();
-            return Ok(Opened::Skipped(FileResult { bytes, pages, file_skipped: Some("the file already contains text".into()) }));
+            return Ok(Opened::Skipped(FileResult { bytes, pages, file_skipped: Some("the file already contains text".into()), images: None }));
         }
-        Ok(Opened::Read(Box::new(FileJob { session, id, bytes, job: Some(job) })))
+        Ok(Opened::Read(Box::new(FileJob { session, id, bytes, job: Some(job), settings })))
     }
 
     /// Add the words found and save: the searchable file, or the original when nothing was found.
+    /// A run that resampled images writes even when it found no word — the smaller file is its
+    /// own result.
     pub fn finish(mut self, pages: Vec<OcrPage>) -> Result<FileResult, String> {
-        if self.session.apply_ocr(self.id, &pages).map_err(|e| e.to_string())? == 0 {
-            return Ok(FileResult { bytes: self.bytes, pages, file_skipped: None });
+        let settings = self.settings;
+        let applied = self.session.apply_ocr_with(self.id, &pages, &settings).map_err(|e| e.to_string())?;
+        if applied.words == 0 && applied.images.as_ref().is_none_or(|i| i.resampled == 0) {
+            return Ok(FileResult { bytes: self.bytes, pages, file_skipped: None, images: applied.images });
         }
-        // Checked like a save before the caller writes it (#2166).
+        // Checked like a save before the caller writes it (#2166). Downsampled images make the
+        // save a full rewrite, so the old ones leave the file.
         let bytes = self.session.save_bytes(self.id).map_err(|e| e.to_string())?;
         self.session.check_save(self.id, &bytes).map_err(|e| e.to_string())?;
-        Ok(FileResult { bytes, pages, file_skipped: None })
+        Ok(FileResult { bytes, pages, file_skipped: None, images: applied.images })
     }
 }
 
@@ -1595,29 +1691,30 @@ mod tests {
         assert_eq!(c.rgba()[8], 4, "the second row starts at y=1");
     }
 
-    /// The stale guard: edits and closing are named and the result is refused; a page-count or
-    /// revision difference is named too (any edit rewrites the working bytes, so those branches
-    /// are reached with a hand-built guard).
+    /// The stale guard: edits and closing are named and the result is refused; a page-count
+    /// difference is named too (any edit moves the content generation first, so that branch is
+    /// reached with a hand-built guard).
     #[test]
     fn stale_results_are_named_and_refused() {
         let mut s = Session::new();
         let id = s.open("t.pdf", None, Arc::new(fixture(2)), None).unwrap();
         let job = s.ocr_job(id, &[], OcrSettings::default()).unwrap();
         assert_eq!(s.stale_reason(&job.guard), None, "freshly captured");
-        // Any edit rewrites the working bytes.
+        // Any edit moves the content generation.
         s.apply(id, Edit::AddOcrText { page: 0, words: vec![] }).unwrap();
         assert_eq!(s.stale_reason(&job.guard).as_deref(), Some("the document changed since recognition started"));
         assert!(s.apply_ocr_checked(id, &[], &job.guard).is_err(), "a stale result is never applied");
         // A fresh guard passes.
         let fresh = s.ocr_job(id, &[], OcrSettings::default()).unwrap();
         assert_eq!(s.stale_reason(&fresh.guard), None);
-        // A page count and a revision count from another life are named too.
+        // A page count from another life is named too.
         let doc = s.get(id).unwrap();
-        let (bytes, revisions) = (doc.bytes.clone(), doc.revision_ends().len());
-        let guard = OcrGuard { doc: id, pages: 5, revisions, bytes };
+        let content = doc.content_generation();
+        let guard = OcrGuard { doc: id, pages: 5, content };
         assert!(s.stale_reason(&guard).is_some_and(|r| r.contains("page count changed")), "{}", s.stale_reason(&guard).unwrap());
-        let guard = OcrGuard { doc: id, pages: 2, revisions: revisions + 3, bytes: s.get(id).unwrap().bytes.clone() };
-        assert!(s.stale_reason(&guard).is_some_and(|r| r.contains("revisions")), "{}", s.stale_reason(&guard).unwrap());
+        // A guard from before an edit names the change, however many revisions saving has added.
+        let guard = OcrGuard { doc: id, pages: 2, content: content.wrapping_sub(1) };
+        assert!(s.stale_reason(&guard).is_some_and(|r| r.contains("changed since")), "{}", s.stale_reason(&guard).unwrap());
         // A guard for a different document refuses up front.
         let other = s.open("other.pdf", None, Arc::new(fixture(1)), None).unwrap();
         let cross = s.apply_ocr_checked(other, &[], &fresh.guard);
@@ -1657,7 +1754,7 @@ mod tests {
 
         // Applying the now-stale result is refused with its named reason and writes nothing.
         let after_edit = s.get(id).unwrap().bytes.clone();
-        assert!(!Arc::ptr_eq(&after_edit, &guard.bytes), "the edit rewrote the working bytes");
+        assert_ne!(s.get(id).unwrap().content_generation(), guard.content, "the edit moved the content generation");
         let revisions = s.get(id).unwrap().revision_ends().len();
         let why = s.apply_ocr_checked(id, &found, &guard).unwrap_err();
         assert_eq!(why, "the document changed since recognition started", "{why}");
@@ -2347,6 +2444,120 @@ mod tests {
                 assert!(near(shot.width, want[0]) && near(shot.height, want[1]), "{dpi} dpi, page {page}: {}x{}", shot.width, shot.height);
             }
         }
+    }
+
+    /// A 600 dpi scan of a text page (no text of its own) and the words OCR would find on it.
+    fn scan_600(s: &mut Session) -> (DocId, Vec<OcrPage>) {
+        let text = s.create_from_text("t", "The quick brown fox jumps over the lazy dog.").unwrap();
+        let id = s.open("text.pdf", None, text, None).unwrap();
+        let png = export::Exporter::new(s.get(id).unwrap()).png(0, 600.0).unwrap();
+        let scan = s.create_from_images_with_resolution(&[("scan.png".into(), png)], crate::ImageResolution::Dpi(600.0)).unwrap();
+        let id = s.open("scan.pdf", None, scan, None).unwrap();
+        let word = |text: &str, x: f64| PlacedWord {
+            text: text.into(),
+            origin: [x, 700.0],
+            across: [40.0, 0.0],
+            up: [0.0, 12.0],
+            confidence: None,
+            source: "ocrs".into(),
+        };
+        let found =
+            vec![OcrPage { page: 0, words: vec![word("quick", 100.0), word("lazy", 300.0)], already_on_page: 0, skipped: None, notes: Vec::new() }];
+        (id, found)
+    }
+
+    /// The page's text glyph boxes (view space), as recognition and search see them.
+    fn glyphs(s: &Session, id: DocId) -> Vec<(String, [i32; 4])> {
+        let mut r = PageRenderer::new(s.get(id).unwrap().bytes.clone(), RenderConfig::default());
+        let text = r.render(RenderRequest { page: 0, kind: RequestKind::Text, scale: 1.0, ..Default::default() }).text.unwrap();
+        text.glyphs.iter().map(|g| (g.text.clone(), g.rect.map(|v| (v * 10.0).round() as i32))).collect()
+    }
+
+    /// Searchable Image: the 600 dpi scan is halved to 300 in place, in the same undoable step as
+    /// the words, which sit exactly where they do over the exact image; the saved file is
+    /// smaller. Exact leaves the image alone, and Undo brings it back.
+    #[test]
+    fn searchable_image_downsamples_the_scan_under_the_text() {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let (exact, found) = scan_600(&mut s);
+        let (small, _) = scan_600(&mut s);
+        let original = s.get(exact).unwrap().page_images(0);
+        assert_eq!(original.len(), 1);
+        let (w, h, matrix) = (original[0].width, original[0].height, original[0].matrix);
+        assert!(w > 4000, "{w}");
+        let original_bytes = s.get(small).unwrap().bytes.len();
+
+        let a = s.apply_ocr_with(exact, &found, &OcrSettings::default()).unwrap();
+        assert_eq!((a.words, a.images), (2, None));
+        let still = s.get(exact).unwrap().page_images(0);
+        assert_eq!((still[0].width, still[0].height), (w, h), "exact leaves the image alone");
+
+        let settings = OcrSettings { output: OcrOutput::Downsampled, dpi: 300.0, ..Default::default() };
+        let a = s.apply_ocr_with(small, &found, &settings).unwrap();
+        let images = a.images.expect("a report");
+        assert_eq!((a.words, images.images, images.resampled), (2, 1, 1), "{images:?}");
+        assert!(images.skipped.is_empty(), "{:?}", images.skipped);
+        let now = s.get(small).unwrap().page_images(0);
+        assert_eq!((now[0].width, now[0].height), (w.div_ceil(2), h.div_ceil(2)));
+        assert_eq!(now[0].matrix, matrix, "the image keeps its placement");
+        assert_eq!(s.get(small).unwrap().can_undo(), Some("Recognize text"));
+
+        // The text layer is there and lines up exactly as over the exact image.
+        let text = glyphs(&s, small);
+        assert!(text.iter().map(|g| g.0.as_str()).collect::<String>().contains("quick"), "{text:?}");
+        assert_eq!(text, glyphs(&s, exact));
+
+        let saved = s.save_bytes(small).unwrap();
+        assert!(saved.len() * 2 < original_bytes, "{} -> {}", original_bytes, saved.len());
+        assert!(s.save_bytes(exact).unwrap().len() > original_bytes, "exact keeps the full image");
+
+        s.undo(small).unwrap();
+        let back = s.get(small).unwrap().page_images(0);
+        assert_eq!((back[0].width, back[0].height), (w, h));
+        assert!(glyphs(&s, small).is_empty());
+    }
+
+    /// Pages that were skipped are not downsampled, and a run that read nothing changes nothing.
+    #[test]
+    fn skipped_pages_keep_their_images() {
+        let mut s = Session::new();
+        let (id, mut found) = scan_600(&mut s);
+        found[0].skipped = Some("the page already contains text".into());
+        found[0].words.clear();
+        let settings = OcrSettings { output: OcrOutput::Downsampled, ..Default::default() };
+        let a = s.apply_ocr_with(id, &found, &settings).unwrap();
+        assert_eq!((a.words, a.images), (0, None));
+        assert_eq!(s.get(id).unwrap().can_undo(), None);
+    }
+
+    /// A signed document keeps its images, and the report gives the reason once for the
+    /// document, not as an image of its own left as it is: `skipped` lists images only.
+    #[test]
+    fn a_signed_document_is_refused_as_a_whole_not_as_one_skipped_image() {
+        // After the test certificate's start date (2026-10-02).
+        let mut s = Session::new().with_clock(|| 1_800_000_000);
+        let (id, found) = scan_600(&mut s);
+        let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+        let digital_id = pdfcraft_sign::pkcs12::open(&p12, "test").unwrap();
+        let opts = crate::SignOptions { page: 0, rect: Some([20.0, 20.0, 180.0, 60.0]), ..Default::default() };
+        let signed = s.sign(id, &digital_id, opts).unwrap();
+        let id = s.open("signed.pdf", None, signed, None).unwrap();
+        assert!(s.get(id).unwrap().is_signed());
+        let width = s.get(id).unwrap().page_images(0)[0].width;
+        let settings = OcrSettings { output: OcrOutput::Downsampled, dpi: 300.0, ..Default::default() };
+        let images = s.apply_ocr_with(id, &found, &settings).unwrap().images.expect("a report");
+        assert!(images.skipped.is_empty(), "no image was looked at: {:?}", images.skipped);
+        assert!(images.refused.as_deref().is_some_and(|why| why.contains("signed")), "{images:?}");
+        assert_eq!((images.images, images.resampled), (0, 0));
+        assert_eq!(s.get(id).unwrap().page_images(0)[0].width, width, "the images are left as they are");
+    }
+
+    #[test]
+    fn output_names_round_trip() {
+        for o in OcrOutput::ALL {
+            assert_eq!(OcrOutput::from_name(o.name()), Some(o));
+        }
+        assert_eq!(OcrOutput::from_name("Downsampled"), None);
     }
 
     /// The first and last letters of a line are read: ocrs' own 3-pixel margin clipped them at
