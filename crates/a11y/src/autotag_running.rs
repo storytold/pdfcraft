@@ -133,8 +133,9 @@ fn groups<'a>(pages: &'a [PageText<'a>]) -> HashMap<(Edge, String), Vec<Member<'
 
 /// The clusters of `members` (sorted by distance) that run: the union of every window of members
 /// within [`TOLERANCE`] of the window's first that covers at least `needed` pages, with windows that
-/// share a member joined into one cluster. At most [`MAX_CLUSTERS`] are returned, nearest the edge
-/// first.
+/// share a member joined into one cluster. A dense run of such windows makes one cluster wider than
+/// [`TOLERANCE`], still inside the edge band, and the heading check then judges the cluster as a
+/// whole. At most [`MAX_CLUSTERS`] are returned, nearest the edge first.
 fn clusters<'m, 'a>(members: &'m [Member<'a>], needed: usize) -> Vec<&'m [Member<'a>]> {
     let mut on_page: HashMap<usize, usize> = HashMap::new();
     let mut found: Vec<&'m [Member<'a>]> = Vec::new();
@@ -365,7 +366,7 @@ mod tests {
         let at = |distance: f64| line("Note", 792.0 - 10.0 - distance);
         let pages = vec![vec![at(20.0)], vec![at(20.0)], vec![at(24.0)], vec![at(28.0)], vec![at(28.0)], Vec::new()];
         let found = run(&pages, None);
-        assert!(found.iter().flatten().all(|e| *e == Some(Edge::Top)), "{found:?}");
+        assert_eq!(found.iter().flatten().filter(|e| **e == Some(Edge::Top)).count(), 5, "{found:?}");
     }
 
     #[test]
