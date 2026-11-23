@@ -447,3 +447,40 @@ fn the_system_is_asked_now_and_then_and_no_answer_changes_nothing() {
     pass(&ctx, &mut time, Vec::new(), |ctx| motion.begin_pass(ctx, AnimationEffects::System));
     assert!(motion.reduced && asked.get() == 3, "no answer leaves the last one standing");
 }
+
+#[test]
+fn expensive_frames_are_asked_about_with_the_system_and_change_the_clock_of_motion() {
+    let ctx = egui::Context::default();
+    let costly = Rc::new(Cell::new(false));
+    let source = Rc::clone(&costly);
+    let mut motion = Motion { costly_frames: Some(Box::new(move || source.get())), ..Default::default() };
+    let mut time = 0.0;
+    assert!(!costly_frames(&ctx), "before any pass, and wherever nobody says, frames are cheap");
+    pass(&ctx, &mut time, Vec::new(), |ctx| {
+        motion.begin_pass(ctx, AnimationEffects::System);
+        assert!(!costly_frames(ctx));
+        // Every frame is asked for, and egui's own clock is right between such frames.
+        assert_eq!(motion_dt(ctx), ctx.input(|i| i.stable_dt));
+    });
+    // A Remote Desktop session takes the window over: heard the next time the system is asked.
+    costly.set(true);
+    pass(&ctx, &mut time, Vec::new(), |ctx| {
+        motion.begin_pass(ctx, AnimationEffects::System);
+        assert!(!costly_frames(ctx), "not asked again so soon");
+    });
+    time += ASK_EVERY;
+    pass(&ctx, &mut time, Vec::new(), |ctx| {
+        motion.begin_pass(ctx, AnimationEffects::System);
+        assert!(costly_frames(ctx));
+        // Thirty frames a second are asked for with a delay, after which egui's `stable_dt` is a
+        // sixtieth of a second whatever passed: motion measures the time itself.
+        assert_eq!(motion_dt(ctx), ctx.input(|i| i.unstable_dt));
+        request_motion_frame(ctx);
+    });
+    costly.set(false);
+    time += ASK_EVERY;
+    pass(&ctx, &mut time, Vec::new(), |ctx| {
+        motion.begin_pass(ctx, AnimationEffects::System);
+        assert!(!costly_frames(ctx), "and back at the machine's own display");
+    });
+}

@@ -83,6 +83,13 @@ pub struct Motion {
     pub reduced: bool,
     /// How to ask the system (the desktop app sets it).
     pub source: Option<MotionSource>,
+    /// Whether every frame is expensive to show: drawn on the processor, or sent over a Remote
+    /// Desktop connection (the desktop app sets it; asked with [`Self::source`]). Motion that
+    /// goes on by itself then asks for [`COSTLY_FRAMES_PER_SECOND`] frames a second, not every
+    /// one the display could show ([`request_motion_frame`]).
+    pub costly_frames: Option<FrameCostSource>,
+    /// The last answer of [`Self::costly_frames`].
+    costly: bool,
     /// egui time of the last question.
     asked_at: f64,
     /// egui's own animation time and scroll animation, kept while they are changed here.
@@ -100,7 +107,16 @@ pub struct Motion {
 impl Default for Motion {
     /// Start motion handling with animations enabled and no desktop preference sampled yet.
     fn default() -> Self {
-        Self { reduced: false, source: None, asked_at: f64::NEG_INFINITY, egui_times: None, wheel: WheelReader::default(), frame: None }
+        Self {
+            reduced: false,
+            source: None,
+            costly_frames: None,
+            costly: false,
+            asked_at: f64::NEG_INFINITY,
+            egui_times: None,
+            wheel: WheelReader::default(),
+            frame: None,
+        }
     }
 }
 
@@ -109,13 +125,19 @@ impl Motion {
     pub(crate) fn begin_pass(&mut self, ctx: &egui::Context, effects: AnimationEffects) {
         let now = ctx.input(|i| i.time);
         // `>=` is false for a NaN time, which then never asks.
-        if now - self.asked_at >= ASK_EVERY
-            && let Some(source) = &self.source
-        {
+        if now - self.asked_at >= ASK_EVERY && (self.source.is_some() || self.costly_frames.is_some()) {
             self.asked_at = now;
-            if let Some(reduced) = source() {
+            if let Some(reduced) = self.source.as_ref().and_then(|source| source()) {
                 self.reduced = reduced;
             }
+            if let Some(costly) = &self.costly_frames {
+                self.costly = costly();
+            }
+        }
+        // Every pass, so a context whose memory was reset still has it.
+        let costly = self.costly;
+        if costly_frames(ctx) != costly {
+            ctx.data_mut(|d| d.insert_temp(costly_id(), costly));
         }
         let animate = effects.animates(self.reduced);
         self.sync_style(ctx, animate);
@@ -183,6 +205,43 @@ impl Motion {
 /// durations, ask this; egui's animations stop by themselves ([`Motion::begin_pass`]).
 pub(crate) fn animated(ctx: &egui::Context) -> bool {
     ctx.global_style().animation_time > 0.0
+}
+
+/// Says whether every frame is expensive to show ([`Motion::costly_frames`]). Asked from the UI
+/// thread every [`ASK_EVERY`] seconds, so it must answer at once.
+pub type FrameCostSource = Box<dyn Fn() -> bool>;
+
+/// Frames a second that motion going on by itself asks for while frames are expensive. A window
+/// drawn on the processor or sent over Remote Desktop rarely shows more, and each frame asked for
+/// beyond what it can show delays the ones after it.
+pub const COSTLY_FRAMES_PER_SECOND: f32 = 30.0;
+
+fn costly_id() -> egui::Id {
+    egui::Id::unique("pdfcraft-motion-costly-frames")
+}
+
+/// Whether every frame is expensive to show, as [`Motion::begin_pass`] last heard.
+pub(crate) fn costly_frames(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp(costly_id())).unwrap_or(false)
+}
+
+/// Asks for the next frame of motion that goes on without input (an eased wheel notch, a glide,
+/// scrolling at an edge): at once, or a thirtieth of a second on while frames are expensive.
+pub(crate) fn request_motion_frame(ctx: &egui::Context) {
+    if costly_frames(ctx) {
+        ctx.request_repaint_after(std::time::Duration::from_secs_f32(1.0 / COSTLY_FRAMES_PER_SECOND));
+    } else {
+        ctx.request_repaint();
+    }
+}
+
+/// The time since the last frame, for motion that [`request_motion_frame`] keeps going. egui's
+/// `stable_dt` is the time actually passed only between frames asked for at once; after a delayed
+/// one it is a sixtieth of a second whatever passed, which would halve the speed of anything
+/// moving at thirty frames a second. Callers bound it, as they bound `stable_dt`.
+pub(crate) fn motion_dt(ctx: &egui::Context) -> f32 {
+    let costly = costly_frames(ctx);
+    ctx.input(|i| if costly { i.unstable_dt } else { i.stable_dt })
 }
 
 /// Return the stable egui id holding the last wheel-zoom input state.
