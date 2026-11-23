@@ -91,13 +91,13 @@ fn select_after_edit(
             view.comments.clear_selection();
             view.comments.selected = newest.map(|n| (a.page, n));
             view.comments.reveal = true;
-            // A new highlight opens its note for typing straight away, as in Acrobat,
-            // unless a note typed into another card is still unsaved.
+            // A new highlight opens its note for typing straight away, as in Acrobat, with the
+            // text it copied from the selection (#2605), unless a note typed into another card is
+            // still unsaved.
             if let (pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, .. }, Some(n)) = (&a.shape, newest)
-                && a.contents.is_empty()
                 && view.comments.editing.is_none()
             {
-                view.comments.open_editor(a.page, n, String::new());
+                view.comments.open_editor(a.page, n, a.contents.clone());
             }
         }
         // Markup on a text selection across pages (marked so when it was made,
@@ -265,7 +265,11 @@ impl PdfCraftApp {
                     view.document_changed(info);
                 }
                 if matches!(edit, Edit::AddAnnotation(_)) || across_pages.is_some() {
-                    view.comments.comment_added();
+                    // A note still open with just what its comment holds has nothing unsaved.
+                    let saved = view.comments.editing.as_ref().is_some_and(|(page, index, text)| {
+                        info.annotations.iter().any(|x| x.page == *page && x.index == *index && x.contents.as_deref().unwrap_or_default() == text)
+                    });
+                    view.comments.comment_added(saved);
                 }
                 // A deletion moves the pop-ups' state with its comments (`annotation_deleted`).
                 if !matches!(edit, Edit::DeleteAnnotation { .. }) {

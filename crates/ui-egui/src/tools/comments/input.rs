@@ -449,13 +449,18 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
     // may be out of view. Every page it covers gets its own markup, in one undo step, once all
     // of them are read.
     if let crate::canvas::ToolMarks::Marks(marks, head) = view.tool_marks(cx.tool, finished, Some(cx.page), false, cx.info) {
+        // Each page's highlight copies that page's part of the selection, read before it clears.
+        let marks: Vec<_> = marks
+            .into_iter()
+            .map(|(page, quads)| (page, quads, cx.prefs.markup_contents(kind, cx.can_copy, || view.selected_text_on(page))))
+            .collect();
         view.clear_selection();
-        let edits = marks.into_iter().map(|(page, quads)| {
+        let edits = marks.into_iter().map(|(page, quads, contents)| {
             Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
                 page,
                 shape: Shape::TextMarkup { kind, quads },
                 style: cx.prefs.style(tool),
-                contents: String::new(),
+                contents,
                 author: cx.prefs.author.clone(),
             })
         });

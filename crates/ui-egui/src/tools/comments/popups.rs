@@ -378,6 +378,7 @@ pub(crate) fn popups(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, pr
                     tool: QuickTool::Select,
                     prefs: &CommentPrefs::default(),
                     allowed,
+                    can_copy: false,
                     hidden,
                     redact_mark: ([0.0; 3], 1.0),
                     keys: PageKeys::new(true),
