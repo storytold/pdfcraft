@@ -202,6 +202,10 @@ pub struct DocView {
     pub close_requested: bool,
     /// A historical snapshot of another document (see [`Snapshot`]): `None` for real documents.
     pub snapshot: Option<Snapshot>,
+    /// Baseline bytes of an imported image document used to detect user edits independently of undo history (#4942).
+    pub(crate) imported_image_baseline: Option<std::sync::Arc<Vec<u8>>>,
+    /// Cached dirty state for an imported image baseline: `(generation, dirty)`.
+    pub(crate) imported_image_dirty: std::cell::Cell<Option<(u64, bool)>>,
     /// Previous view / Next view: pages visited before (and after, once going back).
     pub back: Vec<usize>,
     pub forward: Vec<usize>,
@@ -603,6 +607,8 @@ impl DocView {
             disk_changed: false,
             close_requested: false,
             snapshot: None,
+            imported_image_baseline: None,
+            imported_image_dirty: std::cell::Cell::new(None),
             back: Vec::new(),
             forward: Vec::new(),
             interface: Default::default(),
@@ -707,8 +713,10 @@ impl DocView {
     /// points into the old version.
     pub(crate) fn follow_document(&mut self, ctx: &egui::Context, info: &DocInfo) {
         let continuous = self.view.continuous;
+        let baseline = self.imported_image_baseline.clone();
         self.document_replaced(ctx, info);
         self.view.continuous = continuous;
+        self.imported_image_baseline = baseline;
     }
 
     /// A second view of this document (split view), showing what this one shows.
@@ -720,6 +728,7 @@ impl DocView {
         v.notice_dismissed = self.notice_dismissed;
         v.scripts_off_noted = self.scripts_off_noted;
         v.full_screen_fill = self.full_screen_fill;
+        v.imported_image_baseline = self.imported_image_baseline.clone();
         v
     }
 

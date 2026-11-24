@@ -252,7 +252,7 @@ impl PdfCraftApp {
                 Some(Err(error)) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
                 None => {}
             },
-            open_worker::ResultKind::Converted(created) => match self.open_converted_pdf(&pending.name, created) {
+            open_worker::ResultKind::Converted(created) => match self.open_converted_pdf(&pending.name, created, false) {
                 Ok(()) => {
                     if let Some(command) = pending.then {
                         self.execute(ctx, command);

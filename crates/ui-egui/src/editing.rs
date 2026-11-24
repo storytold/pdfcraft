@@ -1066,7 +1066,24 @@ impl PdfCraftApp {
 
     /// Whether tab `index` has work that isn't saved: edits, or form typing not committed yet.
     pub(crate) fn has_unsaved_work(&self, index: usize) -> bool {
-        self.views.get(index).and_then(|v| self.session.get(v.id)).is_some_and(|doc| doc.dirty) || self.has_unsaved_typing(index)
+        let Some(v) = self.views.get(index) else { return false };
+        let Some(doc) = self.session.get(v.id) else { return false };
+        // An image imported as a new PDF is unsaved only once it differs from what was imported (#4942).
+        let dirty = if let Some(baseline) = &v.imported_image_baseline {
+            let generation = doc.edit_generation();
+            if let Some((cached_gen, cached_dirty)) = v.imported_image_dirty.get()
+                && cached_gen == generation
+            {
+                cached_dirty
+            } else {
+                let d = !std::sync::Arc::ptr_eq(&doc.bytes, baseline) && doc.bytes.as_slice() != baseline.as_slice();
+                v.imported_image_dirty.set(Some((generation, d)));
+                d
+            }
+        } else {
+            doc.dirty
+        };
+        dirty || self.has_unsaved_typing(index)
     }
 
     /// Whether tab `index` holds work of its own that isn't in its document yet: form typing not

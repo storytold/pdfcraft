@@ -29,7 +29,8 @@ pub(crate) fn strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, place: Place) {
         let Some(view) = app.views.get(index) else { continue };
         let Some(doc) = app.session.get(view.id) else { continue };
         let name = crate::canvas::tab_label(app, index).unwrap_or_else(|| doc.name.clone());
-        let mut tab = DocumentTab::new(StripTab::View(view.pane.key), name).modified(doc.dirty).closable(true);
+        let dirty = app.has_unsaved_work(index);
+        let mut tab = DocumentTab::new(StripTab::View(view.pane.key), name).modified(dirty).closable(true);
         if let Some(path) = &doc.path
             && std::path::Path::new(path).file_name().is_some_and(|file| file.to_string_lossy() != doc.name.as_str())
         {
