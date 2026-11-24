@@ -6123,3 +6123,32 @@ fn untag_walk_charges_shared_indirect_k_array_against_budget_without_partial_rew
     assert_eq!(one.get(ObjRef::new(9, 0)), elem9_before);
     assert_eq!(one.get(ObjRef::new(10, 0)).as_array().unwrap().len(), 50);
 }
+
+#[test]
+fn untag_walk_skips_an_owner_over_budget_and_still_untags_a_smaller_one() {
+    // Element 8 (40 MCIDs) is walked first and does not fit a budget of 20; element 7 (one OBJR to
+    // the removed link) comes after it and does. No /ParentTree, so only /K order decides.
+    let mut large_k = String::from("[");
+    for mcid in 0..40 {
+        large_k.push_str(&format!("{mcid} "));
+    }
+    large_k.push(']');
+    let large = format!("<< /S /P /P 6 0 R /K {large_k} >>");
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >>",           // 1
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>", // 2
+        b"<< /Type /Page /Parent 2 0 R /Annots [] >>",                        // 3 (annot 4 already removed)
+        b"<< /Type /Annot /Subtype /Link /Rect [10 10 100 30] /A << /S /URI /URI (https://example.org) >> /StructParent 1 >>", // 4
+        b"<< /Type /StructTreeRoot /K 6 0 R >>",                              // 5
+        b"<< /S /Document /P 5 0 R /K [7 0 R 8 0 R] >>",                      // 6
+        b"<< /S /Link /P 6 0 R /K << /Type /OBJR /Obj 4 0 R >> >>",           // 7
+        large.as_bytes(),                                                     // 8
+    ]);
+    let large_before = doc.get(ObjRef::new(8, 0));
+
+    crate::structure::untag_removed_within(&mut doc, &[(ObjRef::new(4, 0), None)], 20);
+
+    assert_eq!(doc.get(ObjRef::new(8, 0)), large_before, "the oversized owner must stay untouched");
+    let doc_kids = doc.get(ObjRef::new(6, 0)).as_dict().unwrap().get(b"K").unwrap().clone();
+    assert_eq!(doc_kids, Object::Array(vec![Object::Ref(ObjRef::new(8, 0))]), "the emptied link element is detached");
+}

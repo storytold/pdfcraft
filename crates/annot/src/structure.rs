@@ -160,7 +160,9 @@ fn collect_hits(
                 };
                 let budget_left = limit.saturating_sub(steps);
                 if kids.len() > budget_left {
-                    break;
+                    // Leave an owner too big for the remaining budget untouched (never scanned or
+                    // rewritten in part), but keep walking: a smaller owner later may still fit.
+                    continue;
                 }
                 steps = steps.saturating_add(kids.len());
                 let mut hit = false;
