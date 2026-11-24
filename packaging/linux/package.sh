@@ -16,7 +16,7 @@
 # CROSS_COMPILE (binutils prefix, for strip) and optionally EMULATOR (e.g. qemu-riscv64) to
 # smoke-test the CLI.
 #
-# Usage: packaging/linux/package.sh [--skip-build] [--formats "appimage deb rpm tar cli"]
+# Usage: packaging/linux/package.sh [--skip-build] [--formats "appimage deb rpm tar cli"] [--arch-tar-dir DIRECTORY]
 #
 # Needs: cargo, curl and the network (the OCR models: cargo xtask models); nfpm for deb/rpm (https://nfpm.goreleaser.com); appimagetool for the AppImage
 # (downloaded into $CARGO_TARGET_DIR if missing). Build on an old distro (CI: Ubuntu 22.04,
@@ -30,10 +30,16 @@ APP_ID=ai.storyteller.pdfcraft
 
 SKIP_BUILD=0
 FORMATS="appimage deb rpm tar cli"
+ARCH_TAR_DIR=
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1; shift ;;
     --formats) FORMATS="$2"; shift 2 ;;
+    --arch-tar-dir)
+      [[ -n "${2:-}" ]] || { echo "error: --arch-tar-dir needs a directory" >&2; exit 2; }
+      ARCH_TAR_DIR="$2"
+      shift 2
+      ;;
     -h | --help) sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -47,10 +53,21 @@ case "$ARCH" in
   *) echo "unsupported architecture $ARCH" >&2; exit 2 ;;
 esac
 export PDFCRAFT_MAINTAINER="${PDFCRAFT_MAINTAINER:-PdfCraft maintainers <pdfcraft@storyteller.ai>}"
+IS_NIGHTLY=0
+if [[ "${PDFCRAFT_BUILD_CHANNEL:-}" == nightly-v1 || "$VERSION" == *-nightly* ]]; then
+  IS_NIGHTLY=1
+  export PDFCRAFT_BUILD_CHANNEL=nightly-v1
+  export PDFCRAFT_OVERRIDE_VERSION="$VERSION"
+fi
 LABEL_SUFFIX="${PDFCRAFT_BUILD_LABEL:+-$PDFCRAFT_BUILD_LABEL}"
 BASENAME="pdfcraft-$VERSION$LABEL_SUFFIX-linux-$ARCH"
 
-echo "==> PdfCraft $VERSION$LABEL_SUFFIX for Linux $ARCH ($FORMATS)"
+if [[ -n "$ARCH_TAR_DIR" && "$IS_NIGHTLY" != 1 ]]; then
+  echo "error: --arch-tar-dir is only for Nightly builds" >&2
+  exit 2
+fi
+
+echo "==> PdfCraft $VERSION$LABEL_SUFFIX for Linux $ARCH ($FORMATS, channel=${PDFCRAFT_BUILD_CHANNEL:-stable})"
 
 if [[ "$SKIP_BUILD" = 0 ]]; then
   if [[ -n "${CROSS_TARGET:-}" ]]; then
@@ -69,6 +86,11 @@ install -Dm755 "$BIN/pdfcraft" "$STAGE/usr/bin/pdfcraft"
 install -Dm755 "$BIN/pdfcraft-cli" "$STAGE/usr/bin/pdfcraft-cli"
 "${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/pdfcraft" "$STAGE/usr/bin/pdfcraft-cli" 2>/dev/null || true
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
+if [[ "$IS_NIGHTLY" = 1 ]]; then
+  sed -e 's|^StartupWMClass=.*|StartupWMClass=ai.storyteller.pdfcraft.nightly-v1|' \
+      "$STAGE/usr/share/applications/$APP_ID.desktop" >"$STAGE/usr/share/applications/$APP_ID.desktop.tmp"
+  mv "$STAGE/usr/share/applications/$APP_ID.desktop.tmp" "$STAGE/usr/share/applications/$APP_ID.desktop"
+fi
 install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
 mkdir -p "$STAGE/usr/share/metainfo"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$PDFCRAFT_BUILD_DATE/g" \
@@ -106,6 +128,17 @@ if has tar; then
   echo "wrote $DIST/$BASENAME.tar.gz"
 fi
 
+# The Arch handoff keeps the same basename as the plain tarball in a separate directory.
+# Flatpak, OCI and direct tar consumers still get the original binary, not this launcher.
+if [[ -n "$ARCH_TAR_DIR" ]]; then
+  mkdir -p "$ARCH_TAR_DIR"
+  if [[ "$(cd "$ARCH_TAR_DIR" && pwd -P)" == "$(cd "$DIST" && pwd -P)" ]]; then
+    echo "error: the Arch tar directory must differ from the release directory" >&2
+    exit 2
+  fi
+  bash "$HERE/nightly-arch-tar.sh" "$STAGE/usr" "$WORK/arch-tar" "$ARCH_TAR_DIR" "$BASENAME"
+fi
+
 # ---- CLI-only .tar.gz ---------------------------------------------------------------------------
 # The stripped pdfcraft-cli (and its opt-in MCP server) with the licences, for machines that never
 # open a window. Like the other formats it needs glibc >= the build host's.
@@ -125,8 +158,54 @@ if has deb || has rpm; then
   export VERSION
   export RELEASE="1${PDFCRAFT_BUILD_LABEL:+.$PDFCRAFT_BUILD_LABEL}"
   export NFPM_ARCH="$DEB_ARCH"
+  NFPM_STAGE="$STAGE"
+  export NFPM_NAME="pdfcraft"
+  export NFPM_BIN="pdfcraft"
+  export NFPM_CLI="pdfcraft-cli"
+  if [[ "$IS_NIGHTLY" = 1 ]]; then
+    NIGHTLY_DESK_ID="$APP_ID.nightly-v1"
+    export NFPM_NAME="pdfcraft-nightly"
+    export NFPM_BIN="pdfcraft-nightly"
+    export NFPM_CLI="pdfcraft-nightly-cli"
+    NFPM_STAGE="$WORK/nfpm-root"
+    rm -rf "$NFPM_STAGE"
+    cp -R "$STAGE" "$NFPM_STAGE"
+    mv "$NFPM_STAGE/usr/bin/pdfcraft" "$NFPM_STAGE/usr/bin/$NFPM_BIN"
+    mv "$NFPM_STAGE/usr/bin/pdfcraft-cli" "$NFPM_STAGE/usr/bin/$NFPM_CLI"
+    mv "$NFPM_STAGE/usr/share/doc/pdfcraft" "$NFPM_STAGE/usr/share/doc/$NFPM_NAME"
+    sed -e "s|^Exec=pdfcraft\([[:space:]]\|$\)|Exec=$NFPM_BIN\1|" \
+        -e "s|^TryExec=pdfcraft$|TryExec=$NFPM_BIN|" \
+        -e "s|^Icon=$APP_ID$|Icon=$NIGHTLY_DESK_ID|" \
+        -e "s|^Name=PdfCraft$|Name=PdfCraft Nightly|" \
+        -e '/^MimeType=/d' \
+        "$NFPM_STAGE/usr/share/applications/$APP_ID.desktop" >"$NFPM_STAGE/usr/share/applications/$NIGHTLY_DESK_ID.desktop"
+    rm -f "$NFPM_STAGE/usr/share/applications/$APP_ID.desktop"
+    sed -e "s|<id>$APP_ID</id>|<id>$NIGHTLY_DESK_ID</id>|g" \
+        -e "s|<name>PdfCraft</name>|<name>PdfCraft Nightly</name>|g" \
+        -e "s|<launchable type=\"desktop-id\">$APP_ID.desktop</launchable>|<launchable type=\"desktop-id\">$NIGHTLY_DESK_ID.desktop</launchable>|g" \
+        -e "s|<icon type=\"stock\">$APP_ID</icon>|<icon type=\"stock\">$NIGHTLY_DESK_ID</icon>|g" \
+        -e "s|<binary>pdfcraft</binary>|<binary>$NFPM_BIN</binary>|g" \
+        "$NFPM_STAGE/usr/share/metainfo/$APP_ID.metainfo.xml" >"$NFPM_STAGE/usr/share/metainfo/$NIGHTLY_DESK_ID.metainfo.xml"
+    rm -f "$NFPM_STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"
+    rm -rf "$NFPM_STAGE/usr/share/mime"
+    if [[ -f "$ROOT/assets/app-icon/pdfcraft-nightly.png" ]]; then
+      rm -rf "$NFPM_STAGE/usr/share/icons/hicolor"
+      install -Dm644 "$ROOT/assets/app-icon/pdfcraft-nightly.png" \
+        "$NFPM_STAGE/usr/share/icons/hicolor/256x256/apps/$NIGHTLY_DESK_ID.png"
+    else
+      for icon in "$NFPM_STAGE/usr/share/icons/hicolor"/*/apps/"$APP_ID".*; do
+        [[ -f "$icon" ]] || continue
+        ext="${icon##*.}"
+        mv "$icon" "$(dirname "$icon")/$NIGHTLY_DESK_ID.$ext"
+      done
+    fi
+  fi
   # nfpm expands env vars in fields like `version` and `arch`, but not in `contents[].src`.
-  sed "s|\${STAGE}|$STAGE|g" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"
+  DROP_LIB_TREE=
+  # shellcheck disable=SC2016
+  [[ -d "$NFPM_STAGE/usr/lib" ]] || DROP_LIB_TREE='\|^  - src: \${STAGE}/usr/lib/|,+2d;'
+  # shellcheck disable=SC2016
+  sed "${DROP_LIB_TREE}s|\${STAGE}|$NFPM_STAGE|g;s|\${NFPM_BIN}|$NFPM_BIN|g;s|\${NFPM_CLI}|$NFPM_CLI|g" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"
   for fmt in deb rpm; do
     if has "$fmt"; then (cd "$ROOT" && nfpm package -f "$WORK/nfpm.yaml" -p "$fmt" -t "$DIST/$BASENAME.$fmt"); fi
   done
@@ -154,9 +233,33 @@ if has appimage; then
   APPDIR="$WORK/PdfCraft.AppDir"
   cp -R "$STAGE" "$APPDIR"
   ln -s usr/bin/pdfcraft "$APPDIR/AppRun"
-  cp "$HERE/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
-  cp "$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"
-  ln -s "$APP_ID.png" "$APPDIR/.DirIcon"
+  if [[ "$IS_NIGHTLY" = 1 ]]; then
+    APPIMAGE_ID="$APP_ID.nightly-v1"
+    sed -e "s|^Icon=$APP_ID$|Icon=$APPIMAGE_ID|" \
+        -e "s|^Name=PdfCraft$|Name=PdfCraft Nightly|" \
+        -e '/^MimeType=/d' \
+        "$APPDIR/usr/share/applications/$APP_ID.desktop" >"$APPDIR/usr/share/applications/$APPIMAGE_ID.desktop"
+    rm -f "$APPDIR/usr/share/applications/$APP_ID.desktop"
+    cp "$APPDIR/usr/share/applications/$APPIMAGE_ID.desktop" "$APPDIR/$APPIMAGE_ID.desktop"
+    if [[ -f "$ROOT/assets/app-icon/pdfcraft-nightly.png" ]]; then
+      rm -rf "$APPDIR/usr/share/icons/hicolor"
+      install -Dm644 "$ROOT/assets/app-icon/pdfcraft-nightly.png" \
+        "$APPDIR/usr/share/icons/hicolor/256x256/apps/$APPIMAGE_ID.png"
+      cp "$ROOT/assets/app-icon/pdfcraft-nightly.png" "$APPDIR/$APPIMAGE_ID.png"
+    else
+      for icon in "$APPDIR/usr/share/icons/hicolor"/*/apps/"$APP_ID".*; do
+        [[ -f "$icon" ]] || continue
+        ext="${icon##*.}"
+        mv "$icon" "$(dirname "$icon")/$APPIMAGE_ID.$ext"
+      done
+      cp "$APPDIR/usr/share/icons/hicolor/256x256/apps/$APPIMAGE_ID.png" "$APPDIR/$APPIMAGE_ID.png"
+    fi
+    ln -s "$APPIMAGE_ID.png" "$APPDIR/.DirIcon"
+  else
+    cp "$HERE/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
+    cp "$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"
+    ln -s "$APP_ID.png" "$APPDIR/.DirIcon"
+  fi
 
   TOOL="${APPIMAGETOOL:-$(command -v appimagetool || true)}"
   if [[ -z "$TOOL" ]]; then
@@ -197,11 +300,20 @@ if has appimage; then
   # each AppImage on GitHub Releases. `latest` is the newest published release that is not a
   # pre-release. A fork's builds point at its own releases through GITHUB_REPOSITORY.
   REPO="${GITHUB_REPOSITORY:-storytold/pdfcraft}"
-  UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest|pdfcraft-*-linux-$ARCH.AppImage.zsync"
+  UPDATE_ARGS=()
+  if [[ "$IS_NIGHTLY" = 0 ]]; then
+    UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest|pdfcraft-*-linux-$ARCH.AppImage.zsync"
+    UPDATE_ARGS=(-u "$UPDATE_INFO")
+  else
+    # Nightly releases are GitHub pre-releases (`latest` only selects stable releases), so point
+    # zsync update metadata at pre-release tags matching `-nightly` rather than stable `latest`.
+    UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest-pre|pdfcraft-*-nightly*-linux-$ARCH.AppImage.zsync"
+    UPDATE_ARGS=(-u "$UPDATE_INFO")
+  fi
   # Extract-and-run: works without FUSE (containers, CI). The output embeds the static runtime,
   # so users don't need libfuse2 either. With zsyncmake on the host (CI installs the zsync
   # package) appimagetool also writes the .zsync, into its working directory, hence the cd.
-  (cd "$DIST" && ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream --runtime-file "$RUNTIME" -u "$UPDATE_INFO" "$APPDIR" "$OUT")
+  (cd "$DIST" && ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream --runtime-file "$RUNTIME" "${UPDATE_ARGS[@]}" "$APPDIR" "$OUT")
   echo "wrote $OUT"
   if [[ -s "$OUT.zsync" ]]; then
     echo "wrote $OUT.zsync"
