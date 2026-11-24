@@ -110,7 +110,11 @@ fn deliver(sender: &IntakeSender, paths: Vec<String>, combine: bool) {
     // `open` and `open_for` make each path absolute and sort the batch.
     let paths: Vec<std::path::PathBuf> = paths.into_iter().map(std::path::PathBuf::from).collect();
     if combine {
-        sender.open_for(paths, "combine");
+        // The intake sorts each batch, but takes the batches in the order they came: a single
+        // `--combine a b c` keeps the order given when each file is a batch of its own.
+        for path in paths {
+            sender.open_for(vec![path], "combine");
+        }
     } else {
         sender.open(paths);
     }
@@ -506,6 +510,10 @@ mod tests {
         // A --combine launch hands its file over for the Combine files tab (#585).
         assert!(matches!(claim_at(&path, &[text("c.pdf")], true, true), Claim::HandedOff));
         assert_eq!(intake.take(), vec![Intake::OpenFor { paths: vec![file("c.pdf")], action: "combine".to_string() }]);
+        // Several files keep the order they were given in, not the intake's sorted order.
+        assert!(matches!(claim_at(&path, &[text("d.pdf"), text("c.pdf")], true, true), Claim::HandedOff));
+        let combine = |name: &str| Intake::OpenFor { paths: vec![file(name)], action: "combine".to_string() };
+        assert_eq!(intake.take(), vec![combine("d.pdf"), combine("c.pdf")]);
         // A launch with options keeps its own window and doesn't take over the socket.
         assert!(matches!(claim_at(&path, &[text("b.pdf")], false, false), Claim::Alone));
         assert!(intake.take().is_empty());
