@@ -1,335 +1,285 @@
-use super::edit::{actions_menu, edit_panel, stamp_palette};
-use super::{
-    Align2, Availability, Color32, CornerRadius, LeftPanel, PdfCraftApp, Rect, Sense, Stroke, TOOL_GROUPS, Tokens, ToolGroup, catalog, icons, theme,
-    vec2, widgets,
+use craft::behavior::{DisplayOrder, IconId, ItemSource, Selection};
+use craft::theme::{
+    Variant,
+    variant::{Emphasis, Tone},
 };
+use craft::ui::buttons::Button;
+use craft::ui::choice::{Checkbox, Segmented};
+use craft::ui::contract::{
+    ActivateOn, Bind, CollectionEvent, Entry, Outcome as _, Props as _, SelectMode, Show as _, ShowCollection as _, Sizing, clicked,
+};
+use craft::ui::display::Badge;
+use craft::ui::list::{HueTarget, List, ListRow, RowEvent, RowInk, TrailingFace, TrailingPart};
+use craft::ui::primitives::IconSpec;
+use craft::ui::style::DataColor;
+use egui::Color32;
+
+use super::edit::{actions_menu, edit_panel, stamp_palette};
+use super::{Availability, LeftPanel, PdfCraftApp, TOOL_GROUPS, ToolGroup, ToolItem, catalog};
 
 const COLLAPSED_TOOLS: usize = 14;
 
-fn hue(g: &ToolGroup) -> Color32 {
-    Color32::from_rgb(g.hue[0], g.hue[1], g.hue[2])
+/// The pin part of a tool row.
+const PIN: TrailingPart = TrailingPart::new(0);
+
+/// A display order over `0..len`, keyed by position: the source of a list or grid whose rows the caller builds from
+/// its own vector.
+pub(super) struct Rows(pub(super) usize);
+
+impl DisplayOrder<usize> for Rows {
+    fn len(&self) -> usize {
+        self.0
+    }
+
+    fn key(&self, at: usize) -> usize {
+        at
+    }
+
+    fn index_of(&self, key: &usize) -> Option<usize> {
+        (*key < self.0).then_some(*key)
+    }
+
+    fn text(&self, _: usize) -> Option<std::borrow::Cow<'_, str>> {
+        None
+    }
+}
+
+impl ItemSource<usize> for Rows {}
+
+/// The colour a tool's data gives its icon.
+pub(super) fn data_hue(g: &ToolGroup) -> DataColor {
+    DataColor::new(Color32::from_rgb(g.hue[0], g.hue[1], g.hue[2]))
+}
+
+/// One line of text in the body: a section heading, or a quiet note. It takes its line's height, so the controls
+/// and the list after it keep the panel's room.
+pub(super) fn caption_row(ui: &mut egui::Ui, text: &str, heading: bool) {
+    let label = text.to_owned();
+    let list = List::<usize>::new(label.clone()).sizing(Sizing::Content).natural_height(true);
+    list.selection(Bind::given(Selection::default())).show_items(ui, &Rows(1), &mut |_, _| {
+        let row = ListRow::new(label.clone());
+        if heading { row.heading().ink(RowInk::Dimmed) } else { row.ink(RowInk::Muted) }
+    });
 }
 
 pub fn left_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
     // Organize closed another way (the grid's Close, or a page opened from it) closes the tool too,
     // as its panel's Close does, back to the workspace's own panel.
     if app.left == LeftPanel::Tool("organize") && app.active.and_then(|i| app.views.get(i)).is_some_and(|v| !v.organize) {
         app.left = crate::organize_panel::workspace_panel(app.mode);
     }
-    egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin { left: 14, right: 14, top: 12, bottom: 10 }).stroke(Stroke::new(1.0, t.divider)).show(
-        ui,
-        |ui| match app.left {
-            // Organize pages has its own panel whenever the grid shows (with a document open).
-            _ if app.active.is_some() && crate::organize_panel::showing(app) => crate::organize_panel::panel(app, ui, &t),
-            LeftPanel::AllTools => all_tools(app, ui, &t),
-            LeftPanel::Tool(id) => match catalog::group(id) {
-                Some(g) => tool_detail(app, ui, &t, g),
-                None => app.left = LeftPanel::AllTools,
-            },
-            LeftPanel::CalculationOrder => crate::calc_order_ui::panel(app, ui, &t),
+    match app.left {
+        // Organize pages has its own panel whenever the grid shows (with a document open).
+        _ if app.active.is_some() && crate::organize_panel::showing(app) => crate::organize_panel::panel(app, ui),
+        LeftPanel::AllTools => all_tools(app, ui),
+        LeftPanel::Tool(id) => match catalog::group(id) {
+            Some(g) => tool_detail(app, ui, g),
+            None => app.left = LeftPanel::AllTools,
         },
-    );
-}
-
-/// A panel's title row: a leading button (`lead`: its icon and tooltip) when given, the title
-/// and Close. Returns whether the leading button and Close were clicked.
-pub(crate) fn panel_header(ui: &mut egui::Ui, t: &Tokens, title: &str, lead: Option<(&str, &str)>) -> (bool, bool) {
-    let mut go_back = false;
-    let mut close = false;
-    ui.horizontal(|ui| {
-        if let Some((icon, tip)) = lead
-            && icons::button(ui, icon, 26.0, false, tip).clicked()
-        {
-            go_back = true;
-        }
-        // Reserve space for Close before laying out the translated title. Long tool names
-        // must never expand the fixed-width sidebar or push the Close control off-screen.
-        let title_width = (ui.available_width() - 26.0 - ui.spacing().item_spacing.x).max(1.0);
-        ui.add_sized([title_width, 26.0], egui::Label::new(egui::RichText::new(tl!(title)).font(theme::semibold(15.5)).color(t.text)).truncate())
-            .on_hover_text(tl!(title));
-        if icons::button(ui, "x", 26.0, false, tl!("Close panel")).clicked() {
-            close = true;
-        }
-    });
-    ui.add_space(4.0);
-    ui.separator();
-    ui.add_space(6.0);
-    (go_back, close)
-}
-
-/// Width kept free at the right of a scrolling list for the floating scrollbar.
-const SCROLLBAR_GUTTER: f32 = 18.0;
-
-/// The scrollbar floats over the right edge: keeps the rows of the scroll area `ui` is in (and
-/// their rounded hover wash) clear of it.
-pub(super) fn clear_of_scrollbar(ui: &mut egui::Ui) {
-    ui.set_max_width((ui.available_width() - SCROLLBAR_GUTTER).max(0.0));
-}
-
-/// The All tools sidebar: Expand (the full view) and Close, then the tool list, the first few
-/// tools until View more shows them all.
-fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    // Labels distinct from the Combine grid's Expand and Collapse, which can show beside them.
-    let (expand, close) = panel_header(ui, t, "All tools", Some(("maximize-2", tl!("Expand all tools"))));
-    if expand {
-        app.expand_all_tools();
+        LeftPanel::CalculationOrder => crate::calc_order_ui::panel(app, ui),
     }
-    if close {
-        app.left_open = false;
-    }
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        clear_of_scrollbar(ui);
-        ui.add_space(2.0);
-        let shown = if app.all_tools_expanded { TOOL_GROUPS.len() } else { COLLAPSED_TOOLS.min(TOOL_GROUPS.len()) };
-        for g in &TOOL_GROUPS[..shown] {
-            let (resp, pin_clicked) = tool_row(ui, t, g, app.is_tool_pinned(g.id));
-            if pin_clicked {
-                app.toggle_pin_tool(g.id);
-            } else if resp.clicked() {
-                app.select_tool(g.id);
-            }
-        }
-        ui.add_space(4.0);
-        let more = if app.all_tools_expanded { "View less" } else { "View more" };
-        if ui
-            .add(
-                egui::Label::new(egui::RichText::new(tl!(more)).color(t.accent_text).font(theme::medium(13.0)))
-                    .selectable(false)
-                    .sense(Sense::click()),
-            )
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .clicked()
-        {
-            app.all_tools_expanded = !app.all_tools_expanded;
-        }
-    });
 }
 
-/// Draw a one-line row label without painting into the status chip or beyond the sidebar.
-/// Accessibility retains the complete name through the row's WidgetInfo.
-pub(super) fn row_label(ui: &mut egui::Ui, text: &str, font: egui::FontId, color: Color32, left_center: egui::Pos2, max_width: f32) -> bool {
-    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
-    job.wrap = egui::text::TextWrapping { max_width: max_width.max(1.0), max_rows: 1, break_anywhere: true, ..Default::default() };
-    let galley = ui.fonts_mut(|f| f.layout_job(job));
-    let elided = galley.elided;
-    ui.painter().galley(left_center - vec2(0.0, galley.size().y / 2.0), galley, color);
-    elided
-}
-
-/// Draw one tool-group row with its icon, label, badge and availability hint.
-fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup, is_pinned: bool) -> (egui::Response, bool) {
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!(g.label)));
-    let press = theme::Press::track(ui, &resp);
-    press.wash(ui, rect, 6, false);
-    let body = rect.translate(press.offset());
-    icons::paint(ui, Rect::from_min_size(body.min + vec2(6.0, 7.0), vec2(20.0, 20.0)), g.icon, 19.0, hue(g));
-
-    let pin_rect = Rect::from_center_size(body.right_center() - vec2(14.0, 0.0), vec2(22.0, 22.0));
-    let pin_resp = ui.interact(pin_rect, ui.scope_id().with(("pin_toggle_row", g.id)), Sense::click());
-    let pin_hovered = pin_resp.hovered();
-    let mut pin_clicked = false;
-
-    let pin_space = 26.0;
-    let badge_or_hint_reserved = match (g.badge, g.availability) {
-        (Some(b), _) => ui.fonts_mut(|f| f.layout_no_wrap(tl!(b).to_owned(), theme::semibold(9.5), Color32::WHITE).size().x) + 18.0,
-        (None, Availability::Planned(m)) if resp.hovered() => {
-            let hint = format!("{} · {m}", tl!("Planned"));
-            ui.fonts_mut(|f| f.layout_no_wrap(hint, theme::medium(10.5), t.text_faint).size().x) + 10.0
-        }
-        _ => 0.0,
-    };
-    let right_reserved = pin_space + badge_or_hint_reserved + 8.0;
-    let clipped =
-        row_label(ui, tl!(g.label), theme::regular(13.5), t.text, body.left_center() + vec2(36.0, 0.0), rect.width() - 36.0 - right_reserved);
-    match (g.badge, g.availability) {
-        (Some(b), _) => {
-            let font = theme::semibold(9.5);
-            let badge = tl!(b);
-            let w = ui.fonts_mut(|f| f.layout_no_wrap(badge.to_string(), font.clone(), Color32::WHITE).size().x);
-            let r = Rect::from_center_size(body.right_center() - vec2(pin_space + w / 2.0 + 4.0, 0.0), vec2(w + 10.0, 16.0));
-            ui.painter().rect_filled(r, CornerRadius::same(4), t.badge_new);
-            ui.painter().text(r.center(), Align2::CENTER_CENTER, badge, font, Color32::WHITE);
-        }
-        // Planned tools: a quiet milestone hint instead of a chip, so the list stays calm.
-        (None, Availability::Planned(m)) if resp.hovered() => {
-            ui.painter().text(
-                body.right_center() - vec2(pin_space + 4.0, 0.0),
-                Align2::RIGHT_CENTER,
-                format!("{} · {m}", tl!("Planned")),
-                theme::medium(10.5),
-                t.text_faint,
-            );
-        }
-        _ => {}
+/// One tool-group row: its icon, label, badge and the pin part.
+fn tool_row(g: &'static ToolGroup, pinned: bool) -> ListRow<'static> {
+    let mut row = ListRow::new(tl!(g.label).to_owned()).icon(IconSpec::svg(IconId::new(g.icon)));
+    row = row.hue(data_hue(g), HueTarget::Icon);
+    if let Some(b) = g.badge {
+        row = row.trailing_named(tl!(b).to_owned(), tl!(b).to_owned());
     }
-
-    let row_hovered = ui.rect_contains_pointer(rect) || resp.hovered();
-    if is_pinned || row_hovered || pin_hovered {
-        if pin_hovered {
-            ui.painter().rect_filled(pin_rect, CornerRadius::same(4), t.pressed);
-        }
-        let pin_tint = if is_pinned {
-            t.accent_text
-        } else if pin_hovered {
-            t.text
-        } else {
-            t.text_faint
-        };
-        icons::paint(ui, pin_rect.shrink(3.0), "pin", 15.0, pin_tint);
-        let tip = if is_pinned { tl!("Unpin from Home") } else { tl!("Pin to Home") };
-        pin_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tip));
-        if theme::hand(pin_resp).on_hover_text(tip).clicked() {
-            pin_clicked = true;
-        }
-    }
-
+    let pin_name = if pinned { tl!("Unpin from Home") } else { tl!("Pin to Home") }.to_owned();
+    let face = TrailingFace::Icon(IconSpec::svg(IconId::new("pin")));
+    row = if pinned { row.trailing_part(PIN, face, pin_name) } else { row.trailing_part_revealed(PIN, face, pin_name) };
     let tip = match g.availability {
         Availability::Ready => tl!("Available").to_string(),
         Availability::Planned(m) => format!("{} {m} — {}", tl!("Planned for milestone"), tl!("open to see what it will include")),
         Availability::Provider => tl!("Optional: needs an AI provider you configure").into(),
     };
-    let tip = if clipped { format!("{} — {tip}", tl!(g.label)) } else { tip };
-    (theme::hand(resp).on_hover_text(tip), pin_clicked)
+    row.tooltip(tip)
 }
 
-/// Draw the detail view for one tool group, dispatching its commands and tool-specific panels.
-fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static ToolGroup) {
+/// The All tools sidebar body: the tool list, the first few tools until View more shows them all. Its Expand and
+/// Close belong to the dock's group header.
+fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    let shown = if app.all_tools_expanded { TOOL_GROUPS.len() } else { COLLAPSED_TOOLS.min(TOOL_GROUPS.len()) };
+    let pins: Vec<bool> = TOOL_GROUPS[..shown].iter().map(|g| app.is_tool_pinned(g.id)).collect();
+    let out = List::<usize>::new(tl!("All tools").to_owned())
+        .natural_height(true)
+        .select(SelectMode::Single)
+        .activate(ActivateOn::Click)
+        .selection(Bind::given(Selection::default()))
+        .show_items(ui, &Rows(shown), &mut |at, _| match (TOOL_GROUPS.get(*at), pins.get(*at)) {
+            (Some(g), Some(pinned)) => tool_row(g, *pinned),
+            _ => ListRow::spacer(),
+        });
+    for event in out.events {
+        match event {
+            CollectionEvent::Activate(at) => {
+                if let Some(g) = TOOL_GROUPS.get(at) {
+                    app.select_tool(ui.ctx(), g.id);
+                }
+            }
+            CollectionEvent::Item(at, RowEvent::Trailing { part, .. }) if part == PIN => {
+                if let Some(g) = TOOL_GROUPS.get(at) {
+                    app.toggle_pin_tool(g.id);
+                }
+            }
+            _ => {}
+        }
+    }
+    let more = if app.all_tools_expanded { "View less" } else { "View more" };
+    if clicked(craft::ui::buttons::Link::new(tl!(more).to_owned()).show(ui).response()) {
+        app.all_tools_expanded = !app.all_tools_expanded;
+    }
+}
+
+/// A line of a tool's detail list.
+#[derive(Clone, Copy)]
+enum Line {
+    Heading(&'static str),
+    Item(&'static ToolItem),
+}
+
+/// One item row: its icon, label and the availability chip.
+fn item_row(g: &'static ToolGroup, item: &'static ToolItem) -> ListRow<'static> {
+    let ready = item.availability == Availability::Ready;
+    let chip = match item.availability {
+        Availability::Ready => tl!("Ready"),
+        Availability::Planned(m) => m,
+        Availability::Provider => "AI",
+    };
+    let badge = Badge::new(tl!(chip).to_owned()).variant(Variant::look(Emphasis::Soft, if ready { Tone::Good } else { Tone::Neutral }));
+    let row = ListRow::new(tl!(item.label).to_owned()).icon(IconSpec::svg(IconId::new(item.icon))).trailing_field(badge, |_| {});
+    if ready {
+        row.hue(data_hue(g), HueTarget::Icon).tooltip(format!("{} — {}", tl!(item.label), item.command))
+    } else {
+        row.ink(RowInk::Dimmed).tooltip(tl!("Planned").to_owned())
+    }
+}
+
+/// The detail view for one tool group, dispatching its commands and tool-specific panels. Its Back and Close belong
+/// to the dock's group header.
+fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, g: &'static ToolGroup) {
     if g.id == "edit" {
-        edit_panel(app, ui, t, g);
+        edit_panel(app, ui, g);
         return;
     }
-    let (back, close) = panel_header(ui, t, g.label, Some(("chevron-left", tl!("Back to all tools"))));
-    if back {
-        app.left = LeftPanel::AllTools;
-        app.enter_mode(crate::Mode::AllTools);
-    }
-    if close {
-        app.left_open = false;
-    }
     if let Availability::Planned(m) = g.availability {
-        egui::Frame::NONE.fill(t.accent_soft).corner_radius(CornerRadius::same(8)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(
-                egui::RichText::new(format!("{} {m}. {}", tl!("Coming in milestone"), tl!("Items marked Ready work today.")))
-                    .color(t.text)
-                    .font(theme::regular(12.0)),
-            );
-        });
+        caption_row(ui, &format!("{} {m}. {}", tl!("Coming in milestone"), tl!("Items marked Ready work today.")), false);
     }
     if g.id == "measure" {
-        crate::measure_ui::panel(app, ui, t);
+        crate::measure_ui::panel(app, ui);
         return;
     }
     // Add a stamp: the palette.
     if g.id == "stamp" {
-        stamp_palette(app, ui, t);
+        stamp_palette(app, ui);
         return;
     }
     // Prepare a form: Preview fills the form as a reader would; Edit goes back.
     if g.id == "form" {
         if let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) {
-            ui.add(widgets::checkbox(&mut view.prepare.show_tab_numbers, tl!("Show tab numbers")));
-            ui.add_space(4.0);
+            Checkbox::new(Bind::bound(&mut view.session.prepare.show_tab_numbers)).label(tl!("Show tab numbers").to_owned()).show(ui);
         }
-        ui.horizontal(|ui| {
-            let label = if app.form_preview { "Edit fields" } else { "Preview" };
-            if widgets::pill_button(ui, tl!(label), app.form_preview).on_hover_text(tl!("Try the form as people filling it in will see it")).clicked()
-            {
-                app.form_preview = !app.form_preview;
-                if app.form_preview {
-                    app.quick_tool = crate::QuickTool::Select;
-                }
+        let entries = [Entry::new(false, tl!("Edit fields").to_owned()), Entry::new(true, tl!("Preview").to_owned())];
+        let landed = Segmented::new(tl!("Form mode").to_owned(), Bind::given(app.form_preview), &entries)
+            .tooltip(tl!("Try the form as people filling it in will see it").to_owned())
+            .show(ui)
+            .events
+            .landed()
+            .cloned();
+        if let Some(preview) = landed {
+            app.form_preview = preview;
+            if preview {
+                app.quick_tool = crate::QuickTool::Select;
             }
-        });
-        ui.add_space(6.0);
+        }
     }
     let mut run = None;
-    // Redact a PDF has Acrobat's footer: Clear all / Redact all.
-    let footer = g.id == "redact";
-    let marks = if footer { app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks()) } else { 0 };
-    let list_h = if footer { (ui.available_height() - 52.0).max(80.0) } else { ui.available_height() };
-    egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(list_h).show(ui, |ui| {
-        clear_of_scrollbar(ui);
-        ui.add_space(2.0);
-        for s in g.sections {
-            widgets::section_title(ui, tl!(s.title));
-            for item in s.items {
-                if g.id == "fill_sign" && (item.command.starts_with("sign.fill.signature") || item.command.starts_with("sign.fill.initials")) {
-                    continue;
-                }
-                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!(item.label)));
-                let ready = item.availability == Availability::Ready;
-                let press = theme::Press::track(ui, &resp);
-                press.wash(ui, rect, 6, false);
-                let body = rect.translate(press.offset());
-                let fg = if ready { t.text } else { t.text_muted };
-                icons::paint(
-                    ui,
-                    Rect::from_min_size(body.min + vec2(6.0, 8.0), vec2(18.0, 18.0)),
-                    item.icon,
-                    17.0,
-                    if ready { hue(g) } else { t.text_faint },
-                );
-                let (chip, fill, cfg) = match item.availability {
-                    Availability::Ready => (tl!("Ready"), Color32::from_rgb(0xDD, 0xF3, 0xE4), Color32::from_rgb(0x1E, 0x7B, 0x43)),
-                    Availability::Planned(m) => (m, t.pressed, t.text_muted),
-                    Availability::Provider => ("AI", t.pressed, t.text_muted),
-                };
-                let font = theme::semibold(9.5);
-                let chip_label = tl!(chip).to_string();
-                let w = crate::widgets::text_width(ui, &chip_label, &font);
-                let r = Rect::from_center_size(body.right_center() - vec2(w / 2.0 + 10.0, 0.0), vec2(w + 10.0, 16.0));
-                row_label(ui, tl!(item.label), theme::regular(13.0), fg, body.left_center() + vec2(34.0, 0.0), r.left() - body.left() - 42.0);
-                ui.painter().rect_filled(r, CornerRadius::same(4), fill);
-                ui.painter().text(r.center(), Align2::CENTER_CENTER, chip_label, font, cfg);
-                let resp = theme::hand(resp).on_hover_text(format!("{} — {}", tl!(item.label), item.command));
-                // An entry with further commands opens a menu; its caret goes before the chip.
-                if item.actions.is_empty() {
-                    if resp.clicked() {
-                        run = Some(item.command);
-                    }
-                } else if let Some(cmd) = actions_menu(app, ui, &resp, item, r.left_center() - vec2(10.0, 0.0), fg) {
-                    run = Some(cmd);
-                }
+    let mut lines = Vec::new();
+    for s in g.sections {
+        lines.push(Line::Heading(s.title));
+        for item in s.items {
+            if g.id == "fill_sign" && (item.command.starts_with("sign.fill.signature") || item.command.starts_with("sign.fill.initials")) {
+                continue;
+            }
+            lines.push(Line::Item(item));
+        }
+    }
+    let mut list = List::<usize>::new(tl!(g.label).to_owned());
+    if g.id == "fill_sign" {
+        list = list.sizing(Sizing::Content).natural_height(true);
+    }
+    let out = list.select(SelectMode::Single).activate(ActivateOn::Click).selection(Bind::given(Selection::default())).show_items(
+        ui,
+        &Rows(lines.len()),
+        &mut |at, _| match lines.get(*at) {
+            Some(Line::Heading(title)) => ListRow::new(tl!(title).to_owned()).heading().ink(RowInk::Dimmed),
+            Some(Line::Item(item)) => item_row(g, item),
+            None => ListRow::spacer(),
+        },
+    );
+    let opener = out.response.clone();
+    let mut menu = None;
+    for event in out.events {
+        if let CollectionEvent::Activate(at) = event
+            && let Some(Line::Item(item)) = lines.get(at)
+        {
+            if item.actions.is_empty() {
+                run = Some(item.command);
+            } else {
+                menu = Some(*item);
             }
         }
-        if g.id == "fill_sign" {
-            widgets::section_title(ui, tl!("Sign yourself"));
-            if let Some(cmd) = crate::fill_sign::signature_entries(ui, app, t) {
-                run = Some(cmd);
-            }
-            // Where the signing happens, not only in Preferences, and once: not also in the Sign
-            // menu over the page, where it was easy to miss (#2149).
-            ui.add(widgets::checkbox(&mut app.flatten_fill_sign_on_save, tl!("Lock into the page when saving")));
+    }
+    // An entry with further commands opens a menu from its row.
+    // PLAN: assumed actions_menu(app, ui, opener: &Response, item: &'static ToolItem) -> Option<&'static str> (pdf-edit-w6); it keeps its own open state.
+    if let Some(item) = menu
+        && let Some(cmd) = actions_menu(app, ui, &opener, item)
+    {
+        run = Some(cmd);
+    }
+    if g.id == "fill_sign" {
+        caption_row(ui, tl!("Sign yourself"), true);
+        if let Some(cmd) = crate::fill_sign::signature_entries(ui, app) {
+            run = Some(cmd);
         }
-    });
-    if footer {
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if marks > 0 {
-                ui.label(
-                    egui::RichText::new(if marks == 1 {
-                        crate::i18n::fmt(tl!("1 mark"), &[])
-                    } else {
-                        crate::i18n::fmt(tl!("{n} marks"), &[("n", &marks.to_string())])
-                    })
-                    .color(t.text_muted),
-                );
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add_enabled_ui(marks > 0, |ui| widgets::pill_button(ui, tl!("Redact all"), true)).inner.clicked() {
-                    run = Some("redact.apply");
-                }
-                if ui.add_enabled_ui(marks > 0, |ui| widgets::pill_button(ui, tl!("Clear all"), false)).inner.clicked() {
-                    run = Some("redact.clear");
-                }
-            });
-        });
+        // Where the signing happens, not only in Preferences, and once: not also in the Sign
+        // menu over the page, where it was easy to miss (#2149).
+        Checkbox::new(Bind::bound(&mut app.flatten_fill_sign_on_save)).label(tl!("Lock into the page when saving").to_owned()).show(ui);
     }
     if let Some(cmd) = run {
-        app.run_command(cmd);
+        app.run_command(ui.ctx(), cmd);
+    }
+}
+
+/// Whether the Tools panel shows a tool whose actions sit in a footer pinned under the body: Redact a PDF's.
+pub(crate) fn has_footer(app: &PdfCraftApp) -> bool {
+    app.left == LeftPanel::Tool("redact") && !(app.active.is_some() && crate::organize_panel::showing(app))
+}
+
+/// The Tools panel's pinned footer: Redact a PDF's mark count, Clear all and Redact all, in view while the body
+/// scrolls, as production pinned them.
+pub(crate) fn footer(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    if !has_footer(app) {
+        return;
+    }
+    let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());
+    if marks > 0 {
+        caption_row(
+            ui,
+            &if marks == 1 { crate::i18n::fmt(tl!("1 mark"), &[]) } else { crate::i18n::fmt(tl!("{n} marks"), &[("n", &marks.to_string())]) },
+            false,
+        );
+    }
+    let mut run = None;
+    if Button::new(tl!("Clear all").to_owned()).enabled(marks > 0).show(ui).clicked() {
+        run = Some("redact.clear");
+    }
+    if Button::new(tl!("Redact all").to_owned()).enabled(marks > 0).show(ui).clicked() {
+        run = Some("redact.apply");
+    }
+    if let Some(cmd) = run {
+        app.run_command(ui.ctx(), cmd);
     }
 }
