@@ -229,11 +229,9 @@ fn pairs(doc: &Document, o: &Object, p: &Placement) -> Option<Object> {
         return None;
     }
     let mut out = Vec::with_capacity(items.len());
-    for xy in items.chunks_exact(2) {
-        if let [x, y] = xy {
-            out.push(p.x(number(doc, x)?)?);
-            out.push(p.y(number(doc, y)?)?);
-        }
+    for [x, y] in items.as_chunks::<2>().0 {
+        out.push(p.x(number(doc, x)?)?);
+        out.push(p.y(number(doc, y)?)?);
     }
     Some(reals(out))
 }
