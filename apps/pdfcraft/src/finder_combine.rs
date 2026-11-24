@@ -8,7 +8,7 @@
 //! `~/Library/Services` whose shell step writes the selected paths, each ending in a NUL byte, to
 //! `files.pdfcraft-combine` in a fresh `pdfcraft-combine.*` folder in the user's temporary folder
 //! and opens that file with this app (`open -b`). The open arrives as an ordinary Apple event,
-//! whether or not the app is running, and `from_open` turns it into the same `Combine` event a
+//! whether or not the app is running, and `from_open` turns it into the same combine request a
 //! Windows or Linux launch makes. Nothing is combined until Combine is pressed.
 //!
 //! The list is trusted only where the Quick Action writes it: that exact file name, in a
@@ -19,7 +19,14 @@
 
 use std::path::{Path, PathBuf};
 
-use pdfcraft_ui_egui::OsEvent;
+/// What an Apple event's opened files ask for, once Quick Action lists are read.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Request {
+    /// Open the files as documents.
+    Open(Vec<PathBuf>),
+    /// Add the files to the Combine files tab.
+    Combine(Vec<PathBuf>),
+}
 
 /// The list file's name, and the start of its folder's name.
 const LIST: &str = "files.pdfcraft-combine";
@@ -31,20 +38,22 @@ pub const NAME: &str = "Combine files in PdfCraft";
 
 /// An opened Finder list (in the temporary folder) becomes a `Combine` of its files, and the
 /// list is removed; anything else opens as before.
-pub fn from_open(event: OsEvent) -> Vec<OsEvent> {
-    let OsEvent::Open(paths) = event else { return vec![event] };
-    let mut out: Vec<OsEvent> = Vec::new();
+pub fn from_open(paths: Vec<PathBuf>) -> Vec<Request> {
+    let mut out: Vec<Request> = Vec::new();
     for path in paths {
-        match listed(Path::new(&path), &std::env::temp_dir()) {
-            Some(files) if !files.is_empty() => match out.last_mut() {
-                Some(OsEvent::Combine(list)) => list.extend(files),
-                _ => out.push(OsEvent::Combine(files)),
-            },
+        match listed(&path, &std::env::temp_dir()) {
+            Some(files) if !files.is_empty() => {
+                let files = files.into_iter().map(PathBuf::from);
+                match out.last_mut() {
+                    Some(Request::Combine(list)) => list.extend(files),
+                    _ => out.push(Request::Combine(files.collect())),
+                }
+            }
             // An empty or unreadable list combines nothing and opens nothing.
             Some(_) => {}
             None => match out.last_mut() {
-                Some(OsEvent::Open(list)) => list.push(path),
-                _ => out.push(OsEvent::Open(vec![path])),
+                Some(Request::Open(list)) => list.push(path),
+                _ => out.push(Request::Open(vec![path])),
             },
         }
     }
@@ -382,9 +391,8 @@ mod tests {
         let d = tempdir_in(&temp);
         let list = d.join(LIST);
         std::fs::write(&list, "/x/1.pdf\n/x/2.jpg\n").unwrap();
-        let events = from_open(OsEvent::Open(vec!["/y/report.pdf".into(), list.to_string_lossy().into_owned()]));
-        assert_eq!(events, vec![OsEvent::Open(vec!["/y/report.pdf".into()]), OsEvent::Combine(vec!["/x/1.pdf".into(), "/x/2.jpg".into()])]);
-        assert_eq!(from_open(OsEvent::Quit), vec![OsEvent::Quit]);
+        let requests = from_open(vec!["/y/report.pdf".into(), list]);
+        assert_eq!(requests, vec![Request::Open(vec!["/y/report.pdf".into()]), Request::Combine(vec!["/x/1.pdf".into(), "/x/2.jpg".into()])]);
     }
 
     fn tempdir_in(temp: &Path) -> PathBuf {

@@ -43,9 +43,9 @@ mod values;
 pub use appearances::{FieldAppearanceCache, declares_pdfa, need_appearances, undrawn_fields, with_field_appearances, with_field_appearances_cached};
 pub(crate) use read::page_refs;
 pub use read::selected_options;
-pub use read::{Fields, acroform, adopted_page_fields, fields, fields_with_adopted};
+pub use read::{Fields, acroform, adopted_page_fields, fields, fields_with_adopted, form_reads_on_this_thread};
 #[cfg(test)]
-use read::{MAX_SCRIPT_BYTES, PageWalk, enumerate, form_reads};
+use read::{MAX_SCRIPT_BYTES, PageWalk, enumerate, form_reads_on_this_thread as form_reads};
 use read::{first_by_export, qualified_name, script, script_budget};
 pub use tab_order::{TabOrder, move_in_tab_order, set_tab_order, tab_orders};
 #[cfg(test)]
