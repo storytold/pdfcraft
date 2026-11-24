@@ -46,9 +46,8 @@ fn load_ocr_verify(app: &mut PdfCraftApp) -> Result<(), String> {
         OcrSettings { engine: pdfcraft_engine::ocr::EngineChoice::Auto, strategy: MergeStrategy::ConfidenceWeighted, ..OcrSettings::default() };
     app.ocr_draft.engine = settings.engine;
     app.ocr_draft.strategy = settings.strategy;
-    app.open_bytes("scan.pdf", None, scan).map_err(|e| e.to_string())?;
-    app.run_inline = true;
-    if !app.execute("ocr.correct") {
+    app.open_bytes(&egui::Context::default(), "scan.pdf", None, scan).map_err(|e| e.to_string())?;
+    if !app.execute(&egui::Context::default(), "ocr.correct") {
         return Err("ocr.correct did not run".into());
     }
     let Some((_, id)) = app.active_ids() else { return Err("no open document".into()) };
@@ -81,8 +80,8 @@ fn main() -> Result<(), String> {
             None => file = Some(a),
         }
     }
-    let mut harness = Harness::builder().with_size(size).with_pixels_per_point(scale).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+    let mut harness = Harness::builder().with_size(size).with_pixels_per_point(scale).build_eframe(move |cc| {
+        let mut app = PdfCraftApp::new(&cc.egui_ctx);
         if ocr_verify {
             if let Err(e) = load_ocr_verify(&mut app) {
                 eprintln!("shot: --ocr-verify: {e}");
@@ -92,12 +91,12 @@ fn main() -> Result<(), String> {
         } else if let Some(f) = &file {
             let bytes = std::fs::read(f).unwrap_or_default();
             let name = std::path::Path::new(f).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            if let Err(e) = app.open_bytes(&name, Some(f.clone()), bytes) {
+            if let Err(e) = app.open_bytes(&cc.egui_ctx, &name, Some(f.clone()), bytes) {
                 eprintln!("shot: {f}: {e}");
             }
         }
         for (k, v) in &opts {
-            if let Err(e) = app.set_option(k, v) {
+            if let Err(e) = app.set_option(&egui::Context::default(), k, v) {
                 eprintln!("shot: --{k} {v}: {e}");
             }
         }

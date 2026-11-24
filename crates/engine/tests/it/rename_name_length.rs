@@ -6,7 +6,8 @@ use std::path::Path;
 use pdfcraft_engine::{RenameError, new_file_name};
 
 fn name(typed: &str) -> Result<String, RenameError> {
-    new_file_name(Path::new("/docs/report.pdf"), typed)
+    // Keep the component-length boundary separate from the platform's full-path limit.
+    new_file_name(Path::new("report.pdf"), typed)
 }
 
 #[test]
