@@ -10059,6 +10059,8 @@ fn print_readiness_through_tools() {
     assert_eq!(r["pages"].as_array().unwrap().len(), 1, "{r}");
     assert_eq!(r["pages"][0]["trim_set"], false, "{r}");
     assert_eq!(r["resolution_unknown"], 0, "{r}");
+    // Plain text asks for no overprint, and the walk read all of it, so the answer is known.
+    assert!(r["overprint"]["asks"] == false && r["overprint"]["proven"] == true, "{r}");
     let findings = r["findings"].as_array().unwrap();
     // A page without a TrimBox is one informational note for the document, not a bleed warning.
     assert!(!findings.iter().any(|f| f["id"] == "page-bleed"), "{r}");
