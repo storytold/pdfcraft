@@ -14,6 +14,9 @@
 #[path = "src/build_channel.rs"]
 mod build_channel;
 
+#[path = "src/windows_manifest.rs"]
+mod windows_manifest;
+
 /// The in-box DLLs only printing uses (Windows.Data.Pdf draws the job, prntvpt reads the
 /// driver's print capabilities). Trimmed Windows installations (NTLite) can lack them, and a
 /// load-time import of a missing DLL stops the program before `main` (#2630). Delay-loaded, they

@@ -60,11 +60,18 @@ nightly_refuse_signing_env() {
 }
 
 nightly_copy_notices() {
-  local destination="$1" required
+  local destination="$1" required optional
   for required in README.md LICENSE-MIT LICENSE-APACHE NOTICE ATTRIBUTION.md; do
     [[ -f "$ROOT/$required" && ! -L "$ROOT/$required" ]] || nightly_die "missing regular app notice: $required"
+    cp "$ROOT/$required" "$destination/"
   done
-  copy_docs "$destination"
+  for optional in LICENSE COPYRIGHT; do
+    if [[ -f "$ROOT/$optional" && ! -L "$ROOT/$optional" ]]; then cp "$ROOT/$optional" "$destination/"; fi
+  done
+  # Flat font licences only (OFL-<family>.txt, from env.sh). The app's own `copy_docs` also carries
+  # the `licenses/` tree, which the flat nightly archive refuses as an unexpected member, so it is
+  # not used here (the same reason designcraft and deckcraft copy the notices themselves).
+  copy_font_licences "$destination"
 }
 
 nightly_publish_archive() {

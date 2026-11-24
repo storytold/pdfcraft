@@ -146,10 +146,10 @@ fn forbidden_roots(platform: Platform, env: &impl Fn(&str) -> Option<OsString>, 
 }
 
 /// Subfolders of the profile that a write can be redirected out of. `Recovery` holds whole
-/// documents, `Dictionary` the OCR dictionaries, `Instance` the single-instance socket: each must
-/// resolve inside the profile, because a link there would put Nightly's writes in another app's
-/// folder.
-pub const PRIVATE_SUBDIRECTORIES: [&str; 3] = ["Recovery", "Dictionary", "Instance"];
+/// documents, `Dictionary` the OCR dictionaries, `Instance` the single-instance socket and
+/// `Clipboard` the last Copy Image in Original Format: each must resolve inside the profile,
+/// because a link there would put Nightly's writes in another app's folder.
+pub const PRIVATE_SUBDIRECTORIES: [&str; 4] = ["Recovery", "Dictionary", "Instance", "Clipboard"];
 
 fn private_subdirectory(root: &Path, name: impl AsRef<Path>, label: &str) -> Result<PathBuf, String> {
     let chosen = canonical_future(&absolute(root.to_path_buf(), "the nightly profile root")?)?;
