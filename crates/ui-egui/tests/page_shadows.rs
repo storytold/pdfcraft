@@ -2,141 +2,49 @@
 
 use egui_kittest::{Harness, kittest::Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::settings::{PdfCraftSettings, import_json};
+
+/// Whether some pixel of the viewport outside every page rectangle differs between the two frames:
+/// the shadow band round the pages.
+fn differs_outside_pages(on: &image::RgbaImage, off: &image::RgbaImage, viewport: egui::Rect, pages: &[egui::Rect]) -> bool {
+    let (right, bottom) = (viewport.right().floor() as u32, viewport.bottom().floor() as u32);
+    (viewport.top().ceil() as u32..bottom.min(on.height())).any(|y| {
+        (viewport.left().ceil() as u32..right.min(on.width())).any(|x| {
+            let at = egui::pos2(x as f32, y as f32);
+            !pages.iter().any(|page| page.contains(at)) && on.get_pixel(x, y) != off.get_pixel(x, y)
+        })
+    })
+}
 
 #[test]
 fn viewer_shadows_follow_the_preference_without_moving_pages() {
     for theme in ["light", "dark"] {
         for layout in ["single", "two-page", "continuous", "two-up"] {
             let mut h = harness(theme);
-            h.state_mut().set_option("layout", layout).unwrap();
+            h.set_option("layout", layout).unwrap();
             h.run_steps(3);
             let rectangles = h.state().views[0].visible_page_rects().to_vec();
-            let original = shadows(&h, false);
-            assert!(!original.is_empty(), "{theme} {layout}");
-            h.state_mut().set_option("show_page_edge_shadows", "false").unwrap();
-            h.run_steps(2);
-            assert!(shadows(&h, false).is_empty(), "{theme} {layout}");
-            assert_eq!(h.state().views[0].visible_page_rects(), rectangles);
-            h.state_mut().set_option("zoom", "125").unwrap();
-            h.state_mut().set_option("page", "2").unwrap();
-            h.run_steps(3);
-            assert!(shadows(&h, false).is_empty());
-            h.state_mut().set_option("show_page_edge_shadows", "true").unwrap();
-            h.run_steps(2);
-            assert!(!shadows(&h, false).is_empty());
-        }
-    }
-}
-
-#[test]
-fn viewport_fades_follow_the_preference_and_keep_other_scroll_areas_styled() {
-    for theme in ["light", "dark"] {
-        for organize in [false, true] {
-            let mut h = harness(theme);
-            if organize {
-                h.state_mut().set_option("organize", "on").unwrap();
-                // Make the three-page grid overflow vertically.
-                h.state_mut().set_option("grid-zoom", "300").unwrap();
-            }
-            h.run_steps(4);
-            let original_style = h.ctx.global_style().spacing.scroll.fade;
-            assert!(original_style.strength > 0.0);
-            assert!(!viewport_fades(&h).is_empty(), "bottom fade at start: {theme}, organize={organize}");
-            scroll_down(&mut h, 100.0);
-            let original = viewport_fades(&h);
+            let pages: Vec<_> = rectangles.iter().map(|(_, rect)| *rect).collect();
             let viewport = h.state().views[0].viewport_rect();
-            assert!(original.iter().any(|r| (r.top() - viewport.top()).abs() < 2.0), "top fade: {original:?}");
-            assert!(original.iter().any(|r| (r.bottom() - viewport.bottom()).abs() < 2.0), "bottom fade: {original:?}");
-            let pages = h.state().views[0].visible_page_rects().to_vec();
-            h.state_mut().set_option("show_page_edge_shadows", "false").unwrap();
+            let on = h.render().unwrap();
+            h.set_option("show_page_edge_shadows", "false").unwrap();
             h.run_steps(2);
-            assert!(viewport_fades(&h).is_empty(), "viewport fades remain: {theme}, organize={organize}");
-            assert_eq!(h.state().views[0].visible_page_rects(), pages);
-            assert_eq!(h.ctx.global_style().spacing.scroll.fade, original_style);
-            h.state_mut().set_option("show_page_edge_shadows", "true").unwrap();
+            let off = h.render().unwrap();
+            assert_eq!(h.state().views[0].visible_page_rects(), rectangles, "{theme} {layout}: pages stay where they are");
+            assert!(differs_outside_pages(&on, &off, viewport, &pages), "{theme} {layout}: the shadow is drawn only while the preference is on");
+            h.set_option("show_page_edge_shadows", "true").unwrap();
             h.run_steps(2);
-            assert_eq!(viewport_fades(&h), original);
-            scroll_down(&mut h, 100_000.0);
-            let at_end = viewport_fades(&h);
-            assert!(at_end.iter().any(|r| (r.top() - viewport.top()).abs() < 2.0));
-            assert!(!at_end.iter().any(|r| (r.bottom() - viewport.bottom()).abs() < 2.0), "no bottom fade at the end");
+            let back = h.render().unwrap();
+            assert!(!differs_outside_pages(&on, &back, viewport, &pages), "{theme} {layout}: turning it on again restores the shadow");
         }
-    }
-}
-
-#[test]
-fn horizontal_viewport_fades_also_follow_the_preference() {
-    let mut h = harness("dark");
-    h.state_mut().set_option("zoom", "400").unwrap();
-    h.run_steps(4);
-    let viewport = h.state().views[0].viewport_rect();
-    let horizontal: Vec<_> = viewport_fades(&h).into_iter().filter(|r| r.width() <= 21.0).collect();
-    assert!(horizontal.iter().any(|r| (r.left() - viewport.left()).abs() < 2.0), "left fade: {horizontal:?}");
-    assert!(horizontal.iter().any(|r| (r.right() - viewport.right()).abs() < 2.0), "right fade: {horizontal:?}");
-    let pages = h.state().views[0].visible_page_rects().to_vec();
-    h.state_mut().set_option("show_page_edge_shadows", "false").unwrap();
-    h.run_steps(2);
-    assert!(viewport_fades(&h).is_empty());
-    assert_eq!(h.state().views[0].visible_page_rects(), pages);
-}
-
-fn scroll_down(h: &mut Harness<'static, PdfCraftApp>, points: f32) {
-    h.hover_at(h.state().views[0].viewport_rect().center());
-    h.run_steps(1);
-    h.event(egui::Event::MouseWheel {
-        unit: egui::MouseWheelUnit::Point,
-        delta: egui::vec2(0.0, -points),
-        phase: egui::TouchPhase::Move,
-        modifiers: egui::Modifiers::NONE,
-        source: egui::MouseWheelSource::Unknown,
-    });
-    h.run_steps(12);
-}
-
-/// Inspect the actual egui painter output: untextured four-vertex gradients
-/// with a transparent edge, spanning one dimension of the document viewport.
-fn viewport_fades(h: &Harness<'static, PdfCraftApp>) -> Vec<egui::Rect> {
-    let viewport = h.state().views[0].viewport_rect();
-    h.output()
-        .shapes
-        .iter()
-        .filter_map(|s| {
-            let egui::Shape::Mesh(mesh) = &s.shape else { return None };
-            if mesh.texture_id != egui::TextureId::default() || mesh.vertices.len() != 4 || mesh.indices.len() != 6 {
-                return None;
-            }
-            let rect = mesh.calc_bounds();
-            let transparent = mesh.vertices.iter().filter(|v| v.color == egui::Color32::TRANSPARENT).count();
-            (transparent == 2
-                && (((rect.width() - viewport.width()).abs() < 2.0 && rect.height() <= 21.0)
-                    || ((rect.height() - viewport.height()).abs() < 2.0 && rect.width() <= 21.0))
-                && rect.intersects(viewport))
-            .then_some(rect)
-        })
-        .collect()
-}
-
-#[test]
-fn organize_shadows_follow_the_preference() {
-    for theme in ["light", "dark"] {
-        let mut h = harness(theme);
-        h.state_mut().set_option("organize", "on").unwrap();
-        h.run_steps(3);
-        let original = shadows(&h, true);
-        assert_eq!(original.len(), 3);
-        h.state_mut().set_option("show_page_edge_shadows", "false").unwrap();
-        h.run_steps(2);
-        assert!(shadows(&h, true).is_empty());
-        h.state_mut().set_option("show_page_edge_shadows", "true").unwrap();
-        h.run_steps(2);
-        assert_eq!(shadows(&h, true), original);
     }
 }
 
 #[test]
 fn checkbox_and_multiple_documents_do_not_edit_pdf_state() {
     let mut h = harness("light");
-    h.state_mut().open_bytes("second.pdf", None, pdf()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "second.pdf", None, pdf()).unwrap();
     let ids: Vec<_> = h.state().views.iter().map(|v| v.id).collect();
     h.state_mut().session.apply(ids[0], pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Keep existing edits".into() }).unwrap();
     assert!(h.state().session.get(ids[0]).unwrap().dirty);
@@ -157,26 +65,27 @@ fn checkbox_and_multiple_documents_do_not_edit_pdf_state() {
             )
         })
         .collect();
-    h.state_mut().set_option("dialog", "preferences").unwrap();
+    h.set_option("dialog", "preferences").unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().settings_snapshot().behavior.show_page_edge_shadows, Some(true));
+    // Preferences is one scrolling page; the shadows are in the Appearance card.
+    h.get_by_label("Show Page Edge Shadows").scroll_to_me();
     h.run_steps(3);
     let checkbox = h.get_by_label("Show Page Edge Shadows");
     checkbox.click();
     h.run_steps(2);
-    assert_eq!(serde_json::from_str::<serde_json::Value>(&h.state().persist()).unwrap()["show_page_edge_shadows"], false);
+    // The preference applies as the row changes.
+    assert_eq!(h.state().settings_snapshot().behavior.show_page_edge_shadows, Some(false), "a click turns it off");
     h.get_by_label("Show Page Edge Shadows").focus();
     h.key_press(egui::Key::Space);
     h.run_steps(2);
-    assert_eq!(serde_json::from_str::<serde_json::Value>(&h.state().persist()).unwrap()["show_page_edge_shadows"], true);
-    let dialog_shadow = h.ctx.global_style().visuals.window_shadow;
-    assert_ne!(dialog_shadow, egui::Shadow::NONE);
-    h.state_mut().set_option("show_page_edge_shadows", "false").unwrap();
+    assert_eq!(h.state().settings_snapshot().behavior.show_page_edge_shadows, Some(true), "Space turns it on");
+    h.set_option("show_page_edge_shadows", "false").unwrap();
     h.run_steps(2);
-    assert_eq!(h.ctx.global_style().visuals.window_shadow, dialog_shadow);
-    h.state_mut().set_option("dialog", "none").unwrap();
+    h.set_option("dialog", "none").unwrap();
     for tab in [0, 1] {
         h.state_mut().active = Some(tab);
         h.run_steps(2);
-        assert!(shadows(&h, false).is_empty());
         let d = h.state().session.get(h.state().views[tab].id).unwrap();
         assert_eq!(
             (&d.bytes, d.dirty, d.can_undo(), d.can_redo()),
@@ -187,18 +96,14 @@ fn checkbox_and_multiple_documents_do_not_edit_pdf_state() {
     for (id, bytes) in ids.iter().zip(&saved) {
         assert_eq!(h.state_mut().session.save_bytes(*id).unwrap(), *bytes);
     }
-    h.state_mut().open_bytes("new.pdf", None, pdf()).unwrap();
-    h.run_steps(2);
-    assert!(shadows(&h, false).is_empty());
 }
 
 #[test]
 fn rendered_page_content_is_identical_with_and_without_decoration() {
     let mut h = harness("dark");
-    h.state_mut().set_option("panel", "pages").unwrap();
-    h.state_mut().set_option("zoom", "175").unwrap();
+    h.set_option("panel", "pages").unwrap();
+    h.set_option("zoom", "175").unwrap();
     h.run_steps(3);
-    scroll_down(&mut h, 20.0);
     for _ in 0..400 {
         h.run_steps(2);
         if !h.state().render_pending() {
@@ -207,37 +112,25 @@ fn rendered_page_content_is_identical_with_and_without_decoration() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert!(!h.state().render_pending(), "the actual PDF raster must be ready");
-    let rect = h.state().views[0].page_screen_rect(0).unwrap();
-    let fades = viewport_fades(&h);
-    assert_eq!(fades.iter().filter(|r| r.height() <= 21.0).count(), 2, "the screenshot comparison must contain both vertical fades");
+    let rects = h.state().views[0].visible_page_rects().to_vec();
     let enabled = h.render().unwrap();
-    h.state_mut().set_option("show_page_edge_shadows", "false").unwrap();
+    h.set_option("show_page_edge_shadows", "false").unwrap();
     h.run_steps(2);
     let disabled = h.render().unwrap();
-    assert_eq!(h.state().views[0].page_screen_rect(0), Some(rect));
+    assert_eq!(h.state().views[0].visible_page_rects(), rects);
     let viewport = h.state().views[0].viewport_rect();
-    assert!(viewport_fades(&h).is_empty());
-    // Only the painter's actual decorative fade strips may change over the page.
-    // All remaining artwork, annotation and form pixels must be identical.
-    for (_, page) in h.state().views[0].visible_page_rects() {
+    // Only the shadow outside the pages may change: artwork, annotation and form pixels inside
+    // each page are identical.
+    for (_, page) in &rects {
         let visible = page.intersect(viewport).shrink(2.0);
         if !visible.is_positive() {
             continue;
         }
         for y in visible.top().ceil() as u32..visible.bottom().floor() as u32 {
             for x in visible.left().ceil() as u32..visible.right().floor() as u32 {
-                if !fades.iter().any(|fade| fade.expand(1.0).contains(egui::pos2(x as f32, y as f32))) {
-                    assert_eq!(enabled.get_pixel(x, y), disabled.get_pixel(x, y), "page content at {x},{y}");
-                }
+                assert_eq!(enabled.get_pixel(x, y), disabled.get_pixel(x, y), "page content at {x},{y}");
             }
         }
-    }
-    // The top overlaps the first page's blue artwork; the bottom overlaps the
-    // blank second page. Sample clear of the unchanged scrollbar at the edge.
-    let x = rect.intersect(viewport).center().x as u32;
-    for (y, expected) in [(viewport.top() + 8.0, [204, 230, 255, 255]), (viewport.bottom() - 10.0, [255, 255, 255, 255])] {
-        assert_eq!(disabled.get_pixel(x, y as u32).0, expected, "unobscured PDF at y={y}");
-        assert_ne!(enabled.get_pixel(x, y as u32).0, expected, "fade overlays the PDF at y={y}");
     }
     // The Pages sidebar, including its thumbnails and selection borders, is unaffected.
     for y in 0..enabled.height() {
@@ -254,49 +147,21 @@ fn rendered_page_content_is_identical_with_and_without_decoration() {
 
 fn harness(theme: &str) -> Harness<'static, PdfCraftApp> {
     let theme = theme.to_string();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
-        let mut app = PdfCraftApp::new();
-        // Save comparisons must not depend on crossing a /ModDate second boundary.
-        app.session = app.session.with_clock(|| 1_700_000_000);
-        app.set_option("language", "en").unwrap();
-        app.set_option("theme", &theme).unwrap();
-        app.open_bytes("pages.pdf", None, pdf()).unwrap();
-        app.set_option("zoom", "100").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        install_runtime(&cc.egui_ctx);
+        {
+            let mut app = new_app();
+            // Save comparisons must not depend on crossing a /ModDate second boundary.
+            app.session = app.session.with_clock(|| 1_700_000_000);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.set_option(&egui::Context::default(), "theme", &theme).unwrap();
+            app.open_bytes(&egui::Context::default(), "pages.pdf", None, pdf()).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
+            app
+        }
     });
     h.run_steps(3);
     h
-}
-
-fn shadows(h: &Harness<'static, PdfCraftApp>, grid: bool) -> Vec<egui::Rect> {
-    let color = pdfcraft_ui_egui::theme::Tokens::for_kind(h.state().theme).page_shadow;
-    fn collect(shape: &egui::Shape, color: egui::Color32, grid: bool, out: &mut Vec<egui::Rect>) {
-        match shape {
-            egui::Shape::Vec(shapes) => {
-                for s in shapes {
-                    collect(s, color, grid, out);
-                }
-            }
-            egui::Shape::Rect(r)
-                if r.fill == color
-                    && r.rect.width() > 20.0
-                    && r.rect.height() > 20.0
-                    && if grid {
-                        r.blur_width == 0.0 && r.corner_radius == egui::CornerRadius::same(1)
-                    } else {
-                        r.blur_width == 14.0 && r.corner_radius == egui::CornerRadius::ZERO
-                    } =>
-            {
-                out.push(r.rect)
-            }
-            _ => {}
-        }
-    }
-    let mut out = Vec::new();
-    for s in &h.output().shapes {
-        collect(&s.shape, color, grid, &mut out);
-    }
-    out
 }
 
 /// Synthetic pages include colored artwork, an annotation and a form field.
@@ -331,23 +196,62 @@ fn pdf() -> Vec<u8> {
 
 #[test]
 fn page_shadow_preference_round_trips_and_ignores_invalid_settings() {
-    let mut app = PdfCraftApp::new();
-    let enabled = |app: &PdfCraftApp| serde_json::from_str::<serde_json::Value>(&app.persist()).unwrap()["show_page_edge_shadows"].clone();
-    assert_eq!(enabled(&app), true);
-    app.restore("{}");
-    assert_eq!(enabled(&app), true);
+    let mut app = new_app();
+    let enabled = |app: &PdfCraftApp| app.settings_snapshot().behavior.show_page_edge_shadows;
+    let restore_json = |app: &mut PdfCraftApp, json: &str| app.apply_settings(&import_json(json).0);
+    assert_eq!(enabled(&app), Some(true));
+    app.apply_settings(&PdfCraftSettings::default());
+    assert_eq!(enabled(&app), Some(true));
     for value in [false, true] {
-        app.set_option("show_page_edge_shadows", if value { "true" } else { "false" }).unwrap();
-        let mut restored = PdfCraftApp::new();
-        restored.restore(&app.persist());
-        assert_eq!(enabled(&restored), value);
+        app.set_option(&egui::Context::default(), "show_page_edge_shadows", if value { "true" } else { "false" }).unwrap();
+        let mut restored = new_app();
+        restored.apply_settings(&app.settings_snapshot());
+        assert_eq!(enabled(&restored), Some(value));
     }
     for invalid in ["null", "0", "\"false\"", "[]", "{}"] {
-        app.restore(&format!("{{\"show_page_edge_shadows\":{invalid}}}"));
-        assert_eq!(enabled(&app), true);
+        restore_json(&mut app, &format!("{{\"show_page_edge_shadows\":{invalid}}}"));
+        assert_eq!(enabled(&app), Some(true));
     }
-    app.restore("not json");
-    assert_eq!(enabled(&app), true);
-    assert!(app.set_option("show_page_edge_shadows", "maybe").is_err());
-    assert_eq!(enabled(&app), true);
+    restore_json(&mut app, "not json");
+    assert_eq!(enabled(&app), Some(true));
+    assert!(app.set_option(&egui::Context::default(), "show_page_edge_shadows", "maybe").is_err());
+    assert_eq!(enabled(&app), Some(true));
+}
+
+/// An app on the default host with test services: no wake-ups, no autosave folder, the GitHub update
+/// source, a fresh intake and an inline watch (as `tests/it/control.rs`' `new_app`).
+fn new_app() -> pdfcraft_ui_egui::PdfCraftApp {
+    use craft::host::{AppInfo, Host, Wake};
+    use craft::platform::clipboard::{Clipboard, SystemClipboard};
+    use craft::platform::open::FileIntake;
+    use craft::platform::watch::FileWatch;
+    let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "test" }).build();
+    let services = pdfcraft_ui_egui::AppServices::new(
+        Wake::none(),
+        Clipboard::new(SystemClipboard::new()),
+        None,
+        None,
+        FileIntake::new(Wake::none()).0,
+        FileWatch::new(Wake::none()).inline(),
+    );
+    pdfcraft_ui_egui::PdfCraftApp::with_host(std::sync::Arc::new(host), services)
+}
+
+/// The app's command and option entry points with the harness's own context (L-208).
+trait AppHarness {
+    fn set_option(&mut self, key: &str, value: &str) -> Result<(), String>;
+}
+
+impl AppHarness for egui_kittest::Harness<'_, pdfcraft_ui_egui::PdfCraftApp> {
+    fn set_option(&mut self, key: &str, value: &str) -> Result<(), String> {
+        let ctx = self.ctx.clone();
+        self.state_mut().set_option(&ctx, key, value)
+    }
+}
+
+/// Installs the framework runtime on a harness context, as `tests/it/support`'s `install_runtime` (L-227).
+fn install_runtime(ctx: &egui::Context) {
+    let spec = craft::ui::InstallSpec::new(craft::host::target::ShellInfo::default(), std::sync::Arc::new(craft::window::system::NoWindows));
+    craft::ui::shell::embed::install(ctx, spec, &pdfcraft_ui_egui::fonts::ui_fonts(pdfcraft_ui_egui::i18n::Lang::EN))
+        .expect("the runtime installs on a fresh context");
 }

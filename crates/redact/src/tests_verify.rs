@@ -1309,7 +1309,7 @@ fn a_nonempty_user_password_document_is_proven_with_those_credentials() {
         let mut doc = marked(Spec::default());
         let mut snap = Snapshot::capture(&doc, None).unwrap();
         applied(&mut doc, &mut snap).unwrap();
-        doc.set_encryption(&NewEncryption {
+        doc.set_encryption_legacy(&NewEncryption {
             algorithm: alg,
             user_password: "pw-secret",
             owner_password: "owner-secret",
