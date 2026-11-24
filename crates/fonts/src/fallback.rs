@@ -27,7 +27,7 @@
 //! 6. Otherwise, the nearest of the standard 14 by `/FontDescriptor /Flags` — serif, fixed pitch,
 //!    bold and italic. This step always succeeds, so a simple font is never left without a face.
 
-use crate::{CraftFont, Std14};
+use crate::{EmbeddedFace, Std14};
 
 /// What a font dictionary asks for, as far as the dictionary alone can say.
 #[derive(Clone, Copy, Debug, Default)]
@@ -44,7 +44,7 @@ pub struct Request<'a> {
 
 /// The face the chain picked.
 ///
-/// `Debug`, `PartialEq` and `Eq` are written by hand rather than derived, because [`CraftFont`]
+/// `Debug`, `PartialEq` and `Eq` are written by hand rather than derived, because [`EmbeddedFace`]
 /// carries a whole font program: deriving would print megabytes and compare font files.
 #[derive(Clone, Copy)]
 pub enum Face {
@@ -53,7 +53,7 @@ pub enum Face {
     /// One of the standard 14, whose metrics are exact.
     Standard14(Std14),
     /// A face from the optional craft-fonts build input.
-    Craft(&'static CraftFont),
+    Craft(&'static EmbeddedFace),
     /// No face at all. The caller must draw nothing rather than draw the wrong glyphs.
     None,
 }
@@ -181,7 +181,7 @@ pub fn substitute(req: &Request<'_>) -> Substitution {
     }
     if let Some(script) = req.ordering.and_then(script_for) {
         // A script we hold a face for; otherwise there is no honest substitute to offer.
-        return match crate::CRAFT_FONTS.iter().find(|f| f.covers(script)) {
+        return match crate::CRAFT_FONTS.iter().find(|f| f.has_script(script)) {
             Some(f) => at(Face::Craft(f), Why::ScriptFace),
             None => at(Face::None, Why::NoFaceForScript),
         };
@@ -319,7 +319,7 @@ mod tests {
         // craft-fonts is an optional build input, so both outcomes are correct -- but they must be
         // distinguishable, and neither may be a silent Latin stand-in.
         let s = substitute(&req("SomeJapaneseFont", false, 0, Some("Japan1")));
-        if crate::CRAFT_FONTS.iter().any(|f| f.covers("Jpan")) {
+        if crate::CRAFT_FONTS.iter().any(|f| f.has_script("Jpan")) {
             assert_eq!(s.why, Why::ScriptFace);
             assert!(matches!(s.face, Face::Craft(_)));
             assert!(s.face_name().is_some_and(|n| !n.is_empty()));
