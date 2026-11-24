@@ -473,8 +473,11 @@ impl DockPanels<PanelId> for Panels<'_> {
         match at {
             GroupAt::Measure(width) if panels.contains(&PanelId::Toolbar) => Some(crate::hotbar::measure_rail(self.app, ui, width)),
             GroupAt::Show(rect) if panels.contains(&PanelId::Toolbar) => {
+                // Give ToolRail the visible room so its tool list scrolls and its footer stays accessible.
+                let height = rect.intersect(ui.clip_rect()).intersect(ui.ctx().content_rect()).height().max(0.0);
+                ui.set_max_height(height);
                 crate::hotbar::show_rail(self.app, ui);
-                Some(rect.height())
+                Some(height)
             }
             GroupAt::Show(rect) if panels.contains(&PanelId::Document) => {
                 document_view(self.app, ui, rect);

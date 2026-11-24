@@ -287,9 +287,16 @@ fn quick_text_markup_colours_fit_and_activate_at_minimum_window_size() {
     let mut h = harness_with_size(TEXT_FIXTURE.to_vec(), screen.size(), |app| {
         app.set_option(&egui::Context::default(), "quick", "highlight").unwrap();
     });
-    for name in ["Yellow", "Orange", "Red", "Pink", "Purple", "Blue"] {
-        let swatch = h.get_by_role_and_label(Role::ColorWell, &format!("{name} quick colour")).rect();
-        assert!(screen.contains_rect(swatch), "{name} must be visible at the minimum window size");
+    let swatches = ["Yellow", "Orange", "Red", "Pink", "Purple", "Blue"]
+        .map(|name| (name, h.get_by_role_and_label(Role::ColorWell, &format!("{name} quick colour")).rect()));
+    for (name, swatch) in swatches {
+        assert!(
+            screen.contains_rect(swatch),
+            "{name} at {swatch:?} must be visible in {screen:?}; all swatches: {swatches:?}, colour: {:?}, opacity: {:?}, content: {:?}",
+            h.get_by_label("Colour").rect(),
+            h.get_by_label("Opacity").rect(),
+            h.ctx.content_rect(),
+        );
     }
     assert!(screen.contains_rect(h.get_by_label("Opacity").rect()));
 
