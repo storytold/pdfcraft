@@ -446,7 +446,8 @@ pub fn encode_tiff(width: u32, height: u32, premultiplied: &[u8], dpi: f64) -> R
 /// The page is composited over white and thresholded at Rec. 601 luma 128: darker ink is black,
 /// lighter paper stays white. Bits are packed the way `pdfcraft_filters::encode_g4` already
 /// expects (1 is white, 0 is black, MSB first, each row on a new byte), and the TIFF says
-/// BlackIsZero so a reader that honours PhotometricInterpretation shows them correctly.
+/// WhiteIsZero so a reader that honours PhotometricInterpretation shows them as black ink
+/// on white paper.
 pub fn encode_tiff_g4(width: u32, height: u32, premultiplied: &[u8], dpi: f64) -> Result<Vec<u8>, String> {
     check_raster(width, height, premultiplied)?;
     let rgb = over_white(premultiplied);
@@ -495,7 +496,7 @@ fn write_g4_tiff(width: u32, height: u32, coded: &[u8], dpi: f64) -> Result<Vec<
         .with(craft_tiff::tags::IMAGE_LENGTH, craft_tiff::Value::Long(vec![height]))
         .with(craft_tiff::tags::BITS_PER_SAMPLE, craft_tiff::Value::Short(vec![1]))
         .with(craft_tiff::tags::COMPRESSION, craft_tiff::Value::Short(vec![4]))
-        .with(craft_tiff::tags::PHOTOMETRIC, craft_tiff::Value::Short(vec![1]))
+        .with(craft_tiff::tags::PHOTOMETRIC, craft_tiff::Value::Short(vec![0]))
         .with(craft_tiff::tags::SAMPLES_PER_PIXEL, craft_tiff::Value::Short(vec![1]))
         .with(craft_tiff::tags::RESOLUTION_UNIT, craft_tiff::Value::Short(vec![2]))
         .with(craft_tiff::tags::X_RESOLUTION, craft_tiff::Value::Rational(vec![(num, den)]))
@@ -595,8 +596,9 @@ mod raster_tests {
     }
 
     /// A black-and-white page exported with [`ImageFormat::TiffG4`] is 1-bit CCITT Group 4 and
-    /// smaller than the same page as 24-bit RGB/LZW. The default TIFF stays RGB/LZW. Ink darker
-    /// than luma 128 is black (bit 0); paper, including a mid-grey of 128, is white (bit 1).
+    /// smaller than the same page as 24-bit RGB/LZW. The default TIFF stays RGB/LZW. The file is
+    /// tagged WhiteIsZero so a reader that honours PhotometricInterpretation shows darker-than
+    /// luma 128 ink as black and paper, including a mid-grey of 128, as white.
     #[test]
     fn a_mono_tiff_is_1_bit_ccitt_group_4_and_smaller_than_rgb() {
         // 16×2 keeps each row on two bytes, so packed bits have no padding in the last byte.
@@ -623,7 +625,7 @@ mod raster_tests {
 
         let g4_ifd = &craft_tiff::Tiff::parse(&g4).unwrap().ifds[0];
         assert_eq!(g4_ifd.u32(craft_tiff::tags::COMPRESSION).unwrap(), 4, "CCITT Group 4");
-        assert_eq!(g4_ifd.u32(craft_tiff::tags::PHOTOMETRIC).unwrap(), 1, "BlackIsZero, 0 is black");
+        assert_eq!(g4_ifd.u32(craft_tiff::tags::PHOTOMETRIC).unwrap(), 0, "WhiteIsZero, 0 is white");
         assert_eq!(g4_ifd.u32(craft_tiff::tags::BITS_PER_SAMPLE).unwrap(), 1);
         assert_eq!(g4_ifd.u32(craft_tiff::tags::SAMPLES_PER_PIXEL).unwrap(), 1);
         assert_eq!(g4_ifd.u32(craft_tiff::tags::RESOLUTION_UNIT).unwrap(), 2);
@@ -640,5 +642,20 @@ mod raster_tests {
         // Row 0: eight black (0) then eight white (1) → 0x00, 0xFF.
         // Row 1: mid-grey paper, dark ink, then paper → 0xBF, 0xFF.
         assert_eq!(bits, [0x00, 0xFF, 0xBF, 0xFF]);
+
+        // Decode the whole file with a reader that honours PhotometricInterpretation.
+        let decoded = craft_image_codecs::decode(&g4).expect("decode the whole Group 4 TIFF");
+        assert_eq!(decoded.dimensions(), (16, 2));
+        let channels = decoded.layout().channels();
+        let samples = decoded.as_u8().expect("8-bit samples after photometric mapping");
+        assert_eq!(samples.len(), 16 * 2 * channels);
+        let pixel = |i: usize| &samples[i * channels..(i + 1) * channels];
+        let is_black = |i: usize| pixel(i).iter().all(|&c| c == 0);
+        let is_white = |i: usize| pixel(i).iter().all(|&c| c == 255);
+        assert!((0..8).all(is_black), "row 0 ink is black");
+        assert!((8..16).all(is_white), "row 0 paper is white");
+        assert!(is_white(16), "mid-grey 128 is paper");
+        assert!(is_black(17), "dark grey is ink");
+        assert!((18..32).all(is_white), "rest of row 1 is paper");
     }
 }
