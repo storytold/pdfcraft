@@ -10,9 +10,48 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use crate::support::AppHarness as _;
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use pdfcraft_platform::mail::{Answer, Compose, MailError};
 use pdfcraft_ui_egui::PdfCraftApp;
+
+/// Applies `e` to the active document, with the harness's context.
+#[allow(dead_code)]
+fn edit(h: &mut Harness<'static, PdfCraftApp>, e: pdfcraft_engine::Edit) -> bool {
+    let ctx = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx, e)
+}
+
+/// The "couldn't attach" dialog is open.
+#[allow(dead_code)]
+fn problem_open(h: &Harness<'static, PdfCraftApp>) -> bool {
+    h.query_all_by_label("Couldn't attach the file").next().is_some()
+}
+
+/// The unapplied redactions question is open.
+#[allow(dead_code)]
+fn marks_open(h: &Harness<'static, PdfCraftApp>) -> bool {
+    h.query_all_by_label("Redactions aren't applied").next().is_some()
+}
+
+/// The text of every notice card shown, oldest first.
+#[allow(dead_code)]
+fn notices(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
+    craft::ui::runtime::toast::cards(&h.ctx, &craft::ui::runtime::env::WindowKey::main())
+        .iter()
+        .map(|card| {
+            card.toast
+                .title
+                .iter()
+                .chain(std::iter::once(&card.toast.message))
+                .map(|t| t.as_str())
+                .filter(|t| !t.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .collect()
+}
 
 const PDF: &[u8] = include_bytes!("../data/form.pdf");
 
@@ -44,17 +83,18 @@ fn edited(test: &str) -> (Harness<'static, PdfCraftApp>, PathBuf) {
     let path = dir.join(format!("{test}-{}.pdf", std::process::id()));
     std::fs::write(&path, PDF).unwrap();
     let p = path.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::support::inline_app();
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
         let name = Path::new(&p).file_name().unwrap().to_string_lossy().into_owned();
-        app.open_bytes(&name, Some(p.clone()), PDF.to_vec()).unwrap();
+        app.open_bytes(&cc.egui_ctx, &name, Some(p.clone()), PDF.to_vec()).unwrap();
         app.send_email.sender = stand_in;
         app.send_email.reveal = reveal;
         app
     });
     h.run_steps(4);
-    h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    edit(&mut h, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
     let id = h.state().views[0].id;
     assert!(h.state().session.get(id).unwrap().dirty);
     (h, path)
@@ -64,7 +104,7 @@ fn edited(test: &str) -> (Harness<'static, PdfCraftApp>, PathBuf) {
 /// answers that the message opened.
 fn send(h: &mut Harness<'static, PdfCraftApp>) -> PathBuf {
     let before = sent().len();
-    assert!(h.state_mut().execute("file.send_email"));
+    assert!(h.execute("file.send_email"));
     h.run_steps(2);
     let asked = sent();
     assert_eq!(asked.len(), before + 1, "one request per send");

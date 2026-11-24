@@ -1,4 +1,6 @@
-use super::*;
+use super::{DocId, LinkOrigin, PdfCraftApp, PendingLink};
+#[cfg(not(target_arch = "wasm32"))]
+use super::{OpenRequest, PendingDestination, PendingRemoteLink, open_worker};
 
 impl PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]
@@ -37,9 +39,10 @@ impl PdfCraftApp {
     fn open_resolved_remote_link(&mut self, path: std::path::PathBuf, destination: pdfcraft_render::RemoteDestination) {
         let path = path.to_string_lossy().into_owned();
         let name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.clone());
-        let stamp = file_watch::Stamp::at(&path);
+        // PLAN: `OpenRequest::stamp` becomes `Option<FileStamp>` (pdf-hub-w1, `state.rs`)
+        let stamp = craft::platform::watch::FileStamp::at(std::path::Path::new(&path));
         self.startup_superseded = true;
-        let result = self.schedule_open(OpenRequest {
+        self.schedule_open(OpenRequest {
             name: name.clone(),
             path: Some(path.clone()),
             stamp,
@@ -49,10 +52,8 @@ impl PdfCraftApp {
             after_open: Some(destination),
             recovered: None,
             then: None,
+            priority: craft::host::queue::Priority::NEAR,
         });
-        if let Err(error) = result {
-            self.notify_fmt("Couldn't follow linked PDF: {reason}", &[("reason", &error)]);
-        }
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -71,6 +72,15 @@ impl PdfCraftApp {
         }
     }
 
+    /// Show the named destination `name` that an open looked up with its document (`found`), in the tab it just
+    /// opened.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn apply_looked_up_destination(&mut self, name: String, found: Option<(usize, pdfcraft_render::DestView)>) {
+        if let Some(index) = self.views.len().checked_sub(1) {
+            self.show_destination_at(index, found_destination(found, name));
+        }
+    }
+
     /// Show `destination` in the tab at `index`: a document just opened from a link or with open
     /// parameters (#3425), or one already open that such a link or launch names. The latest request
     /// for a document wins over a named destination still being looked up.
@@ -79,44 +89,43 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.pending_destinations.retain(|pending| pending.doc != id);
         let destination = match destination {
-            pdfcraft_render::RemoteDestination::Named(name) => {
-                let Some(doc) = self.session.get(id) else { return };
-                let (bytes, password) = (doc.bytes.clone(), doc.password.clone());
-                // Live, the name tree is read off the UI thread; startup and tests stay inline.
-                #[cfg(not(target_arch = "wasm32"))]
-                if let Some(ctx) = self.ctx.clone().filter(|_| !self.run_inline) {
-                    let (sender, receiver) = std::sync::mpsc::channel();
-                    let (work_bytes, work_password, work_name) = (bytes.clone(), password.clone(), name.clone());
-                    let work = move || {
-                        let _ = sender.send(pdfcraft_render::named_destination(work_bytes, work_password.as_deref(), &work_name));
-                        ctx.request_repaint();
-                    };
-                    if std::thread::Builder::new().name("pdfcraft-named-destination".into()).spawn(work).is_ok() {
-                        self.pending_destinations.push(PendingDestination { doc: id, name, receiver });
-                        return;
-                    }
-                }
-                found_destination(pdfcraft_render::named_destination(bytes, password.as_deref(), &name), name)
-            }
+            pdfcraft_render::RemoteDestination::Named(name) => match self.look_up_named_destination(id, name) {
+                Some(destination) => destination,
+                None => return,
+            },
             other => other,
         };
         self.show_destination_at(index, destination);
     }
 
+    /// Looks `name` up in document `id`. On the desktop the name tree is read off the UI thread:
+    /// the lookup is a `named_destinations` job, shown by [`Self::poll_pending_destinations`], and
+    /// this answers `None`. Elsewhere it is read here.
+    fn look_up_named_destination(&mut self, id: DocId, name: String) -> Option<pdfcraft_render::RemoteDestination> {
+        let doc = self.session.get(id)?;
+        let (bytes, password) = (doc.bytes.clone(), doc.password.clone());
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let looked_up = name.clone();
+            // One job per document: the latest request replaces one still waiting.
+            self.named_destinations.submit(id, craft::host::queue::Priority::VISIBLE, move |_| {
+                pdfcraft_render::named_destination(bytes, password.as_deref(), &looked_up)
+            });
+            self.pending_destinations.push(PendingDestination { doc: id, name });
+            None
+        }
+        #[cfg(target_arch = "wasm32")]
+        Some(found_destination(pdfcraft_render::named_destination(bytes, password.as_deref(), &name), name))
+    }
+
     /// Show each named destination whose lookup has finished, in its document's tab.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn poll_pending_destinations(&mut self) {
-        for pending in std::mem::take(&mut self.pending_destinations) {
-            let found = match pending.receiver.try_recv() {
-                Ok(found) => found,
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    self.pending_destinations.push(pending);
-                    continue;
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
-            };
+        while let Some(done) = self.named_destinations.try_recv() {
+            let Some(at) = self.pending_destinations.iter().position(|pending| pending.doc == done.key) else { continue };
+            let pending = self.pending_destinations.remove(at);
             if let Some(index) = self.views.iter().position(|view| view.id == pending.doc) {
-                self.show_destination_at(index, found_destination(found, pending.name));
+                self.show_destination_at(index, found_destination(done.result, pending.name));
             }
         }
     }
@@ -140,25 +149,10 @@ impl PdfCraftApp {
 
     /// Open a web link in the system browser (a new `noopener` tab on the web). Only for
     /// PdfCraft's own links; an address that came from a document goes through
-    /// [`Self::request_document_url`].
+    /// [`Self::request_document_url`]. This runs outside a pass, so the URL waits on
+    /// `pending_urls` and the frame opens it through the runtime.
     pub fn open_url(&mut self, url: &str) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            if let Some(ctx) = &self.ctx {
-                ctx.open_url(egui::OpenUrl::new_tab(url));
-            }
-        }
-        // eframe's web runner opens new tabs with `window.open(url, "_blank")` and no features,
-        // which hands the opened page `window.opener` and lets it navigate this tab (#5084).
-        #[cfg(target_arch = "wasm32")]
-        {
-            if let Some(window) = web_sys::window() {
-                // With `noopener` the browser answers `null` instead of the new window, and a
-                // blocked pop-up is `null` or an error: there is nothing to keep or retry.
-                let _ = window.open_with_url_and_target_and_features(url, "_blank", "noopener,noreferrer");
-            }
-        }
-        self.last_opened_url = Some(url.to_string());
+        self.pending_urls.push(url.to_string());
     }
 
     /// A document asks to open `url` (a link, a button's URI action or `app.launchURL`). Web and

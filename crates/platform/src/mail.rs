@@ -878,7 +878,7 @@ pub fn create_private_dir(dir: &Path) -> std::io::Result<()> {
     }
     #[cfg(windows)]
     {
-        create_private_dir_with(dir, crate::owner_only::current_user_sid, crate::owner_only::create_private_dir)
+        create_private_dir_with(dir, craft::platform::owner_only::current_user_sid, craft::platform::owner_only::create_private_dir)
     }
     #[cfg(not(any(unix, windows)))]
     {

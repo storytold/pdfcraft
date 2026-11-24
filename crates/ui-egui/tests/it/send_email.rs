@@ -6,11 +6,49 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use crate::support::AppHarness as _;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style, rect_quad};
 use pdfcraft_platform::mail::{self, Answer, Compose, MailError, Why};
-use pdfcraft_ui_egui::{Dialog, LinkOrigin, PdfCraftApp, PendingLink};
+use pdfcraft_ui_egui::{LinkOrigin, PdfCraftApp, PendingLink};
+
+/// Applies `e` to the active document, with the harness's context.
+#[allow(dead_code)]
+fn edit(h: &mut Harness<'static, PdfCraftApp>, e: pdfcraft_engine::Edit) -> bool {
+    let ctx = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx, e)
+}
+
+/// The "couldn't attach" dialog is open.
+#[allow(dead_code)]
+fn problem_open(h: &Harness<'static, PdfCraftApp>) -> bool {
+    h.query_all_by_label("Couldn't attach the file").next().is_some()
+}
+
+/// The unapplied redactions question is open.
+#[allow(dead_code)]
+fn marks_open(h: &Harness<'static, PdfCraftApp>) -> bool {
+    h.query_all_by_label("Redactions aren't applied").next().is_some()
+}
+
+/// The text of every notice card shown, oldest first.
+#[allow(dead_code)]
+fn notices(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
+    craft::ui::runtime::toast::cards(&h.ctx, &craft::ui::runtime::env::WindowKey::main())
+        .iter()
+        .map(|card| {
+            card.toast
+                .title
+                .iter()
+                .chain(std::iter::once(&card.toast.message))
+                .map(|t| t.as_str())
+                .filter(|t| !t.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .collect()
+}
 
 const PDF: &[u8] = include_bytes!("../data/form.pdf");
 
@@ -67,10 +105,12 @@ fn harness(test: &str) -> (Harness<'static, PdfCraftApp>, PathBuf) {
     let path = dir.join(format!("{test}.pdf"));
     std::fs::write(&path, PDF).unwrap();
     let p = path.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes(&format!("{}.pdf", Path::new(&p).file_stem().unwrap().to_string_lossy()), Some(p.clone()), PDF.to_vec()).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::support::inline_app();
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+        app.open_bytes(&cc.egui_ctx, &format!("{}.pdf", Path::new(&p).file_stem().unwrap().to_string_lossy()), Some(p.clone()), PDF.to_vec())
+            .unwrap();
         app.send_email.sender = stand_in;
         app.send_email.reveal = reveal;
         app.send_email.open_address = address_stand_in;
@@ -96,37 +136,35 @@ fn an_email_app_that_cant_take_the_file_gets_a_message_and_the_file_is_shown() {
     assert_eq!(asked[0].path, path, "the file itself, unchanged");
     assert_eq!((asked[0].subject.as_str(), asked[0].to.len()), ("unchanged", 0));
     assert!(h.state().send_email.waiting());
-    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("Attaching unchanged.pdf to a new email message…"));
+    assert_eq!(crate::support::shown_notice(&h).as_deref(), Some("Attaching unchanged.pdf to a new email message…"));
 
     // A second request while the first is under way asks nothing more.
-    assert!(h.state_mut().execute("file.send_email"));
-    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("Still waiting for your email app…"));
+    assert!(h.execute("file.send_email"));
+    h.run_steps(1);
+    assert_eq!(crate::support::shown_notice(&h).as_deref(), Some("Still waiting for your email app…"));
     assert_eq!(sent().len(), 1);
 
-    // The notice a second request brings is kept up while the first is still waiting, not left
-    // to fade after a few seconds.
-    h.state_mut().toast.as_mut().unwrap().1 = 100.0;
+    // The waiting notice is kept up while the first request is still waiting.
     h.run_steps(2);
-    assert!(h.state().toast.as_ref().is_some_and(|t| t.1 < 50.0), "the notice is refreshed while the request is pending");
+    assert!(notices(&h).iter().any(|n| n == "Attaching unchanged.pdf to a new email message…"), "the waiting notice stays");
 
     // Still no answer: nothing changes.
     h.run_steps(2);
-    assert!(h.state().send_email.waiting() && h.state().dialog.is_none());
+    assert!(h.state().send_email.waiting() && !crate::support::dialog_open(&h));
 
     answer(Answer::NotAttached { program: Some("Firefox".into()), why: Why::CantAttach, fallback: mail::fallback(&asked[0]) });
     h.run_steps(3);
-    assert_eq!(h.state().dialog, Some(Dialog::SendEmail));
+    assert!(problem_open(&h));
     assert!(!h.state().send_email.waiting());
-    assert!(h.state().toast.is_none(), "the waiting notice goes when the dialog comes");
-    h.get_by_label("Couldn't attach the file");
+    assert!(!notices(&h).iter().any(|n| n.starts_with("Attaching")), "the waiting notice goes when the dialog comes");
+    assert!(problem_open(&h));
     h.get_by_label_contains("Firefox can't take a file from PdfCraft.");
     h.get_by_label_contains("PdfCraft will show unchanged.pdf in its folder");
     h.get_by_label("Close");
     h.get_by_label(if cfg!(target_os = "macos") { "Reveal in Finder" } else { "Reveal in File Explorer" });
     h.get_by_label("Open message and show file").click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, None);
-    assert_eq!(h.state().last_opened_url.as_deref(), Some("mailto:?subject=unchanged"));
+    assert!(!crate::support::dialog_open(&h));
     assert_eq!(ADDRESSES.with(|a| a.borrow().clone()), ["mailto:?subject=unchanged"], "the email app opens it, not the browser");
     assert_eq!(REVEALED.with(|r| r.borrow().clone()), vec![path.clone()]);
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -141,7 +179,7 @@ fn a_file_replaced_on_disk_is_not_what_goes() {
     assert!(!h.state().session.get(id).unwrap().dirty);
     let replacement = [PDF, b"\n% replaced by another program\n".as_slice()].concat();
     std::fs::write(&path, &replacement).unwrap();
-    assert!(h.state_mut().execute("file.send_email"));
+    assert!(h.execute("file.send_email"));
     h.run_steps(2);
 
     let asked = sent();
@@ -160,10 +198,10 @@ fn a_file_replaced_on_disk_is_not_what_goes() {
 #[test]
 fn unsaved_edits_go_as_a_copy_and_the_open_file_is_left_alone() {
     let (mut h, path) = harness("edited");
-    h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    edit(&mut h, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
     let id = h.state().views[0].id;
     assert!(h.state().session.get(id).unwrap().dirty);
-    assert!(h.state_mut().execute("file.send_email"));
+    assert!(h.execute("file.send_email"));
     h.run_steps(2);
 
     let asked = sent();
@@ -178,11 +216,11 @@ fn unsaved_edits_go_as_a_copy_and_the_open_file_is_left_alone() {
     assert!(std::fs::read(&path).unwrap() == PDF, "the open file is unchanged");
     let doc = h.state().session.get(id).unwrap();
     assert!(doc.dirty && doc.path.as_deref() == Some(path.to_string_lossy().as_ref()), "the document is still the open file, with its edits unsaved");
-    assert!(h.state().dialog.is_none(), "nobody is asked to save");
+    assert!(!crate::support::dialog_open(&h), "nobody is asked to save");
 
     answer(Answer::Opened { program: Some("Mail".into()) });
     h.run_steps(3);
-    assert!(!h.state().send_email.waiting() && h.state().dialog.is_none() && h.state().send_email.problem.is_none());
+    assert!(!h.state().send_email.waiting() && !crate::support::dialog_open(&h) && h.state().send_email.problem.is_none());
     // The copy's folder is its own, made for this send.
     let _ = std::fs::remove_dir_all(copy.parent().unwrap());
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -196,27 +234,27 @@ fn unapplied_redaction_marks_ask_before_sending() {
     let shape = Shape::Redact { quads: vec![rect_quad([80.0, 140.0, 100.0, 180.0])], overlay: String::new(), look: Default::default() };
     let style = Style::default_for(&shape);
     let mark = NewAnnotation { page: 0, shape, style, contents: String::new(), author: "Test".into() };
-    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(mark)));
+    assert!(edit(&mut h, Edit::AddAnnotation(mark)));
 
-    assert!(h.state_mut().execute("file.send_email"));
+    assert!(h.execute("file.send_email"));
     h.run_steps(2);
-    assert_eq!(h.state().dialog, Some(Dialog::SendEmailMarks));
+    assert!(marks_open(&h));
     h.get_by_label("Cancel").click();
     h.run_steps(3);
-    assert!(h.state().dialog.is_none() && sent().is_empty(), "Cancel sends nothing");
+    assert!(!crate::support::dialog_open(&h) && sent().is_empty(), "Cancel sends nothing");
 
-    assert!(h.state_mut().execute("file.send_email"));
+    assert!(h.execute("file.send_email"));
     h.run_steps(2);
     h.get_by_label("Send anyway").click();
     h.run_steps(3);
-    assert!(h.state().dialog.is_none());
+    assert!(!crate::support::dialog_open(&h));
     assert_eq!(sent().len(), 1);
     answer(Answer::Opened { program: Some("Mail".into()) });
     h.run_steps(3);
 
-    assert!(h.state_mut().execute("file.send_email"));
+    assert!(h.execute("file.send_email"));
     h.run_steps(2);
-    assert_eq!(h.state().dialog, Some(Dialog::SendEmailMarks), "each send asks");
+    assert!(marks_open(&h), "each send asks");
     let _ = std::fs::remove_dir_all(sent()[0].path.parent().unwrap());
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
@@ -229,13 +267,17 @@ fn consent_to_send_marks_is_not_carried_to_another_document() {
     let shape = Shape::Redact { quads: vec![rect_quad([80.0, 140.0, 100.0, 180.0])], overlay: String::new(), look: Default::default() };
     let style = Style::default_for(&shape);
     let mark = NewAnnotation { page: 0, shape, style, contents: String::new(), author: "Test".into() };
-    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(mark.clone())));
-    assert!(h.state_mut().execute("file.send_email"));
+    assert!(edit(&mut h, Edit::AddAnnotation(mark.clone())));
+    assert!(h.execute("file.send_email"));
     h.run_steps(2);
-    assert_eq!(h.state().dialog, Some(Dialog::SendEmailMarks));
+    assert!(marks_open(&h));
 
-    h.state_mut().open_bytes("other.pdf", None, PDF.to_vec()).unwrap();
-    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(mark)));
+    {
+        let ctx = h.ctx.clone();
+        h.state_mut().open_bytes(&ctx, "other.pdf", None, PDF.to_vec())
+    }
+    .unwrap();
+    assert!(edit(&mut h, Edit::AddAnnotation(mark)));
     h.run_steps(2);
     h.get_by_label("Send anyway").click();
     h.run_steps(3);
@@ -252,18 +294,18 @@ fn every_failure_is_said_and_close_closes() {
         (Why::NoAnswer, "Your email app didn't open a message in time."),
         (Why::Failed("MAPI error 2".into()), "Your email app didn't open a message. It said: MAPI error 2."),
     ] {
-        assert!(h.state_mut().execute("file.send_email"));
+        assert!(h.execute("file.send_email"));
         h.run_steps(2);
         let asked = sent().last().cloned().unwrap();
         answer(Answer::NotAttached { program: None, why, fallback: mail::fallback(&asked) });
         h.run_steps(3);
-        assert_eq!(h.state().dialog, Some(Dialog::SendEmail));
+        assert!(problem_open(&h));
         h.get_by_label_contains(text);
         h.get_by_label("Close").click();
         h.run_steps(3);
-        assert!(h.state().dialog.is_none() && h.state().send_email.problem.is_none());
+        assert!(!crate::support::dialog_open(&h) && h.state().send_email.problem.is_none());
     }
-    assert!(REVEALED.with(|r| r.borrow().is_empty()) && h.state().last_opened_url.is_none(), "Close opens nothing");
+    assert!(REVEALED.with(|r| r.borrow().is_empty()) && ADDRESSES.with(|a| a.borrow().is_empty()), "Close opens nothing");
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
@@ -274,12 +316,14 @@ fn form_harness(test: &str, pdf: &[u8]) -> (Harness<'static, PdfCraftApp>, PathB
     let path = dir.join(format!("{test}.pdf"));
     std::fs::write(&path, pdf).unwrap();
     let (p, bytes) = (path.to_string_lossy().into_owned(), pdf.to_vec());
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes(&format!("{}.pdf", Path::new(&p).file_stem().unwrap().to_string_lossy()), Some(p.clone()), bytes.clone()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "150").unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::support::inline_app();
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+        app.open_bytes(&cc.egui_ctx, &format!("{}.pdf", Path::new(&p).file_stem().unwrap().to_string_lossy()), Some(p.clone()), bytes.clone())
+            .unwrap();
+        app.set_option(&cc.egui_ctx, "left", "closed").unwrap();
+        app.set_option(&cc.egui_ctx, "zoom", "150").unwrap();
         app.send_email.sender = stand_in;
         app.send_email.reveal = reveal;
         app.send_email.open_address = address_stand_in;
@@ -309,11 +353,11 @@ fn click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
 fn text_still_being_typed_into_a_field_is_in_the_attachment() {
     let (mut h, path) = form_harness("typing", PDF);
     click_field(&mut h, "name");
-    assert!(h.state().views[0].forms.focus.is_some(), "the field's editor is open");
+    assert!(h.state().views[0].session.forms.focus.is_some(), "the field's editor is open");
     h.event(egui::Event::Text("Ada Lovelace".into()));
     h.run_steps(2);
 
-    assert!(h.state_mut().execute("file.send_email"));
+    assert!(h.execute("file.send_email"));
     h.run_steps(2);
     let asked = sent();
     assert_eq!(asked.len(), 1);
@@ -334,11 +378,11 @@ fn a_refused_field_value_sends_nothing() {
     h.event(egui::Event::Text("500".into()));
     h.run_steps(2);
 
-    assert!(h.state_mut().execute("file.send_email"));
+    assert!(h.execute("file.send_email"));
     h.run_steps(3);
     assert!(sent().is_empty(), "the stand-in was never asked");
     assert!(!h.state().send_email.waiting());
-    let focus = h.state().views[0].forms.focus.clone().expect("the refused field stays open");
+    let focus = h.state().views[0].session.forms.focus.clone().expect("the refused field stays open");
     assert_eq!(focus.name, "qty");
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
@@ -373,37 +417,34 @@ fn validated_form() -> Vec<u8> {
 #[test]
 fn an_answer_waits_behind_the_save_question_and_the_waiting_notice_stays() {
     let (mut h, path) = harness("save-question");
-    h.state_mut().apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 });
-    assert!(h.state_mut().execute("file.send_email"));
+    edit(&mut h, Edit::RotatePages { pages: vec![0], degrees: 90 });
+    assert!(h.execute("file.send_email"));
     h.run_steps(2);
     assert!(h.state().send_email.waiting());
     let asked = sent();
 
     // Closing the edited document asks whether to save it.
-    assert!(h.state_mut().execute("file.close"));
+    assert!(h.execute("file.close"));
     h.run_steps(3);
-    assert!(h.state().close_request.is_some(), "the save question is open");
+    assert!(h.query_all_by_label_contains("Save changes to").next().is_some(), "the save question is open");
 
     // A second request while waiting says so, and that notice is kept up, not left to fade.
-    assert!(h.state_mut().execute("file.send_email"));
+    assert!(h.execute("file.send_email"));
     h.run_steps(2);
-    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("Still waiting for your email app…"));
-    if let Some(toast) = h.state_mut().toast.as_mut() {
-        toast.1 = 100.0;
-    }
+    assert_eq!(crate::support::shown_notice(&h).as_deref(), Some("Still waiting for your email app…"));
     h.run_steps(2);
-    assert!(h.state().toast.as_ref().is_some_and(|t| t.1 < 50.0), "the waiting notice is kept up, not left to fade");
+    assert!(notices(&h).iter().any(|n| n.starts_with("Attaching")), "the waiting notice is kept up, not left to fade");
 
     answer(Answer::NotAttached { program: None, why: Why::NoAnswer, fallback: mail::fallback(&asked[0]) });
     h.run_steps(3);
-    assert!(h.state().close_request.is_some(), "the question is still there");
-    assert!(h.state().dialog.is_none() && h.state().send_email.problem.is_none(), "the dialog waits");
+    assert!(h.query_all_by_label_contains("Save changes to").next().is_some(), "the question is still there");
+    assert!(!problem_open(&h) && h.state().send_email.problem.is_none(), "the dialog waits");
     assert!(h.state().send_email.waiting());
 
     // Once the question is answered the dialog comes.
-    h.state_mut().close_request = None;
+    h.get_by_label("Cancel").click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, Some(Dialog::SendEmail));
+    assert!(problem_open(&h));
     assert!(h.state().send_email.problem.is_some());
     let _ = std::fs::remove_dir_all(asked[0].path.parent().unwrap());
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -418,9 +459,9 @@ fn a_copy_that_was_never_handed_over_is_removed() {
         Err(MailError::CouldNotStart("refused".into()))
     }
     let (mut h, path) = harness("refused-copy");
-    h.state_mut().apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 });
+    edit(&mut h, Edit::RotatePages { pages: vec![0], degrees: 90 });
     h.state_mut().send_email.sender = refuse;
-    assert!(h.state_mut().execute("file.send_email"));
+    assert!(h.execute("file.send_email"));
     h.run_steps(2);
     let asked = sent();
     assert_eq!(asked.len(), 1);
