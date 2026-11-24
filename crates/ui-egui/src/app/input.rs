@@ -89,9 +89,9 @@ impl PdfCraftApp {
     }
 
     /// Opens the files dropped on the window: a file with a path like File ▸ Open, one that
-    /// arrived as bytes (the web) as a new tab.
+    /// arrived as bytes (the web) as a new tab. A `file:` URI is opened from the local path it names (#4985).
     pub(crate) fn open_dropped(&mut self, ctx: &egui::Context, files: Vec<OsFile>) {
-        for file in files {
+        for file in files.into_iter().map(crate::workflows::files::resolve_file_uri) {
             self.open_dropped_file(ctx, file.name, file.path, file.bytes);
         }
     }

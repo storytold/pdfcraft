@@ -1129,6 +1129,44 @@ fn pdfs_dropped_on_the_combine_tab_join_its_list() {
     assert!(app.combine_draft[0].modified.is_some() && app.combine_draft[1].modified.is_none());
 }
 
+/// #4985: some Linux file managers drop `file:` URIs (percent-encoded, maybe with `localhost`)
+/// and no bytes; Combine files reads them from the local paths they name, under their file names.
+#[test]
+fn file_uris_dropped_on_the_combine_tab_join_its_list() {
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app
+        }
+    });
+    h.run_steps(3);
+    h.set_option("combine-view", "list").unwrap();
+    h.execute("page.combine");
+    h.run_steps(2);
+    let dir = std::env::temp_dir().join(format!("pdfcraft-combine-uri-drop-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (first, second) = (dir.join("first doc.pdf"), dir.join("second.pdf"));
+    std::fs::write(&first, FIXTURE).unwrap();
+    std::fs::write(&second, FIXTURE).unwrap();
+    let uri = |path: &std::path::Path, host: &str| {
+        let path = path.to_string_lossy().replace('\\', "/");
+        format!("file://{host}/{}", path.trim_start_matches('/')).replace(' ', "%20")
+    };
+    let encoded: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: uri(&first, "").into(), bytes: Vec::new() });
+    let localhost: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: uri(&second, "localhost").into(), bytes: Vec::new() });
+    support::input::drop_files(&mut h, [encoded, localhost]);
+    h.run_steps(3);
+    let _ = std::fs::remove_dir_all(&dir);
+    let app = h.state();
+    assert!(app.views.is_empty(), "nothing opens");
+    let names: Vec<&str> = app.combine_draft.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["first doc.pdf", "second.pdf"], "both URIs are read from disk, under their decoded names");
+    assert!(app.combine_draft.iter().all(|f| f.modified.is_some()), "read from disk, with the modified time");
+}
+
 #[test]
 fn a_folder_dropped_on_the_combine_tab_adds_its_pdfs() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-combine-drop-dir-{}", std::process::id()));

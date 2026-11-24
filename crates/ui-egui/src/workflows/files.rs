@@ -256,13 +256,17 @@ impl PdfCraftApp {
                 std::fs::read(p)
             };
             match read {
-                Ok(b) => files.push((name, b)),
+                Ok(b) => {
+                    files.push((name, b));
+                    modified.push(std::fs::metadata(p).and_then(|m| m.modified()).ok());
+                }
                 Err(e) => {
                     self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
-                    return;
+                    if purpose != FilePurpose::Combine {
+                        return;
+                    }
                 }
             }
-            modified.push(std::fs::metadata(p).and_then(|m| m.modified()).ok());
         }
         if files.is_empty() {
             return;
@@ -300,7 +304,7 @@ impl PdfCraftApp {
     /// [`Self::add_dropped_to_combine`]); a folder adds the files in it and its subfolders.
     pub(crate) fn drop_into_combine(&mut self, ctx: &egui::Context, files: Vec<OsFile>) {
         let mut incoming = Vec::new();
-        for f in files {
+        for f in files.into_iter().map(resolve_file_uri) {
             let name = dropped_name(&f);
             // A file on disk is read from there, with when it was last modified.
             #[cfg(not(target_arch = "wasm32"))]
@@ -879,6 +883,125 @@ impl PdfCraftApp {
     }
 }
 
+/// `f` with the local path and name of the `file:` URI its path holds, as some Linux file managers
+/// drop files (#4985); any other file as it is.
+pub(crate) fn resolve_file_uri(mut f: OsFile) -> OsFile {
+    if let Some(local) = f.path.as_deref().and_then(file_uri_path) {
+        if let Some(name) = local.file_name() {
+            f.name = name.to_string_lossy().into_owned();
+        }
+        f.path = Some(local);
+    }
+    f
+}
+
+/// The local path a dropped `file:` URI names (as some Linux file managers drop them), or `None`
+/// when `raw` is not a `file:` URI or names a remote host. Other paths are used as dropped (#4985).
+pub(crate) fn file_uri_path(raw: &std::path::Path) -> Option<std::path::PathBuf> {
+    let is_uri = raw.to_str().and_then(|s| s.get(..5)).is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"));
+    if is_uri { clean_dropped_path(raw) } else { None }
+}
+
+/// Resolve a dropped file path, stripping `file://` URI schemes and percent-decoding
+/// paths sent by Linux desktop environments (e.g. KDE Plasma / Dolphin) and other file managers.
+/// Rejects non-local schemes (`http://`, `https://`) and remote network / UNC paths (#4985).
+pub(crate) fn clean_dropped_path(raw: &std::path::Path) -> Option<std::path::PathBuf> {
+    let s = raw.to_string_lossy();
+    let s_no_lines = s.trim_end_matches(['\r', '\n']);
+    let lower = s_no_lines.to_ascii_lowercase();
+
+    // Reject non-file URI schemes (e.g. http://, https://, ftp://).
+    if lower.starts_with("http:") || lower.starts_with("https:") || lower.starts_with("ftp:") {
+        return None;
+    }
+
+    // Reject UNC and remote network paths (e.g. \\server\share or //server/share).
+    if s_no_lines.starts_with(r"\\") || s_no_lines.starts_with("//") {
+        return None;
+    }
+
+    if raw.is_absolute() && !lower.starts_with("file:") {
+        return Some(raw.to_path_buf());
+    }
+
+    let cleaned = if let Some(rest) = lower.strip_prefix("file://") {
+        let after_host = if rest.starts_with("localhost/") {
+            s_no_lines.get("file://localhost".len()..).unwrap_or("")
+        } else if rest.starts_with('/') {
+            s_no_lines.get("file://".len()..).unwrap_or("")
+        } else {
+            // Non-empty host that is not localhost (remote network share): reject.
+            return None;
+        };
+        decode_uri_path(after_host)
+    } else if lower.starts_with("file:/") {
+        let after_scheme = s_no_lines.get("file:".len()..).unwrap_or("");
+        decode_uri_path(after_scheme)
+    } else {
+        s_no_lines.to_string()
+    };
+
+    if cleaned.is_empty() || cleaned.starts_with(r"\\") || cleaned.starts_with("//") {
+        return None;
+    }
+    let p = std::path::PathBuf::from(cleaned);
+    if p.is_absolute() || raw.is_absolute() { Some(p) } else { None }
+}
+
+/// Decode percent-encoded byte sequences. On Windows, also strip the slash a `file:` URI puts
+/// before a drive letter (`/C:/x` -> `C:/x`); on Unix `/a:report.pdf` is a valid absolute path.
+fn decode_uri_path(s: &str) -> String {
+    let bytes = percent_decode(s);
+    strip_drive_slash(String::from_utf8_lossy(&bytes).into_owned(), cfg!(windows))
+}
+
+/// `decoded` without the slash before a Windows drive letter when `windows` is true, else unchanged.
+fn strip_drive_slash(decoded: String, windows: bool) -> String {
+    if windows
+        && decoded.len() >= 3
+        && (decoded.starts_with('/') || decoded.starts_with('\\'))
+        && decoded.as_bytes().get(1).is_some_and(|b| b.is_ascii_alphabetic())
+        && decoded.as_bytes().get(2) == Some(&b':')
+    {
+        decoded.get(1..).unwrap_or("").to_string()
+    } else {
+        decoded
+    }
+}
+
+/// Decode percent-encoded byte sequences (e.g. `%20` -> ` `).
+fn percent_decode(s: &str) -> Vec<u8> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes.get(i) == Some(&b'%')
+            && i + 2 < bytes.len()
+            && let (Some(&b1), Some(&b2)) = (bytes.get(i + 1), bytes.get(i + 2))
+            && let (Some(hi), Some(lo)) = (hex_val(b1), hex_val(b2))
+        {
+            out.push((hi << 4) | lo);
+            i += 3;
+        } else if let Some(&b) = bytes.get(i) {
+            out.push(b);
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    out
+}
+
+/// Convert an ASCII byte representing a hexadecimal digit (0-9, a-f, A-F) to its numerical value.
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 /// A file that couldn't be read: its name and why.
 type Unread = (String, String);
 
@@ -952,5 +1075,45 @@ mod tests {
         let listed = app.installed_document_fonts(false).expect("the scan ended");
         assert!(listed.files.is_empty());
         assert_eq!(jobs.waiting(), 0, "no second scan is started");
+    }
+
+    #[test]
+    fn clean_dropped_path_decodes_file_uris_and_percent_encoded_characters() {
+        use super::{clean_dropped_path, percent_decode};
+        assert_eq!(String::from_utf8(percent_decode("hello%20world")).unwrap(), "hello world");
+        assert_eq!(String::from_utf8(percent_decode("%E5%B9%B4%E5%BA%A6")).unwrap(), "年度");
+        assert_eq!(percent_decode("invalid%2G%"), b"invalid%2G%");
+
+        #[cfg(not(windows))]
+        {
+            let unix_path = std::path::Path::new("file:///tmp/my%20file.pdf\r\n");
+            assert_eq!(clean_dropped_path(unix_path), Some(std::path::PathBuf::from("/tmp/my file.pdf")));
+
+            let localhost = std::path::Path::new("file://localhost/tmp/%E5%B9%B4%E5%BA%A6.pdf");
+            assert_eq!(clean_dropped_path(localhost), Some(std::path::PathBuf::from("/tmp/年度.pdf")));
+        }
+
+        #[cfg(windows)]
+        {
+            let win_path = std::path::Path::new("file:///C:/Users/User/Desktop/my%20file.pdf");
+            assert_eq!(clean_dropped_path(win_path), Some(std::path::PathBuf::from("C:/Users/User/Desktop/my file.pdf")));
+
+            let localhost_win = std::path::Path::new("file://localhost/D:/docs/report.pdf");
+            assert_eq!(clean_dropped_path(localhost_win), Some(std::path::PathBuf::from("D:/docs/report.pdf")));
+        }
+
+        // The drive-letter slash is stripped only on Windows: on Unix `/a:report.pdf` is absolute.
+        assert_eq!(super::strip_drive_slash("/C:/docs/a.pdf".into(), true), "C:/docs/a.pdf");
+        assert_eq!(super::strip_drive_slash("/a:report.pdf".into(), false), "/a:report.pdf");
+        #[cfg(not(windows))]
+        assert_eq!(clean_dropped_path(std::path::Path::new("file:///a:report.pdf")), Some(std::path::PathBuf::from("/a:report.pdf")));
+
+        assert_eq!(clean_dropped_path(std::path::Path::new("")), None);
+        assert_eq!(clean_dropped_path(std::path::Path::new("relative.pdf")), None);
+        assert_eq!(clean_dropped_path(std::path::Path::new("http://example.com/test.pdf")), None);
+        assert_eq!(clean_dropped_path(std::path::Path::new("https://example.com/test.pdf")), None);
+        assert_eq!(clean_dropped_path(std::path::Path::new(r"\\server\share\test.pdf")), None);
+        assert_eq!(clean_dropped_path(std::path::Path::new("//server/share/test.pdf")), None);
+        assert_eq!(clean_dropped_path(std::path::Path::new("file://remote-server/share/test.pdf")), None);
     }
 }
