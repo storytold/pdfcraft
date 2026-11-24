@@ -3,12 +3,19 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
+use craft::behavior::{DisplayOrder, ItemSource, Selection, SelectionChange};
+use craft::theme::variant::Tone;
+use craft::ui::buttons::Button;
+use craft::ui::contract::{Bind, CollectionEvent, Outcome as _, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::display::{Shade, Text};
+use craft::ui::form::{Field, FieldGroup};
+use craft::ui::list::{List, ListRow};
+use craft::ui::notices::Notice;
+use craft::ui::text::TextField;
 use egui::Ui;
 use pdfcraft_cos::ObjRef;
 use pdfcraft_engine::a11y::{TagContentItem, TagInfo, TagPlacement, TagProperty};
 use pdfcraft_engine::{DocId, Edit};
-
-use crate::{icons, theme::Tokens, widgets};
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct State {
@@ -119,10 +126,76 @@ impl State {
     }
 }
 
+/// The tags in display order, as the list shows them.
+struct TagRows<'a> {
+    rows: &'a [&'a TagInfo],
+    parents: &'a HashSet<ObjRef>,
+    collapsed: &'a BTreeSet<ObjRef>,
+    /// A search lists matches with their ancestors and ignores collapsed groups, so no row is a group then.
+    searching: bool,
+    selected: Option<ObjRef>,
+    /// An unsaved draft keeps every other row from being selected.
+    dirty: bool,
+}
+
+impl TagRows<'_> {
+    fn is_group(&self, tag: &TagInfo) -> bool {
+        self.parents.contains(&tag.object) && !self.searching
+    }
+}
+
+impl DisplayOrder<ObjRef> for TagRows<'_> {
+    fn len(&self) -> usize {
+        self.rows.len()
+    }
+    fn key(&self, at: usize) -> ObjRef {
+        // The list never asks past `len()`; object 0 is a key no tag has.
+        self.rows.get(at).map_or_else(|| ObjRef::new(0, 0), |tag| tag.object)
+    }
+    fn depth(&self, at: usize) -> usize {
+        self.rows.get(at).map_or(0, |tag| tag.depth)
+    }
+    fn has_children(&self, at: usize) -> bool {
+        self.rows.get(at).is_some_and(|tag| self.is_group(tag))
+    }
+    fn open(&self, at: usize) -> bool {
+        self.rows.get(at).is_some_and(|tag| self.is_group(tag) && !self.collapsed.contains(&tag.object))
+    }
+    fn enabled(&self, at: usize) -> bool {
+        self.rows.get(at).is_some_and(|tag| !self.dirty || self.selected == Some(tag.object))
+    }
+}
+
+impl ItemSource<ObjRef> for TagRows<'_> {}
+
+/// A list of `count` rows keyed by position.
+struct Positions(usize);
+
+impl DisplayOrder<usize> for Positions {
+    fn len(&self) -> usize {
+        self.0
+    }
+    fn key(&self, at: usize) -> usize {
+        at
+    }
+}
+
+impl ItemSource<usize> for Positions {}
+
+/// The label of a marked-content row.
+fn content_label(item: &TagContentItem) -> String {
+    let page_label = item.page.map(|p| crate::i18n::fmt(tl!("Go to page {p}"), &[("p", &(p + 1).to_string())]));
+    match (&page_label, item.text.trim()) {
+        (Some(page), text) if !text.is_empty() => format!("MCID {} · {page} · {text}", item.mcid),
+        (Some(page), _) => format!("MCID {} · {page}", item.mcid),
+        (_, text) if !text.is_empty() => format!("MCID {} · {text}", item.mcid),
+        _ => format!("MCID {}", item.mcid),
+    }
+}
+
 /// The chosen page and an edit to apply after the panel releases its document borrow.
 pub(crate) fn panel(
     ui: &mut Ui,
-    t: &Tokens,
     doc: DocId,
     tags: &[TagInfo],
     content: &[TagContentItem],
@@ -137,106 +210,107 @@ pub(crate) fn panel(
         state.collapsed.clear();
     }
     if tags.is_empty() {
-        ui.label(tl!("This document has no editable structure tags."));
+        Notice::new(Tone::Neutral, tl!("This document has no editable structure tags.")).show(ui);
         return (None, None);
     }
     if state.selected.is_none_or(|r| !tags.iter().any(|t| t.object == r)) {
         state.selected = Some(tags[0].object);
         state.draft = Draft::from_tag(&tags[0]);
     }
-    let search_label = ui.label(tl!("Find a tag"));
-    ui.add(egui::TextEdit::singleline(&mut state.query).hint_text(tl!("Find a tag"))).labelled_by(search_label.id);
-    ui.add_space(4.0);
+    Field::new(tl!("Find a tag")).show(ui, |ui, _| {
+        TextField::new(tl!("Find a tag"), Bind::bound(&mut state.query)).show(ui);
+    });
     let query = state.query.to_lowercase();
     let matching = visible_tags(tags, &query, &state.collapsed);
     let parents: HashSet<ObjRef> = tags.iter().filter_map(|tag| tag.parent).collect();
     let dirty = state.selected.and_then(|r| tags.iter().find(|t| t.object == r)).is_some_and(|tag| state.draft.edit(tag).is_some());
-    ui.label(egui::RichText::new(crate::i18n::fmt(tl!("{n} tags"), &[("n", &matching.len().to_string())])).small().color(t.text_muted));
+    Text::new(crate::i18n::fmt(tl!("{n} tags"), &[("n", &matching.len().to_string())])).shade(Shade::Muted).show(ui);
     let mut page = None;
-    egui::ScrollArea::vertical().max_height(100.0).show_rows(ui, 26.0, matching.len(), |ui, range| {
-        for tag in &matching[range] {
+    let source =
+        TagRows { rows: &matching, parents: &parents, collapsed: &state.collapsed, searching: !query.is_empty(), selected: state.selected, dirty };
+    let mut picked = match state.selected {
+        Some(object) => Selection::single(object),
+        None => Selection::new(Vec::new(), None, None),
+    };
+    let out = List::<ObjRef>::new(tl!("Tags"))
+        .tree(true)
+        .natural_height(true)
+        .select(SelectMode::Single)
+        .selection(Bind::bound(&mut picked))
+        .show_items(ui, &source, &mut |key, _| {
+            let Some(tag) = matching.iter().find(|tag| tag.object == *key) else { return ListRow::new("") };
             let title = tag.title.as_deref().filter(|s| !s.is_empty()).unwrap_or(&tag.kind);
-            let label = format!("{title} · {}", tag.object.num);
-            ui.horizontal(|ui| {
-                ui.add_space((tag.depth.min(8) as f32) * 12.0);
-                if parents.contains(&tag.object) && query.is_empty() {
-                    let closed = state.collapsed.contains(&tag.object);
-                    if icons::button(
-                        ui,
-                        if closed { "chevron-right" } else { "chevron-down" },
-                        18.0,
-                        false,
-                        if closed { tl!("Expand tag") } else { tl!("Collapse tag") },
-                    )
-                    .clicked()
-                    {
-                        if closed {
-                            state.collapsed.remove(&tag.object);
-                        } else {
-                            state.collapsed.insert(tag.object);
-                        }
-                    }
+            let row = ListRow::new(format!("{title} · {}", tag.object.num)).depth(tag.depth);
+            if source.is_group(tag) { row.group(!source.collapsed.contains(&tag.object)) } else { row }
+        });
+    for event in &out.events {
+        match event {
+            CollectionEvent::Open(change) => {
+                if change.open {
+                    state.collapsed.remove(&change.key);
                 } else {
-                    ui.add_space(18.0);
+                    state.collapsed.insert(change.key);
                 }
-                if ui
-                    .add_enabled(!dirty || state.selected == Some(tag.object), egui::Button::selectable(state.selected == Some(tag.object), label))
-                    .clicked()
-                {
+            }
+            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+                if let Some(tag) = keys.last().and_then(|key| tags.iter().find(|tag| tag.object == *key)) {
                     state.selected = Some(tag.object);
                     state.draft = Draft::from_tag(tag);
                     page = tag.page;
                 }
-            });
+            }
+            _ => {}
         }
-    });
-    ui.separator();
+    }
     let Some(tag) = state.selected.and_then(|r| tags.iter().find(|t| t.object == r)) else { return (page, None) };
-    ui.label(egui::RichText::new(format!("{} {} R", tag.object.num, tag.object.generation)).small().color(t.text_faint));
+    Text::new(format!("{} {} R", tag.object.num, tag.object.generation)).shade(Shade::Muted).show(ui);
     if let Some(p) = tag.page
-        && ui.button(crate::i18n::fmt(tl!("Go to page {p}"), &[("p", &(p + 1).to_string())])).clicked()
+        && Button::new(crate::i18n::fmt(tl!("Go to page {p}"), &[("p", &(p + 1).to_string())])).show(ui).response().clicked()
     {
         page = Some(p);
     }
-    ui.add_enabled_ui(can_edit, |ui| {
-        field(ui, tl!("Tag type"), &mut state.draft.kind, false);
-        field(ui, tl!("Title"), &mut state.draft.title, false);
-        field(ui, tl!("Actual text"), &mut state.draft.actual_text, true);
-        field(ui, tl!("Alternate text"), &mut state.draft.alt, true);
-        field(ui, tl!("Language"), &mut state.draft.language, false);
+    let draft = &mut state.draft;
+    FieldGroup::new(tl!("Tag properties")).show(ui, |ui, _| {
+        Field::new(tl!("Tag type")).show(ui, |ui, _| {
+            TextField::new(tl!("Tag type"), Bind::bound(&mut draft.kind)).enabled(can_edit).show(ui);
+        });
+        Field::new(tl!("Title")).show(ui, |ui, _| {
+            TextField::new(tl!("Title"), Bind::bound(&mut draft.title)).enabled(can_edit).show(ui);
+        });
+        Field::new(tl!("Actual text")).show(ui, |ui, _| {
+            TextField::new(tl!("Actual text"), Bind::bound(&mut draft.actual_text)).lines(2).enabled(can_edit).show(ui);
+        });
+        Field::new(tl!("Alternate text")).show(ui, |ui, _| {
+            TextField::new(tl!("Alternate text"), Bind::bound(&mut draft.alt)).lines(2).enabled(can_edit).show(ui);
+        });
+        Field::new(tl!("Language")).show(ui, |ui, _| {
+            TextField::new(tl!("Language"), Bind::bound(&mut draft.language)).enabled(can_edit).show(ui);
+        });
     });
     let edit = state.draft.edit(tag);
-    let mut save = false;
     let siblings: Vec<&TagInfo> = tag.parent.map(|parent| tags.iter().filter(|other| other.parent == Some(parent)).collect()).unwrap_or_default();
     let position = siblings.iter().position(|sibling| sibling.object == tag.object);
-    let before = position.and_then(|position| position.checked_sub(1)).map(|position| siblings[position]);
+    let before = position.and_then(|position| position.checked_sub(1)).and_then(|position| siblings.get(position).copied());
     let after = position.and_then(|position| siblings.get(position + 1)).copied();
-    ui.horizontal(|ui| {
-        save = ui.add_enabled(can_edit && !state.draft.kind.is_empty() && edit.is_some(), egui::Button::new(tl!("Save tag properties"))).clicked();
-        if ui.add_enabled(dirty, egui::Button::new(tl!("Revert changes"))).clicked() {
-            state.draft = Draft::from_tag(tag);
-        }
-    });
-    let (mut earlier, mut later, mut artifact) = (false, false, false);
-    ui.horizontal(|ui| {
-        earlier = ui.add_enabled(can_edit && !dirty && before.is_some(), egui::Button::new(tl!("Move tag earlier"))).clicked();
-        later = ui.add_enabled(can_edit && !dirty && after.is_some(), egui::Button::new(tl!("Move tag later"))).clicked();
-        artifact = ui
-            .add_enabled(can_edit && !dirty, egui::Button::new(tl!("Mark as artifact")))
-            .on_hover_text(tl!("Remove this leaf tag from reading order and mark its direct content as an artifact"))
-            .clicked();
-    });
-    ui.separator();
-    for item in content {
-        let page_label = item.page.map(|p| crate::i18n::fmt(tl!("Go to page {p}"), &[("p", &(p + 1).to_string())]));
-        let label = match (&page_label, item.text.trim()) {
-            (Some(page), text) if !text.is_empty() => format!("MCID {} · {page} · {text}", item.mcid),
-            (Some(page), _) => format!("MCID {} · {page}", item.mcid),
-            (_, text) if !text.is_empty() => format!("MCID {} · {text}", item.mcid),
-            _ => format!("MCID {}", item.mcid),
-        };
-        if ui.button(label).clicked() {
-            page = item.page;
+    let save =
+        Button::new(tl!("Save tag properties")).enabled(can_edit && !state.draft.kind.is_empty() && edit.is_some()).show(ui).response().clicked();
+    if Button::new(tl!("Revert changes")).enabled(dirty).show(ui).response().clicked() {
+        state.draft = Draft::from_tag(tag);
+    }
+    let earlier = Button::new(tl!("Move tag earlier")).enabled(can_edit && !dirty && before.is_some()).show(ui).response().clicked();
+    let later = Button::new(tl!("Move tag later")).enabled(can_edit && !dirty && after.is_some()).show(ui).response().clicked();
+    let artifact = Button::new(tl!("Mark as artifact")).enabled(can_edit && !dirty).show(ui).response().clicked();
+    let mut chosen = Selection::new(Vec::new(), None, None);
+    let marked = List::<usize>::new(tl!("Marked content"))
+        .natural_height(true)
+        .select(SelectMode::Single)
+        .selection(Bind::bound(&mut chosen))
+        .show_items(ui, &Positions(content.len()), &mut |key, _| ListRow::new(content.get(*key).map(content_label).unwrap_or_default()));
+    for event in &marked.events {
+        if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+            && let Some(item) = keys.last().and_then(|key| content.get(*key))
+        {
+            page = item.page.or(page);
         }
     }
     (
@@ -281,13 +355,4 @@ fn visible_tags<'a>(tags: &'a [TagInfo], query: &str, collapsed: &BTreeSet<ObjRe
         }
     }
     tags.iter().filter(|tag| show.contains(&tag.object)).collect()
-}
-
-fn field(ui: &mut Ui, label: &str, value: &mut String, multiline: bool) {
-    let l = ui.label(label);
-    if multiline {
-        ui.add(widgets::block(value).desired_rows(2).desired_width(f32::INFINITY)).labelled_by(l.id);
-    } else {
-        ui.add(egui::TextEdit::singleline(value).desired_width(f32::INFINITY)).labelled_by(l.id);
-    }
 }

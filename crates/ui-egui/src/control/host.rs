@@ -1,61 +1,39 @@
-use super::{Host, Reply, Value, json};
+use serde_json::json;
 
-impl Host for crate::PdfCraftApp {
-    /// Cancel any in-progress pointer gesture in every open view.
-    fn cancel_pointer_gestures(&mut self) {
-        for view in &mut self.views {
-            view.cancel_pointer_gestures();
-        }
-    }
+use super::Value;
 
-    /// The input target: active document, open dialog/prompt, palette and find state.
-    ///
-    /// Synthetic input admitted for one generation is never replayed into another document or
-    /// dialog. Only these identities are hashed, never text or document content.
-    fn input_epoch(&self) -> u64 {
-        use std::hash::{Hash as _, Hasher as _};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.capture_epoch().hash(&mut hasher);
-        // The focused widget is part of the input target: keys typed for one field must not land
-        // in another after focus moves. Only the id value is hashed, never text.
-        let focused = self.ctx.as_ref().and_then(|ctx| ctx.memory(|m| m.focused())).map(|id| id.value());
-        focused.hash(&mut hasher);
-        hasher.finish()
-    }
+/// The side of the Combine thumbnails `ui.state` reports the state of, in points.
+const STATE_THUMB_SIDE: f32 = 160.0;
 
-    /// The captured content: active document and open dialog/prompt, never keyboard focus.
-    fn capture_epoch(&self) -> u64 {
+impl crate::PdfCraftApp {
+    /// The captured content and the target of synthetic input: active document and open
+    /// dialog/prompt, never keyboard focus (the framework withdraws injected input itself when the
+    /// focus moves).
+    pub(crate) fn capture_epoch(&self) -> u64 {
         use std::hash::{Hash as _, Hasher as _};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         let doc = self.active.and_then(|i| self.views.get(i)).map(|v| v.id.0);
         doc.hash(&mut hasher);
         format!(
-            "{:?}/{:?}/{:?}/{:?}/{:?}",
-            self.dialog,
-            self.password_prompt.is_some(),
+            "{:?}/{:?}/{:?}/{:?}/{:?}/{:?}",
+            self.dialogs.open_dialogs().iter().map(|d| (d.id, d.key.as_deref())).collect::<Vec<_>>(),
+            (self.preferences.is_some(), self.shortcuts.is_some()),
+            self.modal_open(),
             self.palette_open,
-            self.close_request.is_some(),
+            self.close_guard.is_some(),
             self.active.and_then(|i| self.views.get(i)).and_then(|v| v.find.as_ref().map(|_| true)),
         )
         .hash(&mut hasher);
         hasher.finish()
     }
 
-    /// Control requests wait for the first UI pass that installs fonts; a font-gated early
-    /// return cannot consume injected input or issue a screenshot.
-    fn accepts_input(&self) -> bool {
-        self.fonts_ready
-    }
-
-    fn panel(&mut self, reset: bool, params: &Value) -> Reply {
+    /// `ui.panel`: the dock's panel request.
+    pub(crate) fn panel(&mut self, reset: bool, params: &Value) -> Result<Value, String> {
         crate::side_panels::command(self, reset, params)
     }
 
-    fn quit(&mut self, ctx: &egui::Context) -> bool {
-        self.request_quit(ctx)
-    }
-
-    fn state(&self) -> Value {
+    /// `ui.state`: what an agent needs to aim its next request.
+    pub(crate) fn state(&self, ctx: &egui::Context) -> Value {
         let active = self.active.and_then(|i| self.views.get(i));
         let docs: Vec<Value> = self
             .views
@@ -67,36 +45,42 @@ impl Host for crate::PdfCraftApp {
             })
             .collect();
         #[cfg(not(target_arch = "wasm32"))]
-        let pending_opens: Vec<Value> = self
-            .pending_opens
-            .iter()
-            .map(|pending| json!({ "token": pending.token, "name": pending.name, "path": pending.path }))
-            .chain(self.deferred_opens.iter().map(|deferred| {
-                let name = std::path::Path::new(&deferred.path).file_name().map(|n| n.to_string_lossy().into_owned());
-                json!({ "token": null, "name": name, "path": deferred.path })
-            }))
-            .collect();
+        let pending_opens: Vec<Value> =
+            self.pending_opens.iter().map(|pending| json!({ "token": pending.token, "name": pending.name, "path": pending.path })).collect();
         #[cfg(target_arch = "wasm32")]
         let pending_opens: Vec<Value> = Vec::new();
+        let cards = craft::ui::runtime::toast::cards(ctx, &craft::ui::runtime::env::WindowKey::main());
+        let notice = cards.last().map(|card| card.toast.message.as_str().to_string());
+        let progress =
+            cards.iter().rev().find_map(|card| card.toast.progress.map(|f| json!({ "label": card.toast.message.as_str(), "fraction": f })));
+        let dock = crate::side_panels::state(self);
+        let thumb_request = craft::ui::primitives::textures::ThumbRequest::for_cell(STATE_THUMB_SIDE, ctx.pixels_per_point());
         json!({
-            "side_panels": crate::side_panels::state(self),
+            "side_panels": dock.clone(),
             "documents": docs,
             "pending_opens": pending_opens,
             "active": active.map(|v| json!({
                 "doc": v.id.0,
-                "page": v.current + 1,
-                "zoom_percent": (v.zoom * 100.0).round(),
-                "fit": format!("{:?}", v.fit),
-                "layout": format!("{:?}", v.layout),
-                "continuous": v.continuous(),
-                "page_gaps": v.show_page_gaps,
+                "page": v.current() + 1,
+                "zoom_percent": (v.view.zoom * 100.0).round(),
+                "fit": format!("{:?}", v.view.fit),
+                "layout": format!("{:?}", v.view.display),
+                "continuous": v.view.continuous,
+                "page_gaps": v.view.page_gaps,
                 "organize": v.organize,
-                "grid_zoom": v.grid_zoom(),
+                "grid_zoom": self.organize_zoom,
                 "thumbnail_zoom": v.thumbnail_zoom(),
                 // Pages picked in the organize grid or the Pages panel (empty: the current page).
-                "selected_pages": v.selected.iter().map(|p| p + 1).collect::<Vec<_>>(),
+                "selected_pages": v.selected.items.iter().map(|p| p + 1).collect::<Vec<_>>(),
                 "auto_scrolling": v.auto_scrolling(),
-                "raster_memory": v.raster_memory(),
+                // The page store's texture counts as the last pass drew the view.
+                "raster_memory": json!({
+                    "entries": v.textures.entries,
+                    "bytes": v.textures.bytes,
+                    "uploads": v.textures.uploads,
+                    "upload_bytes": v.textures.upload_bytes,
+                    "evicted": v.textures.evicted,
+                }),
                 "viewport": [v.viewport_rect().min.x, v.viewport_rect().min.y, v.viewport_rect().max.x, v.viewport_rect().max.y],
                 "find_open": v.find.is_some(),
                 "page_errors": v.page_errors().iter().map(|(p, e)| json!({ "page": p + 1, "error": e })).collect::<Vec<_>>(),
@@ -104,10 +88,10 @@ impl Host for crate::PdfCraftApp {
                 "cut_pages": v.cut_pages().iter().map(|p| p + 1).collect::<Vec<_>>(),
                 // Where pages are on screen (points), to aim ui.click / ui.drag at page content.
                 "pages_on_screen": v.visible_page_rects().iter().map(|(p, r)| json!({ "page": p + 1, "rect": [r.min.x, r.min.y, r.max.x, r.max.y] })).collect::<Vec<_>>(),
-                "selected_comment": v.comments.selected.map(|(p, i)| json!({ "page": p + 1, "index": i + 1 })),
+                "selected_comment": v.session.comments.primary().map(|(p, i)| json!({ "page": p + 1, "index": i + 1 })),
                 // Every selected comment (⌘-click adds), the one with the handles first.
-                "selected_comments": v.comments.selection().iter().map(|(p, i)| json!({ "page": p + 1, "index": i + 1 })).collect::<Vec<_>>(),
-                "comment_composer_open": v.comments.composer.is_some(),
+                "selected_comments": v.session.comments.selection().iter().map(|(p, i)| json!({ "page": p + 1, "index": i + 1 })).collect::<Vec<_>>(),
+                "comment_composer_open": v.session.comments.composer.is_some(),
             })),
             // The Combine files tab: how its files show, and each grid thumbnail's state.
             "combine": {
@@ -116,9 +100,9 @@ impl Host for crate::PdfCraftApp {
                 "zoom": self.combine_zoom,
                 "files": self.combine_draft.iter().map(|f| f.name.clone()).collect::<Vec<_>>(),
                 "selected": self.combine_selection(),
-                "thumbnails": self.combine_thumbnails().iter().map(|t| format!("{t:?}")).collect::<Vec<_>>(),
+                "thumbnails": self.combine_thumbnails(ctx, &thumb_request).iter().map(|t| format!("{t:?}")).collect::<Vec<_>>(),
                 "expanded": self.combine_expanded().iter().filter_map(|i| self.combine_draft.get(*i).map(|f| f.name.clone())).collect::<Vec<_>>(),
-                "preview": self.combine_preview().map(|(file, page, render)| json!({ "file": file, "page": page + 1, "render": format!("{render:?}") })),
+                "preview": self.combine_preview().map(|(file, page)| json!({ "file": file, "page": page + 1 })),
             },
             "quick_tool": match self.quick_tool {
                 crate::QuickTool::Measure(t) => format!("measure-{}", t.name()),
@@ -144,38 +128,47 @@ impl Host for crate::PdfCraftApp {
             "home": self.active.is_none(),
             "mode": format!("{:?}", self.mode),
             "default_mode": self.default_mode,
-            "hotbar": self.hotbar,
+            "hotbar": { "tools": self.hotbar.tools },
             "comment_tool_pinned": self.comment_prefs.pinned,
             // Home's pinned folders, in order, and whether each is folded down to its heading.
             "pinned_folders": self.pinned.folders.iter().map(|f| json!({ "folder": f, "collapsed": self.pinned.collapsed.contains(f) })).collect::<Vec<_>>(),
-            "left_panel": if self.left_open { json!(format!("{:?}", self.left)) } else { Value::Null },
-            "tools_side": if self.side_panels.tools_on_right() { "right" } else { "left" },
-            "rail_side": if self.side_panels.rail_on_right() { "right" } else { "left" },
-            "right_panel": self.right.map(|r| format!("{r:?}")),
+            "left_panel": if self.left_open() { json!(format!("{:?}", self.left)) } else { Value::Null },
+            "tools_side": dock["tools_side"].clone(),
+            "rail_side": dock["rail_side"].clone(),
+            "right_panel": self.right().map(|r| format!("{r:?}")),
             "hidden_interface": self.hidden_interface().to_json(),
-            "dialog": self.dialog.map(|d| format!("{d:?}")),
+            // The top host dialog's key, else the inline window that is open.
+            "dialog": self
+                .dialogs
+                .open_dialogs()
+                .last()
+                .and_then(|d| d.key.clone())
+                .or_else(|| self.preferences.is_some().then(|| "preferences".to_string()))
+                .or_else(|| self.shortcuts.is_some().then(|| "shortcuts".to_string())),
             "palette_open": self.palette_open,
-            "theme": format!("{:?}", self.theme),
-            "theme_preference": self.theme_preference,
+            "theme": format!("{:?}", self.root_env(ctx).resolved(ctx).mode),
+            "theme_preference": format!("{:?}", self.theme_preference),
             "show_page_edge_shadows": self.show_page_edge_shadows,
             "language": self.language,
-            "notice": self.toast.as_ref().map(|t| t.0.clone()),
-            "progress": self.progress_notice.as_ref().map(|p| json!({ "label": p.label, "fraction": p.fraction })),
+            "notice": notice,
+            "progress": progress,
             "password_prompt": self.password_prompt.is_some(),
-            "close_prompt": self.close_request.is_some(),
+            "close_prompt": self.close_guard.is_some(),
         })
     }
 
-    fn command(&mut self, id: &str) -> Reply {
+    /// `ui.command`: runs a registered command, refused while it is disabled.
+    pub(crate) fn command(&mut self, ctx: &egui::Context, id: &str) -> Result<Value, String> {
         let spec = pdfcraft_engine::commands::command(id).ok_or_else(|| format!("unknown command {id:?} (see ui.commands)"))?;
         if !self.command_enabled(spec) {
             return Err(format!("{id} is disabled right now"));
         }
-        self.execute(id);
+        self.execute(ctx, id);
         Ok(json!({ "ran": id }))
     }
 
-    fn commands(&self) -> Value {
+    /// `ui.commands`: every registered command, whether it can run now and its shortcut.
+    pub(crate) fn commands(&self) -> Value {
         let mut list: Vec<Value> = pdfcraft_engine::commands::COMMANDS
             .iter()
             .map(|c| json!({ "id": c.id, "label": c.label, "menu": c.menu, "enabled": self.command_enabled(c), "shortcut": c.shortcut_for(cfg!(target_os = "macos")).map(|s| s.label(cfg!(target_os = "macos"))) }))
@@ -184,22 +177,25 @@ impl Host for crate::PdfCraftApp {
         json!({ "commands": list })
     }
 
-    fn set(&mut self, key: &str, value: &str) -> Reply {
-        self.set_option(key, value).map(|()| json!({ "set": key, "value": value }))
+    /// `ui.set`: a named view option, as [`Self::set_option`] takes it.
+    pub(crate) fn set(&mut self, ctx: &egui::Context, key: &str, value: &str) -> Result<Value, String> {
+        self.set_option(ctx, key, value).map(|()| json!({ "set": key, "value": value }))
     }
 
+    /// `ui.open`: opens a file as the user would; a failure replies with its error.
     #[cfg(not(target_arch = "wasm32"))]
-    fn open(&mut self, path: &str) -> Reply {
+    pub(crate) fn open(&mut self, path: &str) -> Result<Value, String> {
         match self.open_path(path) {
             crate::OpenOutcome::Opened => Ok(json!({ "opened": path, "password_prompt": self.password_prompt.is_some() })),
             crate::OpenOutcome::Focused => Ok(json!({ "opened": path, "focused": true })),
             crate::OpenOutcome::Pending => Ok(json!({ "accepted": path, "pending": true })),
-            crate::OpenOutcome::Failed => Err(self.toast.as_ref().map(|t| t.0.clone()).unwrap_or_else(|| format!("couldn't open {path}"))),
+            crate::OpenOutcome::Failed(error) => Err(error.to_string()),
         }
     }
 
+    /// `ui.open` on the web: there is no file system to open from.
     #[cfg(target_arch = "wasm32")]
-    fn open(&mut self, _path: &str) -> Reply {
+    pub(crate) fn open(&mut self, _path: &str) -> Result<Value, String> {
         Err("ui.open needs a file system; on the web, drop the file on the page".into())
     }
 }
