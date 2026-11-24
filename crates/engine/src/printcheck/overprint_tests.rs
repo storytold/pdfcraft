@@ -214,26 +214,29 @@ fn every_cap_and_undecodable_stream_leaves_the_answer_unproven() {
     assert!(overprint_use(&doc, &pages).asks());
 
     let capped = [
-        ("depth", Limits { depth: 1, ..Limits::DOCUMENT }),
-        ("streams", Limits { streams: 1, ..Limits::DOCUMENT }),
-        ("bytes", Limits { bytes: 4, ..Limits::DOCUMENT }),
+        ("nests deeper than", Limits { depth: 1, ..Limits::DOCUMENT }),
+        ("streams, on page", Limits { streams: 1, ..Limits::DOCUMENT }),
+        ("of decoded content", Limits { bytes: 4, ..Limits::DOCUMENT }),
     ];
-    for (what, limits) in capped {
+    for (why, limits) in capped {
         let short = overprint_use_within(&doc, &pages, limits);
-        assert!(!short.asks() && !short.proven() && !short.unwalked.is_empty(), "{what}: {short:?}");
+        assert!(!short.asks() && !short.proven(), "{why}: {short:?}");
+        assert!(short.unwalked.iter().any(|r| r.contains(why)), "{why}: {short:?}");
     }
 
-    for filter in ["FlateDecode", "NoSuchDecode"] {
+    for (filter, why) in [("FlateDecode", "damaged partway"), ("NoSuchDecode", "can't be decoded")] {
         let mut doc = Document::new_empty();
         let d = dict(&[("Subtype", Object::name("Form")), ("Filter", Object::name(filter))]);
         let broken = stream(&mut doc, d, "not deflate data");
         add_page(&mut doc, dict(&[("XObject", xobjects(&[("B", broken)]))]), "/B Do");
         let undecoded = walk(&doc);
         assert!(!undecoded.asks() && !undecoded.proven(), "{filter}: {undecoded:?}");
+        assert!(undecoded.unwalked.iter().any(|r| r.contains(why)), "{filter}: {undecoded:?}");
     }
 
     let mut doc = Document::new_empty();
     add_page(&mut doc, Dict::new(), &"q ".repeat(MAX_SAVES + 1));
     let nested = walk(&doc);
     assert!(!nested.proven(), "{nested:?}");
+    assert!(nested.unwalked.iter().any(|r| r.contains(&format!("nest deeper than {MAX_SAVES}"))), "{nested:?}");
 }

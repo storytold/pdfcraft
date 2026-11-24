@@ -2,9 +2,9 @@
 //!
 //! Measures what a press looks at and changes nothing: effective image resolution where each
 //! image is drawn, the page boxes (media, crop, trim, bleed), the output intent, fonts that
-//! aren't embedded, the existing PDF/A-2b result, and whether anything drawn turns overprint on. There is no fixup and no generated colour
-//! profile. A screen profile such as sRGB is reported as a screen profile, not accepted as a
-//! press condition.
+//! aren't embedded, the existing PDF/A-2b result, and whether anything drawn turns overprint on.
+//! There is no fixup and no generated colour profile. A screen profile such as sRGB is reported
+//! as a screen profile, not accepted as a press condition.
 
 use pdfcraft_cos::Document;
 use pdfcraft_edit::PageImage;
