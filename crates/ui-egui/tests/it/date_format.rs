@@ -199,6 +199,7 @@ fn a_date_the_pdf_cannot_hold_is_refused_with_a_warning_first() {
 
     h.set_option("dialog", "none").unwrap();
     h.run_steps(2);
+    assert!(h.query_by_label_contains("can't be written into the PDF yet").is_none(), "Preferences was closed");
     assert!(h.execute("sign.fill.date"));
     h.run_steps(2);
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");

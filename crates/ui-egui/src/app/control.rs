@@ -540,6 +540,8 @@ impl PdfCraftApp {
             }
             "none" => {
                 self.cancel_dialogs(ctx);
+                // Preferences is a separate live window, not part of the dialog host.
+                self.preferences = None;
                 self.redact_props = None;
                 self.redact_search_open = false;
                 self.hidden_draft = None;
