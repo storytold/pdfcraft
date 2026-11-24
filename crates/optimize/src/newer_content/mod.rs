@@ -13,7 +13,7 @@ mod joined;
 mod keys;
 mod scan;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::fmt;
 
 use pdfcraft_cos::{Document, MAX_PAGE_DECODED, ObjRef, Object};
@@ -90,7 +90,6 @@ pub(crate) fn content_versions(doc: &Document, keep_going: &mut dyn FnMut() -> b
     let all = scan::objects(doc);
     let reached = scan::reached(doc, &all);
     let arrays = joined::content_arrays(doc, &all, &reached);
-    let joined: HashSet<ObjRef> = arrays.values().flatten().copied().collect();
     let mut tally = Tally::default();
     let mut found = Found::new(doc);
     let mut decoder = Decoder::new(MAX_DECODED, MAX_REJOINED, MAX_JOINED, &arrays);
@@ -109,7 +108,9 @@ pub(crate) fn content_versions(doc: &Document, keep_going: &mut dyn FnMut() -> b
             Object::Stream(s) => {
                 scan::scan_dict(&s.dict, bits | ctx::STREAM, 0, &mut found);
                 let content = (ctx::own(&s.dict, true) | bits) & ctx::CONTENT != 0;
-                if content && bits & ctx::ENCRYPT == 0 && !joined.contains(&r) {
+                // A page-array piece only is read in `decoder.joined`; any other content use, as a
+                // form or a page's sole stream, is read here too, decoded again within the allowance.
+                if content && bits & ctx::ENCRYPT == 0 {
                     if !keep_going() {
                         return None;
                     }

@@ -60,6 +60,9 @@ pub(super) const BORDER_EFFECT: u64 = 1 << 52;
 pub(super) const WIDGET: u64 = 1 << 53;
 pub(super) const VIEW_3D: u64 = 1 << 54;
 pub(super) const NODE_3D: u64 = 1 << 55;
+/// A stream named in a page's `/Contents` array: read joined with the rest of the array, so not
+/// on its own unless something else reaches it as content.
+pub(super) const PIECE: u64 = 1 << 56;
 pub(super) const UNKNOWN: u64 = 1 << 63;
 
 /// Every bit: a rule that applies whatever the dictionary is.
@@ -282,5 +285,5 @@ fn map_value(parent: u64) -> u64 {
 /// `bits` as the rule tables see them: `UNKNOWN` when nothing but being a stream or content
 /// classified the dictionary.
 pub(super) fn settled(bits: u64) -> u64 {
-    if bits & !(STREAM | CONTENT) == 0 { bits | UNKNOWN } else { bits }
+    if bits & !(STREAM | CONTENT | PIECE) == 0 { bits | UNKNOWN } else { bits }
 }

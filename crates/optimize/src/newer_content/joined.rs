@@ -75,9 +75,9 @@ impl Decoder {
     }
 
     /// What the content stream `members` make together needs, by `scan` of their decoded bytes
-    /// joined by a space (as [`pdfcraft_content::Pieces::join`] joins them). A stream that can't
-    /// be read, or past an allowance or the page's cap, is left out and counted. `None` once
-    /// `keep_going` stops.
+    /// joined by a space, as renderers join them (`pdfcraft_content::Pieces::join`): a comment left
+    /// open at a piece's end runs on into the next piece. A stream that can't be read, or past an
+    /// allowance or the page's cap, is left out and counted. `None` once `keep_going` stops.
     pub(super) fn joined(
         &mut self,
         doc: &Document,

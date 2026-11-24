@@ -6038,6 +6038,64 @@ fn a_page_content_split_across_streams_is_read_as_one() {
 }
 
 #[test]
+fn a_page_array_piece_that_is_also_a_form_is_read_as_a_form() {
+    // One form XObject that is also a piece of page `p`'s `/Contents` array: it counts as the
+    // page's content and as a form of its own.
+    let (mut doc, p) = page_with(&[], "");
+    let mut fd = Dict::new();
+    fd.set(b"Type".to_vec(), Object::name("XObject"));
+    fd.set(b"Subtype".to_vec(), Object::name("Form"));
+    fd.set(b"BBox".to_vec(), Object::Array([0, 0, 1, 1].map(Object::Int).to_vec()));
+    let form = doc.add(Object::Stream(Stream::from_raw(fd, b"/OC /MC0 BDC EMC".to_vec())));
+    let first = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"q Q".to_vec())));
+    doc.update_dict(p, |d| d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(first), Object::Ref(form)]))).unwrap();
+    let found = pdfcraft_optimize::newer_content(&doc, Compatibility::Pdf1_4).0;
+    let tag = found.iter().find(|r| r.construct == "marked-content tag /OC");
+    assert_eq!(tag.map(|r| r.objects), Some(2), "the page and the form: {found:?}");
+}
+
+#[test]
+fn a_comment_left_open_at_a_pieces_end_runs_on_as_readers_join() {
+    // The first piece ends inside a comment, with no end of line. Joined as renderers join pieces,
+    // the comment runs on to the next piece's first end of line: a tag there is not drawn, one on a
+    // later line is.
+    let listed = |second: &[u8]| {
+        let (mut doc, p) = page_with(&[], "");
+        let first = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"q % a note".to_vec())));
+        let second = doc.add(Object::Stream(Stream::from_raw(Dict::new(), second.to_vec())));
+        doc.update_dict(p, |d| d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(first), Object::Ref(second)]))).unwrap();
+        let found = pdfcraft_optimize::newer_content(&doc, Compatibility::Pdf1_4).0;
+        found.iter().any(|r| r.construct == "marked-content tag /OC")
+    };
+    assert!(!listed(b"/OC /MC0 BDC EMC Q"), "a tag inside the comment is listed");
+    assert!(listed(b"Q\n/OC /MC0 BDC EMC"), "a tag after the comment's end of line is missed");
+}
+
+#[test]
+fn a_page_array_piece_that_is_another_pages_only_content_is_read_alone_too() {
+    // One stream, a piece of page `p`'s `/Contents` array and the whole of a second page's: it
+    // counts as `p`'s content and as the second page's stream.
+    let (mut doc, p) = page_with(&[], "");
+    let first = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"q Q".to_vec())));
+    let shared = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"/OC /MC0 BDC EMC".to_vec())));
+    doc.update_dict(p, |d| d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(first), Object::Ref(shared)]))).unwrap();
+    raw_page(&mut doc, Object::Dict(Dict::new()), Some(shared));
+    let found = pdfcraft_optimize::newer_content(&doc, Compatibility::Pdf1_4).0;
+    let tag = found.iter().find(|r| r.construct == "marked-content tag /OC");
+    assert_eq!(tag.map(|r| r.objects), Some(2), "page `p` and the shared stream: {found:?}");
+}
+
+#[test]
+fn a_stream_in_an_array_inside_a_contents_array_is_still_read() {
+    // `/Contents [[s]]` is malformed: only direct members are joined, so `s` is read on its own.
+    let (mut doc, p) = page_with(&[], "");
+    let s = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"/OC /MC0 BDC EMC".to_vec())));
+    doc.update_dict(p, |d| d.set(b"Contents".to_vec(), Object::Array(vec![Object::Array(vec![Object::Ref(s)])]))).unwrap();
+    let found = pdfcraft_optimize::newer_content(&doc, Compatibility::Pdf1_4).0;
+    assert!(found.iter().any(|r| r.construct == "marked-content tag /OC"), "{found:?}");
+}
+
+#[test]
 fn an_array_given_by_reference_passes_on_its_context() {
     // `/Contents 10 0 R`, object 10 being `[11 0 R]`: object 11 is still the page's content.
     let (mut doc, p) = page_with(&[], "");

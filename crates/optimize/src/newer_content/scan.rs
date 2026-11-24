@@ -66,6 +66,16 @@ fn child_edges(v: &Object, bits: u64, depth: usize, out: &mut Vec<(ObjRef, u64)>
         Object::Ref(r) if bits != 0 => out.push((*r, bits)),
         Object::Dict(d) => dict_edges(d, bits & !ctx::STREAM, depth + 1, out),
         Object::Array(a) => {
+            // Only a page's `/Contents` hands content to an array: its streams are pieces of one.
+            // An array inside it holds no pieces (only direct members are joined), so its streams
+            // are read as content on their own.
+            let bits = if bits & ctx::PIECE != 0 {
+                bits | ctx::CONTENT
+            } else if bits & ctx::CONTENT != 0 {
+                (bits & !ctx::CONTENT) | ctx::PIECE
+            } else {
+                bits
+            };
             for e in a {
                 child_edges(e, bits, depth + 1, out);
             }
