@@ -1029,6 +1029,18 @@ fn a_saved_attachment_carries_the_documents_zone() {
             self.0.pick(request)
         }
 
+        fn save(&self, request: craft::host::PickRequest, bytes: Vec<u8>) -> craft::host::PickId {
+            self.0.save(request, bytes)
+        }
+
+        fn can_pick(&self) -> bool {
+            self.0.can_pick()
+        }
+
+        fn browser_saves(&self) -> bool {
+            self.0.browser_saves()
+        }
+
         fn take_answer(&self, id: craft::host::PickId) -> Option<Picked> {
             self.0.take_answer(id)
         }
