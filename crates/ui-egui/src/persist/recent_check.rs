@@ -3,35 +3,45 @@
 //!
 //! A recent file can be on a network or cloud mount that has stopped answering, where even
 //! asking whether the file exists blocks in the kernel, and no timeout can cancel that. So
-//! settings keep every recent entry when they load, and a worker asks about them once the window
-//! is up; each frame only takes the answers it has so far. An entry the worker hasn't reached
-//! yet, or can't tell about (the mount answers with an error), stays listed and can be opened or
-//! removed by hand. A worker stuck on a dead mount stays stuck, but nothing waits for it.
+//! settings keep every recent entry when they load, and one background job per path asks about
+//! them once the window is up; each frame only takes the answers it has so far. An entry the job
+//! hasn't reached yet, or can't tell about (the mount answers with an error), stays listed and can
+//! be opened or removed by hand. A job stuck on a dead mount stays stuck, but nothing waits for it.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use craft::host::queue::{JobQueue, Priority};
 
 use crate::PdfCraftApp;
 
-/// The recent files restored from settings that haven't been checked yet, and the check under way.
-#[derive(Debug, Default)]
+/// The recent files restored from settings that haven't been checked yet, and the checks under way.
 pub struct RecentCheck {
-    /// Paths restored from settings, checked on the next frame.
+    /// Paths restored from settings, submitted on the next frame.
     unchecked: Vec<String>,
-    /// The paths the worker has found gone so far; it adds to them as it goes.
-    gone: Option<Arc<Mutex<Vec<String>>>>,
-    /// Paths opened while a check was pending: the file is there now, whatever the worker found.
+    /// One job per path; its answer is whether the file is known to be gone.
+    checks: JobQueue<String, bool>,
+    /// Paths opened while a check was pending: the file is there now, whatever the job found.
     opened: Vec<String>,
 }
 
 impl RecentCheck {
+    /// A check whose jobs run on `checks`.
+    pub(crate) fn new(checks: JobQueue<String, bool>) -> Self {
+        Self { unchecked: Vec::new(), checks, opened: Vec::new() }
+    }
+
     /// Settings just restored these recent files: check them once the window is up.
     pub(crate) fn restored(&mut self, paths: Vec<String>) {
         self.unchecked = paths;
     }
 
-    /// `path` was just opened: an answer the worker gives about it later is out of date.
+    /// Whether a job is waiting, running or has an answer not yet taken.
+    fn pending(&self) -> bool {
+        let counts = self.checks.counts();
+        counts.queued + counts.running + counts.finished > 0
+    }
+
+    /// `path` was just opened: an answer a job gives about it later is out of date.
     pub(crate) fn opened(&mut self, path: &str) {
-        if self.gone.is_some() || !self.unchecked.is_empty() {
+        if self.pending() || !self.unchecked.is_empty() {
             self.opened.push(path.to_string());
         }
     }
@@ -44,45 +54,23 @@ fn gone(path: &str) -> bool {
 
 impl PdfCraftApp {
     /// Start checking the recent files restored from settings, and drop the ones found gone so
-    /// far (called each frame). The check runs on a worker thread, inline in tests
-    /// ([`PdfCraftApp::run_inline`]).
+    /// far (called each frame).
     pub(crate) fn check_restored_recent(&mut self) {
         let paths = std::mem::take(&mut self.recent_check.unchecked);
         // The web build's recent files aren't paths on a file system.
-        if !paths.is_empty() && !cfg!(target_arch = "wasm32") {
-            let slot = Arc::new(Mutex::new(Vec::new()));
-            let out = slot.clone();
-            let ctx = self.ctx.clone();
-            let work = move || {
-                for path in paths {
-                    if gone(&path) {
-                        out.lock().unwrap_or_else(PoisonError::into_inner).push(path);
-                        if let Some(ctx) = &ctx {
-                            ctx.request_repaint();
-                        }
-                    }
-                }
-            };
-            if self.run_inline {
-                work();
-            } else if std::thread::Builder::new().name("pdfcraft-recent".into()).spawn(work).is_err() {
-                // No worker: the entries stay listed, as if the check hadn't reached them.
-                return;
+        if !cfg!(target_arch = "wasm32") {
+            for path in paths {
+                let asked = path.clone();
+                self.recent_check.checks.submit(path, Priority::BACKGROUND, move |_| gone(&asked));
             }
-            self.recent_check.gone = Some(slot);
         }
-        let Some(slot) = &self.recent_check.gone else { return };
-        // Asked before taking, so a path the worker adds after this is taken on a later frame.
-        let finished = Arc::strong_count(slot) == 1;
-        let gone = std::mem::take(&mut *slot.lock().unwrap_or_else(PoisonError::into_inner));
-        if !gone.is_empty() {
-            // A file opened since the check began is there, whatever the worker found earlier.
-            let opened = &self.recent_check.opened;
-            self.recent.retain(|r| !gone.contains(&r.path) || opened.contains(&r.path));
+        while let Some(answer) = self.recent_check.checks.try_recv() {
+            // A file opened since the check began is there, whatever the job found.
+            if answer.result && !self.recent_check.opened.contains(&answer.key) {
+                self.recent.retain(|r| r.path != answer.key);
+            }
         }
-        // The worker has finished (or panicked) and everything it found is taken.
-        if finished {
-            self.recent_check.gone = None;
+        if !self.recent_check.pending() {
             self.recent_check.opened.clear();
         }
     }
@@ -90,22 +78,33 @@ impl PdfCraftApp {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use craft::host::queue::QueueOptions;
+    use craft::host::{ManualJobs, Wake};
+
     use super::*;
 
-    /// A file opened after the worker found it gone, but before that answer was taken, stays
-    /// listed (CodeRabbit on #5692).
+    /// A file opened after its job found it gone, but before that answer was taken, stays listed
+    /// (CodeRabbit on #5692).
     #[test]
     fn a_file_opened_while_the_check_is_pending_stays() {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
+        // No lanes: a job runs only when the test runs it.
+        let queue = JobQueue::new(Arc::new(ManualJobs::new()), Wake::none(), QueueOptions { lanes: 0, ..QueueOptions::default() });
+        app.recent_check = RecentCheck::new(queue);
         app.recent = vec![crate::state::RecentFile { name: "a.pdf".into(), path: "/gone/a.pdf".into(), pages: 1, size: 0 }];
-        // The worker's answer is waiting: it found the file gone.
-        app.recent_check.gone = Some(Arc::new(Mutex::new(vec!["/gone/a.pdf".to_string()])));
+        app.recent_check.restored(vec!["/gone/a.pdf".into()]);
+        app.check_restored_recent();
         app.recent_check.opened("/gone/a.pdf");
+        assert_eq!(app.recent_check.checks.run_inline(10), 1);
         app.check_restored_recent();
         assert_eq!(app.recent.len(), 1, "the reopened file stays");
-        assert!(app.recent_check.gone.is_none() && app.recent_check.opened.is_empty());
+        assert!(app.recent_check.opened.is_empty());
         // Without the open, the answer removes it.
-        app.recent_check.gone = Some(Arc::new(Mutex::new(vec!["/gone/a.pdf".to_string()])));
+        app.recent_check.restored(vec!["/gone/a.pdf".into()]);
+        app.check_restored_recent();
+        app.recent_check.checks.run_inline(10);
         app.check_restored_recent();
         assert!(app.recent.is_empty());
     }
