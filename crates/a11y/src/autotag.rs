@@ -52,8 +52,9 @@ struct Plan {
     evidence: Vec<Evidence>,
     artifacts: HashMap<usize, usize>,
     links: Vec<Link>,
-    /// See [`autotag_links::Placed`].
+    /// See [`autotag_links::Placed`], after [`autotag_links::settle`].
     owners: HashMap<usize, Option<usize>>,
+    blank: HashSet<usize>,
     descriptions: Vec<Option<String>>,
 }
 
@@ -208,13 +209,13 @@ fn plan_page(
     index: usize,
     totals: &mut (usize, usize),
     fonts: &mut autotag_roles::Fonts,
-    seen: &mut HashSet<ObjRef>,
+    budget: &mut autotag_links::LinkBudget,
     allowance: &mut usize,
 ) -> Result<Plan, AutoTagError> {
     if page.dict.contains(b"StructParents") {
         return Err(unsupported(index, "page already has a structure parent key"));
     }
-    let links = autotag_links::page_links(doc, &page.dict, index, seen)?;
+    let links = autotag_links::page_links(doc, &page.dict, index, budget)?;
     let pieces = content_pieces(doc, page, index)?;
     totals.0 = totals.0.saturating_add(pieces.data().len());
     let parsed = pieces.parse();
@@ -279,8 +280,15 @@ fn plan_page(
     if path.is_some() {
         return Err(unsupported(index, "unterminated path object"));
     }
+    let (mut owners, mut blank) = (placed.owners, placed.blank);
+    autotag_links::settle(&spans, &mut owners, &mut blank, &placed.quiet);
+    if let Some((link, by)) = autotag_links::interrupted(&spans, &owners) {
+        let by = by.map_or_else(|| "text outside it".to_string(), |other| autotag_links::name(&links, other));
+        let link = autotag_links::name(&links, link);
+        return Err(unsupported(index, format!("the text of {link} is interrupted by {by}; a Link tag holds a link's text only in one piece")));
+    }
     let evidence = autotag_roles::evidence(doc, fonts, &resources, &states, &ops, &spans);
-    Ok(Plan { page: page.obj, ops, spans, evidence, artifacts, links, owners: placed.owners, descriptions: placed.descriptions })
+    Ok(Plan { page: page.obj, ops, spans, evidence, artifacts, links, owners, blank, descriptions: placed.descriptions })
 }
 
 fn plan(doc: &Document) -> Result<Vec<Plan>, AutoTagError> {
@@ -301,10 +309,10 @@ fn plan(doc: &Document) -> Result<Vec<Plan>, AutoTagError> {
     let mut total = 0usize;
     let mut totals = (0usize, 0usize);
     let mut fonts = autotag_roles::Fonts::default();
-    let mut seen = HashSet::new();
+    let mut budget = autotag_links::LinkBudget::default();
     let mut allowance = autotag_links::MAX_AREA_TESTS;
     for (index, page) in pages.iter().enumerate() {
-        let planned = plan_page(doc, page, index, &mut totals, &mut fonts, &mut seen, &mut allowance)?;
+        let planned = plan_page(doc, page, index, &mut totals, &mut fonts, &mut budget, &mut allowance)?;
         total = total.saturating_add(planned.spans.len());
         out.push(planned);
     }
@@ -374,6 +382,37 @@ fn write_structure(
     Ok(())
 }
 
+/// Refuses a link whose text lies in text objects of different roles. A link's text that runs on
+/// into a later text object sits in the first object's element, so a heading's text would read as
+/// a paragraph's (and the headings after it would skip a level), or a paragraph's as a heading's.
+/// `roles` is each text object's, in plan order.
+fn link_roles(plans: &[Plan], roles: &[&'static str]) -> Result<(), AutoTagError> {
+    let mut roles = roles.iter().copied();
+    for (index, page) in plans.iter().enumerate() {
+        let mut first: Vec<Option<&str>> = vec![None; page.links.len()];
+        for &span in &page.spans {
+            let role = roles.next().unwrap_or("P");
+            for (from, to, owner) in autotag_links::sequences(span, &page.owners) {
+                // Text that reads as nothing has no role to keep.
+                let reads = (from..=to).any(|at| page.owners.contains_key(&at) && !page.blank.contains(&at));
+                let Some(slot) = owner.filter(|_| reads).and_then(|l| first.get_mut(l).map(|s| (l, s))) else { continue };
+                match slot {
+                    (_, slot @ None) => *slot = Some(role),
+                    (link, Some(was)) if *was != role => {
+                        let link = autotag_links::name(&page.links, link);
+                        return Err(unsupported(
+                            index,
+                            format!("the text of {link} is in text tagged {was} and text tagged {role}; a Link tag holds text of one role"),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Tag every text object in an untagged PDF as a paragraph or a heading and mark painted paths, shadings and
 /// images outside text objects as artifacts. Link annotations become Link tags with the text under
 /// them ([`crate::autotag_links`]); any other annotation is refused. The full structure tree, parent
@@ -382,7 +421,9 @@ fn write_structure(
 pub fn autotag_text(doc: &mut Document) -> Result<AutoTagResult, AutoTagError> {
     let plans = plan(doc)?;
     let all: Vec<Evidence> = plans.iter().flat_map(|p| p.evidence.iter().copied()).collect();
-    let mut roles = autotag_roles::roles(&all).into_iter();
+    let roles = autotag_roles::roles(&all);
+    link_roles(&plans, &roles)?;
+    let mut roles = roles.into_iter();
     let mut next = doc.clone();
     let catalog = next.root().ok_or(AutoTagError::NoCatalog)?;
     let (root, document) = (next.add(Object::Null), next.add(Object::Null));
@@ -397,11 +438,6 @@ pub fn autotag_text(doc: &mut Document) -> Result<AutoTagResult, AutoTagError> {
         // Each link's element once its text is found, the element it sits in, and its MCIDs.
         let mut link_elements: Vec<Option<(ObjRef, ObjRef)>> = vec![None; page.links.len()];
         let mut link_kids: Vec<Vec<Object>> = vec![Vec::new(); page.links.len()];
-        // The link the page's last marked-content sequence went to. A link's text joins its element
-        // only while nothing else has come between, so the tree reads in the order the page shows
-        // its text; text of a link after an interruption (another link inside it, or the rest of
-        // a line) is its text object's own.
-        let mut previous: Option<usize> = None;
         if !page.spans.is_empty() {
             let key = i64::try_from(tagged_pages).map_err(|_| AutoTagError::TooManyPages)?;
             let mut parents = Vec::with_capacity(page.spans.len());
@@ -414,11 +450,11 @@ pub fn autotag_text(doc: &mut Document) -> Result<AutoTagResult, AutoTagError> {
                 for (first, last, owner) in autotag_links::sequences(span, &page.owners) {
                     let mcid = parents.len();
                     let id = Object::Int(i64::try_from(mcid).map_err(|_| AutoTagError::TooManyPages)?);
-                    let owner = owner.filter(|&l| link_elements.get(l).is_some_and(|e| e.is_none() || previous == Some(l)));
-                    previous = owner;
                     let slot = owner.and_then(|l| link_elements.get_mut(l).zip(link_kids.get_mut(l)));
                     if let Some((element, link_mcids)) = slot {
-                        // A link whose text runs on into a later text object stays in the first one.
+                        // A link whose text runs on into a later text object stays in the first one;
+                        // nothing comes between ([`autotag_links::interrupted`]), so the tree still
+                        // reads in the order the page shows its text.
                         let link = match *element {
                             Some((link, _)) => link,
                             None => {

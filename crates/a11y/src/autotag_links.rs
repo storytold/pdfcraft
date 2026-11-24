@@ -24,13 +24,13 @@ use crate::autotag_roles::Fonts;
 
 /// Link annotations tagged in one document.
 const MAX_LINKS: usize = 4_096;
-/// `/QuadPoints` quadrilaterals read per link; with more, the link is its `/Rect`. The same limit,
-/// slack and thinness rule as the viewer's link areas (`pdfcraft_render::link_area`), so a Link
-/// tag holds the text where the link can be clicked.
-const MAX_QUADS: usize = 1_024;
-/// How far a quadrilateral's corner may lie outside `/Rect`, and how thin it may be before it
-/// encloses nothing, in default user space units.
-const RECT_SLACK: f64 = 0.01;
+/// `/QuadPoints` numbers one document may read: eight for every area [`MAX_LINK_AREAS`] allows,
+/// eight times over.
+pub(crate) const MAX_QUAD_VALUES: usize = MAX_LINK_AREAS * 64;
+/// Link areas (a quadrilateral, or a `/Rect`) one document may hold: each is kept, with its
+/// corners, until the content is written. A link with more than the viewer's
+/// [`pdfcraft_render::MAX_LINK_QUADS`] quadrilaterals is its `/Rect`, one area.
+pub(crate) const MAX_LINK_AREAS: usize = 65_536;
 /// A jump between two glyphs of a link's text, in glyph space (a fraction of the font size, along
 /// the line as `Tz` scales it), that the description reads as a space: wider than kerning,
 /// narrower than a word space.
@@ -42,9 +42,27 @@ const MAX_CONTENTS: usize = 200;
 /// Glyph-in-area tests in one document: each glyph is tested against every link area on its page.
 pub(crate) const MAX_AREA_TESTS: usize = 50_000_000;
 
+/// What a document's links use, across its pages.
+pub(crate) struct LinkBudget {
+    /// The annotations listed so far.
+    seen: HashSet<ObjRef>,
+    /// Link areas left, from [`MAX_LINK_AREAS`]; each is charged before it is built.
+    areas: usize,
+    /// `/QuadPoints` numbers left to read, from [`MAX_QUAD_VALUES`].
+    values: usize,
+}
+
+impl Default for LinkBudget {
+    fn default() -> Self {
+        LinkBudget { seen: HashSet::new(), areas: MAX_LINK_AREAS, values: MAX_QUAD_VALUES }
+    }
+}
+
 /// A link annotation to tag.
 pub(crate) struct Link {
     pub annot: ObjRef,
+    /// Where the annotation is in the page's `/Annots`, from 1: how a refusal names it.
+    pub position: usize,
     /// Where the link is active, in default user space. Empty when the annotation has no usable
     /// `/Rect`: it is still tagged, but owns no text.
     areas: Vec<Area>,
@@ -58,8 +76,9 @@ pub(crate) struct Link {
 
 /// The link annotations of a page, in `/Annots` order. Any other annotation is refused, as is a link
 /// this can't tag on its own: one written inline (an OBJR needs an object to refer to), one listed
-/// twice (`seen` spans the document) or one that already has a parent tree key.
-pub(crate) fn page_links(doc: &Document, page: &Dict, index: usize, seen: &mut HashSet<ObjRef>) -> Result<Vec<Link>, AutoTagError> {
+/// twice (`budget` spans the document) or one that already has a parent tree key.
+pub(crate) fn page_links(doc: &Document, page: &Dict, index: usize, budget: &mut LinkBudget) -> Result<Vec<Link>, AutoTagError> {
+    let LinkBudget { seen, areas: areas_left, values } = budget;
     let Some(annots) = page.get(b"Annots") else { return Ok(Vec::new()) };
     let annots = doc.resolve(annots);
     let Object::Array(items) = &*annots else { return Err(unsupported(index, "the page's annotations are not an array")) };
@@ -86,15 +105,26 @@ pub(crate) fn page_links(doc: &Document, page: &Dict, index: usize, seen: &mut H
         if seen.len() > MAX_LINKS {
             return Err(unsupported(index, format!("too many link annotations (maximum {MAX_LINKS})")));
         }
-        links.push(Link { annot: *annot, areas: areas(doc, dict), described: described(doc, dict), uri: uri(doc, dict) });
+        let Some(areas) = areas(doc, dict, areas_left, values) else {
+            return Err(unsupported(
+                index,
+                format!(
+                    "the document's links have too many quadrilaterals (maximum {MAX_LINK_AREAS} in all, from {MAX_QUAD_VALUES} /QuadPoints numbers)"
+                ),
+            ));
+        };
+        links.push(Link { annot: *annot, position: at.saturating_add(1), areas, described: described(doc, dict), uri: uri(doc, dict) });
     }
     Ok(links)
 }
 
-/// An array of finite numbers, each possibly given by reference.
-fn numbers(doc: &Document, value: Option<&Object>) -> Option<Vec<f64>> {
+/// A rectangle: an array of four finite numbers, each possibly given by reference. A longer array
+/// isn't read (one shared by many links would be read again for each).
+fn rect(doc: &Document, value: Option<&Object>) -> Option<[f64; 4]> {
     let value = doc.resolve(value?);
-    value.as_array()?.iter().map(|v| doc.resolve(v).as_f64().filter(|n| n.is_finite())).collect()
+    let [a, b, c, d] = value.as_array()?.as_slice() else { return None };
+    let n = |v: &Object| doc.resolve(v).as_f64().filter(|n| n.is_finite());
+    Some([n(a)?, n(b)?, n(c)?, n(d)?])
 }
 
 /// A convex region where a link is active: its corners counter-clockwise, the box around them,
@@ -109,7 +139,10 @@ struct Area {
 impl Area {
     /// The convex hull of `points`; `None` when it encloses no area. A quadrilateral's corners
     /// come in whatever order its producer wrote them (Table 176 asks for counter-clockwise; many
-    /// write top left, top right, bottom left, bottom right), so the hull is what is read.
+    /// write top left, top right, bottom left, bottom right), so the hull is what is read: the
+    /// union of the four triangles its corners make, which the viewer tests
+    /// (`pdfcraft_render::quad_contains`). Whether a quadrilateral is too thin to use is the
+    /// viewer's rule, applied before ([`areas`]).
     fn hull(points: &[(f64, f64)]) -> Option<Area> {
         let mut points = points.to_vec();
         points.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
@@ -127,9 +160,7 @@ impl Area {
             corners.pop();
         }
         let size = corners.iter().zip(corners.iter().cycle().skip(1)).map(|(a, b)| a.0 * b.1 - b.0 * a.1).sum::<f64>() / 2.0;
-        // No thicker than the slack: its corners lie on one line, give or take rounding.
-        let longest = corners.iter().flat_map(|a| corners.iter().map(move |b| (b.0 - a.0).hypot(b.1 - a.1))).fold(0.0, f64::max);
-        if corners.len() < 3 || !(size.is_finite() && size > RECT_SLACK * longest) {
+        if corners.len() < 3 || !(size.is_finite() && size > 0.0) {
             return None;
         }
         let bounds = corners.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, p| {
@@ -148,20 +179,30 @@ impl Area {
     }
 }
 
-/// `/QuadPoints` when every corner lies within `/Rect` (give or take [`RECT_SLACK`]), else `/Rect`
-/// (Table 176), and `/Rect` too when there are more quadrilaterals than are read.
-fn areas(doc: &Document, annot: &Dict) -> Vec<Area> {
-    let Some([a, b, c, d]) = numbers(doc, annot.get(b"Rect")).and_then(|r| <[f64; 4]>::try_from(r).ok()) else { return Vec::new() };
+/// The link's areas as the viewer reads them ([`pdfcraft_render::link_quads`], Table 176): its
+/// `/QuadPoints` quadrilaterals when they are usable and every corner lies within `/Rect`, else
+/// `/Rect`. The numbers read are charged to `values` before they are read (an array can be
+/// shared by many links, and is read again for each), and each area to `left` before it is built;
+/// `None` when too few are left.
+fn areas(doc: &Document, annot: &Dict, left: &mut usize, values: &mut usize) -> Option<Vec<Area>> {
+    let Some([a, b, c, d]) = rect(doc, annot.get(b"Rect")) else { return Some(Vec::new()) };
     let (x0, y0, x1, y1) = (a.min(c), b.min(d), a.max(c), b.max(d));
-    let Some(rect) = Area::hull(&[(x0, y0), (x1, y0), (x1, y1), (x0, y1)]) else { return Vec::new() };
-    let within = |p: &(f64, f64)| x0 - RECT_SLACK <= p.0 && p.0 <= x1 + RECT_SLACK && y0 - RECT_SLACK <= p.1 && p.1 <= y1 + RECT_SLACK;
-    let quads: Vec<Area> = numbers(doc, annot.get(b"QuadPoints"))
-        .filter(|q| !q.is_empty() && q.len() % 8 == 0 && q.len() / 8 <= MAX_QUADS)
-        .map(|q| q.as_chunks::<2>().0.iter().map(|&[x, y]| (x, y)).collect::<Vec<_>>())
-        .filter(|corners| corners.iter().all(within))
-        .map(|corners| corners.as_chunks::<4>().0.iter().filter_map(|q| Area::hull(q)).collect())
-        .unwrap_or_default();
-    if quads.is_empty() { vec![rect] } else { quads }
+    // In the viewer's single precision; an array longer than it reads is not read.
+    let array = annot.get(b"QuadPoints").map(|q| doc.resolve(q));
+    let quads = match array.as_deref().and_then(Object::as_array) {
+        Some(q) if q.len() <= pdfcraft_render::MAX_LINK_QUADS.saturating_mul(8) => {
+            *values = values.checked_sub(q.len())?;
+            let read: Vec<Option<f32>> = q.iter().map(|v| doc.resolve(v).as_f64().map(|n| n as f32)).collect();
+            pdfcraft_render::link_quads(&read, [x0, y0, x1, y1].map(|v| v as f32))
+        }
+        _ => Vec::new(),
+    };
+    *left = left.checked_sub(quads.len().max(1))?;
+    if quads.is_empty() {
+        return Some(Area::hull(&[(x0, y0), (x1, y0), (x1, y1), (x0, y1)]).into_iter().collect());
+    }
+    let corners = |q: &[f32; 8]| -> Vec<(f64, f64)> { q.as_chunks::<2>().0.iter().map(|&[x, y]| (f64::from(x), f64::from(y))).collect() };
+    Some(quads.iter().filter_map(|q| Area::hull(&corners(q))).collect())
 }
 
 fn described(doc: &Document, annot: &Dict) -> bool {
@@ -199,6 +240,14 @@ pub(crate) struct Placed {
     /// For each text-showing operator that shows a glyph: the link its glyphs belong to, or `None`
     /// for the text object's own text.
     pub owners: HashMap<usize, Option<usize>>,
+    /// The text-showing operators whose glyphs all read as nothing ([`blank`]): whitespace and
+    /// control characters.
+    pub blank: HashSet<usize>,
+    /// The text-showing operators of no link that show only glyphs without text whose codes are
+    /// control codes (below 32) of a one-byte font: a control character the writer copied from
+    /// its text (standard encodings have no glyph there), such as a newline shown off the page
+    /// after each label. They join a link only when they lie inside its text ([`settle`]).
+    pub quiet: HashSet<usize>,
     /// The `/Contents` to write on each link, by index into the page's links.
     pub descriptions: Vec<Option<String>>,
 }
@@ -221,7 +270,7 @@ pub(crate) fn place(
     let areas: Vec<(usize, &Area)> = links.iter().enumerate().flat_map(|(i, l)| l.areas.iter().map(move |a| (i, a))).collect();
     if areas.is_empty() {
         let descriptions = links.iter().map(|l| l.description("")).collect();
-        return Some(Placed { ops, owners: HashMap::new(), descriptions });
+        return Some(Placed { ops, owners: HashMap::new(), blank: HashSet::new(), quiet: HashSet::new(), descriptions });
     }
     let mut walk = Walk {
         state: State::default(),
@@ -239,14 +288,14 @@ pub(crate) fn place(
         texts: vec![Covered::default(); links.len()],
     };
     let mut out = Vec::with_capacity(ops.len());
-    let mut owners = HashMap::new();
+    let (mut owners, mut blank, mut quiet) = (HashMap::new(), HashSet::new(), HashSet::new());
     for op in ops {
         match op.op.as_slice() {
             b"Tf" => {
-                walk.state.metrics = op
-                    .name(0)
-                    .filter(|name| !resources.get(name).is_some_and(|f| vertical(doc, f)))
-                    .and_then(|name| fonts.named(doc, resources, name));
+                // Looked up first, whatever it is, so the fonts the document's allowance measures
+                // are the same as with no links; a vertical font's glyphs are then left unplaced.
+                walk.state.metrics =
+                    op.name(0).and_then(|name| fonts.named(doc, resources, name).filter(|_| !resources.get(name).is_some_and(|f| vertical(doc, f))));
             }
             b"gs" => {
                 if let Some(set) = op.name(0).and_then(|name| fonts.state(doc, states, name)) {
@@ -268,18 +317,28 @@ pub(crate) fn place(
         if runs.len() <= 1 {
             if let Some(run) = runs.first() {
                 owners.insert(out.len(), run.owner);
+                match run.reads {
+                    Reads::Nothing => blank.insert(out.len()),
+                    Reads::Unknown => quiet.insert(out.len()),
+                    Reads::Text => false,
+                };
             }
             out.push(op);
             continue;
         }
         for (i, run) in runs.into_iter().enumerate() {
             owners.insert(out.len(), run.owner);
+            match run.reads {
+                Reads::Nothing => blank.insert(out.len()),
+                Reads::Unknown => quiet.insert(out.len()),
+                Reads::Text => false,
+            };
             out.push(split_op(&op, i == 0, run.items));
         }
     }
     *allowance = walk.tests;
     let descriptions = links.iter().zip(&walk.texts).map(|(l, t)| l.description(&t.text)).collect();
-    Some(Placed { ops: out, owners, descriptions })
+    Some(Placed { ops: out, owners, blank, quiet, descriptions })
 }
 
 /// Whether `font` writes vertically (WMode 1, §9.7.4.3): its glyphs advance down the page, which
@@ -336,15 +395,31 @@ impl Default for State {
 struct Run {
     owner: Option<usize>,
     items: Vec<Object>,
+    /// What its glyphs read as, together.
+    reads: Reads,
+}
+
+/// What glyphs read as, from least to most: a run reads as its most.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Reads {
+    /// Whitespace and control characters ([`blank`]).
+    Nothing,
+    /// No link's, no text, and a control code ([`Placed::quiet`]).
+    Unknown,
+    Text,
 }
 
 /// The text inside a link's areas, for its description: every glyph there, whichever link owns it,
 /// so a link with another inside it is described by all of its text.
 #[derive(Clone, Default)]
 struct Covered {
-    /// At most [`MAX_CONTENTS`] characters: only what the description can use is kept.
+    /// At most [`MAX_CONTENTS`] characters, with whitespace as the description writes it (none
+    /// before the first word, one space between words): only what the description can use is
+    /// kept, and counted.
     text: String,
     chars: usize,
+    /// Whitespace, or a jump, came after the last character kept.
+    space: bool,
     /// Where the last glyph taken ended on its baseline, in default user space.
     end: Option<(f64, f64)>,
 }
@@ -363,12 +438,23 @@ impl Covered {
             x.hypot(y) > WORD_GAP
         });
         self.end = Some(end);
-        for c in jumped.then_some(' ').into_iter().chain(text.chars()) {
-            if self.chars >= MAX_CONTENTS {
+        self.space |= jumped;
+        for c in text.chars() {
+            if c.is_whitespace() {
+                self.space = true;
+                continue;
+            }
+            let gap = self.space && !self.text.is_empty();
+            if self.chars.saturating_add(usize::from(gap)) >= MAX_CONTENTS {
                 return;
+            }
+            if gap {
+                self.text.push(' ');
+                self.chars += 1;
             }
             self.text.push(c);
             self.chars += 1;
+            self.space = false;
         }
     }
 }
@@ -475,14 +561,17 @@ impl Walk<'_> {
                 }
                 continue;
             };
-            for (owner, bytes) in self.glyphs(string) {
+            for (owner, bytes, reads) in self.glyphs(string) {
                 let piece = Object::String(PdfString { bytes, hex: string.hex });
                 match runs.last_mut() {
-                    Some(run) if run.owner == owner => run.items.push(piece),
+                    Some(run) if run.owner == owner => {
+                        run.items.push(piece);
+                        run.reads = run.reads.max(reads);
+                    }
                     _ => {
                         let mut items = std::mem::take(&mut pending);
                         items.push(piece);
-                        runs.push(Run { owner, items });
+                        runs.push(Run { owner, items, reads });
                     }
                 }
             }
@@ -493,9 +582,10 @@ impl Walk<'_> {
         (!runs.is_empty()).then_some(runs)
     }
 
-    /// The glyphs of `string` grouped by owner, in order: `(owner, bytes)`. A string whose glyphs
-    /// can't be placed is one group with no owner. Each glyph's text goes to every link it is in.
-    fn glyphs(&mut self, string: &PdfString) -> Vec<(Option<usize>, Vec<u8>)> {
+    /// The glyphs of `string` grouped by owner, in order: `(owner, bytes, what they read as)`. A
+    /// string whose glyphs can't be placed is one group with no owner, read as text. Each glyph's
+    /// text goes to every link it is in.
+    fn glyphs(&mut self, string: &PdfString) -> Vec<(Option<usize>, Vec<u8>, Reads)> {
         let bytes = &string.bytes;
         if bytes.is_empty() {
             return Vec::new();
@@ -507,10 +597,10 @@ impl Walk<'_> {
             .filter(|c| c.iter().map(|&(_, len)| len).sum::<usize>() == bytes.len() && c.iter().all(|&(_, len)| len > 0));
         let (Some(m), Some(codes), false) = (usable, codes, self.lost) else {
             self.lost = true;
-            return vec![(None, bytes.clone())];
+            return vec![(None, bytes.clone(), Reads::Text)];
         };
         let m = Rc::clone(m);
-        let mut out: Vec<(Option<usize>, Vec<u8>)> = Vec::new();
+        let mut out: Vec<(Option<usize>, Vec<u8>, Reads)> = Vec::new();
         let mut at = 0usize;
         for (code, len) in codes {
             let s = &self.state;
@@ -531,9 +621,19 @@ impl Walk<'_> {
             };
             let piece = bytes.get(at..at.saturating_add(len)).unwrap_or_default();
             at = at.saturating_add(len);
+            // A glyph with no text isn't known to read as nothing: a font with no Unicode mapping
+            // still shows text, a link's or a paragraph's. Only a control code is set apart.
+            let reads = match m.text_of(code) {
+                Some(t) if blank(&t) => Reads::Nothing,
+                None if owner.is_none() && !m.composite && len == 1 && code < 32 => Reads::Unknown,
+                _ => Reads::Text,
+            };
             match out.last_mut() {
-                Some(last) if last.0 == owner => last.1.extend_from_slice(piece),
-                _ => out.push((owner, piece.to_vec())),
+                Some(last) if last.0 == owner => {
+                    last.1.extend_from_slice(piece);
+                    last.2 = last.2.max(reads);
+                }
+                _ => out.push((owner, piece.to_vec(), reads)),
             }
             let spacing = if m.is_space(code, len) { s.word_spacing } else { 0.0 };
             let advance = (width * s.size + s.char_spacing + spacing) * s.scale;
@@ -598,6 +698,92 @@ pub(crate) fn sequences((first, last): (usize, usize), owners: &HashMap<usize, O
         run.0 = first.saturating_add(1);
     }
     out
+}
+
+/// Whether `text` reads as nothing: only whitespace and control characters.
+fn blank(text: &str) -> bool {
+    text.chars().all(|c| c.is_whitespace() || c.is_control())
+}
+
+/// Gives the text that reads as nothing an owner from the text around it, in the order the page
+/// shows it, so that it never decides whether a link's text is in one piece: a space at the end
+/// of a line before a link goes on, or a text object of spaces (or of no glyph at all) between two
+/// parts of one link, joins that link. Other blank text goes with the text before it (or, at the
+/// start, after it); a text object that shows no glyph stays its own unless it lies inside one
+/// link's text, and so does an operator of [`Placed::quiet`] control codes. `spans` are the
+/// page's text objects; a text object that joins a link is keyed by its `BT` in `owners`, and
+/// whatever joins a link is added to `blank`.
+pub(crate) fn settle(spans: &[(usize, usize)], owners: &mut HashMap<usize, Option<usize>>, blank: &mut HashSet<usize>, quiet: &HashSet<usize>) {
+    // Each glyph-showing operator, or a text object with none, in order: (key, owner, reads as
+    // nothing, joins only a link it lies inside).
+    let mut items: Vec<(usize, Option<usize>, bool, bool)> = Vec::new();
+    for &(first, last) in spans {
+        let before = items.len();
+        items.extend(
+            (first..=last).filter_map(|at| owners.get(&at).map(|&o| (at, o, blank.contains(&at) || quiet.contains(&at), quiet.contains(&at)))),
+        );
+        if items.len() == before {
+            items.push((first, None, true, true));
+        }
+    }
+    let mut after: Vec<Option<Option<usize>>> = vec![None; items.len()];
+    let mut next = None;
+    for (slot, item) in after.iter_mut().zip(&items).rev() {
+        *slot = next;
+        if !item.2 {
+            next = Some(item.1);
+        }
+    }
+    let mut before: Option<Option<usize>> = None;
+    for (&(at, owner, is_blank, only_inside), next) in items.iter().zip(after) {
+        if !is_blank {
+            before = Some(owner);
+            continue;
+        }
+        let inside = before.filter(|b| b.is_some() && Some(*b) == next).flatten();
+        // A whole text object, or a quiet operator, has no owner of its own to keep.
+        let chosen = if only_inside { inside } else { before.or(next).unwrap_or(owner) };
+        if chosen != owner {
+            owners.insert(at, chosen);
+            blank.insert(at);
+        }
+    }
+}
+
+/// The first link whose text something else interrupts, in the order the page shows its text:
+/// `(link, what came between)`, where `None` is text that is no link's. A Link element holds its
+/// text in one piece; text of a link after an interruption could stay in the Link only by being
+/// read out of order, and could keep its order only by leaving the Link. A link inside another
+/// interrupts it unless it covers the start or end of the other's text.
+pub(crate) fn interrupted(spans: &[(usize, usize)], owners: &HashMap<usize, Option<usize>>) -> Option<(usize, Option<usize>)> {
+    // Each link whose text has ended, and what came right after it.
+    let mut ended: HashMap<usize, Option<usize>> = HashMap::new();
+    let mut last: Option<Option<usize>> = None;
+    for &span in spans {
+        for (_, _, owner) in sequences(span, owners) {
+            if last == Some(owner) {
+                continue;
+            }
+            if let Some(Some(link)) = last {
+                ended.entry(link).or_insert(owner);
+            }
+            if let Some(link) = owner
+                && let Some(&by) = ended.get(&link)
+            {
+                return Some((link, by));
+            }
+            last = Some(owner);
+        }
+    }
+    None
+}
+
+/// How a refusal names `link`.
+pub(crate) fn name(links: &[Link], link: usize) -> String {
+    links.get(link).map_or_else(
+        || "a link annotation".to_string(),
+        |l| format!("link annotation {} in /Annots (object {} {})", l.position, l.annot.num, l.annot.generation),
+    )
 }
 
 #[cfg(test)]
@@ -819,34 +1005,155 @@ mod tests {
         }
     }
 
-    /// A link inside another, and a link whose text runs on into the next line after text that
-    /// isn't its own: the structure tree reads in the order the page shows its text, and each
-    /// annotation is held by one Link.
+    /// Refused before any change, with `why` in the reason.
+    fn refused(mut doc: Document, why: &str) {
+        let before = doc.clone();
+        match autotag_text(&mut doc) {
+            Err(AutoTagError::Unsupported { reason, .. }) => assert!(reason.contains(why), "{reason}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(doc.get(ObjRef::new(3, 0)) == before.get(ObjRef::new(3, 0)) && tags(&doc).is_empty());
+    }
+
+    /// A Link tag holds its link's text in one piece. A link whose text something else comes
+    /// between (another link inside it, text outside it on the same line or the rest of a line
+    /// before it goes on) is refused, naming the link; a link inside another at either end of its
+    /// text is tagged, and the tree reads in the order the page shows its text.
     #[test]
-    fn text_is_read_in_the_order_it_is_shown_when_a_link_is_interrupted() {
-        let nested = page(LINE, &[&link(&over(0, 18)), &link(&over(8, 13))]);
+    fn a_link_whose_text_is_interrupted_is_refused_and_one_at_the_edge_of_another_is_tagged() {
+        // "guide" inside a link over the whole line.
+        refused(
+            page(LINE, &[&link(&over(0, 18)), &link(&over(8, 13))]),
+            "link annotation 1 in /Annots (object 7 0) is interrupted by link annotation 2",
+        );
+        // One link over "See" and "guide", with " the " between.
+        let quads = format!("QuadPoints [20 296 38 296 38 312 20 312 {} 296 {} 296 {} 312 {} 312]", 20 + 48, 20 + 78, 20 + 78, 20 + 48);
+        refused(page(LINE, &[&format!("<< /Type /Annot /Subtype /Link /Rect [{}] /{quads} >>", over(0, 18))]), "interrupted by text outside it");
+        // A link running on into the next line after text that isn't its own.
         let content = "BT /F1 10 Tf 20 300 Td (Read the more) Tj ET BT /F1 10 Tf 20 288 Td (guide now) Tj ET";
         let quads = "QuadPoints [49 312 69 312 49 296 69 296 18 300 52 300 18 284 52 284]";
-        let annot = format!("<< /Type /Annot /Subtype /Link /Rect [18 284 69 312] /{quads} >>");
-        let split = page(content, &[&annot]);
-        for (mut doc, annots) in [(nested, 2u32), (split, 1)] {
+        refused(page(content, &[&format!("<< /Type /Annot /Subtype /Link /Rect [18 284 69 312] /{quads} >>")]), "interrupted by text outside it");
+        // A link inside another at the end, and at the start, of its text.
+        for (outer, inner, texts) in [(over(0, 13), over(8, 13), ["See the ", "guide"]), (over(0, 18), over(0, 3), ["See", " the guide here"])] {
+            let mut doc = page(LINE, &[&link(&outer), &link(&inner)]);
             let shown = String::from_utf8(shown(&doc)).unwrap();
             autotag_text(&mut doc).unwrap();
             assert_eq!(reading(&doc), shown);
-            assert_eq!(links(&doc).len(), annots as usize);
-            for n in 0..annots {
-                assert!(owner_of(&doc, ObjRef::new(7 + n, 0)).is_some());
-            }
+            let found: Vec<Vec<String>> = links(&doc).into_iter().map(|l| l.0).collect();
+            assert_eq!(found, texts.map(|t| vec![t.to_string()]));
+            assert!(owner_of(&doc, ObjRef::new(7, 0)).is_some() && owner_of(&doc, ObjRef::new(8, 0)).is_some());
             passes(&doc);
         }
-        // The inner link keeps its text; the outer one keeps the text before it.
-        let mut doc = page(LINE, &[&link(&over(0, 18)), &link(&over(8, 13))]);
+        // The outer link is described by all the text inside it.
+        let mut doc = page(LINE, &[&link(&over(0, 13)), &link(&over(8, 13))]);
         autotag_text(&mut doc).unwrap();
-        let found: Vec<Vec<String>> = links(&doc).into_iter().map(|l| l.0).collect();
-        assert_eq!(found, [vec!["See the ".to_string()], vec!["guide".to_string()]]);
-        // Each is described by all the text inside it.
         let described = |n| annot_dict(&doc, n).get(b"Contents").and_then(|c| c.as_string()).map(|s| s.to_text());
-        assert_eq!((described(7).as_deref(), described(8).as_deref()), (Some("See the guide here"), Some("guide")));
+        assert_eq!((described(7).as_deref(), described(8).as_deref()), (Some("See the guide"), Some("guide")));
+    }
+
+    /// Text that reads as nothing doesn't interrupt a link: a space left outside a link's area at
+    /// the end of a line, a text object of spaces or of no glyph between two parts of one link, a
+    /// control character a writer shows far off the page after each label, and the space an outer
+    /// link reaches past an inner one at its end. Each is tagged, and the tree reads in the order
+    /// the page shows its text.
+    #[test]
+    fn text_that_reads_as_nothing_does_not_interrupt_a_link() {
+        let per_line =
+            "<< /Type /Annot /Subtype /Link /Rect [18 284 110 312] /QuadPoints [74 296 104 296 104 312 74 312 18 284 38 284 38 300 18 300] >>";
+        let mut cases = vec![(page("BT /F1 10 Tf 12 TL 20 300 Td (Read the guide ) Tj T* (now please) Tj ET", &[per_line]), 1)];
+        for between in ["( ) Tj", "() Tj", "[-250] TJ"] {
+            let content =
+                format!("BT /F1 10 Tf 20 300 Td (See the gu) Tj ET BT /F1 10 Tf 300 100 Td {between} ET BT /F1 10 Tf 80 300 Td (ide here) Tj ET");
+            cases.push((page(&content, &[&link(&over(8, 13))]), 1));
+        }
+        let labels = "BT /F1 10 Tf 20 300 Td (U1) Tj 2314 2304 Td (\n) ' ET BT /F1 10 Tf 20 280 Td (GND) Tj 2314 2304 Td (\n) ' ET";
+        cases.push((page(labels, &[&link("18 276 60 312")]), 1));
+        cases.push((page(LINE, &[&link(&over(0, 14)), &link(&over(8, 13))]), 2));
+        for (mut doc, count) in cases {
+            let shown = String::from_utf8(shown(&doc)).unwrap();
+            autotag_text(&mut doc).unwrap();
+            let read = reading(&doc);
+            // Marked-content sequences are read one after another, so compare without the spaces.
+            assert_eq!(read.split_whitespace().collect::<String>(), shown.split_whitespace().collect::<String>());
+            assert_eq!(links(&doc).len(), count);
+            assert!(links(&doc).iter().all(|l| !l.0.is_empty()), "{:?}", links(&doc));
+            passes(&doc);
+        }
+    }
+
+    /// A link's text that runs on into a later text object sits in the first object's element: a
+    /// link from a paragraph into a heading, or from a heading into a paragraph, is refused rather
+    /// than reading the heading as a paragraph (and the headings after it a level too deep).
+    #[test]
+    fn a_link_from_a_paragraph_into_a_heading_is_refused_and_one_inside_a_heading_keeps_its_role() {
+        // "Read the" and a body line at 10 pt, "Title" at 24 pt (x 20 to 92) and "Heading" at 18 pt.
+        let content = "BT /F1 10 Tf 20 300 Td (Read the) Tj ET BT /F1 24 Tf 20 260 Td (Title) Tj ET \
+                       BT /F1 18 Tf 20 200 Td (Heading) Tj ET BT /F1 10 Tf 20 150 Td (Body text of the page, long enough to set the body size.) Tj ET";
+        let across = |quads: &str| format!("<< /Type /Annot /Subtype /Link /Rect [18 250 95 312] /QuadPoints [{quads}] >>");
+        // "the" and "Title"; then "Title" and the end of the line before it, the other way round.
+        let into_heading = across("49 312 69 312 49 296 69 296 18 255 95 255 18 290 95 290");
+        refused(page(content, &[&into_heading]), "is in text tagged P and text tagged H1");
+        let content_up = "BT /F1 24 Tf 20 300 Td (Title) Tj ET BT /F1 10 Tf 20 260 Td (Read the) Tj ET \
+                          BT /F1 18 Tf 20 200 Td (Heading) Tj ET BT /F1 10 Tf 20 150 Td (Body text of the page, long enough to set the body size.) Tj ET";
+        let into_paragraph = across("18 295 95 295 18 330 95 330 20 256 50 256 20 272 50 272");
+        refused(page(content_up, &[&into_paragraph.replace("250 95 312", "250 95 330")]), "is in text tagged H1 and text tagged P");
+        // A heading drawn in two text objects with a text object of spaces between them (a P,
+        // with no text of its own), under one link: the space has no role to keep.
+        let split = "BT /F1 24 Tf 20 300 Td (Ti) Tj ET BT /F1 10 Tf 300 100 Td ( ) Tj ET BT /F1 24 Tf 48.8 300 Td (tle) Tj ET \
+                     BT /F1 10 Tf 20 150 Td (Body text of the page, long enough to set the body size.) Tj ET";
+        let mut doc = page(split, &[&link("18 295 100 330")]);
+        autotag_text(&mut doc).unwrap();
+        assert_eq!(links(&doc).iter().map(|l| l.1.as_str()).collect::<Vec<_>>(), ["H1"]);
+        // A link over the heading alone: the heading keeps its role, and holds the link.
+        let mut doc = page(content, &[&across("18 255 95 255 18 290 95 290")]);
+        autotag_text(&mut doc).unwrap();
+        let kinds: Vec<String> = tree(&doc).into_iter().map(|t| t.0).collect();
+        assert_eq!(kinds, ["Document", "P", "H1", "Link", "H2", "P"]);
+        assert_eq!(links(&doc), [(vec!["Title".to_string()], "H1".to_string())]);
+        passes(&doc);
+    }
+
+    /// The link areas a document may hold are counted before any is built: past them the
+    /// document is refused, while a link with more quadrilaterals than the viewer reads is still
+    /// its `/Rect`.
+    #[test]
+    fn the_documents_link_quadrilaterals_are_bounded_and_a_link_with_too_many_is_its_rectangle() {
+        use pdfcraft_render::MAX_LINK_QUADS;
+        let quads = |n: usize| "20 296 38 296 38 312 20 312 ".repeat(n);
+        let many = |n: usize| format!("<< /Type /Annot /Subtype /Link /Rect [{}] /QuadPoints [{}] >>", over(0, 18), quads(n));
+        // Over two pages: the allowance is the document's, not each page's.
+        // The first `linked` objects are the links, listed half on each page.
+        let two_pages = |annots: &[String], linked: usize| {
+            let half = linked / 2;
+            let refs = |r: std::ops::Range<usize>| r.map(|i| format!("{} 0 R", i + 7)).collect::<Vec<_>>().join(" ");
+            let page = |annots: String| {
+                format!(
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Contents 5 0 R /Resources << /Font << /F1 6 0 R >> >> /Annots [{annots}] >>"
+                )
+            };
+            let mut bodies = vec![
+                "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+                "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".into(),
+                page(refs(0..half)),
+                page(refs(half..linked)),
+                stream(LINE),
+                COURIER.into(),
+            ];
+            bodies.extend(annots.iter().cloned());
+            pdf(&bodies)
+        };
+        let annots: Vec<String> = (0..=super::MAX_LINK_AREAS / MAX_LINK_QUADS).map(|_| many(MAX_LINK_QUADS)).collect();
+        refused(two_pages(&annots, annots.len()), "too many quadrilaterals");
+        // Many links sharing one array that isn't used (a corner outside /Rect), so each is its
+        // /Rect: each still reads the array.
+        let readers = super::MAX_QUAD_VALUES / (8 * MAX_LINK_QUADS) + 1;
+        let mut annots: Vec<String> =
+            (0..readers).map(|_| format!("<< /Type /Annot /Subtype /Link /Rect [{}] /QuadPoints {} 0 R >>", over(0, 3), readers + 7)).collect();
+        annots.push(format!("[{}]", "0 0 9 0 9 9 0 9 ".repeat(MAX_LINK_QUADS)));
+        refused(two_pages(&annots, readers), "too many quadrilaterals");
+        let mut doc = page(LINE, &[&many(MAX_LINK_QUADS + 1)]);
+        autotag_text(&mut doc).unwrap();
+        assert_eq!(links(&doc), [(vec!["See the guide here".to_string()], "P".to_string())]);
     }
 
     /// A glyph belongs to a quadrilateral only when its centre is inside it, not just inside the
@@ -876,6 +1183,12 @@ mod tests {
         let mut doc = page(LINE, &[&thin]);
         autotag_text(&mut doc).unwrap();
         assert_eq!(links(&doc), [(vec!["See the guide here".to_string()], "P".to_string())]);
+        // Thick enough by the viewer's rule (one of the triangles its corners make is), though its
+        // hull is thinner than that: the link is that sliver, over no glyph's centre.
+        let sliver = format!("<< /Type /Annot /Subtype /Link /Rect [{}] /QuadPoints [20 300 21 300 20.001 300.014 20 300.014] >>", over(0, 18));
+        let mut doc = page(LINE, &[&sliver]);
+        autotag_text(&mut doc).unwrap();
+        assert_eq!(links(&doc), [(Vec::<String>::new(), "Document".to_string())]);
     }
 
     /// `gs` with `/Font` sets the font and size as `Tf` does (Table 57).
@@ -915,6 +1228,52 @@ mod tests {
         let without = roles("");
         assert!(without.get(1).is_some_and(|k| k.starts_with('H')), "{without:?}");
         assert_eq!(roles("/Annots [5 0 R]"), without);
+    }
+
+    /// Which fonts the document's allowance measures doesn't depend on where the links are: a
+    /// vertical font is measured in its turn, though its glyphs are never placed.
+    #[test]
+    fn a_link_does_not_change_which_fonts_are_measured_when_a_vertical_font_comes_first() {
+        let fonts = crate::autotag_roles::MAX_FONTS;
+        let cid = "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /V /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 1000 >>";
+        let mut names = format!("/F0 << /Type /Font /Subtype /Type0 /BaseFont /V /Encoding /Identity-V /DescendantFonts [{cid}] >> ");
+        names.extend((1..=fonts).map(|i| format!("/F{i} << /Type /Font /Subtype /Type1 /BaseFont /Courier >> ")));
+        // The vertical font first, then a font of its own for each body line, and the title last.
+        let mut content = String::from("BT /F0 10 Tf 380 380 Td <0001> Tj ET");
+        for i in 1..fonts {
+            content.push_str(&format!(" BT /F{i} 10 Tf 20 {} Td (Body text of the course) Tj ET", 360 - i));
+        }
+        content.push_str(&format!(" BT /F{fonts} 24 Tf 20 380 Td (Course title) Tj ET"));
+        let roles = |annots: &str| {
+            let mut doc = pdf(&[
+                "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+                format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Contents 4 0 R /Resources << /Font << {names}>> >> {annots} >>"),
+                stream(&content),
+                link("18 376 200 400"),
+            ]);
+            autotag_text(&mut doc).unwrap();
+            tags(&doc).into_iter().map(|t| t.kind).filter(|k| k != "Link").collect::<Vec<_>>()
+        };
+        assert_eq!(roles("/Annots [5 0 R]"), roles(""));
+    }
+
+    /// Text whose font comes only from a graphics state's `/Font` reads back in that font: with no
+    /// `Tf` at all, and after a `Tf` that set another one.
+    #[test]
+    fn text_in_a_font_set_by_a_graphics_state_reads_back_in_that_font() {
+        // /GS1 sets Courier that shows code 65 ("A") as "B"; /F1 is plain Courier.
+        let font = "<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding << /Type /Encoding /Differences [65 /B] >> >>";
+        let resources = format!("/ExtGState << /GS1 << /Type /ExtGState /Font [{font} 10] >> >>");
+        // Glyphs land under the link, and the TJ gap moves the text, only at the size /GS1 sets.
+        for content in ["/GS1 gs BT 20 300 Td [(Go) -600 (AAA)] TJ ET", "BT /F1 1 Tf ET /GS1 gs BT 20 300 Td [(Go) -600 (AAA)] TJ ET"] {
+            let mut doc = page_res(content, &[&link(&over(0, 2))], "", COURIER, &resources);
+            autotag_text(&mut doc).unwrap();
+            assert_eq!(links(&doc), [(vec!["Go".to_string()], "P".to_string())], "{content}");
+            let mut doc = page_res(content, &[&link("0 0 400 400")], "", COURIER, &resources);
+            autotag_text(&mut doc).unwrap();
+            assert_eq!(links(&doc), [(vec!["Go BBB".to_string()], "P".to_string())], "{content}");
+        }
     }
 
     #[test]
@@ -1005,8 +1364,11 @@ mod tests {
             ("q 1 0 0 0.5 0 0 cm BT /F1 20 Tf 20 600 Td [(Cl)-100(ick)] TJ ET Q", "Click"),
             ("BT /F1 10 Tf 20 300 Td (H) Tj -2 Ts (2) Tj 0 Ts (O) Tj ET", "H2O"),
         ];
-        for (content, description) in cases {
-            let mut doc = page(content, &[&link("0 0 400 400")]);
+        // Whitespace counts toward the length limit only as the description writes it.
+        let spaces = " ".repeat(300);
+        let spaced = [(format!("BT /F1 1 Tf 20 300 Td ({spaces}Go) Tj ET"), "Go"), (format!("BT /F1 1 Tf 20 300 Td (Go{spaces}on) Tj ET"), "Go on")];
+        for (content, description) in cases.map(|(c, d)| (c.to_string(), d)).into_iter().chain(spaced) {
+            let mut doc = page(&content, &[&link("0 0 400 400")]);
             autotag_text(&mut doc).unwrap();
             assert_eq!(annot_dict(&doc, 7).get(b"Contents").and_then(|c| c.as_string()).map(|s| s.to_text()).as_deref(), Some(description));
         }
@@ -1035,6 +1397,38 @@ mod tests {
         let element = owner_of(&doc, ObjRef::new(7, 0)).unwrap();
         assert_eq!(tag_content(&doc, element).unwrap().len(), 1);
         passes(&doc);
+    }
+
+    /// Glyphs with no Unicode text still show text: a link over them owns them, and a link in such
+    /// a font takes no text from the text objects around it.
+    #[test]
+    fn glyphs_with_no_text_stay_with_their_own_link_or_paragraph() {
+        let font = "<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding << /Type /Encoding /Differences [65 /uniXXXX /uniYYYY] >> >>";
+        let mut doc = page_in("BT /F1 10 Tf 20 300 Td (See AB here) Tj ET", &[&link(&over(4, 6))], "", font);
+        autotag_text(&mut doc).unwrap();
+        let element = owner_of(&doc, ObjRef::new(7, 0)).unwrap();
+        assert_eq!(tag_content(&doc, element).unwrap().len(), 1);
+        passes(&doc);
+        // Every glyph without text: the link over "AB" holds only that.
+        let content = "BT /F1 10 Tf 20 300 Td (AABB) Tj ET BT /F1 24 Tf 20 250 Td (BBAA) Tj ET BT /F1 10 Tf 20 200 Td (ABAB) Tj ET";
+        let mut doc = page_in(content, &[&link(&over(1, 3))], "", font);
+        autotag_text(&mut doc).unwrap();
+        let element = owner_of(&doc, ObjRef::new(7, 0)).unwrap();
+        assert_eq!(tag_content(&doc, element).unwrap().len(), 1);
+        assert_eq!(tags(&doc).iter().filter(|t| t.kind != "Link").count(), 4, "Document and a tag for each text object");
+        passes(&doc);
+        // A control code after a link's text, with no more of the link after it, stays the
+        // paragraph's.
+        let mut doc = page("BT /F1 10 Tf 20 300 Td (U1) Tj 2314 2304 Td (\n) ' ET", &[&link(&over(0, 2))]);
+        autotag_text(&mut doc).unwrap();
+        let p = tags(&doc).into_iter().find(|t| t.kind == "P").unwrap();
+        assert_eq!(tag_content(&doc, p.object).unwrap().len(), 1);
+        // A text object of such glyphs between two parts of one link is text, and interrupts it.
+        let quads = "QuadPoints [26 296 38 296 38 312 26 312 26 196 38 196 38 212 26 212]";
+        refused(
+            page_in(content, &[&format!("<< /Type /Annot /Subtype /Link /Rect [18 190 60 312] /{quads} >>")], "", font),
+            "interrupted by text outside it",
+        );
     }
 
     /// A font that isn't there, and one that writes vertically, whose glyphs would land under the

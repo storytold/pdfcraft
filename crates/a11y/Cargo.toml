@@ -15,4 +15,7 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-fonts = { workspace = true }
+# The viewer's link areas (`link_quads`), so a Link tag holds the text where the link can be
+# clicked (L4 may depend on L3; the engine already depends on both).
+pdfcraft-render = { workspace = true }
 thiserror.workspace = true
