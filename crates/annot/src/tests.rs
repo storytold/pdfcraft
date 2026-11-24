@@ -2832,7 +2832,10 @@ fn comment_text_the_standard_fonts_cannot_draw_is_kept_and_marked() {
     let by = "By 张三 at 2:14 pm, Oct 02, 2026";
     if pdfcraft_fonts::line_missing(by, &StampLang::En.faces(false)).is_none() {
         assert_eq!(mark(&doc, s), None);
-        assert!(ap_content(&doc, &list(&doc, 0)[s]).contains("/ActualText"), "{}", ap_content(&doc, &list(&doc, 0)[s]));
+        // The by-line is kept as text for search and copy: `/ActualText <FEFF…>`, its UTF-16 code units behind a BOM.
+        let hex: String = std::iter::once(0xFEFF).chain(by.encode_utf16()).map(|u| format!("{u:04X}")).collect();
+        let ap = ap_content(&doc, &list(&doc, 0)[s]);
+        assert!(ap.contains(&format!("/ActualText <{hex}>")), "{ap}");
     } else {
         assert_eq!(mark(&doc, s), Some('张'));
     }

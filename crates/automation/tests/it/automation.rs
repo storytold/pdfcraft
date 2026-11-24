@@ -7265,31 +7265,38 @@ fn stamps_in_other_scripts_through_tools() {
     assert_eq!(list["count"], 1, "{list}");
     // The stamp is written in Russian: its language is saved as /PCLang, which `comment_list` doesn't report.
     ok(&mut a, "doc_save", json!({ "doc": doc, "path": "out/ru.pdf" }));
-    let saved_lang = || -> Option<Vec<u8>> {
-        let d = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("out/ru.pdf")).ok()?)).ok()?;
+    // The saved language of every stamp on the page, in the order they were placed.
+    let saved_langs = |file: &str| -> Option<Vec<Option<Vec<u8>>>> {
+        let d = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join(file)).ok()?)).ok()?;
         let pages = d.get(d.root()?).as_dict()?.reference(b"Pages")?;
         let kids = d.get(pages).as_dict()?.get(b"Kids")?.clone();
         let page = d.resolve(&kids).as_array()?.first()?.clone();
         let annots = d.resolve(&page).as_dict()?.get(b"Annots")?.clone();
-        let stamp = d.resolve(&annots).as_array()?.first()?.clone();
-        Some(d.resolve(&stamp).as_dict()?.name(b"PCLang")?.to_vec())
+        let stamps = d.resolve(&annots).as_array()?.to_vec();
+        Some(stamps.iter().map(|s| d.resolve(s).as_dict().and_then(|a| a.name(b"PCLang")).map(<[u8]>::to_vec)).collect())
     };
-    assert_eq!(saved_lang().as_deref(), Some(&b"ru"[..]), "the stamp's saved language");
+    assert_eq!(saved_langs("out/ru.pdf"), Some(vec![Some(b"ru".to_vec())]), "the stamp's saved language");
     let comment_add = tools().into_iter().find(|t| t.name == "comment_add").unwrap();
     let listed = comment_add.description.split("optional `lang` (").nth(1).and_then(|s| s.split(')').next()).unwrap_or_default();
     let listed: Vec<&str> = listed.split(", ").collect();
     assert_eq!(listed.len(), StampLang::ALL.len() - 1, "{listed:?}");
+    let mut placed: Vec<Option<Vec<u8>>> = vec![Some(b"ru".to_vec())];
     for lang in StampLang::ALL.into_iter().filter(|l| *l != StampLang::En) {
         assert!(listed.contains(&lang.code()), "{} is listed", lang.code());
         let call = json!({ "doc": doc, "page": 1, "type": "stamp", "stamp": "draft", "lang": lang.code(), "at": [150, 300] });
         if lang.drawable() {
             ok(&mut a, "comment_add", call);
+            placed.push(Some(lang.code().as_bytes().to_vec()));
         } else {
             assert!(matches!(a.call("comment_add", &call), Err(ToolError::InvalidArgs(m)) if m.contains("craft-fonts")), "{}", lang.code());
         }
     }
     // The code is matched case-insensitively, and one the list lacks is refused rather than placed in English.
     ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "stamp", "stamp": "draft", "lang": " RU ", "at": [150, 300] }));
+    placed.push(Some(b"ru".to_vec()));
+    // Every stamp keeps the language it was placed in, through the save.
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "out/all.pdf" }));
+    assert_eq!(saved_langs("out/all.pdf"), Some(placed), "each stamp's saved language");
     let unknown = json!({ "doc": doc, "page": 1, "type": "stamp", "stamp": "draft", "lang": "xx", "at": [150, 300] });
     assert!(matches!(a.call("comment_add", &unknown), Err(ToolError::InvalidArgs(m)) if m.contains("unknown stamp language")));
     let schema = &comment_add.input_schema["properties"]["lang"]["enum"];
