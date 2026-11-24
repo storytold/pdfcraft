@@ -5959,3 +5959,167 @@ fn shared_annotation_stays_tagged_when_removed_from_one_page() {
     assert!(doc.get(ObjRef::new(7, 0)).as_dict().unwrap().get(b"K").unwrap().as_array().unwrap().is_empty());
     assert!(parent_tree_pairs(&doc).is_empty());
 }
+
+#[test]
+fn link_delete_prunes_indirect_names_in_flat_id_tree() {
+    // 1) Direct /IDTree with indirect /Names array.
+    let mut direct_tree = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >>",           // 1
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>", // 2
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] /StructParents 0 >>",  // 3
+        b"<< /Type /Annot /Subtype /Link /Rect [10 10 100 30] /A << /S /URI /URI (https://example.org) >> /StructParent 1 >>", // 4
+        b"<< /Type /StructTreeRoot /K 6 0 R /ParentTree << /Nums [1 7 0 R] >> /IDTree << /Names 9 0 R >> >>", // 5
+        b"<< /S /Document /P 5 0 R /K [8 0 R 7 0 R] >>",                      // 6
+        b"<< /S /Link /P 6 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 4 0 R /Pg 3 0 R >> >>", // 7
+        b"<< /S /P /P 6 0 R /Pg 3 0 R /K 0 >>",                               // 8
+        b"[(lnk) 7 0 R (keep) 8 0 R]",                                        // 9 (indirect /Names)
+    ]);
+    links::delete(&mut direct_tree, 0, 0).unwrap();
+    let direct_tree = reopen(&direct_tree);
+    let names = direct_tree.get(ObjRef::new(9, 0)).as_array().unwrap().clone();
+    assert_eq!(names.len(), 2);
+    assert_eq!(names[1], Object::Ref(ObjRef::new(8, 0)));
+
+    // 2) Indirect /IDTree with indirect /Names array.
+    let mut indirect_tree = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >>",           // 1
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>", // 2
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] /StructParents 0 >>",  // 3
+        b"<< /Type /Annot /Subtype /Link /Rect [10 10 100 30] /A << /S /URI /URI (https://example.org) >> /StructParent 1 >>", // 4
+        b"<< /Type /StructTreeRoot /K 6 0 R /ParentTree << /Nums [1 7 0 R] >> /IDTree 9 0 R >>", // 5
+        b"<< /S /Document /P 5 0 R /K [8 0 R 7 0 R] >>",                      // 6
+        b"<< /S /Link /P 6 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 4 0 R /Pg 3 0 R >> >>", // 7
+        b"<< /S /P /P 6 0 R /Pg 3 0 R /K 0 >>",                               // 8
+        b"<< /Names 10 0 R >>",                                               // 9 (indirect flat /IDTree)
+        b"[(lnk) 7 0 R (keep) 8 0 R]",                                        // 10 (indirect /Names)
+    ]);
+    links::delete(&mut indirect_tree, 0, 0).unwrap();
+    let indirect_tree = reopen(&indirect_tree);
+    let names = indirect_tree.get(ObjRef::new(10, 0)).as_array().unwrap().clone();
+    assert_eq!(names.len(), 2);
+    assert_eq!(names[1], Object::Ref(ObjRef::new(8, 0)));
+
+    // 3) Non-flat /IDTree (with /Limits) is left untouched even with indirect /Names.
+    let mut non_flat = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >>",           // 1
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>", // 2
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] /StructParents 0 >>",  // 3
+        b"<< /Type /Annot /Subtype /Link /Rect [10 10 100 30] /A << /S /URI /URI (https://example.org) >> /StructParent 1 >>", // 4
+        b"<< /Type /StructTreeRoot /K 6 0 R /IDTree << /Limits [(keep) (lnk)] /Names 9 0 R >> >>", // 5
+        b"<< /S /Document /P 5 0 R /K [8 0 R 7 0 R] >>",                      // 6
+        b"<< /S /Link /P 6 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 4 0 R /Pg 3 0 R >> >>", // 7
+        b"<< /S /P /P 6 0 R /Pg 3 0 R /K 0 >>",                               // 8
+        b"[(keep) 8 0 R (lnk) 7 0 R]",                                        // 9
+    ]);
+    links::delete(&mut non_flat, 0, 0).unwrap();
+    assert_eq!(non_flat.get(ObjRef::new(9, 0)).as_array().unwrap().len(), 4);
+}
+
+#[test]
+fn remove_all_cascades_empty_hit_owner_and_prunes_id_tree() {
+    // Owner E (8) has kids [OBJR(link A=4), C (9)]; C's only kid is OBJR(link B=5).
+    // Document (7) did not lose an OBJR directly, so it must stay attached to StructTreeRoot (6).
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>",                // 1
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",      // 2
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] /StructParents 0 >>", // 3
+        b"<< /Type /Annot /Subtype /Link /Rect [10 10 100 30] /A << /S /URI /URI (https://a.example) >> /StructParent 1 >>", // 4 (link A)
+        b"<< /Type /Annot /Subtype /Link /Rect [10 40 100 60] /A << /S /URI /URI (https://b.example) >> /StructParent 2 >>", // 5 (link B)
+        b"<< /Type /StructTreeRoot /K 7 0 R /ParentTree << /Nums [1 8 0 R 2 9 0 R] >> /IDTree << /Names [(c) 9 0 R (doc) 7 0 R (e) 8 0 R] >> >>", // 6
+        b"<< /S /Document /P 6 0 R /K [8 0 R] >>",                                 // 7 (non-hit ancestor)
+        b"<< /S /Link /P 7 0 R /Pg 3 0 R /K [<< /Type /OBJR /Obj 4 0 R /Pg 3 0 R >> 9 0 R] >>", // 8 (owner E)
+        b"<< /S /Link /P 8 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 5 0 R /Pg 3 0 R >> >>", // 9 (child C)
+    ]);
+    assert_eq!(links::remove_all(&mut doc, None).unwrap(), 2);
+    let doc = reopen(&doc);
+
+    // Both C (9) and E (8) lost /K, and E was detached from Document (7).
+    assert!(!doc.get(ObjRef::new(9, 0)).as_dict().unwrap().contains(b"K"));
+    assert!(!doc.get(ObjRef::new(8, 0)).as_dict().unwrap().contains(b"K"));
+    assert!(doc.get(ObjRef::new(7, 0)).as_dict().unwrap().get(b"K").unwrap().as_array().unwrap().is_empty());
+    // Document (7) did not lose an OBJR directly, so StructTreeRoot (6) still points to it.
+    assert_eq!(doc.get(ObjRef::new(6, 0)).as_dict().unwrap().get(b"K"), Some(&Object::Ref(ObjRef::new(7, 0))));
+    // Flat IDTree dropped both (c) 9 0 R and (e) 8 0 R, keeping (doc) 7 0 R.
+    let sr = doc.get(ObjRef::new(6, 0));
+    let id_names = sr.as_dict().unwrap().get(b"IDTree").unwrap().as_dict().unwrap().get(b"Names").unwrap().as_array().unwrap();
+    assert_eq!(id_names.len(), 2);
+    assert_eq!(id_names[1], Object::Ref(ObjRef::new(7, 0)));
+    assert!(parent_tree_pairs(&doc).is_empty());
+}
+
+#[test]
+fn remove_all_keeps_hit_owner_with_surviving_kid() {
+    // Owner E (8) has kids [OBJR(link A=4), C (9), 0]; C's only kid is OBJR(link B=5).
+    // After deleting A and B, C is emptied and detached, while E keeps MCID 0 and stays attached.
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>",                // 1
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",      // 2
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] /StructParents 0 >>", // 3
+        b"<< /Type /Annot /Subtype /Link /Rect [10 10 100 30] /A << /S /URI /URI (https://a.example) >> /StructParent 1 >>", // 4 (link A)
+        b"<< /Type /Annot /Subtype /Link /Rect [10 40 100 60] /A << /S /URI /URI (https://b.example) >> /StructParent 2 >>", // 5 (link B)
+        b"<< /Type /StructTreeRoot /K 7 0 R /ParentTree << /Nums [1 8 0 R 2 9 0 R] >> /IDTree << /Names [(c) 9 0 R (e) 8 0 R] >> >>", // 6
+        b"<< /S /Document /P 6 0 R /K [8 0 R] >>",                                 // 7
+        b"<< /S /Link /P 7 0 R /Pg 3 0 R /K [<< /Type /OBJR /Obj 4 0 R /Pg 3 0 R >> 9 0 R 0] >>", // 8 (owner E)
+        b"<< /S /Link /P 8 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 5 0 R /Pg 3 0 R >> >>", // 9 (child C)
+    ]);
+    assert_eq!(links::remove_all(&mut doc, None).unwrap(), 2);
+    let doc = reopen(&doc);
+
+    // C (9) is emptied; E (8) keeps MCID 0 and stays attached to Document (7).
+    assert!(!doc.get(ObjRef::new(9, 0)).as_dict().unwrap().contains(b"K"));
+    assert_eq!(doc.get(ObjRef::new(8, 0)).as_dict().unwrap().get(b"K").unwrap().as_array().unwrap(), &[Object::Int(0)]);
+    assert_eq!(doc.get(ObjRef::new(7, 0)).as_dict().unwrap().get(b"K").unwrap().as_array().unwrap(), &[Object::Ref(ObjRef::new(8, 0))]);
+    // Flat IDTree dropped (c) 9 0 R and kept (e) 8 0 R.
+    let sr = doc.get(ObjRef::new(6, 0));
+    let id_names = sr.as_dict().unwrap().get(b"IDTree").unwrap().as_dict().unwrap().get(b"Names").unwrap().as_array().unwrap();
+    assert_eq!(id_names.len(), 2);
+    assert_eq!(id_names[1], Object::Ref(ObjRef::new(8, 0)));
+}
+
+#[test]
+fn untag_walk_charges_shared_indirect_k_array_against_budget_without_partial_rewrite() {
+    // Build a 50-entry indirect /K array with OBJRs at both ends and 48 MCIDs in between, shared
+    // by three structure elements (7, 8, 9).
+    let mut big_k = String::from("[<< /Type /OBJR /Obj 4 0 R >> ");
+    for mcid in 0..48 {
+        big_k.push_str(&format!("{mcid} "));
+    }
+    big_k.push_str("<< /Type /OBJR /Obj 4 0 R >>]");
+    let build = || {
+        document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >>",           // 1
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>", // 2
+            b"<< /Type /Page /Parent 2 0 R /Annots [] >>",                        // 3 (annot 4 already removed)
+            b"<< /Type /Annot /Subtype /Link /Rect [10 10 100 30] /A << /S /URI /URI (https://example.org) >> /StructParent 1 >>", // 4
+            b"<< /Type /StructTreeRoot /K 6 0 R /ParentTree << /Nums [1 7 0 R] >> >>", // 5
+            b"<< /S /Document /P 5 0 R /K [7 0 R 8 0 R 9 0 R] >>",                // 6
+            b"<< /S /Link /P 6 0 R /K 10 0 R >>",                                 // 7
+            b"<< /S /Link /P 6 0 R /K 10 0 R >>",                                 // 8
+            b"<< /S /Link /P 6 0 R /K 10 0 R >>",                                 // 9
+            big_k.as_bytes(),                                                     // 10 (shared 50-kid array)
+        ])
+    };
+    let gone = [(ObjRef::new(4, 0), Some(1))];
+
+    // 1) Limit smaller than the 50-kid array: walk stops before scanning, no panic and no rewrite.
+    let mut tiny = build();
+    let before = (7..=9).map(|n| tiny.get(ObjRef::new(n, 0))).collect::<Vec<_>>();
+    crate::structure::untag_removed_within(&mut tiny, &gone, 20);
+    for (idx, n) in (7..=9).enumerate() {
+        assert_eq!(tiny.get(ObjRef::new(n, 0)), before[idx], "element {n} must not be partially rewritten");
+    }
+    assert_eq!(tiny.get(ObjRef::new(10, 0)).as_array().unwrap().len(), 50);
+    assert_eq!(parent_tree_pairs(&tiny).len(), 1);
+
+    // 2) Limit large enough for one 50-kid scan, too small for a second: element 7 is rewritten
+    //    completely (all 48 MCIDs kept, both OBJRs dropped), while 8 and 9 stay untouched.
+    let mut one = build();
+    let elem8_before = one.get(ObjRef::new(8, 0));
+    let elem9_before = one.get(ObjRef::new(9, 0));
+    crate::structure::untag_removed_within(&mut one, &gone, 70);
+    let kept = one.get(ObjRef::new(7, 0)).as_dict().unwrap().get(b"K").unwrap().as_array().unwrap().clone();
+    assert_eq!(kept, (0..48).map(Object::Int).collect::<Vec<_>>());
+    assert_eq!(one.get(ObjRef::new(8, 0)), elem8_before);
+    assert_eq!(one.get(ObjRef::new(9, 0)), elem9_before);
+    assert_eq!(one.get(ObjRef::new(10, 0)).as_array().unwrap().len(), 50);
+}

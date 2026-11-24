@@ -67,7 +67,33 @@ pub(crate) fn untag_removed_within(doc: &mut Document, gone: &[(ObjRef, Option<i
         return;
     }
 
-    // Walk the structure tree from `/K`, `/ParentTree` and `/IDTree`, bounded by `seen` and `limit`.
+    let (hits, parent_tree_targets) = collect_hits(doc, &root, struct_root_ref, &gone_map, limit);
+    if hits.is_empty() {
+        return;
+    }
+
+    let emptied = strip_matching_objrs(doc, &hits, &gone_map);
+    if !emptied.is_empty() {
+        let all_emptied = detach_emptied_cascade(doc, &hits, emptied, struct_root_ref);
+        prune_flat_id_tree(doc, &root, struct_root_ref, &all_emptied);
+    }
+
+    // Remove matching `[k v]` pairs from `/ParentTree` number-tree nodes.
+    if !parent_tree_targets.is_empty() {
+        prune_parent_tree(doc, &root, struct_root_ref, &parent_tree_targets, limit);
+    }
+}
+
+/// Walk the structure tree from `/K`, `/ParentTree` and `/IDTree`, bounded by `seen` and `limit`,
+/// collecting indirect structure elements that reference any annotation in `gone_map` and the
+/// matching `(struct_parent, element)` pairs to prune from `/ParentTree`.
+fn collect_hits(
+    doc: &Document,
+    root: &Dict,
+    struct_root_ref: Option<ObjRef>,
+    gone_map: &HashMap<ObjRef, Option<i64>>,
+    limit: usize,
+) -> (Vec<ObjRef>, HashSet<(i64, ObjRef)>) {
     let mut todo: Vec<Object> = [&b"K"[..], b"ParentTree", b"IDTree"].iter().filter_map(|key| root.get(key).cloned()).collect();
     let mut seen: HashSet<ObjRef> = HashSet::new();
     if let Some(sr) = struct_root_ref {
@@ -81,18 +107,33 @@ pub(crate) fn untag_removed_within(doc: &mut Document, gone: &[(ObjRef, Option<i
         if steps >= limit {
             break;
         }
-        steps += 1;
-        let remaining = limit.saturating_sub(todo.len());
+        steps = steps.saturating_add(1);
         match item {
-            Object::Array(a) => todo.extend(a.into_iter().take(remaining)),
+            Object::Array(a) => {
+                let budget_left = limit.saturating_sub(steps);
+                let take = a.len().min(budget_left);
+                steps = steps.saturating_add(take);
+                let room = limit.saturating_sub(todo.len());
+                todo.extend(a.into_iter().take(take).filter(is_walkable).take(room));
+            }
             // Direct structure element (written in place): leave it unchanged, still walk its kids
             // in case it contains indirect elements.
             Object::Dict(d) if d.contains(b"S") => {
-                todo.extend(kids_of(doc, &d).into_iter().take(remaining));
+                if let Some(k_obj) = d.get(b"K") {
+                    let resolved = doc.resolve(k_obj);
+                    match &*resolved {
+                        Object::Array(a) => push_slice_bounded(a, &mut todo, &mut steps, limit),
+                        _ if is_walkable(k_obj) && steps < limit && todo.len() < limit => {
+                            steps = steps.saturating_add(1);
+                            todo.push(k_obj.clone());
+                        }
+                        _ => {}
+                    }
+                }
             }
             // Direct number/name tree node written in place.
             Object::Dict(d) => {
-                todo.extend(tree_node_entries(&d).into_iter().take(remaining));
+                push_tree_node_entries(&d, &mut todo, &mut steps, limit);
             }
             Object::Ref(r) => {
                 if !seen.insert(r) {
@@ -103,18 +144,28 @@ pub(crate) fn untag_removed_within(doc: &mut Document, gone: &[(ObjRef, Option<i
                 }
                 let object = doc.get(r);
                 if let Object::Array(a) = &*object {
-                    todo.extend(a.iter().take(remaining).cloned());
+                    push_slice_bounded(a, &mut todo, &mut steps, limit);
                     continue;
                 }
                 let Some(d) = object.as_dict() else { continue };
                 if !d.contains(b"S") {
-                    todo.extend(tree_node_entries(d).into_iter().take(remaining));
+                    push_tree_node_entries(d, &mut todo, &mut steps, limit);
                     continue;
                 }
-                let kids = kids_of(doc, d);
+                let Some(k_obj) = d.get(b"K") else { continue };
+                let resolved_k = doc.resolve(k_obj);
+                let kids: &[Object] = match &*resolved_k {
+                    Object::Array(a) => a.as_slice(),
+                    _ => std::slice::from_ref(k_obj),
+                };
+                let budget_left = limit.saturating_sub(steps);
+                if kids.len() > budget_left {
+                    break;
+                }
+                steps = steps.saturating_add(kids.len());
                 let mut hit = false;
-                for kid in &kids {
-                    if let Some(annot_ref) = objr_target(doc, kid, &gone_map) {
+                for kid in kids {
+                    if let Some(annot_ref) = objr_target(doc, kid, gone_map) {
                         hit = true;
                         if let Some(sp) = gone_map.get(&annot_ref).copied().flatten() {
                             parent_tree_targets.insert((sp, r));
@@ -124,28 +175,29 @@ pub(crate) fn untag_removed_within(doc: &mut Document, gone: &[(ObjRef, Option<i
                 if hit {
                     hits.push(r);
                 }
-                todo.extend(kids.into_iter().take(remaining));
+                let room = limit.saturating_sub(todo.len());
+                todo.extend(kids.iter().filter(|o| is_walkable(o)).take(room).cloned());
             }
             _ => {}
         }
     }
 
-    if hits.is_empty() {
-        return;
-    }
+    (hits, parent_tree_targets)
+}
 
-    // Remove matching `/OBJR` kids from each indirect structure element; record any left empty.
+/// Remove matching `/OBJR` kids from each indirect structure element in `hits`, returning those
+/// left with no kids.
+fn strip_matching_objrs(doc: &mut Document, hits: &[ObjRef], gone_map: &HashMap<ObjRef, Option<i64>>) -> Vec<ObjRef> {
     let mut emptied: Vec<ObjRef> = Vec::new();
-    for &r in &hits {
+    for &r in hits {
         let Some(d) = doc.get(r).as_dict().cloned() else { continue };
         let resolved_k = d.get(b"K").map(|k| doc.resolve(k));
         let was_array = resolved_k.as_ref().is_some_and(|k| matches!(&**k, Object::Array(_)));
-        let list: Vec<Object> = match resolved_k.as_deref() {
-            Some(Object::Array(a)) => a.clone(),
-            Some(_) => d.get(b"K").cloned().into_iter().collect(),
+        let keep: Vec<Object> = match resolved_k.as_deref() {
+            Some(Object::Array(a)) => a.iter().filter(|x| objr_target(doc, x, gone_map).is_none()).cloned().collect(),
+            Some(_) => d.get(b"K").filter(|x| objr_target(doc, x, gone_map).is_none()).cloned().into_iter().collect(),
             None => Vec::new(),
         };
-        let keep: Vec<Object> = list.into_iter().filter(|x| objr_target(doc, x, &gone_map).is_none()).collect();
         let now_empty = keep.is_empty();
         let _ = doc.update_dict(r, |e| {
             if now_empty {
@@ -162,28 +214,73 @@ pub(crate) fn untag_removed_within(doc: &mut Document, gone: &[(ObjRef, Option<i
             emptied.push(r);
         }
     }
-
-    // Remove emptied elements from their immediate `/P` parent's `/K` (do not climb further),
-    // and drop them from a flat `/IDTree` if present.
-    if !emptied.is_empty() {
-        detach_from_parents(doc, &emptied, struct_root_ref);
-        prune_flat_id_tree(doc, &root, struct_root_ref, &emptied);
-    }
-
-    // Remove matching `[k v]` pairs from `/ParentTree` number-tree nodes.
-    if !parent_tree_targets.is_empty() {
-        prune_parent_tree(doc, &root, struct_root_ref, &parent_tree_targets, limit);
-    }
+    emptied
 }
 
-/// An element's kids: its `/K` array, or the single kid it holds.
-fn kids_of(doc: &Document, d: &Dict) -> Vec<Object> {
-    match d.get(b"K").map(|k| doc.resolve(k)) {
-        Some(o) => match &*o {
-            Object::Array(a) => a.clone(),
-            _ => d.get(b"K").cloned().into_iter().collect(),
-        },
-        None => Vec::new(),
+/// Remove emptied elements from their immediate `/P` parent's `/K`. When a parent that itself
+/// lost an `/OBJR` (in `hits`) is left with no kids, empty and detach it as well (bounded by
+/// `hits.len()` rounds). Ancestors that did not lose an `/OBJR` are never detached. Returns all
+/// elements emptied across every round.
+fn detach_emptied_cascade(doc: &mut Document, hits: &[ObjRef], emptied: Vec<ObjRef>, struct_root_ref: Option<ObjRef>) -> Vec<ObjRef> {
+    let hit_set: HashSet<ObjRef> = hits.iter().copied().collect();
+    let mut emptied_set: HashSet<ObjRef> = emptied.iter().copied().collect();
+    let mut all_emptied: Vec<ObjRef> = emptied.clone();
+    let mut frontier: Vec<ObjRef> = emptied;
+    for _ in 0..hits.len() {
+        if frontier.is_empty() {
+            break;
+        }
+        let touched_parents = detach_from_parents(doc, &frontier, struct_root_ref);
+        let mut next_frontier: Vec<ObjRef> = Vec::new();
+        for parent_ref in touched_parents {
+            if !hit_set.contains(&parent_ref) || emptied_set.contains(&parent_ref) {
+                continue;
+            }
+            let is_empty = doc.get(parent_ref).as_dict().is_some_and(|pd| match pd.get(b"K") {
+                None => true,
+                Some(k) => matches!(&*doc.resolve(k), Object::Array(a) if a.is_empty()),
+            });
+            if is_empty {
+                let _ = doc.update_dict(parent_ref, |d| {
+                    d.remove(b"K");
+                });
+                emptied_set.insert(parent_ref);
+                all_emptied.push(parent_ref);
+                next_frontier.push(parent_ref);
+            }
+        }
+        frontier = next_frontier;
+    }
+    all_emptied
+}
+
+/// Whether `o` can lead to further structure elements or tree nodes during the walk.
+fn is_walkable(o: &Object) -> bool {
+    matches!(o, Object::Ref(_) | Object::Dict(_) | Object::Array(_))
+}
+
+/// Inspect up to the remaining step budget of `items`, charging each inspected element to `steps`
+/// and pushing walkable entries onto `todo` (capped at `limit`).
+fn push_slice_bounded(items: &[Object], todo: &mut Vec<Object>, steps: &mut usize, limit: usize) {
+    let budget_left = limit.saturating_sub(*steps);
+    let take = items.len().min(budget_left);
+    *steps = steps.saturating_add(take);
+    let room = limit.saturating_sub(todo.len());
+    todo.extend(items.iter().take(take).filter(|o| is_walkable(o)).take(room).cloned());
+}
+
+/// Push walkable entries of a number or name tree node (`/Nums`, `/Names`, `/Kids`) without cloning
+/// full inline arrays before checking the walk budget.
+fn push_tree_node_entries(d: &Dict, todo: &mut Vec<Object>, steps: &mut usize, limit: usize) {
+    for key in [&b"Nums"[..], b"Names", b"Kids"] {
+        let Some(entry) = d.get(key) else { continue };
+        match entry {
+            Object::Array(a) => push_slice_bounded(a, todo, steps, limit),
+            o if is_walkable(o) && *steps < limit && todo.len() < limit => {
+                todo.push(o.clone());
+            }
+            _ => {}
+        }
     }
 }
 
@@ -199,13 +296,22 @@ fn objr_target(doc: &Document, o: &Object, gone: &HashMap<ObjRef, Option<i64>>) 
     gone.contains_key(&target).then_some(target)
 }
 
-/// Entries of a number or name tree node to follow: `/Nums`, `/Names`, `/Kids`.
-fn tree_node_entries(d: &Dict) -> Vec<Object> {
-    [&b"Nums"[..], b"Names", b"Kids"].iter().filter_map(|key| d.get(key).cloned()).collect()
+/// Follow up to 32 indirect references to reach an array object, returning the final reference and
+/// a clone of its elements.
+fn resolve_array_ref(doc: &Document, mut r: ObjRef) -> Option<(ObjRef, Vec<Object>)> {
+    for _ in 0..32 {
+        match &*doc.get(r) {
+            Object::Array(a) => return Some((r, a.clone())),
+            Object::Ref(next) => r = *next,
+            _ => return None,
+        }
+    }
+    None
 }
 
-/// Remove each element in `emptied` from its immediate `/P` parent's `/K` (never climbing further).
-fn detach_from_parents(doc: &mut Document, emptied: &[ObjRef], struct_root_ref: Option<ObjRef>) {
+/// Remove each element in `emptied` from its immediate `/P` parent's `/K`, returning the parents
+/// whose `/K` changed.
+fn detach_from_parents(doc: &mut Document, emptied: &[ObjRef], struct_root_ref: Option<ObjRef>) -> Vec<ObjRef> {
     let mut by_parent: HashMap<ObjRef, HashSet<ObjRef>> = HashMap::new();
     for &elem in emptied {
         let Some(parent_ref) = doc.get(elem).as_dict().and_then(|d| d.get(b"P").and_then(Object::as_ref)) else {
@@ -219,6 +325,7 @@ fn detach_from_parents(doc: &mut Document, emptied: &[ObjRef], struct_root_ref: 
             by_parent.entry(parent_ref).or_default().insert(elem);
         }
     }
+    let mut touched = Vec::new();
     for (parent_ref, drop_set) in by_parent {
         let Some(pd) = doc.get(parent_ref).as_dict().cloned() else { continue };
         let Some(k_entry) = pd.get(b"K") else { continue };
@@ -230,6 +337,7 @@ fn detach_from_parents(doc: &mut Document, emptied: &[ObjRef], struct_root_ref: 
                     let _ = doc.update_dict(parent_ref, |d| {
                         d.set(b"K".to_vec(), Object::Array(kept));
                     });
+                    touched.push(parent_ref);
                 }
             }
             _ => {
@@ -237,10 +345,12 @@ fn detach_from_parents(doc: &mut Document, emptied: &[ObjRef], struct_root_ref: 
                     let _ = doc.update_dict(parent_ref, |d| {
                         d.remove(b"K");
                     });
+                    touched.push(parent_ref);
                 }
             }
         }
     }
+    touched
 }
 
 /// Drop `emptied` elements from `/IDTree` when it is a single flat `/Names` node (no `/Kids` or
@@ -272,26 +382,48 @@ fn prune_flat_id_tree(doc: &mut Document, root: &Dict, struct_root_ref: Option<O
             if d.contains(b"Kids") || d.contains(b"Limits") {
                 return;
             }
-            let Some(Object::Array(names)) = d.get(b"Names") else { return };
-            if let Some(new_names) = filter_names(names) {
-                let _ = doc.update_dict(*r, |nd| {
-                    nd.set(b"Names".to_vec(), Object::Array(new_names));
-                });
+            match d.get(b"Names") {
+                Some(Object::Array(names)) => {
+                    if let Some(new_names) = filter_names(names) {
+                        let _ = doc.update_dict(*r, |nd| {
+                            nd.set(b"Names".to_vec(), Object::Array(new_names));
+                        });
+                    }
+                }
+                Some(Object::Ref(names_ref)) => {
+                    if let Some((arr_ref, names)) = resolve_array_ref(doc, *names_ref)
+                        && let Some(new_names) = filter_names(&names)
+                    {
+                        let _ = doc.set_existing(arr_ref, Object::Array(new_names));
+                    }
+                }
+                _ => {}
             }
         }
         Object::Dict(d) => {
             if d.contains(b"Kids") || d.contains(b"Limits") {
                 return;
             }
-            let Some(sr) = struct_root_ref else { return };
-            let Some(Object::Array(names)) = d.get(b"Names") else { return };
-            if let Some(new_names) = filter_names(names) {
-                let _ = doc.update_dict(sr, |rd| {
-                    if let Some(Object::Dict(mut id_dict)) = rd.get(b"IDTree").cloned() {
-                        id_dict.set(b"Names".to_vec(), Object::Array(new_names));
-                        rd.set(b"IDTree".to_vec(), Object::Dict(id_dict));
+            match d.get(b"Names") {
+                Some(Object::Array(names)) => {
+                    let Some(sr) = struct_root_ref else { return };
+                    if let Some(new_names) = filter_names(names) {
+                        let _ = doc.update_dict(sr, |rd| {
+                            if let Some(Object::Dict(mut id_dict)) = rd.get(b"IDTree").cloned() {
+                                id_dict.set(b"Names".to_vec(), Object::Array(new_names));
+                                rd.set(b"IDTree".to_vec(), Object::Dict(id_dict));
+                            }
+                        });
                     }
-                });
+                }
+                Some(Object::Ref(names_ref)) => {
+                    if let Some((arr_ref, names)) = resolve_array_ref(doc, *names_ref)
+                        && let Some(new_names) = filter_names(&names)
+                    {
+                        let _ = doc.set_existing(arr_ref, Object::Array(new_names));
+                    }
+                }
+                _ => {}
             }
         }
         _ => {}
