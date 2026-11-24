@@ -1116,7 +1116,7 @@ impl Metrics {
         out
     }
 
-    fn cid(&self, code: u32) -> u32 {
+    pub(crate) fn cid(&self, code: u32) -> u32 {
         if self.cid_map.is_empty() {
             return code;
         }
@@ -1147,7 +1147,7 @@ impl Metrics {
     /// Where the standard-14 table, indexed by WinAnsi, holds the glyph `code` draws in this font:
     /// its encoding (base and `/Differences`) names the glyph, so a remapped code is measured as
     /// the glyph it now shows (#2894). A [`crate::LATIN_EXTRA`] letter is measured as its base
-    /// letter, as [`crate::Std14::text_width_extra`] lays it out. Symbol and ZapfDingbats are
+    /// letter, as [`crate::text_width_extra`] lays it out. Symbol and ZapfDingbats are
     /// indexed by their own encodings, and a glyph WinAnsi has no code for keeps the code itself.
     fn std14_code(&self, face: crate::Std14, code: u32) -> u32 {
         if matches!(face, crate::Std14::Symbol | crate::Std14::ZapfDingbats) {

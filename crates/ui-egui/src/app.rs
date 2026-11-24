@@ -1,11 +1,28 @@
-use super::hooks::OsEvent;
-use super::state::{
-    Dialog, DocumentCopyJob, GridFile, LeftPanel, LinkOrigin, Mode, NumberDraft, PasswordPrompt, PendingLink, PropsTab, QuickTool, RecentFile,
-    RightPanel, UnlockPrompt,
-};
+use super::state::{DocumentCopyJob, LeftPanel, LinkOrigin, Mode, PasswordPrompt, PendingLink, QuickTool, RecentFile, RightPanel, UnlockPrompt};
 #[cfg(not(target_arch = "wasm32"))]
 use super::state::{OpenOutcome, OpenRequest, PendingRemoteLink};
-use super::*;
+#[cfg(not(target_arch = "wasm32"))]
+use super::{APP_INFO, PendingDestination, PendingOpen, UPDATE_APP, open_worker, recovery};
+use super::{
+    CommentClip, DocId, DocView, PdfCraftApp, PrintDraft, PropsTab, RedactPrefs, RedactSearchDraft, Session, a11y_ui, actions_ui, canvas, chrome,
+    combine_ui, comments, content_ui, dialogs, edit_text_ui, export_ui, fill_sign, i18n, measure_ui, object_ui, ocr_ui, ocr_verify, panes, persist,
+    prepare, print_paper, print_ui, rename_ui, scan_clean_ui, scroll_speed, side_panels, sign_ui, stamps_ui, ui_scale, workflows,
+};
+
+use std::hash::Hash;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use craft::host::queue::{JobQueue, QueueOptions};
+use craft::host::{Host, Wake};
+use craft::platform::autosave::Autosave;
+#[cfg(not(target_arch = "wasm32"))]
+use craft::platform::autosave::RecoveryStore;
+use craft::platform::clipboard::Clipboard;
+use craft::platform::open::FileIntake;
+use craft::ui::runtime::env::{RootEnv, Scale};
+#[cfg(not(target_arch = "wasm32"))]
+use craft::ui::shell::embed;
 
 mod clipboard;
 mod commands;
@@ -15,19 +32,101 @@ mod frame;
 mod input;
 mod keys;
 mod links;
+pub(crate) mod picks;
 mod prefs;
+// Reloading a document whose file changed on disk; the web watches no files.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod reload;
+pub mod settings;
 mod window;
 
 pub(crate) use clipboard::{ObjectClipMark, copy_refused, print_refused};
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use files::same_file;
-use frame::migrate_panel_state;
 pub(crate) use prefs::{MAX_AUTHOR_CHARS, date_text_for_pdf};
 
-impl Default for PdfCraftApp {
-    fn default() -> Self {
-        Self::new()
+/// Where the update check asks for the newest release, in place of GitHub (tests).
+#[cfg(not(target_arch = "wasm32"))]
+pub type UpdateSource = craft::update::updater::CheckSource;
+
+/// The services [`PdfCraftApp::with_host`] builds the app over: the real ones from
+/// [`AppServices::system`], or a test's (`Wake::none()`, an inline watch).
+pub struct AppServices {
+    wake: Wake,
+    clipboard: Clipboard,
+    recovery_dir: Option<PathBuf>,
+    #[cfg(not(target_arch = "wasm32"))]
+    updater: craft::update::updater::Updater,
+    intake: FileIntake,
+    #[cfg(not(target_arch = "wasm32"))]
+    watch: craft::platform::watch::FileWatch<DocId>,
+}
+
+impl AppServices {
+    /// `wake` asks for a frame; `recovery_dir` is where autosaves go (`None`: autosave off);
+    /// `update_source` answers the update check in place of GitHub (`None`: GitHub); `intake`
+    /// holds the files to open; `watch` reports changes to open documents' files.
+    pub fn new(
+        wake: Wake,
+        clipboard: Clipboard,
+        recovery_dir: Option<PathBuf>,
+        #[cfg(not(target_arch = "wasm32"))] update_source: Option<UpdateSource>,
+        intake: FileIntake,
+        #[cfg(not(target_arch = "wasm32"))] watch: craft::platform::watch::FileWatch<DocId>,
+    ) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        let updater = {
+            let updater = craft::update::updater::Updater::new(&UPDATE_APP, pdfcraft_engine::build_info::version().to_string());
+            match update_source {
+                Some(source) => updater.with_source(source),
+                None => updater,
+            }
+        };
+        Self {
+            wake,
+            clipboard,
+            recovery_dir,
+            #[cfg(not(target_arch = "wasm32"))]
+            updater,
+            intake,
+            #[cfg(not(target_arch = "wasm32"))]
+            watch: reload::document_watch(watch),
+        }
     }
+
+    /// These services with `updater` in place of the one over the update source: an updater
+    /// whose update has already installed (craft-update's `Updater::ready_for_tests`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_updater(mut self, updater: craft::update::updater::Updater) -> Self {
+        self.updater = updater;
+        self
+    }
+
+    /// The desktop's or the browser's own services, waking `ctx`, reading the files to open from
+    /// `intake`.
+    pub fn system(ctx: &egui::Context, intake: FileIntake) -> Self {
+        let wake = wake_of(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let clipboard = Clipboard::new(craft::platform::clipboard::SystemClipboard::new());
+            let watch = craft::platform::watch::FileWatch::new(wake.clone());
+            Self::new(wake, clipboard, recovery::prepare_platform_recovery_dir(), None, intake, watch)
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            Self::new(wake, clipboard::web_clipboard(ctx), None, intake)
+        }
+    }
+}
+
+/// A wake that asks `ctx` for a frame.
+fn wake_of(ctx: &egui::Context) -> Wake {
+    let ctx = ctx.clone();
+    Wake::new(move || ctx.request_repaint())
+}
+
+/// A queue of the app's over the host's jobs, named `name` for its lanes.
+fn queue<K: Clone + Eq + Hash + Send + 'static, R: Send + 'static>(host: &Host, wake: &Wake, name: &'static str) -> JobQueue<K, R> {
+    JobQueue::new(host.jobs_shared().clone(), wake.clone(), QueueOptions { name, ..QueueOptions::default() })
 }
 
 impl PdfCraftApp {
@@ -64,64 +163,175 @@ impl PdfCraftApp {
         }
     }
 
-    /// Construct default session, panels, theme and control state with no active property-edit session.
-    pub fn new() -> Self {
+    /// The app over the desktop's own services, waking `ctx`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn new(ctx: &egui::Context) -> Self {
+        let (intake, _) = FileIntake::new(wake_of(ctx));
+        Self::with_intake(ctx, intake)
+    }
+
+    /// [`Self::new`] reading the files to open from `intake` (another launch's, the Apple events').
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_intake(ctx: &egui::Context, intake: FileIntake) -> Self {
+        let services = AppServices::system(ctx, intake);
+        let (files, panels) = craft::dialogs::service::FileService::new(services.wake.clone());
+        let host = Host::builder(APP_INFO).files(Arc::new(files)).build();
+        let mut app = Self::with_host(Arc::new(host), services);
+        app.file_panels = Some(panels);
+        app
+    }
+
+    /// The app unit tests start from: the default host (threads run its jobs, pickers answer Cancelled), no
+    /// wake-ups, no autosave folder, the GitHub update source, a fresh intake and an inline watch.
+    #[cfg(test)]
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn for_unit_tests() -> Self {
+        Self::for_unit_tests_on(Arc::new(Host::builder(APP_INFO).build()))
+    }
+
+    /// [`for_unit_tests`](Self::for_unit_tests) over `host`, for a test whose jobs or files are scripted.
+    #[cfg(test)]
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn for_unit_tests_on(host: Arc<Host>) -> Self {
+        let services = AppServices::new(
+            Wake::none(),
+            Clipboard::new(craft::platform::clipboard::SystemClipboard::new()),
+            None,
+            None,
+            FileIntake::new(Wake::none()).0,
+            craft::platform::watch::FileWatch::new(Wake::none()).inline(),
+        );
+        Self::with_host(host, services)
+    }
+
+    /// Installs the framework runtime on a unit test harness's context, as the app's window does,
+    /// with a system that opens no OS windows and the interface fonts of English.
+    #[cfg(test)]
+    pub(crate) fn install_runtime(ctx: &egui::Context) {
+        let spec = craft::ui::InstallSpec::new(craft::host::target::ShellInfo::default(), Arc::new(craft::window::system::NoWindows));
+        craft::ui::shell::embed::install(ctx, spec, &crate::fonts::ui_fonts(i18n::Lang::EN)).expect("the runtime installs on a fresh context");
+    }
+
+    /// The app over `host` and `services`, with no document open: every queue runs on the host's
+    /// jobs, so a test passes a host over `ManualJobs` and `ScriptedFiles`.
+    pub fn with_host(host: Arc<Host>, services: AppServices) -> Self {
+        crate::icons::register();
+        let AppServices {
+            wake,
+            clipboard,
+            recovery_dir,
+            #[cfg(not(target_arch = "wasm32"))]
+            updater,
+            intake,
+            #[cfg(not(target_arch = "wasm32"))]
+            watch,
+        } = services;
+        #[cfg(not(target_arch = "wasm32"))]
+        let store = recovery_dir.and_then(|dir| match RecoveryStore::open(dir) {
+            Ok(store) => Some(Arc::new(store)),
+            Err(e) => {
+                log::warn!("autosave is off: the recovery folder can't be used: {e}");
+                None
+            }
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        let recovered = store.as_ref().map(|s| s.leftovers()).unwrap_or_default();
+        #[cfg(not(target_arch = "wasm32"))]
+        let autosave = Autosave::new(store.is_some().then(|| std::time::Duration::from_secs_f64(recovery::AUTOSAVE_SECS)));
+        // The browser keeps no recovery folder: autosave is off on the web, and nothing is offered.
+        #[cfg(target_arch = "wasm32")]
+        let (recovered, autosave) = {
+            let _ = recovery_dir;
+            (Vec::new(), Autosave::new(None))
+        };
         Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            // PLAN: assumed open_worker::queue(&Host, Wake) -> JobQueue<u64, ResultKind> (pdf-shell-w13).
+            opens: open_worker::queue(&host, wake.clone()),
+            #[cfg(not(target_arch = "wasm32"))]
+            named_destinations: queue(&host, &wake, "pdfcraft-destinations"),
+            #[cfg(not(target_arch = "wasm32"))]
+            pending_destinations: Vec::new(),
+            pinned_jobs: queue(&host, &wake, "pdfcraft-pinned-folders"),
+            recent_check: persist::recent_check::RecentCheck::new(queue(&host, &wake, "pdfcraft-recent-check")),
+            text_copies: queue(&host, &wake, "pdfcraft-copy-text"),
+            reveal_jobs: queue(&host, &wake, "pdfcraft-reveal"),
+            ocr_runs: queue(&host, &wake, "pdfcraft-ocr"),
+            ocr_batches: queue(&host, &wake, "pdfcraft-ocr-files"),
+            verify_jobs: queue(&host, &wake, "pdfcraft-ocr-verify"),
+            action_jobs: queue(&host, &wake, "pdfcraft-actions"),
+            space_audit_jobs: queue(&host, &wake, "pdfcraft-space-audit"),
+            optimize_jobs: queue(&host, &wake, "pdfcraft-optimize"),
+            scan_cleans: queue(&host, &wake, "pdfcraft-scan-clean"),
+            export_jobs: queue(&host, &wake, "pdfcraft-export"),
+            font_scan: queue(&host, &wake, "pdfcraft-font-scan"),
+            print_tasks: print_ui::PrintTasks::new(host.jobs_shared().clone(), wake.clone()),
+            host,
+            wake,
+            intake,
+            #[cfg(not(target_arch = "wasm32"))]
+            file_panels: None,
+            settings: None,
+            dialogs: craft::ui::dialog::DialogHost::new(),
+            prompts: Default::default(),
+            preferences: None,
+            shortcuts: None,
             panes: Default::default(),
+            dock: std::sync::Arc::new(side_panels::default_workspace(craft::behavior::DockSide::End)),
+            dock_specs: Default::default(),
+            dock_shown: Default::default(),
+            command_states: Default::default(),
+            rail_side: craft::behavior::DockSide::End,
             session: Session::new(),
             status_captions_lang: None,
             views: Vec::new(),
             closed_tabs: Vec::new(),
+            rename_draft: None,
+            rename_returned: rename_ui::Returned::default(),
             active: None,
+            last_frame_active: None,
             mode: Mode::AllTools,
             default_mode: Mode::AllTools,
             view_defaults: Default::default(),
+            highlight_fields: true,
             units: Default::default(),
             blank_paper: crate::paper::Paper::system(),
-            date_format_draft: None,
             mode_override: None,
             left: LeftPanel::AllTools,
-            side_panels: Default::default(),
-            left_open: true,
-            right: None,
             last_right: RightPanel::Comments,
+            notice_inset: 0.0,
+            toolbar_tools_open: true,
+            window_narrow: false,
             right_before_read: None,
             comments_panel_closed: false,
             right_panel_closed: false,
             portfolio_initial: None,
             portfolio_seen: None,
-            #[cfg(target_arch = "wasm32")]
-            web_reads: Default::default(),
             portfolio_panel: None,
             quick_tool: QuickTool::Select,
-            space_hand: None,
             full_screen_tool: None,
             comment_prefs: Default::default(),
+            recent_colours: Default::default(),
+            colour_picks: Default::default(),
             hotbar: Default::default(),
-            theme: ThemeKind::Light,
             // A fresh install follows the desktop's appearance (#1248); saved settings override.
-            theme_preference: ThemePreference::System,
+            theme_preference: craft::theme::ModeChoice::System,
+            suite: craft::theme_store::SuiteClient::memory(),
             reading_colors: Default::default(),
             show_page_edge_shadows: true,
-            #[cfg(target_os = "linux")]
-            desktop_theme: None,
-            #[cfg(target_os = "linux")]
-            desktop_theme_enabled: false,
             scroll_speed: scroll_speed::ScrollSpeed::default(),
             invert_middle_drag: false,
-            animation_effects: motion::AnimationEffects::default(),
+            animation_effects: craft::theme::MotionChoice::System,
             full_screen_escape_exits: true,
-            motion: motion::Motion::default(),
+            full_screen_fill: true,
             language: i18n::AUTO.to_string(),
             ui_scale: None,
-            system_text_scale: 1.0,
-            ui_scale_applied: None,
+            title_bar_choice: Default::default(),
             flatten_fill_sign_on_save: false,
             ask_to_lock_signatures: true,
             placed_signatures: Default::default(),
             pending_lock: None,
             lock_answered: None,
-            lock_remember: false,
             fill_text_size: fill_sign::TEXT_SIZE,
             fill_tool: fill_sign::FillTool::Signature,
             fill_text_color: [0.0; 3],
@@ -129,107 +339,75 @@ impl PdfCraftApp {
             fill_text_border_color: None,
             fill_text_border_shape: pdfcraft_engine::BorderShape::Rectangle,
             fill_text_default: fill_sign::TextBorder::NONE,
-            dialog: None,
-            updates: updates::Updates::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            updater,
+            startup_check: false,
             printer_source: None,
             options_source: None,
             default_paper_source: None,
             printer_papers_source: None,
             spooler: None,
             two_sided_source: None,
-            print_tasks: print_ui::PrintTasks::default(),
             palette_open: false,
-            palette_query: String::new(),
             all_tools_expanded: false,
             all_tools_full: false,
             all_tools_query: String::new(),
             all_tools_tab: (None, false),
             recent: Vec::new(),
             recent_limit: crate::RECENT_FILES_DEFAULT,
+            recent_view: craft::ui::shell::RecentView::List,
+            recent_sort: craft::ui::shell::RecentSort::Opened,
             reopen_last_session: false,
             restore_last_view: true,
             last_views: Vec::new(),
             last_session: Default::default(),
-            quit_session: None,
+            session_keeper: Default::default(),
             reload_changed_files: true,
             update_check_at_start: true,
             show_secured_notice: true,
             text_links: true,
             always_default_view: false,
             #[cfg(not(target_arch = "wasm32"))]
-            watch: Default::default(),
+            watch,
             #[cfg(not(target_arch = "wasm32"))]
-            open_worker: None,
+            reload_request: None,
             #[cfg(not(target_arch = "wasm32"))]
             pending_opens: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
-            deferred_opens: Default::default(),
-            #[cfg(not(target_arch = "wasm32"))]
             password_retry: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            pending_destinations: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             next_open_token: 0,
             #[cfg(not(target_arch = "wasm32"))]
             launch_layout: None,
             #[cfg(not(target_arch = "wasm32"))]
             launch_display_target: None,
-            #[cfg(all(test, not(target_arch = "wasm32")))]
-            open_prepare_gate: None,
-            pinned: Default::default(),
-            recent_check: Default::default(),
+            picks: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
-            reveal_errors: Default::default(),
+            save_flow: Default::default(),
+            pending_save: None,
+            pinned: Default::default(),
             pinned_tools: Vec::new(),
-            pin_tool_search: String::new(),
-            toast: None,
-            toast_script: None,
             script_messages: std::collections::VecDeque::new(),
             script_messages_dropped: 0,
-            toast_dropped: 0,
-            integrated_titlebar: false,
-            titlebar_lights_right: None,
-            window_controls: None,
-            system_title_bar: false,
-            app_frame_shown: None,
+            script_shown: None,
+            posted_notices: Vec::new(),
+            last_edit_refusal: None,
+            notices: craft::ui::notices::NoticeCenter::new(),
+            progress_requests: Vec::new(),
+            progress_cards: Default::default(),
             password_prompt: None,
-            document_copy: None,
             unlock_prompt: None,
-            full_screen: false,
-            inbox: Default::default(),
-            startup_inbox: Default::default(),
-            startup_superseded: false,
-            failed_inbox: Default::default(),
-            unsaved_flag: Default::default(),
-            os_events: None,
-            host_save: None,
+            screen_mode: Default::default(),
             host_dirty: None,
-            close_request: None,
-            save_prompt_button: Default::default(),
-            save_prompt_seen: false,
-            save_prompt_attention: false,
-            #[cfg(not(target_arch = "wasm32"))]
-            pending_overwrite: None,
-            save_override: None,
-            props_draft: None,
-            attachment_description_draft: None,
-            view_draft: None,
-            custom_draft: None,
+            close_guard: None,
+            close_guard_dialog: None,
             props_session: None,
-            requests: Default::default(),
-            #[cfg(not(target_arch = "wasm32"))]
-            pickers: Default::default(),
-            #[cfg(not(target_arch = "wasm32"))]
-            pick_override: None,
-            export_dir_override: None,
-            split_draft: SplitDraft::default(),
-            extract_draft: ExtractDraft::default(),
-            rotate_draft: RotateDraft::default(),
             summary_sort: Default::default(),
+            summarize_dialog: None,
             sign_draft: None,
             presign: None,
             digital_ids: Vec::new(),
-            sig_expanded: Vec::new(),
+            sig_open: Default::default(),
             a11y_options: a11y_ui::A11yOptions::default(),
             ocr_draft: ocr_ui::OcrDraft::default(),
             ocr_run: None,
@@ -239,16 +417,13 @@ impl PdfCraftApp {
             #[cfg(target_arch = "wasm32")]
             ocr_web_waiting: None,
             ocr_verify: ocr_verify::OcrVerify::default(),
-            run_inline: false,
             panicking_frames: 0,
             frame_panicked: false,
             logic_without_ui: false,
             #[cfg(test)]
             panic_next: None,
             custom_actions: Vec::new(),
-            wizard: Default::default(),
             action_run: None,
-            action_files_override: None,
             pdfa: Default::default(),
             compare_old: None,
             compare_pages: String::new(),
@@ -256,14 +431,13 @@ impl PdfCraftApp {
             js_console: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             script_pending: None,
-            doc_js: Default::default(),
+            js_dialog: None,
             a11y: a11y_ui::A11yState::default(),
             tags_state: Default::default(),
             a11y_skipped: Default::default(),
-            alt_draft: Default::default(),
             os_key_store_ids: false,
             cert_viewer: None,
-            space_audit: Vec::new(),
+            space_audit: Default::default(),
             space_audit_of: None,
             combine_draft: Vec::new(),
             combine_conflicts: Default::default(),
@@ -272,203 +446,186 @@ impl PdfCraftApp {
             combine_view: Default::default(),
             combine_zoom: 1.0,
             organize_zoom: 1.0,
-            combine_thumbs: Default::default(),
             image_import: None,
             custom_stamps: Vec::new(),
-            stamp_draft: Default::default(),
-            optimize_draft: OptimizeDraft::default(),
+            stamp_dialog: None,
             optimize_run: None,
             scan_clean_draft: scan_clean_ui::ScanCleanDraft::default(),
             scan_clean_run: None,
-            progress_notice: None,
             page_clipboard: None,
             comment_clipboard: None,
             object_clipboard: None,
             object_clip_mark: Default::default(),
-            grid_drop: None,
             last_snapshot: None,
             last_snapshot_of: None,
             last_copied_image: None,
             last_copied_file: None,
-            system_clipboard: true,
-            html_clipboard_override: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            os_clipboard: None,
-            clipboard_override: None,
-            attach_override: None,
-            duplicate_draft: None,
+            clipboard,
             page_props_draft: None,
-            field_table_draft: None,
             form_preview: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            recovery: store,
+            recovered,
+            autosave,
+            recovered_paths: Default::default(),
+            native_menu: None,
+            window_menu_bar: Default::default(),
             window_title: String::new(),
             page_title: String::new(),
-            recovery: None,
-            recoverable: Vec::new(),
-            recovery_keys: Default::default(),
-            recovered_paths: Default::default(),
-            last_autosave: None,
-            allow_quit: false,
-            deferred_commands: Vec::new(),
-            native_menu: None,
-            menu_input: Vec::new(),
-            menu_pastes: 0,
-            page_keys: Default::default(),
-            dialog_seen: None,
-            dialog_epoch: 0,
-            ctx: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            window_state: Default::default(),
-            styled: false,
-            fonts_ready: false,
-            fonts_cjk: theme::CjkPreference::Default,
             control: None,
-            bookmark_rename: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            control_server: None,
+            control_epoch: 0,
             bookmark_clipboard: None,
-            last_opened_url: None,
-            community_card_closed: false,
-            pending_link: None,
-            pending_full_screen: None,
-            pending_window: None,
-            pending_remote_link: None,
-            protect_draft: Default::default(),
+            word_count_options: Default::default(),
+            printer_marks_draft: Default::default(),
+            convert_colours_draft: Default::default(),
+            hairlines_draft: Default::default(),
             text_style_draft: Default::default(),
             boxes_draft: Default::default(),
             marks_draft: Default::default(),
-            unmarked_page: Default::default(),
+            marks_preview: None,
+            attachment_description: None,
             export_draft: Default::default(),
             export_status: None,
             signature: None,
             initials: None,
-            signature_draft: Default::default(),
-            signature_preview: None,
-            signature_photo: None,
-            saved_signature_previews: [None, None],
             sign_graphic: sign_ui::SignGraphic::Name,
-            sign_graphic_preview: None,
-            #[cfg(target_arch = "wasm32")]
-            signature_images: Default::default(),
             comment_props: None,
-            field_props: None,
-            bulk_field_props: None,
             redact_prefs: RedactPrefs::default(),
             redact_defaults: RedactPrefs::default(),
-            redact_before: None,
-            redact_pages_draft: RedactPagesDraft::default(),
+            redact_props: None,
             redact_search: RedactSearchDraft::default(),
-            hidden_draft: HiddenDraft::default(),
+            redact_search_open: false,
+            hidden_draft: None,
             print_draft: PrintDraft::default(),
-            link_draft: None,
             text_style: content_ui::default_style(),
-            replace_draft: None,
-            number_draft: NumberDraft { from: 1, to: 1, style: pdfcraft_engine::LabelStyle::Decimal, prefix: String::new(), start: 1 },
-            word_count_draft: word_count_ui::Draft::default(),
-            printer_marks_draft: Default::default(),
-            convert_colours_draft: Default::default(),
-            hairlines_draft: Default::default(),
+            edit_more: false,
+            replace_source: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            document_fonts: None,
+            pending_urls: Vec::new(),
+            startup_superseded: false,
+            startup_files: Vec::new(),
+            community_card_closed: false,
+            pending_link: None,
+            pending_window: None,
+            pending_remote_link: None,
         }
     }
 
     /// Fields are being edited (Prepare a form or its Calculation order is open, or a field tool
     /// is picked), unless the form is being previewed.
     pub fn is_preparing(&self) -> bool {
-        ((self.left_open && matches!(self.left, LeftPanel::Tool("form") | LeftPanel::CalculationOrder))
+        ((self.left_open() && matches!(self.left, LeftPanel::Tool("form") | LeftPanel::CalculationOrder))
             || matches!(self.quick_tool, QuickTool::Field(_)))
             && !self.form_preview
-    }
-
-    /// A number that changes whenever the open dialog changes (opened, closed or replaced by
-    /// another), checked every frame. A picker started from a dialog's Browse… button answers
-    /// only into the same showing of that dialog.
-    pub(crate) fn dialog_epoch(&mut self) -> u64 {
-        if self.dialog != self.dialog_seen {
-            self.dialog_seen = self.dialog;
-            self.dialog_epoch = self.dialog_epoch.wrapping_add(1);
-        }
-        self.dialog_epoch
     }
 
     pub fn active_ids(&self) -> Option<(usize, DocId)> {
         self.active.and_then(|i| self.views.get(i).map(|v| (i, v.id)))
     }
 
-    /// Whether something over the pages has the keyboard: what covers them
-    /// ([`Self::covers_pages`]), the hotbar's tools window, a popup, a menu of the menu bar, or the
-    /// bar holding the keyboard (Alt, F10).
-    pub(crate) fn over_pages(&self, ctx: &egui::Context) -> bool {
-        self.covers_pages()
-            || self.hotbar.picker_over_pages(ctx)
-            || egui::Popup::is_any_open(ctx)
-            || craft_menu::bar::is_open(ctx)
-            || craft_menu::bar::is_focused(ctx)
+    /// The right panel showing, as the dock has it.
+    pub(crate) fn right(&self) -> Option<RightPanel> {
+        side_panels::right_of(&self.dock)
     }
 
-    /// Edit ▸ Copy, Cut, Select all and Delete stand for keys, and Edit ▸ Paste for the paste the
-    /// platform answers with. They go where the user's would: to a text field that has the
-    /// keyboard, else to the pages. They join the input once the menu bar has let go of the keys,
-    /// which an in-window menu's click does a pass later (craft-menu stores the menu as open on
-    /// the pass its click closes it). A native menu's click leaves egui's popups and the Hotbar
-    /// tools window open, which hold the pages' keys; a click anywhere else closes them, and so
-    /// does this. Edit ▸ Paste asks the platform for the clipboard only then, so its answer, on a
-    /// later pass, is an ordinary paste. With a text field focused, a native click on Copy, Cut,
-    /// Paste or Select all doesn't come here: craft-menu taps the shortcut for the field instead.
-    fn release_menu_input(&mut self, ctx: &egui::Context) {
-        if self.menu_input.is_empty() && self.menu_pastes == 0 {
-            return;
+    /// Whether the dock has the Tools panel open; Read mode and the expanded All tools view hide it without closing it.
+    pub fn left_open(&self) -> bool {
+        self.dock.layout().contains(&side_panels::PanelId::Tools)
+    }
+
+    /// Opens or closes the Tools panel in the dock, the one record of it (L-136).
+    pub fn set_left_open(&mut self, open: bool) {
+        side_panels::set_panel_visible(self, side_panels::PanelId::Tools, open);
+    }
+
+    /// The app's root values for this frame: appearance mode, motion, interface scale and the
+    /// interface language's direction. The one place the app's `RootEnv` is built.
+    pub(crate) fn root_env(&self, ctx: &egui::Context) -> RootEnv {
+        static SIZES: std::sync::OnceLock<Arc<craft::theme::AppSizes>> = std::sync::OnceLock::new();
+        let sizes = SIZES.get_or_init(|| {
+            let mut sizes = craft::theme::AppSizes::default();
+            sizes.all.insert("typography.display.size".into(), craft::theme::SizeValue::Number(24.0));
+            sizes.all.insert("typography.display.line_height".into(), craft::theme::SizeValue::Number(29.0));
+            Arc::new(sizes)
+        });
+        let lang = i18n::Lang::from_pref(&self.language);
+        let direction = if lang.rtl() { craft_i18n::Direction::Rtl } else { craft_i18n::Direction::Ltr };
+        let system = craft::ui::runtime::env::system_text_scale(ctx).unwrap_or(1.0);
+        let native = ctx.native_pixels_per_point().unwrap_or(1.0);
+        let mut root = RootEnv::new()
+            .mode(self.theme_preference)
+            .density(craft::theme::Size::Comfortable)
+            .direction(direction)
+            .scale(Scale::new(crate::ui_scale::zoom(self.ui_scale, system, native)));
+        if let Ok(theme) = craft::theme::ThemeId::parse("craft.graphite") {
+            root.set_theme(theme);
         }
-        if craft_menu::bar::is_open(ctx) || craft_menu::bar::is_focused(ctx) {
-            ctx.request_repaint();
-            return;
-        }
-        if !ctx.text_edit_focused() {
-            egui::Popup::close_all(ctx);
-            self.hotbar.close_picker();
-        }
-        let events = std::mem::take(&mut self.menu_input);
-        ctx.input_mut(|i| i.events.extend(events));
-        for _ in 0..std::mem::take(&mut self.menu_pastes) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+        root.sizes = Arc::clone(sizes);
+        // Every parameter dialog lays out as a document dialog: inline captions, shaded groups, buttons across the foot.
+        root.values.set(craft::ui::patterns::form_dialogs::DialogLayout(craft::ui::patterns::form_dialogs::ParamLayout::Document));
+        // PdfCraft's looks, opt-in over the framework's defaults: the filled dropdown triangle, shrinking document
+        // tabs with the modified dot, quiet (ghost) Cancel and Don't Save, the theme's page insets and the note
+        // pop-up's flat Reply button.
+        root.values
+            .set(craft::ui::controls::disclosure::DropdownArrow::Triangle)
+            .set(craft::ui::tabs::DocumentTabLook::Shrinking)
+            .set(craft::ui::sections::DialogButtonLook::Quiet)
+            .set(craft::pages::ui::PageInsets::Theme)
+            .set(craft::review::ui::thread::NoteReplyLook::Flat);
+        root.motion = self.animation_effects;
+        // Today is the session's day, the one its date formats and Fill & Sign's Date tool use: the calendars ring it
+        // and pick it.
+        let (year, month, day) = self.session.today();
+        match craft_i18n::CalendarDate::new(year, u8::try_from(month).unwrap_or(0), u8::try_from(day).unwrap_or(0)) {
+            Some(today) => root.today(today),
+            None => root,
         }
     }
 
     /// Read mode and full screen hide the hotbar (the quick tools), and its tools window with it.
     pub(crate) fn hotbar_hidden(&self) -> bool {
-        self.mode == crate::Mode::Read || self.full_screen
+        self.mode == crate::Mode::Read || self.screen_mode.body_only()
     }
 
     /// The pages are covered, and no page key reaches them, a menu click's included: by a dialog or
-    /// prompt that turns the menus off (`modal_open`), by the full-screen and update prompts, which
-    /// leave the menus on, by the palette, which turns them off, or by the OCR Verify screen, which
-    /// takes the pages' place.
+    /// prompt (`modal_open`), by the palette, or by the OCR Verify screen, which takes the pages'
+    /// place.
     pub(crate) fn covers_pages(&self) -> bool {
         // Full screen draws the page alone: not the palette, nor the OCR Verify screen it was
         // entered over. Dialogs and prompts show there too.
-        let shown = !(self.full_screen && self.active.is_some());
-        self.modal_open() || self.pending_full_screen.is_some() || self.updates.prompt_open() || (self.palette_open || self.ocr_verify.open) && shown
+        let shown = !(self.screen_mode.body_only() && self.active.is_some());
+        self.modal_open() || self.prompts.full_screen.is_some() || (self.palette_open || self.ocr_verify.open) && shown
     }
 
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
-    /// on the document underneath it.
+    /// on the document underneath it. The full-screen prompt covers the pages (`covers_pages`)
+    /// while leaving the menus on, as production's `pending_full_screen` did.
     pub(crate) fn modal_open(&self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.script_pending.as_ref().is_some_and(|pending| pending.has_prompt()) {
-            return true;
-        }
-        self.dialog.is_some()
-            || self.close_request.is_some()
+        // Dialogs other than the full-screen prompt (which leaves the menus on) and the startup recovery offer.
+        let fs_open = self.prompts.full_screen.is_some_and(|(id, _)| self.dialogs.open_dialogs().iter().any(|d| d.id == id));
+        self.dialogs.open_dialogs().len() > usize::from(fs_open) + usize::from(self.dialogs.is_open::<craft::ui::dialog::RecoveryDialog>())
             || self.password_prompt.is_some()
             || self.unlock_prompt.is_some()
             || self.pending_link.is_some()
             || self.pending_remote_link.is_some()
-            || self.updates.open
+            || self.preferences.is_some()
+            || self.shortcuts.is_some()
+            || self.redact_props.is_some()
+            || self.redact_search_open
+            || self.hidden_draft.is_some()
+            || self.sign_draft.is_some()
+            || self.cert_viewer.is_some()
+            || self.js_dialog.is_some()
+            || self.comment_props.is_some()
+            || self.stamp_dialog.is_some()
     }
 
-    /// Show `msg` in the toast now, in place of whatever it showed. Script messages still waiting
-    /// show after it.
+    /// Show `msg` as a notice.
     pub fn notify(&mut self, msg: impl Into<String>) {
-        // A left-out count it replaces is said again once the toast is free.
-        self.script_messages_dropped = self.script_messages_dropped.saturating_add(std::mem::take(&mut self.toast_dropped));
-        self.toast = Some((msg.into(), 0.0));
-        self.toast_script = None;
+        self.posted_notices.push(craft::ui::notices::PostedNotice::new(msg));
     }
 
     /// Notify with a static message in the UI language.
@@ -534,57 +691,48 @@ impl PdfCraftApp {
 }
 
 impl eframe::App for PdfCraftApp {
-    /// While files are dragged over the window the system sends no pointer moves, so egui
-    /// would keep the place the pointer entered at: tell it where the pointer really is, so the
-    /// page grid can show (and use) the gap under it.
+    /// The runtime's fired commands and this frame's root values, before egui reads the input.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
-        // The button's release a window move or resize kept from egui.
-        window_controls::release_after_desktop_grab(ctx, raw);
-        // The wheel after Alt+Tab back, before the mouse has moved (#1518).
-        let known = ctx.input(|i| i.pointer.latest_pos().is_some());
-        let size = ctx.input(|i| i.viewport().inner_rect).map_or(egui::Vec2::ZERO, |r| r.size());
-        drag_pointer::locate_wheel(raw, known, size, || drag_pointer::in_window(ctx));
         self.prepare_raw_input(ctx, raw);
-        if raw.hovered_files.is_empty() && raw.dropped_files.is_empty() {
-            return;
-        }
-        if let Some(pos) = drag_pointer::in_window(ctx) {
-            raw.events.push(egui::Event::PointerMoved(pos));
-        }
-        ctx.request_repaint();
     }
 
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        // eframe has just stored the window as it is now: not while it is minimized.
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let minimized = self.ctx.as_ref().is_some_and(|c| c.input(|i| i.viewport().minimized == Some(true)));
-            self.window_state.keep(storage, minimized);
-        }
-        storage.set_string("pdfcraft", self.persist());
+    /// The preferences go to the settings store, which writes them when they changed.
+    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+        self.save_settings();
     }
 
     /// Starts an update that waits for the exit. On macOS the process ends before the app is dropped.
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.updates.exiting();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.updater.start_pending_update();
     }
 
-    /// Each frame's work before drawing: opens, operating-system and control-channel requests,
-    /// the quit guard, shortcuts, and the background jobs' results.
+    /// Each frame's work before drawing: the update check, opens, control-channel requests, the
+    /// background jobs' results, and last the close path (the "save changes?" questions).
     ///
-    /// Last-resort guard (AGENTS.md §4, #3914): a panic in a frame is reported and the app, with
+    /// Last-resort guard (app-agents.md rule 13, #3914): a panic in a frame is reported and the app, with
     /// every open tab, keeps running; see `frame_guard`.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.begin_logic();
-        self.guarded_frame(|app| app.logic_unguarded(ctx));
-        if self.frame_panicked {
-            self.close_after_panic(ctx);
-        }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.update_logic(ctx);
+        self.guarded_frame(ctx, |app| app.logic_unguarded(ctx));
+        self.run_close_path(ctx);
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        #[cfg(not(target_arch = "wasm32"))]
+        embed::before_ui(ui.ctx(), frame);
+        #[cfg(target_arch = "wasm32")]
+        let _ = frame;
         self.begin_ui();
-        self.guarded_frame(|app| app.ui_unguarded(ui));
+        // The native file panels the host's file service asked for, over this window.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(panels) = self.file_panels.as_mut() {
+            panels.pump_with(&mut self.dialogs, Some(&*frame));
+        }
+        let ctx = ui.ctx().clone();
+        self.guarded_frame(&ctx, |app| app.ui_unguarded(ui));
         self.end_ui();
     }
 }
@@ -593,13 +741,9 @@ impl PdfCraftApp {
     fn logic_unguarded(&mut self, ctx: &egui::Context) {
         #[cfg(test)]
         self.injected_panic(crate::frame_guard::FramePart::Logic);
-        self.ctx = Some(ctx.clone());
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_script_dialog(ctx);
-        #[cfg(not(target_arch = "wasm32"))]
-        self.window_state.repair(ctx);
-        self.dialog_epoch();
-        // Notices raised outside `ui` (opened files, OS events, the control channel) translate too.
+        // Notices raised outside `ui` (opened files, the control channel) translate too.
         let lang = i18n::Lang::from_pref(&self.language);
         i18n::set_current(lang);
         self.apply_status_captions(lang);
@@ -608,138 +752,34 @@ impl PdfCraftApp {
         pdfcraft_engine::dates::use_form_date_language(self.session.date_language().unwrap_or(lang.code()));
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if let Some(worker) = &self.open_worker {
-                worker.set_context(ctx);
-            }
-            self.poll_pending_opens();
-            self.show_reveal_errors();
+            self.poll_pending_opens(ctx);
             self.poll_pending_destinations();
         }
         self.check_restored_recent();
-        // Chinese wants its own faces before the Japanese ones (one baseline per line).
-        let cjk = theme::CjkPreference::for_language(lang.code());
-        if !self.styled {
-            egui_extras::install_image_loaders(ctx);
-            theme::install_fonts_for(ctx, cjk);
-            self.fonts_cjk = cjk;
-            theme::apply(ctx, self.theme);
-            self.styled = true;
-        } else {
-            self.fonts_ready = true;
-            if cjk != self.fonts_cjk {
-                // Same family names as before, so named fonts stay valid while the new set loads.
-                theme::install_fonts_for(ctx, cjk);
-                self.fonts_cjk = cjk;
-            }
-        }
-        self.sync_theme(ctx);
-        let native = ctx.native_pixels_per_point().unwrap_or(1.0);
-        ui_scale::sync(ctx, ui_scale::zoom(self.ui_scale, self.system_text_scale, native), &mut self.ui_scale_applied);
-        // Remember user work even if its tab is subsequently closed or Home is selected.
-        self.startup_superseded |= !self.views.is_empty() || self.combine_showing() || self.dialog.is_some() || self.password_prompt.is_some();
-        // Also done in `raw_input_hook`, before input; here for hosts that don't call the hook.
-        self.scroll_speed.set_line_speed(ctx);
-        // Motion reads this frame's wheel input, so it begins in `ui`, in a known UI phase:
-        // `logic` also runs alone while hidden, where the input events and time are stale.
-        // Before taking this frame's drop: the grid must be drawn once with the pointer where
-        // the files were let go before the gap is read.
-        self.finish_grid_drop(ctx);
         // Showing a document hides the Combine files tab.
-        if self.active.is_some() {
+        if self.active.is_some() && self.combine_tab.focused {
             self.combine_tab.focused = false;
         }
-        #[cfg(target_arch = "wasm32")]
-        self.process_signature_images();
-        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
-        #[cfg(not(target_arch = "wasm32"))]
-        let dropped = self.drop_on_signature_pad(dropped);
-        #[cfg(not(target_arch = "wasm32"))]
-        let dropped = self.drop_on_grid(dropped, ctx);
-        // Files dropped on the Combine files tab join its list, all at once, instead of opening.
-        if self.combine_showing() && !dropped.is_empty() {
-            self.drop_into_combine(dropped, ctx);
-        } else {
-            for f in dropped {
-                self.open_dropped(f, ctx);
-            }
+        // The page shown large, while it shows: leaving the tab, whichever way, closes it.
+        if !self.combine_showing() {
+            self.close_combine_preview();
         }
-        let arrived: Vec<(String, Vec<u8>)> = self.inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
-        for (name, bytes) in arrived {
-            if let Err(e) = self.open_bytes(&name, None, bytes) {
-                self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
-            }
-        }
-        // Don't replace a pending prompt or import. A startup file may need its own password
-        // prompt, so its bytes stay queued until the current interaction finishes.
-        #[cfg(not(target_arch = "wasm32"))]
-        let opening = !self.pending_opens.is_empty() || !self.deferred_opens.is_empty();
-        #[cfg(target_arch = "wasm32")]
-        let opening = false;
-        if !opening
-            && self.password_prompt.is_none()
-            && self.image_import.is_none()
-            && self.dialog.is_none()
-            && self.close_request.is_none()
-            && self.pending_link.is_none()
-            && self.pending_remote_link.is_none()
-        {
-            let startup = self.startup_inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
-            for (name, bytes) in startup {
-                let activate = !self.startup_superseded;
-                if let Err(e) = self.open_bytes_with_focus(&name, None, bytes, activate) {
-                    self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e)]);
-                }
-            }
-        }
-        let failed: Vec<(String, String)> = self.failed_inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
-        for (name, e) in failed {
-            self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e)]);
-        }
-        let os_events = self.os_events.as_mut().map(|poll| poll()).unwrap_or_default();
-        for e in os_events {
-            match e {
-                #[cfg(not(target_arch = "wasm32"))]
-                OsEvent::Open(paths) => {
-                    paths.iter().for_each(|p| {
-                        self.open_path(p);
-                    });
-                    // Files handed to the running app (Finder, or another launch): bring its
-                    // window to the front, also when minimized or full screen on another Space.
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                }
-                // Combine from File Explorer's PDF menu, also handed to the running app: the dialog
-                // it opens has to be seen, so the window comes to the front as for Open.
-                #[cfg(not(target_arch = "wasm32"))]
-                OsEvent::Combine(paths) => {
-                    self.combine_paths(&paths);
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                }
-                #[cfg(target_arch = "wasm32")]
-                OsEvent::Open(_) | OsEvent::Combine(_) => {}
-                // Like closing the window: `guard_quit` asks about unsaved changes.
-                OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-            }
-        }
-        self.present_portfolios();
+        // The picks first: a file the user picked opens ahead of a startup file that arrived with it, which then waits
+        // for that open and goes to a background tab.
+        self.process_picks(ctx);
+        // PLAN: assumed PdfCraftApp::open_intake(&mut self, &egui::Context), which opens what the intake holds (pdf-shell-w13).
+        self.open_intake(ctx);
+        self.present_portfolios(ctx);
         if let Some((_, id)) = self.active_ids() {
             let out = self.session.take_js_output(id);
-            self.handle_js(id, out);
+            self.handle_js(ctx, id, out);
         }
         self.script_tick(ctx);
-        if let Some(mut control) = self.control.take() {
-            control.tick(ctx, self);
-            self.control = Some(control);
-        }
-        self.guard_quit(ctx);
-        // macOS: quit through `terminate:` instead of dropping the window (Touch Bar crash, #1136).
-        #[cfg(target_os = "macos")]
-        craft_quit::on_close_request(ctx);
+        self.control_logic(ctx);
         self.autosave_tick(ctx, web_time::Instant::now());
         // Reload documents whose files a build rewrote (#431).
         #[cfg(not(target_arch = "wasm32"))]
-        self.watch_files();
+        self.watch_files(ctx);
         if self.host_dirty.is_some() {
             // An OCR review not yet accepted or rejected is work the page would lose, too.
             let dirty = self.work_at_risk();
@@ -747,52 +787,35 @@ impl PdfCraftApp {
                 report(dirty);
             }
         }
-        self.poll_updates();
+        // The browser asks before a reload or a tab close loses that work.
+        #[cfg(target_arch = "wasm32")]
+        craft::quit::web::hold_leave(self.work_at_risk());
         self.poll_print();
-        // Shortcuts deferred last frame: the text field has taken that frame's typing since.
-        let deferred = std::mem::take(&mut self.deferred_commands);
-        self.native_menu_clicks(ctx);
-        // The input a menu click stands for (⌘C, Delete…), before anything reads this frame's keys.
-        self.release_menu_input(ctx);
-        // A command's chord pressed with the keyboard on the menu bar (Alt, F10) takes it off the
-        // bar, so the chord runs in the same press, the pages' as well as the registry's.
-        craft_menu::bar::leave_for_shortcut(ctx);
-        self.hotbar.close_hidden_picker(ctx, self.hotbar_hidden());
-        self.page_keys = page_keys::PageKeys::new(self.over_pages(ctx));
-        self.shortcuts(ctx);
         // Scrolling and group-drag previews are transient: never resume after changing tabs,
         // opening a modal/palette, or returning to a window that lost focus.
         let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
         for (index, view) in self.views.iter_mut().enumerate() {
             let shut = blocked || self.active != Some(index);
-            view.objects.set_input_blocked(shut);
+            view.session.objects.set_input_blocked(shut);
             if shut {
-                view.auto_scroll.cancel();
-                // Edit text and Add text's drags end while their input is blocked rather than wait, to
-                // land wherever the pointer is once it opens again.
-                if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
-                    view.cancel_edit_text_gestures();
-                }
+                view.left_screen();
+            }
+            // Edit text and Add text's drags end while their input is blocked rather than wait, to
+            // land wherever the pointer is once it opens again.
+            if shut && matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
+                view.cancel_pointer_gestures(ctx);
             }
         }
-        // A field that refused its value this frame keeps the shortcut from saving or printing
-        // behind the user's back; so does a save prompt opened since.
-        if self.process_pending_edits() && self.close_request.is_none() {
-            for (id, doc) in deferred {
-                // Only in the document the shortcut was pressed in.
-                if self.active_ids().map(|(_, active)| active) == doc {
-                    self.execute(id);
-                }
-            }
-        }
+        self.process_pending_edits(ctx);
         self.poll_export();
-        self.auto_ocr_scanned_page();
-        self.poll_ocr();
+        self.auto_ocr_scanned_page(ctx);
+        self.poll_ocr(ctx);
         self.poll_optimize();
         self.poll_scan_clean();
         self.poll_action();
-        // The OCR Verify screen's worker may have finished while no frame was drawn.
-        if self.ocr_verify.phase == workflows::ocr_verify::Phase::Running {
+        // The OCR Verify screen's runs and re-reads may have finished while no frame was drawn.
+        let verify = self.verify_jobs.counts();
+        if verify.queued + verify.running + verify.finished > 0 {
             workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll);
         }
         // A run or re-read asked for while the web build downloaded the models starts when they land.
@@ -800,17 +823,8 @@ impl PdfCraftApp {
         if self.ocr_verify.awaiting_models.is_some() {
             workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll_models);
         }
-        // So may a page or region re-read's worker.
-        if self.ocr_verify.reread.is_some() {
-            workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll_reread);
-        }
-        self.process_file_requests();
-        #[cfg(not(target_arch = "wasm32"))]
-        self.process_picked();
-        self.settle_presign();
-        // Last, after everything that can open or answer the "save changes?" question.
-        self.attend_save_prompt(ctx);
-        self.sync_native_menu(ctx);
+        self.reopen_returned_rename(ctx);
+        self.settle_presign(ctx);
         self.sync_titles(ctx);
     }
 
@@ -818,117 +832,80 @@ impl PdfCraftApp {
         #[cfg(test)]
         self.injected_panic(crate::frame_guard::FramePart::Ui);
         let ctx = ui.ctx().clone();
-        i18n::set_current(i18n::Lang::from_pref(&self.language));
-        // A language change switches stock chrome between LTR and RTL before anything is drawn.
-        theme::sync_direction(&ctx);
-        // Fonts registered via set_fonts only take effect next frame; named families would panic now.
-        if !self.fonts_ready {
-            ctx.request_repaint();
-            return;
+        // The chosen language becomes the current one; when it changes, its fonts are installed with it (the
+        // runtime installed the starting language's fonts at creation, L-227).
+        let lang = i18n::Lang::from_pref(&self.language);
+        if i18n::current().code() != lang.code() {
+            i18n::set_current(lang);
+            crate::fonts::ui_fonts(lang).install(&ctx);
         }
-        // Before any widget reads this frame's wheel input or draws.
-        self.motion.begin_pass(&ctx, self.animation_effects);
-        // One-time 0.36 -> 0.37 panel persistence migration, before any panel stores or reads state.
-        migrate_panel_state(ui);
-        // Another tool lets go of a click whose picture is still being found, whether or not its
-        // page is drawn to see the change.
-        let picks = self.quick_tool == QuickTool::Select;
-        for view in &mut self.views {
-            view.begin_render_frame();
-            if !picks {
-                view.pending_pick = None;
+        // Another tool lets go of a click whose picture is still being found.
+        if self.quick_tool != QuickTool::Select {
+            for view in &mut self.views {
+                view.session.pending_pick = None;
             }
         }
-        panes::frame(self);
+        panes::frame(self, &ctx);
         // Forms' scripts read Highlight fields as `app.runtimeHighlight`.
-        let highlight = self.active.and_then(|i| self.views.get(i)).map_or(self.view_defaults.highlight_fields, |v| v.highlight_fields);
+        let highlight = self.active.and_then(|i| self.views.get(i)).map_or(self.highlight_fields, |v| v.session.highlight_fields);
         self.session.set_field_highlight(highlight);
         self.sync_titles(&ctx);
         // The accessible window takes the same name, so a screen reader (AT-SPI on Linux, UIA on
         // Windows) can tell it apart (#4614). egui builds the root node afresh every pass.
         ctx.accesskit_node_builder(egui::accesskit_root_id(), |root| root.set_label(self.window_title.as_str()));
-        if self.full_screen && self.active.is_some() {
-            // Full screen: the page on black, nothing else, as Acrobat's Full Screen Mode (Esc
-            // or ⌘L to leave).
-            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(egui::Color32::BLACK)).show(ui, |ui| {
-                if let Some(i) = self.active {
-                    match compare_ui::side_by_side(self, i) {
-                        Some((old, new)) => compare_ui::compare_area(self, old, new, ui),
-                        None => canvas::document_area(self, i, ui),
-                    }
-                }
-            });
-            dialogs::show(self, &ctx);
-            // Notices too: a refused field value or a failed save must be seen in full screen.
-            self.show_progress(&ctx);
-            widgets::toast(self, &ctx);
-            self.finish_render_frame(&ctx);
-            if let Some(mut control) = self.control.take() {
-                control.finish_frame(&ctx, self);
-                self.control = Some(control);
-            }
-            return;
+        // PLAN: assumed chrome::shell(&mut PdfCraftApp, &mut egui::Ui), the AppShell pass: menu bar, tab strip, mode bar, window edges and captions (pdf-chrome-w10).
+        // The shell's body is the dock, whose document panel draws the page area or what takes its place
+        // (`side_panels::document_view`).
+        chrome::shell(self, ui);
+        // The keys the app reads itself, once the shell's pass has fired the commands and the tool host has taken
+        // its tools' keys; leaving full screen is followed in this same pass.
+        self.shortcuts(&ctx);
+        self.follow_screen_mode();
+        if !self.full_screen_document() && !self.ocr_verify.open {
+            // FitWindow and CenterWindow, once the document just opened is laid out.
+            self.window_preferences_frame(&ctx);
+            self.process_pending_edits(&ctx);
         }
-        self.sync_window_frame(&ctx);
-        if self.draws_window_frame() {
-            window_controls::resize_edges(&ctx);
+        // Dialogs and notices show in full screen too: a refused field value or a failed save must be seen.
+        dialogs::show(self, ui);
+        crate::notices::show(self, ui);
+        // A notice or progress change made after the notices' turn (a finished job's result) is posted next pass: ask for it.
+        if !self.posted_notices.is_empty() || !self.progress_requests.is_empty() {
+            ctx.request_repaint();
         }
-        chrome::tab_strip(self, ui);
-        // A document can hide the toolbars, the menu and the panels around it in its tab (ISO
-        // 32000-2 Table 147); the tab strip stays, and F8 brings the rest back (`viewer_prefs`).
-        let hidden = self.hidden_interface();
-        if !hidden.mode_bar(self.native_menu.is_some()) {
-            chrome::mode_bar(self, ui);
+        for view in &mut self.views {
+            crate::canvas::organize::finish_reveal(view, &ctx);
         }
-        // Another mode or the Home tab puts the OCR Verify screen away, as Exit does; Correct
-        // recognized text brings it back with its review as it was.
+        // A whole-document text copy read off the UI thread reaches the clipboard once its pages are read (after this
+        // pass's own copies, which replace it).
+        self.drain_text_copies(&ctx);
+        // The native menu bar (macOS): its clicks fire as commands and it takes this pass's command states, last.
+        crate::menus::frame(self, &ctx);
+        // Screenshots are issued only after a settled pass that really drew the window.
+        self.control_ui_pass(&ctx);
+        // Addresses `open_url` queued: the runtime opens them in the browser.
+        for url in self.pending_urls.drain(..) {
+            ctx.open_url(egui::OpenUrl::new_tab(url));
+        }
+    }
+
+    /// Whether the window shows the active document alone on black, as Acrobat's Full Screen Mode (Esc or ⌘L to
+    /// leave).
+    pub(crate) fn full_screen_document(&self) -> bool {
+        self.screen_mode.body_only() && self.active.is_some()
+    }
+
+    /// Puts away the views the front tab no longer shows, before the document panel draws.
+    pub(crate) fn settle_document_view(&mut self) {
+        // Another mode or the Home tab puts the OCR Verify screen away, as Exit does; Correct recognized text brings
+        // it back with its review as it was.
         if self.ocr_verify.open && (self.active.is_none() || self.ocr_verify.shown_in.is_some_and(|m| m != self.mode)) {
             self.ocr_verify.open = false;
         }
         self.ocr_verify.shown_in = self.ocr_verify.open.then_some(self.mode);
-        if self.ocr_verify.open {
-            // The OCR Verify screen takes the document area (its four panes) under the window's
-            // tabs, menus and toolbar, which stay (#6485); the palette, dialogs and notices
-            // still show above it.
-            workflows::ocr_verify::show(self, ui);
-            palette::show(self, &ctx);
-            dialogs::show(self, &ctx);
-            self.show_progress(&ctx);
-            widgets::toast(self, &ctx);
-            self.finish_render_frame(&ctx);
-            if let Some(mut control) = self.control.take() {
-                control.finish_frame(&ctx, self);
-                self.control = Some(control);
-            }
-            return;
-        }
         // Whichever way another tab came to the front, it shows instead of the expanded view.
         if self.all_tools_full && self.all_tools_tab != self.shown_tab() {
             self.all_tools_full = false;
-        }
-        if !hidden.window_ui {
-            side_panels::show(self, ui);
-        }
-        let t = theme::Tokens::get(&ctx);
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(ui, |ui| {
-            if self.mode == Mode::AllTools && self.all_tools_full && !hidden.window_ui {
-                all_tools_ui::show(self, ui);
-            } else {
-                panes::page_area(self, ui);
-            }
-        });
-        // FitWindow and CenterWindow, once the document just opened is laid out.
-        self.window_preferences_frame(&ctx);
-        self.process_pending_edits();
-        palette::show(self, &ctx);
-        dialogs::show(self, &ctx);
-        self.show_progress(&ctx);
-        widgets::toast(self, &ctx);
-        self.finish_render_frame(&ctx);
-        // Screenshots are issued only after a settled pass that really drew the window.
-        if let Some(mut control) = self.control.take() {
-            control.finish_frame(&ctx, self);
-            self.control = Some(control);
         }
     }
 }

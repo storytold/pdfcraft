@@ -466,8 +466,8 @@ impl<'a> Device<'a> for TextDevice {
         // Inside an `/ActualText` replacement only the glyph's box matters.
         let replaced = self.actual.is_some();
         let text = match glyph.as_unicode() {
-            Some(hayro::hayro_interpret::hayro_cmap::BfString::Char(c)) => c.to_string(),
-            Some(hayro::hayro_interpret::hayro_cmap::BfString::String(s)) => s,
+            Some(craft_pdf::interpret::hayro_cmap::BfString::Char(c)) => c.to_string(),
+            Some(craft_pdf::interpret::hayro_cmap::BfString::String(s)) => s,
             None if replaced => String::new(),
             None => {
                 if text_debug() {
