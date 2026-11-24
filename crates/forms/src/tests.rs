@@ -2721,6 +2721,131 @@ fn check_box_styles_change_the_mark() {
 }
 
 #[test]
+fn circle_radio_button_draws_round_frame_and_other_styles_stay_square() {
+    // #8216: a radio button with Button Style Circle (/MK /CA (l), the default) draws a circular
+    // background and border in both Off and On appearances; other radio styles and check boxes
+    // (including CheckStyle::Circle on a check box) keep rectangular frames.
+    let mut doc = one_page();
+    let radio = add_field(&mut doc, 0, [50.0, 600.0, 70.0, 620.0], &NewField::Radio { group: None, export: "A".into() }, None).unwrap();
+    let wide = add_field(&mut doc, 0, [100.0, 600.0, 160.0, 620.0], &NewField::Radio { group: None, export: "W".into() }, None).unwrap();
+    let check = add_field(&mut doc, 0, [50.0, 700.0, 70.0, 720.0], &NewField::CheckBox, None).unwrap();
+
+    let state_stream = |doc: &Document, name: &str, state: &str| {
+        let all = fields(doc);
+        let w = &field(&all, name).widgets[0];
+        let n = doc.resolve(doc.get(w.obj).as_dict().unwrap().get(b"AP").unwrap()).as_dict().unwrap().get(b"N").cloned().unwrap();
+        let r = doc.resolve(&n).as_dict().unwrap().reference(state.as_bytes()).expect("state appearance");
+        let Object::Stream(s) = &*doc.get(r) else { panic!("appearance is a stream") };
+        String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+    };
+
+    // Default Circle radio button: Off and On both draw circular background + circular border, no `re`.
+    let off = state_stream(&doc, &radio, "Off");
+    let on = state_stream(&doc, &radio, "A");
+    for (label, stream) in [("Off", &off), ("On", &on)] {
+        assert!(!stream.contains(" re "), "{label}: no rectangle in circle radio: {stream}");
+        assert!(stream.contains("1 1 1 rg\n20 10 m") && stream.contains(" c f\n"), "{label}: circular background: {stream}");
+        assert!(stream.contains("0.55 0.55 0.55 RG\n1 w\n19.5 10 m") && stream.contains(" c S\n"), "{label}: circular border: {stream}");
+    }
+    // On state adds the centred inner dot (radius 20 * 0.25 = 5 around (10, 10) -> starts at 15 10 m).
+    assert!(on.contains("0 g\n15 10 m") && !off.contains("15 10 m"), "centred dot only in On: on={on} off={off}");
+
+    // Dashed, beveled and inset border styles on Circle radio button.
+    set_props(
+        &mut doc,
+        &radio,
+        &FieldProps {
+            appearance: Some(LookPatch { style: Some(BorderStyle::Dashed), width: Some(2.0), ..Default::default() }),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let dashed = state_stream(&doc, &radio, "Off");
+    assert!(dashed.contains("[3] 0 d\n19 10 m") && dashed.contains(" c S\n") && !dashed.contains(" re "), "dashed circle border: {dashed}");
+
+    set_props(
+        &mut doc,
+        &radio,
+        &FieldProps {
+            appearance: Some(LookPatch { style: Some(BorderStyle::Beveled), width: Some(1.0), ..Default::default() }),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let beveled = state_stream(&doc, &radio, "Off");
+    assert!(beveled.contains("1 G\n") && beveled.contains("0.5 G\n") && !beveled.contains(" re "), "beveled circle shading: {beveled}");
+
+    set_props(
+        &mut doc,
+        &radio,
+        &FieldProps { appearance: Some(LookPatch { style: Some(BorderStyle::Inset), width: Some(1.0), ..Default::default() }), ..Default::default() },
+    )
+    .unwrap();
+    let inset = state_stream(&doc, &radio, "Off");
+    assert!(inset.contains("0.5 G\n") && inset.contains("0.75 G\n") && !inset.contains(" re "), "inset circle shading: {inset}");
+
+    // Radio with Square or Cross style keeps rectangular background and border.
+    for style in [CheckStyle::Square, CheckStyle::Cross] {
+        set_props(
+            &mut doc,
+            &radio,
+            &FieldProps {
+                check_style: Some(style),
+                appearance: Some(LookPatch { style: Some(BorderStyle::Solid), width: Some(1.0), ..Default::default() }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let sq_off = state_stream(&doc, &radio, "Off");
+        assert!(sq_off.contains("0 0 20 20 re f") && sq_off.contains("0.5 0.5 19 19 re S"), "{style:?} keeps square frame: {sq_off}");
+    }
+
+    // Check box with Circle style keeps a rectangular frame (Acrobat draws round frames only on radios).
+    set_props(&mut doc, &check, &FieldProps { check_style: Some(CheckStyle::Circle), ..Default::default() }).unwrap();
+    let cb_off = state_stream(&doc, &check, "Off");
+    let cb_on = state_stream(&doc, &check, "Yes");
+    assert!(cb_off.contains("0 0 20 20 re f") && cb_off.contains("0.5 0.5 19 19 re S"), "checkbox Off stays square: {cb_off}");
+    assert!(
+        cb_on.contains("0.5 0.5 19 19 re S") && cb_on.contains("15 10 m") && cb_on.contains(" c f\n"),
+        "checkbox On stays square with round dot: {cb_on}"
+    );
+
+    // Non-square radio widget (60 x 20): circle diameter equals the smaller side (20), centred at (30, 10).
+    let wide_off = state_stream(&doc, &wide, "Off");
+    let wide_on = state_stream(&doc, &wide, "W");
+    assert!(!wide_off.contains(" re "), "non-square radio has no rectangle: {wide_off}");
+    assert!(
+        wide_off.contains("40 10 m") && wide_off.contains("30 20 c") && wide_off.contains("20 10 c") && wide_off.contains("30 0 c"),
+        "background diameter = 20 around (30, 10): {wide_off}"
+    );
+    assert!(wide_off.contains("39.5 10 m") && wide_off.contains(" c S\n"), "border inset to r=9.5 around (30, 10): {wide_off}");
+    assert!(wide_on.contains("35 10 m") && wide_on.contains(" c f\n"), "dot centred at (30, 10) with r=5: {wide_on}");
+
+    // No border colour / no background: nothing drawn for them (no stray path).
+    set_props(
+        &mut doc,
+        &wide,
+        &FieldProps { appearance: Some(LookPatch { border: Some(None), fill: Some(None), ..Default::default() }), ..Default::default() },
+    )
+    .unwrap();
+    let bare_off = state_stream(&doc, &wide, "Off");
+    let bare_on = state_stream(&doc, &wide, "W");
+    assert!(bare_off.trim().is_empty(), "Off with no border/background emits no stray path: {bare_off:?}");
+    assert!(
+        bare_on.contains("35 10 m") && !bare_on.contains(" S") && !bare_on.contains("39.5") && !bare_on.contains("40 10 m"),
+        "On draws only the dot: {bare_on}"
+    );
+
+    // Display-only appearance (/NeedAppearances) for a Circle radio button also draws a round border.
+    let copy = with_field_appearances(&mk_buttons(true)).expect("buttons to draw");
+    let radio_shown = state_ap(&copy, &field(&fields(&copy), "radio").widgets[0], "B");
+    assert!(
+        radio_shown.contains("0 0 1 RG\n1 w\n23.5 12 m") && radio_shown.contains(" c S\n") && !radio_shown.contains(" re "),
+        "NeedAppearances radio is round: {radio_shown}"
+    );
+}
+
+#[test]
 fn check_mark_takes_the_fields_text_colour() {
     // #4261: Appearance ▸ Text Color is written to /DA; the mark of a check box or radio button
     // is drawn in it (Acrobat does the same), black when the /DA has no colour.

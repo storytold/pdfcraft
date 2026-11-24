@@ -5004,8 +5004,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.field.properties"]
 tools = ["form_set_props", "form_fields"]
-evidence = ["crates/forms/src/tests.rs::check_box_styles_change_the_mark", "crates/ui-egui/tests/it/prepare.rs::options_tab_sets_the_check_box_style", "crates/automation/tests/it/automation.rs::preparing_a_form_through_tools"]
-notes = "Field Properties ▸ Options: check, circle, cross, diamond, square, star (/MK /CA, Acrobat's codes), drawn as paths; defaults check (check boxes) and circle (radio buttons)"
+evidence = ["crates/forms/src/tests.rs::check_box_styles_change_the_mark", "crates/forms/src/tests.rs::circle_radio_button_draws_round_frame_and_other_styles_stay_square", "crates/ui-egui/tests/it/prepare.rs::options_tab_sets_the_check_box_style", "crates/automation/tests/it/automation.rs::preparing_a_form_through_tools"]
+notes = "Field Properties ▸ Options: check, circle, cross, diamond, square, star (/MK /CA, Acrobat's codes), drawn as paths; defaults check (check boxes) and circle (radio buttons). Circle-style radio buttons draw a circular background and border (solid, dashed, beveled, inset, underline) inscribed in the widget's shorter side in both Off and On appearances and under /NeedAppearances; other radio styles and check boxes keep rectangular frames."
 
 [[feature]]
 id = "form.add-dropdown"

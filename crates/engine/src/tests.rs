@@ -13565,10 +13565,11 @@ fn need_appearances_buttons_are_displayed_from_their_captions() {
             .count()
     };
     // In a widget whose lower-left corner is (x, y): its whole inside, the top-left of its inside
-    // (where a check mark leaves the box empty), and the lower-left corner (outside a dot).
+    // (where a check mark leaves the box empty), and a patch inside the file's 4..36 square but
+    // outside a circle inscribed in the 40 x 40 radio box.
     let inside = |x: u32, y: u32| (x + 6, y + 6, x + 34, y + 34);
     let top_left = |x: u32, y: u32| (x + 6, y + 26, x + 14, y + 34);
-    let corner = |x: u32, y: u32| (x + 5, y + 5, x + 9, y + 9);
+    let corner = |x: u32, y: u32| (x + 4, y + 4, x + 6, y + 6);
     let mut s = Session::new();
     let id = s.open("form.pdf", None, Arc::new(pdf(true)), None).unwrap();
     let shown = render(s.get(id).unwrap().display.clone());
@@ -13583,6 +13584,7 @@ fn need_appearances_buttons_are_displayed_from_their_captions() {
         assert!(ink(page, (100, 100, 140, 102)) > 30, "{how}: and keeps its border");
         let dot = ink(page, (188, 108, 212, 132));
         assert!(dot > 300 && ink(page, corner(180, 100)) == 0, "{how}: the radio button's dot: {dot}");
+        assert!(ink(page, (186, 106, 188, 108)) > 0, "{how}: the radio button's circular border");
     }
     let saved = s.save_bytes(id).unwrap();
     assert!(saved.windows(18).any(|w| w == b"0 g 4 4 32 32 re f"), "the file keeps its own appearances");
