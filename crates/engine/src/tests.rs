@@ -9959,7 +9959,7 @@ fn xfa_scripts_stay_off_with_javascript_off() {
 }
 
 fn admin_lock() -> Option<js::JavaScriptLock> {
-    Some(js::JavaScriptLock { source: "HKLM\\SOFTWARE\\Policies\\PdfCraft\\DisableJavaScript".into(), unreadable: None })
+    Some(js::JavaScriptLock { source: "HKLM\\SOFTWARE\\Policies\\ArtCraft\\PdfCraft\\DisableJavaScript".into(), unreadable: None })
 }
 
 #[test]

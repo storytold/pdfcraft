@@ -880,7 +880,7 @@ fn unasked_requests(requests: &mut Vec<Request>) {
 /// operating system; see `pdfcraft_platform::policy`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JavaScriptLock {
-    /// Where the policy was found, e.g. `HKLM\SOFTWARE\Policies\PdfCraft\DisableJavaScript`.
+    /// Where the policy was found, e.g. `HKLM\SOFTWARE\Policies\ArtCraft\PdfCraft\DisableJavaScript`.
     pub source: String,
     /// Set when a policy is there but could not be read: JavaScript stays off until an
     /// administrator fixes it, and this says what was wrong.

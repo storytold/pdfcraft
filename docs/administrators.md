@@ -24,25 +24,28 @@ A flag is the number `0` or `1`, or a boolean where the store has one.
 
 ### Windows
 
-Values under `HKEY_LOCAL_MACHINE\SOFTWARE\Policies\PdfCraft` for the whole machine, or
-`HKEY_CURRENT_USER\SOFTWARE\Policies\PdfCraft` for one user (Group Policy's User
+Values under `HKEY_LOCAL_MACHINE\SOFTWARE\Policies\ArtCraft\PdfCraft` for the whole machine, or
+`HKEY_CURRENT_USER\SOFTWARE\Policies\ArtCraft\PdfCraft` for one user (Group Policy's User
 Configuration). Flags are `REG_DWORD`. When both are set, the one that restricts more wins.
 
 ```powershell
-New-Item -Path 'HKLM:\SOFTWARE\Policies\PdfCraft' -Force | Out-Null
-New-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\PdfCraft' -Name 'DisableJavaScript' -PropertyType DWord -Value 1 -Force | Out-Null
+$key = 'HKLM:\SOFTWARE\Policies\ArtCraft\PdfCraft'
+# Only create the key when it's missing: New-Item -Force on a key that exists empties it.
+if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+New-ItemProperty -Path $key -Name 'DisableJavaScript' -PropertyType DWord -Value 1 -Force | Out-Null
 ```
 
 or, from `cmd` or an RMM component:
 
 ```
-reg add "HKLM\SOFTWARE\Policies\PdfCraft" /v DisableJavaScript /t REG_DWORD /d 1 /f
+reg add "HKLM\SOFTWARE\Policies\ArtCraft\PdfCraft" /v DisableJavaScript /t REG_DWORD /d 1 /f
 ```
 
 Only administrators can write the `HKLM` key, so use it for a lock people can't undo. `HKCU` is
 the user's own hive, and depending on the key's permissions the user may be able to write
-`HKCU\SOFTWARE\Policies\PdfCraft` too, and so remove a value set there; check the permissions on
-your machines before relying on it. A value under `HKCU` never weakens one under `HKLM`.
+`HKCU\SOFTWARE\Policies\ArtCraft\PdfCraft` too, and so remove a value set there; check the
+permissions on your machines before relying on it. A value under `HKCU` never weakens one under
+`HKLM`.
 
 ### macOS
 

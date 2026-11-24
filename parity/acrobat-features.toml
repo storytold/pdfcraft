@@ -10368,7 +10368,7 @@ status = "partial"
 commands = ["app.preferences"]
 tools = ["js_enabled"]
 evidence = ["crates/platform/src/policy.rs::a_policy_file_sets_flags_by_name", "crates/platform/src/policy.rs::a_damaged_policy_file_keeps_everything_locked", "crates/platform/src/policy.rs::the_stricter_of_two_policies_wins", "crates/engine/src/tests.rs::an_administrators_lock_keeps_scripts_off_whatever_the_preference", "crates/engine/src/tests.rs::an_administrators_lock_holds_on_the_background_open_path", "crates/ui-egui/tests/it/javascript.rs::an_administrators_policy_locks_the_preference_off", "crates/automation/tests/it/automation.rs::an_administrators_policy_keeps_javascript_off"]
-notes = "Locked policies (Acrobat's FeatureLockDown): DisableJavaScript only (#1846), read at launch from HKLM/HKCU\\SOFTWARE\\Policies\\PdfCraft (Windows), managed preferences for ai.storyteller.pdfcraft (macOS) or /etc/pdfcraft/policy.json (Linux; /usr/local/etc on FreeBSD); an unreadable policy keeps JavaScript off. Missing: other keys (update check, mcp and --control, crash recovery, self-signed IDs), defaults the user may change, ADMX templates, the Flatpak build (no host /etc)."
+notes = "Locked policies (Acrobat's FeatureLockDown): DisableJavaScript only (#1846), read at launch from HKLM/HKCU\\SOFTWARE\\Policies\\ArtCraft\\PdfCraft (Windows), managed preferences for ai.storyteller.pdfcraft (macOS) or /etc/pdfcraft/policy.json (Linux; /usr/local/etc on FreeBSD); an unreadable policy keeps JavaScript off. Missing: other keys (update check, mcp and --control, crash recovery, self-signed IDs), defaults the user may change, ADMX templates, the Flatpak build (no host /etc)."
 
 [[feature]]
 id = "misc.localization"

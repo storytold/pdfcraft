@@ -258,7 +258,7 @@ fn document_scripts_and_preferences() {
 #[test]
 fn an_administrators_policy_locks_the_preference_off() {
     let mut h = harness();
-    let source = r"HKLM\SOFTWARE\Policies\PdfCraft\DisableJavaScript";
+    let source = r"HKLM\SOFTWARE\Policies\ArtCraft\PdfCraft\DisableJavaScript";
     h.state_mut().session.set_javascript_lock(Some(pdfcraft_engine::js::JavaScriptLock { source: source.into(), unreadable: None }));
     h.state_mut().open_preferences();
     h.run_steps(2);

@@ -4,7 +4,7 @@
 //!
 //! | System | Where |
 //! |---|---|
-//! | Windows | `HKLM\SOFTWARE\Policies\PdfCraft`, then `HKCU\SOFTWARE\Policies\PdfCraft` (Group Policy, Intune, an RMM's `reg add`); flags are `REG_DWORD` 0 or 1 |
+//! | Windows | `HKLM\SOFTWARE\Policies\ArtCraft\PdfCraft`, then `HKCU\SOFTWARE\Policies\ArtCraft\PdfCraft` (Group Policy, Intune, an RMM's `reg add`); flags are `REG_DWORD` 0 or 1 |
 //! | macOS | managed preferences for `ai.storyteller.pdfcraft` (a configuration profile from an MDM); flags are booleans |
 //! | Linux, BSD | `/etc/pdfcraft/policy.json` (`/usr/local/etc/pdfcraft/policy.json` on FreeBSD), a JSON object such as `{"DisableJavaScript": true}` |
 //!
@@ -26,10 +26,16 @@ pub const DISABLE_JAVASCRIPT: &str = "DisableJavaScript";
 pub const MACOS_DOMAIN: &str = "ai.storyteller.pdfcraft";
 
 /// The Windows policy key, under both `HKLM` and `HKCU`.
-pub const WINDOWS_KEY: &str = r"SOFTWARE\Policies\PdfCraft";
+pub const WINDOWS_KEY: &str = r"SOFTWARE\Policies\ArtCraft\PdfCraft";
+
+/// The policy file on Linux and the BSDs other than FreeBSD.
+const ETC_POLICY_FILE: &str = "/etc/pdfcraft/policy.json";
+
+/// The policy file on FreeBSD, which keeps the configuration of packages and ports in `/usr/local/etc`.
+const FREEBSD_POLICY_FILE: &str = "/usr/local/etc/pdfcraft/policy.json";
 
 /// The policy file on Linux and the BSDs.
-pub const POLICY_FILE: &str = if cfg!(target_os = "freebsd") { "/usr/local/etc/pdfcraft/policy.json" } else { "/etc/pdfcraft/policy.json" };
+pub const POLICY_FILE: &str = if cfg!(target_os = "freebsd") { FREEBSD_POLICY_FILE } else { ETC_POLICY_FILE };
 
 /// A policy file larger than this is refused (it is a handful of flags).
 pub const MAX_POLICY_FILE_BYTES: u64 = 64 * 1024;
@@ -40,7 +46,7 @@ pub enum Managed<T> {
     /// No policy: the person using the app decides.
     #[default]
     NotSet,
-    /// Set by the policy at `source` (e.g. `HKLM\SOFTWARE\Policies\PdfCraft\DisableJavaScript`).
+    /// Set by the policy at `source` (e.g. `HKLM\SOFTWARE\Policies\ArtCraft\PdfCraft\DisableJavaScript`).
     Set { value: T, source: String },
     /// A policy is at `source` but couldn't be read; the setting is treated as its most
     /// restrictive value.
@@ -325,6 +331,19 @@ mod tests {
         assert_eq!(policy(Managed::Unreadable { source: source(), reason: "bad".into() }).javascript_lock(), Some((source(), Some("bad".into()))));
     }
 
+    /// Administrators' templates, profiles and scripts name these places, and RFC-0082
+    /// (storytold/craft-contrib#82) proposes the same layout for every Craft app: moving one
+    /// breaks every deployment that set it. Both policy files are checked on every platform.
+    #[test]
+    fn the_policy_locations_follow_the_craft_suite_layout() {
+        assert_eq!(WINDOWS_KEY, r"SOFTWARE\Policies\ArtCraft\PdfCraft");
+        assert_eq!(MACOS_DOMAIN, "ai.storyteller.pdfcraft");
+        assert_eq!(ETC_POLICY_FILE, "/etc/pdfcraft/policy.json");
+        assert_eq!(FREEBSD_POLICY_FILE, "/usr/local/etc/pdfcraft/policy.json");
+        let expected = if cfg!(target_os = "freebsd") { FREEBSD_POLICY_FILE } else { ETC_POLICY_FILE };
+        assert_eq!(POLICY_FILE, expected);
+    }
+
     #[test]
     fn the_stricter_of_two_policies_wins() {
         let on = |s: &str| Managed::Set { value: true, source: s.into() };
@@ -450,7 +469,7 @@ mod tests {
     #[test]
     fn a_missing_registry_key_is_no_policy() {
         // Read-only: a key nobody has, under both roots.
-        let key = format!(r"SOFTWARE\Policies\PdfCraft-test-{}-absent", std::process::id());
+        let key = format!(r"SOFTWARE\Policies\ArtCraft\PdfCraft-test-{}-absent", std::process::id());
         assert_eq!(windows::value(&winsafe::HKEY::LOCAL_MACHINE, &key, DISABLE_JAVASCRIPT), Raw::Missing);
         assert_eq!(windows::value(&winsafe::HKEY::CURRENT_USER, &key, DISABLE_JAVASCRIPT), Raw::Missing);
         // An existing key without the value.
