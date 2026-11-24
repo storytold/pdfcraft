@@ -4,6 +4,7 @@
 
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use pdfcraft_render::DestView;
 use pdfcraft_ui_egui::canvas::Fit;
 use pdfcraft_ui_egui::{OpenOutcome, PdfCraftApp, RightPanel};
@@ -36,12 +37,15 @@ fn fixture(catalog: &str) -> Vec<u8> {
 
 fn harness(catalog: &str) -> Harness<'static, PdfCraftApp> {
     let bytes = fixture(catalog);
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.open_bytes("open.pdf", None, bytes).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.open_bytes(&egui::Context::default(), "open.pdf", None, bytes).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     settle(&mut h);
@@ -87,8 +91,8 @@ fn near(got: f32, want: f32, what: &str) {
 #[test]
 fn an_xyz_open_action_puts_its_point_at_the_window_top_left() {
     let mut h = harness("/OpenAction [5 0 R /XYZ 100 500 2]");
-    assert_eq!(h.state().views[0].current, 2);
-    assert_eq!((h.state().views[0].fit, h.state().views[0].zoom), (Fit::None, 2.0));
+    assert_eq!(h.state().views[0].current(), 2);
+    assert_eq!((h.state().views[0].fit(), h.state().views[0].zoom()), (Fit::None, 2.0));
     // `left`: the page sits 100 user points further left than one opened at left 0.
     let (left, scale) = page_left(&h, 2);
     let (left0, _) = page_left(&harness("/OpenAction [5 0 R /XYZ 0 500 2]"), 2);
@@ -101,8 +105,8 @@ fn an_xyz_open_action_puts_its_point_at_the_window_top_left() {
 #[test]
 fn a_fith_open_action_puts_its_top_at_the_window_top() {
     let mut h = harness("/OpenAction [4 0 R /FitH 400]");
-    assert_eq!(h.state().views[0].current, 1);
-    assert_eq!(h.state().views[0].fit, Fit::Width);
+    assert_eq!(h.state().views[0].current(), 1);
+    assert_eq!(h.state().views[0].fit(), Fit::Width);
     let (page, top) = window_top(&mut h);
     assert_eq!(page, 1);
     near(top, 400.0, "y 400 is at the window's top edge");
@@ -119,33 +123,36 @@ fn a_named_open_destination_opens_its_page() {
         "/OpenAction /there /Dests << /there [7 0 R /XYZ 0 792 0] >>",
     ] {
         let mut h = harness(catalog);
-        assert_eq!(h.state().views[0].current, 4, "{catalog}");
+        assert_eq!(h.state().views[0].current(), 4, "{catalog}");
         // A zoom of 0 keeps the default zoom.
-        assert_eq!(h.state().views[0].fit, Fit::Width, "{catalog}");
+        assert_eq!(h.state().views[0].fit(), Fit::Width, "{catalog}");
         let (page, top) = window_top(&mut h);
         assert_eq!(page, 4, "{catalog}");
         near(top, 792.0, "the page's top is at the window's top edge");
     }
     // A name nothing defines opens on the first page.
     let h = harness("/OpenAction << /S /GoTo /D /missing >> /Dests << /there [7 0 R /Fit] >>");
-    assert_eq!(h.state().views[0].current, 0);
+    assert_eq!(h.state().views[0].current(), 0);
 }
 
 #[test]
 fn always_my_default_view_keeps_the_zoom_and_goes_to_the_page_top() {
     let bytes = fixture("/OpenAction [5 0 R /XYZ 100 500 2]");
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.always_default_view = true;
-        app.open_bytes("open.pdf", None, bytes).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.always_default_view = true;
+            app.open_bytes(&egui::Context::default(), "open.pdf", None, bytes).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     settle(&mut h);
-    assert_eq!(h.state().views[0].current, 2);
-    assert_eq!(h.state().views[0].fit, Fit::Width);
+    assert_eq!(h.state().views[0].current(), 2);
+    assert_eq!(h.state().views[0].fit(), Fit::Width);
     let (page, top) = window_top(&mut h);
     assert_eq!(page, 2);
     near(top, 792.0, "the page's top");
@@ -155,23 +162,23 @@ fn always_my_default_view_keeps_the_zoom_and_goes_to_the_page_top() {
 fn a_full_screen_document_shows_its_non_full_screen_panel_outside_full_screen() {
     for (mode, want) in [("UseThumbs", Some(RightPanel::Pages)), ("UseOC", Some(RightPanel::Layers)), ("UseNone", None)] {
         let mut h = harness(&format!("/PageMode /FullScreen /ViewerPreferences << /NonFullScreenPageMode /{mode} >>"));
-        assert!(h.state().pending_full_screen.is_some(), "{mode}: full screen is asked for");
-        assert_eq!(h.state().right, want, "{mode}: the panel behind the prompt");
+        // The prompt (`ask_full_screen`) is on the dialog host, found by its question.
+        h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Open in Full Screen mode?");
+        assert_eq!(crate::support::right(h.state()), want, "{mode}: the panel behind the prompt");
         // Declining it leaves that panel.
-        let ctx = h.ctx.clone();
-        h.state_mut().resolve_full_screen_prompt(&ctx, false);
+        h.get_by_label("Not now").click();
         h.run_steps(2);
-        assert_eq!((h.state().full_screen, h.state().right), (false, want), "{mode}: declined");
+        assert_eq!((h.state().full_screen(), crate::support::right(h.state())), (false, want), "{mode}: declined");
         // Entering and leaving full screen comes back to it.
-        h.state_mut().apply_full_screen(true);
+        h.state_mut().set_full_screen(true);
         h.run_steps(2);
-        h.state_mut().apply_full_screen(false);
+        h.state_mut().set_full_screen(false);
         h.run_steps(2);
-        assert_eq!(h.state().right, want, "{mode}: after full screen");
+        assert_eq!(crate::support::right(h.state()), want, "{mode}: after full screen");
     }
     // Without /PageMode /FullScreen the entry means nothing.
     let h = harness("/ViewerPreferences << /NonFullScreenPageMode /UseThumbs >>");
-    assert_eq!(h.state().right, None);
+    assert_eq!(crate::support::right(h.state()), None);
 }
 
 #[test]
@@ -183,11 +190,11 @@ fn a_full_screen_document_with_an_outline_shows_it_only_when_it_asks_to() {
         ("/ViewerPreferences << /NonFullScreenPageMode /UseOutlines >>", Some(RightPanel::Bookmarks)),
     ] {
         let h = harness(&format!("/Outlines 9 0 R /PageMode /FullScreen {prefs}"));
-        assert_eq!(h.state().right, want, "{prefs}");
+        assert_eq!(crate::support::right(h.state()), want, "{prefs}");
     }
     // Not in full screen, a document with an outline still opens on it.
     let h = harness("/Outlines 9 0 R");
-    assert_eq!(h.state().right, Some(RightPanel::Bookmarks));
+    assert_eq!(crate::support::right(h.state()), Some(RightPanel::Bookmarks));
 }
 
 /// Named destinations for open parameters: `intro` (page 2) in the catalog's /Dests and
@@ -204,32 +211,48 @@ fn manual(test: &str) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// A window with no document, in English.
+#[cfg(not(target_arch = "wasm32"))]
+fn bare_window() -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app
+        }
+    });
+    h.run_steps(4);
+    h
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_file_named_with_open_parameters_opens_at_their_destination() {
-    // #3425: a help system starts PdfCraft with `manual.pdf#nameddest=…`. Files named at launch
-    // open before the first frame.
+    // #3425: a help system starts PdfCraft with `manual.pdf#nameddest=…`.
     let path = manual("launch");
     for (parameters, page) in [("#nameddest=Load Flow", 3), ("#nameddest=intro", 1), ("#intro", 1), ("#page=5", 4), ("#zoom=200", 2)] {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        assert_eq!(app.open_path(&format!("{path}{parameters}")), OpenOutcome::Opened, "{parameters}");
-        assert_eq!(app.views.len(), 1, "{parameters}");
-        assert_eq!(app.views[0].current, page, "{parameters}");
+        let mut h = bare_window();
+        assert!(matches!(h.state_mut().open_path(&format!("{path}{parameters}")), OpenOutcome::Opened | OpenOutcome::Pending), "{parameters}");
+        crate::support::wait_until(&mut h, "the manual", |app| app.views.len() == 1);
+        assert_eq!(h.state().views.len(), 1, "{parameters}");
+        assert_eq!(h.state().views[0].current(), page, "{parameters}");
+        let app = h.state();
         assert_eq!(app.session.get(app.views[0].id).and_then(|d| d.path.clone()).as_deref(), Some(path.as_str()), "{parameters}: the file itself");
-        assert_eq!(app.toast, None, "{parameters}");
+        assert!(crate::support::shown_notice(&h).is_none(), "{parameters}");
     }
     // A name the file doesn't define: it opens where it would have, and says so.
-    let mut app = PdfCraftApp::new();
-    app.set_option("language", "en").unwrap();
-    assert_eq!(app.open_path(&format!("{path}#nameddest=Nowhere")), OpenOutcome::Opened);
-    assert_eq!(app.views[0].current, 2);
-    assert!(app.toast.as_ref().is_some_and(|(text, _)| text.contains("named destination was not applied")), "{:?}", app.toast);
+    let mut h = bare_window();
+    assert!(matches!(h.state_mut().open_path(&format!("{path}#nameddest=Nowhere")), OpenOutcome::Opened | OpenOutcome::Pending));
+    crate::support::wait_until(&mut h, "the manual", |app| app.views.len() == 1);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].current(), 2);
+    assert!(crate::support::shown_notice(&h).is_some(), "the unapplied name is told");
     // A path that names no file, before a `#` or as a whole, still fails as before.
-    let mut app = PdfCraftApp::new();
-    app.set_option("language", "en").unwrap();
-    assert_eq!(app.open_path(&format!("{path}.missing#page=2")), OpenOutcome::Failed);
-    assert!(app.views.is_empty());
+    let mut h = bare_window();
+    assert!(!matches!(h.state_mut().open_path(&format!("{path}.missing#page=2")), OpenOutcome::Opened | OpenOutcome::Focused));
+    h.run_steps(4);
+    assert!(h.state().views.is_empty());
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -237,23 +260,26 @@ fn a_file_named_with_open_parameters_opens_at_their_destination() {
 fn open_parameters_handed_to_the_running_app_show_their_destination() {
     // A second launch hands `manual.pdf#…` to the running app, which opens it in the background.
     let path = manual("running");
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     // Asked twice before it has opened, it opens at the place asked for last.
     assert_eq!(h.state_mut().open_path(&format!("{path}#page=5")), OpenOutcome::Pending);
     assert_eq!(h.state_mut().open_path(&format!("{path}#nameddest=Load Flow")), OpenOutcome::Pending);
-    crate::support::wait_until(&mut h, "the manual at Load Flow", |app| app.views.len() == 1 && app.views[0].current == 3);
+    crate::support::wait_until(&mut h, "the manual at Load Flow", |app| app.views.len() == 1 && app.views[0].current() == 3);
     // Asked again for a place in the open file, its tab goes there instead of opening it again.
     assert_eq!(h.state_mut().open_path(&format!("{path}#page=2")), OpenOutcome::Focused);
-    assert_eq!((h.state().views.len(), h.state().views[0].current), (1, 1));
+    assert_eq!((h.state().views.len(), h.state().views[0].current()), (1, 1));
     // A name is looked up off the UI thread: the tab moves once the lookup is in.
     assert_eq!(h.state_mut().open_path(&format!("{path}#nameddest=Load Flow")), OpenOutcome::Focused);
-    assert_eq!(h.state().views[0].current, 1, "not yet");
-    crate::support::wait_until(&mut h, "Load Flow", |app| app.views[0].current == 3);
+    assert_eq!(h.state().views[0].current(), 1, "not yet");
+    crate::support::wait_until(&mut h, "Load Flow", |app| app.views[0].current() == 3);
     // A page asked for while a name is still being looked up wins: the lookup's answer is dropped.
     assert_eq!(h.state_mut().open_path(&format!("{path}#nameddest=intro")), OpenOutcome::Focused);
     assert_eq!(h.state_mut().open_path(&format!("{path}#page=5")), OpenOutcome::Focused);
@@ -261,17 +287,16 @@ fn open_parameters_handed_to_the_running_app_show_their_destination() {
         h.run_steps(1);
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    assert_eq!(h.state().views[0].current, 4);
+    assert_eq!(h.state().views[0].current(), 4);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn open_parameters_wait_with_their_file_behind_a_password_prompt_and_a_full_queue() {
-    // Launched with a protected file first and more files than the open worker queues at once:
-    // the files past its bound wait their turn, and the later ones wait behind the password
-    // prompt. A file named with open parameters keeps them while it waits, and named again, it
-    // opens at the place asked for last; the protected file named again with them while its
-    // password is asked for opens there once unlocked. They opened where they would have.
+    // Launched with a protected file first and many files after it: the later ones wait behind
+    // the password prompt. A file named with open parameters keeps them while it waits, and named
+    // again, it opens at the place asked for last; the protected file named again with them while
+    // its password is asked for opens there once unlocked. They opened where they would have.
     let dir = std::env::temp_dir().join(format!("pdfcraft-open-parameters-queue-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -284,24 +309,34 @@ fn open_parameters_wait_with_their_file_behind_a_password_prompt_and_a_full_queu
     let others: Vec<String> = (0..16).map(|i| file(&format!("other-{i:02}.pdf"), fixture(""))).collect();
     let manual = file("manual.pdf", fixture(NAMED));
     let (first, rest, last) = (locked.clone(), others.clone(), manual.clone());
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_path(&first);
-        for path in &rest {
-            app.open_path(path);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_path(&first);
+            for path in &rest {
+                app.open_path(path);
+            }
+            assert_eq!(app.open_path(&format!("{last}#page=2")), OpenOutcome::Pending);
+            assert_eq!(app.open_path(&format!("{last}#page=5")), OpenOutcome::Pending);
+            assert_eq!(app.open_path(&format!("{first}#page=4")), OpenOutcome::Pending);
+            app
         }
-        assert_eq!(app.open_path(&format!("{last}#page=2")), OpenOutcome::Pending);
-        assert_eq!(app.open_path(&format!("{last}#page=5")), OpenOutcome::Pending);
-        assert_eq!(app.open_path(&format!("{first}#page=4")), OpenOutcome::Pending);
-        app
     });
     h.run_steps(4);
-    assert!(h.state().password_prompt.is_some(), "the protected file is asked for");
-    h.state_mut().submit_password(Some("reader".into()));
+    // The dialog, named by its heading.
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Password required");
+    // The password goes into the dialog's field and OK is pressed.
+    // PLAN: the password field is found by its role; the OK button is the dialog's own (the last "Open" button)
+    let field = h.get_by(|n| n.role() == egui::accesskit::Role::PasswordInput && !n.is_hidden());
+    field.focus();
+    field.type_text("reader");
+    h.run_steps(1);
+    h.get_all_by_role_and_label(egui::accesskit::Role::Button, "Open").last().unwrap().click();
     crate::support::wait_until(&mut h, "every file", |app| app.views.len() == others.len() + 2);
     let app = h.state();
-    let page_of = |path: &str| app.views.iter().find(|v| app.session.get(v.id).and_then(|d| d.path.as_deref()) == Some(path)).map(|v| v.current);
+    let page_of = |path: &str| app.views.iter().find(|v| app.session.get(v.id).and_then(|d| d.path.as_deref()) == Some(path)).map(|v| v.current());
     // `fixture(NAMED)` opens at page 3 by its /OpenAction.
     assert_eq!(page_of(&manual), Some(4), "the file past the queue's bound, at the last page asked for");
     assert_eq!(page_of(&locked), Some(3), "the protected file, at the page asked for during its prompt");
