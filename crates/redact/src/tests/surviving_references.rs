@@ -390,6 +390,35 @@ fn type3_font_used_in_a_form_xobject_has_its_redacted_glyph_removed() {
     assert!(!full_save_holds(&doc, b"SECRET_FORM_GLYPH_PAYLOAD"), "redacted glyph program survived");
 }
 
+/// Type 3 cleanup decoded a glyph program again for every font listing it: 2 000 fonts sharing
+/// one large program read it 2 000 times. It is read once now, and the cleanup still keeps the
+/// glyph every font shows.
+#[test]
+fn a_glyph_program_many_type3_fonts_share_is_read_once() {
+    const FONTS: usize = 2_000;
+    let names: String = (0..FONTS).map(|i| format!("/T{i} {} 0 R ", 6 + i)).collect();
+    let shows: String = (0..FONTS).map(|i| format!("/T{i} 10 Tf (A) Tj ")).collect();
+    let mut objs = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << {names}>> >> >>").into_bytes(),
+        stream("", format!("BT 10 100 Td {shows}ET").as_bytes()),
+        stream("", [b"SHARED_GLYPH ".as_slice(), &b"0 0 m 1 1 l S ".repeat(50_000)].concat()),
+    ];
+    objs.extend((0..FONTS).map(|_| {
+        b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 65 /Widths [0] /Encoding << /Differences [65 /A] >> /CharProcs << /A 5 0 R >> >>".to_vec()
+    }));
+    let mut doc = pdf(objs);
+    // The glyphs are drawn at x 10 with no width, so a mark away from them leaves them all.
+    mark(&mut doc, 0, &[[200.0, 200.0, 250.0, 250.0]], "");
+    let started = std::time::Instant::now();
+    apply(&mut doc, None).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
+    let font = doc.get(ObjRef::new(6, 0));
+    let procs = doc.resolve(font.as_dict().unwrap().get(b"CharProcs").unwrap());
+    assert!(procs.as_dict().unwrap().contains(b"A"), "the glyph every font shows was unlinked");
+}
+
 /// A Type 3 font with glyphs A (its program object 7) and B (object 8), at object 6.
 const TYPE3: &str = "<< /Type /Font /Subtype /Type3 /FontBBox [0 -200 1000 800] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 66 /Widths [500 500] /Encoding << /Differences [65 /A /B] >> /CharProcs << /A 7 0 R /B 8 0 R >> >>";
 
@@ -779,6 +808,37 @@ fn a_type3_font_only_a_soft_mask_without_resources_selects_stays_on_the_page() {
     mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
     assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
     assert!(!full_save_holds(&doc, b"REDACTED_GLYPH_A"), "the redacted glyph program survived");
+    assert!(full_save_holds(&doc, b"MASK_GLYPH_B"), "the glyph the soft mask shows was unlinked");
+    assert!(saved_first_page_lists_font(&doc, b"T4"), "the page no longer lists the font the soft mask selects");
+}
+
+/// The same soft mask, its ExtGState selected after a surplus operand (`(x) /GS1 gs`), which the
+/// renderer ignores: read from the front, the cleanups never read the group, and dropped the font
+/// it selects and its glyph.
+#[test]
+fn a_type3_font_only_a_soft_mask_selected_after_a_surplus_operand_selects_stays_on_the_page() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET (x) /GS1 gs 150 150 100 100 re f"),
+        b"<< /Font << /T3 6 0 R /T4 7 0 R >> /ExtGState << /GS1 << /Type /ExtGState /SMask << /Type /Mask /S /Luminosity /G 8 0 R >> >> >> >>"
+            .to_vec(),
+        type3_abc(9),
+        type3_abc(12),
+        stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >>",
+            b"1 g BT /T4 40 Tf 160 180 Td (B) Tj ET",
+        ),
+        stream("", b"% REDACTED_GLYPH_A"),
+        stream("", b"% UNUSED_GLYPH_B"),
+        stream("", b"% PAGE_GLYPH_C"),
+        stream("", b"% UNUSED_T4_GLYPH_A"),
+        stream("", b"% MASK_GLYPH_B"),
+        stream("", b"% UNUSED_T4_GLYPH_C"),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
     assert!(full_save_holds(&doc, b"MASK_GLYPH_B"), "the glyph the soft mask shows was unlinked");
     assert!(saved_first_page_lists_font(&doc, b"T4"), "the page no longer lists the font the soft mask selects");
 }

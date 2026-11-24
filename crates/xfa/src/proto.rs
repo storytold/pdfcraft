@@ -24,7 +24,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use roxmltree::{Node, NodeId};
+use crate::xml::{Node, NodeId};
 
 /// Deepest element nesting written. A prototype may contain a reference to an element that
 /// contains it (Example 6.8): such loops are cut, and this bounds what remains.
@@ -74,6 +74,7 @@ pub(crate) fn expand(template: Node) -> (Option<String>, Vec<String>) {
         soms: HashMap::new(),
         search: MAX_SEARCH,
         work: MAX_WORK,
+        child_counts: HashMap::new(),
         active: HashMap::new(),
         missing: false,
         external: false,
@@ -107,29 +108,47 @@ pub(crate) fn expand(template: Node) -> (Option<String>, Vec<String>) {
 /// default namespace).
 type Scope<'a> = HashMap<Option<&'a str>, &'a str>;
 
-struct Writer<'a, 'd> {
-    template: Node<'a, 'd>,
+struct Writer<'a> {
+    template: Node<'a>,
     out: String,
     limit: usize,
     /// Why expanding stopped, for the warning.
     failed: Option<String>,
     /// The template's elements by `id`, built on the first `#id` reference.
-    ids: Option<HashMap<&'a str, Node<'a, 'd>>>,
+    ids: Option<HashMap<&'a str, Node<'a>>>,
     /// The prototype each element names, once resolved: a prototype shared by many elements
     /// is reached again from each of them, and its reference (of any length) is read once.
-    refs: HashMap<NodeId, Option<Node<'a, 'd>>>,
+    refs: HashMap<NodeId, Option<Node<'a>>>,
     /// SOM references already resolved, by their text.
-    soms: HashMap<&'a str, Option<Node<'a, 'd>>>,
+    soms: HashMap<&'a str, Option<Node<'a>>>,
     /// Elements left to look at for SOM references.
     search: usize,
     /// Children, attributes and namespaces left to look at while merging layers.
     work: usize,
+    /// Bounded memoization only; each use still pays the full child count.
+    child_counts: HashMap<NodeId, usize>,
     /// The elements being written around the current one: inheriting from one is a loop.
     active: HashMap<NodeId, u32>,
     missing: bool,
     external: bool,
     looped: bool,
     layers_cut: bool,
+}
+
+/// Counting a reused prototype must not itself repeatedly walk its descendants.
+/// Cache only complete direct-child counts, and cap the optimization's memory.
+/// Truncated counts are not exact and must never be cached. Budget charging is unchanged.
+fn child_count(node: Node<'_>, work: usize, cache: &mut HashMap<NodeId, usize>) -> usize {
+    const MAX_CACHED_COUNTS: usize = 4_096;
+    let stop = work.saturating_add(1);
+    if let Some(count) = cache.get(&node.id()) {
+        return (*count).min(stop);
+    }
+    let count = node.children().take(stop).count();
+    if count < stop && cache.len() < MAX_CACHED_COUNTS {
+        cache.insert(node.id(), count);
+    }
+    count
 }
 
 fn escape(s: &str, attribute: bool, out: &mut String) {
@@ -162,9 +181,9 @@ fn alternative(tag: &str, c: &Node) -> bool {
     c.is_element() && (tag == "value" || tag == "ui" && !matches!(c.tag_name().name(), "picture" | "extras"))
 }
 
-impl<'a, 'd> Writer<'a, 'd> {
+impl<'a> Writer<'a> {
     /// The element `n` names as its prototype. `usehref` wins over `use` when both are set.
-    fn reference(&mut self, n: Node<'a, 'd>) -> Option<Node<'a, 'd>> {
+    fn reference(&mut self, n: Node<'a>) -> Option<Node<'a>> {
         if let Some(found) = self.refs.get(&n.id()) {
             return *found;
         }
@@ -176,7 +195,7 @@ impl<'a, 'd> Writer<'a, 'd> {
         found
     }
 
-    fn find_reference(&mut self, n: Node<'a, 'd>) -> Option<Node<'a, 'd>> {
+    fn find_reference(&mut self, n: Node<'a>) -> Option<Node<'a>> {
         let set = |name: &str| n.attribute(name).map(str::trim).filter(|v| !v.is_empty());
         let found = if let Some(href) = set("usehref") {
             match href.split_once('#') {
@@ -215,7 +234,7 @@ impl<'a, 'd> Writer<'a, 'd> {
         }
     }
 
-    fn by_id(&mut self, id: &str) -> Option<Node<'a, 'd>> {
+    fn by_id(&mut self, id: &str) -> Option<Node<'a>> {
         let template = self.template;
         let ids = self.ids.get_or_insert_with(|| {
             let mut ids = HashMap::new();
@@ -230,7 +249,7 @@ impl<'a, 'd> Writer<'a, 'd> {
     }
 
     /// A SOM expression from the template down, such as `$template.#subform.styles.Heading[1]`.
-    fn som(&mut self, expr: &'a str) -> Option<Node<'a, 'd>> {
+    fn som(&mut self, expr: &'a str) -> Option<Node<'a>> {
         if expr.len() > MAX_SOM {
             return None;
         }
@@ -246,7 +265,7 @@ impl<'a, 'd> Writer<'a, 'd> {
         found
     }
 
-    fn resolve(&mut self, expr: &str) -> Option<Node<'a, 'd>> {
+    fn resolve(&mut self, expr: &str) -> Option<Node<'a>> {
         let mut steps = expr.split('.').map(str::trim).peekable();
         while steps.peek().is_some_and(|s| matches!(*s, "$template" | "template" | "template[0]" | "xfa" | "$xfa" | "xfa[0]")) {
             steps.next();
@@ -269,7 +288,7 @@ impl<'a, 'd> Writer<'a, 'd> {
 
     /// The children of `at` called `name` (or of class `#name`), looking through nameless
     /// containers, until the one at `index` is found.
-    fn step(&mut self, at: Node<'a, 'd>, name: &str, index: usize, out: &mut Vec<Node<'a, 'd>>, depth: usize) {
+    fn step(&mut self, at: Node<'a>, name: &str, index: usize, out: &mut Vec<Node<'a>>, depth: usize) {
         if depth > MAX_DEPTH {
             return;
         }
@@ -295,7 +314,7 @@ impl<'a, 'd> Writer<'a, 'd> {
     }
 
     /// `n` and the prototypes it inherits from, nearest first.
-    fn chain(&mut self, n: Node<'a, 'd>, layers: &mut Vec<Node<'a, 'd>>) {
+    fn chain(&mut self, n: Node<'a>, layers: &mut Vec<Node<'a>>) {
         let mut seen = HashSet::from([n.id()]);
         layers.push(n);
         let mut at = n;
@@ -332,7 +351,7 @@ impl<'a, 'd> Writer<'a, 'd> {
     /// element, by prefix, and return the scope inside it: the nearest layer's binding of a prefix
     /// wins, and a prefix bound around the element to another URI is bound again here (an XHTML
     /// `body` inside a template whose default namespace is XFA's).
-    fn namespaces(&mut self, layers: &[Node<'a, 'd>], scope: &Scope<'a>) -> Scope<'a> {
+    fn namespaces(&mut self, layers: &[Node<'a>], scope: &Scope<'a>) -> Scope<'a> {
         let mut inner: Scope<'a> = scope.clone();
         let mut decided: HashSet<Option<&'a str>> = HashSet::new();
         for layer in layers {
@@ -358,7 +377,7 @@ impl<'a, 'd> Writer<'a, 'd> {
     }
 
     /// Write the attributes of the element `layers` make, inside the namespace scope `inner`.
-    fn attributes(&mut self, layers: &[Node<'a, 'd>], inner: &Scope<'a>) {
+    fn attributes(&mut self, layers: &[Node<'a>], inner: &Scope<'a>) {
         // Attributes: the nearest layer that has one wins; `id` and `name` are not inherited.
         // Attributes are told apart by namespace URI and local name. One whose layer's prefix is
         // bound here to another URI (the nearest layer's binding won) is written with a fresh
@@ -415,7 +434,7 @@ impl<'a, 'd> Writer<'a, 'd> {
 
     /// Write the element that `stack` makes together: `stack[0]` over `stack[1]` over …, each
     /// an element of the same class. `scope` holds the namespaces already declared around it.
-    fn element(&mut self, stack: &[Node<'a, 'd>], scope: &Scope<'a>, depth: usize) {
+    fn element(&mut self, stack: &[Node<'a>], scope: &Scope<'a>, depth: usize) {
         if self.failed.is_some() {
             return;
         }
@@ -439,7 +458,7 @@ impl<'a, 'd> Writer<'a, 'd> {
         // further than the budget left), attributes and namespaces, and the scope around it.
         let mut cost = scope.len().saturating_add(layers.len());
         for l in &layers {
-            let children = l.children().take(self.work.saturating_add(1)).count();
+            let children = child_count(*l, self.work, &mut self.child_counts);
             cost = cost.saturating_add(children).saturating_add(l.attributes().len()).saturating_add(l.namespaces().len());
         }
         if self.failed.is_some() || !self.charge(cost) {
@@ -477,9 +496,9 @@ impl<'a, 'd> Writer<'a, 'd> {
         // out is left out whole, so it need not be counted either.
         let left_out = |c: &Node| c.tag_name().name() == "proto" || alternative(tag, c) && chosen != Some(c.tag_name().name());
         // The deeper layers' children by (class, position among that class).
-        let index = |l: &Node<'a, 'd>| {
+        let index = |l: &Node<'a>| {
             let mut counts: HashMap<&str, usize> = HashMap::new();
-            let mut by: HashMap<(&'a str, usize), Node<'a, 'd>> = HashMap::new();
+            let mut by: HashMap<(&'a str, usize), Node<'a>> = HashMap::new();
             for c in l.children().filter(|c| c.is_element() && !left_out(c)) {
                 let k = counts.entry(c.tag_name().name()).or_insert(0);
                 by.insert((c.tag_name().name(), *k), c);
@@ -507,7 +526,7 @@ impl<'a, 'd> Writer<'a, 'd> {
                 if !done.insert((ctag, n)) {
                     continue;
                 }
-                let stack: Vec<Node<'a, 'd>> = std::iter::once(c).chain(below.iter().skip(i).filter_map(|b| b.get(&(ctag, n)).copied())).collect();
+                let stack: Vec<Node<'a>> = std::iter::once(c).chain(below.iter().skip(i).filter_map(|b| b.get(&(ctag, n)).copied())).collect();
                 self.element(&stack, &inner, depth + 1);
             }
         }

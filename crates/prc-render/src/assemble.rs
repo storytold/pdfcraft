@@ -2,7 +2,7 @@
 
 use crate::RenderError;
 use crate::raster::channel;
-use pdfcraft_prc::{Matrix, PrcFile, Rgba, Tessellation, TriangleMesh};
+use craft_prc::{Matrix, PrcFile, Rgba, Tessellation, TriangleMesh};
 
 /// The most triangles [`assemble`] places, over every placement: a tessellation many
 /// occurrences draw is copied once per occurrence.
@@ -76,7 +76,7 @@ pub fn assemble(prc: &PrcFile) -> Result<Vec<WorldMesh>, RenderError> {
 /// Each file structure's tessellations, decoded one structure at a time and charged to `budget`
 /// as they are, so decoding stops at the structure that passes a ceiling.
 pub(crate) fn decode(
-    structures: impl IntoIterator<Item = Result<Vec<Tessellation>, pdfcraft_prc::PrcError>>,
+    structures: impl IntoIterator<Item = Result<Vec<Tessellation>, craft_prc::PrcError>>,
     mut budget: Budget,
 ) -> Result<Vec<Vec<Tessellation>>, RenderError> {
     let mut out = Vec::new();
@@ -105,7 +105,7 @@ type FaceColours<'a> = dyn Fn(&TriangleMesh) -> Option<Vec<Option<Rgba>>> + 'a;
 
 /// Each item's mesh moved into the world and coloured, appended to `out`. Items naming a wire,
 /// markup or compressed tessellation are skipped; an item naming no tessellation at all is
-/// [`PrcError::Malformed`](pdfcraft_prc::PrcError::Malformed).
+/// [`PrcError::Malformed`](craft_prc::PrcError::Malformed).
 pub(crate) fn place_items<'a>(
     tessellations: &[Vec<Tessellation>],
     items: impl IntoIterator<Item = Item<'a>>,
@@ -115,7 +115,7 @@ pub(crate) fn place_items<'a>(
     for p in items {
         let Some(tessellation) = tessellations.get(p.file_structure).and_then(|t| t.get(p.tessellation)) else {
             let what = format!("tessellation {} of file structure {}, which has none by that index", p.tessellation, p.file_structure);
-            return Err(pdfcraft_prc::PrcError::Malformed(what).into());
+            return Err(craft_prc::PrcError::Malformed(what).into());
         };
         let Some(mesh) = as_mesh(tessellation) else {
             continue;

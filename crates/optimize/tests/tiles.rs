@@ -151,8 +151,9 @@ fn a_stencil_mask_paints_the_fill_colour_through_its_tiles() {
 #[test]
 fn a_jpeg_is_decoded_into_its_tiles() {
     let px = texture(W, H, 3);
-    let mut jpeg = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 95).encode(&px, W, H, image::ExtendedColorType::Rgb8).unwrap();
+    let img = craft_image_codecs::Image::from_u8(W, H, craft_image_codecs::ChannelLayout::Rgb, px).unwrap();
+    let opts = craft_image_codecs::EncodeOptions { jpeg_quality: 95, jpeg_chroma_subsampling: false, ..Default::default() };
+    let jpeg = craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &opts).unwrap();
     let (doc, im) = page_drawing(W, H, "", |doc| {
         let d = image_dict(
             W,

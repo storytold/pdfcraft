@@ -250,7 +250,7 @@ impl<'a> Inspector<'a> {
                 None => {}
             }
             let open = d.get(b"Count").ok().and_then(|c| c.as_i64().ok()).is_some_and(|c| c > 0);
-            let title = self.text(d, b"Title").unwrap_or_default();
+            let title = self.field_text(d, b"Title").unwrap_or_default();
             let color = match d.get(b"C").map(|o| self.resolve(o)) {
                 Ok(Object::Array(c)) => outline_color(c.iter().map(|v| self.resolve(v).as_float().ok())),
                 _ => None,
