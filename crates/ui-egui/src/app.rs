@@ -310,6 +310,7 @@ impl PdfCraftApp {
             portfolio_panel: None,
             quick_tool: QuickTool::Select,
             full_screen_tool: None,
+            full_screen_followed: false,
             comment_prefs: Default::default(),
             recent_colours: Default::default(),
             colour_picks: Default::default(),

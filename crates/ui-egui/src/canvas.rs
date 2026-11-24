@@ -2218,9 +2218,11 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
         }
         Some(PageMenuAction::SelectTool) => {
             app.quick_tool = QuickTool::Select;
+            app.full_screen_tool = None;
         }
         Some(PageMenuAction::HandTool) => {
             app.quick_tool = QuickTool::Hand;
+            app.full_screen_tool = None;
         }
         Some(PageMenuAction::MarqueeZoom) => {
             app.quick_tool = QuickTool::MarqueeZoom;

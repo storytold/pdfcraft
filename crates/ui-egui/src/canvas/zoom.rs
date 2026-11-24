@@ -49,17 +49,18 @@ impl DocView {
     }
 
     /// Leave full screen: the display from before it comes back, at the page reached meanwhile.
-    /// From a display full screen kept, at the reading position.
+    /// From a display full screen kept (Fill screen off), keep any changes made inside full screen
+    /// and the reading position (#8074).
     pub fn leave_presentation(&mut self) {
         let filled = self.fills_screen();
         let Some(saved) = self.presentation.take() else { return };
         self.session.presenter = Default::default();
-        self.view.display = saved.display;
-        self.view.continuous = saved.continuous;
-        self.view.cover = saved.cover;
-        self.view.fit = saved.fit;
-        self.view.zoom = saved.zoom;
         if filled {
+            self.view.display = saved.display;
+            self.view.continuous = saved.continuous;
+            self.view.cover = saved.cover;
+            self.view.fit = saved.fit;
+            self.view.zoom = saved.zoom;
             self.view.go_to(self.view.current);
         } else {
             self.go_to_reading_position();
@@ -83,18 +84,24 @@ impl DocView {
 
     /// The display shown outside full screen: the one presenting replaced, or the current one.
     pub fn normal_display(&self) -> SavedDisplay {
-        self.presentation.unwrap_or(SavedDisplay {
-            display: self.view.display,
-            continuous: self.view.continuous,
-            cover: self.view.cover,
-            fit: self.view.fit,
-            zoom: self.view.zoom,
-        })
+        if self.fills_screen()
+            && let Some(saved) = self.presentation
+        {
+            saved
+        } else {
+            SavedDisplay {
+                display: self.view.display,
+                continuous: self.view.continuous,
+                cover: self.view.cover,
+                fit: self.view.fit,
+                zoom: self.view.zoom,
+            }
+        }
     }
 
-    /// The display saved before entering full screen, while presenting.
+    /// The display saved before entering full screen, while Fill screen replaced it.
     pub fn saved_display_mut(&mut self) -> Option<&mut SavedDisplay> {
-        self.presentation.as_mut()
+        if self.full_screen_fill { self.presentation.as_mut() } else { None }
     }
 
     /// Whether the view is in full screen's one-page-at-a-time display.

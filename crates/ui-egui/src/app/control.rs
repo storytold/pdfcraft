@@ -318,11 +318,17 @@ impl PdfCraftApp {
             ("quick", _) => {
                 // `--quick select|hand|note|freetext|highlight|underline|strikeout|ink|line|arrow|square|circle`
                 self.quick_tool = match value {
-                    "select" => QuickTool::Select,
+                    "select" => {
+                        self.full_screen_tool = None;
+                        QuickTool::Select
+                    }
                     measure if measure.starts_with("measure-") => QuickTool::Measure(
                         measure_ui::Tool::from_name(measure.trim_start_matches("measure-")).ok_or_else(|| format!("unknown tool {measure}"))?,
                     ),
-                    "hand" => QuickTool::Hand,
+                    "hand" => {
+                        self.full_screen_tool = None;
+                        QuickTool::Hand
+                    }
                     "crop" => QuickTool::Crop,
                     "enhance-camera" => QuickTool::EnhanceCamera,
                     "redact" => QuickTool::Redact,

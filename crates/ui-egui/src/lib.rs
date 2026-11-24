@@ -307,8 +307,11 @@ pub struct PdfCraftApp {
     /// closed), given back when its tab is left.
     portfolio_panel: Option<Option<RightPanel>>,
     pub quick_tool: QuickTool,
-    /// The tool before full screen, given back on leaving it (see [`Self::apply_full_screen`]).
+    /// The tool before full screen, given back on leaving it (see [`Self::follow_screen_mode`]).
     full_screen_tool: Option<QuickTool>,
+    /// Whether [`Self::follow_screen_mode`] last saw the window in full screen, so entering switches
+    /// the tool once rather than undoing a Select or Hand choice made inside full screen.
+    full_screen_followed: bool,
     /// Comment author, per-tool colours and widths, pin.
     pub comment_prefs: comments::CommentPrefs,
     /// The colours picked last in the comment tools' colour pickers.

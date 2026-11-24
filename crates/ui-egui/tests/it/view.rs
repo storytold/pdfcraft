@@ -2373,6 +2373,169 @@ fn full_screen_keeps_continuous_scrolling_when_fill_is_off() {
     assert!(!h.state().full_screen() && h.state().views[0].continuous());
 }
 
+/// #8074: with Fill screen off, entering full screen keeps the reader's navigation tool (Hand /
+/// Select) and each tab's scrolling layout (continuous / single page), and leaving keeps both.
+#[test]
+fn full_screen_keeps_hand_tool_and_continuous_scrolling() {
+    use pdfcraft_ui_egui::QuickTool;
+    let mut h = harness(&[("layout", "continuous"), ("zoom", "50"), ("full-screen-fill", "off")]);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "single.pdf", None, PAGES.to_vec()).expect("opens");
+    h.set_option("layout", "single").unwrap();
+    h.state_mut().active = Some(0);
+    h.execute("view.hand_tool");
+    h.run_steps(4);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand);
+    assert!(h.state().views[0].continuous(), "tab 1 starts continuous");
+    assert!(!h.state().views[1].continuous(), "tab 2 starts single-page");
+
+    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+    h.run_steps(6);
+    assert!(h.state().full_screen());
+    assert_eq!(h.state().quick_tool, QuickTool::Hand, "Hand tool stays active in full screen");
+    assert!(h.state().views[0].continuous(), "continuous scrolling stays on in full screen");
+    assert!(!h.state().views[1].continuous(), "other tab keeps its single-page layout in full screen");
+    assert!(rect(&h, 0).is_some() && rect(&h, 1).is_some(), "continuous scrolling still shows multiple pages");
+
+    h.key_press(Key::Escape);
+    h.run_steps(4);
+    assert!(!h.state().full_screen());
+    assert_eq!(h.state().quick_tool, QuickTool::Hand, "Hand tool stays active after leaving full screen");
+    assert!(h.state().views[0].continuous(), "continuous scrolling stays on after leaving full screen");
+    assert!(!h.state().views[1].continuous(), "other tab still keeps its single-page layout");
+}
+
+/// #8074: with Fill screen off, switching navigation tool or scroll mode inside full screen keeps
+/// the new choice after leaving; a non-navigation tool still restores when left untouched.
+#[test]
+fn full_screen_keeps_tool_and_scroll_changes_made_inside_it() {
+    use pdfcraft_ui_egui::QuickTool;
+    let mut h = harness(&[("layout", "continuous"), ("zoom", "50"), ("full-screen-fill", "off")]);
+    h.execute("view.hand_tool");
+    h.run_steps(4);
+
+    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+    h.run_steps(6);
+    assert!(h.state().full_screen());
+    assert_eq!(h.state().quick_tool, QuickTool::Hand);
+    assert!(h.state().views[0].continuous());
+
+    // Switch Hand -> Select and continuous -> single page inside full screen.
+    h.key_press(Key::V);
+    assert!(h.execute("view.continuous"));
+    h.run_steps(4);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    assert!(!h.state().views[0].continuous());
+
+    h.key_press(Key::Escape);
+    h.run_steps(4);
+    assert!(!h.state().full_screen());
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "Select chosen in full screen persists after leaving");
+    assert!(!h.state().views[0].continuous(), "single-page chosen in full screen persists after leaving");
+
+    // Re-enter with Select, switch to Hand inside full screen, and leave.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+    h.run_steps(6);
+    h.key_press(Key::H);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand);
+    h.key_press(Key::Escape);
+    h.run_steps(4);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand, "Hand chosen in full screen persists after leaving");
+
+    // A non-navigation tool still switches to Select in full screen and restores when untouched.
+    h.state_mut().quick_tool = QuickTool::Crop;
+    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+    h.run_steps(6);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    h.key_press(Key::Escape);
+    h.run_steps(4);
+    assert_eq!(h.state().quick_tool, QuickTool::Crop, "untouched non-navigation tool is restored on exit");
+
+    // Switching to Hand inside full screen replaces the saved non-navigation tool.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+    h.run_steps(6);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    h.key_press(Key::H);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand);
+    h.key_press(Key::Escape);
+    h.run_steps(4);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand, "explicit Hand choice in full screen is not overwritten by Crop");
+}
+
+/// #8074 review: turning Fill screen off while in full screen and entering again keeps the Fill
+/// choice the saved display was made under, so leaving still brings that display back.
+#[test]
+fn repeated_full_screen_entry_keeps_the_fill_choice_it_started_with() {
+    let mut h = harness(&[("layout", "continuous"), ("zoom", "50")]);
+    assert!(h.state().views[0].continuous());
+    h.state_mut().set_full_screen(true);
+    h.run_steps(6);
+    assert!(!h.state().views[0].continuous(), "Fill screen shows one page at a time");
+
+    h.set_option("full-screen-fill", "off").unwrap();
+    h.state_mut().set_full_screen(true);
+    h.run_steps(4);
+    h.state_mut().set_full_screen(false);
+    h.run_steps(4);
+    assert!(h.state().views[0].continuous(), "the display from before full screen comes back");
+}
+
+/// #8074 review: choosing Hand while Space is held keeps Hand after Space is released and after
+/// leaving full screen.
+#[test]
+fn choosing_hand_while_space_is_held_keeps_hand_after_release_and_leaving() {
+    use pdfcraft_ui_egui::QuickTool;
+    for choose in ["command", "option"] {
+        let mut h = harness(&[]);
+        h.state_mut().quick_tool = QuickTool::Crop;
+        h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+        h.run_steps(6);
+        assert_eq!(h.state().quick_tool, QuickTool::Select);
+        h.key_down(Key::Space);
+        h.run_steps(4);
+        assert_eq!(h.state().quick_tool, QuickTool::Select, "the tool waits under the held Space");
+        if choose == "command" {
+            assert!(h.execute("view.hand_tool"));
+        } else {
+            h.set_option("quick", "hand").unwrap();
+        }
+        h.run_steps(2);
+        h.key_up(Key::Space);
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::Hand, "Hand chosen by {choose} survives releasing Space");
+        h.key_press(Key::Escape);
+        h.run_steps(4);
+        assert!(!h.state().full_screen());
+        assert_eq!(h.state().quick_tool, QuickTool::Hand, "Hand chosen by {choose} survives leaving full screen");
+    }
+}
+
+/// #8074: even with Fill screen on (the default), pressing H inside full screen keeps the Hand
+/// tool after leaving instead of restoring the pre-full-screen tool.
+#[test]
+fn full_screen_fill_keeps_hand_chosen_inside_full_screen() {
+    use pdfcraft_ui_egui::QuickTool;
+    let mut h = harness(&[]);
+    assert!(h.state().full_screen_fill, "Fill screen is on by default");
+
+    for before in [QuickTool::Select, QuickTool::Crop] {
+        h.state_mut().quick_tool = before;
+        h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+        h.run_steps(6);
+        assert!(h.state().full_screen());
+        assert_eq!(h.state().quick_tool, QuickTool::Select, "Fill screen starts in Select");
+        h.key_press(Key::H);
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::Hand, "H switches to Hand inside full screen");
+        h.key_press(Key::Escape);
+        h.run_steps(4);
+        assert!(!h.state().full_screen());
+        assert_eq!(h.state().quick_tool, QuickTool::Hand, "Hand chosen in full screen persists over {before:?}");
+    }
+}
+
 /// #5302: Esc closes one thing at a time. In full screen with the find bar open, the first Esc
 /// closes the find bar and full screen stays; the next one leaves full screen (*Adobe Acrobat
 /// Help*, 2019, p. 248: in a form field, "Esc" deselects it and "Esc (press twice)" exits Full

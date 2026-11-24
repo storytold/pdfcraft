@@ -464,8 +464,14 @@ impl PdfCraftApp {
                     self.notify(e);
                 }
             }
-            "view.select_tool" => self.quick_tool = crate::QuickTool::Select,
-            "view.hand_tool" => self.quick_tool = crate::QuickTool::Hand,
+            "view.select_tool" => {
+                self.quick_tool = crate::QuickTool::Select;
+                self.full_screen_tool = None;
+            }
+            "view.hand_tool" => {
+                self.quick_tool = crate::QuickTool::Hand;
+                self.full_screen_tool = None;
+            }
             // Find and replace changes page text, so it runs in Edit text mode (as Acrobat's
             // does): the command turns the mode on, and the find bar shows its Replace row there.
             "edit.replace" => {
