@@ -117,10 +117,26 @@ pub(crate) fn touch(d: &mut Dict, meta: &Meta) {
 /// go together from either ([`own_deletion`]).
 pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Result<(), AnnotError> {
     let index = deleted_index(doc, page, index)?;
+    let p = page_ref(doc, page)?;
+    let before: Vec<(ObjRef, Option<i64>)> = if super::structure::has_structure_tree(doc) {
+        annots(doc, p).iter().filter_map(Object::as_ref).map(|r| (r, super::structure::struct_parent(doc, r))).collect()
+    } else {
+        Vec::new()
+    };
     lift_annotation(doc, page, index)?;
     // Not in lift_annotation: a drag preview lifts on a throwaway copy and must not log a repair.
-    let p = page_ref(doc, page)?;
-    change_annots(doc, p, annots(doc, p))
+    let after = annots(doc, p);
+    let gone: Vec<(ObjRef, Option<i64>)> = if before.is_empty() {
+        Vec::new()
+    } else {
+        let remaining: HashSet<ObjRef> = after.iter().filter_map(Object::as_ref).collect();
+        before.into_iter().filter(|(r, _)| !remaining.contains(r)).collect()
+    };
+    change_annots(doc, p, after)?;
+    if !gone.is_empty() {
+        super::structure::untag_removed(doc, &gone);
+    }
+    Ok(())
 }
 
 /// Whether [`delete_annotation`] deletes the annotation at `(page, index)`, or why not, without

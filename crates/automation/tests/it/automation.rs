@@ -7411,6 +7411,43 @@ fn links_through_tools() {
 }
 
 #[test]
+fn link_delete_untags_structure_element() {
+    let dir = workdir("link-delete-untag");
+    let mut a = auto(&dir);
+    std::fs::write(
+        dir.join("tagged_link.pdf"),
+        b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R] /StructParents 0 >> endobj
+4 0 obj << /Type /Annot /Subtype /Link /Rect [10 10 100 30] /A << /S /URI /URI (https://example.org) >> /StructParent 1 >> endobj
+5 0 obj << /Type /StructTreeRoot /K 6 0 R /ParentTree << /Nums [0 [7 0 R] 1 7 0 R] >> >> endobj
+6 0 obj << /S /Document /P 5 0 R /K [7 0 R] >> endobj
+7 0 obj << /S /Link /P 6 0 R /Pg 3 0 R /K [0 << /Type /OBJR /Obj 4 0 R /Pg 3 0 R >>] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+            .as_slice(),
+    )
+    .unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "tagged_link.pdf" }))["doc"].as_u64().unwrap();
+    let list = ok(&mut a, "link_list", json!({ "doc": doc }));
+    assert_eq!(list["count"], 1);
+    let idx = list["links"][0]["index"].clone();
+    ok(&mut a, "link_delete", json!({ "doc": doc, "page": 1, "index": idx }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "saved.pdf" }));
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("saved.pdf")).unwrap())).unwrap();
+    let catalog = saved.get(saved.root().unwrap());
+    let sr = saved.resolve(catalog.as_dict().unwrap().get(b"StructTreeRoot").unwrap());
+    let doc_elem = saved.resolve(sr.as_dict().unwrap().get(b"K").unwrap());
+    let link_ref = doc_elem.as_dict().unwrap().get(b"K").unwrap().as_array().unwrap()[0].as_ref().unwrap();
+    let link_k = saved.get(link_ref).as_dict().unwrap().get(b"K").unwrap().as_array().unwrap().clone();
+    assert_eq!(link_k, vec![pdfcraft_cos::Object::Int(0)]);
+    let pt = saved.resolve(sr.as_dict().unwrap().get(b"ParentTree").unwrap());
+    let nums = saved.resolve(pt.as_dict().unwrap().get(b"Nums").unwrap()).as_array().unwrap().clone();
+    assert_eq!(nums, vec![pdfcraft_cos::Object::Int(0), pdfcraft_cos::Object::Array(vec![pdfcraft_cos::Object::Ref(link_ref)])]);
+}
+
+#[test]
 fn link_zoom_through_tools() {
     let dir = workdir("link-zoom");
     std::fs::write(dir.join("notes.txt"), "Contents").unwrap();

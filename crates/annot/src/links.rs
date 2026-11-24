@@ -422,30 +422,42 @@ pub fn set(
 
 /// Delete one link.
 pub fn delete(doc: &mut Document, page: usize, index: usize) -> Result<(), AnnotError> {
-    let (p, _) = link_at(doc, page, index)?;
+    let (p, r) = link_at(doc, page, index)?;
+    let gone = [(r, crate::structure::struct_parent(doc, r))];
     let mut list = annots(doc, p);
     list.remove(index);
-    Ok(set_annots(doc, p, list)?)
+    set_annots(doc, p, list)?;
+    crate::structure::untag_removed(doc, &gone);
+    Ok(())
 }
 
 /// Remove every link on `pages` (all when `None`). Returns how many went.
 pub fn remove_all(doc: &mut Document, pages: Option<&[usize]>) -> Result<usize, AnnotError> {
     let refs = page_refs(doc)?;
     let mut n = 0;
+    let mut gone = Vec::new();
     for (pi, p) in refs.iter().enumerate() {
         if pages.is_some_and(|ps| !ps.contains(&pi)) {
             continue;
         }
         let list = annots(doc, *p);
-        let kept: Vec<Object> = list
-            .iter()
-            .filter(|a| doc.resolve(a).as_dict().and_then(|d| d.name(b"Subtype").map(<[u8]>::to_vec)).as_deref() != Some(b"Link"))
-            .cloned()
-            .collect();
+        let mut kept = Vec::with_capacity(list.len());
+        for a in &list {
+            if doc.resolve(a).as_dict().and_then(|d| d.name(b"Subtype").map(<[u8]>::to_vec)).as_deref() == Some(b"Link") {
+                if let Some(r) = a.as_ref() {
+                    gone.push((r, crate::structure::struct_parent(doc, r)));
+                }
+            } else {
+                kept.push(a.clone());
+            }
+        }
         if kept.len() != list.len() {
             n += list.len() - kept.len();
             set_annots(doc, *p, kept)?;
         }
+    }
+    if !gone.is_empty() {
+        crate::structure::untag_removed(doc, &gone);
     }
     Ok(n)
 }
