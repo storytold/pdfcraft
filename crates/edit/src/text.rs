@@ -345,6 +345,7 @@ mod tests {
         assert_eq!(wrapped("一行目　二行目", 4.0), ["一行目　", "二行目"]);
     }
 
+    #[cfg(not(feature = "lstm-line-break"))] // the dictionary's own words
     #[test]
     fn thai_text_wraps_between_dictionary_words_and_keeps_marks_on_their_word() {
         // Without word breaks the whole run is one word and overflows a single row.

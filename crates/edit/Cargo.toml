@@ -29,3 +29,8 @@ icu_segmenter = { version = "2.3", default-features = false, features = ["compil
 hayro-syntax = { workspace = true }
 pdfcraft-render = { workspace = true }
 proptest = { workspace = true }
+
+[features]
+# Thai line breaking from ICU4X's LSTM model (about 0.3 MB of data) instead of its dictionaries (about
+# 1.8 MB), for builds where size counts more than the odd rare word, such as a web module.
+lstm-line-break = ["icu_segmenter/lstm"]
