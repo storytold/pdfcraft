@@ -1026,16 +1026,23 @@ impl PdfCraftApp {
 }
 
 /// What a result says about the pages that could not be read (a language pack that is not
-/// installed, for one): how many there are, and the first one's reason. `None` when every
-/// page was read or passed over for having text.
+/// installed, for one): how many there are, and why. When they failed for different reasons
+/// the reason is given as the first page's, not as every page's. `None` when every page was
+/// read or passed over for having text.
 pub(crate) fn unread_pages_note(pages: &[OcrPage]) -> Option<String> {
     let mut reasons = pages.iter().filter_map(|p| p.failure());
     let why = reasons.next()?;
-    let unread = 1 + reasons.count();
+    let (mut unread, mut one_reason) = (1, true);
+    for other in reasons {
+        unread += 1;
+        one_reason &= other == why;
+    }
     Some(if unread == 1 {
         crate::i18n::fmt(tl!("1 page could not be read: {why}"), &[("why", why)])
-    } else {
+    } else if one_reason {
         crate::i18n::fmt(tl!("{n} pages could not be read: {why}"), &[("n", &unread.to_string()), ("why", why)])
+    } else {
+        crate::i18n::fmt(tl!("{n} pages could not be read, the first: {why}"), &[("n", &unread.to_string()), ("why", why)])
     })
 }
 
@@ -1679,6 +1686,11 @@ mod tests {
         // read. Each is counted as what it is, and the reason is said.
         let mixed = finish(&mut app, vec![read(0), skipped(1, pdfcraft_engine::ocr::PAGE_HAS_TEXT), skipped(2, why)], false);
         assert!(mixed.contains("1 word on 1 page") && mixed.contains("1 page already had text") && mixed.contains(why), "{mixed}");
+        // Two pages that failed for different reasons: the count is both, and the first
+        // one's reason is not given as the reason for both.
+        let same = finish(&mut app, vec![read(0), skipped(1, why), skipped(2, why)], false);
+        let differ = finish(&mut app, vec![read(0), skipped(1, why), skipped(2, "the selected region is outside the page")], false);
+        assert!(differ.contains(why) && differ != same, "{differ}");
         // The editable output: a run that read nothing says why and opens no empty review.
         assert!(finish(&mut app, vec![skipped(0, why)], true).contains(why));
         assert!(!app.ocr_verify.open, "there is nothing to review");
