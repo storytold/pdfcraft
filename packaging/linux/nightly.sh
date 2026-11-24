@@ -18,27 +18,13 @@ OUTPUT="$DIST/pdfcraft-$VERSION-linux-x86_64-nightly.tar.gz"
 nightly_build_gui
 STAGE="$NIGHTLY_WORK/stage"
 mkdir -p "$STAGE"
-cp "$NIGHTLY_GUI" "$STAGE/pdfcraft"
-chmod 755 "$STAGE/pdfcraft"
-# An unpacked tar is isolated too: the launcher starts the GUI through its launch profile, and the
-# bare binary refuses to run without one.
-cat >"$STAGE/pdfcraft-nightly" <<'LAUNCHER'
-#!/bin/sh
-# PdfCraft Nightly. Its own data root: the stable app's settings, recovery and socket are never touched.
-set -eu
-here="$(cd "$(dirname "$0")" && pwd)"
-if [ -z "${XDG_DATA_HOME:-}" ] && [ -z "${HOME:-}" ]; then
-  echo "pdfcraft-nightly: XDG_DATA_HOME and HOME are both unset, so there is no Nightly data folder" >&2
-  exit 2
-fi
-root="${XDG_DATA_HOME:-$HOME/.local/share}/pdfcraft-nightly"
-# A version query is answered in the Launcher's form; everything else is a file, after `--`.
-case "${1:-}" in
-  --version | -V) exec "$here/pdfcraft" --launch-profile nightly-v1 --profile-root "$root" "$1" ;;
-esac
-exec "$here/pdfcraft" --launch-profile nightly-v1 --profile-root "$root" -- "$@"
-LAUNCHER
-chmod 755 "$STAGE/pdfcraft-nightly"
+# The standard Nightly tarball layout: `pdfcraft` is the launcher and `pdfcraft-bin` the GUI, so an
+# unpacked tar starts through the same private profile every installed format uses, and a bare run
+# of the GUI cannot write the stable profile. The launcher is the one script the deb, rpm, AppImage
+# and Arch handoff install (packaging/linux/nightly-launch.sh), checked by nightly-launch-test.sh.
+cp "$NIGHTLY_GUI" "$STAGE/pdfcraft-bin"
+chmod 755 "$STAGE/pdfcraft-bin"
+install -m755 "$ROOT/packaging/linux/nightly-launch.sh" "$STAGE/pdfcraft"
 if [[ -f "$ROOT/assets/app-icon/pdfcraft-nightly.png" ]]; then
   cp "$ROOT/assets/app-icon/pdfcraft-nightly.png" "$STAGE/pdfcraft-nightly.png"
 else

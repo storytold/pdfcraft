@@ -11,7 +11,7 @@
 # notarized. `unsigned` (nightly.sh's compile output, e.g. pull-request CI) checks no signature.
 # Last, the bundle's GUI answers its version query with an empty environment, both plainly and in the
 # Launcher's form `--launch-profile nightly-v1 --profile-root <fresh dir> --version` (the shared producer
-# smoke): each must exit 0 within 15 seconds, print exactly `pdfcraft <version> (nightly-v1)` and
+# smoke): each must exit 0 within 15 seconds, print exactly `PdfCraft <version> (nightly-v1)` and
 # write nothing to standard error.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -66,9 +66,9 @@ query() {
     /usr/bin/perl -e 'alarm 15; exec @ARGV or die' "$APP/Contents/MacOS/PdfCraft" "$@" 2>"$WORK/stderr")" \
     || mac_nightly_die "the version query ($*) failed or did not finish within 15 s"
   [[ ! -s "$WORK/stderr" ]] || mac_nightly_die "the version query ($*) wrote to standard error: $(head -c 2000 "$WORK/stderr")"
-  [[ "$out" == "pdfcraft $VERSION (nightly-v1)" ]] || mac_nightly_die "the version query ($*) reports '$out', not pdfcraft $VERSION (nightly-v1)"
+  [[ "$out" == "PdfCraft $VERSION (nightly-v1)" ]] || mac_nightly_die "the version query ($*) reports '$out', not PdfCraft $VERSION (nightly-v1)"
 }
 mkdir -m 700 "$WORK/home" "$WORK/tmp" "$WORK/profile"
 query --version
 query --launch-profile nightly-v1 --profile-root "$WORK/profile" --version
-echo "==> verified ($EXPECT): pdfcraft $VERSION (nightly-v1), plain and in the Launcher's profile form"
+echo "==> verified ($EXPECT): PdfCraft $VERSION (nightly-v1), plain and in the Launcher's profile form"

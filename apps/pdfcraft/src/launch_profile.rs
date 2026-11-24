@@ -102,30 +102,6 @@ pub fn version_query(args: &[OsString]) -> bool {
     matches!(parse(lexical), Ok(Launch { profile: Profile::NightlyV1(_), args }) if args.len() == 1)
 }
 
-/// The nightly profile named by `PDFCRAFT_CONFIG_DIR`, when a launch supplies that variable
-/// instead of the Launcher's selector/root pair. The Arch packaging wrapper
-/// (`packaging/linux/nightly-arch-launch.sh`) starts the GUI with it, so the nightly build takes
-/// it as an equivalent way to name the root: it goes through exactly the same validation and
-/// fences as `--profile-root`. A stable build keeps its documented override behaviour, and a
-/// launch that names the selector (or the `=` form) is parsed by the strict protocol alone.
-pub fn parse_startup(args: Vec<OsString>, config_dir: Option<OsString>) -> Result<Launch, String> {
-    let protocol = |arg: &OsString| {
-        let text = arg.to_string_lossy();
-        text.starts_with("--launch-profile") || text.starts_with("--profile-root")
-    };
-    if args.iter().take_while(|arg| *arg != "--").any(protocol) {
-        return parse(args);
-    }
-    let Some(root) = config_dir.filter(|v| !v.is_empty()) else { return parse(args) };
-    let root = PathBuf::from(root);
-    if !root.is_absolute() || root.components().any(|c| matches!(c, Component::ParentDir)) {
-        return Err("the nightly profile root must be absolute and contain no parent traversal".into());
-    }
-    // The launch keeps its own arguments: unlike the Launcher's strict form, the variable names a
-    // data root, not the whole command line (the app's options stay usable).
-    Ok(Launch { profile: Profile::NightlyV1(root), args })
-}
-
 /// Validation finishes before the caller's first startup effect. Stable never calls the nightly
 /// root validator, so its old portable/config resolution stays unchanged.
 pub fn prepare(mut launch: Launch, validate: impl FnOnce(&Path) -> Result<PathBuf, String>) -> Result<Launch, String> {
@@ -215,23 +191,6 @@ mod tests {
         }
         // Outside the query the strict protocol still refuses the version flag.
         assert!(parse(args(&["--launch-profile", VERSION, "--profile-root", absolute(), "--version"])).is_err());
-    }
-
-    #[test]
-    fn a_config_dir_names_the_same_validated_root_as_the_launcher_pair() {
-        let launch = parse_startup(args(&["--new-window", "a.pdf"]), Some(absolute().into())).unwrap();
-        assert_eq!(launch.profile, Profile::NightlyV1(PathBuf::from(absolute())));
-        assert_eq!(launch.args, args(&["--new-window", "a.pdf"]), "the app's own options stay usable");
-        // An empty variable is no override, and a relative one is refused.
-        assert_eq!(parse_startup(args(&[]), Some("".into())).unwrap().profile, Profile::Stable);
-        assert!(parse_startup(args(&[]), Some("relative/pdfcraft".into())).is_err());
-        assert!(parse_startup(args(&[]), Some("../escape".into())).is_err());
-        // A file named like one of the protocol's own arguments, after `--`, is just a file.
-        let launch = parse_startup(args(&["--", "--launch-profile", "a.pdf"]), Some(absolute().into())).unwrap();
-        assert_eq!(launch.args, args(&["--", "--launch-profile", "a.pdf"]));
-        // The strict protocol still applies when the pair is given.
-        assert!(parse_startup(nightly(), None).unwrap().profile.is_nightly());
-        assert!(parse_startup(args(&["--launch-profile", VERSION]), Some(absolute().into())).is_err());
     }
 
     #[test]

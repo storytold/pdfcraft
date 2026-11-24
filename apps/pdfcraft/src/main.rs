@@ -210,10 +210,13 @@ fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
     if build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1 && (build_flavor::version_query(&argv) || launch_profile::version_query(&argv))
     {
         let version = build_flavor::version(build_flavor::COMPILED, env!("PDFCRAFT_BUILT_VERSION"));
-        let _ = print_and_exit(&format!("pdfcraft {version}"));
+        // The shared smoke and the release contract compare the *display* name: every other app
+        // prints `PhotoCraft <version> (nightly-v1)`, so a Nightly PdfCraft prints `PdfCraft …`.
+        // Stable `--version` is untouched (it prints `pdfcraft <version>` below).
+        let _ = print_and_exit(&format!("{} {version}", build_flavor::display_name(build_flavor::COMPILED)));
         return None;
     }
-    let early = launch_profile::parse_startup(argv, std::env::var_os("PDFCRAFT_CONFIG_DIR"))
+    let early = launch_profile::parse(argv)
         .and_then(|launch| {
             build_flavor::require_profile(build_flavor::COMPILED, &launch.profile)?;
             initialize_nightly_process_identity().map_err(|error| error.to_string())?;
@@ -324,13 +327,7 @@ fn main() -> eframe::Result {
     // The log file stays in the data folder; opened after the arguments (so `--version` leaves
     // no file behind) and after the PrintCraft migration (which a fresh folder would block).
     // Records logged until now are written to it first. A Nightly launch logs into its profile.
-    let data_dir = if nightly {
-        settings_dir()
-    } else if portable() {
-        settings_dir()
-    } else {
-        eframe::storage_dir("PdfCraft")
-    };
+    let data_dir = if nightly || portable() { settings_dir() } else { eframe::storage_dir("PdfCraft") };
     if let (Some(logger), Some(dir)) = (logger, data_dir) {
         match logger.attach_dir(&dir.join("logs")) {
             Ok(path) => log::info!("PdfCraft {}, log file {}", os_window::version(), path.display()),
@@ -371,14 +368,19 @@ fn main() -> eframe::Result {
     // The Nightly session record: this window owns the profile while it runs, and the next start
     // reports an exit that skipped the controlled path (a crash, or a forced kill). Written only
     // in a Nightly launch whose profile is the validated private root.
-    let (session, unclean) =
+    let (session, health_unavailable) =
         match nightly_session::Session::begin_with_health(launch_profile::current().root(), &os_window::version(), os_window::commit()) {
-            Ok((session, unclean)) => (std::sync::Arc::new(std::sync::Mutex::new(session)), unclean),
+            Ok(state) => state,
             Err(error) => {
                 log::warn!("Nightly session health is unavailable: {error}");
-                (std::sync::Arc::new(std::sync::Mutex::new(None)), false)
+                (None, true)
             }
         };
+    // Whether the *previous* Nightly session left its record behind (a crash or a forced kill).
+    // Read before the session moves into the shared handle the exit hook and the return path use;
+    // a busy secondary owns no record, so it never reports one.
+    let previous_unclean = session.as_ref().is_some_and(nightly_session::Session::previous_unclean);
+    let session = std::sync::Arc::new(std::sync::Mutex::new(session));
     // Set by the window that showed this start's unclean-exit notice: only then may the record be
     // cleared, so a start that failed before any window keeps it for the next owner to report.
     let notice_shown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -407,7 +409,8 @@ fn main() -> eframe::Result {
             launch.clone(),
             Rc::clone(&started),
             instance.as_ref(),
-            unclean,
+            previous_unclean,
+            health_unavailable,
             std::sync::Arc::clone(&notice_shown),
             make_exit_hook(),
             #[cfg(target_os = "macos")]
@@ -428,7 +431,8 @@ fn main() -> eframe::Result {
                     launch,
                     started,
                     instance.as_ref(),
-                    unclean,
+                    previous_unclean,
+                    health_unavailable,
                     std::sync::Arc::clone(&notice_shown),
                     make_exit_hook(),
                     #[cfg(target_os = "macos")]
@@ -653,7 +657,8 @@ fn app_creator<'a>(
     launch: Launch,
     started: Rc<Cell<bool>>,
     instance: Option<&'a single_instance::Server>,
-    unclean: bool,
+    previous_unclean: bool,
+    health_unavailable: bool,
     notice_shown: std::sync::Arc<std::sync::atomic::AtomicBool>,
     exit_hook: Box<dyn FnOnce()>,
     #[cfg(target_os = "macos")] apple_events: &'a apple_events::AppleEvents,
@@ -677,10 +682,16 @@ fn app_creator<'a>(
         app.set_exit_hook(exit_hook);
         // The previous Nightly session ended without its controlled exit (a crash, a kill): say so
         // once, and only now may this start clear the record (a start that never showed it keeps
-        // the interruption for the next owner to report).
-        if unclean {
+        // the interruption for the next owner to report). An unavailable session store is a
+        // different fact with its own message: it has no record to clear.
+        if previous_unclean {
             app.notify("PdfCraft Nightly ended unexpectedly last time. Documents with unsaved changes were kept in its recovery folder.".to_string());
             notice_shown.store(true, std::sync::atomic::Ordering::Release);
+        } else if health_unavailable {
+            app.notify(
+                "PdfCraft Nightly could not record session health in its private profile. It still works, but an unexpected exit cannot be detected."
+                    .to_string(),
+            );
         }
         // First start (or settings from before Units existed): the region's unit.
         app.units = pdfcraft_ui_egui::units::Unit::system();

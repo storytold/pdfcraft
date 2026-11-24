@@ -45,7 +45,8 @@ function Get-NightlySourceState([string] $RepositoryRoot) {
 }
 
 function Assert-NightlyFlavor([string] $ProductName, [string] $VersionOutput, [string] $ExpectedVersion) {
-  if ($ProductName -ne 'PdfCraft Nightly' -or $VersionOutput -cne "pdfcraft $ExpectedVersion (nightly-v1)") {
+  # The shared smoke compares the product name every other app prints: `PdfCraft <version> (nightly-v1)`.
+  if ($ProductName -ne 'PdfCraft Nightly' -or $VersionOutput -cne "PdfCraft $ExpectedVersion (nightly-v1)") {
     throw 'the executable is not the compiled nightly-v1 flavor'
   }
 }

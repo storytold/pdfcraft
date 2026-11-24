@@ -25,7 +25,7 @@ param(
   # Nightly packaging is its own path (nightly.ps1): GUI-only ZIP, no MSI, CLI or associations.
   [switch] $Nightly,
   # With -Nightly: compile and check the flavor, and leave the archives to the trusted signer.
-  [switch] $BuildOnly
+  [switch] $BuildOnly,
   # -SkipBuild only: the existing binaries were built without CRAFT_FONTS_DIR, so they embed no
   # craft-fonts faces. Without CRAFT_FONTS_DIR this assertion is required: package.ps1 cannot
   # otherwise know whether the binaries need the fonts' OFL notices.

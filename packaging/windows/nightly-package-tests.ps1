@@ -15,8 +15,10 @@ foreach ($bad in @('', '0.22.1', '../other', '0.22.1/elsewhere')) {
   try { Get-NightlyArchiveSpec $bad 'x64' | Out-Null } catch { $refused = $true }
   Assert $refused 'unsafe artifact version was accepted'
 }
-Assert-NightlyFlavor 'PdfCraft Nightly' 'pdfcraft 0.22.1-nightly.20261120.17.1.gabcdef012345 (nightly-v1)' '0.22.1-nightly.20261120.17.1.gabcdef012345'
-foreach ($pair in @(@('PdfCraft', 'pdfcraft 0.22.1 (nightly-v1)'), @('PdfCraft Nightly', 'pdfcraft 0.22.1'), @('PdfCraft Nightly', 'PdfCraft 0.22.1-nightly.20261120.17.1.gabcdef012345 (nightly-v1)'))) {
+Assert-NightlyFlavor 'PdfCraft Nightly' 'PdfCraft 0.22.1-nightly.20261120.17.1.gabcdef012345 (nightly-v1)' '0.22.1-nightly.20261120.17.1.gabcdef012345'
+# Rejected: the stable line, the Cargo version without the channel, the wrong display name and the
+# lowercase name (the shared smoke compares the display name exactly).
+foreach ($pair in @(@('PdfCraft', 'pdfcraft 0.22.1 (nightly-v1)'), @('PdfCraft Nightly', 'PdfCraft 0.22.1'), @('PdfCraft Nightly', 'pdfcraft 0.22.1-nightly.20261120.17.1.gabcdef012345 (nightly-v1)'), @('PdfCraft Nightly', 'PdfCraft 0.22.1-nightly.20261120.17.1.gabcdef012345'))) {
   $refused = $false
   try { Assert-NightlyFlavor $pair[0] $pair[1] '0.22.1-nightly.20261120.17.1.gabcdef012345' } catch { $refused = $true }
   Assert $refused 'stable or mismatched build flavor was accepted'

@@ -132,7 +132,6 @@ impl Session {
     }
 
     /// Whether an earlier session left its record behind: the caller shows the notice for it.
-    #[cfg(test)]
     pub fn previous_unclean(&self) -> bool {
         self.previous_unclean
     }
@@ -221,6 +220,22 @@ mod tests {
         let next = Session::begin(Some(&fixture.0), "third", None).unwrap().unwrap();
         assert!(next.previous_unclean());
         next.complete().unwrap();
+        assert!(!fixture.0.join(RECORD).exists());
+    }
+
+    #[test]
+    fn a_crash_is_reported_by_the_next_window_and_then_cleared() {
+        let fixture = Fixture::new();
+        // A window that never reached its controlled exit (a crash, a forced kill): it drops its
+        // session instead of finishing it, so the record stays.
+        drop(Session::begin(Some(&fixture.0), "crashed", None).unwrap().unwrap());
+        let reporting = Session::begin(Some(&fixture.0), "reporting", None).unwrap().unwrap();
+        assert!(reporting.previous_unclean(), "the next window must be told about the interrupted one");
+        reporting.finish(true).unwrap();
+        assert!(!fixture.0.join(RECORD).exists(), "the window that showed the notice clears the record");
+        let clean = Session::begin(Some(&fixture.0), "clean", None).unwrap().unwrap();
+        assert!(!clean.previous_unclean(), "a reported crash must not be reported again");
+        clean.finish(true).unwrap();
         assert!(!fixture.0.join(RECORD).exists());
     }
 

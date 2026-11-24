@@ -89,12 +89,20 @@ PdfCraft Nightly from ArtCraft Launcher" (a native dialog on a desktop session) 
 stable build refuses the profile. `--version`, `-V` and the Launcher's
 `… --profile-root <dir> --version` are answered before the root is validated, logging starts, the
 process identity is set, IPC is claimed or any window exists: they print
-`pdfcraft <version> (nightly-v1)` and exit 0.
+`PdfCraft <version> (nightly-v1)` and exit 0.
 
-`PDFCRAFT_CONFIG_DIR` names the same root when a launcher does not use the two tokens (the Arch
-packaging wrapper does this); it goes through exactly the same validation and fences, and an empty
-value is no override. A command line that names `--launch-profile` or `--profile-root` is parsed
-by the strict protocol alone.
+The pair is the only way to name the profile: `PDFCRAFT_CONFIG_DIR` is refused in a Nightly launch,
+its documented meaning in a stable one is unchanged, and a command line without the pair is a
+stable launch (which a Nightly build refuses).
+
+### Linux formats
+
+Every Nightly Linux format starts the GUI through that pair, from one launcher
+(`packaging/linux/nightly-launch.sh`): the deb/rpm install it as `/usr/bin/pdfcraft-nightly` with the
+GUI in `/usr/lib/pdfcraft-nightly`, the AppImage as `AppRun` and `usr/bin/pdfcraft-nightly`, the Arch
+handoff as `bin/pdfcraft` with the GUI in `bin/.pdfcraft-nightly` (the packager renames it), and the
+plain tarball as `pdfcraft` with the GUI beside it as `pdfcraft-bin` — the standard tarball layout,
+so an unpacked copy is isolated too and the archive's entry point is a script, not the binary.
 
 ### The data root
 
@@ -125,7 +133,9 @@ server, inherited `PDFCRAFT_CONTROL_*`, the stable agent link and the shared the
 The Nightly session record is app-private health, not telemetry: `<profile>/nightly-session.json`
 exists while a window runs and is removed by the controlled exit (`on_exit`, which is the only
 exit path macOS has). A record found by the next start means the last one was killed or crashed;
-the window says so once and clears it.
+that window says so once and clears it then. A start that finds the record but cannot show a window
+(a renderer that failed) leaves it for the next one, and a second window of the same profile (no
+hand-off) says that health is unavailable instead of claiming a crash.
 
 ### Local checks
 

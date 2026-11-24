@@ -37,7 +37,10 @@ jobs:
         with:
           persist-credentials: false
       - run: python3 packaging/nightly-tests.py
-      - run: bash -n packaging/nightly-common.sh packaging/linux/nightly.sh packaging/macos/nightly.sh packaging/macos/nightly-lib.sh packaging/macos/nightly-sign.sh packaging/macos/nightly-verify.sh
+      # The Linux launchers run against an argv recorder: no compiler, no window.
+      - run: bash packaging/linux/nightly-launch-test.sh
+      - run: bash packaging/linux/nightly-arch-tar-test.sh
+      - run: bash -n packaging/nightly-common.sh packaging/linux/nightly.sh packaging/linux/nightly-launch.sh packaging/linux/nightly-arch-tar.sh packaging/macos/nightly.sh packaging/macos/nightly-lib.sh packaging/macos/nightly-sign.sh packaging/macos/nightly-verify.sh
 
   linux:
     name: Nightly tar (x86_64)
@@ -77,10 +80,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir "$RUNNER_TEMP/unpacked" && tar -xzf "$RUNNER_TEMP/nightly-dist/pdfcraft-$PDFCRAFT_VERSION-linux-x86_64-nightly.tar.gz" -C "$RUNNER_TEMP/unpacked"
+          # The standard layout: `pdfcraft` is the launcher and `pdfcraft-bin` the GUI ELF.
           test "$(stat -c '%a' "$RUNNER_TEMP/unpacked/pdfcraft")" = 755
-          "$RUNNER_TEMP/unpacked/pdfcraft" --version | grep -Fx "pdfcraft $PDFCRAFT_VERSION (nightly-v1)"
+          test "$(stat -c '%a' "$RUNNER_TEMP/unpacked/pdfcraft-bin")" = 755
+          test "$(head -c 4 "$RUNNER_TEMP/unpacked/pdfcraft-bin")" = "$(printf '\177ELF')"
+          "$RUNNER_TEMP/unpacked/pdfcraft" --version | grep -Fx "PdfCraft $PDFCRAFT_VERSION (nightly-v1)"
           # The Launcher's form answers before the root is touched: it never creates the profile.
-          "$RUNNER_TEMP/unpacked/pdfcraft" --launch-profile nightly-v1 --profile-root "$RUNNER_TEMP/profile" --version | grep -Fx "pdfcraft $PDFCRAFT_VERSION (nightly-v1)"
+          "$RUNNER_TEMP/unpacked/pdfcraft" --launch-profile nightly-v1 --profile-root "$RUNNER_TEMP/profile" --version | grep -Fx "PdfCraft $PDFCRAFT_VERSION (nightly-v1)"
           test ! -e "$RUNNER_TEMP/profile"
       - name: Keep the unsigned tar
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

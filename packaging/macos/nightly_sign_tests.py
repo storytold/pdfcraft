@@ -165,7 +165,7 @@ class Fixture:
         (app / "Contents/MacOS").mkdir(parents=True)
         (app / "Contents/Resources").mkdir()
         exe = app / "Contents/MacOS/PdfCraft"
-        exe.write_text(gui or f"#!/bin/sh\ntouch {self.ran}\necho 'pdfcraft {version} (nightly-v1)'\n")
+        exe.write_text(gui or f"#!/bin/sh\ntouch {self.ran}\necho 'PdfCraft {version} (nightly-v1)'\n")
         exe.chmod(0o755)
         (app / "Contents/Resources/pdfcraft-nightly.icns").write_bytes(b"generated icon")
         rendered = PLIST.render((HERE / "Info.plist.in").read_bytes(), version, COMMIT)
@@ -229,7 +229,7 @@ class Checks(unittest.TestCase):
         for broken in (DETAILS.replace("flags=0x10000(runtime)", "flags=0x0(none)"),
                        DETAILS.replace("Timestamp=23 Nov 2026\n", "Signed Time=23 Nov 2026\n"),
                        "Identifier=pdfcraft-1234\nSignature=adhoc\nTeamIdentifier=not set\n",
-                       DETAILS.replace("ai.storyteller.pdfcraft.nightly", "ai.storyteller.photocraft"),
+                       DETAILS.replace("ai.storyteller.pdfcraft.nightly", "ai.storyteller.pdfcraft"),
                        DETAILS.replace("ai.storyteller.pdfcraft.nightly", "aiXstorytellerXpdfcraftXnightly")):
             with self.subTest(broken=broken):
                 self.assertNotEqual(lib("mac_nightly_check_signature", broken, TEAM)[0], 0)
@@ -362,14 +362,14 @@ class Verify(unittest.TestCase):
         return self.f.run("nightly-verify.sh", "--input", self.f.input, *args, **{name: None for name in SECRETS}, **env)
 
     def test_asks_the_gui_its_version_with_an_empty_environment(self):
-        self.f.bundle(gui=f"#!/bin/sh\n[ -z \"$INHERITED\" ] || exit 9\necho 'pdfcraft {VERSION} (nightly-v1)'\n")
+        self.f.bundle(gui=f"#!/bin/sh\n[ -z \"$INHERITED\" ] || exit 9\necho 'PdfCraft {VERSION} (nightly-v1)'\n")
         result = self.verify("--expect", "unsigned", INHERITED="generated")
         self.assertEqual(result.returncode, 0, result.stdout)
         self.f.bundle(gui="#!/bin/sh\necho 'pdfcraft 0.22.1 (stable)'\n")
         self.assertNotEqual(self.verify("--expect", "unsigned").returncode, 0)
 
     def test_the_launcher_profile_form_must_answer_promptly_and_cleanly(self):
-        answer = f"echo 'pdfcraft {VERSION} (nightly-v1)'"
+        answer = f"echo 'PdfCraft {VERSION} (nightly-v1)'"
         # The shared producer smoke's exact form, with a fresh profile directory.
         exact = ('#!/bin/sh\nif [ "$1" = --launch-profile ]; then\n'
                  '  [ "$#" = 5 ] && [ "$2" = nightly-v1 ] && [ "$3" = --profile-root ] && [ -d "$4" ] && [ "$5" = --version ] || exit 7\n'
@@ -415,7 +415,7 @@ class Build(unittest.TestCase):
         for name in ("APPLE_CERTIFICATE", "APPLE_PASSWORD", "MACOS_SIGN_IDENTITY", "WINDOWS_CERTIFICATE", "AZURE_CLIENT_SECRET", "LINUX_SIGNING_KEY"):
             with self.subTest(name=name):
                 result = f.run("nightly.sh", "--arch", "aarch64", **{**{key: None for key in SECRETS}, name: "generated"},
-                               PHOTOCRAFT_BUILD_CHANNEL="nightly-v1", PHOTOCRAFT_VERSION=VERSION)
+                               PDFCRAFT_BUILD_CHANNEL="nightly-v1", PDFCRAFT_VERSION=VERSION)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(name, result.stdout)
                 self.assertNotIn("cargo", [call[0] for call in f.calls()])

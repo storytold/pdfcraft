@@ -121,6 +121,11 @@ fn forbidden_roots(platform: Platform, env: &impl Fn(&str) -> Option<OsString>, 
                     .into_iter()
                     .map(|(key, fallback)| xdg_base(env, key, fallback).map(|p| p.join("pdfcraft")))
                     .collect::<Result<Vec<_>, _>>()?;
+            // The stable single-instance socket folder, when the session names one: a Nightly
+            // profile there would sit beside (and could share) the stable app's socket.
+            if let Some(runtime) = env("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
+                roots.push(absolute(PathBuf::from(runtime), "XDG_RUNTIME_DIR")?.join("pdfcraft"));
+            }
             roots.extend(["/usr/bin/pdfcraft", "/usr/local/bin/pdfcraft", "/opt/pdfcraft"].map(PathBuf::from));
             // The stable Flatpak keeps its data in its own per-app folder.
             roots.push(required_base(env, "HOME")?.join(".var/app/ai.storyteller.pdfcraft"));
@@ -433,6 +438,11 @@ mod tests {
             }
             assert_eq!(std::fs::read(stable.join("stable-sentinel")).unwrap(), b"stable bytes");
         }
+        // The stable socket folder is fenced as well: a Nightly profile there could meet the
+        // stable app's single-instance socket.
+        fixture.env.insert("XDG_RUNTIME_DIR".into(), fixture.root.join("runtime").into_os_string());
+        let runtime = fixture.root.join("runtime/pdfcraft");
+        assert!(fixture.check(Platform::Linux, &runtime.join("nightly")).unwrap_err().contains("overlap"));
         let data = PathBuf::from(fixture.get("XDG_DATA_HOME").unwrap());
         let nightly = data.join("ArtCraftLauncher/nightly/profiles/pdfcraft");
         assert_eq!(fixture.check(Platform::Linux, &nightly).unwrap(), nightly);

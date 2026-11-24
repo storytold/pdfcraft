@@ -106,7 +106,7 @@ pub fn install_build(version: impl Into<String>, commit: Option<&str>) -> Result
 
 /// The version this build reports (the prepared Nightly identity in a Nightly build).
 pub fn version() -> String {
-    BUILD.get().map_or_else(|| pdfcraft_engine::build_info::version(), |b| b.version.clone())
+    BUILD.get().map_or_else(pdfcraft_engine::build_info::version, |b| b.version.clone())
 }
 
 /// The source commit this build was made from, when it was recorded.

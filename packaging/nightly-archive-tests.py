@@ -28,11 +28,20 @@ class ArchivePolicy(unittest.TestCase):
         self.stage = self.root / "stage"
         self.stage.mkdir()
         self.output = self.root / "nightly.tar.gz"
-        self.required = {"pdfcraft", "pdfcraft-nightly", "pdfcraft-nightly.png", "README.md", "LICENSE-MIT", "LICENSE-APACHE", "NOTICE", "ATTRIBUTION.md"}
+        self.required = {
+            "pdfcraft",
+            "pdfcraft-bin",
+            "pdfcraft-nightly.png",
+            "README.md",
+            "LICENSE-MIT",
+            "LICENSE-APACHE",
+            "NOTICE",
+            "ATTRIBUTION.md",
+        }
         for name in self.required:
             (self.stage / name).write_bytes(b"generated fixture: " + name.encode())
         (self.stage / "pdfcraft").chmod(0o755)
-        (self.stage / "pdfcraft-nightly").chmod(0o755)
+        (self.stage / "pdfcraft-bin").chmod(0o755)
 
     def test_flat_regular_ustar_with_all_notices_and_the_launcher(self):
         (self.stage / "OFL-Font.txt").write_text("generated fixture license", encoding="utf-8")
@@ -41,7 +50,7 @@ class ArchivePolicy(unittest.TestCase):
             self.assertEqual({m.name for m in archive}, self.required | {"OFL-Font.txt"})
             self.assertTrue(all(m.isfile() and not m.pax_headers for m in archive))
             self.assertEqual(archive.extractfile("pdfcraft").read(), (self.stage / "pdfcraft").read_bytes())
-            self.assertEqual(archive.extractfile("pdfcraft-nightly").read(), (self.stage / "pdfcraft-nightly").read_bytes())
+            self.assertEqual(archive.extractfile("pdfcraft-bin").read(), (self.stage / "pdfcraft-bin").read_bytes())
         with gzip.open(self.output, "rb") as stream:
             while (header := stream.read(512)) != bytes(512):
                 self.assertEqual(len(header), 512)
@@ -49,6 +58,12 @@ class ArchivePolicy(unittest.TestCase):
                 self.assertEqual(header[257:263], b"ustar\0")
                 size = int(header[124:136].rstrip(b"\0 ").lstrip(b" ") or b"0", 8)
                 stream.read(((size + 511) // 512) * 512)
+
+    def test_the_launcher_and_the_gui_stay_executable(self):
+        ARCHIVE.linux_archive(self.stage, self.output)
+        with tarfile.open(self.output) as archive:
+            self.assertEqual(archive.getmember("pdfcraft").mode & 0o111, 0o111, "the launcher must stay executable")
+            self.assertEqual(archive.getmember("pdfcraft-bin").mode & 0o111, 0o111, "the GUI must stay executable")
 
     def test_each_required_member_is_required_before_output(self):
         for name in self.required:

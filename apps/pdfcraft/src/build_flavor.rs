@@ -26,6 +26,16 @@ pub fn version_query(args: &[OsString]) -> bool {
     matches!(args, [arg] if arg == "--version" || arg == "-V")
 }
 
+/// The product name a build reports in its version line. A Nightly build says `PdfCraft`, the name
+/// every other app's nightly prints and the one the shared smoke compares, while the stable
+/// `--version` keeps the executable name it has always printed.
+pub fn display_name(flavor: BuildFlavor) -> &'static str {
+    match flavor {
+        BuildFlavor::Stable => "pdfcraft",
+        BuildFlavor::NightlyV1 => "PdfCraft",
+    }
+}
+
 pub fn version(flavor: BuildFlavor, stable: &str) -> String {
     match flavor {
         BuildFlavor::Stable => stable.to_owned(),
@@ -61,6 +71,9 @@ mod tests {
     #[test]
     fn nightly_version_query_is_unambiguous_and_never_reinterprets_file_arguments() {
         assert_eq!(version(BuildFlavor::Stable, "0.22.1"), "0.22.1");
+        // The shared smoke and the Launcher's display name: `PdfCraft <version> (nightly-v1)`.
+        assert_eq!(display_name(BuildFlavor::NightlyV1), "PdfCraft");
+        assert_eq!(display_name(BuildFlavor::Stable), "pdfcraft");
         assert_eq!(version(BuildFlavor::NightlyV1, "0.22.1"), "0.22.1 (nightly-v1)");
         assert!(version_query(&["--version".into()]));
         assert!(version_query(&["-V".into()]));
