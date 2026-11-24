@@ -447,23 +447,23 @@ fn theme_commands_and_options_report_preference_and_effective_colours() {
 }
 
 #[test]
-fn lithuanian_inspector_title_updates_through_the_control_channel() {
-    if crate::support::skip_without_catalogs("lithuanian_inspector_title_updates_through_the_control_channel") {
+fn lithuanian_comments_tab_panel_title_updates_through_the_control_channel() {
+    if crate::support::skip_without_catalogs("lithuanian_comments_tab_panel_title_updates_through_the_control_channel") {
         return;
     }
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "panel", "value": "comments" }));
     h.run_steps(2);
-    h.get_by_label("Inspector");
+    h.get_by_role_and_label(egui::accesskit::Role::TabPanel, "Comments");
     let documents = ok(&mut h, &c, "ui.state", json!({}))["documents"].clone();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "lt" }));
     h.run_steps(2);
-    h.get_by_label("Inspektorius");
-    assert!(h.query_by_label("Inspector").is_none());
+    h.get_by_role_and_label(egui::accesskit::Role::TabPanel, "Komentarai");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::TabPanel, "Comments").is_none());
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"], documents);
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "en" }));
     h.run_steps(2);
-    h.get_by_label("Inspector");
+    h.get_by_role_and_label(egui::accesskit::Role::TabPanel, "Comments");
 }
 
 /// Switching the interface language changes labels only: documents, their dirty state and the
@@ -960,12 +960,15 @@ fn ukrainian_preferences_and_search_keep_command_ids() {
     for (dialog, label) in [("properties", "Властивості документа"), ("protect", "Захистити паролем"), ("about", "Учасники")]
     {
         ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": dialog }));
+        settle(&mut h);
         let found = ok(&mut h, &c, "ui.inspect", json!({ "query": label }));
         assert!(found["count"].as_u64().unwrap() > 0, "{dialog}: {found}");
     }
     ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": "none" }));
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeletePages { pages: vec![0, 1, 2, 3, 4] }));
+    // Direct test-side edits queue a notice; let the UI publish it before querying ui.state.
+    settle(&mut h);
     let state = ok(&mut h, &c, "ui.state", json!({}));
     assert_eq!(state["language"], "uk");
     assert_eq!(state["notice"], "Помилка «Видалити сторінки»: a document must keep at least one page");
@@ -1059,6 +1062,8 @@ fn japanese_dialogs_errors_and_custom_action_names() {
     ok(&mut h, &c, "ui.set", json!({"key": "dialog", "value": "none"}));
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeletePages { pages: vec![0, 1, 2, 3, 4] }));
+    // Direct test-side edits queue a notice; let the UI publish it before querying ui.state.
+    settle(&mut h);
     let state = ok(&mut h, &c, "ui.state", json!({}));
     // The frame is translated; the engine's own error text is shown as it is.
     assert_eq!(state["notice"], "操作「ページを削除」に失敗しました: a document must keep at least one page");
@@ -1093,8 +1098,9 @@ fn simplified_chinese_signature_prompts_and_errors_keep_document_state() {
     settle(&mut h);
     ok(&mut h, &c, "ui.set", json!({"key": "dialog", "value": "signature"}));
     settle(&mut h);
-    let typed = ok(&mut h, &c, "ui.inspect", json!({"query": "请输入您的签名。"}));
+    let typed = ok(&mut h, &c, "ui.inspect", json!({"query": "输入文本"}));
     assert!(typed["count"].as_u64().unwrap() > 0, "{typed}");
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "输入文本");
     // The shell also has a Draw control; the modal's button is registered after the shell.
     let draw = ok(&mut h, &c, "ui.inspect", json!({"query": "绘制"}));
     let id = draw["widgets"]
@@ -1106,11 +1112,14 @@ fn simplified_chinese_signature_prompts_and_errors_keep_document_state() {
         .expect("signature Draw button")["id"]
         .clone();
     ok(&mut h, &c, "ui.click", json!({"id": id}));
-    let drawn = ok(&mut h, &c, "ui.inspect", json!({"query": "请在下方绘制您的签名。"}));
-    assert!(drawn["count"].as_u64().unwrap() > 0, "{drawn}");
+    settle(&mut h);
+    h.get_by_role_and_label(egui::accesskit::Role::Image, "绘制");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::TextInput, "输入文本").is_none(), "Draw replaces the translated type field");
     ok(&mut h, &c, "ui.click", json!({"label": "取消"}));
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeletePages { pages: vec![0, 1, 2, 3, 4] }));
+    // Direct test-side edits queue a notice; let the UI publish it before querying ui.state.
+    settle(&mut h);
     let state = ok(&mut h, &c, "ui.state", json!({}));
     assert_eq!(state["notice"], "删除页面失败：a document must keep at least one page");
     assert_eq!(state["documents"], documents, "a language change and failed edit must preserve the document");
