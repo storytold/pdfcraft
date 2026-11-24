@@ -280,6 +280,45 @@ fn the_quick_bar_colour_changes_the_selected_comment() {
 }
 
 #[test]
+fn quick_text_markup_colours_fit_and_activate_at_minimum_window_size() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+
+    let screen = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(480.0, 520.0));
+    let mut h = harness_with_size(TEXT_FIXTURE.to_vec(), screen.size(), |app| {
+        app.set_option(&egui::Context::default(), "quick", "highlight").unwrap();
+    });
+    for name in ["Yellow", "Orange", "Red", "Pink", "Purple", "Blue"] {
+        let swatch = h.get_by_role_and_label(Role::ColorWell, &format!("{name} quick colour")).rect();
+        assert!(screen.contains_rect(swatch), "{name} must be visible at the minimum window size");
+    }
+    assert!(screen.contains_rect(h.get_by_label("Opacity").rect()));
+
+    h.get_by_label("Colour").focus();
+    h.run_steps(2);
+    for _ in 0..6 {
+        if h.get_by_label("Purple quick colour").is_focused() {
+            break;
+        }
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+    }
+    assert!(h.get_by_label("Purple quick colour").is_focused());
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().comment_prefs.style(CommentTool::Highlight).color, [0.54, 0.25, 0.82]);
+
+    let blue = h.get_by_label("Blue quick colour").rect().center();
+    click(&mut h, blue);
+    assert_eq!(h.state().comment_prefs.style(CommentTool::Highlight).color, [0.0, 0.47, 0.84]);
+    for tool in [CommentTool::Underline, CommentTool::StrikeOut, CommentTool::Squiggly] {
+        h.state_mut().quick_tool = QuickTool::Comment(tool);
+        h.run_steps(3);
+        assert_eq!(h.query_by_label("Blue quick colour").is_some(), tool == CommentTool::Underline, "{tool:?}");
+        h.get_by_label("Colour");
+    }
+}
+
+#[test]
 fn the_quick_bar_colour_changes_the_selected_arrow() {
     use pdfcraft_ui_egui::comments::CommentTool;
 

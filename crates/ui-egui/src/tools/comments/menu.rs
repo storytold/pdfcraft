@@ -14,7 +14,7 @@ use craft::ui::runtime::requests::ColorRequest;
 // PLAN: `mod colours;` is declared in `tools/comments.rs` (pdf-comments-w7).
 use super::colours::{self, RecentColours, fill_choice, palette, to_srgba};
 use super::state::{Composer, ComposerKind};
-use super::{Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, ReviewState, Rgb, defaultable};
+use super::{Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, ReviewState, Rgb, SWATCHES, defaultable};
 
 /// A row of the attachment actions: its label and whether the file opens in a new tab rather than being saved.
 pub(crate) struct AttachmentRow {
@@ -290,6 +290,17 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
             false
         },
     );
+    if matches!(tool, CommentTool::Highlight | CommentTool::Underline) {
+        ui.horizontal_wrapped(|ui| {
+            for (name, colour) in SWATCHES.iter().take(6) {
+                let label = crate::i18n::fmt(tl!("{colour} quick colour"), &[("colour", tl!(name))]);
+                if Swatch::new(label, to_srgba(*colour)).selected(colours::same_colour(colour, &style.color)).show(ui).clicked {
+                    prefs.set_color(tool, *colour);
+                    out.colour = Some(*colour);
+                }
+            }
+        });
+    }
     if tool.has_fill() {
         popover_from(
             ui,
