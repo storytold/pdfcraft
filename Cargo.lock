@@ -6231,6 +6231,7 @@ dependencies = [
  "pdfcraft-prc-render",
  "pdfcraft-render",
  "pdfcraft-xfa",
+ "regex",
  "rustix 1.1.6",
  "serde_json",
  "sha2 0.11.1",

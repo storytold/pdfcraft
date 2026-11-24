@@ -335,7 +335,7 @@ impl MarginUnits {
     }
 }
 
-/// The standard faces a header can be drawn in (#3754), by the id their choice row keeps.
+/// The standard faces a header (#3754) or a text watermark (#4956) can be drawn in, by the id their choice row keeps.
 const FACES: [(&str, FontFamily); 3] = [("helvetica", FontFamily::Helvetica), ("times", FontFamily::Times), ("courier", FontFamily::Courier)];
 
 fn face_id(f: FontFamily) -> &'static str {
@@ -380,6 +380,7 @@ fn opening_fields(d: &MarksDraft, kind: MarkKind, m: &MarginUnits) -> DialogFiel
             if kind == MarkKind::Watermark {
                 f.set("file.scale", FieldValue::Number(d.wm.scale * 100.0));
                 f.set("wm.text", FieldValue::Text(d.wm.text.clone()));
+                f.set("wm.font", FieldValue::Text(face_id(d.wm.font).into()));
                 f.set("wm.fit", FieldValue::Bool(d.fit));
                 f.set("wm.size", FieldValue::Number(if d.wm.font_size == 0.0 { 72.0 } else { d.wm.font_size }));
                 f.set("marks.wm.colour", colour_value(d.wm.color));
@@ -446,6 +447,9 @@ fn read_fields(d: &mut MarksDraft, f: &DialogFields, kind: MarkKind, m: &MarginU
                 d.wm.scale = scale.unwrap_or(d.wm.scale);
                 if let Some(text) = f.text("wm.text") {
                     text.clone_into(&mut d.wm.text);
+                }
+                if let Some(face) = f.text("wm.font").and_then(|id| FACES.iter().find(|(i, _)| *i == id)) {
+                    d.wm.font = face.1;
                 }
                 d.fit = f.bool("wm.fit").unwrap_or(d.fit);
                 d.wm.font_size = f.number("wm.size").unwrap_or(d.wm.font_size);
@@ -608,6 +612,10 @@ fn rows(kind: MarkKind, g: &Geometry) -> Vec<Param> {
             rows.push(Param::new("source", tl!("Source"), ParamKind::radio(source.map(|(i, l)| (i, l.into())).to_vec(), Some("text".into()))));
             file_rows(&mut rows);
             rows.push(Param::new("wm.text", tl!("Text"), ParamKind::text("")).multiline(2).hint("CONFIDENTIAL").enabled_when("source", "text"));
+            rows.push(
+                Param::new("wm.font", tl!("Font:"), choice(FACES.iter().map(|(id, f)| ((*id).to_string(), f.label().to_string())), "helvetica"))
+                    .enabled_when("source", "text"),
+            );
             rows.push(Param::new("wm.fit", tl!("Fit to page"), ParamKind::bool(true)).enabled_when("source", "text"));
             rows.push(Param::number("wm.size", tl!("Size"), 72.0, 1.0, 0).bounds(Some(6.0), Some(300.0)).enabled_when("wm.fit", false));
             rows.push(Param::new("marks.wm.colour", tl!("Colour"), ParamKind::color(None)));
@@ -887,7 +895,8 @@ fn overlay(kind: MarkKind, d: &MarksDraft, size: (f64, f64)) -> SharedOverlay {
                 } else {
                     (wm.font_size as f32 * s).max(5.0)
                 };
-                let galley = p.layout_no_wrap(text.to_string(), egui::FontId::proportional(size), rgb32(wm.color).gamma_multiply(wm.opacity as f32));
+                let font = if wm.font == FontFamily::Courier { egui::FontId::monospace(size) } else { egui::FontId::proportional(size) };
+                let galley = p.layout_no_wrap(text.to_string(), font, rgb32(wm.color).gamma_multiply(wm.opacity as f32));
                 let angle = -(wm.rotation as f32).to_radians();
                 let half = galley.size() / 2.0;
                 let (sn, cs) = angle.sin_cos();

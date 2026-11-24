@@ -6,6 +6,17 @@ use super::{Arc, Automation, BlockKey, DocId, Document, Edit, Path, PathBuf, Tex
 /// How far a watermark may be moved from the page centre, in points (a page is at most 14,400).
 const WATERMARK_MAX_OFFSET: f64 = 20_000.0;
 
+/// The `font` names `doc_watermark` accepts, matched ASCII case-insensitively, and the family each
+/// draws with. The tool schema's `pattern` is built from this table, so a schema-enforcing client
+/// can send every spelling the handler takes, and no other.
+pub(crate) const WATERMARK_FONTS: [(&str, pdfcraft_engine::FontFamily); 5] = [
+    ("Helvetica", pdfcraft_engine::FontFamily::Helvetica),
+    ("Times", pdfcraft_engine::FontFamily::Times),
+    ("Times New Roman", pdfcraft_engine::FontFamily::Times),
+    ("Courier", pdfcraft_engine::FontFamily::Courier),
+    ("Courier New", pdfcraft_engine::FontFamily::Courier),
+];
+
 /// `doc_optimize` with `target_bytes`: (max target ppi, max JPEG quality) per extra attempt, mildest first.
 /// The quality applies only to images the caller left on JPEG; zip and retain keep their encoding.
 const TARGET_LADDER: [(f64, u8); 5] = [(110.0, 45), (96.0, 35), (72.0, 28), (54.0, 20), (36.0, 12)];
@@ -653,8 +664,19 @@ impl Automation {
                     Some(_) => a.opt_str("text")?.unwrap_or_default().to_string(),
                     None => a.str("text")?.to_string(),
                 };
+                let font = match a.opt_str("font")? {
+                    None => pdfcraft_engine::FontFamily::Helvetica,
+                    Some(s) => match WATERMARK_FONTS.iter().find(|(name, _)| name.eq_ignore_ascii_case(s)) {
+                        Some((_, family)) => *family,
+                        None => {
+                            let names = WATERMARK_FONTS.iter().map(|(n, _)| format!("{n:?}")).collect::<Vec<_>>().join(", ");
+                            return Err(ToolError::InvalidArgs(format!("font must be one of {names} (any letter case), not {s:?}")));
+                        }
+                    },
+                };
                 let wm = Watermark {
                     text,
+                    font,
                     source: None,
                     scale: a.opt_num("scale")?.unwrap_or(d.scale).clamp(0.01, 1.0),
                     font_size: a.opt_num("font_size")?.unwrap_or(0.0),

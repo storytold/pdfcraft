@@ -4028,6 +4028,49 @@ fn watermarks_move_from_the_page_centre_through_tools() {
     assert!(matches!(a.call("doc_watermark", &json!({ "doc": doc, "text": "X", "offset_x": "left" })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// Watermark font names through an MCP client: what `tools/list` publishes for `font` matches
+/// exactly what `tools/call` accepts, names in any letter case included.
+#[cfg(feature = "mcp")]
+#[test]
+fn watermark_font_names_match_the_published_schema_through_mcp() {
+    let dir = workdir("wm-font-mcp");
+    let mut s = McpServer::new(auto(&dir));
+    rpc(&mut s, 1, "initialize", json!({}));
+    let tools_list = rpc(&mut s, 2, "tools/list", json!({}));
+    let font = tools_list["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "doc_watermark").expect("doc_watermark")["inputSchema"]
+        ["properties"]["font"]
+        .clone();
+    let pattern = regex::Regex::new(font["pattern"].as_str().expect("font has a pattern")).unwrap();
+    let examples: Vec<&str> = font["examples"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    assert_eq!(examples, ["Helvetica", "Times", "Times New Roman", "Courier", "Courier New"]);
+    let opened = rpc(&mut s, 3, "tools/call", json!({ "name": "doc_open", "arguments": { "path": "a.pdf" } }));
+    let doc = opened["result"]["structuredContent"]["doc"].as_u64().unwrap();
+    let call = |s: &mut McpServer, font: &str| {
+        let args = json!({ "doc": doc, "pages": [1], "text": "FONT", "font": font, "replace": true });
+        rpc(s, 4, "tools/call", json!({ "name": "doc_watermark", "arguments": args }))["result"].clone()
+    };
+    // Every advertised name, and the same names lowercased, uppercased or mixed, pass the schema
+    // and the handler.
+    let mut accepted: Vec<String> = Vec::new();
+    for name in &examples {
+        accepted.extend([name.to_string(), name.to_lowercase(), name.to_uppercase()]);
+    }
+    accepted.extend(["tImEs NeW rOmAn".to_string(), "helvetica".to_string()]);
+    for name in &accepted {
+        assert!(pattern.is_match(name), "the schema accepts {name:?}");
+        let result = call(&mut s, name);
+        assert_eq!(result["isError"], false, "the handler accepts {name:?}: {result}");
+    }
+    // Anything else fails both, and the error names the choices.
+    for refused in ["ComicSans", "Helvetica Bold", " Times", "Courier New ", "TimesNewRoman", ""] {
+        assert!(!pattern.is_match(refused), "the schema refuses {refused:?}");
+        let result = call(&mut s, refused);
+        assert_eq!(result["isError"], true, "the handler refuses {refused:?}");
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("\"Times New Roman\"") && text.contains("any letter case"), "{text}");
+    }
+}
+
 #[test]
 fn exporting_images_and_text_through_tools() {
     let dir = workdir("export");
