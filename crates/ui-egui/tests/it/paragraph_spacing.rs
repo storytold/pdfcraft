@@ -1,10 +1,11 @@
 //! Format text's Paragraph spacing row edits the open paragraph's spacing.
 
 use egui::Key;
-use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
+
+use crate::support::AppHarness as _;
 
 /// A one-page document showing "Page 1".
 fn fixture() -> Vec<u8> {
@@ -33,14 +34,15 @@ fn fixture() -> Vec<u8> {
 
 /// The document open in Edit text with its paragraph in the editor.
 fn editing() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, fixture()).expect("fixture opens");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture()).expect("fixture opens");
         app
     });
-    h.run_steps(4);
-    assert!(h.state_mut().execute("edit.edit_text"));
+    crate::support::settle(&mut h);
+    assert!(h.execute("edit.edit_text"));
     h.run_steps(2);
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
     let at = egui::pos2(r.left() + 40.0 / 200.0 * r.width(), r.top() + (300.0 - 158.0) / 300.0 * r.height());
@@ -50,12 +52,12 @@ fn editing() -> Harness<'static, PdfCraftApp> {
     h.run_steps(1);
     h.drop_at(at);
     h.run_steps(3);
-    assert!(h.state().views[0].line_editor.is_some());
+    assert!(h.state().views[0].session.line_editor.is_some(), "the paragraph opens for typing");
     h
 }
 
 fn paragraph_spacing(h: &Harness<'static, PdfCraftApp>) -> Option<f64> {
-    h.state().views[0].line_editor.as_ref().map(|e| e.extras.paragraph_spacing)
+    h.state().views[0].session.line_editor.as_ref().map(|e| e.extras.paragraph_spacing)
 }
 
 /// The row is a working field, not a placeholder: a value typed in it becomes the paragraph's
@@ -63,8 +65,7 @@ fn paragraph_spacing(h: &Harness<'static, PdfCraftApp>) -> Option<f64> {
 #[test]
 fn the_paragraph_spacing_field_edits_the_paragraph() {
     let mut h = editing();
-    h.get_by_label("FORMAT TEXT");
-    let field = h.get_by_role_and_label(Role::SpinButton, "Paragraph spacing");
+    let field = h.get_by_label("Paragraph spacing");
     assert!(!field.accesskit_node().is_disabled());
     assert_eq!(paragraph_spacing(&h), Some(0.0));
     field.click();
