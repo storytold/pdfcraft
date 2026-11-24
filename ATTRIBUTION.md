@@ -145,7 +145,7 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `assets/icons/panel-left.svg` | Lucide icon "panel-left" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/panel-left.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/panel-right.svg` | Lucide icon "panel-right" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/panel-right.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 
-## Compiled in through dependencies (24)
+## Compiled in through dependencies (26)
 
 | Crate | File | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|---|
@@ -173,6 +173,8 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `hayro-cmap` 0.1.0 | `assets/cmaps.brotli` | Adobe CMap resources (predefined CJK CMaps) (non-visual data, AGENTS.md §1.1) | Adobe | BSD-3-Clause | https://github.com/adobe-type-tools/cmap-resources (via hayro-cmap 0.1.0 assets/) | Character-code mapping tables required to read CJK PDFs. Non-visual data, allowed by AGENTS.md §1.1 |
 | `hayro-interpret` 0.7.0 | `src/font/generated/metrics.rs` | Standard-14 font metrics and encodings (as Rust tables) (non-visual data, AGENTS.md §1.1) | Adobe (Core 14 AFM metrics, PDF specification encodings); tables by The Hayro Authors | MIT OR Apache-2.0 | ISO 32000-2 Annex D; Adobe Core14 AFM files (via vendored hayro-interpret) | Glyph widths and encodings for non-embedded standard fonts. Non-visual data, allowed by AGENTS.md §1.1 |
 | `icu_segmenter_data` 2.3.0 | `data/segmenter_dictionary_extended_v1.rs.data` | Southeast Asian word dictionaries for line breaking (Thai, Lao, Khmer, Burmese) | The ICU4X Project Developers; word lists from the ICU project (Unicode, Inc.) | Unicode-3.0 | https://github.com/unicode-org/icu4x (via icu_segmenter_data) | Word boundaries for wrapping Thai text in Edit text and Add text (crates/edit/src/linebreak.rs). Non-visual data; the line segmenter loads only these dictionaries, not the Chinese and Japanese one |
+| `rxing` 0.9.4 | `src/pdf417/encoder/pdf_417.rs` | PDF417 codeword patterns | Jeremias Maerki and the ZXing Authors; Rust port by rxing contributors | Apache-2.0 | https://crates.io/crates/rxing/0.9.4 | Encode XFA PDF417 values as vector bars |
+| `rxing` 0.9.4 | `src/pdf417/encoder/pdf_417_error_correction.rs` | PDF417 error correction coefficients | Jeremias Maerki and the ZXing Authors; Rust port by rxing contributors | Apache-2.0 | https://crates.io/crates/rxing/0.9.4 | Add error correction to XFA PDF417 symbols |
 
 ## Downloaded at build time (22)
 

@@ -126,6 +126,7 @@ pub(super) fn solid_extent(item: &Item) -> Option<(f64, f64)> {
     match item {
         Item::Text(s) => Some((s.baseline - s.face.size * 0.8, s.baseline + s.face.size * 0.2)),
         Item::Image { rect, .. } => Some((rect.y, rect.bottom())),
+        Item::Barcode(symbol) => Some((symbol.rect.y, symbol.rect.bottom())),
         Item::Widget(w) => Some((w.rect.y, w.rect.bottom())),
         Item::Turned(t) => Some(t.extent),
         Item::Fill { .. } | Item::Line { .. } | Item::Rounded(_) => None,
@@ -257,6 +258,10 @@ pub(super) fn moved(mut item: Item, dx: f64, dy: f64) -> Item {
         Item::Rounded(r) => {
             r.rect.x += dx;
             r.rect.y += dy;
+        }
+        Item::Barcode(symbol) => {
+            symbol.rect.x += dx;
+            symbol.rect.y += dy;
         }
         Item::Line { from, to, .. } => {
             *from = (from.0 + dx, from.1 + dy);

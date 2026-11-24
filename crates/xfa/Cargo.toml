@@ -17,5 +17,6 @@ pdfcraft-fonts = { workspace = true }
 craft-xml = { workspace = true }
 base64 = "0.23"
 craft-image-codecs = { workspace = true }
+rxing = { version = "0.9.4", default-features = false, features = ["encoders", "encoding_rs", "pdf417"] }
 sha2 = "0.11"
 thiserror = { workspace = true }

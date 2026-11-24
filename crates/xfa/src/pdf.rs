@@ -782,6 +782,14 @@ impl Emitter<'_> {
                 Item::Fill { rect, color } => {
                     content.extend(format!("{} rg {} {} {} {} re f\n", rgb(*color), n(rect.x), n(h - rect.bottom()), n(rect.w), n(rect.h)).bytes());
                 }
+                Item::Barcode(symbol) => {
+                    let rect = symbol.rect;
+                    content.extend(format!("q 1 g {} {} {} {} re f 0 g\n", n(rect.x), n(h - rect.bottom()), n(rect.w), n(rect.h)).bytes());
+                    for bar in symbol.bars() {
+                        content.extend(format!("{} {} {} {} re\n", n(bar.x), n(h - bar.bottom()), n(bar.w), n(bar.h)).bytes());
+                    }
+                    content.extend(b"f Q\n");
+                }
                 Item::Rounded(r) => content.extend(rounded(r, h).bytes()),
                 Item::Line { from, to, width, color, dashed } => {
                     content.extend(

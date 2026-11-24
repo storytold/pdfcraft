@@ -196,7 +196,9 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   separate lines. Password fields are password text fields. Signature fields are `/Sig` fields
   the app can sign. Image fields show the picture the data or template holds (JPEG, PNG, GIF)
   and are buttons that pick a new one, kept in the data as base64 with its `xfa:contentType`
-  (`write_data_image`); barcode fields show their value as text, not as bars.
+  (`write_data_image`). PDF417 barcode fields draw vector bars from the current field value,
+  including after XFA scripts change it. Other barcode types and unsupported PDF417
+  settings show the value as text with a layout warning.
 - **Data files.** `export_data` writes the data as Acrobat's Export Data does: an XML document
   holding the data alone (the form's root data node at the root, its namespaces declared) or
   an XDP holding the whole datasets and a reference to the PDF. `import_data` takes an XDP, a

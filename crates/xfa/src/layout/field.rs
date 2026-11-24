@@ -1,13 +1,13 @@
-use super::common::{button_action, date_pattern};
+use super::common::{button_action, date_pattern, formatted_value};
 use super::items::{BorderShape, Item, Widget, WidgetBorder, WidgetKind};
 use super::{
-    Access, Border, Ctx, Engine, Face, Field, HAlign, Layouter, MAX_DATA_IMAGE, Margin, Para, Placement, Presence, Rect, Ui, VAlign, Value, Views,
-    XfaError, data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, text,
+    Access, Border, Ctx, Engine, Face, Field, HAlign, Layouter, MAX_BARCODE_MODULES, MAX_DATA_IMAGE, Margin, Para, Placement, Presence, Rect, Ui,
+    VAlign, Value, Views, XfaError, data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, text,
 };
 
 impl Layouter<'_> {
     /// Draw field `f` at `rect`: its border (a button's is its widget's box), its caption, then its
-    /// widget, or its value as plain text when it is non-interactive, a barcode, or a text field
+    /// widget, barcode, or its value as plain text when it is non-interactive or a text field
     /// taller than its content area. `radio` is set for a group's radio button; `sib` is its SOM index.
     pub(super) fn draw_field(
         &mut self,
@@ -106,20 +106,39 @@ impl Layouter<'_> {
                 // Then the field itself, which clicking gives a new picture.
             }
             Ui::Barcode => {
-                // The value as text, where the bars would be.
-                self.warn_once("barcode fields show their value as text, not as bars");
                 let value = self
                     .data
                     .and_then(|d| d.text_at(&data_path(self.tpl, &som_path())))
                     .map(str::to_string)
                     .or_else(|| f.value.plain())
                     .unwrap_or_default();
-                if !value.trim().is_empty() {
-                    let mut para = fctx.para.clone();
-                    para.h_align = HAlign::Center;
-                    self.draw_value_text(&Value::Text(value), ui.inset(&f.ui_margin), &fctx.font, &para, &fctx.som)?;
+                if value.is_empty() {
+                    return Ok(());
                 }
-                return Ok(());
+                let value = f.display_picture.as_deref().and_then(|picture| formatted_value(picture, &value)).unwrap_or(value);
+                let field_box = ui.inset(&f.ui_margin);
+                match f.pdf417 {
+                    Some(options) => {
+                        let symbol = (self.barcode_modules < MAX_BARCODE_MODULES).then(|| options.encode(&value, field_box)).flatten();
+                        if let Some(symbol) = symbol {
+                            let modules = self.barcode_modules + symbol.module_count();
+                            if modules <= MAX_BARCODE_MODULES {
+                                self.barcode_modules = modules;
+                                return self.push(Item::Barcode(Box::new(symbol)));
+                            }
+                            self.barcode_modules = MAX_BARCODE_MODULES;
+                        }
+                        if self.barcode_modules == MAX_BARCODE_MODULES {
+                            self.warn_once("the form exceeds the barcode drawing limit; the remaining barcode values are shown as text");
+                        } else {
+                            self.warn_once("a PDF417 barcode could not fit its data or field; its value is shown as text");
+                        }
+                    }
+                    None => self.warn_once("unsupported barcode types or settings are shown as text"),
+                }
+                let mut para = fctx.para.clone();
+                para.h_align = HAlign::Center;
+                return self.draw_value_text(&Value::Text(value), field_box, &fctx.font, &para, &fctx.som);
             }
             _ => {}
         }

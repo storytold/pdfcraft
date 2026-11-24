@@ -830,6 +830,20 @@ pub fn path_is_embedded(tpl: &Template, path: &crate::DataPath) -> bool {
     !tpl.embedded_paths.is_empty() && tpl.embedded_paths.contains(&path.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>())
 }
 
+/// Does a value change require redrawing the page content (a floating field or a barcode)?
+pub fn path_affects_page_content(tpl: &Template, path: &crate::DataPath) -> bool {
+    if tpl.embedded_paths.is_empty() && tpl.barcode_paths.is_empty() {
+        return false;
+    }
+    let names = path.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>();
+    tpl.embedded_paths.contains(&names) || tpl.barcode_paths.contains(&names)
+}
+
+/// As above, given the field's SOM path.
+pub fn field_affects_page_content(tpl: &Template, som: &str) -> bool {
+    !(tpl.embedded_paths.is_empty() && tpl.barcode_paths.is_empty()) && path_affects_page_content(tpl, &data_path(tpl, som))
+}
+
 /// Give the field at `som` in `live`, and every other field bound to the same data node (a
 /// field inside an area shares its node with one outside, since areas are left out of data
 /// paths), the value [`form_tree`] would give it from `data` now, so a value change needs no

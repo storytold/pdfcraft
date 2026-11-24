@@ -610,6 +610,8 @@ pub enum Access {
 pub struct Field {
     pub common: Common,
     pub ui: Ui,
+    /// Supported settings for a PDF417 barcode; other barcode fields fall back to text.
+    pub pdf417: Option<crate::barcode::Pdf417Options>,
     /// The border drawn by the widget itself (`<ui><textEdit><border>`), inside the field.
     pub ui_border: Option<Border>,
     pub ui_margin: Margin,
@@ -873,6 +875,8 @@ pub struct Template {
     /// The data paths of those fields, by name alone (any instance of a repeating subform), as
     /// a script writes them: a write there changes text shown elsewhere.
     pub embedded_paths: std::collections::BTreeSet<Vec<String>>,
+    /// The data paths of barcode fields. Their values are drawn directly on the page.
+    pub barcode_paths: std::collections::BTreeSet<Vec<String>>,
     /// What a user of the template keeps for as long as it lives (see [`TemplateCache`]).
     pub cache: TemplateCache,
 }

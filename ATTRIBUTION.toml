@@ -1202,6 +1202,30 @@ kind = "data"
 usage = "Word boundaries for wrapping Thai text in Edit text and Add text (crates/edit/src/linebreak.rs). Non-visual data; the line segmenter loads only these dictionaries, not the Chinese and Japanese one"
 sha256 = "cad3821ca44fdb88ed856ff3336444aa200afe7b9d19e34ac28ae6a4459d4c6d"
 
+[[bundled]]
+crate = "rxing"
+version = "0.9.4"
+path = "src/pdf417/encoder/pdf_417.rs"
+title = "PDF417 codeword patterns"
+author = "Jeremias Maerki and the ZXing Authors; Rust port by rxing contributors"
+source = "https://crates.io/crates/rxing/0.9.4"
+licence = "Apache-2.0"
+kind = "data"
+usage = "Encode XFA PDF417 values as vector bars"
+sha256 = "7552b6c3ef4f2e047be60fcf32583b60f2f4427dd1b3be591ebf1d36f926422c"
+
+[[bundled]]
+crate = "rxing"
+version = "0.9.4"
+path = "src/pdf417/encoder/pdf_417_error_correction.rs"
+title = "PDF417 error correction coefficients"
+author = "Jeremias Maerki and the ZXing Authors; Rust port by rxing contributors"
+source = "https://crates.io/crates/rxing/0.9.4"
+licence = "Apache-2.0"
+kind = "data"
+usage = "Add error correction to XFA PDF417 symbols"
+sha256 = "951b909fe209a182a3b66a644d24b6f358289e85385ffaab067303537aadc159"
+
 [[fetched]]
 file = "PlayfairDisplay[wght].ttf"
 url = "https://raw.githubusercontent.com/google/fonts/9710da1eacb3be272583c3224dcb70f9da6eadbb/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf"
