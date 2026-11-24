@@ -545,6 +545,7 @@ impl PdfCraftApp {
                 self.hidden_draft = None;
                 self.sign_draft = None;
                 self.cert_viewer = None;
+                self.cert_import = None;
             }
             "about" => self.open_about(craft::ui::patterns::form_dialogs::AboutTab::default()),
             _ => self.open_about(craft::ui::patterns::form_dialogs::AboutTab::default()),

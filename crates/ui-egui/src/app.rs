@@ -437,6 +437,9 @@ impl PdfCraftApp {
             a11y_skipped: Default::default(),
             os_key_store_ids: false,
             cert_viewer: None,
+            cert_import: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            cert_import_job: None,
             space_audit: Default::default(),
             space_audit_of: None,
             combine_draft: Vec::new(),
@@ -618,6 +621,7 @@ impl PdfCraftApp {
             || self.hidden_draft.is_some()
             || self.sign_draft.is_some()
             || self.cert_viewer.is_some()
+            || self.cert_import.is_some()
             || self.js_dialog.is_some()
             || self.comment_props.is_some()
             || self.stamp_dialog.is_some()
@@ -810,6 +814,8 @@ impl PdfCraftApp {
         self.poll_export();
         self.auto_ocr_scanned_page(ctx);
         self.poll_ocr(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_certificate_import();
         self.poll_optimize();
         self.poll_scan_clean();
         self.poll_action();

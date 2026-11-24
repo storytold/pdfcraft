@@ -91,6 +91,10 @@ pub fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, cx: &mut BodyCx<'_>,
         Some(crate::sign_ui::PanelAction::Validate) => app.run_command(&ctx, "sign.validate"),
         Some(crate::sign_ui::PanelAction::GoTo(p)) => app.views[index].go_to_page(p),
         Some(crate::sign_ui::PanelAction::Trust(c)) => app.trust_certificate(*c),
+        #[cfg(not(target_arch = "wasm32"))]
+        Some(crate::sign_ui::PanelAction::Import) => app.pick_certificates_to_import(),
+        #[cfg(target_arch = "wasm32")]
+        Some(crate::sign_ui::PanelAction::Import) => {}
         Some(crate::sign_ui::PanelAction::ViewCertificate(chain)) => crate::sign_ui::cert_viewer::open(app, chain),
         Some(crate::sign_ui::PanelAction::ViewSigned { len, revision }) => app.view_signed_version(len, revision),
         Some(crate::sign_ui::PanelAction::Sign(field)) => {

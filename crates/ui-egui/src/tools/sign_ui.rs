@@ -13,11 +13,15 @@ use crate::FilePurpose;
 use crate::PdfCraftApp;
 use crate::canvas::{DocView, Snapshot, SnapshotKind};
 
+pub(crate) mod cert_import;
 pub(crate) mod cert_viewer;
 pub(crate) mod dialog;
 mod panel;
 pub(crate) mod tool;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use cert_import::CERTIFICATE_EXTENSIONS;
+pub use cert_import::CertImport;
 #[cfg(test)]
 use dialog::detail_lines;
 use dialog::graphic_of;
@@ -605,11 +609,78 @@ impl PdfCraftApp {
 
     /// Trust a certificate (Signatures panel ▸ Add to trusted certificates), revalidating.
     pub fn trust_certificate(&mut self, cert: Certificate) {
+        self.trust_certificates(vec![cert]);
+    }
+
+    /// Trust `new` (those not trusted yet), revalidating once. Returns how many were added.
+    pub fn trust_certificates(&mut self, new: Vec<Certificate>) -> usize {
         let mut certs = self.session.trusted_certificates().to_vec();
-        if !certs.iter().any(|c| c.raw == cert.raw) {
-            certs.push(cert);
+        let before = certs.len();
+        for cert in new {
+            if !certs.iter().any(|c| c.raw == cert.raw) {
+                certs.push(cert);
+            }
         }
-        self.apply_trusted_certificates(certs);
+        let added = certs.len() - before;
+        // Nothing new: the verdicts can't change, so nothing is revalidated or redrawn.
+        if added > 0 {
+            self.apply_trusted_certificates(certs);
+        }
+        added
+    }
+
+    /// Signatures panel ▸ Import certificates…: pick certificate files (several at once, as the
+    /// ICP-Brasil download unpacks to one file per authority), then confirm what to trust.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn pick_certificates_to_import(&mut self) {
+        let request = PickRequest::open_many(FilePurpose::TrustCertificates.key()).filter(tl!("Certificates"), CERTIFICATE_EXTENSIONS);
+        self.pick_file(request, None, |app: &mut Self, _: &egui::Context, picked| {
+            if let craft::host::Picked::Paths(paths) = picked
+                && !paths.is_empty()
+            {
+                app.open_certificate_import(&paths);
+            }
+        });
+    }
+
+    /// Read the certificates in `paths` on a worker, then show them for confirmation (see
+    /// [`Self::poll_certificate_import`]). Reading up to the import's limits must not hold up
+    /// the frame. Nothing is trusted yet; a newer pick replaces a read still running.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn open_certificate_import(&mut self, paths: &[PathBuf]) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let paths = paths.to_vec();
+        let wake = self.wake.clone();
+        let work = move || {
+            let read = pdfcraft_engine::guard(|| CertImport::from_files(&paths)).and_then(|r| r);
+            let _ = tx.send(read);
+            wake.wake();
+        };
+        match std::thread::Builder::new().name("pdfcraft-cert-import".into()).spawn(work) {
+            Ok(_) => self.cert_import_job = Some(rx),
+            Err(e) => self.notify_fmt("Couldn't import the certificates: {e}", &[("e", &e.to_string())]),
+        }
+    }
+
+    /// Show the certificates a finished read found, or say why it failed. Called every pass.
+    /// While another dialog or prompt is open the result waits in the channel: opening the
+    /// import over it would take away that dialog's own way to close.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn poll_certificate_import(&mut self) {
+        if self.modal_open() {
+            return;
+        }
+        let Some(rx) = self.cert_import_job.as_ref() else { return };
+        let read = match rx.try_recv() {
+            Ok(read) => read,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("the reading stopped unexpectedly".to_string()),
+        };
+        self.cert_import_job = None;
+        match read {
+            Ok(v) => self.cert_import = Some(v),
+            Err(e) => self.notify_fmt("Couldn't import the certificates: {e}", &[("e", &e)]),
+        }
     }
 
     /// Replace the trust store and redraw from the rebuilt display copy. One helper
@@ -1093,5 +1164,237 @@ mod tests {
         import_app.process_picks(&egui::Context::default());
         assert!(out_pdf.exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Import certificates… as the app runs it, waiting for the worker's read to finish.
+    fn import_now(app: &mut PdfCraftApp, paths: &[PathBuf]) {
+        app.open_certificate_import(paths);
+        let start = std::time::Instant::now();
+        while app.cert_import_job.is_some() && start.elapsed() < std::time::Duration::from_secs(20) {
+            app.poll_certificate_import();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(app.cert_import_job.is_none(), "the read finished");
+    }
+
+    /// A self-signed certificate named `cn`, for the trust tests.
+    fn test_cert(cn: &str) -> Certificate {
+        let key = PrivateKey::generate_p256().unwrap();
+        Certificate::self_signed(&Name::build(cn, "", "", "", ""), &key, sign::Time::from_unix(0), 1, &[1]).unwrap()
+    }
+
+    /// The whole app with Import Certificates showing `v`, over `trusted`.
+    fn import_harness(v: CertImport, trusted: Vec<Certificate>) -> egui_kittest::Harness<'static, PdfCraftApp> {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            let mut app = PdfCraftApp::for_unit_tests();
+            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+            if !trusted.is_empty() {
+                app.apply_trusted_certificates(trusted);
+            }
+            app.cert_import = Some(v);
+            app
+        });
+        h.run_steps(2);
+        h
+    }
+
+    fn trusted_names(app: &PdfCraftApp) -> Vec<String> {
+        app.session.trusted_certificates().iter().map(Certificate::display_name).collect()
+    }
+
+    /// Import certificates… (#2613): reading a file trusts nothing, a certificate repeated in it
+    /// is listed once, and confirming trusts only the ticked ones.
+    #[test]
+    fn an_import_trusts_only_the_ticked_certificates_on_confirmation() {
+        use egui_kittest::kittest::Queryable;
+        let dir = scratch();
+        let (root, other) = (test_cert("Import Root"), test_cert("Import Other"));
+        let file = dir.join("bundle.pem");
+        std::fs::write(&file, [&root, &other, &root].map(sign::x509::to_pem).concat()).unwrap();
+        let mut app = PdfCraftApp::for_unit_tests();
+        import_now(&mut app, std::slice::from_ref(&file));
+        assert!(app.session.trusted_certificates().is_empty(), "nothing is trusted before the user confirms");
+        let v = app.cert_import.take().unwrap();
+        assert_eq!(v.certs.len(), 2, "a certificate repeated in the file is listed once");
+        let mut h = import_harness(v, Vec::new());
+        h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Import Certificates");
+        // Neither is an authority, so neither starts ticked: tick one.
+        h.get_by_label("Import Root").click();
+        h.run_steps(2);
+        h.get_by_label("Trust selected (1)").click();
+        h.run_steps(3);
+        assert_eq!(trusted_names(h.state()), ["Import Root"]);
+        assert!(h.state().cert_import.is_none(), "confirming closes the import");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A certificate already trusted can't be ticked again, and with nothing left to trust the
+    /// confirm button does nothing; Cancel trusts nothing and closes.
+    #[test]
+    fn an_import_of_trusted_certificates_only_offers_cancel() {
+        use egui_kittest::kittest::Queryable;
+        let a = test_cert("Already There");
+        let v = CertImport::read("a.cer", sign::x509::to_pem(&a).as_bytes()).unwrap();
+        let mut h = import_harness(v, vec![a]);
+        h.get_by_label("Trust selected (0)").click();
+        h.run_steps(2);
+        assert!(h.state().cert_import.is_some(), "a disabled confirm does nothing");
+        h.get_by_label("Cancel").click();
+        h.run_steps(2);
+        assert!(h.state().cert_import.is_none());
+        assert_eq!(trusted_names(h.state()), ["Already There"]);
+    }
+
+    /// Escape drops what was read for the import, and trusts nothing.
+    #[test]
+    fn escape_drops_the_certificates_read_for_import() {
+        let v = CertImport::read("a.cer", sign::x509::to_pem(&test_cert("Escaped")).as_bytes()).unwrap();
+        let mut h = import_harness(v, Vec::new());
+        assert!(h.state().cert_import.is_some() && h.state().modal_open(), "the import holds the window");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert!(h.state().cert_import.is_none() && h.state().session.trusted_certificates().is_empty());
+    }
+
+    /// Several files picked at once (ICP-Brasil's download is one `.crt` per authority) are read
+    /// into one list, each certificate once; one unreadable file refuses the whole import.
+    #[test]
+    fn several_certificate_files_import_as_one_list() {
+        let dir = scratch();
+        let (a, b) = (test_cert("File A"), test_cert("File B"));
+        let (fa, fb, junk) = (dir.join("a.crt"), dir.join("b.crt"), dir.join("junk.crt"));
+        std::fs::write(&fa, sign::x509::to_pem(&a)).unwrap();
+        std::fs::write(&fb, [&b, &a].map(sign::x509::to_pem).concat()).unwrap();
+        std::fs::write(&junk, b"nope").unwrap();
+        let v = CertImport::from_files(&[fa.clone(), fb.clone()]).unwrap();
+        assert_eq!(v.certs.iter().map(Certificate::display_name).collect::<Vec<_>>(), ["File A", "File B"]);
+        let e = CertImport::from_files(&[fa, junk.clone(), fb]).unwrap_err();
+        assert!(e.contains("junk.crt"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Authorities start ticked; a person's (end-entity) certificate starts unticked, so
+    /// confirming a whole bundle without looking never trusts an individual signer.
+    #[test]
+    fn only_authorities_start_ticked() {
+        // An authority (basic constraints CA:TRUE) and a self-signed certificate without them.
+        let pem = [include_str!("../../../sign/tests/data/ca.crt.pem").to_string(), sign::x509::to_pem(&test_cert("Some Person"))].concat();
+        let v = CertImport::read("bundle.pem", pem.as_bytes()).unwrap();
+        assert_eq!(v.certs.iter().map(|c| c.is_ca).collect::<Vec<_>>(), [true, false]);
+        assert_eq!(v.chosen, [true, false]);
+        assert_eq!(v.picked(&[]).len(), 1);
+        assert!(v.fingerprints.iter().all(|f| f.len() == 32 * 3 - 1), "{:?}", v.fingerprints);
+    }
+
+    /// Files each under the per-file limit are still refused when together they exceed the
+    /// import's total, before any is read.
+    #[test]
+    fn an_import_too_large_in_total_is_refused() {
+        let dir = scratch();
+        let n = cert_import::MAX_CERTIFICATE_IMPORT_BYTES / cert_import::MAX_CERTIFICATE_FILE_BYTES + 1;
+        let paths: Vec<PathBuf> = (0..n)
+            .map(|i| {
+                let p = dir.join(format!("{i}.p7b"));
+                std::fs::File::create(&p).unwrap().set_len(cert_import::MAX_CERTIFICATE_FILE_BYTES).unwrap();
+                p
+            })
+            .collect();
+        let e = CertImport::from_files(&paths).unwrap_err();
+        assert!(e.contains("together too large"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A folder or a named pipe is refused from its metadata, before it is opened: opening a
+    /// pipe with no writer would block the app.
+    #[test]
+    fn an_import_refuses_what_is_not_a_regular_file() {
+        let dir = scratch();
+        let folder = dir.join("folder.cer");
+        std::fs::create_dir(&folder).unwrap();
+        let e = CertImport::from_files(std::slice::from_ref(&folder)).unwrap_err();
+        assert!(e.contains("not a file"), "{e}");
+        #[cfg(unix)]
+        {
+            let pipe = dir.join("pipe.p7b");
+            if std::process::Command::new("mkfifo").arg(&pipe).status().is_ok_and(|s| s.success()) {
+                let e = CertImport::from_files(std::slice::from_ref(&pipe)).unwrap_err();
+                assert!(e.contains("not a file"), "{e}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The files are read on a worker: picking them returns at once, and the import shows only
+    /// when a later pass collects the result.
+    #[test]
+    fn certificates_are_read_off_the_frame() {
+        let dir = scratch();
+        let file = dir.join("one.cer");
+        std::fs::write(&file, sign::x509::to_pem(&test_cert("Off Frame"))).unwrap();
+        let mut app = PdfCraftApp::for_unit_tests();
+        app.open_certificate_import(std::slice::from_ref(&file));
+        assert!(app.cert_import_job.is_some() && app.cert_import.is_none());
+        let start = std::time::Instant::now();
+        while app.cert_import.is_none() && start.elapsed() < std::time::Duration::from_secs(20) {
+            app.poll_certificate_import();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(app.cert_import.map(|v| v.certs.len()), Some(1));
+        assert!(app.cert_import_job.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A finished read waits while a dialog on the host or a window beside it is open: showing
+    /// the import over it would take away that dialog's own way to close.
+    #[test]
+    fn a_finished_read_waits_while_another_dialog_is_open() {
+        let cert = test_cert("Waits");
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(CertImport::read("one.cer", sign::x509::to_pem(&cert).as_bytes())).unwrap();
+        let mut app = PdfCraftApp::for_unit_tests();
+        app.cert_import_job = Some(rx);
+        app.cert_viewer = Some(CertViewer { chain: vec![cert], selected: 0, tab: panel::CertTab::Summary });
+        app.poll_certificate_import();
+        assert!(app.cert_import.is_none() && app.cert_import_job.is_some(), "the result stays pending");
+        app.cert_viewer = None;
+        app.open_about(craft::ui::patterns::form_dialogs::AboutTab::default());
+        app.poll_certificate_import();
+        assert!(app.cert_import.is_none() && app.cert_import_job.is_some(), "a dialog on the host holds it too");
+        app.cancel_dialogs(&egui::Context::default());
+        app.poll_certificate_import();
+        assert_eq!(app.cert_import.map(|v| v.certs.len()), Some(1));
+        assert!(app.cert_import_job.is_none());
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_certificate_or_too_large_opens_no_import() {
+        let dir = scratch();
+        let junk = dir.join("junk.cer");
+        std::fs::write(&junk, b"not a certificate").unwrap();
+        // Sparse: the size is refused before a byte is read.
+        let huge = dir.join("huge.p7b");
+        std::fs::File::create(&huge).unwrap().set_len(cert_import::MAX_CERTIFICATE_FILE_BYTES + 1).unwrap();
+        for file in [&junk, &huge] {
+            assert!(CertImport::from_file(file).is_err(), "{}", file.display());
+            let mut app = PdfCraftApp::for_unit_tests();
+            import_now(&mut app, std::slice::from_ref(file));
+            assert!(app.cert_import.is_none(), "{}", file.display());
+            assert!(app.session.trusted_certificates().is_empty());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_import_offers_only_what_is_not_trusted_yet() {
+        let (a, b) = (test_cert("A"), test_cert("B"));
+        let pem = [&a, &b].map(sign::x509::to_pem).concat();
+        let mut v = CertImport::read("bundle.pem", pem.as_bytes()).unwrap();
+        v.chosen = vec![true; v.certs.len()];
+        assert_eq!(v.picked(std::slice::from_ref(&a)).iter().map(Certificate::display_name).collect::<Vec<_>>(), ["B"]);
+        assert_eq!((v.picked_count(std::slice::from_ref(&a)), v.picked_count(&[])), (1, 2));
+        let mut app = PdfCraftApp::for_unit_tests();
+        assert_eq!(app.trust_certificates(v.picked(&[])), 2);
+        assert_eq!(app.trust_certificates(v.picked(&[])), 0, "trusting again adds nothing");
     }
 }

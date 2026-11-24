@@ -35,6 +35,8 @@ pub enum FilePurpose {
     SignGraphic,
     /// Sign ▸ where the signed copy is saved.
     SignedCopy,
+    /// Signatures ▸ Import certificates…: the certificate files to trust from.
+    TrustCertificates,
 }
 
 impl FilePurpose {
@@ -52,6 +54,7 @@ impl FilePurpose {
             Self::DigitalId => "sign.digital_id",
             Self::SignGraphic => "sign.graphic",
             Self::SignedCopy => "sign.signed_copy",
+            Self::TrustCertificates => "sign.trust_certificates",
         }
     }
 
@@ -217,7 +220,7 @@ impl PdfCraftApp {
     /// Read the picked files and use them.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn use_paths(&mut self, ctx: &egui::Context, purpose: FilePurpose, paths: &[std::path::PathBuf]) {
-        if matches!(purpose, FilePurpose::DigitalId | FilePurpose::SignGraphic | FilePurpose::SignedCopy) {
+        if matches!(purpose, FilePurpose::DigitalId | FilePurpose::SignGraphic | FilePurpose::SignedCopy | FilePurpose::TrustCertificates) {
             return;
         }
         if purpose == FilePurpose::CreateMultiple {
@@ -386,7 +389,7 @@ impl PdfCraftApp {
                 self.redact_search.mode = crate::redact_ui::SearchMode::Words;
             }
             // Picked by the signing tools with their own requests.
-            FilePurpose::DigitalId | FilePurpose::SignGraphic | FilePurpose::SignedCopy => {}
+            FilePurpose::DigitalId | FilePurpose::SignGraphic | FilePurpose::SignedCopy | FilePurpose::TrustCertificates => {}
         }
     }
 
