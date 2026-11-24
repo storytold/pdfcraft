@@ -1,4 +1,4 @@
-use super::{DocInfo, HashSet, LayerOp, PageXform, PdfCraftApp, Pos2, Rect, Vec2, pos2, vec2};
+use super::{DocInfo, DocView, HashSet, LayerOp, PageXform, PdfCraftApp, Pos2, Rect, Vec2, pos2, vec2};
 
 /// Whether what the pages show of the signatures differs between `before` and `after`: a verdict,
 /// or whether a signature's appearance draws it.
@@ -173,6 +173,87 @@ pub(crate) fn sign_tab_on_page(field: Rect, page: Rect, label_width: f32) -> Opt
     sign_tab_layout(field.intersect(page), label_width)
 }
 
+/// Run a standard page-navigation named action (ISO 32000-2 Table 215); returns whether `name` was handled.
+pub(super) fn run_named_navigation(view: &mut DocView, pages: usize, name: &str) -> bool {
+    match name {
+        "NextPage" => view.step_page(true),
+        "PrevPage" => view.step_page(false),
+        "FirstPage" => view.go_to_page(0),
+        "LastPage" => view.go_to_page(pages.saturating_sub(1)),
+        _ => return false,
+    }
+    true
+}
+
+/// Create an edit to reset form fields to their defaults.
+pub(super) fn reset_form_edit(
+    session: &pdfcraft_engine::Session,
+    id: pdfcraft_engine::DocId,
+    fields: &[String],
+    exclude: bool,
+) -> pdfcraft_engine::Edit {
+    let all: Vec<String> = session.get(id).map(|d| d.form.iter().map(|f| f.name.clone()).collect()).unwrap_or_default();
+    let listed = |n: &String| fields.iter().any(|f| n == f || n.starts_with(&format!("{f}.")));
+    let names = match (fields.is_empty(), exclude) {
+        (true, _) => None,
+        (false, false) => Some(all.iter().filter(|n| listed(n)).cloned().collect()),
+        (false, true) => Some(all.iter().filter(|n| !listed(n)).cloned().collect()),
+    };
+    pdfcraft_engine::Edit::ResetForm { names }
+}
+
+/// Create an edit that hides or shows the fields named in `fields` (and their descendants).
+pub(super) fn hide_fields_edit(
+    session: &pdfcraft_engine::Session,
+    id: pdfcraft_engine::DocId,
+    fields: &[String],
+    hide: bool,
+) -> Option<pdfcraft_engine::Edit> {
+    let doc = session.get(id)?;
+    let listed = |n: &str| fields.iter().any(|m| n == m || n.starts_with(&format!("{m}.")));
+    // `display.hidden` 1, `display.visible` 0, as a script setting `field.display` would.
+    let changes: Vec<pdfcraft_engine::FieldChange> = doc
+        .form
+        .iter()
+        .filter(|f| listed(&f.name))
+        .map(|f| pdfcraft_engine::FieldChange { name: f.name.clone(), display: Some(if hide { 1 } else { 0 }), ..Default::default() })
+        .collect();
+    if changes.is_empty() {
+        return None;
+    }
+    let label = if hide { "Hide a field" } else { "Show a field" };
+    Some(pdfcraft_engine::Edit::Batch { label: label.into(), edits: vec![pdfcraft_engine::Edit::ApplyScriptChanges { changes }] })
+}
+
+/// Create an edit that hides or shows the fields a Hide action names (by field name or widget/field object reference).
+pub(super) fn hide_targets_edit(
+    session: &pdfcraft_engine::Session,
+    id: pdfcraft_engine::DocId,
+    targets: &[pdfcraft_render::HideTarget],
+    hide: bool,
+) -> Option<pdfcraft_engine::Edit> {
+    use pdfcraft_render::HideTarget;
+    let doc = session.get(id)?;
+    let mut matched = HashSet::new();
+    for t in targets {
+        match t {
+            HideTarget::Field(name) => {
+                matched.insert(name.clone());
+            }
+            HideTarget::Annotation(obj_id) => {
+                let target_ref = pdfcraft_cos::ObjRef::new(obj_id.0, obj_id.1);
+                for f in doc.form.iter() {
+                    if f.obj == target_ref || f.widgets.iter().any(|w| w.obj == target_ref) {
+                        matched.insert(f.name.clone());
+                    }
+                }
+            }
+        }
+    }
+    let names: Vec<String> = matched.into_iter().collect();
+    hide_fields_edit(session, id, &names, hide)
+}
+
 /// Run a push button's action (the ones that need no JavaScript engine).
 pub(super) fn run_button(
     app: &mut PdfCraftApp,
@@ -183,58 +264,39 @@ pub(super) fn run_button(
     action: pdfcraft_engine::form_scripts::ButtonAction,
 ) {
     use pdfcraft_engine::form_scripts::ButtonAction as B;
-    let pages = app.session.get(app.views[index].id).map_or(0, |d| d.info.pages.len());
+    let Some(view_id) = app.views.get(index).map(|v| v.id) else { return };
+    let pages = app.session.get(view_id).map_or(0, |d| d.info.pages.len());
     match action {
         B::Reset { fields, exclude } => {
-            let all: Vec<String> = app.session.get(app.views[index].id).map(|d| d.form.iter().map(|f| f.name.clone()).collect()).unwrap_or_default();
-            let listed = |n: &String| fields.iter().any(|f| n == f || n.starts_with(&format!("{f}.")));
-            let names = match (fields.is_empty(), exclude) {
-                (true, _) => None,
-                (false, false) => Some(all.iter().filter(|n| listed(n)).cloned().collect()),
-                (false, true) => Some(all.iter().filter(|n| !listed(n)).cloned().collect()),
-            };
-            app.views[index].session.forms.focus = None;
-            app.views[index].session.pending_edit = Some(pdfcraft_engine::Edit::ResetForm { names });
+            let edit = reset_form_edit(&app.session, view_id, &fields, exclude);
+            if let Some(view) = app.views.get_mut(index) {
+                view.session.forms.focus = None;
+                view.session.pending_edit = Some(edit);
+            }
         }
-        B::Named(n) => match n.as_str() {
-            "Print" => app.open_print(),
-            // What PdfCraft's XFA buttons use, and what a script's `execMenuItem("Save")`
-            // does too: the Save As dialog, so a click never overwrites the file unasked.
-            "SaveAs" => app.run_command(ctx, "file.save_as"),
-            "NextPage" => app.views[index].step_page(true),
-            "PrevPage" => app.views[index].step_page(false),
-            "FirstPage" => app.views[index].go_to_page(0),
-            "LastPage" => app.views[index].go_to_page(pages.saturating_sub(1)),
-            other => app.notify_fmt("{name}: the {other} action isn't supported yet", &[("name", name), ("other", other)]),
-        },
+        B::Named(n) => {
+            if app.views.get_mut(index).is_some_and(|v| run_named_navigation(v, pages, &n)) {
+                return;
+            }
+            match n.as_str() {
+                "Print" => app.open_print(),
+                // What PdfCraft's XFA buttons use, and what a script's `execMenuItem("Save")`
+                // does too: the Save As dialog, so a click never overwrites the file unasked.
+                "SaveAs" => app.run_command(ctx, "file.save_as"),
+                other => app.notify_fmt("{name}: the {other} action isn't supported yet", &[("name", name), ("other", other)]),
+            }
+        }
         B::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Button),
-        B::GoTo(p) => app.views[index].go_to_page(p.min(pages.saturating_sub(1))),
+        B::GoTo(p) => {
+            if let Some(view) = app.views.get_mut(index) {
+                view.go_to_page(p.min(pages.saturating_sub(1)));
+            }
+        }
         B::ShowHide { fields, hide } => {
-            let listed = |n: &String| fields.iter().any(|f| n == f || n.starts_with(&format!("{f}.")));
-            // `display.hidden` 1, `display.visible` 0, as a script setting `field.display` would.
-            let changes: Vec<pdfcraft_engine::FieldChange> = app
-                .session
-                .get(app.views[index].id)
-                .map(|d| d.form.iter().filter(|f| listed(&f.name)).map(|f| f.name.clone()).collect::<Vec<_>>())
-                .unwrap_or_default()
-                .into_iter()
-                .map(|name| pdfcraft_engine::FieldChange {
-                    name,
-                    value: None,
-                    formatted: false,
-                    read_only: None,
-                    required: None,
-                    display: Some(if hide { 1 } else { 0 }),
-                    caption: None,
-                    text_color: None,
-                    fill_color: None,
-                    ..Default::default()
-                })
-                .collect();
-            if !changes.is_empty() {
-                let label = if hide { "Hide a field" } else { "Show a field" };
-                app.views[index].session.pending_edit =
-                    Some(pdfcraft_engine::Edit::Batch { label: label.into(), edits: vec![pdfcraft_engine::Edit::ApplyScriptChanges { changes }] });
+            if let Some(edit) = hide_fields_edit(&app.session, view_id, &fields, hide)
+                && let Some(view) = app.views.get_mut(index)
+            {
+                view.session.pending_edit = Some(edit);
             }
         }
         B::SetLayers { changes, preserve_rb } => {

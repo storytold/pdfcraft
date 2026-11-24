@@ -1,7 +1,7 @@
 use super::core::{limited_pdf_string, pretty_date, spend};
 use super::model::{
-    Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, Popup, RemoteDestination, fill_group_text, link_replies,
-    state_or_default,
+    Annotation, AttachmentSource, DestView, Field, FieldKind, HideTarget, LayerOp, Link, LinkTarget, Popup, RemoteDestination, fill_group_text,
+    link_replies, state_or_default,
 };
 use super::navigation::text_string;
 use super::{Dictionary, DocInfo, Entry, HashMap, HashSet, Inspector, Object, ObjectId};
@@ -70,6 +70,39 @@ const MAX_LAYER_STATE: usize = 1024;
 pub(super) const MAX_REMOTE_FILE_SPEC_BYTES: usize = 4096;
 
 const MAX_REMOTE_DESTINATION_NAME_BYTES: usize = 1024;
+
+/// Maximum number of chained actions to inspect per link (ISO 32000-2 §12.6.2, Table 196).
+const MAX_ACTION_CHAIN: usize = 64;
+/// Maximum number of field or annotation targets parsed from a single Hide or ResetForm action.
+const MAX_ACTION_TARGETS: usize = 256;
+/// Maximum number of action nodes visited while inspecting a `/Next` action chain.
+const MAX_ACTION_VISITS: usize = 1024;
+
+/// Whether a link target (or any action chained within it) is a JavaScript action.
+fn has_javascript_target(target: &LinkTarget) -> bool {
+    match target {
+        LinkTarget::JavaScript(_) => true,
+        LinkTarget::Other(s) if s == "JavaScript" => true,
+        LinkTarget::Sequence(seq) => seq.iter().any(has_javascript_target),
+        _ => false,
+    }
+}
+
+/// A URI action's address resolved against the catalog's `/URI /Base` ([`crate::resolve_uri`]);
+/// any other target as it is. The raw address is spent already. What the base adds is spent
+/// too, or the link keeps the raw address.
+fn with_uri_base(target: LinkTarget, base: Option<&str>, text_budget: &mut usize) -> LinkTarget {
+    match target {
+        LinkTarget::Uri(uri) => match crate::resolve_uri(base, &uri) {
+            Some(resolved) if resolved.len().saturating_sub(uri.len()) <= *text_budget => {
+                *text_budget = text_budget.saturating_sub(resolved.len().saturating_sub(uri.len()));
+                LinkTarget::Uri(resolved)
+            }
+            _ => LinkTarget::Uri(uri),
+        },
+        other => other,
+    }
+}
 
 /// Text and geometry `DocInfo::annotations` keeps, as counted by [`retained`]. Past it the rest
 /// are not listed: real comments stay far below, many small ones sharing one long string do not.
@@ -387,17 +420,20 @@ impl<'a> Inspector<'a> {
         } else if let Some(a) = action.filter(|a| self.name(a, b"S").as_deref() == Some("JavaScript")) {
             self.link_script(a, scripts).map_or_else(|| LinkTarget::Other("JavaScript".into()), LinkTarget::JavaScript)
         } else {
-            match self.action_target(action?, text_budget)? {
-                LinkTarget::Uri(uri) => match crate::resolve_uri(base, &uri) {
-                    // The raw address is spent already. What the base adds is spent too, or the
-                    // link keeps the raw address.
-                    Some(resolved) if resolved.len().saturating_sub(uri.len()) <= *text_budget => {
-                        *text_budget = text_budget.saturating_sub(resolved.len().saturating_sub(uri.len()));
-                        LinkTarget::Uri(resolved)
-                    }
-                    _ => LinkTarget::Uri(uri),
-                },
-                other => other,
+            let a_obj = d.get(b"A").ok()?;
+            let a = self.dict(a_obj)?;
+            let mut targets = Vec::new();
+            let mut active_stack = HashSet::new();
+            if let Object::Reference(id) = a_obj {
+                active_stack.insert(*id);
+            }
+            let mut visits = 0;
+            self.collect_actions(a, &mut targets, &mut active_stack, text_budget, &mut visits, 0);
+            let mut targets: Vec<_> = targets.into_iter().map(|t| with_uri_base(t, base, text_budget)).collect();
+            match targets.len() {
+                0 => return None,
+                1 => targets.swap_remove(0),
+                _ => LinkTarget::Sequence(targets),
             }
         };
         // Not read at all once no quadrilateral would fit what is left of the budget, or when this
@@ -444,6 +480,8 @@ impl<'a> Inspector<'a> {
     ) {
         info.has_javascript |= self.runs_javascript(d);
         let Some(link) = self.link(at.0, at.1, d, info.uri_base.as_deref(), text_budget, unfit_quads, scripts) else { return };
+        // A JavaScript action chained after the link's own by `/Next` is JavaScript too.
+        info.has_javascript |= has_javascript_target(&link.target);
         let refused = matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript");
         if refused && scripts.remaining == 0 && !scripts.limit_reported {
             info.warnings
@@ -526,6 +564,230 @@ impl<'a> Inspector<'a> {
             "GoToR" => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
             "Launch" => self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
             other => LinkTarget::Other(spend(other.as_bytes(), text_budget, |b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default()),
+        })
+    }
+
+    /// Collect the action in `a` and any actions chained after it via `/Next` (§12.6.2, Table 196),
+    /// bounded to prevent cycles and exponential DAG fan-out.
+    fn collect_actions(
+        &self,
+        a: &'a Dictionary,
+        targets: &mut Vec<LinkTarget>,
+        active_stack: &mut HashSet<ObjectId>,
+        text_budget: &mut usize,
+        visits: &mut usize,
+        depth: usize,
+    ) {
+        if depth >= MAX_ACTION_CHAIN || targets.len() >= MAX_ACTION_CHAIN || *visits >= MAX_ACTION_VISITS {
+            return;
+        }
+        *visits += 1;
+        if let Some(target) = self.single_action(a, text_budget) {
+            targets.push(target);
+        }
+        let Ok(next) = a.get(b"Next") else { return };
+        if let Object::Reference(id) = next {
+            if !active_stack.insert(*id) {
+                return;
+            }
+            match self.resolve(next) {
+                Object::Dictionary(d) => {
+                    self.collect_actions(d, targets, active_stack, text_budget, visits, depth + 1);
+                }
+                Object::Array(items) => {
+                    for item in items.iter().take(MAX_ACTION_CHAIN) {
+                        if targets.len() >= MAX_ACTION_CHAIN || *visits >= MAX_ACTION_VISITS {
+                            break;
+                        }
+                        if let Object::Reference(child_id) = item {
+                            if !active_stack.insert(*child_id) {
+                                continue;
+                            }
+                            if let Some(d) = self.dict(item) {
+                                self.collect_actions(d, targets, active_stack, text_budget, visits, depth + 1);
+                            }
+                            active_stack.remove(child_id);
+                        } else if let Some(d) = self.dict(item) {
+                            self.collect_actions(d, targets, active_stack, text_budget, visits, depth + 1);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            active_stack.remove(id);
+        } else {
+            match self.resolve(next) {
+                Object::Dictionary(d) => {
+                    self.collect_actions(d, targets, active_stack, text_budget, visits, depth + 1);
+                }
+                Object::Array(items) => {
+                    for item in items.iter().take(MAX_ACTION_CHAIN) {
+                        if targets.len() >= MAX_ACTION_CHAIN || *visits >= MAX_ACTION_VISITS {
+                            break;
+                        }
+                        if let Object::Reference(child_id) = item {
+                            if !active_stack.insert(*child_id) {
+                                continue;
+                            }
+                            if let Some(d) = self.dict(item) {
+                                self.collect_actions(d, targets, active_stack, text_budget, visits, depth + 1);
+                            }
+                            active_stack.remove(child_id);
+                        } else if let Some(d) = self.dict(item) {
+                            self.collect_actions(d, targets, active_stack, text_budget, visits, depth + 1);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Parse a single action dictionary of a link into a [`LinkTarget`]: the named, hide and
+    /// reset-form actions a link runs, and otherwise what [`Self::action_target`] reads.
+    fn single_action(&self, a: &'a Dictionary, text_budget: &mut usize) -> Option<LinkTarget> {
+        match self.name(a, b"S").as_deref() {
+            Some("Named") => {
+                let n = self.name(a, b"N").unwrap_or_default();
+                Some(LinkTarget::Named(n))
+            }
+            Some("Hide") => {
+                let targets = self.hide_targets(a, text_budget);
+                let hide = !matches!(a.get(b"H").ok().map(|h| self.resolve(h)), Some(Object::Boolean(false)));
+                Some(LinkTarget::Hide { targets, hide })
+            }
+            Some("ResetForm") => {
+                let (fields, incomplete) = self.reset_form_targets(a, text_budget);
+                let exclude = a.get(b"Flags").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 1 != 0;
+                // If /Fields is present:
+                // - In include mode (Flags bit 1 clear), an incomplete or unresolvable list must not reset all fields.
+                // - In exclude mode (Flags bit 1 set), an incomplete list must not omit excluded fields (which would reset them).
+                if a.get(b"Fields").is_ok() && (incomplete || (!exclude && fields.is_empty())) {
+                    return None;
+                }
+                Some(LinkTarget::ResetForm { fields, exclude })
+            }
+            Some(_) => self.action_target(a, text_budget),
+            None => None,
+        }
+    }
+
+    /// The targets of a Hide action (§12.6.4.11, Table 214).
+    fn hide_targets(&self, a: &Dictionary, text_budget: &mut usize) -> Vec<HideTarget> {
+        let Ok(t) = a.get(b"T") else { return Vec::new() };
+        let mut targets = Vec::new();
+        match self.resolve(t) {
+            Object::Array(items) => {
+                for item in items.iter().take(MAX_ACTION_TARGETS) {
+                    if let Some(target) = self.hide_target(item, text_budget) {
+                        targets.push(target);
+                    }
+                }
+            }
+            _ => {
+                if let Some(target) = self.hide_target(t, text_budget) {
+                    targets.push(target);
+                }
+            }
+        }
+        targets
+    }
+
+    /// Resolves an action target object (string, name, or indirect reference) to a [`HideTarget`].
+    fn hide_target(&self, item: &'a Object, text_budget: &mut usize) -> Option<HideTarget> {
+        match item {
+            Object::Reference(id) => match self.resolve(item) {
+                Object::String(bytes, _) => spend(bytes, text_budget, text_string).map(HideTarget::Field),
+                Object::Name(bytes) => spend(bytes, text_budget, |b| String::from_utf8_lossy(b).into_owned()).map(HideTarget::Field),
+                _ => Some(HideTarget::Annotation(*id)),
+            },
+            _ => match self.resolve(item) {
+                Object::String(bytes, _) => spend(bytes, text_budget, text_string).map(HideTarget::Field),
+                Object::Name(bytes) => spend(bytes, text_budget, |b| String::from_utf8_lossy(b).into_owned()).map(HideTarget::Field),
+                _ => None,
+            },
+        }
+    }
+
+    /// The field names listed in a ResetForm action (§12.7.6.3, Table 241), and whether the target list is incomplete.
+    fn reset_form_targets(&self, a: &Dictionary, text_budget: &mut usize) -> (Vec<String>, bool) {
+        let Ok(f) = a.get(b"Fields") else { return (Vec::new(), false) };
+        let mut fields = Vec::new();
+        let mut incomplete = false;
+        match self.resolve(f) {
+            Object::Array(items) => {
+                if items.len() > MAX_ACTION_TARGETS {
+                    incomplete = true;
+                }
+                for item in items.iter().take(MAX_ACTION_TARGETS) {
+                    if let Some(field) = self.field_target_name(item, text_budget) {
+                        fields.push(field);
+                    } else if *text_budget == 0 {
+                        incomplete = true;
+                        break;
+                    }
+                }
+            }
+            _ => {
+                if let Some(field) = self.field_target_name(f, text_budget) {
+                    fields.push(field);
+                } else if *text_budget == 0 {
+                    incomplete = true;
+                }
+            }
+        }
+        (fields, incomplete)
+    }
+
+    /// Resolves an action target object (string, name, or indirect reference) to a field name.
+    fn field_target_name(&self, item: &'a Object, text_budget: &mut usize) -> Option<String> {
+        match self.resolve(item) {
+            Object::String(bytes, _) => spend(bytes, text_budget, text_string),
+            Object::Name(bytes) => spend(bytes, text_budget, |b| String::from_utf8_lossy(b).into_owned()),
+            Object::Dictionary(d) => {
+                if let Object::Reference(id) = item {
+                    self.field_qualified_name(*id, text_budget)
+                } else if d.get(b"FT").is_ok() || self.name(d, b"Subtype").as_deref() == Some("Widget") {
+                    let Ok(t) = d.get(b"T") else { return None };
+                    self.resolve(t).as_str().ok().and_then(|bytes| spend(bytes, text_budget, text_string))
+                } else {
+                    None
+                }
+            }
+            _ => {
+                if let Object::Reference(id) = item {
+                    self.field_qualified_name(*id, text_budget)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// The fully qualified name of the field that `id` belongs to, from the partial names (`/T`)
+    /// up its `/Parent` chain.
+    fn field_qualified_name(&self, id: ObjectId, text_budget: &mut usize) -> Option<String> {
+        let mut parts = Vec::new();
+        let mut cur = id;
+        let mut seen = HashSet::new();
+        let mut is_field = false;
+        while seen.insert(cur) && parts.len() < 32 {
+            let Ok(d) = self.doc.get_dictionary(cur) else { break };
+            is_field |= d.get(b"FT").is_ok() || self.name(d, b"Subtype").as_deref() == Some("Widget");
+            if let Ok(t) = d.get(b"T")
+                && let Ok(bytes) = self.resolve(t).as_str()
+                && let Some(part) = spend(bytes, text_budget, text_string)
+            {
+                parts.push(part);
+            }
+            match d.get(b"Parent") {
+                Ok(Object::Reference(parent_id)) => cur = *parent_id,
+                _ => break,
+            }
+        }
+        (is_field && !parts.is_empty()).then(|| {
+            parts.reverse();
+            parts.join(".")
         })
     }
 

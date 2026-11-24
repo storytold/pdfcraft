@@ -788,6 +788,58 @@ fn close_requested_tab(ctx: &egui::Context, app: &mut PdfCraftApp, index: usize)
     true
 }
 
+fn run_link_target(
+    app: &mut PdfCraftApp,
+    index: usize,
+    target: &LinkTarget,
+    pending_edits: &mut Vec<pdfcraft_engine::Edit>,
+) -> Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)> {
+    let view_id = app.views.get(index)?.id;
+    let pages = app.session.get(view_id).map_or(0, |d| d.info.pages.len());
+    match target {
+        LinkTarget::Page(p, dest) => {
+            if let Some(view) = app.views.get_mut(index)
+                && let Some(doc) = app.session.get(view.id)
+            {
+                view.go_to_dest(*p, *dest, &doc.info);
+            }
+        }
+        LinkTarget::Uri(u) => app.request_document_url(u, crate::LinkOrigin::Link),
+        LinkTarget::SetLayers { changes, preserve_rb } => set_layers(app, index, changes, *preserve_rb),
+        LinkTarget::RemoteGoTo { file, destination, .. } => return Some((view_id, file.clone(), destination.clone())),
+        // Run by `PdfCraftApp::run_link_script`, which needs the link's page and index.
+        LinkTarget::JavaScript(_) => {}
+        LinkTarget::Named(n) => {
+            // ISO 32000-2 Table 215: if the viewer does not recognise the name, it shall take no action.
+            if let Some(view) = app.views.get_mut(index) {
+                let _ = area::run_named_navigation(view, pages, n);
+            }
+        }
+        LinkTarget::Hide { targets, hide } => {
+            if let Some(edit) = area::hide_targets_edit(&app.session, view_id, targets, *hide) {
+                pending_edits.push(edit);
+            }
+        }
+        LinkTarget::ResetForm { fields, exclude } => {
+            if let Some(view) = app.views.get_mut(index) {
+                view.session.forms.focus = None;
+            }
+            pending_edits.push(area::reset_form_edit(&app.session, view_id, fields, *exclude));
+        }
+        LinkTarget::Sequence(seq) => {
+            let mut last_remote = None;
+            for a in seq {
+                if let Some(remote) = run_link_target(app, index, a, pending_edits) {
+                    last_remote = Some(remote);
+                }
+            }
+            return last_remote;
+        }
+        LinkTarget::Other(s) => app.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", s)]),
+    }
+    None
+}
+
 /// Follows the link, or the bookmark's action, that was clicked. A link to another file comes
 /// back, to be opened once the document is no longer borrowed.
 pub(crate) fn follow_link(
@@ -795,22 +847,24 @@ pub(crate) fn follow_link(
     index: usize,
     target: Option<LinkTarget>,
 ) -> Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)> {
-    let view_id = app.views[index].id;
-    match target? {
-        LinkTarget::Page(p, dest) => {
-            let view = &mut app.views[index];
-            if let Some(doc) = app.session.get(view.id) {
-                view.go_to_dest(p, dest, &doc.info);
-            }
+    let mut pending_edits = Vec::new();
+    let remote = run_link_target(app, index, &target?, &mut pending_edits);
+    if !pending_edits.is_empty()
+        && let Some(view) = app.views.get_mut(index)
+    {
+        let link_edit = if pending_edits.len() == 1 {
+            pending_edits.pop()
+        } else {
+            Some(pdfcraft_engine::Edit::Batch { label: "Link actions".into(), edits: pending_edits })
+        };
+        if let Some(edit) = link_edit {
+            view.session.pending_edit = Some(match view.session.pending_edit.take() {
+                Some(first) => pdfcraft_engine::Edit::Batch { label: "Link actions".into(), edits: vec![first, edit] },
+                None => edit,
+            });
         }
-        LinkTarget::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Link),
-        LinkTarget::SetLayers { changes, preserve_rb } => set_layers(app, index, &changes, preserve_rb),
-        LinkTarget::RemoteGoTo { file, destination, .. } => return Some((view_id, file, destination)),
-        // Run by `PdfCraftApp::run_link_script`, which needs the link's page and index.
-        LinkTarget::JavaScript(_) => {}
-        LinkTarget::Other(s) => app.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", &s)]),
     }
-    None
+    remote
 }
 
 /// A Snapshot area's bar choice, a signature rectangle drawn, or an empty signature field clicked.
