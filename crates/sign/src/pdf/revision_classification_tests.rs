@@ -486,7 +486,7 @@ fn a_fields_array_of_its_own_only_accepts_new_signature_fields_appended() {
     // A new object that is itself a reference to the signed value: the field's `/V` resolves
     // through it to the signature the earlier revision signed.
     let chained = widget("/V 17 0 R");
-    let cases: [Case; 22] = [
+    let cases: [Case; 23] = [
         ("in-place entry taken out", IN_PLACE, LISTED, &[]),
         ("in-place entry rewritten", IN_PLACE, "[<< /FT /Sig /T (Other) /V 7 0 R >> 6 0 R 13 0 R]", &[]),
         ("in-place entry moved", IN_PLACE, "[6 0 R << /FT /Sig /T (Approval) /V 7 0 R >> 13 0 R]", &[]),
@@ -527,6 +527,8 @@ fn a_fields_array_of_its_own_only_accepts_new_signature_fields_appended() {
         ("signed value by another generation", LISTED, "[6 0 R 13 0 R 11 0 R]", &[(11, &value_gen)]),
         ("signed value behind a new reference", LISTED, "[6 0 R 13 0 R 11 0 R]", &[(11, &chained), (17, "7 0 R")]),
         ("signed value behind two new references", LISTED, "[6 0 R 13 0 R 11 0 R]", &[(11, &chained), (17, "18 0 R"), (18, "7 0 R")]),
+        // The order of the signed entries is kept even when a valid field is appended after them.
+        ("order changed with a field appended", LISTED, "[13 0 R 6 0 R 11 0 R]", &[(11, &timestamp), (12, TIMESTAMP)]),
     ];
     /// A name, the signed `/Fields`, objects the signed revision holds besides, the later
     /// `/Fields`, and objects the later revision adds.
