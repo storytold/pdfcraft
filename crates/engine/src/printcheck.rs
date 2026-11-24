@@ -65,6 +65,7 @@ pub struct PrintReadiness {
     /// Image placements whose resolution couldn't be measured (a degenerate or non-finite
     /// placement matrix). They are neither passed nor failed.
     pub resolution_unknown: usize,
+    /// Whether anything drawn turns overprint on, and where first; or why that isn't proven.
     pub overprint: Overprint,
 }
 

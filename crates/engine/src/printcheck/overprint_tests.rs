@@ -151,3 +151,87 @@ fn requests_in_patterns_glyphs_masks_and_appearances_are_found() {
         assert!(found.asks() && found.page == Some(1), "{what}: {found:?}");
     }
 }
+
+fn xobjects(entries: &[(&str, ObjRef)]) -> Object {
+    Object::Dict(dict(&entries.iter().map(|(k, r)| (*k, Object::Ref(*r))).collect::<Vec<_>>()))
+}
+
+#[test]
+fn forms_that_draw_each_other_end_with_a_proven_answer() {
+    let mut doc = Document::new_empty();
+    let a = form(&mut doc, Dict::new(), "");
+    let b = form(&mut doc, Dict::new(), "");
+    for (r, content) in [(a, "/A Do /B Do"), (b, "/A Do")] {
+        let resources = dict(&[("XObject", xobjects(&[("A", a), ("B", b)]))]);
+        let d = dict(&[("Subtype", Object::name("Form")), ("Resources", Object::Dict(resources))]);
+        doc.set(r, Object::Stream(Stream::from_raw(d, content.as_bytes().to_vec())));
+    }
+    add_page(&mut doc, dict(&[("XObject", xobjects(&[("A", a)]))]), "/A Do");
+
+    let found = walk(&doc);
+    assert!(!found.asks() && found.proven(), "{found:?}");
+}
+
+#[test]
+fn a_form_without_resources_uses_those_of_the_stream_that_draws_it() {
+    let mut doc = Document::new_empty();
+    let bare = dict(&[("Subtype", Object::name("Form"))]);
+    let f = stream(&mut doc, bare, "/Over gs");
+    add_page(&mut doc, dict(&[("ExtGState", over()), ("XObject", xobjects(&[("F", f)]))]), "/F Do");
+
+    let found = walk(&doc);
+    assert!(found.asks() && found.object == Some(f.to_string()), "{found:?}");
+}
+
+#[test]
+fn the_font_restored_by_q_and_q_decides_whether_glyphs_are_walked() {
+    let page = |content: &str| {
+        let mut doc = Document::new_empty();
+        let glyph = stream(&mut doc, Dict::new(), "0 0 d0 /Over gs 0 0 1 1 re f");
+        let t3 = doc.add(Object::Dict(dict(&[
+            ("Subtype", Object::name("Type3")),
+            ("CharProcs", Object::Dict(dict(&[("a", Object::Ref(glyph))]))),
+            ("Resources", Object::Dict(dict(&[("ExtGState", over())]))),
+        ])));
+        let plain = doc.add(Object::Dict(dict(&[("Subtype", Object::name("Type1")), ("BaseFont", Object::name("Helvetica"))])));
+        add_page(&mut doc, dict(&[("Font", xobjects(&[("T3", t3), ("P", plain)]))]), content);
+        walk(&doc)
+    };
+
+    let restored = page("BT /T3 1 Tf q /P 1 Tf Q (a) Tj ET");
+    assert!(restored.asks(), "{restored:?}");
+    let plain = page("BT /P 1 Tf q /T3 1 Tf Q (a) Tj ET");
+    assert!(!plain.asks() && plain.proven(), "{plain:?}");
+}
+
+#[test]
+fn every_cap_and_undecodable_stream_leaves_the_answer_unproven() {
+    let mut doc = Document::new_empty();
+    let inner = form(&mut doc, dict(&[("ExtGState", over())]), "/Over gs");
+    let outer = form(&mut doc, dict(&[("XObject", xobjects(&[("I", inner)]))]), "/I Do");
+    add_page(&mut doc, dict(&[("XObject", xobjects(&[("O", outer)]))]), "/O Do");
+    let pages = pdfcraft_model::pages(&doc);
+    assert!(overprint_use(&doc, &pages).asks());
+
+    let capped = [
+        ("depth", Limits { depth: 1, ..Limits::DOCUMENT }),
+        ("streams", Limits { streams: 1, ..Limits::DOCUMENT }),
+        ("bytes", Limits { bytes: 4, ..Limits::DOCUMENT }),
+    ];
+    for (what, limits) in capped {
+        let short = overprint_use_within(&doc, &pages, limits);
+        assert!(!short.asks() && !short.proven() && !short.unwalked.is_empty(), "{what}: {short:?}");
+    }
+
+    let mut doc = Document::new_empty();
+    let d = dict(&[("Subtype", Object::name("Form")), ("Filter", Object::name("FlateDecode"))]);
+    let broken = stream(&mut doc, d, "not deflate data");
+    add_page(&mut doc, dict(&[("XObject", xobjects(&[("B", broken)]))]), "/B Do");
+    let undecoded = walk(&doc);
+    assert!(!undecoded.asks() && !undecoded.proven(), "{undecoded:?}");
+
+    let mut doc = Document::new_empty();
+    add_page(&mut doc, Dict::new(), &"q ".repeat(MAX_SAVES + 1));
+    let nested = walk(&doc);
+    assert!(!nested.proven(), "{nested:?}");
+}

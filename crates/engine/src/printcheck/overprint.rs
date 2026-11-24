@@ -1,10 +1,11 @@
 //! Whether a document asks for overprint (ISO 32000-2 §8.6.7, §11.7.4).
 //!
 //! Overprint is asked for when content that is drawn invokes, with `gs`, a graphics state whose
-//! `/OP` or `/op` is true (§8.6.5, Table 57), or paints with a shading pattern whose own graphics
-//! state has one (§8.7.4.1). The content walked is each page's, the form XObjects, tiling
-//! patterns, soft-mask groups and Type 3 glyph procedures it draws, and the appearance streams of
-//! the page's annotations (§12.5.5). A graphics state that is listed in the resources but never
+//! `/OP` or `/op` is true (§8.4.5, Table 57), or paints with a shading pattern whose own graphics
+//! state has one (§8.7.4.3). The content walked is each page's, the form XObjects, tiling
+//! patterns, soft-mask groups and Type 3 glyph procedures it draws, and every appearance stream of
+//! the page's annotations, in any state and whatever their flags (§12.5.5), so an appearance that
+//! is never shown can still be reported. A graphics state that is listed in the resources but never
 //! invoked asks for nothing. The walk is bounded; where it stops short the answer is "not proven",
 //! never "no".
 
