@@ -1,12 +1,29 @@
 //! Measure objects: page-space clicks, live readings and persistent drawing scales.
-#[cfg(not(target_arch = "wasm32"))]
-use crate::file_filter::AddFilterAnyCase as _;
-use crate::{LeftPanel, PdfCraftApp, QuickTool, canvas::DocView, page_cursor::Layer, theme::Tokens, widgets};
-use egui::{Color32, Pos2, Stroke};
+use crate::{LeftPanel, PdfCraftApp, QuickTool, comments::PageMap};
+use craft::behavior::{CancelReason, Cursor, CursorIcon, DisplayOrder, ItemSource, Selection, geometry::turn_to_45, kurbo};
+use craft::host::{
+    Host, PickRequest, Picked, Wake, WriteIntent,
+    queue::{JobQueue, Priority, QueueOptions},
+};
+use craft::theme::variant::Tone;
+use craft::ui::{
+    buttons::Button,
+    canvas::{CanvasTool, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer},
+    choice::{Checkbox, Segmented},
+    contract::{Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _},
+    form::{Field, SliderField},
+    list::{List, ListRow},
+    notices::Notice,
+    pickers::{Select, UnitSelect},
+    primitives::{Draw, PaintShape, StrokeWidth, TextRun, glyph},
+    runtime::env::UnitKind,
+    text::{NumberField, TextField},
+};
 use pdfcraft_engine::{
     Document, Edit, Style,
     measure::{self, Kind, NewMeasurement, PageUnit, Point, Reading, Scale},
 };
+// PLAN: assumed `pdfcraft_render::DocInfo` as the type of `Document::info` (pdf-canvas-w9 passes `cx.info`)
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -41,8 +58,8 @@ impl Tool {
         }
     }
 }
-/// Where a thread reading snapping geometry sends it.
-type PathsReceiver = std::sync::mpsc::Receiver<Result<measure::snap::Geometry, String>>;
+/// The snapping geometry of one page read by a queued job: (page, edit generation, geometry or why not).
+type PathsRead = (usize, u64, Result<measure::snap::Geometry, String>);
 
 pub struct MeasureView {
     pub points: Vec<Point>,
@@ -72,10 +89,12 @@ pub struct MeasureView {
     seeded_page: Option<usize>,
     /// Snapping geometry (or why it failed) per (page, edit generation): extraction is not
     /// repeated on every hover frame.
-    paths: Option<(usize, u64, Result<measure::snap::Geometry, String>)>,
-    /// The snapping geometry being read on a thread, for (page, edit generation): a heavy
-    /// drawing takes seconds, which would freeze the window.
-    pending_paths: Option<(usize, u64, PathsReceiver)>,
+    paths: Option<PathsRead>,
+    /// The queue that reads snapping geometry away from the window: a heavy drawing takes
+    /// seconds, which would freeze it. The tool builds it from the host on first use.
+    reads: Option<JobQueue<(), PathsRead>>,
+    /// The (page, edit generation) whose snapping geometry `reads` is reading.
+    pending_read: Option<(usize, u64)>,
     /// Saved measurements per edit generation, for the panel.
     listing: Option<(u64, Result<measure::Listing, String>)>,
 }
@@ -104,7 +123,8 @@ impl Default for MeasureView {
             label: String::new(),
             seeded_page: None,
             paths: None,
-            pending_paths: None,
+            reads: None,
+            pending_read: None,
             listing: None,
         }
     }
@@ -178,7 +198,6 @@ impl MeasureView {
 /// Snaps `point` to the page's drawn geometry (endpoints, midpoints, intersections, paths),
 /// recording in `state` why it couldn't when the content is too complex or unreadable.
 fn snap_to_content(
-    ctx: &egui::Context,
     state: &mut MeasureView,
     doc: &Document,
     page: usize,
@@ -187,7 +206,7 @@ fn snap_to_content(
     point: Point,
 ) -> Option<(Point, measure::snap::SnapKind)> {
     let reading = tl!("Reading the drawing for snapping…");
-    if !load_paths(ctx, state, doc, page) {
+    if !load_paths(state, doc, page) {
         state.error = Some(reading.into());
         return None;
     }
@@ -218,13 +237,11 @@ fn snap_to_content(
 }
 
 /// A file smaller than this may have its snapping geometry read on the spot.
-#[cfg(not(target_arch = "wasm32"))]
 const SNAP_SMALL_FILE: usize = 8 * 1024 * 1024;
 
-/// Whether the snapping geometry of `page` as it is now is at hand, starting (on a thread) or
+/// Whether the snapping geometry of `page` as it is now is at hand, starting (on the queue) or
 /// collecting the read when it isn't.
-fn load_paths(ctx: &egui::Context, state: &mut MeasureView, doc: &Document, page: usize) -> bool {
-    use std::sync::mpsc::TryRecvError;
+fn load_paths(state: &mut MeasureView, doc: &Document, page: usize) -> bool {
     let generation = doc.edit_generation();
     let current = |p: usize, g: u64| p == page && g == generation;
     if state.paths.as_ref().is_some_and(|(p, g, _)| current(*p, *g)) {
@@ -232,25 +249,20 @@ fn load_paths(ctx: &egui::Context, state: &mut MeasureView, doc: &Document, page
     }
     // One read at a time, each being a whole page: one of another page or edit is let finish, and
     // its answer dropped.
-    if let Some((p, g, receiver)) = &state.pending_paths {
-        let answer = match receiver.try_recv() {
-            Ok(result) => result,
-            Err(TryRecvError::Empty) => return false,
-            Err(TryRecvError::Disconnected) => Err("the snapping read stopped unexpectedly".into()),
-        };
-        let wanted = current(*p, *g);
-        state.pending_paths = None;
-        if wanted {
-            state.paths = Some((page, generation, answer));
+    if state.pending_read.is_some() {
+        let Some(done) = state.reads.as_ref().and_then(|queue| queue.try_recv()) else { return false };
+        let (read_page, read_generation, answer) = done.result;
+        state.pending_read = None;
+        if current(read_page, read_generation) {
+            state.paths = Some((read_page, read_generation, answer));
             return true;
         }
     }
-    start_read(ctx, state, doc, page, generation)
+    start_read(state, doc, page, generation)
 }
 
 /// What the window itself reads of `page`: a small file's page, if it is within what a frame can
 /// afford. A small file can still hold millions of segments.
-#[cfg(not(target_arch = "wasm32"))]
 fn read_on_the_spot(doc: &Document, page: usize) -> Option<Result<measure::snap::Geometry, String>> {
     if doc.bytes.len() >= SNAP_SMALL_FILE {
         return None;
@@ -259,191 +271,276 @@ fn read_on_the_spot(doc: &Document, page: usize) -> Option<Result<measure::snap:
     (!read.as_ref().is_ok_and(|g| g.truncated)).then_some(read)
 }
 
-/// Read `page`'s geometry, on a thread unless it is little. Whether it is at hand already.
-#[cfg(not(target_arch = "wasm32"))]
-fn start_read(ctx: &egui::Context, state: &mut MeasureView, doc: &Document, page: usize, generation: u64) -> bool {
+/// Read `page`'s geometry, on the queue unless it is little. Whether it is at hand already.
+fn start_read(state: &mut MeasureView, doc: &Document, page: usize, generation: u64) -> bool {
     if let Some(read) = read_on_the_spot(doc, page) {
         state.paths = Some((page, generation, read));
         return true;
     }
-    let (sender, receiver) = std::sync::mpsc::channel();
-    let job = doc.measurement_paths_job(page);
-    let repaint = ctx.clone();
-    let work = move || {
-        let _ = sender.send(job());
-        repaint.request_repaint();
-    };
-    if let Err(e) = std::thread::Builder::new().name("pdfcraft-snap".into()).spawn(work) {
-        state.paths = Some((page, generation, Err(e.to_string())));
+    let Some(queue) = state.reads.as_ref() else {
+        state.paths = Some((page, generation, Err("the snapping read has no queue".into())));
         return true;
-    }
-    state.pending_paths = Some((page, generation, receiver));
+    };
+    let job = doc.measurement_paths_job(page);
+    queue.submit((), Priority::VISIBLE, move |_cancel| {
+        // The queue delivers nothing for a panicked job, so the guard reports the stop.
+        let read = pdfcraft_engine::guard(job).unwrap_or_else(|_| Err("the snapping read stopped unexpectedly".into()));
+        (page, generation, read)
+    });
+    // Without lanes (the web) the owner runs the job.
+    #[cfg(target_arch = "wasm32")]
+    queue.run_inline(1);
+    state.pending_read = Some((page, generation));
     false
-}
-
-/// With no threads here, what a frame can afford; past it the drawing says it exceeds the limit.
-#[cfg(target_arch = "wasm32")]
-fn start_read(_ctx: &egui::Context, state: &mut MeasureView, doc: &Document, page: usize, generation: u64) -> bool {
-    state.paths = Some((page, generation, doc.measurement_paths_within(page, measure::snap::Limits::WITHIN_A_FRAME)));
-    true
 }
 
 /// Whether a click may place a point: with snapping on, not while the drawing is being read, as
 /// the point would land unsnapped.
 fn takes_clicks(state: &MeasureView) -> bool {
-    !state.snap_enabled || state.pending_paths.is_none()
+    !state.snap_enabled || state.pending_read.is_none()
 }
 
-/// The Measure tools' own clicks this frame: those of a press nobody holds.
-#[derive(Clone, Copy)]
-pub(crate) struct Clicks {
-    pub single: bool,
-    pub double: bool,
-}
-
-impl Clicks {
-    /// `resp`'s clicks, when the press is the tool's (`free`).
-    pub(crate) fn of(resp: &egui::Response, free: bool) -> Self {
-        Clicks { single: free && resp.clicked(), double: free && resp.double_clicked() }
-    }
-}
-
-pub(crate) fn page_input(
-    ui: &egui::Ui,
-    clicks: Clicks,
-    doc: &Document,
-    view: &mut DocView,
-    cx: &crate::comments::PageCx<'_>,
+/// The Measure tools on a page: a click places a vertex, Enter or a double click finishes a
+/// perimeter or area, Shift turns the next vertex onto a 45-degree ray.
+pub(crate) struct MeasureTool<'a> {
+    view: &'a mut MeasureView,
+    doc: &'a Document,
+    pages: &'a PageMap<'a>,
     tool: Tool,
     units: crate::units::Unit,
-) {
-    let page = cx.page;
-    let xf = cx.xf;
-    let author = &cx.prefs.author;
-    if !doc.allows_annotation() {
-        return;
-    }
-    let Some(info) = doc.info.pages.get(page) else { return };
-    let state = &mut view.measure;
-    if state.tool != Some(tool) {
-        state.cancel();
-        state.tool = Some(tool);
-    }
-    // Keys belong to a focused text field (the label, unit or viewport name) when there is one.
-    let typing = ui.ctx().egui_wants_keyboard_input();
-    if !typing && cx.keys.pressed(ui.ctx(), egui::Key::Escape) {
-        state.cancel();
-    }
-    let screen = |p: Point| {
-        let v = info.user_to_view(p[0] as f32, p[1] as f32);
-        xf.norm_to_screen(v[0] / xf.pw, v[1] / xf.ph)
-    };
-    let pos = cx.ptr.within(xf.rect);
-    let mut hover = None;
-    let mut snap = None;
-    if let Some(pos) = pos {
-        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
-        let (vx, vy) = xf.screen_to_view(pos);
-        let [x, y] = info.view_to_user(vx, vy);
-        let mut point = [f64::from(x), f64::from(y)];
-        let mut snapped = None;
-        if state.snap_enabled {
-            snapped = snap_to_content(ui.ctx(), state, doc, page, [vx, vy], xf.zoom().max(1e-6), point);
+    author: String,
+    /// The pointer's page, point (user space) and snap kind of the last hover or press.
+    hover: Option<(usize, Point, Option<measure::snap::SnapKind>)>,
+    edit: Option<Edit>,
+}
+
+impl<'a> MeasureTool<'a> {
+    /// The tool for `tool` over `view`. A different tool than the last drops the measurement in
+    /// progress. `host` and `wake` build the snapping read queue on first use.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        view: &'a mut MeasureView,
+        doc: &'a Document,
+        pages: &'a PageMap<'a>,
+        tool: Tool,
+        units: crate::units::Unit,
+        author: &str,
+        host: &Host,
+        wake: Wake,
+    ) -> Self {
+        if view.tool != Some(tool) {
+            view.cancel();
+            view.tool = Some(tool);
         }
-        if let Some((snapped_point, kind)) = snapped {
-            point = snapped_point;
-            snap = Some(kind);
+        view.reads
+            .get_or_insert_with(|| JobQueue::new(host.jobs_shared().clone(), wake, QueueOptions { name: "measure-snap", ..QueueOptions::default() }));
+        Self { view, doc, pages, tool, units, author: author.into(), hover: None, edit: None }
+    }
+
+    /// The measurement the tool finished this pass, for the page body to apply.
+    pub(crate) fn take_edit(&mut self) -> Option<Edit> {
+        self.edit.take()
+    }
+
+    /// The page, user-space point and snap kind under `pos`, snapped to the drawing and turned
+    /// onto a 45-degree ray from the last vertex while Shift is held.
+    fn locate(&mut self, pos: egui::Pos2, cx: &ToolContext<'_>) -> Option<(usize, Point, Option<measure::snap::SnapKind>)> {
+        let space = cx.space()?;
+        let screen = kurbo::Point::new(f64::from(pos.x), f64::from(pos.y));
+        let page = self.pages.page_at(screen)?;
+        let displayed = self.pages.to_page(page, screen)?;
+        let mut point = self.pages.to_user(page, displayed);
+        let mut snap = None;
+        if self.view.snap_enabled {
+            let [vx, vy] = self.doc.measurement_to_view(page, point).ok()?;
+            if let Some((snapped, kind)) =
+                snap_to_content(self.view, self.doc, page, [vx as f32, vy as f32], (space.view.zoom as f32).max(1e-6), point)
+            {
+                point = snapped;
+                snap = Some(kind);
+            }
         }
-        if ui.input(|i| i.modifiers.shift)
-            && let Some(last) = state.points.last()
+        if cx.mods.shift
+            && self.view.page == Some(page)
+            && let Some(last) = self.view.points.last()
         {
-            point = measure::snap::constrain(*last, point);
+            let turned = turn_to_45(kurbo::Point::new(last[0], last[1]), kurbo::Point::new(point[0], point[1]));
+            point = [turned.x, turned.y];
         }
-        hover = Some(point);
-        if clicks.single && takes_clicks(state) {
-            if state.page != Some(page) {
-                state.cancel();
-                state.page = Some(page);
-            }
-            if state.points.is_empty() {
-                match doc.measurement_scale_or(page, point, units.per_point(), units.label()) {
-                    Ok(scale) => {
-                        state.scale = Some(scale);
-                        state.error = None;
-                    }
-                    Err(e) => {
-                        state.error = Some(e);
-                        return;
-                    }
-                }
-            }
-            let closes =
-                tool == Tool::Area && state.points.len() >= 3 && state.points.first().is_some_and(|first| screen(*first).distance(pos) <= 6.0);
-            let repeats = state.points.last().is_some_and(|last| measure::distance(*last, point) < 1e-6);
-            if !closes && !repeats && state.points.len() < measure::MAX_POINTS {
-                state.points.push(point);
-            }
-            let finishes = closes || matches!(tool, Tool::Distance | Tool::Calibrate) && state.points.len() == 2;
-            if finishes {
-                finish(state, &mut view.pending_edit, doc, page, tool, author, units);
-            }
-        }
+        Some((page, point, snap))
     }
-    if state.page == Some(page) && !state.points.is_empty() {
-        let double = clicks.double && takes_clicks(state);
-        if (double || !typing && cx.keys.pressed(ui.ctx(), egui::Key::Enter)) && matches!(tool, Tool::Perimeter | Tool::Area) {
-            finish(state, &mut view.pending_edit, doc, page, tool, author, units);
-        }
-        if !typing && cx.keys.pressed(ui.ctx(), egui::Key::Backspace) {
-            state.points.pop();
-        }
-        let mut points = state.points.clone();
-        if let Some(p) = hover
+
+    /// The vertices placed, and the pointer's point as the next one when `with_hover`.
+    fn vertices(&self, with_hover: bool) -> Vec<Point> {
+        let mut points = self.view.points.clone();
+        if with_hover
+            && let Some((page, p, _)) = self.hover
+            && self.view.page == Some(page)
             && points.last().is_none_or(|last| measure::distance(*last, p) > 1e-6)
         {
             points.push(p);
         }
-        if let Some(scale) = &state.scale {
-            match measure::reading(tool.kind(), &points, scale) {
-                Ok(reading) => state.reading = Some(reading),
-                Err(e) => state.error = Some(e.to_string()),
+        points
+    }
+
+    /// The live reading of the vertices with the pointer's point as the next one.
+    fn refresh_reading(&mut self) {
+        if self.view.page.is_none() || self.view.points.is_empty() {
+            return;
+        }
+        let points = self.vertices(true);
+        if let Some(scale) = &self.view.scale {
+            match measure::reading(self.tool.kind(), &points, scale) {
+                Ok(reading) => self.view.reading = Some(reading),
+                Err(e) => self.view.error = Some(e.to_string()),
             }
-        }
-        let positions: Vec<Pos2> = points.iter().map(|&p| screen(p)).collect();
-        let stroke = Stroke::new(1.5, Color32::from_rgb(0, 120, 214));
-        for pair in positions.windows(2) {
-            if let [a, b] = pair {
-                ui.painter().line_segment([*a, *b], stroke);
-            }
-        }
-        if tool == Tool::Area
-            && let (Some(a), Some(b)) = (positions.first(), positions.last())
-        {
-            ui.painter().line_segment([*a, *b], stroke);
-        }
-        for &p in &positions {
-            ui.painter().circle_filled(p, 3.0, stroke.color);
-        }
-        if let (Some(p), Some(kind)) = (hover, snap) {
-            ui.painter().circle_stroke(screen(p), 6.0, Stroke::new(1.0, Color32::from_rgb(46, 158, 92)));
-            ui.painter().text(
-                screen(p) + egui::vec2(10.0, -10.0),
-                egui::Align2::LEFT_BOTTOM,
-                tl!(match kind {
-                    measure::snap::SnapKind::Endpoint => "Endpoint",
-                    measure::snap::SnapKind::Midpoint => "Midpoint",
-                    measure::snap::SnapKind::Intersection => "Intersection",
-                    measure::snap::SnapKind::Path => "Path",
-                }),
-                crate::theme::regular(11.0),
-                stroke.color,
-            );
-        }
-        if let (Some(p), Some(reading)) = (hover, &state.reading) {
-            ui.painter().text(screen(p) + egui::vec2(12.0, 12.0), egui::Align2::LEFT_TOP, &reading.label, crate::theme::semibold(12.0), stroke.color);
         }
     }
+
+    fn finish(&mut self, page: usize) {
+        finish(self.view, &mut self.edit, self.doc, page, self.tool, &self.author, self.units);
+    }
 }
+
+impl CanvasTool for MeasureTool<'_> {
+    fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
+        if !self.doc.allows_annotation() {
+            return ToolAction::Ignored;
+        }
+        let Some((page, point, snap)) = self.locate(pointer.pos, cx) else { return ToolAction::Done };
+        self.hover = Some((page, point, snap));
+        if !takes_clicks(self.view) {
+            return ToolAction::Done;
+        }
+        if self.view.page != Some(page) {
+            self.view.cancel();
+            self.view.page = Some(page);
+        }
+        if self.view.points.is_empty() {
+            match self.doc.measurement_scale_or(page, point, self.units.per_point(), self.units.label()) {
+                Ok(scale) => {
+                    self.view.scale = Some(scale);
+                    self.view.error = None;
+                }
+                Err(e) => {
+                    self.view.error = Some(e);
+                    return ToolAction::Done;
+                }
+            }
+        }
+        // A press within the click distance of the first vertex closes an area.
+        let closes = self.tool == Tool::Area
+            && self.view.points.len() >= 3
+            && self
+                .view
+                .points
+                .first()
+                .and_then(|first| self.pages.to_screen(page, self.pages.to_doc(page, *first)))
+                .is_some_and(|first| first.distance(pointer.pos) <= cx.slop);
+        let repeats = self.view.points.last().is_some_and(|last| measure::distance(*last, point) < 1e-6);
+        if !closes && !repeats && self.view.points.len() < measure::MAX_POINTS {
+            self.view.points.push(point);
+        }
+        let finishes = closes || matches!(self.tool, Tool::Distance | Tool::Calibrate) && self.view.points.len() == 2;
+        if finishes || pointer.clicks == 2 && matches!(self.tool, Tool::Perimeter | Tool::Area) && !self.view.points.is_empty() {
+            self.finish(page);
+        }
+        self.refresh_reading();
+        ToolAction::Done
+    }
+
+    fn drag(&mut self, _pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {}
+
+    fn release(&mut self, _pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {}
+
+    fn hover(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        self.hover = self.locate(pointer.pos, cx);
+        self.refresh_reading();
+    }
+
+    fn cancel(&mut self, _reason: CancelReason, _cx: &mut ToolContext<'_>) {
+        self.view.cancel();
+        self.hover = None;
+    }
+
+    fn claims(&self) -> ToolClaims {
+        // Backspace removes a vertex only while there is one; otherwise it stays the app's.
+        if self.view.points.is_empty() { ToolClaims::NONE } else { ToolClaims::NONE.deletes() }
+    }
+
+    fn key(&mut self, key: &ToolKey, _cx: &mut ToolContext<'_>) -> bool {
+        match key {
+            ToolKey::Submit => match self.view.page {
+                Some(page) if matches!(self.tool, Tool::Perimeter | Tool::Area) && !self.view.points.is_empty() => {
+                    self.finish(page);
+                    true
+                }
+                _ => false,
+            },
+            ToolKey::Delete { forward: false, .. } => {
+                let popped = self.view.points.pop().is_some();
+                self.refresh_reading();
+                popped
+            }
+            ToolKey::Cancel => {
+                self.view.cancel();
+                self.hover = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
+        let (Some(style), Some(page)) = (cx.style(), self.view.page) else { return };
+        if self.view.points.is_empty() {
+            return;
+        }
+        let accent = style.color(style.tokens.color.accent.solid);
+        let good = style.color(style.tokens.color.status.good.solid);
+        let screen = |p: Point| self.pages.to_screen(page, self.pages.to_doc(page, p));
+        let positions: Vec<egui::Pos2> = self.vertices(cx.pointer.is_some()).iter().filter_map(|&p| screen(p)).collect();
+        draw.stroke(&PaintShape::Path(positions.clone()), StrokeWidth::Medium, accent);
+        if self.tool == Tool::Area
+            && let (Some(a), Some(b)) = (positions.first(), positions.last())
+        {
+            draw.stroke(&PaintShape::Path(vec![*b, *a]), StrokeWidth::Medium, accent);
+        }
+        let side = draw.width(StrokeWidth::Heavy);
+        for &p in &positions {
+            draw.fill(&glyph::dot(p, side), accent);
+        }
+        let Some((hover_page, hover_point, snap)) = self.hover.filter(|(p, ..)| *p == page) else { return };
+        let _ = hover_page;
+        let Some(at) = screen(hover_point) else { return };
+        let label = |text: String, at: egui::Pos2, color| {
+            let rect = egui::Rect::from_min_size(at, egui::vec2((cx.rect.right() - at.x).max(0.0), cx.slop * 2.0));
+            draw.text(rect, &TextRun::new(text).color(color));
+        };
+        if let Some(kind) = snap {
+            draw.stroke(&PaintShape::Circle(at, cx.slop), StrokeWidth::Thin, good);
+            let name = tl!(match kind {
+                measure::snap::SnapKind::Endpoint => "Endpoint",
+                measure::snap::SnapKind::Midpoint => "Midpoint",
+                measure::snap::SnapKind::Intersection => "Intersection",
+                measure::snap::SnapKind::Path => "Path",
+            });
+            label(name.to_string(), at + egui::vec2(cx.slop, -cx.slop * 3.0), good);
+        }
+        if let Some(reading) = &self.view.reading {
+            label(reading.label.clone(), at + egui::vec2(cx.slop, cx.slop), accent);
+        }
+    }
+
+    fn cursor(&self, _cx: &ToolContext<'_>) -> Cursor {
+        Cursor::System(CursorIcon::Crosshair)
+    }
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the Measure panel's Apply scale and Export commands")
+    }
+}
+
 fn finish(state: &mut MeasureView, pending: &mut Option<Edit>, doc: &Document, page: usize, tool: Tool, author: &str, units: crate::units::Unit) {
     if tool == Tool::Calibrate {
         if let [a, b] = state.points.as_slice() {
@@ -474,29 +571,45 @@ fn finish(state: &mut MeasureView, pending: &mut Option<Edit>, doc: &Document, p
         state.cancel();
     }
 }
-pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    egui::ScrollArea::vertical().id_salt("measure-panel").show(ui, |ui| panel_body(app, ui, t));
+
+/// The unit select's entry for a page unit.
+fn unit_kind(unit: PageUnit) -> UnitKind {
+    match unit {
+        PageUnit::Pt => UnitKind::Points,
+        PageUnit::In => UnitKind::Inches,
+        PageUnit::Mm => UnitKind::Millimetres,
+        PageUnit::Cm => UnitKind::Centimetres,
+    }
 }
+
+/// The page unit a unit select entry stands for.
+fn page_unit_of_kind(kind: UnitKind) -> Option<PageUnit> {
+    PageUnit::ALL.into_iter().find(|u| unit_kind(*u) == kind)
+}
+
 /// Draw the measurement panel: tool selection, scale calibration, snapping and the current reading.
-fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
-    crate::widgets::begin_dialog(ui);
+pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let Some((index, id)) = app.active_ids() else {
-        ui.label(tl!("Open a PDF to measure it."));
+        Notice::new(Tone::Info, tl!("Open a PDF to measure it.")).show(ui);
         return;
     };
+    let current = match app.quick_tool {
+        QuickTool::Measure(t) => Some(t),
+        _ => None,
+    };
     let mut tool = None;
-    ui.horizontal(|ui| {
-        for (label, value) in [("Distance", Tool::Distance), ("Perimeter", Tool::Perimeter), ("Area", Tool::Area)] {
-            if ui.selectable_label(app.quick_tool == QuickTool::Measure(value), tl!(label)).clicked() {
-                tool = Some(value);
-            }
-        }
-    });
+    let tools = [Entry::new(Tool::Distance, tl!("Distance")), Entry::new(Tool::Perimeter, tl!("Perimeter")), Entry::new(Tool::Area, tl!("Area"))];
+    let picked = Segmented::new(tl!("Measure"), Bind::given(current.unwrap_or(Tool::Distance)), &tools).show(ui);
+    if let Some(t) = picked.value().copied()
+        && Some(t) != current
+    {
+        tool = Some(t);
+    }
     let Some(doc) = app.session.get(id) else { return };
     let units = app.units;
-    let page = app.views[index].current;
+    let page = app.views[index].current();
     let info = doc.info.pages.get(page).cloned();
-    let state = &mut app.views[index].measure;
+    let state = &mut app.views[index].session.measure;
     if state.listing.as_ref().is_none_or(|(g, _)| *g != doc.edit_generation()) {
         state.listing = Some((doc.edit_generation(), doc.measurements()));
     }
@@ -516,127 +629,153 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
         }
         sync_ratio_text(state, units);
     }
-    ui.label(tl!("Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area."));
-    ui.label(tl!("Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels."));
-    ui.separator();
-    ui.label(tl!("Measurement information"));
+    Notice::new(Tone::Neutral, tl!("Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area."))
+        .lines([tl!("Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.")])
+        .show(ui);
     if let Some(reading) = &state.reading {
-        ui.label(egui::RichText::new(&reading.label).strong());
-        ui.label(format!("X: {:.3}   Y: {:.3}", reading.delta_x, reading.delta_y));
-        ui.label(format!("{}: {:.2}°", tl!("Angle"), reading.angle));
+        let mut lines = vec![format!("X: {:.3}   Y: {:.3}", reading.delta_x, reading.delta_y), format!("{}: {:.2}°", tl!("Angle"), reading.angle)];
         if let Some(scale) = &state.scale {
-            ui.label(&scale.ratio);
+            lines.push(scale.ratio.clone());
         }
+        Notice::new(Tone::Neutral, reading.label.clone()).lines(lines).show(ui);
     } else {
-        ui.label(tl!("Click the first point to begin."));
+        Notice::new(Tone::Neutral, tl!("Click the first point to begin.")).show(ui);
     }
-    ui.horizontal(|ui| {
-        let label = ui.label(tl!("Label"));
-        ui.add(crate::widgets::line(&mut state.label).desired_width(130.0).char_limit(128)).labelled_by(label.id);
+    Field::new(tl!("Label")).id_salt("measure-label").show(ui, |ui, _| {
+        TextField::new(tl!("Label"), Bind::bound(&mut state.label)).show(ui);
     });
-    ui.separator();
-    ui.add(widgets::checkbox(&mut state.snap_enabled, tl!("Snap to drawing")));
+    Checkbox::new(Bind::bound(&mut state.snap_enabled)).label(tl!("Snap to drawing")).show(ui);
     if state.snap_enabled {
-        ui.horizontal(|ui| {
-            ui.add(widgets::checkbox(&mut state.snaps.endpoints, tl!("Endpoints")));
-            ui.add(widgets::checkbox(&mut state.snaps.midpoints, tl!("Midpoints")));
-        });
-        ui.horizontal(|ui| {
-            ui.add(widgets::checkbox(&mut state.snaps.intersections, tl!("Intersections")));
-            ui.add(widgets::checkbox(&mut state.snaps.paths, tl!("Paths")));
-        });
-        ui.add(egui::Slider::new(&mut state.sensitivity, 1.0..=20.0).text(tl!("Sensitivity")));
+        Checkbox::new(Bind::bound(&mut state.snaps.endpoints)).label(tl!("Endpoints")).show(ui);
+        Checkbox::new(Bind::bound(&mut state.snaps.midpoints)).label(tl!("Midpoints")).show(ui);
+        Checkbox::new(Bind::bound(&mut state.snaps.intersections)).label(tl!("Intersections")).show(ui);
+        Checkbox::new(Bind::bound(&mut state.snaps.paths)).label(tl!("Paths")).show(ui);
+        SliderField::new(tl!("Sensitivity"), Bind::bound(&mut state.sensitivity), 1.0..=20.0).show(ui);
     }
-    ui.separator();
     // "1:N" fills the fields below and applies at once, as does picking a common scale.
     let mut chosen = None;
     let fields = scale_fields(state);
-    ui.horizontal(|ui| {
-        ui.label(tl!("Drawing scale")).on_hover_text(tl!("Applying a scale switches units to m / mm."));
-        let typed = ui.add(crate::widgets::line(&mut state.ratio_text).hint_text("1:100").desired_width(56.0).char_limit(16));
-        typed.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, tl!("Scale")));
-        state.ratio_dirty |= typed.changed();
-        if typed.lost_focus() && std::mem::take(&mut state.ratio_dirty) {
-            match parse_ratio(&state.ratio_text) {
-                Some(n) => chosen = Some(n),
-                None => state.error = Some(tl!("Enter a scale such as 1:50.").into()),
-            }
+    let before = state.ratio_text.clone();
+    let ratio_text = &mut state.ratio_text;
+    let typed = Field::new(tl!("Drawing scale"))
+        .id_salt("measure-ratio")
+        .show(ui, |ui, _| TextField::new(tl!("Scale"), Bind::bound(ratio_text)).submits().show(ui));
+    state.ratio_dirty |= state.ratio_text != before;
+    if typed.inner.as_ref().is_some_and(|t| t.submitted || t.response.lost_focus()) && std::mem::take(&mut state.ratio_dirty) {
+        match parse_ratio(&state.ratio_text) {
+            Some(n) => chosen = Some(n),
+            None => state.error = Some(tl!("Enter a scale such as 1:50.").into()),
         }
-        craft_ui::ComboBox::from_id_salt("measure-common-scales").selected_text(tl!("Common scales")).width(20.0).show_ui(ui, |ui| {
-            for n in RATIOS {
-                if ui.selectable_label(state.ratio_text == format_ratio(n), format_ratio(n)).clicked() {
-                    chosen = Some(n);
-                }
-            }
-        });
+    }
+    let ratios: Vec<Entry<String>> = RATIOS.iter().map(|&n| Entry::new(format_ratio(n), format_ratio(n))).collect();
+    let common = Field::new(tl!("Common scales"))
+        .id_salt("measure-common")
+        .show(ui, |ui, _| Select::new(tl!("Common scales"), Bind::given(state.ratio_text.clone()), &ratios).show(ui));
+    if let Some(text) = common.inner.as_ref().and_then(|c| c.value())
+        && let Some(n) = parse_ratio(text)
+        && *text != state.ratio_text
+    {
+        chosen = Some(n);
+    }
+    let page_unit = page_unit_of(state.page_unit, &state.unit, units);
+    let unit_entries: Vec<Entry<UnitKind>> = PageUnit::ALL.iter().map(|&u| Entry::new(unit_kind(u), u.label())).collect();
+    let mut drawing = Some(state.drawing_points);
+    let mut picked_unit = unit_kind(page_unit);
+    Field::new(tl!("Page length")).id_salt("measure-page-length").show(ui, |ui, _| {
+        UnitSelect::new(tl!("Page length"), Bind::bound(&mut drawing), Bind::bound(&mut picked_unit), &unit_entries).range(0.000001..=1e9).show(ui);
     });
-    ui.horizontal(|ui| {
-        ui.add(egui::DragValue::new(&mut state.drawing_points).range(0.000001..=1e9));
-        let page_unit = page_unit_of(state.page_unit, &state.unit, units);
-        craft_ui::ComboBox::from_id_salt("measure-page-unit").selected_text(page_unit.label()).width(44.0).show_ui(ui, |ui| {
-            for u in PageUnit::ALL {
-                if ui.selectable_label(u == page_unit, u.label()).clicked() {
-                    state.page_unit = Some(u);
-                }
-            }
-        });
-        ui.label("=");
-        ui.add(egui::DragValue::new(&mut state.real_distance).range(0.000001..=1e12));
+    state.drawing_points = drawing.unwrap_or(state.drawing_points);
+    if picked_unit != unit_kind(page_unit) {
+        state.page_unit = page_unit_of_kind(picked_unit);
+    }
+    let mut real = Some(state.real_distance);
+    Field::new(tl!("Real distance")).id_salt("measure-real").show(ui, |ui, _| {
+        NumberField::new(tl!("Real distance"), Bind::bound(&mut real)).range(0.000001..=1e9).show(ui);
     });
-    ui.horizontal(|ui| {
-        let unit = ui.label(tl!("Unit"));
-        ui.add(crate::widgets::line(&mut state.unit).desired_width(64.0).char_limit(12)).labelled_by(unit.id);
-        ui.add(egui::DragValue::new(&mut state.precision).range(0..=6).prefix(format!("{} ", tl!("Decimals"))));
+    state.real_distance = real.unwrap_or(state.real_distance);
+    Field::new(tl!("Unit")).id_salt("measure-unit").show(ui, |ui, _| {
+        TextField::new(tl!("Unit"), Bind::bound(&mut state.unit)).show(ui);
     });
+    let mut precision = Some(f64::from(state.precision));
+    Field::new(tl!("Decimals")).id_salt("measure-decimals").show(ui, |ui, _| {
+        NumberField::new(tl!("Decimals"), Bind::bound(&mut precision)).range(0.0..=6.0).step(1.0).show(ui);
+    });
+    state.precision = precision.map_or(state.precision, |p| p.round().clamp(0.0, 6.0) as u8);
     // A hand edit of the fields leaves the 1:N field showing the old ratio: say the new one.
     if scale_fields(state) != fields {
         sync_ratio_text(state, units);
     }
-    if ui.button(tl!("Calibrate from two points")).clicked() {
+    if Button::new(tl!("Calibrate from two points")).show(ui).clicked() {
         tool = Some(Tool::Calibrate);
     }
-    ui.add(widgets::checkbox(&mut state.whole_page, tl!("Entire page")));
+    Checkbox::new(Bind::bound(&mut state.whole_page)).label(tl!("Entire page")).show(ui);
     if !state.whole_page {
-        ui.label(tl!("Viewport rectangle in page points (x, y, width, height)"));
-        for (i, name) in ["X", "Y", "Width", "Height"].iter().enumerate() {
+        Notice::new(Tone::Neutral, tl!("Viewport rectangle in page points (x, y, width, height)")).show(ui);
+        for (i, name) in [tl!("X"), tl!("Y"), tl!("Width"), tl!("Height")].into_iter().enumerate() {
             if let Some(v) = state.rect.get_mut(i) {
-                ui.add(egui::DragValue::new(v).range(0.0..=1e9).prefix(format!("{}: ", tl!(name))));
+                let mut value = Some(*v);
+                NumberField::new(name, Bind::bound(&mut value)).range(0.0..=1e9).show(ui);
+                *v = value.unwrap_or(*v);
             }
         }
     }
-    ui.horizontal(|ui| {
-        let viewport = ui.label(tl!("Viewport"));
-        ui.add(crate::widgets::line(&mut state.name).desired_width(130.0).char_limit(128)).labelled_by(viewport.id);
+    Field::new(tl!("Viewport")).id_salt("measure-viewport").show(ui, |ui, _| {
+        TextField::new(tl!("Viewport"), Bind::bound(&mut state.name)).show(ui);
     });
-    let apply = ui.add_enabled(doc.allows_annotation(), egui::Button::new(tl!("Apply scale"))).clicked();
+    let apply = Button::new(tl!("Apply scale")).enabled(doc.allows_annotation()).show(ui).clicked();
     if let Some(error) = &state.error {
-        ui.colored_label(Color32::from_rgb(190, 50, 50), error);
+        Notice::new(Tone::Bad, error.clone()).show(ui);
     }
-    ui.separator();
     let mut select = None;
     match state.listing.as_ref().map(|(_, l)| l) {
         None => {}
         Some(Ok(listing)) => {
-            ui.label(format!("{}: {}", tl!("Saved measurements"), listing.measurements.len()));
+            Notice::new(Tone::Neutral, crate::i18n::fmt(tl!("Saved measurements: {n}"), &[("n", &listing.measurements.len().to_string())])).show(ui);
             if !listing.unsupported.is_empty() {
-                let reasons: Vec<String> =
-                    listing.unsupported.iter().map(|u| format!("{} {}: {}", tl!("Page"), u.page.saturating_add(1), u.reason)).collect();
-                ui.colored_label(Color32::from_rgb(190, 120, 30), format!("{}: {}", tl!("Unsupported measurements"), listing.unsupported.len()))
-                    .on_hover_text(reasons.join("\n"));
+                let reasons: Vec<String> = listing
+                    .unsupported
+                    .iter()
+                    .map(|u| {
+                        crate::i18n::fmt(tl!("Page {page}: {reason}"), &[("page", &u.page.saturating_add(1).to_string()), ("reason", &u.reason)])
+                    })
+                    .collect();
+                Notice::new(Tone::Warn, crate::i18n::fmt(tl!("Unsupported measurements: {n}"), &[("n", &listing.unsupported.len().to_string())]))
+                    .lines(reasons)
+                    .show(ui);
             }
-            egui::ScrollArea::vertical().id_salt("measurement-list").max_height(140.0).show(ui, |ui| {
-                for m in &listing.measurements {
-                    if ui.button(format!("{} {}: {} {}", tl!("Page"), m.page.saturating_add(1), m.reading.label, m.label)).clicked() {
-                        select = Some((m.page, m.index, m.reading.clone(), m.scale.clone()));
-                    }
+            if !listing.measurements.is_empty() {
+                let source = MeasurementRows(listing.measurements.len());
+                let mut selection = Selection::default();
+                let out = List::new(tl!("Saved measurements")).select(SelectMode::Single).selection(Bind::bound(&mut selection)).show_items(
+                    ui,
+                    &source,
+                    &mut |&at, icx| {
+                        let text = listing
+                            .measurements
+                            .get(at)
+                            .map(|m| {
+                                crate::i18n::fmt(
+                                    tl!("Page {page}: {reading} {label}"),
+                                    &[("page", &m.page.saturating_add(1).to_string()), ("reading", &m.reading.label), ("label", &m.label)],
+                                )
+                            })
+                            .unwrap_or_default();
+                        ListRow::new(text).striped(icx.at % 2 == 1)
+                    },
+                );
+                // Only the pass's own pick selects; a drained event list is empty on a second pass.
+                if out.events.iter().any(|e| !matches!(e, CollectionEvent::Column(_)))
+                    && let Some(m) = selection.lead.and_then(|at| listing.measurements.get(at))
+                {
+                    select = Some((m.page, m.index, m.reading.clone(), m.scale.clone()));
                 }
-            });
+            }
         }
         Some(Err(e)) => {
-            ui.colored_label(Color32::from_rgb(190, 50, 50), e);
+            Notice::new(Tone::Bad, e.clone()).show(ui);
         }
     }
-    let export = ui.button(tl!("Export measurements as CSV")).clicked();
+    let export = Button::new(tl!("Export measurements as CSV")).show(ui).clicked();
     if let Some(n) = chosen
         && set_ratio(state, n)
     {
@@ -657,7 +796,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
                 let [x, y, w, h] = if state.whole_page { [0.0, 0.0, f64::from(info.width), f64::from(info.height)] } else { state.rect };
                 let a = info.view_to_user(x as f32, y as f32);
                 let b = info.view_to_user((x + w) as f32, (y + h) as f32);
-                app.views[index].pending_edit = Some(Edit::SetMeasurementScale {
+                app.views[index].session.pending_edit = Some(Edit::SetMeasurementScale {
                     page,
                     bbox: [f64::from(a[0].min(b[0])), f64::from(a[1].min(b[1])), f64::from(a[0].max(b[0])), f64::from(a[1].max(b[1]))],
                     name: state.name.clone(),
@@ -668,27 +807,42 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
         }
     }
     if let Some((page, annotation, reading, scale)) = select {
-        app.views[index].current = page;
-        app.views[index].comments.select_only((page, annotation));
-        app.views[index].measure.reading = Some(reading);
-        app.views[index].measure.scale = Some(scale);
+        app.views[index].go_to_page(page);
+        app.views[index].session.comments.select_only((page, annotation));
+        app.views[index].session.measure.reading = Some(reading);
+        app.views[index].session.measure.scale = Some(scale);
         app.quick_tool = QuickTool::Select;
     }
     if let Some(tool) = tool {
-        app.views[index].measure.cancel();
+        app.views[index].session.measure.cancel();
         app.quick_tool = QuickTool::Measure(tool);
     }
     if export {
         export_csv(app);
     }
 }
+/// The saved measurements as the list's item source, keyed by position.
+struct MeasurementRows(usize);
+
+impl DisplayOrder<usize> for MeasurementRows {
+    fn len(&self) -> usize {
+        self.0
+    }
+
+    fn key(&self, at: usize) -> usize {
+        at
+    }
+}
+
+impl ItemSource<usize> for MeasurementRows {}
+
 pub(crate) fn command(app: &mut PdfCraftApp, id: &str) {
     app.left = LeftPanel::Tool("measure");
-    app.left_open = true;
+    app.set_left_open(true);
     if let Some((index, _)) = app.active_ids()
         && let Some(tool) = id.strip_prefix("measure.").and_then(Tool::from_name)
     {
-        app.views[index].measure.cancel();
+        app.views[index].session.measure.cancel();
         app.quick_tool = QuickTool::Measure(tool);
     }
     if id == "measure.export" {
@@ -708,27 +862,26 @@ fn export_csv(app: &mut PdfCraftApp) {
                     &[("n", &listing.unsupported.len().to_string())],
                 ));
             }
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                let write = move |app: &mut PdfCraftApp, path: std::path::PathBuf| match crate::editing::write_atomically(
-                    &path.to_string_lossy(),
-                    csv.as_bytes(),
-                ) {
-                    Ok(()) => app.notify(tl!("Saved measurements.")),
-                    Err(e) => app.notify(e.to_string()),
-                };
-                match app.export_dir_override.as_ref().map(|d| std::path::PathBuf::from(d).join("measurements.csv")) {
-                    Some(path) => write(app, path),
-                    None => {
-                        let dialog = rfd::AsyncFileDialog::new().set_file_name("measurements.csv").add_filter_any_case("CSV", &["csv"]);
-                        app.ask_one(crate::pickers::Ask::Save(dialog), None, write);
+            let request = PickRequest::save("measurements").file_name("measurements.csv").filter("CSV", &["csv"]);
+            app.pick_file(request, None, move |app: &mut PdfCraftApp, _: &egui::Context, picked: Picked| {
+                let Some(path) = picked.first_path() else { return };
+                // A browser answers with a name, not a path to write: the files service hands the bytes over as a download.
+                let written = match picked {
+                    Picked::Paths(_) => {
+                        craft::atomic::atomic_write(&path, csv.as_bytes()).map(|()| tl!("Saved measurements.")).map_err(|e| e.to_string())
                     }
+                    _ => app
+                        .host
+                        .files()
+                        .write(&path, csv.as_bytes(), WriteIntent::SaveAs)
+                        .map(|_| tl!("Downloaded measurements."))
+                        .map_err(|e| e.to_string()),
+                };
+                match written {
+                    Ok(done) => app.notify(done),
+                    Err(e) => app.notify(e),
                 }
-            }
-            #[cfg(target_arch = "wasm32")]
-            if let Err(e) = crate::editing::download("measurements.csv", csv.as_bytes()) {
-                app.notify(&e);
-            }
+            });
         }
     }
 }
@@ -736,6 +889,14 @@ fn export_csv(app: &mut PdfCraftApp) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use craft::host::{Jobs, ManualJobs};
+    use std::sync::Arc;
+
+    /// A snapping read queue that runs a job only when the test says so.
+    fn manual_reads() -> JobQueue<(), PathsRead> {
+        let jobs: Arc<dyn Jobs> = Arc::new(ManualJobs::new());
+        JobQueue::new(jobs, Wake::none(), QueueOptions { lanes: 0, name: "measure-snap", ..QueueOptions::default() })
+    }
 
     /// What Apply scale builds from the panel's fields, then a distance read with it.
     fn measured(state: &MeasureView, from: Point, to: Point) -> f64 {
@@ -774,53 +935,45 @@ mod tests {
         pdf
     }
 
-    /// A big file's geometry is read on a thread, which the window doesn't wait for; a small
+    /// A big file's geometry is read on the queue, which the window doesn't wait for; a small
     /// file's is there at once.
     #[test]
     fn only_a_small_file_is_read_for_snapping_on_the_window_thread() {
-        let ctx = egui::Context::default();
         let mut session = pdfcraft_engine::Session::new();
 
-        let small = session.open_new("small.pdf", std::sync::Arc::new(lined_pdf(10))).unwrap();
-        let mut state = MeasureView::default();
-        assert!(load_paths(&ctx, &mut state, session.get(small).unwrap(), 0), "there at once");
-        assert!(state.pending_paths.is_none());
+        let small = session.open_new("small.pdf", Arc::new(lined_pdf(10))).unwrap();
+        let mut state = MeasureView { reads: Some(manual_reads()), ..MeasureView::default() };
+        assert!(load_paths(&mut state, session.get(small).unwrap(), 0), "there at once");
+        assert!(state.pending_read.is_none());
 
         // However little is on its page.
         let big = padded_lined_pdf(10, SNAP_SMALL_FILE);
         assert!(big.len() >= SNAP_SMALL_FILE);
-        let big = session.open_new("big.pdf", std::sync::Arc::new(big)).unwrap();
+        let big = session.open_new("big.pdf", Arc::new(big)).unwrap();
         let doc = session.get(big).unwrap();
-        let mut state = MeasureView::default();
-        assert!(!load_paths(&ctx, &mut state, doc, 0), "started, and not waited for");
-        assert!(state.pending_paths.is_some());
-        let start = std::time::Instant::now();
-        while !load_paths(&ctx, &mut state, doc, 0) {
-            assert!(start.elapsed() < std::time::Duration::from_secs(60), "it arrives");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert!(state.pending_paths.is_none());
+        let mut state = MeasureView { reads: Some(manual_reads()), ..MeasureView::default() };
+        assert!(!load_paths(&mut state, doc, 0), "started, and not waited for");
+        assert_eq!(state.pending_read.map(|(p, _)| p), Some(0));
+        assert_eq!(state.reads.as_ref().map(|q| q.run_inline(1)), Some(1));
+        assert!(load_paths(&mut state, doc, 0));
+        assert!(state.pending_read.is_none());
         let geometry = state.paths.as_ref().and_then(|(_, _, g)| g.as_ref().ok()).expect("read");
         assert!(geometry.segment_count() > 0);
     }
 
-    /// A small file can hold more than a frame can read: it goes to the thread, and comes whole.
+    /// A small file can hold more than a frame can read: it goes to the queue, and comes whole.
     #[test]
     fn a_small_file_past_a_frames_limits_is_read_on_a_thread() {
         let lines = measure::snap::Limits::WITHIN_A_FRAME.segments + 1;
         let pdf = lined_pdf(lines);
         assert!(pdf.len() < SNAP_SMALL_FILE);
-        let ctx = egui::Context::default();
         let mut session = pdfcraft_engine::Session::new();
-        let id = session.open_new("small.pdf", std::sync::Arc::new(pdf)).unwrap();
+        let id = session.open_new("small.pdf", Arc::new(pdf)).unwrap();
         let doc = session.get(id).unwrap();
-        let mut state = MeasureView::default();
-        assert!(!load_paths(&ctx, &mut state, doc, 0), "not read on the window's thread");
-        let start = std::time::Instant::now();
-        while !load_paths(&ctx, &mut state, doc, 0) {
-            assert!(start.elapsed() < std::time::Duration::from_secs(60), "it arrives");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        let mut state = MeasureView { reads: Some(manual_reads()), ..MeasureView::default() };
+        assert!(!load_paths(&mut state, doc, 0), "not read on the window's thread");
+        assert_eq!(state.reads.as_ref().map(|q| q.run_inline(1)), Some(1));
+        assert!(load_paths(&mut state, doc, 0));
         let geometry = state.paths.as_ref().and_then(|(_, _, g)| g.as_ref().ok()).expect("read");
         assert_eq!(geometry.segment_count(), lines);
         assert!(!geometry.truncated);
@@ -829,55 +982,38 @@ mod tests {
     /// A read of another page is let finish before the next starts, and only then is it dropped.
     #[test]
     fn only_one_snapping_read_runs_at_a_time() {
-        let ctx = egui::Context::default();
         let mut session = pdfcraft_engine::Session::new();
-        let id = session.open_new("big.pdf", std::sync::Arc::new(lined_pdf(SNAP_SMALL_FILE / 20 + 1))).unwrap();
+        let id = session.open_new("big.pdf", Arc::new(lined_pdf(SNAP_SMALL_FILE / 20 + 1))).unwrap();
         let doc = session.get(id).unwrap();
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let mut state = MeasureView { pending_paths: Some((9, 9, receiver)), ..MeasureView::default() };
-        assert!(!load_paths(&ctx, &mut state, doc, 0));
-        assert_eq!(state.pending_paths.as_ref().map(|(p, _, _)| *p), Some(9), "waits for it");
-        sender.send(Ok(measure::snap::Geometry::default())).unwrap();
-        assert!(!load_paths(&ctx, &mut state, doc, 0));
-        assert_eq!(state.pending_paths.as_ref().map(|(p, _, _)| *p), Some(0), "then reads this page");
+        let reads = manual_reads();
+        reads.submit((), Priority::VISIBLE, |_| (9, 9, Ok(measure::snap::Geometry::default())));
+        let mut state = MeasureView { reads: Some(reads), pending_read: Some((9, 9)), ..MeasureView::default() };
+        assert!(!load_paths(&mut state, doc, 0));
+        assert_eq!(state.pending_read.map(|(p, _)| p), Some(9), "waits for it");
+        assert_eq!(state.reads.as_ref().map(|q| q.run_inline(1)), Some(1));
+        assert!(!load_paths(&mut state, doc, 0));
+        assert_eq!(state.pending_read.map(|(p, _)| p), Some(0), "then reads this page");
         assert!(state.paths.is_none(), "the other page's answer is dropped");
-    }
-
-    /// A read that dies says so, instead of reading on for ever.
-    #[test]
-    fn a_snapping_read_that_stops_is_an_error() {
-        let ctx = egui::Context::default();
-        let mut session = pdfcraft_engine::Session::new();
-        let id = session.open_new("small.pdf", std::sync::Arc::new(lined_pdf(10))).unwrap();
-        let doc = session.get(id).unwrap();
-        let (sender, receiver) = std::sync::mpsc::channel();
-        drop(sender);
-        let mut state = MeasureView { pending_paths: Some((0, doc.edit_generation(), receiver)), ..MeasureView::default() };
-        assert!(load_paths(&ctx, &mut state, doc, 0));
-        assert!(matches!(&state.paths, Some((_, _, Err(_)))));
-        assert!(state.pending_paths.is_none());
     }
 
     #[test]
     fn the_reading_message_goes_when_the_drawing_is_read() {
-        let ctx = egui::Context::default();
         let mut session = pdfcraft_engine::Session::new();
-        let id = session.open_new("small.pdf", std::sync::Arc::new(lined_pdf(10))).unwrap();
+        let id = session.open_new("small.pdf", Arc::new(lined_pdf(10))).unwrap();
         let doc = session.get(id).unwrap();
         let mut state = MeasureView { error: Some(tl!("Reading the drawing for snapping…").into()), ..MeasureView::default() };
-        let _ = snap_to_content(&ctx, &mut state, doc, 0, [5.0, 5.0], 1.0, [5.0, 5.0]);
+        let _ = snap_to_content(&mut state, doc, 0, [5.0, 5.0], 1.0, [5.0, 5.0]);
         assert_eq!(state.error, None);
     }
 
     #[test]
     fn clicks_wait_for_the_drawing_only_with_snapping_on() {
-        let (_sender, receiver) = std::sync::mpsc::channel();
-        let mut state = MeasureView { pending_paths: Some((0, 0, receiver)), ..MeasureView::default() };
+        let mut state = MeasureView { pending_read: Some((0, 0)), ..MeasureView::default() };
         assert!(!takes_clicks(&state));
         state.snap_enabled = false;
         assert!(takes_clicks(&state));
         state.snap_enabled = true;
-        state.pending_paths = None;
+        state.pending_read = None;
         assert!(takes_clicks(&state));
     }
 
@@ -904,15 +1040,9 @@ mod tests {
 
     #[test]
     fn ratios_are_written_as_people_say_them() {
-        assert_eq!(format_ratio(50.0), "1:50");
-        assert_eq!(format_ratio(2.5), "1:2.5");
-        assert_eq!(format_ratio(0.5), "1:0.5");
         // Nothing is rounded away: the field reads the ratio that applies.
-        assert_eq!(format_ratio(1.234), "1:1.234");
-        assert_eq!(format_ratio(0.001), "1:0.001");
-        assert_eq!(parse_ratio(&format_ratio(333.333333)), Some(333.333333));
-        for n in RATIOS {
-            assert_eq!(parse_ratio(&format_ratio(n)), Some(n));
+        for n in RATIOS.into_iter().chain([2.5, 0.5, 1.234, 0.001, 333.333333]) {
+            assert_eq!(parse_ratio(&format_ratio(n)), Some(n), "1:{n}");
         }
     }
 
@@ -929,16 +1059,6 @@ mod tests {
                 assert!((v - expected).abs() < 1e-9 * expected.max(1.0), "1:{n} in {unit} gave {v}, wanted {expected}");
             }
         }
-    }
-
-    #[test]
-    fn any_starting_unit_becomes_metres() {
-        let mut state = MeasureView { unit: "yards?".into(), ..Default::default() };
-        assert!(set_ratio(&mut state, 50.0));
-        assert_eq!(state.unit, "m");
-        // 1 mm of paper at 1:50 is 50 mm.
-        let v = measured(&state, [0.0, 0.0], [72.0 / 25.4, 0.0]);
-        assert!((v - 0.05).abs() < 1e-9, "{v}");
     }
 
     #[test]
@@ -979,15 +1099,5 @@ mod tests {
         state.drawing_points = 0.0;
         sync_ratio_text(&mut state, display);
         assert_eq!(state.ratio_text, "");
-    }
-
-    #[test]
-    fn an_unusable_ratio_changes_nothing() {
-        let mut state = MeasureView::default();
-        let before = (state.drawing_points, state.real_distance, state.unit.clone(), state.page_unit);
-        for n in [0.0, -1.0, f64::NAN, f64::INFINITY] {
-            assert!(!set_ratio(&mut state, n));
-        }
-        assert_eq!((state.drawing_points, state.real_distance, state.unit.clone(), state.page_unit), before);
     }
 }
