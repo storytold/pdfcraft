@@ -1,19 +1,21 @@
 //! The menus: one definition ([`PdfCraftApp::menu_bar`]) for the native macOS menu bar and the
-//! `Menu` button popup on Windows, Linux and the web, laid out for each platform by craft-menu.
+//! in-window bar on Windows, Linux and the web, laid out for each platform by craft-menu.
 //!
 //! Items run registry commands (`pdfcraft_engine::commands`) by id, with the registry's label and
 //! shortcut, so a menu click and its shortcut run the same command. A few items have menu-only
 //! ids: the zoom keys the document view handles itself, the side panel choices, the clipboard
-//! keys, the recent files and the open documents. [`PdfCraftApp::run_menu_command`] runs every
-//! one of them, once per click, whichever bar it came from.
+//! keys, the recent files and the open documents. Each is a command of the app's catalog
+//! (`commands::catalog`), fired once per click, whichever bar it came from.
 
-use craft_keymap::{Key, Mods, Platform};
-use craft_menu::{Builtin, Chord, CommandRef, Document, Gate, Item, ItemRole, ItemState, LayoutOptions, Menu, MenuBar, MenuRole, Node, Target};
+use craft::keymap::{Key, Mods, Platform};
+use craft::menu::{
+    Builtin, Chord, CommandRef, Document, Gate, Item, ItemKind, ItemRole, ItemState, Layout, LayoutOptions, Menu, MenuBar, MenuRole, Node, Target,
+};
+use craft::ui::contract::{Props as _, Show as _};
+use craft::ui::runtime::commands::{FireSource, fire, resolve};
 use pdfcraft_engine::catalog::{Availability, TOOL_GROUPS};
 use pdfcraft_engine::commands::{self, Shortcut};
 
-use crate::canvas::{Fit, PageLayout};
-use crate::theme::ThemePreference;
 use crate::{PdfCraftApp, RightPanel};
 
 pub(super) mod tab_context;
@@ -26,6 +28,7 @@ pub(crate) const CUT: &str = "edit.cut";
 pub(crate) const PASTE: &str = "edit.paste";
 pub(crate) const DELETE: &str = "edit.delete";
 pub(crate) const SELECT_ALL: &str = "edit.select_all";
+pub(crate) const QUIT: &str = "app.quit";
 pub(crate) const NO_RECENT: &str = "file.no_recent";
 /// An open document in the Window menu, `{"index": n}` in the tab strip.
 pub(crate) const DOCUMENT: &str = "window.document";
@@ -40,25 +43,20 @@ const ZOOM_OUT: &str = "view.zoom.out";
 const ROTATE_CW: &str = "view.rotate.cw";
 const ROTATE_CCW: &str = "view.rotate.ccw";
 
-/// The menu-only items: id, English label and the shortcut shown (the keys stay with the view).
-const EXTRA: &[(&str, &str, Option<Shortcut>)] = &[
+/// The menu-only items: id, English label and the shortcut shown (the keys stay with the view). The
+/// zoom and rotate ids are registry commands; only Fit to height has no registry row.
+pub(crate) const EXTRA: &[(&str, &str, Option<Shortcut>)] = &[
+    (QUIT, "Quit", Some(Shortcut::cmd("Q"))),
     (CUT, "Cut", Some(Shortcut::cmd("X"))),
     (PASTE, "Paste", Some(Shortcut::cmd("V"))),
     (DELETE, "Delete", Some(Shortcut { command: false, shift: false, mac_ctrl: false, key: "Delete" })),
     (SELECT_ALL, "Select all", Some(crate::commands::SELECT_ALL)),
     (NO_RECENT, "No recent files", None),
-    (ACTUAL_SIZE, "Actual size", Some(crate::commands::ACTUAL_SIZE)),
-    (PAGE_LEVEL, "Zoom to page level", Some(crate::commands::PAGE_LEVEL)),
-    (FIT_WIDTH, "Fit to width", Some(crate::commands::FIT_WIDTH)),
     (FIT_HEIGHT, "Fit to height", None),
-    (ZOOM_IN, "Zoom in", Some(crate::commands::ZOOM_IN)),
-    (ZOOM_OUT, "Zoom out", Some(crate::commands::ZOOM_OUT)),
-    (ROTATE_CW, "Rotate view clockwise", Some(crate::commands::ROTATE_CW)),
-    (ROTATE_CCW, "Rotate view counterclockwise", Some(crate::commands::ROTATE_CCW)),
 ];
 
 /// View ▸ Side panels: the panel, its id in [`PANEL`] commands and its English label.
-const PANELS: &[(RightPanel, &str, &str)] = &[
+pub(crate) const PANELS: &[(RightPanel, &str, &str)] = &[
     (RightPanel::Comments, "comments", "Comments"),
     (RightPanel::Bookmarks, "bookmarks", "Bookmarks"),
     (RightPanel::Pages, "pages", "Pages"),
@@ -70,6 +68,30 @@ const PANELS: &[(RightPanel, &str, &str)] = &[
     (RightPanel::Tags, "tags", "Tags"),
     (RightPanel::Search, "search", "Search"),
     (RightPanel::Compare, "compare", "Compare"),
+];
+
+/// The English titles of the menus and submenus, for the bar's mnemonics in languages whose
+/// labels have no ASCII letter.
+const TITLES: &[&str] = &[
+    "File",
+    "Edit",
+    "View",
+    "Pages",
+    "Sign",
+    "Window",
+    "Help",
+    "Open Recent",
+    "Create",
+    "Export",
+    "Protect",
+    "Zoom",
+    "Rotate view",
+    "Page navigation",
+    "Page display",
+    "Side panels",
+    "Display theme",
+    "Tools",
+    "Fill & Sign",
 ];
 
 /// Separator.
@@ -97,6 +119,7 @@ const FILE: &[&str] = &[
     "file.word_count",
     SEP,
     "print.dialog",
+    QUIT,
 ];
 const CREATE: &[&str] = &["create.file", "create.multiple", "create.multiple_separate", "create.images", "create.clipboard"];
 const EXPORT: &[&str] = &["export.docx", "export.pptx", "export.rtf", "export.html", "export.text", SEP, "export.image", "export.all_images"];
@@ -210,27 +233,57 @@ fn extra(id: &str) -> Option<&'static (&'static str, &'static str, Option<Shortc
     EXTRA.iter().find(|(e, ..)| *e == id)
 }
 
-fn translate(english: &'static str) -> String {
-    // craft_menu's bar writes "⋯" (U+22EF, MIDLINE HORIZONTAL ELLIPSIS) itself, for the menu of
-    // titles that don't fit: a sentinel to translate, not an English phrase, and the only one of
-    // its four reserved labels no font this app ships or falls back to has a glyph for.
-    // MissingGlyphPolicy::Panic (egui 0.37) crashes on it. The ordinary ellipsis every other
-    // truncated label in this app already uses is in the bundled faces.
-    if english == "\u{22ef}" {
-        return "…".to_owned();
+/// The English label of an item's command, for the bar's mnemonics.
+fn english_label(command: &CommandRef) -> Option<String> {
+    if let Some(spec) = commands::command(&command.id) {
+        return Some(spec.label.to_owned());
     }
+    if let Some((_, label, _)) = extra(&command.id) {
+        return Some((*label).to_owned());
+    }
+    FILL.iter().find(|(id, _)| *id == command.id).map(|(_, label)| (*label).to_owned())
+}
+
+/// Puts the English names on the menu model, for the bar's mnemonics and the Help search.
+fn name_in_english(nodes: &mut [Node]) {
+    for node in nodes {
+        match node {
+            Node::Item(item) => item.english = english_label(&item.command),
+            Node::Submenu { label, english, children, .. } => {
+                *english = TITLES.iter().find(|t| tl!(t) == label.as_str()).map(|t| (*t).to_owned());
+                name_in_english(children);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn translate(english: &'static str) -> String {
     tl!(english).to_owned()
 }
 
 /// The layouts' own labels (About, Quit, Window…) through the app's translations.
 pub(crate) fn layout_options() -> LayoutOptions<'static> {
-    LayoutOptions { label: &translate, ..LayoutOptions::new(APP_NAME) }
+    LayoutOptions::new(APP_NAME).label(&translate)
+}
+
+/// Whether a dialog, a prompt or the command palette holds the window: the one gate over commands
+/// and the menus.
+pub(crate) fn gated(app: &PdfCraftApp) -> bool {
+    app.modal_open() || app.palette_open
+}
+
+/// Whether a text field has the keyboard: the one signal behind the Edit rows' state and the native
+/// menu's gate. A text field only, as production's `text_edit_focused`: egui's keyboard focus alone is
+/// also on an open menu's rows or a button, which would hand Edit ▸ Copy and Paste to them.
+pub(crate) fn text_editing(ctx: &egui::Context) -> bool {
+    craft::ui::runtime::windows::WindowHost::of(ctx).typing()
 }
 
 impl PdfCraftApp {
     /// The app's menus for this frame, before the platform layout: every item's label, shortcut,
-    /// enabled and checked state as the app is now. A modal dialog doesn't grey anything here;
-    /// that is the [`Gate`]'s job ([`PdfCraftApp::menu_gate`]).
+    /// enabled and checked state follow the item's command (`commands::catalog::command_input`). A
+    /// modal dialog doesn't grey anything here; that is the command gate's job ([`gated`]).
     pub fn menu_bar(&self, ctx: &egui::Context) -> MenuBar {
         let mac = crate::commands::mac_shortcuts(ctx);
         let mut used: Vec<&str> = Vec::new();
@@ -245,7 +298,7 @@ impl PdfCraftApp {
                 })
                 .collect()
         };
-        let file = {
+        let mut file = {
             let mut nodes = Vec::new();
             for node in list(FILE, &mut used) {
                 // Open Recent is the live recent list; Create, Export and Protect follow Combine,
@@ -292,7 +345,7 @@ impl PdfCraftApp {
         )];
         sign.extend(list(SIGN, &mut used));
         let window = list(WINDOW, &mut used);
-        let help = list(HELP, &mut used);
+        let mut help = list(HELP, &mut used);
         let mut view = vec![
             Node::submenu(tl!("Zoom"), list(ZOOM, &mut used)),
             Node::submenu(tl!("Rotate view"), list(&[ROTATE_CW, ROTATE_CCW], &mut used)),
@@ -317,26 +370,30 @@ impl PdfCraftApp {
         view.push(Node::Separator);
         view.push(Node::submenu(tl!("Tools"), self.tools_menu(&used, mac)));
         view.extend(list(&["view.palette"], &mut used));
-        let mut bar = MenuBar {
-            menus: vec![
-                Menu::new(tl!("File"), craft_menu::tidy(file)).role(MenuRole::File),
-                Menu::new(tl!("Edit"), craft_menu::tidy(edit)).role(MenuRole::Edit),
-                Menu::new(tl!("View"), craft_menu::tidy(view)).role(MenuRole::View),
-                Menu::new(tl!("Sign"), craft_menu::tidy(sign)),
-                Menu::new(tl!("Window"), window).role(MenuRole::Window),
-                Menu::new(tl!("Help"), craft_menu::tidy(help)).role(MenuRole::Help),
-            ],
-            documents: self.menu_documents(),
-        };
+        for nodes in [&mut file, &mut edit, &mut view, &mut sign, &mut help] {
+            craft::menu::tidy(nodes);
+        }
+        let mut bar = MenuBar::new(vec![
+            Menu::new(tl!("File"), file).role(MenuRole::File),
+            Menu::new(tl!("Edit"), edit).role(MenuRole::Edit),
+            Menu::new(tl!("View"), view).role(MenuRole::View),
+            Menu::new(tl!("Sign"), sign),
+            Menu::new(tl!("Window"), window).role(MenuRole::Window),
+            Menu::new(tl!("Help"), help).role(MenuRole::Help),
+        ])
+        .documents(self.menu_documents());
+        for menu in &mut bar.menus {
+            menu.english = TITLES.iter().find(|t| tl!(t) == menu.title.as_str()).map(|t| (*t).to_owned());
+            name_in_english(&mut menu.children);
+        }
         bar.tag_item(&CommandRef::new("help.about"), ItemRole::About);
         bar.tag_item(&CommandRef::new("app.preferences"), ItemRole::Settings);
-        craft_menu::apply_state(&mut bar, |command| self.menu_state(ctx, command));
+        bar.tag_item(&CommandRef::new(QUIT), ItemRole::Quit);
         bar
     }
 
     /// One item: a registry command with its live label (Undo names the edit) and shortcut, or a
-    /// menu-only one. Radio and check items get their kind here, their state from
-    /// [`PdfCraftApp::menu_state`].
+    /// menu-only one. Radio items get their kind here, their state from the command.
     fn menu_item(&self, id: &'static str, label: Option<&str>, mac: bool) -> Node {
         let (english, shortcut) = match commands::command(id) {
             Some(spec) => {
@@ -373,7 +430,7 @@ impl PdfCraftApp {
             items.push(self.menu_item("file.clear_recent", Some(tl!("Clear Recent Files")), mac));
         }
         let label = commands::command("file.open_recent").map_or("Open Recent", |c| c.label);
-        Node::submenu(crate::i18n::menu_label("file.open_recent", label), items)
+        Node::submenu(crate::i18n::menu_label("file.open_recent", label), items).enabled(!self.recent.is_empty())
     }
 
     /// View ▸ Tools: the All tools groups, each a submenu of its ready tools that no other menu
@@ -414,136 +471,37 @@ impl PdfCraftApp {
             .collect()
     }
 
-    /// What may run from the menus now: a dialog, a prompt or the command palette holds the
-    /// window. Edit's text items stay with a focused text field (craft-menu's gate).
-    pub fn menu_gate(&self, ctx: &egui::Context) -> Gate {
-        Gate { modal: self.modal_open() || self.palette_open, recording_shortcut: false, text_editing: ctx.text_edit_focused() }
+    /// The native macOS bar's layout with the state AppKit shows: each item's enabled and checked
+    /// state is its command's, read from the board. The one reader of command state for the native
+    /// bar.
+    pub(crate) fn native_bar(&self, ctx: &egui::Context) -> Layout {
+        let mut layout = craft::menu::mac_layout(&self.menu_bar(ctx), &layout_options());
+        let mut bar = craft::ui::contract::Tracked::new(std::mem::take(&mut layout.bar));
+        craft::menu::apply_state(&mut bar, |command| {
+            let resolved = resolve(ctx, command.clone());
+            ItemState::default().enabled(resolved.enabled).checked(resolved.checked)
+        });
+        layout.bar = bar.into_inner();
+        layout
     }
 
-    /// Whether a menu item's command can run now, and its checked or selected state.
-    pub fn menu_state(&self, ctx: &egui::Context, command: &CommandRef) -> ItemState {
-        let view = self.active.and_then(|i| self.views.get(i));
-        let organize = view.is_some_and(|v| v.organize);
-        let has_doc = view.is_some();
-        let enabled_id = |id: &str| commands::command(id).is_some_and(|s| self.command_enabled(s));
-        let index = param_index(command);
-        let text = ctx.text_edit_focused() && matches!(command.id.as_str(), "edit.undo" | "edit.redo" | "edit.copy" | CUT | PASTE | SELECT_ALL);
-        // Objects selected together in Edit a PDF are what Copy and Cut take, and Paste brings
-        // back objects copied there.
-        let edit_objects = self.quick_tool == crate::QuickTool::EditText && !organize;
-        let doc = self.active_ids().and_then(|(_, id)| self.session.get(id));
-        let enabled = text
-            || match command.id.as_str() {
-                craft_quit::QUIT_MENU_ID => true,
-                NO_RECENT => false,
-                "file.open_recent" => index.is_none_or(|i| i < self.recent.len()),
-                "file.clear_recent" => !self.recent.is_empty(),
-                DOCUMENT => index.is_some_and(|i| i < self.views.len()),
-                // macOS ⌘W closes the window when no document is open (#869).
-                "file.close" if !has_doc && crate::commands::mac_shortcuts(ctx) && !cfg!(target_arch = "wasm32") => true,
-                "edit.copy" if organize => enabled_id("page.copy"),
-                "edit.copy" if view.is_some_and(|v| v.picked_image.is_some()) => {
-                    self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.allows_copying())
-                }
-                "edit.copy" | CUT if edit_objects && view.is_some_and(|v| v.objects.count() > 0) => {
-                    doc.is_some_and(|d| d.allows_copying() && (command.id != CUT || d.allows_modification()))
-                }
-                PASTE if edit_objects && self.object_clipboard.is_some() => doc.is_some_and(pdfcraft_engine::Document::allows_modification),
-                // Selected comments are what ⌘C copies when no text is selected, and ⌘V pastes
-                // copied ones onto the pages (#7123); the menu items send those same events.
-                // Selected text is ⌘C's first, and Prepare Form takes neither key (`clipboard_keys`).
-                "edit.copy"
-                    if !organize
-                        && !self.is_preparing()
-                        && view.is_some_and(|v| v.comments.selected.is_some() && v.selected_text().is_none_or(|t| t.is_empty())) =>
-                {
-                    enabled_id("comment.copy")
-                }
-                PASTE if !organize && !self.is_preparing() && self.comment_clipboard.is_some() => enabled_id("comment.paste"),
-                CUT => organize && enabled_id("page.cut"),
-                PASTE => organize && self.page_clipboard.is_some() && enabled_id("page.paste"),
-                SELECT_ALL | DELETE => has_doc,
-                ACTUAL_SIZE | PAGE_LEVEL | FIT_WIDTH | FIT_HEIGHT | ZOOM_IN | ZOOM_OUT | ROTATE_CW | ROTATE_CCW => has_doc,
-                PANEL => panel(command).is_some(),
-                id => enabled_id(id),
-            };
-        let checked = match command.id.as_str() {
-            "view.layout.single" => Some(view.is_some_and(|v| v.layout == PageLayout::Single)),
-            "view.layout.two_up" => Some(view.is_some_and(|v| v.layout == PageLayout::TwoUp)),
-            "view.continuous" => Some(view.is_some_and(|v| v.continuous())),
-            "view.page_gaps" => Some(view.is_some_and(|v| v.show_page_gaps)),
-            "view.layout.cover" => Some(view.is_some_and(|v| v.cover)),
-            "view.full_screen" => Some(self.full_screen),
-            "view.read_mode" => Some(self.mode == crate::Mode::Read),
-            "view.side_panel" => Some(self.right.is_some()),
-            "view.tools_pane" => Some(self.left_open),
-            "view.split" => Some(self.panes.split.is_some()),
-            "view.theme.system" => Some(self.theme_preference == ThemePreference::System),
-            "view.theme.light" => Some(self.theme_preference == ThemePreference::Light),
-            "view.theme.dark" => Some(self.theme_preference == ThemePreference::Dark),
-            PANEL => Some(panel(command).is_some_and(|p| self.right == Some(p))),
-            _ => None,
-        };
-        ItemState { enabled, checked }
-    }
-
-    /// Run a command chosen in either menu bar. Registry commands go through
-    /// [`PdfCraftApp::dispatch_command`], as their shortcuts do; the clipboard items act as
-    /// their keys would (⌘C is a Copy event, Delete a key press), so every place that handles the
-    /// key handles the click. A command that can't run now (a dialog opened since the menu was
-    /// drawn) does nothing.
-    pub fn run_menu_command(&mut self, ctx: &egui::Context, command: &CommandRef) {
-        // Both menu bars run Quit and Minimize themselves; Hide and Hide Others are AppKit's.
-        if Builtin::of(command).is_some() {
-            return;
-        }
-        if !self.menu_gate(ctx).allows_command(command) || !self.menu_state(ctx, command).enabled {
-            return;
-        }
-        let index = param_index(command);
-        let key = |key: egui::Key, modifiers: egui::Modifiers| {
-            [true, false].map(|pressed| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers })
-        };
-        match command.id.as_str() {
-            "file.open_recent" if index.is_some() => {
-                if let Some(path) = index.and_then(|i| self.recent.get(i)).map(|r| r.path.clone()) {
-                    self.open_recent(&path);
-                }
-            }
-            DOCUMENT => {
-                if let Some(i) = index.filter(|&i| i < self.views.len()) {
-                    self.active = Some(i);
-                }
-            }
-            "edit.copy" => self.menu_input.push(egui::Event::Copy),
-            CUT => self.menu_input.push(egui::Event::Cut),
-            PASTE => self.menu_pastes = self.menu_pastes.saturating_add(1),
-            SELECT_ALL => self.menu_input.extend(key(egui::Key::A, egui::Modifiers::COMMAND)),
-            DELETE => self.menu_input.extend(key(egui::Key::Delete, egui::Modifiers::NONE)),
-            PANEL => self.choose_right_panel(panel(command)),
-            ACTUAL_SIZE | PAGE_LEVEL | FIT_WIDTH | FIT_HEIGHT | ZOOM_IN | ZOOM_OUT | ROTATE_CW | ROTATE_CCW => {
-                let Some(v) = self.active.and_then(|i| self.views.get_mut(i)) else { return };
-                match command.id.as_str() {
-                    ACTUAL_SIZE => v.set_zoom(1.0),
-                    PAGE_LEVEL => v.fit = Fit::Page,
-                    FIT_WIDTH => v.fit = Fit::Width,
-                    FIT_HEIGHT => {
-                        v.fit = Fit::Height;
-                        v.goto = Some((v.current, 0.0));
-                    }
-                    ZOOM_IN => v.zoom_step(true),
-                    ZOOM_OUT => v.zoom_step(false),
-                    ROTATE_CW => v.rotate_view(true),
-                    _ => v.rotate_view(false),
-                }
-            }
-            id => {
-                if let Some(spec) = commands::command(id) {
-                    self.dispatch_command(ctx, spec.id);
-                }
-            }
-        }
-        ctx.request_repaint();
+    /// The menu bar drawn in the window (Windows, Linux, the web, and macOS when the native one
+    /// couldn't be installed), where the top bar starts: collapsed into a single "Menu" button that
+    /// opens the full hierarchical menu tree as a popup.
+    pub(crate) fn menu_bar_ui(&mut self, ui: &mut egui::Ui) {
+        let out = craft::ui::buttons::Button::new(tl!("Menu"))
+            .variant(craft::theme::Variant::GHOST)
+            .icon(craft::behavior::IconId::new("panel-left"))
+            .show(ui);
+        let btn = out.response;
+        let popup_id = egui::Popup::default_response_id(&btn);
+        ui.ctx().accesskit_node_builder(btn.id, |n| {
+            n.set_role(egui::accesskit::Role::Button);
+            n.set_label(tl!("Menu"));
+            n.set_has_popup(egui::accesskit::HasPopup::Menu);
+        });
+        handle_menu_button_keys(self, ui.ctx(), popup_id, &btn);
+        egui::Popup::menu(&btn).show(|ui| self.menu_popup_ui(ui));
     }
 
     /// The menus as a vertical popup: each top-level menu is a submenu button, with its items and
@@ -552,8 +510,17 @@ impl PdfCraftApp {
         let pass = ui.ctx().cumulative_pass_nr();
         ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("craft-menu-bar-open"), pass));
         let ctx = ui.ctx().clone();
-        let bar = craft_menu::layout(&self.menu_bar(&ctx), Target::current(), &layout_options()).bar;
-        let gate = self.menu_gate(&ctx);
+        let mut layout = craft::menu::layout(&self.menu_bar(&ctx), Target::current(), &layout_options());
+        if *self.window_menu_bar != layout.bar {
+            *self.window_menu_bar = std::mem::take(&mut layout.bar);
+        }
+        let mut bar = self.window_menu_bar.clone();
+        craft::menu::apply_state(&mut bar, |command| {
+            let resolved = resolve(&ctx, command.clone());
+            ItemState::default().enabled(resolved.enabled).checked(resolved.checked)
+        });
+        let bar = bar.into_inner();
+        let gate = Gate::default().modal(gated(self)).text_editing(text_editing(&ctx));
         let mut chosen = Vec::new();
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         ui.set_min_width(220.0);
@@ -632,13 +599,13 @@ impl PdfCraftApp {
             });
         }
         for command in chosen {
-            if command.id == craft_quit::QUIT_MENU_ID || matches!(craft_menu::Builtin::of(&command), Some(craft_menu::Builtin::Quit)) {
+            if command.id == QUIT || matches!(Builtin::of(&command), Some(Builtin::Quit)) {
                 self.request_quit(&ctx);
-                craft_quit::on_menu_event(&ctx, craft_quit::QUIT_MENU_ID);
-            } else if matches!(craft_menu::Builtin::of(&command), Some(craft_menu::Builtin::Minimize)) {
+                craft_quit::on_menu_event(&ctx, QUIT);
+            } else if matches!(Builtin::of(&command), Some(Builtin::Minimize)) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             } else {
-                self.run_menu_command(&ctx, &command);
+                fire(&ctx, command, FireSource::Menu);
             }
         }
     }
@@ -648,70 +615,216 @@ impl PdfCraftApp {
     #[cfg(target_os = "macos")]
     pub fn install_native_menu(&mut self, ctx: &egui::Context) -> bool {
         crate::i18n::set_current(crate::i18n::Lang::from_pref(&self.language));
-        let bar = craft_menu::mac_layout(&self.menu_bar(ctx), &layout_options()).bar;
+        let bar = self.native_bar(ctx).bar;
         // The Window menu lists the open documents itself, so AppKit's window list stays off.
-        self.native_menu = craft_menu::mac::install_with(ctx, &bar, craft_menu::mac::MacOptions::default().window_list(false));
+        self.native_menu = craft::menu::mac::install_with(ctx, &bar, craft::menu::mac::MacOptions::default().window_list(false));
         self.native_menu.is_some()
     }
+}
 
-    /// The native menu's clicks since the last frame, run like in-window ones.
-    pub(crate) fn native_menu_clicks(&mut self, ctx: &egui::Context) {
-        let gate = self.menu_gate(ctx);
-        let Some(native) = self.native_menu.as_mut() else { return };
+/// The native menu's per-frame turn: its gate, its clicks fired as commands, then its bar brought in
+/// step with the app, last, after this frame's changes.
+pub(crate) fn frame(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    if app.native_menu.is_none() {
+        return;
+    }
+    let gate = Gate::default().modal(gated(app)).text_editing(text_editing(ctx));
+    let clicks = app.native_menu.as_mut().map(|native| {
         native.set_gate(gate);
-        for command in native.take_clicks(ctx) {
-            self.run_menu_command(ctx, &command);
+        native.take_clicks(ctx)
+    });
+    for command in clicks.unwrap_or_default() {
+        fire(ctx, command, FireSource::Menu);
+    }
+    // The layout is built every frame from the commands' state; keyed on its bar, the native menus are laid out
+    // again only when that changed (or a menu event flipped an item).
+    let layout = app.native_bar(ctx);
+    let key = layout.bar.clone();
+    if let Some(native) = app.native_menu.as_mut() {
+        for clash in native.sync_with(&key, move || layout) {
+            log::info!("menu shortcut {:?} kept by {} over {} ({})", clash.shortcut, clash.command.id, clash.system, clash.resolution);
         }
     }
+}
 
-    /// Bring the native menu in step with the app, after this frame's changes.
-    pub(crate) fn sync_native_menu(&mut self, ctx: &egui::Context) {
-        if self.native_menu.is_none() {
-            return;
+/// A command's `{"index": n}` parameter.
+pub(crate) fn param_index(command: &CommandRef) -> Option<usize> {
+    command.params.get("index").and_then(serde_json::Value::as_u64).and_then(|i| usize::try_from(i).ok())
+}
+
+/// The side panel a [`PANEL`] command names.
+pub(crate) fn panel(command: &CommandRef) -> Option<RightPanel> {
+    let name = command.params.get("panel").and_then(serde_json::Value::as_str)?;
+    PANELS.iter().find(|(_, n, _)| *n == name).map(|(p, ..)| *p)
+}
+
+/// Handle Alt-tap, F10, and Alt+letter mnemonics (e.g. Alt+F for File) for the mode bar Menu button.
+pub(crate) fn handle_menu_button_keys(app: &mut PdfCraftApp, ctx: &egui::Context, popup_id: egui::Id, btn: &egui::Response) {
+    let focus_id = egui::Id::unique("mode_bar_menu_focused");
+    let mut menu_focused: bool = ctx.data(|d| d.get_temp(focus_id)).unwrap_or(false);
+
+    // A command shortcut (Ctrl+S, F7…) pressed while the keyboard is on the button left the bar
+    // (craft_menu::bar::leave_for_shortcut, app.rs): the shortcut runs in that press and the
+    // keyboard goes back to the pages. Consume the handoff here, before the local focus state
+    // below can put the keyboard back on the bar every frame.
+    if ctx.data(|d| d.get_temp::<bool>(egui::Id::unique("craft-menu-bar-leave"))).unwrap_or(false) {
+        ctx.data_mut(|d| d.remove::<bool>(egui::Id::unique("craft-menu-bar-leave")));
+        menu_focused = false;
+        btn.surrender_focus();
+    }
+
+    if btn.clicked() {
+        menu_focused = false;
+    }
+    if ctx.input(|i| i.pointer.any_click()) && !btn.hovered() {
+        menu_focused = false;
+    }
+
+    let f10 = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F10));
+
+    // Track Alt-tap (pressing and releasing Alt without another key) to focus the menu button.
+    #[derive(Clone, Copy, Default)]
+    struct AltTapState {
+        alt_tap: bool,
+        buttons_held: u32,
+    }
+    let alt_state_id = egui::Id::unique("mode_bar_alt_tap_state");
+    let mut alt_state: AltTapState = ctx.data(|d| d.get_temp(alt_state_id)).unwrap_or_default();
+    let mut alt_tapped = false;
+
+    for event in ctx.input(|i| i.events.clone()) {
+        match event {
+            egui::Event::Key { key: egui::Key::AltLeft | egui::Key::AltRight, pressed, repeat, modifiers, .. } => {
+                if pressed && !repeat {
+                    alt_state.alt_tap =
+                        !modifiers.ctrl && !modifiers.shift && !modifiers.command && !modifiers.mac_cmd && alt_state.buttons_held == 0;
+                } else if !pressed && alt_state.alt_tap {
+                    alt_tapped = true;
+                    alt_state.alt_tap = false;
+                }
+            }
+            egui::Event::PointerButton { pressed, button, .. } => {
+                let bit = 1u32 << (button as u8);
+                if pressed {
+                    alt_state.buttons_held |= bit;
+                } else {
+                    alt_state.buttons_held &= !bit;
+                }
+                alt_state.alt_tap = false;
+                alt_tapped = false;
+            }
+            egui::Event::WindowFocused(false) => {
+                alt_state.alt_tap = false;
+                alt_state.buttons_held = 0;
+            }
+            egui::Event::Key { pressed: true, .. } | egui::Event::Text(_) | egui::Event::MouseWheel { .. } => {
+                alt_state.alt_tap = false;
+            }
+            _ => {}
         }
-        let layout = craft_menu::mac_layout(&self.menu_bar(ctx), &layout_options());
-        let gate = self.menu_gate(ctx);
-        if let Some(native) = self.native_menu.as_mut() {
-            native.set_gate(gate);
-            for clash in native.sync(layout) {
-                log::info!("menu shortcut {:?} kept by {} over {} ({})", clash.shortcut, clash.command.id, clash.system, clash.resolution);
+    }
+    ctx.data_mut(|d| d.insert_temp(alt_state_id, alt_state));
+
+    let is_open = egui::Popup::is_id_open(ctx, popup_id);
+
+    if f10 || alt_tapped {
+        if is_open {
+            egui::Popup::close_all(ctx);
+            menu_focused = false;
+            btn.surrender_focus();
+        } else {
+            menu_focused = !menu_focused;
+            if menu_focused {
+                btn.request_focus();
+            } else {
+                btn.surrender_focus();
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    if menu_focused {
+        if ctx.input(|i| i.key_pressed(egui::Key::Tab)) || ctx.memory(|m| m.focused().is_some_and(|id| id != btn.id)) {
+            menu_focused = false;
+            btn.surrender_focus();
+        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            menu_focused = false;
+            btn.surrender_focus();
+            ctx.request_repaint();
+        } else if ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
+                || i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                || i.consume_key(egui::Modifiers::NONE, egui::Key::Space)
+        }) {
+            menu_focused = false;
+            egui::Popup::open_id(ctx, popup_id);
+            ctx.request_repaint();
+        } else {
+            let plain_letter = ctx.input(|i| {
+                i.events.iter().find_map(|e| match e {
+                    egui::Event::Key { key, pressed: true, modifiers, .. }
+                        if !modifiers.alt && !modifiers.command && !modifiers.ctrl && !modifiers.mac_cmd =>
+                    {
+                        key_letter(*key).map(|c| (c, *key))
+                    }
+                    _ => None,
+                })
+            });
+            if let Some((c, key)) = plain_letter {
+                ctx.input_mut(|i| {
+                    i.consume_key(egui::Modifiers::NONE, key);
+                    i.events
+                        .retain(|e| !matches!(e, egui::Event::Text(t) if t.chars().count() == 1 && t.chars().all(|ch| ch.to_ascii_uppercase() == c)));
+                });
+                menu_focused = false;
+                egui::Popup::open_id(ctx, popup_id);
+                app.menu_target = Some(c);
+                ctx.request_repaint();
             }
         }
     }
-}
 
-fn any_enabled(nodes: &[craft_menu::Node], gate: &craft_menu::Gate) -> bool {
-    nodes.iter().any(|node| match node {
-        craft_menu::Node::Item(item) => item.enabled && gate.allows(item),
-        craft_menu::Node::Submenu { children, .. } => any_enabled(children, gate),
-        _ => false,
-    })
-}
-
-/// The platform whose key names the shortcut column shows: the build's platform, but on the web
-/// the one the browser runs on (`ctx.os()`), as craft-menu's bar does for its own shortcut column.
-fn shortcut_platform(ctx: &egui::Context) -> Platform {
-    use egui::os::OperatingSystem;
-    if cfg!(target_arch = "wasm32") {
-        match ctx.os() {
-            OperatingSystem::Mac | OperatingSystem::IOS => Platform::Mac,
-            OperatingSystem::Windows => Platform::Windows,
-            _ => Platform::Linux,
+    // Alt+letter (e.g. Alt+F) opens the Menu popup and selects that submenu.
+    // Disabled on macOS so Option-generated text remains available.
+    let is_mac = matches!(ctx.os(), egui::os::OperatingSystem::Mac | egui::os::OperatingSystem::IOS);
+    let alt_letter = ctx.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            egui::Event::Key { key, pressed: true, modifiers, .. }
+                if !is_mac && modifiers.alt && !modifiers.command && !modifiers.ctrl && !modifiers.mac_cmd =>
+            {
+                key_letter(*key).map(|c| (c, *key))
+            }
+            _ => None,
+        })
+    });
+    if let Some((c, key)) = alt_letter {
+        let bar = craft::menu::layout(&app.menu_bar(ctx), Target::current(), &layout_options()).bar;
+        let mnemonics = top_level_mnemonics(&bar);
+        if mnemonics.contains(&c) {
+            ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::ALT, key);
+                i.events.retain(|e| !matches!(e, egui::Event::Text(t) if t.chars().count() == 1 && t.chars().all(|ch| ch.to_ascii_uppercase() == c)));
+            });
+            menu_focused = false;
+            egui::Popup::open_id(ctx, popup_id);
+            app.menu_target = Some(c);
+            ctx.request_repaint();
         }
-    } else {
-        Platform::current()
+    }
+
+    ctx.data_mut(|d| d.insert_temp(focus_id, menu_focused));
+    let pass = ctx.cumulative_pass_nr();
+    if is_open {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("craft-menu-bar-open"), pass));
+    }
+    if menu_focused {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("craft-menu-bar-focus"), pass));
     }
 }
 
 /// Render a slice of menu `Node`s into `ui` for the "Menu" button popup, collecting clicked
 /// commands. `Standard` items (AppKit-only) are skipped.
-fn render_nodes(
-    ui: &mut egui::Ui,
-    nodes: &[craft_menu::Node],
-    gate: &craft_menu::Gate,
-    chosen: &mut Vec<CommandRef>,
-    active_key: &mut Option<(char, egui::Key)>,
-) {
+fn render_nodes(ui: &mut egui::Ui, nodes: &[Node], gate: &Gate, chosen: &mut Vec<CommandRef>, active_key: &mut Option<(char, egui::Key)>) {
     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
     let ctx = ui.ctx().clone();
     let root_id = egui::containers::menu::find_menu_root(ui).unique_id;
@@ -720,8 +833,8 @@ fn render_nodes(
     let labels: Vec<&str> = nodes
         .iter()
         .map(|node| match node {
-            craft_menu::Node::Item(item) => item.label.as_str(),
-            craft_menu::Node::Submenu { label, .. } => label.as_str(),
+            Node::Item(item) => item.label.as_str(),
+            Node::Submenu { label, .. } => label.as_str(),
             _ => "",
         })
         .collect();
@@ -729,8 +842,8 @@ fn render_nodes(
     let preferred: Vec<Option<char>> = nodes
         .iter()
         .map(|node| match node {
-            craft_menu::Node::Item(item) => preferred_item_mnemonic(item),
-            craft_menu::Node::Submenu { label, .. } => extract_explicit_mnemonic(label),
+            Node::Item(item) => preferred_item_mnemonic(item),
+            Node::Submenu { label, .. } => extract_explicit_mnemonic(label),
             _ => None,
         })
         .collect();
@@ -740,20 +853,22 @@ fn render_nodes(
 
     for (node, mnemonic) in nodes.iter().zip(mnemonics) {
         match node {
-            craft_menu::Node::Separator => {
+            Node::Separator => {
                 ui.separator();
             }
-            craft_menu::Node::Item(item) => {
+            Node::Item(item) => {
                 let enabled = item.enabled && gate.allows(item);
                 let role = match item.kind {
-                    craft_menu::ItemKind::Plain => egui::accesskit::Role::MenuItem,
-                    craft_menu::ItemKind::Check(_) => egui::accesskit::Role::MenuItemCheckBox,
-                    craft_menu::ItemKind::Radio(_) => egui::accesskit::Role::MenuItemRadio,
+                    ItemKind::Plain => egui::accesskit::Role::MenuItem,
+                    ItemKind::Check(_) => egui::accesskit::Role::MenuItemCheckBox,
+                    ItemKind::Radio(_) => egui::accesskit::Role::MenuItemRadio,
+                    _ => egui::accesskit::Role::MenuItem,
                 };
                 let mark = match item.kind {
-                    craft_menu::ItemKind::Check(true) | craft_menu::ItemKind::Radio(true) => "\u{2713} ",
-                    craft_menu::ItemKind::Check(false) | craft_menu::ItemKind::Radio(false) => "  ",
-                    craft_menu::ItemKind::Plain => "",
+                    ItemKind::Check(true) | ItemKind::Radio(true) => "\u{2713} ",
+                    ItemKind::Check(false) | ItemKind::Radio(false) => "  ",
+                    ItemKind::Plain => "",
+                    _ => "",
                 };
                 let mut button = egui::Button::new(mnemonic_item_label(ui, mark, &item.label, mnemonic, true));
                 let shortcut_str = item.shortcut.as_ref().map(|c| c.display(shortcut_platform(&ctx)));
@@ -774,7 +889,7 @@ fn render_nodes(
                         n.set_access_key(m.to_string());
                     }
                     match item.kind {
-                        craft_menu::ItemKind::Check(on) | craft_menu::ItemKind::Radio(on) => {
+                        ItemKind::Check(on) | ItemKind::Radio(on) => {
                             n.set_toggled(if on { egui::accesskit::Toggled::True } else { egui::accesskit::Toggled::False });
                         }
                         _ => {}
@@ -797,7 +912,7 @@ fn render_nodes(
                     ui.close();
                 }
             }
-            craft_menu::Node::Submenu { label, children, .. } => {
+            Node::Submenu { label, children, .. } => {
                 let enabled = any_enabled(children, gate);
                 let is_key_match = !child_open && active_key.is_some_and(|(c, _)| Some(c) == mnemonic);
 
@@ -854,20 +969,33 @@ fn render_nodes(
                     }
                 });
             }
-            craft_menu::Node::Standard { .. } => {}
+            Node::Standard { .. } => {}
+            _ => {}
         }
     }
 }
 
-/// A command's `{"index": n}` parameter.
-fn param_index(command: &CommandRef) -> Option<usize> {
-    command.params.get("index").and_then(serde_json::Value::as_u64).and_then(|i| usize::try_from(i).ok())
+fn any_enabled(nodes: &[Node], gate: &Gate) -> bool {
+    nodes.iter().any(|node| match node {
+        Node::Item(item) => item.enabled && gate.allows(item),
+        Node::Submenu { children, .. } => any_enabled(children, gate),
+        _ => false,
+    })
 }
 
-/// The side panel a [`PANEL`] command names.
-fn panel(command: &CommandRef) -> Option<RightPanel> {
-    let name = command.params.get("panel").and_then(serde_json::Value::as_str)?;
-    PANELS.iter().find(|(_, n, _)| *n == name).map(|(p, ..)| *p)
+/// The platform whose key names the shortcut column shows: the build's platform, but on the web
+/// the one the browser runs on (`ctx.os()`), as craft-menu's bar does for its own shortcut column.
+fn shortcut_platform(ctx: &egui::Context) -> Platform {
+    use egui::os::OperatingSystem;
+    if cfg!(target_arch = "wasm32") {
+        match ctx.os() {
+            OperatingSystem::Mac | OperatingSystem::IOS => Platform::Mac,
+            OperatingSystem::Windows => Platform::Windows,
+            _ => Platform::Linux,
+        }
+    } else {
+        Platform::current()
+    }
 }
 
 /// Extract the single ASCII character for an alphanumeric Key press, uppercase.
@@ -904,16 +1032,16 @@ pub(crate) fn extract_explicit_mnemonic(title: &str) -> Option<char> {
 }
 
 /// Determine the preferred mnemonic for a top-level menu role.
-pub(crate) fn preferred_menu_role_mnemonic(role: craft_menu::MenuRole, title: &str) -> Option<char> {
+pub(crate) fn preferred_menu_role_mnemonic(role: MenuRole, title: &str) -> Option<char> {
     if let Some(c) = extract_explicit_mnemonic(title) {
         return Some(c);
     }
     match role {
-        craft_menu::MenuRole::File => Some('F'),
-        craft_menu::MenuRole::Edit => Some('E'),
-        craft_menu::MenuRole::View => Some('V'),
-        craft_menu::MenuRole::Window => Some('W'),
-        craft_menu::MenuRole::Help => Some('H'),
+        MenuRole::File => Some('F'),
+        MenuRole::Edit => Some('E'),
+        MenuRole::View => Some('V'),
+        MenuRole::Window => Some('W'),
+        MenuRole::Help => Some('H'),
         _ => {
             if title == "Sign" || title == "Fill & Sign" || title.starts_with("Sign") {
                 Some('S')
@@ -925,12 +1053,12 @@ pub(crate) fn preferred_menu_role_mnemonic(role: craft_menu::MenuRole, title: &s
 }
 
 /// Determine the preferred mnemonic for a menu command item.
-fn preferred_item_mnemonic(item: &craft_menu::Item) -> Option<char> {
+fn preferred_item_mnemonic(item: &Item) -> Option<char> {
     if let Some(c) = extract_explicit_mnemonic(&item.label) {
         return Some(c);
     }
     let id = item.command.id.as_str();
-    if id == craft_quit::QUIT_MENU_ID || matches!(craft_menu::Builtin::of(&item.command), Some(craft_menu::Builtin::Quit)) {
+    if id == QUIT || matches!(Builtin::of(&item.command), Some(Builtin::Quit)) {
         if item.label.chars().any(|c| c.eq_ignore_ascii_case(&'X')) {
             return Some('X');
         } else {
@@ -1017,7 +1145,7 @@ pub(crate) fn assign_mnemonics(labels: &[&str], preferred: &[Option<char>]) -> V
 }
 
 /// Top-level mnemonics for the menus in `bar`.
-pub(crate) fn top_level_mnemonics(bar: &craft_menu::MenuBar) -> Vec<char> {
+pub(crate) fn top_level_mnemonics(bar: &MenuBar) -> Vec<char> {
     let titles: Vec<&str> = bar.menus.iter().map(|m| m.title.as_str()).collect();
     let preferred: Vec<Option<char>> = bar.menus.iter().map(|m| preferred_menu_role_mnemonic(m.role, &m.title)).collect();
     assign_mnemonics(&titles, &preferred).into_iter().flatten().collect()
@@ -1076,46 +1204,27 @@ pub(crate) fn mnemonic_item_label(ui: &egui::Ui, mark: &str, label: &str, mnemon
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
-    use craft_menu::{Backend, Dispatch, Event, ItemKind, NativeMenu};
+    use craft::menu::Builtin;
 
     use super::*;
 
     const PDF: &[u8] = include_bytes!("../tests/data/form.pdf");
 
     fn app(docs: &[&str]) -> (PdfCraftApp, egui::Context) {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = PdfCraftApp::for_unit_tests();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         for name in docs {
-            app.open_bytes(name, None, PDF.to_vec()).unwrap();
+            app.open_bytes(&egui::Context::default(), name, None, PDF.to_vec()).unwrap();
         }
         (app, egui::Context::default())
     }
 
     fn linux(app: &PdfCraftApp, ctx: &egui::Context) -> MenuBar {
-        craft_menu::layout(&app.menu_bar(ctx), Target::Linux, &layout_options()).bar
+        craft::menu::layout(&app.menu_bar(ctx), Target::Linux, &layout_options()).bar
     }
 
     fn item<'b>(bar: &'b MenuBar, command: &CommandRef) -> &'b Item {
         bar.find(command).unwrap_or_else(|| panic!("{} is in the menus", command.key()))
-    }
-
-    /// The bar's own overflow-menu sentinel is not rendered as typed: no font this app ships or
-    /// falls back to has U+22EF, and egui 0.37's `MissingGlyphPolicy::Panic` crashes on it when
-    /// the menu bar is narrow enough to need it. The editing tests that narrow the window while a
-    /// paragraph is open reproduce this end to end. The other three reserved labels are plain
-    /// ASCII, so untranslated is safe for them.
-    #[test]
-    fn the_overflow_menu_sentinel_is_not_passed_through_untranslated() {
-        crate::i18n::set_current(crate::i18n::Lang::EN);
-        let translated = translate("⋯");
-        assert_ne!(translated, "⋯", "no installed font has this glyph");
-        assert_eq!(translated, "…", "the ordinary ellipsis the rest of the app already uses");
-        for label in ["Menu", "Scroll menu up", "Scroll menu down"] {
-            assert_eq!(translate(label), label, "plain ASCII reserved labels need no substitution");
-        }
     }
 
     #[test]
@@ -1147,45 +1256,6 @@ mod tests {
     }
 
     #[test]
-    fn check_and_radio_items_follow_the_app() {
-        let (mut app, ctx) = app(&["a.pdf"]);
-        let kind = |app: &PdfCraftApp, id: &str| item(&linux(app, &ctx), &CommandRef::new(id)).kind;
-        assert_eq!(kind(&app, "view.layout.single"), ItemKind::Radio(true));
-        assert_eq!(kind(&app, "view.layout.two_up"), ItemKind::Radio(false));
-        let continuous = app.views[0].continuous();
-        assert_eq!(kind(&app, "view.continuous"), ItemKind::Check(continuous));
-        app.run_menu_command(&ctx, &CommandRef::new("view.layout.two_up"));
-        app.run_menu_command(&ctx, &CommandRef::new("view.continuous"));
-        assert_eq!(kind(&app, "view.layout.single"), ItemKind::Radio(false));
-        assert_eq!(kind(&app, "view.layout.two_up"), ItemKind::Radio(true));
-        assert_eq!(kind(&app, "view.continuous"), ItemKind::Check(!continuous));
-        let left = app.left_open;
-        assert_eq!(kind(&app, "view.tools_pane"), ItemKind::Check(left));
-        app.run_menu_command(&ctx, &CommandRef::new("view.tools_pane"));
-        assert_eq!(kind(&app, "view.tools_pane"), ItemKind::Check(!left));
-        let bookmarks = CommandRef::with_params(PANEL, serde_json::json!({ "panel": "bookmarks" }));
-        app.run_menu_command(&ctx, &bookmarks);
-        assert_eq!(app.right, Some(RightPanel::Bookmarks));
-        assert_eq!(item(&linux(&app, &ctx), &bookmarks).kind, ItemKind::Radio(true));
-        assert_eq!(kind(&app, "view.side_panel"), ItemKind::Check(true));
-    }
-
-    #[test]
-    fn a_dialog_greys_document_commands_and_drops_their_clicks() {
-        let (mut app, ctx) = app(&["a.pdf"]);
-        let rotate = CommandRef::new("page.rotate");
-        assert!(app.menu_gate(&ctx).allows_command(&rotate));
-        app.dialog = Some(crate::Dialog::About);
-        assert!(!app.menu_gate(&ctx).allows_command(&rotate), "the gate greys the menus under a dialog");
-        let doc = app.views[0].id;
-        let before = app.session.get(doc).unwrap().info.pages[0].rotation;
-        app.run_menu_command(&ctx, &rotate);
-        assert_eq!(app.session.get(doc).unwrap().info.pages[0].rotation, before, "a click that arrives anyway does nothing");
-        // Quit still asks the window to close, which asks about unsaved changes.
-        assert!(app.menu_gate(&ctx).allows_command(&Builtin::Quit.command()));
-    }
-
-    #[test]
     fn recent_files_and_open_documents_are_listed_once_each() {
         let (mut app, ctx) = app(&["a.pdf", "b.pdf"]);
         app.recent = ["one.pdf", "two.pdf"].map(|n| crate::RecentFile { name: n.into(), path: format!("/nowhere/{n}"), pages: 1, size: 0 }).into();
@@ -1203,58 +1273,18 @@ mod tests {
             })
             .collect();
         assert_eq!(documents, ["a.pdf", "b.pdf"], "each open document once, in tab order");
-        app.run_menu_command(&ctx, &CommandRef::with_params(DOCUMENT, serde_json::json!({ "index": 0 })));
-        assert_eq!(app.active, Some(0));
         // The macOS layout lists them once too.
-        let mac = craft_menu::mac_layout(&app.menu_bar(&ctx), &layout_options()).bar;
+        let mac = craft::menu::mac_layout(&app.menu_bar(&ctx), &layout_options()).bar;
         let listed = mac.items().iter().filter(|it| it.command.id == DOCUMENT).count();
         assert_eq!(listed, 2);
         app.recent.clear();
         let bar = linux(&app, &ctx);
-        assert!(!item(&bar, &CommandRef::new(NO_RECENT)).enabled, "an empty list shows a greyed placeholder");
+        assert!(bar.find(&CommandRef::new(NO_RECENT)).is_some(), "an empty list shows a placeholder");
         assert!(bar.find(&CommandRef::new("file.clear_recent")).is_none());
     }
 
-    /// A native backend that reports what the test queues, through the driver's dispatch as the
-    /// macOS backend does.
-    #[derive(Clone, Default)]
-    struct FakeMenu(Rc<RefCell<(Option<Dispatch>, Vec<Event>)>>);
-
-    impl FakeMenu {
-        fn click(&self, command: &CommandRef) {
-            let mut state = self.0.borrow_mut();
-            let event = state.0.as_ref().map(|d| d.chosen(command, None, false, None));
-            state.1.extend(event);
-        }
-    }
-
-    impl Backend for FakeMenu {
-        fn sync(&mut self, _bar: &MenuBar) {}
-        fn drain(&mut self) -> Vec<Event> {
-            std::mem::take(&mut self.0.borrow_mut().1)
-        }
-        fn attach(&mut self, dispatch: Dispatch) {
-            self.0.borrow_mut().0 = Some(dispatch);
-        }
-    }
-
     #[test]
-    fn a_native_menu_click_runs_its_command_once() {
-        let (mut app, ctx) = app(&["a.pdf"]);
-        let fake = FakeMenu::default();
-        app.native_menu = Some(NativeMenu::new(Box::new(fake.clone())));
-        let doc = app.views[0].id;
-        let before = app.session.get(doc).unwrap().info.pages[0].rotation;
-        fake.click(&CommandRef::new("page.rotate"));
-        let mut raw = egui::RawInput::default();
-        app.prepare_raw_input(&ctx, &mut raw);
-        app.native_menu_clicks(&ctx);
-        app.native_menu_clicks(&ctx);
-        assert_eq!(app.session.get(doc).unwrap().info.pages[0].rotation, (before + 90) % 360, "rotated once");
-    }
-
-    #[test]
-    fn duplicate_localized_mnemonics_are_resolved_uniquely() {
+    fn french_file_and_window_have_distinct_sibling_mnemonics() {
         // Colliding first letter 'F', where Fenêtre's preferred role 'W' is absent from the title:
         let titles = ["Fichier", "Fenêtre"];
         let preferred = [Some('F'), Some('W')];
@@ -1295,9 +1325,9 @@ mod tests {
     #[test]
     fn clipped_submenu_row_does_not_open_on_hover_unless_already_open() {
         let ctx = egui::Context::default();
-        let submenu = craft_menu::Node::submenu("Sub", vec![craft_menu::Item::new(craft_menu::CommandRef::new("cmd.test"), "Child Item").into()]);
+        let submenu = Node::submenu("Sub", vec![Item::new(CommandRef::new("cmd.test"), "Child Item").into()]);
         let nodes = vec![submenu];
-        let gate = craft_menu::Gate::default();
+        let gate = Gate::default();
 
         // Pass 1: Pointer hover over the row's rectangle (y=150), but clip rect is y in 0..100.
         let mut raw = egui::RawInput::default();
