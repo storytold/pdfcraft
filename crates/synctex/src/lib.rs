@@ -43,7 +43,7 @@ pub enum Error {
     NotSyncTex,
     #[error("the SyncTeX file is larger than the {} byte limit once unzipped", MAX_INFLATED)]
     TooLarge,
-    #[error("the SyncTeX file has more than the {} boxes and points that are read", MAX_RECORDS)]
+    #[error("the SyncTeX file has more than the {} records that are read", MAX_RECORDS)]
     TooManyRecords,
     #[error("the SyncTeX file could not be unzipped: {0}")]
     Inflate(String),

@@ -64,15 +64,21 @@ fn real_path(p: &Path) -> Option<PathBuf> {
 
 impl SyncTex {
     /// The tags of the inputs that are `file`: by lexical path first, then by `canonicalize`, which
-    /// is not tried on a network or device path.
+    /// is not tried on a network or device path. A relative `file` is read against the folder the
+    /// SyncTeX file's own relative inputs are, so a name written as the file writes it matches from
+    /// any working directory; failing that, against the current directory.
     fn tags_of(&self, file: &Path) -> Vec<u32> {
-        let want = normalise(file);
-        let lexical: Vec<u32> = self.inputs.iter().filter(|(_, p)| normalise(p) == want).map(|(t, _)| *t).collect();
+        let beside = (!file.is_absolute()).then(|| normalise(&self.base_dir.join(file)));
+        let wanted: Vec<PathBuf> = beside.into_iter().chain([normalise(file)]).collect();
+        let lexical: Vec<u32> = self.inputs.iter().filter(|(_, p)| wanted.contains(&normalise(p))).map(|(t, _)| *t).collect();
         if !lexical.is_empty() {
             return lexical;
         }
-        let Some(real) = real_path(&want) else { return Vec::new() };
-        self.inputs.iter().filter(|(_, p)| real_path(&normalise(p)).is_some_and(|c| c == real)).map(|(t, _)| *t).collect()
+        let real: Vec<PathBuf> = wanted.iter().filter_map(|p| real_path(p)).collect();
+        if real.is_empty() {
+            return Vec::new();
+        }
+        self.inputs.iter().filter(|(_, p)| real_path(&normalise(p)).is_some_and(|c| real.contains(&c))).map(|(t, _)| *t).collect()
     }
 
     /// Where `line` of `file` landed in the output: the lowest sheet with a match and the
@@ -255,6 +261,18 @@ Count:9
     fn a_plain_path_may_be_looked_up() {
         assert!(on_a_local_disk(Path::new("/work/main.tex")));
         assert!(on_a_local_disk(Path::new("main.tex")));
+    }
+
+    /// A relative name is the one the SyncTeX file wrote, wherever the process runs.
+    #[test]
+    fn a_relative_source_is_read_against_the_synctex_folder() {
+        let base = std::env::temp_dir().join("pdfcraft-synctex-no-such-folder");
+        let text = "SyncTeX Version:1\nInput:1:./chap/one.tex\nContent:\n{1\n(1,7:6578176,13156352:19734528,657818,0\n)\n}1\n";
+        let st = SyncTex::parse(text.as_bytes(), &base).unwrap();
+        assert_eq!(st.forward(Path::new("./chap/one.tex"), 7).unwrap().map(|p| p.sheet), Some(1));
+        assert_eq!(st.forward(Path::new("chap/one.tex"), 7).unwrap().map(|p| p.sheet), Some(1));
+        assert_eq!(st.forward(&base.join("chap/one.tex"), 7).unwrap().map(|p| p.sheet), Some(1));
+        assert_eq!(st.forward(Path::new("chap/two.tex"), 7), Err(UnknownSource));
     }
 
     #[cfg(unix)]

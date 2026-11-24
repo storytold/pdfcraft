@@ -8,9 +8,9 @@ use crate::{Error, Rect};
 
 /// The most a gzipped file may inflate to.
 pub const MAX_INFLATED: u64 = 512 * 1024 * 1024;
-/// The most boxes and point records kept, over all sheets. A file with more is refused, so what a
-/// parse keeps in memory is bounded by this and not only by the size of the text: the shortest
-/// record is a few bytes, and a box kept is some 70. TeX writes about one record per word, glue
+/// The most records kept: boxes, points, sheets and inputs together. A file with more is refused,
+/// so what a parse keeps in memory is bounded by this and not only by the size of the text: the
+/// shortest record is a few bytes, and a box kept is some 70. TeX writes about one record per word, glue
 /// or kern, so this is a document of several thousand pages.
 pub const MAX_RECORDS: usize = 8_000_000;
 /// The deepest box nesting kept; a box nested deeper is skipped and counted.
@@ -58,6 +58,8 @@ pub(crate) struct Sheet {
 pub struct SyncTex {
     pub(crate) inputs: Vec<(u32, PathBuf)>,
     pub(crate) sheets: Vec<Sheet>,
+    /// The folder relative `Input:` paths were resolved against.
+    pub(crate) base_dir: PathBuf,
     skipped: usize,
 }
 
@@ -206,7 +208,7 @@ fn parse_text(bytes: &[u8], base_dir: &Path, max_records: usize) -> Result<SyncT
     let mut inputs = Vec::new();
     let mut sheets: Vec<Sheet> = Vec::new();
     let mut skipped = 0usize;
-    // Boxes and points kept so far, held to `max_records`.
+    // Boxes, points, sheets and inputs kept so far, held to `max_records`.
     let mut records = 0usize;
     let mut count = move || {
         records = records.saturating_add(1);
@@ -231,7 +233,10 @@ fn parse_text(bytes: &[u8], base_dir: &Path, max_records: usize) -> Result<SyncT
             let mut it = rest.splitn(2, |b| *b == b':');
             let tag = it.next().and_then(|t| std::str::from_utf8(t).ok()).and_then(|t| t.parse::<u32>().ok());
             match (tag, it.next()) {
-                (Some(tag), Some(path)) => inputs.push((tag, input_path(os_string(path), base_dir))),
+                (Some(tag), Some(path)) => {
+                    count()?;
+                    inputs.push((tag, input_path(os_string(path), base_dir)));
+                }
                 _ => skipped += 1,
             }
             continue;
@@ -285,6 +290,7 @@ fn parse_text(bytes: &[u8], base_dir: &Path, max_records: usize) -> Result<SyncT
             }
             '}' => {
                 if let Some(sheet) = open_sheet.take() {
+                    count()?;
                     sheets.push(sheet);
                 } else {
                     skipped += 1;
@@ -365,7 +371,7 @@ fn parse_text(bytes: &[u8], base_dir: &Path, max_records: usize) -> Result<SyncT
         }
     }
 
-    Ok(SyncTex { inputs, sheets, skipped })
+    Ok(SyncTex { inputs, sheets, base_dir: base_dir.to_path_buf(), skipped })
 }
 
 #[cfg(test)]
@@ -443,13 +449,21 @@ Count:9
         assert!(matches!(parse_capped(&gz, Path::new("/work"), 10), Err(Error::TooLarge)));
     }
 
-    /// Boxes and points count together, and one past the most kept refuses the file.
+    /// Every kind of record counts, and one past the most kept refuses the file.
     #[test]
     fn the_record_cap_is_enforced() {
+        // One input, one box, one point, one void box and one sheet: five records.
         let text = "SyncTeX Version:1\nInput:1:/work/main.tex\nContent:\n{1\n(1,1:0,0:10,10,0\nx1,1:0,0\nh1,2:0,0:10,10,0\n)\n}1\n";
-        let limited = |max| parse_limited(text.as_bytes(), Path::new("/work"), MAX_INFLATED, max);
-        assert!(matches!(limited(2), Err(Error::TooManyRecords)));
-        assert_eq!(limited(3).unwrap().sheets(), 1);
+        let limited = |text: &str, max| parse_limited(text.as_bytes(), Path::new("/work"), MAX_INFLATED, max);
+        assert!(matches!(limited(text, 4), Err(Error::TooManyRecords)));
+        assert_eq!(limited(text, 5).unwrap().sheets(), 1);
+        // Sheets with nothing on them and inputs count as well as boxes and points do.
+        let sheets = format!("SyncTeX Version:1\nContent:\n{}", "{1\n}1\n".repeat(10));
+        assert!(matches!(limited(&sheets, 9), Err(Error::TooManyRecords)));
+        assert_eq!(limited(&sheets, 10).unwrap().sheets(), 10);
+        let inputs = format!("SyncTeX Version:1\n{}", "Input:1:a.tex\n".repeat(10));
+        assert!(matches!(limited(&inputs, 9), Err(Error::TooManyRecords)));
+        assert_eq!(limited(&inputs, 10).unwrap().inputs().count(), 10);
     }
 
     #[test]
