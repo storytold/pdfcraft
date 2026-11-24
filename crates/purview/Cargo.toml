@@ -10,16 +10,18 @@ workspace = true
 
 [features]
 default = []
-mip-sdk = []
+mip-auth = ["dep:craft-mime", "dep:oauth2", "dep:reqwest", "dep:serde", "dep:serde_json", "dep:thiserror", "dep:webbrowser"]
+mip-sdk = ["mip-auth"]
 
 [dependencies]
-oauth2 = { workspace = true }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
-serde = { workspace = true }
-serde_json = { workspace = true }
-thiserror = { workspace = true }
-webbrowser = { workspace = true }
-url = "2"
+pdfcraft-purview-policy = { workspace = true }
+craft-mime = { workspace = true, optional = true }
+oauth2 = { workspace = true, optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots"], optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+webbrowser = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 pdfcraft-platform = { workspace = true }

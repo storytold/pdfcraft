@@ -219,11 +219,7 @@ pub(super) fn notices(
     let purview_msg = purview.and_then(|purview| {
         purview.label.as_ref().map(|label| {
             let protection = if purview.protected { tl!("Protected") } else { tl!("Label applied") };
-            (
-                "tag",
-                crate::i18n::fmt(tl!("Sensitivity label: {label} — {status}"), &[("label", label.name.as_str()), ("status", protection.as_ref())]),
-                false,
-            )
+            ("tag", crate::i18n::fmt(tl!("Sensitivity label: {label} — {status}"), &[("label", label.name.as_str()), ("status", protection)]), false)
         })
     });
     let msg = if let Some(purview_msg) = purview_msg {
@@ -261,10 +257,8 @@ pub(super) fn notices(
                 toggled = Some(Notice::FieldHighlights(view.highlight_fields));
             }
         }
-        if purview.is_some() {
-            if crate::widgets::pill_button(ui, tl!("Sensitivity label"), false).clicked() {
-                open_purview_label = true;
-            }
+        if purview.is_some() && crate::widgets::pill_button(ui, tl!("Sensitivity label"), false).clicked() {
+            open_purview_label = true;
         }
         if scripts_off && crate::widgets::pill_button(ui, tl!("JavaScript Console"), false).clicked() {
             open_console = true;

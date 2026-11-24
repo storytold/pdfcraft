@@ -136,7 +136,7 @@ pub use pdfcraft_forms::detect;
 pub use pdfcraft_optimize as optimize;
 pub use pdfcraft_preflight as pdfa;
 pub use pdfcraft_print as print;
-pub use pdfcraft_purview::{
+pub use pdfcraft_purview_policy::{
     PurviewAccount, PurviewDocument, PurviewDocumentState, PurviewError, PurviewLabel, PurviewOpen, PurviewProvider, PurviewRights, PurviewStatus,
 };
 pub use pdfcraft_redact::Elsewhere as RedactionElsewhere;

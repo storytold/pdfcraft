@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(feature = "mip-auth")]
 use crate::auth;
 use crate::{PurviewAccount, PurviewDocument, PurviewError, PurviewLabel, PurviewOpen, PurviewProvider, PurviewRights, PurviewStatus};
 
@@ -394,6 +395,12 @@ impl PurviewProvider for NativePurviewProvider {
         Ok(())
     }
 
+    #[cfg(not(feature = "mip-auth"))]
+    fn sign_in(&self, _username_hint: Option<&str>) -> Result<(), PurviewError> {
+        if self.app_id.is_empty() { Err(PurviewError::NotConfigured) } else { Err(PurviewError::SdkUnavailable) }
+    }
+
+    #[cfg(feature = "mip-auth")]
     fn sign_in(&self, username_hint: Option<&str>) -> Result<(), PurviewError> {
         if self.app_id.is_empty() {
             return Err(PurviewError::NotConfigured);

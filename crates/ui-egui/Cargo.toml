@@ -10,7 +10,7 @@ rust-version = "1.95"
 workspace = true
 
 [features]
-mip-sdk = ["pdfcraft-purview/mip-sdk", "pdfcraft-engine/mip-sdk"]
+mip-sdk = ["pdfcraft-purview/mip-sdk"]
 
 [dependencies]
 edit-session = { workspace = true }

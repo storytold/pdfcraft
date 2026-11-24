@@ -45,9 +45,7 @@ impl Session {
         let rewrite = editor.cos.full_save_required() || editor.cos.encryption_changed() || editor.cos.revisions().is_empty();
         let cos = writable(&editor.cos)?;
         let working = guard(|| {
-            if doc.purview.is_some() {
-                write_incremental(&cos, &opts)
-            } else if on_saved || rewrite {
+            if doc.purview.is_some() || on_saved || rewrite {
                 write_incremental(&cos, &opts)
             } else {
                 let mut base = pdfcraft_cos::Document::open_with_password(editor.saved.clone(), editor.saved_keys.reopen.as_deref())?;

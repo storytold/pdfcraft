@@ -2797,9 +2797,9 @@ checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
 
 [[package]]
 name = "form_urlencoded"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+checksum = "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e"
 dependencies = [
  "percent-encoding",
 ]
@@ -3401,10 +3401,10 @@ dependencies = [
  "hyper",
  "hyper-util",
  "rustls",
+ "rustls-native-certs",
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots",
 ]
 
 [[package]]
@@ -5049,7 +5049,7 @@ dependencies = [
  "pdfcraft-organize",
  "pdfcraft-preflight",
  "pdfcraft-print",
- "pdfcraft-purview",
+ "pdfcraft-purview-policy",
  "pdfcraft-redact",
  "pdfcraft-render",
  "pdfcraft-sign",
@@ -5251,14 +5251,22 @@ dependencies = [
 name = "pdfcraft-purview"
 version = "0.21.1"
 dependencies = [
+ "craft-mime",
  "oauth2",
  "pdfcraft-platform",
+ "pdfcraft-purview-policy",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "url",
  "webbrowser",
+]
+
+[[package]]
+name = "pdfcraft-purview-policy"
+version = "0.21.1"
+dependencies = [
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -6286,6 +6294,7 @@ dependencies = [
  "pin-project-lite",
  "quinn",
  "rustls",
+ "rustls-native-certs",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -6300,7 +6309,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "webpki-roots",
 ]
 
 [[package]]
@@ -8111,9 +8119,9 @@ dependencies = [
 
 [[package]]
 name = "url"
-version = "2.5.8"
+version = "2.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+checksum = "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a"
 dependencies = [
  "form_urlencoded",
  "idna",
@@ -8534,15 +8542,6 @@ name = "webpki-root-certs"
 version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "58ec80e73fd8baf57bf0d9615554c75348bda990d6d5bbeab964dd068319fecb"
-dependencies = [
- "rustls-pki-types",
-]
-
-[[package]]
-name = "webpki-roots"
-version = "1.0.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7265c9301c16a8711c992c2d8da90ee77ef54b1ed51482d6dfeb00dc756b1297"
 dependencies = [
  "rustls-pki-types",
 ]

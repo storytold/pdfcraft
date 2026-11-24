@@ -4,6 +4,74 @@ use crate::PdfCraftApp;
 use crate::theme;
 use crate::theme::Tokens;
 
+pub(super) fn properties(
+    ui: &mut egui::Ui,
+    row: &impl Fn(&mut egui::Ui, &str, String),
+    purview: Option<&pdfcraft_engine::PurviewDocument>,
+    status: pdfcraft_engine::PurviewStatus,
+    req: &mut super::Pending,
+) {
+    let Some(purview) = purview else { return };
+    row(
+        ui,
+        "Microsoft Purview",
+        if purview.protected {
+            tl!("Protected").to_string()
+        } else if purview.label.is_some() {
+            tl!("Sensitivity label").to_string()
+        } else {
+            tl!("Detected").to_string()
+        },
+    );
+    if let Some(label) = &purview.label {
+        row(
+            ui,
+            "Sensitivity label",
+            format!("{}{}", label.name, if label.description.is_empty() { String::new() } else { format!(" — {}", label.description) }),
+        );
+    }
+    if let Some(owner) = purview.owner.as_ref().filter(|owner| !owner.trim().is_empty()) {
+        row(ui, "Microsoft Purview owner", owner.clone());
+    }
+    let mip_yes = |b: bool| tl!(if b { "Allowed" } else { "Not allowed" }).to_string();
+    row(ui, "MIP view", mip_yes(purview.rights.view));
+    row(ui, "MIP edit/save", mip_yes(purview.rights.can_edit() || purview.rights.can_save()));
+    row(ui, "MIP print", mip_yes(purview.rights.can_print()));
+    row(ui, "MIP copy/extract", mip_yes(purview.rights.can_copy()));
+    row(ui, "MIP export/change security", mip_yes(purview.rights.can_export() || purview.rights.can_change_security()));
+    ui.horizontal(|ui| match status {
+        pdfcraft_engine::PurviewStatus::Ready => {
+            if purview.label.is_some() {
+                if ui.button(tl!("Change sensitivity label…")).clicked() {
+                    req.link_command = Some("purview.apply_label");
+                }
+            } else if ui.button(tl!("Apply sensitivity label…")).clicked() {
+                req.link_command = Some("purview.apply_label");
+            }
+            if purview.label.is_some() && purview.rights.can_change_security() && ui.button(tl!("Remove label")).clicked() {
+                req.link_command = Some("purview.remove_label");
+            }
+            if purview.protected && purview.rights.can_change_security() && ui.button(tl!("Remove protection")).clicked() {
+                req.link_command = Some("purview.remove_protection");
+            }
+        }
+        pdfcraft_engine::PurviewStatus::SignedOut => {
+            if ui.button(tl!("Sign in to Microsoft…")).clicked() {
+                req.link_command = Some("purview.sign_in");
+            }
+        }
+        pdfcraft_engine::PurviewStatus::SigningIn => {
+            ui.label(tl!("Opening Microsoft sign-in"));
+        }
+        pdfcraft_engine::PurviewStatus::NotConfigured => {
+            ui.label(tl!("Microsoft account sign-in is not configured"));
+        }
+        pdfcraft_engine::PurviewStatus::SdkUnavailable => {
+            ui.label(tl!("Protection SDK unavailable"));
+        }
+    });
+}
+
 fn account_secondary(account: &pdfcraft_engine::PurviewAccount) -> String {
     if !account.email.trim().is_empty() {
         account.email.trim().to_owned()
@@ -51,7 +119,7 @@ fn account_card(ui: &mut egui::Ui, app: &mut PdfCraftApp, tokens: &Tokens) {
                 ui.add_space(6.0);
                 let active_id = active.id.clone();
                 let mut selected = active_id.clone();
-                egui::ComboBox::new("purview-account-picker", "Microsoft account").selected_text(active.label()).width(290.0).show_ui(ui, |ui| {
+                craft_ui::ComboBox::new("purview-account-picker", "Microsoft account").selected_text(active.label()).width(290.0).show_ui(ui, |ui| {
                     for account in &accounts {
                         let is_active = account.id == active_id;
                         if ui.selectable_label(is_active, account.label()).clicked() && !is_active {
@@ -300,7 +368,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, tokens: &Tokens) ->
                     let policy = if label.protection { "Protection policy" } else { "Label only" };
                     let text =
                         if detail.is_empty() { format!("{} - {}", label.name, policy) } else { format!("{} - {} - {}", label.name, policy, detail) };
-                    ui.radio_value(&mut selected, label.id.clone(), text);
+                    crate::widgets::radio_value(ui, &mut selected, label.id.clone(), text);
                 }
                 app.purview_label_id = selected;
             }

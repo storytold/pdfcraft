@@ -2,13 +2,15 @@
 
 Microsoft Purview Information Protection integration for PdfCraft.
 
-The crate is intentionally split into a platform-neutral Rust policy model and a native MIP
-SDK adapter. Ordinary builds do not ship or link the Microsoft SDK. Builds that enable the
-`mip-sdk` feature require an official MIP SDK 1.18.x-compatible package and an approved Entra
-public-client application registration.
+The lower-layer `pdfcraft-purview-policy` crate provides the Rust policy model and provider
+contract; this crate provides the native MIP SDK adapter. Ordinary builds do not compile a native helper or include the authentication
+dependencies, and detected protected files fail closed. The `mip-sdk` feature enables the
+`mip-auth` Rust authentication feature and requires an official MIP SDK 1.18.x-compatible
+package. Live use also requires an Entra public-client application registration.
 
-The engine and automation layers use this crate's rights model. They never independently
-decrypt files or strip protection.
+The engine and automation layers use this crate's rights model; decryption is delegated to
+Microsoft's SDK. The POC is not safe for real sensitive documents: recovery snapshots,
+optimized output and read-only saves can write decrypted content without restoring protection.
 
 ## Native and dependency boundary
 
@@ -17,11 +19,18 @@ It does not shell out to Azure CLI, require `az login`, reuse Azure CLI tokens, 
 third-party MIP SDK wrapper. The Rust layer is limited to authentication state, PKCE browser
 callback, profile/tenant JSON decoding, staging and the rights policy seam.
 
-Official SDK packages are used for macOS arm64/x86_64, Windows amd64/x86/arm64 where
-supported, and supported Linux distributions/architectures. The helper and SDK redistributables
-are staged and signed only in explicitly configured SDK builds.
+Official SDK packages are used for macOS, Windows, and Linux targets where Microsoft provides
+them. The helper and SDK redistributables are staged and signed only in explicitly configured SDK
+builds. Microsoft documents additional platform-specific native runtime requirements in its
+[SDK setup guide](https://learn.microsoft.com/en-us/information-protection/develop/setup-configure-mip).
 
-The least auth dependencies are the PKCE/OAuth implementation, an HTTPS client, browser
-launcher, JSON decoding, URL parsing and the existing workspace platform helper on Windows.
-UUID and generic Base64 crates are not runtime dependencies; app-ID validation and ID-token
-Base64URL decoding are bounded local implementation details.
+The optional authentication path uses Rust OAuth/PKCE, HTTPS with system trust roots, browser and JSON libraries, plus
+the URL parser re-exported by OAuth. It reuses the workspace's `craft-mime` for bounded, strict
+Base64URL decoding rather than maintaining another codec. The desktop already uses `craft-mime`;
+a standalone authentication build also pulls in its other dependencies. OAuth and HTTPS may
+themselves use Base64 transitively. The TLS provider also uses `ring`, which includes native C
+and assembly; replacing cryptography locally would not make this safer. Windows staging uses the
+existing workspace platform helper.
+
+The native adapter stays at the platform layer, including Windows owner-only staging; the
+engine depends only on the lower-layer policy contract. Frontends install the adapter.

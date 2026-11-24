@@ -41,4 +41,4 @@ winresource = "0.1"
 default = ["mcp"]
 # The opt-in MCP server (`pdfcraft-cli mcp`). Build with --no-default-features to leave it out.
 mcp = ["pdfcraft-automation/mcp"]
-mip-sdk = ["pdfcraft-purview/mip-sdk", "pdfcraft-engine/mip-sdk", "pdfcraft-automation/mip-sdk"]
+mip-sdk = ["pdfcraft-purview/mip-sdk", "pdfcraft-automation/mip-sdk"]

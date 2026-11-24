@@ -751,70 +751,7 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
                 ui.end_row();
             }
             PropsTab::Security => {
-                if let Some(purview) = doc.purview() {
-                    row(
-                        ui,
-                        "Microsoft Purview",
-                        if purview.protected {
-                            tl!("Protected").to_string()
-                        } else if purview.label.is_some() {
-                            tl!("Sensitivity label").to_string()
-                        } else {
-                            tl!("Detected").to_string()
-                        },
-                    );
-                    if let Some(label) = &purview.label {
-                        row(
-                            ui,
-                            "Sensitivity label",
-                            format!(
-                                "{}{}",
-                                label.name,
-                                if label.description.is_empty() { String::new() } else { format!(" — {}", label.description) }
-                            ),
-                        );
-                    }
-                    if let Some(owner) = purview.owner.as_ref().filter(|owner| !owner.trim().is_empty()) {
-                        row(ui, "Microsoft Purview owner", owner.clone());
-                    }
-                    let mip_yes = |b: bool| tl!(if b { "Allowed" } else { "Not allowed" }).to_string();
-                    row(ui, "MIP view", mip_yes(purview.rights.view));
-                    row(ui, "MIP edit/save", mip_yes(purview.rights.can_edit() || purview.rights.can_save()));
-                    row(ui, "MIP print", mip_yes(purview.rights.can_print()));
-                    row(ui, "MIP copy/extract", mip_yes(purview.rights.can_copy()));
-                    row(ui, "MIP export/change security", mip_yes(purview.rights.can_export() || purview.rights.can_change_security()));
-                    ui.horizontal(|ui| match app.session.purview_status() {
-                        pdfcraft_engine::PurviewStatus::Ready => {
-                            if purview.label.is_some() {
-                                if ui.button(tl!("Change sensitivity label…")).clicked() {
-                                    req.link_command = Some("purview.apply_label");
-                                }
-                            } else if ui.button(tl!("Apply sensitivity label…")).clicked() {
-                                req.link_command = Some("purview.apply_label");
-                            }
-                            if purview.label.is_some() && purview.rights.can_change_security() && ui.button(tl!("Remove label")).clicked() {
-                                req.link_command = Some("purview.remove_label");
-                            }
-                            if purview.protected && purview.rights.can_change_security() && ui.button(tl!("Remove protection")).clicked() {
-                                req.link_command = Some("purview.remove_protection");
-                            }
-                        }
-                        pdfcraft_engine::PurviewStatus::SignedOut => {
-                            if ui.button(tl!("Sign in to Microsoft…")).clicked() {
-                                req.link_command = Some("purview.sign_in");
-                            }
-                        }
-                        pdfcraft_engine::PurviewStatus::SigningIn => {
-                            ui.label(tl!("Opening Microsoft sign-in"));
-                        }
-                        pdfcraft_engine::PurviewStatus::NotConfigured => {
-                            ui.label(tl!("Microsoft account sign-in is not configured"));
-                        }
-                        pdfcraft_engine::PurviewStatus::SdkUnavailable => {
-                            ui.label(tl!("Protection SDK unavailable"));
-                        }
-                    });
-                }
+                purview::properties(ui, &row, doc.purview(), app.session.purview_status(), req);
                 match doc.security_summary() {
                     None => {
                         row(ui, "Security method", tl!("No security").to_string());

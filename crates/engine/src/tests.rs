@@ -2996,7 +2996,7 @@ fn combine_source_check_says_why_a_file_cannot_be_combined() {
 #[test]
 fn mandatory_sensitivity_policy_blocks_save_until_a_label_is_selected() {
     let (mut s, id) = session_with(1);
-    let provider = Arc::new(pdfcraft_purview::UnavailablePurviewProvider);
+    let provider = Arc::new(pdfcraft_purview_policy::UnavailablePurviewProvider);
     let bytes = s.get(id).unwrap().bytes.clone();
     s.doc_mut(id).unwrap().purview = Some(crate::PurviewDocumentState {
         handle: 1,

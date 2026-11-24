@@ -9,7 +9,7 @@ license.workspace = true
 workspace = true
 
 [features]
-mip-sdk = ["pdfcraft-purview/mip-sdk", "pdfcraft-ui-egui/mip-sdk", "pdfcraft-engine/mip-sdk"]
+mip-sdk = ["pdfcraft-purview/mip-sdk", "pdfcraft-ui-egui/mip-sdk"]
 
 [dependencies]
 # Help ▸ Check for updates (issue #28): one HTTPS request to GitHub, over rustls with the OS's

@@ -352,6 +352,9 @@ and IPIA. Do not put an app secret in a desktop binary or source repository.
 
 The following inputs are required to turn the PdfCraft POC from an SDK bridge into a live tenant test:
 
+- Fix protected-document recovery, optimization and read-only save paths that can currently
+  write decrypted content without restoring MIP protection. Until then, use only synthetic
+  test documents and do not distribute the POC for sensitive content.
 - Download the official `mip_sdk_file_macos_1.18.148.zip` package for macOS and, for public release,
   the corresponding `file`, `protection`, and `upe` packages for every supported platform.
 - Extract the package into a private SDK staging directory outside the Git repository.
@@ -391,18 +394,28 @@ approve it.
 The runtime MIP bridge uses Microsoft's official native MIP SDK, not an
 independent PDF decryptor, Azure CLI, or third-party MIP SDK wrapper.
 
-The Rust authentication side keeps only the dependencies needed for:
+Ordinary builds do not compile the native helper or include Purview's optional
+authentication stack. They still detect protected files and fail closed. The
+`mip-sdk` feature enables `mip-auth`, which can also be enabled independently
+to test the Rust authentication code without the SDK.
+
+The optional Rust authentication side keeps only the dependencies needed for:
 
 - Authorization URL, PKCE, redirect callback and token response handling.
-- HTTPS token exchange.
+- HTTPS token exchange using system trust roots.
 - Cross-platform system browser launch.
 - Account/ID-token JSON decoding.
 - URL parsing.
 - The existing Windows owner-only staging helper.
 
 There is no direct UUID, generic Base64, Azure CLI, device-code, or refresh-token
-dependency in the POC auth path. App-ID validation and ID-token Base64URL
-decoding are bounded local code.
+dependency in the POC auth path. App-ID validation is local; ID-token Base64URL
+decoding reuses the existing Rust `craft-mime` codec with an input-size limit.
+The OAuth and HTTPS libraries may use Base64 as a transitive dependency.
+The TLS provider uses `ring`, which includes native C and assembly. Retain the
+maintained TLS stack rather than implementing authentication cryptography locally.
+Microsoft's SDK and its documented platform-specific runtime dependencies remain
+required for SDK-enabled builds; a Rust replacement would not be the official SDK.
 
 Supported native helper builds follow the target platform:
 

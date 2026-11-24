@@ -86,7 +86,7 @@ fn normalize_authority(value: &str, username: &str) -> Result<(String, String), 
         return Err(PurviewAuthError::InvalidAuthority("the authority is missing".into()));
     }
     if authority.contains("://") {
-        let url = url::Url::parse(authority).map_err(|e| PurviewAuthError::InvalidAuthority(e.to_string()))?;
+        let url = oauth2::url::Url::parse(authority).map_err(|e| PurviewAuthError::InvalidAuthority(e.to_string()))?;
         let mut base = format!("{}://{}", url.scheme(), url.host_str().unwrap_or(""));
         if let Some(port) = url.port() {
             base.push(':');
@@ -116,47 +116,10 @@ fn claim_string(claims: &serde_json::Map<String, serde_json::Value>, names: &[&s
 }
 
 fn base64url_decode(value: &str) -> Option<Vec<u8>> {
-    fn sextet(byte: u8) -> Option<u8> {
-        match byte {
-            b'A'..=b'Z' => Some(byte - b'A'),
-            b'a'..=b'z' => Some(byte - b'a' + 26),
-            b'0'..=b'9' => Some(byte - b'0' + 52),
-            b'-' => Some(62),
-            b'_' => Some(63),
-            b'=' => Some(0),
-            _ => None,
-        }
-    }
-
-    let value = value.as_bytes();
     if value.len() > 1024 * 1024 {
         return None;
     }
-    let mut out = Vec::with_capacity(value.len().checked_mul(3)?.checked_div(4)?);
-    let mut index = 0_usize;
-    while index < value.len() {
-        let remaining = value.len() - index;
-        let take = remaining.min(4);
-        if take < 2 {
-            return None;
-        }
-        let mut sextets = [0_u8; 4];
-        for slot in 0..take {
-            sextets[slot] = sextet(value[index + slot])?;
-        }
-        out.push((sextets[0] << 2) | (sextets[1] >> 4));
-        if take >= 3 {
-            out.push((sextets[1] << 4) | (sextets[2] >> 2));
-        }
-        if take == 4 {
-            out.push((sextets[2] << 6) | sextets[3]);
-        }
-        index = index.checked_add(take)?;
-        if take < 4 {
-            break;
-        }
-    }
-    Some(out)
+    craft_mime::base64::URL_SAFE_NO_PAD.decode(value).ok()
 }
 
 fn account_from_id_token(id_token: Option<&str>, username_hint: &str) -> Option<PurviewAccount> {
@@ -233,7 +196,7 @@ fn parse_callback(stream: &mut TcpStream) -> Result<(AuthorizationCode, CsrfToke
     let first = text.lines().next().unwrap_or_default();
     let target = first.split_whitespace().nth(1).unwrap_or("/");
     let full = format!("http://localhost{target}");
-    let url = url::Url::parse(&full).map_err(|e| PurviewAuthError::Callback(e.to_string()))?;
+    let url = oauth2::url::Url::parse(&full).map_err(|e| PurviewAuthError::Callback(e.to_string()))?;
     let query: std::collections::HashMap<String, String> = url.query_pairs().into_owned().collect();
     if let Some(error) = query.get("error") {
         let description = query.get("error_description").map(String::as_str).unwrap_or(error);
@@ -351,33 +314,21 @@ mod tests {
             "email": "ada@example.com"
         })
         .to_string();
-        fn base64url_encode(value: &[u8]) -> String {
-            const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-            let mut out = String::new();
-            let mut index = 0;
-            while index < value.len() {
-                let remaining = value.len() - index;
-                let a = value[index];
-                let b = if remaining > 1 { value[index + 1] } else { 0 };
-                let c = if remaining > 2 { value[index + 2] } else { 0 };
-                out.push(TABLE[((a >> 2) & 0x3f) as usize] as char);
-                out.push(TABLE[(((a & 0x03) << 4) | (b >> 4)) as usize] as char);
-                if remaining > 1 {
-                    out.push(TABLE[(((b & 0x0f) << 2) | (c >> 6)) as usize] as char);
-                }
-                if remaining > 2 {
-                    out.push(TABLE[(c & 0x3f) as usize] as char);
-                }
-                index += 3;
-            }
-            out
-        }
-        let segment = base64url_encode(payload.as_bytes());
+        let segment = craft_mime::base64::URL_SAFE_NO_PAD.encode(payload.as_bytes());
         let account = account_from_id_token(Some(&format!("header.{segment}.signature")), "").expect("profile");
         assert_eq!(account.id, "account-object-id");
         assert_eq!(account.display_name, "Ada Lovelace");
         assert_eq!(account.email, "ada@example.com");
         assert_eq!(account.principal_name, "ada@example.com");
         assert_eq!(account.label(), "Ada Lovelace - ada@example.com");
+    }
+
+    #[test]
+    fn id_token_base64url_requires_canonical_unpadded_input() {
+        assert_eq!(base64url_decode("Zg"), Some(vec![b'f']));
+        assert!(base64url_decode("Zh").is_none());
+        assert!(base64url_decode("Zg==").is_none());
+        assert!(base64url_decode("A").is_none());
+        assert!(base64url_decode(&"A".repeat(1024 * 1024 + 1)).is_none());
     }
 }

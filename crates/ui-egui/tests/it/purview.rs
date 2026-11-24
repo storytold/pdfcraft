@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_purview::{PurviewAccount, PurviewDocument, PurviewError, PurviewLabel, PurviewOpen, PurviewProvider, PurviewRights, PurviewStatus};
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp, PropsTab};
 
@@ -312,10 +312,53 @@ fn two_signed_in_accounts_have_an_account_picker() {
         email: "grace@example.com".into(),
         principal_name: "grace@example.com".into(),
     };
-    let h = harness(TestPurviewProvider::signed_in(ada.clone(), vec![ada.clone(), grace]));
+    let mut h = harness(TestPurviewProvider::signed_in(ada.clone(), vec![ada.clone(), grace]));
     h.get_by_label("Ada Lovelace");
     h.get_by_label("Add account");
     h.get_by_label("Sign out");
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Microsoft account").focus();
+    h.run_steps(1);
+    assert!(h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Microsoft account").is_focused());
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    h.get_by_label("Grace Hopper - grace@example.com").focus();
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    h.get_by_label("Grace Hopper");
+    h.get_by_label("grace@example.com");
+}
+
+#[test]
+fn sensitivity_label_can_be_selected_by_keyboard() {
+    let ada = PurviewAccount {
+        id: "ada".into(),
+        display_name: "Ada Lovelace".into(),
+        email: "ada@example.com".into(),
+        principal_name: "ada@example.com".into(),
+    };
+    let mut h = harness(TestPurviewProvider::signed_in(ada.clone(), vec![ada]));
+    h.state_mut().purview_labels = vec![PurviewLabel {
+        id: "confidential".into(),
+        name: "Confidential".into(),
+        description: String::new(),
+        tooltip: String::new(),
+        color: None,
+        parent_id: None,
+        sensitivity: 0,
+        active: true,
+        protection: false,
+    }];
+    h.run_steps(3);
+    let label = "Confidential - Label only";
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, label).focus();
+    h.run_steps(1);
+    assert!(h.get_by_role_and_label(egui::accesskit::Role::RadioButton, label).is_focused());
+    h.key_press(egui::Key::Space);
+    h.run_steps(3);
+    assert_eq!(h.state().purview_label_id, "confidential");
+    assert_eq!(h.get_by_role_and_label(egui::accesskit::Role::RadioButton, label).accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+    h.get_by_label("Apply label");
 }
 
 #[test]

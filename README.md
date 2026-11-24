@@ -115,6 +115,10 @@ IRM-protected PDF viewing, rights enforcement, label application and re-publishi
 support is opt-in and uses Microsoft's official SDK; setup and public-release requirements are
 documented in [docs/storytold-purview-onetime-setup.md](docs/storytold-purview-onetime-setup.md).
 
+**Proof of concept only:** do not use real sensitive documents. Recovery snapshots, optimized
+output and read-only saves can write decrypted content without restoring MIP protection.
+These paths must be fixed and live tenant rights verified before release.
+
 ## Read anything, beautifully
 
 PdfCraft renders PDFs with care for the details that make a page feel right: kerning and ligatures, right-to-left and complex scripts, vertical CJK, colour emoji, shadings, blend modes, soft masks and optional content.

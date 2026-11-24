@@ -73,6 +73,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("print", Class::Layer(4)),
     ("media", Class::Layer(4)),
     ("ai", Class::Layer(4)),
+    ("purview-policy", Class::Layer(4)),
     // L5 interaction
     ("viewport", Class::Layer(5)),
     ("tools", Class::Layer(5)),
@@ -80,6 +81,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("engine", Class::Layer(6)),
     // L7 platform + frontends
     ("platform", Class::Layer(7)),
+    ("purview", Class::Layer(7)),
     ("ui-common", Class::Layer(7)),
     ("ui-egui", Class::Layer(7)),
     ("automation", Class::Layer(7)),
@@ -108,6 +110,10 @@ pub const SIDEWAYS: &[(&str, &str)] = &[
     ("ui-egui", "ui-common"),
     ("ui-egui", "platform"),
     ("automation", "platform"),
+    // The native provider uses Windows private staging; frontends install it into the engine.
+    ("purview", "platform"),
+    ("ui-egui", "purview"),
+    ("automation", "purview"),
 ];
 
 /// External crates that constitute a UI toolkit / windowing dependency (prefix match with `*`).
@@ -293,6 +299,26 @@ mod tests {
             c("pdfcraft", &[("pdfcraft-ui-egui", Normal, true)]),
         ];
         assert!(check(&g).is_empty(), "{:?}", check(&g));
+    }
+
+    #[test]
+    fn purview_policy_and_native_adapter_keep_the_engine_below_platform() {
+        let g = [
+            c("pdfcraft-purview-policy", &[]),
+            c("pdfcraft-purview", &[("pdfcraft-purview-policy", Normal, true), ("pdfcraft-platform", Normal, true)]),
+            c("pdfcraft-engine", &[("pdfcraft-purview-policy", Normal, true)]),
+            c("pdfcraft-ui-egui", &[("pdfcraft-engine", Normal, true), ("pdfcraft-purview", Normal, true)]),
+            c("pdfcraft-automation", &[("pdfcraft-engine", Normal, true), ("pdfcraft-purview", Normal, true)]),
+        ];
+        assert!(check(&g).is_empty(), "{:?}", check(&g));
+        assert!(matches!(
+            check(&[c("pdfcraft-engine", &[("pdfcraft-purview", Normal, true)])]).as_slice(),
+            [Violation::Upward { from: 6, to: 7, .. }]
+        ));
+        assert!(matches!(
+            check(&[c("pdfcraft-purview-policy", &[("pdfcraft-platform", Normal, true)])]).as_slice(),
+            [Violation::Upward { from: 4, to: 7, .. }]
+        ));
     }
 
     #[test]
