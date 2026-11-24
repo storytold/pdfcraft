@@ -4,17 +4,26 @@
 //! ("Save and Rename"), so the renamed file is always the version on screen (Acrobat on macOS asks
 //! the same). The name's rules are the engine's ([`pdfcraft_engine::new_file_name`]).
 
-use egui::{Align, Layout};
+use std::path::PathBuf;
+
+use craft::theme::variant::Tone;
+use craft::ui::contract::{Bind, Show as _};
+use craft::ui::dialog::dialog_id;
+use craft::ui::display::{Shade, Text};
+use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind};
 use pdfcraft_engine::DocId;
 
-use crate::{Dialog, PdfCraftApp, theme, widgets};
+use crate::PdfCraftApp;
+use crate::editing::SaveTarget;
 
-/// The Rename dialog's state: the document and the name being typed.
+/// The dialog's key.
+const KEY: &str = "file.rename";
+
+/// The Rename dialog's document and the name it opens with; while the dialog is open, the
+/// document it renames.
 pub(crate) struct RenameDraft {
     pub id: DocId,
     pub name: String,
-    /// Select the name and focus the field on the dialog's first frame.
-    pub fresh: bool,
 }
 
 /// Where a "Save and Rename" hands the typed name back when its save does not go through.
@@ -37,48 +46,130 @@ impl Pending {
 
 impl Drop for Pending {
     fn drop(&mut self) {
-        if let Some(mut draft) = self.draft.take() {
-            draft.fresh = false;
+        if let Some(draft) = self.draft.take() {
             *self.back.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(draft);
         }
     }
 }
 
+/// What the dialog shows about the document it renames, fixed when it opens.
+struct RenameFacts {
+    /// The file's path now.
+    path: PathBuf,
+    /// The document's name, for the title.
+    current: String,
+    /// Whether the document has unsaved work, so the rename saves first.
+    unsaved: bool,
+}
+
+impl RenameFacts {
+    /// The dialog over the values: the name row, and under it the new file name or why the name
+    /// can't be used, checked as it is typed. Rename waits for a usable name; Enter is Rename.
+    fn dialog<'b>(&self, fields: &'b mut DialogFields) -> ParamDialog<'b> {
+        let typed = fields.text("name").unwrap_or_default().to_owned();
+        let check = pdfcraft_engine::rename_target(&self.path, &typed);
+        let ready = matches!(check, Ok(Some(_)));
+        let (line, refused) = match &check {
+            Err(e) => (Some(e.to_string()), true),
+            Ok(Some(target)) => (target.file_name().map(|n| n.to_string_lossy().into_owned()), false),
+            Ok(None) => (None, false),
+        };
+        let unsaved = self.unsaved;
+        let title = crate::i18n::fmt(tl!("Rename “{name}”"), &[("name", &self.current)]);
+        let ok = if unsaved { tl!("Save and Rename") } else { tl!("Rename") };
+        let params = vec![Param::new("name", tl!("File name"), ParamKind::text("")).hint(tl!("File name")).full_width().select_on_focus()];
+        let reason = line.clone().filter(|_| refused);
+        let mut dialog =
+            ParamDialog::new(KEY, title, params).values(Bind::bound(fields)).ok_label(ok.into()).ok_enabled(ready).below(move |ui, _| {
+                match &line {
+                    Some(line) if refused => {
+                        Text::new(line.clone()).tone(Tone::Bad).show(ui);
+                    }
+                    Some(line) => {
+                        Text::new(line.clone()).shade(Shade::Muted).show(ui);
+                    }
+                    None => {}
+                }
+                if unsaved {
+                    Text::new(tl!("This document has unsaved changes. They are saved first, then the file is renamed.")).show(ui);
+                }
+            });
+        if let Some(reason) = reason {
+            dialog = dialog.ok_reason(reason.into());
+        }
+        dialog
+    }
+}
+
 impl PdfCraftApp {
     /// Opens Rename again with the name that was typed, once a save that was to precede the
-    /// rename has come to nothing. Called every frame.
-    pub(crate) fn reopen_returned_rename(&mut self) {
-        if self.dialog.is_some() {
+    /// rename has come to nothing. Called every frame; waits while another dialog is open.
+    pub(crate) fn reopen_returned_rename(&mut self, ctx: &egui::Context) {
+        if self.modal_open() {
             return;
         }
         let Some(draft) = self.rename_returned.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() else { return };
         if self.views.iter().any(|v| v.id == draft.id) {
-            self.rename_draft = Some(draft);
-            self.dialog = Some(Dialog::RenameFile);
+            self.open_rename(ctx, draft);
         }
     }
 
     /// Rename… for document `id` (tab menu, double-click on the tab): the dialog opens with the
-    /// name selected, without its extension. Nothing happens for a document that has no file.
-    pub(crate) fn start_rename(&mut self, id: DocId) {
+    /// name, without its extension. Nothing happens for a document that has no file.
+    pub(crate) fn start_rename(&mut self, ctx: &egui::Context, id: DocId) {
         let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) else { return };
         let name = std::path::Path::new(&path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        self.rename_draft = Some(RenameDraft { id, name, fresh: true });
-        self.dialog = Some(Dialog::RenameFile);
+        self.open_rename(ctx, RenameDraft { id, name });
+    }
+
+    /// Opens the Rename dialog for `draft`'s document with its name in the field.
+    fn open_rename(&mut self, ctx: &egui::Context, draft: RenameDraft) {
+        let Some(doc) = self.session.get(draft.id) else { return };
+        let Some(path) = doc.path.clone() else { return };
+        let current = doc.name.clone();
+        let unsaved = self.views.iter().position(|v| v.id == draft.id).is_some_and(|i| self.has_unsaved_work(i));
+        let facts = RenameFacts { path: PathBuf::from(path), current, unsaved };
+        let mut fields = DialogFields::new();
+        fields.set("name", draft.name.as_str());
+        self.rename_draft = Some(draft);
+        let dialog = HostedParamDialog::new(ctx, KEY, fields, move |fields| facts.dialog(fields));
+        crate::dialogs::host::open(self, dialog);
+    }
+
+    /// Takes the Rename dialog's answer: Rename (or Save and Rename) renames with the typed name
+    /// once the dialog has closed, so a save it starts may ask about a file changed on disk.
+    pub(crate) fn rename_pass(&mut self, ctx: &egui::Context) {
+        let Some(answer) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(KEY)) else { return };
+        match answer.ok() {
+            Some(result) => {
+                if let Some(draft) = self.rename_draft.as_mut() {
+                    draft.name = result.fields.text("name").unwrap_or_default().to_owned();
+                }
+                self.rename_with_draft(ctx);
+            }
+            None => self.rename_draft = None,
+        }
     }
 
     /// The dialog's Rename (or Save and Rename).
-    pub(crate) fn rename_with_draft(&mut self) {
+    pub(crate) fn rename_with_draft(&mut self, ctx: &egui::Context) {
         let Some(draft) = self.rename_draft.take() else { return };
         let Some(index) = self.views.iter().position(|v| v.id == draft.id) else { return };
         if self.has_unsaved_work(index) {
-            // Saved in place first; the rename follows only if the save went through.
+            // Saved in place first; the rename follows only if the save went through. Every way the
+            // save comes to nothing drops `after`, and with it `pending`, which hands the name back.
             let mut pending = Pending { draft: Some(draft), back: self.rename_returned.clone() };
-            self.save_then(index, crate::editing::SaveTarget::InPlace, move |app| {
-                if let Some(draft) = pending.take() {
-                    app.rename_now(draft.id, &draft.name);
-                }
-            });
+            self.save_then(
+                ctx,
+                index,
+                SaveTarget::InPlace,
+                move |app, _| {
+                    if let Some(draft) = pending.take() {
+                        app.rename_now(draft.id, &draft.name);
+                    }
+                },
+                |_, _| {},
+            );
         } else {
             self.rename_now(draft.id, &draft.name);
         }
@@ -98,7 +189,7 @@ impl PdfCraftApp {
                 }
                 // The renamed file is the version the document came from: not a change on disk.
                 #[cfg(not(target_arch = "wasm32"))]
-                self.watch.known_now(id, &new);
+                self.watch.known_now(id, std::path::Path::new(&new));
                 self.notify_fmt("Renamed to {name}", &[("name", &name)]);
             }
             Ok(_) => {}
@@ -110,119 +201,83 @@ impl PdfCraftApp {
     }
 }
 
-/// The Rename dialog. Returns `(close, rename)`.
-pub(crate) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> (bool, bool) {
-    let (mut close, mut go) = (false, false);
-    let Some(doc_id) = app.rename_draft.as_ref().map(|d| d.id) else { return (true, false) };
-    let Some((path, current)) = app.session.get(doc_id).and_then(|d| d.path.clone().map(|p| (p, d.name.clone()))) else { return (true, false) };
-    let unsaved = app.views.iter().position(|v| v.id == doc_id).is_some_and(|i| app.has_unsaved_work(i));
-    let Some(draft) = app.rename_draft.as_mut() else { return (true, false) };
-    let heading = ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Rename “{name}”"), &[("name", &current)])).font(theme::semibold(18.0)));
-    ui.add_space(8.0);
-    let id = ui.make_persistent_id("rename-file-name");
-    if draft.fresh {
-        let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
-        let end = egui::text::CCursor::new(draft.name.chars().count());
-        state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
-        state.store(ui.ctx(), id);
-    }
-    let field =
-        ui.add(egui::TextEdit::singleline(&mut draft.name).id(id).desired_width(f32::INFINITY).hint_text(tl!("File name"))).labelled_by(heading.id);
-    if std::mem::take(&mut draft.fresh) {
-        field.request_focus();
-    }
-    // Checked as it is typed: the reason shows under the field and Rename waits for a usable name.
-    let check = pdfcraft_engine::rename_target(std::path::Path::new(&path), &draft.name);
-    let t = theme::Tokens::get(ui.ctx());
-    match &check {
-        Err(e) => {
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new(e.to_string()).color(ui.visuals().error_fg_color).font(theme::regular(12.0)));
-        }
-        Ok(Some(target)) => {
-            ui.add_space(4.0);
-            let new = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            ui.label(egui::RichText::new(new).color(t.text_muted).font(theme::regular(12.0)));
-        }
-        Ok(None) => {}
-    }
-    if unsaved {
-        ui.add_space(8.0);
-        ui.label(tl!("This document has unsaved changes. They are saved first, then the file is renamed."));
-    }
-    let ready = matches!(check, Ok(Some(_)));
-    if ready && field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-        go = true;
-        close = true;
-    }
-    ui.add_space(12.0);
-    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        let label = if unsaved { tl!("Save and Rename") } else { tl!("Rename") };
-        if ui.add_enabled_ui(ready, |ui| widgets::pill_button(ui, label, true)).inner.clicked() {
-            go = true;
-            close = true;
-        }
-        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-            close = true;
-        }
-    });
-    (close, go)
-}
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use super::KEY;
     use crate::PdfCraftApp;
+    use craft::ui::dialog::dialog_id;
+    use craft::ui::patterns::form_dialogs::HostedParamDialog;
+    use egui::accesskit::Role;
     use egui_kittest::{
         Harness,
         kittest::{NodeT, Queryable},
     };
 
-    fn harness(dir: &std::path::Path) -> Harness<'static, PdfCraftApp> {
-        let file = dir.join("first.pdf");
-        std::fs::write(&file, include_bytes!("../../tests/data/form.pdf")).unwrap();
-        let path = file.to_string_lossy().into_owned();
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
-            let mut app = PdfCraftApp::new();
-            app.set_option("language", "en").unwrap();
-            app.open_bytes("first.pdf", Some(path), include_bytes!("../../tests/data/form.pdf").to_vec()).unwrap();
+    const PDF: &[u8] = include_bytes!("../../tests/data/form.pdf");
+
+    /// An English app with one document named `name`, opened from `file` on disk (with no file when `None`).
+    fn harness(file: Option<&std::path::Path>, name: &'static str) -> Harness<'static, PdfCraftApp> {
+        let path = file.map(|f| {
+            std::fs::write(f, PDF).unwrap();
+            f.to_string_lossy().into_owned()
+        });
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+            PdfCraftApp::install_runtime(&cc.egui_ctx);
+            let mut app = PdfCraftApp::for_unit_tests();
+            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+            app.open_bytes(&cc.egui_ctx, name, path.clone(), PDF.to_vec()).unwrap();
             app
         });
         h.run_steps(8);
         h
     }
 
+    /// Rename… from the menu of the tab whose name starts with `tab` (an edited tab says so after its name).
     fn open_rename(h: &mut Harness<'static, PdfCraftApp>, tab: &str) {
-        h.get_by_role_and_label(egui::accesskit::Role::Tab, tab).click_secondary();
+        h.get_by(|n| n.role() == Role::Tab && n.label().is_some_and(|l| l.starts_with(tab))).click_secondary();
         h.run_steps(2);
         h.get_by_label("Rename…").click();
         h.run_steps(6);
     }
 
+    /// Types `name` into the dialog's field, as automation sets it.
     fn type_name(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
-        h.state_mut().rename_draft.as_mut().unwrap().name = name.to_string();
+        let ctx = h.ctx.clone();
+        h.state_mut().dialogs.set_json_field(&ctx, dialog_id(KEY), "name", serde_json::json!(name)).unwrap();
         h.run_steps(3);
+    }
+
+    /// The name in the open Rename dialog's field; `None` while it is closed.
+    fn shown_name(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
+        h.state().dialogs.get_by_id::<HostedParamDialog>(dialog_id(KEY)).map(|d| d.fields().text("name").unwrap_or_default().to_owned())
+    }
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-rename-ui-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     #[test]
     fn rename_from_the_tab_menu_moves_the_file_and_keeps_the_tab() {
-        let dir = std::env::temp_dir().join(format!("pdfcraft-rename-ui-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = scratch("menu");
         std::fs::write(dir.join("taken.pdf"), b"other").unwrap();
-        let mut h = harness(&dir);
+        let mut h = harness(Some(&dir.join("first.pdf")), "first.pdf");
         let id = h.state().views[0].id;
         open_rename(&mut h, "first.pdf");
-        assert_eq!(h.state().rename_draft.as_ref().unwrap().name, "first", "the name opens without its extension");
+        assert_eq!(shown_name(&h).as_deref(), Some("first"), "the name opens without its extension");
         // Refusals show under the field and keep Rename disabled.
         type_name(&mut h, "taken");
         h.get_by_label_contains("already exists");
-        assert!(h.get_by_label("Rename").accesskit_node().is_disabled());
+        assert!(h.get_by_role_and_label(Role::Button, "Rename").accesskit_node().is_disabled());
         type_name(&mut h, "CON");
         h.get_by_label_contains("reserves");
         type_name(&mut h, "Budget 2026");
         h.get_by_label("Budget 2026.pdf");
-        h.get_by_label("Rename").click();
+        h.get_by_role_and_label(Role::Button, "Rename").click();
         h.run_steps(4);
         assert!(dir.join("Budget 2026.pdf").exists() && !dir.join("first.pdf").exists());
         assert_eq!(h.state().views.len(), 1, "the tab stays");
@@ -231,26 +286,25 @@ mod tests {
         assert_eq!(doc.name, "Budget 2026.pdf");
         assert!(h.state().recent.iter().any(|r| r.name == "Budget 2026.pdf" && r.path.ends_with("Budget 2026.pdf")));
         assert!(!h.state().recent.iter().any(|r| r.path.ends_with("first.pdf")), "Recent files follow the rename");
-        h.get_by_role_and_label(egui::accesskit::Role::Tab, "Budget 2026.pdf");
+        h.get_by_role_and_label(Role::Tab, "Budget 2026.pdf");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn unsaved_changes_are_saved_before_the_rename() {
-        let dir = std::env::temp_dir().join(format!("pdfcraft-rename-ui-save-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut h = harness(&dir);
+        let dir = scratch("save");
+        let mut h = harness(Some(&dir.join("first.pdf")), "first.pdf");
         let id = h.state().views[0].id;
-        h.state_mut().apply_edit(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Saved first".into() });
+        let ctx = h.ctx.clone();
+        h.state_mut().apply_edit(&ctx, pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Saved first".into() });
         h.run_steps(3);
         assert!(h.state().session.get(id).unwrap().dirty);
-        open_rename(&mut h, "first.pdf (edited)"); // an edited tab says so to assistive technology
+        open_rename(&mut h, "first.pdf");
         type_name(&mut h, "second");
         h.get_by_label("This document has unsaved changes. They are saved first, then the file is renamed.");
-        h.get_by_label("Save and Rename").click();
+        h.get_by_role_and_label(Role::Button, "Save and Rename").click();
         h.run_steps(6);
-        assert!(h.state().rename_draft.is_none() && h.state().dialog.is_none());
+        assert!(h.state().rename_draft.is_none() && shown_name(&h).is_none());
         let doc = h.state().session.get(id).unwrap();
         assert!(!doc.dirty, "saved");
         assert_eq!(doc.name, "second.pdf");
@@ -261,22 +315,20 @@ mod tests {
 
     #[test]
     fn a_save_that_fails_keeps_the_typed_name() {
-        let dir = std::env::temp_dir().join(format!("pdfcraft-rename-ui-fail-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut h = harness(&dir);
+        let dir = scratch("fail");
+        let mut h = harness(Some(&dir.join("first.pdf")), "first.pdf");
         let id = h.state().views[0].id;
-        h.state_mut().apply_edit(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Unsaved".into() });
+        let ctx = h.ctx.clone();
+        h.state_mut().apply_edit(&ctx, pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Unsaved".into() });
         h.run_steps(3);
-        open_rename(&mut h, "first.pdf (edited)");
+        open_rename(&mut h, "first.pdf");
         type_name(&mut h, "second");
         // The save cannot be written: the file's place is now a folder.
         std::fs::remove_file(dir.join("first.pdf")).unwrap();
         std::fs::create_dir(dir.join("first.pdf")).unwrap();
-        h.get_by_label("Save and Rename").click();
+        h.get_by_role_and_label(Role::Button, "Save and Rename").click();
         h.run_steps(6);
-        assert!(matches!(h.state().dialog, Some(crate::Dialog::RenameFile)), "the dialog is back");
-        assert_eq!(h.state().rename_draft.as_ref().unwrap().name, "second", "with the name that was typed");
+        assert_eq!(shown_name(&h).as_deref(), Some("second"), "the dialog is back with the name that was typed");
         assert!(h.state().session.get(id).unwrap().dirty, "nothing was saved");
         assert!(dir.join("first.pdf").is_dir() && !dir.join("second.pdf").exists());
         let _ = std::fs::remove_dir_all(&dir);
@@ -284,14 +336,8 @@ mod tests {
 
     #[test]
     fn a_document_without_a_file_offers_no_rename() {
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
-            let mut app = PdfCraftApp::new();
-            app.set_option("language", "en").unwrap();
-            app.open_bytes("unsaved.pdf", None, include_bytes!("../../tests/data/form.pdf").to_vec()).unwrap();
-            app
-        });
-        h.run_steps(8);
-        h.get_by_role_and_label(egui::accesskit::Role::Tab, "unsaved.pdf").click_secondary();
+        let mut h = harness(None, "unsaved.pdf");
+        h.get_by_role_and_label(Role::Tab, "unsaved.pdf").click_secondary();
         h.run_steps(2);
         assert!(h.get_by_label("Rename…").accesskit_node().is_disabled());
     }
