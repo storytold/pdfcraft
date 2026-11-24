@@ -288,19 +288,23 @@ fn centred_text(cx: &craft::ui::primitives::ContentPainterCx<'_>, at: egui::Pos2
 /// new text gets.
 fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     use crate::format_text_ui::{Target, panel};
-    // Editing a paragraph of existing text: its formatting, applied as it changes.
-    if let Some((i, _)) = app.active_ids()
-        && let Some(ed) = app.views[i].session.line_editor.clone()
-    {
-        let mut ed = ed;
-        let sources: Vec<(String, String)> = app
-            .session
-            .get(app.views[i].id)
-            .map(|d| d.text_editor_fonts(ed.page))
+    let page_fonts = |app: &PdfCraftApp, view: usize, page: usize, include_choice_only: bool| -> Vec<(String, String)> {
+        app.views
+            .get(view)
+            .and_then(|v| app.session.get(v.id))
+            .map(|d| d.text_editor_fonts(page))
             .unwrap_or_default()
             .into_iter()
+            .filter(|f| include_choice_only || !f.choice_only)
             .map(|f| (f.resource, f.face))
-            .collect();
+            .collect()
+    };
+    // Editing a paragraph of existing text: its formatting, applied as it changes.
+    if let Some((i, _)) = app.active_ids()
+        && let Some(ed) = app.views.get(i).and_then(|v| v.session.line_editor.clone())
+    {
+        let mut ed = ed;
+        let sources = page_fonts(app, i, ed.page, true);
         let fmt = ed.selection_formatting(&sources);
         ed.sync_selection_look(&fmt);
         panel(app, ui, i, Target::Paragraph(Box::new(ed)), Some(&fmt), &sources);
@@ -308,16 +312,17 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     // Typing added text: the box's formatting, and alignment for the lines a selection touches.
     if let Some(i) = app.active_ids().map(|(i, _)| i)
-        && let Some(draft) = app.views[i].session.content.draft.clone()
+        && let Some(draft) = app.views.get(i).and_then(|v| v.session.content.draft.clone())
     {
         if draft.index.is_none() && app.quick_tool == crate::QuickTool::AddText {
             crate::content_ui::hint(ui);
         }
-        panel(app, ui, i, Target::Draft(Box::new(draft)), None, &[]);
+        let sources = page_fonts(app, i, draft.page, false);
+        panel(app, ui, i, Target::Draft(Box::new(draft)), None, &sources);
         return;
     }
     let image = app.active_ids().and_then(|(i, id)| {
-        let (page, index) = app.views[i].session.content.selected?;
+        let (page, index) = app.views.get(i)?.session.content.selected?;
         let doc = app.session.get(id)?;
         match &doc.added().iter().filter(|a| a.page == page).nth(index)?.content {
             pdfcraft_engine::AddedContent::Image(img) => Some((page, index, img.clone())),
@@ -335,7 +340,7 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         return;
     }
     let selected = app.active_ids().and_then(|(i, id)| {
-        let (page, index) = app.views[i].session.content.selected?;
+        let (page, index) = app.views.get(i)?.session.content.selected?;
         let doc = app.session.get(id)?;
         let a = doc.added().iter().filter(|a| a.page == page).nth(index)?;
         match &a.content {
@@ -344,11 +349,18 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         }
     });
     match selected {
-        Some((i, page, index, text)) => panel(app, ui, i, Target::Added { page, index, text }, None, &[]),
+        Some((i, page, index, text)) => {
+            let sources = page_fonts(app, i, page, false);
+            panel(app, ui, i, Target::Added { page, index, text }, None, &sources);
+        }
         None if app.quick_tool == crate::QuickTool::AddText => {
             crate::content_ui::hint(ui);
             let armed = app.text_style.clone();
-            panel(app, ui, 0, Target::Armed(armed), None, &[]);
+            let (view, sources) = match app.active_ids().and_then(|(i, _)| app.views.get(i).map(|v| (i, v.current()))) {
+                Some((i, page)) => (i, page_fonts(app, i, page, false)),
+                None => (0, Vec::new()),
+            };
+            panel(app, ui, view, Target::Armed(armed), None, &sources);
         }
         None => {}
     }
@@ -365,19 +377,19 @@ impl PdfCraftApp {
         // look would bring it back.
         style.drop_stale_ink();
         let Some(view) = self.views.get_mut(index) else { return };
-        // Text the standard fonts can't draw stays in the box, unwritten, until it is corrected (#125).
-        let blocked = view.session.content.blocked().is_some();
         let Some(d) = view.session.content.draft.as_mut() else { return };
         let committed = d.style.clone();
         // `text` and `rect` stay what the page has; the rest is the new style.
         d.style = pdfcraft_engine::AddedText { text: committed.text.clone(), rect: committed.rect, ..style };
         d.focus = true;
         self.text_style = pdfcraft_engine::AddedText { text: String::new(), rect: [0.0; 4], aligns: Vec::new(), ..d.style.clone() };
-        let (page, item) = (d.page, d.index);
-        let text = d.text.trim_end().to_string();
+        let (page, item, raw_text, rect, next_style) = (d.page, d.index, d.text.clone(), d.rect, d.style.clone());
+        // Text the selected font can't draw stays in the box, unwritten, until it is corrected (#125).
+        let blocked = view.session.content.blocked().is_some();
+        let text = raw_text.trim_end().to_string();
         let Some(item) = item.filter(|_| !text.trim().is_empty() && !blocked) else { return };
-        let aligns = pdfcraft_engine::paragraph_align::remap(&d.text, &text, &d.style.aligns);
-        let updated = pdfcraft_engine::AddedText { text, rect: d.rect, aligns, ..d.style.clone() };
+        let aligns = pdfcraft_engine::paragraph_align::remap(&raw_text, &text, &next_style.aligns);
+        let updated = pdfcraft_engine::AddedText { text, rect, aligns, ..next_style };
         if updated == committed {
             return;
         }

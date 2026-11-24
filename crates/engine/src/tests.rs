@@ -5216,6 +5216,7 @@ fn pasted_added_content_keeps_its_style_and_picture() {
         align: TextAlign::Center,
         aligns: Vec::new(),
         char_spacing: 0.0,
+        font_resource: None,
     };
     s.apply(id, Edit::AddText { page: 0, text: text.clone() }).unwrap();
     let copied = s.get(id).unwrap().added()[0].content.clone();
@@ -10907,6 +10908,7 @@ fn content_edit_keeps_pages_annotations_fields_and_links() {
         align: TextAlign::Left,
         aligns: Vec::new(),
         char_spacing: 0.0,
+        font_resource: None,
     };
     session.apply(id, Edit::AddText { page: 1, text }).unwrap();
     let after = session.get(id).unwrap();
@@ -10949,6 +10951,7 @@ fn content_refresh_lists_match_the_storages_an_edit_touches() {
                 align: TextAlign::Left,
                 aligns: Vec::new(),
                 char_spacing: 0.0,
+                font_resource: None,
             },
         },
         Edit::MoveObjects { page: 0, objects: vec![target(crate::ObjectKind::Added)], offset: [1.0, 0.0] },

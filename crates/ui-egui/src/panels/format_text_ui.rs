@@ -1,9 +1,10 @@
 //! Format text: the font; size, colour, lists and alignment; bold, italic, underline, superscript and
 //! subscript; line and paragraph spacing; horizontal scale and character spacing. One framework
 //! `FormatText` panel serves a paragraph being edited (with the fonts already on its page and the
-//! spacing controls) and added text (the standard families, size, colour, style, alignment and
-//! character spacing). What PdfCraft can't apply yet (lists, or line and paragraph spacing and
-//! scale for added text) is shown disabled and says so ([`unsupported`]).
+//! spacing controls) and added text (the page's fonts, installed/loaded fonts, standard families,
+//! size, colour, style, alignment and character spacing). What PdfCraft can't apply yet (lists, or
+//! line and paragraph spacing and scale for added text) is shown disabled and says so
+//! ([`unsupported`]).
 //!
 //! This module maps the panel's values from the thing being formatted ([`values`]) and its edits back
 //! onto it ([`apply`]); the layout, the number fields and their parsing are the framework's.
@@ -299,7 +300,12 @@ pub(crate) fn values(target: &Target, fmt: Option<&SelectionFormatting>, sources
     let shown_font = match fmt {
         Some(fmt) if fmt.font_shown != tl!("Mixed") => Some(fmt.font_shown.clone()),
         Some(_) => None,
-        None => Some(look.family.label().to_string()),
+        None => Some(
+            look.font_resource
+                .as_ref()
+                .and_then(|r| sources.iter().find(|(res, _)| res == r).map(|(_, face)| face.clone()))
+                .unwrap_or_else(|| look.family.label().to_string()),
+        ),
     };
     character.family = shown_font.clone();
     character.size = match fmt {
@@ -310,8 +316,9 @@ pub(crate) fn values(target: &Target, fmt: Option<&SelectionFormatting>, sources
         Some(fmt) => fmt.color.map(rgba),
         None => Some(rgba(look.color)),
     };
-    character.faux_bold = fmt.map_or(Some(look.bold), |f| f.bold);
-    character.faux_italic = fmt.map_or(Some(look.italic), |f| f.italic);
+    let styleable = look.font_resource.is_none();
+    character.faux_bold = fmt.map_or(Some(look.bold && styleable), |f| f.bold);
+    character.faux_italic = fmt.map_or(Some(look.italic && styleable), |f| f.italic);
     character.underline = Some(extras.is_some_and(|e| e.underline));
     character.position = Some(match &paragraphs {
         Some(p) if pdfcraft_engine::text_script::is_in(p.text, p.selection.as_ref(), Script::Super) => BaselinePosition::Superscript,
@@ -339,14 +346,18 @@ pub(crate) fn values(target: &Target, fmt: Option<&SelectionFormatting>, sources
             }
         }
         (Target::Paragraph(_), None) => None,
-        _ => Some(FontPick::Family(look.family)),
+        _ => match &look.font_resource {
+            Some(resource) if sources.iter().any(|(res, _)| res == resource) => Some(FontPick::Resource(resource.clone())),
+            _ => Some(FontPick::Family(look.family)),
+        },
     };
     Values { character, paragraph, line_spacing, font }
 }
 
 /// The controls `target` can't apply, each with why: the two list buttons always; underline, line
-/// and paragraph spacing and scale for added text; superscript and subscript for text
-/// that is not open for typing; alignment while a paragraph selection is not tidy.
+/// and paragraph spacing and scale for added text; bold and italic when added text uses an
+/// explicit document font; superscript and subscript for text that is not open for typing;
+/// alignment while a paragraph selection is not tidy.
 pub(crate) fn unsupported(target: &Target) -> Vec<(FormatControl, Label)> {
     let planned = || Label::from(tl!("Planned").to_string());
     let mut out = vec![(FormatControl::BulletedList, planned()), (FormatControl::NumberedList, planned())];
@@ -359,6 +370,12 @@ pub(crate) fn unsupported(target: &Target) -> Vec<(FormatControl, Label)> {
             (FormatControl::HorizontalScale, planned()),
         ]);
     }
+    if !matches!(target, Target::Paragraph(_)) && target.look().font_resource.is_some() {
+        out.extend([
+            (FormatControl::Bold, Label::from(tl!("Bold is determined by the selected document font").to_string())),
+            (FormatControl::Italic, Label::from(tl!("Italic is determined by the selected document font").to_string())),
+        ]);
+    }
     if paragraphs.is_none() {
         out.extend([(FormatControl::Superscript, planned()), (FormatControl::Subscript, planned())]);
     }
@@ -368,19 +385,28 @@ pub(crate) fn unsupported(target: &Target) -> Vec<(FormatControl, Label)> {
     out
 }
 
-/// The rows the font picker lists above the installed families, as groups of rows: for a paragraph
-/// (`sources` given) `Keep source fonts` and the page's fonts, then the standard three, then
-/// `Load font…`, `Reload` and what the installed-font scan found. Added text lists the standard
-/// three only. The caller borrows each group's rows into a `HostFontGroup`.
+/// The rows the font picker lists above the installed families, as groups of rows: `Keep source
+/// fonts` (when `keep_source`, i.e. editing an existing paragraph) and the page's fonts, then the
+/// standard three, then `Load font…`, `Reload` and what the installed-font scan found. The caller
+/// borrows each group's rows into a `HostFontGroup`.
 #[cfg(not(target_arch = "wasm32"))]
-fn font_groups(sources: Option<&[(String, String)]>, installed: Option<&[pdfcraft_engine::text_fonts::FontFile]>) -> Vec<Vec<HostFontRow>> {
+fn font_groups(
+    sources: Option<&[(String, String)]>,
+    keep_source: bool,
+    installed: Option<&[pdfcraft_engine::text_fonts::FontFile]>,
+) -> Vec<Vec<HostFontRow>> {
     let mut groups = Vec::new();
     if let Some(sources) = sources {
-        let mut page = vec![HostFontRow::action(FontPick::KeepSource.key(), tl!("Keep source fonts").to_string())];
+        let mut page = Vec::new();
+        if keep_source {
+            page.push(HostFontRow::action(FontPick::KeepSource.key(), tl!("Keep source fonts").to_string()));
+        }
         for (resource, face) in sources.iter().filter(|(r, _)| !r.starts_with("PCApproved")) {
             page.push(HostFontRow::face(FontPick::Resource(resource.clone()).key(), face.clone(), None));
         }
-        groups.push(page);
+        if !page.is_empty() {
+            groups.push(page);
+        }
     }
     groups.push(STANDARD.into_iter().map(|f| HostFontRow::face(FontPick::Family(f).key(), f.label(), None)).collect());
     if sources.is_some() {
@@ -418,8 +444,8 @@ fn pick_installed<'a>(
 }
 
 /// Format text for `target`, and its edits applied. The colour swatch's request opens the app's
-/// colour picker, whose answer is applied to the same target when it comes. `fmt` and `sources` are
-/// the open paragraph's ([`values`]).
+/// colour picker, whose answer is applied to the same target when it comes. `fmt` is the open
+/// paragraph's ([`values`]); `sources` are the page's document fonts.
 pub(crate) fn panel(
     app: &mut PdfCraftApp,
     ui: &mut egui::Ui,
@@ -430,7 +456,7 @@ pub(crate) fn panel(
 ) {
     let shown = Section::fixed(tl!("Format text").to_string()).show(ui, |ui, _| {
         #[cfg(not(target_arch = "wasm32"))]
-        let installed = if matches!(target, Target::Paragraph(_)) { app.installed_document_fonts(false) } else { None };
+        let installed = app.installed_document_fonts(false);
         show(
             ui,
             &target,
@@ -448,9 +474,8 @@ pub(crate) fn panel(
     apply(ui.ctx(), app, view, target, &out.edits);
 }
 
-/// The Format text controls for `target`, shown. The font row is the font picker over the installed
-/// families with the page's fonts, the standard three and `Load font…` above them, for a paragraph;
-/// otherwise it lists the standard families.
+/// The Format text controls for `target`, shown. On desktop, the font row is the font picker over
+/// the installed families with the page's fonts, the standard three and `Load font…` above them.
 fn show(
     ui: &mut egui::Ui,
     target: &Target,
@@ -482,16 +507,23 @@ fn show(
     // With nothing to set it on the row still reads Auto, as production's does, not Mixed.
     text = text.line_spacing(v.line_spacing.unwrap_or(LineSpacing::Auto));
     #[cfg(not(target_arch = "wasm32"))]
-    if matches!(target, Target::Paragraph(_))
-        && let Some(installed) = installed
     {
-        let rows = font_groups(Some(sources), Some(&installed.files));
+        static EMPTY_CATALOG: std::sync::OnceLock<std::sync::Arc<craft::font_catalog::Catalog>> = std::sync::OnceLock::new();
+        let keep_source = matches!(target, Target::Paragraph(_));
+        let rows = font_groups(Some(sources), keep_source, installed.map(|i| i.files.as_slice()));
         let groups: Vec<HostFontGroup<'_>> = rows.iter().map(|rows| HostFontGroup::new(None, rows)).collect();
-        let source = FontPickerSource::new(&installed.catalog).host(&groups).current_host(v.font.as_ref().map(FontPick::key));
-        return text.font_picker(source).show(ui);
+        let catalog = match installed {
+            Some(installed) => &installed.catalog,
+            None => EMPTY_CATALOG.get_or_init(|| {
+                let catalog = std::sync::Arc::new(craft::font_catalog::Catalog::of_files(Vec::new()));
+                let _ = catalog.families();
+                catalog
+            }),
+        };
+        let source = FontPickerSource::new(catalog).host(&groups).current_host(v.font.as_ref().map(FontPick::key));
+        text.font_picker(source).show(ui)
     }
-    // PLAN: pdf-workflows-w13 answers `installed_document_fonts` with an empty catalogue while it scans (lead ruling), so this
-    // paragraph branch is always taken and `Finding document fonts…` shows; its `Option` return still has a `None` until then.
+    #[cfg(target_arch = "wasm32")]
     text.show(ui)
 }
 
@@ -523,11 +555,15 @@ fn step(look: &mut AddedText, extras: Option<&mut Extras>, paragraphs: Option<&P
                 (v.is_finite() && SIZE_RANGE.contains(&v)).then_some(Special::Size(v))
             }
             CharacterChange::FauxBold(on) => {
-                look.bold = *on;
+                if look.font_resource.is_none() {
+                    look.bold = *on;
+                }
                 None
             }
             CharacterChange::FauxItalic(on) => {
-                look.italic = *on;
+                if look.font_resource.is_none() {
+                    look.italic = *on;
+                }
                 None
             }
             CharacterChange::Underline(on) => {
@@ -614,6 +650,67 @@ fn committed(edits: &[EditEvent<FormatTextChange>]) -> Vec<&FormatTextChange> {
         .collect()
 }
 
+/// Deferred host actions collected while applying a pass's changes to added text.
+#[derive(Default)]
+struct AddedFontAction {
+    load: bool,
+    reload: bool,
+    installed_family: Option<String>,
+    installed_style: Option<String>,
+}
+
+impl AddedFontAction {
+    /// Applies a font or size [`Special`] to `style`, recording any host action (picker, reload,
+    /// installed font) to run after the style update.
+    fn take(&mut self, style: &mut AddedText, special: Special) {
+        match special {
+            Special::Size(size) => style.size = size,
+            Special::Font(pick) => match pick {
+                FontPick::KeepSource => style.font_resource = None,
+                FontPick::Resource(resource) => {
+                    style.font_resource = Some(resource);
+                    style.bold = false;
+                    style.italic = false;
+                }
+                FontPick::Family(family) => {
+                    style.family = family;
+                    style.font_resource = None;
+                }
+                FontPick::Load => self.load = true,
+                FontPick::Reload => self.reload = true,
+            },
+            Special::Family(name) => self.installed_family = Some(name),
+            Special::Style(name) => self.installed_style = Some(name),
+            Special::Script(_) => {}
+        }
+    }
+
+    /// Runs any deferred font picker, installed-font load or rescan for `page`.
+    fn finish(self, ctx: &egui::Context, app: &mut PdfCraftApp, page: Option<usize>) {
+        if self.load
+            && let Some(page) = page
+        {
+            app.pick_files(crate::files::FilePurpose::TextFont { page }, false);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.reload {
+                let _ = app.installed_document_fonts(true);
+            }
+            if let (Some(family), Some(page)) = (self.installed_family, page) {
+                let path = app
+                    .installed_document_fonts(false)
+                    .and_then(|i| pick_installed(&i.files, &family, self.installed_style.as_deref()).map(|f| f.path.clone()));
+                if let Some(path) = path {
+                    app.use_paths(ctx, crate::files::FilePurpose::TextFont { page }, &[path]);
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = (ctx, self.reload, self.installed_family, self.installed_style);
+    }
+}
+
 /// Applies the edits of one pass to `target`: the engine edit that follows is one undoable change
 /// (`apply_line_format`, `restyle_draft` or an `UpdateContent`), made only when something changed.
 /// Only this pass's own edits are applied, so a second pass in a frame applies nothing again.
@@ -629,8 +726,10 @@ pub(crate) fn apply(ctx: &egui::Context, app: &mut PdfCraftApp, view: usize, tar
             }
         }
         Target::Draft(draft) => {
+            let page = Some(draft.page);
             let mut style = draft.style.clone();
             let mut toggled = None;
+            let mut actions = AddedFontAction::default();
             for change in &changes {
                 let paragraphs = Paragraphs {
                     text: &draft.text,
@@ -638,15 +737,14 @@ pub(crate) fn apply(ctx: &egui::Context, app: &mut PdfCraftApp, view: usize, tar
                     tidy: true,
                 };
                 match step(&mut style, None, Some(&paragraphs), change) {
-                    Some(Special::Size(size)) => style.size = size,
-                    Some(Special::Font(FontPick::Family(family))) => style.family = family,
                     Some(Special::Script(script)) => {
                         let mut next = toggled.take().unwrap_or_else(|| (*draft).clone());
                         if crate::edit_text_ui::toggle_script(&mut next.text, &mut next.selection, script) {
                             toggled = Some(next);
                         }
                     }
-                    _ => {}
+                    Some(special) => actions.take(&mut style, special),
+                    None => {}
                 }
             }
             if let Some(next) = toggled
@@ -657,14 +755,14 @@ pub(crate) fn apply(ctx: &egui::Context, app: &mut PdfCraftApp, view: usize, tar
             if style != draft.style {
                 app.restyle_draft(ctx, view, style);
             }
+            actions.finish(ctx, app, page);
         }
         Target::Added { page, index, text } => {
             let mut style = text.clone();
+            let mut actions = AddedFontAction::default();
             for change in &changes {
-                match step(&mut style, None, None, change) {
-                    Some(Special::Size(size)) => style.size = size,
-                    Some(Special::Font(FontPick::Family(family))) => style.family = family,
-                    _ => {}
+                if let Some(special) = step(&mut style, None, None, change) {
+                    actions.take(&mut style, special);
                 }
             }
             if style != text {
@@ -676,19 +774,21 @@ pub(crate) fn apply(ctx: &egui::Context, app: &mut PdfCraftApp, view: usize, tar
                     app.text_style = AddedText { text: String::new(), rect: [0.0; 4], aligns: Vec::new(), ..style };
                 }
             }
+            actions.finish(ctx, app, Some(page));
         }
         Target::Armed(text) => {
+            let page = app.views.get(view).map(|v| v.current());
             let mut style = text.clone();
+            let mut actions = AddedFontAction::default();
             for change in &changes {
-                match step(&mut style, None, None, change) {
-                    Some(Special::Size(size)) => style.size = size,
-                    Some(Special::Font(FontPick::Family(family))) => style.family = family,
-                    _ => {}
+                if let Some(special) = step(&mut style, None, None, change) {
+                    actions.take(&mut style, special);
                 }
             }
             if style != text {
                 app.text_style = style;
             }
+            actions.finish(ctx, app, page);
         }
     }
 }
@@ -887,5 +987,98 @@ mod tests {
         let pick = vec![set(FormatTextChange::Paragraph(ParagraphChange::Align(PanelAlign::Center)))];
         apply(&egui::Context::default(), &mut app, 0, Target::Draft(Box::new(draft)), &pick);
         assert_eq!(item(&app).align, TextAlign::Center);
+    }
+
+    #[test]
+    fn custom_document_font_applies_to_added_text_draft_and_armed_style() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_text();
+        let id = app.views[0].id;
+        assert!(
+            app.session
+                .apply(id, pdfcraft_engine::Edit::RegisterTextFont { page: 0, bytes: std::sync::Arc::new(pdfcraft_fonts::INTER_REGULAR.to_vec()) })
+                .is_ok()
+        );
+        let font = app
+            .session
+            .get(id)
+            .unwrap()
+            .text_editor_fonts(0)
+            .into_iter()
+            .find(|f| !f.resource.starts_with("PCApproved") && !f.choice_only)
+            .expect("registered font");
+        let sources = vec![(font.resource.clone(), font.face.clone())];
+
+        // Picking a document font on a selected added item sets font_resource, clears bold/italic,
+        // and records one undoable edit.
+        let depth = undo_depth(&app);
+        let mut bold_text = item(&app);
+        bold_text.bold = true;
+        let pick = vec![set(FormatTextChange::HostFont(FontPick::Resource(font.resource.clone()).key()))];
+        apply(&ctx, &mut app, 0, Target::Added { page: 0, index: 0, text: bold_text }, &pick);
+        let updated = item(&app);
+        assert_eq!(updated.font_resource.as_deref(), Some(font.resource.as_str()));
+        assert!(!updated.bold && !updated.italic);
+        assert_eq!(app.text_style.font_resource.as_deref(), Some(font.resource.as_str()));
+        assert_eq!(undo_depth(&app), depth + 1);
+
+        // Values and unsupported reflect the custom document font.
+        let target = Target::Added { page: 0, index: 0, text: updated.clone() };
+        let v = values(&target, None, &sources);
+        assert_eq!(v.character.family.as_deref(), Some(font.face.as_str()));
+        assert_eq!(v.font, Some(FontPick::Resource(font.resource.clone())));
+        let disabled = unsupported(&target);
+        assert!(disabled.iter().any(|(c, _)| *c == FormatControl::Bold));
+        assert!(disabled.iter().any(|(c, _)| *c == FormatControl::Italic));
+
+        // Picking a standard family clears font_resource.
+        let std_pick = vec![set(FormatTextChange::HostFont(FontPick::Family(FontFamily::Times).key()))];
+        apply(&ctx, &mut app, 0, Target::Added { page: 0, index: 0, text: updated }, &std_pick);
+        assert_eq!(item(&app).font_resource, None);
+        assert_eq!(item(&app).family, FontFamily::Times);
+
+        // Picking a document font on an open draft with Greek text unblocks and applies it.
+        let mut draft = open_draft(&mut app);
+        draft.text = "γραφή φ".into();
+        app.views[0].session.content.draft = Some(draft.clone());
+        assert!(app.views[0].session.content.blocked().is_some(), "standard font blocks Greek phi");
+        apply(&ctx, &mut app, 0, Target::Draft(Box::new(draft)), &pick);
+        assert_eq!(app.views[0].session.content.blocked(), None, "custom font unblocks Greek phi");
+        assert_eq!(item(&app).text, "γραφή φ");
+        assert_eq!(item(&app).font_resource.as_deref(), Some(font.resource.as_str()));
+
+        // Picking a document font while Add text is armed sets app.text_style.
+        app.text_style.font_resource = None;
+        let armed = app.text_style.clone();
+        apply(&ctx, &mut app, 0, Target::Armed(armed), &pick);
+        assert_eq!(app.text_style.font_resource.as_deref(), Some(font.resource.as_str()));
+    }
+
+    #[test]
+    fn loaded_text_font_applies_to_armed_draft_and_selected_added_text() {
+        let ctx = egui::Context::default();
+        let font_file = || vec![("Inter-Regular.ttf".into(), pdfcraft_fonts::INTER_REGULAR.to_vec())];
+
+        // Armed Add text (nothing selected, no draft).
+        let mut app = app_with_text();
+        app.use_files(&ctx, crate::files::FilePurpose::TextFont { page: 0 }, font_file());
+        let armed_res = app.text_style.font_resource.clone().expect("armed style gets loaded font");
+
+        // Selected added text.
+        let mut app = app_with_text();
+        app.views[0].session.content.selected = Some((0, 0));
+        app.use_files(&ctx, crate::files::FilePurpose::TextFont { page: 0 }, font_file());
+        assert_eq!(item(&app).font_resource.as_deref(), Some(armed_res.as_str()));
+        assert_eq!(app.text_style.font_resource.as_deref(), Some(armed_res.as_str()));
+
+        // Open draft.
+        let mut app = app_with_text();
+        let mut draft = open_draft(&mut app);
+        draft.text = "φ".into();
+        app.views[0].session.content.draft = Some(draft);
+        app.use_files(&ctx, crate::files::FilePurpose::TextFont { page: 0 }, font_file());
+        assert_eq!(app.views[0].session.content.draft.as_ref().and_then(|d| d.style.font_resource.as_deref()), Some(armed_res.as_str()));
+        assert_eq!(item(&app).text, "φ");
+        assert_eq!(item(&app).font_resource.as_deref(), Some(armed_res.as_str()));
     }
 }
