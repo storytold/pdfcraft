@@ -8,6 +8,11 @@ use crate::{Error, Rect};
 
 /// The most a gzipped file may inflate to.
 pub const MAX_INFLATED: u64 = 512 * 1024 * 1024;
+/// The most boxes and point records kept, over all sheets. A file with more is refused, so what a
+/// parse keeps in memory is bounded by this and not only by the size of the text: the shortest
+/// record is a few bytes, and a box kept is some 70. TeX writes about one record per word, glue
+/// or kern, so this is a document of several thousand pages.
+pub const MAX_RECORDS: usize = 8_000_000;
 /// The deepest box nesting kept; a box nested deeper is skipped and counted.
 pub const MAX_DEPTH: usize = 256;
 
@@ -80,6 +85,11 @@ impl SyncTex {
 }
 
 pub(crate) fn parse_capped(bytes: &[u8], base_dir: &Path, cap: u64) -> Result<SyncTex, Error> {
+    parse_limited(bytes, base_dir, cap, MAX_RECORDS)
+}
+
+/// [`parse_capped`] with the most boxes and points to keep named too.
+pub(crate) fn parse_limited(bytes: &[u8], base_dir: &Path, cap: u64, max_records: usize) -> Result<SyncTex, Error> {
     if bytes.starts_with(&[0x1f, 0x8b]) {
         let decoder = flate2::read::GzDecoder::new(bytes);
         let mut out = Vec::new();
@@ -87,9 +97,9 @@ pub(crate) fn parse_capped(bytes: &[u8], base_dir: &Path, cap: u64) -> Result<Sy
         if u64::try_from(out.len()).map_or(true, |n| n > cap) {
             return Err(Error::TooLarge);
         }
-        parse_text(&out, base_dir)
+        parse_text(&out, base_dir, max_records)
     } else {
-        parse_text(bytes, base_dir)
+        parse_text(bytes, base_dir, max_records)
     }
 }
 
@@ -186,7 +196,7 @@ fn os_string(bytes: &[u8]) -> OsString {
     OsString::from(String::from_utf8_lossy(bytes).into_owned())
 }
 
-fn parse_text(bytes: &[u8], base_dir: &Path) -> Result<SyncTex, Error> {
+fn parse_text(bytes: &[u8], base_dir: &Path, max_records: usize) -> Result<SyncTex, Error> {
     let mut lines = bytes.split(|b| *b == b'\n').map(|l| l.strip_suffix(b"\r").unwrap_or(l));
     match lines.next() {
         Some(first) if first.starts_with(b"SyncTeX Version:") => {}
@@ -196,6 +206,12 @@ fn parse_text(bytes: &[u8], base_dir: &Path) -> Result<SyncTex, Error> {
     let mut inputs = Vec::new();
     let mut sheets: Vec<Sheet> = Vec::new();
     let mut skipped = 0usize;
+    // Boxes and points kept so far, held to `max_records`.
+    let mut records = 0usize;
+    let mut count = move || {
+        records = records.saturating_add(1);
+        if records > max_records { Err(Error::TooManyRecords) } else { Ok(()) }
+    };
     let (mut unit, mut magnification) = (1.0f64, 1000.0f64);
     let (mut x_offset, mut y_offset) = (0.0f64, 0.0f64);
     let mut scale = Scale { factor: 0.0, x_offset: 0.0, y_offset: 0.0 };
@@ -294,6 +310,7 @@ fn parse_text(bytes: &[u8], base_dir: &Path) -> Result<SyncTex, Error> {
                     continue;
                 }
                 let kind = if first == '[' { BoxKind::Vertical } else { BoxKind::Horizontal };
+                count()?;
                 sheet.boxes.push(BoxRec { kind, tag: f.tag, line: f.line, rect, points: Vec::new() });
                 stack.push(sheet.boxes.len() - 1);
             }
@@ -324,6 +341,7 @@ fn parse_text(bytes: &[u8], base_dir: &Path) -> Result<SyncTex, Error> {
                         continue;
                     }
                     let kind = if first == 'v' { BoxKind::Vertical } else { BoxKind::Horizontal };
+                    count()?;
                     sheet.boxes.push(BoxRec { kind, tag: f.tag, line: f.line, rect, points: Vec::new() });
                     continue;
                 }
@@ -339,6 +357,7 @@ fn parse_text(bytes: &[u8], base_dir: &Path) -> Result<SyncTex, Error> {
                     skipped += 1;
                     continue;
                 };
+                count()?;
                 b.points.push(Point { kind: first, tag: f.tag, line: f.line, column: f.column, x, y });
             }
             // `!` (comment), `<`, `>`, `f` and anything else are ignored.
@@ -422,6 +441,15 @@ Count:9
         enc.write_all(FIXTURE.as_bytes()).unwrap();
         let gz = enc.finish().unwrap();
         assert!(matches!(parse_capped(&gz, Path::new("/work"), 10), Err(Error::TooLarge)));
+    }
+
+    /// Boxes and points count together, and one past the most kept refuses the file.
+    #[test]
+    fn the_record_cap_is_enforced() {
+        let text = "SyncTeX Version:1\nInput:1:/work/main.tex\nContent:\n{1\n(1,1:0,0:10,10,0\nx1,1:0,0\nh1,2:0,0:10,10,0\n)\n}1\n";
+        let limited = |max| parse_limited(text.as_bytes(), Path::new("/work"), MAX_INFLATED, max);
+        assert!(matches!(limited(2), Err(Error::TooManyRecords)));
+        assert_eq!(limited(3).unwrap().sheets(), 1);
     }
 
     #[test]

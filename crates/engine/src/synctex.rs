@@ -2,6 +2,8 @@
 //! a page to a LaTeX source line and back. Page positions here are display points, origin at the
 //! top-left of the page as shown (after `/Rotate`).
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
@@ -156,10 +158,19 @@ impl Document {
         if let Some(c) = cache.as_ref().filter(|c| c.path == *path && c.len == len && c.modified == modified) {
             return Ok(c.tex.clone());
         }
+        let too_large = || SyncTexError::Unreadable(format!("{} is larger than {} MiB", path.display(), MAX_SYNCTEX_FILE >> 20));
         if len > MAX_SYNCTEX_FILE {
-            return Err(SyncTexError::Unreadable(format!("{} is larger than {} MiB", path.display(), MAX_SYNCTEX_FILE >> 20)));
+            return Err(too_large());
         }
-        let bytes = std::fs::read(path).map_err(|e| SyncTexError::Unreadable(format!("{}: {e}", path.display())))?;
+        // Read through a limit of its own: the size above is what the file had when it was looked
+        // at, and it may have been replaced by a larger one since.
+        let unreadable = |e: std::io::Error| SyncTexError::Unreadable(format!("{}: {e}", path.display()));
+        let mut bytes = Vec::new();
+        let limit = MAX_SYNCTEX_FILE.saturating_add(1);
+        std::fs::File::open(path).map_err(unreadable)?.take(limit).read_to_end(&mut bytes).map_err(unreadable)?;
+        if u64::try_from(bytes.len()).map_or(true, |read| read > MAX_SYNCTEX_FILE) {
+            return Err(too_large());
+        }
         let base = path.parent().unwrap_or(Path::new(""));
         let tex = Arc::new(SyncTex::parse(&bytes, base).map_err(SyncTexError::Parse)?);
         *cache = Some(Cached { path: path.clone(), len, modified, tex: tex.clone() });

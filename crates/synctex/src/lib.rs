@@ -12,7 +12,7 @@ mod lookup;
 mod parse;
 
 pub use lookup::NEAR;
-pub use parse::{MAX_DEPTH, MAX_INFLATED, SyncTex};
+pub use parse::{MAX_DEPTH, MAX_INFLATED, MAX_RECORDS, SyncTex};
 
 /// A rectangle `[x0, y0, x1, y1]` in points from the page's top-left corner.
 pub type Rect = [f64; 4];
@@ -43,6 +43,8 @@ pub enum Error {
     NotSyncTex,
     #[error("the SyncTeX file is larger than the {} byte limit once unzipped", MAX_INFLATED)]
     TooLarge,
+    #[error("the SyncTeX file has more than the {} boxes and points that are read", MAX_RECORDS)]
+    TooManyRecords,
     #[error("the SyncTeX file could not be unzipped: {0}")]
     Inflate(String),
 }

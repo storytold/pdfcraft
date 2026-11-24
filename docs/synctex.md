@@ -25,7 +25,7 @@ report them.
 
 ```json
 [
-  {"tool":"doc_open","args":{"path":"DIR/main.pdf"}},
+  {"tool":"doc_open","args":{"path":"main.pdf"}},
   {"tool":"synctex_inverse","args":{"doc":1,"page":1,"at":[120,125]}}
 ]
 ```
@@ -34,7 +34,7 @@ The result has the source `file`, `line` and `column`. TeX does not always recor
 
 ```json
 [
-  {"tool":"doc_open","args":{"path":"DIR/main.pdf"}},
+  {"tool":"doc_open","args":{"path":"main.pdf"}},
   {"tool":"synctex_forward","args":{"doc":1,"file":"DIR/main.tex","line":3}}
 ]
 ```
@@ -44,7 +44,9 @@ the SyncTeX file's inputs; an error lists some. If the given line produced no ou
 blank line or a comment, PdfCraft uses the nearest line that did. Glue and kerns do not count as
 output. `column` is accepted and ignored.
 
-Run a script with `pdfcraft-cli run --script steps.json --root DIR`.
+Run a script with `pdfcraft-cli run --script steps.json --root DIR`, where `DIR` is the folder
+that holds `main.pdf`. The PDF is named from that folder. The source `file` is named as the SyncTeX
+file names it, which is usually its full path.
 
 When a lookup finds nothing, the error says why:
 

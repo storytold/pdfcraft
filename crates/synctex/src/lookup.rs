@@ -1,7 +1,7 @@
 //! Inverse lookup: a point on a page to the source line that produced it.
 
 use std::cmp::Reverse;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 
 use crate::parse::{BoxKind, BoxRec, Point};
 use crate::{PdfPos, Rect, SourcePos, SyncTex, UnknownSource};
@@ -43,16 +43,36 @@ fn normalise(p: &Path) -> PathBuf {
     parts.into_iter().collect()
 }
 
+/// Whether `p` may be looked up on disk to compare it. On Windows a network share or a device
+/// path is not: resolving one contacts the host or opens the device. Only a drive, plain or in
+/// the verbatim form, is. Input names come from the SyncTeX file, so they are not trusted to be
+/// local. On other systems every path may be looked up.
+fn on_a_local_disk(p: &Path) -> bool {
+    match p.components().next() {
+        Some(Component::Prefix(prefix)) => matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)),
+        _ => true,
+    }
+}
+
+/// `p` with its links followed, when it is on a local disk and exists.
+fn real_path(p: &Path) -> Option<PathBuf> {
+    if !on_a_local_disk(p) {
+        return None;
+    }
+    std::fs::canonicalize(p).ok()
+}
+
 impl SyncTex {
-    /// The tags of the inputs that are `file`: by lexical path first, then by `canonicalize`.
+    /// The tags of the inputs that are `file`: by lexical path first, then by `canonicalize`, which
+    /// is not tried on a network or device path.
     fn tags_of(&self, file: &Path) -> Vec<u32> {
         let want = normalise(file);
         let lexical: Vec<u32> = self.inputs.iter().filter(|(_, p)| normalise(p) == want).map(|(t, _)| *t).collect();
         if !lexical.is_empty() {
             return lexical;
         }
-        let Ok(real) = std::fs::canonicalize(&want) else { return Vec::new() };
-        self.inputs.iter().filter(|(_, p)| std::fs::canonicalize(normalise(p)).is_ok_and(|c| c == real)).map(|(t, _)| *t).collect()
+        let Some(real) = real_path(&want) else { return Vec::new() };
+        self.inputs.iter().filter(|(_, p)| real_path(&normalise(p)).is_some_and(|c| c == real)).map(|(t, _)| *t).collect()
     }
 
     /// Where `line` of `file` landed in the output: the lowest sheet with a match and the
@@ -216,6 +236,25 @@ Count:9
         let text = "SyncTeX Version:1\nInput:1:/work/a.tex\nContent:\n{1\n}1\n";
         let st = SyncTex::parse(text.as_bytes(), Path::new("/work")).unwrap();
         assert_eq!(st.forward(Path::new("/work/a.tex"), 3), Ok(None));
+    }
+
+    /// A share or device named as an input, or asked for, is compared by name only.
+    #[cfg(windows)]
+    #[test]
+    fn network_and_device_paths_are_not_looked_up() {
+        for p in [r"\\host\share\main.tex", r"\\?\UNC\host\share\main.tex", r"\\.\pipe\main.tex"] {
+            assert!(!on_a_local_disk(Path::new(p)), "{p}");
+            assert_eq!(real_path(Path::new(p)), None, "{p}");
+        }
+        for p in [r"C:\work\main.tex", r"\\?\C:\work\main.tex"] {
+            assert!(on_a_local_disk(Path::new(p)), "{p}");
+        }
+    }
+
+    #[test]
+    fn a_plain_path_may_be_looked_up() {
+        assert!(on_a_local_disk(Path::new("/work/main.tex")));
+        assert!(on_a_local_disk(Path::new("main.tex")));
     }
 
     #[cfg(unix)]

@@ -171,3 +171,15 @@ fn a_link_beside_the_pdf_that_leaves_the_root_is_refused() {
     assert!(err.contains("outside"), "{err}");
     assert!(!err.contains("main.tex"), "{err}");
 }
+
+/// The same refusal when the link's target is not there: the answer does not tell whether a file
+/// outside the root exists.
+#[cfg(unix)]
+#[test]
+fn a_link_beside_the_pdf_to_a_missing_file_outside_is_refused_alike() {
+    let (mut a, doc, tmp) = open("link-missing", false);
+    let outside = dir("link-missing-outside");
+    std::os::unix::fs::symlink(outside.join("absent.synctex"), tmp.join("out.synctex.gz")).unwrap();
+    let err = call(&mut a, "synctex_inverse", json!({"doc": doc, "page": 1, "at": [120, 195]})).unwrap_err();
+    assert!(err.contains("outside"), "{err}");
+}
