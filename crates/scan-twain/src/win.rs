@@ -6,7 +6,17 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::dib::dib_to_bmp;
-use crate::{PaperSource, PixelMode, ScanRequest, ScannedPage, TwainDevice, TwainError};
+use crate::{PaperSource, PixelMode, ScanBatch, ScanRequest, ScannedPage, TwainDevice, TwainError};
+
+/// Maximum cumulative uncompressed BMP bytes buffered in one multi-page feeder batch (512 MiB).
+const MAX_BATCH_BYTES: usize = 512 * 1024 * 1024;
+
+fn validate_dpi(dpi: u16) -> Result<(), TwainError> {
+    if dpi > i16::MAX as u16 {
+        return Err(TwainError::Failed(format!("requested resolution {dpi} DPI exceeds TWAIN maximum ({})", i16::MAX)));
+    }
+    Ok(())
+}
 
 // ── Win32 FFI ────────────────────────────────────────────────────────────────────────────────
 
@@ -557,20 +567,19 @@ pub fn list_devices() -> Result<Vec<TwainDevice>, TwainError> {
         }
         ds = zero_identity();
         rc = unsafe { (dsm.entry)(&raw mut app, ptr::null_mut(), DG_CONTROL, DAT_IDENTITY, MSG_GETNEXT, (&raw mut ds).cast()) };
-        if rc == TWRC_ENDOFLIST {
-            break;
-        }
     }
+    let result = if rc == TWRC_ENDOFLIST { Ok(devices) } else { Err(TwainError::Failed(format!("scanner enumeration failed (rc={rc})"))) };
 
     // SAFETY: Balances `MSG_OPENDSM`.
     unsafe {
         let _ = (dsm.entry)(&raw mut app, ptr::null_mut(), DG_CONTROL, DAT_PARENT, MSG_CLOSEDSM, (&raw mut hwnd).cast());
     }
 
-    Ok(devices)
+    result
 }
 
-pub fn acquire(request: &ScanRequest, cancel: &AtomicBool) -> Result<Vec<ScannedPage>, TwainError> {
+pub fn acquire(request: &ScanRequest, cancel: &AtomicBool) -> Result<ScanBatch, TwainError> {
+    validate_dpi(request.dpi)?;
     let _com = ComGuard::init();
     let dsm = DsmLib::load()?;
     let win = HiddenWindow::create()?;
@@ -623,13 +632,7 @@ fn select_source(dsm: &DsmLib, app: &mut TwIdentity, wanted: Option<&str>) -> Re
     Err(TwainError::NoDevices)
 }
 
-fn acquire_in_dsm(
-    dsm: &DsmLib,
-    app: &mut TwIdentity,
-    hwnd: Hwnd,
-    request: &ScanRequest,
-    cancel: &AtomicBool,
-) -> Result<Vec<ScannedPage>, TwainError> {
+fn acquire_in_dsm(dsm: &DsmLib, app: &mut TwIdentity, hwnd: Hwnd, request: &ScanRequest, cancel: &AtomicBool) -> Result<ScanBatch, TwainError> {
     let mem = TwainMem::query(dsm, app);
     let mut ds = select_source(dsm, app, request.device_name.as_deref())?;
 
@@ -659,8 +662,8 @@ fn acquire_in_ds(
     hwnd: Hwnd,
     request: &ScanRequest,
     cancel: &AtomicBool,
-) -> Result<Vec<ScannedPage>, TwainError> {
-    // Negotiate capabilities in State 4 (failures are logged and non-fatal so driver defaults still work).
+) -> Result<ScanBatch, TwainError> {
+    // Negotiate capabilities in State 4 (most failures are non-fatal so driver defaults still work).
     let _ = set_cap_one_value(dsm, mem, app, ds, ICAP_XFERMECH, TWTY_UINT16, 0); // TWSX_NATIVE
     let _ = set_cap_one_value(dsm, mem, app, ds, CAP_XFERCOUNT, TWTY_INT16, u32::from(u16::MAX)); // -1 (all pages)
     let _ = set_cap_one_value(dsm, mem, app, ds, ICAP_UNITS, TWTY_UINT16, 0); // TWUN_INCHES
@@ -691,8 +694,14 @@ fn acquire_in_ds(
         PaperSource::FeederDuplex => {
             let _ = set_cap_one_value(dsm, mem, app, ds, CAP_FEEDERENABLED, TWTY_BOOL, 1);
             let _ = set_cap_one_value(dsm, mem, app, ds, CAP_AUTOFEED, TWTY_BOOL, 1);
-            let _ = set_cap_one_value(dsm, mem, app, ds, CAP_DUPLEXENABLED, TWTY_BOOL, 1);
+            if !set_cap_one_value(dsm, mem, app, ds, CAP_DUPLEXENABLED, TWTY_BOOL, 1) {
+                return Err(TwainError::Failed("scanner driver does not support duplex scanning".into()));
+            }
         }
+    }
+
+    if cancel.load(Ordering::Relaxed) {
+        return Err(TwainError::Cancelled);
     }
 
     // State 4 -> 5: Enable DS.
@@ -720,7 +729,7 @@ fn pump_and_transfer(
     ds: &mut TwIdentity,
     fallback_dpi: f64,
     cancel: &AtomicBool,
-) -> Result<Vec<ScannedPage>, TwainError> {
+) -> Result<ScanBatch, TwainError> {
     let mut msg = Msg { hwnd: ptr::null_mut(), message: 0, w_param: 0, l_param: 0, time: 0, pt: Point { x: 0, y: 0 } };
 
     // SAFETY: Standard Win32 TWAIN event loop with periodic wakeups so cancellation is responsive.
@@ -767,52 +776,78 @@ unsafe fn reset_pending(dsm: &DsmLib, app: &mut TwIdentity, ds: &mut TwIdentity,
     }
 }
 
+unsafe fn read_final_image_dpi(dsm: &DsmLib, app: &mut TwIdentity, ds: &mut TwIdentity) -> (Option<f64>, Option<f64>) {
+    let mut info = TwImageInfo {
+        x_resolution: TwFix32 { whole: 0, frac: 0 },
+        y_resolution: TwFix32 { whole: 0, frac: 0 },
+        image_width: 0,
+        image_length: 0,
+        samples_per_pixel: 0,
+        bits_per_sample: [0; 8],
+        bits_per_pixel: 0,
+        planar: 0,
+        pixel_type: 0,
+        compression: 0,
+    };
+    let info_rc = unsafe { (dsm.entry)(app, ds, DG_IMAGE, DAT_IMAGEINFO, MSG_GET, (&raw mut info).cast()) };
+    if info_rc == TWRC_SUCCESS {
+        let x = info.x_resolution.to_f64();
+        let y = info.y_resolution.to_f64();
+        (x.is_finite().then_some(x).filter(|&v| v > 0.0), y.is_finite().then_some(y).filter(|&v| v > 0.0))
+    } else {
+        (None, None)
+    }
+}
+
+fn bmp_header_dpi(bmp: &[u8]) -> (Option<f64>, Option<f64>) {
+    if bmp.len() < 46 {
+        return (None, None);
+    }
+    let ppm_x = i32::from_le_bytes([bmp[38], bmp[39], bmp[40], bmp[41]]);
+    let ppm_y = i32::from_le_bytes([bmp[42], bmp[43], bmp[44], bmp[45]]);
+    let x = (ppm_x > 0).then(|| f64::from(ppm_x) * 0.0254);
+    let y = (ppm_y > 0).then(|| f64::from(ppm_y) * 0.0254);
+    (x, y)
+}
+
 unsafe fn transfer_all_pages(
     dsm: &DsmLib,
     app: &mut TwIdentity,
     ds: &mut TwIdentity,
     fallback_dpi: f64,
     cancel: &AtomicBool,
-) -> Result<Vec<ScannedPage>, TwainError> {
+) -> Result<ScanBatch, TwainError> {
     let mut pages = Vec::new();
+    let mut total_bytes: usize = 0;
+    let mut incomplete_reason: Option<String> = None;
     let mut pending = TwPendingXfers { count: 1, eoj: 0 };
 
     while pending.count != 0 {
         if cancel.load(Ordering::Relaxed) {
             unsafe { reset_pending(dsm, app, ds, &mut pending) };
-            return if pages.is_empty() { Err(TwainError::Cancelled) } else { Ok(pages) };
+            if pages.is_empty() {
+                return Err(TwainError::Cancelled);
+            }
+            incomplete_reason = Some("scanning was cancelled before all pages finished".into());
+            break;
         }
-        let mut info = TwImageInfo {
-            x_resolution: TwFix32 { whole: 0, frac: 0 },
-            y_resolution: TwFix32 { whole: 0, frac: 0 },
-            image_width: 0,
-            image_length: 0,
-            samples_per_pixel: 0,
-            bits_per_sample: [0; 8],
-            bits_per_pixel: 0,
-            planar: 0,
-            pixel_type: 0,
-            compression: 0,
-        };
-        let info_rc = unsafe { (dsm.entry)(app, ds, DG_IMAGE, DAT_IMAGEINFO, MSG_GET, (&raw mut info).cast()) };
-        let (dpi_x, dpi_y) = if info_rc == TWRC_SUCCESS {
-            let x = info.x_resolution.to_f64();
-            let y = info.y_resolution.to_f64();
-            (if x.is_finite() && x > 0.0 { x } else { fallback_dpi }, if y.is_finite() && y > 0.0 { y } else { fallback_dpi })
-        } else {
-            (fallback_dpi, fallback_dpi)
-        };
 
         let mut hdib: Handle = ptr::null_mut();
         let rc = unsafe { (dsm.entry)(app, ds, DG_IMAGE, DAT_IMAGENATIVEXFER, MSG_GET, (&raw mut hdib).cast()) };
         match rc {
             TWRC_XFERDONE => {
+                // Read final image info after TWRC_XFERDONE and before MSG_ENDXFER so drivers that
+                // refine resolution during transfer report accurate DPI.
+                let (info_x, info_y) = unsafe { read_final_image_dpi(dsm, app, ds) };
+                let patch_x = info_x.unwrap_or(fallback_dpi);
+                let patch_y = info_y.unwrap_or(fallback_dpi);
+
                 if !hdib.is_null() {
                     let size = unsafe { GlobalSize(hdib) };
                     let ptr = unsafe { GlobalLock(hdib) }.cast::<u8>();
                     let bmp_res = if !ptr.is_null() && size >= 40 {
                         let slice = unsafe { std::slice::from_raw_parts(ptr, size) };
-                        dib_to_bmp(slice, dpi_x, dpi_y)
+                        dib_to_bmp(slice, patch_x, patch_y)
                     } else {
                         Err("scanner returned an empty bitmap handle".into())
                     };
@@ -821,17 +856,40 @@ unsafe fn transfer_all_pages(
                         GlobalFree(hdib);
                     }
                     match bmp_res {
-                        Ok(bmp_bytes) => pages.push(ScannedPage { bmp_bytes, dpi_x, dpi_y }),
+                        Ok(bmp_bytes) => {
+                            if !pages.is_empty() && total_bytes.saturating_add(bmp_bytes.len()) > MAX_BATCH_BYTES {
+                                let _ = unsafe { (dsm.entry)(app, ds, DG_CONTROL, DAT_PENDINGXFERS, MSG_ENDXFER, (&raw mut pending).cast()) };
+                                unsafe { reset_pending(dsm, app, ds, &mut pending) };
+                                incomplete_reason = Some(format!(
+                                    "batch reached the {} MB memory limit; remaining pages were not scanned",
+                                    MAX_BATCH_BYTES / (1024 * 1024)
+                                ));
+                                break;
+                            }
+                            let (bmp_x, bmp_y) = bmp_header_dpi(&bmp_bytes);
+                            let dpi_x = info_x.or(bmp_x).unwrap_or(fallback_dpi);
+                            let dpi_y = info_y.or(bmp_y).unwrap_or(fallback_dpi);
+                            total_bytes = total_bytes.saturating_add(bmp_bytes.len());
+                            pages.push(ScannedPage { bmp_bytes, dpi_x, dpi_y });
+                        }
                         Err(e) => {
                             let _ = unsafe { (dsm.entry)(app, ds, DG_CONTROL, DAT_PENDINGXFERS, MSG_ENDXFER, (&raw mut pending).cast()) };
                             unsafe { reset_pending(dsm, app, ds, &mut pending) };
-                            return Err(TwainError::Failed(e));
+                            if pages.is_empty() {
+                                return Err(TwainError::Failed(e));
+                            }
+                            incomplete_reason = Some(format!("page {} could not be read ({e}); only earlier pages were kept", pages.len() + 1));
+                            break;
                         }
                     }
                 }
                 let end_rc = unsafe { (dsm.entry)(app, ds, DG_CONTROL, DAT_PENDINGXFERS, MSG_ENDXFER, (&raw mut pending).cast()) };
                 if end_rc != TWRC_SUCCESS {
                     unsafe { reset_pending(dsm, app, ds, &mut pending) };
+                    if pages.is_empty() {
+                        return Err(TwainError::Failed(format!("failed to finish page transfer (rc={end_rc})")));
+                    }
+                    incomplete_reason = Some(format!("scanner failed to finish page transfer (rc={end_rc}); batch may be incomplete"));
                     break;
                 }
             }
@@ -841,6 +899,7 @@ unsafe fn transfer_all_pages(
                 if pages.is_empty() {
                     return Err(TwainError::Cancelled);
                 }
+                incomplete_reason = Some("scanning was cancelled before all pages finished".into());
                 break;
             }
             _ => {
@@ -849,17 +908,26 @@ unsafe fn transfer_all_pages(
                 if pages.is_empty() {
                     return Err(TwainError::Failed(format!("image transfer failed (rc={rc})")));
                 }
+                incomplete_reason = Some(format!("image transfer failed on page {} (rc={rc}); only earlier pages were recovered", pages.len() + 1));
                 break;
             }
         }
     }
 
-    if pages.is_empty() { Err(TwainError::Cancelled) } else { Ok(pages) }
+    if pages.is_empty() { Err(TwainError::Cancelled) } else { Ok(ScanBatch { pages, incomplete_reason }) }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_dpi_accepts_zero_and_i16_max_rejects_overflow() {
+        assert!(validate_dpi(0).is_ok());
+        assert!(validate_dpi(600).is_ok());
+        assert!(validate_dpi(i16::MAX as u16).is_ok());
+        assert!(validate_dpi(i16::MAX as u16 + 1).is_err());
+    }
 
     #[test]
     fn twain_struct_sizes_match_win64_pack2_abi() {

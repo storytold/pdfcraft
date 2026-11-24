@@ -10,11 +10,10 @@ use std::sync::{Arc, mpsc};
 
 use egui::{Align, Layout};
 use pdfcraft_engine::{DocId, ImageResolution};
-use pdfcraft_twain::{PaperSource, PixelMode, ScanRequest, ScannedPage, TwainDevice, TwainError};
+use pdfcraft_twain::{PaperSource, PixelMode, ScanBatch, ScanRequest, TwainDevice, TwainError};
 
+use crate::PdfCraftApp;
 use crate::notices::{self, ProgressKey, ProgressNotice};
-use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, widgets};
 
 const DPI_CHOICES: &[u16] = &[150, 200, 300, 400, 600, 1200];
 
@@ -63,7 +62,7 @@ pub struct TwainScanRun {
     pub target_doc: Option<DocId>,
     pub fallback_dpi: f64,
     pub cancel: Arc<AtomicBool>,
-    pub rx: mpsc::Receiver<Result<Vec<ScannedPage>, TwainError>>,
+    pub rx: mpsc::Receiver<Result<ScanBatch, TwainError>>,
 }
 
 /// Result of a background TWAIN device discovery worker.
@@ -88,18 +87,16 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if !app.twain_scan_draft.open {
         return;
     }
-    let t = theme::tokens(app.theme);
     let mut open = true;
     let mut action = (false, false, false);
     egui::Window::new(tl!("Scan from scanner"))
-        .id(egui::Id::new("twain_scan_window"))
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .fixed_size(egui::vec2(460.0, 0.0))
         .show(ui.ctx(), |ui| {
-            action = body(ui, app, &t);
+            action = body(ui, app);
         });
     let (go, cancel, refresh) = action;
     if !open || cancel || go {
@@ -113,28 +110,26 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
 }
 
-pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool, bool) {
-    let has_doc = app.active.is_some();
+pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool, bool) {
+    let can_append =
+        app.active_ids().and_then(|(_, id)| app.session.get(id)).is_some_and(|doc| doc.allows_assembly() && doc.read_only_reason.is_none());
     let scanning = app.twain_scan_run.is_some();
     let discovering = app.twain_discovery_run.is_some();
     let d = &mut app.twain_scan_draft;
-    if !has_doc && d.destination == ScanDestination::AppendCurrent {
+    if !can_append && d.destination == ScanDestination::AppendCurrent {
         d.destination = ScanDestination::NewPdf;
     }
 
-    ui.label(egui::RichText::new(tl!("Scan from scanner")).font(theme::semibold(18.0)));
+    ui.label(egui::RichText::new(tl!("Scan from scanner")).size(18.0).strong());
     ui.add_space(4.0);
-    ui.label(
-        egui::RichText::new(tl!("Scans pages through your 64-bit TWAIN scanner driver into a new PDF or the active document."))
-            .small()
-            .color(t.text_muted),
-    );
+    ui.label(egui::RichText::new(tl!("Scans pages through your 64-bit TWAIN scanner driver into a new PDF or the active document.")).small().weak());
     ui.add_space(8.0);
 
     let mut refresh = false;
+    let group_fill = ui.visuals().faint_bg_color;
     let group = |ui: &mut egui::Ui, title: &str, body: &mut dyn FnMut(&mut egui::Ui)| {
-        ui.label(egui::RichText::new(tl!(title)).font(theme::semibold(13.0)));
-        egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+        ui.label(egui::RichText::new(tl!(title)).size(13.0).strong());
+        egui::Frame::new().fill(group_fill).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             body(ui);
         });
@@ -205,13 +200,13 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             });
         });
         ui.add_space(6.0);
-        ui.add(widgets::checkbox(&mut d.show_ui, tl!("Show scanner driver dialog")));
+        ui.checkbox(&mut d.show_ui, tl!("Show scanner driver dialog"));
     });
 
     group(ui, "Destination", &mut |ui| {
-        widgets::radio_value(ui, &mut d.destination, ScanDestination::NewPdf, tl!("Create new PDF"));
-        ui.add_enabled_ui(has_doc, |ui| {
-            widgets::radio_value(ui, &mut d.destination, ScanDestination::AppendCurrent, tl!("Append to current PDF"));
+        ui.radio_value(&mut d.destination, ScanDestination::NewPdf, tl!("Create new PDF"));
+        ui.add_enabled_ui(can_append, |ui| {
+            ui.radio_value(&mut d.destination, ScanDestination::AppendCurrent, tl!("Append to current PDF"));
         });
     });
 
@@ -221,10 +216,10 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let can_scan = !scanning && !discovering && (!d.devices.is_empty() || d.discovery_error.is_none());
             let btn_label = if scanning { tl!("Scanning…") } else { tl!("Scan") };
-            if ui.add_enabled_ui(can_scan, |ui| widgets::pill_button(ui, btn_label, true)).inner.clicked() {
+            if ui.add_enabled(can_scan, egui::Button::new(btn_label)).clicked() {
                 go = true;
             }
-            if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+            if ui.button(tl!("Cancel")).clicked() {
                 cancel = true;
             }
         });
@@ -242,17 +237,15 @@ impl PdfCraftApp {
 
     /// Query installed 64-bit TWAIN scanners on a background thread.
     pub fn start_twain_discovery(&mut self) {
-        if self.twain_discovery_run.is_some() {
+        if self.twain_discovery_run.is_some() || self.twain_scan_run.is_some() {
             return;
         }
         self.twain_scan_draft.discovery_error = None;
         let (tx, rx) = mpsc::channel();
-        let ctx = self.ctx.clone();
+        let wake = self.wake.clone();
         let work = move || {
             let _ = tx.send(pdfcraft_twain::list_devices());
-            if let Some(c) = ctx {
-                c.request_repaint();
-            }
+            wake.wake();
         };
         #[cfg(not(target_arch = "wasm32"))]
         if std::thread::Builder::new().name("pdfcraft-twain-list".into()).spawn(work).is_err() {
@@ -283,12 +276,10 @@ impl PdfCraftApp {
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = cancel.clone();
         let (tx, rx) = mpsc::channel();
-        let ctx = self.ctx.clone();
+        let wake = self.wake.clone();
         let work = move || {
             let _ = tx.send(pdfcraft_twain::acquire(&req, &worker_cancel));
-            if let Some(c) = ctx {
-                c.request_repaint();
-            }
+            wake.wake();
         };
         #[cfg(not(target_arch = "wasm32"))]
         if std::thread::Builder::new().name("pdfcraft-twain-scan".into()).spawn(work).is_err() {
@@ -349,7 +340,7 @@ impl PdfCraftApp {
                 self.twain_scan_run = None;
                 notices::end_progress(self, ProgressKey::TwainScan);
                 match res {
-                    Ok(pages) => self.finish_twain_scan(ctx, pages, destination, target_doc, fallback_dpi),
+                    Ok(batch) => self.finish_twain_scan(ctx, batch, destination, target_doc, fallback_dpi),
                     Err(TwainError::Cancelled) => self.notify_tr("Scanning was stopped"),
                     Err(e) => self.notify(e.to_string()),
                 }
@@ -378,11 +369,13 @@ impl PdfCraftApp {
     fn finish_twain_scan(
         &mut self,
         ctx: &egui::Context,
-        pages: Vec<ScannedPage>,
+        batch: ScanBatch,
         destination: ScanDestination,
         target_doc: Option<DocId>,
         fallback_dpi: f64,
     ) {
+        let incomplete_reason = batch.incomplete_reason;
+        let pages = batch.pages;
         let count = pages.len();
         let dpi = pages.first().map(|p| p.dpi_x).filter(|d| d.is_finite() && (1.0..=1200.0).contains(d)).unwrap_or(fallback_dpi.clamp(1.0, 1200.0));
         let images: Vec<(String, Vec<u8>)> = pages.into_iter().enumerate().map(|(i, p)| (format!("scan-{}.bmp", i + 1), p.bmp_bytes)).collect();
@@ -391,20 +384,25 @@ impl PdfCraftApp {
             Err(e) => return self.notify(e.to_string()),
         };
 
-        let open_new = |app: &mut Self, bytes: Arc<Vec<u8>>| {
-            if let Err(e) = app.open_bytes("Scan.pdf", None, (*bytes).clone()) {
+        let open_new = |app: &mut Self, bytes: Arc<Vec<u8>>, suffix: Option<&str>| {
+            if let Err(e) = app.open_bytes(ctx, "Scan.pdf", None, (*bytes).clone()) {
                 app.notify(e);
             } else {
-                let msg = crate::i18n::trn(crate::i18n::current(), count as u64, "Scanned {n} page", "Scanned {n} pages");
+                let mut msg = crate::i18n::trn(crate::i18n::current(), count as u64, "Scanned {n} page", "Scanned {n} pages");
+                if let Some(reason) = suffix {
+                    msg = format!("{msg} ({reason})");
+                }
                 app.notify(msg);
             }
         };
 
         match destination {
-            ScanDestination::NewPdf => open_new(self, bytes),
+            ScanDestination::NewPdf => open_new(self, bytes, incomplete_reason.as_deref()),
             ScanDestination::AppendCurrent => {
-                let Some(doc_id) = target_doc.filter(|id| self.session.get(*id).is_some()) else {
-                    open_new(self, bytes);
+                let Some(doc_id) =
+                    target_doc.filter(|id| self.session.get(*id).is_some_and(|doc| doc.allows_assembly() && doc.read_only_reason.is_none()))
+                else {
+                    open_new(self, bytes, incomplete_reason.as_deref());
                     return;
                 };
                 if let Some(idx) = self.views.iter().position(|v| v.id == doc_id) {
@@ -415,14 +413,20 @@ impl PdfCraftApp {
                     ctx,
                     pdfcraft_engine::Edit::InsertPagesFrom {
                         name: "Scan.pdf".into(),
-                        bytes,
+                        bytes: bytes.clone(),
                         pages: None,
                         at,
                         field_conflicts: pdfcraft_engine::FieldConflicts::Rename,
                     },
                 ) {
-                    let msg = crate::i18n::trn(crate::i18n::current(), count as u64, "Appended {n} scanned page", "Appended {n} scanned pages");
+                    let mut msg = crate::i18n::trn(crate::i18n::current(), count as u64, "Appended {n} scanned page", "Appended {n} scanned pages");
+                    if let Some(reason) = incomplete_reason.as_deref() {
+                        msg = format!("{msg} ({reason})");
+                    }
                     self.notify(msg);
+                } else {
+                    // Keep the scanned pages by opening them as a new document if the target refused the edit.
+                    open_new(self, bytes, incomplete_reason.as_deref());
                 }
             }
         }

@@ -2,7 +2,7 @@
 
 pub mod dib;
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", target_pointer_width = "64"))]
 mod win;
 
 /// Color mode requested from the TWAIN scanner.
@@ -63,10 +63,19 @@ pub struct ScannedPage {
     pub dpi_y: f64,
 }
 
+/// Pages acquired from a TWAIN session, along with an optional incomplete-batch notice.
+#[derive(Clone, Debug)]
+pub struct ScanBatch {
+    pub pages: Vec<ScannedPage>,
+    /// Set when acquisition stopped early after one or more pages were already transferred
+    /// (for example due to a later transfer error, `MSG_ENDXFER` failure, memory cap, or cancellation).
+    pub incomplete_reason: Option<String>,
+}
+
 /// Errors produced by the TWAIN backend.
 #[derive(Debug, thiserror::Error)]
 pub enum TwainError {
-    #[error("TWAIN scanning is only available on Windows")]
+    #[error("TWAIN scanning is only available on 64-bit Windows")]
     Unsupported,
     #[error("TWAIN Data Source Manager (TWAINDSM.dll) was not found. Copy 64-bit TWAINDSM.dll next to pdfcraft.exe or into System32.")]
     DsmNotFound,
@@ -80,24 +89,27 @@ pub enum TwainError {
 
 /// List all installed 64-bit TWAIN scanner drivers on this machine.
 pub fn list_devices() -> Result<Vec<TwainDevice>, TwainError> {
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", target_pointer_width = "64"))]
     {
         win::list_devices()
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(all(target_os = "windows", target_pointer_width = "64")))]
     {
         Err(TwainError::Unsupported)
     }
 }
 
 /// Acquire one or more pages from the requested 64-bit TWAIN scanner.
+///
 /// Runs its own Win32 message loop and blocks until scanning completes or `cancel` is set.
-pub fn acquire(request: &ScanRequest, cancel: &std::sync::atomic::AtomicBool) -> Result<Vec<ScannedPage>, TwainError> {
-    #[cfg(target_os = "windows")]
+/// Cancellation is checked before enabling the source, between event-loop waits, and between pages;
+/// setting `cancel` cannot interrupt an in-flight `DAT_IMAGENATIVEXFER` call until the scanner driver returns.
+pub fn acquire(request: &ScanRequest, cancel: &std::sync::atomic::AtomicBool) -> Result<ScanBatch, TwainError> {
+    #[cfg(all(target_os = "windows", target_pointer_width = "64"))]
     {
         win::acquire(request, cancel)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(all(target_os = "windows", target_pointer_width = "64")))]
     {
         let _ = (request, cancel);
         Err(TwainError::Unsupported)

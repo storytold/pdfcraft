@@ -12,13 +12,18 @@ pub fn dib_to_bmp(dib: &[u8], dpi_x: f64, dpi_y: f64) -> Result<Vec<u8>, String>
     if header_size < 40 || header_size > dib.len() {
         return Err(format!("unsupported DIB header size ({header_size} bytes)"));
     }
+    let width = i32::from_le_bytes([dib[4], dib[5], dib[6], dib[7]]);
+    let height = i32::from_le_bytes([dib[8], dib[9], dib[10], dib[11]]);
     let bit_count = u16::from_le_bytes([dib[14], dib[15]]);
     let compression = u32::from_le_bytes([dib[16], dib[17], dib[18], dib[19]]);
     let clr_used = u32::from_le_bytes([dib[32], dib[33], dib[34], dib[35]]) as usize;
+    if width <= 0 || height == 0 || bit_count == 0 {
+        return Err("scanner returned a DIB with invalid dimensions or bit depth".into());
+    }
 
     let palette_entries = if clr_used > 0 {
         clr_used
-    } else if bit_count > 0 && bit_count <= 8 {
+    } else if bit_count <= 8 {
         1usize << (bit_count as usize)
     } else {
         0
@@ -38,6 +43,20 @@ pub fn dib_to_bmp(dib: &[u8], dpi_x: f64, dpi_y: f64) -> Result<Vec<u8>, String>
         header_size.checked_add(palette_bytes).and_then(|v| v.checked_add(masks_bytes)).ok_or_else(|| "DIB header offset overflow".to_string())?;
     if pixel_offset_in_dib > dib.len() {
         return Err("scanner returned a DIB shorter than its header and palette".into());
+    }
+    // Validate pixel buffer length for uncompressed DIBs (BI_RGB = 0, BI_BITFIELDS = 3, BI_ALPHABITFIELDS = 6).
+    if matches!(compression, 0 | 3 | 6) {
+        let bits_per_row = (width as u64).checked_mul(u64::from(bit_count)).ok_or_else(|| "DIB row stride overflow".to_string())?;
+        let stride = bits_per_row
+            .checked_add(31)
+            .and_then(|v| v.checked_div(32))
+            .and_then(|v| v.checked_mul(4))
+            .ok_or_else(|| "DIB row stride overflow".to_string())?;
+        let required_pixels = stride.checked_mul(u64::from(height.unsigned_abs())).ok_or_else(|| "DIB pixel buffer size overflow".to_string())?;
+        let available_pixels = (dib.len() - pixel_offset_in_dib) as u64;
+        if available_pixels < required_pixels {
+            return Err("scanner returned a DIB with incomplete pixel data".into());
+        }
     }
 
     let file_size =
@@ -101,5 +120,19 @@ mod tests {
     #[test]
     fn dib_to_bmp_rejects_truncated_header() {
         assert!(dib_to_bmp(&[0u8; 16], 300.0, 300.0).is_err());
+    }
+
+    #[test]
+    fn dib_to_bmp_rejects_incomplete_pixel_data() {
+        let mut dib = sample_dib_24bit(4, 2);
+        dib.truncate(41); // 40-byte header + only 1 pixel byte (needs 24)
+        assert!(dib_to_bmp(&dib, 300.0, 300.0).is_err());
+    }
+
+    #[test]
+    fn dib_to_bmp_accepts_uncompressed_dib_with_zero_size_image() {
+        let mut dib = sample_dib_24bit(4, 2);
+        dib[20..24].copy_from_slice(&0u32.to_le_bytes());
+        assert!(dib_to_bmp(&dib, 300.0, 300.0).is_ok());
     }
 }

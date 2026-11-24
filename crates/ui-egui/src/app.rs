@@ -6,7 +6,7 @@ use super::{APP_INFO, PendingDestination, PendingOpen, UPDATE_APP, open_worker, 
 use super::{
     CommentClip, DocId, DocView, PdfCraftApp, PrintDraft, PropsTab, RedactPrefs, RedactSearchDraft, Session, a11y_ui, actions_ui, canvas, chrome,
     combine_ui, comments, content_ui, dialogs, edit_text_ui, export_ui, fill_sign, i18n, measure_ui, object_ui, ocr_ui, ocr_verify, panes, persist,
-    prepare, print_paper, print_ui, rename_ui, scan_clean_ui, scroll_speed, side_panels, sign_ui, stamps_ui, ui_scale, workflows,
+    prepare, print_paper, print_ui, rename_ui, scan_clean_ui, scroll_speed, side_panels, sign_ui, stamps_ui, twain_scan_ui, ui_scale, workflows,
 };
 
 use std::hash::Hash;
@@ -624,6 +624,7 @@ impl PdfCraftApp {
             || self.js_dialog.is_some()
             || self.comment_props.is_some()
             || self.stamp_dialog.is_some()
+            || self.twain_scan_draft.open
     }
 
     /// Show `msg` as a notice.
