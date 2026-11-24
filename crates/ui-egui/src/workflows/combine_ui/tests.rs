@@ -1,26 +1,34 @@
+use std::time::{Duration, SystemTime};
+
 use super::*;
+use crate::PdfCraftApp;
 
 #[test]
 fn utc_stamp_is_utc_minutes_and_clamps_pre_epoch() {
-    use std::time::Duration;
     let at = |s: u64| utc_stamp(SystemTime::UNIX_EPOCH + Duration::from_secs(s));
     assert_eq!(at(0), "1970-01-01 00:00 UTC");
     assert_eq!(at(1_791_446_357), "2026-10-08 07:59 UTC");
     // The 400-year leap rule.
     assert_eq!(at(951_782_400), "2000-02-29 00:00 UTC");
-    // A clock before 1970 reads as the epoch, as the old `unwrap_or(0)` did.
-    assert_eq!(utc_stamp(SystemTime::UNIX_EPOCH - Duration::from_secs(5)), "1970-01-01 00:00 UTC");
-    // Past chrono's range keeps the proleptic Gregorian date the old code gave, not the epoch.
-    // Windows' SystemTime holds only up to about year 30828, so this is checked where it fits.
-    if let Some(far) = SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(10_000_000_000_000)) {
-        assert_eq!(utc_stamp(far), "318857-05-20 17:46 UTC");
-    }
-    // Windows' SystemTime can't hold u64::MAX / 2 seconds, so it is only checked where it exists.
-    if let Some(far) = SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(u64::MAX / 2)) {
-        assert_eq!(utc_stamp(far), "292277026596-12-04 15:30 UTC");
-    }
+    // Minutes, not seconds.
+    assert_eq!(at(59), at(0));
+    assert_ne!(at(60), at(0));
     // Years past 9999 keep the plain zero-padded year (no `+`).
     assert_eq!(at(253_402_300_800), "10000-01-01 00:00 UTC");
+    // A time before 1970 reads as the epoch, however far before.
+    assert_eq!(utc_stamp(SystemTime::UNIX_EPOCH - Duration::from_secs(5)), at(0));
+    if let Some(far) = SystemTime::UNIX_EPOCH.checked_sub(Duration::from_secs(u64::MAX / 2)) {
+        assert_eq!(utc_stamp(far), at(0));
+    }
+    // Past chrono's range every time gives one stamp, whatever the distance, and never panics.
+    // (Windows' SystemTime can't hold the largest, so each is checked where it exists.)
+    let far: Vec<String> = [10_000_000_000_000u64, u64::MAX / 2]
+        .into_iter()
+        .filter_map(|s| SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(s)))
+        .map(utc_stamp)
+        .collect();
+    assert!(far.windows(2).all(|w| w[0] == w[1]), "{far:?}");
+    assert!(far.iter().all(|s| s.ends_with(" UTC")), "{far:?}");
 }
 
 /// A one-page PDF that opens with "pw".
@@ -55,7 +63,7 @@ fn locked() -> Vec<u8> {
 #[test]
 fn duplicate_warnings_reuse_results_and_track_removal_and_parts() {
     let bytes = locked();
-    let mut app = PdfCraftApp::new();
+    let mut app = PdfCraftApp::for_unit_tests();
     app.stage_combine(vec![("same.pdf".into(), bytes.clone())]);
     let mut part = app.combine_draft[0].clone();
     part.id = 99;
@@ -69,9 +77,10 @@ fn duplicate_warnings_reuse_results_and_track_removal_and_parts() {
     let duplicate = app.combine_draft.last().unwrap().id;
     app.combine_apply(RowAction::RemoveFile(duplicate));
     assert_eq!(&*app.combine_tab.duplicate_warnings(&app.combine_draft), &[false, false]);
-    app.combine_history_step(true);
+    let ctx = egui::Context::default();
+    app.combine_history_step(&ctx, true);
     assert_eq!(&*app.combine_tab.duplicate_warnings(&app.combine_draft), &[true, true, true]);
-    app.close_combine_tab();
+    app.close_combine_tab(&ctx);
     assert!(app.combine_tab.duplicate_warnings(&app.combine_draft).is_empty());
 }
 
@@ -83,7 +92,7 @@ fn the_same_image_or_text_file_added_twice_is_a_duplicate() {
     let img = craft_image_codecs::Image::from_u8(12, 4, craft_image_codecs::ChannelLayout::Rgba, [20, 30, 40, 255].repeat(48)).unwrap();
     let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let warnings = |first: (&str, &[u8]), second: (&str, &[u8])| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         app.session = std::mem::take(&mut app.session).with_clock(|| NOW.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
         for (name, bytes) in [first, second] {
             app.stage_combine(vec![(name.into(), bytes.to_vec())]);
@@ -100,12 +109,12 @@ fn the_same_image_or_text_file_added_twice_is_a_duplicate() {
 fn every_read_of_a_file_is_new_even_after_undo() {
     // Regression: the read counter lived in the undo history, so unlock → undo → unlock (with
     // another password) could repeat a value and keep a thumbnail of the other read.
-    let mut app = PdfCraftApp::new();
+    let mut app = PdfCraftApp::for_unit_tests();
     app.stage_combine(vec![("secret.pdf".into(), locked())]);
     let added = app.combine_draft[0].auth;
     assert!(app.combine_unlock_rows(&[0], "pw"));
     let first = app.combine_draft[0].auth;
-    app.combine_history_step(true);
+    app.combine_history_step(&egui::Context::default(), true);
     assert_eq!(app.combine_draft[0].auth, added, "undo brings back the file as it was read");
     assert!(app.combine_unlock_rows(&[0], "owner"));
     let second = app.combine_draft[0].auth;
@@ -114,7 +123,7 @@ fn every_read_of_a_file_is_new_even_after_undo() {
 
 #[test]
 fn moves_by_rank_never_lose_or_repeat_a_file() {
-    let mut app = PdfCraftApp::new();
+    let mut app = PdfCraftApp::for_unit_tests();
     app.stage_combine((0..6).map(|i| (format!("f{i}.pdf"), locked())).collect());
     let mut ids: Vec<u64> = app.combine_draft.iter().map(|f| f.id).collect();
     for (moving, gap) in [(vec![0usize, 2, 4], 6), (vec![5], 0), (vec![1, 3], 3)] {
@@ -216,19 +225,25 @@ fn removing_pages_drops_emptied_parts_and_joins_what_meets() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn a_password_answered_after_combine_opens_behind_the_combine_tab() {
-    let mut app = PdfCraftApp::new();
-    app.open_bytes("locked.pdf", None, locked()).unwrap();
+    let mut app = PdfCraftApp::for_unit_tests();
+    app.open_bytes(&egui::Context::default(), "locked.pdf", None, locked()).unwrap();
     assert!(app.password_prompt.is_some() && app.views.is_empty());
-    app.combine_paths(&[]);
+    app.combine_paths(&egui::Context::default(), &[]);
     assert!(app.combine_showing());
-    app.submit_password(Some("pw".into()));
+    app.submit_password(&egui::Context::default(), Some("pw".into()));
     assert!(app.password_prompt.is_none());
+    // The unlocked document opens through the open queue, which the host's threads run.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while app.views.is_empty() && std::time::Instant::now() < deadline {
+        app.poll_pending_opens(&egui::Context::default());
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     assert_eq!(app.views.len(), 1, "the document is open");
     assert!(app.combine_showing(), "and the Combine files tab still shows");
 
-    let mut app = PdfCraftApp::new();
-    app.open_bytes("locked.pdf", None, locked()).unwrap();
+    let mut app = PdfCraftApp::for_unit_tests();
+    app.open_bytes(&egui::Context::default(), "locked.pdf", None, locked()).unwrap();
     app.password_prompt.as_mut().unwrap().then = Some("export.text");
-    app.combine_paths(&[]);
+    app.combine_paths(&egui::Context::default(), &[]);
     assert!(app.password_prompt.as_ref().unwrap().activate, "a tool's open keeps its focus");
 }
