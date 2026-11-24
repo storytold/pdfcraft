@@ -1,4 +1,8 @@
-use super::{BTreeSet, Ordering, SystemTime};
+use std::collections::BTreeSet;
+use std::time::SystemTime;
+
+use chrono::{DateTime, Datelike, Timelike, Utc};
+
 #[cfg(not(target_arch = "wasm32"))]
 use super::{MAX_FOLDER_DEPTH, MAX_FOLDER_FILES};
 
@@ -28,7 +32,7 @@ pub(super) fn combinable_in(dir: &std::path::Path, recursive: bool) -> (Vec<std:
             }
         }
     }
-    found.sort_by(|a, b| natural(&a.to_string_lossy(), &b.to_string_lossy()));
+    found.sort_by(|a, b| craft::docpath::names::natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
     (found, more)
 }
 
@@ -56,59 +60,6 @@ pub(super) fn title_of(name: &str) -> &str {
     match name.rsplit_once('.') {
         Some((stem, ext)) if !stem.is_empty() && combinable(ext) => stem,
         _ => name,
-    }
-}
-
-/// File names in the order people expect: case-insensitive, with numbers by value
-/// ("scan2" before "scan10").
-pub(super) fn natural(a: &str, b: &str) -> Ordering {
-    let (mut a, mut b) = (a.chars().peekable(), b.chars().peekable());
-    loop {
-        match (a.peek().copied(), b.peek().copied()) {
-            (None, None) => return Ordering::Equal,
-            (None, Some(_)) => return Ordering::Less,
-            (Some(_), None) => return Ordering::Greater,
-            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
-                let take = |it: &mut std::iter::Peekable<std::str::Chars>| {
-                    let mut digits = String::new();
-                    while let Some(c) = it.peek().copied().filter(char::is_ascii_digit) {
-                        digits.push(c);
-                        it.next();
-                    }
-                    digits.trim_start_matches('0').to_owned()
-                };
-                let (x, y) = (take(&mut a), take(&mut b));
-                // Without leading zeros, a longer run of digits is a larger number.
-                match x.len().cmp(&y.len()).then_with(|| x.cmp(&y)) {
-                    Ordering::Equal => {}
-                    other => return other,
-                }
-            }
-            (Some(x), Some(y)) => {
-                match x.to_lowercase().cmp(y.to_lowercase()) {
-                    Ordering::Equal => {}
-                    other => return other,
-                }
-                a.next();
-                b.next();
-            }
-        }
-    }
-}
-
-/// Where an arrow key goes from `at` among `n` files, `by` at a time (1 in the list; a grid
-/// row's length for Up/Down in the grid). It stays put on the first row going up and on the last
-/// row going down; a short last row is reached from the row above at its last file.
-pub(crate) fn step_to(at: usize, n: usize, by: usize, down: bool) -> usize {
-    let by = by.max(1);
-    let last = n.saturating_sub(1);
-    let at = at.min(last);
-    if down {
-        if at >= last / by * by { at } else { at.saturating_add(by).min(last) }
-    } else if at < by {
-        at
-    } else {
-        at - by
     }
 }
 
@@ -256,34 +207,12 @@ pub(crate) fn removed_pages(parts: &[Part], removing: &BTreeSet<(u64, usize)>, n
     (out != parts).then_some(out)
 }
 
-/// How long ago `time` was ("5 min ago"); a date after a week. Relative times need no time zone.
-pub(crate) fn ago(time: SystemTime) -> String {
-    let secs = SystemTime::now().duration_since(time).map(|d| d.as_secs()).unwrap_or(0);
-    let (mins, hours, days) = (secs / 60, secs / 3600, secs / 86_400);
-    match () {
-        _ if mins == 0 => tl!("just now").to_string(),
-        _ if hours == 0 => crate::i18n::fmt(tl!("{n} min ago"), &[("n", &mins.to_string())]),
-        _ if days == 0 => crate::i18n::fmt(tl!("{n} h ago"), &[("n", &hours.to_string())]),
-        _ if days == 1 => tl!("yesterday").to_string(),
-        _ if days < 7 => crate::i18n::fmt(tl!("{n} days ago"), &[("n", &days.to_string())]),
-        _ => utc_stamp(time).get(..10).unwrap_or_default().to_string(),
-    }
-}
-
-/// `time` as "2026-10-08 14:05 UTC". A clock before 1970 reads as the epoch; past chrono's year
-/// 262143 range the proleptic Gregorian date is kept via the 400-year cycle, not the epoch.
+/// `time` as "2026-10-08 14:05 UTC". A file time is hostile input (Windows counts from 1601,
+/// some filesystems hold far-future times): one before 1970 reads as the epoch, and one past
+/// chrono's range as its last moment, on every platform.
 pub(super) fn utc_stamp(time: SystemTime) -> String {
-    let secs = time.duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    let (days, rem) = (secs / 86_400, secs % 86_400);
-    let (y, m, d) = civil_from_days(days);
-    // `{y:04}` rather than `%Y`, which writes a `+` before years past 9999.
-    format!("{y:04}-{m:02}-{d:02} {:02}:{:02} UTC", rem / 3600, rem % 3600 / 60)
-}
-
-/// Days since 1970-01-01 → proleptic Gregorian (year, month, day): `pdfcraft_cos::civil_from_days`,
-/// which keeps the date past chrono's range by whole 400-year cycles. `days` is a `u64` second
-/// count over 86_400, at most about 2.1e14, so it always fits an `i64`.
-fn civil_from_days(days: u64) -> (i64, u32, u32) {
-    // The fallback is unreachable: `days` is at most `u64::MAX / 86_400`, far below `i64::MAX`.
-    pdfcraft_cos::civil_from_days(i64::try_from(days).unwrap_or(i64::MAX))
+    let secs = time.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+    let at = DateTime::<Utc>::from_timestamp(secs, 0).unwrap_or(DateTime::<Utc>::MAX_UTC);
+    // Built from parts rather than `%Y`, which writes a `+` before years past 9999.
+    format!("{:04}-{:02}-{:02} {:02}:{:02} UTC", at.year(), at.month(), at.day(), at.hour(), at.minute())
 }
