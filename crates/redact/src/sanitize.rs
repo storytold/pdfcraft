@@ -472,6 +472,13 @@ fn is_comment(subtype: &[u8]) -> bool {
 /// `/Usage /View /ViewState` is OFF. Rules that turn a layer on, or apply only when printing or
 /// exporting, leave it as the lists say.
 fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
+    hidden_layers_with_view_auto(doc, true)
+}
+
+/// The layers that are off in `/OCProperties /D`, optionally also applying `/AS` `/Event /View`
+/// rules. Printing sets `apply_view_auto = false` because printing is not the View event (any
+/// Print auto state has already been written into `/D`).
+fn hidden_layers_with_view_auto(doc: &Document, apply_view_auto: bool) -> Vec<ObjRef> {
     let Some((_, cat)) = catalog(doc) else { return Vec::new() };
     let Some(oc) = sub(doc, &cat, b"OCProperties") else { return Vec::new() };
     let Some(d) = sub(doc, &oc, b"D") else { return Vec::new() };
@@ -486,6 +493,9 @@ fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
     // group both lists name ends up off (§8.11.4.3, Table 101) — the viewer reads it the same way.
     let base_off = d.get(b"BaseState").map(|b| crate::resolve_chain(doc, b)).is_some_and(|b| b.as_name() == Some(b"OFF".as_slice()));
     let mut hidden: Vec<ObjRef> = all.iter().copied().filter(|g| off.contains(g) || (base_off && !on.contains(g))).collect();
+    if !apply_view_auto {
+        return hidden;
+    }
     // Each rule, layer list and layer is read once, however often the rules name them: many rules
     // can share one long list.
     let known: std::collections::HashSet<ObjRef> = all.iter().copied().collect();
@@ -616,9 +626,73 @@ fn config_without(doc: &mut Document, mut d: Dict, keep: &impl Fn(&Object) -> bo
     Ok(d)
 }
 
+/// Remove page and form content belonging to optional-content groups that are OFF in the
+/// default configuration (`/OCProperties /D`: `/BaseState`, `/ON`, `/OFF`), without applying
+/// `/AS` `/Event /View` and without changing `/OCProperties`.
+///
+/// Used when producing print-ready PDFs so spoolers and RIPs that ignore `/OCProperties`
+/// (such as macOS CoreGraphics / CUPS `cgpdftoraster` and `cgpdftops`, AirPrint RIPs, and
+/// Preview.app) cannot draw hidden layers. Returns how many hidden layer blocks or hidden
+/// XObject invocations were removed; returns `Ok(0)` without touching pages when the document
+/// has no `/OCProperties`.
+pub fn strip_off_layer_content(doc: &mut Document) -> Result<usize, RedactError> {
+    let Some((_, cat)) = catalog(doc) else { return Ok(0) };
+    if sub(doc, &cat, b"OCProperties").is_none() {
+        return Ok(0);
+    }
+    let off = hidden_layers_with_view_auto(doc, false);
+    let (removed, _) = content_pass_with_off(doc, false, true, off, true)?;
+    Ok(removed)
+}
+
+/// Remove page annotations whose `/OC` entry evaluates to hidden under the default
+/// optional-content configuration (`/OCProperties /D`: `/BaseState`, `/ON`, `/OFF`), without
+/// applying `/AS` `/Event /View`.
+///
+/// Used by Print as image, where annotations remain in `/Annots` for the raster renderer rather
+/// than being folded into `/OC` marked content by `pdfcraft_print::impose`.
+pub fn drop_off_layer_annotations(doc: &mut Document) {
+    let Some((_, cat)) = catalog(doc) else { return };
+    if sub(doc, &cat, b"OCProperties").is_none() {
+        return;
+    }
+    let off = hidden_layers_with_view_auto(doc, false);
+    let mut report = Report::default();
+    let mut images = pdfcraft_cos::ImageBudget::new(doc);
+    let mut scope = Scope::new(&[], Mode::Verify, &mut report, pdfcraft_cos::DecodeBudget::page(), &mut images);
+    scope.hidden_layers = off.into_iter().collect();
+    scope.layers_enabled = true;
+    for page in pdfcraft_model::pages(doc) {
+        let Some(annots) = page.dict.get(b"Annots").and_then(|a| doc.resolve(a).as_array().cloned()) else { continue };
+        let before = annots.len();
+        let kept: Vec<Object> = annots
+            .into_iter()
+            .filter(|a| {
+                let Some(d) = doc.resolve(a).as_dict().cloned() else { return true };
+                !d.get(b"OC").is_some_and(|oc| scope.layer_hidden(doc, oc))
+            })
+            .collect();
+        if kept.len() != before {
+            let _ = doc.update_dict(page.obj, |d| {
+                d.set(b"Annots".to_vec(), Object::Array(kept));
+            });
+        }
+    }
+}
+
 /// Glyphs of hidden text, or content of hidden layers, on every page (`write` = remove them).
 fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Result<(usize, std::collections::HashSet<ObjRef>), RedactError> {
     let off = if layers { hidden_layers(doc) } else { Vec::new() };
+    content_pass_with_off(doc, text, layers, off, write)
+}
+
+fn content_pass_with_off(
+    doc: &mut Document,
+    text: bool,
+    layers: bool,
+    off: Vec<ObjRef>,
+    write: bool,
+) -> Result<(usize, std::collections::HashSet<ObjRef>), RedactError> {
     if !text && !layers {
         return Ok((0, std::collections::HashSet::new()));
     }

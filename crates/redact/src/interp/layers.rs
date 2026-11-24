@@ -2,7 +2,7 @@ use super::{Dict, Document, HashSet, ObjRef, Object, Op, Scope};
 
 impl<'a> Scope<'a> {
     /// Is this optional-content reference (an OCG or OCMD) hidden?
-    fn layer_hidden(&mut self, doc: &Document, o: &Object) -> bool {
+    pub(crate) fn layer_hidden(&mut self, doc: &Document, o: &Object) -> bool {
         if !self.layers_enabled {
             return false;
         }

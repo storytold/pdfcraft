@@ -12,7 +12,7 @@ use pdfcraft_print::{Content, Raster};
 use pdfcraft_render::{PRINT_TAG, PageRenderer, RenderRequest};
 
 use crate::export::encode_png;
-use crate::{Document, guard, print_layer_states};
+use crate::{Document, guard, print_layer_states, set_default_layer_state};
 
 /// `doc`'s pages `pages` (0-based, each once, in the order given) as an image-only PDF, one
 /// page per entry, the size of the source page as displayed, drawing what `content` prints.
@@ -31,11 +31,20 @@ pub fn rasterize(doc: &Document, pages: &[usize], raster: &Raster, content: Cont
         pdfcraft_print::keep_printed(&mut cos, content);
         // The layers as the vector print sets them: as shown, then the Print event's auto state.
         let layers = print_layer_states(&cos, &doc.info.layers);
+        if let Some(printed_layers) = &layers {
+            set_default_layer_state(&mut cos, printed_layers);
+        } else if !doc.config.layers.is_empty() {
+            set_default_layer_state(&mut cos, &doc.info.layers);
+        }
+        pdfcraft_redact::sanitize::drop_off_layer_annotations(&mut cos);
         Ok((write_incremental(&cos, &SaveOptions::default()).map_err(|e| e.to_string())?, layers))
     })??;
     if let Some(layers) = layers {
         config.layers = std::sync::Arc::new(layers.iter().map(|l| (l.id.0 as i32, l.id.1 as i32, l.visible)).collect());
     }
+    // `render_page` with `PRINT_TAG` prefers `print_layers` over `layers`; clear it so this
+    // render uses the freshly resolved `config.layers`.
+    config.print_layers = None;
     let mut renderer = PageRenderer::new(std::sync::Arc::new(printed), config);
     let mut images: Vec<(String, Vec<u8>)> = Vec::with_capacity(pages.len());
     let mut used: Option<f64> = None;
