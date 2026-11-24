@@ -11,6 +11,14 @@
 //! boundaries into operators of the same kind, which paint the same glyphs at the same places: each
 //! part can then be its own marked-content sequence. Glyphs whose position can't be worked out (an
 //! unknown font, codes that can't be split reliably) stay with their text object, never with a link.
+//!
+//! A glyph a clip hides shows nowhere, so it is no link's: a clip that encloses no area hides
+//! everything; a clip rectangle, through the CTM, hides a glyph whose centre is outside it; any
+//! other clip path hides one whose centre is outside the box around it, so a glyph inside the box
+//! is taken as shown. Past [`MAX_CLIP_QUADS`] turned rectangles in one state, a rectangle counts by
+//! its box too; past [`MAX_SAVED`] nested `q`, clips are not followed, and clipping by text
+//! (render modes 4 to 7) never is. Hidden text inside a link's text is an artifact: in no element,
+//! and no interruption.
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -37,6 +45,8 @@ pub(crate) const MAX_LINK_AREAS: usize = 65_536;
 const WORD_GAP: f64 = 0.15;
 /// Saved graphics states followed; deeper `q` nesting keeps the current state.
 const MAX_SAVED: usize = 64;
+/// Clip rectangles not aligned with the axes that are followed exactly in one graphics state.
+const MAX_CLIP_QUADS: usize = 16;
 /// Characters of a `/Contents` description written from a link's text or address.
 const MAX_CONTENTS: usize = 200;
 /// Glyph-in-area tests in one document: each glyph is tested against every link area on its page.
@@ -243,12 +253,14 @@ pub(crate) struct Placed {
     /// The text-showing operators whose glyphs all read as nothing ([`blank`]): whitespace and
     /// control characters.
     pub blank: HashSet<usize>,
-    /// The text-showing operators of no link whose glyphs are all either clipped out of view, or
-    /// without text with codes that are control codes (below 32) of a one-byte font: a control
-    /// character the writer copied from its text (standard encodings have no glyph there), such
-    /// as a newline shown off the page after each label. They join a link only when they lie
-    /// inside its text ([`settle`]).
+    /// The text-showing operators of no link whose glyphs are all without text with codes that
+    /// are control codes (below 32) of a one-byte font: a control character the writer copied
+    /// from its text (standard encodings have no glyph there), such as a newline shown off the
+    /// page after each label. They join a link only when they lie inside its text ([`settle`]).
     pub quiet: HashSet<usize>,
+    /// The text-showing operators whose glyphs are all clipped out of view: shown nowhere, so no
+    /// link's. They never interrupt a link; inside a link's text they are artifacts ([`settle`]).
+    pub hidden: HashSet<usize>,
     /// The `/Contents` to write on each link, by index into the page's links.
     pub descriptions: Vec<Option<String>>,
 }
@@ -271,7 +283,7 @@ pub(crate) fn place(
     let areas: Vec<(usize, &Area)> = links.iter().enumerate().flat_map(|(i, l)| l.areas.iter().map(move |a| (i, a))).collect();
     if areas.is_empty() {
         let descriptions = links.iter().map(|l| l.description("")).collect();
-        return Some(Placed { ops, owners: HashMap::new(), blank: HashSet::new(), quiet: HashSet::new(), descriptions });
+        return Some(Placed { ops, owners: HashMap::new(), blank: HashSet::new(), quiet: HashSet::new(), hidden: HashSet::new(), descriptions });
     }
     let mut walk = Walk {
         state: State::default(),
@@ -291,7 +303,7 @@ pub(crate) fn place(
         clip: false,
     };
     let mut out = Vec::with_capacity(ops.len());
-    let (mut owners, mut blank, mut quiet) = (HashMap::new(), HashSet::new(), HashSet::new());
+    let (mut owners, mut blank, mut quiet, mut hidden) = (HashMap::new(), HashSet::new(), HashSet::new(), HashSet::new());
     for op in ops {
         match op.op.as_slice() {
             b"Tf" => {
@@ -321,6 +333,7 @@ pub(crate) fn place(
             if let Some(run) = runs.first() {
                 owners.insert(out.len(), run.owner);
                 match run.reads {
+                    _ if run.hidden => hidden.insert(out.len()),
                     Reads::Nothing => blank.insert(out.len()),
                     Reads::Unknown => quiet.insert(out.len()),
                     Reads::Text => false,
@@ -332,6 +345,7 @@ pub(crate) fn place(
         for (i, run) in runs.into_iter().enumerate() {
             owners.insert(out.len(), run.owner);
             match run.reads {
+                _ if run.hidden => hidden.insert(out.len()),
                 Reads::Nothing => blank.insert(out.len()),
                 Reads::Unknown => quiet.insert(out.len()),
                 Reads::Text => false,
@@ -341,7 +355,7 @@ pub(crate) fn place(
     }
     *allowance = walk.tests;
     let descriptions = links.iter().zip(&walk.texts).map(|(l, t)| l.description(&t.text)).collect();
-    Some(Placed { ops: out, owners, blank, quiet, descriptions })
+    Some(Placed { ops: out, owners, blank, quiet, hidden, descriptions })
 }
 
 /// Whether `font` writes vertically (WMode 1, §9.7.4.3): its glyphs advance down the page, which
@@ -387,8 +401,73 @@ struct State {
     rise: f64,
     metrics: Option<Rc<Metrics>>,
     /// The clipping path encloses no area (`0 0 0 0 re W n`): nothing drawn until it is restored
-    /// shows, so no glyph is placed. Clipping is followed only this far.
+    /// shows, so no glyph is placed.
     hidden: bool,
+    /// The clips with area that are active: a glyph whose centre is outside them shows nowhere.
+    clip: Clip,
+}
+
+/// Clips that enclose some area, as far as they are followed: a rectangle (`re`, the only
+/// subpath of its path) exactly, through the CTM; any other path by its bounding box, which holds
+/// the path, so a glyph outside the box is hidden, and one inside it is taken as shown. Each clip
+/// narrows the one before (§8.5.4), so they are kept together. In default user space.
+#[derive(Clone, Default)]
+struct Clip {
+    /// The intersection of the clips' bounding boxes, `[x0, y0, x1, y1]`; `None` until a clip
+    /// sets it. It can be empty (`x0 > x1`): then no glyph shows.
+    bounds: Option<[f64; 4]>,
+    /// Rectangles not aligned with the axes (a rotated or skewed CTM), each a parallelogram: the
+    /// first [`MAX_CLIP_QUADS`], past which a rectangle counts by its bounding box alone.
+    quads: Vec<[(f64, f64); 4]>,
+}
+
+impl Clip {
+    /// Narrows the clip to `path`'s, when `path` has points and they are all finite.
+    fn narrow(&mut self, path: &Path) {
+        let Some(b) = path.bounds.filter(|_| path.finite) else { return };
+        if let Shape::Rect(q) = path.shape
+            && !(q[0].1 == q[1].1 && q[1].0 == q[2].0 || q[0].0 == q[1].0 && q[1].1 == q[2].1)
+            && self.quads.len() < MAX_CLIP_QUADS
+        {
+            self.quads.push(q);
+        }
+        self.bounds = Some(match self.bounds {
+            None => b,
+            Some(a) => [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])],
+        });
+    }
+
+    /// Whether a glyph centred at `p` shows: inside, or on the edge of, every clip. A point that
+    /// isn't finite has no place to test, and is taken as shown.
+    fn shows(&self, (x, y): (f64, f64)) -> bool {
+        if !(x.is_finite() && y.is_finite()) {
+            return true;
+        }
+        if let Some(b) = self.bounds
+            && !(b[0] <= x && x <= b[2] && b[1] <= y && y <= b[3])
+        {
+            return false;
+        }
+        self.quads.iter().all(|q| {
+            let side = |i: usize| {
+                let (a, b) = (q[i], q[(i + 1) % 4]);
+                (b.0 - a.0) * (y - a.1) - (b.1 - a.1) * (x - a.0)
+            };
+            let sides = [side(0), side(1), side(2), side(3)];
+            // A side too large to measure (an overflow) is taken as shown.
+            sides.iter().any(|s| !s.is_finite()) || sides.iter().all(|&s| s >= 0.0) || sides.iter().all(|&s| s <= 0.0)
+        })
+    }
+}
+
+/// Whether a path is one rectangle.
+#[derive(Clone, Copy, Default)]
+enum Shape {
+    #[default]
+    Empty,
+    /// One `re` and nothing else: its corners in default user space, in order around it.
+    Rect([(f64, f64); 4]),
+    Other,
 }
 
 impl Default for State {
@@ -403,20 +482,30 @@ impl Default for State {
             rise: 0.0,
             metrics: None,
             hidden: false,
+            clip: Clip::default(),
         }
     }
 }
 
-/// The path being built, in device space, only as far as telling whether it encloses any area:
-/// for the current subpath its first point, a second point apart from it, and whether any point
-/// lies off the line through them; and whether any subpath so far does. Curves are followed by
-/// their control points, whose hull holds the curve.
-#[derive(Default)]
+/// The path being built, in device space, only as far as telling whether it encloses any area
+/// and where it can: for the current subpath its first point, a second point apart from it, and
+/// whether any point lies off the line through them; whether any subpath so far does; the box
+/// around its points; and whether it is one rectangle. Curves are followed by their control
+/// points, whose hull holds the curve.
 struct Path {
     first: Option<(f64, f64)>,
     second: Option<(f64, f64)>,
     area: bool,
     points: bool,
+    bounds: Option<[f64; 4]>,
+    finite: bool,
+    shape: Shape,
+}
+
+impl Default for Path {
+    fn default() -> Self {
+        Path { first: None, second: None, area: false, points: false, bounds: None, finite: true, shape: Shape::Empty }
+    }
 }
 
 impl Path {
@@ -427,6 +516,11 @@ impl Path {
 
     fn add(&mut self, p: (f64, f64)) {
         self.points = true;
+        self.finite &= p.0.is_finite() && p.1.is_finite();
+        self.bounds = Some(match self.bounds {
+            None => [p.0, p.1, p.0, p.1],
+            Some(b) => [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)],
+        });
         match (self.first, self.second) {
             _ if self.area => {}
             (None, _) => self.first = Some(p),
@@ -449,6 +543,8 @@ impl Path {
 /// Consecutive glyphs of one operator with one owner, and the operands that show them.
 struct Run {
     owner: Option<usize>,
+    /// The glyphs are clipped out of view: shown nowhere, so no link's.
+    hidden: bool,
     items: Vec<Object>,
     /// What its glyphs read as, together.
     reads: Reads,
@@ -459,8 +555,7 @@ struct Run {
 enum Reads {
     /// Whitespace and control characters ([`blank`]).
     Nothing,
-    /// No link's, and either no text with a control code, or clipped out of view
-    /// ([`Placed::quiet`]).
+    /// No link's, and no text with a control code ([`Placed::quiet`]).
     Unknown,
     Text,
 }
@@ -588,8 +683,12 @@ impl Walk<'_> {
             // A clip only narrows until `Q`, so once it encloses nothing it stays so. Past
             // `MAX_SAVED`, a `Q` would not restore it, so text is then taken as shown.
             b"n" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s" => {
-                if std::mem::take(&mut self.clip) && self.path.flat() && self.unsaved == 0 {
-                    self.state.hidden = true;
+                if std::mem::take(&mut self.clip) && self.unsaved == 0 {
+                    if self.path.flat() {
+                        self.state.hidden = true;
+                    } else {
+                        self.state.clip.narrow(&self.path);
+                    }
                 }
                 self.path = Path::default();
             }
@@ -616,11 +715,19 @@ impl Walk<'_> {
         .unwrap_or_default();
         // An operator whose operands don't read is skipped, as the renderer skips it: it starts
         // no subpath.
-        if !points.is_empty() && matches!(op.op.as_slice(), b"m" | b"re") {
+        if points.is_empty() {
+            return;
+        }
+        if matches!(op.op.as_slice(), b"m" | b"re") {
             self.path.start();
         }
-        for (x, y) in points {
-            self.path.add(ctm.apply(x, y));
+        let points: Vec<(f64, f64)> = points.into_iter().map(|(x, y)| ctm.apply(x, y)).collect();
+        self.path.shape = match (self.path.shape, points.as_slice()) {
+            (Shape::Empty, &[a, b, c, d]) if op.op == b"re" => Shape::Rect([a, b, c, d]),
+            _ => Shape::Other,
+        };
+        for p in points {
+            self.path.add(p);
         }
     }
 
@@ -651,17 +758,17 @@ impl Walk<'_> {
                 }
                 continue;
             };
-            for (owner, bytes, reads) in self.glyphs(string) {
+            for Glyphs { owner, hidden, bytes, reads } in self.glyphs(string) {
                 let piece = Object::String(PdfString { bytes, hex: string.hex });
                 match runs.last_mut() {
-                    Some(run) if run.owner == owner => {
+                    Some(run) if run.owner == owner && run.hidden == hidden => {
                         run.items.push(piece);
                         run.reads = run.reads.max(reads);
                     }
                     _ => {
                         let mut items = std::mem::take(&mut pending);
                         items.push(piece);
-                        runs.push(Run { owner, items, reads });
+                        runs.push(Run { owner, hidden, items, reads });
                     }
                 }
             }
@@ -669,21 +776,29 @@ impl Walk<'_> {
         if let Some(run) = runs.last_mut() {
             run.items.append(&mut pending);
         }
+        // Hidden glyphs matter only beside a link's ([`settle`]): an operator with none of a link's
+        // and visible text is split nowhere, since that text stays its own wherever it is. With
+        // only blank or quiet text visible, the hidden part is kept apart, to be an artifact.
+        if runs.len() > 1 && runs.iter().all(|r| r.owner.is_none()) && runs.iter().any(|r| !r.hidden && r.reads == Reads::Text) {
+            let items = runs.into_iter().flat_map(|r| r.items).collect();
+            runs = vec![Run { owner: None, hidden: false, items, reads: Reads::Text }];
+        }
         (!runs.is_empty()).then_some(runs)
     }
 
-    /// The glyphs of `string` grouped by owner, in order: `(owner, bytes, what they read as)`. A
-    /// string whose glyphs can't be placed is one group with no owner, read as text. Each glyph's
-    /// text goes to every link it is in.
-    fn glyphs(&mut self, string: &PdfString) -> Vec<(Option<usize>, Vec<u8>, Reads)> {
+    /// The glyphs of `string` grouped by owner and by whether they are clipped out of view, in
+    /// order. A string whose glyphs can't be placed is one group with no owner, read as text and
+    /// taken as shown, unless a clip that encloses no area hides everything. Each glyph's text
+    /// goes to every link it is in.
+    fn glyphs(&mut self, string: &PdfString) -> Vec<Glyphs> {
         let bytes = &string.bytes;
         if bytes.is_empty() {
             return Vec::new();
         }
-        // Clipped out of view: shown nowhere, so in no link's area; like text that reads as
-        // nothing, it never interrupts a link ([`settle`]).
+        // Clipped out of view: shown nowhere, so in no link's area; it never interrupts a link
+        // ([`settle`]).
         if self.state.hidden {
-            return vec![(None, bytes.clone(), Reads::Unknown)];
+            return vec![Glyphs { owner: None, hidden: true, bytes: bytes.clone(), reads: Reads::Unknown }];
         }
         let s = &self.state;
         let usable = s.metrics.as_ref().filter(|m| !m.codespaces_dropped && !m.past_allowance);
@@ -692,18 +807,19 @@ impl Walk<'_> {
             .filter(|c| c.iter().map(|&(_, len)| len).sum::<usize>() == bytes.len() && c.iter().all(|&(_, len)| len > 0));
         let (Some(m), Some(codes), false) = (usable, codes, self.lost) else {
             self.lost = true;
-            return vec![(None, bytes.clone(), Reads::Text)];
+            return vec![Glyphs { owner: None, hidden: false, bytes: bytes.clone(), reads: Reads::Text }];
         };
         let m = Rc::clone(m);
-        let mut out: Vec<(Option<usize>, Vec<u8>, Reads)> = Vec::new();
+        let mut out: Vec<Glyphs> = Vec::new();
         let mut at = 0usize;
         for (code, len) in codes {
             let s = &self.state;
             let width = m.width(code);
             let glyph = Matrix([s.size * s.scale, 0.0, 0.0, s.size, 0.0, s.rise]).then(&self.tm).then(&s.ctm);
             let centre = glyph.apply(width / 2.0, (m.ascent + m.descent) / 2.0);
+            let hidden = !s.clip.shows(centre);
             let b = self.bounds;
-            let near = b[0] <= centre.0 && centre.0 <= b[2] && b[1] <= centre.1 && centre.1 <= b[3];
+            let near = !hidden && b[0] <= centre.0 && centre.0 <= b[2] && b[1] <= centre.1 && centre.1 <= b[3];
             let (owner, inside) = if near {
                 let Some(left) = self.tests.checked_sub(self.areas.len()) else {
                     self.exhausted = true;
@@ -724,11 +840,11 @@ impl Walk<'_> {
                 _ => Reads::Text,
             };
             match out.last_mut() {
-                Some(last) if last.0 == owner => {
-                    last.1.extend_from_slice(piece);
-                    last.2 = last.2.max(reads);
+                Some(last) if last.owner == owner && last.hidden == hidden => {
+                    last.bytes.extend_from_slice(piece);
+                    last.reads = last.reads.max(reads);
                 }
-                _ => out.push((owner, piece.to_vec(), reads)),
+                _ => out.push(Glyphs { owner, hidden, bytes: piece.to_vec(), reads }),
             }
             let spacing = if m.is_space(code, len) { s.word_spacing } else { 0.0 };
             let advance = (width * s.size + s.char_spacing + spacing) * s.scale;
@@ -749,6 +865,15 @@ impl Walk<'_> {
     }
 }
 
+/// Consecutive glyphs of one string with one owner, all clipped out of view or none, and their
+/// codes.
+struct Glyphs {
+    owner: Option<usize>,
+    hidden: bool,
+    bytes: Vec<u8>,
+    reads: Reads,
+}
+
 /// The link whose smallest area holds `point` (its owner), and every link with an area holding it.
 fn links_at(areas: &[(usize, &Area)], point: (f64, f64)) -> (Option<usize>, Vec<usize>) {
     if !(point.0.is_finite() && point.1.is_finite()) {
@@ -767,18 +892,47 @@ fn links_at(areas: &[(usize, &Area)], point: (f64, f64)) -> (Option<usize>, Vec<
     (owner.map(|(link, _)| link), inside)
 }
 
-/// The marked-content sequences of the text object `(first, last)` (its `BT` and `ET`): the whole
-/// object, with no link, when none of its glyphs belongs to one. Otherwise one sequence per run of
-/// glyph-showing operators with the same owner, which together cover everything between `BT` and
-/// `ET`: an operator that shows no glyph (`() Tj`, `[-250] TJ`) is still text-showing content, and
-/// must be in a sequence too.
-pub(crate) fn sequences((first, last): (usize, usize), owners: &HashMap<usize, Option<usize>>) -> Vec<(usize, usize, Option<usize>)> {
-    if !(first..=last).any(|at| matches!(owners.get(&at), Some(Some(_)))) {
-        return vec![(first, last, None)];
+/// What holds a marked-content sequence of a text object.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Part {
+    /// The text object's own element.
+    Own,
+    /// The link's Link element.
+    Link(usize),
+    /// No element: text clipped out of view inside a link's text ([`settle`]).
+    Artifact,
+}
+
+impl Part {
+    pub(crate) fn link(self) -> Option<usize> {
+        match self {
+            Part::Link(link) => Some(link),
+            _ => None,
+        }
     }
-    let mut out: Vec<(usize, usize, Option<usize>)> = Vec::new();
+}
+
+/// The marked-content sequences of the text object `(first, last)` (its `BT` and `ET`): the whole
+/// object, its own, when none of its glyphs belongs to a link or is an artifact. Otherwise one
+/// sequence per run of glyph-showing operators with the same [`Part`], which together cover
+/// everything between `BT` and `ET`: an operator that shows no glyph (`() Tj`, `[-250] TJ`) is
+/// still text-showing content, and must be in a sequence too. `artifacts` are the operators that
+/// [`settle`] made artifacts.
+pub(crate) fn sequences(
+    (first, last): (usize, usize),
+    owners: &HashMap<usize, Option<usize>>,
+    artifacts: &HashSet<usize>,
+) -> Vec<(usize, usize, Part)> {
+    let part = |at: usize| {
+        let owner = owners.get(&at)?;
+        Some(if artifacts.contains(&at) { Part::Artifact } else { owner.map_or(Part::Own, Part::Link) })
+    };
+    if !(first..=last).any(|at| part(at).is_some_and(|p| p != Part::Own)) {
+        return vec![(first, last, Part::Own)];
+    }
+    let mut out: Vec<(usize, usize, Part)> = Vec::new();
     for at in first..=last {
-        let Some(&owner) = owners.get(&at) else { continue };
+        let Some(owner) = part(at) else { continue };
         match out.last_mut() {
             Some(run) if run.2 == owner => run.1 = at,
             _ => out.push((at, at, owner)),
@@ -805,18 +959,28 @@ fn blank(text: &str) -> bool {
 /// of a line before a link goes on, or a text object of spaces (or of no glyph at all) between two
 /// parts of one link, joins that link. Other blank text goes with the text before it (or, at the
 /// start, after it); a text object that shows no glyph stays its own unless it lies inside one
-/// link's text, and so does an operator of [`Placed::quiet`] control codes. `spans` are the
-/// page's text objects; a text object that joins a link is keyed by its `BT` in `owners`, and
-/// whatever joins a link is added to `blank`.
-pub(crate) fn settle(spans: &[(usize, usize)], owners: &mut HashMap<usize, Option<usize>>, blank: &mut HashSet<usize>, quiet: &HashSet<usize>) {
+/// link's text, and so does an operator of [`Placed::quiet`] control codes. Text clipped out of
+/// view ([`Placed::hidden`]) stays its own too, and inside one link's text is an artifact, in no
+/// element: it isn't the link's text, and doesn't interrupt it. `spans` are the page's text
+/// objects; a text object that joins a link is keyed by its `BT` in `owners`, whatever joins a
+/// link is added to `blank`, and the artifacts are returned.
+pub(crate) fn settle(
+    spans: &[(usize, usize)],
+    owners: &mut HashMap<usize, Option<usize>>,
+    blank: &mut HashSet<usize>,
+    quiet: &HashSet<usize>,
+    hidden: &HashSet<usize>,
+) -> HashSet<usize> {
+    let mut artifacts = HashSet::new();
     // Each glyph-showing operator, or a text object with none, in order: (key, owner, reads as
     // nothing, joins only a link it lies inside).
     let mut items: Vec<(usize, Option<usize>, bool, bool)> = Vec::new();
     for &(first, last) in spans {
         let before = items.len();
-        items.extend(
-            (first..=last).filter_map(|at| owners.get(&at).map(|&o| (at, o, blank.contains(&at) || quiet.contains(&at), quiet.contains(&at)))),
-        );
+        items.extend((first..=last).filter_map(|at| {
+            let only_inside = quiet.contains(&at) || hidden.contains(&at);
+            owners.get(&at).map(|&o| (at, o, only_inside || blank.contains(&at), only_inside))
+        }));
         if items.len() == before {
             items.push((first, None, true, true));
         }
@@ -838,11 +1002,19 @@ pub(crate) fn settle(spans: &[(usize, usize)], owners: &mut HashMap<usize, Optio
         let inside = before.filter(|b| b.is_some() && Some(*b) == next).flatten();
         // A whole text object, or a quiet operator, has no owner of its own to keep.
         let chosen = if only_inside { inside } else { before.or(next).unwrap_or(owner) };
-        if chosen != owner {
+        // Blank text before any text that reads joins what comes after it, and so is what comes
+        // before the blank and hidden text after it.
+        if before.is_none() && !only_inside && next.is_some() {
+            before = Some(chosen);
+        }
+        if chosen.is_some() && hidden.contains(&at) {
+            artifacts.insert(at);
+        } else if chosen != owner {
             owners.insert(at, chosen);
             blank.insert(at);
         }
     }
+    artifacts
 }
 
 /// The first link whose text something else interrupts, in the order the page shows its text:
@@ -850,12 +1022,21 @@ pub(crate) fn settle(spans: &[(usize, usize)], owners: &mut HashMap<usize, Optio
 /// text in one piece; text of a link after an interruption could stay in the Link only by being
 /// read out of order, and could keep its order only by leaving the Link. A link inside another
 /// interrupts it unless it covers the start or end of the other's text.
-pub(crate) fn interrupted(spans: &[(usize, usize)], owners: &HashMap<usize, Option<usize>>) -> Option<(usize, Option<usize>)> {
+/// An artifact interrupts nothing.
+pub(crate) fn interrupted(
+    spans: &[(usize, usize)],
+    owners: &HashMap<usize, Option<usize>>,
+    artifacts: &HashSet<usize>,
+) -> Option<(usize, Option<usize>)> {
     // Each link whose text has ended, and what came right after it.
     let mut ended: HashMap<usize, Option<usize>> = HashMap::new();
     let mut last: Option<Option<usize>> = None;
     for &span in spans {
-        for (_, _, owner) in sequences(span, owners) {
+        for (_, _, part) in sequences(span, owners, artifacts) {
+            if part == Part::Artifact {
+                continue;
+            }
+            let owner = part.link();
             if last == Some(owner) {
                 continue;
             }
@@ -1176,10 +1357,13 @@ mod tests {
         }
     }
 
-    /// Text drawn inside a clip that encloses no area shows nowhere, so it is in no link's area:
-    /// a hidden `v` a writer draws where a citation's `[5]` is shown stays in its paragraph, and
-    /// is not in the link's description; hidden text between two parts of one link doesn't
-    /// interrupt it. A clip that encloses some area, or one restored by `Q`, hides nothing.
+    /// Text drawn where a clip hides it shows nowhere, so it is in no link's area: a hidden `v` a
+    /// writer draws where a citation's `[5]` is shown stays in its paragraph, and is not in the
+    /// link's description; hidden text between two parts of one link is an artifact, neither in
+    /// the Link nor interrupting it. A clip hides a glyph when it encloses no area, when the
+    /// glyph's centre is outside a clip rectangle (through the CTM) or outside the intersection
+    /// of rectangles, or when it is outside the box around any other clip path. A clip around the
+    /// glyph, or one restored by `Q`, hides nothing.
     #[test]
     fn text_clipped_out_of_view_is_in_no_link() {
         let cite = |clip: &str| format!("q {clip} BT /F1 10 Tf 20 300 Td (v) Tj ET Q BT /F1 10 Tf 20 300 Td ([5]) Tj ET");
@@ -1191,6 +1375,18 @@ mod tests {
             "0 0 m 10 10 l 20 20 10 10 30 30 c h W f",
             "0 0 100 100 re f 0 0 0 0 re W n",
             "0 0 m 10 0 l 0 5 m 0 10 l W n",
+            // A rectangle away from the glyph, with either rule, and one ended by a paint.
+            "0 0 10 10 re W n",
+            "0 0 10 10 re W* n",
+            "0 0 10 10 re W f",
+            // A rectangle away from the glyph, then one around it: the clip is where both are.
+            "0 0 10 400 re W n 0 0 400 400 re W n",
+            // A rectangle around the glyph moved away by `cm`, and one skewed off it whose box
+            // holds it.
+            "1 0 0 1 200 0 cm 10 290 100 30 re W n 1 0 0 1 -200 0 cm",
+            "1 0 1 1 0 0 cm 0 0 10 400 re W n 1 0 -1 1 0 0 cm",
+            // A triangle whose box is away from the glyph.
+            "100 100 m 200 100 l 150 200 l h W n",
         ] {
             let mut doc = page(&cite(clip), &[&link(&over(0, 3))]);
             autotag_text(&mut doc).unwrap();
@@ -1213,7 +1409,18 @@ mod tests {
             "0 0 m 400 0 l 1 2 3 re 0 400 l W n",
         ];
         let moved = "0 0 m 400 0 l 1 0 0 1 0 400 cm 0 0 l h W n 1 0 0 1 0 -400 cm";
-        for content in around.into_iter().chain([moved]).map(cite) {
+        // A rectangle skewed by `cm` that still holds the glyph; a triangle that misses it but
+        // whose box holds it, which is taken as showing it; nested rectangles around it.
+        let skewed = "1 0 1 1 0 0 cm -300 290 50 30 re W n 1 0 -1 1 0 0 cm";
+        let triangle = "0 280 m 400 280 l 400 400 l h W n";
+        let nested = "0 0 400 400 re W n 10 290 100 30 re W* n";
+        // A rectangle turned and reflected (wound the other way) around the glyph, and a turned
+        // one too large to measure.
+        let reflected = "0.6 0.8 0.8 -0.6 0 0 cm 240 -180 30 30 re W n 0.6 0.8 0.8 -0.6 0 0 cm";
+        let big = format!("1{}", "0".repeat(160));
+        let huge = format!("0.6 0.8 -0.8 0.6 0 0 cm -{big} -{big} 2{big} 2{big} re W n 0.6 -0.8 0.8 0.6 0 0 cm");
+        let around = around.into_iter().map(str::to_string).chain([moved, skewed, triangle, nested, reflected].map(str::to_string)).chain([huge]);
+        for content in around.map(|c| cite(&c)) {
             let mut doc = page(&content, &[&link(&over(0, 3))]);
             autotag_text(&mut doc).unwrap();
             assert_eq!(described(&doc).as_deref(), Some("v [5]"), "{content}");
@@ -1229,16 +1436,55 @@ mod tests {
         let mut doc = page(after, &[&link(&over(0, 3))]);
         autotag_text(&mut doc).unwrap();
         assert_eq!(links(&doc), [(vec!["[5]".to_string()], "P".to_string())]);
-        let content = "BT /F1 10 Tf 20 300 Td (See the gu) Tj ET q 0 0 0 0 re W n BT /F1 10 Tf 300 100 Td (hidden) Tj ET Q \
-                       BT /F1 10 Tf 80 300 Td (ide here) Tj ET";
-        // Between two parts of one link it joins the link, as whitespace does, so the Link holds
-        // the link's text in one piece; it reads as before, and the description leaves it out.
-        let mut doc = page(content, &[&link(&over(8, 13))]);
-        let shown = String::from_utf8(shown(&doc)).unwrap();
+        // Between two parts of one link it is an artifact: the Link holds only the link's text,
+        // in one piece, the page shows the same, and the tree reads without it.
+        for clip in ["0 0 0 0 re W n", "0 0 10 10 re W n"] {
+            let content = format!(
+                "BT /F1 10 Tf 20 300 Td (See the gu) Tj ET q {clip} BT /F1 10 Tf 300 100 Td (hidden) Tj ET Q BT /F1 10 Tf 80 300 Td (ide here) Tj ET"
+            );
+            let mut doc = page(&content, &[&link(&over(8, 13))]);
+            let before = shown(&doc);
+            autotag_text(&mut doc).unwrap();
+            assert_eq!(links(&doc).iter().map(|l| l.0.concat()).collect::<Vec<_>>(), ["guide"], "{clip}");
+            assert_eq!(reading(&doc), "See the guide here", "{clip}");
+            assert_eq!(shown(&doc), before, "{clip}");
+            assert_eq!(described(&doc).as_deref(), Some("guide"), "{clip}");
+            passes(&doc);
+        }
+        // So it is after a text object of spaces that leads into the link.
+        let leading = "BT /F1 10 Tf 300 100 Td ( ) Tj ET q 0 0 0 0 re W n BT /F1 10 Tf 300 50 Td (x) Tj ET Q BT /F1 10 Tf 20 300 Td (See) Tj ET";
+        let mut doc = page(leading, &[&link(&over(0, 3))]);
         autotag_text(&mut doc).unwrap();
-        assert_eq!(links(&doc).iter().map(|l| l.0.concat()).collect::<Vec<_>>(), ["guhiddenide"]);
-        assert_eq!(reading(&doc), shown);
-        assert_eq!(described(&doc).as_deref(), Some("guide"));
+        assert_eq!(links(&doc).iter().map(|l| l.0.concat().trim().to_string()).collect::<Vec<_>>(), ["See"]);
+        assert!(!reading(&doc).contains('x'));
+        passes(&doc);
+        // Hidden text and a visible space in one operator between two parts of a link: the space
+        // joins the link and the hidden text is an artifact, as when they are two operators.
+        for between in ["(x ) Tj", "(x) Tj ( ) Tj"] {
+            let content = format!(
+                "BT /F1 10 Tf 20 300 Td (See the gu) Tj ET q 305 0 100 400 re W n BT /F1 10 Tf 300 100 Td {between} ET Q BT /F1 10 Tf 80 300 Td (ide here) Tj ET"
+            );
+            let mut doc = page(&content, &[&link(&over(8, 13))]);
+            autotag_text(&mut doc).unwrap();
+            assert_eq!(links(&doc).iter().map(|l| l.0.concat().replace(' ', "")).collect::<Vec<_>>(), ["guide"], "{between}");
+            passes(&doc);
+        }
+        // Blank text with nothing readable after it keeps the owners it was placed with.
+        let mut doc = page("BT /F1 10 Tf 300 100 Td ( ) Tj ET BT /F1 10 Tf 20 300 Td ( ) Tj ET", &[&link(&over(0, 1))]);
+        autotag_text(&mut doc).unwrap();
+        assert_eq!(links(&doc), [(vec![" ".to_string()], "P".to_string())]);
+        // A clip's edge splits no text-showing operator that is in no link.
+        let shows = |doc: &Document| {
+            let page = &pdfcraft_model::pages(doc)[0];
+            let content = doc.resolve(page.dict.get(b"Contents").unwrap());
+            let Object::Stream(content) = &*content else { panic!("page content") };
+            pdfcraft_content::parse(&content.decoded_strict().unwrap()).ops.iter().filter(|o| o.op == b"Tj").count()
+        };
+        let edge = "q 0 0 23 400 re W n BT /F1 10 Tf 20 300 Td (ab) Tj ET Q BT /F1 10 Tf 20 200 Td (Go) Tj ET";
+        let mut doc = page(edge, &[&link("18 196 40 212")]);
+        let before = shows(&doc);
+        autotag_text(&mut doc).unwrap();
+        assert_eq!(shows(&doc), before);
         passes(&doc);
     }
 
@@ -1265,6 +1511,18 @@ mod tests {
         let mut doc = page(split, &[&link("18 295 100 330")]);
         autotag_text(&mut doc).unwrap();
         assert_eq!(links(&doc).iter().map(|l| l.1.as_str()).collect::<Vec<_>>(), ["H1"]);
+        // A text object of spaces before a linked heading, which joins the link: the Link sits in
+        // the heading, and the heading keeps its role.
+        let leading = "BT /F1 10 Tf 300 100 Td ( ) Tj ET BT /F1 24 Tf 20 300 Td (Title) Tj ET \
+                       BT /F1 10 Tf 20 150 Td (Body text of the page, long enough to set the body size.) Tj ET";
+        let mut doc = page(leading, &[&link("18 295 100 330")]);
+        let shown = String::from_utf8(shown(&doc)).unwrap();
+        autotag_text(&mut doc).unwrap();
+        let kinds: Vec<String> = tree(&doc).into_iter().map(|t| t.0).collect();
+        assert_eq!(kinds, ["Document", "H1", "Link", "P"]);
+        assert_eq!(links(&doc).iter().map(|l| (l.0.concat(), l.1.as_str())).collect::<Vec<_>>(), [(" Title".to_string(), "H1")]);
+        assert_eq!(reading(&doc), shown);
+        passes(&doc);
         // A link over the heading alone: the heading keeps its role, and holds the link.
         let mut doc = page(content, &[&across("18 255 95 255 18 290 95 290")]);
         autotag_text(&mut doc).unwrap();
