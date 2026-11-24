@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use craft::review::AnnotationEdit;
 use craft::review::ui::{AnnotateTool, CommentsPanelState, NoteDrafts};
@@ -326,22 +326,23 @@ impl CommentView {
     }
 
     pub(crate) fn drop_hidden_selection(&mut self, annotations: &[Annotation]) -> bool {
-        if self.hidden_types.is_empty() {
+        if self.hidden_types.is_empty() || (self.tool.selected.is_empty() && self.member.is_none() && self.panel.editing.is_none()) {
             return false;
         }
-        let is_hidden = |(page, index)| {
-            annotations.iter().any(|a| a.page == page && a.index == index && !crate::comments_panel::type_visible(a, &self.hidden_types))
-        };
+        let hidden: HashSet<_> = annotations
+            .iter()
+            .filter(|annotation| !crate::comments_panel::type_visible(annotation, &self.hidden_types))
+            .map(|annotation| (annotation.page, annotation.index))
+            .collect();
         let previous = self.primary();
-        self.tool.selected.retain(|id| !is_hidden(bridge::key_of(*id)));
-        if self.member.is_some_and(|(member, group)| is_hidden(member) || Some(group) != self.primary()) {
+        self.tool.selected.retain(|id| !hidden.contains(&bridge::key_of(*id)));
+        if self.member.is_some_and(|(member, group)| hidden.contains(&member) || Some(group) != self.primary()) {
             self.member = None;
         }
-        let changed = previous != self.primary();
-        if changed {
+        if self.panel.editing.as_ref().is_some_and(|(thread, _, _)| hidden.contains(&bridge::thread_key(*thread))) {
             self.panel.editing = None;
         }
-        changed
+        previous != self.primary()
     }
 
     /// What Delete acts on: the group member clicked, while its group is still the selection,
