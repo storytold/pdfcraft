@@ -22,7 +22,8 @@ pub struct Pdf417Options {
     pub(crate) module_width: f64,
     pub(crate) row_height: f64,
     pub(crate) error_correction: u8,
-    pub(crate) dimensions: Option<(u8, u8)>,
+    pub(crate) rows: Option<u8>,
+    pub(crate) columns: Option<u8>,
     pub(crate) row_column_ratio: Option<f64>,
     pub(crate) truncated: bool,
 }
@@ -101,18 +102,7 @@ impl Pdf417Options {
         let codewords = encodeHighLevel(value, compaction, encoding, false).ok()?;
         let needed = codewords.chars().count() + 1 + (1 << (self.error_correction + 1));
 
-        let size = if let Some((rows, cols)) = self.dimensions {
-            self.size(rows, cols, needed, field)?
-        } else {
-            (MIN_COLS..=MAX_COLS)
-                .filter_map(|cols| {
-                    let rows = u8::try_from(needed.div_ceil(usize::from(cols))).ok()?.max(MIN_ROWS);
-                    self.size(rows, cols, needed, field)
-                })
-                .max_by(|a, b| {
-                    a.scale.total_cmp(&b.scale).then_with(|| b.ratio_error.total_cmp(&a.ratio_error)).then_with(|| b.capacity.cmp(&a.capacity))
-                })?
-        };
+        let size = self.choose_size(needed, field)?;
         let mut encoder = PDF417::with_compact_hint(self.truncated);
         let cols = u32::from(size.cols);
         let rows = u32::from(size.rows);
@@ -131,5 +121,27 @@ impl Pdf417Options {
             row_height: self.row_height * size.scale,
             modules,
         })
+    }
+
+    fn choose_size(self, needed: usize, field: Rect) -> Option<Size> {
+        if let Some(rows) = self.rows {
+            return self.size(rows, self.columns?, needed, field);
+        }
+        let columns = self.columns.map_or(MIN_COLS..=MAX_COLS, |cols| cols..=cols);
+        columns
+            .filter(|cols| (MIN_COLS..=MAX_COLS).contains(cols))
+            .flat_map(|cols| {
+                let col_count = usize::from(cols);
+                let min_rows = needed.div_ceil(col_count).max(usize::from(MIN_ROWS));
+                let max_rows = MAX_CODEWORDS / col_count;
+                // An explicit ratio can call for padding beyond the rows needed for the data.
+                let last_row = if self.row_column_ratio.is_some() { max_rows } else { min_rows.min(max_rows) };
+                let last_row = last_row.min(usize::from(MAX_ROWS));
+                // Once a row count no longer fits, adding rows cannot improve the scale.
+                (min_rows..=last_row).map_while(move |rows| self.size(rows as u8, cols, needed, field))
+            })
+            .max_by(|a, b| {
+                a.scale.total_cmp(&b.scale).then_with(|| b.ratio_error.total_cmp(&a.ratio_error)).then_with(|| b.capacity.cmp(&a.capacity))
+            })
     }
 }

@@ -881,12 +881,12 @@ fn parse_pdf417(n: XmlNode) -> Option<crate::barcode::Pdf417Options> {
     // ISO/IEC 15438 requires rows at least three times as high as the narrowest bar.
     let row_height = measure(n.attribute("moduleHeight").unwrap_or("5mm")).filter(|&height| height > 0.0)?.max(3.0 * module_width);
     let error_correction = n.attribute("errorCorrectionLevel").unwrap_or("2").trim().parse::<u8>().ok().filter(|&level| level <= 8)?;
-    let dimensions = match (n.attribute("dataRowCount"), n.attribute("dataColumnCount")) {
-        (None, None) => None,
-        (Some(rows), Some(cols)) => Some((rows.trim().parse().ok()?, cols.trim().parse().ok()?)),
-        _ => return None,
-    };
-    let row_column_ratio = match (dimensions, n.attribute("rowColumnRatio")) {
+    let rows = n.attribute("dataRowCount").map(|value| value.trim().parse()).transpose().ok()?;
+    let columns = n.attribute("dataColumnCount").map(|value| value.trim().parse()).transpose().ok()?;
+    if rows.is_some() && columns.is_none() {
+        return None;
+    }
+    let row_column_ratio = match (rows, n.attribute("rowColumnRatio")) {
         (None, Some(ratio)) => Some(ratio.trim().parse::<f64>().ok().filter(|&ratio| ratio.is_finite() && ratio > 0.0)?),
         _ => None,
     };
@@ -895,7 +895,7 @@ fn parse_pdf417(n: XmlNode) -> Option<crate::barcode::Pdf417Options> {
         Some("1" | "true") => true,
         _ => return None,
     };
-    Some(crate::barcode::Pdf417Options { module_width, row_height, error_correction, dimensions, row_column_ratio, truncated })
+    Some(crate::barcode::Pdf417Options { module_width, row_height, error_correction, rows, columns, row_column_ratio, truncated })
 }
 
 /// Whether a `<validate>` element makes its object one that must be filled in: `nullTest="error"`

@@ -1,4 +1,4 @@
-use super::common::{button_action, date_pattern, formatted_value};
+use super::common::{button_action, date_pattern, format_display_date};
 use super::items::{BorderShape, Item, Widget, WidgetBorder, WidgetKind};
 use super::{
     Access, Border, Ctx, Engine, Face, Field, HAlign, Layouter, MAX_BARCODE_MODULES, MAX_DATA_IMAGE, Margin, Para, Placement, Presence, Rect, Ui,
@@ -115,9 +115,15 @@ impl Layouter<'_> {
                 if value.is_empty() {
                     return Ok(());
                 }
-                let value = f.display_picture.as_deref().and_then(|picture| formatted_value(picture, &value)).unwrap_or(value);
+                let picture = f.display_picture.as_deref();
+                let formatted = picture.and_then(|picture| format_display_date(picture, &value));
+                let format_failed = picture.is_some() && formatted.is_none();
+                let value = formatted.unwrap_or(value);
                 let field_box = ui.inset(&f.ui_margin);
                 match f.pdf417 {
+                    Some(_) if format_failed => {
+                        self.warn_once("a PDF417 barcode value could not be formatted; its value is shown as text");
+                    }
                     Some(options) => {
                         let symbol = (self.barcode_modules < MAX_BARCODE_MODULES).then(|| options.encode(&value, field_box)).flatten();
                         if let Some(symbol) = symbol {
