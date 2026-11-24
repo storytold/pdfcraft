@@ -28,7 +28,7 @@ bin="$work/installed/bin"
 mv "$bin/pdfcraft" "$bin/pdfcraft-nightly"
 mv "$bin/pdfcraft-cli" "$bin/pdfcraft-nightly-cli"
 
-test ! -e "$stage/bin/.pdfcraft-nightly"
+[[ ! -e "$stage/bin/.pdfcraft-nightly" ]]
 cmp "$stage/bin/pdfcraft" "$bin/.pdfcraft-nightly/pdfcraft"
 cmp "$stage/bin/pdfcraft-cli" "$bin/pdfcraft-nightly-cli"
 expect() {

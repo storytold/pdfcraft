@@ -176,7 +176,7 @@ if has deb || has rpm; then
     if [[ -d "$NFPM_STAGE/usr/share/pdfcraft" ]]; then
       mv "$NFPM_STAGE/usr/share/pdfcraft" "$NFPM_STAGE/usr/share/$NFPM_NAME"
     fi
-    sed -e "s|^Exec=pdfcraft\([[:space:]]\|$\)|Exec=$NFPM_BIN\1|" \
+    sed -e "s#^Exec=pdfcraft\([[:space:]]\|$\)#Exec=$NFPM_BIN\1#" \
         -e "s|^TryExec=pdfcraft$|TryExec=$NFPM_BIN|" \
         -e "s|^Icon=$APP_ID$|Icon=$NIGHTLY_DESK_ID|" \
         -e "s|^Name=PdfCraft$|Name=PdfCraft Nightly|" \

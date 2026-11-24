@@ -184,6 +184,10 @@ fn socket_path() -> Option<std::path::PathBuf> {
     // own name so it never hands files to an installed copy (which keeps its settings elsewhere).
     // Never the portable folder itself: it may sit where other accounts can write (`C:\Tools`).
     let name = if pdfcraft_ui_egui::settings::portable_dir().is_some() { format!("portable-{name}") } else { name };
+    let name = match option_env!("PDFCRAFT_BUILD_CHANNEL") {
+        Some(ch) if matches!(ch.as_bytes(), b"nightly-v1") => format!("nightly-v1-{name}"),
+        _ => name,
+    };
     std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()).map(|d| std::path::PathBuf::from(d).join("PdfCraft").join(name))
 }
 
@@ -193,6 +197,10 @@ fn socket_path() -> Option<std::path::PathBuf> {
 fn socket_path() -> Option<std::path::PathBuf> {
     let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     let name = display_socket_name(var("WAYLAND_DISPLAY").or_else(|| var("DISPLAY")).as_deref());
+    let name = match option_env!("PDFCRAFT_BUILD_CHANNEL") {
+        Some(ch) if matches!(ch.as_bytes(), b"nightly-v1") => format!("nightly-v1-{name}"),
+        _ => name,
+    };
     // The XDG base directory spec makes it the user's own (mode 0700), so the folder inside it is
     // out of other accounts' reach whatever the umask.
     var("XDG_RUNTIME_DIR").map(|d| std::path::PathBuf::from(d).join("pdfcraft").join(name))
