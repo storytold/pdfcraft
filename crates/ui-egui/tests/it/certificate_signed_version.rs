@@ -60,11 +60,12 @@ fn certificate_protected(app: &PdfCraftApp, view: usize) -> bool {
 
 #[test]
 fn viewing_the_signed_version_of_a_certificate_document_opens_that_revision() {
-    let mut app = PdfCraftApp::new();
-    app.set_option("language", "en").unwrap();
+    let ctx = egui::Context::default();
+    let mut app = crate::support::inline_app();
+    app.set_option(&ctx, "language", "en").unwrap();
     app.session.add_identity(identity());
     let first = protected();
-    app.open_bytes("secret.pdf", None, first.to_vec()).unwrap();
+    app.open_bytes(&ctx, "secret.pdf", None, first.to_vec()).unwrap();
     assert_eq!(app.views.len(), 1, "the identity opens it");
     let id = app.views[0].id;
     // A second revision, appended by an incremental save.
@@ -76,14 +77,14 @@ fn viewing_the_signed_version_of_a_certificate_document_opens_that_revision() {
     // The version a signature over the first revision covers: the file as it was then.
     app.active = Some(0);
     app.view_signed_version(first.len(), 1);
-    assert_eq!(app.views.len(), 2, "{:?}", app.toast);
+    assert_eq!(app.views.len(), 2);
     assert!(certificate_protected(&app, 1), "opened from the encrypted file, not the decrypted copy");
     assert_eq!(app.session.get(app.views[1].id).unwrap().info.title, None, "as it was before the update");
 
     // Saved revision 1 opens from the file too.
     app.active = Some(0);
     app.open_revision(1);
-    assert_eq!(app.views.len(), 3, "{:?}", app.toast);
+    assert_eq!(app.views.len(), 3);
     assert!(app.views[2].snapshot.as_ref().is_some_and(|s| s.kind == SnapshotKind::Revision && s.revision == 1));
     assert!(certificate_protected(&app, 2));
     assert_eq!(app.session.get(app.views[2].id).unwrap().info.title, None);

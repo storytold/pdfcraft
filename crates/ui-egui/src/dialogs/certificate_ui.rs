@@ -4,12 +4,27 @@
 //! .pem, .der) or from the person's own digital ID files; and the prompt that opens such a
 //! document with one of those digital IDs.
 
-use egui::{Align, Color32, Layout};
+use craft::theme::variant::Tone;
+use craft::ui::buttons::Button;
+use craft::ui::choice::{Checkbox, Radio, RadioGroup};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft::ui::display::{Shade, Text};
+use craft::ui::form::Field;
+use craft::ui::layout_components::Row;
+use craft::ui::patterns::form_dialogs::FormDialog;
+use craft::ui::pickers::Select;
+use craft::ui::style::TypeRole;
+use craft::ui::text::TextField;
+use egui::Ui;
 use pdfcraft_engine::sign::{self, Certificate, DigitalId};
 use pdfcraft_engine::{Algorithm, CertificateProtection, CertificateRecipient, Changes, Edit, Printing, Protection};
 
-use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, widgets};
+use crate::PdfCraftApp;
+
+fn text(s: &str) -> String {
+    tl!(s).to_string()
+}
 
 /// One recipient in the dialog.
 #[derive(Clone, Debug, PartialEq)]
@@ -43,6 +58,19 @@ pub struct CertificateDraft {
     pub own_id: String,
     pub own_password: String,
     pub error: Option<String>,
+    /// The person's digital ID files that can be recipients: `(path, name)`, read when the dialog opens.
+    pub own_files: Vec<(String, String)>,
+    /// What the dialog asks the app to do on its next pass (a file to choose, a digital ID to open).
+    pub want: Option<Want>,
+}
+
+/// What the Encrypt with Certificate dialog asks the app for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Want {
+    /// Choose certificate files to add as recipients.
+    CertificateFile,
+    /// Open the chosen digital ID with its password and add it as a recipient.
+    AddOwn,
 }
 
 impl CertificateDraft {
@@ -133,11 +161,166 @@ fn id_label(files: &[(String, String)], path: &str) -> String {
         .unwrap_or_else(|| std::path::Path::new(path).file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned()))
 }
 
+/// Encrypt with Certificate, owned by the dialog host.
+pub(crate) struct CertificateDialog {
+    id: DialogId,
+    pub(crate) draft: CertificateDraft,
+}
+
+impl StackDialog for CertificateDialog {
+    type Result = CertificateDraft;
+
+    fn id(&self) -> DialogId {
+        self.id
+    }
+
+    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<CertificateDraft>> {
+        let problem = self.draft.problem();
+        let mut form = FormDialog::new(text("Encrypt with Certificate"), Bind::bound(&mut self.draft)).ok_label(text("Apply"));
+        if let Some(problem) = problem {
+            form = form.ok_reason(text(problem));
+        }
+        let shown = form.show(ui, |ui, _, draft| body(ui, draft));
+        match (shown.accepted, shown.closed) {
+            (Some(draft), _) => Some(DialogResult::Ok(draft)),
+            (None, Some(_)) => Some(DialogResult::Cancel),
+            (None, None) => None,
+        }
+    }
+}
+
+/// The dialog's rows; returns whether Apply can be pressed.
+fn body(ui: &mut Ui, d: &mut CertificateDraft) -> bool {
+    Text::new(text("Only the recipients can open the document, each with the private key of their own certificate.")).show(ui);
+    Text::new(text("Recipients")).role(TypeRole::Heading).show(ui);
+    if d.recipients.is_empty() {
+        Text::new(text("No recipients yet.")).shade(Shade::Muted).show(ui);
+    }
+    let mut remove = None;
+    for (i, r) in d.recipients.iter_mut().enumerate() {
+        let name = if r.mine { crate::i18n::fmt(tl!("{name} (you)"), &[("name", &r.name)]) } else { r.name.clone() };
+        Text::new(name).show(ui);
+        let mut sub: Vec<String> = [r.email.clone(), r.issuer.clone()].into_iter().filter(|s| !s.is_empty()).collect();
+        sub.push(crate::i18n::fmt(tl!("Expires {date}"), &[("date", &r.expires)]));
+        Text::new(sub.join(" · ")).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+        Row::new().show(ui, |ui, _| {
+            Checkbox::new(Bind::bound(&mut r.everything)).label(text("All permissions")).show(ui);
+            if Button::new(text("Remove")).show(ui).clicked() {
+                remove = Some(i);
+            }
+        });
+    }
+    if let Some(i) = remove {
+        d.recipients.remove(i);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if Button::new(text("Add certificate file…")).show(ui).clicked() {
+        d.want = Some(Want::CertificateFile);
+    }
+    if !d.own_files.is_empty() {
+        if d.own_id.is_empty() || !d.own_files.iter().any(|(p, _)| *p == d.own_id) {
+            d.own_id = d.own_files[0].0.clone();
+        }
+        let ids: Vec<Entry<String>> = d.own_files.iter().map(|(p, n)| Entry::new(p.clone(), n.clone())).collect();
+        let label = text("Add your digital ID");
+        Field::new(label.clone()).show(ui, |ui, _| {
+            if let Some(path) = Select::new(label.clone(), Bind::given(d.own_id.clone()), &ids).show(ui).value().cloned() {
+                d.own_id = path;
+            }
+        });
+        Row::new().show(ui, |ui, _| {
+            let typed = TextField::new(text("Password"), Bind::bound(&mut d.own_password)).masked().submits().show(ui);
+            if Button::new(text("Add")).show(ui).clicked() || typed.submitted {
+                d.want = Some(Want::AddOwn);
+            }
+        });
+    }
+    advanced_rows(ui, &mut d.protection);
+    if let Some(e) = &d.error {
+        // Known error text is translated; anything else passes through.
+        Text::new(tl!(e).to_string()).tone(Tone::Bad).show(ui);
+    }
+    if !d.recipients.is_empty() && !d.includes_me() {
+        Text::new(text("None of the recipients is one of your digital IDs: you won't be able to open the saved document.")).tone(Tone::Warn).show(ui);
+    }
+    Text::new(text("The restrictions apply to recipients without “All permissions”. It's applied when you save."))
+        .role(TypeRole::Caption)
+        .shade(Shade::Muted)
+        .show(ui);
+    d.problem().is_none()
+}
+
+/// What recipients without "All permissions" may do, the compatibility and what is encrypted.
+fn advanced_rows(ui: &mut Ui, p: &mut Protection) {
+    use Algorithm as A;
+    let algos =
+        [Entry::new(A::Aes256, text("Acrobat X and later (256-bit AES)")), Entry::new(A::Aes128, text("Acrobat 7.0 and later (128-bit AES)"))];
+    if !matches!(p.algorithm, A::Aes256 | A::Aes128) {
+        p.algorithm = A::Aes256;
+    }
+    let label = text("Compatibility");
+    Field::new(label.clone()).show(ui, |ui, _| {
+        if let Some(a) = Select::new(label.clone(), Bind::given(p.algorithm), &algos).show(ui).value().copied() {
+            p.algorithm = a;
+        }
+    });
+    let label = text("Encrypt");
+    Field::new(label.clone()).show(ui, |ui, _| {
+        RadioGroup::new(label.clone(), Bind::bound(&mut p.encrypt_metadata)).show(ui, |ui, _| {
+            Radio::new(true).label(text("All document contents")).show(ui);
+            Radio::new(false).label(text("All document contents except metadata")).show(ui);
+        });
+    });
+    let printing = [
+        Entry::new(Printing::None, text("None")),
+        Entry::new(Printing::Low, text("Low Resolution (150 dpi)")),
+        Entry::new(Printing::High, text("High Resolution")),
+    ];
+    let label = text("Printing allowed");
+    Field::new(label.clone()).show(ui, |ui, _| {
+        if let Some(v) = Select::new(label.clone(), Bind::given(p.printing), &printing).show(ui).value().copied() {
+            p.printing = v;
+        }
+    });
+    let changes = [
+        Entry::new(Changes::None, text("None")),
+        Entry::new(Changes::Pages, text("Inserting, deleting, and rotating pages")),
+        Entry::new(Changes::FillSign, text("Filling in form fields and signing existing signature fields")),
+        Entry::new(Changes::CommentFillSign, text("Commenting, filling in form fields, and signing existing signature fields")),
+        Entry::new(Changes::AnyExceptExtract, text("Any except extracting pages")),
+    ];
+    let label = text("Changes allowed");
+    Field::new(label.clone()).show(ui, |ui, _| {
+        if let Some(v) = Select::new(label.clone(), Bind::given(p.changes), &changes).show(ui).value().copied() {
+            p.changes = v;
+        }
+    });
+    Checkbox::new(Bind::bound(&mut p.copy)).label(text("Enable copying of text, images, and other content")).show(ui);
+    Checkbox::new(Bind::bound(&mut p.accessibility)).label(text("Enable text access for screen reader devices for the visually impaired")).show(ui);
+}
+
+/// The digital ID prompt's values while it is shown.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct IdChoice {
+    path: String,
+    password: String,
+    files: Vec<(String, String)>,
+    message: String,
+    error: Option<String>,
+    browse: bool,
+}
+
 impl PdfCraftApp {
-    /// Add one of the person's digital ID files as a recipient with every permission; its
-    /// identity also joins the session, so the saved document opens here.
-    pub fn add_own_recipient(&mut self) -> Result<(), String> {
-        let (path, password) = (self.certificate_draft.own_id.clone(), self.certificate_draft.own_password.clone());
+    /// Opens Encrypt with Certificate with no recipients.
+    pub(crate) fn open_certificate(&mut self) {
+        let draft = CertificateDraft { own_files: id_files(self), ..Default::default() };
+        crate::dialogs::host::open(self, CertificateDialog { id: dialog_id("protect.certificate"), draft });
+    }
+
+    /// Add the draft's chosen digital ID file as a recipient with every permission; its identity
+    /// also joins the session, so the saved document opens here.
+    pub fn add_own_recipient(&mut self, d: &mut CertificateDraft) -> Result<(), String> {
+        let (path, password) = (d.own_id.clone(), d.own_password.clone());
         if path.is_empty() {
             return Err("Choose a digital ID.".into());
         }
@@ -148,15 +331,51 @@ impl PdfCraftApp {
         let cert = id.certificate.clone();
         self.session.add_identity(id);
         self.add_digital_id(&path, &cert);
-        let d = &mut self.certificate_draft;
         d.add(Recipient::of(&cert, true));
         d.own_password.clear();
         Ok(())
     }
 
+    /// What the open dialog asked for, and its answer: Apply encrypts the document for its
+    /// recipients when it is saved.
+    pub(crate) fn certificate_pass(&mut self, ctx: &egui::Context) {
+        match self.dialogs.get_mut::<CertificateDialog>().and_then(|d| d.draft.want.take()) {
+            Some(Want::AddOwn) => {
+                if let Some(mut draft) = self.dialogs.get::<CertificateDialog>().map(|d| d.draft.clone()) {
+                    draft.error = self.add_own_recipient(&mut draft).err();
+                    if let Some(open) = self.dialogs.get_mut::<CertificateDialog>() {
+                        open.draft = draft;
+                    }
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Some(Want::CertificateFile) => {
+                let request = craft::host::PickRequest::open("protect.certificate.file").filter(tl!("Certificate"), &["cer", "crt", "pem", "der"]);
+                // The picker answers on a later pass, into the dialog if it is still open.
+                self.pick_file(request, None, |app, _, picked| {
+                    let Some(path) = picked.first_path() else { return };
+                    let Some(open) = app.dialogs.get_mut::<CertificateDialog>() else { return };
+                    match recipients_from_file(&path) {
+                        Ok(list) => {
+                            open.draft.error = None;
+                            for r in list {
+                                open.draft.add(r);
+                            }
+                        }
+                        Err(e) => open.draft.error = Some(e),
+                    }
+                });
+            }
+            _ => {}
+        }
+        if let Some(DialogResult::Ok(draft)) = self.dialogs.take::<CertificateDialog>() {
+            self.apply_certificate_draft(ctx, &draft);
+        }
+    }
+
     /// Apply the dialog: the document is encrypted for its recipients when it is saved. With
     /// no randomness for the file key nothing changes, and the notice says why.
-    pub(crate) fn apply_certificate_draft(&mut self) -> bool {
+    pub(crate) fn apply_certificate_draft(&mut self, ctx: &egui::Context, draft: &CertificateDraft) -> bool {
         let seed = match self.session.new_seed() {
             Ok(seed) => seed,
             Err(e) => {
@@ -164,310 +383,93 @@ impl PdfCraftApp {
                 return false;
             }
         };
-        let edit = self.certificate_draft.edit(seed);
-        if self.apply_edit(edit) {
-            self.certificate_draft = Default::default();
+        if self.apply_edit(ctx, draft.edit(seed)) {
             self.notify_tr("Certificate encryption will be applied when you save");
             true
         } else {
             false
         }
     }
-}
 
-/// Draw the dialog body; returns (apply, cancel).
-pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
-    let files = id_files(app);
-    let red = Color32::from_rgb(0xD1, 0x3B, 0x3B);
-    ui.label(egui::RichText::new(tl!("Encrypt with Certificate")).font(theme::semibold(18.0)));
-    ui.add_space(4.0);
-    ui.separator();
-    ui.add_space(6.0);
-    ui.add(egui::Label::new(tl!("Only the recipients can open the document, each with the private key of their own certificate.")).wrap());
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new(tl!("Recipients")).font(theme::semibold(14.0)));
-    ui.add_space(4.0);
-    let mut remove = None;
-    {
-        let d = &mut app.certificate_draft;
-        if d.recipients.is_empty() {
-            ui.label(egui::RichText::new(tl!("No recipients yet.")).color(t.text_muted));
-        } else {
-            egui::Grid::new("cert-recipients").num_columns(4).spacing([14.0, 6.0]).striped(true).show(ui, |ui| {
-                for (i, r) in d.recipients.iter_mut().enumerate() {
-                    ui.vertical(|ui| {
-                        let name = if r.mine { crate::i18n::fmt(tl!("{name} (you)"), &[("name", &r.name)]) } else { r.name.clone() };
-                        ui.label(egui::RichText::new(name).font(theme::medium(13.0)));
-                        let sub = [r.email.as_str(), r.issuer.as_str()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
-                        if !sub.is_empty() {
-                            ui.label(egui::RichText::new(sub).color(t.text_muted).font(theme::regular(11.5)));
-                        }
-                    });
-                    ui.label(
-                        egui::RichText::new(crate::i18n::fmt(tl!("Expires {date}"), &[("date", &r.expires)]))
-                            .color(t.text_muted)
-                            .font(theme::regular(11.5)),
-                    );
-                    ui.add(widgets::checkbox(&mut r.everything, tl!("All permissions")));
-                    if ui.button(tl!("Remove")).clicked() {
-                        remove = Some(i);
-                    }
-                    ui.end_row();
-                }
-            });
+    /// The prompt for a document encrypted with certificates, in place of the password dialog:
+    /// which digital ID file opens it, and its password. Called by the password pass every pass
+    /// while such a prompt waits.
+    pub(crate) fn digital_id_pass(&mut self, ui: &mut Ui) {
+        let files = id_files(self);
+        let Some(prompt) = self.password_prompt.as_mut() else { return };
+        let Some(chosen) = prompt.digital_id.as_mut() else { return };
+        if chosen.is_empty()
+            && let Some((p, _)) = files.first()
+        {
+            *chosen = p.clone();
         }
-        if let Some(i) = remove {
-            d.recipients.remove(i);
-        }
-    }
-    ui.add_space(6.0);
-    // Only the native file picker sets it.
-    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
-    let mut browse = false;
-    #[cfg(not(target_arch = "wasm32"))]
-    if ui.button(tl!("Add certificate file…")).clicked() {
-        browse = true;
-    }
-    let mut add_own = false;
-    if !files.is_empty() {
-        ui.add_space(6.0);
-        let d = &mut app.certificate_draft;
-        if d.own_id.is_empty() || !files.iter().any(|(p, _)| *p == d.own_id) {
-            d.own_id = files[0].0.clone();
-        }
-        ui.horizontal(|ui| {
-            let label = ui.label(tl!("Add your digital ID"));
-            let combo = craft_ui::ComboBox::from_id_salt("cert-own-id").width(200.0).selected_text(id_label(&files, &d.own_id)).show_ui(ui, |ui| {
-                for (p, n) in &files {
-                    ui.selectable_value(&mut d.own_id, p.clone(), n);
-                }
-            });
-            combo.response.labelled_by(label.id);
-            let r = ui
-                .add(widgets::line(&mut d.own_password).password(true).hint_text(tl!("Password")).desired_width(150.0))
-                .accessible_name(tl!("Password"));
-            if ui.button(tl!("Add")).clicked() || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
-                add_own = true;
-            }
-        });
-    }
-    if add_own {
-        app.certificate_draft.error = app.add_own_recipient().err();
-    }
-    ui.add_space(10.0);
-    ui.separator();
-    ui.add_space(6.0);
-    {
-        use pdfcraft_engine::Algorithm as A;
-        let p = &mut app.certificate_draft.protection;
-        egui::Grid::new("cert-permissions").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-            let label = ui.label(tl!("Compatibility"));
-            let algos = [(A::Aes256, tl!("Acrobat X and later (256-bit AES)")), (A::Aes128, tl!("Acrobat 7.0 and later (128-bit AES)"))];
-            if !algos.iter().any(|(a, _)| *a == p.algorithm) {
-                p.algorithm = Algorithm::Aes256;
-            }
-            let cur = algos.iter().find(|(a, _)| *a == p.algorithm).map_or(algos[0].1, |(_, l)| *l);
-            let combo = craft_ui::ComboBox::from_id_salt("cert-algo").width(300.0).selected_text(cur).show_ui(ui, |ui| {
-                for (a, l) in algos {
-                    ui.selectable_value(&mut p.algorithm, a, l);
-                }
-            });
-            combo.response.labelled_by(label.id);
-            ui.end_row();
-            ui.label(tl!("Encrypt"));
-            ui.vertical(|ui| {
-                widgets::radio_value(ui, &mut p.encrypt_metadata, true, tl!("All document contents"));
-                widgets::radio_value(ui, &mut p.encrypt_metadata, false, tl!("All document contents except metadata"));
-            });
-            ui.end_row();
-            let label = ui.label(tl!("Printing allowed"));
-            let opts = [(Printing::None, tl!("None")), (Printing::Low, tl!("Low Resolution (150 dpi)")), (Printing::High, tl!("High Resolution"))];
-            let cur = opts.iter().find(|(o, _)| *o == p.printing).map_or(tl!("High Resolution"), |(_, l)| *l);
-            let combo = craft_ui::ComboBox::from_id_salt("cert-print").width(300.0).selected_text(cur).show_ui(ui, |ui| {
-                for (o, l) in opts {
-                    ui.selectable_value(&mut p.printing, o, l);
-                }
-            });
-            combo.response.labelled_by(label.id);
-            ui.end_row();
-            let label = ui.label(tl!("Changes allowed"));
-            let opts = [
-                (Changes::None, tl!("None")),
-                (Changes::Pages, tl!("Inserting, deleting, and rotating pages")),
-                (Changes::FillSign, tl!("Filling in form fields and signing existing signature fields")),
-                (Changes::CommentFillSign, tl!("Commenting, filling in form fields, and signing existing signature fields")),
-                (Changes::AnyExceptExtract, tl!("Any except extracting pages")),
-            ];
-            let cur = opts.iter().find(|(o, _)| *o == p.changes).map_or(tl!("None"), |(_, l)| *l);
-            let combo = craft_ui::ComboBox::from_id_salt("cert-changes").width(300.0).selected_text(cur).show_ui(ui, |ui| {
-                for (o, l) in opts {
-                    ui.selectable_value(&mut p.changes, o, l);
-                }
-            });
-            combo.response.labelled_by(label.id);
-            ui.end_row();
-            ui.label("");
-            ui.vertical(|ui| {
-                ui.add(widgets::checkbox(&mut p.copy, tl!("Enable copying of text, images, and other content")));
-                ui.add(widgets::checkbox(&mut p.accessibility, tl!("Enable text access for screen reader devices for the visually impaired")));
-            });
-            ui.end_row();
-        });
-    }
-    ui.add_space(8.0);
-    let d = &app.certificate_draft;
-    if let Some(e) = &d.error {
-        // Known error text is translated; anything else passes through.
-        ui.add(egui::Label::new(egui::RichText::new(tl!(e)).color(red)).wrap());
-    }
-    if !d.recipients.is_empty() && !d.includes_me() {
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(tl!("None of the recipients is one of your digital IDs: you won't be able to open the saved document."))
-                    .color(Color32::from_rgb(0xE8, 0x8A, 0x1A)),
-            )
-            .wrap(),
+        let message = crate::i18n::fmt(
+            tl!("“{name}” is encrypted for specific people. Choose your digital ID and enter its password to open it."),
+            &[("name", &prompt.name)],
         );
-    }
-    ui.label(
-        egui::RichText::new(tl!("The restrictions apply to recipients without “All permissions”. It's applied when you save."))
-            .color(t.text_faint)
-            .font(theme::regular(11.5)),
-    );
-    ui.add_space(12.0);
-    let (mut apply, mut cancel) = (false, false);
-    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        let ok = d.problem().is_none();
-        if ui.add_enabled_ui(ok, |ui| widgets::pill_button(ui, tl!("Apply"), true)).inner.clicked() {
-            apply = true;
+        let mut choice = IdChoice {
+            path: chosen.clone(),
+            password: prompt.digital_id_password.clone(),
+            files,
+            message,
+            error: prompt.error.clone(),
+            browse: false,
+        };
+        let mut open = true;
+        let ready = !choice.path.is_empty();
+        let shown = FormDialog::new(text("Digital ID required"), Bind::bound(&mut choice))
+            .opened(Bind::bound(&mut open))
+            .ok_label(text("Open"))
+            .ok_enabled(ready)
+            .show(ui, |ui, _, c| id_body(ui, c));
+        let (accepted, closed) = (shown.accepted, shown.closed);
+        if let Some(prompt) = self.password_prompt.as_mut() {
+            prompt.digital_id = Some(choice.path.clone());
+            prompt.digital_id_password = choice.password.clone();
         }
-        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-            cancel = true;
-        }
-    });
-    // The picker answers on a later frame, into the draft if the same dialog is still open.
-    #[cfg(not(target_arch = "wasm32"))]
-    if browse {
-        let dialog = rfd::AsyncFileDialog::new().add_filter(tl!("Certificate"), &["cer", "crt", "pem", "der"]);
-        let epoch = app.dialog_epoch();
-        app.ask_one(crate::pickers::Ask::File(dialog), None, move |app, p| {
-            if app.dialog_epoch() != epoch {
-                return;
-            }
-            match recipients_from_file(&p) {
-                Ok(list) => {
-                    let d = &mut app.certificate_draft;
-                    d.error = None;
-                    for r in list {
-                        d.add(r);
-                    }
+        #[cfg(not(target_arch = "wasm32"))]
+        if choice.browse {
+            let request = craft::host::PickRequest::open("protect.digital_id").filter(tl!("Digital ID"), &["p12", "pfx"]);
+            self.pick_file(request, None, |app, _, picked| {
+                if let (Some(path), Some(chosen)) = (picked.first_path(), app.password_prompt.as_mut().and_then(|p| p.digital_id.as_mut())) {
+                    *chosen = path.to_string_lossy().into_owned();
                 }
-                Err(e) => app.certificate_draft.error = Some(e),
+            });
+        }
+        match (accepted, closed) {
+            (Some(c), _) if !c.path.is_empty() => self.submit_password(ui.ctx(), Some(c.password)),
+            (None, Some(_)) => self.submit_password(ui.ctx(), None),
+            _ => {}
+        }
+    }
+}
+
+/// The digital ID prompt's rows; returns whether Open can be pressed.
+fn id_body(ui: &mut Ui, c: &mut IdChoice) -> bool {
+    Text::new(c.message.clone()).show(ui);
+    let label = text("Digital ID");
+    let mut ids: Vec<Entry<String>> = c.files.iter().map(|(p, n)| Entry::new(p.clone(), n.clone())).collect();
+    if !c.path.is_empty() && !c.files.iter().any(|(p, _)| *p == c.path) {
+        ids.push(Entry::new(c.path.clone(), id_label(&c.files, &c.path)));
+    }
+    Field::new(label.clone()).show(ui, |ui, _| {
+        Row::new().show(ui, |ui, _| {
+            if !ids.is_empty()
+                && let Some(path) = Select::new(label.clone(), Bind::given(c.path.clone()), &ids).show(ui).value().cloned()
+            {
+                c.path = path;
             }
-        });
-    }
-    #[cfg(target_arch = "wasm32")]
-    let _ = browse;
-    (apply, cancel)
-}
-
-/// What the digital ID prompt was answered with.
-enum Answer {
-    Submit,
-    Cancel,
-}
-
-/// The prompt for a document encrypted with certificates: which digital ID file opens it, and
-/// its password.
-pub(crate) fn open_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
-    let files = id_files(app);
-    let t = Tokens::get(ctx);
-    // Only the native file picker sets it.
-    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
-    let mut browse = false;
-    let Some(prompt) = app.password_prompt.as_mut() else { return };
-    let Some(chosen) = prompt.digital_id.as_mut() else { return };
-    if chosen.is_empty()
-        && let Some((p, _)) = files.first()
-    {
-        *chosen = p.clone();
-    }
-    let message = crate::i18n::fmt(
-        tl!("“{name}” is encrypted for specific people. Choose your digital ID and enter its password to open it."),
-        &[("name", &prompt.name)],
-    );
-    let mut answer = None;
-    let modal = widgets::show_modal(ctx, "certificate-password", |ui| {
-        ui.set_width(440.0);
-        ui.horizontal(|ui| {
-            ui.add(crate::icons::image("file-lock-2", 22.0, t.accent));
-            ui.label(egui::RichText::new(tl!("Digital ID required")).font(theme::semibold(17.0)));
-        });
-        ui.add_space(6.0);
-        ui.add(egui::Label::new(message).wrap());
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            let shown = if chosen.is_empty() { tl!("Choose a digital ID file").to_string() } else { id_label(&files, chosen) };
-            // The accessible name stays the field's, not the selected file's.
-            craft_ui::ComboBox::from_id_salt("certificate-password-id")
-                .width(300.0)
-                .selected_text(shown)
-                .show_ui(ui, |ui| {
-                    for (p, n) in &files {
-                        ui.selectable_value(chosen, p.clone(), n);
-                    }
-                })
-                .response
-                .accessible_name(tl!("Digital ID"));
             #[cfg(not(target_arch = "wasm32"))]
-            if ui.button(tl!("Browse…")).clicked() {
-                browse = true;
-            }
-        });
-        ui.add_space(6.0);
-        let r = ui
-            .add(widgets::line(&mut prompt.input).password(true).hint_text(tl!("Password")).desired_width(f32::INFINITY))
-            .accessible_name(tl!("Password"));
-        if (r.has_focus() || r.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            answer = Some(Answer::Submit);
-        }
-        if !browse {
-            r.request_focus();
-        }
-        if let Some(e) = prompt.error.as_deref() {
-            ui.add_space(4.0);
-            ui.add(egui::Label::new(egui::RichText::new(tl!(e)).color(Color32::from_rgb(0xD1, 0x3B, 0x3B))).wrap());
-        }
-        ui.add_space(12.0);
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.add_enabled_ui(!chosen.is_empty(), |ui| widgets::pill_button(ui, tl!("Open"), true)).inner.clicked() {
-                answer = Some(Answer::Submit);
-            }
-            if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-                answer = Some(Answer::Cancel);
+            if Button::new(text("Browse…")).show(ui).clicked() {
+                c.browse = true;
             }
         });
     });
-    let answer = answer.or(modal.should_close().then_some(Answer::Cancel));
-    match answer {
-        Some(Answer::Submit) if prompt.digital_id.as_deref().is_some_and(|p| !p.is_empty()) => {
-            let pw = prompt.input.clone();
-            app.submit_password(Some(pw));
-        }
-        Some(Answer::Cancel) => app.submit_password(None),
-        _ => {}
+    TextField::new(text("Password"), Bind::bound(&mut c.password)).masked().show(ui);
+    if let Some(e) = &c.error {
+        Text::new(tl!(e).to_string()).tone(Tone::Bad).show(ui);
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    if browse {
-        let dialog = rfd::AsyncFileDialog::new().add_filter(tl!("Digital ID"), &["p12", "pfx"]);
-        app.ask_one(crate::pickers::Ask::File(dialog), None, move |app, p| {
-            if let Some(chosen) = app.password_prompt.as_mut().and_then(|p| p.digital_id.as_mut()) {
-                *chosen = p.to_string_lossy().into_owned();
-            }
-        });
-    }
-    #[cfg(target_arch = "wasm32")]
-    let _ = browse;
+    !c.path.is_empty()
 }
 
 #[cfg(test)]

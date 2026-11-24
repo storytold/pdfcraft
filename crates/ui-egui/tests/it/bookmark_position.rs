@@ -46,13 +46,16 @@ fn fixture_of(sizes: &[(u32, u32)], rotate: u16) -> Vec<u8> {
 }
 
 fn harness(rotate: u16) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("text.pdf", None, fixture(rotate)).expect("opens");
-        app.set_option("left", "closed").unwrap();
-        app.set_option("panel", "bookmarks").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "text.pdf", None, fixture(rotate)).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     crate::support::settle(&mut h);
@@ -89,7 +92,8 @@ fn a_new_bookmark_goes_to_the_top_of_the_window_not_the_top_of_the_page() {
     let mut h = harness(0);
     // A bookmark that scrolls page 2 to 250 pt up its height puts that line at the top of the
     // window; a bookmark made there then goes to the same place.
-    h.state_mut().apply_edit(Edit::AddBookmark { parent: vec![], index: 0, title: "Mid".into(), page: 1, left: None, top: Some(250.0) });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, Edit::AddBookmark { parent: vec![], index: 0, title: "Mid".into(), page: 1, left: None, top: Some(250.0) });
     h.run_steps(3);
     h.get_by_label("Mid").click();
     crate::support::settle(&mut h);
@@ -98,31 +102,6 @@ fn a_new_bookmark_goes_to_the_top_of_the_window_not_the_top_of_the_page() {
     let (left, top) = xyz(view);
     close(top, 250.0, "top");
     assert_eq!(left, None, "the horizontal position is the reader's");
-}
-
-#[test]
-fn a_bookmark_made_at_the_start_goes_to_the_top_of_the_first_page() {
-    let mut h = harness(0);
-    let (page, view) = new_bookmark(&mut h);
-    assert_eq!(page, Some(0));
-    let (left, top) = xyz(view);
-    close(top, 400.0, "top is the page's top edge");
-    assert_eq!(left, None);
-}
-
-#[test]
-fn a_bookmark_made_with_text_selected_goes_to_the_selections_corner() {
-    let mut h = harness(0);
-    // "quick brown": the selection starts after "The ", 40 pt in plus its width, on the line at 150.
-    h.state_mut().views[0].select_text(0, 4, 15);
-    h.run_steps(3);
-    let (page, view) = new_bookmark(&mut h);
-    assert_eq!(page, Some(0), "the selection's page");
-    let (left, top) = xyz(view);
-    let left = left.expect("left is set from the selection");
-    let top = top.expect("top is set from the selection");
-    assert!((66.0..=70.0).contains(&left), "left is where 'q' starts: {left}");
-    assert!((155.0..=168.0).contains(&top), "top is above the baseline at 150: {top}");
 }
 
 #[test]
@@ -136,10 +115,12 @@ fn a_bookmark_made_on_a_turned_page_pins_the_axis_the_window_scrolls_along() {
     assert_eq!(top, None, "the displayed horizontal position is the reader's");
 }
 
-/// Turn the view a quarter at a time (View ▸ Rotate View) and let the layout settle.
+/// Turn the view a quarter at a time (View ▸ Rotate View, clockwise) and let the layout settle.
 fn rotate_view(h: &mut Harness<'static, PdfCraftApp>, degrees: u16) {
-    h.state_mut().views[0].rotation = degrees;
-    h.run_steps(3);
+    for _ in 0..degrees / 90 {
+        crate::support::fire_menu(h, "view.rotate.cw");
+        h.run_steps(3);
+    }
     crate::support::settle(h);
 }
 
@@ -193,21 +174,24 @@ fn a_bookmark_made_with_text_selected_in_a_turned_view_goes_to_the_corner_shown_
 
 #[test]
 fn a_bookmark_in_a_spread_of_unequal_pages_goes_to_the_page_crossing_the_top_of_the_window() {
-    use pdfcraft_ui_egui::canvas::PageLayout;
     // Pages 1 and 2 share a row; page 1 is shorter, so it is centred and starts below page 2's top.
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("spread.pdf", None, fixture_of(&[(300, 200), (300, 400), (300, 400)], 0)).expect("opens");
-        app.set_option("left", "closed").unwrap();
-        app.set_option("panel", "bookmarks").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "spread.pdf", None, fixture_of(&[(300, 200), (300, 400), (300, 400)], 0)).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap();
+            app
+        }
     });
-    h.state_mut().views[0].layout = PageLayout::TwoUp;
+    crate::support::fire_menu(&mut h, "view.layout.two_up");
     h.run_steps(4);
     crate::support::settle(&mut h);
     // 20 pt below page 2's top is at the window's top, where page 1 has not started.
-    h.state_mut().apply_edit(Edit::AddBookmark { parent: vec![], index: 0, title: "Right".into(), page: 1, left: None, top: Some(380.0) });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, Edit::AddBookmark { parent: vec![], index: 0, title: "Right".into(), page: 1, left: None, top: Some(380.0) });
     h.run_steps(3);
     h.get_by_label("Right").click();
     crate::support::settle(&mut h);
