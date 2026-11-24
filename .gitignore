@@ -13,4 +13,5 @@ plan/
 /.nightly-tools
 /.nightly-input
 /craft-i18n
+__pycache__/
 .claude/
