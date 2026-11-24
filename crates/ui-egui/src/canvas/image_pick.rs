@@ -3,10 +3,19 @@
 //! other image as a lossless PNG (with its transparency). The clipboard gets the file, as when a
 //! file is copied in Finder or Explorer; Copy Image copies the pixels instead.
 
-use egui::{Color32, CornerRadius, Stroke};
+use std::sync::Arc;
+
+use craft::behavior::kurbo::BezPath;
+use craft::host::queue::{JobQueue, Priority, QueueOptions};
+use craft::host::{Jobs, Wake};
+use craft::pages::ui::PageBody;
+#[cfg(not(target_arch = "wasm32"))]
+use craft::platform::clipboard::Flavor;
+use craft::ui::canvas_controls::SelectionOutline;
+use craft::ui::contract::Show as _;
 
 use crate::PdfCraftApp;
-use crate::canvas::{DocView, PageXform};
+use crate::canvas::{PageGeometry, PageSession, PageXform};
 use pdfcraft_render::DocInfo;
 
 /// The selected picture: page, index in `page_images` and its box in user space, and the
@@ -19,130 +28,112 @@ pub struct PickedImage {
     pub generation: u64,
 }
 
-const BLUE: Color32 = Color32::from_rgb(0x3A, 0x7B, 0xF0);
-
-/// A click on page `page` (Select tool, not taken by anything else) selects the picture under
-/// it, even with text drawn over it (scans with an OCR layer, captions), with `pick` (a press
-/// nobody holds: a link's click follows the link only); dragging or a double click still selects
-/// text, and clears the picture.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn page_input(
-    resp: &egui::Response,
-    xf: &PageXform,
-    page: usize,
-    info: &DocInfo,
+/// The picture a click asked for ([`PageSession::pending_pick`]), once the page's pictures are known: the window stays live
+/// until then. A click made before an edit asks for nothing.
+pub(crate) fn resolve_pending(
+    session: &mut PageSession,
+    geo: PageGeometry<'_>,
     doc: &pdfcraft_engine::Document,
-    ptr: &crate::page_pointer::PagePointer,
-    pick: bool,
-    view: &mut DocView,
+    info: &DocInfo,
+    jobs: &Arc<dyn Jobs>,
+    wake: &Wake,
 ) {
-    let Some(info_page) = info.pages.get(page) else { return };
+    let Some((page, at, clicked_in)) = session.pending_pick else { return };
     let generation = doc.edit_generation();
-    if let Some(p) = ptr.pos.filter(|p| xf.rect.contains(*p)) {
-        if ptr.drag_started || resp.double_clicked() || resp.triple_clicked() {
-            view.picked_image = None;
-            view.pending_pick = None;
-            return;
-        }
-        if resp.clicked() {
-            // A link's click picks nothing, and takes back an earlier click still being looked into.
-            view.pending_pick = None;
-            if pick {
-                let (vx, vy) = xf.screen_to_view(p);
-                let u = info_page.view_to_user(vx, vy);
-                view.picked_image = None;
-                view.pending_pick = Some((page, [f64::from(u[0]), f64::from(u[1])], generation));
-            }
-        }
-    }
-    // The click's picture, as soon as the page's pictures are known: the window stays live until then.
-    let Some((_, at, clicked_in)) = view.pending_pick.filter(|pending| pending.0 == page) else { return };
     if clicked_in != generation {
-        view.pending_pick = None;
-    } else if let Some(pictures) = view.pictures.get(&resp.ctx, doc, page) {
+        session.pending_pick = None;
+        return;
+    }
+    // A page not drawn keeps the click waiting.
+    let Some(xf) = session.page_xform(page, geo) else { return };
+    let answer = session.pictures.get(jobs, wake, doc, page).map(|pictures| {
         // Where the click was on the page now: the view may have moved while the page was read.
         let point = xf.user_rect_f64(info, page, [at[0], at[1], at[0], at[1]]).center();
-        view.picked_image = pdfcraft_engine::picture_at(pictures, at).and_then(|(index, i)| {
-            let screen_rect = crate::canvas::image_screen_rect(i, xf, info, page);
+        pdfcraft_engine::picture_at(pictures, at).and_then(|(index, i)| {
+            let screen_rect = crate::canvas::image_screen_rect(i, &xf, info, page);
             (screen_rect.is_positive() && screen_rect.contains(point)).then(|| PickedImage {
                 page,
                 index: *index,
                 rect: crate::canvas::image_selectable_bounds(i),
                 generation,
             })
-        });
-        view.pending_pick = None;
+        })
+    });
+    let Some(picked) = answer else { return };
+    if picked.is_some() {
+        session.text.selection = None;
     }
+    session.picked_image = picked;
+    session.pending_pick = None;
 }
 
 /// Page and document generation.
 type PictureKey = (usize, u64);
 
-/// The pictures of the page last asked about, found on their own thread: the search reads every
-/// drawing operator on the page, seconds on a dense one. A small file answers on the spot, so its
-/// menu and selection don't flicker. The web build has no threads, so there every search runs on
-/// the spot, as before.
+/// The pictures of the page last asked about, found on a job queue: the search reads every drawing operator on the
+/// page, seconds on a dense one. A small file answers on the spot, so its menu and selection don't flicker. On the web
+/// the queue has no lanes and each pass runs one search inline, so a dense page never holds a whole frame.
 ///
-/// One search at a time: a page left while it is read is read to the end before the next one
-/// starts (the read can't be stopped part-way).
+/// One search at a time: a page left while it is read is dropped, and cancelled if it is running.
 #[derive(Default)]
 pub(crate) struct PagePictures {
+    /// Made on the first search, on the host's jobs.
+    queue: Option<JobQueue<PictureKey, Vec<pdfcraft_engine::PagePicture>>>,
     /// The pictures of the key's page.
     ready: Option<(PictureKey, Vec<pdfcraft_engine::PagePicture>)>,
-    /// The search under way. One at a time: each is a full read of a page.
-    job: Option<(PictureKey, std::sync::mpsc::Receiver<Vec<pdfcraft_engine::PagePicture>>)>,
 }
 
 impl PagePictures {
     /// A file smaller than this has its pictures read on the spot.
     const SMALL_FILE: usize = 8 * 1024 * 1024;
 
-    /// The pictures on `page`, or `None` while they are being found (a repaint follows the answer).
-    pub(crate) fn get(&mut self, ctx: &egui::Context, doc: &pdfcraft_engine::Document, page: usize) -> Option<&[pdfcraft_engine::PagePicture]> {
+    /// The pictures on `page`, or `None` while they are being found (the queue's `wake` repaints on the answer).
+    // PLAN: the decisions give `get(ctx, host, wake, doc, page)`; the queue needs the host's jobs and the wake only.
+    pub(crate) fn get(
+        &mut self,
+        jobs: &Arc<dyn Jobs>,
+        wake: &Wake,
+        doc: &pdfcraft_engine::Document,
+        page: usize,
+    ) -> Option<&[pdfcraft_engine::PagePicture]> {
         let key = (page, doc.edit_generation());
         self.poll();
-        if self.job.is_none() && !self.ready.as_ref().is_some_and(|(k, _)| *k == key) {
+        let known = self.ready.as_ref().is_some_and(|(k, _)| *k == key);
+        let searching = self.queue.as_ref().is_some_and(|q| q.contains(&key));
+        if !known && !searching {
             match doc.page_pictures_job(page) {
                 Some(work) if doc.bytes.len() < Self::SMALL_FILE => self.ready = Some((key, work())),
-                Some(work) => self.start(ctx, key, work),
+                Some(work) => self.start(jobs, wake, key, work),
                 None => self.ready = Some((key, Vec::new())),
             }
-            self.poll();
         }
+        self.poll();
         self.ready.as_ref().filter(|(k, _)| *k == key).map(|(_, pictures)| pictures.as_slice())
     }
 
-    fn start(&mut self, ctx: &egui::Context, key: PictureKey, work: impl FnOnce() -> Vec<pdfcraft_engine::PagePicture> + Send + 'static) {
-        let (send, answer) = std::sync::mpsc::channel();
-        let ctx = ctx.clone();
-        let run = move || {
-            let _ = send.send(work());
-            ctx.request_repaint();
-        };
-        self.job = Some((key, answer));
-        #[cfg(target_arch = "wasm32")]
-        run();
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Err(e) = std::thread::Builder::new().name("page-pictures".into()).spawn(run) {
-            log::warn!("page pictures thread: {e}");
-            self.job = None;
-            self.ready = Some((key, Vec::new()));
-        }
+    fn start(
+        &mut self,
+        jobs: &Arc<dyn Jobs>,
+        wake: &Wake,
+        key: PictureKey,
+        work: impl FnOnce() -> Vec<pdfcraft_engine::PagePicture> + Send + 'static,
+    ) {
+        let queue = self.queue.get_or_insert_with(|| {
+            // One search at a time: each is a full read of a page. The web has no lanes; `poll` runs the job.
+            let options = QueueOptions { lanes: if cfg!(target_arch = "wasm32") { 0 } else { 1 }, name: "page-pictures", ..QueueOptions::default() };
+            JobQueue::new(Arc::clone(jobs), wake.clone(), options)
+        });
+        queue.reprioritize(|k, priority| (*k == key).then_some(priority));
+        queue.submit(key, Priority::VISIBLE, move |_| work());
     }
 
-    /// Take the answer if it has come.
+    /// Take the answers that have come; on the web, first run one waiting search.
     fn poll(&mut self) {
-        use std::sync::mpsc::TryRecvError;
-        let Some((key, answer)) = &self.job else { return };
-        let got = match answer.try_recv() {
-            Ok(pictures) => Some(pictures),
-            Err(TryRecvError::Empty) => None,
-            // The search failed: this page offers no pictures.
-            Err(TryRecvError::Disconnected) => Some(Vec::new()),
-        };
-        if let Some(pictures) = got {
-            self.ready = Some((*key, pictures));
-            self.job = None;
+        let Some(queue) = &self.queue else { return };
+        #[cfg(target_arch = "wasm32")]
+        queue.run_inline(1);
+        while let Some(done) = queue.try_recv() {
+            self.ready = Some((done.key, done.result));
         }
     }
 }
@@ -150,62 +141,11 @@ impl PagePictures {
 #[cfg(test)]
 mod picture_tests {
     use super::*;
-
-    /// A search that takes its time doesn't hold the window: starting and polling it return before
-    /// the search is let go, and the answer is picked up when it comes.
-    #[test]
-    #[cfg(not(target_arch = "wasm32"))]
-    fn a_slow_page_does_not_hold_up_the_window() {
-        let (release, wait) = std::sync::mpsc::channel::<()>();
-        // Lets the search go in the end, should it run on this thread or be waited for.
-        let late = release.clone();
-        let let_go = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let watchdog = let_go.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            watchdog.store(true, std::sync::atomic::Ordering::SeqCst);
-            let _ = late.send(());
-        });
-        let mut pictures = PagePictures::default();
-        let caller = std::thread::current().id();
-        let (ran_on, ran) = std::sync::mpsc::channel();
-        pictures.start(&egui::Context::default(), (3, 1), move || {
-            let _ = ran_on.send(std::thread::current().id());
-            let _ = wait.recv();
-            Vec::new()
-        });
-        pictures.poll();
-        assert!(!let_go.load(std::sync::atomic::Ordering::SeqCst), "starting and polling the search must not wait for it");
-        // A search that never ran (its thread couldn't start) fails the test rather than hanging it.
-        let ran_on = ran.recv_timeout(std::time::Duration::from_secs(10)).expect("the search ran");
-        assert_ne!(ran_on, caller, "the search must not run on the calling thread");
-        let _ = release.send(());
-        for _ in 0..500 {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            pictures.poll();
-            if pictures.ready.is_some() {
-                break;
-            }
-        }
-        assert_eq!(pictures.ready, Some(((3, 1), Vec::new())));
-    }
-
-    /// Escape takes back a click whose picture isn't known yet: it isn't selected when it is.
-    #[test]
-    fn escape_cancels_a_click_on_a_page_still_being_read() {
-        let mut app = PdfCraftApp::new();
-        app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
-        let (i, _) = app.active_ids().unwrap();
-        app.views[i].pending_pick = Some((0, [1.0, 1.0], 0));
-        let escape = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() };
-        egui::Context::default()
-            .run_ui(egui::RawInput { events: vec![escape], ..Default::default() }, |ui| app.image_pick_keys(i, ui.ctx()))
-            .drop_without_applying_deltas();
-        assert_eq!(app.views[i].pending_pick, None);
-    }
+    use craft::host::{AppInfo, Host, ManualJobs};
+    use egui_kittest::Harness;
 
     /// A page (200 × 300) with a square comment over 20..80 × 20..80 and a link over 120..180 ×
-    /// 220..280.
+    /// 220..280, in a file past `SMALL_FILE`, so its pictures are found on the job queue.
     fn page_with_a_comment_and_a_link() -> Vec<u8> {
         let objs = [
             "<< /Type /Catalog /Pages 2 0 R >>",
@@ -214,7 +154,9 @@ mod picture_tests {
             "<< /Type /Annot /Subtype /Square /Rect [20 20 80 80] /C [1 0 0] /Border [0 0 2] >>",
             "<< /Type /Annot /Subtype /Link /Rect [120 220 180 280] /Border [0 0 0] /A << /S /URI /URI (https://example.org/) >> >>",
         ];
-        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut out = b"%PDF-1.7\n%".to_vec();
+        out.extend(std::iter::repeat_n(b'x', PagePictures::SMALL_FILE));
+        out.push(b'\n');
         let mut offsets = Vec::new();
         for (i, o) in objs.iter().enumerate() {
             offsets.push(out.len());
@@ -229,42 +171,44 @@ mod picture_tests {
         out
     }
 
-    /// The page open with the Select tool, once it is on screen, and where a point on it is.
-    fn open_page() -> (egui_kittest::Harness<'static, PdfCraftApp>, impl Fn(f32, f32) -> egui::Pos2) {
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-            let mut app = PdfCraftApp::new();
-            app.open_bytes("marks.pdf", None, page_with_a_comment_and_a_link()).unwrap();
-            app
+    /// The page open with the Select tool on an app whose jobs wait in `jobs`, once it is on screen, and where a point
+    /// on it is. The jobs are run only while the page settles.
+    fn open_page(ctx: &egui::Context) -> (Harness<'static, PdfCraftApp>, Arc<ManualJobs>, impl Fn(f32, f32) -> egui::Pos2) {
+        let jobs = Arc::new(ManualJobs::new());
+        let host_jobs = jobs.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            {
+                let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).jobs(host_jobs).build();
+                let services = crate::AppServices::new(
+                    Wake::none(),
+                    craft::platform::clipboard::Clipboard::new(craft::platform::clipboard::SystemClipboard::new()),
+                    None,
+                    None,
+                    craft::platform::open::FileIntake::new(Wake::none()).0,
+                    craft::platform::watch::FileWatch::new(Wake::none()).inline(),
+                );
+                let mut app = PdfCraftApp::with_host(Arc::new(host), services);
+                app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+                app.open_bytes(ctx, "marks.pdf", None, page_with_a_comment_and_a_link()).unwrap();
+                app
+            }
         });
         let mut on_screen = None;
         for _ in 0..600 {
+            jobs.run_all();
             h.run_steps(2);
             on_screen = h.state().views[0].page_screen_rect(0);
             if on_screen.is_some() {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(5));
         }
         let r = on_screen.expect("the page is on screen");
         let k = r.width() / 200.0;
-        (h, move |x, y| r.min + egui::vec2(x * k, (300.0 - y) * k))
+        (h, jobs, move |x, y| r.min + egui::vec2(x * k, (300.0 - y) * k))
     }
 
-    /// An earlier click on the page whose pictures are still being found, as on a dense drawing:
-    /// they don't come while the returned sender lives.
-    fn click_still_being_looked_into(
-        h: &mut egui_kittest::Harness<'static, PdfCraftApp>,
-    ) -> std::sync::mpsc::Sender<Vec<pdfcraft_engine::PagePicture>> {
-        let id = h.state().views[0].id;
-        let generation = h.state().session.get(id).expect("the document").edit_generation();
-        let (send, answer) = std::sync::mpsc::channel();
-        let view = &mut h.state_mut().views[0];
-        view.pictures = PagePictures { ready: None, job: Some(((0, generation), answer)) };
-        view.pending_pick = Some((0, [150.0, 150.0], generation));
-        send
-    }
-
-    fn click(h: &mut egui_kittest::Harness<'static, PdfCraftApp>, p: egui::Pos2) {
+    fn click(h: &mut Harness<'static, PdfCraftApp>, p: egui::Pos2) {
         h.hover_at(p);
         h.run_steps(1);
         h.drag_at(p);
@@ -273,61 +217,113 @@ mod picture_tests {
         h.run_steps(4);
     }
 
+    /// A click on a blank part of the page whose pictures are still being found, as on a dense drawing: the search waits
+    /// in the jobs, which the test does not run.
+    fn click_still_being_looked_into(h: &mut Harness<'static, PdfCraftApp>, at: &impl Fn(f32, f32) -> egui::Pos2) {
+        click(h, at(100.0, 150.0));
+        h.run_steps(2);
+        let _test = std::thread::current().name().and_then(|n| n.rsplit("::").next()).unwrap_or_default().to_owned();
+        let _s = h.state();
+        assert!(h.state().views[0].session.pending_pick.is_some(), "the click waits for its page");
+    }
+
+    /// A search that takes its time doesn't hold the window: the click returns before the search runs, and its answer is
+    /// taken in the pass after the job has.
+    #[test]
+    fn a_slow_page_does_not_hold_up_the_window() {
+        let ctx = &egui::Context::default();
+        let (mut h, jobs, at) = open_page(ctx);
+        click_still_being_looked_into(&mut h, &at);
+        assert!(jobs.waiting() > 0, "the search is queued as a job");
+        assert_eq!(h.state().views[0].session.picked_image, None);
+        jobs.run_all();
+        h.run_steps(3);
+        assert_eq!(h.state().views[0].session.pending_pick, None, "the answer came: no picture there");
+    }
+
+    /// Escape takes back a click whose picture isn't known yet: it isn't selected when it is.
+    #[test]
+    fn escape_cancels_a_click_on_a_page_still_being_read() {
+        let ctx = &egui::Context::default();
+        let (mut h, _jobs, at) = open_page(ctx);
+        click_still_being_looked_into(&mut h, &at);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert_eq!(h.state().views[0].session.pending_pick, None);
+    }
+
     /// Another tool lets go of the click, even while its page isn't drawn (Organize pages).
     #[test]
     fn another_tool_takes_back_a_click_on_a_page_not_drawn() {
-        let (mut h, _) = open_page();
-        let _keep = click_still_being_looked_into(&mut h);
-        assert!(h.state_mut().execute("page.organize"));
+        let ctx = &egui::Context::default();
+        let (mut h, _jobs, at) = open_page(ctx);
+        click_still_being_looked_into(&mut h, &at);
+        let ctx = h.ctx.clone();
+        assert!(h.state_mut().execute(&ctx, "page.organize"));
         h.run_steps(2);
-        assert!(h.state().views[0].pending_pick.is_some(), "the click waits while the page isn't drawn");
+        assert!(h.state().views[0].session.pending_pick.is_some(), "the click waits while the page isn't drawn");
         h.state_mut().quick_tool = crate::QuickTool::Hand;
         h.run_steps(1);
         h.state_mut().quick_tool = crate::QuickTool::Select;
         h.run_steps(1);
-        assert_eq!(h.state().views[0].pending_pick, None);
+        assert_eq!(h.state().views[0].session.pending_pick, None);
     }
 
     /// A click a comment takes lets go of the earlier click: its picture isn't picked after the
     /// comment is selected.
     #[test]
     fn a_click_on_a_comment_takes_back_the_earlier_click() {
-        let (mut h, at) = open_page();
-        let _keep = click_still_being_looked_into(&mut h);
+        let ctx = &egui::Context::default();
+        let (mut h, _jobs, at) = open_page(ctx);
+        click_still_being_looked_into(&mut h, &at);
+        h.run_steps(30);
         click(&mut h, at(50.0, 50.0));
-        assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is selected");
-        assert_eq!(h.state().views[0].pending_pick, None);
+        assert!(h.state().views[0].session.comments.primary().is_some(), "the comment is selected");
+        assert_eq!(h.state().views[0].session.pending_pick, None);
     }
 
     /// A click on a link follows it and lets go of the earlier click too.
     #[test]
     fn a_click_on_a_link_takes_back_the_earlier_click() {
-        let (mut h, at) = open_page();
-        let _keep = click_still_being_looked_into(&mut h);
+        let ctx = &egui::Context::default();
+        let (mut h, _jobs, at) = open_page(ctx);
+        click_still_being_looked_into(&mut h, &at);
+        h.run_steps(30);
         click(&mut h, at(150.0, 250.0));
         assert!(h.state().pending_link.is_some(), "the link is followed");
-        assert_eq!(h.state().views[0].pending_pick, None);
+        assert_eq!(h.state().views[0].session.pending_pick, None);
     }
 }
 
 /// Forget the selected picture once the document has been edited since it was picked: Edit text &
 /// images (or Undo) may have deleted or moved it, and its highlight would stay behind on an empty
 /// spot of the page.
-pub(crate) fn drop_stale(doc: &pdfcraft_engine::Document, view: &mut DocView) {
-    if view.picked_image.is_some_and(|p| p.generation != doc.edit_generation()) {
-        view.picked_image = None;
+pub(crate) fn drop_stale(doc: &pdfcraft_engine::Document, session: &mut PageSession) {
+    if session.picked_image.is_some_and(|p| p.generation != doc.edit_generation()) {
+        session.picked_image = None;
     }
 }
 
-/// The selected picture's highlight on page `page`.
-pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, view: &DocView) {
-    let Some(picked) = view.picked_image.filter(|p| p.page == page) else { return };
-    if info.pages.get(page).is_none() || !picked.rect.iter().all(|v| v.is_finite()) {
+/// The selected picture's outline in the page body, over the page as shown with the view turned by `rotation`.
+// PLAN: pdf-canvas-w8's body calls `selection::show_picked(ui, body, session, cx.info)`; it is here, and takes
+// `cx.rotation` after `session`.
+pub(crate) fn show_picked(ui: &mut egui::Ui, body: &PageBody<'_>, session: &PageSession, rotation: u16, info: &DocInfo) {
+    let Some(picked) = session.picked_image else { return };
+    let Some(info_page) = info.pages.get(picked.page) else { return };
+    if !picked.rect.iter().all(|v| v.is_finite()) {
         return;
     }
-    let r = xf.user_rect(info, page, picked.rect.map(|v| v as f32));
-    painter.rect_filled(r, CornerRadius::ZERO, Color32::from_rgba_unmultiplied(0x3A, 0x7B, 0xF0, 50));
-    painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(2.0, BLUE), egui::StrokeKind::Outside);
+    let Some(placed) = session.placed.iter().find(|p| p.page == picked.page) else { return };
+    let xf = PageXform::of(placed, rotation, (info_page.width, info_page.height));
+    let r = xf.user_rect(info, picked.page, picked.rect.map(|v| v as f32));
+    let corners = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()].map(|p| body.view.to_doc(p));
+    let mut path = BezPath::new();
+    path.move_to(corners[0]);
+    for corner in &corners[1..] {
+        path.line_to(*corner);
+    }
+    path.close_path();
+    let _ = SelectionOutline::solid(tl!("Picked picture"), &[path]).show_at(ui, body.rect);
 }
 
 /// A file name without characters file systems refuse.
@@ -338,7 +334,7 @@ pub(crate) fn safe_name(s: &str) -> String {
 }
 
 /// The per-user folder that holds the file of the last Copy Image in Original Format: `Clipboard`
-/// in the portable data folder in portable mode ([`crate::portable`]), otherwise the platform's
+/// in the portable data folder in portable mode ([`crate::settings::portable_dir`]), otherwise the platform's
 /// per-user cache folder: `~/Library/Caches/PdfCraft/Clipboard` (macOS),
 /// `%LOCALAPPDATA%\PdfCraft\Clipboard` (Windows), or `$XDG_CACHE_HOME/pdfcraft/clipboard` /
 /// `~/.cache/pdfcraft/clipboard` (others). Never the shared temporary folder, where another user
@@ -346,7 +342,7 @@ pub(crate) fn safe_name(s: &str) -> String {
 #[cfg(not(target_arch = "wasm32"))]
 fn clipboard_dir() -> Option<std::path::PathBuf> {
     use std::path::PathBuf;
-    if let Some(dir) = crate::portable::data_dir() {
+    if let Some(dir) = crate::settings::portable_dir() {
         return Some(dir.join("Clipboard"));
     }
     let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from).filter(|p| p.is_absolute());
@@ -416,40 +412,28 @@ fn write_clipboard_file(dir: &std::path::Path, name: &str, bytes: &[u8]) -> Resu
 }
 
 impl PdfCraftApp {
-    /// ⌘C / Ctrl+C copies the selected picture in its original format; Escape deselects it, or
-    /// takes back a click whose picture isn't known yet.
-    pub(crate) fn image_pick_keys(&mut self, i: usize, ctx: &egui::Context) {
-        if ctx.egui_wants_keyboard_input() {
-            return;
-        }
-        if self.page_keys.pressed(ctx, egui::Key::Escape) {
-            if let Some(view) = self.views.get_mut(i) {
-                view.picked_image = None;
-                view.pending_pick = None;
-            }
-            return;
-        }
-        let Some(picked) = self.views.get(i).and_then(|v| v.picked_image) else { return };
-        let copy = self.page_keys.clipboard(ctx).copy;
-        if !copy || self.views[i].selected_text().is_some() {
-            return;
-        }
-        // The document may have changed since the click: the same picture must still be there.
-        let current =
-            self.session.get(self.views[i].id).and_then(|d| d.page_images(picked.page).get(picked.index).map(crate::canvas::image_selectable_bounds));
+    /// ⌘C / Ctrl+C with a picture picked and no text selected: copies the picture in its original format. The document
+    /// may have changed since the click: the same picture must still be there, else it is let go. Returns whether
+    /// there was a picked picture to copy.
+    pub(crate) fn copy_picked_image(&mut self, i: usize) -> bool {
+        let Some((id, picked)) = self.views.get(i).and_then(|v| Some((v.id, v.session.picked_image?))) else { return false };
+        let current = self.session.get(id).and_then(|d| d.page_images(picked.page).get(picked.index).map(crate::canvas::image_selectable_bounds));
         if current == Some(picked.rect) {
             self.copy_page_image_file(picked.page, picked.index);
         } else {
-            self.views[i].picked_image = None;
+            if let Some(view) = self.views.get_mut(i) {
+                view.session.picked_image = None;
+            }
             self.notify_tr("The page has changed; select the image again");
         }
+        true
     }
 
     /// Copy Image in Original Format: image `index` on `page` as a file on the clipboard (JPEG
     /// as stored in the PDF, otherwise PNG).
     pub(crate) fn copy_page_image_file(&mut self, page: usize, index: usize) {
         // A newer copy wins over a whole-document copy still reading its pages.
-        self.document_copy = None;
+        self.cancel_text_copies();
         let Some((_, id)) = self.active_ids() else { return };
         if !self.may_copy(id) {
             return;
@@ -473,21 +457,16 @@ impl PdfCraftApp {
     /// Writes `bytes` to PdfCraft's private clipboard folder ([`clipboard_dir`]), replacing the
     /// previous copy, and puts that file on the system clipboard.
     #[cfg(not(target_arch = "wasm32"))]
-    fn put_file_on_clipboard(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
-        if !self.system_clipboard {
-            return Ok(());
-        }
+    fn put_file_on_clipboard(&mut self, name: &str, bytes: &[u8]) -> Result<(), String> {
         let dir = clipboard_dir().ok_or("there is no folder for the copied file")?;
         let path = write_clipboard_file(&dir, name, bytes)?;
-        crate::os_clipboard::with(|c| c.set().file_list(&[path])).map_err(|e| e.to_string())
+        // PLAN: assumed `PdfCraftApp.clipboard: craft::platform::clipboard::Clipboard` (pdf-hub-w1, the services given to `with_host`)
+        self.clipboard.write(&[Flavor::files(&[path])]).map(|_| ()).map_err(|e| e.to_string())
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn put_file_on_clipboard(&self, _name: &str, _bytes: &[u8]) -> Result<(), String> {
-        if self.system_clipboard {
-            return Err("the web version can't put files on the clipboard yet; use Save Image As".to_string());
-        }
-        Ok(())
+    fn put_file_on_clipboard(&mut self, _name: &str, _bytes: &[u8]) -> Result<(), String> {
+        Err("the web version can't put files on the clipboard yet; use Save Image As".to_string())
     }
 }
 
