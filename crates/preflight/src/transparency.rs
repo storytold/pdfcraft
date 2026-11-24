@@ -148,8 +148,8 @@ pub(crate) fn page_draws_transparently(doc: &Document, page: &Dict) -> bool {
 
 /// The keys of the page's own resource entries ([`CATEGORIES`]) that its content names as an
 /// operand, its `/Contents` decoded within one page's allowance and joined with a space as
-/// readers join them; `None` when a stream of it can't be read or is damaged partway. A name counts whatever operator
-/// takes it, so an entry is left out only when no operand names it.
+/// readers join them; `None` when a stream of it can't be read or is damaged partway. A name
+/// counts whatever operator takes it, so an entry is left out only when no operand names it.
 fn names_drawn(doc: &Document, page: &Dict) -> Option<HashSet<Vec<u8>>> {
     let res = page.get(b"Resources").map(|r| held(doc, r));
     let mut keys: HashSet<Vec<u8>> = HashSet::new();
