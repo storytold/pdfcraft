@@ -84,7 +84,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
             title: "Export to",
             items: &[
                 item("Microsoft Word (.docx)", "file-text", "export.docx", Ready),
-                item("Spreadsheet (.xlsx)", "grid-3x3", "export.xlsx", Planned("M10")),
+                item("Spreadsheet (.xlsx)", "grid", "export.xlsx", Planned("M10")),
                 item("Presentation (.pptx)", "presentation", "export.pptx", Ready),
                 item("Image (PNG)", "image", "export.image", Ready),
                 item("Export all images", "image", "export.all_images", Ready),
@@ -107,8 +107,8 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
             items: &[
                 item("Add text", "type", "sign.fill.text", Ready),
                 item("Checkmark", "check", "sign.fill.check", Ready),
-                item("Cross", "x", "sign.fill.cross", Ready),
-                item("Dot", "circle-dot", "sign.fill.dot", Ready),
+                item("Cross", "close", "sign.fill.cross", Ready),
+                item("Dot", "target", "sign.fill.dot", Ready),
                 item("Line", "minus", "sign.fill.line", Ready),
                 item("Date", "clock-3", "sign.fill.date", Ready),
                 item("Signature", "signature", "sign.fill.signature", Ready),
@@ -130,11 +130,11 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 title: "Modify page",
                 items: &[
                     item("Edit text & images", "text-cursor-input", "edit.edit_text", Ready),
-                    item("Rotate pages", "rotate-cw", "page.rotate", Ready),
+                    item("Rotate pages", "rotate_cw", "page.rotate", Ready),
                     item("Insert pages", "file-plus-2", "page.insert", Ready),
                     item("Delete pages", "trash-2", "page.delete", Ready),
                     item("Extract pages", "file-output", "page.extract", Ready),
-                    item("Organize pages", "layout-grid", "page.organize", Ready),
+                    item("Organize pages", "layout_grid", "page.organize", Ready),
                 ],
             },
             ToolSection {
@@ -144,7 +144,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                     item("Image", "image-plus", "edit.image", Ready),
                     menu_item("Header and footer", "heading", &["edit.header_footer", "edit.header_footer.update", "edit.header_footer.remove"]),
                     menu_item("Watermark", "stamp", &["edit.watermark", "edit.watermark.update", "edit.watermark.remove"]),
-                    item("Link", "link-2", "edit.link", Ready),
+                    item("Link", "link", "edit.link", Ready),
                     item("Bates numbering", "hash", "edit.bates", Ready),
                     menu_item("Background", "palette", &["edit.background", "edit.background.update", "edit.background.remove"]),
                     item("Attach file", "paperclip", "edit.attach", Ready),
@@ -183,7 +183,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
     ToolGroup {
         id: "organize",
         label: "Organize pages",
-        icon: "layout-grid",
+        icon: "layout_grid",
         hue: GREEN,
         badge: None,
         availability: Ready,
@@ -191,8 +191,8 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
             ToolSection {
                 title: "Page options",
                 items: &[
-                    item("Page grid", "layout-grid", "page.organize", Ready),
-                    item("Rotate", "rotate-cw", "page.rotate", Ready),
+                    item("Page grid", "layout_grid", "page.organize", Ready),
+                    item("Rotate", "rotate_cw", "page.rotate", Ready),
                     item("Delete", "trash-2", "page.delete", Ready),
                     item("Extract", "file-output", "page.extract", Ready),
                     item("Insert", "file-plus-2", "page.insert", Ready),
@@ -206,7 +206,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                     item("Set page boxes", "square-dashed-mouse-pointer", "page.boxes", Ready),
                     item("Crop pages", "crop", "page.crop", Ready),
                     item("Duplicate pages", "copy-plus", "page.duplicate", Ready),
-                    item("Reverse pages", "arrow-up-down", "page.reverse", Ready),
+                    item("Reverse pages", "swap_vertical", "page.reverse", Ready),
                     item("Page labels", "tag", "page.number", Ready),
                     item("Page transitions", "presentation", "page.transitions", Planned("M4")),
                 ],
@@ -226,8 +226,8 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 items: &[
                     item("Sticky note", "sticky-note", "comment.note", Ready),
                     item("Highlight text", "highlighter", "comment.highlight", Ready),
-                    item("Underline", "underline", "comment.underline", Ready),
-                    item("Strikethrough", "strikethrough", "comment.strikeout", Ready),
+                    item("Underline", "text_underline", "comment.underline", Ready),
+                    item("Strikethrough", "text_strikethrough", "comment.strikeout", Ready),
                     item("Squiggly underline", "spline", "comment.squiggly", Ready),
                     item("Text box", "type", "comment.freetext", Ready),
                 ],
@@ -283,7 +283,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 title: "Protect",
                 items: &[
                     item("Protect with password", "lock", "protect.password", Ready),
-                    item("Remove hidden information", "eye-off", "protect.remove_hidden", Ready),
+                    item("Remove hidden information", "eye_off", "protect.remove_hidden", Ready),
                 ],
             },
             ToolSection {
@@ -291,7 +291,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 items: &[
                     item("Encrypt with certificate", "file-lock-2", "protect.certificate", Planned("M8")),
                     item("Security properties", "shield-check", "protect.properties", Ready),
-                    item("Remove security", "lock-open", "protect.remove", Ready),
+                    item("Remove security", "lock_open", "protect.remove", Ready),
                 ],
             },
         ],
@@ -299,14 +299,14 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
     ToolGroup {
         id: "redact",
         label: "Redact a PDF",
-        icon: "rectangle-horizontal",
+        icon: "rectangle",
         hue: RED,
         badge: None,
         availability: Ready,
         sections: &[ToolSection {
             title: "Redact",
             items: &[
-                item("Redact text and images", "rectangle-horizontal", "redact.mark", Ready),
+                item("Redact text and images", "rectangle", "redact.mark", Ready),
                 item("Redact pages", "file-x", "redact.pages", Ready),
                 item("Find text and redact", "file-search", "redact.search", Ready),
                 item("Set properties", "settings-2", "redact.properties", Ready),
@@ -347,7 +347,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                     item("Field properties", "settings-2", "form.field.properties", Ready),
                     item("Tab order by rows", "rows-3", "form.tab_order.row", Ready),
                     item("Tab order by columns", "columns-3", "form.tab_order.column", Ready),
-                    item("Calculation order", "list-ordered", "form.calculation_order", Ready),
+                    item("Calculation order", "list_numbered", "form.calculation_order", Ready),
                     item("Flatten form fields", "layers", "form.flatten", Ready),
                     item("Import data", "file-input", "form.import_data", Ready),
                     item("Export data", "file-output", "form.export_data", Ready),
@@ -357,10 +357,10 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 title: "Add form components",
                 items: &[
                     item("Text field", "text-cursor-input", "form.add.text", Ready),
-                    item("Text field table", "grid-3x3", "form.add.text_table", Ready),
+                    item("Text field table", "grid", "form.add.text_table", Ready),
                     item("Checkbox", "check-circle-2", "form.add.checkbox", Ready),
                     item("Radio button", "circle", "form.add.radio", Ready),
-                    item("Drop-down list", "chevron-down", "form.add.combo", Ready),
+                    item("Drop-down list", "chevron_down", "form.add.combo", Ready),
                     item("List box", "list", "form.add.list", Ready),
                     item("Button", "square", "form.add.button", Ready),
                     item("Image field", "image", "form.add.image", Ready),
@@ -482,7 +482,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 item("Open accessibility report", "file-text", "a11y.report", Ready),
                 item("Add alternate text", "image", "a11y.alt_text", Ready),
                 item("Tags panel", "tag", "a11y.tags", Ready),
-                item("Fix reading order", "list-ordered", "a11y.reading_order", Planned("M12")),
+                item("Fix reading order", "list_numbered", "a11y.reading_order", Planned("M12")),
             ],
         }],
     },
