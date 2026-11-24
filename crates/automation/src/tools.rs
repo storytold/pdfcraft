@@ -1237,7 +1237,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "page_scale",
             "Scale pages to a size",
-            "Scale page contents to a new page size in points: fit (default) shrinks or enlarges the visible page to fit inside the size, centred; fill covers the size and trims what overflows. orientation match (default) turns the size to the page's own orientation as displayed; exact uses it as given. Comments, links, destinations and measuring scales move with the content; geospatial measures are left as they were and listed in repairs. Undoable.",
+            "Scale page contents to a new page size in points: fit (default) shrinks or enlarges the visible page to fit inside the size, centred; fill covers the size, and what overflows is clipped from view but stays in the PDF: it is not deleted or redacted. orientation match (default) turns the size to the page's own orientation as displayed; exact uses it as given. Comments, links, destinations and measuring scales move with the content; geospatial measures are left as they were and listed in repairs. Undoable.",
         )
         .with(schema(
             json!({

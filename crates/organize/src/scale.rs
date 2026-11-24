@@ -90,6 +90,11 @@ impl Placement {
         Some(self.scale * y + self.dy).filter(|v| v.is_finite())
     }
 
+    /// Identifies the placement, for copies made per placement.
+    fn key(&self) -> [u64; 3] {
+        [self.scale, self.dx, self.dy].map(f64::to_bits)
+    }
+
     fn rect(&self, r: [f64; 4]) -> Option<[f64; 4]> {
         let (x0, y0, x1, y1) = (self.x(r[0])?, self.y(r[1])?, self.x(r[2])?, self.y(r[3])?);
         Some([x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)])
@@ -97,7 +102,8 @@ impl Placement {
 }
 
 /// Plan where `source` lands on a page shown at `rotate` degrees, `width` × `height` as shown.
-/// `None` unless both sizes are finite and positive and the placement is finite.
+/// `None` unless both sizes are finite and positive and the placement is finite and within the
+/// range of a PDF real (Annex C).
 fn plan(source: [f64; 4], rotate: i64, width: f64, height: f64, req: &ScaleRequest) -> Option<Placement> {
     let (sw, sh) = (source[2] - source[0], source[3] - source[1]);
     let sane = |v: f64| v.is_finite() && v > 0.0;
@@ -118,14 +124,13 @@ fn plan(source: [f64; 4], rotate: i64, width: f64, height: f64, req: &ScaleReque
         ScaleMode::Fill => fx.max(fy),
     };
     let p = Placement { scale, dx: (uw - scale * sw) / 2.0 - scale * source[0], dy: (uh - scale * sh) / 2.0 - scale * source[1], size: [uw, uh] };
-    [p.scale, p.dx, p.dy].into_iter().all(f64::is_finite).then_some(p).filter(|p| p.scale > 0.0)
+    let real = |v: f64| v.is_finite() && v.abs() <= f64::from(f32::MAX);
+    [p.scale, p.dx, p.dy].into_iter().all(real).then_some(p).filter(|p| p.scale > 0.0)
 }
 
-/// A content-stream number: at most six decimals, no trailing zeros.
+/// A content-stream number, in plain decimal with every digit needed to read back the same value.
 fn num(v: f64) -> String {
-    let s = format!("{v:.6}");
-    let s = s.trim_end_matches('0').trim_end_matches('.');
-    if s == "-0" { "0".into() } else { s.into() }
+    if v == 0.0 { "0".into() } else { format!("{v}") }
 }
 
 /// The stream before the page's own: save the state, place, clip to the old visible area.
@@ -159,8 +164,8 @@ fn placed_resources(doc: &mut Document, resources: &Object, p: &Placement, s: &m
     let mut placed = patterns.clone();
     s.report.patterns_unplaced += patterns.len().saturating_sub(MAX_PATTERNS);
     for (name, pattern) in patterns.iter().take(MAX_PATTERNS) {
-        let key = pattern.as_ref().map(|r| (r, [p.scale, p.dx, p.dy].map(f64::to_bits)));
-        if let Some(copy) = key.and_then(|k| s.patterns.get(&k)) {
+        let key = pattern.as_ref().map(|r| (r, p.key()));
+        if let Some(copy) = key.and_then(|k| s.copies.get(&k)) {
             placed.set(name.clone(), Object::Ref(*copy));
             continue;
         }
@@ -190,7 +195,7 @@ fn placed_resources(doc: &mut Document, resources: &Object, p: &Placement, s: &m
         };
         let r = doc.add(copy);
         if let Some(k) = key {
-            s.patterns.insert(k, r);
+            s.copies.insert(k, r);
         }
         placed.set(name.clone(), Object::Ref(r));
     }
@@ -241,24 +246,32 @@ fn no_zoom(doc: &Document, annot: &Dict) -> bool {
     annot.get(b"F").and_then(|f| doc.resolve(f).as_int()).is_some_and(|f| f & 8 != 0)
 }
 
-/// Move one annotation's geometry; `None` when it has none recognised. `/Rect` (NoZoom: moved,
-/// not resized), the point arrays `/QuadPoints`, `/Vertices`, `/L`, `/CL`, the arrays of point
-/// arrays `/InkList` and `/Path`, and the lengths `/RD`, `/LL`, `/LLE`, `/LLO`. An appearance
-/// follows its `/Rect` by itself (§12.5.5).
+/// Move one annotation's geometry; `None` when it has none recognised. `/Rect`, the point arrays
+/// `/QuadPoints`, `/Vertices`, `/L`, `/CL`, the arrays of point arrays `/InkList` and `/Path`, and
+/// the lengths `/RD`, `/LL`, `/LLE`, `/LLO`. A NoZoom annotation is moved by its upper-left
+/// corner and keeps its size: its points move with that corner and its lengths stay. An
+/// appearance follows its `/Rect` by itself (§12.5.5).
 fn move_annotation(doc: &Document, annot: &Dict, p: &Placement) -> Option<Dict> {
     let mut out = annot.clone();
     let mut changed = false;
     let fixed = no_zoom(doc, annot);
+    let mut points = *p;
     if let Some(r) = annot.get(b"Rect").and_then(|o| rect(doc, o)) {
-        let moved = if fixed { p.x(r[0]).zip(p.y(r[3])).map(|(x, y)| [x, y - (r[3] - r[1]), x + (r[2] - r[0]), y]) } else { p.rect(r) };
+        let moved = if fixed {
+            let (x, y) = (p.x(r[0])?, p.y(r[3])?);
+            points = Placement { scale: 1.0, dx: x - r[0], dy: y - r[3], size: p.size };
+            Some([x, y - (r[3] - r[1]), x + (r[2] - r[0]), y])
+        } else {
+            p.rect(r)
+        };
         if let Some(m) = moved.filter(|m| m.iter().all(|v| v.is_finite())) {
             out.set(b"Rect".to_vec(), reals(m));
             changed = true;
         }
+    } else if fixed {
+        return None;
     }
-    if fixed {
-        return changed.then_some(out);
-    }
+    let p = &points;
     for key in [&b"QuadPoints"[..], b"Vertices", b"L", b"CL"] {
         if let Some(m) = annot.get(key).and_then(|o| pairs(doc, o, p)) {
             out.set(key.to_vec(), m);
@@ -295,16 +308,23 @@ enum Measured {
     Changed(Dict),
 }
 
-/// Rescale a rectilinear `/Measure` (§12.9.1): only the first number format of each array
-/// converts from user space, so its `/C` is divided by the scale (`/X`, `/Y`, `/D`) or by its
-/// square (`/A`). Angles and slopes are scale-free.
-fn rescale_measure(doc: &Document, measure: &Dict, scale: f64) -> Measured {
+/// Rescale a rectilinear `/Measure` (§12.9): only the first number format of `/X` and `/Y`
+/// converts from user space, so its `/C` is divided by the scale; `/D` and `/A` convert from
+/// `/X`'s units and stay, as do angles and slopes. An explicit origin `/O` is a point in user
+/// space and moves with the content.
+fn rescale_measure(doc: &Document, measure: &Dict, p: &Placement) -> Measured {
     if measure.get(b"Subtype").is_some_and(|s| doc.resolve(s).as_name() == Some(b"GEO")) {
         return Measured::Geo;
     }
     let mut out = measure.clone();
     let mut changed = false;
-    for (key, factor) in [(&b"X"[..], scale), (b"Y", scale), (b"D", scale), (b"A", scale * scale)] {
+    let origin = measure.get(b"O").filter(|o| doc.resolve(o).as_array().is_some_and(|a| a.len() == 2));
+    if let Some(o) = origin.and_then(|o| pairs(doc, o, p)) {
+        out.set(b"O".to_vec(), o);
+        changed = true;
+    }
+    for key in [&b"X"[..], b"Y"] {
+        let factor = p.scale;
         let Some(arr) = measure.get(key).map(|o| doc.resolve(o)) else { continue };
         let Some(items) = arr.as_array() else { continue };
         let Some(first) = items.first().map(|o| doc.resolve(o)) else { continue };
@@ -322,64 +342,81 @@ fn rescale_measure(doc: &Document, measure: &Dict, scale: f64) -> Measured {
     if changed { Measured::Changed(out) } else { Measured::Same }
 }
 
-/// Map the rectangle under `key` (a viewport's `/BBox`, a bead's `/R`).
-fn move_rect_key(doc: &Document, d: &Dict, key: &[u8], p: &Placement) -> Option<Dict> {
-    let r = p.rect(d.get(key).and_then(|o| rect(doc, o))?)?;
-    let mut out = d.clone();
-    out.set(key.to_vec(), reals(r));
-    Some(out)
+/// How [`Scaling::move_list`] treats an indirect item that other pages may share.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shared {
+    /// Moved in place, once: annotations and beads, which other objects point at.
+    InPlace,
+    /// Replaced on this page by a copy per placement: viewports, which only `/VP` arrays hold.
+    Copied,
 }
 
-/// The edit in progress: objects already moved (shared ones move once) and the counts.
+/// The edit in progress: objects already moved (shared ones move once), the copies made per
+/// placement, and the counts.
 struct Scaling {
     seen: HashSet<ObjRef>,
-    /// Placed copies of shared patterns, by pattern and placement.
-    patterns: HashMap<(ObjRef, [u64; 3]), ObjRef>,
+    /// Placed copies of shared patterns, measures and viewports, by original and placement.
+    copies: HashMap<(ObjRef, [u64; 3]), ObjRef>,
     report: ScaleReport,
 }
 
 impl Scaling {
-    /// Rescale the `/Measure` held in `holder`: an indirect one is written once, a direct one is
-    /// replaced in `holder`.
-    fn measure(&mut self, doc: &mut Document, holder: &mut Dict, scale: f64) -> Result<(), OrganizeError> {
-        let Some(m) = holder.get(b"Measure").cloned() else { return Ok(()) };
-        if let Some(r) = m.as_ref()
-            && !self.seen.insert(r)
-        {
-            return Ok(());
+    /// Rescale the `/Measure` held in `holder`. A direct one is replaced in `holder`; an indirect
+    /// one is left for the pages that still use it, and `holder` gets a copy per placement.
+    fn measure(&mut self, doc: &mut Document, holder: &mut Dict, p: &Placement) {
+        let Some(m) = holder.get(b"Measure").cloned() else { return };
+        let key = m.as_ref().map(|r| (r, p.key()));
+        if let Some(copy) = key.and_then(|k| self.copies.get(&k)) {
+            holder.set(b"Measure".to_vec(), Object::Ref(*copy));
+            return;
         }
         let resolved = doc.resolve(&m);
-        let Object::Dict(md) = &*resolved else { return Ok(()) };
-        match rescale_measure(doc, md, scale) {
-            Measured::Geo => self.report.geo_measures_unchanged += 1,
+        let Object::Dict(md) = &*resolved else { return };
+        match rescale_measure(doc, md, p) {
+            Measured::Geo => {
+                if m.as_ref().is_none_or(|r| self.seen.insert(r)) {
+                    self.report.geo_measures_unchanged += 1;
+                }
+            }
             Measured::Same => {}
             Measured::Changed(new) => {
                 self.report.measures += 1;
-                match m.as_ref() {
-                    Some(r) => doc.set_existing(r, Object::Dict(new))?,
-                    None => holder.set(b"Measure".to_vec(), Object::Dict(new)),
-                }
+                let new = match key {
+                    Some(k) => {
+                        let copy = doc.add(Object::Dict(new));
+                        self.copies.insert(k, copy);
+                        Object::Ref(copy)
+                    }
+                    None => Object::Dict(new),
+                };
+                holder.set(b"Measure".to_vec(), new);
             }
         }
-        Ok(())
     }
 
-    /// Move each dictionary in the array at `page[key]` with `f`, writing indirect items in place
-    /// and a changed direct item back into the array (and the array back where it lives).
+    /// Move each dictionary in the array at `page[key]` with `f`. An indirect item is moved in
+    /// place or copied, as `shared` says; a changed direct item or a copy goes into the array,
+    /// and a changed array onto this page alone.
     fn move_list(
         &mut self,
         doc: &mut Document,
         page: &mut Dict,
         key: &[u8],
         p: &Placement,
+        shared: Shared,
         f: fn(&Document, &Dict, &Placement) -> Option<Dict>,
     ) -> Result<usize, OrganizeError> {
         let Some(held) = page.get(key).cloned() else { return Ok(0) };
         let Some(mut items) = doc.resolve(&held).as_array().cloned() else { return Ok(0) };
-        let (mut moved, mut direct) = (0, false);
+        let (mut moved, mut rewired) = (0, false);
         for item in &mut items {
             let r = item.as_ref();
-            if r.is_some_and(|r| !self.seen.insert(r)) {
+            if shared == Shared::InPlace && r.is_some_and(|r| !self.seen.insert(r)) {
+                continue;
+            }
+            if let Some(copy) = r.and_then(|r| self.copies.get(&(r, p.key()))) {
+                *item = Object::Ref(*copy);
+                rewired = true;
                 continue;
             }
             let resolved = doc.resolve(item);
@@ -389,34 +426,47 @@ impl Scaling {
                 moved += 1;
             }
             let mut holder = out.take().unwrap_or_else(|| d.clone());
-            self.measure(doc, &mut holder, p.scale)?;
+            self.measure(doc, &mut holder, p);
             if holder == *d {
                 continue;
             }
             match r {
-                Some(r) => doc.set_existing(r, Object::Dict(holder))?,
+                Some(r) if shared == Shared::InPlace => doc.set_existing(r, Object::Dict(holder))?,
+                Some(r) => {
+                    let copy = doc.add(Object::Dict(holder));
+                    self.copies.insert((r, p.key()), copy);
+                    *item = Object::Ref(copy);
+                    rewired = true;
+                }
                 None => {
                     *item = Object::Dict(holder);
-                    direct = true;
+                    rewired = true;
                 }
             }
         }
-        if direct {
-            match held.as_ref() {
-                Some(r) => doc.set_existing(r, Object::Array(items))?,
-                None => page.set(key.to_vec(), Object::Array(items)),
-            }
+        if rewired {
+            page.set(key.to_vec(), Object::Array(items));
         }
         Ok(moved)
     }
 }
 
+/// A viewport's `/BBox` keeps its corner order, which sets the measuring axes' directions (§12.9).
 fn move_viewport(doc: &Document, d: &Dict, p: &Placement) -> Option<Dict> {
-    move_rect_key(doc, d, b"BBox", p)
+    let bbox = d.get(b"BBox")?;
+    if doc.resolve(bbox).as_array()?.len() != 4 {
+        return None;
+    }
+    let mut out = d.clone();
+    out.set(b"BBox".to_vec(), pairs(doc, bbox, p)?);
+    Some(out)
 }
 
 fn move_bead(doc: &Document, d: &Dict, p: &Placement) -> Option<Dict> {
-    move_rect_key(doc, d, b"R", p)
+    let r = p.rect(rect(doc, d.get(b"R")?)?)?;
+    let mut out = d.clone();
+    out.set(b"R".to_vec(), reals(r));
+    Some(out)
 }
 
 /// The page's content streams (a stream, an array, or a reference to an array, §7.7.3.3),
@@ -454,13 +504,22 @@ fn dest_axes(kind: &[u8]) -> Option<&'static [u8]> {
     }
 }
 
-/// Move an explicit destination's coordinates; `null` operands and `/XYZ`'s zoom stay.
-fn move_destination(items: &[Object], p: &Placement) -> Option<Vec<Object>> {
-    let axes = dest_axes(items.get(1)?.as_name()?)?;
+/// An array shaped as an explicit destination: a page reference, then a destination kind.
+fn is_destination(doc: &Document, items: &[Object]) -> bool {
+    let kind = items.get(1).map(|k| doc.resolve(k));
+    let fits = |k: &[u8]| dest_axes(k).is_some() || matches!(k, b"Fit" | b"FitB");
+    items.first().and_then(Object::as_ref).is_some() && kind.as_deref().and_then(Object::as_name).is_some_and(fits)
+}
+
+/// Move an explicit destination's coordinates, read through references and written in place in
+/// the array; `null` operands and `/XYZ`'s zoom stay.
+fn move_destination(doc: &Document, items: &[Object], p: &Placement) -> Option<Vec<Object>> {
+    let kind = doc.resolve(items.get(1)?);
+    let axes = dest_axes(kind.as_name()?)?;
     let mut out = items.to_vec();
     let mut changed = false;
     for (slot, axis) in out.iter_mut().skip(2).zip(axes) {
-        let Some(v) = slot.as_f64().filter(|v| v.is_finite()) else { continue };
+        let Some(v) = number(doc, slot) else { continue };
         if let Some(m) = if *axis == b'x' { p.x(v) } else { p.y(v) } {
             *slot = Object::Real(m);
             changed = true;
@@ -469,45 +528,82 @@ fn move_destination(items: &[Object], p: &Placement) -> Option<Vec<Object>> {
     changed.then_some(out)
 }
 
-/// How deep [`move_destinations`] looks inside one object.
+/// How deep [`DestScan::walk`] looks inside one object.
 const MAX_DEST_DEPTH: usize = 32;
 
-/// Every explicit destination inside `obj` that names a scaled page, moved: an array whose first
-/// element is a scaled page and second a destination kind, wherever it sits (outline item, link
-/// `/Dest`, GoTo `/D`, `/OpenAction`, a name tree or the catalog's `/Dests`). Returns the changed
-/// value, or `None` when nothing changed.
-fn move_destinations(obj: &Object, pages: &HashMap<ObjRef, Placement>, depth: usize, count: &mut usize) -> Option<Object> {
-    if depth > MAX_DEST_DEPTH {
-        return None;
+/// What a value is, by where it sits (§12.3.2).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ctx {
+    /// Looked through for the entries below.
+    Other,
+    /// A destination: a `/Dest`, a GoTo `/D`, the `/OpenAction`, or a named destination's value.
+    Dest,
+    /// The catalog's `/Dests` dictionary, or a node of the `/Dests` name tree.
+    Dests,
+}
+
+/// The context of the value under `key` in a dictionary whose own context is `parent`.
+fn child(parent: Ctx, key: &[u8]) -> Ctx {
+    match key {
+        b"Dest" | b"D" | b"OpenAction" => Ctx::Dest,
+        b"Dests" => Ctx::Dests,
+        b"Kids" | b"Names" if parent == Ctx::Dests => Ctx::Dests,
+        b"Limits" => Ctx::Other,
+        _ if parent == Ctx::Dests => Ctx::Dest,
+        _ => Ctx::Other,
     }
-    match obj {
-        Object::Array(items) => {
-            if let Some(p) = items.first().and_then(Object::as_ref).and_then(|r| pages.get(&r))
-                && let Some(out) = move_destination(items, p)
-            {
-                *count += 1;
-                return Some(Object::Array(out));
-            }
-            let mut out: Option<Vec<Object>> = None;
-            for (i, item) in items.iter().enumerate() {
-                if let Some(new) = move_destinations(item, pages, depth + 1, count)
-                    && let Some(slot) = out.get_or_insert_with(|| items.clone()).get_mut(i)
-                {
-                    *slot = new;
-                }
-            }
-            out.map(Object::Array)
+}
+
+/// Finds the explicit destinations naming a scaled page, by context: arrays elsewhere, such as
+/// private application data, are left alone.
+struct DestScan<'a> {
+    doc: &'a Document,
+    pages: &'a HashMap<ObjRef, Placement>,
+    count: usize,
+    /// Objects referenced from a destination context, to be read in it.
+    pending: Vec<(ObjRef, Ctx)>,
+}
+
+impl DestScan<'_> {
+    /// `obj` with the destinations in it moved, or `None` when nothing changed.
+    fn walk(&mut self, obj: &Object, ctx: Ctx, depth: usize) -> Option<Object> {
+        if depth > MAX_DEST_DEPTH {
+            return None;
         }
-        Object::Dict(d) => {
-            let mut out: Option<Dict> = None;
-            for (key, value) in d.iter() {
-                if let Some(new) = move_destinations(value, pages, depth + 1, count) {
-                    out.get_or_insert_with(|| d.clone()).set(key.clone(), new);
-                }
+        match obj {
+            Object::Ref(r) if ctx != Ctx::Other => {
+                self.pending.push((*r, ctx));
+                None
             }
-            out.map(Object::Dict)
+            Object::Array(items) if ctx != Ctx::Other && is_destination(self.doc, items) => {
+                let p = items.first().and_then(Object::as_ref).and_then(|r| self.pages.get(&r))?;
+                let out = move_destination(self.doc, items, p)?;
+                self.count += 1;
+                Some(Object::Array(out))
+            }
+            Object::Array(_) if ctx == Ctx::Dest => None,
+            Object::Array(items) => {
+                let mut out: Option<Vec<Object>> = None;
+                for (i, item) in items.iter().enumerate() {
+                    if let Some(new) = self.walk(item, ctx, depth + 1)
+                        && let Some(slot) = out.get_or_insert_with(|| items.clone()).get_mut(i)
+                    {
+                        *slot = new;
+                    }
+                }
+                out.map(Object::Array)
+            }
+            Object::Dict(d) => {
+                let mut out: Option<Dict> = None;
+                for (key, value) in d.iter() {
+                    if let Some(new) = self.walk(value, child(ctx, key), depth + 1) {
+                        out.get_or_insert_with(|| d.clone()).set(key.clone(), new);
+                    }
+                }
+                out.map(Object::Dict)
+            }
+            _ => None,
         }
-        _ => None,
     }
 }
 
@@ -535,7 +631,7 @@ pub fn scale_pages(doc: &mut Document, pages: &[usize], request: ScaleRequest) -
             .ok_or_else(|| OrganizeError::InvalidBox(format!("page {} can't be scaled to that size", i + 1)))?;
         plans.push((i, *page, inherited.contains(b"CropBox"), inherited.get(b"Resources").cloned(), source, placement));
     }
-    let mut s = Scaling { seen: HashSet::new(), patterns: HashMap::new(), report: ScaleReport::default() };
+    let mut s = Scaling { seen: HashSet::new(), copies: HashMap::new(), report: ScaleReport::default() };
     let mut placed = HashMap::new();
     for (i, page, cropped, resources, source, p) in &plans {
         let (i, page, p) = (*i, *page, *p);
@@ -573,9 +669,9 @@ fn scale_page(
             d.set(key.to_vec(), target.clone());
         }
     }
-    s.report.annotations += s.move_list(doc, &mut d, b"Annots", p, move_annotation)?;
-    s.move_list(doc, &mut d, b"VP", p, move_viewport)?;
-    s.move_list(doc, &mut d, b"B", p, move_bead)?;
+    s.report.annotations += s.move_list(doc, &mut d, b"Annots", p, Shared::InPlace, move_annotation)?;
+    s.move_list(doc, &mut d, b"VP", p, Shared::Copied, move_viewport)?;
+    s.move_list(doc, &mut d, b"B", p, Shared::InPlace, move_bead)?;
     if let Some(contents) = wrapped_contents(doc, &d, source, p) {
         d.set(b"Contents".to_vec(), contents);
     }
@@ -584,14 +680,32 @@ fn scale_page(
 }
 
 /// Move the destinations naming a scaled page in every object but streams. Returns how many.
+/// An object referenced from a destination context is read again in that context, and that
+/// reading replaces the first.
 fn rewrite_destinations(doc: &mut Document, placed: &HashMap<ObjRef, Placement>) -> Result<usize, OrganizeError> {
-    let mut count = 0;
-    let changed: Vec<(ObjRef, Object)> = doc
-        .scan_objects()
-        .filter(|(_, o)| !matches!(&**o, Object::Stream(_)))
-        .filter_map(|(r, o)| move_destinations(&o, placed, 0, &mut count).map(|new| (r, new)))
-        .collect();
-    for (r, new) in changed {
+    let mut changed: HashMap<ObjRef, (Object, usize)> = HashMap::new();
+    {
+        let view: &Document = doc;
+        let mut scan = DestScan { doc: view, pages: placed, count: 0, pending: Vec::new() };
+        let mut read = |scan: &mut DestScan, r: ObjRef, o: &Object, ctx: Ctx| {
+            let before = scan.count;
+            if let Some(new) = scan.walk(o, ctx, 0) {
+                changed.insert(r, (new, scan.count.saturating_sub(before)));
+            }
+        };
+        for (r, o) in view.scan_objects().filter(|(_, o)| !matches!(&**o, Object::Stream(_))) {
+            read(&mut scan, r, &o, Ctx::Other);
+        }
+        let mut done = HashSet::new();
+        while let Some((r, ctx)) = scan.pending.pop() {
+            let o = view.get(r);
+            if done.insert(r) && !matches!(&*o, Object::Stream(_)) {
+                read(&mut scan, r, &o, ctx);
+            }
+        }
+    }
+    let count = changed.values().map(|(_, n)| n).sum();
+    for (r, (new, _)) in changed {
         doc.set_existing(r, new)?;
     }
     Ok(count)

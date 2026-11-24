@@ -203,6 +203,25 @@ fn note_skipped(doc: &mut pdfcraft_cos::Document, report: &pdfcraft_xfdf::Report
 /// as they were: they no longer match the scaled content.
 fn scale_pages(doc: &mut pdfcraft_cos::Document, pages: &[usize], request: crate::ScaleRequest) -> Result<(), EditError> {
     let report = pdfcraft_organize::scale_pages(doc, pages, request)?;
+    // An added item's record keeps its place on the old page, so the item would be listed, and
+    // edited, where it no longer is. It stays as page content, drawn where the page now puts it.
+    let scaled: std::collections::HashSet<usize> = report.pages.iter().map(|(i, _)| *i).collect();
+    let added: Vec<_> = pdfcraft_edit::list_added(doc).into_iter().filter(|a| scaled.contains(&a.page)).map(|a| a.obj).collect();
+    for obj in &added {
+        doc.update_dict(*obj, |d| {
+            d.remove(b"PCAdded");
+            d.remove(b"PCMark");
+        })
+        .map_err(|e| EditError::Edit(pdfcraft_edit::EditError::Invalid(e.to_string())))?;
+    }
+    if !added.is_empty() {
+        let n = added.len();
+        doc.note_repair(format!(
+            "scaling pages made {n} added item{} part of the page content: {} can no longer be edited as added text or images",
+            if n == 1 { "" } else { "s" },
+            if n == 1 { "it" } else { "they" }
+        ));
+    }
     let left = report.geo_measures_unchanged;
     if left > 0 {
         doc.note_repair(format!(
@@ -608,7 +627,17 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_organize::replace_pages(doc, pages, &src, src_pages)?;
         }
         Edit::SetPageBox { pages, which, spec } => pdfcraft_organize::set_page_box(doc, pages, *which, *spec)?,
-        Edit::ScalePages { pages, request } => scale_pages(doc, pages, *request)?,
+        Edit::ScalePages { pages, request } => {
+            // The marks an earlier redaction of this edit applied are in the page's old geometry;
+            // checked against the scaled page, they would miss what is under them. Fail closed.
+            if !cx.redaction_marks.is_empty() {
+                return Err(EditError::Invalid(
+                    "a batch that applies redactions can't also scale pages: the scaled pages can't be checked against the marks; the document was not changed"
+                        .into(),
+                ));
+            }
+            scale_pages(doc, pages, *request)?
+        }
         Edit::SetTransition { pages, spec } => pdfcraft_organize::set_transition(doc, pages, spec)?,
         Edit::InsertPagesFrom { name, bytes, pages, at, field_conflicts } => {
             let src = crate::sources::open_source_into(name, bytes, doc)?;
