@@ -548,15 +548,20 @@ fn projection(root: &Node, ellipsoid: Ellipsoid) -> std::result::Result<Projecti
     let value = |names: &[&str]| {
         params.iter().find(|p| p.label().is_some_and(|l| names.contains(&squash(l).as_str()))).and_then(|p| p.numbers.first().copied())
     };
+    // A parameter without a unit of its own is in the base geographic system's angular unit
+    // (OGC 01-009 §7; ISO 19162 §9.3), in radians per unit; degrees when that names none.
+    let radians_per = |n: &Node| {
+        n.children
+            .iter()
+            .find(|c| matches!(c.name.as_str(), "ANGLEUNIT" | "UNIT"))
+            .and_then(|u| u.numbers.first().copied())
+            .filter(|r| r.is_finite() && *r > 0.0)
+    };
+    let base = root.find(&["GEOGCS", "BASEGEOGCRS", "BASEGEODCRS"]).and_then(radians_per).unwrap_or(1f64.to_radians());
     let angle = |names: &[&str]| -> Option<f64> {
         let p = params.iter().find(|p| p.label().is_some_and(|l| names.contains(&squash(l).as_str())))?;
         let v = p.numbers.first().copied()?;
-        // WKT2 states the unit (radians per unit); WKT1 angles are in degrees.
-        let unit = p.find(&["ANGLEUNIT", "UNIT"]).and_then(|u| u.numbers.first().copied());
-        Some(match unit {
-            Some(radians) if radians > 0.0 => v * radians,
-            _ => v.to_radians(),
-        })
+        Some(v * radians_per(p).unwrap_or(base))
     };
     let lat = angle(&["latitudeoforigin", "latitudeofnaturalorigin", "latitudeoffalseorigin", "latitudeofcenter", "latitudeofprojectioncentre"])
         .unwrap_or(0.0);
@@ -603,8 +608,6 @@ pub struct Registration {
     fit: [f64; 6],
     /// The model plane to user space.
     unfit: [f64; 6],
-    /// Longitudes are fitted from 0 to 360 (the map crosses the antimeridian).
-    east: bool,
 }
 
 /// `bbox` as `[x0 y0 x1 y1]` with x0 < x1 and y0 < y1.
@@ -734,16 +737,20 @@ impl Registration {
             (None, false) => Method::Geographic,
             (None, true) => Method::Approximate,
         };
-        // Longitudes are read as -180..180 whichever way they are written (242 is -118), and those
-        // of a map across the antimeridian are then fitted from 0 to 360.
-        let geo: Vec<Point> = geo.iter().map(|g| [g[0], (g[1] + 180.0).rem_euclid(360.0) - 180.0]).collect();
-        let (lo, hi) = geo.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), g| (lo.min(g[1]), hi.max(g[1])));
-        let east = projection.is_none() && hi - lo > 180.0;
+        // Longitudes are fitted as written (242 stays 242, a world map keeps -180 and 180), except
+        // a map written -180..180 across the antimeridian (170 and -170), whose longitudes are
+        // fitted from 0 to 360 so they stay continuous: for latitude/longitude fits and for Web
+        // Mercator alike (the other projections wrap about their own central meridian).
+        let span = |lons: &mut dyn Iterator<Item = f64>| lons.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), l| (lo.min(l), hi.max(l)));
+        let (lo, hi) = span(&mut geo.iter().map(|g| g[1]));
+        let (elo, ehi) = span(&mut geo.iter().map(|g| g[1].rem_euclid(360.0)));
+        let east = lo >= -180.0 && hi <= 180.0 && hi - lo > 180.0 && ehi - elo > 0.0 && ehi - elo < hi - lo;
         let mut model = Vec::with_capacity(geo.len());
         for g in &geo {
+            let lon = if east { g[1].rem_euclid(360.0) } else { g[1] };
             let m = match &projection {
-                Some(p) => p.forward(g[0].to_radians(), g[1].to_radians()).ok_or_else(|| invalid("a control point lies outside its projection"))?,
-                None => [if east { g[1].rem_euclid(360.0) } else { g[1] }, g[0]],
+                Some(p) => p.forward(g[0].to_radians(), lon.to_radians()).ok_or_else(|| invalid("a control point lies outside its projection"))?,
+                None => [lon, g[0]],
             };
             model.push(m);
         }
@@ -758,7 +765,7 @@ impl Registration {
         };
         let fit = [a, b, c, dd, e, f];
         let unfit = invert(fit).ok_or_else(|| invalid("its control points lie on one line"))?;
-        Ok(Self { crs, method, note, projection, bounds: bounds.iter().map(to_user).collect(), fit, unfit, east })
+        Ok(Self { crs, method, note, projection, bounds: bounds.iter().map(to_user).collect(), fit, unfit })
     }
 
     /// The latitude and longitude (degrees) of a user-space point, if it is in the registered area.
@@ -786,12 +793,17 @@ impl Registration {
         if !lat.is_finite() || !lon.is_finite() || lat.abs() > 90.0 {
             return None;
         }
-        let m = match &self.projection {
-            Some(p) => p.forward(lat.to_radians(), lon.to_radians())?,
-            None => [if self.east { lon.rem_euclid(360.0) } else { (lon + 180.0).rem_euclid(360.0) - 180.0 }, lat],
-        };
-        let p = apply(self.unfit, m);
-        (p.iter().all(|v| v.is_finite()) && inside(&self.bounds, p)).then_some(p)
+        // The longitude as -180..180, then a turn either way: the first that lands in the registered
+        // area (control longitudes may be written 0..360, or continue across the antimeridian).
+        let lon = (lon + 180.0).rem_euclid(360.0) - 180.0;
+        [lon, lon + 360.0, lon - 360.0].into_iter().find_map(|lon| {
+            let m = match &self.projection {
+                Some(p) => p.forward(lat.to_radians(), lon.to_radians())?,
+                None => [lon, lat],
+            };
+            let p = apply(self.unfit, m);
+            (p.iter().all(|v| v.is_finite()) && inside(&self.bounds, p)).then_some(p)
+        })
     }
 }
 

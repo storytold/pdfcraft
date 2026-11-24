@@ -154,7 +154,13 @@ fn wkt_names_the_projection_in_either_version() {
     let (known, why) = from_wkt(wkt1).unwrap();
     assert!(why.is_ok() && known.projected);
     assert_eq!(known.name, "NAD83 / UTM zone 11N");
-    assert_eq!(known.projection, utm(GRS80, 11, false));
+    // The same zone, to the last digit of the WKT's own degree (0.0174532925199433).
+    let (ours, theirs) = (known.projection.unwrap(), utm(GRS80, 11, false).unwrap());
+    for (lat, lon) in [(34.0_f64, -117.0_f64), (36.5, -119.5)] {
+        let (a, b) = (ours.forward(lat.to_radians(), lon.to_radians()).unwrap(), theirs.forward(lat.to_radians(), lon.to_radians()).unwrap());
+        near(a[0], b[0], 1e-6);
+        near(a[1], b[1], 1e-6);
+    }
 
     let wkt2 = r#"PROJCRS["NAD83 / California zone 5",BASEGEOGCRS["NAD83",DATUM["North American Datum 1983",ELLIPSOID["GRS 1980",6378137,298.257222101,LENGTHUNIT["metre",1]]],ANGLEUNIT["degree",0.0174532925199433]],CONVERSION["SPCS83 California zone 5",METHOD["Lambert Conic Conformal (2SP)",ID["EPSG",9802]],PARAMETER["Latitude of false origin",33.5,ANGLEUNIT["degree",0.0174532925199433]],PARAMETER["Longitude of false origin",-118,ANGLEUNIT["degree",0.0174532925199433]],PARAMETER["Latitude of 1st standard parallel",35.4666666666667,ANGLEUNIT["degree",0.0174532925199433]],PARAMETER["Latitude of 2nd standard parallel",34.0333333333333,ANGLEUNIT["degree",0.0174532925199433]],PARAMETER["Easting at false origin",2000000,LENGTHUNIT["metre",1]],PARAMETER["Northing at false origin",500000,LENGTHUNIT["metre",1]]],CS[Cartesian,2],AXIS["easting (X)",east,ORDER[1]],AXIS["northing (Y)",north,ORDER[2]],LENGTHUNIT["metre",1]]"#;
     let (known, why) = from_wkt(wkt2).unwrap();
@@ -332,4 +338,55 @@ fn find_skips_a_location_another_viewport_covers() {
     let at = page.find(40.5, -119.5).unwrap();
     near(at[0], 300.0, 1e-6);
     near(located(&page, at).lat, 40.5, 1e-9);
+}
+
+#[test]
+fn edge_longitudes_of_180_keep_their_side() {
+    // Rows from review: whole-world maps, a map written 0..360, and a map from 0 to 180.
+    for (gpts, gcs, lat, lon) in [
+        ("[-90 -180 90 -180 90 180 -90 180]", "/EPSG 4326", 0.0, 0.0),
+        ("[-85 -180 85 -180 85 180 -85 180]", "/Type /PROJCS /EPSG 3857", 0.0, 0.0),
+        ("[-90 0 90 0 90 360 -90 360]", "/EPSG 4326", 0.0, 180.0),
+        ("[-90 0 90 0 90 180 -90 180]", "/EPSG 4326", 0.0, 90.0),
+    ] {
+        let page = GeoPage::read(&page_with(&geo_viewport(&format!("/GPTS {gpts} /GCS << {gcs} >>"))), 0).unwrap();
+        let centre = page.locate([300.0, 400.0]).unwrap_or_else(|| panic!("{gpts} {gcs}: {:?}", page.viewports[0].kind));
+        near(centre.lat, lat, 1e-6);
+        // 180 and -180 are one meridian.
+        near((centre.lon - lon + 540.0).rem_euclid(360.0) - 180.0, 0.0, 1e-6);
+    }
+    // The 0..180 map isn't mirrored: a quarter across is 45°E.
+    let page = GeoPage::read(&page_with(&geo_viewport("/GPTS [-90 0 90 0 90 180 -90 180] /GCS << /EPSG 4326 >>")), 0).unwrap();
+    near(located(&page, [200.0, 400.0]).lon, 45.0, 1e-6);
+    near(page.find(0.0, 45.0).unwrap()[0], 200.0, 1e-6);
+}
+
+#[test]
+fn a_web_mercator_map_across_the_antimeridian_stays_continuous() {
+    for gpts in ["[34 179 35 179 35 181 34 181]", "[34 179 35 179 35 -179 34 -179]"] {
+        let page = GeoPage::read(&page_with(&geo_viewport(&format!("/GPTS {gpts} /GCS << /Type /PROJCS /EPSG 3857 >>"))), 0).unwrap();
+        let centre = located(&page, [300.0, 400.0]);
+        near(centre.lon.abs(), 180.0, 1e-6);
+        let east = located(&page, [400.0, 400.0]);
+        near(east.lon, -179.5, 1e-6);
+        let at = page.find(east.lat, -179.5).unwrap();
+        near(at[0], 400.0, 1e-6);
+        near(page.find(east.lat, 180.5 - 360.0).unwrap()[0], 400.0, 1e-6);
+    }
+}
+
+#[test]
+fn wkt1_parameters_without_a_unit_take_the_geographic_unit() {
+    // OGC 01-009: PROJCS parameters are in the GEOGCS angular unit. 50 grads is 45°.
+    let grads = r#"PROJCS["NTF (Paris) / Lambert zone II",GEOGCS["NTF (Paris)",DATUM["D",SPHEROID["Clarke 1880 (IGN)",6378249.2,293.4660212936269]],PRIMEM["Paris",2.33722917],UNIT["grad",0.01570796326794897]],PROJECTION["Lambert_Conformal_Conic_1SP"],PARAMETER["latitude_of_origin",50],PARAMETER["central_meridian",0],PARAMETER["scale_factor",0.99987742],PARAMETER["false_easting",600000],PARAMETER["false_northing",2200000],UNIT["metre",1]]"#;
+    let (known, why) = from_wkt(grads).unwrap();
+    assert!(why.is_ok());
+    let Some(Projection::Lambert(l)) = &known.projection else { panic!("{:?}", known.projection) };
+    near(l.n, 45_f64.to_radians().sin(), 1e-12);
+    // WKT2: an explicit parameter unit wins over the base CRS's.
+    let wkt2 = r#"PROJCRS["x",BASEGEOGCRS["g",DATUM["d",ELLIPSOID["GRS 1980",6378137,298.257222101]],ANGLEUNIT["grad",0.01570796326794897]],CONVERSION["c",METHOD["Lambert Conic Conformal (1SP)"],PARAMETER["Latitude of natural origin",45,ANGLEUNIT["degree",0.0174532925199433]],PARAMETER["Longitude of natural origin",10],PARAMETER["Scale factor at natural origin",1]]]"#;
+    let (known, _) = from_wkt(wkt2).unwrap();
+    let Some(Projection::Lambert(l)) = &known.projection else { panic!("{:?}", known.projection) };
+    near(l.n, 45_f64.to_radians().sin(), 1e-12);
+    near(l.lon0, 9_f64.to_radians(), 1e-12);
 }
