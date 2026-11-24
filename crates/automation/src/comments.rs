@@ -836,7 +836,8 @@ impl Automation {
     /// locked comment, a document that doesn't allow changes) deletes none of them.
     pub(crate) fn comments_cut(&mut self, a: &Args) -> Result<Value> {
         let (xfdf, which) = self.listed_comments_xfdf(a)?;
-        let count = which.len();
+        // A comment listed twice is cut once, and counted once.
+        let count = which.iter().collect::<std::collections::BTreeSet<_>>().len();
         // Each deletion still names its comment after the ones before it took their pop-ups and replies.
         let edits = self.doc(a)?.annotation_deletions(&which);
         let mut out = self.apply(a, Edit::Batch { label: "Cut comments".into(), edits })?;

@@ -14697,6 +14697,24 @@ fn comments_cut_copies_and_deletes_as_one_step_through_tools() {
     assert!(matches!(a.call("comments_cut", &json!({ "doc": src, "comments": [[2]] })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// A comment listed twice is cut once, and `comments_cut` reports it once.
+#[test]
+fn comments_cut_counts_a_comment_listed_twice_once() {
+    let dir = workdir("comments-cut-twice");
+    let mut a = auto(&dir);
+    let src = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "comment_add", json!({ "doc": src, "page": 1, "type": "rectangle", "rect": [20, 20, 80, 60], "contents": "Box" }));
+    ok(&mut a, "comment_add", json!({ "doc": src, "page": 1, "type": "rectangle", "rect": [100, 20, 160, 60], "contents": "Other" }));
+    let listed = ok(&mut a, "comment_list", json!({ "doc": src, "page": 1 }));
+    let first = listed["comments"].as_array().unwrap().iter().find(|c| c["contents"] == "Box").map(|c| json!([c["page"], c["index"]])).unwrap();
+    let cut = ok(&mut a, "comments_cut", json!({ "doc": src, "comments": [first, first] }));
+    assert_eq!(cut["comments"], 1, "{cut}");
+    let left = ok(&mut a, "comment_list", json!({ "doc": src }));
+    let left = left["comments"].as_array().unwrap();
+    assert_eq!(left.len(), 1, "only the listed comment went");
+    assert_eq!(left[0]["contents"], "Other");
+}
+
 /// A bitmap Type 3 font drawn with a flipped font matrix under a flipped text matrix (as TeX's
 /// bitmap fonts are): `text_lines` boxes a line by its glyphs' `d1` boxes (ISO 32000-2 §9.6.4),
 /// as high as the ink, not a 0.09-point sliver.
