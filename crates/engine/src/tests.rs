@@ -14079,6 +14079,39 @@ fn a_batch_that_applies_redactions_and_copies_a_page_is_refused() {
     assert!(page_texts(&s, id).iter().all(|t| !t.contains("SECRET42")), "{:?}", page_texts(&s, id));
 }
 
+/// A batch that applies redactions and then scales a page is refused whole: the marks are in the
+/// old geometry, so checking them against the scaled page would miss what is under them.
+#[test]
+fn a_batch_that_applies_redactions_and_scales_a_page_is_refused() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let page = one_line_page_with("/Font << /F1 4 0 R >>", "", "BT /F1 16 Tf 20 150 Td (Public words then SECRET42) Tj ET");
+    let id = s.open("batch.pdf", None, Arc::new(page), None).unwrap();
+    mark_shown_text(&mut s, id, "SECRET42");
+    let request = ScaleRequest { width: 100.0, height: 150.0, mode: ScaleMode::Fit, orientation: ScaleOrientation::Match };
+    let edits = vec![Edit::ApplyRedactions { pages: None }, Edit::ScalePages { pages: vec![0], request }];
+    let refused = s.apply(id, Edit::Batch { label: "x".into(), edits });
+    assert!(matches!(&refused, Err(EditError::Invalid(m)) if m.contains("scale pages")), "{refused:?}");
+    assert!(page_texts(&s, id)[0].contains("SECRET42"), "nothing changed");
+    assert_eq!(s.get(id).unwrap().redaction_marks(), 1);
+}
+
+/// An added item on a scaled page becomes page content, drawn where the page now puts it, rather
+/// than staying listed at its old place; the repair log says so. Other pages keep theirs.
+#[test]
+fn scaling_a_page_makes_its_added_items_page_content() {
+    let (mut s, id) = session_with(2);
+    for page in [0, 1] {
+        let text = AddedText { rect: [20.0, 250.0, 180.0, 280.0], text: "Added note".into(), size: 12.0, ..AddedText::default() };
+        s.apply(id, Edit::AddText { page, text }).unwrap();
+    }
+    let request = ScaleRequest { width: 100.0, height: 150.0, mode: ScaleMode::Fit, orientation: ScaleOrientation::Match };
+    s.apply(id, Edit::ScalePages { pages: vec![0], request }).unwrap();
+    let d = s.get(id).unwrap();
+    assert_eq!(d.added().iter().map(|a| a.page).collect::<Vec<_>>(), vec![1], "only the unscaled page's item is still listed");
+    assert!(page_texts(&s, id)[0].contains("Added note"), "the text is still on the page");
+    assert!(d.repair_log().iter().any(|l| l.contains("added item")), "{:?}", d.repair_log());
+}
+
 /// A reset in an opening script reaches a field of a row an earlier opening script added, before
 /// the form is laid out again with the row's widgets: its data goes back to its default and stays
 /// so when the form is saved.
