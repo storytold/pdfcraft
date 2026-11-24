@@ -14,11 +14,13 @@
 //!
 //! A glyph a clip hides shows nowhere, so it is no link's: a clip that encloses no area hides
 //! everything; a clip rectangle, through the CTM, hides a glyph whose centre is outside it; any
-//! other clip path hides one whose centre is outside the box around it, so a glyph inside the box
-//! is taken as shown. Past [`MAX_CLIP_QUADS`] turned rectangles in one state, a rectangle counts by
-//! its box too; past [`MAX_SAVED`] nested `q`, clips are not followed, and clipping by text
-//! (render modes 4 to 7) never is. Hidden text inside a link's text is an artifact: in no element,
-//! and no interruption.
+//! other clip path hides one whose centre is outside its shape, by the nonzero rule for `W` and
+//! the even-odd rule for `W*` (§8.5.3.3), with its curves flattened to [`CURVE_SEGMENTS`] lines
+//! each. Past [`MAX_CLIP_QUADS`] turned rectangles in one state a rectangle, and past the
+//! document's [`MAX_CLIP_WORK`] any other path, counts by the box around it, so a glyph inside the
+//! box is taken as shown; past [`MAX_SAVED`] nested `q`, clips are not followed, and clipping by
+//! text (render modes 4 to 7) never is. Hidden text inside a link's text is an artifact: in no
+//! element, and no interruption.
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -47,10 +49,30 @@ const WORD_GAP: f64 = 0.15;
 const MAX_SAVED: usize = 64;
 /// Clip rectangles not aligned with the axes that are followed exactly in one graphics state.
 const MAX_CLIP_QUADS: usize = 16;
+/// The line segments a Bézier curve of a clip path is followed by.
+const CURVE_SEGMENTS: usize = 16;
+/// Clip-path work in one document: each line segment a clip path is kept as, and each segment a
+/// glyph is tested against. Every glyph inside a clip path's box is tested, near a link or not.
+/// Past it, a clip path counts by the box around it.
+const MAX_CLIP_WORK: usize = 50_000_000;
 /// Characters of a `/Contents` description written from a link's text or address.
 const MAX_CONTENTS: usize = 200;
 /// Glyph-in-area tests in one document: each glyph is tested against every link area on its page.
 pub(crate) const MAX_AREA_TESTS: usize = 50_000_000;
+
+/// What placing a document's glyphs may use, across its pages.
+pub(crate) struct Allowance {
+    /// Glyph-in-area tests left, from [`MAX_AREA_TESTS`]: past them, the document is refused.
+    tests: usize,
+    /// Clip-path work left, from [`MAX_CLIP_WORK`]: past it, clip paths count by their boxes.
+    clip: usize,
+}
+
+impl Default for Allowance {
+    fn default() -> Self {
+        Allowance { tests: MAX_AREA_TESTS, clip: MAX_CLIP_WORK }
+    }
+}
 
 /// What a document's links use, across its pages.
 pub(crate) struct LinkBudget {
@@ -267,8 +289,8 @@ pub(crate) struct Placed {
 
 /// Where each glyph of `ops` falls, against `links`. `resources` and `states` are the page's `/Font`
 /// and `/ExtGState` resource dictionaries and `fonts` the document's font cache. With no link areas the operators come back as
-/// they are and no glyph has an owner. `allowance` is the glyph-in-area tests the document has left
-/// (from [`MAX_AREA_TESTS`]); `None` when placing this page's glyphs would take more.
+/// they are and no glyph has an owner. `allowance` is what the document has left; `None` when
+/// placing this page's glyphs would take more glyph-in-area tests than it has.
 pub(crate) fn place(
     doc: &Document,
     fonts: &mut Fonts,
@@ -276,7 +298,7 @@ pub(crate) fn place(
     states: &Dict,
     ops: Vec<Op>,
     links: &[Link],
-    allowance: &mut usize,
+    allowance: &mut Allowance,
 ) -> Option<Placed> {
     // Each usable area once, with the link it belongs to: what every glyph near them is tested
     // against, and what it is charged for.
@@ -292,7 +314,8 @@ pub(crate) fn place(
         tm: Matrix::IDENTITY,
         tlm: Matrix::IDENTITY,
         lost: false,
-        tests: *allowance,
+        tests: allowance.tests,
+        clip_work: allowance.clip,
         exhausted: false,
         bounds: areas.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, (_, a)| {
             [b[0].min(a.bounds[0]), b[1].min(a.bounds[1]), b[2].max(a.bounds[2]), b[3].max(a.bounds[3])]
@@ -300,7 +323,7 @@ pub(crate) fn place(
         areas,
         texts: vec![Covered::default(); links.len()],
         path: Path::default(),
-        clip: false,
+        clip: None,
     };
     let mut out = Vec::with_capacity(ops.len());
     let (mut owners, mut blank, mut quiet, mut hidden) = (HashMap::new(), HashSet::new(), HashSet::new(), HashSet::new());
@@ -353,7 +376,7 @@ pub(crate) fn place(
             out.push(split_op(&op, i == 0, run.items));
         }
     }
-    *allowance = walk.tests;
+    (allowance.tests, allowance.clip) = (walk.tests, walk.clip_work);
     let descriptions = links.iter().zip(&walk.texts).map(|(l, t)| l.description(&t.text)).collect();
     Some(Placed { ops: out, owners, blank, quiet, hidden, descriptions })
 }
@@ -408,28 +431,129 @@ struct State {
 }
 
 /// Clips that enclose some area, as far as they are followed: a rectangle (`re`, the only
-/// subpath of its path) exactly, through the CTM; any other path by its bounding box, which holds
-/// the path, so a glyph outside the box is hidden, and one inside it is taken as shown. Each clip
-/// narrows the one before (§8.5.4), so they are kept together. In default user space.
+/// subpath of its path) exactly, through the CTM; any other path by its shape, through the CTM,
+/// while the document's clip work lasts, and past it by its bounding box, which holds the path, so
+/// a glyph outside the box is hidden, and one inside it is taken as shown. Each clip narrows the
+/// one before (§8.5.4), so they are kept together. In default user space.
 #[derive(Clone, Default)]
 struct Clip {
     /// The intersection of the clips' bounding boxes, `[x0, y0, x1, y1]`; `None` until a clip
-    /// sets it. It can be empty (`x0 > x1`): then no glyph shows.
+    /// sets it. It can be empty (`x0 > x1`): then no glyph shows. It is tested first: a glyph
+    /// outside it costs no clip work.
     bounds: Option<[f64; 4]>,
     /// Rectangles not aligned with the axes (a rotated or skewed CTM), each a parallelogram: the
     /// first [`MAX_CLIP_QUADS`], past which a rectangle counts by its bounding box alone.
     quads: Vec<[(f64, f64); 4]>,
+    /// The other clip paths, followed by their shapes, the latest first: shared, so saving the
+    /// graphics state copies none of them.
+    paths: Option<Rc<ClipPath>>,
+}
+
+/// A clip path that is not one rectangle, as line segments in default user space.
+struct ClipPath {
+    /// Its subpaths, each closed from its last point back to its first. With each point, the
+    /// curve the line ending there was flattened from, by its place in [`ClipPath::bends`] from 1
+    /// (0 for a straight line).
+    polygons: Vec<Polygon>,
+    /// The curves its lines were flattened from ([`Bend`]).
+    bends: Vec<Bend>,
+    /// `W*`: the even-odd rule; else nonzero winding.
+    even_odd: bool,
+    /// Its segments: what a glyph test against it costs.
+    segments: usize,
+    /// The clip path it narrows.
+    under: Option<Rc<ClipPath>>,
+}
+
+/// A subpath as a polygon: each point with the curve the line ending there was flattened from, by
+/// its place in a [`Bend`] list from 1 (0 for a straight line).
+type Polygon = Vec<((f64, f64), usize)>;
+
+/// How far the lines of one curve can stray from it, and the box around its control points,
+/// which holds the curve: a point within the slack of one of its lines and inside the box is
+/// taken as inside, so flattening a curve hides no glyph that shows.
+#[derive(Clone, Copy)]
+struct Bend {
+    slack: f64,
+    bounds: [f64; 4],
+}
+
+impl Drop for ClipPath {
+    /// One clip at a time: a long chain dropped recursively would overflow the stack.
+    fn drop(&mut self) {
+        let mut under = self.under.take();
+        while let Some(path) = under {
+            under = Rc::try_unwrap(path).ok().and_then(|mut p| p.under.take());
+        }
+    }
+}
+
+impl ClipPath {
+    /// Whether `(x, y)` is inside the path by its rule, or on its edge or within the slack of a
+    /// curve's line. A side too large to measure (an overflow) is taken as inside.
+    fn holds(&self, (x, y): (f64, f64)) -> bool {
+        let mut winding = 0i64;
+        for polygon in &self.polygons {
+            for (i, &(a, _)) in polygon.iter().enumerate() {
+                // The line back to the first point, closing the subpath, is straight.
+                let (b, bend) = polygon.get(i + 1).copied().unwrap_or((polygon.first().map_or(a, |f| f.0), 0));
+                // Where the point is from the edge's line: left of it, going from `a` to `b`, when
+                // positive.
+                let side = (b.0 - a.0) * (y - a.1) - (x - a.0) * (b.1 - a.1);
+                if !side.is_finite() {
+                    return true;
+                }
+                if side == 0.0 && a.0.min(b.0) <= x && x <= a.0.max(b.0) && a.1.min(b.1) <= y && y <= a.1.max(b.1) {
+                    return true;
+                }
+                if let Some(Bend { slack, bounds: k }) = bend.checked_sub(1).and_then(|i| self.bends.get(i)).copied()
+                    && k[0] <= x
+                    && x <= k[2]
+                    && k[1] <= y
+                    && y <= k[3]
+                {
+                    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                    let along = ((x - a.0) * dx + (y - a.1) * dy) / (dx * dx + dy * dy);
+                    let t = if along.is_finite() { along.clamp(0.0, 1.0) } else { 0.0 };
+                    let near = (x - a.0 - t * dx).hypot(y - a.1 - t * dy);
+                    if !near.is_finite() || near <= slack {
+                        return true;
+                    }
+                }
+                if a.1 <= y {
+                    if b.1 > y && side > 0.0 {
+                        winding += 1;
+                    }
+                } else if b.1 <= y && side < 0.0 {
+                    winding -= 1;
+                }
+            }
+        }
+        if self.even_odd { winding % 2 != 0 } else { winding != 0 }
+    }
 }
 
 impl Clip {
-    /// Narrows the clip to `path`'s, when `path` has points and they are all finite.
-    fn narrow(&mut self, path: &Path) {
+    /// Narrows the clip to `path`'s, when `path` has points and they are all finite. `even_odd`
+    /// is its rule; `work` is the document's clip work left, which keeping a path's segments
+    /// spends.
+    fn narrow(&mut self, path: &Path, even_odd: bool, work: &mut usize) {
         let Some(b) = path.bounds.filter(|_| path.finite) else { return };
-        if let Shape::Rect(q) = path.shape
-            && !(q[0].1 == q[1].1 && q[1].0 == q[2].0 || q[0].0 == q[1].0 && q[1].1 == q[2].1)
-            && self.quads.len() < MAX_CLIP_QUADS
-        {
-            self.quads.push(q);
+        match path.shape {
+            Shape::Rect(q) => {
+                if !(q[0].1 == q[1].1 && q[1].0 == q[2].0 || q[0].0 == q[1].0 && q[1].1 == q[2].1) && self.quads.len() < MAX_CLIP_QUADS {
+                    self.quads.push(q);
+                }
+            }
+            Shape::Other => {
+                let segments = path.segments();
+                if let Some(left) = work.checked_sub(segments) {
+                    *work = left;
+                    let (polygons, bends) = path.polygons();
+                    self.paths = Some(Rc::new(ClipPath { polygons, bends, even_odd, segments, under: self.paths.take() }));
+                }
+            }
+            Shape::Empty => {}
         }
         self.bounds = Some(match self.bounds {
             None => b,
@@ -438,8 +562,10 @@ impl Clip {
     }
 
     /// Whether a glyph centred at `p` shows: inside, or on the edge of, every clip. A point that
-    /// isn't finite has no place to test, and is taken as shown.
-    fn shows(&self, (x, y): (f64, f64)) -> bool {
+    /// isn't finite has no place to test, and is taken as shown. Each clip path it is tested
+    /// against spends `work`; once `work` can't pay for one, it and the clip paths it narrows
+    /// count by their boxes.
+    fn shows(&self, (x, y): (f64, f64), work: &mut usize) -> bool {
         if !(x.is_finite() && y.is_finite()) {
             return true;
         }
@@ -447,6 +573,15 @@ impl Clip {
             && !(b[0] <= x && x <= b[2] && b[1] <= y && y <= b[3])
         {
             return false;
+        }
+        let mut path = self.paths.as_deref();
+        while let Some(p) = path {
+            let Some(left) = work.checked_sub(p.segments) else { break };
+            *work = left;
+            if !p.holds((x, y)) {
+                return false;
+            }
+            path = p.under.as_deref();
         }
         self.quads.iter().all(|q| {
             let side = |i: usize| {
@@ -487,10 +622,10 @@ impl Default for State {
     }
 }
 
-/// The path being built, in device space, only as far as telling whether it encloses any area
-/// and where it can: for the current subpath its first point, a second point apart from it, and
-/// whether any point lies off the line through them; whether any subpath so far does; the box
-/// around its points; and whether it is one rectangle. Curves are followed by their control
+/// The path being built, in device space: for the current subpath its first point, a second
+/// point apart from it, and whether any point lies off the line through them; whether any subpath
+/// so far does; the box around its points; whether it is one rectangle; and its subpaths, for a
+/// clip to follow its shape. For the area and the box, curves are followed by their control
 /// points, whose hull holds the curve.
 struct Path {
     first: Option<(f64, f64)>,
@@ -500,11 +635,34 @@ struct Path {
     bounds: Option<[f64; 4]>,
     finite: bool,
     shape: Shape,
+    /// Each subpath from its first point, as it was drawn.
+    subpaths: Vec<Vec<Segment>>,
+    /// The last subpath was closed (`h`, or `re`): a line or curve after it starts a new subpath
+    /// at its first point.
+    closed: bool,
+}
+
+/// A piece of a subpath, in device space: a line to a point (the subpath's first point, for its
+/// first piece), or a Bézier curve's two control points and its end.
+#[derive(Clone, Copy)]
+enum Segment {
+    Line((f64, f64)),
+    Curve([(f64, f64); 3]),
 }
 
 impl Default for Path {
     fn default() -> Self {
-        Path { first: None, second: None, area: false, points: false, bounds: None, finite: true, shape: Shape::Empty }
+        Path {
+            first: None,
+            second: None,
+            area: false,
+            points: false,
+            bounds: None,
+            finite: true,
+            shape: Shape::Empty,
+            subpaths: Vec::new(),
+            closed: false,
+        }
     }
 }
 
@@ -537,6 +695,90 @@ impl Path {
     /// The path has points, and each subpath's lie on one line.
     fn flat(&self) -> bool {
         self.points && !self.area
+    }
+
+    /// Adds a drawn piece: `start` begins a new subpath with it (`m`, `re`); otherwise it goes on
+    /// the current subpath, or on a new one from where a closed one began.
+    fn draw(&mut self, start: bool, segment: Segment) {
+        let reopen = if self.closed && !start { self.subpaths.last().and_then(|s| s.first()).copied() } else { None };
+        self.closed = false;
+        if start || reopen.is_some() || self.subpaths.is_empty() {
+            self.subpaths.push(reopen.into_iter().collect());
+        }
+        let Some(subpath) = self.subpaths.last_mut() else { return };
+        match segment {
+            // A curve with no point to start from (no `m` before it) starts the subpath at its end.
+            Segment::Curve([_, _, end]) if subpath.is_empty() => subpath.push(Segment::Line(end)),
+            _ => subpath.push(segment),
+        }
+    }
+
+    /// The current point: where the last piece ended, or where a closed subpath began.
+    fn current(&self) -> Option<(f64, f64)> {
+        let subpath = self.subpaths.last()?;
+        let segment = if self.closed { subpath.first() } else { subpath.last() };
+        segment.map(|&(Segment::Line(p) | Segment::Curve([_, _, p]))| p)
+    }
+
+    /// `h`: the current subpath is closed.
+    fn close(&mut self) {
+        self.closed = !self.subpaths.is_empty();
+    }
+
+    /// The line segments [`Path::polygons`] gives.
+    fn segments(&self) -> usize {
+        self.subpaths
+            .iter()
+            .flatten()
+            .map(|s| match s {
+                Segment::Line(_) => 1,
+                Segment::Curve(_) => CURVE_SEGMENTS,
+            })
+            .fold(0usize, usize::saturating_add)
+    }
+
+    /// Each subpath as the points of a polygon, its curves flattened to [`CURVE_SEGMENTS`] lines,
+    /// each point with the curve the line ending there came from; and those curves. A line of a
+    /// curve strays at most an eighth of the curve's largest second derivative times the square
+    /// of the line's share of it: 3/4 of the largest second difference of its points, over the
+    /// lines squared.
+    fn polygons(&self) -> (Vec<Polygon>, Vec<Bend>) {
+        let mut bends: Vec<Bend> = Vec::new();
+        let polygons = self
+            .subpaths
+            .iter()
+            .map(|subpath| {
+                let mut points: Polygon = Vec::new();
+                for &segment in subpath {
+                    match segment {
+                        Segment::Line(p) => points.push((p, 0)),
+                        Segment::Curve([b, c, d]) => {
+                            let a = points.last().map_or(d, |l| l.0);
+                            let second = |p: (f64, f64), q: (f64, f64), r: (f64, f64)| (p.0 - 2.0 * q.0 + r.0).hypot(p.1 - 2.0 * q.1 + r.1);
+                            let n = CURVE_SEGMENTS as f64;
+                            let slack = 0.75 * second(a, b, c).max(second(b, c, d)) / (n * n);
+                            let (xs, ys) = ([a.0, b.0, c.0, d.0], [a.1, b.1, c.1, d.1]);
+                            let bounds = [
+                                xs.into_iter().fold(f64::INFINITY, f64::min),
+                                ys.into_iter().fold(f64::INFINITY, f64::min),
+                                xs.into_iter().fold(f64::NEG_INFINITY, f64::max),
+                                ys.into_iter().fold(f64::NEG_INFINITY, f64::max),
+                            ];
+                            bends.push(Bend { slack, bounds });
+                            let bend = bends.len();
+                            for k in 1..=CURVE_SEGMENTS {
+                                let t = k as f64 / CURVE_SEGMENTS as f64;
+                                let u = 1.0 - t;
+                                let (wa, wb, wc, wd) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+                                points.push(((wa * a.0 + wb * b.0 + wc * c.0 + wd * d.0, wa * a.1 + wb * b.1 + wc * c.1 + wd * d.1), bend));
+                            }
+                        }
+                    }
+                }
+                points
+            })
+            .collect();
+        (polygons, bends)
     }
 }
 
@@ -631,9 +873,12 @@ struct Walk<'a> {
     /// The box around all the page's link areas: a glyph outside it is tested against none of them,
     /// and costs nothing.
     bounds: [f64; 4],
-    /// The current path, and whether `W` or `W*` makes it a clip when it is ended.
+    /// Clip-path work left in the document's allowance ([`MAX_CLIP_WORK`]).
+    clip_work: usize,
+    /// The current path, and whether `W` (`Some(false)`) or `W*` (`Some(true)`) makes it a clip
+    /// when it is ended.
     path: Path,
-    clip: bool,
+    clip: Option<bool>,
 }
 
 impl Walk<'_> {
@@ -679,15 +924,18 @@ impl Walk<'_> {
             b"T*" => self.next_line(),
             b"Tj" | b"'" | b"\"" | b"TJ" => return self.show(op),
             b"m" | b"l" | b"c" | b"v" | b"y" | b"re" => self.path_points(op),
-            b"W" | b"W*" => self.clip = true,
+            b"h" => self.path.close(),
+            b"W" | b"W*" => self.clip = Some(op.op == b"W*"),
             // A clip only narrows until `Q`, so once it encloses nothing it stays so. Past
             // `MAX_SAVED`, a `Q` would not restore it, so text is then taken as shown.
             b"n" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s" => {
-                if std::mem::take(&mut self.clip) && self.unsaved == 0 {
+                if let Some(even_odd) = self.clip.take()
+                    && self.unsaved == 0
+                {
                     if self.path.flat() {
                         self.state.hidden = true;
                     } else {
-                        self.state.clip.narrow(&self.path);
+                        self.state.clip.narrow(&self.path, even_odd, &mut self.clip_work);
                     }
                 }
                 self.path = Path::default();
@@ -718,7 +966,8 @@ impl Walk<'_> {
         if points.is_empty() {
             return;
         }
-        if matches!(op.op.as_slice(), b"m" | b"re") {
+        let start = matches!(op.op.as_slice(), b"m" | b"re");
+        if start {
             self.path.start();
         }
         let points: Vec<(f64, f64)> = points.into_iter().map(|(x, y)| ctm.apply(x, y)).collect();
@@ -726,6 +975,22 @@ impl Walk<'_> {
             (Shape::Empty, &[a, b, c, d]) if op.op == b"re" => Shape::Rect([a, b, c, d]),
             _ => Shape::Other,
         };
+        // `v` puts its curve's first control point at the current point, and `y` its second at
+        // the curve's end.
+        let at = self.path.current();
+        match (op.op.as_slice(), points.as_slice()) {
+            (b"re", &[a, b, c, d]) => {
+                for (i, p) in [a, b, c, d].into_iter().enumerate() {
+                    self.path.draw(i == 0, Segment::Line(p));
+                }
+                self.path.close();
+            }
+            (b"c", &[b, c, d]) => self.path.draw(false, Segment::Curve([b, c, d])),
+            (b"v", &[c, d]) => self.path.draw(false, Segment::Curve([at.unwrap_or(c), c, d])),
+            (b"y", &[b, d]) => self.path.draw(false, Segment::Curve([b, d, d])),
+            (_, &[p]) => self.path.draw(start, Segment::Line(p)),
+            _ => {}
+        }
         for p in points {
             self.path.add(p);
         }
@@ -817,7 +1082,7 @@ impl Walk<'_> {
             let width = m.width(code);
             let glyph = Matrix([s.size * s.scale, 0.0, 0.0, s.size, 0.0, s.rise]).then(&self.tm).then(&s.ctm);
             let centre = glyph.apply(width / 2.0, (m.ascent + m.descent) / 2.0);
-            let hidden = !s.clip.shows(centre);
+            let hidden = !s.clip.shows(centre, &mut self.clip_work);
             let b = self.bounds;
             let near = !hidden && b[0] <= centre.0 && centre.0 <= b[2] && b[1] <= centre.1 && centre.1 <= b[3];
             let (owner, inside) = if near {
@@ -1357,18 +1622,57 @@ mod tests {
         }
     }
 
+    /// A clip of a circle drawn as four Bézier curves.
+    fn circle((x, y): (f64, f64), r: f64) -> String {
+        let k = 0.5523 * r;
+        format!(
+            "{} {y} m {} {} {} {} {x} {} c {} {} {} {} {} {y} c {} {} {} {} {x} {} c {} {} {} {} {} {y} c h W n",
+            x + r,
+            x + r,
+            y + k,
+            x + k,
+            y + r,
+            y + r,
+            x - k,
+            y + r,
+            x - r,
+            y + k,
+            x - r,
+            x - r,
+            y - k,
+            x - k,
+            y - r,
+            y - r,
+            x + k,
+            y - r,
+            x + r,
+            y - k,
+            x + r
+        )
+    }
+
     /// Text drawn where a clip hides it shows nowhere, so it is in no link's area: a hidden `v` a
     /// writer draws where a citation's `[5]` is shown stays in its paragraph, and is not in the
     /// link's description; hidden text between two parts of one link is an artifact, neither in
-    /// the Link nor interrupting it. A clip hides a glyph when it encloses no area, when the
-    /// glyph's centre is outside a clip rectangle (through the CTM) or outside the intersection
-    /// of rectangles, or when it is outside the box around any other clip path. A clip around the
-    /// glyph, or one restored by `Q`, hides nothing.
+    /// the Link nor interrupting it. A clip hides a glyph when it encloses no area, or when the
+    /// glyph's centre is outside its shape through the CTM: a rectangle, the intersection of
+    /// several clips, or any other path by its rule (nonzero for `W`, even-odd for `W*`), its
+    /// curves followed too. A clip around the glyph, or one restored by `Q`, hides nothing.
     #[test]
     fn text_clipped_out_of_view_is_in_no_link() {
         let cite = |clip: &str| format!("q {clip} BT /F1 10 Tf 20 300 Td (v) Tj ET Q BT /F1 10 Tf 20 300 Td ([5]) Tj ET");
         let described = |doc: &Document| annot_dict(doc, 7).get(b"Contents").and_then(|c| c.as_string()).map(|s| s.to_text());
-        for clip in [
+        // The `v` is centred near (23, 302). A pentagram around it, drawn as one self-crossing
+        // subpath: the glyph is where it winds twice, inside by the nonzero rule, outside by
+        // even-odd.
+        let star = |rule: &str| {
+            let corner = |k: usize| {
+                let a = std::f64::consts::FRAC_PI_2 + (k * 2 % 5) as f64 * std::f64::consts::TAU / 5.0;
+                format!("{:.3} {:.3}", 23.0 + 60.0 * a.cos(), 302.0 + 60.0 * a.sin())
+            };
+            format!("{} m {} l {} l {} l {} l h {rule} n", corner(0), corner(1), corner(2), corner(3), corner(4))
+        };
+        let hidden = [
             "0 0 0 0 re W n",
             "0 0 0 10 re W* n",
             "20 300 m 60 300 l W n",
@@ -1385,10 +1689,33 @@ mod tests {
             // holds it.
             "1 0 0 1 200 0 cm 10 290 100 30 re W n 1 0 0 1 -200 0 cm",
             "1 0 1 1 0 0 cm 0 0 10 400 re W n 1 0 -1 1 0 0 cm",
-            // A triangle whose box is away from the glyph.
+            // A triangle whose box is away from the glyph, and one whose box holds it.
             "100 100 m 200 100 l 150 200 l h W n",
-        ] {
-            let mut doc = page(&cite(clip), &[&link(&over(0, 3))]);
+            "0 280 m 400 280 l 400 400 l h W n",
+            // A concave clip whose box holds the glyph, with a notch where the glyph is; and with a
+            // wide curve far from it, whose slack is no straight edge's.
+            "0 280 m 100 280 l 100 330 l 40 330 l 40 295 l 10 295 l 10 330 l 0 330 l h W n",
+            "0 280 m 100 280 l 100 330 l 40 330 l 40 295 l 10 295 l 10 330 l 0 330 l h 300 280 m 300 2000 400 -1500 400 280 c h W n",
+            // And with a curve whose lines' slack reaches the glyph from far off, though the curve,
+            // inside the box around its control points, stays away from it.
+            "0 280 m 100 280 l 100 330 l 40 330 l 40 295 l 10 295 l 10 330 l 0 330 l h 300 0 m 300 100000 400 -100000 400 0 c h W n",
+            // A triangle that holds the glyph, turned by `cm` (a reflection) so that it misses it
+            // while its box still holds it.
+            "-1 0 0 1 400 0 cm 0 280 m 400 280 l 0 400 l h W n -1 0 0 1 400 0 cm",
+            // That triangle, narrowed by a larger one around the glyph: the clip is where both are.
+            "0 280 m 400 280 l 400 400 l h W n 0 0 m 400 0 l 0 400 l h W n",
+            // A curve drawn by `v` (its first control point at the current point) and by `y` (its
+            // second at its end), each passing below the glyph; with both control points at the
+            // given one, it would pass above.
+            "0 220 m 100 220 l 0 370 0 220 v h W n",
+            "0 220 m 100 220 l 0 370 0 220 y h W n",
+        ]
+        .map(str::to_string)
+        .into_iter()
+        // The pentagram by the even-odd rule, and a circle whose box holds the glyph.
+        .chain([star("W*"), circle((63.0, 342.0), 50.0)]);
+        for clip in hidden {
+            let mut doc = page(&cite(&clip), &[&link(&over(0, 3))]);
             autotag_text(&mut doc).unwrap();
             assert_eq!(links(&doc), [(vec!["[5]".to_string()], "P".to_string())], "{clip}");
             assert_eq!(described(&doc).as_deref(), Some("[5]"), "{clip}");
@@ -1409,17 +1736,27 @@ mod tests {
             "0 0 m 400 0 l 1 2 3 re 0 400 l W n",
         ];
         let moved = "0 0 m 400 0 l 1 0 0 1 0 400 cm 0 0 l h W n 1 0 0 1 0 -400 cm";
-        // A rectangle skewed by `cm` that still holds the glyph; a triangle that misses it but
-        // whose box holds it, which is taken as showing it; nested rectangles around it.
+        // A rectangle skewed by `cm` that still holds the glyph; nested rectangles around it; the
+        // concave clip with its notch away from the glyph; the triangle before `cm` turns it; the
+        // pentagram by the nonzero rule; and a circle around the glyph, off its centre so that
+        // the glyph is outside the circle's four corners (a curve taken as a line would miss it).
         let skewed = "1 0 1 1 0 0 cm -300 290 50 30 re W n 1 0 -1 1 0 0 cm";
-        let triangle = "0 280 m 400 280 l 400 400 l h W n";
         let nested = "0 0 400 400 re W n 10 290 100 30 re W* n";
+        let concave = "0 280 m 100 280 l 100 330 l 80 330 l 80 295 l 50 295 l 50 330 l 0 330 l h W n";
+        let unturned = "0 280 m 400 280 l 0 400 l h W n";
+        // A wide arch whose top passes 6 above the glyph, where its flattened lines pass 6 below:
+        // a glyph within the lines' slack is taken as inside.
+        let arch = "1 0 0 1 -1790.4766 -2680.0619 cm 0 0 m 0 4000 4000 4000 4000 0 c h W n 1 0 0 1 1790.4766 2680.0619 cm";
         // A rectangle turned and reflected (wound the other way) around the glyph, and a turned
         // one too large to measure.
         let reflected = "0.6 0.8 0.8 -0.6 0 0 cm 240 -180 30 30 re W n 0.6 0.8 0.8 -0.6 0 0 cm";
         let big = format!("1{}", "0".repeat(160));
         let huge = format!("0.6 0.8 -0.8 0.6 0 0 cm -{big} -{big} 2{big} 2{big} re W n 0.6 -0.8 0.8 0.6 0 0 cm");
-        let around = around.into_iter().map(str::to_string).chain([moved, skewed, triangle, nested, reflected].map(str::to_string)).chain([huge]);
+        let around = around
+            .into_iter()
+            .map(str::to_string)
+            .chain([moved, skewed, nested, concave, unturned, arch, reflected].map(str::to_string))
+            .chain([huge, star("W"), circle((11.0, 290.0), 20.0)]);
         for content in around.map(|c| cite(&c)) {
             let mut doc = page(&content, &[&link(&over(0, 3))]);
             autotag_text(&mut doc).unwrap();
@@ -1608,6 +1945,58 @@ mod tests {
         let mut doc = page(LINE, &[&sliver]);
         autotag_text(&mut doc).unwrap();
         assert_eq!(links(&doc), [(Vec::<String>::new(), "Document".to_string())]);
+    }
+
+    /// Past the document's clip work, a clip path counts by the box around it, as it did before
+    /// its shape was followed: the text is still placed, not refused. A clip that misses the
+    /// glyph, with its box around it, then shows it.
+    #[test]
+    fn past_the_documents_clip_work_a_clip_path_counts_by_its_box() {
+        let described = |clip: &str, work: usize| {
+            let content = format!("q {clip} BT /F1 10 Tf 20 300 Td (v) Tj ET Q BT /F1 10 Tf 20 300 Td ([5]) Tj ET");
+            let doc = page(&content, &[&link(&over(0, 3))]);
+            let page = &pdfcraft_model::pages(&doc)[0];
+            let links = super::page_links(&doc, &page.dict, 0, &mut super::LinkBudget::default()).unwrap();
+            let stream = doc.resolve(page.dict.get(b"Contents").unwrap());
+            let Object::Stream(stream) = &*stream else { panic!("page content") };
+            let ops = pdfcraft_content::parse(&stream.decoded_strict().unwrap()).ops;
+            let resources = doc.resolve(page.dict.get(b"Resources").unwrap());
+            let fonts = doc.resolve(resources.as_dict().unwrap().get(b"Font").unwrap());
+            let mut allowance = super::Allowance { clip: work, ..Default::default() };
+            let mut cache = crate::autotag_roles::Fonts::default();
+            let placed = super::place(&doc, &mut cache, fonts.as_dict().unwrap(), &pdfcraft_cos::Dict::default(), ops, &links, &mut allowance);
+            placed.expect("placed").descriptions.remove(0)
+        };
+        let triangle = "0 280 m 400 280 l 400 400 l h W n";
+        assert_eq!(described(triangle, super::MAX_CLIP_WORK).as_deref(), Some("[5]"));
+        // Enough to keep the triangle's three sides, but not to test the glyph against them.
+        assert_eq!(described(triangle, 3).as_deref(), Some("v [5]"));
+        // A curve costs its lines: a clip of two lines and a curve that misses the glyph, with
+        // work for it as three lines, counts by its box.
+        assert_eq!(described("0 220 m 100 220 l 0 370 0 220 v h W n", 8).as_deref(), Some("v [5]"));
+        // The triangle narrowed by a circle around the glyph, with work to keep both and to test
+        // the triangle but not the circle: once the latest clip can't be paid for, the ones it
+        // narrows count by their boxes too, so the work spent on a glyph is bounded.
+        let both = format!("{triangle} {}", circle((23.0, 302.0), 30.0));
+        assert_eq!(described(&both, 3 + 65 + 3).as_deref(), Some("v [5]"));
+    }
+
+    /// A long chain of clip paths (two rectangles each, so not one rectangle) is freed one at a
+    /// time, on a small stack.
+    #[test]
+    fn many_nested_clip_paths_are_freed_without_overflowing_the_stack() {
+        let clips = "0 0 400 400 re 0 0 400 400 re W n ".repeat(24_000);
+        let content = format!("q {clips} BT /F1 10 Tf 20 300 Td (v) Tj ET Q BT /F1 10 Tf 20 300 Td ([5]) Tj ET");
+        let tagged = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let mut doc = page(&content, &[&link(&over(0, 3))]);
+                autotag_text(&mut doc).is_ok()
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert!(tagged);
     }
 
     /// `gs` with `/Font` sets the font and size as `Tf` does (Table 57).

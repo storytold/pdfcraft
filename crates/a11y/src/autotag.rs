@@ -212,7 +212,7 @@ fn plan_page(
     totals: &mut (usize, usize),
     fonts: &mut autotag_roles::Fonts,
     budget: &mut autotag_links::LinkBudget,
-    allowance: &mut usize,
+    allowance: &mut autotag_links::Allowance,
 ) -> Result<Plan, AutoTagError> {
     if page.dict.contains(b"StructParents") {
         return Err(unsupported(index, "page already has a structure parent key"));
@@ -312,7 +312,7 @@ fn plan(doc: &Document) -> Result<Vec<Plan>, AutoTagError> {
     let mut totals = (0usize, 0usize);
     let mut fonts = autotag_roles::Fonts::default();
     let mut budget = autotag_links::LinkBudget::default();
-    let mut allowance = autotag_links::MAX_AREA_TESTS;
+    let mut allowance = autotag_links::Allowance::default();
     for (index, page) in pages.iter().enumerate() {
         let planned = plan_page(doc, page, index, &mut totals, &mut fonts, &mut budget, &mut allowance)?;
         total = total.saturating_add(planned.spans.len());
