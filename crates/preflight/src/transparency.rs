@@ -12,10 +12,10 @@
 //! a resource is not asked: a resource a page holds is one it may paint with. Blend modes are read
 //! from the same graphics states, so private data (`/PieceInfo`) is never taken for one.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use pdfcraft_cos::{Dict, Document, ObjRef, Object};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object};
 
 /// How many dictionaries one page's search reads, across its resources, XObjects, patterns, Type
 /// 3 fonts and appearance streams. An object [`Shared`] holds counts as one read.
@@ -115,25 +115,65 @@ fn walk_page<'a>(doc: &'a Document, page: &Dict, shared: &'a mut Shared) -> Walk
     if let Some(r) = page.get(b"Resources") {
         walk.visit(r, 0, Walk::resources);
     }
-    let annots = page.get(b"Annots").map(|a| held(doc, a));
-    for a in annots.as_deref().and_then(Object::as_array).into_iter().flatten() {
-        let a = held(doc, a);
-        let Some(ap) = a.as_dict().and_then(|a| a.get(b"AP")).map(|ap| held(doc, ap)) else { continue };
-        let Some(ap) = ap.as_dict() else { continue };
-        // Each appearance (normal, rollover, down) is a stream, or a dictionary of streams by state.
-        for (_, v) in ap.iter() {
-            match &*held(doc, v) {
-                Object::Stream(_) => walk.visit(v, 0, Walk::xobject),
-                Object::Dict(states) => {
-                    for (_, s) in states.iter() {
-                        walk.visit(s, 0, Walk::xobject);
-                    }
-                }
-                _ => {}
-            }
+    walk.annotations(page);
+    walk
+}
+
+/// Whether what the page `page` draws can paint transparently ([`Painting::paints_transparently`]),
+/// as [`page_painting`] finds it, except that of the page's own resources only the entries its
+/// content names are read. Pages often share one resource dictionary holding what any of them
+/// draws, and an image or graphics state one page uses would otherwise count on every page. When
+/// some of the content can't be read, every entry counts, as in [`page_painting`].
+pub(crate) fn page_draws_transparently(doc: &Document, page: &Dict) -> bool {
+    let mut shared = Shared::default();
+    let Some(named) = names_drawn(doc, page) else {
+        return page_painting(doc, page, &mut shared).paints_transparently;
+    };
+    let mut walk = Walk { doc, shared: &mut shared, seen: HashMap::new(), visits: 0, cuts: 0, found: Painting::default() };
+    // Read in place, not through `visit`: what one page names of a shared dictionary is not what
+    // the dictionary holds, so it must not go in `Shared`.
+    if let Some(r) = page.get(b"Resources") {
+        walk.visits += 1;
+        walk.resources_within(r, 0, Some(&named));
+    }
+    walk.annotations(page);
+    walk.found.paints_transparently
+}
+
+/// The keys of the page's own resource entries ([`CATEGORIES`]) that its content names as an
+/// operand, its `/Contents` decoded within one page's allowance and joined with a space as
+/// readers join them; `None` when a stream of it can't be read. A name counts whatever operator
+/// takes it, so an entry is left out only when no operand names it.
+fn names_drawn(doc: &Document, page: &Dict) -> Option<HashSet<Vec<u8>>> {
+    let res = page.get(b"Resources").map(|r| held(doc, r));
+    let mut keys: HashSet<Vec<u8>> = HashSet::new();
+    for category in CATEGORIES {
+        let entries = res.as_deref().and_then(Object::as_dict).and_then(|r| r.get(category)).map(|d| held(doc, d));
+        if let Some(entries) = entries.as_deref().and_then(Object::as_dict) {
+            keys.extend(entries.iter().map(|(k, _)| k.to_vec()));
         }
     }
-    walk
+    let mut named = HashSet::new();
+    let Some(contents) = page.get(b"Contents") else { return Some(named) };
+    if keys.is_empty() {
+        return Some(named);
+    }
+    let mut data = Vec::new();
+    for piece in DecodeBudget::page().decode_contents(doc, contents) {
+        data.extend_from_slice(&piece.ok()?);
+        data.push(b' ');
+    }
+    for op in pdfcraft_content::ops(&data) {
+        for name in op.operands.iter().filter_map(Object::as_name) {
+            if keys.contains(name) {
+                named.insert(name.to_vec());
+            }
+        }
+        if named.len() == keys.len() {
+            break;
+        }
+    }
+    Some(named)
 }
 
 /// The default colour space resource name and component count for a device colour space name.
@@ -231,6 +271,29 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
+    /// The appearance streams of the page's annotations.
+    fn annotations(&mut self, page: &Dict) {
+        let doc = self.doc;
+        let annots = page.get(b"Annots").map(|a| held(doc, a));
+        for a in annots.as_deref().and_then(Object::as_array).into_iter().flatten() {
+            let a = held(doc, a);
+            let Some(ap) = a.as_dict().and_then(|a| a.get(b"AP")).map(|ap| held(doc, ap)) else { continue };
+            let Some(ap) = ap.as_dict() else { continue };
+            // Each appearance (normal, rollover, down) is a stream, or a dictionary of streams by state.
+            for (_, v) in ap.iter() {
+                match &*held(doc, v) {
+                    Object::Stream(_) => self.visit(v, 0, Self::xobject),
+                    Object::Dict(states) => {
+                        for (_, s) in states.iter() {
+                            self.visit(s, 0, Self::xobject);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     /// Read `o`, reached `depth` levels down, with `read`: from [`Shared`] when an earlier page
     /// read it to the end, else when it is within the budget and the depth, and not an indirect
     /// object read before on this page from as shallow a place.
@@ -268,13 +331,21 @@ impl Walk<'_> {
     }
 
     fn resources(&mut self, r: &Object, depth: usize) {
+        self.resources_within(r, depth, None);
+    }
+
+    /// A resource dictionary's entries, or with `only` those of them whose key it holds.
+    fn resources_within(&mut self, r: &Object, depth: usize, only: Option<&HashSet<Vec<u8>>>) {
         let doc = self.doc;
         let res = held(doc, r);
         let Some(res) = res.as_dict() else { return };
         for category in CATEGORIES {
             let entries = res.get(category).map(|d| held(doc, d));
             let Some(entries) = entries.as_deref().and_then(Object::as_dict) else { continue };
-            for (_, v) in entries.iter() {
+            for (k, v) in entries.iter() {
+                if only.is_some_and(|only| !only.contains(k.as_slice())) {
+                    continue;
+                }
                 // Once the budget is spent nothing more is read, so nothing more is gathered either.
                 if self.visits >= MAX_VISITS {
                     self.cuts = self.cuts.saturating_add(1);
@@ -433,7 +504,7 @@ mod tests {
 
     use pdfcraft_cos::Document;
 
-    use super::{Shared, page_names_blending_space, page_painting};
+    use super::{Shared, page_draws_transparently, page_names_blending_space, page_painting};
     use crate::{Level, verify};
 
     fn build(objs: &[&str]) -> Document {
@@ -553,5 +624,29 @@ mod tests {
         ]);
         let page = &pdfcraft_model::pages(&doc)[0];
         assert!(crate::page_uses_transparency(&doc, &page.dict));
+    }
+
+    #[test]
+    fn only_the_shared_resources_a_page_names_count_for_what_it_draws() {
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R] /Count 4 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources 7 0 R /Contents 8 0 R >>",
+            "<< /Type /Page /Parent 2 0 R /Resources 7 0 R /Contents [9 0 R 10 0 R] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources 7 0 R /Contents 11 0 R >>",
+            "<< /Type /Page /Parent 2 0 R /Resources 7 0 R /Contents 9 0 R >>",
+            "<< /ExtGState << /Half << /ca 0.5 >> /Opaque << /ca 1 >> >> /XObject << /Fm 12 0 R >> >>",
+            "<< /Length 21 >>\nstream\n/Half gs 0 0 1 1 re f\nendstream",
+            "<< /Length 23 >>\nstream\n/Opaque gs 0 0 1 1 re f\nendstream",
+            "<< /Length 6 >>\nstream\n/Fm Do\nendstream",
+            "<< /Filter /NoSuchFilter /Length 4 >>\nstream\nnope\nendstream",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /ExtGState << /G << /BM /Multiply >> >> >> /Length 0 >>\nstream\n\nendstream",
+        ]);
+        let pages = pdfcraft_model::pages(&doc);
+        let draws: Vec<bool> = pages.iter().map(|p| page_draws_transparently(&doc, &p.dict)).collect();
+        // Page 1 sets the translucent state; page 2 draws the blending form in its second stream;
+        // page 3's content can't be read, so every entry counts; page 4 names neither.
+        assert_eq!(draws, [true, true, true, false]);
+        assert!(pages.iter().all(|p| crate::page_uses_transparency(&doc, &p.dict)));
     }
 }

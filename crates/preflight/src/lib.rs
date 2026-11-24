@@ -932,6 +932,14 @@ pub fn page_uses_transparency(doc: &Document, page: &Dict) -> bool {
     transparency::page_painting(doc, page, &mut transparency::Shared::default()).paints_transparently
 }
 
+/// Whether what the page `page` draws can paint transparently: [`page_uses_transparency`], except
+/// that of the page's own resources only those its content names count, so a page that shares a
+/// resource dictionary with one drawing a soft-masked image doesn't count for it. When the page's
+/// content can't all be read, the answer is [`page_uses_transparency`]'s.
+pub fn page_draws_transparency(doc: &Document, page: &Dict) -> bool {
+    transparency::page_draws_transparently(doc, page)
+}
+
 fn check_transparency(
     doc: &Document,
     pages: &[pdfcraft_model::Page],
