@@ -5,6 +5,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use craft::docpath::names::{CopyNumbering, safe_file_stem, unique_file_name};
+use craft::host::WriteIntent;
 use pdfcraft_engine::{EditError, SourceKind};
 
 use crate::PdfCraftApp;
@@ -54,34 +56,16 @@ impl PdfCraftApp {
                 refused.push(format!("{name} ({})", tl!("already a PDF")));
                 continue;
             }
-            let base = crate::files::file_stem_from_user(stem(&name));
+            let base = safe_file_stem(stem(&name), "pdf");
             let base = if base.is_empty() { "document" } else { &base };
-            let mut output = None;
-            for number in 1..10_000 {
-                let filename = if number == 1 { format!("{base}.pdf") } else { format!("{base} ({number}).pdf") };
-                let candidate = dir.as_ref().map(|d| d.join(&filename));
-                if !used.contains(&filename.to_lowercase()) && !candidate.as_ref().is_some_and(|path| path.exists()) {
-                    used.insert(filename.to_lowercase());
-                    output = Some((filename, candidate));
-                    break;
-                }
-            }
-            let Some((filename, target)) = output else {
-                refused.push(format!("{name} ({})", tl!("no unused output name")));
-                continue;
-            };
-            #[cfg(not(target_arch = "wasm32"))]
-            let result = match target {
-                Some(path) => crate::editing::write_atomically(&path.to_string_lossy(), &pdf).map_err(|e| e.to_string()),
-                None => Err(tl!("no output folder was chosen").to_string()),
-            };
-            #[cfg(target_arch = "wasm32")]
-            let result = {
-                let _ = target;
-                crate::editing::download(&filename, &pdf)
-            };
-            match result {
-                Ok(()) => made += 1,
+            let filename = unique_file_name(&format!("{base}.pdf"), CopyNumbering::Parenthesized, |candidate| {
+                used.contains(&candidate.to_lowercase()) || dir.as_ref().is_some_and(|d| self.host.files().exists(&d.join(candidate)))
+            });
+            used.insert(filename.to_lowercase());
+            // Without a folder (the web) the write is a download.
+            let path = dir.as_ref().map_or_else(|| PathBuf::from(&filename), |d| d.join(&filename));
+            match self.host.files().write(&path, &pdf, WriteIntent::SaveAs) {
+                Ok(_) => made += 1,
                 Err(error) => refused.push(format!("{filename} ({error})")),
             }
         }

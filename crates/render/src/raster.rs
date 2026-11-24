@@ -440,7 +440,14 @@ fn render_page<'a>(
             Some(t) => {
                 let scale = req.scale.clamp(0.01, 400.0);
                 let (tw, th) = (t.w.clamp(1, 4096), t.h.clamp(1, 4096));
-                RasterOptions { scale: [scale, scale], size: Some([tw, th]), offset: [t.x as f32, t.y as f32], background, color_replacement }
+                RasterOptions {
+                    scale: [scale, scale],
+                    size: Some([tw, th]),
+                    offset: [t.x as f32, t.y as f32],
+                    background,
+                    color_replacement,
+                    ..Default::default()
+                }
             }
             None => {
                 let scale = effective_scale(w, h, req.scale);
@@ -457,7 +464,14 @@ fn render_page<'a>(
                 // hayro floors the size when none is given, losing the partial edge pixels. The
                 // scale keeps each side within MAX_SIDE (give or take float noise), so it fits u32.
                 let side = |pt: f32| device_pixels(pt, scale).min(MAX_SIDE as u32);
-                RasterOptions { scale: [scale, scale], size: Some([side(w), side(h)]), offset: [0.0, 0.0], background, color_replacement }
+                RasterOptions {
+                    scale: [scale, scale],
+                    size: Some([side(w), side(h)]),
+                    offset: [0.0, 0.0],
+                    background,
+                    color_replacement,
+                    ..Default::default()
+                }
             }
         };
         // Rendered straight into a buffer of whole pixels, which the GUI takes over as is.

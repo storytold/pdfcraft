@@ -3,12 +3,16 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+// PLAN: apps/pdfcraft-web/Cargo.toml needs `craft = { workspace = true, features = ["host", "platform", "ui", "web-host"] }`; the manifest is not in this set's Files table.
+
 #[cfg(any(target_arch = "wasm32", test))]
 mod api;
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
-    use pdfcraft_ui_egui::PdfCraftApp;
+    use std::sync::Arc;
+
+    use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
 
     let options = eframe::WebOptions { renderer: eframe::Renderer::Glow, ..Default::default() };
     wasm_bindgen_futures::spawn_local(async move {
@@ -18,38 +22,46 @@ fn main() {
                 canvas,
                 options,
                 Box::new(|cc| {
-                    let mut app = PdfCraftApp::new();
-                    // "printcraft": settings saved under the app's former name, PrintCraft.
-                    if let Some(json) = cc.storage.and_then(|s| s.get_string("pdfcraft").or_else(|| s.get_string("printcraft"))) {
-                        app.restore(&json);
-                    }
+                    // `settings::open()` is a store over `craft::settings::LocalStorageFiles` on wasm32, with the former PrintCraft key migrated.
+                    let settings = pdfcraft_ui_egui::settings::open();
+                    install_runtime(cc, startup_lang(settings.get().behavior.language.as_deref()))?;
+                    let ctx = cc.egui_ctx.clone();
+                    let wake = craft::host::Wake::new(move || ctx.request_repaint());
+                    // Files to open: a `?file=` download, the embedding page's `pdfcraft:open`, a drop.
+                    let (intake, opens) = craft::platform::open::FileIntake::new(wake.clone());
+                    // Picks read the browser's files, holding at most `MAX_OPEN_BYTES` until they are taken; saves go
+                    // through the browser's save picker or download.
+                    let limits = craft::platform::browser_files::PickLimits {
+                        pending_bytes: usize::try_from(host::MAX_OPEN_BYTES).unwrap_or(usize::MAX),
+                        ..craft::platform::browser_files::PickLimits::DEFAULT
+                    };
+                    let files = craft::platform::browser_files::BrowserFiles::new(move || wake.wake())
+                        .limits(limits)
+                        .page_saves(craft_web_host::files::page_save);
+                    let app_host = craft::host::Host::builder(pdfcraft_ui_egui::APP_INFO).files(Arc::new(files)).build();
+                    let mut app = PdfCraftApp::with_host(Arc::new(app_host), AppServices::system(&cc.egui_ctx, intake));
+                    app.apply_settings(&settings.get());
+                    app.attach_settings(settings);
                     // `?file=<url>` opens a PDF from a URL (same-origin or CORS-enabled).
                     if let Some(url) = query_param("file") {
-                        let inbox = app.startup_inbox.clone();
-                        let failed = app.failed_inbox.clone();
+                        let opens = opens.clone();
                         let ctx = cc.egui_ctx.clone();
                         wasm_bindgen_futures::spawn_local(async move {
                             let name = url.rsplit('/').next().unwrap_or("document.pdf").split('?').next().unwrap_or("document.pdf").to_string();
                             match fetch_bytes(&url).await {
-                                Ok(bytes) => {
-                                    if let Ok(mut q) = inbox.lock() {
-                                        q.push((name, bytes));
-                                    }
-                                }
+                                Ok(bytes) => opens.open_bytes(name, Arc::from(bytes)),
                                 Err(e) => {
                                     eframe::web_sys::console::error_1(&format!("PdfCraft: could not fetch {url}: {e}").into());
                                     // Shown in the app too, not only in the console (#173).
-                                    if let Ok(mut q) = failed.lock() {
-                                        q.push((name, e));
-                                    }
+                                    let text = pdfcraft_ui_egui::i18n::fmt(
+                                        pdfcraft_ui_egui::i18n::t("Couldn't open {name}: {e}"),
+                                        &[("name", &name), ("e", &e)],
+                                    );
+                                    let _ = craft::ui::notices::NoticeCenter::new().post(&ctx, &craft::ui::notices::PostedNotice::new(text), &[]);
                                 }
                             }
-                            ctx.request_repaint();
                         });
                     }
-                    // eframe never raises a close request on a browser reload or tab close, so `guard_quit` never
-                    // prompts; ask the browser to confirm instead while a document has unsaved work or an OCR review is open (#812).
-                    warn_before_unload(app.unsaved_flag.clone());
                     // Host modes (`host` below, over `craft-web-host`): `?host=parent`, a
                     // same-origin page embedding PdfCraft in an iframe (such as the Nextcloud
                     // app), or `data-host="page"` on the canvas, a host that runs the module in
@@ -62,8 +74,7 @@ fn main() {
                         {
                             app.comment_prefs.author = author.chars().take(200).collect();
                         }
-                        bridge.listen(app.startup_inbox.clone(), cc.egui_ctx.clone());
-                        app.host_save = Some(bridge.save_fn());
+                        bridge.listen(opens.clone());
                         app.host_dirty = Some(bridge.dirty_fn());
                         bridge.post_ready();
                     } else if query_param("host").as_deref() == Some("parent") {
@@ -74,7 +85,9 @@ fn main() {
                     // `?control`: `window.pdfcraft`, the page's command API (`api`). Opt-in: the control
                     // channel keeps the accessibility tree of every frame.
                     if query_param("control").is_some() {
-                        api::install(app.attach_control(&cc.egui_ctx));
+                        let (requests, receiver) = std::sync::mpsc::channel();
+                        app.attach_control(craft::automation::ControlChannel::new(receiver));
+                        api::install(requests);
                     }
                     Ok(Box::new(app))
                 }),
@@ -89,18 +102,26 @@ fn main() {
     });
 }
 
+/// The language the interface starts in: the saved preference, else the browser's.
 #[cfg(target_arch = "wasm32")]
-fn warn_before_unload(unsaved: std::sync::Arc<std::sync::atomic::AtomicBool>) {
-    use eframe::wasm_bindgen::{JsCast, closure::Closure};
-    let Some(window) = web_sys::window() else { return };
-    let handler = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
-        if unsaved.load(std::sync::atomic::Ordering::Relaxed) {
-            event.prevent_default();
-        }
-    });
-    if window.add_event_listener_with_callback("beforeunload", handler.as_ref().unchecked_ref()).is_ok() {
-        handler.forget();
-    }
+fn startup_lang(saved: Option<&str>) -> pdfcraft_ui_egui::i18n::Lang {
+    use pdfcraft_ui_egui::i18n::{AUTO, Lang, normalize_pref};
+    Lang::from_pref(saved.and_then(normalize_pref).unwrap_or(AUTO))
+}
+
+/// Installs the framework runtime on eframe's context, with the interface fonts of `lang`. Once
+/// per context, before the app is built. The browser draws the page's frame and opens no OS
+/// windows, so the spec names no frame and no app id.
+#[cfg(target_arch = "wasm32")]
+fn install_runtime(cc: &eframe::CreationContext<'_>, lang: pdfcraft_ui_egui::i18n::Lang) -> Result<(), String> {
+    use craft::host::target::ShellInfo;
+    use craft::ui::InstallSpec;
+    let ctx = cc.egui_ctx.clone();
+    let system = craft::ui::runtime::env::SystemReader::start(move || ctx.request_repaint());
+    let spec = InstallSpec::new(ShellInfo::default(), std::sync::Arc::new(craft::window::system::SystemWindows)).system(system);
+    craft::ui::shell::embed::install(&cc.egui_ctx, spec, &pdfcraft_ui_egui::fonts::ui_fonts(lang))
+        .map(drop)
+        .map_err(|error| format!("the runtime could not be installed: {error}"))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -143,14 +164,16 @@ fn app_canvas() -> Option<web_sys::HtmlCanvasElement> {
 ///   says `file: false` and a host sends `bytes`.
 /// - `pdfcraft:open` (from the host): `{ name, bytes }` holding a PDF. It opens in a tab, like a
 ///   `?file=` URL; a file over [`host::MAX_OPEN_BYTES`] is refused before it is copied.
-/// - `pdfcraft:save` (to the host): `{ name, saveAs, bytes }` when the user saves. The host stores
-///   the file (and reports its own errors).
+/// - `pdfcraft:save` (to the host): `{ name, saveAs, bytes }` when the user saves, posted by the
+///   browser file service. The host stores the file (and reports its own errors).
 /// - `pdfcraft:dirty` whenever unsaved work appears or goes away, `pdfcraft:failed` when the app
 ///   couldn't start.
 #[cfg(target_arch = "wasm32")]
 mod host {
     use std::rc::Rc;
+    use std::sync::Arc;
 
+    use craft::platform::open::IntakeSender;
     use craft_web_host::web::{FileData, Host, Message};
 
     /// The app id in the host messages (`pdfcraft:ready`).
@@ -160,7 +183,7 @@ mod host {
     const DEFAULT_NAME: &str = "document.pdf";
 
     /// The largest file the host may hand over to open, checked before it is copied (the app's own readers have their own limits).
-    const MAX_OPEN_BYTES: u64 = 512 << 20;
+    pub(super) const MAX_OPEN_BYTES: u64 = 512 << 20;
 
     #[derive(Clone)]
     pub struct Bridge {
@@ -185,18 +208,13 @@ mod host {
             let _ = self.host.post_failed(error, None);
         }
 
-        /// Hear `pdfcraft:open` and queue the file like a `?file=` download.
-        pub fn listen(&self, inbox: pdfcraft_ui_egui::Inbox, ctx: egui::Context) {
+        /// Hear `pdfcraft:open` and hand the file to the app's intake, like a `?file=` download.
+        pub fn listen(&self, opens: IntakeSender) {
             self.host.listen(move |message| {
                 if let Message::Open { name, data } = message {
-                    queue_open(&name, &data, &inbox, &ctx);
+                    queue_open(&name, &data, &opens);
                 }
             });
-        }
-
-        pub fn save_fn(&self) -> pdfcraft_ui_egui::HostSaveFn {
-            let host = self.host.clone();
-            Box::new(move |name: &str, bytes: &[u8], save_as: bool| host.post_save(name, bytes, None, save_as))
         }
 
         pub fn dirty_fn(&self) -> pdfcraft_ui_egui::HostDirtyFn {
@@ -212,10 +230,10 @@ mod host {
         }
     }
 
-    /// The `pdfcraft:open` payload, `{ name, bytes }` where `bytes` holds a PDF: queue it like a
-    /// `?file=` download and wake the app. The crate has cleaned the name (and cut it to 255
+    /// The `pdfcraft:open` payload, `{ name, bytes }` where `bytes` holds a PDF: hand it to the
+    /// intake, which wakes the app. The crate has cleaned the name (and cut it to 255
     /// characters); a blank one comes as `document` and becomes `document.pdf`.
-    fn queue_open(name: &str, data: &FileData, inbox: &pdfcraft_ui_egui::Inbox, ctx: &egui::Context) {
+    fn queue_open(name: &str, data: &FileData, opens: &IntakeSender) {
         let name = if name == "document" { DEFAULT_NAME } else { name }.to_string();
         let FileData::Bytes(view) = data else {
             eframe::web_sys::console::warn_1(&format!("PdfCraft: host file {name} came as a File; PdfCraft reads bytes only; not opened").into());
@@ -228,10 +246,7 @@ mod host {
             );
             return;
         }
-        if let Ok(mut q) = inbox.lock() {
-            q.push((name, view.to_vec()));
-        }
-        ctx.request_repaint();
+        opens.open_bytes(name, Arc::from(view.to_vec()));
     }
 }
 

@@ -115,12 +115,34 @@ pub(crate) fn without_extended_xmp(bytes: &[u8]) -> Vec<u8> {
 /// Calls `f` with the byte range of each Extended XMP chunk (APP1 segment) before the image data.
 fn each_extended_xmp(bytes: &[u8], mut f: impl FnMut(std::ops::Range<usize>)) {
     const PREFIX: &[u8] = b"http://ns.adobe.com/xmp/extension/\0";
-    let _ = walk_jpeg_segments(bytes, |marker, span, seg| {
-        if marker == 0xE1 && seg.starts_with(PREFIX) {
-            f(span);
+    let mut i = 2usize;
+    while let Some(&byte) = bytes.get(i) {
+        // Stray bytes between segments, which the decoder skips too.
+        if byte != 0xFF {
+            i += 1;
+            continue;
         }
-        Ok(JpegVisit::Continue)
-    });
+        let Some(&marker) = bytes.get(i.saturating_add(1)) else { break };
+        match marker {
+            // Fill bytes before a marker.
+            0xFF => i += 1,
+            // Markers without a segment.
+            0x00 | 0x01 | 0xD0..=0xD7 => i += 2,
+            // The image data starts (or ends): no headers after it.
+            0xDA | 0xD9 => break,
+            _ => {
+                let Some(&[hi, lo]) = bytes.get(i.saturating_add(2)..i.saturating_add(4)) else { break };
+                let len = usize::from(u16::from_be_bytes([hi, lo]));
+                let end = i.saturating_add(2).saturating_add(len.max(2));
+                // The prefix must start the APP1 segment's own payload: a zero-length header
+                // followed by prefix bytes is not a chunk.
+                if marker == 0xE1 && bytes.get(i.saturating_add(4)..end.min(bytes.len())).is_some_and(|seg| seg.starts_with(PREFIX)) {
+                    f(i..end.min(bytes.len()));
+                }
+                i = end;
+            }
+        }
+    }
 }
 
 fn jfif_density_dpi(bytes: &[u8]) -> Option<(f32, f32)> {
@@ -156,8 +178,7 @@ pub(crate) mod tests {
         assert!(matches!(upright(b"\xff\xd8 not a jpeg"), Cow::Borrowed(_)));
     }
 
-    /// `jpeg` with `n` empty chunks of one never-complete Extended XMP packet after its SOI.
-    pub(crate) fn with_extended_xmp_chunks(jpeg: &[u8], n: usize) -> Vec<u8> {
+    fn extended_xmp_chunk() -> Vec<u8> {
         let mut seg = b"http://ns.adobe.com/xmp/extension/\0".to_vec();
         seg.extend_from_slice(&[b'0'; 32]); // the packet's GUID
         seg.extend_from_slice(&1000u32.to_be_bytes()); // its full length
@@ -165,6 +186,12 @@ pub(crate) mod tests {
         let mut chunk = vec![0xFF, 0xE1];
         chunk.extend_from_slice(&u16::try_from(seg.len() + 2).unwrap().to_be_bytes());
         chunk.extend_from_slice(&seg);
+        chunk
+    }
+
+    /// `jpeg` with `n` empty chunks of one never-complete Extended XMP packet after its SOI.
+    pub(crate) fn with_extended_xmp_chunks(jpeg: &[u8], n: usize) -> Vec<u8> {
+        let chunk = extended_xmp_chunk();
         [&jpeg[..2], b"\0".as_slice(), &chunk.repeat(n), &jpeg[2..]].concat()
     }
 
@@ -178,5 +205,44 @@ pub(crate) mod tests {
         assert!(matches!(upright(&with(4)), Cow::Owned(_)), "a few chunks are an ordinary photo");
         assert!(matches!(upright(&with(5_000)), Cow::Borrowed(_)));
         assert_eq!(DECODES.with(std::cell::Cell::get), 1, "only the ordinary photo reached the decoder");
+    }
+
+    #[test]
+    fn stray_bytes_and_ff00_before_extended_xmp_chunks_are_preflighted_and_stripped() {
+        let photo = phone_jpeg(6, 144);
+        let noise = b"\x00\x12\xFF\xFF\xFF\x00\xFF\x01\xFF\xD0";
+        let chunks = extended_xmp_chunk().repeat(MAX_EXTENDED_XMP_CHUNKS + 1);
+        let flooded = [&photo[..2], noise.as_slice(), &chunks, &photo[2..]].concat();
+
+        assert!(!decodable_metadata(&flooded));
+        DECODES.with(|c| c.set(0));
+        assert!(matches!(upright(&flooded), Cow::Borrowed(_)));
+        assert_eq!(DECODES.with(std::cell::Cell::get), 0);
+        assert_eq!(without_extended_xmp(&flooded), [&photo[..2], noise.as_slice(), &photo[2..]].concat());
+    }
+
+    #[test]
+    fn short_and_truncated_app1_segments_are_handled_safely() {
+        const PREFIX: &[u8] = b"http://ns.adobe.com/xmp/extension/\0";
+
+        // Zero-length and short APP1 segments followed by PREFIX bytes must not be misread as chunks.
+        let mut short_segments = vec![0xFF, 0xD8];
+        short_segments.extend_from_slice(&[0xFF, 0xE1, 0x00, 0x00]);
+        short_segments.extend_from_slice(PREFIX);
+        short_segments.extend_from_slice(&[0xFF, 0xE1, 0x00, 0x04, 0x00, 0x00]);
+        short_segments.extend_from_slice(PREFIX);
+        assert_eq!(extended_xmp_chunks(&short_segments), 0);
+        assert_eq!(without_extended_xmp(&short_segments), short_segments);
+
+        // A truncated length header stops cleanly without panicking.
+        let truncated_header = [0xFF, 0xD8, 0xFF, 0xE1, 0x00];
+        assert_eq!(extended_xmp_chunks(&truncated_header), 0);
+        assert_eq!(without_extended_xmp(&truncated_header), truncated_header);
+
+        // A truncated Extended-XMP APP1 payload is still counted and stripped up to EOF.
+        let mut truncated_payload = vec![0xFF, 0xD8, 0xFF, 0xE1, 0x01, 0x00];
+        truncated_payload.extend_from_slice(PREFIX);
+        assert_eq!(extended_xmp_chunks(&truncated_payload), 1);
+        assert_eq!(without_extended_xmp(&truncated_payload), &[0xFF, 0xD8]);
     }
 }
