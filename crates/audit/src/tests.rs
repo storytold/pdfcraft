@@ -1091,7 +1091,7 @@ fn repeated_stream_references_share_one_decode_budget() {
     let mut doc = Document::new_empty();
     let spaces = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
     let contents: Dict = [(b"Contents".to_vec(), Object::Array(vec![Object::Ref(spaces); 300]))].into_iter().collect();
-    assert!(crate::cover::filled_rects(&doc, &contents).is_err(), "repeated content streams");
+    assert!(crate::cover::filled_rects(&doc, &contents, &Default::default()).is_err(), "repeated content streams");
 
     let form_dict: Dict = [(b"Subtype".to_vec(), Object::Name(b"Form".to_vec()))].into_iter().collect();
     let form = doc.add(Stream::flate(form_dict, &vec![b' '; 1 << 20]));
@@ -1099,7 +1099,7 @@ fn repeated_stream_references_share_one_decode_budget() {
     let xobjects: Dict = [(b"X".to_vec(), Object::Ref(form))].into_iter().collect();
     let resources: Dict = [(b"XObject".to_vec(), Object::Dict(xobjects))].into_iter().collect();
     let page: Dict = [(b"Contents".to_vec(), Object::Ref(draws)), (b"Resources".to_vec(), Object::Dict(resources))].into_iter().collect();
-    assert!(crate::cover::filled_rects(&doc, &page).is_err(), "repeated form draws");
+    assert!(crate::cover::filled_rects(&doc, &page, &Default::default()).is_err(), "repeated form draws");
 }
 
 #[test]
@@ -1113,7 +1113,7 @@ fn form_entries_past_the_page_allowance_fail_the_audit() {
     let xobjects: Dict = [(b"X".to_vec(), Object::Ref(form))].into_iter().collect();
     let resources: Dict = [(b"XObject".to_vec(), Object::Dict(xobjects))].into_iter().collect();
     let page: Dict = [(b"Contents".to_vec(), Object::Ref(draws)), (b"Resources".to_vec(), Object::Dict(resources))].into_iter().collect();
-    assert!(matches!(crate::cover::filled_rects(&doc, &page), Err(crate::AuditError::TooManyForms)));
+    assert!(matches!(crate::cover::filled_rects(&doc, &page, &Default::default()), Err(crate::AuditError::TooManyForms)));
 }
 
 /// Copying a covered line's text walks all of it, padding included, so a long padded line under
@@ -1270,6 +1270,27 @@ fn text_clipping_mode_fill_is_not_reported_as_cover() {
     let findings = audit_redactions(&open(one_page(content, ""))).expect("audit must run");
     assert_eq!(findings.len(), 1, "Tr 3 text does not clip: {findings:?}");
     assert!(findings[0].covered_text.contains("SECRET"));
+}
+
+#[test]
+fn glyph_clipping_keeps_covers_over_independent_text() {
+    let content = b"BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET q BT /F1 24 Tf 7 Tr 100 700 Td (MASK) Tj ET 0 g 100 688 220 32 re f Q";
+    let findings = audit_redactions(&open(one_page(content, ""))).expect("audit must run");
+    assert!(findings.iter().any(|finding| finding.covered_text.contains("SECRET")), "{findings:?}");
+}
+
+#[test]
+fn empty_glyph_shows_leave_clipping_unchanged() {
+    let blank = r#"BT /F1 24 Tf 7 Tr () Tj [() 120 ()] TJ () ' 0 0 () " /F1 0 Tf (TEXT) Tj ET"#;
+    let fill = "0 g 100 688 220 32 re f";
+    let content = format!("BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET {blank} {fill}");
+    let findings = audit_redactions(&open(one_page(content.as_bytes(), ""))).expect("audit must run");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert!(findings[0].covered_text.contains("SECRET"));
+
+    let content = format!("BT /F1 24 Tf 7 Tr 100 700 Td (MASK) Tj ET {blank} {fill}");
+    let findings = audit_redactions(&open(one_page(content.as_bytes(), ""))).expect("audit must run");
+    assert!(findings.is_empty(), "a blank show must preserve the previous text clip: {findings:?}");
 }
 
 #[test]

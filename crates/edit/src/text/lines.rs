@@ -19,6 +19,16 @@ impl TextLine {
         (self.stream, self.ops.iter().min().copied().unwrap_or(0))
     }
 
+    /// Whether all the line's drawing operators are inside one text object in the joined
+    /// page stream. A line can join runs from several text objects.
+    pub fn drawn_within(&self, operators: &std::ops::Range<usize>) -> bool {
+        if self.actual_text {
+            return !self.ops.is_empty() && self.ops.iter().all(|op| operators.contains(op));
+        }
+        // Glyph shows are appended in stream order.
+        self.ops.first().zip(self.ops.last()).is_some_and(|(first, last)| operators.contains(first) && operators.contains(last))
+    }
+
     /// The runs of text the line joins, in content order: each run's text as its glyphs show it,
     /// the boxes of its words (a part of `ink`), and whether joining put a space between it and
     /// the run before (`text` has one there; runs closer together join with none, so one word
@@ -431,13 +441,13 @@ fn fill_color(fill: &[Op]) -> [f64; 3] {
 
 /// The lines of text on a page (0-based), in content order.
 pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditError> {
-    text_lines_in(doc, &page_dict(doc, page)?, true, false)
+    text_lines_in(doc, &page_dict(doc, page)?, true, false, None)
 }
 
 /// [`text_lines`] with every show of invisible text a line of its own, however alike its
 /// neighbours: an OCR layer's words, which an edit can keep or change one by one.
 pub(crate) fn word_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditError> {
-    text_lines_in(doc, &page_dict(doc, page)?, true, true)
+    text_lines_in(doc, &page_dict(doc, page)?, true, true, None)
 }
 
 /// The lines `page`'s glyphs show, in content order, without `/ActualText` replacements: what the
@@ -445,12 +455,27 @@ pub(crate) fn word_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, E
 /// not trust that metadata (the redaction audit). Takes the page itself, so a caller going
 /// through every page doesn't walk the page tree again for each.
 pub fn glyph_text_lines(doc: &Document, page: &pdfcraft_model::Page) -> Result<Vec<TextLine>, EditError> {
-    text_lines_in(doc, page, false, false)
+    text_lines_in(doc, page, false, false, None)
+}
+
+/// Extracts the glyph lines and records text-clipping shows whose glyphs have no outlines.
+pub fn glyph_text_lines_with_blank_clips(
+    doc: &Document,
+    page: &pdfcraft_model::Page,
+    blank_clips: &mut std::collections::HashSet<usize>,
+) -> Result<Vec<TextLine>, EditError> {
+    text_lines_in(doc, page, false, false, Some(blank_clips))
 }
 
 /// [`text_lines`] of `p`; with `actual_text`, `/ActualText` replaces the glyphs it spans, and with
 /// `invisible_apart`, no show of invisible text joins the one before it.
-fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, invisible_apart: bool) -> Result<Vec<TextLine>, EditError> {
+fn text_lines_in(
+    doc: &Document,
+    p: &pdfcraft_model::Page,
+    actual_text: bool,
+    invisible_apart: bool,
+    blank_clips: Option<&mut std::collections::HashSet<usize>>,
+) -> Result<Vec<TextLine>, EditError> {
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut cache = HashMap::new();
     let mut lines: Vec<TextLine> = Vec::new();
@@ -461,6 +486,9 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
     let ops = pieces.parse().ops;
     let properties = res.get(b"Properties").and_then(|o| doc.dict(o)).unwrap_or_default();
     let shown = interpret(doc, &ops, &res, &mut cache, &mut carry, None, actual_text.then_some(&properties))?;
+    if let Some(blank_clips) = blank_clips {
+        blank_clips.extend(shown.iter().filter(|s| (4..=7).contains(&s.state.render_mode) && !s.may_draw_outline).map(|s| s.op));
+    }
     let mut last: Option<(usize, Pen)> = None; // the stream piece and where its last run ended
     for mut s in shown {
         // A single RTL glyph's ActualText (e.g. lam-alef) is an inline ligature, not a

@@ -449,6 +449,8 @@ pub(super) struct Shown {
     pub(super) extra_ops: Vec<usize>,
     /// Encoded glyphs, not bytes or Unicode characters (a ligature can represent several).
     pub(super) glyph_count: usize,
+    /// A glyph has an outline, or its font could not establish that it is empty.
+    pub(super) may_draw_outline: bool,
     /// Advance in text space, including spacing and TJ adjustments.
     pub(super) advance: f64,
     pub(super) tracking: f64,
@@ -806,11 +808,15 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
     // before may have ended in one: a justified line can be split over `TJ` and `Tj`.
     let mut gap_space = std::mem::take(&mut carry.gap_space);
     let mut glyph_count = 0_usize;
+    let mut may_draw_outline = false;
     for p in &pieces {
         match p {
             Object::String(s) => {
                 for (code, len) in m.codes(&s.bytes) {
                     glyph_count = glyph_count.saturating_add(1);
+                    if (4..=7).contains(&ts.render_mode) && ts.size != 0.0 && ts.scale != 0.0 {
+                        may_draw_outline |= m.past_allowance || m.codespaces_dropped || m.has_outline(code) != Some(false);
+                    }
                     let shown = m.text_of(code);
                     let blank = m.is_space(code, len) || shown.as_deref().is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace));
                     // A space glyph right after a gap that read as a space is that space:
@@ -929,6 +935,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         op: i,
         extra_ops: Vec::new(),
         glyph_count,
+        may_draw_outline,
         // Vertical text: the TJ adjustment that undoes the run is n = -1000 y / size; the
         // preview divides by size × `Tz`, so `Tz` is put back here.
         advance: if vertical.is_some() { y_text * ts.scale } else { x_text },
