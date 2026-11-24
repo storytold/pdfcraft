@@ -377,6 +377,43 @@ fn a_new_highlight_opens_its_note_for_typing() {
     assert_eq!(note(&h).as_deref(), Some("typed"));
 }
 
+#[test]
+fn leaving_highlights_unselected_keeps_the_previous_mark_colour() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+
+    let mut h = harness(|app| {
+        let ctx = egui::Context::default();
+        app.set_option(&ctx, "quick", "highlight").unwrap();
+        app.set_option(&ctx, "leave-new-highlights-unselected", "true").unwrap();
+    });
+    let (start, end) = {
+        let view = &h.state().views[0];
+        (view.glyph_screen_pos(0, 4).unwrap(), view.glyph_screen_pos(0, 14).unwrap())
+    };
+    drag(&mut h, start, end);
+    assert_eq!(comments(&h).len(), 1);
+    assert!(h.state().views[0].session.comments.selection().is_empty());
+    assert_eq!(note(&h), None);
+
+    h.get_by_label("Colour").click();
+    h.run_steps(2);
+    h.get_by_label("Blue").click();
+    h.run_steps(3);
+    assert_eq!(h.state().comment_prefs.style(CommentTool::Highlight).color, [0.0, 0.47, 0.84]);
+    // The new toolbar palette stays open while the user tries swatches.
+    if h.query_by_role_and_label(Role::ListBoxOption, "Blue").is_some() {
+        h.get_by_role_and_label(Role::ColorWell, "Colour").click();
+        h.run_steps(3);
+    }
+    assert!(h.query_by_role_and_label(Role::ListBoxOption, "Blue").is_none());
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    assert_eq!(comments(&h).len(), 2);
+    let (_, id) = h.state().active_ids().unwrap();
+    let document = h.state().session.get(id).unwrap();
+    assert_eq!(document.comment_props(0, 0).unwrap().color, Some([1.0, 0.94, 0.0]));
+    assert_eq!(document.comment_props(0, 1).unwrap().color, Some([0.0, 0.47, 0.84]));
+}
+
 /// The Comments panel's editor for a comment's note (labelled "Edit", distinct from the panel's
 /// top "Add a comment" field and each card's "Add a reply" field).
 fn note_editor<'a>(h: &'a Harness<'static, PdfCraftApp>) -> egui_kittest::Node<'a> {

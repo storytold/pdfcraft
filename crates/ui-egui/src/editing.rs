@@ -43,6 +43,7 @@ fn select_after_edit(
     annots_before: &[pdfcraft_render::Annotation],
     quick_tool: crate::QuickTool,
     across_pages: Option<usize>,
+    leave_new_highlights_unselected: bool,
 ) {
     match edit {
         Edit::MovePages { pages, to } => {
@@ -66,6 +67,12 @@ fn select_after_edit(
                 clear_shifted_page_comment_state(view, first);
             }
             view.select_pages(&[]);
+        }
+        Edit::AddAnnotation(a)
+            if leave_new_highlights_unselected
+                && matches!(a.shape, pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, .. }) =>
+        {
+            view.session.comments.clear_selection();
         }
         // A stroke drawn with the pen stays unselected, so the selection box and
         // author popup don't sit over the next stroke (#429).
@@ -104,7 +111,7 @@ fn select_after_edit(
             // The selection's pages are in page order: dragged back up, it ends on the first.
             let on_head = edits.iter().find(|e| matches!(e, Edit::AddAnnotation(a) if Some(a.page) == across_pages));
             if let Some(head) = on_head.or(edits.last()) {
-                select_after_edit(view, head, info, &[], quick_tool, None);
+                select_after_edit(view, head, info, &[], quick_tool, None, leave_new_highlights_unselected);
             }
         }
         // A group moved together stays selected (its positions don't change), so it
@@ -271,7 +278,15 @@ impl PdfCraftApp {
                     view.session.comments.popups_after_edit(&popups_before, &info.annotations);
                 }
                 // Keep the pages the user acted on selected, where they now are.
-                select_after_edit(view, &edit, info, &annots_before, self.quick_tool, across_pages);
+                select_after_edit(
+                    view,
+                    &edit,
+                    info,
+                    &annots_before,
+                    self.quick_tool,
+                    across_pages,
+                    self.comment_prefs.leave_new_highlights_unselected,
+                );
                 if let (Some((target, ambiguous_before)), Edit::EditPageImage { page, .. }) = (target_arrange_image, &edit) {
                     let page_images = doc.page_images(*page);
                     re_resolve_image_selection(view, *page, &target, ambiguous_before, &page_images);

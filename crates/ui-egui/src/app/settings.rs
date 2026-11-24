@@ -121,6 +121,7 @@ pub struct View {
     pub date_language: Option<String>,
     pub author: Option<String>,
     pub hide_empty_highlight_hover: Option<bool>,
+    pub leave_new_highlights_unselected: Option<bool>,
     pub comment_tool_pinned: Option<bool>,
 }
 
@@ -609,6 +610,7 @@ pub fn import_json(text: &str) -> (PdfCraftSettings, Vec<SectionError>) {
             date_language: r.string("date_language"),
             author: r.string("author"),
             hide_empty_highlight_hover: r.bool("hide_empty_highlight_hover"),
+            leave_new_highlights_unselected: r.bool("leave_new_highlights_unselected"),
             comment_tool_pinned: r.bool("comment_tool_pinned"),
         }
     };

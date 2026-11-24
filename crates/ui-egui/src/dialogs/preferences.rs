@@ -85,6 +85,7 @@ struct PrefsDraft {
     invert_middle_drag: bool,
     author: String,
     hide_empty_highlight_hover: bool,
+    leave_new_highlights_unselected: bool,
     flatten_fill_sign_on_save: bool,
     ask_to_lock_signatures: bool,
     date_format: String,
@@ -121,6 +122,7 @@ impl PrefsDraft {
             invert_middle_drag: app.invert_middle_drag,
             author: app.comment_prefs.author.clone(),
             hide_empty_highlight_hover: app.comment_prefs.hide_empty_highlight_hover,
+            leave_new_highlights_unselected: app.comment_prefs.leave_new_highlights_unselected,
             flatten_fill_sign_on_save: app.flatten_fill_sign_on_save,
             ask_to_lock_signatures: app.ask_to_lock_signatures,
             date_format: app.session.date_format().to_string(),
@@ -162,6 +164,7 @@ impl PrefsDraft {
             invert_middle_drag: false,
             author: prefs.author,
             hide_empty_highlight_hover: prefs.hide_empty_highlight_hover,
+            leave_new_highlights_unselected: prefs.leave_new_highlights_unselected,
             flatten_fill_sign_on_save: false,
             ask_to_lock_signatures: true,
             date_format: engine.date_format().to_string(),
@@ -467,6 +470,7 @@ impl PreferencesModel for Prefs<'_> {
             ("view.invert_middle", PrefValue::Bool(v)) => d.invert_middle_drag = v,
             ("comment.author", PrefValue::Text(v)) => d.author = v.chars().take(crate::MAX_AUTHOR_CHARS).collect(),
             ("comment.hide_hover", PrefValue::Bool(v)) => d.hide_empty_highlight_hover = v,
+            ("comment.leave_highlights_unselected", PrefValue::Bool(v)) => d.leave_new_highlights_unselected = v,
             ("fill.flatten", PrefValue::Bool(v)) => d.flatten_fill_sign_on_save = v,
             ("fill.ask_lock", PrefValue::Bool(v)) => d.ask_to_lock_signatures = v,
             ("fill.date_preset", PrefValue::Choice(id)) => {
@@ -560,6 +564,7 @@ impl PreferencesModel for Prefs<'_> {
             "comment" => {
                 d.author = fresh.author;
                 d.hide_empty_highlight_hover = fresh.hide_empty_highlight_hover;
+                d.leave_new_highlights_unselected = fresh.leave_new_highlights_unselected;
             }
             "fill" => {
                 d.flatten_fill_sign_on_save = fresh.flatten_fill_sign_on_save;
@@ -636,6 +641,7 @@ impl PreferencesDraft for Prefs<'_> {
         self.app.invert_middle_drag = d.invert_middle_drag;
         self.app.comment_prefs.author = d.author;
         self.app.comment_prefs.hide_empty_highlight_hover = d.hide_empty_highlight_hover;
+        self.app.comment_prefs.leave_new_highlights_unselected = d.leave_new_highlights_unselected;
         self.app.flatten_fill_sign_on_save = d.flatten_fill_sign_on_save;
         self.app.ask_to_lock_signatures = d.ask_to_lock_signatures;
 
@@ -783,6 +789,11 @@ impl Prefs<'_> {
                 "comment.hide_hover",
                 tl!("Hide hover previews for highlights without comment text"),
                 RowKind::Bool(d.hide_empty_highlight_hover),
+            ),
+            RowSpec::new(
+                "comment.leave_highlights_unselected",
+                tl!("Leave new highlights unselected"),
+                RowKind::Bool(d.leave_new_highlights_unselected),
             ),
         ];
         PageSpec::new("comment", tl!("Comment"), rows)

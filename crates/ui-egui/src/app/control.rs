@@ -379,6 +379,13 @@ impl PdfCraftApp {
                     _ => return Err("hide-empty-highlight-hover must be true or false".into()),
                 };
             }
+            ("leave-new-highlights-unselected", _) => {
+                self.comment_prefs.leave_new_highlights_unselected = match value {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err("leave-new-highlights-unselected must be true or false".into()),
+                };
+            }
             ("text-links", _) => {
                 self.text_links = match value {
                     "true" => true,
