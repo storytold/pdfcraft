@@ -183,3 +183,28 @@ fn a_link_beside_the_pdf_to_a_missing_file_outside_is_refused_alike() {
     let err = call(&mut a, "synctex_inverse", json!({"doc": doc, "page": 1, "at": [120, 195]})).unwrap_err();
     assert!(err.contains("outside"), "{err}");
 }
+
+/// The automation read root holds the file beside the PDF as it holds any path a tool reads: a
+/// link there that leads outside it is refused, with its target there or not, and the target is
+/// not read.
+#[cfg(unix)]
+#[test]
+fn the_read_root_refuses_a_link_beside_the_pdf_that_leaves_it() {
+    let lookup = |tag: &str, target_exists: bool| {
+        let tmp = dir(tag).canonicalize().unwrap();
+        let outside = dir(&format!("{tag}-outside")).canonicalize().unwrap();
+        std::fs::write(tmp.join("out.pdf"), two_page_pdf()).unwrap();
+        if target_exists {
+            std::fs::write(outside.join("secret.synctex"), fixture(&outside, 12)).unwrap();
+        }
+        std::os::unix::fs::symlink(outside.join("secret.synctex"), tmp.join("out.synctex")).unwrap();
+        let roots = pdfcraft_automation::file_access::AutomationRoots::new(Some(tmp.as_path()), None).unwrap();
+        let mut a = Automation::new().with_automation_roots(roots);
+        let doc = call(&mut a, "doc_open", json!({"path": tmp.join("out.pdf")})).unwrap()["doc"].as_u64().unwrap();
+        let err = call(&mut a, "synctex_inverse", json!({"doc": doc, "page": 1, "at": [120, 195]})).unwrap_err();
+        assert!(err.contains("automation path rejected"), "{err}");
+        assert!(!err.contains("main.tex"), "{err}");
+    };
+    lookup("roots-link", true);
+    lookup("roots-link-absent", false);
+}
