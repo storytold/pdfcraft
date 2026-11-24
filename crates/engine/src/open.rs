@@ -390,6 +390,7 @@ impl Session {
             name,
             path,
             bytes,
+            saved_purview: purview.clone(),
             purview,
             display,
             info,

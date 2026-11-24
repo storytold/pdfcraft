@@ -15,6 +15,7 @@ mip-sdk = ["mip-auth"]
 
 [dependencies]
 pdfcraft-purview-policy = { workspace = true }
+log = { workspace = true }
 craft-mime = { workspace = true, optional = true }
 oauth2 = { workspace = true, optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots"], optional = true }

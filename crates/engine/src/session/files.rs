@@ -163,6 +163,7 @@ impl Session {
     /// Export comments and/or form data: XFDF and FDF carry either or both; XML, CSV and text
     /// are form data only.
     pub fn export_data(&self, id: DocId, format: DataFormat, comments: bool, fields: bool) -> Result<Vec<u8>, EditError> {
+        self.check_purview_export(id)?;
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let cos = match doc.editor.as_ref() {
             Some(e) => e.cos.clone(),
@@ -218,6 +219,9 @@ impl Session {
     /// replies: what Copy puts on the clipboard; [`Edit::PasteComments`] takes it back in.
     pub fn export_comments(&self, id: DocId, which: &[(usize, usize)]) -> Result<String, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        if doc.purview().is_some_and(|state| state.protected && !state.rights.can_copy()) {
+            return Err(EditError::NotPermitted("copying comments"));
+        }
         let cos = match doc.editor.as_ref() {
             Some(e) => e.cos.clone(),
             None => {
@@ -468,6 +472,7 @@ impl Session {
 
     /// New PDF bytes containing copies of `pages` of the document (Extract Pages).
     pub fn extract(&self, id: DocId, pages: &[usize]) -> Result<Arc<Vec<u8>>, EditError> {
+        self.check_purview_export(id)?;
         let src = self.cos(id)?;
         if src.permissions().is_some_and(|p| !p.extract_pages()) {
             return Err(EditError::NotPermitted("extracting pages"));
@@ -478,6 +483,7 @@ impl Session {
 
     /// Split the document into several new PDFs.
     pub fn split(&self, id: DocId, by: &pdfcraft_organize::SplitBy) -> Result<Vec<SplitPart>, EditError> {
+        self.check_purview_export(id)?;
         let src = self.cos(id)?;
         if src.permissions().is_some_and(|p| !p.extract_pages()) {
             return Err(EditError::NotPermitted("splitting the document"));
@@ -496,6 +502,7 @@ impl Session {
     /// order while their size (as single-page files, an over-estimate because shared fonts and
     /// images count once per part) fits; a page larger than the limit is a part of its own.
     pub fn split_by_size(&self, id: DocId, max_bytes: usize) -> Result<Vec<SplitPart>, EditError> {
+        self.check_purview_export(id)?;
         let src = self.cos(id)?;
         if src.permissions().is_some_and(|p| !p.extract_pages()) {
             return Err(EditError::NotPermitted("splitting the document"));
@@ -512,6 +519,10 @@ impl Session {
             used += size;
         }
         self.split(id, &pdfcraft_organize::SplitBy::Before(cuts))
+    }
+
+    fn check_purview_export(&self, id: DocId) -> Result<(), EditError> {
+        self.get(id).ok_or(EditError::NoDocument)?.check_unprotected_export()
     }
 
     fn cos(&self, id: DocId) -> Result<&pdfcraft_cos::Document, EditError> {

@@ -9,8 +9,11 @@ dependencies, and detected protected files fail closed. The `mip-sdk` feature en
 package. Live use also requires an Entra public-client application registration.
 
 The engine and automation layers use this crate's rights model; decryption is delegated to
-Microsoft's SDK. The POC is not safe for real sensitive documents: recovery snapshots,
-optimized output and read-only saves can write decrypted content without restoring protection.
+Microsoft's SDK. The POC is not ready for real sensitive documents. Protected saves and recovery
+are verified, while optimization, digital signing and label/protection changes on protected files are disabled
+until protection can be retained and tested against a live tenant.
+A configured default label is not applied automatically; a required label must be selected and
+applied before saving.
 
 ## Native and dependency boundary
 
@@ -21,7 +24,9 @@ callback, profile/tenant JSON decoding, staging and the rights policy seam.
 
 Official SDK packages are used for macOS, Windows, and Linux targets where Microsoft provides
 them. The helper and SDK redistributables are staged and signed only in explicitly configured SDK
-builds. Microsoft documents additional platform-specific native runtime requirements in its
+builds. macOS, Windows, and Linux packages also carry the SDK's license terms and third-party
+notices; this does not replace the approval required before distribution. Microsoft documents
+additional platform-specific native runtime requirements in its
 [SDK setup guide](https://learn.microsoft.com/en-us/information-protection/develop/setup-configure-mip).
 
 The optional authentication path uses Rust OAuth/PKCE, HTTPS with system trust roots, browser and JSON libraries, plus
@@ -31,6 +36,10 @@ a standalone authentication build also pulls in its other dependencies. OAuth an
 themselves use Base64 transitively. The TLS provider also uses `ring`, which includes native C
 and assembly; replacing cryptography locally would not make this safer. Windows staging uses the
 existing workspace platform helper.
+
+The adapter checks that the protection and policy token responses identify the same Microsoft
+account before pairing them. A missing or mismatched account stops sign-in, and a failed attempt
+to add an account leaves an existing signed-in account available.
 
 The native adapter stays at the platform layer, including Windows owner-only staging; the
 engine depends only on the lower-layer policy contract. Frontends install the adapter.

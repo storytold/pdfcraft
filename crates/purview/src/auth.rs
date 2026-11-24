@@ -141,10 +141,7 @@ fn account_from_id_token(id_token: Option<&str>, username_hint: &str) -> Option<
             .map(str::to_owned)
             .unwrap_or_else(|| "Microsoft account".to_owned())
     });
-    let id = claim_string(&claims, &["oid", "sub"])
-        .or_else(|| email.clone())
-        .or_else(|| principal_name.clone())
-        .unwrap_or_else(|| "microsoft-account".to_owned());
+    let id = claim_string(&claims, &["oid", "sub"])?;
     Some(PurviewAccount { id, display_name, email: email.unwrap_or_default(), principal_name: principal_name.unwrap_or_default() })
 }
 
@@ -321,6 +318,13 @@ mod tests {
         assert_eq!(account.email, "ada@example.com");
         assert_eq!(account.principal_name, "ada@example.com");
         assert_eq!(account.label(), "Ada Lovelace - ada@example.com");
+    }
+
+    #[test]
+    fn id_token_profile_requires_a_stable_account_id() {
+        let payload = serde_json::json!({ "email": "ada@example.com" }).to_string();
+        let segment = craft_mime::base64::URL_SAFE_NO_PAD.encode(payload.as_bytes());
+        assert!(account_from_id_token(Some(&format!("header.{segment}.signature")), "").is_none());
     }
 
     #[test]

@@ -128,6 +128,11 @@ impl PdfCraftApp {
 
     /// Why the command can't run right now, for the user.
     fn disabled_reason(&self, spec: &CommandSpec) -> String {
+        if matches!(spec.id, "sign.digital" | "sign.certify" | "sign.certify_invisible")
+            && self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|doc| doc.purview().is_some_and(|state| state.protected))
+        {
+            return tl!("Digitally signing a Microsoft Purview-protected document is not available yet.").to_string();
+        }
         match spec.needs {
             commands::Needs::Undo => tl!("Nothing to undo").to_string(),
             commands::Needs::Redo => tl!("Nothing to redo").to_string(),
@@ -229,25 +234,23 @@ impl PdfCraftApp {
                     self.notify_tr("Security will be removed when you save");
                 }
             }
-            "purview.sign_in" => match self.session.purview_sign_in(None) {
-                Ok(()) => {
-                    self.notify_tr("Signed in to Microsoft Purview");
-                    self.retry_purview_signin();
-                }
-                Err(error) => self.notify_fmt("Microsoft Purview sign-in failed: {e}", &[("e", &error.to_string())]),
-            },
+            "purview.sign_in" => self.start_purview_sign_in(),
             "purview.sign_out" => {
-                if matches!(self.session.purview_status(), pdfcraft_engine::PurviewStatus::Ready) {
-                    match self.session.purview_sign_out() {
-                        Ok(()) => self.notify_tr("Signed out"),
-                        Err(error) => self.notify_fmt("Sign-out failed: {e}", &[("e", &error.to_string())]),
-                    }
+                if let Some(reason) = self.purview_account_change_reason() {
+                    self.notify_tr(reason);
                 } else {
-                    self.notify_tr("No Microsoft account is signed in");
+                    match self.purview_status() {
+                        pdfcraft_engine::PurviewStatus::Ready => match self.session.purview_sign_out() {
+                            Ok(()) => self.notify_tr("Signed out"),
+                            Err(error) => self.notify_fmt("Sign-out failed: {e}", &[("e", &error.to_string())]),
+                        },
+                        pdfcraft_engine::PurviewStatus::SigningIn => self.notify_tr("Wait for Microsoft sign-in to finish"),
+                        _ => self.notify_tr("No Microsoft account is signed in"),
+                    }
                 }
             }
             "purview.status" => {
-                let status = format!("{:?}", self.session.purview_status());
+                let status = format!("{:?}", self.purview_status());
                 let account = self.session.purview_account().map(|account| format!("; account: {}", account.label()));
                 if let Some((_, id)) = self.active_ids()
                     && let Some(document) = self.session.get(id)
@@ -272,7 +275,7 @@ impl PdfCraftApp {
                 }
             }
             "purview.apply_label" => {
-                if matches!(self.session.purview_status(), pdfcraft_engine::PurviewStatus::Ready) {
+                if matches!(self.purview_status(), pdfcraft_engine::PurviewStatus::Ready) {
                     match self.session.purview_labels() {
                         Ok(labels) => {
                             self.purview_labels = labels;

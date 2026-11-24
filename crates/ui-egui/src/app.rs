@@ -334,6 +334,8 @@ impl PdfCraftApp {
             pending_window: None,
             pending_remote_link: None,
             purview_signin_prompt: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            purview_sign_in_job: None,
             protect_draft: Default::default(),
             purview_labels: Vec::new(),
             purview_label_id: String::new(),
@@ -611,6 +613,8 @@ impl PdfCraftApp {
         let lang = i18n::Lang::from_pref(&self.language);
         i18n::set_current(lang);
         self.apply_status_captions(lang);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_purview_sign_in();
         // Form date fields name months in the date language (Preferences ▸ Date format), which
         // follows the interface language until one is picked (#5303).
         pdfcraft_engine::dates::use_form_date_language(self.session.date_language().unwrap_or(lang.code()));

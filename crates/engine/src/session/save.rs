@@ -3,6 +3,29 @@ use super::{
     display_bytes, display_config, guard, render_threads, signatures_of, writable, write_full, write_incremental, xfa_sync_datasets,
 };
 
+fn inspect_protected_output(state: &crate::PurviewDocumentState, name: &str, bytes: &Arc<Vec<u8>>) -> Result<crate::PurviewOpen, EditError> {
+    let opened = state.provider.inspect(name, bytes).map_err(|error| EditError::Protection(error.to_string()))?;
+    match opened {
+        Some(opened) if opened.document.protected => Ok(opened),
+        _ => Err(EditError::Protection("the Microsoft Purview output could not be verified as protected".into())),
+    }
+}
+
+fn republish_verified(state: &crate::PurviewDocumentState, name: &str, working: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, EditError> {
+    let output = state.provider.republish(state.handle, &state.original, working).map_err(|error| EditError::Protection(error.to_string()))?;
+    if state.document.protected {
+        inspect_protected_output(state, name, &output)?;
+    }
+    Ok(output)
+}
+
+fn check_purview_signing(doc: &Document) -> Result<(), EditError> {
+    if doc.purview().is_some_and(|state| state.protected) {
+        return Err(EditError::Protection("digitally signing a Microsoft Purview-protected document is not yet supported".into()));
+    }
+    Ok(())
+}
+
 impl Session {
     /// The bytes to write for Save: an incremental update of the file as opened/last saved,
     /// with `/ModDate` stamped. Call `mark_saved` after writing them successfully.
@@ -13,14 +36,15 @@ impl Session {
     /// break its signatures, so with no edits it keeps its bytes, damage and all.
     pub fn save_bytes(&self, id: DocId) -> Result<Arc<Vec<u8>>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
-        let Some(editor) = doc.editor.as_ref() else { return Ok(doc.bytes.clone()) };
         if let Some(purview) = doc.purview.as_ref()
             && purview.document.labeling_required
             && purview.document.label.is_none()
-            && purview.document.default_label_id.is_none()
         {
             return Err(EditError::Protection("a sensitivity label is required before this document can be saved".into()));
         }
+        let Some(editor) = doc.editor.as_ref() else {
+            return Ok(doc.purview.as_ref().map_or_else(|| doc.bytes.clone(), |purview| purview.original.clone()));
+        };
         if let Some(purview) = doc.purview.as_ref()
             && purview.document.protected
             && (doc.dirty || editor.cos.is_modified())
@@ -56,11 +80,7 @@ impl Session {
         .map_err(EditError::Write)?
         .map(Arc::new)
         .map_err(|e| EditError::Write(e.to_string()))?;
-        if let Some(purview) = doc.purview.as_ref() {
-            purview.provider.republish(purview.handle, &purview.original, &working).map_err(|error| EditError::Protection(error.to_string()))
-        } else {
-            Ok(working)
-        }
+        if let Some(purview) = doc.purview.as_ref() { republish_verified(purview, &doc.name, &working) } else { Ok(working) }
     }
 
     /// A compact, garbage-collected rewrite (Save As ▸ "Optimized" / Reduce File Size groundwork).
@@ -69,7 +89,6 @@ impl Session {
         if let Some(purview) = doc.purview.as_ref()
             && purview.document.labeling_required
             && purview.document.label.is_none()
-            && purview.document.default_label_id.is_none()
         {
             return Err(EditError::Protection("a sensitivity label is required before this document can be saved".into()));
         }
@@ -86,11 +105,7 @@ impl Session {
         let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
         let cos = writable(&editor.cos)?;
         let working = guard(|| write_full(&cos, &opts)).map_err(EditError::Write)?.map(Arc::new).map_err(|e| EditError::Write(e.to_string()))?;
-        if let Some(purview) = doc.purview.as_ref() {
-            purview.provider.republish(purview.handle, &purview.original, &working).map_err(|error| EditError::Protection(error.to_string()))
-        } else {
-            Ok(working)
-        }
+        if let Some(purview) = doc.purview.as_ref() { republish_verified(purview, &doc.name, &working) } else { Ok(working) }
     }
 
     /// Check that `bytes`, from [`Self::save_bytes`] or [`Self::save_full_bytes`], reopen as this
@@ -99,7 +114,14 @@ impl Session {
     pub fn check_save(&self, id: DocId, bytes: &Arc<Vec<u8>>) -> Result<(), EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let Some(editor) = doc.editor.as_ref() else { return Ok(()) };
-        if doc.purview.is_some() {
+        if let Some(state) = doc.purview.as_ref() {
+            if state.document.protected {
+                let opened = inspect_protected_output(state, &doc.name, bytes)?;
+                pdfcraft_cos::Document::open_with_password(opened.bytes.clone(), editor.keys.reopen.as_deref())
+                    .map_err(|error| EditError::Reopen(error.to_string()))?;
+                pdfcraft_render::check_pages(opened.bytes, doc.password.as_deref(), doc.info.pages.len())
+                    .map_err(|error| EditError::Reopen(error.to_string()))?;
+            }
             return Ok(());
         }
         pdfcraft_cos::Document::open_with_password(bytes.clone(), editor.keys.reopen.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
@@ -112,7 +134,12 @@ impl Session {
         let purview_rebase = if let Some(doc) = self.get(id) {
             if let Some(purview) = doc.purview.as_ref() {
                 match purview.provider.inspect(&doc.name, &bytes) {
-                    Ok(opened) => opened,
+                    Ok(opened) => {
+                        if purview.document.protected && opened.as_ref().is_none_or(|result| !result.document.protected) {
+                            return Err(EditError::Protection("the Microsoft Purview output could not be verified as protected".into()));
+                        }
+                        opened
+                    }
                     Err(error) => return Err(EditError::Protection(error.to_string())),
                 }
             } else {
@@ -126,7 +153,7 @@ impl Session {
         if let Some(editor) = doc.editor.as_mut() {
             if let Some(purview) = doc.purview.as_ref() {
                 if let Some(opened) = purview_rebase {
-                    let working = pdfcraft_cos::Document::open_with_password(opened.bytes.clone(), None)
+                    let working = pdfcraft_cos::Document::open_with_password(opened.bytes.clone(), editor.keys.reopen.as_deref())
                         .map_err(|error| EditError::Reopen(error.to_string()))?;
                     editor.cos = working;
                     editor.saved = opened.bytes.clone();
@@ -134,13 +161,14 @@ impl Session {
                     editor.unsaved_file = false;
                     doc.bytes = opened.bytes.clone();
                     let mut state = purview.clone();
+                    state.handle = opened.handle;
                     state.original = bytes.clone();
                     state.document = opened.document;
                     doc.purview = Some(state);
                     renumbered = false;
                 } else {
-                    let working =
-                        pdfcraft_cos::Document::open_with_password(bytes.clone(), None).map_err(|error| EditError::Reopen(error.to_string()))?;
+                    let working = pdfcraft_cos::Document::open_with_password(bytes.clone(), editor.keys.reopen.as_deref())
+                        .map_err(|error| EditError::Reopen(error.to_string()))?;
                     editor.cos = working;
                     editor.saved = bytes.clone();
                     editor.saved_keys = editor.keys.clone();
@@ -175,6 +203,7 @@ impl Session {
                 editor.unsaved_file = false;
             }
         }
+        doc.saved_purview = doc.purview.clone();
         if let Some(p) = path {
             doc.name = std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
             doc.path = Some(p);
@@ -222,46 +251,36 @@ impl Session {
     /// cleared, as in Acrobat, and the document's opening scripts run again.
     pub fn revert(&mut self, id: DocId) -> Result<(), EditError> {
         self.invalidate_javascript(id);
-        let purview_revert = if let Some(doc) = self.get(id) {
-            if let Some(purview) = doc.purview.as_ref() {
-                let base = doc.editor.as_ref().map(|editor| editor.saved.clone()).unwrap_or(doc.bytes.clone());
-                match purview.provider.inspect(&doc.name, &base) {
-                    Ok(opened) => Some((true, base, opened)),
-                    Err(error) => return Err(EditError::Protection(error.to_string())),
-                }
-            } else {
-                None
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let purview_revert = if let Some(saved) = doc.saved_purview.as_ref() {
+            let opened = saved
+                .provider
+                .inspect(&doc.name, &saved.original)
+                .map_err(|error| EditError::Protection(error.to_string()))?
+                .ok_or_else(|| EditError::Protection("the saved Microsoft Purview state could not be verified".into()))?;
+            if saved.document.protected && !opened.document.protected {
+                return Err(EditError::Protection("the saved Microsoft Purview document is no longer protected".into()));
             }
+            Some((saved.clone(), opened))
         } else {
             None
         };
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
         let base = editor.saved.clone();
-        if let Some((_, protected_base, opened)) = purview_revert {
-            let (cos, keys, purview) = if let Some(opened) = opened {
-                let cos =
-                    pdfcraft_cos::Document::open_with_password(opened.bytes.clone(), None).map_err(|error| EditError::Reopen(error.to_string()))?;
-                let provider = doc.purview.as_ref().map(|state| state.provider.clone());
-                let state = provider.map(|provider| crate::PurviewDocumentState {
-                    handle: opened.handle,
-                    original: protected_base.clone(),
-                    document: opened.document,
-                    provider,
-                });
-                (cos, editor.keys.clone(), state)
-            } else {
-                let cos =
-                    pdfcraft_cos::Document::open_with_password(protected_base.clone(), None).map_err(|error| EditError::Reopen(error.to_string()))?;
-                (cos, Keys::default(), None)
-            };
+        if let Some((mut saved, opened)) = purview_revert {
+            let keys = editor.saved_keys.clone();
+            let cos = pdfcraft_cos::Document::open_with_password(opened.bytes.clone(), keys.reopen.as_deref())
+                .map_err(|error| EditError::Reopen(error.to_string()))?;
             editor.cos = cos;
-            editor.saved = protected_base.clone();
-            editor.saved_keys = keys;
+            editor.saved = opened.bytes.clone();
+            editor.keys = keys;
             editor.undo.clear();
             editor.redo.clear();
-            doc.bytes = protected_base;
-            doc.purview = purview;
+            doc.bytes = opened.bytes;
+            saved.handle = opened.handle;
+            saved.document = opened.document;
+            doc.purview = Some(saved);
             Self::adopt_keys(doc);
             Self::sync_dirty(doc);
             doc.xfa_exited.clear();
@@ -283,6 +302,7 @@ impl Session {
         editor.keys = keys;
         editor.undo.clear();
         editor.redo.clear();
+        doc.purview = None;
         Self::adopt_keys(doc);
         Self::sync_dirty(doc);
         // The changes whose exits ran are gone with the rest: skip no exit.
@@ -346,7 +366,7 @@ impl Session {
             if d.dirty && d.generation != d.snapshot_generation {
                 // The working bytes hold typed Password-field values (#3926, #3944): a recovery file
                 // is written from a copy without them, and none is written if that copy fails.
-                let bytes =
+                let mut bytes =
                     match d.editor.as_ref().filter(|e| pdfcraft_forms::has_password_values(&e.cos) || pdfcraft_xfa::has_password_values(&e.cos)) {
                         Some(e) => match writable(&e.cos)
                             .and_then(|c| write_incremental(&c, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string())))
@@ -356,13 +376,25 @@ impl Session {
                         },
                         None => d.bytes.clone(),
                     };
+                let mut protected = false;
+                if let Some(purview) = d.purview.as_ref().filter(|state| state.document.protected) {
+                    let output = match republish_verified(purview, &d.name, &bytes) {
+                        Ok(output) => output,
+                        Err(error) => {
+                            log::warn!("protected recovery snapshot for {:?} could not be published: {error}", d.id);
+                            continue;
+                        }
+                    };
+                    bytes = output;
+                    protected = true;
+                }
                 d.snapshot_generation = d.generation;
                 out.push(RecoverySnapshot {
                     doc: d.id,
                     name: d.name.clone(),
                     path: d.path.clone(),
                     bytes,
-                    encrypted: d.info.encrypted || d.editor.as_ref().is_some_and(|e| e.cos.security().is_some()),
+                    encrypted: protected || d.info.encrypted || d.editor.as_ref().is_some_and(|e| e.cos.security().is_some()),
                 });
             }
         }
@@ -469,6 +501,7 @@ impl Session {
     /// `opts.date` takes the session clock.
     pub fn sign(&self, doc: DocId, id: &pdfcraft_sign::DigitalId, mut opts: SignOptions) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        check_purview_signing(d)?;
         // Encrypted documents are signed under their permissions (the signer checks them).
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         if opts.date.is_empty() {
@@ -489,6 +522,7 @@ impl Session {
         tsa: &dyn pdfcraft_sign::TimestampAuthority,
     ) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        check_purview_signing(d)?;
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         if opts.date.is_empty() {
             opts.date = self.signing_date();
@@ -504,6 +538,7 @@ impl Session {
     /// current state. An empty `date` takes the session clock; the transport is the caller's.
     pub fn timestamp_document(&self, doc: DocId, tsa: &dyn pdfcraft_sign::TimestampAuthority, date: String) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        check_purview_signing(d)?;
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         let date = if date.is_empty() { self.signing_date() } else { date };
         let cos = writable(&editor.cos)?;
@@ -516,6 +551,7 @@ impl Session {
     /// (PAdES B-LT): an incremental update that never rewrites signed bytes.
     pub fn embed_ltv(&self, doc: DocId, evidence: &pdfcraft_sign::dss::Evidence) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        check_purview_signing(d)?;
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         let cos = writable(&editor.cos)?;
         let embedded = Arc::new(pdfcraft_sign::dss::embed(&cos, evidence)?);

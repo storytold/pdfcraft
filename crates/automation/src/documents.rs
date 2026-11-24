@@ -829,6 +829,7 @@ impl Automation {
 
     pub(crate) fn export(&mut self, tool: &str, a: &Args) -> Result<Value> {
         let doc = self.doc_to_copy(a)?;
+        doc.check_unprotected_export().map_err(failed)?;
         let pages = match a.opt_ints("pages")? {
             Some(_) => self.pages(a, "pages")?,
             None => (0..doc.info.pages.len()).collect(),

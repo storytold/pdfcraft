@@ -28,7 +28,7 @@ fn main() {
     let target = if target_os == "windows" { "pdfcraft-purview-helper.exe" } else { "pdfcraft-purview-helper" };
     let helper = PathBuf::from(out_dir).join(target);
 
-    let compiler = std::env::var("CXX").unwrap_or_else(|_| if cfg!(target_os = "windows") { "cl".into() } else { "c++".into() });
+    let compiler = std::env::var("CXX").unwrap_or_else(|_| if target_os == "windows" { "cl".into() } else { "c++".into() });
     let sdk = match std::env::var("MIP_SDK_ROOT").or_else(|_| std::env::var("PDFCRAFT_MIP_SDK_ROOT")) {
         Ok(path) => PathBuf::from(path),
         Err(_) => {
@@ -44,7 +44,11 @@ fn main() {
     let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let sdk_arch = match (os.as_str(), arch.as_str()) {
         ("macos", "aarch64") => "arm64",
-        ("macos", _) => "x86_64",
+        ("macos", "x86_64") => "x86_64",
+        ("macos", _) => {
+            println!("cargo:warning=PDFCRAFT_PURVIEW: unsupported macOS target architecture: {arch}");
+            std::process::exit(1);
+        }
         (_, "x86_64") => "amd64",
         (_, "aarch64") => "arm64",
         (_, _) => arch.as_str(),
@@ -83,6 +87,7 @@ fn main() {
             .arg("-o")
             .arg(&helper);
         if os == "macos" {
+            command.arg("-arch").arg(sdk_arch);
             command.arg("-Wl,-rpath,@executable_path/../Frameworks");
             command.arg("-Wl,-rpath,@loader_path");
         } else {

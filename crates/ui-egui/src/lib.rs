@@ -267,6 +267,9 @@ impl Drop for DocumentCopy {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+type PurviewSignInResult = Result<Result<Vec<pdfcraft_engine::PurviewLabel>, pdfcraft_engine::PurviewError>, pdfcraft_engine::PurviewError>;
+
+#[cfg(not(target_arch = "wasm32"))]
 struct PendingOpen {
     token: u64,
     receiver: std::sync::mpsc::Receiver<open_worker::ResultMessage>,
@@ -555,6 +558,8 @@ pub struct PdfCraftApp {
     app_frame_shown: Option<bool>,
     pub password_prompt: Option<PasswordPrompt>,
     pub purview_signin_prompt: Option<PurviewSignInPrompt>,
+    #[cfg(not(target_arch = "wasm32"))]
+    purview_sign_in_job: Option<std::sync::mpsc::Receiver<PurviewSignInResult>>,
     /// Copy of a whole document's text (#2639) whose pages are being read off the UI thread.
     document_copy: Option<DocumentCopy>,
     pub unlock_prompt: Option<UnlockPrompt>,

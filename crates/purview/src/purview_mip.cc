@@ -2,6 +2,7 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -73,17 +74,6 @@ static std::vector<std::string> split_tsv(const std::string& line) {
         if (ch == '\t') {
             fields.push_back(field);
             field.clear();
-        } else if (ch == '\\' && i + 1 < line.size()) {
-            char next = line[++i];
-            if (next == 't') {
-                field.push_back('\t');
-            } else if (next == 'n') {
-                field.push_back('\n');
-            } else if (next == '\\') {
-                field.push_back('\\');
-            } else {
-                field.push_back(next);
-            }
         } else {
             field.push_back(ch);
         }
@@ -307,9 +297,25 @@ static void copy_file(const std::string& input, const std::string& output) {
     }
     std::ifstream source(input, std::ios::binary);
     std::ofstream destination(output, std::ios::binary | std::ios::trunc);
+    if (!source || !destination) {
+        throw std::runtime_error("Microsoft Purview could not open the staged file");
+    }
     destination << source.rdbuf();
+    if (source.bad() || !destination) {
+        throw std::runtime_error("Microsoft Purview could not copy the staged file");
+    }
+    destination.flush();
+    if (!destination) {
+        throw std::runtime_error("Microsoft Purview could not flush the staged file");
+    }
+    destination.close();
+    if (!destination) {
+        throw std::runtime_error("Microsoft Purview could not close the staged file");
+    }
 #if defined(__unix__) || defined(__APPLE__)
-    ::chmod(output.c_str(), 0600);
+    if (::chmod(output.c_str(), 0600) != 0) {
+        throw std::runtime_error("Microsoft Purview could not restrict the staged file");
+    }
 #endif
 }
 
@@ -364,6 +370,9 @@ static void handle_open(const std::vector<std::string>& fields) {
             copy_file(decrypted, output);
             std::error_code removed_error;
             std::filesystem::remove(decrypted, removed_error);
+            if (removed_error) {
+                throw std::runtime_error("Microsoft Purview could not remove its decrypted temporary file");
+            }
         } else {
             copy_file(input, output);
         }
@@ -491,6 +500,9 @@ static void handle_apply_label(const std::vector<std::string>& fields) {
             copy_file(decrypted, working);
             std::error_code removed_error;
             std::filesystem::remove(decrypted, removed_error);
+            if (removed_error) {
+                throw std::runtime_error("Microsoft Purview could not remove its decrypted temporary file");
+            }
         } else {
             copy_file(output, working);
         }

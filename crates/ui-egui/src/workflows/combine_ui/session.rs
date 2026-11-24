@@ -447,6 +447,14 @@ impl PdfCraftApp {
     /// Add documents open in tabs (by tab index), as they are now; those already in the list
     /// stay out (#1356). The same document, not the same name: two files called alike are two.
     pub(crate) fn add_open_documents(&mut self, tabs: &[usize]) {
+        if let Some(error) = tabs
+            .iter()
+            .filter_map(|&i| self.views.get(i).and_then(|view| self.session.get(view.id)))
+            .find_map(|doc| doc.check_unprotected_export().err())
+        {
+            self.notify_error(error);
+            return;
+        }
         let mut incoming = Vec::new();
         for &i in tabs {
             let Some(doc) = self.views.get(i).and_then(|v| self.session.get(v.id)) else { continue };

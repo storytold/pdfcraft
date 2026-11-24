@@ -24,6 +24,13 @@ mod files;
 mod save;
 mod view;
 
+fn check_purview_label_mutation(document: &Document) -> Result<(), EditError> {
+    if document.purview().is_some_and(|state| state.protected) {
+        return Err(EditError::Protection("changing labels or protection on a Microsoft Purview-protected document is not yet supported".into()));
+    }
+    Ok(())
+}
+
 impl Session {
     pub fn set_purview_provider(&mut self, provider: Arc<dyn crate::PurviewProvider>) {
         self.purview = Some(provider);
@@ -31,6 +38,26 @@ impl Session {
 
     pub fn clear_purview_provider(&mut self) {
         self.purview = None;
+    }
+
+    pub fn has_purview_protected_documents(&self) -> bool {
+        self.docs.iter().any(|document| document.purview().is_some_and(|state| state.protected))
+    }
+
+    fn check_purview_account_change(&self) -> Result<(), crate::PurviewError> {
+        let provider = self.purview.as_ref().ok_or(crate::PurviewError::SdkUnavailable)?;
+        if self.has_purview_protected_documents() {
+            return Err(crate::PurviewError::Native("Close all Microsoft Purview-protected documents before changing accounts".into()));
+        }
+        if provider.status() == crate::PurviewStatus::SigningIn {
+            return Err(crate::PurviewError::Native("Microsoft account sign-in is already in progress".into()));
+        }
+        Ok(())
+    }
+
+    pub fn purview_sign_in_provider(&self) -> Result<Arc<dyn crate::PurviewProvider>, crate::PurviewError> {
+        self.check_purview_account_change()?;
+        self.purview.clone().ok_or(crate::PurviewError::SdkUnavailable)
     }
 
     pub fn purview_status(&self) -> crate::PurviewStatus {
@@ -46,14 +73,16 @@ impl Session {
     }
 
     pub fn purview_switch_account(&self, account_id: &str) -> Result<(), crate::PurviewError> {
+        self.check_purview_account_change()?;
         self.purview.as_ref().ok_or(crate::PurviewError::SdkUnavailable)?.switch_account(account_id)
     }
 
     pub fn purview_sign_in(&self, username_hint: Option<&str>) -> Result<(), crate::PurviewError> {
-        self.purview.as_ref().ok_or(crate::PurviewError::SdkUnavailable)?.sign_in(username_hint)
+        self.purview_sign_in_provider()?.sign_in(username_hint)
     }
 
     pub fn purview_sign_out(&mut self) -> Result<(), crate::PurviewError> {
+        self.check_purview_account_change()?;
         self.purview.as_ref().ok_or(crate::PurviewError::SdkUnavailable)?.sign_out()
     }
 
@@ -63,6 +92,7 @@ impl Session {
 
     pub fn purview_apply_label(&mut self, id: DocId, label_id: &str, justification: Option<&str>) -> Result<(), EditError> {
         let document = self.get(id).ok_or(EditError::NoDocument)?;
+        check_purview_label_mutation(document)?;
         if document.editor.as_ref().is_some_and(|editor| editor.cos.output_handler().is_some()) {
             return Err(EditError::Protection(
                 "ordinary PDF password protection and Microsoft Purview labels cannot be composed in the same save".into(),
@@ -98,6 +128,7 @@ impl Session {
 
     pub fn purview_remove_label(&mut self, id: DocId, justification: Option<&str>) -> Result<(), EditError> {
         let document = self.get(id).ok_or(EditError::NoDocument)?;
+        check_purview_label_mutation(document)?;
         if document.editor.as_ref().is_some_and(|editor| editor.cos.output_handler().is_some()) {
             return Err(EditError::Protection(
                 "ordinary PDF password protection and Microsoft Purview labels cannot be composed in the same save".into(),
@@ -128,6 +159,7 @@ impl Session {
 
     pub fn purview_remove_protection(&mut self, id: DocId) -> Result<(), EditError> {
         let document = self.get(id).ok_or(EditError::NoDocument)?;
+        check_purview_label_mutation(document)?;
         if document.editor.as_ref().is_some_and(|editor| editor.cos.output_handler().is_some()) {
             return Err(EditError::Protection(
                 "ordinary PDF password protection and Microsoft Purview protection cannot be composed in the same save".into(),

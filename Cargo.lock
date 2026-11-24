@@ -5028,6 +5028,7 @@ dependencies = [
  "icu_properties",
  "idna",
  "image",
+ "log",
  "pdfcraft-a11y",
  "pdfcraft-annot",
  "pdfcraft-audit",
@@ -5252,6 +5253,7 @@ name = "pdfcraft-purview"
 version = "0.21.1"
 dependencies = [
  "craft-mime",
+ "log",
  "oauth2",
  "pdfcraft-platform",
  "pdfcraft-purview-policy",

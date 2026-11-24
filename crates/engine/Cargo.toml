@@ -39,6 +39,7 @@ pdfcraft-model = { workspace = true }
 pdfcraft-geom = { workspace = true }
 pdfcraft-purview-policy = { workspace = true }
 thiserror = { workspace = true }
+log = { workspace = true }
 # Already in the graph (url and idna through webbrowser, icu_properties through boa): they show
 # the host of a document's link the way the browser reads it (links::display_host).
 url = "2.5.9"

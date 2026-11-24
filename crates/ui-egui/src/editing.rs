@@ -762,6 +762,10 @@ impl PdfCraftApp {
         }
         let Some((i, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
+        if let Err(error) = doc.check_unprotected_export() {
+            self.notify_error(error);
+            return;
+        }
         let pages = self.views[i].target_pages();
         let n = doc.info.pages.len();
         if cut && pages.len() >= n {

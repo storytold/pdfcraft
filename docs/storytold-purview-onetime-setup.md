@@ -10,6 +10,24 @@ happens in the customer's Microsoft 365 / Purview and Microsoft Entra portals.
 This is a public-release runbook. Storytold may use a separate internal-only app for development
 and testing, but an internal app must not be distributed as the public application identity.
 
+## Related RFC and application work
+
+This runbook implements the proposed shared standard in
+[RFC-0075](https://github.com/storytold/craft-contrib/pull/75), which is still a draft, and
+its [RFC discussion](https://github.com/storytold/craft-contrib/issues/73). It is not a
+substitute for Storytold's approval or Microsoft's agreements.
+
+| Application | Tracking | Suggested application of the standard |
+|---|---|---|
+| PdfCraft | [IRM feature](https://github.com/storytold/pdfcraft/issues/6747), [draft POC](https://github.com/storytold/pdfcraft/pull/7843) | Complete the native SDK integration and live protected-PDF tests first. |
+| GridCraft | [label-preservation issue](https://github.com/storytold/gridcraft/issues/865), [label-preservation PR](https://github.com/storytold/gridcraft/pull/1221) | Preserve spreadsheet label metadata and use the shared identity and SDK standard for any protection enforcement. |
+| DeckCraft | [label-preservation PR](https://github.com/storytold/deckcraft/pull/535), [password-protected decks PR](https://github.com/storytold/deckcraft/pull/2176) | Preserve presentation labels; keep ordinary password encryption distinct from MIP rights. |
+| WordCraft | [password-protected documents issue](https://github.com/storytold/wordcraft/issues/5827) | Keep document passwords separate and adopt the shared standard when adding MIP support. |
+| ArtCraft | [enterprise compliance issue](https://github.com/storytold/artcraft/issues/2447) | Coordinate suite-wide identity, policy, consent and compliance requirements. |
+
+Preserving label metadata or supporting ordinary document passwords is not, by itself, MIP
+decryption or rights enforcement.
+
 ## Executive decision
 
 Use **one multitenant, public/native Microsoft Entra app registration** for all first-party
@@ -352,9 +370,10 @@ and IPIA. Do not put an app secret in a desktop binary or source repository.
 
 The following inputs are required to turn the PdfCraft POC from an SDK bridge into a live tenant test:
 
-- Fix protected-document recovery, optimization and read-only save paths that can currently
-  write decrypted content without restoring MIP protection. Until then, use only synthetic
-  test documents and do not distribute the POC for sensitive content.
+- Validate protected-document saves, recovery and revert against a live tenant. Optimization,
+  digital signing and label/protection changes on protected documents are intentionally disabled until they
+  can preserve and verify protection. Continue using synthetic test documents; do not
+  distribute the POC for sensitive content.
 - Download the official `mip_sdk_file_macos_1.18.148.zip` package for macOS and, for public release,
   the corresponding `file`, `protection`, and `upe` packages for every supported platform.
 - Extract the package into a private SDK staging directory outside the Git repository.
@@ -366,8 +385,10 @@ The following inputs are required to turn the PdfCraft POC from an SDK bridge in
 - Use a dedicated Microsoft 365 test tenant with a published sensitivity label policy.
 - Create test labels for default, mandatory, protected, and unprotected outcomes.
 - Test a PFILE/PDF produced from the tenant against the live POC on macOS arm64 first.
-- Verify sign-in, MFA/Conditional Access, use-license acquisition, rights, save/re-publish, label
-  downgrade justification, remove label, remove protection, and ordinary-password composition behavior.
+- Verify sign-in, MFA/Conditional Access, use-license acquisition, rights and save/re-publish.
+  Until protected-document label changes, protection removal and ordinary-password composition
+  are implemented, verify that each is refused clearly; then test those operations and downgrade
+  justification against the tenant before enabling them.
 - Keep the POC fail-close if the SDK, app ID, helper, or tenant policy is missing. Never silently open MIP-shaped bytes in that state.
 
 ### Authentication fallback policy
@@ -376,6 +397,14 @@ PdfCraft's normal desktop authentication is browser-based Authorization Code
 with PKCE through the Storytold public/native app registration. It does not use
 or reuse Azure CLI credentials, the Azure CLI client ID, `az login`, or
 `az account get-access-token`.
+
+The POC obtains protection and policy tokens separately. Use the same work/school account for
+both prompts; sign-in fails if either response lacks an account identifier or they differ. A
+failed attempt to add an account leaves any existing signed-in account available.
+Sign-in and policy loading run outside the UI thread; closing the sign-in window does not
+cancel them. Close protected documents and finish queued opens before switching accounts or
+signing out, so rights from one account are not reused for another. If another MIP operation
+is in progress, wait for it to finish and retry the account change.
 
 Azure CLI is useful to Storytold maintainers for tenant/app-registration setup
 and Azure resource administration, but it is not the runtime identity for
@@ -545,7 +574,7 @@ Validate the UI and automation/MCP paths with one label per scenario:
 | Rights | Required PdfCraft behavior |
 |---|---|
 | VIEW only | Open and render; no copy, print or edit |
-| VIEW + EXTRACT | Copy/text export allowed only to authorized flows |
+| VIEW + EXTRACT | Text/image copying is allowed; structural page/object copying and unprotected file exports require EXPORT or OWNER |
 | VIEW + PRINT | Printing allowed; copy/edit/export remain subject to rights |
 | VIEW + EDIT/DOCEDIT | Editing allowed; export/protection removal remain subject to rights |
 | VIEW + EXPORT | Export/re-protection behavior allowed only as the policy permits |

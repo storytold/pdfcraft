@@ -2669,7 +2669,7 @@ fn apply_notice(app: &mut PdfCraftApp, index: usize, notice: Option<Notice>) {
         Some(Notice::Repairs) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Advanced)),
         Some(Notice::Security) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Security)),
         Some(Notice::PurviewLabel) => {
-            if matches!(app.session.purview_status(), pdfcraft_engine::PurviewStatus::Ready) {
+            if matches!(app.purview_status(), pdfcraft_engine::PurviewStatus::Ready) {
                 match app.session.purview_labels() {
                     Ok(labels) => {
                         app.purview_labels = labels;

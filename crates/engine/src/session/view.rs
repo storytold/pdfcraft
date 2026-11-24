@@ -122,6 +122,7 @@ impl Session {
     /// "<name> (revision n)".
     pub fn open_revision(&mut self, id: DocId, n: usize) -> Result<DocId, String> {
         let doc = self.get(id).ok_or("no such document")?;
+        doc.check_unprotected_export().map_err(|error| error.to_string())?;
         let ends = doc.revision_ends();
         let end = *n.checked_sub(1).and_then(|i| ends.get(i)).ok_or_else(|| format!("the document has {} revision(s)", ends.len()))?;
         let name = format!("{} (revision {n}).pdf", doc.name.trim_end_matches(".pdf"));
@@ -349,6 +350,7 @@ impl Session {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         // The summary copies the comments' text out into a new document.
         doc.check_copying()?;
+        doc.check_unprotected_export()?;
         let text = comment_summary(&doc.name, &doc.info.annotations, sort);
         self.create_report(&format!("Summary of Comments on {}", doc.name), &text)
     }

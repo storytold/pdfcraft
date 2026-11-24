@@ -14,12 +14,18 @@ const FIXTURE: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
+struct SignInGate {
+    started: std::sync::mpsc::Sender<()>,
+    release: Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
 struct TestPurviewProvider {
     status: Mutex<PurviewStatus>,
     active: Mutex<Option<PurviewAccount>>,
     accounts: Mutex<Vec<PurviewAccount>>,
     inspect_document: Option<PurviewDocument>,
     inspect_sign_in_required: bool,
+    sign_in_gate: Option<Arc<SignInGate>>,
 }
 
 impl TestPurviewProvider {
@@ -30,6 +36,7 @@ impl TestPurviewProvider {
             accounts: Mutex::new(Vec::new()),
             inspect_document: None,
             inspect_sign_in_required: false,
+            sign_in_gate: None,
         }
     }
 
@@ -40,6 +47,7 @@ impl TestPurviewProvider {
             accounts: Mutex::new(Vec::new()),
             inspect_document: None,
             inspect_sign_in_required: true,
+            sign_in_gate: None,
         }
     }
 
@@ -50,6 +58,7 @@ impl TestPurviewProvider {
             accounts: Mutex::new(accounts),
             inspect_document: None,
             inspect_sign_in_required: false,
+            sign_in_gate: None,
         }
     }
 
@@ -60,6 +69,7 @@ impl TestPurviewProvider {
             accounts: Mutex::new(accounts),
             inspect_document: Some(document),
             inspect_sign_in_required: false,
+            sign_in_gate: None,
         }
     }
 }
@@ -92,6 +102,10 @@ impl PurviewProvider for TestPurviewProvider {
     }
 
     fn sign_in(&self, _username_hint: Option<&str>) -> Result<(), PurviewError> {
+        if let Some(gate) = &self.sign_in_gate {
+            gate.started.send(()).unwrap();
+            gate.release.lock().unwrap().recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        }
         *self.status.lock().unwrap_or_else(|poison| poison.into_inner()) = PurviewStatus::Ready;
         Ok(())
     }
@@ -105,7 +119,15 @@ impl PurviewProvider for TestPurviewProvider {
 
     fn inspect(&self, _name: &str, bytes: &Arc<Vec<u8>>) -> Result<Option<PurviewOpen>, PurviewError> {
         if self.inspect_sign_in_required {
-            return Err(PurviewError::SignInRequired);
+            if self.status() != PurviewStatus::Ready {
+                return Err(PurviewError::SignInRequired);
+            }
+            return Ok(Some(PurviewOpen {
+                handle: 1,
+                original: bytes.clone(),
+                bytes: Arc::new(FIXTURE.to_vec()),
+                document: PurviewDocument { protected: true, rights: PurviewRights { view: true, ..Default::default() }, ..Default::default() },
+            }));
         }
         Ok(self.inspect_document.clone().map(|document| PurviewOpen { handle: 1, original: bytes.clone(), bytes: bytes.clone(), document }))
     }
@@ -184,6 +206,19 @@ fn harness_security(provider: TestPurviewProvider) -> Harness<'static, PdfCraftA
     h
 }
 
+fn harness_security_with_document(provider: TestPurviewProvider) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.session.set_purview_provider(Arc::new(provider));
+        app.open_bytes("protected.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.dialog = Some(Dialog::Properties(PropsTab::Security));
+        app
+    });
+    h.run_steps(4);
+    h
+}
+
 fn harness_with_document(provider: TestPurviewProvider) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
@@ -238,6 +273,57 @@ fn opening_a_pfile_automatically_opens_the_signed_out_sign_in_gate() {
 }
 
 #[test]
+fn microsoft_sign_in_does_not_block_the_ui() {
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let mut provider = TestPurviewProvider::signed_out();
+    provider.sign_in_gate = Some(Arc::new(SignInGate { started: started_tx, release: Mutex::new(release_rx) }));
+    let mut h = harness(provider);
+    h.get_by_label("Sign in").click();
+    h.run_steps(1);
+    started_rx.recv_timeout(std::time::Duration::from_secs(2)).expect("sign-in worker started");
+    h.run_steps(2);
+    h.get_by_label("Opening Microsoft sign-in");
+    h.get_by_label("Close");
+
+    release_tx.send(()).unwrap();
+    for _ in 0..200 {
+        h.run_steps(1);
+        if h.query_by(|node| node.label().as_deref() == Some("Sensitivity labels")).is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.get_by_label("Sensitivity labels");
+}
+
+#[test]
+fn successful_sign_in_retries_the_held_file_without_an_extra_close() {
+    let mut h = harness_pfile(TestPurviewProvider::signed_out_for_pfile());
+    h.get_by_label("Sign in").click();
+    for _ in 0..200 {
+        h.run_steps(1);
+        if !h.state().session.docs().is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(h.state().purview_signin_prompt.is_none());
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().session.docs().len(), 1);
+}
+
+#[test]
+fn escape_dismisses_the_pending_purview_sign_in() {
+    let mut h = harness_pfile(TestPurviewProvider::signed_out_for_pfile());
+    assert!(h.state().purview_signin_prompt.is_some());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    assert!(h.state().purview_signin_prompt.is_none());
+}
+
+#[test]
 fn protect_menu_mip_entry_opens_signed_out_account_gate() {
     let mut h = harness_closed(TestPurviewProvider::signed_out());
     assert!(h.state_mut().execute("purview.apply_label"));
@@ -269,6 +355,16 @@ fn security_properties_offer_sign_in_then_sensitivity_label_action() {
         }],
     ));
     h.get_by_label("Apply sensitivity label / Microsoft Purview…");
+}
+
+#[test]
+fn security_properties_do_not_claim_a_protected_document_is_unrestricted() {
+    let account = PurviewAccount { id: "ada".into(), display_name: "Ada".into(), email: "ada@example.com".into(), principal_name: String::new() };
+    let document = PurviewDocument { protected: true, rights: PurviewRights { view: true, ..Default::default() }, ..Default::default() };
+    let h = harness_security_with_document(TestPurviewProvider::signed_in_with_document(account.clone(), vec![account], document));
+    h.get_by_label("Managed by Microsoft Purview");
+    assert!(h.query_by(|node| node.label().as_deref() == Some("None — everything is allowed")).is_none());
+    assert!(h.query_by(|node| node.label().as_deref() == Some("No security")).is_none());
 }
 
 #[test]
@@ -416,7 +512,7 @@ fn labeled_document_shows_owner_label_and_dynamic_capabilities() {
 }
 
 #[test]
-fn removable_label_and_protection_actions_require_change_security_rights() {
+fn protected_label_actions_are_unavailable_even_with_owner_rights() {
     let ada = PurviewAccount {
         id: "ada".into(),
         display_name: "Ada Lovelace".into(),
@@ -459,7 +555,83 @@ fn removable_label_and_protection_actions_require_change_security_rights() {
         default_label_id: None,
         downgrade_justification_required: false,
     };
-    let h = harness_with_document(TestPurviewProvider::signed_in_with_document(ada.clone(), vec![ada], document));
+    let h = harness_with_document(TestPurviewProvider::signed_in_with_document(ada.clone(), vec![ada.clone()], document.clone()));
+    h.get_by_label("Changing labels or protection on protected documents is not available yet.");
+    h.get_by_label("Close all Microsoft Purview-protected documents before changing accounts.");
+    assert!(h.query_by(|node| node.label().as_deref() == Some("Add account")).is_none());
+    assert!(h.query_by(|node| node.label().as_deref() == Some("Sign out")).is_none());
+    assert!(h.query_by(|node| node.label().as_deref() == Some("Remove label")).is_none());
+    assert!(h.query_by(|node| node.label().as_deref() == Some("Remove protection")).is_none());
+
+    let label_only = PurviewDocument { protected: false, default_label_id: Some("other-default".into()), ..document };
+    let h = harness_with_document(TestPurviewProvider::signed_in_with_document(ada.clone(), vec![ada], label_only));
     h.get_by_label("Remove label");
-    h.get_by_label("Remove protection");
+    h.get_by_label("Add account");
+    h.get_by_label("Sign out");
+    h.get_by_label("A default label is configured but is not applied automatically.");
+    assert!(h.query_by(|node| node.label().as_deref() == Some("Remove protection")).is_none());
+}
+
+#[test]
+fn protected_pages_cannot_be_copied_or_combined_without_export_right() {
+    let ada = PurviewAccount {
+        id: "ada".into(),
+        display_name: "Ada Lovelace".into(),
+        email: "ada@example.com".into(),
+        principal_name: "ada@example.com".into(),
+    };
+    let document =
+        PurviewDocument { protected: true, rights: PurviewRights { view: true, extract: true, ..Default::default() }, ..Default::default() };
+    let mut h = harness_with_document(TestPurviewProvider::signed_in_with_document(ada.clone(), vec![ada.clone()], document.clone()));
+    h.state_mut().dialog = None;
+    h.state_mut().copy_pages(false);
+    assert!(h.state().page_clipboard.is_none());
+    h.state_mut().open_bytes("another.pdf", None, FIXTURE.to_vec()).unwrap();
+    h.state_mut().execute("page.combine");
+    h.run_steps(3);
+    h.get_by_label("Add open documents").click();
+    h.run_steps(2);
+    h.get_by_label("All open documents").click();
+    h.run_steps(3);
+    assert!(h.state().combine_parts_shown().is_empty());
+    assert!(h.state().toast.as_ref().is_some_and(|(message, _)| message.contains("exporting unprotected content")));
+
+    let allowed = PurviewDocument { rights: PurviewRights { export: true, ..document.rights }, ..document };
+    let mut h = harness_with_document(TestPurviewProvider::signed_in_with_document(ada.clone(), vec![ada], allowed));
+    h.state_mut().dialog = None;
+    h.state_mut().copy_pages(false);
+    assert!(h.state().page_clipboard.is_some());
+}
+
+#[test]
+fn protected_attachments_cannot_open_as_unprotected_documents_without_export_right() {
+    let ada = PurviewAccount {
+        id: "ada".into(),
+        display_name: "Ada Lovelace".into(),
+        email: "ada@example.com".into(),
+        principal_name: "ada@example.com".into(),
+    };
+    let document = PurviewDocument {
+        protected: true,
+        rights: PurviewRights { view: true, edit: true, extract: true, ..Default::default() },
+        ..Default::default()
+    };
+    let mut h = harness_with_document(TestPurviewProvider::signed_in_with_document(ada.clone(), vec![ada], document));
+    let id = h.state().session.docs()[0].id;
+    h.state_mut()
+        .session
+        .apply(
+            id,
+            pdfcraft_engine::Edit::AddAttachment {
+                name: "child.pdf".into(),
+                bytes: FIXTURE.to_vec(),
+                description: None,
+                mime: Some("application/pdf".into()),
+            },
+        )
+        .unwrap();
+    assert_eq!(h.state().session.get(id).unwrap().info.attachments.len(), 1);
+    h.state_mut().attachment_action(id, 0, true);
+    assert_eq!(h.state().session.docs().len(), 1);
+    assert!(h.state().toast.as_ref().is_some_and(|(message, _)| message.contains("exporting unprotected content")));
 }

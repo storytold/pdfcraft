@@ -1065,6 +1065,7 @@ impl Session {
     /// words at all (an empty document would silently lose the scan's content).
     pub fn editable_ocr_bytes(&self, id: DocId, found: &[OcrPage]) -> Result<Arc<Vec<u8>>, String> {
         let doc = self.get(id).ok_or("no such document")?;
+        doc.check_unprotected_export().map_err(|error| error.to_string())?;
         let words = layer::validate_words(found.iter().flat_map(|p| &p.words)).map_err(|e| e.to_string())?;
         if words == 0 {
             return Err("the recognition found no words, so there is no editable text to write".into());

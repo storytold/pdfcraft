@@ -22,6 +22,8 @@ pub struct Document {
     /// the PDF's standard password encryption, so rights remain enforceable
     /// after the MIP SDK decrypts a temporary working copy.
     pub purview: Option<crate::PurviewDocumentState>,
+    /// The protection and label state at the last successful open or save.
+    pub(crate) saved_purview: Option<crate::PurviewDocumentState>,
     /// The working file: what Save writes.
     pub bytes: Arc<Vec<u8>>,
     /// What is displayed (the page view, `page_render`, page images): `bytes`, plus what is drawn
@@ -342,6 +344,7 @@ impl Document {
     /// Save image as: image `index` on `page` as a file (extension, bytes).
     pub fn page_image_file(&self, page: usize, index: usize) -> Result<(&'static str, Vec<u8>), String> {
         self.check_copying().map_err(|e| e.to_string())?;
+        self.check_unprotected_export().map_err(|e| e.to_string())?;
         let editor = self.editor.as_ref().ok_or("the document can't be read")?;
         let img = self.page_images(page).into_iter().nth(index).ok_or_else(|| format!("page {} has no image {}", page + 1, index + 1))?;
         if img.is_form {
@@ -578,6 +581,15 @@ impl Document {
     /// [`Self::allows_copying`], as the error to report when it isn't.
     pub fn check_copying(&self) -> Result<(), EditError> {
         if self.allows_copying() { Ok(()) } else { Err(EditError::NotPermitted("copying text and images")) }
+    }
+
+    /// Require explicit export rights before producing an unprotected derivative of an MIP file.
+    pub fn check_unprotected_export(&self) -> Result<(), EditError> {
+        if self.purview().is_some_and(|state| state.protected && !state.rights.can_export()) {
+            Err(EditError::NotPermitted("exporting unprotected content"))
+        } else {
+            Ok(())
+        }
     }
 
     /// Page changes (insert, delete, rotate, move) are allowed.
@@ -838,9 +850,12 @@ impl Document {
         self.editor.as_ref().map(|e| e.cos.revision_ends()).unwrap_or_default()
     }
 
-    /// The file as last opened or saved, without unsaved edits: what an incremental save appends
-    /// to. This stays that file when undo has restored an older snapshot.
+    /// The file as last opened or saved, without unsaved edits. For MIP this is the protected
+    /// original; the editor separately retains its decrypted incremental-save baseline.
     pub fn saved_bytes(&self) -> Arc<Vec<u8>> {
+        if let Some(saved) = self.saved_purview.as_ref().filter(|state| state.document.protected) {
+            return saved.original.clone();
+        }
         self.editor.as_ref().map_or_else(|| self.bytes.clone(), |e| e.saved.clone())
     }
 

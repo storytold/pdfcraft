@@ -411,9 +411,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("protect.remove", "Remove security", FILE, None, ProtectedSecurity, "lock-open"),
     c("protect.unlock", "Enter permissions password…", None, None, Unlock, "lock-open"),
     c("protect.properties", "Security properties…", FILE, None, Document, "shield-check"),
-    c("purview.sign_in", "Sign in with Microsoft…", None, None, Document, "shield-check"),
-    c("purview.sign_out", "Sign out of Microsoft", None, None, Document, "lock-open"),
-    c("purview.status", "Microsoft Purview status", None, None, Document, "shield-check"),
+    c("purview.sign_in", "Sign in with Microsoft…", None, None, Nothing, "shield-check"),
+    c("purview.sign_out", "Sign out of Microsoft", None, None, Nothing, "lock-open"),
+    c("purview.status", "Microsoft Purview status", None, None, Nothing, "shield-check"),
     c("purview.apply_label", "Apply sensitivity label / Microsoft Purview…", None, None, Document, "tag"),
     c("purview.remove_label", "Remove Microsoft Purview label", None, None, Document, "tag"),
     c("purview.remove_protection", "Remove Microsoft Purview protection", None, None, Document, "lock-open"),
@@ -462,6 +462,11 @@ pub fn menu(menu: &str) -> impl Iterator<Item = &'static CommandSpec> + '_ {
 /// Whether `spec` can run now, for the document `active` (the focused tab).
 pub fn is_enabled(spec: &CommandSpec, session: &Session, active: Option<DocId>) -> bool {
     let doc = active.and_then(|id| session.get(id));
+    if matches!(spec.id, "sign.digital" | "sign.certify" | "sign.certify_invisible")
+        && doc.is_some_and(|doc| doc.purview().is_some_and(|state| state.protected))
+    {
+        return false;
+    }
     match spec.needs {
         Nothing => true,
         Document | TwoPageView => doc.is_some(),
@@ -571,5 +576,16 @@ mod tests {
         s.apply(id, crate::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
         assert!(is_enabled(undo, &s, Some(id)));
         assert_eq!(current_label(undo, &s, Some(id)), "Undo Rotate page");
+    }
+
+    #[test]
+    fn purview_account_commands_do_not_require_an_open_document() {
+        let session = Session::new();
+        for id in ["purview.sign_in", "purview.sign_out", "purview.status"] {
+            assert!(is_enabled(command(id).unwrap(), &session, None), "{id} should be available before opening a document");
+        }
+        for id in ["purview.apply_label", "purview.remove_label", "purview.remove_protection"] {
+            assert!(!is_enabled(command(id).unwrap(), &session, None), "{id} needs a document");
+        }
     }
 }

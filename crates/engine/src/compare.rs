@@ -109,6 +109,8 @@ impl Session {
 
     /// [`Session::compare_report`] of the changes on `pages` ([`Session::compare_pages`]).
     pub fn compare_report_of(&self, old: DocId, new: DocId, pages: &[usize]) -> Result<Arc<Vec<u8>>, EditError> {
+        self.get(old).ok_or(EditError::NoDocument)?.check_unprotected_export()?;
+        self.get(new).ok_or(EditError::NoDocument)?.check_unprotected_export()?;
         let c = self.compare_pages(old, new, pages)?;
         let name = |id| self.get(id).map(|d| d.name.clone()).unwrap_or_default();
         self.create_report("Compare Report", &pdfcraft_compare::report(&c, &name(old), &name(new)))
@@ -123,6 +125,9 @@ impl Session {
 
     /// [`Session::mark_differences`] of the changes on `pages` ([`Session::compare_pages`]).
     pub fn mark_differences_of(&mut self, old: DocId, new: DocId, pages: &[usize]) -> Result<usize, EditError> {
+        if old != new {
+            self.get(old).ok_or(EditError::NoDocument)?.check_unprotected_export()?;
+        }
         let c = self.compare_pages(old, new, pages)?;
         let mut edits = Vec::new();
         for ch in &c.changes {
@@ -325,6 +330,7 @@ impl crate::Document {
     }
 
     /// The document as a Word, PowerPoint, HTML or RTF file.
+    /// Callers must first check [`Self::check_unprotected_export`].
     pub fn export_office(&self, format: OfficeFormat) -> Vec<u8> {
         self.export_office_checked(format).bytes
     }

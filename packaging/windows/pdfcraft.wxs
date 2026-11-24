@@ -3,6 +3,9 @@
   <?ifndef HasCraftFontLicences ?>
   <?define HasCraftFontLicences=0 ?>
   <?endif?>
+  <?ifndef HasMipSdk ?>
+  <?define HasMipSdk=0 ?>
+  <?endif?>
   <Package Name="PdfCraft" Manufacturer="Learning Machines LLC" Version="$(var.Version)" UpgradeCode="EA00C367-7270-4C50-9D8B-A7A5C88AD27F" Scope="perUserOrMachine" Compressed="yes" Language="1033">
     <SummaryInformation Description="PdfCraft PDF workbench" Manufacturer="Learning Machines LLC" />
     <?include $(sys.SOURCEFILEDIR)install-policy.wxi?>
@@ -209,8 +212,11 @@
       <Component Id="PdfcraftCli">
         <File Id="PdfcraftCliExe" Source="$(var.BinDir)\pdfcraft-cli.exe" KeyPath="yes" />
       </Component>
+      <?if $(var.HasMipSdk) = 1 ?>
       <Files Include="$(var.BinDir)\pdfcraft-purview-helper.exe" />
-      <Files Include="$(var.BinDir)\mip_*.dll" />
+      <Files Include="$(var.BinDir)\*.dll" />
+      <Files Include="$(var.BinDir)\MIP-*" />
+      <?endif?>
       <!-- The embedded PDF icon's ISC notice and project licences travel with the binaries. -->
       <Component Id="PdfcraftDocumentIconLicense">
         <File Id="PdfcraftDocumentIconLicenseFile" Source="$(var.BinDir)\LICENSE-document.txt" KeyPath="yes" />

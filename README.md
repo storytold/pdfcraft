@@ -115,9 +115,10 @@ IRM-protected PDF viewing, rights enforcement, label application and re-publishi
 support is opt-in and uses Microsoft's official SDK; setup and public-release requirements are
 documented in [docs/storytold-purview-onetime-setup.md](docs/storytold-purview-onetime-setup.md).
 
-**Proof of concept only:** do not use real sensitive documents. Recovery snapshots, optimized
-output and read-only saves can write decrypted content without restoring MIP protection.
-These paths must be fixed and live tenant rights verified before release.
+**Proof of concept only:** use synthetic documents, not real sensitive files. Protected saves
+and recovery are checked before output; optimization, digital signing and label/protection changes on protected
+documents are disabled until they can preserve and verify protection. Other paths and live
+tenant rights still require validation before release.
 
 ## Read anything, beautifully
 

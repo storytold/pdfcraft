@@ -73,6 +73,9 @@ contents:
   - src: ${STAGE}/usr/bin/pdfcraft-cli
     dst: /usr/bin/pdfcraft-cli
     file_info: { mode: 0755 }
+  - src: ${STAGE}/usr/lib/
+    dst: /usr/lib/
+    type: tree
   - src: ${STAGE}/usr/share/
     dst: /usr/share/
     type: tree

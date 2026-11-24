@@ -114,7 +114,7 @@ impl PurviewRights {
     }
 
     pub fn can_export(&self) -> bool {
-        self.owner || self.export || self.extract
+        self.owner || self.export
     }
 
     pub fn can_change_security(&self) -> bool {
@@ -277,9 +277,10 @@ mod tests {
         assert!(!view_only.can_edit());
         assert!(!view_only.can_save());
 
-        let extract = PurviewRights { owner: false, view: true, extract: true, export: true, ..PurviewRights::default() };
+        let extract = PurviewRights { owner: false, view: true, extract: true, ..PurviewRights::default() };
         assert!(extract.can_copy());
-        assert!(extract.can_export());
+        assert!(!extract.can_export(), "copy rights do not authorize an unprotected document export");
+        assert!(PurviewRights { export: true, ..extract }.can_export());
 
         let owner = PurviewRights { owner: true, ..PurviewRights::default() };
         assert!(owner.can_copy());

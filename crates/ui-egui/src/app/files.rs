@@ -583,6 +583,10 @@ impl PdfCraftApp {
     /// else asked to open is offered to save.
     pub fn attachment_action(&mut self, doc: DocId, index: usize, open: bool) {
         let Some(d) = self.session.get(doc) else { return };
+        if let Err(error) = d.check_unprotected_export() {
+            self.notify_error(error);
+            return;
+        }
         let Some(att) = d.info.attachments.get(index).cloned() else { return };
         let data = pdfcraft_render::attachment_data(&d.bytes, d.password.as_deref(), &att);
         #[cfg(not(target_arch = "wasm32"))]
@@ -703,6 +707,10 @@ impl PdfCraftApp {
     /// whatever its name. A file of another kind, or one that can't be read, stays in the list.
     fn open_portfolio_initial(&mut self, doc: DocId, index: usize) {
         let Some(d) = self.session.get(doc) else { return };
+        if let Err(error) = d.check_unprotected_export() {
+            self.notify_error(error);
+            return;
+        }
         let Some(att) = d.info.attachments.get(index).cloned() else { return };
         let Ok(bytes) = pdfcraft_render::attachment_data(&d.bytes, d.password.as_deref(), &att) else { return };
         if pdfcraft_engine::source_kind(&att.name, &bytes) != Some(pdfcraft_engine::SourceKind::Pdf) {
@@ -833,10 +841,102 @@ impl PdfCraftApp {
         self.settle_launch_layout();
     }
 
+    pub(crate) fn purview_status(&self) -> pdfcraft_engine::PurviewStatus {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.purview_sign_in_job.is_some() {
+            return pdfcraft_engine::PurviewStatus::SigningIn;
+        }
+        self.session.purview_status()
+    }
+
+    pub(crate) fn purview_account_change_reason(&self) -> Option<&'static str> {
+        if self.session.has_purview_protected_documents() {
+            return Some("Close all Microsoft Purview-protected documents before changing accounts.");
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.session.purview_status() == pdfcraft_engine::PurviewStatus::Ready
+            && (!self.pending_opens.is_empty() || !self.deferred_opens.is_empty())
+        {
+            return Some("Finish opening queued files before changing Microsoft accounts; close this dialog if needed.");
+        }
+        None
+    }
+
+    pub(crate) fn start_purview_sign_in(&mut self) {
+        if let Some(reason) = self.purview_account_change_reason() {
+            self.notify_tr(reason);
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.purview_sign_in_job.is_some() {
+                self.notify_tr("Microsoft sign-in is already in progress");
+                return;
+            }
+            let provider = match self.session.purview_sign_in_provider() {
+                Ok(provider) => provider,
+                Err(error) => {
+                    self.notify_fmt("Sign-in failed: {e}", &[("e", &error.to_string())]);
+                    return;
+                }
+            };
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let ctx = self.ctx.clone();
+            let worker = std::thread::Builder::new().name("purview-sign-in".into()).spawn(move || {
+                let result = provider.sign_in(None).map(|()| provider.labels());
+                if sender.send(result).is_err() {
+                    log::debug!("Microsoft sign-in completed after PdfCraft exited");
+                }
+                if let Some(ctx) = ctx {
+                    ctx.request_repaint();
+                }
+            });
+            match worker {
+                Ok(_) => self.purview_sign_in_job = Some(receiver),
+                Err(error) => self.notify_fmt("Couldn't start Microsoft sign-in: {e}", &[("e", &error.to_string())]),
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        match self.session.purview_sign_in(None) {
+            Ok(()) => {
+                self.notify_tr("Signed in");
+                self.retry_purview_signin();
+            }
+            Err(error) => self.notify_fmt("Sign-in failed: {e}", &[("e", &error.to_string())]),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn poll_purview_sign_in(&mut self) {
+        let Some(receiver) = self.purview_sign_in_job.as_ref() else { return };
+        let result = match receiver.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err(pdfcraft_engine::PurviewError::Native("the Microsoft sign-in worker stopped".into()))
+            }
+        };
+        self.purview_sign_in_job = None;
+        match result {
+            Ok(labels) => {
+                self.notify_tr("Signed in");
+                self.retry_purview_signin();
+                match labels {
+                    Ok(labels) => self.purview_labels = labels,
+                    Err(error) => self.notify_fmt("Couldn't load sensitivity labels: {e}", &[("e", &error.to_string())]),
+                }
+            }
+            Err(error) => self.notify_fmt("Sign-in failed: {e}", &[("e", &error.to_string())]),
+        }
+    }
+
     /// Retry a document that was held at a Microsoft Purview sign-in boundary. The file bytes,
     /// tab activation, remote destination and tool continuation are preserved.
     pub fn retry_purview_signin(&mut self) {
         let Some(p) = self.purview_signin_prompt.take() else { return };
+        if self.dialog == Some(Dialog::Purview) {
+            self.dialog = None;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if self.ctx.is_some() && !self.run_inline {
             let result = self.schedule_open_priority(OpenRequest {

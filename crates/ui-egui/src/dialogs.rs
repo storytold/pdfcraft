@@ -491,9 +491,6 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             let (go, cancel) = purview::body(ui, app, &t);
             req.apply = go;
             req.close = req.apply || cancel;
-            if cancel {
-                app.purview_signin_prompt = None;
-            }
             return false;
         }
         Dialog::PrinterMarks => {
@@ -569,6 +566,7 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
     });
     ui.separator();
     let units = app.units;
+    let purview_status = app.purview_status();
     let Some((_, id)) = app.active_ids() else { return false };
     let Some(doc) = app.session.get(id) else { return false };
     let i = &doc.info;
@@ -751,15 +749,19 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
                 ui.end_row();
             }
             PropsTab::Security => {
-                purview::properties(ui, &row, doc.purview(), app.session.purview_status(), req);
+                purview::properties(ui, &row, doc.purview(), purview_status, req);
                 match doc.security_summary() {
+                    None if doc.purview().is_some_and(|state| state.protected) => {
+                        row(ui, "Security method", tl!("Microsoft Purview").to_string());
+                        row(ui, "Restrictions", tl!("Managed by Microsoft Purview").to_string());
+                    }
                     None => {
                         row(ui, "Security method", tl!("No security").to_string());
                         row(ui, "Restrictions", tl!("None — everything is allowed").to_string());
                         if doc.allows_security_change() && ui.button(tl!("Protect using password…")).clicked() {
                             req.link_command = Some("protect.password");
                         }
-                        ui.horizontal(|ui| match app.session.purview_status() {
+                        ui.horizontal(|ui| match purview_status {
                             pdfcraft_engine::PurviewStatus::Ready => {
                                 if doc.allows_security_change() && ui.button(tl!("Apply sensitivity label / Microsoft Purview…")).clicked() {
                                     req.link_command = Some("purview.apply_label");
@@ -2248,6 +2250,9 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
         }
         if dialog == Dialog::AttachmentDescription {
             app.attachment_description_draft = None;
+        }
+        if dialog == Dialog::Purview {
+            app.purview_signin_prompt = None;
         }
         app.discard_properties();
         app.bulk_field_props = None;

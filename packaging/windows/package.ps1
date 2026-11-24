@@ -104,21 +104,39 @@ foreach ($check in @(@('pdfcraft.exe', 2), @('pdfcraft-cli.exe', 3))) {
 $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
-if ($env:MIP_SDK_ROOT -or $env:PDFCRAFT_MIP_SDK_ROOT) {
+foreach ($exe in 'pdfcraft.exe', 'pdfcraft-cli.exe') {
+  Copy-Item -LiteralPath (Join-Path $Bin $exe) -Destination $Stage
+}
+$HasMipSdk = if ($env:MIP_SDK_ROOT -or $env:PDFCRAFT_MIP_SDK_ROOT) { 1 } else { 0 }
+if ($HasMipSdk -eq 1) {
   $MipSdkRoot = if ($env:MIP_SDK_ROOT) { $env:MIP_SDK_ROOT } else { $env:PDFCRAFT_MIP_SDK_ROOT }
   $MipArch = switch ($Arch) { 'x64' { 'amd64' } 'x86' { 'x86' } 'arm64' { 'arm64' } }
   $MipBin = Join-Path $MipSdkRoot "bins\release\$MipArch"
   $Helper = Join-Path $Bin 'pdfcraft-purview-helper.exe'
   if (-not (Test-Path $MipBin)) { throw "MIP SDK binary directory is missing: $MipBin" }
   if (-not (Test-Path $Helper)) {
-    $Helper = Get-ChildItem (Join-Path $TargetDir '*') -Recurse -Filter 'pdfcraft-purview-helper.exe' -ErrorAction SilentlyContinue |
-      Where-Object { $_.FullName -match '\\release\\build\\.*\\out\\pdfcraft-purview-helper\.exe$' } |
+    $Helper = Get-ChildItem -LiteralPath (Join-Path $Bin 'build') -Recurse -Filter 'pdfcraft-purview-helper.exe' -ErrorAction SilentlyContinue |
+      Where-Object { $_.FullName -match '[\\/]out[\\/]pdfcraft-purview-helper\.exe$' } |
+      Sort-Object LastWriteTimeUtc -Descending |
       Select-Object -First 1 -ExpandProperty FullName
   }
   if (-not $Helper) { throw 'sdk build did not produce pdfcraft-purview-helper.exe' }
+  $helperHeader = Get-PeHeader $Helper
+  if ($helperHeader.Machine -ne $Machine) {
+    throw "pdfcraft-purview-helper.exe is for machine 0x$('{0:X}' -f $helperHeader.Machine), expected 0x$('{0:X}' -f $Machine) ($Arch)"
+  }
   Copy-Item -LiteralPath $Helper -Destination (Join-Path $Stage 'pdfcraft-purview-helper.exe')
-  foreach ($dll in Get-ChildItem -LiteralPath $MipBin -File -Filter '*.dll') {
+  $MipDlls = @(Get-ChildItem -LiteralPath $MipBin -File -Filter '*.dll')
+  if ($MipDlls.Count -eq 0) { throw "MIP SDK runtime DLLs are missing: $MipBin" }
+  foreach ($dll in $MipDlls) {
     Copy-Item -LiteralPath $dll.FullName -Destination $Stage
+  }
+  foreach ($notice in 'LICENSE.txt', 'LicenseTerms.rtf', 'ThirdPartyNotice.txt') {
+    $source = Join-Path $MipSdkRoot $notice
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf) -or (Get-Item -LiteralPath $source).Length -eq 0) {
+      throw "MIP SDK notice is missing or empty: $source"
+    }
+    Copy-Item -LiteralPath $source -Destination (Join-Path $Stage "MIP-$notice")
   }
 }
 # The document icon embeds Lucide artwork: carry its ISC notice and the project licences
@@ -174,7 +192,7 @@ Invoke-Native 'wix build' {
   wix build (Join-Path $PSScriptRoot 'pdfcraft.wxs') -arch $Arch `
     (Join-Path $PSScriptRoot 'installer-ui.wxs') `
     -d "Version=$MsiVersion" -d "BinDir=$Stage" -d "ModelsDir=$Models" -d "IconPath=$(Join-Path $Root 'assets\app-icon\pdfcraft.ico')" `
-    -d "DocsDir=$Docs" -d "HasCraftFontLicences=$HasCraftFontLicences" `
+    -d "DocsDir=$Docs" -d "HasCraftFontLicences=$HasCraftFontLicences" -d "HasMipSdk=$HasMipSdk" `
     -o $Msi
 }
 # Inspect the built MSI, not just the XML, before signing/publishing it. In a child process, so
@@ -194,6 +212,10 @@ $Portable = Join-Path $TargetDir "windows-package\pdfcraft-$Version-windows-$Arc
 Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Portable | Out-Null
 Copy-Item (Join-Path $Stage '*.exe') $Portable
+if ($HasMipSdk -eq 1) {
+  Copy-Item (Join-Path $Stage '*.dll') $Portable
+  Copy-Item (Join-Path $Stage 'MIP-*') $Portable
+}
 foreach ($f in 'NOTICE', 'LICENSE-document.txt') {
   Copy-Item (Join-Path $Stage $f) $Portable
 }

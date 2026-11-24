@@ -73,6 +73,7 @@ impl Document {
     /// `page`). Refused when the document doesn't allow copying. Changes nothing.
     pub fn copy_objects(&self, page: usize, targets: &[ObjectTarget]) -> Result<ObjectClip, EditError> {
         self.check_copying()?;
+        self.check_unprotected_export()?;
         let editor = self.editor.as_ref().ok_or_else(|| EditError::ReadOnly("the document can't be read".into()))?;
         let copied = pdfcraft_edit::copy_objects(&editor.cos, page, targets)?;
         Ok(ObjectClip { copied, source: editor.cos.clone(), doc: self.id, page })
