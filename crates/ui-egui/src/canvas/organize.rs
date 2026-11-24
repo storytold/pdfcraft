@@ -122,8 +122,8 @@ fn commit_reorder(view: &mut DocView, mut pages: Vec<usize>, to: usize, copy: bo
     view.selected = Selection::new((to..to + count).collect(), Some(to), Some(to));
 }
 
-/// The page menu's rows: Extract, Split, Replace, a rule, Cut, Copy, Paste after.
-fn page_menu(ui: &mut egui::Ui, view: &mut DocView, editable: bool) {
+/// The page menu's rows: Extract, Split, Replace, Reverse, a rule, Cut, Copy, Paste after.
+fn page_menu(ui: &mut egui::Ui, view: &mut DocView, editable: bool, page_count: usize) {
     if MenuItem::new(tl!("Extract pages")).show(ui).ran {
         view.pending_action = Some(ViewAction::Extract);
     }
@@ -132,6 +132,9 @@ fn page_menu(ui: &mut egui::Ui, view: &mut DocView, editable: bool) {
     }
     if MenuItem::new(tl!("Replace pages…")).enabled(editable).show(ui).ran {
         view.pending_action = Some(ViewAction::ReplacePages);
+    }
+    if MenuItem::new(tl!("Reverse pages")).enabled(editable && (view.selected.items.len() >= 2 || page_count >= 2)).show(ui).ran {
+        craft::ui::runtime::commands::fire(ui.ctx(), CommandRef::new("page.reverse"), craft::ui::runtime::commands::FireSource::Menu);
     }
     Divider::horizontal().show(ui);
     if MenuItem::new(tl!("Cut")).enabled(editable).show(ui).ran {
@@ -283,7 +286,7 @@ pub(super) fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document,
         Menu::context(tl!("Page"), &out.response)
             .anchor(Anchor::Point(at))
             .open(Bind::bound(&mut open))
-            .show(cx.ui, |ui, _| page_menu(ui, view, editable));
+            .show(cx.ui, |ui, _| page_menu(ui, view, editable, n));
         if !open {
             cx.ui.data_mut(|d| d.insert_temp::<Option<Pos2>>(menu_id, None));
         }
