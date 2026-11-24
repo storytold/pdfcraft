@@ -165,6 +165,7 @@ const TWRC_XFERDONE: u16 = 6;
 const TWRC_ENDOFLIST: u16 = 7;
 
 const TWON_ONEVALUE: u16 = 5;
+const TWON_DONTCARE16: u16 = 0xFFFF;
 const TWTY_INT16: u16 = 1;
 const TWTY_UINT16: u16 = 4;
 const TWTY_BOOL: u16 = 6;
@@ -545,7 +546,7 @@ fn set_cap_one_value(dsm: &DsmLib, mem: &TwainMem, app: &mut TwIdentity, ds: &mu
 fn get_cap_bool_current(dsm: &DsmLib, mem: &TwainMem, app: &mut TwIdentity, ds: &mut TwIdentity, cap: u16) -> Option<bool> {
     // SAFETY: Queries `DAT_CAPABILITY / MSG_GETCURRENT` and frees any container handle returned by the source.
     unsafe {
-        let mut tw_cap = TwCapability { cap, con_type: TWON_ONEVALUE, h_container: ptr::null_mut() };
+        let mut tw_cap = TwCapability { cap, con_type: TWON_DONTCARE16, h_container: ptr::null_mut() };
         let rc = (dsm.entry)(app, ds, DG_CONTROL, DAT_CAPABILITY, MSG_GETCURRENT, (&raw mut tw_cap).cast());
         let h = tw_cap.h_container;
         if h.is_null() {
