@@ -120,6 +120,27 @@ impl CommentLayer {
 }
 
 impl Document {
+    /// The displayed page under a Fill & Sign typewriter, with only that annotation hidden.
+    /// The renderer reads the display bytes, including other comments and generated appearances.
+    /// An inline annotation has no object identity the renderer can hide.
+    pub fn typewriter_move_background(&self, page: usize, index: usize) -> Option<RenderPool> {
+        guard(|| {
+            let editor = self.editor.as_ref()?;
+            self.info.annotations.iter().find(|a| {
+                (a.page, a.index) == (page, index) && a.fill_sign && a.subtype == "FreeText" && a.intent.as_deref() == Some("FreeTextTypeWriter")
+            })?;
+            let page = pdfcraft_model::page_at(&editor.cos, page)?;
+            let annots = editor.cos.resolve(page.dict.get(b"Annots")?);
+            let target = annots.as_array()?.get(index)?.as_ref()?;
+            let id = (i32::try_from(target.num).ok()?, i32::from(target.generation));
+            let mut config = crate::live_scripts::screen_config(self);
+            Arc::make_mut(&mut config.annotations).insert(0, (id.0, id.1, false));
+            Some(RenderPool::new(self.display.clone(), 1, config))
+        })
+        .ok()
+        .flatten()
+    }
+
     /// The comments at `indices` on `page` alone (the ones moved together), drawn as on screen:
     /// one without an appearance of its own gets the one the page view draws. `None` when one
     /// of them doesn't exist or none has anything to draw.

@@ -3,14 +3,18 @@
 //! follows the pointer while it is moved: its own layer is drawn where it goes.
 
 use craft::behavior::{Input, Sense};
+use craft::pages::ui::PlacedPage;
 use craft::review::AnnotationEdit;
 use craft::ui::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Role};
 use craft::ui::primitives::Draw;
-use craft::ui::primitives::textures::{CachedTexture, Revision, TextureStore, TextureStoreOptions};
+use craft::ui::primitives::textures::{
+    CachedTexture, Revision, TextureState, TextureStore, TextureStoreOptions, ThumbRequest, fit_rect, texture_side,
+};
 use craft::ui::style::{ComponentStyle, Metrics, StyleCx};
+use egui::emath::GuiRounding as _;
 use egui::{ColorImage, Pos2, Rect, Response, TextureId, Vec2, pos2, vec2};
 use pdfcraft_engine::{Document, Edit};
-use pdfcraft_render::{PageInfo, RenderPool, RenderRequest, Tile};
+use pdfcraft_render::{PageInfo, RenderPool, RenderRequest, RenderWarning, Tile, device_pixels, effective_scale};
 
 use super::PageXform;
 use crate::QuickTool;
@@ -28,6 +32,8 @@ enum Layer {
     Background,
     /// A stamp rendered alone.
     Stamp,
+    /// The displayed page under the old position of a Typewriter.
+    TypewriterBackground(pdfcraft_engine::DocId),
 }
 
 /// What names one of the drag's textures in the store: the document's edit generation, the page, the
@@ -59,8 +65,21 @@ pub(crate) struct SignatureDrag {
 struct Moving {
     /// The comment's layer: `from` is its box when the move started.
     layer: StampLayer,
+    background: Option<TypewriterBackground>,
     /// Released and applied: keep it where it went until the page shows it there.
     settling: bool,
+}
+
+struct TypewriterBackground {
+    renderer: RenderPool,
+    request: Option<RenderRequest>,
+    pending: bool,
+    /// The tile, ready to cover the original when the moving text is also ready.
+    pixels: Option<CachedTexture>,
+    /// The current backing raster and its unturned dimensions, available only when this page
+    /// has a ready whole-page picture whose sampling grid the tile can match.
+    backing: Option<(Rect, [u32; 2], (f32, f32))>,
+    stored: Option<DragKey>,
 }
 
 struct Layers {
@@ -200,6 +219,7 @@ impl SignatureDrag {
         if let Some((key, m)) = self.moving.as_mut()
             && matches!(edit, Edit::MoveAnnotation { page, index, .. } if (*page, *index) == (key.1, key.2))
         {
+            self.retired.extend(m.background.take().and_then(|b| b.stored));
             key.0 = generation;
             m.settling = true;
         } else {
@@ -228,6 +248,16 @@ impl SignatureDrag {
         }
     }
 
+    /// A history step invalidates the derived tile and the move it belonged to.
+    pub(crate) fn cancel_typewriter_move(&mut self, ctx: &egui::Context) -> bool {
+        if !self.moving.as_ref().is_some_and(|(_, moving)| moving.background.is_some()) {
+            return false;
+        }
+        self.retire_moving();
+        self.forget_retired(ctx);
+        true
+    }
+
     /// Drops the selected stamp's layers, keeping their textures' keys to free.
     fn retire_layers(&mut self) {
         if let Some(layers) = self.layers.take() {
@@ -240,6 +270,7 @@ impl SignatureDrag {
     fn retire_moving(&mut self) {
         if let Some((_, moving)) = self.moving.take() {
             self.retired.extend(moving.layer.stored);
+            self.retired.extend(moving.background.and_then(|b| b.stored));
         }
     }
 
@@ -295,15 +326,10 @@ impl SignatureDrag {
         });
     }
 
-    /// The page of the comment being moved, whose raster [`Self::prepare_move`] asks about.
-    pub fn moving_page(&self) -> Option<usize> {
-        self.moving.as_ref().map(|((_, page, _), _)| *page)
-    }
-
     /// While a comment without stamp layers is moved, its own layer: rendered when the move
     /// starts, kept after release until the page's raster shows it where it went (`stale`: the
     /// page is still drawn as before its last change).
-    pub fn prepare_move(&mut self, ctx: &egui::Context, doc: &Document, cv: &CommentView, pending: Option<&Edit>, stale: bool, scale: f32) {
+    pub fn prepare_move(&mut self, ctx: &egui::Context, doc: &Document, cv: &CommentView, pending: Option<&Edit>, pages: &[PlacedPage], scale: f32) {
         self.forget_retired(ctx);
         let generation = doc.edit_generation();
         let dragged = match cv.tool.in_flight() {
@@ -316,7 +342,7 @@ impl SignatureDrag {
             let (_, page, index) = key;
             dragged == Some(key)
                 || matches!(pending, Some(Edit::MoveAnnotation { page: p, index: i, .. }) if (*p, *i) == (page, index))
-                || m.settling && stale
+                || m.settling && key.0 == generation && pages.iter().any(|p| p.page == page && matches!(p.picture, TextureState::Loading { .. }))
         };
         if self.moving.as_ref().is_some_and(|(key, m)| !keep(*key, m)) {
             self.retire_moving();
@@ -337,14 +363,22 @@ impl SignatureDrag {
                     let rotation = doc.info.pages.get(page).map_or(0, |p| p.rotation);
                     let layer =
                         StampLayer { renderer: alone.renderer(), from: a.shown_rect(rotation), tag: None, pixels: None, failed: None, stored: None };
-                    self.moving = Some((key, Moving { layer, settling: false }));
+                    let background = doc.typewriter_move_background(page, index).map(TypewriterBackground::new);
+                    self.moving = Some((key, Moving { layer, background, settling: false }));
                 }
                 _ => self.no_layer = Some(key),
             }
         }
-        let Some(((generation, page, index), m)) = self.moving.as_mut() else { return };
-        let Some(p) = doc.info.pages.get(*page) else { return };
-        match m.layer.update(ctx, (*generation, *page, *index, Layer::Stamp), *page, p, scale) {
+        let Some((key, m)) = self.moving.as_mut() else { return };
+        let (generation, page, index) = *key;
+        let Some(p) = doc.info.pages.get(page) else { return };
+        if dragged != Some(*key) {
+            self.retired.extend(m.background.take().and_then(|b| b.stored));
+        } else if let Some(background) = &mut m.background {
+            let key = (generation, page, index, Layer::TypewriterBackground(doc.id));
+            background.update(ctx, key, p, m.layer.from, pages.iter().find(|placed| placed.page == page));
+        }
+        match m.layer.update(ctx, (generation, page, index, Layer::Stamp), page, p, scale) {
             Some(pending) => {
                 if pending {
                     ctx.request_repaint_after(std::time::Duration::from_millis(16));
@@ -368,7 +402,14 @@ impl SignatureDrag {
         // already where it went).
         let rect = cx.adjusted_rect(map, a, cv.tool.in_flight(), pending);
         let from = cx.xf.user_rect(cx.info, *page, m.layer.from);
-        draw.clipped(cx.xf.rect, |draw| m.layer.paint(draw, cx, *page, from.translate(rect.min - from.min)));
+        draw.clipped(cx.xf.rect, |draw| {
+            if m.layer.pixels.is_some()
+                && let Some(background) = &m.background
+            {
+                background.paint(draw, cx.xf);
+            }
+            m.layer.paint(draw, cx, *page, from.translate(rect.min - from.min));
+        });
     }
 }
 
@@ -514,6 +555,89 @@ impl StampLayer {
 impl Layers {
     fn new(front: Front, renderer: RenderPool, keys: Vec<DragKey>) -> Self {
         Self { front, renderer, background: None, tag: None, received_tag: None, settling: false, keys }
+    }
+}
+
+impl TypewriterBackground {
+    fn new(renderer: RenderPool) -> Self {
+        Self { renderer, request: None, pending: false, pixels: None, backing: None, stored: None }
+    }
+
+    fn update(&mut self, ctx: &egui::Context, key: DragKey, page: &PageInfo, from: [f32; 4], placed: Option<&PlacedPage>) {
+        self.backing = None;
+        let Some(placed) = placed else { return };
+        let TextureState::Ready(backing) = &placed.picture else { return };
+        let ppp = ctx.pixels_per_point();
+        let points = placed.rect.width().max(placed.rect.height());
+        let side = ThumbRequest::for_cell(points, ppp).side;
+        let texture_limit = texture_side(ctx);
+        // The framework may draw a separately rendered detail over an oversized whole-page
+        // raster. Without its sampling grid, covering it can introduce a seam.
+        if side > texture_limit || (points * ppp).round() > texture_limit as f32 {
+            return;
+        }
+        let scale = effective_scale(page.width, page.height, side as f32 / page.width.max(page.height));
+        let full = [device_pixels(page.width, scale), device_pixels(page.height, scale)];
+        let shown = [backing.size.width, backing.size.height];
+        if !(0.01..=400.0).contains(&scale) || (shown != full && shown != [full[1], full[0]]) {
+            return;
+        }
+        let Some((bounded_scale, mut tile)) = stamp_tile(page, from, scale) else { return };
+        if bounded_scale != scale {
+            // Drawing the tile at less than the backing scale would change the underlying ink.
+            return;
+        }
+        tile.w = tile.w.min(full[0].saturating_sub(tile.x));
+        tile.h = tile.h.min(full[1].saturating_sub(tile.y));
+        let limit = (MAX_STAMP_SIDE as u32).min(texture_limit);
+        if tile.w == 0 || tile.h == 0 || tile.w > limit || tile.h > limit {
+            return;
+        }
+        let picture = fit_rect(placed.rect, backing.size_vec2()).round_to_pixels(ppp);
+        self.backing = Some((picture, full, placed.band));
+        let request = RenderRequest { page: key.1, tile: Some(tile), scale, tag: u64::from(scale.to_bits()), ..Default::default() };
+        if self.request != Some(request) {
+            self.request = Some(request);
+            self.pending = true;
+            self.pixels = None;
+            if let Some(old) = self.stored.take() {
+                drag_store(ctx).forget(ctx, &old);
+            }
+            self.renderer.set_queue(vec![request]);
+        }
+        if !self.pending {
+            self.pixels = self.pixels.and_then(|_| match drag_store(ctx).state(ctx, &key, Revision::new(request.tag)) {
+                TextureState::Ready(texture) => Some(texture),
+                _ => None,
+            });
+            return;
+        }
+        if let Some(out) = self.renderer.try_recv()
+            && out.request == request
+        {
+            self.pending = false;
+            if out.error.is_none() && !out.warnings.contains(&RenderWarning::ContentTruncated) && (out.width, out.height) == (tile.w, tile.h) {
+                let image = crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba);
+                self.pixels = Some(drag_store(ctx).put(ctx, key, Revision::new(request.tag), image));
+                self.stored = Some(key);
+            }
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+    }
+
+    fn paint(&self, draw: &Draw<'_>, xf: &PageXform) {
+        let (Some(pixels), Some((rect, [w, h], band)), Some(tile)) = (self.pixels, self.backing, self.request.and_then(|r| r.tile)) else {
+            return;
+        };
+        // Use the same pixel-rounded containment as the backing picture. Coordinates refer to
+        // integer edges of the unturned raster; the view transform turns both pictures alike.
+        let raster = PageXform { rect, ..*xf };
+        let (l, t) = (tile.x, tile.y);
+        let (r, b) = (l.saturating_add(tile.w), t.saturating_add(tile.h));
+        let corners = [(l, t), (r, t), (r, b), (l, b)].map(|(x, y)| raster.norm_to_screen(x as f32 / w as f32, y as f32 / h as f32));
+        let band = Rect::from_min_max(pos2(xf.rect.left(), xf.rect.top() + band.0), pos2(xf.rect.right(), xf.rect.top() + band.1));
+        draw.clipped(band, |draw| draw.texture_quad(corners, pixels.id, pixels.uv()));
     }
 }
 
