@@ -223,11 +223,18 @@ impl<'a> Scope<'a> {
 
 /// Remove marked-content blocks of hidden layers (`/OC /name BDC … EMC`, nested blocks
 /// included). Returns the remaining operators and how many blocks went.
+///
+/// With [`Scope::keep_hidden_state`] (printing) a hidden block keeps every operator that changes
+/// the graphics or text state and loses only what paints ([`kept_state`]); a text-showing
+/// operator whose advance later text in the same text object starts from sets
+/// [`Scope::hidden_advance_lost`].
 pub(super) fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Vec<Op>, props: &Dict) -> (Vec<Op>, usize) {
     let mut out = Vec::with_capacity(ops.len());
     // For each open marked-content block: does it hide its contents?
     let mut stack: Vec<bool> = Vec::new();
     let mut removed = 0;
+    // Printing: a hidden block left out a text advance, and the text object is still open.
+    let mut advance_dropped = false;
     for op in ops {
         let hidden_now = stack.last().copied().unwrap_or(false);
         match op.op.as_slice() {
@@ -255,14 +262,61 @@ pub(super) fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Ve
                     out.push(op);
                 }
             }
+            _ if hidden_now && scope.keep_hidden_state => {
+                if matches!(op.op.as_slice(), b"BT" | b"ET" | b"Tm") {
+                    advance_dropped = false;
+                }
+                let (kept, dropped_advance) = kept_state(op);
+                advance_dropped |= dropped_advance;
+                out.extend(kept);
+            }
             _ => {
                 if !hidden_now {
+                    match op.op.as_slice() {
+                        // A new text object, or an absolute text matrix, starts where it says.
+                        b"BT" | b"ET" | b"Tm" => advance_dropped = false,
+                        b"Tj" | b"TJ" | b"'" | b"\"" | b"Td" | b"TD" | b"T*" if advance_dropped => scope.hidden_advance_lost = true,
+                        _ => {}
+                    }
                     out.push(op);
                 }
             }
         }
     }
     (out, removed)
+}
+
+/// What a hidden block keeps of `op` when printing, and whether it left out a text advance.
+/// Painting a path becomes `n`, which still ends the path and applies a pending clip. Text, shadings,
+/// XObjects and inline images go; `'` and `"` keep their move to the next line and their spacing.
+/// Every other operator changes state that content after the block may depend on, and stays.
+fn kept_state(mut op: Op) -> (Vec<Op>, bool) {
+    match op.op.as_slice() {
+        b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" => {
+            op.op = b"n".to_vec();
+            op.operands.clear();
+            (vec![op], false)
+        }
+        b"sh" | b"Do" | b"BI" => (Vec::new(), false),
+        b"Tj" | b"TJ" => (Vec::new(), true),
+        b"'" => {
+            op.op = b"T*".to_vec();
+            op.operands.clear();
+            (vec![op], true)
+        }
+        b"\"" => {
+            // `aw ac string "` is `aw Tw ac Tc string '`.
+            let mut operands = std::mem::take(&mut op.operands).into_iter();
+            let (Some(aw), Some(ac)) = (operands.next(), operands.next()) else { return (Vec::new(), true) };
+            let at = |name: &str, operands: Vec<Object>| {
+                let mut o = Op::new(name, operands);
+                o.span = op.span.clone();
+                o
+            };
+            (vec![at("Tw", vec![aw]), at("Tc", vec![ac]), at("T*", Vec::new())], true)
+        }
+        _ => (vec![op], false),
+    }
 }
 
 /// Is this dictionary's `/Type` the given name? An indirect `/Type` is followed, as a viewer

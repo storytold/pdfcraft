@@ -635,13 +635,18 @@ fn config_without(doc: &mut Document, mut d: Dict, keep: &impl Fn(&Object) -> bo
 /// Preview.app) cannot draw hidden layers. Returns how many hidden layer blocks or hidden
 /// XObject invocations were removed; returns `Ok(0)` without touching pages when the document
 /// has no `/OCProperties`.
+///
+/// Inside a hidden block it keeps what sets the graphics and text state (`cm`, `gs`, clips, text
+/// positioning), so the visible content after it prints where it would have, and leaves out only
+/// what paints. When hidden text advances the start of visible text after it in the same text
+/// object, it refuses ([`RedactError::HiddenLayerAdvance`]) rather than move that text.
 pub fn strip_off_layer_content(doc: &mut Document) -> Result<usize, RedactError> {
     let Some((_, cat)) = catalog(doc) else { return Ok(0) };
     if sub(doc, &cat, b"OCProperties").is_none() {
         return Ok(0);
     }
     let off = hidden_layers_with_view_auto(doc, false);
-    let (removed, _) = content_pass_with_off(doc, false, true, off, true)?;
+    let (removed, _) = content_pass_with_off(doc, false, true, off, true, true)?;
     Ok(removed)
 }
 
@@ -683,7 +688,7 @@ pub fn drop_off_layer_annotations(doc: &mut Document) {
 /// Glyphs of hidden text, or content of hidden layers, on every page (`write` = remove them).
 fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Result<(usize, std::collections::HashSet<ObjRef>), RedactError> {
     let off = if layers { hidden_layers(doc) } else { Vec::new() };
-    content_pass_with_off(doc, text, layers, off, write)
+    content_pass_with_off(doc, text, layers, off, write, false)
 }
 
 fn content_pass_with_off(
@@ -692,6 +697,7 @@ fn content_pass_with_off(
     layers: bool,
     off: Vec<ObjRef>,
     write: bool,
+    keep_state: bool,
 ) -> Result<(usize, std::collections::HashSet<ObjRef>), RedactError> {
     if !text && !layers {
         return Ok((0, std::collections::HashSet::new()));
@@ -730,9 +736,13 @@ fn content_pass_with_off(
         }
         scope.hidden_layers = off.iter().copied().collect();
         scope.layers_enabled = layers;
+        scope.keep_hidden_state = keep_state;
         let out = process(doc, &mut scope, &data, &resources, Matrix::IDENTITY);
         if let Some(error) = out.error {
             return Err(error.into());
+        }
+        if scope.hidden_advance_lost {
+            return Err(RedactError::HiddenLayerAdvance(pi + 1));
         }
         // Bytes the parser can't read, or an inline image whose end is a guess: the walk reads past
         // them, so what it reads around them may not be what other readers draw (hidden text in a
