@@ -173,6 +173,9 @@ if has deb || has rpm; then
     mv "$NFPM_STAGE/usr/bin/pdfcraft" "$NFPM_STAGE/usr/bin/$NFPM_BIN"
     mv "$NFPM_STAGE/usr/bin/pdfcraft-cli" "$NFPM_STAGE/usr/bin/$NFPM_CLI"
     mv "$NFPM_STAGE/usr/share/doc/pdfcraft" "$NFPM_STAGE/usr/share/doc/$NFPM_NAME"
+    if [[ -d "$NFPM_STAGE/usr/share/pdfcraft" ]]; then
+      mv "$NFPM_STAGE/usr/share/pdfcraft" "$NFPM_STAGE/usr/share/$NFPM_NAME"
+    fi
     sed -e "s|^Exec=pdfcraft\([[:space:]]\|$\)|Exec=$NFPM_BIN\1|" \
         -e "s|^TryExec=pdfcraft$|TryExec=$NFPM_BIN|" \
         -e "s|^Icon=$APP_ID$|Icon=$NIGHTLY_DESK_ID|" \
@@ -306,8 +309,9 @@ if has appimage; then
     UPDATE_ARGS=(-u "$UPDATE_INFO")
   else
     # Nightly releases are GitHub pre-releases (`latest` only selects stable releases), so point
-    # zsync update metadata at pre-release tags matching `-nightly` rather than stable `latest`.
-    UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest-pre|pdfcraft-*-nightly*-linux-$ARCH.AppImage.zsync"
+    # zsync update metadata at `latest-pre` with a pattern matching both channel-only and
+    # version-suffixed Nightly filenames for this architecture.
+    UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest-pre|pdfcraft-*-linux-$ARCH.AppImage.zsync"
     UPDATE_ARGS=(-u "$UPDATE_INFO")
   fi
   # Extract-and-run: works without FUSE (containers, CI). The output embeds the static runtime,
