@@ -17,12 +17,26 @@ if [[ -z "${APPLE_CERTIFICATE:-}" ]]; then
   exit 0
 fi
 
-TMP="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+# A new, owner-only folder of its own (umask 077): the certificate and keychain are never
+# written through a path someone else could have made first in a shared temporary folder.
+TMP="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/pdfcraft-signing.XXXXXXXX")"
 KEYCHAIN="$TMP/pdfcraft-signing.keychain-db"
 CERT="$TMP/pdfcraft-signing.p12"
 KC_PASS="${KEYCHAIN_PASSWORD:-$(openssl rand -hex 24)}"
 
-trap 'rm -f "$CERT"' EXIT
+# The decoded bundle is removed on every exit. The keychain and its folder are kept on success,
+# because package.sh signs with them in a later step (the release workflow's clean-up step deletes
+# the keychain), and removed only when this script fails.
+cleanup() {
+  local status=$?
+  rm -f "$CERT"
+  if [[ "$status" -ne 0 ]]; then
+    security delete-keychain "$KEYCHAIN" 2>/dev/null || true
+    rm -rf "$TMP"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
 printf '%s' "$APPLE_CERTIFICATE" | base64 --decode >"$CERT"
 security create-keychain -p "$KC_PASS" "$KEYCHAIN"
 security set-keychain-settings -lut 21600 "$KEYCHAIN"

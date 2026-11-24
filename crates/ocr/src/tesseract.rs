@@ -474,6 +474,11 @@ impl Recognizer for TesseractCli {
         }
     }
 
+    /// The tessdata packs the program reported, as `--list-langs` printed them (`ara`, `eng`,
+    /// `osd`, `script/Arabic`, …): the pack's own name is the code here, not the two-letter
+    /// code the settings use, and [`offered_languages`] maps the one to the other. For a
+    /// program found by [`TesseractCli::at`] this is the list its probe left and starts no
+    /// process.
     fn languages(&self) -> Vec<(String, String)> {
         if self.probed.load(Ordering::Relaxed) == 2 {
             return Vec::new();
@@ -842,6 +847,25 @@ mod tests {
         std::fs::write(dir.path.join("reading.tsv"), exact).unwrap();
         let complete = recognizer.recognize(&blot(8, 8, 0, 0, 4, 4), &RecognizeOptions::default()).unwrap();
         assert_eq!(complete.iter().map(|line| line.words.len()).sum::<usize>(), MAX_WORDS);
+    }
+
+    /// From the program's own answer to the dropdown (#7496), with a fake `tesseract` that
+    /// lists its packs the way the real one does: `languages` keeps the packs as reported
+    /// (the dropdown relies on that), and the languages offered are the allow-listed ones
+    /// among them. Unix only (it needs a real process), so it runs where no Tesseract is
+    /// installed.
+    #[cfg(unix)]
+    #[test]
+    fn the_packs_a_program_lists_decide_what_is_offered() {
+        let dir = TempDir::create().unwrap();
+        let script = dir.path.join("tesseract-lists");
+        std::fs::write(&script, "#!/bin/sh\nprintf 'List of available languages in \"/tessdata/\" (4):\\nara\\neng\\nosd\\nscript/Arabic\\n'\n")
+            .unwrap();
+        make_executable(&script);
+        let found = TesseractCli::at(script).expect("the program answers --list-langs");
+        let packs: Vec<String> = found.languages().into_iter().map(|(pack, _)| pack).collect();
+        assert_eq!(packs, ["ara", "eng", "osd", "script/Arabic"]);
+        assert_eq!(offered_languages(&packs), vec![("en", "English"), ("ar", "Arabic")]);
     }
 
     /// A hung binary is killed at the timeout and reported (Unix: a fake `tesseract` script;

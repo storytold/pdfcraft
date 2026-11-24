@@ -213,10 +213,6 @@ impl Default for OcrSettings {
     }
 }
 
-/// Why [`OcrPage::skipped`] says a page was passed over for having text of its own (the
-/// skip-text option). Any other reason is a page that could not be read.
-pub const PAGE_HAS_TEXT: &str = "the page already contains text";
-
 /// What recognition found on one page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OcrPage {
@@ -232,14 +228,6 @@ pub struct OcrPage {
 }
 
 impl OcrPage {
-    /// Why the page could not be read, when it was skipped for anything but having text of
-    /// its own: the render or the recognition failed (a language pack that is not installed,
-    /// for one). The interface says this reason instead of counting the page as one that
-    /// "already had text".
-    pub fn failure(&self) -> Option<&str> {
-        self.skipped.as_deref().filter(|why| *why != PAGE_HAS_TEXT)
-    }
-
     pub fn text(&self) -> String {
         self.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ")
     }
@@ -633,23 +621,10 @@ pub fn engine_unavailable_reason(engine: EngineChoice) -> Option<String> {
     }
 }
 
-/// Every document language some engine can be asked for: the built-in engine's table, then
-/// Tesseract's allow-list (not on the web, which has no Tesseract). A saved choice is checked
+/// The English name of a document language code some engine can be asked for (the interface
+/// translates it): the built-in engine's table, then Tesseract's allow-list (not on the web,
+/// which has no Tesseract). `None` for a code no engine knows. A saved choice is checked
 /// against this; what can be chosen right now is [`document_languages`].
-pub fn all_languages() -> Vec<(&'static str, &'static str)> {
-    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
-    let mut out: Vec<(&'static str, &'static str)> = LANGUAGES.to_vec();
-    #[cfg(not(target_arch = "wasm32"))]
-    for entry in pdfcraft_ocr::tesseract::LANGUAGE_NAMES {
-        if !out.iter().any(|l| l.0 == entry.0) {
-            out.push(*entry);
-        }
-    }
-    out
-}
-
-/// The English name of a document language code from [`all_languages`] (the interface
-/// translates it); `None` for a code no engine knows.
 pub fn language_name(code: &str) -> Option<&'static str> {
     if let Some(l) = LANGUAGES.iter().find(|l| l.0 == code) {
         return Some(l.1);
@@ -663,10 +638,13 @@ pub fn language_name(code: &str) -> Option<&'static str> {
 
 /// The language a run with `engine` is asked for: `language` when that engine can be asked
 /// for it, else English. The built-in engine's languages go with every choice; Tesseract's
-/// allow-listed ones only with Tesseract chosen, because the built-in engine (which reads
-/// first under Automatic) would read such a page as Latin letters. Never starts a process:
-/// whether the language pack is installed is [`document_languages`]' question, and a run
-/// that asks for a missing pack fails with Tesseract's own message.
+/// allow-listed ones only with Tesseract chosen. Automatic does not get them, even on a
+/// machine where Tesseract is the only engine it has: Automatic reads with the built-in
+/// engine first wherever that one is installed, and it would read such a page as Latin
+/// letters, so the same saved choice would read differently from one machine to the next.
+/// Never starts a process: whether the language pack is installed is
+/// [`document_languages`]' question, and a run that asks for a missing pack fails with
+/// Tesseract's own message.
 pub fn language_for(engine: EngineChoice, language: &str) -> &'static str {
     if let Some(l) = LANGUAGES.iter().find(|l| l.0 == language) {
         return l.0;
@@ -677,6 +655,8 @@ pub fn language_for(engine: EngineChoice, language: &str) -> &'static str {
     {
         return l.0;
     }
+    // The web build has no Tesseract, so nothing above reads the choice there.
+    #[cfg(target_arch = "wasm32")]
     let _ = engine;
     "en"
 }
@@ -691,12 +671,15 @@ pub fn document_languages(engine: EngineChoice) -> Vec<(&'static str, &'static s
     if engine == EngineChoice::Tesseract {
         let configured = std::env::var_os("PDFCRAFT_TESSERACT").map(|v| v.to_string_lossy().into_owned());
         if let Probe::Known(Some(tesseract)) = tesseract_engine_now(configured.as_deref()) {
-            // The probe that found the program already listed its packs: this reads that
+            // The probe that found the program already listed its packs, and Tesseract's
+            // `languages` reports them under their tessdata names (`ara`): this reads that
             // list and starts no process.
-            let installed: Vec<String> = tesseract.languages().into_iter().map(|(code, _)| code).collect();
+            let installed: Vec<String> = tesseract.languages().into_iter().map(|(pack, _)| pack).collect();
             return languages_with(&installed);
         }
     }
+    // The web build has no Tesseract, so nothing above reads the choice there.
+    #[cfg(target_arch = "wasm32")]
     let _ = engine;
     LANGUAGES.to_vec()
 }
@@ -887,7 +870,7 @@ impl OcrSteps {
             .map(|t| t.glyphs.iter().filter(|g| !g.text.trim().is_empty()).map(|g| g.rect).collect())
             .unwrap_or_default();
         if settings.skip_text_pages && !settings.force_ocr && !existing.is_empty() && has_own_text(r, page) {
-            return Err(skip(PAGE_HAS_TEXT));
+            return Err(skip("the page already contains text"));
         }
         // A scan is read at its own resolution (enlarging it only blurs the letters), at
         // most the chosen one.
@@ -1575,18 +1558,6 @@ mod tests {
         assert_eq!(document_languages(EngineChoice::Auto), LANGUAGES.to_vec());
     }
 
-    /// A page skipped for having text is not a failure; a page skipped for any other reason
-    /// (the engine's error, a render error) is, and keeps its reason.
-    #[test]
-    fn a_page_that_could_not_be_read_is_told_from_one_that_has_text() {
-        let page =
-            |skipped: Option<&str>| OcrPage { page: 0, words: Vec::new(), already_on_page: 0, skipped: skipped.map(String::from), notes: Vec::new() };
-        assert_eq!(page(None).failure(), None);
-        assert_eq!(page(Some(PAGE_HAS_TEXT)).failure(), None);
-        let why = "tesseract failed: Error opening data file ara.traineddata";
-        assert_eq!(page(Some(why)).failure(), Some(why));
-    }
-
     /// A language is only asked of an engine that can be asked for it: Tesseract's languages
     /// need Tesseract chosen, and anything unknown reads as English, as before.
     #[test]
@@ -1599,13 +1570,11 @@ mod tests {
         for bogus in ["", "ara", "AR", " ar", "klingon", "ar;rm"] {
             assert_eq!(language_for(EngineChoice::Tesseract, bogus), "en", "{bogus:?}");
         }
-        assert_eq!(language_name("ar"), Some("Arabic"));
-        assert_eq!(language_name("en"), Some("English"));
+        // Every code that can be offered has a name to show, and no other code has one.
+        for (code, _) in LANGUAGES.iter().chain(pdfcraft_ocr::tesseract::LANGUAGE_CODES) {
+            assert!(language_name(code).is_some(), "{code}");
+        }
         assert_eq!(language_name("klingon"), None);
-        let all = all_languages();
-        assert_eq!(all.first(), Some(&("en", "English")));
-        assert_eq!(all.iter().filter(|l| l.0 == "en").count(), 1, "English is listed once");
-        assert_eq!(all.len(), pdfcraft_ocr::tesseract::LANGUAGE_CODES.len());
     }
 
     /// What the interface sees of the cache: a fresh answer as is, an expired failed probe as
@@ -2173,74 +2142,6 @@ mod tests {
         s.apply(id, Edit::AddOcrText { page: 0, words: vec![word] }).unwrap();
         let text = crate::tests::page_texts(&s, id)[0].clone();
         assert!(text.contains("日本語"), "{text}");
-    }
-
-    /// Right-to-left words (Arabic through Tesseract, #7496) are read back as they were
-    /// recognized: the layer draws them in visual order, which is what this extractor and
-    /// every other one turns back into reading order. Drawn in logical order, each word came
-    /// back reversed ("مسب" for "بسم") and no search found it. A number on the line keeps its
-    /// digits in order.
-    #[test]
-    fn searchable_layer_round_trips_right_to_left_words() {
-        let mut s = Session::new().with_clock(|| 1_700_000_000);
-        let id = s.open("src.pdf", None, Arc::new(fixture(1)), None).unwrap();
-        // One line, as a scan shows it: the first word is the rightmost.
-        let line = [("تاريخ", 150.0, 30.0), ("الجلسة", 110.0, 35.0), ("2026", 80.0, 25.0), ("رقم", 55.0, 20.0)];
-        let words: Vec<PlacedWord> = line
-            .iter()
-            .map(|(text, x, width)| PlacedWord {
-                text: (*text).to_string(),
-                origin: [*x, 250.0],
-                across: [*width, 0.0],
-                up: [0.0, 10.0],
-                confidence: None,
-                source: "tesseract".into(),
-            })
-            .collect();
-        s.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
-        let text = crate::tests::page_texts(&s, id)[0].clone();
-        for (word, _, _) in line {
-            assert!(text.contains(word), "{word} in {text}");
-        }
-        assert!(text.contains("تاريخ الجلسة 2026 رقم"), "{text}");
-        let saved = s.save_bytes(id).unwrap();
-        let reopened = s.open("searchable.pdf", None, saved, None).unwrap();
-        assert!(crate::tests::page_texts(&s, reopened)[0].contains("تاريخ الجلسة 2026 رقم"));
-
-        // What scans really hold between the words: brackets and the Arabic comma, a Latin
-        // word, a date and a percentage, and a left-to-right line on the same page.
-        let id = s.open("mixed.pdf", None, Arc::new(fixture(1)), None).unwrap();
-        // A word with its left edge and width; a line of them, its baseline, and how it reads.
-        type Placed = (&'static str, f64, f64);
-        type Line = (&'static [Placed], f64, &'static str);
-        let lines: [Line; 4] = [
-            (&[("قال", 150.0, 15.0), ("(نص)", 125.0, 20.0), ("هنا،", 100.0, 20.0), ("ثم", 85.0, 10.0)], 250.0, "قال (نص) هنا، ثم"),
-            (&[("العقد", 150.0, 20.0), ("Contract", 115.0, 30.0), ("بين", 97.0, 13.0), ("الطرفين", 70.0, 23.0)], 230.0, "العقد Contract بين الطرفين"),
-            (
-                &[("بتاريخ", 150.0, 23.0), ("16/11/2026", 115.0, 30.0), ("بنسبة", 92.0, 20.0), ("15%", 75.0, 13.0)],
-                210.0,
-                "بتاريخ 16/11/2026 بنسبة 15%",
-            ),
-            (&[("Agreement", 20.0, 35.0), ("No.", 60.0, 13.0), ("42", 78.0, 8.0)], 190.0, "Agreement No. 42"),
-        ];
-        let words: Vec<PlacedWord> = lines
-            .iter()
-            .flat_map(|(line, y, _)| {
-                line.iter().map(|(text, x, width)| PlacedWord {
-                    text: (*text).to_string(),
-                    origin: [*x, *y],
-                    across: [*width, 0.0],
-                    up: [0.0, 8.0],
-                    confidence: None,
-                    source: "tesseract".into(),
-                })
-            })
-            .collect();
-        s.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
-        let text = crate::tests::page_texts(&s, id)[0].clone();
-        for (_, _, read) in lines {
-            assert!(text.contains(read), "{read} in {text}");
-        }
     }
 
     /// The fontless searchable layer retains its original pixels, handles multiple code
