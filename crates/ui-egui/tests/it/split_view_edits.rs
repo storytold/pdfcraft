@@ -2,20 +2,30 @@
 //! the other pane, even when that click changes the document too.
 
 use egui::{Key, Modifiers, Pos2};
+use std::sync::Arc;
+
+use craft::host::{Host, InlineJobs, Picked, ScriptedFiles};
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
 use pdfcraft_ui_egui::panes::Place;
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.run_inline = true;
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        // The whole 300×400 pt page in either pane.
-        app.set_option("zoom", "100").unwrap();
-        app
+    harness_over(crate::support::host_with(Arc::new(InlineJobs), Arc::new(ScriptedFiles::new())))
+}
+
+/// [`harness`] on `host`: its jobs run at once, and its file service answers the pickers.
+fn harness_over(host: Arc<Host>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::support::test_app(host);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            // The whole 300×400 pt page in either pane.
+            app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h
@@ -70,7 +80,7 @@ fn typing_in_one_pane_survives_an_edit_in_the_other() {
 
     click(&mut h, name);
     assert_eq!(h.state().active, Some(second));
-    assert!(h.state().views[second].forms.focus.is_some(), "the editor opened");
+    assert!(h.state().views[second].session.forms.focus.is_some(), "the editor opened");
     h.event(egui::Event::Text("Typed in the second pane".into()));
     h.run_steps(2);
     assert!(value(&h, "name").is_empty(), "not committed yet");
@@ -80,7 +90,7 @@ fn typing_in_one_pane_survives_an_edit_in_the_other() {
     assert_eq!(h.state().active, Some(first), "the click made the first pane active");
     assert_eq!(value(&h, "agree"), ["Yes"], "the click's own edit");
     assert_eq!(value(&h, "name"), ["Typed in the second pane"], "the typing in the other pane went into the document");
-    assert!(h.state().views[second].pending_edit.is_none(), "nothing left queued");
+    assert!(h.state().views[second].session.pending_edit.is_none(), "nothing left queued");
 }
 
 /// Save from the second pane, with the same document in both: what is typed there goes into the
@@ -91,8 +101,8 @@ fn save_in_the_second_pane_keeps_its_typing() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-split-save-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join("out.pdf");
-    let mut h = harness();
-    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![out.clone()])]));
+    let mut h = harness_over(crate::support::host_with(Arc::new(InlineJobs), files.clone()));
     h.key_press_modifiers(Modifiers::COMMAND, Key::Backslash);
     h.run_steps(4);
     let second = 1;
@@ -113,5 +123,5 @@ fn save_in_the_second_pane_keeps_its_typing() {
     assert_eq!(h.state().active, Some(second), "the pane worked in stays the active one");
     let s = h.state();
     assert!(!s.session.get(s.views[second].id).unwrap().dirty, "and wrote it");
-    assert!(std::fs::metadata(&out).is_ok_and(|m| m.len() > 0));
+    assert!(files.file(&out).is_some_and(|bytes| !bytes.is_empty()));
 }
