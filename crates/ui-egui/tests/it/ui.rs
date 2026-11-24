@@ -1131,6 +1131,20 @@ fn pdfs_dropped_on_the_combine_tab_join_its_list() {
 
 /// #4985: some Linux file managers drop `file:` URIs (percent-encoded, maybe with `localhost`)
 /// and no bytes; Combine files reads them from the local paths they name, under their file names.
+/// A file dropped as a desktop platform drops it: its bytes are read from the path it names, so a
+/// `file:` URI, which names no file as a path, has none and is passed on by its path.
+#[derive(Debug)]
+struct NativeDrop(std::path::PathBuf);
+
+impl egui::DroppedFile for NativeDrop {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|e| e.to_string())
+    }
+}
+
 #[test]
 fn file_uris_dropped_on_the_combine_tab_join_its_list() {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|cc| {
@@ -1155,8 +1169,8 @@ fn file_uris_dropped_on_the_combine_tab_join_its_list() {
         let path = path.to_string_lossy().replace('\\', "/");
         format!("file://{host}/{}", path.trim_start_matches('/')).replace(' ', "%20")
     };
-    let encoded: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: uri(&first, "").into(), bytes: Vec::new() });
-    let localhost: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: uri(&second, "localhost").into(), bytes: Vec::new() });
+    let encoded: egui::DroppedFileHandle = std::sync::Arc::new(NativeDrop(uri(&first, "").into()));
+    let localhost: egui::DroppedFileHandle = std::sync::Arc::new(NativeDrop(uri(&second, "localhost").into()));
     support::input::drop_files(&mut h, [encoded, localhost]);
     h.run_steps(3);
     let _ = std::fs::remove_dir_all(&dir);
