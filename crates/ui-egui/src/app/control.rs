@@ -90,8 +90,14 @@ impl PdfCraftApp {
             ("default-mode", _) => {
                 self.default_mode = Mode::parse(value).ok_or("default-mode must be all, read, edit, convert or sign")?;
             }
-            ("date-format", _) => self.session.set_date_format(value)?,
-            ("date-language", _) => self.session.set_date_language(Some(value).filter(|v| *v != "auto"))?,
+            ("date-format", _) => {
+                self.session.set_date_format(value)?;
+                self.sync_open_date_format();
+            }
+            ("date-language", _) => {
+                self.session.set_date_language(Some(value).filter(|v| *v != "auto"))?;
+                self.sync_open_date_language();
+            }
             ("tool", _) => {
                 let g = pdfcraft_engine::catalog::group(value).ok_or_else(|| format!("unknown tool {value}"))?;
                 self.select_tool(ctx, g.id);
