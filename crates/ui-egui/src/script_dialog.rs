@@ -1,60 +1,301 @@
-//! Script prompts suspend the document worker, never the egui event loop.
+//! Script prompts suspend the document worker, never the egui event loop. Each prompt is a hosted dialog
+//! (`app.dialogs`) whose answer `poll_script_dialog` takes by id and sends back to the waiting worker.
 use crate::PdfCraftApp;
+use craft::behavior::{DisplayOrder, ItemSource, Selection};
+use craft::theme::variant::Tone;
+use craft::ui::contract::{ActivateOn, Bind, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _};
+use craft::ui::dialog::{DialogId, DialogResult, DialogStack, Prompt, PromptChoice, StackDialog, StandardPrompt, dialog_id};
+use craft::ui::display::{Elide, Text};
+use craft::ui::list::{List, ListRow, OpenSet};
+use craft::ui::runtime::frame;
+use craft::ui::sections::{DialogRole, FooterButton};
+use craft::ui::text::TextField;
 use pdfcraft_engine::{
     DocId,
-    js::{InteractiveEvent, JsOutput, MenuItem, PendingScript, Prompt},
+    js::{InteractiveEvent, JsOutput, MenuItem, Message, MessageButtons, PendingScript, Prompt as ScriptPrompt},
 };
+use std::borrow::Cow;
 use std::sync::mpsc::{Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
+/// The most bytes a text answer may hold; a longer one is not accepted.
+const MAX_ANSWER_BYTES: usize = 4096;
+
+/// What the open prompt is, so its answer is taken as the right type and a cancellation gives the right reply.
+#[derive(Clone, Copy, Debug)]
+enum Asked {
+    /// A message box (`StandardPrompt`): Proceed answers `proceed`, Alternate answers "3", and Cancel or Escape
+    /// answers `on_cancel`, the button set's safe default.
+    Alert { proceed: &'static str, on_cancel: &'static str },
+    /// A text question or a menu (`ScriptPromptDialog`); a cancellation answers nothing.
+    Dialog,
+}
+
 pub(crate) struct Pending {
     run: PendingScript,
-    prompt: Option<(Prompt, Sender<Option<String>>)>,
-    text: String,
-    focus: bool,
+    reply: Option<Sender<Option<String>>>,
+    dialog: Option<DialogId>,
+    asked: Option<Asked>,
     started: Instant,
-    zoom: f32,
+    zoom: f64,
     page: usize,
-    serial: u32,
 }
-impl Pending {
-    /// Whether this invocation is waiting for an explicit user reply rather than worker execution.
-    pub(crate) fn has_prompt(&self) -> bool {
-        self.prompt.is_some()
+
+/// The document's name as a prompt shows it: document data, so control and direction characters go and it is capped.
+fn document_name(name: &str) -> String {
+    name.chars()
+        .filter(|c| !c.is_control() && !matches!(c, '\u{061c}' | '\u{200e}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+        .take(160)
+        .collect()
+}
+
+/// The line naming the document a prompt comes from.
+fn document_line(document: &str) -> String {
+    crate::i18n::fmt(tl!("Document: {name}"), &[("name", document)]).to_string()
+}
+
+/// The caption every script prompt carries, so the document's own title cannot pass for the app's.
+fn caption() -> String {
+    tl!("This document's script is asking").to_string()
+}
+
+/// A script message box with the button set the script asked for.
+fn alert_prompt(run: DocId, document: &str, message: &Message) -> (StandardPrompt, Asked) {
+    let yes_no = matches!(message.buttons, MessageButtons::YesNo | MessageButtons::YesNoCancel);
+    let on_cancel = match message.buttons {
+        MessageButtons::Ok => "1",
+        MessageButtons::YesNo => "3",
+        _ => "2",
+    };
+    let mut prompt = StandardPrompt::custom(message.text.clone()).title(caption()).paragraph(document_line(document));
+    if let Some(title) = message.title.as_ref().filter(|t| !t.is_empty()) {
+        prompt = prompt.paragraph(title.clone());
+    }
+    prompt = prompt.button(PromptChoice::Proceed, if yes_no { tl!("Yes").to_string() } else { tl!("OK").to_string() });
+    if yes_no {
+        // Production's order: No between Cancel and Yes.
+        prompt = prompt.button(PromptChoice::Alternate, tl!("No").to_string()).alternate_role(craft::ui::sections::DialogRole::Alternative);
+    }
+    // One script runs at a time and its prompt closes before the next opens, so the run names the instance.
+    let prompt = prompt.button(PromptChoice::Cancel, tl!("Cancel").to_string()).instance(("script.prompt", run.0));
+    (prompt, Asked::Alert { proceed: if yes_no { "4" } else { "1" }, on_cancel })
+}
+
+/// One row of a menu prompt's tree, in the order a depth-first walk reaches it.
+struct Node {
+    name: String,
+    value: String,
+    enabled: bool,
+    depth: usize,
+    group: bool,
+}
+
+/// The menu `items` as rows in depth-first order, keyed by their place in `out`. The engine bounds a menu's depth.
+fn flatten(items: &[MenuItem], depth: usize, out: &mut Vec<Node>) {
+    for item in items {
+        out.push(Node { name: item.name.clone(), value: item.value.clone(), enabled: item.enabled, depth, group: !item.children.is_empty() });
+        flatten(&item.children, depth + 1, out);
     }
 }
 
-/// Draw the bounded menu tree and return only the selected enabled leaf value.
-fn menu(ui: &mut egui::Ui, items: &[MenuItem], answer: &mut Option<String>) {
-    for item in items {
-        if item.name == "-" {
-            ui.separator();
+/// The rows of `nodes` that show: those whose groups above them are all open.
+fn shown_nodes(nodes: &[Node], open: &OpenSet<usize>) -> Vec<usize> {
+    let mut shown = Vec::new();
+    let mut closed_at: Option<usize> = None;
+    for (at, node) in nodes.iter().enumerate() {
+        if closed_at.is_some_and(|depth| node.depth > depth) {
             continue;
         }
-        ui.add_enabled_ui(item.enabled, |ui| {
-            if item.children.is_empty() {
-                if ui.selectable_label(item.marked, &item.name).clicked() {
-                    *answer = Some(item.value.clone());
-                }
-            } else {
-                egui::CollapsingHeader::new(&item.name).show(ui, |ui| menu(ui, &item.children, answer));
-            }
-        });
+        closed_at = (node.group && !open.is_open(&at)).then_some(node.depth);
+        shown.push(at);
+    }
+    shown
+}
+
+/// The shown rows of a menu as the display order of a tree list.
+struct MenuTree<'a> {
+    nodes: &'a [Node],
+    shown: &'a [usize],
+    open: &'a OpenSet<usize>,
+}
+
+impl MenuTree<'_> {
+    fn node(&self, at: usize) -> Option<&Node> {
+        self.shown.get(at).and_then(|key| self.nodes.get(*key))
     }
 }
+
+impl DisplayOrder<usize> for MenuTree<'_> {
+    fn len(&self) -> usize {
+        self.shown.len()
+    }
+
+    fn key(&self, at: usize) -> usize {
+        self.shown.get(at).copied().unwrap_or_default()
+    }
+
+    fn index_of(&self, key: &usize) -> Option<usize> {
+        self.shown.iter().position(|node| node == key)
+    }
+
+    fn depth(&self, at: usize) -> usize {
+        self.node(at).map_or(0, |node| node.depth)
+    }
+
+    fn has_children(&self, at: usize) -> bool {
+        self.node(at).is_some_and(|node| node.group)
+    }
+
+    fn open(&self, at: usize) -> bool {
+        self.shown.get(at).is_some_and(|key| self.open.is_open(key))
+    }
+
+    fn text(&self, at: usize) -> Option<Cow<'_, str>> {
+        self.node(at).map(|node| Cow::Borrowed(node.name.as_str()))
+    }
+}
+
+impl ItemSource<usize> for MenuTree<'_> {}
+
+/// What a `ScriptPromptDialog` asks.
+enum Body {
+    /// A text question; `text` is the answer being typed.
+    Text { title: String, question: String, label: String, password: bool, text: String },
+    /// A menu: only an enabled leaf answers.
+    Menu { nodes: Vec<Node>, open: OpenSet<usize>, selection: Selection<usize> },
+}
+
+/// A script's text question or menu, over the app's own caption and the document's name. Its answer is the typed
+/// text or the chosen leaf's value; cancelling gives none.
+pub(crate) struct ScriptPromptDialog {
+    id: DialogId,
+    document: String,
+    body: Body,
+}
+
+impl ScriptPromptDialog {
+    /// The dialog for `prompt` of document `run`, or `None` for a message box, which the standard prompt answers.
+    fn for_prompt(run: DocId, document: String, prompt: ScriptPrompt) -> Option<Self> {
+        let body = match prompt {
+            ScriptPrompt::Text { title, question, password, label, default, .. } => Body::Text { title, question, label, password, text: default },
+            ScriptPrompt::Menu(items) => {
+                let mut nodes = Vec::new();
+                flatten(&items, 0, &mut nodes);
+                Body::Menu { nodes, open: OpenSet::new(), selection: Selection::default() }
+            }
+            ScriptPrompt::Alert(_) => return None,
+        };
+        Some(ScriptPromptDialog { id: dialog_id(("script.prompt", run.0)), document, body })
+    }
+}
+
+impl StackDialog for ScriptPromptDialog {
+    type Result = Option<String>;
+
+    fn id(&self) -> DialogId {
+        self.id
+    }
+
+    fn show(&mut self, ui: &mut egui::Ui, _: &DialogStack) -> Option<DialogResult<Option<String>>> {
+        let Self { document, body, .. } = self;
+        let mut prompt = match &*body {
+            Body::Text { question, .. } => Prompt::new(caption(), question.clone()),
+            Body::Menu { .. } => Prompt::new(caption(), String::new()),
+        };
+        let accepts = matches!(body, Body::Text { .. });
+        if let Body::Text { title, label, password, .. } = &*body {
+            if *password {
+                prompt = prompt.tone(
+                    Tone::Warn,
+                    tl!("This request comes from the document, not PdfCraft. Only enter a password if you trust this document.").to_string(),
+                );
+            }
+            if !title.is_empty() {
+                prompt = prompt.paragraph(title.clone());
+            }
+            if !label.is_empty() {
+                prompt = prompt.paragraph(label.clone());
+            }
+        }
+        let mut answers = Vec::new();
+        if accepts {
+            answers.push(FooterButton::new(tl!("OK").to_string(), DialogRole::Accept));
+        }
+        answers.push(FooterButton::new(tl!("Cancel").to_string(), DialogRole::Cancel));
+        let line = document_line(document);
+        let mut chosen: Option<String> = None;
+        // PLAN: the text field takes no initial-focus prop; the user clicks it or tabs to it.
+        let out = prompt
+            .answers(answers)
+            .extras(|ui| {
+                Text::new(line.clone()).elide(Elide::End).show(ui);
+                match &mut *body {
+                    Body::Text { text, password, .. } => {
+                        let field = TextField::new(tl!("Answer").to_string(), Bind::bound(&mut *text)).limit(MAX_ANSWER_BYTES);
+                        if *password {
+                            field.masked().show(ui);
+                        } else {
+                            field.show(ui);
+                        }
+                    }
+                    Body::Menu { nodes, open, selection } => {
+                        let shown = shown_nodes(nodes, open);
+                        let groups: Vec<usize> = nodes.iter().enumerate().filter(|(_, node)| node.group).map(|(at, _)| at).collect();
+                        let tree = MenuTree { nodes, shown: &shown, open };
+                        let listed = List::<usize>::new(tl!("Choices").to_string())
+                            .tree(true)
+                            .natural_height(true)
+                            .select(SelectMode::Single)
+                            .activate(ActivateOn::Click)
+                            .selection(Bind::bound(&mut *selection))
+                            .show_items(ui, &tree, &mut |key, _| match tree.nodes.get(*key) {
+                                Some(node) if node.name == "-" => ListRow::spacer(),
+                                Some(node) => {
+                                    let row = ListRow::new(node.name.clone()).depth(node.depth).enabled(node.enabled);
+                                    if node.group { row.group(tree.open.is_open(key)) } else { row }
+                                }
+                                None => ListRow::new(String::new()),
+                            });
+                        for event in &listed.events {
+                            match event {
+                                CollectionEvent::Activate(key) => {
+                                    if let Some(node) = nodes.get(*key) {
+                                        if node.group {
+                                            let now = open.is_open(key);
+                                            open.set(key, !now);
+                                        } else if node.enabled && node.name != "-" {
+                                            chosen = Some(node.value.clone());
+                                        }
+                                    }
+                                }
+                                CollectionEvent::Open(change) => open.apply(&change.key, change.open, change.all, &groups),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            })
+            .show(ui);
+        if let Some(value) = chosen {
+            return Some(DialogResult::Ok(Some(value)));
+        }
+        match out.picked {
+            Some(0) if accepts => match &*body {
+                Body::Text { text, .. } if text.len() <= MAX_ANSWER_BYTES => Some(DialogResult::Ok(Some(text.clone()))),
+                _ => None,
+            },
+            Some(_) => Some(DialogResult::Cancel),
+            None => None,
+        }
+    }
+}
+
 /// Consume the current prompt before replying so two UI events cannot resume it twice.
 fn reply_to_prompt(ctx: &egui::Context, pending: &mut Pending, answer: Option<String>, cancel: bool) {
-    if let Some((prompt, reply)) = pending.prompt.take() {
+    if let Some(reply) = pending.reply.take() {
         let answer = if cancel {
-            match prompt {
-                Prompt::Alert(m) => Some(
-                    match m.buttons {
-                        pdfcraft_engine::js::MessageButtons::Ok => "1",
-                        pdfcraft_engine::js::MessageButtons::YesNo => "3",
-                        _ => "2",
-                    }
-                    .into(),
-                ),
+            match pending.asked {
+                Some(Asked::Alert { on_cancel, .. }) => Some(on_cancel.to_owned()),
                 _ => None,
             }
         } else {
@@ -62,8 +303,10 @@ fn reply_to_prompt(ctx: &egui::Context, pending: &mut Pending, answer: Option<St
         };
         let _ = reply.send(answer);
     }
+    pending.dialog = None;
+    pending.asked = None;
     pending.started = Instant::now();
-    ctx.request_repaint();
+    frame::request_repaint_after(ctx, 0.0);
 }
 
 impl PdfCraftApp {
@@ -86,16 +329,52 @@ impl PdfCraftApp {
             return;
         }
         let Some(view) = self.views.iter().find(|v| v.id == id) else { return };
-        let (zoom, page, highlight) = (view.zoom, view.current, view.highlight_fields);
-        self.session.set_javascript_view(id, zoom as f64 * 100.0, highlight, page);
+        let (zoom, page, highlight) = (view.zoom(), view.current(), view.session.highlight_fields);
+        self.session.set_javascript_view(id, zoom * 100.0, highlight, page);
         match start(&mut self.session) {
             Ok(run) => {
-                self.script_pending =
-                    Some(Pending { run, prompt: None, text: String::new(), focus: false, started: Instant::now(), zoom, page, serial: 0 })
+                self.script_pending = Some(Pending { run, reply: None, dialog: None, asked: None, started: Instant::now(), zoom, page });
             }
             Err(e) => self.notify(e.to_string()),
         }
     }
+
+    /// Takes the answer of the hosted prompt `id` that `asked` describes, as the reply the worker waits for: the
+    /// answer, or a cancellation.
+    fn take_prompt_result(&mut self, id: DialogId, asked: Asked) -> Option<DialogResult<Option<String>>> {
+        match asked {
+            Asked::Alert { proceed, .. } => {
+                self.dialogs.take_by_id::<StandardPrompt>(id).map(|result| match result.ok().map(|answer| answer.choice) {
+                    Some(PromptChoice::Proceed) => DialogResult::Ok(Some(proceed.to_owned())),
+                    Some(PromptChoice::Alternate) => DialogResult::Ok(Some("3".to_owned())),
+                    _ => DialogResult::Cancel,
+                })
+            }
+            Asked::Dialog => self.dialogs.take_by_id::<ScriptPromptDialog>(id),
+        }
+    }
+
+    /// Closes the prompt `pending` has open, before its run is dropped; the cancellation it leaves is taken so it
+    /// does not linger in the host.
+    fn close_script_prompt(&mut self, ctx: &egui::Context, pending: &Pending) {
+        if let (Some(id), Some(asked)) = (pending.dialog, pending.asked) {
+            self.dialogs.cancel_by_id(ctx, id);
+            let _ = self.take_prompt_result(id, asked);
+        }
+    }
+
+    /// Opens the hosted dialog for `prompt` above any open dialog and returns its id and what it answers with.
+    fn open_script_prompt(&mut self, run: DocId, prompt: ScriptPrompt) -> Option<(DialogId, Asked)> {
+        let document = self.session.get(run).map(|d| document_name(&d.name)).unwrap_or_default();
+        if let ScriptPrompt::Alert(message) = &prompt {
+            let (alert, asked) = alert_prompt(run, &document, message);
+            // PLAN: assumed `dialogs::host::open_over(app: &mut PdfCraftApp, dialog: D) -> DialogId` (pdf-hub-w2)
+            return Some((crate::dialogs::host::open_over(self, alert), asked));
+        }
+        let dialog = ScriptPromptDialog::for_prompt(run, document, prompt)?;
+        Some((crate::dialogs::host::open_over(self, dialog), Asked::Dialog))
+    }
+
     /// Receive worker prompts/results and invalidate stale or timed-out interactions before applying their edits.
     pub(crate) fn poll_script_dialog(&mut self, ctx: &egui::Context) {
         let Some(mut pending) = self.script_pending.take() else { return };
@@ -106,30 +385,41 @@ impl PdfCraftApp {
                     && self.active_ids().is_some_and(|(_, active)| active == c.old || active == c.new)
             }))
             && self.session.script_pending_current(&pending.run)
-            && self.views.iter().find(|v| v.id == pending.run.id).is_some_and(|v| v.zoom == pending.zoom && v.current == pending.page);
+            && self.views.iter().find(|v| v.id == pending.run.id).is_some_and(|v| v.zoom() == pending.zoom && v.current() == pending.page);
         if !current {
+            self.close_script_prompt(ctx, &pending);
             self.session.discard_javascript(&pending.run);
             return;
         }
-        if (pending.prompt.is_none() && pending.started.elapsed() > Duration::from_secs(10))
-            || (pending.prompt.is_some() && pending.started.elapsed() > Duration::from_secs(300))
+        if (pending.dialog.is_none() && pending.started.elapsed() > Duration::from_secs(10))
+            || (pending.dialog.is_some() && pending.started.elapsed() > Duration::from_secs(300))
         {
+            self.close_script_prompt(ctx, &pending);
             self.session.timeout_javascript(pending.run);
             self.notify("The form script timed out; its result was discarded");
             return;
         }
-        if pending.prompt.is_none() {
+        if let (Some(id), Some(asked)) = (pending.dialog, pending.asked)
+            && let Some(result) = self.take_prompt_result(id, asked)
+        {
+            let (answer, cancel) = match result {
+                DialogResult::Ok(Some(answer)) => (Some(answer), false),
+                _ => (None, true),
+            };
+            reply_to_prompt(ctx, &mut pending, answer, cancel);
+        }
+        if pending.dialog.is_none() {
             match pending.run.receiver.try_recv() {
-                Ok(InteractiveEvent::Prompt(prompt, reply)) => {
-                    pending.text = match &prompt {
-                        Prompt::Text { default, .. } => default.clone(),
-                        _ => String::new(),
-                    };
-                    pending.serial = pending.serial.saturating_add(1);
-                    pending.focus = true;
-                    pending.started = Instant::now();
-                    pending.prompt = Some((prompt, reply));
-                }
+                Ok(InteractiveEvent::Prompt(prompt, reply)) => match self.open_script_prompt(pending.run.id, prompt) {
+                    Some((dialog, asked)) => {
+                        pending.reply = Some(reply);
+                        pending.dialog = Some(dialog);
+                        pending.asked = Some(asked);
+                        pending.started = Instant::now();
+                    }
+                    // Dropping `reply` cancels the question for the worker.
+                    None => drop(reply),
+                },
                 Ok(InteractiveEvent::Complete(out)) => {
                     let id = pending.run.id;
                     match self.session.finish_javascript(pending.run, out) {
@@ -137,9 +427,10 @@ impl PdfCraftApp {
                             if let Some(i) = self.views.iter().position(|v| v.id == id)
                                 && let Some(info) = self.session.get(id).map(|d| d.info.clone())
                             {
-                                self.views[i].document_changed(&info);
+                                self.views[i].document_changed(ctx, &info);
                             }
                             self.handle_js(
+                                ctx,
                                 id,
                                 JsOutput {
                                     alerts: Vec::new(),
@@ -163,132 +454,35 @@ impl PdfCraftApp {
             }
         }
         // Input events wake egui immediately; idle prompts only need a coarse timeout check.
-        ctx.request_repaint_after(if pending.has_prompt() { Duration::from_secs(1) } else { Duration::from_millis(16) });
+        frame::request_repaint_after(ctx, if pending.dialog.is_some() { 1.0 } else { 0.016 });
         self.script_pending = Some(pending);
-    }
-    /// Display the current typed prompt and send one answer/cancellation without replaying script side effects.
-    pub(crate) fn show_script_dialog(&mut self, ctx: &egui::Context) {
-        self.show_script_dialog_with_menu(ctx, |_, _, _| None);
-    }
-
-    /// Let an alternative renderer own a menu until it returns a selection or cancellation.
-    /// Returning `None` uses the built-in modal; the renderer never receives the reply sender.
-    pub fn show_script_dialog_with_menu(
-        &mut self,
-        ctx: &egui::Context,
-        render_menu: impl FnOnce(&egui::Context, DocId, &[MenuItem]) -> Option<std::task::Poll<Option<String>>>,
-    ) {
-        let Some(pending) = self.script_pending.as_mut() else { return };
-        let Some((prompt, _)) = pending.prompt.as_ref() else { return };
-        let Some(doc) = self.session.get(pending.run.id) else { return };
-        if let Prompt::Menu(items) = prompt
-            && let Some(reply) = render_menu(ctx, pending.run.id, items)
-        {
-            if let std::task::Poll::Ready(answer) = reply {
-                let cancel = answer.is_none();
-                reply_to_prompt(ctx, pending, answer, cancel);
-            }
-            return;
-        }
-        // Keep the filename in a separate, single-line label. It is document data too.
-        let document_name: String = doc
-            .name
-            .chars()
-            .filter(|c| !c.is_control() && !matches!(c, '\u{061c}' | '\u{200e}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
-            .take(160)
-            .collect();
-        let mut answer = None;
-        let mut cancel = ctx.input(|i| i.key_pressed(egui::Key::Escape));
-        let prompt_modal = crate::widgets::modal(ctx, ("document-script-prompt", pending.run.id.0, pending.serial));
-        // A different dialog may have been opened after this prompt. Drawing last alone
-        // does not reorder retained egui areas, so explicitly retain modal input priority.
-        ctx.move_to_top(prompt_modal.area.layer());
-        let modal = prompt_modal.show(ctx, |ui| {
-            ui.set_width(360.0);
-            ui.heading(tl!("This document's script is asking"));
-            ui.add(egui::Label::new(crate::i18n::fmt(tl!("Document: {name}"), &[("name", &document_name)])).truncate());
-            ui.separator();
-            match prompt {
-                Prompt::Menu(items) => {
-                    egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| menu(ui, items, &mut answer));
-                }
-                Prompt::Text { title, question, password, label, .. } => {
-                    if *password {
-                        ui.label(tl!("This request comes from the document, not PdfCraft. Only enter a password if you trust this document."));
-                    }
-                    if !title.is_empty() {
-                        ui.label(title);
-                    }
-                    ui.label(question);
-                    if !label.is_empty() {
-                        ui.label(label);
-                    }
-                    let field = ui.add(egui::TextEdit::singleline(&mut pending.text).password(*password).char_limit(4096));
-                    if pending.focus {
-                        field.request_focus();
-                        pending.focus = false;
-                    }
-                    if ui.add_enabled(pending.text.len() <= 4096, egui::Button::new(tl!("OK"))).clicked() {
-                        answer = Some(pending.text.clone());
-                    }
-                }
-                Prompt::Alert(message) => {
-                    if let Some(title) = &message.title {
-                        ui.label(title);
-                    }
-                    ui.label(&message.text);
-                    use pdfcraft_engine::js::MessageButtons as B;
-                    ui.horizontal(|ui| match message.buttons {
-                        B::Ok | B::OkCancel => {
-                            if ui.button(tl!("OK")).clicked() {
-                                answer = Some("1".into());
-                            }
-                        }
-                        B::YesNo | B::YesNoCancel => {
-                            if ui.button(tl!("Yes")).clicked() {
-                                answer = Some("4".into());
-                            }
-                            if ui.button(tl!("No")).clicked() {
-                                answer = Some("3".into());
-                            }
-                        }
-                    });
-                }
-            }
-            if ui.button(tl!("Cancel")).clicked() {
-                cancel = true;
-            }
-        });
-        cancel |= answer.is_none() && modal.should_close();
-        if answer.is_some() || cancel {
-            reply_to_prompt(ctx, pending, answer, cancel);
-        }
     }
 }
 
 #[cfg(test)]
 mod review_tests {
     use super::*;
-    /// The central shortcut/page-input gate must see a real pending script prompt.
+    /// The central shortcut/page-input gate must see a real hosted script prompt.
     #[test]
     fn a_script_prompt_blocks_document_input_until_answered() {
-        let mut app = PdfCraftApp::new();
+        let ctx = &egui::Context::default();
+        let mut app = PdfCraftApp::for_unit_tests();
         let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
-        app.open_bytes("synthetic.pdf", None, bytes.to_vec()).unwrap();
+        app.open_bytes(ctx, "synthetic.pdf", None, bytes.to_vec()).unwrap();
         let id = app.active_ids().unwrap().1;
         app.start_ui_script(id, "app.response({cQuestion:'Wait'});", None, None);
         let ctx = egui::Context::default();
         for _ in 0..300 {
             app.poll_script_dialog(&ctx);
-            if app.script_pending.as_ref().is_some_and(|p| p.prompt.is_some()) {
+            if app.script_pending.as_ref().is_some_and(|p| p.dialog.is_some()) {
                 break;
             }
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert!(app.script_pending.as_ref().unwrap().prompt.is_some());
+        let dialog = app.script_pending.as_ref().unwrap().dialog.expect("the prompt opened");
         assert!(app.modal_open(), "an unanswered script prompt must block document input");
-        let (_, reply) = app.script_pending.as_mut().unwrap().prompt.take().unwrap();
-        reply.send(None).unwrap();
+        assert!(app.dialogs.stack().contains(dialog), "the prompt is a hosted dialog");
+        assert!(app.dialogs.cancel_by_id(&ctx, dialog));
         for _ in 0..300 {
             app.poll_script_dialog(&ctx);
             if app.script_pending.is_none() {
@@ -304,69 +498,79 @@ mod review_tests {
 #[cfg(test)]
 mod review13_ui_tests {
     use super::*;
-    /// Create a native app with a visible synthetic blank document and no renderer.
-    fn app() -> (PdfCraftApp, DocId) {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+    use craft::host::{AppInfo, Host, Picked, ScriptedFiles, Wake};
+    use craft::platform::clipboard::{Clipboard, EventClipboard};
+    use craft::platform::open::FileIntake;
+    use craft::platform::watch::FileWatch;
+    use craft::ui::notices::PostedNotice;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    /// Create a native app over `files` with a visible synthetic blank document and no renderer.
+    fn app_over(ctx: &egui::Context, files: Arc<ScriptedFiles>) -> (PdfCraftApp, DocId) {
+        let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).files(files).build();
+        let (intake, _) = FileIntake::new(Wake::none());
+        let clipboard = Clipboard::new(EventClipboard::new(|| 0, |_| Ok(0)));
+        let services = crate::AppServices::new(Wake::none(), clipboard, None, None, intake, FileWatch::new(Wake::none()).inline());
+        let mut app = PdfCraftApp::with_host(Arc::new(host), services);
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         let bytes = app.session.create_blank(200.0, 300.0, 2).unwrap();
-        app.open_bytes("synthetic.pdf", None, bytes.to_vec()).unwrap();
+        app.open_bytes(ctx, "synthetic.pdf", None, bytes.to_vec()).unwrap();
         let id = app.active_ids().unwrap().1;
         (app, id)
+    }
+    fn app(ctx: &egui::Context) -> (PdfCraftApp, DocId) {
+        app_over(ctx, Arc::new(ScriptedFiles::new()))
     }
     /// Refused clicks and execution/prompt timeouts are visible, while stale runs stay silent.
     #[test]
     fn busy_and_timeout_notices_do_not_claim_worker_termination() {
         let ctx = egui::Context::default();
         for (timeout, prompt) in [(true, false), (true, true), (false, false)] {
-            let (mut app, id) = app();
+            let (mut app, id) = app(&ctx);
             app.start_ui_script(id, "app.response({cQuestion:'Wait'});", None, None);
             app.start_ui_script(id, "var shouldNotRun=1;", None, None);
-            assert!(app.toast.as_ref().unwrap().0.contains("not run"));
-            app.toast = None;
+            assert!(app.posted_notices.contains(&PostedNotice::new("Another form script is active; this click was not run")));
+            app.posted_notices.clear();
             if prompt {
                 let deadline = Instant::now() + Duration::from_secs(5);
-                while app.script_pending.as_ref().unwrap().prompt.is_none() && Instant::now() < deadline {
+                while app.script_pending.as_ref().unwrap().dialog.is_none() && Instant::now() < deadline {
                     app.poll_script_dialog(&ctx);
                     std::thread::sleep(Duration::from_millis(5));
                 }
-                assert!(app.script_pending.as_ref().unwrap().prompt.is_some());
+                assert!(app.script_pending.as_ref().unwrap().dialog.is_some());
             }
             if timeout {
                 app.script_pending.as_mut().unwrap().started = Instant::now() - Duration::from_secs(if prompt { 301 } else { 11 });
             } else {
-                app.views.iter_mut().find(|v| v.id == id).unwrap().zoom += 1.0;
+                app.views.iter_mut().find(|v| v.id == id).unwrap().view.zoom += 1.0;
             }
             app.poll_script_dialog(&ctx);
             assert!(app.script_pending.is_none());
             if timeout {
-                assert_eq!(app.toast.as_ref().unwrap().0, "The form script timed out; its result was discarded");
+                assert_eq!(app.posted_notices, [PostedNotice::new("The form script timed out; its result was discarded")]);
             } else {
-                assert!(app.toast.is_none());
+                assert!(app.posted_notices.is_empty());
             }
         }
     }
     /// Comparison completion preserves globals and sends Save As/Print to its source document.
     #[test]
     fn non_active_comparison_document_completes_native_script() {
+        let ctx = &egui::Context::default();
         for request in ["", "app.execMenuItem('SaveAs');", "print();"] {
-            let (mut app, old) = app();
-            app.views.iter_mut().find(|v| v.id == old).unwrap().current = 1;
+            let saved = PathBuf::from("/scripted/source.pdf");
+            let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![saved.clone()])]));
+            let (mut app, old) = app_over(ctx, files.clone());
+            app.views.iter_mut().find(|v| v.id == old).unwrap().view.current = 1;
             let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
-            app.open_bytes("new.pdf", None, bytes.to_vec()).unwrap();
+            app.open_bytes(ctx, "new.pdf", None, bytes.to_vec()).unwrap();
             let new = app.active_ids().unwrap().1;
             assert_ne!(new, old);
             let new_before = app.session.save_bytes(new).unwrap();
             app.compare_old = Some(old);
-            app.run_compare();
+            app.run_compare(&egui::Context::default());
             assert!(app.compare.as_ref().unwrap().side_by_side);
-            let dir = std::env::temp_dir().join(format!(
-                "pdfcraft-comparison-request-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-            ));
-            std::fs::create_dir(&dir).unwrap();
-            let saved = dir.join("source.pdf");
-            app.save_override = Some(saved.to_string_lossy().into_owned());
             app.printer_source = Some(std::sync::Arc::new(Vec::new));
             app.start_ui_script(old, &format!("var comparisonKept=42;{request}"), None, None);
             let ctx = egui::Context::default();
@@ -376,6 +580,8 @@ mod review13_ui_tests {
                 std::thread::sleep(Duration::from_millis(5));
             }
             assert!(app.script_pending.is_none());
+            // The Save As the script asked for takes the queued answer on this pass.
+            app.save_flow_pass(&ctx);
             assert_eq!(app.session.run_javascript(old, "comparisonKept", None).unwrap().result.as_deref(), Some("42"));
             assert_eq!(app.session.save_bytes(new).unwrap(), new_before);
             assert!(app.session.get(new).unwrap().path.is_none());
@@ -383,28 +589,25 @@ mod review13_ui_tests {
                 assert_eq!(app.active_ids().unwrap().1, new, "Save As need not change the comparison tab");
                 assert_eq!(app.session.get(old).unwrap().path.as_deref(), saved.to_str());
                 let mut reopened = pdfcraft_engine::Session::new();
-                let id = reopened.open("saved.pdf", None, std::sync::Arc::new(std::fs::read(&saved).unwrap()), None).unwrap();
+                let id = reopened.open("saved.pdf", None, std::sync::Arc::new(files.file(&saved).unwrap()), None).unwrap();
                 assert_eq!(reopened.get(id).unwrap().info.pages.len(), 2, "the saved file is the two-page source, not the one-page active file");
             } else if request == "print();" {
                 assert_eq!(app.active_ids().unwrap().1, old, "Print must retain its source as the active document");
-                assert!(matches!(app.dialog, Some(crate::Dialog::Print)));
+                assert!(app.dialogs.is_open::<craft::print::ui::HostedPrint>());
                 assert_eq!(app.print_draft.current_page, 1);
-                assert!(!saved.exists());
+                assert!(files.file(&saved).is_none());
             } else {
                 assert_eq!(app.active_ids().unwrap().1, new);
-                assert!(!saved.exists());
+                assert!(files.file(&saved).is_none());
             }
-            drop(app);
-            if saved.exists() {
-                std::fs::remove_file(saved).unwrap();
-            }
-            std::fs::remove_dir(dir).unwrap();
         }
     }
     /// Script focus reveals the requested field page before opening its editor.
     #[test]
     fn script_focus_reveals_an_offscreen_widget() {
-        let (mut app, id) = app();
+        let _ctx = &egui::Context::default();
+        let ctx = &egui::Context::default();
+        let (mut app, id) = app(ctx);
         app.session
             .apply(
                 id,
@@ -416,10 +619,10 @@ mod review13_ui_tests {
                 },
             )
             .unwrap();
-        app.handle_js(id, JsOutput { requests: vec![pdfcraft_engine::js::Request::Focus("later".into())], ..Default::default() });
+        app.handle_js(ctx, id, JsOutput { requests: vec![pdfcraft_engine::js::Request::Focus("later".into())], ..Default::default() });
         let view = app.views.iter().find(|v| v.id == id).unwrap();
-        assert_eq!(view.current, 1);
-        assert_eq!(view.forms.focus.as_ref().unwrap().name, "later");
+        assert_eq!(view.current(), 1);
+        assert_eq!(view.session.forms.focus.as_ref().unwrap().name, "later");
     }
 }
 
@@ -456,25 +659,31 @@ mod link_script_tests {
     /// window's prompt, the answer resumes it, and its field change and openDoc consent apply.
     #[test]
     fn a_javascript_link_asks_its_menu_and_applies_its_result() {
+        let _ctx = &egui::Context::default();
+        let ctx = &egui::Context::default();
         // An absolute path on this system (the document has no folder): on Windows, Acrobat's
         // `/C/…` form, which reads as `C:/…`.
         let path = if cfg!(windows) { "/C/abs/other.pdf" } else { "/abs/other.pdf" };
         let script = format!("getField\\('log'\\).value = app.popUpMenuEx\\({{cName:'A', cReturn:'a'}}\\) + event.type; app.openDoc\\('{path}'\\);");
-        let mut app = PdfCraftApp::new();
-        app.open_bytes("link.pdf", None, linked(&script)).unwrap();
+        let mut app = PdfCraftApp::for_unit_tests();
+        app.open_bytes(ctx, "link.pdf", None, linked(&script)).unwrap();
         let id = app.active_ids().unwrap().1;
-        app.run_link_script(id, 0, 0);
-        let ctx = egui::Context::default();
-        for _ in 0..400 {
-            app.poll_script_dialog(&ctx);
-            if app.script_pending.as_ref().is_some_and(|p| p.prompt.is_some()) {
-                break;
+        app.run_link_script(ctx, id, 0, 0);
+        // The worker's question is read from its reply channel, before any pass hosts it.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let (prompt, reply) = loop {
+            match app.script_pending.as_ref().unwrap().run.receiver.try_recv() {
+                Ok(InteractiveEvent::Prompt(prompt, reply)) => break (prompt, reply),
+                Ok(InteractiveEvent::Complete(_)) | Err(TryRecvError::Disconnected) => panic!("the script ended without asking"),
+                Err(TryRecvError::Empty) => {
+                    assert!(Instant::now() < deadline, "the script did not ask");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
             }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let (prompt, reply) = app.script_pending.as_mut().unwrap().prompt.take().unwrap();
-        assert!(matches!(&prompt, Prompt::Menu(items) if items.len() == 1 && items[0].value == "a"), "{prompt:?}");
+        };
+        assert!(matches!(&prompt, ScriptPrompt::Menu(items) if items.len() == 1 && items[0].value == "a"), "{prompt:?}");
         reply.send(Some("a".into())).unwrap();
+        let ctx = egui::Context::default();
         for _ in 0..400 {
             app.poll_script_dialog(&ctx);
             if app.script_pending.is_none() {
