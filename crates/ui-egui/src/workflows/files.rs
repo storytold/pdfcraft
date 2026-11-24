@@ -327,6 +327,65 @@ impl PdfCraftApp {
         self.add_dropped_to_combine(incoming);
     }
 
+    /// Paste with files copied in Explorer, Finder or a file manager (#1289) does what dropping
+    /// them does: on Home each file opens in a tab, and on the Combine files tab they join its
+    /// list. A document showing keeps Paste for its own pastes.
+    ///
+    /// It runs as the Paste command: Edit ▸ Paste, or ⌘V / Ctrl+V once the window delivers a paste
+    /// (Finder puts a copied file's name and icon next to the file list); the framework has given
+    /// the paste to a focused field, an open menu or a dialog first. Windows Explorer puts only
+    /// the file list on the clipboard, and the window delivers no paste for that yet, so there
+    /// only Edit ▸ Paste reaches here.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn paste_files(&mut self, ctx: &egui::Context) {
+        // A read of the clipboard's file list on the UI thread, not of the files.
+        let paths = match self.clipboard.read_files() {
+            Ok(paths) => paths.unwrap_or_default(),
+            Err(e) => {
+                self.notify_fmt("Couldn't read the clipboard: {e}", &[("e", &e.to_string())]);
+                return;
+            }
+        };
+        // A file list holds full paths; anything else is not a file to open.
+        let paths: Vec<_> = paths.into_iter().filter(|p| p.is_absolute()).collect();
+        if paths.is_empty() {
+            self.notify_tr("The clipboard holds no files to open");
+            return;
+        }
+        let name_of =
+            |path: &std::path::Path| path.file_name().map_or_else(|| path.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned());
+        let combine = self.combine_showing();
+        let mut files = Vec::new();
+        for path in paths {
+            let name = name_of(&path);
+            let meta = match std::fs::metadata(&path) {
+                Ok(meta) => meta,
+                Err(e) => {
+                    self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
+                    continue;
+                }
+            };
+            if meta.is_dir() && !combine {
+                // Home opens files; a folder's PDFs are combined from the Combine files tab.
+                self.notify_fmt("{name} is a folder; only files open from Home", &[("name", &name)]);
+            } else if !meta.is_dir() && !meta.is_file() {
+                // A pipe or a device would block the read.
+                self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", tl!("it is not a file"))]);
+            } else if combine {
+                let mut file = OsFile::default();
+                file.name = name;
+                file.path = Some(path);
+                files.push(file);
+            } else {
+                self.open_path(&path.to_string_lossy());
+            }
+        }
+        if combine {
+            // One batch, as dropped files are: folders in place, unsupported files refused.
+            self.drop_into_combine(ctx, files);
+        }
+    }
+
     /// `doc` as it is now, for a pick that will edit it.
     pub(crate) fn pick_target(&self, doc: Option<DocId>) -> Option<PickTarget> {
         doc.map(|doc| PickTarget { doc, generation: self.session.get(doc).map(|d| d.edit_generation()) })

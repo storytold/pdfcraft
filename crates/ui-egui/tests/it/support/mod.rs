@@ -160,6 +160,7 @@ struct Recorded {
     writes: Vec<Vec<Flavor>>,
     held: Option<String>,
     refused: Option<&'static str>,
+    files: Option<Vec<PathBuf>>,
 }
 
 impl RecordingClipboard {
@@ -168,6 +169,11 @@ impl RecordingClipboard {
         let clipboard = Self::default();
         clipboard.lock().refused = Some(mime);
         clipboard
+    }
+
+    /// Hold `files` as files copied in a file manager, for the next paste.
+    pub fn hold_files(&self, files: Vec<PathBuf>) {
+        self.lock().files = Some(files);
     }
 
     /// The text the app last copied.
@@ -189,6 +195,8 @@ impl ClipboardBackend for RecordingClipboard {
     fn write(&mut self, flavors: &[Flavor]) -> Result<usize, ClipboardError> {
         let mut state = self.lock();
         state.writes.push(flavors.to_vec());
+        // A copy replaces the files a file manager copied before it.
+        state.files = None;
         if let Some(mime) = state.refused
             && flavors.iter().any(|f| f.mime == mime)
         {
@@ -209,7 +217,7 @@ impl ClipboardBackend for RecordingClipboard {
     }
 
     fn read_files(&mut self, _limit: usize) -> Result<Option<Vec<PathBuf>>, ClipboardError> {
-        Ok(None)
+        Ok(self.lock().files.clone())
     }
 
     fn has(&mut self, mimes: &[&str]) -> bool {

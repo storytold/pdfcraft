@@ -77,6 +77,14 @@ impl PdfCraftApp {
         if self.run_catalog_command(ctx, fired) {
             return;
         }
+        // On Home and the Combine files tab, Paste opens or adds the copied files (#1289).
+        #[cfg(not(target_arch = "wasm32"))]
+        if id == crate::menus::PASTE && self.active.is_none() {
+            if !self.covers_pages() {
+                self.paste_files(ctx);
+            }
+            return;
+        }
         // In Organize the clipboard rows and keys are the picked pages' (the catalog enables them as
         // `page.copy`, `page.cut` and `page.paste`); the registry's text Copy itself stays off there.
         let organize = self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.organize);

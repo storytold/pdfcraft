@@ -125,9 +125,10 @@ pub(crate) fn command_input(app: &mut PdfCraftApp, ctx: &egui::Context) -> Comma
     let gated = menus::gated(app);
     // Edit ▸ Paste asks the platform for the clipboard in the pass the row is picked, as production's menu did, and
     // reaches the app with what it holds, as ⌘V does. Organize pastes its own picked pages and Prepare Form its own
-    // fields, at once, as `run_fired` sends them.
+    // fields, at once, as `run_fired` sends them. On the desktop's Home, Paste reads the copied files itself (#1289):
+    // a clipboard holding only files (Windows Explorer's) answers the platform's request with no paste.
     let organize = app.active.and_then(|i| app.views.get(i)).is_some_and(|v| v.organize);
-    let reads_clipboard = !organize && !app.is_preparing();
+    let reads_clipboard = !organize && !app.is_preparing() && (app.active.is_some() || cfg!(target_arch = "wasm32"));
     let mut input = CommandInput::new().gate(CommandGate::new(gated, |gated, _| !*gated)).paste_reads_clipboard(reads_clipboard);
     if let Some(catalog) = shared_catalog(super::mac_shortcuts(ctx)) {
         input = input.catalog(catalog);
@@ -218,7 +219,8 @@ fn enabled(app: &PdfCraftApp, ctx: &egui::Context, command: &CommandRef) -> bool
         PASTE if organize => app.page_clipboard.is_some() && enabled_id("page.paste"),
         // On the pages Paste takes what the clipboard holds (a picture, comments), which only the paste itself reads:
         // ⌘V and the platform's delivered paste are this command.
-        PASTE => has_doc,
+        // On Home and the Combine files tab it opens or adds copied files (#1289); browsers hand pages no file paths.
+        PASTE => has_doc || !cfg!(target_arch = "wasm32"),
         SELECT_ALL | DELETE => has_doc || app.combine_showing() && !app.combine_draft.is_empty(),
         id if id.starts_with("view.zoom.") || id.starts_with("view.rotate.") => has_doc,
         PANEL => menus::panel(command).is_some(),
