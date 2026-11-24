@@ -4114,3 +4114,18 @@ fn non_finite_clips_and_unbalanced_pops_do_not_panic() {
     dev.pop_clip_path();
     assert!(!dev.clip_empty());
 }
+
+/// An `/ActualText` span that draws one glyph in view and one under a clip enclosing no area keeps
+/// only the glyph that shows, rather than the whole replacement; a span drawn wholly in view still
+/// reads as its replacement, and one drawn wholly under the empty clip reads as nothing.
+#[test]
+fn actual_text_losing_a_glyph_to_an_empty_clip_keeps_only_what_shows() {
+    let pdf = marked_pages(&[
+        "/Span <</ActualText (AB)>> BDC BT /F1 20 Tf 1 0 0 1 100 150 Tm (a) Tj ET q 0 0 0 0 re W n BT /F1 20 Tf 1 0 0 1 130 150 Tm (b) Tj ET Q EMC",
+        "BT /F1 20 Tf 1 0 0 1 100 150 Tm /Span <</ActualText (AB)>> BDC (ab) Tj EMC ET",
+        "q 0 0 0 0 re W n BT /F1 20 Tf 1 0 0 1 100 150 Tm /Span <</ActualText (AB)>> BDC (ab) Tj EMC ET Q BT /F1 20 Tf 1 0 0 1 100 100 Tm (c) Tj ET",
+    ]);
+    assert_eq!(marked_text(&pdf, 0).plain_text(), "a");
+    assert_eq!(marked_text(&pdf, 1).plain_text(), "AB");
+    assert_eq!(marked_text(&pdf, 2).plain_text(), "c");
+}

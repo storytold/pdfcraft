@@ -470,6 +470,9 @@ impl<'a> Device<'a> for TextDevice {
     fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
     fn draw_glyph(&mut self, glyph: &Glyph<'a>, transform: Affine, glyph_transform: Affine, _: &Paint<'a>, mode: &GlyphDrawMode) {
         if self.clip_empty() {
+            // A replacement that loses a glyph this way keeps only the glyphs it still draws, as one
+            // the crop box cuts does: its full text would bring the hidden glyph back.
+            self.actual_cropped |= self.actual.is_some();
             return;
         }
         if self.excluded_depth.is_some() || (self.filter.images && matches!(mode, GlyphDrawMode::Invisible)) {
