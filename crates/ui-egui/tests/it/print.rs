@@ -783,11 +783,13 @@ fn print_as_image_is_an_advanced_choice_that_saves_pictures() {
     assert_eq!(pictures, 1, "the page is one picture");
 }
 
-/// Print colours as black is a choice in the dialog's Advanced section, and it turns the resolution on.
+/// Print colours as black is a choice in the dialog's Advanced section, and it keeps the resolution enabled.
 #[test]
 fn print_colours_as_black_is_an_advanced_choice() {
     let mut h = harness();
     h.open();
+    h.get_by_role_and_label(Role::Button, "Advanced").scroll_to_me();
+    h.run_steps(4);
     h.get_by_role_and_label(Role::Button, "Advanced").click();
     h.run_steps(2);
     h.get_by_role_and_label(Role::CheckBox, "Print colours as black").scroll_to_me();
