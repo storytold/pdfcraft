@@ -37,6 +37,7 @@ mod history;
 pub mod js;
 mod layers;
 pub mod links;
+mod live_scripts;
 pub mod model3d;
 mod object_clip;
 pub mod ocr;
@@ -48,6 +49,7 @@ mod pictures;
 pub mod print_raster;
 pub mod printcheck;
 mod protection;
+mod rename;
 mod rich_copy;
 pub mod scan_clean;
 mod scan_colours;
@@ -74,6 +76,7 @@ use std::sync::Arc;
 pub use links::{
     MAX_REMOTE_DOCUMENT_BYTES, RemoteDocumentPathError, read_remote_document, remote_document_path_is_absolute, resolve_remote_document_path,
 };
+pub use live_scripts::{MAX_TIMER_RUNS, ScriptRun};
 pub use pdfcraft_edit::strip_subset_tag;
 pub use rich_copy::RichCopy;
 pub use signature_image::{ImageSignaturePreview, SignatureImage};
@@ -167,6 +170,7 @@ pub use pictures::{MarkFile, image_dimensions};
 use pictures::{embed_image, fit_picture, mark_source, model_poster};
 use protection::unrestricted;
 pub use protection::{Changes, Printing, Protection, SecuritySummary};
+pub use rename::{RenameError, new_file_name, rename_target};
 pub use session::Session;
 pub use sources::{CombineSource, Combined, combine_source_check, office_to_pdf, source_page_count};
 use sources::{open_source, open_source_with};
@@ -192,7 +196,7 @@ use doc_state::{LOW_RESOLUTION_PRINT_DPI, render_threads, renderer_password, sig
 /// The configuration of the pool that draws the viewer: the document's own, plus installed CJK
 /// fonts for fonts a PDF does not embed (`pdfcraft_render::RenderConfig::system_fonts`). Exports,
 /// printing, OCR and automation use the document configuration itself, so nothing drawn with an
-/// installed font is saved or printed (AGENTS.md §1.2, §1.4).
+/// installed font is saved or printed (licences.md; docs/development.md "Fonts and attribution").
 fn display_config(config: &pdfcraft_render::RenderConfig) -> pdfcraft_render::RenderConfig {
     config.clone().on_screen()
 }
@@ -202,5 +206,7 @@ pub const MAX_STAMP_LINE: usize = 200;
 
 #[cfg(test)]
 mod document_actions_tests;
+#[cfg(test)]
+mod link_javascript_tests;
 #[cfg(test)]
 mod tests;
