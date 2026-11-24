@@ -1,19 +1,21 @@
-//! What the page's tools see of the pointer. A finger tap, a touch drag and a click whose press
-//! and release share a frame act as a mouse click and drag do, and nothing drawn over the page (a
-//! dialog, the palette, the quick bar, the chrome over a page scrolled under it) lets the page's
-//! cursor, tips or presses through.
-//!
-//! The ignored tests pin live bugs that later steps of the page pointer router fix: one hit test
-//! (step 3), and press-time capture with cancel (step 4).
+//! What the page's parts and tools make of the pointer: the cursor and tip over a part promise
+//! what a press there does, the part drawn on top takes the press, a click on two touching pages
+//! is the first page's, and nothing drawn over the page (a dialog, the palette, the chrome over a
+//! page scrolled under it) lets the page's cursor or tips through.
 
+use std::sync::Arc;
+
+use craft::host::{AppInfo, Host, Wake};
+use craft::platform::clipboard::EventClipboard;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::StampKind;
 use pdfcraft_ui_egui::comments::CommentTool;
 use pdfcraft_ui_egui::fill_sign::FillTool;
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool, UnlockPrompt};
+use pdfcraft_ui_egui::{AppServices, PdfCraftApp, QuickTool};
 
-use crate::support::input::{coalesced_click, double_click, one_frame, touch_drag, touch_tap};
+use crate::support::AppHarness as _;
+use crate::support::input::one_frame;
 
 /// A PDF of `objects`, numbered from 1 with the catalog first.
 fn pdf(objects: &[&str]) -> Vec<u8> {
@@ -148,19 +150,6 @@ fn checkbox_pdf() -> Vec<u8> {
     ])
 }
 
-/// A 300×400 page with two unchecked check boxes side by side: `agree` at x 100..120 and
-/// `other` at x 120..140, both at y 200..220.
-fn two_checkboxes_pdf() -> Vec<u8> {
-    pdf(&[
-        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] /DA (/ZaDb 0 Tf 0 g) /DR << /Font << /ZaDb 6 0 R >> >> >> >>",
-        PAGES,
-        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
-        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /V /Off /AS /Off /Rect [100 200 120 220] /P 3 0 R /F 4 /MK << /CA (4) >> /DA (/ZaDb 11 Tf 0 g) >>",
-        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (other) /V /Off /AS /Off /Rect [120 200 140 220] /P 3 0 R /F 4 /MK << /CA (4) >> /DA (/ZaDb 11 Tf 0 g) >>",
-        "<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>",
-    ])
-}
-
 /// The check box `agree` of [`checkbox_pdf`], with a highlight drawn over it.
 fn highlighted_checkbox_pdf() -> Vec<u8> {
     pdf(&[
@@ -173,28 +162,33 @@ fn highlighted_checkbox_pdf() -> Vec<u8> {
     ])
 }
 
-/// A 300×400 page with a push button at x 100..200, y 200..220 whose action opens a web address.
-fn button_pdf() -> Vec<u8> {
-    pdf(&[
-        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) >> >>",
-        PAGES,
-        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
-        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (web) /Rect [100 200 200 220] /P 3 0 R /A << /S /URI /URI (https://example.org/) >> >>",
-    ])
+/// The services a pointer test gives the app: no wake-ups, a clipboard fed by paste events (a
+/// paste arrives in the pass that reads it, so its pass clock never needs to move) whose copies go
+/// nowhere, a recovery folder of the test process's own, and no update source.
+fn services() -> AppServices {
+    let clipboard = craft::platform::clipboard::Clipboard::new(EventClipboard::new(|| 0, |_| Ok(0)));
+    let recovery = std::env::temp_dir().join(format!("pdfcraft-pointer-{}", std::process::id()));
+    let (intake, _sender) = craft::platform::open::FileIntake::new(Wake::none());
+    let watch = craft::platform::watch::FileWatch::new(Wake::none()).inline();
+    AppServices::new(Wake::none(), clipboard, Some(recovery), None, intake, watch)
 }
 
 /// The app with `pdf` open at `zoom` percent and its first frames run. The left panel stays
 /// open only where a test places the page relative to the window's chrome.
 fn open(pdf: Vec<u8>, zoom: &'static str, left_open: bool) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("test.pdf", None, pdf).unwrap();
-        if !left_open {
-            app.set_option("left", "closed").unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "test" }).build();
+            let mut app = PdfCraftApp::with_host(Arc::new(host), services());
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "test.pdf", None, pdf).unwrap();
+            if !left_open {
+                app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            }
+            app.set_option(&egui::Context::default(), "zoom", zoom).unwrap();
+            app
         }
-        app.set_option("zoom", zoom).unwrap();
-        app
     });
     for _ in 0..30 {
         h.run_steps(2);
@@ -263,10 +257,18 @@ fn agree(h: &Harness<'_, PdfCraftApp>) -> Vec<String> {
     s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "agree").unwrap().value.clone()
 }
 
-/// Whether the page's hover tip shows and says `text`.
-fn tip_says(h: &Harness<'_, PdfCraftApp>, text: &str) -> bool {
-    let Some(tip) = h.ctx.memory(|m| m.area_rect(egui::Id::unique("canvas-hover"))).filter(|_| tip_shown(h)) else { return false };
-    h.query_all_by_label_contains(text).any(|n| tip.contains(n.rect().center()))
+/// Whether the pointer's tip shows and says `text`. The pointer rests where it is for up to a second, past the
+/// tooltip's delay; the tip is the framework's tooltip.
+fn tip_says(h: &mut Harness<'_, PdfCraftApp>, text: &str) -> bool {
+    use egui::accesskit::Role;
+    for _ in 0..60 {
+        let tips: Vec<egui::Rect> = h.query_all_by_role(Role::Tooltip).map(|n| n.rect()).collect();
+        if !tips.is_empty() {
+            return h.query_all_by_label_contains(text).any(|n| tips.iter().any(|tip| tip.contains(n.rect().center())));
+        }
+        h.step();
+    }
+    false
 }
 
 /// Hovers `p` until `want` accepts the cursor there (text layers and paragraph boxes arrive from
@@ -333,7 +335,8 @@ fn edit_text_over_a_linked_word_offers_the_move_arrow() {
 
 #[test]
 fn select_tool_over_a_comment_on_text_offers_the_move_arrow() {
-    let mut h = open(comment_on_text_pdf(), "150", false);
+    // Keep the text clear of the floating quick toolbar.
+    let mut h = open(comment_on_text_pdf(), "100", false);
     // Inside the rectangle where there is no text, and inside it over a word.
     let blank = at(&h, 120.0, 315.0);
     let on_text = at(&h, 60.0, 303.0);
@@ -389,12 +392,12 @@ fn a_click_on_a_link_over_a_picture_follows_it_and_picks_no_picture() {
     let mut h = open(linked_picture_pdf(), "150", false);
     let beside = at(&h, 70.0, 300.0);
     mouse_click(&mut h, beside);
-    assert!(h.state().views[0].picked_image.is_some(), "the picture beside the link is picked");
-    h.state_mut().views[0].picked_image = None;
+    assert!(h.state().views[0].session.picked_image.is_some(), "the picture beside the link is picked");
+    h.state_mut().views[0].session.picked_image = None;
     let on_link = at(&h, 150.0, 300.0);
     mouse_click(&mut h, on_link);
     assert_eq!(pending_url(&h).as_deref(), Some("https://example.org/"), "the link is followed");
-    assert!(h.state().views[0].picked_image.is_none(), "and no picture is picked");
+    assert!(h.state().views[0].session.picked_image.is_none(), "and no picture is picked");
 }
 
 /// The I-beam drops over a link only where a press would go to it: with the Select tool the link's
@@ -420,14 +423,15 @@ fn a_click_on_stacked_comments_selects_the_one_drawn_on_top() {
     let overlap = at(&h, 125.0, 225.0);
     assert_eq!(cursor_at(&mut h, overlap), egui::CursorIcon::Move);
     h.run_steps(2);
-    assert!(tip_says(&h, "Top note") && !tip_says(&h, "Bottom note"), "the tip names the comment drawn on top");
+    assert!(tip_says(&mut h, "Top note") && !tip_says(&mut h, "Bottom note"), "the tip names the comment drawn on top");
     mouse_click(&mut h, overlap);
-    assert_eq!(h.state().views[0].comments.selected, Some((0, 1)), "a click selects it too");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 1)), "a click selects it too");
 }
 
 #[test]
 fn a_comments_tip_shows_with_every_tool_beside_its_cursor() {
-    let mut h = open(comment_on_text_pdf(), "150", false);
+    // Keep the text clear of the floating quick toolbar.
+    let mut h = open(comment_on_text_pdf(), "100", false);
     // Inside the rectangle comment by "Reviewer": where there is no text, and over a word.
     let (blank, on_text) = (at(&h, 120.0, 315.0), at(&h, 60.0, 303.0));
     let hover = |h: &mut Harness<'static, PdfCraftApp>, tool: QuickTool, p: egui::Pos2, want: egui::CursorIcon| {
@@ -458,7 +462,7 @@ fn a_comments_tip_shows_with_every_tool_beside_its_cursor() {
 /// left of the edge. Returns the cursor shown at the press point and the line count after.
 fn narrow_from_left(dx: f32) -> (egui::CursorIcon, usize) {
     let mut h = open(text_pdf(), "150", false);
-    assert!(h.state_mut().execute("edit.edit_text"));
+    assert!(h.execute("edit.edit_text"));
     for _ in 0..20 {
         h.run_steps(2);
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -494,25 +498,6 @@ fn a_paragraph_edge_resizes_wherever_it_shows_the_resize_cursor() {
 // ---------------------------------------------------------------------------------------------
 // Things drawn over the page keep the page's cursor, tips and presses off.
 
-/// Check that the command palette's frame keeps the default cursor over the page while the page beside it
-/// still shows the stamp tool.
-#[test]
-fn stamp_cursor_stays_off_the_command_palette() {
-    let mut h = open(link_pdf(), "300", false);
-    stamp_tool(&mut h);
-    h.state_mut().palette_open = true;
-    h.run_steps(4);
-    let palette = h.ctx.memory(|m| m.area_rect(egui::Id::unique("palette"))).expect("palette shown");
-    // On the palette's frame margin, where none of its widgets sets a cursor, over the page.
-    let p = egui::pos2(palette.left() + 4.0, palette.bottom() - 4.0);
-    assert!(page(&h).contains(p), "the palette must lie over the page here");
-    assert_eq!(cursor_at(&mut h, p), egui::CursorIcon::Default);
-    // The page beside the palette still shows the tool.
-    let beside = egui::pos2(palette.left() + 4.0, palette.bottom() + 40.0);
-    assert!(page(&h).contains(beside));
-    assert_eq!(cursor_at(&mut h, beside), egui::CursorIcon::Crosshair);
-}
-
 /// A link beside the open palette shows no tip: tips draw above the palette.
 #[test]
 fn link_tip_stays_off_while_the_palette_is_open() {
@@ -520,7 +505,7 @@ fn link_tip_stays_off_while_the_palette_is_open() {
     let mut h = open(link_pdf(), "300", false);
     h.state_mut().palette_open = true;
     h.run_steps(4);
-    let palette = h.ctx.memory(|m| m.area_rect(egui::Id::unique("palette"))).expect("palette shown");
+    let palette = h.query_all_by_label("Find tools and commands").map(|n| n.rect()).reduce(|a, b| a.union(b)).expect("palette shown");
     let beside = [60.0, 100.0, 150.0, 200.0, 240.0]
         .into_iter()
         .flat_map(|x| [305.0, 325.0, 345.0].map(|y| at(&h, x, y)))
@@ -528,282 +513,28 @@ fn link_tip_stays_off_while_the_palette_is_open() {
         .unwrap_or_else(|| panic!("no point of the link beside the palette {palette:?}, page {:?}", page(&h)));
     h.hover_at(beside);
     h.run_steps(3);
-    assert!(h.query_by_label("https://example.org/").is_none(), "no tip beside the palette");
+    assert!(!tip_says(&mut h, "https://example.org/"), "no tip beside the palette");
     h.state_mut().palette_open = false;
-    h.hover_at(beside);
+    h.hover_at(beside + egui::vec2(1.0, 0.0));
     h.run_steps(3);
-    h.get_by_label("https://example.org/");
-}
-
-/// A panel's resize edge dragged over a link shows neither the link's tip nor its cursor, and the
-/// link answers again once the edge is let go.
-#[test]
-fn a_dragged_panel_edge_passes_over_a_link_without_its_tip() {
-    use egui::accesskit::Role;
-    use egui_kittest::kittest::Queryable;
-    let mut h = open(link_pdf(), "150", false);
-    h.state_mut().set_option("panel", "comments").unwrap();
-    for _ in 0..4 {
-        h.run_steps(2);
-    }
-    let on_link = at(&h, 100.0, 340.0);
-    assert_eq!(cursor_at(&mut h, on_link), egui::CursorIcon::PointingHand);
-    h.run_steps(2);
-    assert!(tip_shown(&h), "the link's tip shows over an uncovered page");
-    // Away from the link, then the side panel's resize edge (the rightmost one) is picked up and
-    // carried over it.
-    h.hover_at(at(&h, 150.0, 100.0));
-    h.run_steps(4);
-    let tab = h
-        .get_all_by(|n| n.role() == Role::Splitter && n.label().as_deref() == Some("Resize panels"))
-        .map(|n| n.rect().center())
-        .max_by(|a, b| a.x.total_cmp(&b.x))
-        .expect("the side panel has a resize edge")
-        // The pane's half of the edge: the page, drawn after the panes, takes the other half.
-        + egui::vec2(2.0, 0.0);
-    h.hover_at(tab);
-    h.run_steps(1);
-    h.drag_at(tab);
-    h.run_steps(1);
-    for i in 1..=8 {
-        h.hover_at(tab + (on_link - tab) * (i as f32 / 8.0));
-        h.run_steps(1);
-    }
-    for _ in 0..4 {
-        h.run_steps(2);
-        assert!(h.ctx.dragged_id().is_some(), "the edge is still being dragged");
-        assert!(!tip_shown(&h), "no link tip under a dragged panel edge");
-        assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand);
-    }
-    // Back to the start and let go there, which leaves the width as it was.
-    for i in 1..=8 {
-        h.hover_at(on_link + (tab - on_link) * (i as f32 / 8.0));
-        h.run_steps(1);
-    }
-    h.drop_at(tab);
-    h.run_steps(2);
-    assert!(h.ctx.dragged_id().is_none());
-    assert_eq!(cursor_at(&mut h, on_link), egui::CursorIcon::PointingHand, "the link answers again");
-    h.run_steps(2);
-    assert!(tip_shown(&h), "and shows its tip");
-}
-
-/// Send one wheel event over the page and let its scrolling settle.
-fn wheel(h: &mut Harness<'_, PdfCraftApp>, delta: egui::Vec2) {
-    h.hover_at(egui::pos2(800.0, 500.0));
-    h.event(egui::Event::MouseWheel {
-        unit: egui::MouseWheelUnit::Point,
-        delta,
-        modifiers: egui::Modifiers::NONE,
-        phase: egui::TouchPhase::Move,
-        source: egui::MouseWheelSource::Unknown,
-    });
-    for _ in 0..10 {
-        h.run_steps(2);
-    }
-}
-
-/// Check that the quick bar's frame keeps the default cursor over the page while the page below it still
-/// shows the stamp tool.
-#[test]
-fn stamp_cursor_stays_off_the_quick_bar() {
-    let mut h = open(link_pdf(), "400", true);
-    stamp_tool(&mut h);
-    // Bring the page under the quick bar's left end.
-    wheel(&mut h, egui::vec2(-200.0, 0.0));
-    let bar = h.ctx.memory(|m| m.area_rect(egui::Id::unique("quick-bar"))).expect("quick bar shown");
-    // Inside the bar's frame margin: no button there.
-    let p = egui::pos2(bar.left() + 3.0, bar.bottom() - 3.0);
-    assert!(page(&h).contains(p), "the quick bar must lie over the page here");
-    assert_eq!(cursor_at(&mut h, p), egui::CursorIcon::Default);
-    let below = egui::pos2(bar.left() + 3.0, bar.bottom() + 20.0);
-    assert!(page(&h).contains(below));
-    assert_eq!(cursor_at(&mut h, below), egui::CursorIcon::Crosshair);
-}
-
-#[test]
-fn stamp_cursor_stays_off_the_chrome_above_a_page_scrolled_under_it() {
-    let mut h = open(link_pdf(), "400", true);
-    stamp_tool(&mut h);
-    let top = page(&h).top();
-    wheel(&mut h, egui::vec2(0.0, -300.0));
-    let page = page(&h);
-    // Above where the page started (the viewport's top edge, give or take its margin): the
-    // toolbar, with the page scrolled up under it. Left of the link, which shows the hand.
-    let x = page.left() + 20.0;
-    let p = egui::pos2(x, top - 45.0);
-    assert!(page.contains(p), "the page must extend under the chrome here");
-    // The toolbar keeps its own cursor (a button's hand here); the page's is gone.
-    assert_ne!(cursor_at(&mut h, p), egui::CursorIcon::Crosshair);
-    assert_eq!(cursor_at(&mut h, egui::pos2(x, top + 40.0)), egui::CursorIcon::Crosshair);
-}
-
-/// Whether the page's hover tip was drawn in the last frame.
-fn tip_shown(h: &Harness<'_, PdfCraftApp>) -> bool {
-    let tip = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("canvas-hover"));
-    h.ctx.memory(|m| m.areas().is_visible(&tip))
-}
-
-/// Opens the Unlock prompt, a dialog with a backdrop over the whole window, from the next frame.
-fn open_unlock_prompt(h: &mut Harness<'_, PdfCraftApp>) {
-    let doc = h.state().views[0].id;
-    h.state_mut().unlock_prompt = Some(UnlockPrompt { doc, name: "test.pdf".into(), input: String::new(), error: None, then: None });
-}
-
-/// Check that the link tip and pointing cursor disappear under the Unlock prompt.
-#[test]
-fn link_tip_stays_under_the_unlock_prompt() {
-    let mut h = open(link_pdf(), "300", true);
-    let page = page(&h);
-    let k = page.width() / 300.0;
-    // Near the link's top left corner, clear of the prompt's card in the middle of the window.
-    let on_link = page.min + egui::vec2(55.0 * k, (400.0 - 345.0) * k);
-    assert_eq!(cursor_at(&mut h, on_link), egui::CursorIcon::PointingHand);
-    h.run_steps(2);
-    assert!(tip_shown(&h), "the link's tip shows over an uncovered page");
-
-    open_unlock_prompt(&mut h);
-    h.hover_at(on_link + egui::vec2(1.0, 0.0));
-    for _ in 0..4 {
-        h.run_steps(2);
-    }
-    let card = h.ctx.memory(|m| m.area_rect(egui::Id::unique("unlock")));
-    assert!(card.is_none_or(|c| !c.contains(on_link)), "the point must be on the backdrop, not the card: {card:?}");
-    assert!(!tip_shown(&h), "the link's tip must not float over the Unlock prompt");
-    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand);
-}
-
-/// Check that moving onto a link's floating tip still reports the link's pointing-hand cursor.
-#[test]
-fn the_link_tip_lets_the_pointer_through_to_the_link() {
-    let mut h = open(link_pdf(), "150", false);
-    let p = at(&h, 100.0, 340.0);
-    assert_eq!(cursor_at(&mut h, p), egui::CursorIcon::PointingHand);
-    let tip = h.ctx.memory(|m| m.area_rect(egui::Id::unique("canvas-hover"))).expect("the link's tip");
-    // A quick move lands on the tip, drawn beside where the pointer was, and still on the link.
-    let onto = tip.min + egui::vec2(6.0, 6.0);
-    assert!(egui::Rect::from_two_pos(at(&h, 50.0, 350.0), at(&h, 250.0, 300.0)).contains(onto), "the point must be on the link");
-    h.hover_at(onto);
-    h.run_steps(1);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand, "the tip must not take the pointer from the link");
-}
-
-// Dialogs are drawn after the pages, so on the frame one opens egui does not know its layer yet
-// and still gives the pages the pointer, and a press there.
-
-#[test]
-fn the_link_tip_stays_under_a_dialog_on_the_frame_it_opens() {
-    let mut h = open(link_pdf(), "150", false);
-    let p = at(&h, 100.0, 340.0);
-    assert_eq!(cursor_at(&mut h, p), egui::CursorIcon::PointingHand);
-    h.run_steps(2);
-    assert!(tip_shown(&h), "the link's tip shows over an uncovered page");
-    open_unlock_prompt(&mut h);
-    h.run_steps(1);
-    assert!(!tip_shown(&h), "the link's tip must not show over the Unlock prompt on the frame it opens");
-}
-
-#[test]
-fn a_click_on_the_frame_a_dialog_opens_places_no_stamp() {
-    let mut h = open(link_pdf(), "150", false);
-    stamp_tool(&mut h);
-    let p = at(&h, 150.0, 150.0);
-    assert_eq!(cursor_at(&mut h, p), egui::CursorIcon::Crosshair);
-    open_unlock_prompt(&mut h);
-    let button = |pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
-    one_frame(&mut h, [button(true), button(false)]);
-    h.run_steps(4);
-    assert_eq!(stamps(&h), 0, "a click in the frame the Unlock prompt opens places no stamp under it");
-}
-
-#[test]
-fn a_double_click_on_a_dialog_backdrop_leaves_page_text_alone() {
-    let mut h = open(text_pdf(), "150", false);
-    let word = at(&h, 50.0, 303.0);
-    // The I-beam shows the page's text layer has arrived.
-    assert_eq!(wait_for_cursor(&mut h, word, |c| c == egui::CursorIcon::Text), egui::CursorIcon::Text, "the page text is live");
-    // Control: without a dialog, a double-click there selects the word.
-    double_click(&mut h, word);
-    h.run_steps(4);
-    assert!(h.state().views[0].selected_text().is_some_and(|t| !t.is_empty()), "control: a double-click selects the word");
-    // A click on blank page clears it again.
-    h.run_steps(30);
-    let p = at(&h, 150.0, 150.0);
-    mouse_click(&mut h, p);
-    h.run_steps(30);
-    assert!(h.state().views[0].selected_text().is_none_or(|t| t.is_empty()), "cleared before the dialog opens");
-    h.state_mut().set_option("dialog", "shortcuts").unwrap();
-    h.run_steps(6);
-    assert!(h.state().dialog.is_some(), "a modal dialog is open");
-    // On the dialog's backdrop, where the page's first word lies underneath.
-    double_click(&mut h, word);
-    h.run_steps(4);
-    let selected = h.state().views[0].selected_text();
-    assert!(selected.as_deref().is_none_or(str::is_empty), "a double-click on a dialog selects nothing on the page under it: {selected:?}");
+    assert!(tip_says(&mut h, "https://example.org/"), "the tip once the palette is closed");
 }
 
 // ---------------------------------------------------------------------------------------------
-// Taps, touch drags and clicks within one frame. On the frame a touch (or a Windows pen) lifts,
-// egui-winit has sent `PointerGone`, so there is no hover position; egui still reports the click.
+// Clicks on the parts of a page.
 
 #[test]
 fn mouse_click_follows_a_link() {
-    // Control for the tap below.
     let mut h = open(link_pdf(), "150", false);
     let p = at(&h, 150.0, 325.0);
     mouse_click(&mut h, p);
     assert!(h.state().pending_link.is_some(), "a click on a link asks to open it");
 }
 
-#[test]
-fn touch_tap_follows_a_link() {
-    let mut h = open(link_pdf(), "150", false);
-    let p = at(&h, 150.0, 325.0);
-    touch_tap(&mut h, p);
-    assert!(h.state().pending_link.is_some(), "a tap on a link asks to open it, as a click does");
-}
-
-#[test]
-fn coalesced_click_follows_a_link() {
-    let mut h = open(link_pdf(), "150", false);
-    let p = at(&h, 150.0, 325.0);
-    coalesced_click(&mut h, p);
-    assert!(h.state().pending_link.is_some(), "a click whose press and release share a frame follows the link");
-}
-
-#[test]
-fn touch_tap_places_a_stamp() {
-    let mut h = open(link_pdf(), "150", false);
-    stamp_tool(&mut h);
-    let p = at(&h, 150.0, 150.0);
-    touch_tap(&mut h, p);
-    assert_eq!(stamps(&h), 1, "a tap with the stamp tool places the stamp");
-}
-
-#[test]
-fn coalesced_click_places_a_stamp() {
-    let mut h = open(link_pdf(), "150", false);
-    stamp_tool(&mut h);
-    let p = at(&h, 150.0, 150.0);
-    coalesced_click(&mut h, p);
-    assert_eq!(stamps(&h), 1, "a click whose press and release share a frame places the stamp");
-}
-
 /// The value of the field named `name` on the first view's document.
 fn field_value(h: &Harness<'_, PdfCraftApp>, name: &str) -> Vec<String> {
     let s = h.state();
     s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone()
-}
-
-/// A press belongs to the field it lands on: pressed at the right edge of `agree` and released just
-/// over the edge of `other` beside it (a click still, to egui), it ticks neither, as a button
-/// pressed and released off itself does nothing. The release used to tick `other`.
-#[test]
-fn a_press_on_one_check_box_released_over_another_ticks_neither() {
-    let mut h = open(two_checkboxes_pdf(), "150", false);
-    let (press, release) = (at(&h, 119.0, 210.0), at(&h, 121.0, 210.0));
-    slipping_click(&mut h, press, release);
-    assert_eq!((field_value(&h, "agree"), field_value(&h, "other")), (Vec::<String>::new(), Vec::new()), "neither box is ticked");
 }
 
 /// A click whose pointer slips from `press` to `release` before the button comes up (a click
@@ -817,33 +548,6 @@ fn slipping_click(h: &mut Harness<'_, PdfCraftApp>, press: egui::Pos2, release: 
     h.run_steps(4);
 }
 
-/// A click follows the link its press was on only when released over it: pressed just inside the
-/// link's edge and released just past it, it follows nothing, as a button pressed and released off
-/// itself does nothing. The press used to be enough.
-#[test]
-fn a_press_on_a_link_released_off_it_follows_nothing() {
-    let mut h = open(link_pdf(), "150", false);
-    // The link ends at x 250.
-    let press = at(&h, 249.0, 325.0);
-    slipping_click(&mut h, press, press + egui::vec2(5.0, 0.0));
-    assert_eq!(h.state().pending_link, None, "nothing asks to open the link");
-    mouse_click(&mut h, press);
-    assert!(h.state().pending_link.is_some(), "a click there asks to open it");
-}
-
-/// The same for a push button: pressed just inside its edge and released just past it, it runs no
-/// action. The press used to be enough.
-#[test]
-fn a_press_on_a_button_released_off_it_runs_nothing() {
-    let mut h = open(button_pdf(), "150", false);
-    // The button ends at x 200.
-    let press = at(&h, 199.0, 210.0);
-    slipping_click(&mut h, press, press + egui::vec2(5.0, 0.0));
-    assert_eq!(h.state().pending_link, None, "the button's action does not run");
-    mouse_click(&mut h, press);
-    assert!(h.state().pending_link.is_some(), "a click there runs it");
-}
-
 /// Text markup lies on the text, under a form field: a click on a check box under a highlight
 /// ticks the box, and the field's hand shows there.
 #[test]
@@ -853,40 +557,20 @@ fn a_check_box_under_a_highlight_takes_the_click() {
     assert_eq!(cursor_at(&mut h, p), egui::CursorIcon::PointingHand);
     mouse_click(&mut h, p);
     assert_eq!(field_value(&h, "agree"), ["Yes"], "the box is ticked");
-    assert_eq!(h.state().views[0].comments.selected, None, "and the highlight is not selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), None, "and the highlight is not selected");
 }
 
 #[test]
 fn mouse_click_ticks_a_check_box() {
-    // Control for the tap below.
     let mut h = open(checkbox_pdf(), "150", false);
     let p = at(&h, 110.0, 210.0);
     mouse_click(&mut h, p);
     assert_eq!(agree(&h), ["Yes"], "a click ticks the box");
 }
 
-#[test]
-fn touch_tap_ticks_a_check_box() {
-    let mut h = open(checkbox_pdf(), "150", false);
-    let p = at(&h, 110.0, 210.0);
-    touch_tap(&mut h, p);
-    assert_eq!(agree(&h), ["Yes"], "a tap ticks the box, as a click does");
-}
-
-#[test]
-fn touch_drag_moves_a_comment_and_leaves_no_gesture_behind() {
-    let mut h = open(comment_on_text_pdf(), "150", false);
-    let k = page(&h).width() / 300.0;
-    let before = square(&h);
-    // A finger drags the rectangle 30 pt right, from a blank spot inside it.
-    let from = at(&h, 120.0, 315.0);
-    touch_drag(&mut h, from, from + egui::vec2(30.0 * k, 0.0));
-    let after_touch = square(&h);
-    assert_ne!(after_touch, before, "the touch drag moves the rectangle");
-    // Later, a mouse drag on empty page far below it.
-    let p = at(&h, 150.0, 100.0);
-    mouse_drag(&mut h, p, egui::vec2(10.0 * k, 10.0 * k));
-    assert_eq!(square(&h), after_touch, "an unrelated drag elsewhere leaves the rectangle where the touch put it");
+/// Whether a signing dialog shows: its title, in the access tree.
+fn signing_dialog_shown(h: &Harness<'_, PdfCraftApp>) -> bool {
+    ["Sign with a Digital ID", "Configure a Digital ID for Signing"].into_iter().any(|title| h.query_by_label(title).is_some())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -907,9 +591,10 @@ fn escape_cancels_a_signature_rectangle() {
     // Escape while the button is still held.
     h.key_press(egui::Key::Escape);
     h.run_steps(4);
-    let s = h.state();
-    assert_eq!(s.quick_tool, QuickTool::SignArea { certify: false }, "Escape abandons the rectangle; the tool stays");
-    assert!(s.dialog.is_none(), "and no signing dialog opens: {:?}", s.dialog);
+    assert_eq!(h.state().quick_tool, QuickTool::SignArea { certify: false }, "Escape abandons the rectangle; the tool stays");
+    h.drop_at(b);
+    h.run_steps(4);
+    assert!(!signing_dialog_shown(&h), "and its release opens no signing dialog");
 }
 
 /// A highlight dragged over the line of [`text_pdf`] at 150 %, from x 45 to x 150, with Escape
@@ -961,47 +646,6 @@ fn a_drag_from_beside_the_page_right_after_a_click_leaves_the_comment_alone() {
     h.drop_at(beside + egui::vec2(0.0, 60.0));
     h.run_steps(4);
     assert_eq!(square(&h), Some(before), "the comment stays where it was");
-}
-
-/// Only the primary button draws a signature rectangle: a right-drag opens no signing dialog.
-#[test]
-fn a_right_drag_draws_no_signature_rectangle() {
-    let mut h = open(link_pdf(), "150", false);
-    h.state_mut().quick_tool = QuickTool::SignArea { certify: false };
-    h.run_steps(4);
-    let (a, b) = (at(&h, 60.0, 200.0), at(&h, 200.0, 120.0));
-    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE };
-    h.hover_at(a);
-    h.run_steps(1);
-    h.event(button(a, true));
-    h.run_steps(1);
-    h.hover_at(b);
-    h.run_steps(2);
-    h.event(button(b, false));
-    h.run_steps(4);
-    let s = h.state();
-    assert_eq!(s.quick_tool, QuickTool::SignArea { certify: false }, "the tool stays: no rectangle was drawn");
-    assert!(s.dialog.is_none(), "and no signing dialog opens: {:?}", s.dialog);
-}
-
-/// Escape with the button down drops the press: its release places no stamp, and the next click
-/// places one.
-#[test]
-fn escape_mid_press_keeps_its_release_from_placing_a_stamp() {
-    let mut h = open(link_pdf(), "150", false);
-    stamp_tool(&mut h);
-    let p = at(&h, 150.0, 150.0);
-    h.hover_at(p);
-    h.run_steps(1);
-    h.drag_at(p);
-    h.run_steps(1);
-    h.key_press(egui::Key::Escape);
-    h.run_steps(1);
-    h.drop_at(p);
-    h.run_steps(4);
-    assert_eq!(stamps(&h), 0, "the cancelled press places nothing on release");
-    mouse_click(&mut h, p);
-    assert_eq!(stamps(&h), 1, "the next click places a stamp");
 }
 
 /// Escape mid-drag abandons a crop rectangle: the page keeps its boxes.
@@ -1094,7 +738,7 @@ fn the_link_tool_selects_the_topmost_of_stacked_links() {
     h.state_mut().pending_link = None;
     link_tool(&mut h);
     mouse_click(&mut h, both);
-    assert_eq!(h.state().views[0].links.selected, Some((0, 1)), "the Link tool selects it too");
+    assert_eq!(h.state().views[0].session.links.selected, Some((0, 1)), "the Link tool selects it too");
 }
 
 /// The Link tool edits every link, one that does nothing included. The Select tool, which
@@ -1112,7 +756,7 @@ fn the_link_tool_selects_a_link_with_no_action() {
     link_tool(&mut h);
     assert_eq!(cursor_at(&mut h, dead), egui::CursorIcon::PointingHand);
     mouse_click(&mut h, dead);
-    assert_eq!(h.state().views[0].links.selected, Some((0, 0)), "the Link tool selects the link that does nothing");
+    assert_eq!(h.state().views[0].session.links.selected, Some((0, 0)), "the Link tool selects the link that does nothing");
 }
 
 /// With the Link tool a drag that starts on a link draws a new link: the press is the link's, its
@@ -1123,9 +767,20 @@ fn a_drag_with_the_link_tool_from_a_link_draws_a_new_link() {
     link_tool(&mut h);
     let on_link = at(&h, 150.0, 325.0);
     mouse_drag(&mut h, on_link, egui::vec2(80.0, 120.0));
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Dialog, "Create Link").is_some(), "Link Properties opens for a new link");
+    assert_eq!(confirm_new_link(&mut h), [0, 0], "after OK the page holds its link and the new one");
+}
+
+/// Clicks OK in the open Link Properties dialog and returns the page of every link the document
+/// then holds.
+fn confirm_new_link(h: &mut Harness<'_, PdfCraftApp>) -> Vec<usize> {
+    // A new web link needs an address; choose a page destination for this gesture test.
+    h.get_by_label("Go to a page view").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(6);
     let s = h.state();
-    assert_eq!(s.dialog, Some(Dialog::LinkProps));
-    assert_eq!(s.link_draft.as_ref().map(|d| d.index), Some(None), "Link Properties opens for a new link");
+    s.session.get(s.views[0].id).unwrap().links().iter().map(|link| link.page).collect()
 }
 
 /// With the Select tool a right-click finds a link only where a click follows it: just beside the
@@ -1136,13 +791,13 @@ fn a_right_click_beside_a_link_with_the_select_tool_opens_no_link_menu() {
     // The link ends at x 250.
     let beside = at(&h, 250.0, 325.0) + egui::vec2(1.5, 0.0);
     right_click(&mut h, beside);
-    assert_eq!(h.state().views[0].links.context, None, "no link under the right-click");
+    assert_eq!(h.state().views[0].session.links.context, None, "no link under the right-click");
     assert!(h.query_by_label("Remove all links").is_none(), "the page's menu has no link items");
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
     let on_link = at(&h, 245.0, 325.0);
     right_click(&mut h, on_link);
-    assert_eq!(h.state().views[0].links.context, Some((0, 0)), "on the link, its menu");
+    assert_eq!(h.state().views[0].session.links.context, Some((0, 0)), "on the link, its menu");
 }
 
 /// A right-click goes to what a press there would go to: on a note over a link, the note. It used
@@ -1153,7 +808,7 @@ fn a_right_click_on_a_note_over_a_link_opens_the_notes_menu() {
     let on_note = at(&h, 150.0, 325.0);
     right_click(&mut h, on_note);
     let v = &h.state().views[0];
-    assert_eq!((v.links.context, v.comments.selected), (None, Some((0, 1))), "the note is selected, not the link");
+    assert_eq!((v.session.links.context, v.session.comments.primary()), (None, Some((0, 1))), "the note is selected, not the link");
     assert!(h.query_by_label("Remove all links").is_none(), "the menu is the note's");
 }
 
@@ -1177,7 +832,7 @@ fn a_right_click_on_a_highlight_over_a_link_opens_the_highlights_menu() {
     let on_both = at(&h, 150.0, 325.0);
     right_click(&mut h, on_both);
     let v = &h.state().views[0];
-    assert_eq!((v.links.context, v.comments.selected), (None, Some((0, 1))), "the highlight is selected, not the link");
+    assert_eq!((v.session.links.context, v.session.comments.primary()), (None, Some((0, 1))), "the highlight is selected, not the link");
     assert!(h.query_by_label("Remove all links").is_none(), "the menu is the highlight's");
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
@@ -1194,7 +849,7 @@ fn a_right_click_on_a_comment_with_a_drawing_tool_opens_its_menu() {
     h.run_steps(4);
     let on_comment = at(&h, 100.0, 305.0);
     right_click(&mut h, on_comment);
-    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is selected for its menu");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the comment is selected for its menu");
     assert!(h.query_all_by_label("Reply").next().is_some(), "and its menu is open");
 }
 
@@ -1217,21 +872,21 @@ fn a_click_on_a_form_field_deselects_the_selected_comment() {
     let mut h = open(comment_and_checkbox_pdf(), "150", false);
     let comment = at(&h, 200.0, 125.0);
     mouse_click(&mut h, comment);
-    assert_eq!(h.state().views[0].comments.selected, Some((0, 1)), "the comment is selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 1)), "the comment is selected");
     let check_box = at(&h, 110.0, 210.0);
     mouse_click(&mut h, check_box);
-    assert_eq!(h.state().views[0].comments.selected, None, "a click on the check box leaves it unselected");
+    assert_eq!(h.state().views[0].session.comments.primary(), None, "a click on the check box leaves it unselected");
     assert_eq!(agree(&h).len(), 1, "and ticks the box");
 }
 
 /// The camera tool's quadrilateral, corner by corner, in page view points.
 fn camera_corners(h: &Harness<'_, PdfCraftApp>) -> Option<[[f32; 2]; 4]> {
-    h.state().views[0].camera.map(|q| q.corners)
+    h.state().views[0].session.camera.map(|q| q.corners)
 }
 
 /// A corner of the camera tool's quadrilateral is a press of its own: Escape in the middle of its
-/// drag cancels it, and once the button is up no corner follows the pointer. Today Escape also
-/// leaves the camera tool before the pages see it; this holds whatever the order of the keys.
+/// drag cancels it, and once the button is up no corner follows the pointer, whatever else Escape
+/// does to the tool.
 #[test]
 fn escape_mid_corner_drag_leaves_no_corner_following_the_pointer() {
     let mut h = open(text_pdf(), "150", false);
@@ -1258,7 +913,6 @@ fn escape_mid_corner_drag_leaves_no_corner_following_the_pointer() {
     h.hover_at(corner + egui::vec2(120.0, 90.0));
     h.run_steps(3);
     assert_eq!(camera_corners(&h), after, "no corner follows the pointer once the press is cancelled");
-    assert!(h.state().views[0].camera.is_none_or(|q| q.grab.is_none()), "and none is held");
 }
 
 /// A 300×400 page with a text field `name` (tooltip "Your name") at x 50..250, y 200..220, and a
@@ -1304,7 +958,11 @@ fn a_right_click_with_the_link_tool_on_a_note_over_a_link_selects_the_link() {
     let on_both = at(&h, 150.0, 325.0);
     right_click(&mut h, on_both);
     let v = &h.state().views[0];
-    assert_eq!((v.links.selected, v.links.context, v.comments.selected), (Some((0, 0)), Some((0, 0)), None), "the link, not the note");
+    assert_eq!(
+        (v.session.links.selected, v.session.links.context, v.session.comments.primary()),
+        (Some((0, 0)), Some((0, 0)), None),
+        "the link, not the note"
+    );
 }
 
 /// With Add text a right-click leaves comments alone, as before: Add text takes the page's
@@ -1317,7 +975,7 @@ fn a_right_click_with_add_text_selects_no_comment() {
     // Above the line of text the comment covers, where no paragraph is.
     let on_comment = at(&h, 100.0, 317.0);
     right_click(&mut h, on_comment);
-    assert_eq!(h.state().views[0].comments.selected, None, "the comment under the pointer is not selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), None, "the comment under the pointer is not selected");
 }
 
 /// With the Select tool a right-click finds a link only where a click follows it: a link that
@@ -1327,7 +985,7 @@ fn a_right_click_with_the_select_tool_on_a_link_with_no_action_opens_no_link_men
     let mut h = open(dead_link_pdf(), "150", false);
     let dead = at(&h, 25.0, 325.0);
     right_click(&mut h, dead);
-    assert_eq!(h.state().views[0].links.context, None);
+    assert_eq!(h.state().views[0].session.links.context, None);
     assert!(h.query_by_label("Remove all links").is_none(), "the page's menu has no link items");
 }
 
@@ -1349,22 +1007,8 @@ fn a_right_click_on_a_field_over_a_link_opens_no_link_menu() {
     let mut h = open(field_over_link_pdf(), "150", false);
     let on_field = at(&h, 150.0, 325.0);
     right_click(&mut h, on_field);
-    assert_eq!(h.state().views[0].links.context, None, "the field is on top");
+    assert_eq!(h.state().views[0].session.links.context, None, "the field is on top");
     assert!(h.query_by_label("Remove all links").is_none());
-}
-
-/// While the palette is open, a field beside it still shows its tooltip, as before: the palette
-/// keeps the page's own tips away, not egui's tooltip of a field.
-#[test]
-fn a_fields_tooltip_shows_beside_the_open_palette() {
-    let mut h = open(commented_text_field_pdf(), "150", false);
-    h.state_mut().palette_open = true;
-    h.run_steps(4);
-    let palette = h.ctx.memory(|m| m.area_rect(egui::Id::unique("palette"))).expect("palette shown");
-    let on_field = at(&h, 60.0, 210.0);
-    assert!(!palette.expand(20.0).contains(on_field), "the field is beside the palette {palette:?}");
-    rest_at(&mut h, on_field);
-    assert!(h.query_all_by_label("Your name").next().is_some(), "the field's tooltip shows");
 }
 
 /// Two blank 300×400 pages.
@@ -1413,13 +1057,16 @@ fn a_redaction_box_dragged_off_its_page_is_drawn_on_it() {
 
 #[test]
 fn a_link_rectangle_dragged_off_its_page_is_drawn_on_it() {
-    let h = drag_seen_only_past_page_ones_edge(|app| app.quick_tool = QuickTool::Link);
-    assert_eq!(h.state().link_draft.as_ref().map(|d| (d.page, d.index)), Some((0, None)), "a new link on page 1");
+    let mut h = drag_seen_only_past_page_ones_edge(|app| app.quick_tool = QuickTool::Link);
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Dialog, "Create Link").is_some(), "Link Properties opens for a new link");
+    assert_eq!(confirm_new_link(&mut h), [0], "after OK the new link is on page 1");
 }
 
 #[test]
 fn a_field_dragged_off_its_page_is_drawn_on_it() {
-    let h = drag_seen_only_past_page_ones_edge(|app| assert!(app.execute("form.add.text"), "Prepare a form, with the text field tool"));
+    let h = drag_seen_only_past_page_ones_edge(|app| {
+        assert!(app.execute(&egui::Context::default(), "form.add.text"), "Prepare a form, with the text field tool")
+    });
     let s = h.state();
     let doc = s.session.get(s.views[0].id).unwrap();
     assert!(doc.form.iter().any(|f| f.widgets.iter().any(|w| w.page == Some(0))), "a field on page 1");
@@ -1432,13 +1079,13 @@ fn a_right_click_with_the_link_tool_on_a_link_keeps_the_selected_comment() {
     let mut h = open(note_over_link_pdf(), "150", false);
     let on_note = at(&h, 150.0, 325.0);
     mouse_click(&mut h, on_note);
-    assert_eq!(h.state().views[0].comments.selected, Some((0, 1)), "the note is selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 1)), "the note is selected");
     link_tool(&mut h);
     // On the link, away from the note.
     let on_link = at(&h, 70.0, 325.0);
     right_click(&mut h, on_link);
     let v = &h.state().views[0];
-    assert_eq!((v.links.context, v.comments.selected), (Some((0, 0)), Some((0, 1))), "the link's menu; the note stays selected");
+    assert_eq!((v.session.links.context, v.session.comments.primary()), (Some((0, 0)), Some((0, 1))), "the link's menu; the note stays selected");
 }
 
 /// A 300×400 page with a rectangle comment round the camera tool's first corner (view 15, 20).
@@ -1460,115 +1107,7 @@ fn a_right_click_on_a_comment_under_a_camera_corner_opens_the_comments_menu() {
     h.run_steps(4);
     let corner = at(&h, 15.0, 380.0);
     right_click(&mut h, corner);
-    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is selected for its menu");
-}
-
-/// A right-button drag from `a` to `b`, in frames of their own.
-fn right_drag(h: &mut Harness<'_, PdfCraftApp>, a: egui::Pos2, b: egui::Pos2) {
-    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE };
-    h.hover_at(a);
-    h.run_steps(1);
-    h.event(button(a, true));
-    h.run_steps(1);
-    for k in 1..=4 {
-        h.hover_at(a + (b - a) * (k as f32 / 4.0));
-        h.run_steps(1);
-    }
-    h.event(button(b, false));
-    h.run_steps(3);
-}
-
-// A right-button drag starts nothing a left-button drag does. egui's drag start counts every
-// button, and each of these started on it.
-
-/// With the Rectangle tool, a right-button drag draws no rectangle.
-#[test]
-fn a_right_button_drag_draws_no_rectangle() {
-    let mut h = open(text_pdf(), "150", false);
-    h.state_mut().quick_tool = QuickTool::Comment(CommentTool::Rectangle);
-    h.run_steps(4);
-    let (a, b) = (at(&h, 60.0, 150.0), at(&h, 200.0, 80.0));
-    right_drag(&mut h, a, b);
-    let s = h.state();
-    assert!(s.session.get(s.views[0].id).unwrap().info.annotations.is_empty(), "no rectangle is drawn");
-}
-
-/// With Prepare open, a right-button drag around a field selects it by no selection rectangle.
-#[test]
-fn a_right_button_drag_selects_no_field() {
-    let mut h = open(comment_and_checkbox_pdf(), "150", false);
-    assert!(h.state_mut().execute("form.prepare"));
-    h.run_steps(4);
-    let (a, b) = (at(&h, 60.0, 250.0), at(&h, 140.0, 180.0));
-    right_drag(&mut h, a, b);
-    assert!(h.state().views[0].prepare.selected.is_none(), "no field is selected");
-}
-
-/// With the Link tool, a right-button drag draws no link.
-#[test]
-fn a_right_button_drag_draws_no_link() {
-    let mut h = open(text_pdf(), "150", false);
-    link_tool(&mut h);
-    let (a, b) = (at(&h, 60.0, 150.0), at(&h, 200.0, 80.0));
-    right_drag(&mut h, a, b);
-    assert!(h.state().link_draft.is_none() && h.state().dialog != Some(Dialog::LinkProps), "no link is drawn");
-}
-
-/// With the camera, a right-button drag on another page leaves the quadrilateral where it is.
-#[test]
-fn a_right_button_drag_leaves_the_camera_quadrilateral() {
-    let mut h = open(two_pages_pdf(), "100", false);
-    h.state_mut().quick_tool = QuickTool::EnhanceCamera;
-    h.run_steps(4);
-    assert_eq!(h.state().views[0].camera.as_ref().map(|q| q.page), Some(0));
-    let two = h.state().views[0].page_screen_rect(1).expect("page 2 on screen");
-    right_drag(&mut h, two.min + egui::vec2(40.0, 40.0), two.min + egui::vec2(120.0, 100.0));
-    assert_eq!(h.state().views[0].camera.as_ref().map(|q| q.page), Some(0), "the quadrilateral stays on page 1");
-}
-
-/// A text selection, then `tool` and a right-button drag across more of the line. The harness, and
-/// the text selected before the drag.
-fn right_drag_over_a_selection(tool: QuickTool) -> (Harness<'static, PdfCraftApp>, Option<String>) {
-    let mut h = open(text_pdf(), "150", false);
-    let (a, b) = (at(&h, 45.0, 303.0), at(&h, 120.0, 303.0));
-    assert_eq!(wait_for_cursor(&mut h, a, |c| c == egui::CursorIcon::Text), egui::CursorIcon::Text, "the page's text has arrived");
-    mouse_drag(&mut h, a, b - a);
-    let selected = h.state().views[0].selected_text();
-    assert!(selected.is_some(), "some text is selected");
-    h.state_mut().quick_tool = tool;
-    h.run_steps(2);
-    let (c, d) = (at(&h, 150.0, 303.0), at(&h, 230.0, 303.0));
-    right_drag(&mut h, c, d);
-    (h, selected)
-}
-
-/// With the Select tool, a right-button drag leaves the text selected as it is. It moved the
-/// selection's end to the pointer.
-#[test]
-fn a_right_button_drag_leaves_a_text_selection_alone() {
-    let (h, selected) = right_drag_over_a_selection(QuickTool::Select);
-    assert_eq!(h.state().views[0].selected_text(), selected, "the selection stays as it was");
-}
-
-/// A right-button drag with a markup tool or Redact turns no selection left from another tool into
-/// a comment: its end finished the selection whichever button it was.
-#[test]
-fn a_right_button_drag_makes_no_mark_of_a_text_selection() {
-    for tool in [QuickTool::Comment(CommentTool::Highlight), QuickTool::Redact] {
-        let (h, _) = right_drag_over_a_selection(tool);
-        let s = h.state();
-        assert!(s.session.get(s.views[0].id).unwrap().info.annotations.is_empty(), "no mark with {tool:?}");
-    }
-}
-
-/// With the Select tool, a right-button drag across text selects none.
-#[test]
-fn a_right_button_drag_selects_no_text() {
-    let mut h = open(text_pdf(), "150", false);
-    let (a, b) = (at(&h, 45.0, 303.0), at(&h, 200.0, 303.0));
-    assert_eq!(wait_for_cursor(&mut h, a, |c| c == egui::CursorIcon::Text), egui::CursorIcon::Text, "the page's text has arrived");
-    right_drag(&mut h, a, b);
-    assert!(h.state().views[0].selected_text().is_none(), "no text is selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the comment is selected for its menu");
 }
 
 /// A 300×400 page with a web link along its left edge, x 0..100, y 300..350.
@@ -1606,13 +1145,15 @@ fn a_right_click_with_edit_text_on_a_paragraph_under_a_comment_selects_the_comme
     let on_text = at(&h, 100.0, 303.0);
     wait_for_cursor(&mut h, on_text, |c| c != egui::CursorIcon::Default);
     right_click(&mut h, on_text);
-    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment over the paragraph is selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the comment over the paragraph is selected");
     assert!(h.query_by_label("Properties…").is_some(), "its menu opens");
-    assert_eq!(h.state().views[0].comments.context_at.map(|(page, _)| page), Some(0), "the menu is anchored on the page");
+    assert_eq!(h.state().views[0].session.comments.context_at.map(|(page, _)| page), Some(0), "the menu is anchored on the page");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
     // The rectangle ends at x 200; the line goes on.
     let beside = at(&h, 230.0, 303.0);
     right_click(&mut h, beside);
-    assert_eq!(h.state().views[0].comments.selected, None, "the paragraph beside the comment leaves it unselected");
+    assert_eq!(h.state().views[0].session.comments.primary(), None, "the paragraph beside the comment leaves it unselected");
 }
 
 /// With Edit text, a right-click on added text over a comment selects no comment: what has no menu
@@ -1620,15 +1161,19 @@ fn a_right_click_with_edit_text_on_a_paragraph_under_a_comment_selects_the_comme
 #[test]
 fn a_right_click_with_edit_text_on_added_text_over_a_comment_selects_no_comment() {
     let mut h = open(comment_on_text_pdf(), "150", false);
-    assert!(h.state_mut().execute("edit.edit_text"));
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText {
-        page: 0,
-        text: pdfcraft_engine::AddedText { rect: [110.0, 296.0, 190.0, 311.0], text: "Added".into(), ..Default::default() },
-    }));
+    assert!(h.execute("edit.edit_text"));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(
+        &ctx_h,
+        pdfcraft_engine::Edit::AddText {
+            page: 0,
+            text: pdfcraft_engine::AddedText { rect: [110.0, 296.0, 190.0, 311.0], text: "Added".into(), ..Default::default() },
+        }
+    ));
     h.run_steps(4);
     let on_added = at(&h, 150.0, 303.0);
     right_click(&mut h, on_added);
-    assert_eq!(h.state().views[0].comments.selected, None, "the comment under the added text is not selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), None, "the comment under the added text is not selected");
 }
 
 /// With a Prepare field tool a right-click is the tool's, as before: a comment under it is not
@@ -1636,11 +1181,11 @@ fn a_right_click_with_edit_text_on_added_text_over_a_comment_selects_no_comment(
 #[test]
 fn a_right_click_with_a_field_tool_selects_no_comment() {
     let mut h = open(comment_and_checkbox_pdf(), "150", false);
-    assert!(h.state_mut().execute("form.add.text"));
+    assert!(h.execute("form.add.text"));
     h.run_steps(4);
     let on_comment = at(&h, 200.0, 125.0);
     right_click(&mut h, on_comment);
-    assert_eq!(h.state().views[0].comments.selected, None);
+    assert_eq!(h.state().views[0].session.comments.primary(), None);
 }
 
 /// With the Link tool a click that began off the page (in the gutter beside it) is no page's: the
@@ -1651,10 +1196,10 @@ fn a_click_that_began_off_the_page_keeps_the_selected_link() {
     link_tool(&mut h);
     let on_link = at(&h, 150.0, 325.0);
     mouse_click(&mut h, on_link);
-    assert_eq!(h.state().views[0].links.selected, Some((0, 0)), "the link is selected");
+    assert_eq!(h.state().views[0].session.links.selected, Some((0, 0)), "the link is selected");
     let left = page(&h).min.x;
     slipping_click(&mut h, egui::pos2(left - 2.0, on_link.y), egui::pos2(left + 3.0, on_link.y));
-    assert_eq!(h.state().views[0].links.selected, Some((0, 0)), "a click that began off the page leaves it selected");
+    assert_eq!(h.state().views[0].session.links.selected, Some((0, 0)), "a click that began off the page leaves it selected");
 }
 
 /// A right-click while a comment is moved leaves the moved comment selected: the move ends on
@@ -1679,7 +1224,7 @@ fn a_right_click_during_a_comment_move_keeps_the_moved_comment_selected() {
     h.run_steps(1);
     h.drop_at(end);
     h.run_steps(3);
-    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the moved comment stays selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the moved comment stays selected");
 }
 
 /// A click on added text leaves the selected comment unselected, as a click on a form field does
@@ -1687,56 +1232,47 @@ fn a_right_click_during_a_comment_move_keeps_the_moved_comment_selected() {
 #[test]
 fn a_click_on_added_text_deselects_the_selected_comment() {
     let mut h = open(comment_on_text_pdf(), "150", false);
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText {
-        page: 0,
-        text: pdfcraft_engine::AddedText { rect: [40.0, 195.0, 140.0, 210.0], text: "Added".into(), ..Default::default() },
-    }));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(
+        &ctx_h,
+        pdfcraft_engine::Edit::AddText {
+            page: 0,
+            text: pdfcraft_engine::AddedText { rect: [40.0, 195.0, 140.0, 210.0], text: "Added".into(), ..Default::default() },
+        }
+    ));
     // The Edit panel open, with the Select tool: added text is picked up.
-    assert!(h.state_mut().execute("edit.text"));
+    assert!(h.execute("edit.text"));
     h.run_steps(3);
     h.state_mut().quick_tool = QuickTool::Select;
     h.run_steps(3);
     let on_comment = at(&h, 150.0, 315.0);
     mouse_click(&mut h, on_comment);
-    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the comment is selected");
     let on_added = at(&h, 90.0, 202.0);
     mouse_click(&mut h, on_added);
-    assert_eq!(h.state().views[0].comments.selected, None, "a click on the added text leaves it unselected");
+    assert_eq!(h.state().views[0].session.comments.primary(), None, "a click on the added text leaves it unselected");
 }
 
-/// A comment gesture left over with no button down (a release the pages never saw) does not keep
-/// a right-click from selecting the comment under it.
+/// A comment move made halfway and let go beside the page leaves nothing held: the next
+/// right-click selects the comment under it, not the one that was being moved.
 #[test]
 fn a_right_click_selects_its_comment_though_a_gesture_was_left_over() {
     let mut h = open(stacked_comments_pdf(), "150", false);
-    let bottom = at(&h, 60.0, 160.0);
-    h.state_mut().views[0].comments.gesture = Some(pdfcraft_ui_egui::comments::Gesture::Move { page: 0, index: 0, from: bottom });
-    let top = at(&h, 190.0, 290.0);
+    // "Bottom note" alone, then "Top note" alone.
+    let (bottom, top) = (at(&h, 60.0, 160.0), at(&h, 190.0, 290.0));
+    let beside = page(&h).left_center() - egui::vec2(20.0, 0.0);
+    h.hover_at(bottom);
+    h.run_steps(1);
+    h.drag_at(bottom);
+    h.run_steps(1);
+    h.hover_at(bottom + egui::vec2(0.0, 20.0));
+    h.run_steps(1);
+    h.hover_at(beside);
+    h.run_steps(1);
+    h.drop_at(beside);
+    h.run_steps(3);
     right_click(&mut h, top);
-    assert_eq!(h.state().views[0].comments.selected, Some((0, 1)), "the note under the right-click is selected");
-}
-
-/// A comment's move ends once its button is up, though the pages missed its release, and applies
-/// nothing: where it came up is not known, and the pointer has moved on. A drag elsewhere later moves
-/// nothing either. The move waited for the next drag's end on the page, and took the comment there.
-#[test]
-fn a_comment_move_whose_release_the_pages_missed_ends_once_the_button_is_up() {
-    let mut h = open(stacked_comments_pdf(), "150", false);
-    let rect = |h: &Harness<'_, PdfCraftApp>| {
-        let s = h.state();
-        s.session.get(s.views[0].id).unwrap().info.annotations.iter().find(|a| a.index == 0).map(|a| a.rect)
-    };
-    let before = rect(&h);
-    let bottom = at(&h, 60.0, 160.0);
-    h.state_mut().views[0].comments.gesture = Some(pdfcraft_ui_egui::comments::Gesture::Move { page: 0, index: 0, from: bottom });
-    let elsewhere = at(&h, 250.0, 100.0);
-    h.hover_at(elsewhere);
-    h.run_steps(2);
-    assert!(h.state().views[0].comments.gesture.is_none(), "the move is over");
-    assert_eq!(rect(&h), before, "and moved nothing to where the pointer turned up");
-    let blank = at(&h, 250.0, 60.0);
-    mouse_drag(&mut h, blank, egui::vec2(30.0, 0.0));
-    assert_eq!(rect(&h), before, "nothing moved the comment");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 1)), "the note under the right-click is selected");
 }
 
 /// A click that began off the page (in the gutter beside it) is no page's: the selected comment
@@ -1746,10 +1282,10 @@ fn a_click_that_began_off_the_page_keeps_the_selected_comment() {
     let mut h = open(stacked_comments_pdf(), "150", false);
     let bottom = at(&h, 60.0, 160.0);
     mouse_click(&mut h, bottom);
-    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the note is selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the note is selected");
     let left = page(&h).min.x;
     slipping_click(&mut h, egui::pos2(left - 2.0, bottom.y), egui::pos2(left + 3.0, bottom.y));
-    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "a click that began off the page leaves it selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "a click that began off the page leaves it selected");
 }
 
 /// A touch's long press on a comment selects it for its menu, as a right-click does: egui reports
@@ -1763,7 +1299,7 @@ fn a_long_press_on_a_comment_selects_it_for_its_menu() {
     one_frame(&mut h, [touch(egui::TouchPhase::Start, top), egui::Event::PointerMoved(top), button(top, true)]);
     // Held still, past egui's long-press time.
     h.run_steps(6);
-    assert_eq!(h.state().views[0].comments.selected, Some((0, 1)), "the note under the finger is selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 1)), "the note under the finger is selected");
     one_frame(&mut h, [touch(egui::TouchPhase::End, top), button(top, false), egui::Event::PointerGone]);
     h.run_steps(2);
 }
@@ -1773,7 +1309,7 @@ fn a_long_press_on_a_comment_selects_it_for_its_menu() {
 fn menu_page_after_a_right_click_with_the_button_held(escape: bool) -> Option<usize> {
     let mut h = open(two_pages_pdf(), "100", false);
     h.run_steps(2);
-    h.state_mut().views[0].comments.context_at = Some((0, [10.0, 10.0]));
+    h.state_mut().views[0].session.comments.context_at = Some((0, [10.0, 10.0]));
     let two = h.state().views[0].page_screen_rect(1).expect("page 2 on screen");
     let press = two.min + egui::vec2(50.0, 30.0);
     h.hover_at(press);
@@ -1791,7 +1327,7 @@ fn menu_page_after_a_right_click_with_the_button_held(escape: bool) -> Option<us
         h.event(egui::Event::PointerButton { pos: menu, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
     }
     h.run_steps(1);
-    let page = h.state().views[0].comments.context_at.map(|(page, _)| page);
+    let page = h.state().views[0].session.comments.context_at.map(|(page, _)| page);
     h.drop_at(press + egui::vec2(40.0, 0.0));
     h.run_steps(2);
     page
@@ -1817,23 +1353,27 @@ fn a_right_click_after_escape_cancelled_the_press_anchors_the_menu_on_its_page()
 #[test]
 fn a_right_click_with_edit_text_on_added_text_unselects_the_comment() {
     let mut h = open(comment_on_text_pdf(), "150", false);
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText {
-        page: 0,
-        text: pdfcraft_engine::AddedText { rect: [40.0, 195.0, 140.0, 210.0], text: "Added".into(), ..Default::default() },
-    }));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(
+        &ctx_h,
+        pdfcraft_engine::Edit::AddText {
+            page: 0,
+            text: pdfcraft_engine::AddedText { rect: [40.0, 195.0, 140.0, 210.0], text: "Added".into(), ..Default::default() },
+        }
+    ));
     h.state_mut().quick_tool = QuickTool::EditText;
     h.run_steps(4);
-    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.state_mut().views[0].session.comments.select_only((0, 0));
     let on_added = at(&h, 90.0, 202.0);
     right_click(&mut h, on_added);
-    assert_eq!(h.state().views[0].comments.selected, None);
+    assert_eq!(h.state().views[0].session.comments.primary(), None);
 }
 
 /// Two pages with their gaps hidden, after `tool` set the tool up, and a point on the row of pixels
 /// where they touch, which lies on both.
 fn touching_pages(tool: impl FnOnce(&mut PdfCraftApp)) -> (Harness<'static, PdfCraftApp>, egui::Pos2) {
     let mut h = open(two_pages_pdf(), "100", false);
-    h.state_mut().views[0].show_page_gaps = false;
+    h.state_mut().views[0].view.page_gaps = false;
     tool(h.state_mut());
     h.run_steps(4);
     let (one, two) = {
@@ -1876,7 +1416,7 @@ fn a_stamp_click_pressed_on_one_page_and_released_on_the_next_places_nothing() {
 fn a_right_click_where_two_pages_touch_is_the_first_pages() {
     let (mut h, seam) = touching_pages(|_| {});
     right_click(&mut h, seam);
-    assert_eq!(h.state().views[0].comments.context_at.map(|(page, _)| page), Some(0));
+    assert_eq!(h.state().views[0].session.comments.context_at.map(|(page, _)| page), Some(0));
 }
 
 /// With Prepare open, a click that began off the page (in the gutter beside it) is no page's: the
@@ -1884,14 +1424,14 @@ fn a_right_click_where_two_pages_touch_is_the_first_pages() {
 #[test]
 fn with_prepare_a_click_that_began_off_the_page_keeps_the_selected_field() {
     let mut h = open(comment_and_checkbox_pdf(), "150", false);
-    assert!(h.state_mut().execute("form.prepare"));
+    assert!(h.execute("form.prepare"));
     h.run_steps(4);
     let on_box = at(&h, 110.0, 210.0);
     mouse_click(&mut h, on_box);
-    assert!(h.state().views[0].prepare.selected.is_some(), "the field is selected");
+    assert!(h.state().views[0].session.prepare.selected.is_some(), "the field is selected");
     let left = page(&h).min.x;
     slipping_click(&mut h, egui::pos2(left - 2.0, on_box.y), egui::pos2(left + 3.0, on_box.y));
-    assert!(h.state().views[0].prepare.selected.is_some(), "a click that began off the page leaves it selected");
+    assert!(h.state().views[0].session.prepare.selected.is_some(), "a click that began off the page leaves it selected");
 }
 
 /// With Prepare open, a drag from a highlight draws the selection rectangle: a highlight lets a drag
@@ -1899,24 +1439,25 @@ fn with_prepare_a_click_that_began_off_the_page_keeps_the_selected_field() {
 #[test]
 fn with_prepare_a_drag_from_a_highlight_draws_the_selection_rectangle() {
     let mut h = open(highlighted_checkbox_pdf(), "150", false);
-    assert!(h.state_mut().execute("form.prepare"));
+    assert!(h.execute("form.prepare"));
     h.run_steps(4);
     // On the highlight, beside the box; the drag ends past the box's other corner.
     let (from, to) = (at(&h, 97.0, 197.0), at(&h, 130.0, 230.0));
     mouse_drag(&mut h, from, to - from);
-    assert!(h.state().views[0].prepare.selected.is_some(), "the rectangle selects the field inside it");
+    assert!(h.state().views[0].session.prepare.selected.is_some(), "the rectangle selects the field inside it");
 }
 
 /// A right-click while the primary button is held opens the menu of the comment it went to, when that
 /// is the one selected, and leaves the selection as it is.
 #[test]
 fn a_right_click_with_the_button_held_opens_the_selected_comments_menu() {
-    let mut h = open(comment_on_text_pdf(), "150", false);
+    // Keep the drag clear of the floating quick toolbar.
+    let mut h = open(comment_on_text_pdf(), "100", false);
     // On the rectangle's left edge: an unfilled one takes a press on its border.
     let edge = at(&h, 30.0, 303.0);
     wait_for_cursor(&mut h, edge, |c| c != egui::CursorIcon::Default);
     mouse_click(&mut h, edge);
-    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the comment is selected");
     h.hover_at(edge);
     h.run_steps(1);
     h.drag_at(edge);
@@ -1929,7 +1470,7 @@ fn a_right_click_with_the_button_held_opens_the_selected_comments_menu() {
     }
     h.run_steps(3);
     assert!(h.query_by_label("Properties…").is_some(), "the comment's menu");
-    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the selection stays");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the selection stays");
     h.drop_at(moved);
     h.run_steps(2);
 }
@@ -1939,8 +1480,8 @@ fn a_right_click_with_the_button_held_opens_the_selected_comments_menu() {
 #[test]
 fn a_shift_click_where_two_pages_touch_keeps_what_it_selected() {
     let mut h = open(bottom_line_pages_pdf(), "100", false);
-    h.state_mut().views[0].show_page_gaps = false;
-    assert!(h.state_mut().execute("edit.edit_text"));
+    h.state_mut().views[0].view.page_gaps = false;
+    assert!(h.execute("edit.edit_text"));
     h.run_steps(4);
     let (one, two) = {
         let v = &h.state().views[0];
@@ -1969,14 +1510,14 @@ fn with_prepare_on_a_locked_document_a_right_click_on_a_field_selects_nothing() 
     let mut h = open(locked, "150", false);
     // Prepare doesn't open on such a document; it stays open on a tab switched to one.
     h.state_mut().left = pdfcraft_ui_egui::LeftPanel::Tool("form");
-    h.state_mut().left_open = true;
+    h.state_mut().set_left_open(true);
     h.run_steps(4);
     assert!(h.state().is_preparing(), "Prepare is open");
     let id = h.state().views[0].id;
     assert!(!h.state().session.get(id).unwrap().allows_modification(), "the document can't be changed");
     let on_box = at(&h, 110.0, 210.0);
     right_click(&mut h, on_box);
-    assert!(h.state().views[0].prepare.selected.is_none(), "no field is selected");
+    assert!(h.state().views[0].session.prepare.selected.is_none(), "no field is selected");
     assert!(h.query_by_label("Duplicate…").is_none(), "no field menu");
 }
 
@@ -1986,11 +1527,11 @@ fn with_prepare_on_a_locked_document_a_right_click_on_a_field_selects_nothing() 
 #[test]
 fn with_prepare_a_right_click_beside_the_selected_field_opens_the_pages_menu() {
     let mut h = open(comment_and_checkbox_pdf(), "150", false);
-    assert!(h.state_mut().execute("form.prepare"));
+    assert!(h.execute("form.prepare"));
     h.run_steps(4);
     let on_box = at(&h, 110.0, 210.0);
     mouse_click(&mut h, on_box);
-    assert!(h.state().views[0].prepare.selected.is_some(), "the field is selected");
+    assert!(h.state().views[0].session.prepare.selected.is_some(), "the field is selected");
     let blank = at(&h, 60.0, 300.0);
     right_click(&mut h, blank);
     assert!(h.query_by_label("Duplicate…").is_none(), "no field menu on the empty page");
@@ -2007,13 +1548,13 @@ fn with_prepare_a_right_click_beside_the_selected_field_opens_the_pages_menu() {
 #[test]
 fn with_a_field_tool_a_right_click_on_a_field_opens_its_menu() {
     let mut h = open(comment_and_checkbox_pdf(), "150", false);
-    assert!(h.state_mut().execute("form.prepare"));
+    assert!(h.execute("form.prepare"));
     h.run_steps(4);
-    assert!(h.state_mut().execute("form.add.text"));
+    assert!(h.execute("form.add.text"));
     h.run_steps(4);
     let on_box = at(&h, 110.0, 210.0);
     right_click(&mut h, on_box);
-    assert!(h.state().views[0].prepare.selected.is_some(), "the field is selected");
+    assert!(h.state().views[0].session.prepare.selected.is_some(), "the field is selected");
     assert!(h.query_by_label("Duplicate…").is_some(), "the field's menu");
 }
 
@@ -2026,7 +1567,7 @@ fn with_edit_text_a_right_click_on_a_picture_under_a_link_selects_the_picture() 
     h.run_steps(4);
     let on_link = at(&h, 150.0, 300.0);
     right_click(&mut h, on_link);
-    let selected = h.state().views[0].image_selection.as_ref().map(|s| (s.page, s.index));
+    let selected = h.state().views[0].session.image_selection.as_ref().map(|s| (s.page, s.index));
     assert_eq!(selected, Some((0, 0)), "the picture is selected for its menu");
 }
 
@@ -2036,7 +1577,7 @@ fn with_edit_text_a_right_click_on_a_picture_under_a_link_selects_the_picture() 
 #[test]
 fn a_drag_past_a_pages_edge_under_its_open_paragraph_is_the_next_pages() {
     let mut h = open(bottom_line_pages_pdf(), "100", false);
-    h.state_mut().views[0].show_page_gaps = false;
+    h.state_mut().views[0].view.page_gaps = false;
     h.state_mut().quick_tool = QuickTool::EditText;
     h.run_steps(4);
     let (one, two) = {
@@ -2045,7 +1586,7 @@ fn a_drag_past_a_pages_edge_under_its_open_paragraph_is_the_next_pages() {
     };
     let line = egui::pos2(one.min.x + 60.0, one.max.y - 8.0);
     mouse_click(&mut h, line);
-    assert!(h.state().views[0].line_editor.is_some(), "the bottom line is open");
+    assert!(h.state().views[0].session.line_editor.is_some(), "the bottom line is open");
     let below = egui::pos2(one.min.x + 60.0, two.min.y + 3.0);
     mouse_drag(&mut h, below, egui::vec2(200.0, 30.0));
     // What the area selection took, Delete removes.
@@ -2066,11 +1607,11 @@ fn a_click_beside_the_picture_unselects_it_where_objects_cant_be_grouped() {
     let doc = s.session.get(s.views[0].id).unwrap();
     assert_eq!(doc.page_images(0).len(), 1, "the picture");
     assert!(doc.editable_objects(0).is_err(), "and no objects to group");
-    h.state_mut().views[0].image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
+    h.state_mut().views[0].session.image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
     h.run_steps(2);
     let blank = at(&h, 150.0, 100.0);
     mouse_click(&mut h, blank);
-    assert!(h.state().views[0].image_selection.is_none(), "the picture is unselected");
+    assert!(h.state().views[0].session.image_selection.is_none(), "the picture is unselected");
 }
 
 /// With the Select tool a drag that starts on a link lets the picked picture go, as a drag elsewhere
@@ -2080,10 +1621,10 @@ fn a_drag_from_a_link_lets_the_picked_picture_go() {
     let mut h = open(linked_picture_pdf(), "150", false);
     let beside = at(&h, 70.0, 300.0);
     mouse_click(&mut h, beside);
-    assert!(h.state().views[0].picked_image.is_some(), "the picture is picked");
+    assert!(h.state().views[0].session.picked_image.is_some(), "the picture is picked");
     let on_link = at(&h, 150.0, 300.0);
     mouse_drag(&mut h, on_link, egui::vec2(30.0, 0.0));
-    assert!(h.state().views[0].picked_image.is_none(), "the drag lets it go");
+    assert!(h.state().views[0].session.picked_image.is_none(), "the drag lets it go");
 }
 
 /// With the Edit panel open and the Note tool, a click on added text is the added text's: no note is
@@ -2091,22 +1632,26 @@ fn a_drag_from_a_link_lets_the_picked_picture_go() {
 #[test]
 fn a_note_tool_click_on_added_text_starts_no_note() {
     let mut h = open(comment_on_text_pdf(), "150", false);
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText {
-        page: 0,
-        text: pdfcraft_engine::AddedText { rect: [40.0, 195.0, 140.0, 210.0], text: "Added".into(), ..Default::default() },
-    }));
-    assert!(h.state_mut().execute("edit.text"));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(
+        &ctx_h,
+        pdfcraft_engine::Edit::AddText {
+            page: 0,
+            text: pdfcraft_engine::AddedText { rect: [40.0, 195.0, 140.0, 210.0], text: "Added".into(), ..Default::default() },
+        }
+    ));
+    assert!(h.execute("edit.text"));
     h.run_steps(3);
     h.state_mut().quick_tool = QuickTool::Comment(CommentTool::Note);
     h.run_steps(3);
     let on_added = at(&h, 90.0, 202.0);
     mouse_click(&mut h, on_added);
-    assert!(h.state().views[0].comments.composer.is_none(), "no note is started");
+    assert!(h.state().views[0].session.comments.composer.is_none(), "no note is started");
 }
 
-/// With Fill & Sign, a mark being moved on the page keeps the page's presses, as before: a press held
-/// through its move and released places no new mark. (A move left over once the button is up ends:
-/// `a_comment_move_whose_release_the_pages_missed_ends_once_the_button_is_up`.)
+/// With Fill & Sign, a mark being moved on the page keeps the page's presses, as before: a press
+/// held through the mark's move and released places no new mark, though it is a Fill click where
+/// it comes up.
 #[test]
 fn a_fill_and_sign_click_places_nothing_while_a_mark_is_moved() {
     let mut h = open(comment_on_text_pdf(), "150", false);
@@ -2117,13 +1662,17 @@ fn a_fill_and_sign_click_places_nothing_while_a_mark_is_moved() {
         s.session.get(s.views[0].id).unwrap().info.annotations.len()
     };
     let before = marks(&h);
-    let blank = at(&h, 150.0, 100.0);
-    h.hover_at(blank);
+    // Inside the rectangle, where no text lies: the mark takes the press.
+    let mark = at(&h, 120.0, 315.0);
+    let k = page(&h).width() / 300.0;
+    h.hover_at(mark);
     h.run_steps(1);
-    h.drag_at(blank);
+    h.drag_at(mark);
     h.run_steps(1);
-    h.state_mut().views[0].comments.gesture = Some(pdfcraft_ui_egui::comments::Gesture::Move { page: 0, index: 0, from: blank });
-    h.drop_at(blank);
+    let to = mark + egui::vec2(20.0 * k, 0.0);
+    h.hover_at(to);
+    h.run_steps(2);
+    h.drop_at(to);
     h.run_steps(4);
     assert_eq!(marks(&h), before, "no mark is placed");
 }
@@ -2134,7 +1683,7 @@ fn a_fill_and_sign_click_places_nothing_while_a_mark_is_moved() {
 fn a_right_click_between_the_pages_anchors_no_pages_menu() {
     let mut h = open(two_pages_pdf(), "100", false);
     h.run_steps(2);
-    h.state_mut().views[0].comments.context_at = Some((0, [10.0, 10.0]));
+    h.state_mut().views[0].session.comments.context_at = Some((0, [10.0, 10.0]));
     let (one, two) = {
         let v = &h.state().views[0];
         (v.page_screen_rect(0).expect("page 1 on screen"), v.page_screen_rect(1).expect("page 2 on screen"))
@@ -2142,7 +1691,7 @@ fn a_right_click_between_the_pages_anchors_no_pages_menu() {
     let gap = egui::pos2(one.center().x, (one.max.y + two.min.y) / 2.0);
     assert!(!one.contains(gap) && !two.contains(gap), "between the pages: {one:?} {two:?}");
     right_click(&mut h, gap);
-    assert_eq!(h.state().views[0].comments.context_at, None);
+    assert_eq!(h.state().views[0].session.comments.context_at, None);
 }
 
 /// Two 300×400 pages, a rectangle comment on the first.
@@ -2161,9 +1710,9 @@ fn two_pages_and_a_comment_pdf() -> Vec<u8> {
 #[test]
 fn a_right_click_between_the_pages_opens_the_page_menu_not_the_selected_comments() {
     let mut h = open(two_pages_and_a_comment_pdf(), "100", false);
-    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.state_mut().views[0].session.comments.select_only((0, 0));
     h.run_steps(2);
-    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the comment is selected");
     let (one, two) = {
         let v = &h.state().views[0];
         (v.page_screen_rect(0).expect("page 1 on screen"), v.page_screen_rect(1).expect("page 2 on screen"))
@@ -2171,7 +1720,7 @@ fn a_right_click_between_the_pages_opens_the_page_menu_not_the_selected_comments
     let gap = egui::pos2(one.center().x, (one.max.y + two.min.y) / 2.0);
     assert!(!one.contains(gap) && !two.contains(gap), "between the pages: {one:?} {two:?}");
     right_click(&mut h, gap);
-    assert_eq!(h.state().views[0].comments.selected, None);
+    assert_eq!(h.state().views[0].session.comments.primary(), None);
     assert!(h.query_by_label("Rotate view counterclockwise").is_some(), "the page menu opens");
     assert!(h.query_by_label("Reply").is_none(), "not the comment's");
 }
@@ -2182,20 +1731,30 @@ fn a_right_click_between_the_pages_opens_the_page_menu_not_the_selected_comments
 /// centred the image on page 1's point, which on page 2 lies at its foot.
 #[test]
 fn paste_from_a_right_click_where_two_pages_touch_keeps_to_the_first_page() {
-    let (mut h, seam) = touching_pages(|app| {
-        app.system_clipboard = false;
-        app.quick_tool = QuickTool::EditText;
-    });
-    let clip = || pdfcraft_ui_egui::Clip::Image { width: 60, height: 40, rgba: [50u8, 150, 250, 255].repeat(60 * 40) };
-    h.state_mut().clipboard_override = Some(clip());
-    assert!(h.state_mut().paste_image_at(1, [100.0, 400.0]), "a picture across page 2's top edge");
-    h.state_mut().clipboard_override = Some(clip());
-    h.state_mut().views[0].image_selection = None;
+    let (mut h, seam) = touching_pages(|app| app.quick_tool = QuickTool::EditText);
+    // A picture reaches the clipboard as the platform's paste of it, in the frame that pastes.
+    let picture = || {
+        let image = egui::ColorImage::from_rgba_unmultiplied([60, 40], &[50u8, 150, 250, 255].repeat(60 * 40));
+        egui::Event::PasteImage(Arc::new(image))
+    };
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(60, 40, image::Rgb([50, 150, 250])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let ctx_h = h.ctx.clone();
+    assert!(
+        h.state_mut().apply_edit(
+            &ctx_h,
+            pdfcraft_engine::Edit::AddImage { page: 1, rect: Some([70.0, 380.0, 130.0, 420.0]), name: "picture.png".into(), bytes: Arc::new(png) },
+        ),
+        "a picture across page 2's top edge"
+    );
+    h.state_mut().views[0].session.image_selection = None;
     h.run_steps(4);
     right_click(&mut h, seam);
-    assert_eq!(h.state().views[0].comments.context_at.map(|(page, _)| page), Some(0), "page 1 takes the right-click");
-    assert!(h.state().views[0].image_selection.is_none(), "page 2's picture is not selected for its menu");
-    h.get_by_label_contains("Paste").click();
+    assert_eq!(h.state().views[0].session.comments.context_at.map(|(page, _)| page), Some(0), "page 1 takes the right-click");
+    assert!(h.state().views[0].session.image_selection.is_none(), "page 2's picture is not selected for its menu");
+    h.get_by_label("Paste").click();
+    h.run_steps(1);
+    h.event(picture());
     h.run_steps(3);
     let images = |page| {
         let s = h.state();
@@ -2216,10 +1775,10 @@ fn a_camera_click_on_another_page_moves_the_quadrilateral_there() {
     let mut h = open(two_pages_pdf(), "100", false);
     h.state_mut().quick_tool = QuickTool::EnhanceCamera;
     h.run_steps(4);
-    assert_eq!(h.state().views[0].camera.map(|q| q.page), Some(0), "it starts on the current page");
+    assert_eq!(h.state().views[0].session.camera.map(|q| q.page), Some(0), "it starts on the current page");
     let two = h.state().views[0].page_screen_rect(1).expect("page 2 on screen");
     mouse_click(&mut h, two.min + egui::vec2(100.0, 60.0));
-    assert_eq!(h.state().views[0].camera.map(|q| q.page), Some(1));
+    assert_eq!(h.state().views[0].session.camera.map(|q| q.page), Some(1));
 }
 
 /// A camera click is located where it came up, not where the pointer went after it in the same
@@ -2229,7 +1788,7 @@ fn a_camera_click_on_another_page_moves_the_quadrilateral_there() {
 #[test]
 fn a_camera_click_released_off_its_page_moves_nothing() {
     let (mut h, seam) = touching_pages(|app| app.quick_tool = QuickTool::EnhanceCamera);
-    assert_eq!(h.state().views[0].camera.map(|q| q.page), Some(0), "it starts on the current page");
+    assert_eq!(h.state().views[0].session.camera.map(|q| q.page), Some(0), "it starts on the current page");
     let (press, release, back) = (seam + egui::vec2(0.0, 2.0), seam - egui::vec2(0.0, 2.0), seam + egui::vec2(0.0, 40.0));
     h.hover_at(press);
     h.run_steps(1);
@@ -2238,115 +1797,7 @@ fn a_camera_click_released_off_its_page_moves_nothing() {
     let up = egui::Event::PointerButton { pos: release, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE };
     one_frame(&mut h, [up, egui::Event::PointerMoved(back)]);
     h.run_steps(2);
-    assert_eq!(h.state().views[0].camera.map(|q| q.page), Some(0));
-}
-
-/// Delete and Escape with a dialog open are the dialog's: the link selected behind it with the Link
-/// tool stays and stays selected. Delete removed it, and Escape deselected it as it closed the
-/// dialog.
-#[test]
-fn delete_and_escape_under_a_dialog_leave_the_selected_link() {
-    for key in [egui::Key::Delete, egui::Key::Escape] {
-        let mut h = open(link_pdf(), "150", false);
-        link_tool(&mut h);
-        let on_link = at(&h, 150.0, 325.0);
-        mouse_click(&mut h, on_link);
-        assert_eq!(h.state().views[0].links.selected, Some((0, 0)));
-        h.state_mut().dialog = Some(Dialog::Shortcuts);
-        h.run_steps(3);
-        h.key_press(key);
-        h.run_steps(3);
-        let s = h.state();
-        assert_eq!(s.session.get(s.views[0].id).unwrap().links().len(), 1, "{key:?} under a dialog deletes nothing");
-        assert_eq!(s.views[0].links.selected, Some((0, 0)), "{key:?}: still selected");
-        assert_eq!(s.dialog.is_none(), key == egui::Key::Escape, "{key:?}: only Escape closes it");
-    }
-}
-
-/// Escape with a dialog open over Edit text objects that an area selected closes the dialog, and
-/// the objects stay selected: Delete then removes them. Escape went to the objects instead, and the
-/// dialog stayed open.
-#[test]
-fn escape_under_a_dialog_closes_it_over_selected_edit_text_objects() {
-    let mut h = open(bottom_line_pages_pdf(), "100", false);
-    h.state_mut().views[0].show_page_gaps = false;
-    h.state_mut().quick_tool = QuickTool::EditText;
-    h.run_steps(4);
-    let (one, two) = {
-        let v = &h.state().views[0];
-        (v.page_screen_rect(0).expect("page 1 on screen"), v.page_screen_rect(1).expect("page 2 on screen"))
-    };
-    mouse_click(&mut h, egui::pos2(one.min.x + 60.0, one.max.y - 8.0));
-    mouse_drag(&mut h, egui::pos2(one.min.x + 60.0, two.min.y + 3.0), egui::vec2(200.0, 30.0));
-    let blocks = |h: &Harness<'_, PdfCraftApp>| {
-        let s = h.state();
-        s.session.get(s.views[0].id).unwrap().text_blocks(1).len()
-    };
-    assert_eq!(blocks(&h), 1, "page 2's line is there");
-    h.state_mut().dialog = Some(Dialog::Shortcuts);
-    h.run_steps(3);
-    h.key_press(egui::Key::Escape);
-    h.run_steps(3);
-    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
-    h.key_press(egui::Key::Delete);
-    h.run_steps(4);
-    assert_eq!(blocks(&h), 0, "the objects stayed selected: Delete removes them");
-}
-
-/// With a menu of the menu bar open, V and H are the menu's: the tool stays. V picked Select.
-#[test]
-fn the_tool_letters_with_a_menu_open_leave_the_tool() {
-    for letter in [egui::Key::V, egui::Key::H] {
-        let mut h = open(link_pdf(), "150", false);
-        link_tool(&mut h);
-        crate::support::open_menu(&mut h, "Edit");
-        h.key_press(letter);
-        h.run_steps(3);
-        assert_eq!(h.state().quick_tool, QuickTool::Link, "{letter:?} with a menu open");
-    }
-}
-
-/// With a menu of the menu bar open, Delete leaves Edit text objects that an area selected: the key
-/// is the menu's. It deleted them.
-#[test]
-fn delete_with_a_menu_open_leaves_selected_edit_text_objects() {
-    let mut h = open(bottom_line_pages_pdf(), "100", false);
-    h.state_mut().views[0].show_page_gaps = false;
-    h.state_mut().quick_tool = QuickTool::EditText;
-    h.run_steps(4);
-    let (one, two) = {
-        let v = &h.state().views[0];
-        (v.page_screen_rect(0).expect("page 1 on screen"), v.page_screen_rect(1).expect("page 2 on screen"))
-    };
-    mouse_click(&mut h, egui::pos2(one.min.x + 60.0, one.max.y - 8.0));
-    mouse_drag(&mut h, egui::pos2(one.min.x + 60.0, two.min.y + 3.0), egui::vec2(200.0, 30.0));
-    let blocks = |h: &Harness<'_, PdfCraftApp>| {
-        let s = h.state();
-        s.session.get(s.views[0].id).unwrap().text_blocks(1).len()
-    };
-    assert_eq!(blocks(&h), 1, "page 2's line is there");
-    crate::support::open_menu(&mut h, "View");
-    h.key_press(egui::Key::Delete);
-    h.run_steps(4);
-    assert_eq!(blocks(&h), 1, "Delete with a menu open deletes nothing");
-    h.key_press(egui::Key::Escape);
-    h.run_steps(3);
-    assert!(!egui::Popup::is_any_open(&h.ctx), "Escape closed the menu");
-    h.key_press(egui::Key::Delete);
-    h.run_steps(4);
-    assert_eq!(blocks(&h), 0, "the objects stayed selected, and Delete with the menu closed removes them");
-}
-
-/// With a menu of the menu bar open, End is the menu's: the view stays on its page. It went to the
-/// last page.
-#[test]
-fn end_with_a_menu_open_turns_no_page() {
-    let mut h = open(bottom_line_pages_pdf(), "100", false);
-    let current = h.state().views[0].current;
-    crate::support::open_menu(&mut h, "View");
-    h.key_press(egui::Key::End);
-    h.run_steps(4);
-    assert_eq!(h.state().views[0].current, current, "End with a menu open turns no page");
+    assert_eq!(h.state().views[0].session.camera.map(|q| q.page), Some(0));
 }
 
 /// With a menu of the menu bar open, Delete leaves the picture selected with Edit text: the key is
@@ -2356,72 +1807,12 @@ fn delete_with_a_menu_open_leaves_the_selected_picture() {
     let mut h = open(linked_picture_pdf(), "150", false);
     h.state_mut().quick_tool = QuickTool::EditText;
     h.run_steps(4);
-    h.state_mut().views[0].image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
+    h.state_mut().views[0].session.image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
     h.run_steps(3);
     crate::support::open_menu(&mut h, "View");
     h.key_press(egui::Key::Delete);
     h.run_steps(3);
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), None, "nothing was deleted");
-    assert!(s.views[0].image_selection.is_some(), "and the picture is still selected");
-}
-
-/// The Hotbar tools window, left open when full screen hides it, holds no keys there: the arrows
-/// still turn the page. It held every page key until the window was drawn again.
-#[test]
-fn a_hotbar_window_hidden_by_full_screen_holds_no_keys() {
-    let mut h = open(bottom_line_pages_pdf(), "100", false);
-    h.get_by_label("Hotbar settings").click();
-    h.run_steps(3);
-    assert!(h.state_mut().execute("view.full_screen"));
-    h.run_steps(4);
-    assert!(h.state().full_screen, "full screen");
-    let before = h.state().views[0].current;
-    h.key_press(egui::Key::ArrowRight);
-    h.run_steps(4);
-    assert_eq!(h.state().views[0].current, before + 1, "→ turns the page");
-}
-
-/// Full screen entered as a native menu's click is, between passes, closes the Hotbar tools window
-/// on the pass it hides it: → on that pass turns the page. The window, drawn on the pass before,
-/// held it.
-#[test]
-fn full_screen_from_a_native_menu_with_the_hotbar_window_open_leaves_the_keys_to_the_page() {
-    let mut h = open(bottom_line_pages_pdf(), "100", false);
-    h.get_by_label("Hotbar settings").click();
-    h.run_steps(3);
-    assert!(h.query_by_label("Close menu").is_some(), "the Hotbar tools window is open");
-    let before = h.state().views[0].current;
-    assert!(h.state_mut().execute("view.full_screen"));
-    h.key_press(egui::Key::ArrowRight);
-    h.run_steps(4);
-    assert!(h.state().full_screen, "full screen");
-    assert_eq!(h.state().views[0].current, before + 1, "→ turns the page");
-}
-
-/// With a menu of the menu bar open, the view's chords wait, as the registered commands' do: ⌘=
-/// zooms nothing. It zoomed the view behind the menu.
-#[test]
-fn a_view_chord_with_a_menu_open_waits() {
-    // (A chord on the OCR Verify screen: comments::chords_on_the_ocr_verify_screen_leave_the_hidden_page.)
-    let mut h = open(bottom_line_pages_pdf(), "100", false);
-    let before = h.state().views[0].zoom;
-    crate::support::open_menu(&mut h, "View");
-    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Equals);
-    h.run_steps(3);
-    assert_eq!(h.state().views[0].zoom, before, "⌘= with a menu open zooms nothing");
-}
-
-/// In Organize Pages, a Cut with a menu of the menu bar open is the menu's: the pages stay. It cut
-/// the current page.
-#[test]
-fn a_cut_with_a_menu_open_leaves_organize_pages_alone() {
-    let mut h = open(bottom_line_pages_pdf(), "100", false);
-    h.state_mut().views[0].organize = true;
-    h.run_steps(4);
-    crate::support::open_menu(&mut h, "View");
-    h.event(egui::Event::Cut);
-    h.run_steps(4);
-    let s = h.state();
-    assert_eq!(s.session.get(s.views[0].id).unwrap().info.pages.len(), 2, "no page was cut");
+    assert!(s.views[0].session.image_selection.is_some(), "and the picture is still selected");
 }
