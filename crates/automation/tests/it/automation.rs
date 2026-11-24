@@ -8700,6 +8700,10 @@ fn optimizing_to_an_older_version_lists_newer_content() {
     assert!(listed(&old), "{old}");
     let new = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "v17.pdf", "compatibility": "1.7" }));
     assert!(!listed(&new), "{new}");
+    // A target size that can't be met: every attempt is made, and the kept copy is still checked.
+    let sized = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "sized.pdf", "compatibility": "1.4", "target_bytes": 1 }));
+    assert_eq!(sized["target_reached"], false, "{sized}");
+    assert!(listed(&sized), "{sized}");
 }
 
 #[test]

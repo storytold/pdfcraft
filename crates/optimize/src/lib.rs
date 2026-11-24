@@ -239,6 +239,10 @@ pub struct Settings {
     /// actions with an `/F`, out of links and bookmarks; a link left with nothing to do is
     /// removed. Links within the document and web links stay.
     pub discard_external_refs: bool,
+    /// List content newer than the chosen version in [`Report::newer_content`] (default true).
+    /// A caller optimizing several times to pick one copy turns it off and runs
+    /// [`newer_content`] once on the copy it keeps.
+    pub list_newer_content: bool,
 }
 
 impl Settings {
@@ -246,6 +250,12 @@ impl Settings {
     /// enabled when `object_streams` is set and the target version is not PDF 1.4 (§7.5.7).
     pub fn effective_object_streams(&self) -> bool {
         self.object_streams && self.compatibility != Compatibility::Pdf1_4
+    }
+
+    /// The version content is checked against: `Retain`, checking nothing, unless
+    /// `list_newer_content` is set.
+    fn listed_compatibility(&self) -> Compatibility {
+        if self.list_newer_content { self.compatibility } else { Compatibility::Retain }
     }
 }
 
@@ -271,6 +281,7 @@ impl Default for Settings {
             remove_invalid_links: true,
             remove_unreferenced_dests: true,
             discard_external_refs: false,
+            list_newer_content: true,
         }
     }
 }
@@ -516,18 +527,28 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
             }
         }
     }
-    list_newer_content(doc, settings, &mut report, progress)?;
+    fill_newer_content(doc, settings.listed_compatibility(), &mut report, progress)?;
     Ok(report)
 }
 
-/// Fill `report`'s newer-content fields when `settings` choose a version.
-fn list_newer_content(
+/// Constructs in `doc` newer than `compatibility`, highest version first, and the number of
+/// content streams and font programs that could not be read for them; nothing when the version
+/// is retained. The same check [`optimize`] runs on its copy.
+pub fn newer_content(doc: &Document, compatibility: Compatibility) -> (Vec<Requirement>, usize) {
+    let mut report = Report::default();
+    // Never cancelled: the callback always says go on.
+    let _ = fill_newer_content(doc, compatibility, &mut report, &mut |_| true);
+    (report.newer_content, report.newer_content_unread)
+}
+
+/// Fill `report`'s newer-content fields when `compatibility` chooses a version.
+fn fill_newer_content(
     doc: &Document,
-    settings: &Settings,
+    compatibility: Compatibility,
     report: &mut Report,
     progress: &mut dyn FnMut(Stage) -> bool,
 ) -> Result<(), OptimizeError> {
-    if let Some(chosen) = settings.compatibility.version() {
+    if let Some(chosen) = compatibility.version() {
         let found = newer_content::content_versions(doc, &mut || progress(Stage::CleanUp)).ok_or(OptimizeError::Cancelled)?;
         report.newer_content = found.newer_than(chosen);
         report.newer_content_unread = found.unread;

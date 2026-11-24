@@ -15,6 +15,20 @@ const BOOKMARK_PAGE: usize = 100;
 
 const MAX_BOOKMARK_PAGE: usize = 1000;
 
+/// The newer-content check of an optimized copy, read back from its `bytes`; nothing when the
+/// version is retained.
+fn newer_content_of(
+    bytes: &Arc<Vec<u8>>,
+    password: Option<&str>,
+    compatibility: pdfcraft_engine::optimize::Compatibility,
+) -> Result<(Vec<pdfcraft_engine::optimize::Requirement>, usize)> {
+    if compatibility.version().is_none() {
+        return Ok((Vec::new(), 0));
+    }
+    let kept = pdfcraft_cos::Document::open_with_password(bytes.clone(), password).map_err(|e| ToolError::Failed(e.to_string()))?;
+    Ok(pdfcraft_engine::optimize::newer_content(&kept, compatibility))
+}
+
 impl Automation {
     // ---- documents ---------------------------------------------------------------------------
 
@@ -442,6 +456,8 @@ impl Automation {
             Some(t) if t >= 1 => Some(usize::try_from(t).map_err(|_| ToolError::InvalidArgs(format!("target_bytes {t} is too large")))?),
             Some(t) => return Err(ToolError::InvalidArgs(format!("target_bytes must be at least 1, not {t}"))),
         };
+        // With a target, several copies may be made: newer content is listed once, on the kept one.
+        settings.list_newer_content = target.is_none();
         let (mut bytes, mut r) = self.session.optimized_bytes(id, &settings, &discard).map_err(failed)?;
         let mut attempts = 1;
         let mut step_used = 0;
@@ -475,6 +491,10 @@ impl Automation {
                     (bytes, r, step_used) = (b2, r2, k + 1);
                 }
             }
+        }
+        if target.is_some() {
+            let pw = self.doc(a).ok().and_then(|d| d.password.as_deref());
+            (r.optimize.newer_content, r.optimize.newer_content_unread) = newer_content_of(&bytes, pw, settings.compatibility)?;
         }
         write_atomic(&path, &bytes)?;
         fn valid_version(v: &[u8]) -> Option<&str> {

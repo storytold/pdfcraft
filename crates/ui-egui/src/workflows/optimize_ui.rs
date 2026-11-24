@@ -788,6 +788,18 @@ mod tests {
 
     use super::*;
 
+    /// The result line counts the features left newer than the chosen version, and says nothing
+    /// of them when there are none.
+    #[test]
+    fn the_result_counts_features_newer_than_the_chosen_version() {
+        let newer =
+            |construct: &str| pdfcraft_engine::optimize::Requirement { version: "2.0", construct: construct.into(), objects: 1, example: None };
+        let mut r = OptimizeReport::default();
+        assert!(!summary(&r).contains("newer than"), "{}", summary(&r));
+        r.optimize.newer_content = vec![newer("/Path"), newer("UTF-8 text string")];
+        assert!(summary(&r).contains("2 features newer than the chosen PDF version"), "{}", summary(&r));
+    }
+
     /// Cancelling while a queued optimization is waiting must reach its worker before it saves a copy.
     #[test]
     fn cancelling_a_queued_optimization_stops_the_worker() {

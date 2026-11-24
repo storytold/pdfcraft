@@ -5932,3 +5932,70 @@ fn the_encryption_dictionary_is_left_to_the_encryption_check() {
     let report = newer_content(&doc, Compatibility::Pdf1_7);
     assert!(report.newer_content.is_empty(), "{:?}", report.newer_content);
 }
+
+#[test]
+fn a_key_counts_only_in_the_dictionary_that_defines_it() {
+    // /Path is an ink, polygon or polyline annotation's since 2.0; /DL, /SS, /CI and /EP name a
+    // stream's, a transition's and a file specification's entries. On a page they are nobody's.
+    let keys = ["Path", "DL", "SS", "CI", "EP"];
+    let entries: Vec<_> = keys.iter().map(|k| (*k, Object::Int(1))).collect();
+    let on_page = newer_content(&page_with(&entries, "").0, Compatibility::Pdf1_4).newer_content;
+    assert!(!on_page.iter().any(|r| keys.iter().any(|k| r.construct == format!("/{k}"))), "{on_page:?}");
+
+    let mut ink = Dict::new();
+    ink.set(b"Type".to_vec(), Object::name("Annot"));
+    ink.set(b"Subtype".to_vec(), Object::name("Ink"));
+    ink.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
+    ink.set(b"Path".to_vec(), Object::Array(vec![Object::Array(vec![0.into(), 0.into()])]));
+    let (mut doc, p) = page_with(&[], "");
+    let a = doc.add(Object::Dict(ink));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(a)]))).unwrap();
+    let in_annot = newer_content(&doc, Compatibility::Pdf1_7).newer_content;
+    assert!(in_annot.iter().any(|r| r.construct == "/Path" && r.version == "2.0"), "{in_annot:?}");
+}
+
+/// `levels` arrays nested around one UTF-8 text string (2.0).
+fn nested_utf8(levels: usize) -> Object {
+    let mut v = Object::String(pdfcraft_cos::PdfString::literal(b"\xEF\xBB\xBFx".to_vec()));
+    for _ in 0..levels {
+        v = Object::Array(vec![v]);
+    }
+    v
+}
+
+#[test]
+fn a_cyclic_deeply_nested_document_is_checked_to_a_bounded_depth() {
+    let utf8 = |doc: &Document| newer_content(doc, Compatibility::Pdf1_7).newer_content.iter().any(|r| r.construct == "UTF-8 text string");
+    let (shallow, _) = page_with(&[("PieceInfo", nested_utf8(4))], "");
+    assert!(utf8(&shallow), "a string a few levels down is seen");
+
+    // Two outline items naming each other, an annotation that is its own parent, and a value
+    // nested past the depth followed: the check finishes and doesn't report the buried string.
+    let (mut doc, p) = page_with(&[("PieceInfo", nested_utf8(300))], "");
+    let first = doc.add(Object::Null);
+    let second = doc.add(Object::Null);
+    for (me, other) in [(first, second), (second, first)] {
+        let mut item = Dict::new();
+        for key in ["Next", "Prev", "First", "Last", "Parent"] {
+            item.set(key.as_bytes().to_vec(), Object::Ref(other));
+        }
+        doc.set(me, Object::Dict(item));
+    }
+    let annot = doc.add(Object::Null);
+    let mut a = Dict::new();
+    a.set(b"Subtype".to_vec(), Object::name("Ink"));
+    a.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+    a.set(b"Parent".to_vec(), Object::Ref(annot));
+    a.set(b"Popup".to_vec(), Object::Ref(annot));
+    doc.set(annot, Object::Dict(a));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(annot)]))).unwrap();
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |d| {
+        let mut outlines = Dict::new();
+        outlines.set(b"First".to_vec(), Object::Ref(first));
+        outlines.set(b"Last".to_vec(), Object::Ref(second));
+        d.set(b"Outlines".to_vec(), Object::Dict(outlines));
+    })
+    .unwrap();
+    assert!(!utf8(&doc), "nesting past the depth followed is not walked");
+}
