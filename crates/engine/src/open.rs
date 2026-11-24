@@ -373,6 +373,8 @@ impl Session {
             read_only_reason,
             form: Arc::new(form),
             marker_scan: OnceLock::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            synctex: Default::default(),
             links: OnceLock::new(),
             signatures: Arc::new(signatures),
             trust: context.trust.clone(),

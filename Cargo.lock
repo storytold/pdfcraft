@@ -6230,6 +6230,7 @@ dependencies = [
  "pdfcraft-platform",
  "pdfcraft-prc-render",
  "pdfcraft-render",
+ "pdfcraft-testkit",
  "pdfcraft-xfa",
  "rustix 1.1.6",
  "serde_json",
@@ -6366,6 +6367,7 @@ dependencies = [
  "pdfcraft-redact",
  "pdfcraft-render",
  "pdfcraft-sign",
+ "pdfcraft-synctex",
  "pdfcraft-testkit",
  "pdfcraft-xfa",
  "pdfcraft-xfdf",
@@ -6651,6 +6653,14 @@ dependencies = [
  "sha3",
  "thiserror 2.0.21",
  "zeroize",
+]
+
+[[package]]
+name = "pdfcraft-synctex"
+version = "0.22.0"
+dependencies = [
+ "flate2",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

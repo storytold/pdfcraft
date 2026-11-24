@@ -77,6 +77,7 @@ pdfcraft-content = { path = "crates/content", version = "0.22.0" }
 pdfcraft-redact = { path = "crates/redact", version = "0.22.0" }
 pdfcraft-print = { path = "crates/print", version = "0.22.0" }
 pdfcraft-xfdf = { path = "crates/xfdf", version = "0.22.0" }
+pdfcraft-synctex = { path = "crates/synctex", version = "0.22.0" }
 pdfcraft-sign = { path = "crates/sign", version = "0.22.0" }
 pdfcraft-optimize = { path = "crates/optimize", version = "0.22.0" }
 pdfcraft-a11y = { path = "crates/a11y", version = "0.22.0" }
