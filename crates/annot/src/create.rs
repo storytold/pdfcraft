@@ -2,7 +2,8 @@ use super::draw::draw_appearance;
 use super::lookup::{annot_dict, annot_ref, annots, change_annots, fill_sign_shape, page_ref};
 use super::modify::{free_text_da, n, refuse_undrawable_thai, rich_text, set_part_keys, shape_text_box};
 use super::types::{
-    FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, OverlayLook, Rgb, Shape, StampGroup, Style,
+    FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, OverlayLook, Rgb, Shape, StampGroup, StampKind,
+    StampLang, Style,
 };
 use super::{AnnotError, Dict, Document, ObjRef, Object, PdfString, appearance};
 
@@ -311,6 +312,25 @@ pub(crate) fn on_side(rect: [f64; 4], side: Side, end: [f64; 2]) -> bool {
     }
 }
 
+/// A palette stamp's own keys: its name, its language when not English, PdfCraft's mark, its
+/// "By" line, and `turn`, the page's rotation as displayed when it was placed.
+fn set_stamp_keys(d: &mut Dict, stamp: StampKind, lang: StampLang, by: Option<&str>, turn: i64) {
+    d.set(b"Name".to_vec(), Object::name(stamp.name()));
+    if lang != StampLang::En {
+        d.set(b"PCLang".to_vec(), Object::name(lang.code()));
+    }
+    // Marks the stamp as drawn by PdfCraft: other stamps with standard names keep
+    // their own artwork.
+    d.set(b"PCStamp".to_vec(), Object::Bool(true));
+    if let Some(b) = by {
+        d.set(b"PCByLine".to_vec(), PdfString::text(b));
+    }
+    // The label is drawn for the page as displayed. A later page rotation is a new edit.
+    if matches!(turn, 90 | 180 | 270) {
+        d.set(b"PCStampRotate".to_vec(), Object::Int(turn));
+    }
+}
+
 /// Add a comment; returns its index in the page's `/Annots`.
 pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> Result<usize, AnnotError> {
     let page = page_ref(doc, new.page)?;
@@ -371,20 +391,10 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
                 d.set(b"PCStampRotate".to_vec(), Object::Int(turn));
             }
         }
-        Shape::Stamp { stamp, by, .. } => {
+        Shape::Stamp { stamp, lang, by, .. } => {
             d.set(b"C".to_vec(), rgb(style.color));
-            d.set(b"Name".to_vec(), Object::name(stamp.name()));
-            // Marks the stamp as drawn by PdfCraft: other stamps with standard names keep
-            // their own artwork.
-            d.set(b"PCStamp".to_vec(), Object::Bool(true));
-            if let Some(b) = by {
-                d.set(b"PCByLine".to_vec(), PdfString::text(b));
-            }
-            // The label is drawn for the page as displayed. A later page rotation is a new edit.
             let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
-            if matches!(turn, 90 | 180 | 270) {
-                d.set(b"PCStampRotate".to_vec(), Object::Int(turn));
-            }
+            set_stamp_keys(&mut d, *stamp, *lang, by.as_deref(), turn);
         }
         Shape::TypedSignature { contours, .. } => {
             d.set(b"C".to_vec(), rgb(style.color));

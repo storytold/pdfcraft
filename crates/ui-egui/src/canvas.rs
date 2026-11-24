@@ -1736,7 +1736,10 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     let mut body_out = BodyOut::default();
     let date_text = crate::date_text_for_pdf(&app.session);
     // The dynamic stamps' lines, filled in for now: the built-in ones write the default line, a custom stamp its own.
-    let by_line = app.session.stamp_line(crate::stamps_ui::DEFAULT_LINE, &app.comment_prefs.author);
+    // The built-in stamps are written in the interface language where a translation exists and this build has the
+    // faces to draw it.
+    let stamp_lang = pdfcraft_engine::StampLang::for_interface(crate::i18n::current().code());
+    let by_line = app.session.stamp_by_line_in(&app.comment_prefs.author, stamp_lang);
     let custom_line = match tool {
         QuickTool::CustomStamp(i) => app
             .custom_stamps
@@ -1787,6 +1790,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
             initials: app.initials.as_ref(),
         },
         by_line: &by_line,
+        stamp_lang,
         custom_stamp,
     };
     let cx = PageBodyCx {

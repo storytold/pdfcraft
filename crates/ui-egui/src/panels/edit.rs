@@ -182,7 +182,9 @@ impl craft::behavior::ItemSource<usize> for Stamps {
 /// Add a stamp: Dynamic, Sign Here and Standard Business stamps; click one, then click on the
 /// page to place it.
 pub(super) fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
-    use pdfcraft_engine::{StampGroup, StampKind};
+    use pdfcraft_engine::{StampGroup, StampKind, StampLang};
+    // As the stamps will be placed (`canvas::document_area`).
+    let lang = StampLang::for_interface(crate::i18n::current().code());
     // The dock's group header already names the tool and closes it; a second title here showed "Add a stamp" twice.
     let shown = Panel::new(tl!("Add a stamp").to_string()).show(ui, |ui, _| {
         Stack::new().scroll(Scroll::vertical()).show(ui, |ui, _| {
@@ -218,7 +220,7 @@ pub(super) fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     let Some((group, kind)) = kinds.get(*key).copied() else { return Tile::new(String::new()) };
                     let [r, g, b] = kind.color().map(|v| (v * 255.0) as u8);
                     let color = egui::Color32::from_rgb(r, g, b);
-                    let (label, by) = (kind.label().to_string(), tl!("By name at time, date").to_string());
+                    let (label, by) = (kind.label_in(lang).to_string(), lang.by_placeholder().to_string());
                     Tile::new(label.clone()).thumb(ThumbAspect::new(6, 1), move |cx, rect| paint_chip(cx, rect, group, &label, &by, color))
                 });
             if selection != before

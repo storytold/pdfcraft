@@ -94,6 +94,7 @@ pub(crate) struct StampPress {
 /// canvas takes the edit with [`StampTool::placed`] and goes back to selecting.
 pub struct StampTool<'a> {
     choice: StampChoice,
+    lang: pdfcraft_engine::StampLang,
     by_line: String,
     line: Option<String>,
     author: String,
@@ -109,13 +110,14 @@ impl<'a> StampTool<'a> {
     /// `press` is the session's slot for the tool's press.
     pub(crate) fn new(
         choice: StampChoice,
+        lang: pdfcraft_engine::StampLang,
         by_line: String,
         line: Option<String>,
         author: String,
         map: &'a PageMap<'a>,
         press: &'a mut Option<StampPress>,
     ) -> Self {
-        Self { choice, by_line, line, author, map, press, placed: None }
+        Self { choice, lang, by_line, line, author, map, press, placed: None }
     }
 
     /// The edit a click placed, once; the canvas applies it.
@@ -130,12 +132,12 @@ impl<'a> StampTool<'a> {
                 let info = self.map.info.pages.get(page)?;
                 // Laid out in view space, so the stamp is upright as the page is shown.
                 let [vx, vy] = info.user_to_view(user[0] as f32, user[1] as f32);
-                let (w, h) = kind.size();
+                let (w, h) = kind.size_in(self.lang);
                 let a = info.view_to_user((f64::from(vx) - w / 2.0) as f32, (f64::from(vy) - h / 2.0) as f32);
                 let b = info.view_to_user((f64::from(vx) + w / 2.0) as f32, (f64::from(vy) + h / 2.0) as f32);
                 let rect = [f64::from(a[0].min(b[0])), f64::from(a[1].min(b[1])), f64::from(a[0].max(b[0])), f64::from(a[1].max(b[1]))];
                 let by = (kind.group() == StampGroup::Dynamic).then(|| self.by_line.clone());
-                let shape = Shape::Stamp { rect, stamp: *kind, by };
+                let shape = Shape::Stamp { rect, stamp: *kind, lang: self.lang, by };
                 Some(Edit::AddAnnotation(NewAnnotation {
                     page,
                     style: Style::default_for(&shape),

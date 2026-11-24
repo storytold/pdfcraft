@@ -110,6 +110,8 @@ pub(crate) struct PageToolCx<'a> {
     pub(crate) fill: FillPrefs<'a>,
     /// The by-line of a dynamic stamp.
     pub(crate) by_line: &'a str,
+    /// The language the built-in stamps are written in.
+    pub(crate) stamp_lang: pdfcraft_engine::StampLang,
     /// The custom stamp chosen, and the line filled in for it (#1741).
     pub(crate) custom_stamp: Option<(&'a CustomStamp, Option<&'a str>)>,
 }
@@ -399,12 +401,19 @@ pub(crate) fn page_tool<'a>(
         QuickTool::EditText => {
             Arm::Area(Box::new(EditTextTool::new(session, cx.doc, cx.info, cx.pages, press, cx.geometry()).button_held(cx.button_held)))
         }
-        QuickTool::Stamp(kind) => {
-            Arm::Stamp(StampTool::new(StampChoice::Builtin(kind), cx.by_line.to_owned(), None, cx.author.to_owned(), map, &mut session.stamp_press))
-        }
+        QuickTool::Stamp(kind) => Arm::Stamp(StampTool::new(
+            StampChoice::Builtin(kind),
+            cx.stamp_lang,
+            cx.by_line.to_owned(),
+            None,
+            cx.author.to_owned(),
+            map,
+            &mut session.stamp_press,
+        )),
         QuickTool::CustomStamp(_) => match cx.custom_stamp {
             Some((stamp, line)) => Arm::Stamp(StampTool::new(
                 StampChoice::Custom(stamp.clone()),
+                cx.stamp_lang,
                 cx.by_line.to_owned(),
                 line.map(str::to_owned),
                 cx.author.to_owned(),

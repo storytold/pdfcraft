@@ -26,8 +26,8 @@ mod support {
 }
 
 use pdfcraft_annot::{
-    AnnotError, AttachIcon, LineEnding, Markup, Meta, NewAnnotation, NoteIcon, OverlayFont, OverlayLook, ReviewState, Shape, StampKind, Style,
-    StyleChange, add_annotation, add_reply, delete_annotation, links, page_refs, props, set_locked, set_review_state, set_style, summaries,
+    AnnotError, AttachIcon, LineEnding, Markup, Meta, NewAnnotation, NoteIcon, OverlayFont, OverlayLook, ReviewState, Shape, StampKind, StampLang,
+    Style, StyleChange, add_annotation, add_reply, delete_annotation, links, page_refs, props, set_locked, set_review_state, set_style, summaries,
 };
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions};
 
@@ -243,7 +243,7 @@ fn shapes_keep_rectangles_fills_borders_and_stamp_identity() {
         &mut doc,
         &styled(
             0,
-            Shape::Stamp { rect: [40.0, 600.0, 180.0, 650.0], stamp: StampKind::Approved, by: Some("Ada".into()) },
+            Shape::Stamp { rect: [40.0, 600.0, 180.0, 650.0], stamp: StampKind::Approved, lang: StampLang::En, by: Some("Ada".into()) },
             "stamped",
             [0.13, 0.55, 0.13],
             1.0,

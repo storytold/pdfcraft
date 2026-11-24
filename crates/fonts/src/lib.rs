@@ -12,6 +12,7 @@ mod cjk_scripts;
 mod craft;
 pub mod embedding;
 pub mod fallback;
+mod line;
 pub mod pdf;
 pub mod plan;
 mod script;
@@ -26,6 +27,7 @@ pub use craft::{
 pub use craft_pdf::fonts::{
     Std14, Std14Match, UnicodeCMap, encodings, first_non_win_ansi, fits_win_ansi, win_ansi, win_ansi_byte, win_ansi_char, win_ansi_encodable,
 };
+pub use line::{MAX_LINE_CHARS, line_faces, line_missing, line_outline};
 pub use plan::{MAX_PLAN_GLYPHS, MAX_TYPE3_GLYPHS, PlannedType3, TextPlan};
 pub use script::{
     GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, craft_glyph, face_has, japanese_glyph, japanese_glyph_from,
