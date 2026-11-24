@@ -57,6 +57,8 @@ const COLOUR: &str = "comment.props.colour";
 const BORDER: &str = "comment.props.border";
 const FILL: &str = "comment.props.fill";
 const MAKE_DEFAULT: &str = "make_default";
+const TEXT_ALIGNMENT: &str = "text_alignment";
+const ALIGNMENTS: [(&str, &str); 3] = [("left", "Align left"), ("center", "Centre"), ("right", "Align right")];
 
 /// The name shown in the line-ending combo. [`LineEnding::name`] stays the PDF `/LE` token.
 fn ending_label(ending: LineEnding) -> &'static str {
@@ -100,6 +102,9 @@ fn opening(o: &CommentProps) -> DialogFields {
     if let Some(size) = o.font_size {
         f.set("font_size", FieldValue::Number(size));
     }
+    if let Some((id, _)) = o.text_alignment.and_then(|a| ALIGNMENTS.get(usize::from(a))) {
+        f.set(TEXT_ALIGNMENT, *id);
+    }
     f.set("opacity", FieldValue::Number(o.opacity * 100.0));
     if let Some(t) = o.text_opacity {
         f.set("text_opacity", FieldValue::Number(t * 100.0));
@@ -141,6 +146,12 @@ pub fn edited(original: &CommentProps, fields: &DialogFields) -> CommentProps {
     }
     if let Some(name) = text("border_shape").filter(|_| e.border_shape.is_some()) {
         e.border_shape = BorderShape::ALL.into_iter().find(|s| s.name() == name).or(e.border_shape);
+    }
+    if e.text_alignment.is_some()
+        && let Some(id) = fields.text(TEXT_ALIGNMENT)
+        && let Some(alignment) = ALIGNMENTS.iter().position(|(choice, _)| *choice == id)
+    {
+        e.text_alignment = Some(alignment as u8);
     }
     if e.fillable {
         e.fill = fields.color(FILL).map(rgb);
@@ -264,6 +275,12 @@ fn comment_props_dialog<'b>(
         rows.push(PropertyRow::field(
             Param::number("font_size", tl!("Font size"), 12.0, 0.5, 1).bounds(Some(1.0), Some(400.0)).unit(UnitKind::Points),
         ));
+    }
+    if o.text_alignment.is_some() {
+        let options = ALIGNMENTS.into_iter().map(|(id, label)| (id.to_string(), tl!(label).into())).collect();
+        let row = Param::new(TEXT_ALIGNMENT, tl!("Text alignment"), ParamKind::choice(options, None));
+        let enabled = drawn_border_shape(&edited(o, fields)) == Some(BorderShape::Rectangle);
+        rows.push(PropertyRow::field(if enabled { row } else { row.disabled() }));
     }
     // One opacity for the whole comment, or each part's of its own; a part not drawn is disabled.
     let (fill, text) = parts_shown(o);
@@ -637,6 +654,13 @@ fn changes(o: &CommentProps, e: &CommentProps, page: usize, index: usize, t: &Co
         && let Some(shape) = drawn_border_shape(&shaped).filter(|s| Some(*s) != t.border_shape)
     {
         out.push(Edit::BorderShapeAnnotation { page, index, shape });
+    }
+    if t.restylable
+        && drawn_border_shape(&shaped) == Some(BorderShape::Rectangle)
+        && t.text_alignment.is_some()
+        && let Some(alignment) = e.text_alignment.filter(|a| Some(*a) != o.text_alignment)
+    {
+        out.push(Edit::AlignAnnotationText { page, index, alignment });
     }
     let author = (e.author != o.author).then(|| e.author.clone());
     let subject = (e.subject != o.subject).then(|| e.subject.clone());

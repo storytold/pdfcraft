@@ -1128,6 +1128,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "border_color": { "type": "string", "description": "A text box's, typewriter text's or callout's border colour: #RRGGBB, a colour name, or \"text\" for the text's colour." },
                 "border_shape": { "type": "string", "enum": ["rectangle", "oval", "circle"], "description": "A text box's or typewriter text's border shape: an oval or a circle goes around the text, which keeps its place." },
                 "font_size": { "type": "number", "minimum": 1, "maximum": 400, "description": "Font size in points of a text box, typewriter text or callout; the box grows to hold the text." },
+                "align": { "type": "string", "enum": ["left", "center", "right"], "description": "Horizontal alignment for a rectangular text box comment." },
                 "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
                 "move": point(),
                 "points": { "type": "array", "items": point(), "minItems": 1, "description": "A line's two ends, every corner of connected lines, a polygon or a cloud, or a callout's arrow point and (optionally) knee, in page coordinates. A callout given its arrow point alone keeps the knee it has." },

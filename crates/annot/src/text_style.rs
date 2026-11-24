@@ -27,6 +27,15 @@ pub struct TextStyle {
     pub color: Rgb,
 }
 
+/// Stored horizontal alignment for a text box, independent of its current border shape.
+pub(crate) fn box_alignment(d: &Dict) -> Option<u8> {
+    (d.name(b"Subtype") == Some(b"FreeText") && d.name(b"IT") != Some(b"FreeTextTypeWriter") && !d.contains(b"CL")).then(|| match d.int(b"Q") {
+        Some(1) => 1,
+        Some(2) => 2,
+        _ => 0,
+    })
+}
+
 /// The style of `d`'s text: `/DA`, with what `/DS` sets taking its place. `dr_face` is the face
 /// the `/DA` font resource names in the form's `/DR` ([`dr_face`]); `None` when it isn't there,
 /// and the common resource names (`/Helv`, `/Cour`, `/TiRo`, …) are read instead.

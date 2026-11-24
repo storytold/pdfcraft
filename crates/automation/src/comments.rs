@@ -786,6 +786,15 @@ impl Automation {
             }
             edits.push(Edit::FontSizeAnnotation { page, index, size });
         }
+        if let Some(align) = a.opt_str("align")? {
+            let alignment = match align {
+                "left" => 0,
+                "center" => 1,
+                "right" => 2,
+                _ => return Err(ToolError::InvalidArgs("align must be left, center or right".into())),
+            };
+            edits.push(Edit::AlignAnnotationText { page, index, alignment });
+        }
         if let Some(r) = a.nums::<4>("rect")? {
             // The rectangle as comment_list reports it: where the comment is drawn.
             let doc = self.doc(a)?;
@@ -813,7 +822,7 @@ impl Automation {
         }
         if edits.is_empty() {
             return Err(ToolError::InvalidArgs(
-                "nothing to change: pass contents, color, opacity, fill_opacity, text_opacity, width, fill, border_color, border_shape, font_size, rect, move or points".into(),
+                "nothing to change: pass contents, color, opacity, fill_opacity, text_opacity, width, fill, border_color, border_shape, font_size, align, rect, move or points".into(),
             ));
         }
         let edit = if edits.len() == 1 { edits.remove(0) } else { Edit::Batch { label: "Edit comment".into(), edits } };

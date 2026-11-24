@@ -1451,6 +1451,33 @@ fn text_box_properties_choose_the_border_shape() {
     assert_eq!(s.comment_prefs.style(CommentTool::TextBox).border_shape, BorderShape::Oval, "the default for new text boxes");
 }
 
+#[test]
+fn comment_properties_updates_a_text_box_alignment() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+
+    let mut h = harness(|_| {});
+    let shape = Shape::TextBox { rect: [40.0, 120.0, 200.0, 160.0], font_size: 12.0 };
+    let style = Style::default_for(&shape);
+    let ctx = h.ctx.clone();
+    assert!(
+        h.state_mut().apply_edit(
+            &ctx,
+            Edit::AddAnnotation(NewAnnotation { page: 0, shape, style, contents: "Keep this text".into(), author: "Tester".into() })
+        )
+    );
+    h.run_steps(2);
+    open_comment_props(&mut h, 0, 0);
+    h.run_steps(2);
+    h.get_by_label("Text alignment");
+    set_prop(&mut h, "text_alignment", FieldValue::Text("right".into()));
+    accept_props(&mut h);
+
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    assert_eq!(doc.comment_props(0, 0).unwrap().text_alignment, Some(2));
+    assert_eq!(doc.info.annotations[0].contents.as_deref(), Some("Keep this text"));
+}
+
 /// Thickness 0 in Comment Properties takes a circle away with the line, as Border ▸ None does on
 /// the toolbar, and a default made from it draws no circle either.
 #[test]

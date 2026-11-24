@@ -8078,6 +8078,27 @@ fn text_box_font_size_through_the_tool() {
 }
 
 #[test]
+fn text_box_alignment_through_the_tool() {
+    let dir = workdir("comment-alignment");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "comment_add", json!({"doc": doc, "page": 1, "type": "textbox", "rect": [20, 40, 200, 80], "contents": "Keep this text"}));
+
+    for (align, expected) in [("center", 1), ("right", 2), ("left", 0)] {
+        ok(&mut a, "comment_edit", json!({"doc": doc, "page": 1, "index": 1, "align": align}));
+        let path = format!("aligned-{align}.pdf");
+        ok(&mut a, "doc_save", json!({"doc": doc, "path": path}));
+        let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join(&path)).unwrap())).unwrap();
+        let actual = saved.object_numbers().iter().filter_map(|n| saved.try_get(*n).ok()).find_map(|object| {
+            let d = object.as_dict()?;
+            (d.name(b"Subtype") == Some(b"FreeText")).then(|| d.int(b"Q")).flatten()
+        });
+        assert_eq!(actual, Some(expected), "{align}");
+    }
+    assert!(matches!(a.call("comment_edit", &json!({"doc": doc, "page": 1, "index": 1, "align": "justify"})), Err(ToolError::InvalidArgs(_))));
+}
+
+#[test]
 fn line_endings_through_the_tool() {
     let dir = workdir("endings");
     let mut a = auto(&dir);

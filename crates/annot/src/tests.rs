@@ -3418,6 +3418,111 @@ fn degenerate_and_absurd_leader_and_caption_values_do_not_panic() {
     assert!(!long.contains(&"w".repeat(257)));
 }
 
+#[test]
+fn text_box_alignment_updates_the_appearance_and_preserves_referenced_contents() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /FreeText /Rect [20 20 180 80] /DA (0 g /Helv 12 Tf) /Contents 5 0 R >>",
+        b"(Keep this text)",
+    ]);
+    let reference = ObjRef::new(4, 0);
+    assert_eq!(props(&doc, 0, 0).unwrap().text_alignment, Some(0));
+
+    set_text_alignment(&mut doc, 0, 0, 2, &Meta::default()).unwrap();
+
+    let object = doc.get(reference);
+    let updated = object.as_dict().unwrap();
+    assert_eq!(updated.int(b"Q"), Some(2));
+    assert_eq!(updated.get(b"Contents").and_then(Object::as_ref), Some(ObjRef::new(5, 0)));
+    let rich = updated.get(b"RC").and_then(Object::as_string).unwrap().to_text();
+    assert!(rich.contains("text-align:right") && rich.contains("Keep this text"), "{rich}");
+    assert!(updated.contains(b"AP"));
+    assert_eq!(props(&doc, 0, 0).unwrap().text_alignment, Some(2));
+}
+
+#[test]
+fn alignment_leaves_an_inline_formatted_text_box_untouched() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /FreeText /Rect [20 20 180 80] /DA (0 g /Helv 12 Tf) /Contents (Keep this text) /RC 5 0 R /DS (font-size:12pt;color:#123456) >>",
+        br#"(<body><p style="color:#123456">Keep <span style="font-weight:bold">this</span> text</p></body>)"#,
+    ]);
+    let reference = ObjRef::new(4, 0);
+    let before = doc.get(reference);
+    assert_eq!(props(&doc, 0, 0).unwrap().text_alignment, None);
+    assert!(set_text_alignment(&mut doc, 0, 0, 2, &Meta::default()).is_err());
+    assert_eq!(doc.get(reference), before);
+}
+
+#[test]
+fn alignment_preserves_foreign_text_given_by_reference() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /FreeText /Rect [20 20 180 80] /DA (0 g /Helv 12 Tf) /Contents 5 0 R /AP << /N 6 0 R >> >>",
+        b"<FEFF0416>",
+        b"<< /Length 0 >> stream\nendstream",
+    ]);
+    let reference = ObjRef::new(4, 0);
+    let before = doc.get(reference);
+    assert!(matches!(set_text_alignment(&mut doc, 0, 0, 2, &Meta::default()), Err(AnnotError::Undrawable(_))));
+    assert_eq!(doc.get(reference), before);
+}
+
+#[test]
+fn alignment_preserves_rich_text_whose_body_style_differs_from_its_appearance_defaults() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /FreeText /Rect [20 20 180 80] /DA (0 g /Helv 12 Tf) /Contents (Red text) /RC 5 0 R >>",
+        br#"(<body style="color:#FF0000"><p>Red text</p></body>)"#,
+    ]);
+    let reference = ObjRef::new(4, 0);
+    let before = doc.get(reference);
+    assert_eq!(props(&doc, 0, 0).unwrap().text_alignment, None);
+    assert!(set_text_alignment(&mut doc, 0, 0, 2, &Meta::default()).is_err());
+    assert_eq!(doc.get(reference), before);
+}
+
+#[test]
+fn alignment_requires_matching_rich_text_and_hard_line_breaks() {
+    for (plain, rich, matching) in [
+        ("(Fallback)", "(<body><p>Actual</p></body>)", false),
+        ("(First Second)", "(<body><p>First</p><p>Second</p></body>)", false),
+        (r"(First & second\r\nThird)", "(<body><p>First &amp; second</p><p>Third</p></body>)", true),
+        (r"(First\nSecond)", "(<body>First<br/>Second</body>)", true),
+    ] {
+        let mut doc = document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R] >>",
+            b"<< /Type /Annot /Subtype /FreeText /Rect [20 20 180 80] /DA (0 g /Helv 12 Tf) /Contents 5 0 R /RC 6 0 R /AP << /N 7 0 R >> >>",
+            plain.as_bytes(),
+            rich.as_bytes(),
+            b"<< /Length 0 >> stream\nendstream",
+        ]);
+        let reference = ObjRef::new(4, 0);
+        let before = doc.get(reference);
+        let appearance = doc.get(ObjRef::new(7, 0));
+        assert_eq!(props(&doc, 0, 0).unwrap().text_alignment, matching.then_some(0));
+        let result = set_text_alignment(&mut doc, 0, 0, 2, &Meta::default());
+        if matching {
+            result.unwrap();
+            assert_eq!(props(&doc, 0, 0).unwrap().text_alignment, Some(2));
+        } else {
+            assert!(matches!(result, Err(AnnotError::Invalid(_))), "{rich}");
+            assert_eq!(doc.get(reference), before);
+            assert_eq!(doc.get(ObjRef::new(7, 0)), appearance);
+        }
+    }
+}
+
 /// A comment's built appearance for the dictionary `body` (no `/AP`), as text, or `None` when
 /// PdfCraft can't draw it.
 fn built(body: &str) -> Option<String> {

@@ -319,6 +319,8 @@ pub struct Props {
     pub fill: Option<Rgb>,
     /// Text boxes, typewriter text and callouts: the `/DA` font size in points.
     pub font_size: Option<f64>,
+    /// Stored horizontal alignment for text boxes whose formatting can be preserved.
+    pub text_alignment: Option<u8>,
     /// Text boxes, typewriter text and callouts: the border's own colour (`None`: the text's).
     pub border_color: Option<Rgb>,
     /// Text boxes and typewriter text: the border's shape (callouts have none to choose).
@@ -369,6 +371,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         fillable: fillable(&subtype),
         fill: fill_of(d),
         font_size: style.map(|s| s.size),
+        text_alignment: crate::modify::editable_box_alignment(doc, d),
         border_color: (subtype == "FreeText").then(|| appearance::da_border(d)).flatten(),
         border_shape: (subtype == "FreeText" && !d.contains(b"CL")).then(|| BorderShape::of(d)),
         fill_opacity: fillable(&subtype).then(|| appearance::part_opacity(d).fill),
