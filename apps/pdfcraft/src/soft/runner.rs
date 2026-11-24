@@ -79,6 +79,7 @@ pub(crate) fn run(setup: Setup<'_>) -> Result<(), String> {
         last_frame: Instant::now(),
         next_repaint: None,
         redraw_deadline: None,
+        hidden_until: None,
         last_paint_error: None,
         error: None,
     };
@@ -97,6 +98,8 @@ struct Handler<'a> {
     next_repaint: Option<Instant>,
     /// Set while the system owes a `RedrawRequested`: when to stop waiting for it.
     redraw_deadline: Option<Instant>,
+    /// Until when a hidden window rests after its last frame.
+    hidden_until: Option<Instant>,
     /// The last painting failure logged, so a failure every frame is one line in the log.
     last_paint_error: Option<String>,
     /// Why the window never showed a frame.
@@ -140,6 +143,10 @@ impl Handler<'_> {
         }
     }
 
+    fn earliest(&self, hidden: bool) -> Instant {
+        earliest_frame(self.last_frame, self.frame_interval, self.hidden_until, hidden)
+    }
+
     /// Asks for the frame egui wants once it is due, and sleeps until the next thing to do.
     fn pace(&mut self, event_loop: &ActiveEventLoop) {
         let now = Instant::now();
@@ -149,25 +156,44 @@ impl Handler<'_> {
             self.redraw_deadline = None;
             self.frame(event_loop, true);
         }
-        if let (Some(when), Some(window)) = (self.next_repaint, self.running.as_ref().map(|running| Arc::clone(&running.window)))
-            && when.max(self.last_frame + self.frame_interval) <= now
+        let window = self.running.as_ref().map(|running| Arc::clone(&running.window));
+        let is_hidden = window.as_deref().is_some_and(hidden);
+        if let (Some(when), Some(window)) = (self.next_repaint, &window)
+            && when.max(self.earliest(is_hidden)) <= now
             && self.redraw_deadline.is_none()
         {
             self.next_repaint = None;
-            if hidden(&window) {
+            if is_hidden {
                 // Windows sends a hidden window no `RedrawRequested`, so the frame runs from here:
                 // commands such as "show the window" are carried out, nothing is painted.
                 self.frame(event_loop, false);
-                if let Some(next) = &mut self.next_repaint {
-                    *next = (*next).max(Instant::now() + HIDDEN_INTERVAL);
-                }
+                self.hidden_until = Some(Instant::now() + HIDDEN_INTERVAL);
             } else {
                 window.request_redraw();
                 self.redraw_deadline = Some(now + MISSED_REDRAW);
             }
         }
-        let wake = [self.next_repaint.map(|when| when.max(self.last_frame + self.frame_interval)), self.redraw_deadline].into_iter().flatten().min();
+        let wake = wake_at(self.next_repaint.map(|when| when.max(self.earliest(is_hidden))), self.redraw_deadline);
         event_loop.set_control_flow(wake.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
+    }
+}
+
+/// When the loop wakes next: when the frame egui wants is due (`repaint`), unless the system still
+/// owes a `RedrawRequested`. Then only that redraw's deadline counts: a frame due meanwhile can't be
+/// asked for, and a wake time already past would spin the loop until the redraw came. The frame is
+/// asked for once the redraw arrives or its deadline passes.
+fn wake_at(repaint: Option<Instant>, redraw_deadline: Option<Instant>) -> Option<Instant> {
+    redraw_deadline.or(repaint)
+}
+
+/// The earliest the next frame may start: `interval` after the last one, and while the window is
+/// hidden, not before its rest after its last frame is over (`hidden_until`), whether the request
+/// was waiting when that frame ended or arrived after it.
+fn earliest_frame(last_frame: Instant, interval: Duration, hidden_until: Option<Instant>, hidden: bool) -> Instant {
+    let paced = last_frame + interval;
+    match hidden_until {
+        Some(until) if hidden => paced.max(until),
+        _ => paced,
     }
 }
 
@@ -611,9 +637,10 @@ impl<'a> Running<'a> {
         let started = Instant::now();
         let (painted, image) = self.painter.paint(&self.window, pixels_per_point, clear, &primitives, &mut self.textures, !screenshots.is_empty())?;
         log::trace!("painted {} pixels of {} meshes in {:?}", painted.pixels, primitives.len(), started.elapsed());
-        if let Some(image) = image.map(Arc::new) {
-            for callback in screenshots {
-                callback.complete(Arc::clone(&image));
+        let image = image.map(Arc::new);
+        if let Some(image) = &image {
+            for callback in screenshots.drain(..) {
+                callback.complete(Arc::clone(image));
             }
         }
         for action in self.actions.drain(..) {
@@ -625,6 +652,9 @@ impl<'a> Running<'a> {
                 ActionRequested::Paste => self.state.request_paste(&self.window),
             }
         }
+        // A minimized window has no pixels to take: the screenshots wait for the next frame that
+        // has them (restoring the window asks for one), as their callbacks are not sent again.
+        self.actions.extend(screenshots.into_iter().map(ActionRequested::Screenshot));
         if !std::mem::replace(&mut self.shown, true) {
             if let Some(settings) = &self.restored {
                 settings.before_first_show(&self.window);
@@ -672,5 +702,26 @@ mod tests {
     fn the_update_area_windows_reports_is_the_same_pixels() {
         let rect = winsafe::RECT { left: 5, top: 7, right: 640, bottom: 480 };
         assert_eq!(update_area(rect), PixelRect::new(5, 7, 640, 480));
+    }
+
+    #[test]
+    fn while_a_redraw_is_owed_the_loop_sleeps_until_its_deadline() {
+        let now = Instant::now();
+        let (due, deadline) = (now - Duration::from_millis(5), now + MISSED_REDRAW);
+        // A frame already due can't be asked for while the redraw is owed: waking for it would
+        // spin the loop until the redraw came.
+        assert_eq!(wake_at(Some(due), Some(deadline)), Some(deadline));
+        assert_eq!(wake_at(Some(due), None), Some(due));
+        assert_eq!(wake_at(None, None), None);
+    }
+
+    #[test]
+    fn a_hidden_window_rests_between_frames_however_the_request_arrives() {
+        let frame = Instant::now();
+        let interval = Duration::from_millis(33);
+        let rest = frame + HIDDEN_INTERVAL;
+        assert!(earliest_frame(frame, interval, Some(rest), true) >= rest, "a request that came after the hidden frame waits too");
+        assert_eq!(earliest_frame(frame, interval, Some(rest), false), frame + interval, "shown again, frames are paced as usual");
+        assert_eq!(earliest_frame(frame, interval, None, true), frame + interval);
     }
 }

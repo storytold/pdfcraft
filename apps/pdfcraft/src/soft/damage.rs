@@ -154,8 +154,11 @@ mod tests {
         assert_eq!(frame(&mut damage, &[]), vec![], "the same frame again changes nothing");
         damage.begin(700, 320, 7);
         assert_eq!(damage.finish(), vec![PixelRect::new(0, 0, 700, 320)], "the last tile ends at the window's edge");
+        // The same size, and the same frame twice: only the lost pixels make it a whole redraw.
+        frame(&mut damage, &[]);
+        assert_eq!(frame(&mut damage, &[]), vec![]);
         damage.invalidate();
-        assert_eq!(frame(&mut damage, &[]), vec![PixelRect::new(0, 0, 640, 320)]);
+        assert_eq!(frame(&mut damage, &[]), vec![PixelRect::new(0, 0, 640, 320)], "pixels the system lost are all redrawn");
     }
 
     #[test]

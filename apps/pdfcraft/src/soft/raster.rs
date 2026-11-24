@@ -286,19 +286,40 @@ pub(crate) fn draw_mesh(target: &mut Target<'_>, job: &MeshJob<'_>) {
         return;
     }
     let job = MeshJob { clip, ..*job };
-    let indices = &job.mesh.indices;
-    let mut at = 0;
-    while let Some(triangle) = indices.get(at..at + 3) {
-        if let Some(quad) = indices.get(at..at + 6).and_then(|six| quad_of(job.mesh, six)) {
-            draw_quad(target, &job, &quad);
-            at += 6;
-            continue;
+    for piece in pieces(job.mesh) {
+        match piece {
+            Piece::Quad(quad, _) => draw_quad(target, &job, &quad),
+            Piece::Triangle(triangle) => {
+                if let [Some(a), Some(b), Some(c)] = [vertex(job.mesh, triangle, 0), vertex(job.mesh, triangle, 1), vertex(job.mesh, triangle, 2)] {
+                    draw_triangle(target, &job, [a, b, c]);
+                }
+            }
         }
-        if let [Some(a), Some(b), Some(c)] = [vertex(job.mesh, triangle, 0), vertex(job.mesh, triangle, 1), vertex(job.mesh, triangle, 2)] {
-            draw_triangle(target, &job, [a, b, c]);
+    }
+}
+
+/// A part of a mesh as `draw_mesh` draws it.
+pub(crate) enum Piece<'a> {
+    /// Two triangles (their six indices) drawn as one rectangle.
+    Quad(Quad, &'a [u32]),
+    /// Three indices drawn as a triangle.
+    Triangle(&'a [u32]),
+}
+
+/// How a mesh is drawn, in order. What finds the changed parts of a frame reads the same pieces,
+/// so the same triangles drawn another way count as a change.
+pub(crate) fn pieces(mesh: &Mesh) -> impl Iterator<Item = Piece<'_>> {
+    let indices = &mesh.indices;
+    let mut at = 0;
+    std::iter::from_fn(move || {
+        let triangle = indices.get(at..at + 3)?;
+        if let Some((six, quad)) = indices.get(at..at + 6).and_then(|six| Some((six, quad_of(mesh, six)?))) {
+            at += 6;
+            return Some(Piece::Quad(quad, six));
         }
         at += 3;
-    }
+        Some(Piece::Triangle(triangle))
+    })
 }
 
 fn vertex<'a>(mesh: &'a Mesh, indices: &[u32], at: usize) -> Option<&'a Vertex> {
@@ -306,7 +327,7 @@ fn vertex<'a>(mesh: &'a Mesh, indices: &[u32], at: usize) -> Option<&'a Vertex> 
 }
 
 /// An axis-aligned rectangle of one colour whose texture coordinates follow its sides.
-struct Quad {
+pub(crate) struct Quad {
     /// In points.
     min: egui::Pos2,
     max: egui::Pos2,
@@ -398,7 +419,12 @@ fn draw_quad(target: &mut Target<'_>, job: &MeshJob<'_>, quad: &Quad) {
     let linear = texture.linear_at(step_x.abs().max(step_y.abs()));
     for y in cover.y0..cover.y1 {
         let Some(row) = target.row(y, cover.x0, cover.x1) else { continue };
-        let copied = if own_size { texture.row(i64::from(y) + shift_y, i64::from(cover.x0) + shift_x, i64::from(cover.x1) + shift_x) } else { None };
+        // The shifts come from the mesh's texture coordinates, which may be anything: a shift that
+        // doesn't add up is no copy, and the texels are sampled instead.
+        let texels = |row: i32, from: i32, to: i32| {
+            texture.row(i64::from(row).checked_add(shift_y)?, i64::from(from).checked_add(shift_x)?, i64::from(to).checked_add(shift_x)?)
+        };
+        let copied = if own_size { texels(y, cover.x0, cover.x1) } else { None };
         if let Some(texels) = copied {
             copy_row(row, texels, tint, texture.opaque);
             continue;
@@ -488,22 +514,36 @@ fn fixed(v: f32) -> i64 {
     (v.clamp(-MAX_COORD, MAX_COORD) * SUBPIXEL as f32).round() as i64
 }
 
+/// The first pixel whose centre is at or after `at` (in subpixels).
+fn first_center_at(at: i64) -> i32 {
+    let pixel = (at - SUBPIXEL / 2 + SUBPIXEL - 1).div_euclid(SUBPIXEL);
+    i32::try_from(pixel).unwrap_or(if pixel < 0 { i32::MIN } else { i32::MAX })
+}
+
+/// One past the last pixel whose centre is at or before `at` (in subpixels).
+fn past_center_at(at: i64) -> i32 {
+    let pixel = (at - SUBPIXEL / 2).div_euclid(SUBPIXEL) + 1;
+    i32::try_from(pixel).unwrap_or(if pixel < 0 { i32::MIN } else { i32::MAX })
+}
+
 fn draw_triangle(target: &mut Target<'_>, job: &MeshJob<'_>, vertices: [&Vertex; 3]) {
     let [a, b, c] = vertices;
     let position = |v: &Vertex| (v.pos.x * job.scale, v.pos.y * job.scale);
-    let (pa, pb, pc) = (position(a), position(b), position(c));
+    let fixed_point = |p: (f32, f32)| (fixed(p.0), fixed(p.1));
+    let (mut fa, mut fb, fc) = (fixed_point(position(a)), fixed_point(position(b)), fixed_point(position(c)));
+    // From the same snapped corners the edges are tested with: a corner snapped across a pixel
+    // centre would otherwise leave that centre out of the bounds of the triangle that owns it.
+    // The bounds hold every centre on the triangle's border; `span` decides which are inside.
     let bounds = PixelRect::new(
-        first_center(pa.0.min(pb.0).min(pc.0)),
-        first_center(pa.1.min(pb.1).min(pc.1)),
-        first_center(pa.0.max(pb.0).max(pc.0)),
-        first_center(pa.1.max(pb.1).max(pc.1)),
+        first_center_at(fa.0.min(fb.0).min(fc.0)),
+        first_center_at(fa.1.min(fb.1).min(fc.1)),
+        past_center_at(fa.0.max(fb.0).max(fc.0)),
+        past_center_at(fa.1.max(fb.1).max(fc.1)),
     )
     .intersect(job.clip);
     if bounds.is_empty() {
         return;
     }
-    let fixed_point = |p: (f32, f32)| (fixed(p.0), fixed(p.1));
-    let (mut fa, mut fb, fc) = (fixed_point(pa), fixed_point(pb), fixed_point(pc));
     let (mut a, mut b) = (a, b);
     // Either winding is drawn: egui doesn't cull. Turn the triangle so that inside is positive.
     if Edge::new(fa, fb).at(fc.0, fc.1) < 0 {
@@ -537,11 +577,17 @@ fn draw_triangle(target: &mut Target<'_>, job: &MeshJob<'_>, vertices: [&Vertex;
     for (slot, step) in per_pixel.iter_mut().enumerate() {
         *step = edges.iter().zip(&corners).map(|(edge, corner)| (edge.cx * SUBPIXEL) as f64 / area * f64::from(corner[slot])).sum::<f64>() as f32;
     }
+    // And from one row to the next: with both, the filter sees how many texels a pixel covers
+    // across and down. A texture enlarged across but shrunk down is shrunk.
+    let per_row = |slot: usize| -> f32 {
+        edges.iter().zip(&corners).map(|(edge, corner)| (edge.cy * SUBPIXEL) as f64 / area * f64::from(corner[slot])).sum::<f64>() as f32
+    };
+    let texels_per_pixel = per_pixel[4].abs().max(per_pixel[5].abs()).max(per_row(4).abs()).max(per_row(5).abs());
     let shade = if one_texel {
         let texel = texture.nearest(corners[0][4], corners[0][5]);
         if one_color { Shade::Flat(modulate(texel, pack(a.color))) } else { Shade::Gradient(texel) }
     } else {
-        Shade::Textured { linear: texture.linear_at(per_pixel[4].abs().max(per_pixel[5].abs())), tint: one_color.then(|| pack(a.color)) }
+        Shade::Textured { linear: texture.linear_at(texels_per_pixel), tint: one_color.then(|| pack(a.color)) }
     };
     for y in bounds.y0..bounds.y1 {
         let center_y = i64::from(y) * SUBPIXEL + SUBPIXEL / 2;

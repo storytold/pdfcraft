@@ -13,7 +13,7 @@ use egui::{TextureId, TexturesDelta};
 use winit::window::Window;
 
 use super::damage::{Damage, mix};
-use super::raster::{MeshJob, PixelRect, Target, Texture, draw_mesh};
+use super::raster::{MeshJob, Piece, PixelRect, Target, Texture, draw_mesh, pieces};
 
 /// The longest side of a texture egui may ask for. Nothing here limits it; this is what Direct3D
 /// offers, so pages are cut into tiles the same way as on a GPU.
@@ -225,13 +225,25 @@ fn vertex_hash(hash: u64, vertex: &Vertex) -> u64 {
 }
 
 /// Adds every triangle of `mesh` to the tiles it may touch. Returns the pixels the mesh may touch.
+///
+/// A triangle's mark says whether it is drawn as half of a rectangle or by itself (`pieces`, as
+/// `draw_mesh` draws), as the two can differ by a pixel's blend. Indices themselves are left out:
+/// they shift whenever anything earlier in the mesh changes, and everything after it would be
+/// redrawn.
 fn mark(damage: &mut Damage, mesh: &egui::Mesh, clip: PixelRect, scale: f32, seed: u64) -> PixelRect {
     let mut bounds = PixelRect::default();
     if clip.is_empty() {
         return bounds;
     }
     let vertex = |index: &u32| mesh.vertices.get(usize::try_from(*index).ok()?);
-    for [a, b, c] in mesh.indices.as_chunks::<3>().0 {
+    let triangles = pieces(mesh).flat_map(|piece| {
+        let (path, indices) = match piece {
+            Piece::Quad(_, six) => (1, six),
+            Piece::Triangle(three) => (2, three),
+        };
+        indices.as_chunks::<3>().0.iter().map(move |triangle| (path, triangle))
+    });
+    for (path, [a, b, c]) in triangles {
         let [Some(a), Some(b), Some(c)] = [vertex(a), vertex(b), vertex(c)] else { continue };
         let (x0, x1) = (a.pos.x.min(b.pos.x).min(c.pos.x) * scale, a.pos.x.max(b.pos.x).max(c.pos.x) * scale);
         let (y0, y1) = (a.pos.y.min(b.pos.y).min(c.pos.y) * scale, a.pos.y.max(b.pos.y).max(c.pos.y) * scale);
@@ -240,7 +252,7 @@ fn mark(damage: &mut Damage, mesh: &egui::Mesh, clip: PixelRect, scale: f32, see
         if area.is_empty() {
             continue;
         }
-        damage.add(area, vertex_hash(vertex_hash(vertex_hash(seed, a), b), c));
+        damage.add(area, vertex_hash(vertex_hash(vertex_hash(mix(seed, path), a), b), c));
         bounds = bounds.union(area);
     }
     bounds

@@ -2,31 +2,84 @@
 //!
 //! eframe's own file storage is private to its GPU integrations. This one keeps the same file: a
 //! RON map from keys to strings, so settings saved by either renderer are read by the other.
+//!
+//! Saving happens on a thread of its own, as in eframe: an autosave while scrolling doesn't wait
+//! for the disk (a roaming profile can be slow). One write runs at a time, so saves land in order,
+//! and the last one is waited for when the store is dropped.
 
 use std::collections::HashMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::thread::JoinHandle;
+use std::time::Duration;
+
+/// Reads of a settings file that exists but isn't settings: another window may be writing it.
+const READ_ATTEMPTS: u32 = 4;
+const READ_RETRY: Duration = Duration::from_millis(50);
 
 pub(crate) struct FileStore {
     path: PathBuf,
     values: HashMap<String, String>,
+    /// Changes not yet handed to a write.
     dirty: bool,
+    /// The write in progress, if any.
+    writing: Option<JoinHandle<Result<(), String>>>,
 }
 
 impl FileStore {
     /// The settings in `path`; none when there is no such file or it can't be read as settings.
     pub(crate) fn open(path: PathBuf) -> Self {
-        let values = match read(&path) {
+        let values = match read_settled(&path, READ_ATTEMPTS, READ_RETRY) {
             Ok(values) => values,
             Err(e) => {
                 if path.exists() {
-                    log::warn!("settings in {} were not read: {e}", path.display());
+                    // Kept before anything is saved over it, so what it held can be recovered.
+                    let kept = sibling(&path, ".unreadable");
+                    let copied = std::fs::copy(&path, &kept).map(|_| format!("; a copy is in {}", kept.display())).unwrap_or_default();
+                    log::warn!("settings in {} were not read: {e}{copied}", path.display());
                 }
                 HashMap::new()
             }
         };
-        Self { path, values, dirty: false }
+        Self { path, values, dirty: false, writing: None }
     }
+
+    /// Waits for the write in progress, and takes its result: a failed write leaves the changes to
+    /// be saved again.
+    fn settle(&mut self) {
+        let Some(writing) = self.writing.take() else { return };
+        let result = writing.join().unwrap_or_else(|_| Err("the writer stopped".to_owned()));
+        if let Err(e) = result {
+            log::warn!("settings were not saved to {}: {e}", self.path.display());
+            self.dirty = true;
+        }
+    }
+}
+
+impl Drop for FileStore {
+    /// The last save is waited for, and whatever changed after it is written before the app ends.
+    fn drop(&mut self) {
+        self.settle();
+        if self.dirty
+            && let Err(e) = write(&self.path, &self.values)
+        {
+            log::warn!("settings were not saved to {}: {e}", self.path.display());
+        }
+    }
+}
+
+/// The settings in `path`, read up to `attempts` times while the file exists but isn't settings:
+/// it may be in the middle of being written by another window (eframe writes it in place).
+fn read_settled(path: &Path, attempts: u32, pause: Duration) -> Result<HashMap<String, String>, String> {
+    let mut result = read(path);
+    for _ in 1..attempts {
+        if result.is_ok() || !path.exists() {
+            break;
+        }
+        std::thread::sleep(pause);
+        result = read(path);
+    }
+    result
 }
 
 fn read(path: &Path) -> Result<HashMap<String, String>, String> {
@@ -53,13 +106,18 @@ fn write(path: &Path, values: &HashMap<String, String>) -> Result<(), String> {
     moved.map_err(|e| e.to_string())
 }
 
+/// `path` with `suffix` added to its name.
+fn sibling(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
 /// Where process `process` stages a new `path`. Each process has its own, so two windows saving at
 /// once (a second instance that didn't hand its files on) never write into one file and move a
 /// mixture over the settings; the last whole file to be moved wins.
 fn staged_path(path: &Path, process: u32) -> PathBuf {
-    let mut staged = path.as_os_str().to_owned();
-    staged.push(format!(".{process}.tmp"));
-    PathBuf::from(staged)
+    sibling(path, &format!(".{process}.tmp"))
 }
 
 impl eframe::Storage for FileStore {
@@ -78,14 +136,27 @@ impl eframe::Storage for FileStore {
         self.dirty |= self.values.remove(key).is_some();
     }
 
+    /// Hands the changes to a write on its own thread. While an earlier write is still running they
+    /// stay for the next save (or the last one, when the store is dropped).
     fn flush(&mut self) {
+        if self.writing.as_ref().is_some_and(|writing| !writing.is_finished()) {
+            return;
+        }
+        self.settle();
         if !self.dirty {
             return;
         }
-        match write(&self.path, &self.values) {
-            Ok(()) => self.dirty = false,
-            // Still dirty: the next save tries again.
-            Err(e) => log::warn!("settings were not saved to {}: {e}", self.path.display()),
+        let (path, values) = (self.path.clone(), self.values.clone());
+        match std::thread::Builder::new().name("settings".to_owned()).spawn(move || write(&path, &values)) {
+            Ok(writing) => {
+                self.writing = Some(writing);
+                self.dirty = false;
+            }
+            // No thread to be had: saved here instead.
+            Err(_) => match write(&self.path, &self.values) {
+                Ok(()) => self.dirty = false,
+                Err(e) => log::warn!("settings were not saved to {}: {e}", self.path.display()),
+            },
         }
     }
 }
@@ -95,6 +166,12 @@ mod tests {
     use super::*;
     use eframe::Storage as _;
 
+    /// Saves and waits for the write, as the store does when it is dropped.
+    fn save(store: &mut FileStore) {
+        store.flush();
+        store.settle();
+    }
+
     #[test]
     fn settings_survive_a_round_trip_and_a_file_that_is_not_settings() {
         let folder = std::env::temp_dir().join(format!("pdfcraft-soft-store-{}", std::process::id()));
@@ -103,20 +180,77 @@ mod tests {
         assert_eq!(store.get_string("pdfcraft"), None);
         store.set_string("pdfcraft", "{\"a\": \"quoted \\\" and\\nnewline\"}".to_owned());
         store.set_string("window", "(x: 1)".to_owned());
-        store.flush();
+        save(&mut store);
         let mut again = FileStore::open(path.clone());
         assert_eq!(again.get_string("pdfcraft").as_deref(), Some("{\"a\": \"quoted \\\" and\\nnewline\"}"));
         again.remove_string("window");
-        again.flush();
+        save(&mut again);
         assert_eq!(FileStore::open(path.clone()).get_string("window"), None);
         assert!(!staged_path(&path, std::process::id()).exists(), "the staged copy was moved, not left");
 
-        std::fs::write(&path, "not ron at all {{{").expect("write");
+        let garbage = "not ron at all {{{";
+        std::fs::write(&path, garbage).expect("write");
         let mut broken = FileStore::open(path.clone());
         assert_eq!(broken.get_string("pdfcraft"), None, "unreadable settings start empty, they don't stop the app");
+        assert_eq!(
+            std::fs::read_to_string(sibling(&path, ".unreadable")).ok().as_deref(),
+            Some(garbage),
+            "and are kept before anything is saved over them"
+        );
         broken.set_string("pdfcraft", "x".to_owned());
-        broken.flush();
+        save(&mut broken);
         assert_eq!(FileStore::open(path).get_string("pdfcraft").as_deref(), Some("x"));
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn the_last_changes_are_written_when_the_store_goes() {
+        let folder = std::env::temp_dir().join(format!("pdfcraft-soft-store-last-{}", std::process::id()));
+        let path = folder.join("app.ron");
+        let mut store = FileStore::open(path.clone());
+        store.set_string("first", "1".to_owned());
+        store.flush();
+        // Changed again while the first write may still be running: kept for the last save.
+        store.set_string("second", "2".to_owned());
+        store.flush();
+        drop(store);
+        let saved = FileStore::open(path);
+        assert_eq!((saved.get_string("first").as_deref(), saved.get_string("second").as_deref()), (Some("1"), Some("2")));
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn a_failed_write_keeps_the_changes_to_be_saved_again() {
+        let folder = std::env::temp_dir().join(format!("pdfcraft-soft-store-failed-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("folder");
+        // The settings' folder is a file: nothing can be written.
+        let blocker = folder.join("blocked");
+        std::fs::write(&blocker, "").expect("file");
+        let mut store = FileStore::open(blocker.join("app.ron"));
+        store.set_string("pdfcraft", "x".to_owned());
+        save(&mut store);
+        assert!(store.dirty, "still to be saved");
+        drop(store);
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn settings_being_written_by_another_window_are_read_once_written() {
+        let folder = std::env::temp_dir().join(format!("pdfcraft-soft-store-settle-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("folder");
+        let path = folder.join("app.ron");
+        // Truncated, as eframe leaves the file while it writes it in place.
+        std::fs::write(&path, "{\"pdfcraft\": \"x").expect("write");
+        let finisher = {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(20));
+                std::fs::write(&path, "{\"pdfcraft\": \"x\"}").expect("write");
+            })
+        };
+        let read = read_settled(&path, 20, Duration::from_millis(25));
+        let _ = finisher.join();
+        assert_eq!(read.ok().and_then(|values| values.get("pdfcraft").cloned()).as_deref(), Some("x"));
         let _ = std::fs::remove_dir_all(folder);
     }
 

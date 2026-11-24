@@ -133,8 +133,11 @@ fn opengl_is_the_fallback_unless_a_renderer_was_chosen() {
 #[test]
 fn the_window_is_drawn_on_the_processor_only_over_remote_desktop_without_a_gpu_or_when_asked() {
     use super::{RendererChoice, draws_in_software, renderer_choice, retry_with_gl};
+    // Only Windows has the software renderer: elsewhere the names are unrecognised, and wgpu keeps
+    // its fallback to OpenGL.
+    let named = if cfg!(target_os = "windows") { RendererChoice::Software } else { RendererChoice::Auto };
     for software in ["software", " Soft ", "CPU"] {
-        assert_eq!(renderer_choice(Some(software)), RendererChoice::Software);
+        assert_eq!(renderer_choice(Some(software)), named);
     }
     assert!(!retry_with_gl(RendererChoice::Software, false), "a chosen renderer is not worked around");
     let never_asked = || -> bool { panic!("the graphics processor is looked for only in a Remote Desktop session with no renderer chosen") };

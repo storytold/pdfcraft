@@ -296,3 +296,58 @@ fn blending_is_premultiplied_and_saturates() {
     assert_eq!(modulate(0x8080_8080, 0xFFFF_0000), 0x8080_0000);
     assert_eq!((lerp(0xFF00_0000, 0xFFFF_FFFF, 0), lerp(0xFF00_0000, 0xFFFF_FFFF, 256)), (0xFF00_0000, 0xFFFF_FFFF));
 }
+
+#[test]
+fn a_rectangle_with_a_texture_coordinate_out_of_range_is_sampled_not_copied() {
+    // A rectangle as wide as the copy tolerance, with one huge texture coordinate across it: it
+    // passes for a texture at its own size, and the texel column it would be copied from is past
+    // what an `i64` holds. Adding it to a pixel column overflowed.
+    let texture = numbered(4, 4, TextureOptions::NEAREST);
+    let far = 1e20 / 4.0;
+    let mesh = textured(Rect::from_min_max(pos2(1.49, 0.0), pos2(1.51, 2.0)), Rect::from_min_max(pos2(far, 0.0), pos2(far, 0.5)), Color32::WHITE);
+    let mut canvas = Canvas::new(4, 4);
+    canvas.draw(&mesh, &texture, canvas.all(), 1.0);
+    assert!(canvas.touched().iter().all(|(x, _)| *x == 1), "only the column the rectangle holds the centre of");
+}
+
+#[test]
+fn a_corner_snapped_onto_a_pixel_centre_still_lets_one_triangle_draw_it() {
+    // Two triangles share an edge a 1024th of a pixel right of the centres of column 1. Snapped
+    // to the subpixel grid, the edge runs through those centres, and the right triangle owns them.
+    // Its bounds came from the corners before snapping and started at column 2: the column was
+    // nobody's.
+    let edge = 1.5 + 1.0 / 1024.0;
+    let color = Color32::from_rgba_premultiplied(64, 0, 0, 128);
+    let point = |x: f32, y: f32| Vertex { pos: pos2(x, y), uv: egui::epaint::WHITE_UV, color };
+    let mut mesh = Mesh::default();
+    mesh.vertices.extend([point(edge, 0.0), point(edge, 8.0), point(-8.0, 4.0), point(10.0, 4.0)]);
+    mesh.indices.extend([0, 1, 2, 0, 1, 3]);
+    let mut canvas = Canvas::new(10, 8);
+    canvas.draw(&mesh, &solid(Color32::WHITE), canvas.all(), 1.0);
+    let once = over(BLACK, pack(color));
+    for y in 0..8 {
+        assert_eq!(canvas.at(1, y), once, "pixel (1, {y}) is drawn by exactly one triangle");
+    }
+}
+
+#[test]
+fn a_texture_shrunk_one_way_is_filtered_as_shrunk_whichever_way_it_grows() {
+    // A 4×8 texture over 8×2 pixels: enlarged across, shrunk eight times down. With linear
+    // shrinking, the magnification filter must not matter: it was chosen from the across
+    // direction alone, so nearest enlarging picked single texel rows.
+    let triangle = |texture: &Texture| {
+        let corner = |x: f32, y: f32, u: f32, v: f32| Vertex { pos: pos2(x, y), uv: pos2(u, v), color: Color32::WHITE };
+        let mut mesh = Mesh::with_texture(TextureId::Managed(1));
+        mesh.vertices.extend([corner(0.0, 0.0, 0.0, 0.0), corner(8.0, 0.0, 1.0, 0.0), corner(0.0, 2.0, 0.0, 1.0)]);
+        mesh.indices.extend([0, 1, 2]);
+        let mut canvas = Canvas::new(8, 2);
+        canvas.draw(&mesh, texture, canvas.all(), 1.0);
+        canvas.pixels
+    };
+    let nearest_enlarging = TextureOptions { magnification: TextureFilter::Nearest, ..TextureOptions::LINEAR };
+    let pixels = |options| {
+        let pixels = (0..8).flat_map(|y| (0..4).map(move |x| Color32::from_rgb((x * 60) as u8, (y * 30) as u8, 7))).collect();
+        Texture::new(&egui::ColorImage::new([4, 8], pixels), options)
+    };
+    assert_eq!(triangle(&pixels(nearest_enlarging)), triangle(&pixels(TextureOptions::LINEAR)));
+}

@@ -338,8 +338,8 @@ enum RendererChoice {
     Wgpu,
     /// OpenGL only (`gl`, `opengl` or `glow`): for drivers where wgpu starts but misbehaves.
     Gl,
-    /// Drawn on the processor (`software`, `soft` or `cpu`; Windows only, wgpu elsewhere): no
-    /// graphics driver is loaded at all.
+    /// Drawn on the processor (`software`, `soft` or `cpu`, on Windows; elsewhere those mean
+    /// `Auto`): no graphics driver is loaded at all.
     Software,
 }
 
@@ -347,7 +347,9 @@ fn renderer_choice(value: Option<&str>) -> RendererChoice {
     match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
         Some("wgpu") => RendererChoice::Wgpu,
         Some("gl" | "opengl" | "glow") => RendererChoice::Gl,
-        Some("software" | "soft" | "cpu") => RendererChoice::Software,
+        // Only Windows has the software renderer; elsewhere these stay unrecognised, so wgpu keeps
+        // its fallback to OpenGL.
+        Some("software" | "soft" | "cpu") if cfg!(target_os = "windows") => RendererChoice::Software,
         _ => RendererChoice::Auto,
     }
 }
@@ -372,8 +374,14 @@ fn draws_in_software(choice: RendererChoice, remote: bool, has_graphics_processo
 #[cfg(target_os = "windows")]
 fn has_graphics_processor() -> bool {
     use eframe::wgpu;
-    // The instance the window itself would be drawn with.
-    let instance = pollster::block_on(native_options(false, false, eframe::Renderer::Wgpu).wgpu_options.wgpu_setup.new_instance());
+    // The instance the window itself would be drawn with, but always with Direct3D 12: a
+    // `WGPU_BACKEND` that leaves it out (`gl`) chooses how wgpu draws, not whether there is a GPU,
+    // and an instance without the backend would find no adapter on it.
+    let mut setup = native_options(false, false, eframe::Renderer::Wgpu).wgpu_options.wgpu_setup;
+    if let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut setup {
+        create.instance_descriptor.backends = wgpu::Backends::DX12;
+    }
+    let instance = pollster::block_on(setup.new_instance());
     let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::DX12));
     let hardware = adapters.iter().map(wgpu::Adapter::get_info).find(|info| info.device_type != wgpu::DeviceType::Cpu);
     match &hardware {
