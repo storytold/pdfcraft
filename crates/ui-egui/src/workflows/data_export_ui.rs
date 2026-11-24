@@ -2,11 +2,16 @@
 //! opens. The macOS save panel shows no list of file types, so a choice offered only there could
 //! not be found (#5215).
 
-use egui::{Align, Layout};
+use craft::ui::contract::Bind;
+use craft::ui::dialog::{DialogResult, dialog_id};
+use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind};
+use craft::ui::runtime::env::Label;
 use pdfcraft_engine::DataFormat;
 
-use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, widgets};
+use crate::PdfCraftApp;
+
+/// The dialog's one row: the format, by its extension.
+const FORMAT: &str = "format";
 
 /// What a data export writes out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,46 +77,50 @@ fn active_is_xfa(app: &PdfCraftApp) -> bool {
     app.active_ids().and_then(|(_, id)| app.session.get(id)).is_some_and(|d| d.info.xfa.is_some())
 }
 
-/// The dialog's body: the Format list, then Export and Cancel.
-pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, _t: &Tokens, kind: DataKind) -> (bool, bool) {
+impl DataKind {
+    const ALL: [DataKind; 2] = [DataKind::Comments, DataKind::FormData];
+
+    /// The dialog's key: the command that opens it. Each kind has its own so a result says which it answers.
+    fn key(self) -> &'static str {
+        match self {
+            DataKind::Comments => "comment.export",
+            DataKind::FormData => "form.export_data",
+        }
+    }
+}
+
+/// `format` as the Format list shows it: its name and extension.
+fn label(format: DataFormat) -> String {
+    format!("{} (.{})", name(format), extension(format))
+}
+
+/// Opens the dialog for `kind` over the active document: the Format list, then Export and Cancel.
+pub(crate) fn open(app: &mut PdfCraftApp, ctx: &egui::Context, kind: DataKind) {
     let offered = formats(kind, active_is_xfa(app));
-    let shown = chosen(app, kind);
-    let mut current = shown;
-    ui.label(
-        egui::RichText::new(match kind {
+    let Some(format) = chosen(app, kind) else { return };
+    let fields = DialogFields::from_pairs([(FORMAT, extension(format))]);
+    let dialog = HostedParamDialog::new(ctx, kind.key(), fields, move |fields| {
+        let options = offered.iter().map(|f| (extension(*f).to_string(), Label::from(label(*f)))).collect();
+        let title = match kind {
             DataKind::Comments => tl!("Export comments"),
             DataKind::FormData => tl!("Export form data"),
-        })
-        .font(theme::semibold(18.0)),
-    );
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        let title = ui.label(tl!("Format"));
-        let label = |f: DataFormat| format!("{} (.{})", name(f), extension(f));
-        let combo = craft_ui::ComboBox::from_id_salt("export-data-format").selected_text(current.map(label).unwrap_or_default()).show_ui(ui, |ui| {
-            for f in offered {
-                ui.selectable_value(&mut current, Some(*f), label(*f));
-            }
-        });
-        // The visible label names the list for assistive technology and tests.
-        combo.response.labelled_by(title.id);
+        };
+        ParamDialog::command(kind.key(), title, vec![Param::new(FORMAT, tl!("Format"), ParamKind::choice(options, None))])
+            .values(Bind::bound(fields))
+            .ok_label(tl!("Export").into())
     });
-    // Only a choice the user makes is remembered: drawing another kind's default, then
-    // cancelling, keeps the format chosen before.
-    if current != shown {
-        app.data_format = current;
+    crate::dialogs::host::open(app, dialog);
+}
+
+/// Takes what the dialogs answered this pass: Export remembers the format and asks where to save.
+/// Only a choice exported with is remembered: a cancelled dialog keeps the format chosen before.
+pub(crate) fn pass(ctx: &egui::Context, app: &mut PdfCraftApp) {
+    for kind in DataKind::ALL {
+        let Some(DialogResult::Ok(result)) = app.dialogs.take_by_id::<HostedParamDialog>(dialog_id(kind.key())) else { continue };
+        let Some(format) = result.fields.text(FORMAT).and_then(DataFormat::from_extension) else { continue };
+        app.data_format = Some(format);
+        app.export_data_as(ctx, kind, format);
     }
-    ui.add_space(12.0);
-    let (mut apply, mut cancel) = (false, false);
-    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        if ui.add_enabled_ui(current.is_some(), |ui| widgets::pill_button(ui, tl!("Export"), true)).inner.clicked() {
-            apply = true;
-        }
-        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-            cancel = true;
-        }
-    });
-    (apply, cancel)
 }
 
 #[cfg(test)]
