@@ -14,11 +14,14 @@
 //!
 //! A glyph a clip hides shows nowhere, so it is no link's: a clip that encloses no area hides
 //! everything; a clip rectangle, through the CTM, hides a glyph whose centre is outside it; any
-//! other clip path hides one whose centre is outside its shape, by the nonzero rule for `W` and
-//! the even-odd rule for `W*` (§8.5.3.3), with its curves flattened to [`CURVE_SEGMENTS`] lines
-//! each. Past [`MAX_CLIP_QUADS`] turned rectangles in one state a rectangle, and past the
-//! document's [`MAX_CLIP_WORK`] any other path, counts by the box around it, so a glyph inside the
-//! box is taken as shown; past [`MAX_SAVED`] nested `q`, clips are not followed, and clipping by
+//! other clip path hides one whose centre is outside the area it encloses, by the nonzero rule for
+//! `W` and the even-odd rule for `W*` (§8.5.3.3), its curves followed exactly. A subpath whose
+//! points lie on one line encloses none. A glyph centred on the outline of the area the clips
+//! leave together (§8.5.4) shows where that area reaches it, from any side, so a line a path
+//! traces with no area beside it, or the edge where two clips only meet, shows nothing. Past
+//! [`MAX_CLIP_QUADS`] turned rectangles in one state a rectangle, and past the document's
+//! [`MAX_CLIP_WORK`] any other path, counts by the box around it, so a glyph inside the box is
+//! taken as shown; past [`MAX_SAVED`] nested `q`, clips are not followed, and clipping by
 //! text (render modes 4 to 7) never is. Hidden text inside a link's text is an artifact: in no
 //! element, and no interruption.
 
@@ -49,11 +52,15 @@ const WORD_GAP: f64 = 0.15;
 const MAX_SAVED: usize = 64;
 /// Clip rectangles not aligned with the axes that are followed exactly in one graphics state.
 const MAX_CLIP_QUADS: usize = 16;
-/// The line segments a Bézier curve of a clip path is followed by.
-const CURVE_SEGMENTS: usize = 16;
-/// Clip-path work in one document: each line segment a clip path is kept as, and each segment a
-/// glyph is tested against. Every glyph inside a clip path's box is tested, near a link or not.
-/// Past it, a clip path counts by the box around it.
+/// The clip work a Bézier curve of a clip path costs, where a line costs one: about what finding
+/// where it crosses a line takes.
+const CURVE_WORK: usize = 64;
+/// Halvings that find where a stretch of a curve crosses a line: past them, its parameter is
+/// known to about 1e-18.
+const HALVINGS: usize = 60;
+/// Clip-path work in one document: each line and curve a clip path is kept as, and each a glyph
+/// is tested against (again for each way out of a point on an outline). Every glyph inside a clip
+/// path's box is tested, near a link or not. Past it, a clip path counts by the box around it.
 const MAX_CLIP_WORK: usize = 50_000_000;
 /// Characters of a `/Contents` description written from a link's text or address.
 const MAX_CONTENTS: usize = 200;
@@ -141,7 +148,7 @@ pub(crate) fn page_links(doc: &Document, page: &Dict, index: usize, budget: &mut
             return Err(unsupported(
                 index,
                 format!(
-                    "the document's links have too many quadrilaterals (maximum {MAX_LINK_AREAS} in all, from {MAX_QUAD_VALUES} /QuadPoints numbers)"
+                    "the document's links have too many link areas (maximum {MAX_LINK_AREAS} in all, including fallback rectangles, from {MAX_QUAD_VALUES} /QuadPoints numbers)"
                 ),
             ));
         };
@@ -432,9 +439,10 @@ struct State {
 
 /// Clips that enclose some area, as far as they are followed: a rectangle (`re`, the only
 /// subpath of its path) exactly, through the CTM; any other path by its shape, through the CTM,
-/// while the document's clip work lasts, and past it by its bounding box, which holds the path, so
-/// a glyph outside the box is hidden, and one inside it is taken as shown. Each clip narrows the
-/// one before (§8.5.4), so they are kept together. In default user space.
+/// while the document's clip work lasts, and past it by the box around the subpaths that enclose
+/// some area, which holds the clip, so a glyph outside the box is hidden, and one inside it is
+/// taken as shown. Each clip narrows the one before (§8.5.4), so they are kept together, and a
+/// glyph on an outline is tested against all of them at once. In default user space.
 #[derive(Clone, Default)]
 struct Clip {
     /// The intersection of the clips' bounding boxes, `[x0, y0, x1, y1]`; `None` until a clip
@@ -449,33 +457,23 @@ struct Clip {
     paths: Option<Rc<ClipPath>>,
 }
 
-/// A clip path that is not one rectangle, as line segments in default user space.
+/// A clip path that is not one rectangle: the subpaths that enclose some area, as their pieces in
+/// default user space, each subpath closed by a line back to its first point.
 struct ClipPath {
-    /// Its subpaths, each closed from its last point back to its first. With each point, the
-    /// curve the line ending there was flattened from, by its place in [`ClipPath::bends`] from 1
-    /// (0 for a straight line).
-    polygons: Vec<Polygon>,
-    /// The curves its lines were flattened from ([`Bend`]).
-    bends: Vec<Bend>,
+    pieces: Vec<Piece>,
     /// `W*`: the even-odd rule; else nonzero winding.
     even_odd: bool,
-    /// Its segments: what a glyph test against it costs.
+    /// The clip work a test against it costs: one for each line, [`CURVE_WORK`] for each curve.
     segments: usize,
     /// The clip path it narrows.
     under: Option<Rc<ClipPath>>,
 }
 
-/// A subpath as a polygon: each point with the curve the line ending there was flattened from, by
-/// its place in a [`Bend`] list from 1 (0 for a straight line).
-type Polygon = Vec<((f64, f64), usize)>;
-
-/// How far the lines of one curve can stray from it, and the box around its control points,
-/// which holds the curve: a point within the slack of one of its lines and inside the box is
-/// taken as inside, so flattening a curve hides no glyph that shows.
+/// A line from one point to another, or a Bézier curve by its four points.
 #[derive(Clone, Copy)]
-struct Bend {
-    slack: f64,
-    bounds: [f64; 4],
+enum Piece {
+    Line((f64, f64), (f64, f64)),
+    Curve([(f64, f64); 4]),
 }
 
 impl Drop for ClipPath {
@@ -488,57 +486,214 @@ impl Drop for ClipPath {
     }
 }
 
+/// Where `w` is from the line through the origin along `d`: left of it when positive.
+fn cross(d: (f64, f64), w: (f64, f64)) -> f64 {
+    d.0 * w.1 - d.1 * w.0
+}
+
+fn dot(d: (f64, f64), w: (f64, f64)) -> f64 {
+    d.0 * w.0 + d.1 * w.1
+}
+
+/// A cubic in Bernstein form (`k`, its four values) at `t`, in the power basis, so a curve whose
+/// four values are equal is exactly that value everywhere.
+fn cubic(k: [f64; 4], t: f64) -> f64 {
+    let c1 = 3.0 * (k[1] - k[0]);
+    let c2 = 3.0 * (k[0] - 2.0 * k[1] + k[2]);
+    let c3 = k[3] - k[0] + 3.0 * (k[1] - k[2]);
+    ((c3 * t + c2) * t + c1) * t + k[0]
+}
+
+/// The cubic's slope at `t`.
+fn slope(k: [f64; 4], t: f64) -> f64 {
+    let c1 = 3.0 * (k[1] - k[0]);
+    let c2 = 3.0 * (k[0] - 2.0 * k[1] + k[2]);
+    let c3 = k[3] - k[0] + 3.0 * (k[1] - k[2]);
+    (3.0 * c3 * t + 2.0 * c2) * t + c1
+}
+
+/// How near, against the size of the points around it, a point counts as on a curve: well past
+/// what rounding moves it by.
+const NEAR: f64 = 1e-9;
+
+/// The ways along the axes.
+const AXES: [(f64, f64); 4] = [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)];
+
+/// The cubic's ends and where it turns inside (0, 1), in order: the first `n` of the array.
+fn stretches(k: [f64; 4]) -> ([f64; 4], usize) {
+    let (a, b, c) = (3.0 * (k[3] - k[0] + 3.0 * (k[1] - k[2])), 6.0 * (k[0] - 2.0 * k[1] + k[2]), 3.0 * (k[1] - k[0]));
+    let roots = if a == 0.0 {
+        [if b == 0.0 { f64::NAN } else { -c / b }, f64::NAN]
+    } else {
+        let r = (b * b - 4.0 * a * c).sqrt();
+        [(-b - r) / (2.0 * a), (-b + r) / (2.0 * a)]
+    };
+    let (mut ts, mut n) = ([0.0, 1.0, 1.0, 1.0], 1);
+    for t in roots {
+        // A NaN (no root) fails both tests.
+        if t > 0.0 && t < 1.0 {
+            ts[n] = t;
+            n += 1;
+        }
+    }
+    ts[1..n].sort_by(f64::total_cmp);
+    ts[n] = 1.0;
+    (ts, n + 1)
+}
+
 impl ClipPath {
-    /// Whether `(x, y)` is inside the path by its rule, or on its edge or within the slack of a
-    /// curve's line. A side too large to measure (an overflow) is taken as inside.
-    fn holds(&self, (x, y): (f64, f64)) -> bool {
-        let mut winding = 0i64;
-        for polygon in &self.polygons {
-            for (i, &(a, _)) in polygon.iter().enumerate() {
-                // The line back to the first point, closing the subpath, is straight.
-                let (b, bend) = polygon.get(i + 1).copied().unwrap_or((polygon.first().map_or(a, |f| f.0), 0));
-                // Where the point is from the edge's line: left of it, going from `a` to `b`, when
-                // positive.
-                let side = (b.0 - a.0) * (y - a.1) - (x - a.0) * (b.1 - a.1);
-                if !side.is_finite() {
-                    return true;
-                }
-                if side == 0.0 && a.0.min(b.0) <= x && x <= a.0.max(b.0) && a.1.min(b.1) <= y && y <= a.1.max(b.1) {
-                    return true;
-                }
-                if let Some(Bend { slack, bounds: k }) = bend.checked_sub(1).and_then(|i| self.bends.get(i)).copied()
-                    && k[0] <= x
-                    && x <= k[2]
-                    && k[1] <= y
-                    && y <= k[3]
-                {
-                    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-                    let along = ((x - a.0) * dx + (y - a.1) * dy) / (dx * dx + dy * dy);
-                    let t = if along.is_finite() { along.clamp(0.0, 1.0) } else { 0.0 };
-                    let near = (x - a.0 - t * dx).hypot(y - a.1 - t * dy);
-                    if !near.is_finite() || near <= slack {
-                        return true;
+    /// Whether a winding number is inside by the path's rule.
+    fn encloses(&self, winding: i64) -> bool {
+        if self.even_odd { winding % 2 != 0 } else { winding != 0 }
+    }
+
+    /// The winding number of the point a hair from `p` along `d`, and a far smaller hair to its
+    /// left, counted along a ray from `p` along `d`: an edge through `p` (not along `d`) is
+    /// behind that point, and one along `d` below it. Whether the path's outline passes through
+    /// `p` itself; and, into `dirs`, the directions it leaves `p` in. `None` when a side is too
+    /// large to measure (an overflow).
+    fn winding(&self, p: (f64, f64), d: (f64, f64), mut dirs: Option<&mut Vec<(f64, f64)>>) -> Option<(i64, bool)> {
+        let (mut winding, mut on) = (0i64, false);
+        let mut leave = |w: (f64, f64), on: &mut bool| {
+            *on = true;
+            if let Some(dirs) = dirs.as_deref_mut() {
+                dirs.push(w);
+            }
+        };
+        for &piece in &self.pieces {
+            match piece {
+                Piece::Line(a, b) => {
+                    let (va, vb) = (cross(d, (a.0 - p.0, a.1 - p.1)), cross(d, (b.0 - p.0, b.1 - p.1)));
+                    // Where `p` is from the edge's line: left of it, going from `a` to `b`, when
+                    // positive; for an edge that crosses the ray's line, ahead of `p` when it is
+                    // the side the edge goes up on.
+                    let side = (b.0 - a.0) * (p.1 - a.1) - (p.0 - a.0) * (b.1 - a.1);
+                    if !(side.is_finite() && va.is_finite() && vb.is_finite()) {
+                        return None;
                     }
-                }
-                if a.1 <= y {
-                    if b.1 > y && side > 0.0 {
+                    if side == 0.0 && a != b && a.0.min(b.0) <= p.0 && p.0 <= a.0.max(b.0) && a.1.min(b.1) <= p.1 && p.1 <= a.1.max(b.1) {
+                        let along = (b.0 - a.0, b.1 - a.1);
+                        if p != b {
+                            leave(along, &mut on);
+                        }
+                        if p != a {
+                            leave((-along.0, -along.1), &mut on);
+                        }
+                    }
+                    if va <= 0.0 && 0.0 < vb && side > 0.0 {
                         winding += 1;
+                    } else if vb <= 0.0 && 0.0 < va && side < 0.0 {
+                        winding -= 1;
                     }
-                } else if b.1 <= y && side < 0.0 {
-                    winding -= 1;
+                }
+                Piece::Curve(c) => {
+                    let (xs, ys) = (c.map(|q| q.0), c.map(|q| q.1));
+                    let v = c.map(|q| cross(d, (q.0 - p.0, q.1 - p.1)));
+                    let u = c.map(|q| dot(d, (q.0 - p.0, q.1 - p.1)));
+                    if !v.iter().chain(&u).all(|n| n.is_finite()) {
+                        return None;
+                    }
+                    // Its ends at `p`, leaving along the first control point apart from them.
+                    for (end, rest) in [(c[0], [c[1], c[2], c[3]]), (c[3], [c[2], c[1], c[0]])] {
+                        if end == p {
+                            match rest.iter().find(|&&q| q != end) {
+                                Some(q) => leave((q.0 - end.0, q.1 - end.1), &mut on),
+                                None => on = true,
+                            }
+                        }
+                    }
+                    let (vmin, vmax) = v.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &n| (lo.min(n), hi.max(n)));
+                    let (umin, umax) = u.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &n| (lo.min(n), hi.max(n)));
+                    if vmax <= 0.0 || vmin > 0.0 || umax < 0.0 {
+                        continue;
+                    }
+                    if umin > 0.0 {
+                        // Wholly ahead: it crosses as its ends do.
+                        winding += i64::from(v[0] <= 0.0 && 0.0 < v[3]) - i64::from(v[3] <= 0.0 && 0.0 < v[0]);
+                        continue;
+                    }
+                    // Each stretch between its turns crosses the ray's line at most once: where it
+                    // does, found by halving, it counts when ahead of `p`.
+                    let at = |t: f64| {
+                        if t == 0.0 {
+                            v[0]
+                        } else if t == 1.0 {
+                            v[3]
+                        } else {
+                            cubic(v, t)
+                        }
+                    };
+                    let (ts, n) = stretches(v);
+                    let size = v.iter().chain(&u).fold(0.0f64, |m, n| m.max(n.abs()));
+                    // Within a hair of `p`, against the size of the curve around it, the curve
+                    // passes through `p`: it leaves `p` both ways along its tangent there (along
+                    // the axes where it has none).
+                    let mut through = |t: f64, on: &mut bool| {
+                        let tangent = (slope(xs, t), slope(ys, t));
+                        if tangent == (0.0, 0.0) {
+                            for w in AXES {
+                                leave(w, on);
+                            }
+                        } else {
+                            leave(tangent, on);
+                            leave((-tangent.0, -tangent.1), on);
+                        }
+                    };
+                    // Where a stretch ends at `p`, as at the top of a dome resting on the ray's
+                    // line, which meets it but needn't cross it.
+                    for &t in &ts[..n] {
+                        if cubic(v, t).abs() <= size * NEAR && cubic(u, t).abs() <= size * NEAR {
+                            through(t, &mut on);
+                        }
+                    }
+                    for w in ts[..n].windows(2) {
+                        let (t0, t1) = (w[0], w[1]);
+                        let (v0, v1) = (at(t0), at(t1));
+                        let up = v0 <= 0.0 && 0.0 < v1;
+                        if !(up || v1 <= 0.0 && 0.0 < v0) {
+                            continue;
+                        }
+                        // A stretch that meets the ray's line at `p` itself passes through it.
+                        let (meets, t) = if up { (v0, t0) } else { (v1, t1) };
+                        let point = if t == 0.0 {
+                            c[0]
+                        } else if t == 1.0 {
+                            c[3]
+                        } else {
+                            (cubic(xs, t), cubic(ys, t))
+                        };
+                        if meets == 0.0 && point == p {
+                            continue;
+                        }
+                        // Narrowed to where the stretch passes the hair left of the line.
+                        let (mut below, mut above) = if up { (t0, t1) } else { (t1, t0) };
+                        for _ in 0..HALVINGS {
+                            let mid = 0.5 * (below + above);
+                            if mid == below || mid == above {
+                                break;
+                            }
+                            if cubic(v, mid) <= 0.0 { below = mid } else { above = mid }
+                        }
+                        let ahead = cubic(u, above);
+                        if ahead.abs() <= size * NEAR {
+                            through(above, &mut on);
+                        } else if ahead > 0.0 {
+                            winding += if up { 1 } else { -1 };
+                        }
+                    }
                 }
             }
         }
-        if self.even_odd { winding % 2 != 0 } else { winding != 0 }
+        Some((winding, on))
     }
 }
 
 impl Clip {
-    /// Narrows the clip to `path`'s, when `path` has points and they are all finite. `even_odd`
-    /// is its rule; `work` is the document's clip work left, which keeping a path's segments
-    /// spends.
+    /// Narrows the clip to `path`'s subpaths that enclose some area, when it has any and all its
+    /// points are finite. `even_odd` is its rule; `work` is the document's clip work left, which
+    /// keeping those subpaths' segments spends.
     fn narrow(&mut self, path: &Path, even_odd: bool, work: &mut usize) {
-        let Some(b) = path.bounds.filter(|_| path.finite) else { return };
+        let Some(b) = path.bounds().filter(|_| !path.nonfinite) else { return };
         match path.shape {
             Shape::Rect(q) => {
                 if !(q[0].1 == q[1].1 && q[1].0 == q[2].0 || q[0].0 == q[1].0 && q[1].1 == q[2].1) && self.quads.len() < MAX_CLIP_QUADS {
@@ -549,8 +704,7 @@ impl Clip {
                 let segments = path.segments();
                 if let Some(left) = work.checked_sub(segments) {
                     *work = left;
-                    let (polygons, bends) = path.polygons();
-                    self.paths = Some(Rc::new(ClipPath { polygons, bends, even_odd, segments, under: self.paths.take() }));
+                    self.paths = Some(Rc::new(ClipPath { pieces: path.pieces(), even_odd, segments, under: self.paths.take() }));
                 }
             }
             Shape::Empty => {}
@@ -561,37 +715,153 @@ impl Clip {
         });
     }
 
-    /// Whether a glyph centred at `p` shows: inside, or on the edge of, every clip. A point that
-    /// isn't finite has no place to test, and is taken as shown. Each clip path it is tested
-    /// against spends `work`; once `work` can't pay for one, it and the clip paths it narrows
-    /// count by their boxes.
-    fn shows(&self, (x, y): (f64, f64), work: &mut usize) -> bool {
-        if !(x.is_finite() && y.is_finite()) {
+    /// Whether a glyph centred at `p` shows: inside every clip, or on the outline of the area they
+    /// leave, where some points just off `p` are inside every clip. A point that isn't finite has
+    /// no place to test, and is taken as shown. Each clip path it is tested against spends `work`;
+    /// once `work` can't pay for one, it and the clip paths it narrows count by their boxes, and a
+    /// point on an outline is taken as shown.
+    fn shows(&self, p: (f64, f64), work: &mut usize) -> bool {
+        if !(p.0.is_finite() && p.1.is_finite()) {
             return true;
         }
-        if let Some(b) = self.bounds
-            && !(b[0] <= x && x <= b[2] && b[1] <= y && y <= b[3])
-        {
-            return false;
-        }
-        let mut path = self.paths.as_deref();
-        while let Some(p) = path {
-            let Some(left) = work.checked_sub(p.segments) else { break };
-            *work = left;
-            if !p.holds((x, y)) {
+        // First the point a hair from `p` along the x axis (`p` itself, off every outline), with
+        // the directions in which each outline through `p` leaves it.
+        let across = (1.0, 0.0);
+        let (mut inside, mut dirs, mut outlined) = (true, Vec::new(), Vec::new());
+        if let Some(b) = self.bounds {
+            if !(b[0] <= p.0 && p.0 <= b[2] && b[1] <= p.1 && p.1 <= b[3]) {
                 return false;
             }
-            path = p.under.as_deref();
+            inside &= box_holds(b, p, across, Some(&mut dirs));
         }
-        self.quads.iter().all(|q| {
-            let side = |i: usize| {
-                let (a, b) = (q[i], q[(i + 1) % 4]);
-                (b.0 - a.0) * (y - a.1) - (b.1 - a.1) * (x - a.0)
-            };
-            let sides = [side(0), side(1), side(2), side(3)];
-            // A side too large to measure (an overflow) is taken as shown.
-            sides.iter().any(|s| !s.is_finite()) || sides.iter().all(|&s| s >= 0.0) || sides.iter().all(|&s| s <= 0.0)
-        })
+        let mut path = self.paths.as_deref();
+        while let Some(c) = path {
+            let Some(left) = work.checked_sub(c.segments) else { break };
+            *work = left;
+            if let Some((winding, on)) = c.winding(p, across, Some(&mut dirs)) {
+                let holds = c.encloses(winding);
+                if on {
+                    outlined.push(c);
+                } else if !holds {
+                    return false;
+                }
+                inside &= holds;
+            }
+            path = c.under.as_deref();
+        }
+        for q in &self.quads {
+            let before = dirs.len();
+            let holds = quad_holds(q, p, across, Some(&mut dirs));
+            if dirs.len() == before && !holds {
+                return false;
+            }
+            inside &= holds;
+        }
+        if inside {
+            return true;
+        }
+        // On an outline: the glyph shows when, in some direction between the outlines through
+        // `p`, the points just off it are inside every clip.
+        for d in ways_out(&dirs) {
+            if self.bounds.is_some_and(|b| !box_holds(b, p, d, None)) || self.quads.iter().any(|q| !quad_holds(q, p, d, None)) {
+                continue;
+            }
+            let mut holds = true;
+            for c in &outlined {
+                let Some(left) = work.checked_sub(c.segments) else { return true };
+                *work = left;
+                if c.winding(p, d, None).is_some_and(|(winding, _)| !c.encloses(winding)) {
+                    holds = false;
+                    break;
+                }
+            }
+            if holds {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// Whether the point a hair from `p` along `d`, and a far smaller hair to its left, is inside the
+/// box `b` (`[x0, y0, x1, y1]`, which holds `p`); and, into `dirs`, the directions its edges
+/// through `p` leave it in.
+fn box_holds(b: [f64; 4], p: (f64, f64), d: (f64, f64), dirs: Option<&mut Vec<(f64, f64)>>) -> bool {
+    let n = (-d.1, d.0);
+    // How far in from each edge, then how fast `d` and its left move in from it.
+    let ins = [(p.0 - b[0], d.0, n.0), (b[2] - p.0, -d.0, -n.0), (p.1 - b[1], d.1, n.1), (b[3] - p.1, -d.1, -n.1)];
+    if let Some(dirs) = dirs {
+        for (i, &(gap, _, _)) in ins.iter().enumerate() {
+            if gap == 0.0 {
+                dirs.extend(if i < 2 { [(0.0, 1.0), (0.0, -1.0)] } else { [(1.0, 0.0), (-1.0, 0.0)] });
+            }
+        }
+    }
+    ins.iter().all(|&(gap, along, left)| gap > 0.0 || gap == 0.0 && (along > 0.0 || along == 0.0 && left > 0.0))
+}
+
+/// Whether the point a hair from `p` along `d`, and a far smaller hair to its left, is inside the
+/// parallelogram `q`; and, into `dirs`, the directions its edges through `p` leave it in. A side
+/// too large to measure (an overflow) is taken as inside.
+fn quad_holds(q: &[(f64, f64); 4], p: (f64, f64), d: (f64, f64), mut dirs: Option<&mut Vec<(f64, f64)>>) -> bool {
+    let n = (-d.1, d.0);
+    let mut sides = [0.0; 4];
+    for (i, side) in sides.iter_mut().enumerate() {
+        let (a, b) = (q[i], q[(i + 1) % 4]);
+        let e = (b.0 - a.0, b.1 - a.1);
+        let s = cross(e, (p.0 - a.0, p.1 - a.1));
+        if !s.is_finite() {
+            return true;
+        }
+        if s == 0.0
+            && a.0.min(b.0) <= p.0
+            && p.0 <= a.0.max(b.0)
+            && a.1.min(b.1) <= p.1
+            && p.1 <= a.1.max(b.1)
+            && let Some(dirs) = dirs.as_deref_mut()
+        {
+            if p != b {
+                dirs.push(e);
+            }
+            if p != a {
+                dirs.push((-e.0, -e.1));
+            }
+        }
+        *side = if s != 0.0 {
+            s
+        } else if cross(e, d) != 0.0 {
+            cross(e, d)
+        } else {
+            cross(e, n)
+        };
+    }
+    sides.iter().all(|&s| s > 0.0) || sides.iter().all(|&s| s < 0.0)
+}
+
+/// A direction inside each angle that `dirs`, the ways outlines leave a point, divide the plane
+/// into; the four along the axes when there are none. Two ways along one line, however long, are
+/// one: exactly, by their cross product.
+fn ways_out(dirs: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let mut ways: Vec<((f64, f64), f64)> =
+        dirs.iter().filter(|w| w.0.is_finite() && w.1.is_finite() && *w != &(0.0, 0.0)).map(|&w| (w, w.1.atan2(w.0))).collect();
+    ways.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let same = |a: (f64, f64), b: (f64, f64)| cross(a, b) == 0.0 && dot(a, b) > 0.0;
+    ways.dedup_by(|a, b| same(a.0, b.0));
+    if ways.len() > 1 && same(ways[0].0, ways[ways.len() - 1].0) {
+        ways.pop();
+    }
+    match ways.as_slice() {
+        [] => AXES.to_vec(),
+        [(a, _)] => vec![(-a.0, -a.1)],
+        _ => (0..ways.len())
+            .map(|i| {
+                // Halfway round from one way to the next, counter-clockwise.
+                let (a, b) = (ways[i].1, ways[(i + 1) % ways.len()].1);
+                let turn = (b - a).rem_euclid(std::f64::consts::TAU);
+                let half = a + if turn > 0.0 { turn } else { std::f64::consts::TAU } / 2.0;
+                (half.cos(), half.sin())
+            })
+            .collect(),
     }
 }
 
@@ -622,24 +892,74 @@ impl Default for State {
     }
 }
 
-/// The path being built, in device space: for the current subpath its first point, a second
-/// point apart from it, and whether any point lies off the line through them; whether any subpath
-/// so far does; the box around its points; whether it is one rectangle; and its subpaths, for a
-/// clip to follow its shape. For the area and the box, curves are followed by their control
-/// points, whose hull holds the curve.
+/// The path being built, in device space: its subpaths, whether a point of it is not finite, and
+/// whether it is one rectangle.
+#[derive(Default)]
 struct Path {
-    first: Option<(f64, f64)>,
-    second: Option<(f64, f64)>,
-    area: bool,
-    points: bool,
-    bounds: Option<[f64; 4]>,
-    finite: bool,
+    nonfinite: bool,
     shape: Shape,
     /// Each subpath from its first point, as it was drawn.
-    subpaths: Vec<Vec<Segment>>,
+    subpaths: Vec<Subpath>,
     /// The last subpath was closed (`h`, or `re`): a line or curve after it starts a new subpath
     /// at its first point.
     closed: bool,
+}
+
+/// One subpath: its pieces and the box around their points. For the box and the area, a curve
+/// is followed by its control points, whose hull holds the curve. A subpath whose points lie on one
+/// line (a line, a point, an `re` with no width or height) encloses nothing, by either rule, so a
+/// clip takes no part of it.
+#[derive(Default)]
+struct Subpath {
+    segments: Vec<Segment>,
+    bounds: Option<[f64; 4]>,
+    /// The size of the numbers its points were worked out from, before the CTM's terms could
+    /// cancel: what rounding moves them by depends on it.
+    scale: f64,
+}
+
+impl Subpath {
+    fn add(&mut self, p: (f64, f64)) {
+        self.bounds = Some(match self.bounds {
+            None => [p.0, p.1, p.0, p.1],
+            Some(b) => [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)],
+        });
+    }
+
+    fn points(&self) -> impl Iterator<Item = (f64, f64)> + '_ {
+        self.segments
+            .iter()
+            .flat_map(|s| match s {
+                Segment::Line(p) => std::slice::from_ref(p),
+                Segment::Curve(c) => c.as_slice(),
+            })
+            .copied()
+    }
+
+    /// Whether some point is off the line through the others by more than rounding moves a point
+    /// (a few thousand times the spacing of numbers of its scale), in whatever order they come. That line is from the first point to the one farthest from it,
+    /// whose direction rounding moves least. A point or scale that isn't finite, or a distance too
+    /// large to measure, counts as area, so it hides nothing.
+    fn area(&self) -> bool {
+        let Some(a) = self.points().next() else { return false };
+        if !self.scale.is_finite() || self.points().any(|q| !(q.0.is_finite() && q.1.is_finite())) {
+            return true;
+        }
+        let tolerance = 4096.0 * f64::EPSILON * self.scale.max(1.0);
+        let far = |q: (f64, f64)| (q.0 - a.0).hypot(q.1 - a.1);
+        let Some(b) = self.points().max_by(|&q, &r| far(q).total_cmp(&far(r))) else { return false };
+        let u = (b.0 - a.0, b.1 - a.1);
+        let length = u.0.hypot(u.1);
+        if !matches!(length.partial_cmp(&tolerance), Some(std::cmp::Ordering::Greater)) {
+            return !length.is_finite();
+        }
+        self.points().any(|q| {
+            !matches!(
+                (cross(u, (q.0 - a.0, q.1 - a.1)).abs() / length).partial_cmp(&tolerance),
+                Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+            )
+        })
+    }
 }
 
 /// A piece of a subpath, in device space: a line to a point (the subpath's first point, for its
@@ -650,72 +970,59 @@ enum Segment {
     Curve([(f64, f64); 3]),
 }
 
-impl Default for Path {
-    fn default() -> Self {
-        Path {
-            first: None,
-            second: None,
-            area: false,
-            points: false,
-            bounds: None,
-            finite: true,
-            shape: Shape::Empty,
-            subpaths: Vec::new(),
-            closed: false,
-        }
-    }
-}
-
 impl Path {
-    /// `m` or `re`: a new subpath.
-    fn start(&mut self) {
-        (self.first, self.second) = (None, None);
-    }
-
-    fn add(&mut self, p: (f64, f64)) {
-        self.points = true;
-        self.finite &= p.0.is_finite() && p.1.is_finite();
-        self.bounds = Some(match self.bounds {
-            None => [p.0, p.1, p.0, p.1],
-            Some(b) => [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)],
-        });
-        match (self.first, self.second) {
-            _ if self.area => {}
-            (None, _) => self.first = Some(p),
-            (Some(a), None) => {
-                if p != a {
-                    self.second = Some(p);
-                }
-            }
-            // Not `== 0.0`: a NaN counts as area, so it hides nothing.
-            (Some(a), Some(b)) => self.area = (b.0 - a.0) * (p.1 - a.1) - (b.1 - a.1) * (p.0 - a.0) != 0.0,
-        }
-    }
-
-    /// The path has points, and each subpath's lie on one line.
+    /// The path has points, and each subpath's lie on one line: it encloses nothing.
     fn flat(&self) -> bool {
-        self.points && !self.area
+        !self.subpaths.is_empty() && self.subpaths.iter().all(|s| !s.area())
+    }
+
+    /// The subpaths that enclose some area: the only ones a clip follows.
+    fn areas(&self) -> impl Iterator<Item = &Subpath> {
+        self.subpaths.iter().filter(|s| s.area())
+    }
+
+    /// The box around the subpaths that enclose some area.
+    fn bounds(&self) -> Option<[f64; 4]> {
+        self.areas().filter_map(|s| s.bounds).reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])])
     }
 
     /// Adds a drawn piece: `start` begins a new subpath with it (`m`, `re`); otherwise it goes on
-    /// the current subpath, or on a new one from where a closed one began.
-    fn draw(&mut self, start: bool, segment: Segment) {
-        let reopen = if self.closed && !start { self.subpaths.last().and_then(|s| s.first()).copied() } else { None };
+    /// the current subpath, or on a new one from where a closed one began, which is then where
+    /// that subpath's area is measured from.
+    /// `scale` is the size of the numbers its points were worked out from.
+    fn draw(&mut self, start: bool, segment: Segment, scale: f64) {
+        let reopen = if self.closed && !start { self.subpaths.last().and_then(|s| Some((*s.segments.first()?, s.scale))) } else { None };
         self.closed = false;
         if start || reopen.is_some() || self.subpaths.is_empty() {
-            self.subpaths.push(reopen.into_iter().collect());
+            let mut subpath = Subpath::default();
+            if let Some((Segment::Line(p) | Segment::Curve([_, _, p]), scale)) = reopen {
+                subpath.segments.push(Segment::Line(p));
+                subpath.add(p);
+                subpath.scale = scale;
+            }
+            self.subpaths.push(subpath);
         }
         let Some(subpath) = self.subpaths.last_mut() else { return };
-        match segment {
+        let segment = match segment {
             // A curve with no point to start from (no `m` before it) starts the subpath at its end.
-            Segment::Curve([_, _, end]) if subpath.is_empty() => subpath.push(Segment::Line(end)),
-            _ => subpath.push(segment),
+            Segment::Curve([_, _, end]) if subpath.segments.is_empty() => Segment::Line(end),
+            _ => segment,
+        };
+        subpath.segments.push(segment);
+        subpath.scale = subpath.scale.max(scale);
+        let points = match segment {
+            Segment::Line(p) => vec![p],
+            Segment::Curve(c) => c.to_vec(),
+        };
+        for p in points {
+            self.nonfinite |= !(p.0.is_finite() && p.1.is_finite());
+            subpath.add(p);
         }
     }
 
     /// The current point: where the last piece ended, or where a closed subpath began.
     fn current(&self) -> Option<(f64, f64)> {
-        let subpath = self.subpaths.last()?;
+        let subpath = &self.subpaths.last()?.segments;
         let segment = if self.closed { subpath.first() } else { subpath.last() };
         segment.map(|&(Segment::Line(p) | Segment::Curve([_, _, p]))| p)
     }
@@ -725,60 +1032,46 @@ impl Path {
         self.closed = !self.subpaths.is_empty();
     }
 
-    /// The line segments [`Path::polygons`] gives.
+    /// The clip work keeping [`Path::pieces`], or testing a glyph against them, costs.
     fn segments(&self) -> usize {
-        self.subpaths
-            .iter()
-            .flatten()
+        self.areas()
+            .flat_map(|s| &s.segments)
             .map(|s| match s {
                 Segment::Line(_) => 1,
-                Segment::Curve(_) => CURVE_SEGMENTS,
+                Segment::Curve(_) => CURVE_WORK,
             })
             .fold(0usize, usize::saturating_add)
     }
 
-    /// Each subpath as the points of a polygon, its curves flattened to [`CURVE_SEGMENTS`] lines,
-    /// each point with the curve the line ending there came from; and those curves. A line of a
-    /// curve strays at most an eighth of the curve's largest second derivative times the square
-    /// of the line's share of it: 3/4 of the largest second difference of its points, over the
-    /// lines squared.
-    fn polygons(&self) -> (Vec<Polygon>, Vec<Bend>) {
-        let mut bends: Vec<Bend> = Vec::new();
-        let polygons = self
-            .subpaths
-            .iter()
-            .map(|subpath| {
-                let mut points: Polygon = Vec::new();
-                for &segment in subpath {
-                    match segment {
-                        Segment::Line(p) => points.push((p, 0)),
-                        Segment::Curve([b, c, d]) => {
-                            let a = points.last().map_or(d, |l| l.0);
-                            let second = |p: (f64, f64), q: (f64, f64), r: (f64, f64)| (p.0 - 2.0 * q.0 + r.0).hypot(p.1 - 2.0 * q.1 + r.1);
-                            let n = CURVE_SEGMENTS as f64;
-                            let slack = 0.75 * second(a, b, c).max(second(b, c, d)) / (n * n);
-                            let (xs, ys) = ([a.0, b.0, c.0, d.0], [a.1, b.1, c.1, d.1]);
-                            let bounds = [
-                                xs.into_iter().fold(f64::INFINITY, f64::min),
-                                ys.into_iter().fold(f64::INFINITY, f64::min),
-                                xs.into_iter().fold(f64::NEG_INFINITY, f64::max),
-                                ys.into_iter().fold(f64::NEG_INFINITY, f64::max),
-                            ];
-                            bends.push(Bend { slack, bounds });
-                            let bend = bends.len();
-                            for k in 1..=CURVE_SEGMENTS {
-                                let t = k as f64 / CURVE_SEGMENTS as f64;
-                                let u = 1.0 - t;
-                                let (wa, wb, wc, wd) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
-                                points.push(((wa * a.0 + wb * b.0 + wc * c.0 + wd * d.0, wa * a.1 + wb * b.1 + wc * c.1 + wd * d.1), bend));
-                            }
-                        }
+    /// The pieces of each subpath that encloses some area, each closed by a line back to its
+    /// first point; a curve whose points lie on one line as the line between its ends.
+    fn pieces(&self) -> Vec<Piece> {
+        let mut pieces = Vec::new();
+        for subpath in self.areas() {
+            let mut segments = subpath.segments.iter();
+            let Some(&(Segment::Line(start) | Segment::Curve([_, _, start]))) = segments.next() else { continue };
+            let mut at = start;
+            for &segment in segments {
+                match segment {
+                    Segment::Line(p) => {
+                        pieces.push(Piece::Line(at, p));
+                        at = p;
+                    }
+                    // A curve whose points lie on one line goes back and forth along it, which
+                    // crosses any other line as the straight line between its ends does.
+                    Segment::Curve([b, c, d]) => {
+                        let straight = [b, c, d]
+                            .iter()
+                            .find(|&&q| q != at)
+                            .is_none_or(|&q| [b, c, d].iter().all(|&r| cross((q.0 - at.0, q.1 - at.1), (r.0 - at.0, r.1 - at.1)) == 0.0));
+                        pieces.push(if straight { Piece::Line(at, d) } else { Piece::Curve([at, b, c, d]) });
+                        at = d;
                     }
                 }
-                points
-            })
-            .collect();
-        (polygons, bends)
+            }
+            pieces.push(Piece::Line(at, start));
+        }
+        pieces
     }
 }
 
@@ -967,9 +1260,9 @@ impl Walk<'_> {
             return;
         }
         let start = matches!(op.op.as_slice(), b"m" | b"re");
-        if start {
-            self.path.start();
-        }
+        let [a, b, c, d, e, f] = ctm.0;
+        let scale =
+            points.iter().fold(0.0f64, |m, &(x, y)| m.max((a * x).abs() + (c * y).abs() + e.abs()).max((b * x).abs() + (d * y).abs() + f.abs()));
         let points: Vec<(f64, f64)> = points.into_iter().map(|(x, y)| ctm.apply(x, y)).collect();
         self.path.shape = match (self.path.shape, points.as_slice()) {
             (Shape::Empty, &[a, b, c, d]) if op.op == b"re" => Shape::Rect([a, b, c, d]),
@@ -981,18 +1274,15 @@ impl Walk<'_> {
         match (op.op.as_slice(), points.as_slice()) {
             (b"re", &[a, b, c, d]) => {
                 for (i, p) in [a, b, c, d].into_iter().enumerate() {
-                    self.path.draw(i == 0, Segment::Line(p));
+                    self.path.draw(i == 0, Segment::Line(p), scale);
                 }
                 self.path.close();
             }
-            (b"c", &[b, c, d]) => self.path.draw(false, Segment::Curve([b, c, d])),
-            (b"v", &[c, d]) => self.path.draw(false, Segment::Curve([at.unwrap_or(c), c, d])),
-            (b"y", &[b, d]) => self.path.draw(false, Segment::Curve([b, d, d])),
-            (_, &[p]) => self.path.draw(start, Segment::Line(p)),
+            (b"c", &[b, c, d]) => self.path.draw(false, Segment::Curve([b, c, d]), scale),
+            (b"v", &[c, d]) => self.path.draw(false, Segment::Curve([at.unwrap_or(c), c, d]), scale),
+            (b"y", &[b, d]) => self.path.draw(false, Segment::Curve([b, d, d]), scale),
+            (_, &[p]) => self.path.draw(start, Segment::Line(p), scale),
             _ => {}
-        }
-        for p in points {
-            self.path.add(p);
         }
     }
 
@@ -1693,11 +1983,11 @@ mod tests {
             "100 100 m 200 100 l 150 200 l h W n",
             "0 280 m 400 280 l 400 400 l h W n",
             // A concave clip whose box holds the glyph, with a notch where the glyph is; and with a
-            // wide curve far from it, whose slack is no straight edge's.
+            // wide curve far from it.
             "0 280 m 100 280 l 100 330 l 40 330 l 40 295 l 10 295 l 10 330 l 0 330 l h W n",
             "0 280 m 100 280 l 100 330 l 40 330 l 40 295 l 10 295 l 10 330 l 0 330 l h 300 280 m 300 2000 400 -1500 400 280 c h W n",
-            // And with a curve whose lines' slack reaches the glyph from far off, though the curve,
-            // inside the box around its control points, stays away from it.
+            // And with a wild curve whose control points' box holds the glyph, though the curve
+            // stays away from it.
             "0 280 m 100 280 l 100 330 l 40 330 l 40 295 l 10 295 l 10 330 l 0 330 l h 300 0 m 300 100000 400 -100000 400 0 c h W n",
             // A triangle that holds the glyph, turned by `cm` (a reflection) so that it misses it
             // while its box still holds it.
@@ -1740,12 +2030,12 @@ mod tests {
         // concave clip with its notch away from the glyph; the triangle before `cm` turns it; the
         // pentagram by the nonzero rule; and a circle around the glyph, off its centre so that
         // the glyph is outside the circle's four corners (a curve taken as a line would miss it).
+        // A wide arch whose top passes 6 above the glyph, where 16 lines through its points would
+        // pass 6 below.
         let skewed = "1 0 1 1 0 0 cm -300 290 50 30 re W n 1 0 -1 1 0 0 cm";
         let nested = "0 0 400 400 re W n 10 290 100 30 re W* n";
         let concave = "0 280 m 100 280 l 100 330 l 80 330 l 80 295 l 50 295 l 50 330 l 0 330 l h W n";
         let unturned = "0 280 m 400 280 l 0 400 l h W n";
-        // A wide arch whose top passes 6 above the glyph, where its flattened lines pass 6 below:
-        // a glyph within the lines' slack is taken as inside.
         let arch = "1 0 0 1 -1790.4766 -2680.0619 cm 0 0 m 0 4000 4000 4000 4000 0 c h W n 1 0 0 1 1790.4766 2680.0619 cm";
         // A rectangle turned and reflected (wound the other way) around the glyph, and a turned
         // one too large to measure.
@@ -1825,6 +2115,99 @@ mod tests {
         passes(&doc);
     }
 
+    /// What a clip path traces without enclosing any area hides nothing and shows nothing: only
+    /// the area its subpaths enclose, by its rule, counts, curves followed exactly, and a glyph
+    /// centred on the outline of what the clips leave shows only where that area reaches it.
+    #[test]
+    fn a_clip_path_counts_only_the_area_it_encloses() {
+        // The `v` is centred at (23, 303.25); the triangle is away from it, its box around it.
+        let cite = |clip: &str| format!("q {clip} BT /F1 10 Tf 20 300 Td (v) Tj ET Q BT /F1 10 Tf 20 300 Td ([5]) Tj ET");
+        let triangle = "0 280 m 400 280 l 400 400 l h";
+        // A circle whose top is the glyph's centre, or a hair above it, as a path.
+        let top = |y: f64| circle((23.0, y - 20.0), 20.0).replace(" W n", "");
+        let (big, tiny) = (format!("1{}", "0".repeat(160)), format!("0.{}1", "0".repeat(159)));
+        let hidden = [
+            // A line through the glyph, as its own subpath; and a point, a second `m` overriding it.
+            format!("{triangle} 23 290 m 23 315 l W n"),
+            format!("{triangle} 23 303.25 m 30 400 m 30 410 l W n"),
+            // A rectangle of no width through the glyph.
+            format!("{triangle} 23 290 0 30 re W n"),
+            // A line through the glyph that the triangle's subpath goes up and back down (a spike),
+            // drawn by lines and by one curve; and a subpath that goes out along a line and back,
+            // its points not on one line.
+            "0 280 m 23 280 l 23 315 l 23 280 l 400 280 l 400 400 l h W n".into(),
+            "0 280 m 23 280 l 23 330 23 330 23 280 c 400 280 l 400 400 l h W n".into(),
+            "23 290 m 23 320 l 60 320 l 23 320 l h W n".into(),
+            // A square whose edge passes through the glyph, and a circle around it, each traced
+            // twice: by the even-odd rule they enclose nothing.
+            "23 290 m 60 290 l 60 320 l 23 320 l h 23 290 m 60 290 l 60 320 l 23 320 l h W* n".into(),
+            format!("{} {} W* n", top(303.26), top(303.26)),
+            // A curve whose control points lie on a line passing a hair from the glyph.
+            format!("{triangle} 0 220 m 46 388 0 220 46 388 c W n"),
+            // Two clips that meet only along a line through the glyph: rectangles, skewed ones, and
+            // triangles.
+            "0 0 23 400 re W n 23 0 100 400 re W n".into(),
+            "1 0 1 1 0 0 cm -330.25 290 50 30 re W n -280.25 290 50 30 re W n 1 0 -1 1 0 0 cm".into(),
+            "0 280 m 23 280 l 23 330 l h W n 23 280 m 60 280 l 23 330 l h W n".into(),
+            // A spike and two clips meeting along a slanted line through the glyph, drawn by edges
+            // of different lengths.
+            "60 250 m 16 282.25 l 30 324.25 l 21 297.25 l 80 250 l h W n".into(),
+            "16 282.25 m 30 324.25 l 0 400 l h W n 21 297.25 m 25 309.25 l 60 280 l h W n".into(),
+            // A line through the glyph whose first step is short, so that rounding turns it most:
+            // alone, and as a subpath beside the triangle.
+            "20 290 m 20.0000003 290.000001325 l 26 316.5 l W n".into(),
+            format!("{triangle} 20 290 m 20.0000003 290.000001325 l 26 316.5 l W n"),
+            // A line through the glyph drawn far away and moved back by `cm`, whose terms cancel.
+            "1 0 0 1 100000000 0 cm -99999980 290 m -99999977.9 299.275 l -99999974 316.5 l W n 1 0 0 1 -100000000 0 cm".into(),
+        ];
+        for clip in hidden {
+            let mut doc = page(&cite(&clip), &[&link(&over(0, 3))]);
+            autotag_text(&mut doc).unwrap();
+            assert_eq!(links(&doc), [(vec!["[5]".to_string()], "P".to_string())], "{clip}");
+        }
+        // The area reaches the glyph: on a triangle's edge, from the left, and by the even-odd
+        // rule; a triangle drawn on from where a closed line began, which is where its area is
+        // measured from; at a diamond's top corner, from below, and at the corner of a triangle
+        // that points along neither axis; at the top of a circle, by the even-odd rule; the square
+        // traced twice by the nonzero rule; two clips that share an edge through the glyph, on
+        // the same side of it; a skewed rectangle with an edge through it; a rectangle of negative
+        // width, wound the other way, beside another so that it isn't one rectangle; the inner
+        // corner of an L-shaped clip, which holds all around it but up and to the right; and
+        // where a rectangle's top edge meets a straight curve, leaving only the quarter below and
+        // to the left; and on a curve, halfway along it, with the area below it.
+        let shown = [
+            "23 280 m 23 320 l 0 300 l h W n".to_string(),
+            "23 280 m 23 320 l 0 300 l h W* n".into(),
+            "0 280 m 1 280 l h 400 280 l 0 400 l W n".into(),
+            "23 303.25 m 33 293.25 l 23 283.25 l 13 293.25 l h W n".into(),
+            "23 303.25 m 57.641 323.25 l 43 337.891 l h W n".into(),
+            format!("{} W* n", top(303.25)),
+            "23 290 m 60 290 l 60 320 l 23 320 l h 23 290 m 60 290 l 60 320 l 23 320 l h W n".into(),
+            "0 0 23 400 re W n 0 280 m 23 280 l 23 330 l h W n".into(),
+            "1 0 1 1 0 0 cm -280.25 290 50 30 re W n 1 0 -1 1 0 0 cm".into(),
+            "0 0 1 1 re 30 290 -20 30 re W n".into(),
+            "0 280 m 60 280 l 60 303.25 l 23 303.25 l 23 330 l 0 330 l h W n".into(),
+            "0 250 100 53.25 re W n 23 330 m 0 330 l 0 250 l 60 250 l 60 290 l 23 290 l 23 300 23 320 23 330 c h W n".into(),
+            "0 280 m 20 280 26 326.5 46 326.5 c 46 280 l h W n".into(),
+            // Where a curve turns at the glyph: the top of a dome with the area below, alone,
+            // inside a rectangle below the glyph, and the bottom of a cup with the area above.
+            "3 279.25 m 3 311.25 43 311.25 43 279.25 c h W n".into(),
+            "3 279.25 m 3 311.25 43 311.25 43 279.25 c h W n 0 250 46 53.25 re W n".into(),
+            "3 327.25 m 3 295.25 43 295.25 43 327.25 c h W n".into(),
+            "3 327.25 m 3 295.25 43 295.25 43 327.25 c h W* n".into(),
+            // A thin strip around the glyph whose first point is far from it.
+            "-1000000000 303 m 46 303 l 46 303.5 l 0 303.5 l h W n".into(),
+            "-100000 303.249995 m 46 303.249995 l 46 303.250005 l 0 303.250005 l h W n".into(),
+            // A path whose points are too large to place: it can't be followed, so it hides nothing.
+            format!("{big} 0 0 {big} 0 0 cm 0 0 m {big} 0 l 0 {big} l h W n {tiny} 0 0 {tiny} 0 0 cm"),
+        ];
+        for clip in shown {
+            let mut doc = page(&cite(&clip), &[&link(&over(0, 3))]);
+            autotag_text(&mut doc).unwrap();
+            assert_eq!(links(&doc), [(vec!["v".to_string(), "[5]".to_string()], "P".to_string())], "{clip}");
+        }
+    }
+
     /// A link's text that runs on into a later text object sits in the first object's element: a
     /// link from a paragraph into a heading, or from a heading into a paragraph, is refused rather
     /// than reading the heading as a paragraph (and the headings after it a level too deep).
@@ -1899,14 +2282,14 @@ mod tests {
             pdf(&bodies)
         };
         let annots: Vec<String> = (0..=super::MAX_LINK_AREAS / MAX_LINK_QUADS).map(|_| many(MAX_LINK_QUADS)).collect();
-        refused(two_pages(&annots, annots.len()), "too many quadrilaterals");
+        refused(two_pages(&annots, annots.len()), "too many link areas");
         // Many links sharing one array that isn't used (a corner outside /Rect), so each is its
         // /Rect: each still reads the array.
         let readers = super::MAX_QUAD_VALUES / (8 * MAX_LINK_QUADS) + 1;
         let mut annots: Vec<String> =
             (0..readers).map(|_| format!("<< /Type /Annot /Subtype /Link /Rect [{}] /QuadPoints {} 0 R >>", over(0, 3), readers + 7)).collect();
         annots.push(format!("[{}]", "0 0 9 0 9 9 0 9 ".repeat(MAX_LINK_QUADS)));
-        refused(two_pages(&annots, readers), "too many quadrilaterals");
+        refused(two_pages(&annots, readers), "too many link areas");
         let mut doc = page(LINE, &[&many(MAX_LINK_QUADS + 1)]);
         autotag_text(&mut doc).unwrap();
         assert_eq!(links(&doc), [(vec!["See the guide here".to_string()], "P".to_string())]);
@@ -1971,14 +2354,27 @@ mod tests {
         assert_eq!(described(triangle, super::MAX_CLIP_WORK).as_deref(), Some("[5]"));
         // Enough to keep the triangle's three sides, but not to test the glyph against them.
         assert_eq!(described(triangle, 3).as_deref(), Some("v [5]"));
-        // A curve costs its lines: a clip of two lines and a curve that misses the glyph, with
-        // work for it as three lines, counts by its box.
-        assert_eq!(described("0 220 m 100 220 l 0 370 0 220 v h W n", 8).as_deref(), Some("v [5]"));
+        // A curve costs more than a line: a clip of two lines and a curve that misses the glyph,
+        // with work one short of keeping it, counts by its box.
+        assert_eq!(described("0 220 m 100 220 l 0 370 0 220 v h W n", 1 + super::CURVE_WORK).as_deref(), Some("v [5]"));
         // The triangle narrowed by a circle around the glyph, with work to keep both and to test
         // the triangle but not the circle: once the latest clip can't be paid for, the ones it
         // narrows count by their boxes too, so the work spent on a glyph is bounded.
         let both = format!("{triangle} {}", circle((23.0, 302.0), 30.0));
-        assert_eq!(described(&both, 3 + 65 + 3).as_deref(), Some("v [5]"));
+        assert_eq!(described(&both, 3 + (1 + 4 * super::CURVE_WORK) + 3).as_deref(), Some("v [5]"));
+        // With no work left, two lines from one point, the second drawn on after `h`, enclose
+        // nothing and still hide the glyph, however the second runs; and the box is only that of
+        // the subpaths that enclose some area, so a point and a line beyond the glyph leave it out.
+        // So does a line whose points are off it only by rounding.
+        for lines in [
+            "23 290 m 23 320 l h 40 290 l W n",
+            "30 280 m 40 280 l h 10 330 l W n",
+            "20.1 290.1 m 23.2 300.3 l 26.3 310.5 l W n",
+            "20.1 290.1 m 20.10000031 290.10000102 l 26.3 310.5 l W n",
+        ] {
+            assert_eq!(described(lines, 0).as_deref(), Some("[5]"), "{lines}");
+        }
+        assert_eq!(described("100 100 m 200 100 l 150 200 l h 0 400 m 300 400 m 300 410 l W n", 0).as_deref(), Some("[5]"));
     }
 
     /// A long chain of clip paths (two rectangles each, so not one rectangle) is freed one at a
