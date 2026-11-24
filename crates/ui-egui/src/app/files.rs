@@ -18,7 +18,7 @@ fn asks_for_password(kind: &open_worker::ResultKind) -> bool {
         open_worker::ResultKind::Prepared { result, .. }
             if matches!(**result, Err(pdfcraft_render::OpenError::NeedsPassword | pdfcraft_render::OpenError::WrongPassword))
     )
-}
+} 
 
 /// Whether two paths name the same file: equal, or the same once resolved on disk.
 pub(crate) fn same_file(open: &str, path: &str) -> bool {
