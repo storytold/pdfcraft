@@ -59,7 +59,22 @@ mkdir -p "$WORK/stage"
 tar -xzf "$TARBALL" -C "$WORK/stage" --strip-components=1
 [[ -x "$WORK/stage/bin/pdfcraft" ]] || { echo "error: $TARBALL has no bin/pdfcraft" >&2; exit 1; }
 if [[ "$FLATPAK_ID" != "$APP_ID" ]]; then
-  sed -e "s|^Icon=$APP_ID$|Icon=$FLATPAK_ID|" \
+  # The Nightly GUI starts through its launch profile inside the sandbox, from a wrapper the
+  # manifest runs (and the desktop entry names), so the Flatpak never writes the stable profile.
+  cat >"$WORK/stage/bin/pdfcraft-nightly-launch" <<'LAUNCHER'
+#!/bin/sh
+# PdfCraft Nightly inside its own Flatpak: the data root is this app's own folder.
+set -eu
+root="${XDG_DATA_HOME:-$HOME/.local/share}/pdfcraft-nightly"
+case "${1:-}" in
+  --version | -V) exec /app/bin/pdfcraft --launch-profile nightly-v1 --profile-root "$root" "$1" ;;
+esac
+exec /app/bin/pdfcraft --launch-profile nightly-v1 --profile-root "$root" -- "$@"
+LAUNCHER
+  chmod 755 "$WORK/stage/bin/pdfcraft-nightly-launch"
+  sed -e "s#^Exec=pdfcraft\([[:space:]]\|$\)#Exec=pdfcraft-nightly-launch\1#" \
+      -e "s|^TryExec=pdfcraft$|TryExec=pdfcraft-nightly-launch|" \
+      -e "s|^Icon=$APP_ID$|Icon=$FLATPAK_ID|" \
       -e "s|^Name=PdfCraft$|Name=PdfCraft Nightly|" \
       -e 's|^StartupWMClass=.*|StartupWMClass=ai.storyteller.pdfcraft.nightly-v1|' \
       -e '/^MimeType=/d' \
@@ -69,6 +84,7 @@ if [[ "$FLATPAK_ID" != "$APP_ID" ]]; then
       -e "s|<name>PdfCraft</name>|<name>PdfCraft Nightly</name>|g" \
       -e "s|<launchable type=\"desktop-id\">$APP_ID.desktop</launchable>|<launchable type=\"desktop-id\">$FLATPAK_ID.desktop</launchable>|g" \
       -e "s|<icon type=\"stock\">$APP_ID</icon>|<icon type=\"stock\">$FLATPAK_ID</icon>|g" \
+      -e '/<mediatype>/d' \
       "$WORK/stage/share/metainfo/$APP_ID.metainfo.xml" >"$WORK/stage/share/metainfo/$FLATPAK_ID.metainfo.xml"
   rm -f "$WORK/stage/share/metainfo/$APP_ID.metainfo.xml"
   mv "$WORK/stage/share/mime/packages/$APP_ID.xml" "$WORK/stage/share/mime/packages/$FLATPAK_ID.xml"
@@ -84,6 +100,8 @@ if [[ "$FLATPAK_ID" != "$APP_ID" ]]; then
     done
   fi
   sed -e "s|ai\.storyteller\.pdfcraft|$FLATPAK_ID|g" \
+      -e "s|^command: pdfcraft$|command: pdfcraft-nightly-launch|" \
+      -e "s|^      - install -Dm755 bin/pdfcraft-cli /app/bin/pdfcraft-cli$|      - install -Dm755 bin/pdfcraft-cli /app/bin/pdfcraft-cli\n      - install -Dm755 bin/pdfcraft-nightly-launch /app/bin/pdfcraft-nightly-launch|" \
       "$HERE/flatpak/$APP_ID.bundle.yml" >"$WORK/$FLATPAK_ID.yml"
 else
   cp "$HERE/flatpak/$APP_ID.bundle.yml" "$WORK/$FLATPAK_ID.yml"

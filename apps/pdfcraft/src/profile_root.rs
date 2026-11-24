@@ -241,10 +241,16 @@ fn validate_for(
     if env("PDFCRAFT_CONFIG_DIR").is_some_and(|v| !v.is_empty()) {
         return Err("nightly-v1 cannot be combined with PDFCRAFT_CONFIG_DIR".into());
     }
-    if platform != Platform::Windows && env("FLATPAK_ID").is_some_and(|v| !v.is_empty()) {
-        // These rows are native tar/app-bundle launches, not a Flatpak package. Inheriting its
-        // runtime socket namespace could point another profile at the stable app's socket.
-        return Err("nightly-v1 native packages cannot inherit a Flatpak instance; launch through the native Launcher".into());
+    // A native package must not inherit a Flatpak instance: its runtime namespace could point
+    // another profile at the stable app's socket. A Nightly Flatpak is a different app id, so its
+    // own sandbox is allowed; the stable id (or any other) is not.
+    if platform != Platform::Windows
+        && let Some(id) = env("FLATPAK_ID").filter(|v| !v.is_empty())
+    {
+        let own = pdfcraft_ui_egui::os_window::package_id_for(pdfcraft_ui_egui::os_window::LaunchIdentity::NightlyV1);
+        if id.to_string_lossy() != own {
+            return Err("nightly-v1 native packages cannot inherit a Flatpak instance; launch through the native Launcher".into());
+        }
     }
     let chosen = canonical_future(root)?;
     if is_portable_layout(root, platform) || is_portable_layout(&chosen, platform) {
@@ -570,6 +576,11 @@ mod tests {
         fixture.env.remove("PDFCRAFT_CONFIG_DIR");
         fixture.env.insert("FLATPAK_ID".into(), "ai.storyteller.pdfcraft".into());
         assert!(fixture.check(Platform::Linux, &candidate).unwrap_err().contains("Flatpak"));
+        // The Nightly Flatpak is a different app id: its own sandbox is where its profile belongs.
+        fixture.env.insert("FLATPAK_ID".into(), "ai.storyteller.pdfcraft.nightly".into());
+        let own = candidate.join("flatpak");
+        assert!(fixture.check(Platform::Linux, &own).is_ok());
+        std::fs::remove_dir_all(&own).unwrap();
         fixture.env.remove("FLATPAK_ID");
         fixture.env.remove("HOME");
         assert!(fixture.check(Platform::Linux, &candidate).unwrap_err().contains("HOME"));

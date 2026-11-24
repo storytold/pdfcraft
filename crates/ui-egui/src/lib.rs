@@ -377,9 +377,10 @@ pub struct PdfCraftApp {
     /// The border new Fill & Sign text starts each launch with, kept across launches: what Make
     /// Current Properties Default last took from typed text (none at first).
     pub fill_text_default: fill_sign::TextBorder,
-    /// The update check, its prompt and the self-update.
+    /// The update check, its prompt and the self-update. `None` in a Nightly build: the Launcher
+    /// manages updates, so a Nightly copy can never replace itself with a stable release.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) updater: craft::update::updater::Updater,
+    pub(crate) updater: Option<craft::update::updater::Updater>,
     /// The desktop app asks for a newer release once it has started (Preferences permitting).
     pub(crate) startup_check: bool,
     /// Lists the Print dialog's printers in the background (the desktop app sets it; see

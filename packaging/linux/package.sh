@@ -120,6 +120,56 @@ verify_sha256() {
   printf '%s  %s\n' "$expected" "$target" | sha256sum -c -
 }
 
+# A launcher that starts the Nightly GUI through its launch profile, so no Linux format ever runs
+# it against the stable profile (the app refuses a Nightly build without a profile). `real_bin` is
+# where the GUI is installed; the profile root is the Nightly data folder in the user's data
+# directory, which the app validates like the Launcher's.
+nightly_launcher() {
+  local destination="$1" real_bin="$2"
+  install -d "$(dirname "$destination")"
+  cat >"$destination" <<LAUNCHER
+#!/bin/sh
+# PdfCraft Nightly. Its own data root: the stable app's settings, recovery and socket are never touched.
+set -eu
+if [ -z "\${XDG_DATA_HOME:-}" ] && [ -z "\${HOME:-}" ]; then
+  echo "pdfcraft-nightly: XDG_DATA_HOME and HOME are both unset, so there is no Nightly data folder" >&2
+  exit 2
+fi
+root="\${XDG_DATA_HOME:-\$HOME/.local/share}/pdfcraft-nightly"
+case "\${1:-}" in
+  --version | -V) exec "$real_bin" --launch-profile nightly-v1 --profile-root "$root" "$1" ;;
+esac
+exec "$real_bin" --launch-profile nightly-v1 --profile-root "$root" -- "\$@"
+LAUNCHER
+  chmod 755 "$destination"
+}
+
+# The same launcher for a moved tree (an AppImage, an unpacked tar): it finds the GUI beside
+# itself or in usr/bin, so one script serves AppRun, usr/bin/pdfcraft-nightly and the tar's copy.
+nightly_relative_launcher() {
+  local destination="$1"
+  install -d "$(dirname "$destination")"
+  cat >"$destination" <<'LAUNCHER'
+#!/bin/sh
+# PdfCraft Nightly. Its own data root: the stable app's settings, recovery and socket are never touched.
+set -eu
+here="$(cd "$(dirname "$0")" && pwd)"
+real="$here/usr/bin/pdfcraft"
+[ -x "$real" ] || real="$here/pdfcraft"
+if [ -z "${XDG_DATA_HOME:-}" ] && [ -z "${HOME:-}" ]; then
+  echo "pdfcraft-nightly: XDG_DATA_HOME and HOME are both unset, so there is no Nightly data folder" >&2
+  exit 2
+fi
+root="${XDG_DATA_HOME:-$HOME/.local/share}/pdfcraft-nightly"
+# A version query is answered in the Launcher's form; everything else is a file, after `--`.
+case "${1:-}" in
+  --version | -V) exec "$real" --launch-profile nightly-v1 --profile-root "$root" "$1" ;;
+esac
+exec "$real" --launch-profile nightly-v1 --profile-root "$root" -- "$@"
+LAUNCHER
+  chmod 755 "$destination"
+}
+
 # ---- .tar.gz ------------------------------------------------------------------------------------
 if has tar; then
   mkdir -p "$WORK/tar"
@@ -170,12 +220,17 @@ if has deb || has rpm; then
     NFPM_STAGE="$WORK/nfpm-root"
     rm -rf "$NFPM_STAGE"
     cp -R "$STAGE" "$NFPM_STAGE"
-    mv "$NFPM_STAGE/usr/bin/pdfcraft" "$NFPM_STAGE/usr/bin/$NFPM_BIN"
+    # The GUI binary moves out of /usr/bin (its name there is the launcher's), beside its models:
+    # the app looks for them next to the executable before the share folder.
+    install -d "$NFPM_STAGE/usr/lib/pdfcraft-nightly"
+    mv "$NFPM_STAGE/usr/bin/pdfcraft" "$NFPM_STAGE/usr/lib/pdfcraft-nightly/pdfcraft"
+    if [[ -d "$NFPM_STAGE/usr/share/pdfcraft/models" ]]; then
+      mv "$NFPM_STAGE/usr/share/pdfcraft/models" "$NFPM_STAGE/usr/lib/pdfcraft-nightly/models"
+      rmdir "$NFPM_STAGE/usr/share/pdfcraft" 2>/dev/null || true
+    fi
+    nightly_launcher "$NFPM_STAGE/usr/bin/$NFPM_BIN" /usr/lib/pdfcraft-nightly/pdfcraft
     mv "$NFPM_STAGE/usr/bin/pdfcraft-cli" "$NFPM_STAGE/usr/bin/$NFPM_CLI"
     mv "$NFPM_STAGE/usr/share/doc/pdfcraft" "$NFPM_STAGE/usr/share/doc/$NFPM_NAME"
-    if [[ -d "$NFPM_STAGE/usr/share/pdfcraft" ]]; then
-      mv "$NFPM_STAGE/usr/share/pdfcraft" "$NFPM_STAGE/usr/share/$NFPM_NAME"
-    fi
     sed -e "s#^Exec=pdfcraft\([[:space:]]\|$\)#Exec=$NFPM_BIN\1#" \
         -e "s|^TryExec=pdfcraft$|TryExec=$NFPM_BIN|" \
         -e "s|^Icon=$APP_ID$|Icon=$NIGHTLY_DESK_ID|" \
@@ -188,6 +243,7 @@ if has deb || has rpm; then
         -e "s|<launchable type=\"desktop-id\">$APP_ID.desktop</launchable>|<launchable type=\"desktop-id\">$NIGHTLY_DESK_ID.desktop</launchable>|g" \
         -e "s|<icon type=\"stock\">$APP_ID</icon>|<icon type=\"stock\">$NIGHTLY_DESK_ID</icon>|g" \
         -e "s|<binary>pdfcraft</binary>|<binary>$NFPM_BIN</binary>|g" \
+        -e '/<mediatype>/d' \
         "$NFPM_STAGE/usr/share/metainfo/$APP_ID.metainfo.xml" >"$NFPM_STAGE/usr/share/metainfo/$NIGHTLY_DESK_ID.metainfo.xml"
     rm -f "$NFPM_STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"
     rm -rf "$NFPM_STAGE/usr/share/mime"
@@ -235,10 +291,19 @@ if has appimage; then
   fi
   APPDIR="$WORK/PdfCraft.AppDir"
   cp -R "$STAGE" "$APPDIR"
-  ln -s usr/bin/pdfcraft "$APPDIR/AppRun"
+  if [[ "$IS_NIGHTLY" = 1 ]]; then
+    # A script, not a symlink: the Nightly GUI must start through its launch profile, and the
+    # desktop entry's Exec names the launcher too.
+    nightly_relative_launcher "$APPDIR/AppRun"
+    nightly_relative_launcher "$APPDIR/usr/bin/pdfcraft-nightly"
+  else
+    ln -s usr/bin/pdfcraft "$APPDIR/AppRun"
+  fi
   if [[ "$IS_NIGHTLY" = 1 ]]; then
     APPIMAGE_ID="$APP_ID.nightly-v1"
-    sed -e "s|^Icon=$APP_ID$|Icon=$APPIMAGE_ID|" \
+    sed -e "s#^Exec=pdfcraft\([[:space:]]\|$\)#Exec=pdfcraft-nightly\1#" \
+        -e "s|^TryExec=pdfcraft$|TryExec=pdfcraft-nightly|" \
+        -e "s|^Icon=$APP_ID$|Icon=$APPIMAGE_ID|" \
         -e "s|^Name=PdfCraft$|Name=PdfCraft Nightly|" \
         -e '/^MimeType=/d' \
         "$APPDIR/usr/share/applications/$APP_ID.desktop" >"$APPDIR/usr/share/applications/$APPIMAGE_ID.desktop"
