@@ -148,7 +148,7 @@ pub(crate) fn page_draws_transparently(doc: &Document, page: &Dict) -> bool {
 
 /// The keys of the page's own resource entries ([`CATEGORIES`]) that its content names as an
 /// operand, its `/Contents` decoded within one page's allowance and joined with a space as
-/// readers join them; `None` when a stream of it can't be read. A name counts whatever operator
+/// readers join them; `None` when a stream of it can't be read or is damaged partway. A name counts whatever operator
 /// takes it, so an entry is left out only when no operand names it.
 fn names_drawn(doc: &Document, page: &Dict) -> Option<HashSet<Vec<u8>>> {
     let res = page.get(b"Resources").map(|r| held(doc, r));
@@ -165,8 +165,13 @@ fn names_drawn(doc: &Document, page: &Dict) -> Option<HashSet<Vec<u8>>> {
         return Some(named);
     }
     let mut data = Vec::new();
-    for piece in DecodeBudget::page().decode_contents(doc, contents) {
-        data.extend_from_slice(&piece.ok()?);
+    // A stream damaged partway gives only what came before the damage, which may leave out a name.
+    for piece in DecodeBudget::page().decode_contents_with_damage(doc, contents) {
+        let (bytes, damaged) = piece.ok()?;
+        if damaged {
+            return None;
+        }
+        data.extend_from_slice(&bytes);
         data.push(b' ');
     }
     for op in pdfcraft_content::ops(&data) {
@@ -391,6 +396,11 @@ impl Walk<'_> {
             && let Some(group) = m.get(b"G")
         {
             self.visit(group, depth + 1, Self::xobject);
+        }
+        // `/Font [font size]` selects a font that text then draws with, though no `Tf` names it.
+        let font = g.get(b"Font").map(|f| held(doc, f));
+        if let Some(font) = font.as_deref().and_then(Object::as_array).and_then(|f| f.first()) {
+            self.visit(font, depth + 1, Self::type3);
         }
     }
 
@@ -688,5 +698,39 @@ endstream",
         let pages = pdfcraft_model::pages(&doc);
         let draws: Vec<bool> = pages.iter().map(|p| page_draws_transparently(&doc, &p.dict)).collect();
         assert_eq!(draws, [true, true]);
+    }
+
+    #[test]
+    fn a_page_whose_content_is_damaged_partway_counts_every_entry() {
+        // The stream breaks after naming the opaque state; the translucent one comes after the break.
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /ExtGState << /Half << /ca 0.5 >> /Opaque << /ca 1 >> >> >> /Contents 4 0 R >>",
+            "<< /Filter /ASCIIHexDecode /Length 95 >>
+stream
+2F4F70617175652067732030203020312031207265206620zz202F48616C6620677320302030203120312072652066>
+endstream",
+        ]);
+        let page = &pdfcraft_model::pages(&doc)[0];
+        assert!(page_draws_transparently(&doc, &page.dict));
+    }
+
+    #[test]
+    fn a_type3_font_a_graphics_state_selects_counts() {
+        // `/G gs` selects the Type 3 font, listed as `/F` but never named by `Tf`, whose glyphs paint
+        // translucently.
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /ExtGState << /G << /Font [5 0 R 12] >> >> /Font << /F 5 0 R >> >> /Contents 4 0 R >>",
+            "<< /Length 18 >>
+stream
+/G gs BT (A) Tj ET
+endstream",
+            "<< /Type /Font /Subtype /Type3 /Resources << /ExtGState << /H << /ca 0.5 >> >> >> >>",
+        ]);
+        let page = &pdfcraft_model::pages(&doc)[0];
+        assert!(page_draws_transparently(&doc, &page.dict));
     }
 }
