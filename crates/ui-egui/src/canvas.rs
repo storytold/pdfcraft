@@ -788,15 +788,19 @@ fn close_requested_tab(ctx: &egui::Context, app: &mut PdfCraftApp, index: usize)
     true
 }
 
+/// A link to another file that a click followed, to be opened once the document is no longer
+/// borrowed: a local PDF (GoToR or Launch), or a PDF attached to this one (GoToE).
+pub(crate) enum FollowedLink {
+    Remote(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination),
+    Embedded(pdfcraft_engine::DocId, pdfcraft_render::EmbeddedTarget, pdfcraft_render::RemoteDestination),
+}
+
 /// Follows the link, or the bookmark's action, that was clicked. A link to another file comes
 /// back, to be opened once the document is no longer borrowed.
-pub(crate) fn follow_link(
-    app: &mut PdfCraftApp,
-    index: usize,
-    target: Option<LinkTarget>,
-) -> Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)> {
+pub(crate) fn follow_link(app: &mut PdfCraftApp, index: usize, target: Option<LinkTarget>) -> Option<FollowedLink> {
+    let target = target?;
     let view_id = app.views[index].id;
-    match target? {
+    match target {
         LinkTarget::Page(p, dest) => {
             let view = &mut app.views[index];
             if let Some(doc) = app.session.get(view.id) {
@@ -805,7 +809,8 @@ pub(crate) fn follow_link(
         }
         LinkTarget::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Link),
         LinkTarget::SetLayers { changes, preserve_rb } => set_layers(app, index, &changes, preserve_rb),
-        LinkTarget::RemoteGoTo { file, destination, .. } => return Some((view_id, file, destination)),
+        LinkTarget::RemoteGoTo { file, destination, .. } => return Some(FollowedLink::Remote(view_id, file, destination)),
+        LinkTarget::EmbeddedGoTo { target, destination, .. } => return Some(FollowedLink::Embedded(view_id, target, destination)),
         // Run by `PdfCraftApp::run_link_script`, which needs the link's page and index.
         LinkTarget::JavaScript(_) => {}
         LinkTarget::Other(s) => app.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", &s)]),
@@ -2021,7 +2026,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     if let Some((page, area)) = body_out.snapshot {
         app.finish_marquee(ui.ctx(), index, (page, area));
     }
-    let remote_open = follow_link(app, index, clicked_link);
+    let followed_link = follow_link(app, index, clicked_link);
     if let Some((page, link)) = javascript_link {
         app.run_link_script(ui.ctx(), doc_id, page, link);
     }
@@ -2036,7 +2041,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         form_notice,
         copy_selected: body_out.copy_selected,
         recolour,
-        remote_open,
+        followed_link,
         open_table: prepare.table,
         open_boxes: body_out.open_boxes,
         open_signature: body_out.open_signature,
@@ -2058,7 +2063,7 @@ struct FrameRequests {
     copy_selected: bool,
     /// A colour picked for every selected comment (Colour in the page's menu).
     recolour: Option<pdfcraft_engine::Rgb>,
-    remote_open: Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)>,
+    followed_link: Option<FollowedLink>,
     /// A table drawn with the prepare tool: its page and user-space rectangle.
     open_table: Option<(usize, [f64; 4])>,
     /// The Crop tool's double-click: open Set Page Boxes on the current page.
@@ -2081,7 +2086,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
         form_notice,
         copy_selected,
         recolour,
-        remote_open,
+        followed_link,
         open_table,
         open_boxes,
         open_signature,
@@ -2302,8 +2307,10 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
     if let Some(notice) = app.views[index].session.comments.notice.take() {
         app.notify_tr(notice);
     }
-    if let Some((source, file, destination)) = remote_open {
-        app.open_remote_link(source, file, destination);
+    match followed_link {
+        Some(FollowedLink::Remote(source, file, destination)) => app.open_remote_link(source, file, destination),
+        Some(FollowedLink::Embedded(source, target, destination)) => app.open_embedded_link(ctx, source, target, destination),
+        None => {}
     }
 }
 

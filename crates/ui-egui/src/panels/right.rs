@@ -134,11 +134,11 @@ pub fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, cx: &mut BodyCx<'_>,
             Some(doc) => app.views[index].go_to_dest(p, dest, &doc.info),
             None => app.views[index].go_to_page(p),
         },
-        Some(Nav::Action(target)) => {
-            if let Some((source, file, destination)) = crate::canvas::follow_link(app, index, Some(target)) {
-                app.open_remote_link(source, file, destination);
-            }
-        }
+        Some(Nav::Action(target)) => match crate::canvas::follow_link(app, index, Some(target)) {
+            Some(crate::canvas::FollowedLink::Remote(source, file, destination)) => app.open_remote_link(source, file, destination),
+            Some(crate::canvas::FollowedLink::Embedded(source, target, destination)) => app.open_embedded_link(&ctx, source, target, destination),
+            None => {}
+        },
         Some(Nav::Flash(p, r)) => {
             let v = &mut app.views[index];
             if let Some(doc) = app.session.get(id) {

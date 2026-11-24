@@ -147,6 +147,11 @@ pub(crate) fn target_label(info: &DocInfo, target: &LinkTarget) -> String {
         LinkTarget::Uri(u) => u.clone(),
         LinkTarget::SetLayers { .. } => tl!("Set layer visibility").to_string(),
         LinkTarget::RemoteGoTo { file, .. } => file.clone(),
+        LinkTarget::EmbeddedGoTo { target, .. } => match target {
+            pdfcraft_render::EmbeddedTarget::Name(name) => name.clone(),
+            pdfcraft_render::EmbeddedTarget::Annotation { .. } => tl!("Attached file").to_string(),
+            pdfcraft_render::EmbeddedTarget::Parent => tl!("Parent document").to_string(),
+        },
         LinkTarget::JavaScript(_) => crate::i18n::fmt(tl!("{s} action"), &[("s", "JavaScript")]),
         LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
     }

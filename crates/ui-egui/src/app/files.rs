@@ -20,6 +20,16 @@ fn asks_for_password(kind: &open_worker::ResultKind) -> bool {
     )
 }
 
+/// Inputs for opening a document inline on the UI thread.
+struct InlineOpen<'a> {
+    name: &'a str,
+    path: Option<String>,
+    bytes: std::sync::Arc<Vec<u8>>,
+    password: Option<&'a str>,
+    activate: bool,
+    destination: Option<pdfcraft_render::RemoteDestination>,
+}
+
 /// Whether two paths name the same file: equal, or the same once resolved on disk.
 pub(crate) fn same_file(open: &str, path: &str) -> bool {
     craft::platform::open::same_file(std::path::Path::new(open), std::path::Path::new(path), None)
@@ -111,6 +121,23 @@ impl PdfCraftApp {
         self.open_bytes_with_focus(ctx, name, path, bytes, true)
     }
 
+    /// Open a document from memory, make it the active tab, and navigate to the given remote destination.
+    pub fn open_bytes_with_destination(
+        &mut self,
+        ctx: &egui::Context,
+        name: &str,
+        path: Option<String>,
+        bytes: Vec<u8>,
+        destination: Option<pdfcraft_render::RemoteDestination>,
+    ) -> Result<(), String> {
+        self.startup_superseded = true;
+        self.apply_status_captions(i18n::Lang::from_pref(&self.language));
+        if let Some(r) = self.open_converted(name, &bytes) {
+            return r;
+        }
+        self.try_open(ctx, InlineOpen { name, path, bytes: std::sync::Arc::new(bytes), password: None, activate: true, destination })
+    }
+
     pub(super) fn open_bytes_with_focus(
         &mut self,
         ctx: &egui::Context,
@@ -130,7 +157,7 @@ impl PdfCraftApp {
             }
             return r;
         }
-        self.try_open(ctx, name, path, std::sync::Arc::new(bytes), None, activate)
+        self.try_open(ctx, InlineOpen { name, path, bytes: std::sync::Arc::new(bytes), password: None, activate, destination: None })
     }
 
     /// Hand `request` to the open queue; the result arrives later as a pending open, under the
@@ -314,18 +341,11 @@ impl PdfCraftApp {
         }
     }
 
-    /// Open `bytes` on this thread: ask for a password if the document needs one, else add it
-    /// as a tab (in front when `activate`).
-    fn try_open(
-        &mut self,
-        ctx: &egui::Context,
-        name: &str,
-        path: Option<String>,
-        bytes: std::sync::Arc<Vec<u8>>,
-        password: Option<&str>,
-        activate: bool,
-    ) -> Result<(), String> {
+    /// Open `open.bytes` on this thread: ask for a password if the document needs one, else add it
+    /// as a tab (in front when `open.activate`) and apply any `open.destination`.
+    fn try_open(&mut self, ctx: &egui::Context, open: InlineOpen<'_>) -> Result<(), String> {
         use pdfcraft_render::OpenError;
+        let InlineOpen { name, path, bytes, password, activate, destination } = open;
         // A new document opens with the remembered Highlight fields, which its scripts read; the
         // session keeps the document in front's.
         let context = self.session.open_context().with_highlight(self.highlight_fields);
@@ -345,14 +365,18 @@ impl PdfCraftApp {
                     activate,
                     recovered: None,
                     then: None,
-                    after_open: None,
+                    after_open: destination,
                     display_override: None,
                 });
                 return Ok(());
             }
             Err(e) => return Err(e.to_string()),
         };
-        self.finish_open(ctx, name, path, bytes.len(), prepared, activate).map(|_| ())
+        self.finish_open(ctx, name, path, bytes.len(), prepared, activate)?;
+        if let Some(destination) = destination {
+            self.apply_remote_destination(destination);
+        }
+        Ok(())
     }
 
     /// Add a prepared document as a tab: its view, the panels it opens with, a portfolio's file list
@@ -752,7 +776,10 @@ impl PdfCraftApp {
     #[cfg(target_arch = "wasm32")]
     fn retry_inline(&mut self, ctx: &egui::Context, mut p: PasswordPrompt, pw: zeroize::Zeroizing<String>) {
         let after_open = p.after_open.clone();
-        let opened = self.try_open(ctx, &p.name, p.path.take(), p.bytes.clone(), Some(&pw), p.activate);
+        let opened = self.try_open(
+            ctx,
+            InlineOpen { name: &p.name, path: p.path.take(), bytes: p.bytes.clone(), password: Some(&pw), activate: p.activate, destination: None },
+        );
         drop(pw);
         match opened {
             Err(e) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &p.name), ("e", &e.to_string())]),
