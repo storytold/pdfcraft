@@ -223,12 +223,14 @@ fn every_cap_and_undecodable_stream_leaves_the_answer_unproven() {
         assert!(!short.asks() && !short.proven() && !short.unwalked.is_empty(), "{what}: {short:?}");
     }
 
-    let mut doc = Document::new_empty();
-    let d = dict(&[("Subtype", Object::name("Form")), ("Filter", Object::name("FlateDecode"))]);
-    let broken = stream(&mut doc, d, "not deflate data");
-    add_page(&mut doc, dict(&[("XObject", xobjects(&[("B", broken)]))]), "/B Do");
-    let undecoded = walk(&doc);
-    assert!(!undecoded.asks() && !undecoded.proven(), "{undecoded:?}");
+    for filter in ["FlateDecode", "NoSuchDecode"] {
+        let mut doc = Document::new_empty();
+        let d = dict(&[("Subtype", Object::name("Form")), ("Filter", Object::name(filter))]);
+        let broken = stream(&mut doc, d, "not deflate data");
+        add_page(&mut doc, dict(&[("XObject", xobjects(&[("B", broken)]))]), "/B Do");
+        let undecoded = walk(&doc);
+        assert!(!undecoded.asks() && !undecoded.proven(), "{filter}: {undecoded:?}");
+    }
 
     let mut doc = Document::new_empty();
     add_page(&mut doc, Dict::new(), &"q ".repeat(MAX_SAVES + 1));
