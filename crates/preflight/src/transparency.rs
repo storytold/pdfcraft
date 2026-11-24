@@ -111,7 +111,7 @@ pub(crate) fn page_reads(doc: &Document, page: &Dict, shared: &mut Shared) -> us
 }
 
 fn walk_page<'a>(doc: &'a Document, page: &Dict, shared: &'a mut Shared) -> Walk<'a> {
-    let mut walk = Walk { doc, shared, seen: HashMap::new(), visits: 0, cuts: 0, found: Painting::default() };
+    let mut walk = Walk { doc, shared, seen: HashMap::new(), visits: 0, cuts: 0, found: Painting::default(), inherits: false };
     if let Some(r) = page.get(b"Resources") {
         walk.visit(r, 0, Walk::resources);
     }
@@ -129,7 +129,7 @@ pub(crate) fn page_draws_transparently(doc: &Document, page: &Dict) -> bool {
     let Some(named) = names_drawn(doc, page) else {
         return page_painting(doc, page, &mut shared).paints_transparently;
     };
-    let mut walk = Walk { doc, shared: &mut shared, seen: HashMap::new(), visits: 0, cuts: 0, found: Painting::default() };
+    let mut walk = Walk { doc, shared: &mut shared, seen: HashMap::new(), visits: 0, cuts: 0, found: Painting::default(), inherits: false };
     // Read in place, not through `visit`: what one page names of a shared dictionary is not what
     // the dictionary holds, so it must not go in `Shared`.
     if let Some(r) = page.get(b"Resources") {
@@ -137,6 +137,12 @@ pub(crate) fn page_draws_transparently(doc: &Document, page: &Dict) -> bool {
         walk.resources_within(r, 0, Some(&named));
     }
     walk.annotations(page);
+    if walk.inherits || walk.cuts > 0 {
+        // Something it draws has no resources of its own and paints with the page's (ISO 32000-1
+        // 7.8.3), so what it names can be any entry of them; or the walk was cut short before it
+        // could tell.
+        return page_painting(doc, page, &mut Shared::default()).paints_transparently;
+    }
     walk.found.paints_transparently
 }
 
@@ -268,6 +274,8 @@ struct Walk<'a> {
     /// under it may be incomplete.
     cuts: usize,
     found: Painting,
+    /// Whether a form, tiling pattern or Type 3 font read has no `/Resources` of its own.
+    inherits: bool,
 }
 
 impl Walk<'_> {
@@ -405,8 +413,9 @@ impl Walk<'_> {
             .map(|g| held(doc, g))
             .is_some_and(|g| g.as_dict().is_some_and(|g| g.get(b"S").is_some_and(|s| held(doc, s).as_name() == Some(b"Transparency"))));
         self.found.transparency |= group;
-        if let Some(r) = d.get(b"Resources") {
-            self.visit(r, depth + 1, Self::resources);
+        match d.get(b"Resources") {
+            Some(r) => self.visit(r, depth + 1, Self::resources),
+            None => self.inherits = true,
         }
     }
 
@@ -423,8 +432,10 @@ impl Walk<'_> {
         if let Some(g) = d.get(b"ExtGState") {
             self.visit(g, depth + 1, Self::ext_gstate);
         }
-        if let Some(r) = d.get(b"Resources") {
-            self.visit(r, depth + 1, Self::resources);
+        match d.get(b"Resources") {
+            Some(r) => self.visit(r, depth + 1, Self::resources),
+            // A tiling pattern has content; a shading pattern has none to inherit for.
+            None => self.inherits |= matches!(&*p, Object::Stream(_)),
         }
     }
 
@@ -436,8 +447,9 @@ impl Walk<'_> {
         if !d.get(b"Subtype").is_some_and(|s| held(doc, s).as_name() == Some(b"Type3")) {
             return;
         }
-        if let Some(r) = d.get(b"Resources") {
-            self.visit(r, depth + 1, Self::resources);
+        match d.get(b"Resources") {
+            Some(r) => self.visit(r, depth + 1, Self::resources),
+            None => self.inherits = true,
         }
     }
 }
@@ -648,5 +660,33 @@ mod tests {
         // page 3's content can't be read, so every entry counts; page 4 names neither.
         assert_eq!(draws, [true, true, true, false]);
         assert!(pages.iter().all(|p| crate::page_uses_transparency(&doc, &p.dict)));
+    }
+
+    #[test]
+    fn what_a_drawn_form_without_resources_names_of_the_pages_counts() {
+        // Page 1 draws a form with no /Resources, which paints with the page's, and only the form
+        // names the translucent state. Page 2 names the state through an escaped name.
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources 5 0 R /Contents 6 0 R >>",
+            "<< /Type /Page /Parent 2 0 R /Resources 5 0 R /Contents 8 0 R >>",
+            "<< /ExtGState << /Half << /ca 0.5 >> >> /XObject << /Fm 7 0 R >> >>",
+            "<< /Length 6 >>
+stream
+/Fm Do
+endstream",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 21 >>
+stream
+/Half gs 0 0 1 1 re f
+endstream",
+            "<< /Length 23 >>
+stream
+/Hal#66 gs 0 0 1 1 re f
+endstream",
+        ]);
+        let pages = pdfcraft_model::pages(&doc);
+        let draws: Vec<bool> = pages.iter().map(|p| page_draws_transparently(&doc, &p.dict)).collect();
+        assert_eq!(draws, [true, true]);
     }
 }
