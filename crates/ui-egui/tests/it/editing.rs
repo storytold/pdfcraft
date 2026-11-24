@@ -5446,6 +5446,122 @@ fn arrow_keys_nudge_a_selected_image_instead_of_turning_the_page() {
     assert!(h.state().views[0].session.image_selection.is_some(), "it stays selected for the next nudge");
 }
 
+/// #6523: the selected image's pixels should follow the frame during a held arrow key.
+#[test]
+fn a_held_arrow_key_moves_the_picture_on_screen_before_release() {
+    let _gpu = gpu();
+    let mut png = Vec::new();
+    // Original synthetic PNG: a red square with transparent sides over the fixture's "Page 1".
+    let pixels =
+        image::RgbaImage::from_fn(80, 40, |x, _| if (10..70).contains(&x) { image::Rgba([200, 30, 30, 255]) } else { image::Rgba([0, 0, 0, 0]) });
+    pixels.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+
+    let mut h = harness(1, |_| {});
+    assert!(h.execute("edit.edit_text"));
+    support::settle(&mut h);
+    let text_page = h.render().unwrap();
+    let ctx = h.ctx.clone();
+    h.state_mut().add_image(&ctx, "nudge.png".into(), png);
+    support::settle(&mut h);
+    assert!(h.state().views[0].session.image_selection.is_some(), "the picture is selected");
+    let bounds = |h: &Harness<'static, PdfCraftApp>| {
+        let [a, _, c, _] = picture_corners(h, 0, 0);
+        egui::Rect::from_two_pos(a, c)
+    };
+    let start = bounds(&h);
+    let probe = |rect: egui::Rect| egui::Rect::from_center_size(rect.center() + egui::vec2(rect.width() * 0.3, 0.0), egui::vec2(6.0, 6.0));
+    let first = h.render().unwrap();
+    assert!(red(&first, probe(start)) > 0, "the original picture is painted");
+    let key = |pressed, repeat| egui::Event::Key {
+        key: Key::ArrowRight,
+        physical_key: Some(Key::ArrowRight),
+        pressed,
+        repeat,
+        modifiers: Modifiers::SHIFT,
+    };
+    support::input::one_frame(&mut h, [egui::Event::ModifiersChanged(Modifiers::SHIFT)]);
+    let backing = |h: &Harness<'static, PdfCraftApp>| {
+        let placed = &h.state().views[0].session.placed[0];
+        match placed.picture {
+            craft::ui::primitives::textures::TextureState::Ready(texture) if placed.picture_revision.is_none() => Some(texture),
+            _ => None,
+        }
+    };
+    let mut held = Vec::new();
+    let mut backing_after_first = None;
+    let mut reused = true;
+    for step in 0..4 {
+        support::input::one_frame(&mut h, [key(true, step > 0)]);
+        let logical = bounds(&h);
+        let drawn = red(&h.render().unwrap(), probe(logical));
+        eprintln!("held step {}: left {:.2}, red pixels at the new edge {drawn}", step + 1, logical.left());
+        let handle = h.get_by_role_and_label(Role::Button, "Top right corner").rect().center();
+        held.push((logical, drawn, handle));
+        if step == 0 {
+            support::settle(&mut h);
+            backing_after_first = backing(&h);
+        } else {
+            reused &= backing_after_first.is_some() && backing_after_first == backing(&h);
+        }
+    }
+    let (end, _, _) = *held.last().unwrap();
+    assert!(
+        end.left() > start.left() && (end.width() - start.width()).abs() < 0.5,
+        "the image frame moves while the key is held: {start:?} → {end:?}"
+    );
+    assert_eq!(red(&first, probe(end)), 0, "the sampled area starts outside the original red picture");
+
+    h.step();
+    let held_picture = h.render().unwrap();
+    let idle_ink = red(&held_picture, probe(end));
+    eprintln!("held without a repeat: red pixels at the new edge {idle_ink}");
+    let uncovered = egui::Rect::from_min_max(
+        start.left_top() + egui::vec2(start.width() * 0.25, 8.0),
+        egui::pos2(start.left() + start.width() * 0.4, start.center().y - 5.0),
+    );
+    let dark = |pixels: &image::RgbaImage| {
+        (uncovered.top() as u32..uncovered.bottom() as u32)
+            .flat_map(|y| (uncovered.left() as u32..uncovered.right() as u32).map(move |x| pixels.get_pixel(x, y)))
+            .filter(|p| p.0[..3].iter().all(|&v| v < 96))
+            .count()
+    };
+
+    support::input::one_frame(&mut h, [key(false, false)]);
+    support::input::one_frame(&mut h, [egui::Event::ModifiersChanged(Modifiers::NONE)]);
+    support::settle(&mut h);
+    assert_eq!(bounds(&h), end, "key release adds no movement");
+    let released_ink = red(&h.render().unwrap(), probe(end));
+    assert!(released_ink > 0, "the page redraw shows the image in the new frame after release");
+    assert!(h.state().views[0].session.placed[0].picture_revision.is_some(), "the committed page replaces the backdrop");
+    assert!(
+        held.iter().all(|(_, ink, _)| *ink > 0),
+        "each new frame must contain picture pixels before release (held {held:?}, released {released_ink})"
+    );
+    assert!(reused, "the repeats reuse the same ready page backdrop");
+    assert!(held.iter().all(|(bounds, _, handle)| handle.distance(bounds.right_top()) < 1.0), "the accessible frame moves with the picture");
+    assert!(dark(&text_page) > dark(&first), "the inserted picture covers some of the original text");
+    assert!(dark(&held_picture) > dark(&first), "the uncovered text shows under the keyboard preview");
+
+    // A plain arrow is the fine nudge. Check its newly covered leading edge.
+    let plain = |key, pressed| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: Modifiers::NONE };
+    let plain_before = h.render().unwrap();
+    support::input::one_frame(&mut h, [plain(Key::ArrowLeft, true)]);
+    let nudged = bounds(&h);
+    let left = nudged.left() + nudged.width() / 8.0;
+    let sample = egui::Rect::from_min_size(egui::pos2(left + 1.0, nudged.center().y - 3.0), egui::vec2(1.5, 6.0));
+    assert!(nudged.left() < end.left(), "a plain arrow moves left");
+    assert!(red(&h.render().unwrap(), sample) > red(&plain_before, sample), "the plain arrow paints at the new edge");
+
+    // Escape has never undone an applied nudge. Undo still steps back exactly once.
+    support::input::one_frame(&mut h, [plain(Key::Escape, true), plain(Key::Escape, false)]);
+    assert_eq!(bounds(&h), nudged, "Escape keeps the applied nudge");
+    support::input::one_frame(&mut h, [plain(Key::ArrowLeft, false)]);
+    press(&mut h, Modifiers::COMMAND, Key::Z);
+    support::settle(&mut h);
+    assert_eq!(bounds(&h), end, "one Undo takes back just the plain nudge");
+    assert!(red(&h.render().unwrap(), probe(end)) > 0, "Undo leaves the picture painted at that step");
+}
+
 /// #3632: with a picture selected, Alt+← / Alt+→ still go back and forward through the view
 /// history. They don't nudge it (the nudge patterns also match a press with Alt), so nothing moves
 /// and the document isn't edited.

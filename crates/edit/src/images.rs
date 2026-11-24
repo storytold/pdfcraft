@@ -56,6 +56,11 @@ pub struct PageImage {
 }
 
 impl PageImage {
+    /// Whether an explicit clipping path constrains this placement, apart from the page boundary.
+    pub fn has_path_clip(&self) -> bool {
+        !self.clips.is_empty()
+    }
+
     /// Whether an active clip was written by PdfCraft's image crop tool.
     pub fn has_editor_crop(&self) -> bool {
         self.clips.iter().any(|clip| clip.app_crop)

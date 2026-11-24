@@ -1821,7 +1821,9 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         find_marks: &find_marks,
         table_preview: table_preview.as_ref(),
     };
-    let source = DocPages::new(&app.session, doc_id).rotated(state.rotation).revisions(revisions).reports(reports);
+    let image_nudge =
+        (unobstructed && tool == QuickTool::EditText && can_modify).then(|| session.image_selection.as_ref()?.nudge_backdrop(ui.ctx())).flatten();
+    let source = DocPages::new(&app.session, doc_id).rotated(state.rotation).revisions(revisions).reports(reports).with_image_nudge(image_nudge);
     // A modal over the pages blocks the canvas's keys and presses in the framework, so the view needs no gate here.
     // Scope each tab's PageView by its view key so per-canvas gestures (like middle-button autoscroll) stay tab-local.
     let mut callbacks = PageCallbacks { session, momentary, cx: &cx, out: &mut body_out, parts: None, field_arrived: false };

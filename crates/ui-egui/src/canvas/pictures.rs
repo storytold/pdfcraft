@@ -2,7 +2,7 @@
 //! framework's texture contract for. Revisions say when a picture is out of date; render jobs own what they read.
 
 use std::collections::{BTreeSet, HashMap};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use craft::behavior::kurbo::Size;
 use craft::pages::ui::{PageRevision, PageSource};
@@ -102,6 +102,34 @@ impl RenderReports {
     }
 }
 
+/// One unchanged background for a burst of image nudges. The view can keep this raster (including
+/// any text beneath the picture) and paint the moved picture separately until the arrows come up.
+pub(crate) struct ImageNudgeBackdrop {
+    page: usize,
+    index: usize,
+    generation: u64,
+    display: Arc<Vec<u8>>,
+    rewritten: OnceLock<Arc<Vec<u8>>>,
+}
+
+impl ImageNudgeBackdrop {
+    pub(crate) fn new(doc: &pdfcraft_engine::Document, page: usize, index: usize) -> Arc<Self> {
+        // Capture the display from the same document generation as the page_images lookup.
+        // The display serialization adds appearances without changing the page's image order.
+        Arc::new(Self { page, index, generation: doc.edit_generation(), display: doc.display.clone(), rewritten: OnceLock::new() })
+    }
+
+    /// The first render job rewrites the display. Both the full page and detail jobs share
+    /// those bytes, or the original display if the rewrite was refused.
+    fn bytes(&self) -> Arc<Vec<u8>> {
+        self.rewritten
+            .get_or_init(|| {
+                pdfcraft_engine::image_move_backdrop(self.display.clone(), self.page, self.index).unwrap_or_else(|_| self.display.clone())
+            })
+            .clone()
+    }
+}
+
 /// One document's pages as a [`PageSource`] and the source of print previews. It owns what a render job reads, so
 /// jobs outlive the pass that made them.
 pub struct DocPages<'a> {
@@ -111,6 +139,7 @@ pub struct DocPages<'a> {
     rotation: u16,
     revisions: Option<&'a PageRevisions>,
     reports: Option<RenderReports>,
+    image_nudge: Option<Arc<ImageNudgeBackdrop>>,
 }
 
 impl<'a> DocPages<'a> {
@@ -124,6 +153,7 @@ impl<'a> DocPages<'a> {
             rotation: 0,
             revisions: None,
             reports: None,
+            image_nudge: None,
         }
     }
 
@@ -148,15 +178,28 @@ impl<'a> DocPages<'a> {
         self
     }
 
+    pub(crate) fn with_image_nudge(mut self, backdrop: Option<Arc<ImageNudgeBackdrop>>) -> Self {
+        self.image_nudge = backdrop;
+        self
+    }
+
+    fn nudge_at(&self, page: usize) -> Option<&Arc<ImageNudgeBackdrop>> {
+        self.image_nudge.as_ref().filter(|nudge| nudge.page == page)
+    }
+
     fn revision_of(&self, page: usize, request: &ThumbRequest, print: Option<bool>) -> Revision {
         let generation = self.revisions.map_or((0, 0), |r| r.of(page));
         let region = request.region.map(|r| [r.min.x.to_bits(), r.min.y.to_bits(), r.max.x.to_bits(), r.max.y.to_bits()]);
+        if let Some(nudge) = self.nudge_at(page).filter(|_| print.is_none()) {
+            return Revision::of(&(nudge.generation, nudge.index, request.side, region, self.rotation, "image nudge background"));
+        }
         Revision::of(&(generation, request.side, region, self.rotation, print))
     }
 
     /// The job making `page` at `request`; `print` is `Some(grayscale)` for a print preview.
     fn render_page(&self, page: usize, request: &ThumbRequest, print: Option<bool>) -> ThumbRender {
-        let reports = self.reports.clone();
+        let backdrop = self.nudge_at(page).filter(|_| print.is_none()).cloned();
+        let reports = if backdrop.is_some() { None } else { self.reports.clone() };
         let Some(info) = self.info.and_then(|i| i.pages.get(page)) else {
             return ThumbRender::Later(Box::new(|_| Err(LoadFailure::Missing)));
         };
@@ -179,6 +222,10 @@ impl<'a> DocPages<'a> {
         let config = if print.is_some() { self.config.clone() } else { self.config.clone().on_screen() };
         let tag = if print.is_some() { PRINT_TAG } else { 0 };
         ThumbRender::Later(Box::new(move |cancel| {
+            if cancel.is_cancelled() {
+                return Err(LoadFailure::Missing);
+            }
+            let bytes = backdrop.map_or(bytes, |nudge| nudge.bytes());
             if cancel.is_cancelled() {
                 return Err(LoadFailure::Missing);
             }
@@ -211,6 +258,11 @@ impl<'a> DocPages<'a> {
 
 impl PageSource for DocPages<'_> {
     fn page_revision(&self, page: usize) -> Option<PageRevision> {
+        // A ready backdrop contains everything except the selected picture. It cannot settle
+        // a preview or substitute for the document's committed revision.
+        if self.nudge_at(page).is_some() {
+            return None;
+        }
         let (document, page) = self.revisions?.of(page);
         Some(PageRevision { document, page })
     }
