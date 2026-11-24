@@ -676,3 +676,66 @@ fn replace_all_is_one_undo_step_and_counts_pages_whose_matches_had_no_paragraph(
     let doc = h.state().session.get(id).unwrap();
     assert_eq!((doc.undo_depth(), &doc.bytes), (depth, &before), "one undo puts both pages back");
 }
+
+#[test]
+fn dest_indicator_rect_covers_each_destination_view() {
+    let info = DocInfo {
+        pages: vec![pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }],
+        ..Default::default()
+    };
+    let v = DocView::new(DocId(1), &info, ViewDefaults::default(), true);
+
+    let top = v.dest_indicator_rect(0, DestView::Top, &info).expect("top rect");
+    assert_eq!([top[0], top[2], top[3]], [0.0, 300.0, 400.0]);
+    assert!((top[1] - 376.0).abs() < 1e-4);
+
+    let fit = v.dest_indicator_rect(0, DestView::Fit, &info).expect("fit rect");
+    assert_eq!(fit, top);
+
+    let fith = v.dest_indicator_rect(0, DestView::FitH { top: Some(300.0) }, &info).expect("fith rect");
+    assert!((fith[0] - 0.0).abs() < 1e-4 && (fith[1] - 276.0).abs() < 1e-4 && (fith[2] - 300.0).abs() < 1e-4 && (fith[3] - 300.0).abs() < 1e-4);
+
+    let fitv = v.dest_indicator_rect(0, DestView::FitV { left: Some(75.0) }, &info).expect("fitv rect");
+    assert!((fitv[0] - 75.0).abs() < 1e-4 && (fitv[1] - 0.0).abs() < 1e-4 && (fitv[2] - 99.0).abs() < 1e-4 && (fitv[3] - 400.0).abs() < 1e-4);
+
+    let xyz = v.dest_indicator_rect(0, DestView::Xyz { left: Some(150.0), top: Some(200.0), zoom: None }, &info).expect("xyz rect");
+    assert!((xyz[0] - 150.0).abs() < 1e-4 && (xyz[3] - 200.0).abs() < 1e-4 && xyz[2] > xyz[0] && xyz[3] > xyz[1]);
+
+    let fitr = v.dest_indicator_rect(0, DestView::FitR { rect: [60.0, 100.0, 150.0, 300.0] }, &info).expect("fitr rect");
+    assert!((fitr[0] - 60.0).abs() < 1e-4 && (fitr[1] - 100.0).abs() < 1e-4 && (fitr[2] - 150.0).abs() < 1e-4 && (fitr[3] - 300.0).abs() < 1e-4);
+
+    // Quarter-turn rotation swaps the displayed axis for FitH and FitV.
+    let mut rotated = v;
+    rotated.view.rotation = 90;
+    let xf_rot = PageXform { rect: Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 300.0)), rot: 90, pw: 300.0, ph: 400.0 };
+    let fith_rot = rotated.dest_indicator_rect(0, DestView::FitH { top: Some(300.0) }, &info).expect("rotated fith rect");
+    let fith_screen = xf_rot.user_rect(&info, 0, fith_rot);
+    assert!(
+        (fith_screen.left() / 400.0 - 0.75).abs() < 1e-4 && fith_screen.top().abs() < 1e-4 && (fith_screen.bottom() - 300.0).abs() < 1e-4,
+        "rotated FitH lands on the displayed vertical band: {fith_screen:?}"
+    );
+
+    let fitv_rot = rotated.dest_indicator_rect(0, DestView::FitV { left: Some(75.0) }, &info).expect("rotated fitv rect");
+    let fitv_screen = xf_rot.user_rect(&info, 0, fitv_rot);
+    assert!(
+        fitv_screen.left().abs() < 1e-4 && (fitv_screen.right() - 400.0).abs() < 1e-4 && (fitv_screen.top() / 300.0 - 0.25).abs() < 1e-4,
+        "rotated FitV lands on the displayed horizontal band: {fitv_screen:?}"
+    );
+
+    // Null-top XYZ destination falls back to top edge when no position is preserved,
+    // and uses the resolved position when go_to preserved it.
+    let v_unrotated = DocView::new(DocId(1), &info, ViewDefaults::default(), true);
+    let xyz_null_top =
+        v_unrotated.dest_indicator_rect(0, DestView::Xyz { left: Some(150.0), top: None, zoom: None }, &info).expect("xyz null top rect");
+    assert!((xyz_null_top[3] - 400.0).abs() < 1e-4);
+    assert!((xyz_null_top[1] - 376.0).abs() < 1e-4);
+
+    let mut v_with_preserved = DocView::new(DocId(1), &info, ViewDefaults::default(), true);
+    v_with_preserved.view.go_to = Some(craft::pages::ui::view::GoTo::Corner { page: 0, at: craft::behavior::kurbo::Point::new(150.0, 240.0) });
+    let xyz_preserved =
+        v_with_preserved.dest_indicator_rect(0, DestView::Xyz { left: Some(150.0), top: None, zoom: None }, &info).expect("xyz preserved top rect");
+    assert!((xyz_preserved[3] - 160.0).abs() < 1e-4);
+    assert!((xyz_preserved[1] - 136.0).abs() < 1e-4);
+
+    assert!(rotated.dest_indicator_rect(5, DestView::Top, &info).is_none());
+}

@@ -200,6 +200,87 @@ impl DocView {
         }
     }
 
+    /// Computes the PDF user-space destination indicator rectangle `[x0, y0, x1, y1]` for `dest`
+    /// on `page`, to flash after following an internal link (#4787).
+    pub(crate) fn dest_indicator_rect(&self, page: usize, dest: DestView, info: &DocInfo) -> Option<[f32; 4]> {
+        let p = info.pages.get(page)?;
+        let rotation = self.view.rotation;
+        let (dw, dh) = displayed(p, rotation);
+        let (dw, dh) = (dw.max(1.0), dh.max(1.0));
+        let band_x = (24.0 / dw).clamp(0.02, 0.3);
+        let band_y = (24.0 / dh).clamp(0.02, 0.3);
+        let point = |x: Option<f32>, y: Option<f32>| p.dest_fraction(x, y, rotation);
+        // The destination coordinate lands on one displayed axis only; a quarter turn swaps it.
+        let band = |[fx, fy]: [Option<f32>; 2], default_vertical: bool| match (fx, fy) {
+            (Some(x), _) => {
+                let x1 = (x + band_x).min(1.0);
+                [(x1 - band_x).max(0.0), 0.0, x1, 1.0]
+            }
+            (None, Some(y)) => {
+                let y1 = (y + band_y).min(1.0);
+                [0.0, (y1 - band_y).max(0.0), 1.0, y1]
+            }
+            (None, None) if default_vertical => [0.0, 0.0, band_x, 1.0],
+            (None, None) => [0.0, 0.0, 1.0, band_y],
+        };
+        let total = (u32::from(p.rotation) + u32::from(rotation)) % 360;
+        let rect = match dest {
+            DestView::Top | DestView::Fit => [0.0, 0.0, 1.0, band_y],
+            DestView::FitH { top } => band(point(None, top), total % 180 == 90),
+            DestView::FitV { left } => band(point(left, None), total.is_multiple_of(180)),
+            DestView::Xyz { left, top, .. } => {
+                let [fx, fy] = point(left, top);
+                let (x0, x1) = match fx {
+                    Some(x) => {
+                        let x1 = (x + (120.0 / dw).clamp(0.1, 0.5)).min(1.0);
+                        ((x1 - band_x).min(x).max(0.0), x1)
+                    }
+                    None => (0.0, 1.0),
+                };
+                let (y0, y1) = match fy {
+                    Some(y) => {
+                        let y1 = (y + band_y).min(1.0);
+                        ((y1 - band_y).max(0.0), y1)
+                    }
+                    None => {
+                        let preserved = match self.view.go_to {
+                            Some(GoTo::Corner { page: gp, at }) if gp == page && at.y.is_finite() => Some((at.y as f32 / dh).clamp(0.0, 1.0)),
+                            _ => None,
+                        };
+                        match preserved {
+                            Some(y) => {
+                                let y1 = (y + band_y).min(1.0);
+                                ((y1 - band_y).max(0.0), y1)
+                            }
+                            None => (0.0, band_y),
+                        }
+                    }
+                };
+                [x0, y0, x1, y1]
+            }
+            DestView::FitR { rect } => {
+                let ([Some(ax), Some(ay)], [Some(bx), Some(by)]) = (point(Some(rect[0]), Some(rect[3])), point(Some(rect[2]), Some(rect[1]))) else {
+                    return None;
+                };
+                [ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)]
+            }
+        };
+        let [cx0, cy0, cx1, cy1] = p.crop;
+        let to_user = |a: f32, b: f32| {
+            let (u, v) = match total {
+                90 => (b, 1.0 - a),
+                180 => (1.0 - a, 1.0 - b),
+                270 => (1.0 - b, a),
+                _ => (a, b),
+            };
+            [cx0 + u * (cx1 - cx0), cy1 - v * (cy1 - cy0)]
+        };
+        let c0 = to_user(rect[0], rect[1]);
+        let c1 = to_user(rect[2], rect[3]);
+        let user = [c0[0].min(c1[0]), c0[1].min(c1[1]), c0[0].max(c1[0]), c0[1].max(c1[1])];
+        user.iter().all(|v| v.is_finite()).then_some(user)
+    }
+
     /// The user-space point of the current page at the window's top-left as far as pages go (past
     /// the side gutter) in the last pass, if that page was drawn.
     fn place_at_corner(&self, info: &DocInfo) -> Option<[f32; 2]> {

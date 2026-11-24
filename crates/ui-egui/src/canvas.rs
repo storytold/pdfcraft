@@ -801,6 +801,8 @@ pub(crate) fn follow_link(
             let view = &mut app.views[index];
             if let Some(doc) = app.session.get(view.id) {
                 view.go_to_dest(p, dest, &doc.info);
+                let target = p.min(view.page_count.saturating_sub(1));
+                view.session.flash = view.dest_indicator_rect(target, dest, &doc.info).map(|r| (target, r, 0.0));
             }
         }
         LinkTarget::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Link),

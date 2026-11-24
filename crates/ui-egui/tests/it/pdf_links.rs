@@ -230,3 +230,48 @@ fn the_link_context_menu_shows_only_for_a_right_click_on_a_link() {
     assert!(links(&h).is_empty());
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Remove all links"));
 }
+
+const INTERNAL_LINK_PDF: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Annots [20 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R >> endobj
+20 0 obj << /Type /Annot /Subtype /Link /Rect [50 300 250 350] /Border [0 0 0] /Dest [4 0 R /FitH 300] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// Following an internal page link activates the flashing destination indicator on the target page
+/// and clears it once the animation duration elapses (#4787).
+#[test]
+fn following_an_internal_link_flashes_the_destination_indicator() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "internal.pdf", None, INTERNAL_LINK_PDF.to_vec()).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
+            app
+        }
+    });
+    h.run_steps(6);
+    assert!(h.state().views[0].session.flash.is_none());
+
+    let click_pos = at(&h, 150.0, 75.0);
+    h.hover_at(click_pos);
+    h.run_steps(2);
+    h.drag_at(click_pos);
+    h.drop_at(click_pos);
+    h.run_steps(8);
+
+    let v = &h.state().views[0];
+    assert_eq!(v.current(), 1, "internal link navigates to page 2");
+    let (flash_page, rect, _) = v.session.flash.expect("destination flash indicator is active after following an internal link");
+    assert_eq!(flash_page, 1);
+    assert!((rect[0] - 0.0).abs() < 1e-4 && (rect[2] - 300.0).abs() < 1e-4);
+    assert!((rect[3] - 300.0).abs() < 1e-4 && rect[1] < rect[3]);
+
+    // Fast-forward past the flash fade-out duration (120 frames at 60Hz = 2.0s).
+    h.run_steps(120);
+    assert!(h.state().views[0].session.flash.is_none(), "flash indicator clears after its duration elapses");
+}
