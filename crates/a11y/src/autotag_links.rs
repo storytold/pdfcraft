@@ -243,10 +243,11 @@ pub(crate) struct Placed {
     /// The text-showing operators whose glyphs all read as nothing ([`blank`]): whitespace and
     /// control characters.
     pub blank: HashSet<usize>,
-    /// The text-showing operators of no link that show only glyphs without text whose codes are
-    /// control codes (below 32) of a one-byte font: a control character the writer copied from
-    /// its text (standard encodings have no glyph there), such as a newline shown off the page
-    /// after each label. They join a link only when they lie inside its text ([`settle`]).
+    /// The text-showing operators of no link whose glyphs are all either clipped out of view, or
+    /// without text with codes that are control codes (below 32) of a one-byte font: a control
+    /// character the writer copied from its text (standard encodings have no glyph there), such
+    /// as a newline shown off the page after each label. They join a link only when they lie
+    /// inside its text ([`settle`]).
     pub quiet: HashSet<usize>,
     /// The `/Contents` to write on each link, by index into the page's links.
     pub descriptions: Vec<Option<String>>,
@@ -286,6 +287,8 @@ pub(crate) fn place(
         }),
         areas,
         texts: vec![Covered::default(); links.len()],
+        path: Path::default(),
+        clip: false,
     };
     let mut out = Vec::with_capacity(ops.len());
     let (mut owners, mut blank, mut quiet) = (HashMap::new(), HashSet::new(), HashSet::new());
@@ -383,11 +386,63 @@ struct State {
     leading: f64,
     rise: f64,
     metrics: Option<Rc<Metrics>>,
+    /// The clipping path encloses no area (`0 0 0 0 re W n`): nothing drawn until it is restored
+    /// shows, so no glyph is placed. Clipping is followed only this far.
+    hidden: bool,
 }
 
 impl Default for State {
     fn default() -> Self {
-        State { ctm: Matrix::IDENTITY, size: 0.0, char_spacing: 0.0, word_spacing: 0.0, scale: 1.0, leading: 0.0, rise: 0.0, metrics: None }
+        State {
+            ctm: Matrix::IDENTITY,
+            size: 0.0,
+            char_spacing: 0.0,
+            word_spacing: 0.0,
+            scale: 1.0,
+            leading: 0.0,
+            rise: 0.0,
+            metrics: None,
+            hidden: false,
+        }
+    }
+}
+
+/// The path being built, in device space, only as far as telling whether it encloses any area:
+/// for the current subpath its first point, a second point apart from it, and whether any point
+/// lies off the line through them; and whether any subpath so far does. Curves are followed by
+/// their control points, whose hull holds the curve.
+#[derive(Default)]
+struct Path {
+    first: Option<(f64, f64)>,
+    second: Option<(f64, f64)>,
+    area: bool,
+    points: bool,
+}
+
+impl Path {
+    /// `m` or `re`: a new subpath.
+    fn start(&mut self) {
+        (self.first, self.second) = (None, None);
+    }
+
+    fn add(&mut self, p: (f64, f64)) {
+        self.points = true;
+        match (self.first, self.second) {
+            _ if self.area => {}
+            (None, _) => self.first = Some(p),
+            (Some(a), None) => {
+                if p != a {
+                    self.second = Some(p);
+                }
+            }
+            // Not `== 0.0`: a NaN counts as area, so it hides nothing.
+            (Some(a), Some(b)) => self.area = (b.0 - a.0) * (p.1 - a.1) - (b.1 - a.1) * (p.0 - a.0) != 0.0,
+        }
+    }
+
+    /// The path has points, and each subpath's lie on one line.
+    fn flat(&self) -> bool {
+        self.points && !self.area
     }
 }
 
@@ -404,7 +459,8 @@ struct Run {
 enum Reads {
     /// Whitespace and control characters ([`blank`]).
     Nothing,
-    /// No link's, no text, and a control code ([`Placed::quiet`]).
+    /// No link's, and either no text with a control code, or clipped out of view
+    /// ([`Placed::quiet`]).
     Unknown,
     Text,
 }
@@ -480,6 +536,9 @@ struct Walk<'a> {
     /// The box around all the page's link areas: a glyph outside it is tested against none of them,
     /// and costs nothing.
     bounds: [f64; 4],
+    /// The current path, and whether `W` or `W*` makes it a clip when it is ended.
+    path: Path,
+    clip: bool,
 }
 
 impl Walk<'_> {
@@ -524,6 +583,16 @@ impl Walk<'_> {
             }
             b"T*" => self.next_line(),
             b"Tj" | b"'" | b"\"" | b"TJ" => return self.show(op),
+            b"m" | b"l" | b"c" | b"v" | b"y" | b"re" => self.path_points(op),
+            b"W" | b"W*" => self.clip = true,
+            // A clip only narrows until `Q`, so once it encloses nothing it stays so. Past
+            // `MAX_SAVED`, a `Q` would not restore it, so text is then taken as shown.
+            b"n" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s" => {
+                if std::mem::take(&mut self.clip) && self.path.flat() && self.unsaved == 0 {
+                    self.state.hidden = true;
+                }
+                self.path = Path::default();
+            }
             _ => {}
         }
         None
@@ -532,6 +601,27 @@ impl Walk<'_> {
     fn next_line(&mut self) {
         self.tlm = Matrix::translate(0.0, -self.state.leading).then(&self.tlm);
         (self.tm, self.lost) = (self.tlm, false);
+    }
+
+    /// A path-building operator's points, in device space.
+    fn path_points(&mut self, op: &Op) {
+        let ctm = self.state.ctm;
+        let points: Vec<(f64, f64)> = match op.op.as_slice() {
+            b"m" | b"l" => op.nums::<2>().map(|[x, y]| vec![(x, y)]),
+            b"c" => op.nums::<6>().map(|[a, b, c, d, e, f]| vec![(a, b), (c, d), (e, f)]),
+            b"v" | b"y" => op.nums::<4>().map(|[a, b, c, d]| vec![(a, b), (c, d)]),
+            b"re" => op.nums::<4>().map(|[x, y, w, h]| vec![(x, y), (x + w, y), (x + w, y + h), (x, y + h)]),
+            _ => None,
+        }
+        .unwrap_or_default();
+        // An operator whose operands don't read is skipped, as the renderer skips it: it starts
+        // no subpath.
+        if !points.is_empty() && matches!(op.op.as_slice(), b"m" | b"re") {
+            self.path.start();
+        }
+        for (x, y) in points {
+            self.path.add(ctm.apply(x, y));
+        }
     }
 
     fn show(&mut self, op: &Op) -> Option<Vec<Run>> {
@@ -589,6 +679,11 @@ impl Walk<'_> {
         let bytes = &string.bytes;
         if bytes.is_empty() {
             return Vec::new();
+        }
+        // Clipped out of view: shown nowhere, so in no link's area; like text that reads as
+        // nothing, it never interrupts a link ([`settle`]).
+        if self.state.hidden {
+            return vec![(None, bytes.clone(), Reads::Unknown)];
         }
         let s = &self.state;
         let usable = s.metrics.as_ref().filter(|m| !m.codespaces_dropped && !m.past_allowance);
@@ -1079,6 +1174,72 @@ mod tests {
             assert!(links(&doc).iter().all(|l| !l.0.is_empty()), "{:?}", links(&doc));
             passes(&doc);
         }
+    }
+
+    /// Text drawn inside a clip that encloses no area shows nowhere, so it is in no link's area:
+    /// a hidden `v` a writer draws where a citation's `[5]` is shown stays in its paragraph, and
+    /// is not in the link's description; hidden text between two parts of one link doesn't
+    /// interrupt it. A clip that encloses some area, or one restored by `Q`, hides nothing.
+    #[test]
+    fn text_clipped_out_of_view_is_in_no_link() {
+        let cite = |clip: &str| format!("q {clip} BT /F1 10 Tf 20 300 Td (v) Tj ET Q BT /F1 10 Tf 20 300 Td ([5]) Tj ET");
+        let described = |doc: &Document| annot_dict(doc, 7).get(b"Contents").and_then(|c| c.as_string()).map(|s| s.to_text());
+        for clip in [
+            "0 0 0 0 re W n",
+            "0 0 0 10 re W* n",
+            "20 300 m 60 300 l W n",
+            "0 0 m 10 10 l 20 20 10 10 30 30 c h W f",
+            "0 0 100 100 re f 0 0 0 0 re W n",
+            "0 0 m 10 0 l 0 5 m 0 10 l W n",
+        ] {
+            let mut doc = page(&cite(clip), &[&link(&over(0, 3))]);
+            autotag_text(&mut doc).unwrap();
+            assert_eq!(links(&doc), [(vec!["[5]".to_string()], "P".to_string())], "{clip}");
+            assert_eq!(described(&doc).as_deref(), Some("[5]"), "{clip}");
+            passes(&doc);
+        }
+        // A clip around the glyph; a path that isn't a clip; a clip already restored; a triangle
+        // around the glyph that is flat only in user space, its last point moved by `cm`.
+        // Also: a clip of an area and a flat subpath; a path ended without `W` after a clip; a
+        // repeated first point; an `re` with too few operands, which the renderer skips.
+        let around = [
+            "10 290 100 30 re W n",
+            "0 0 0 0 re n",
+            "q 0 0 0 0 re W n Q",
+            "0 0 m 400 0 l 0 400 l W n",
+            "10 290 100 30 re 0 0 0 0 re W n",
+            "10 290 100 30 re W n 0 0 0 0 re n",
+            "0 0 m 0 0 l 400 0 l 0 400 l W n",
+            "0 0 m 400 0 l 1 2 3 re 0 400 l W n",
+        ];
+        let moved = "0 0 m 400 0 l 1 0 0 1 0 400 cm 0 0 l h W n 1 0 0 1 0 -400 cm";
+        for content in around.into_iter().chain([moved]).map(cite) {
+            let mut doc = page(&content, &[&link(&over(0, 3))]);
+            autotag_text(&mut doc).unwrap();
+            assert_eq!(described(&doc).as_deref(), Some("v [5]"), "{content}");
+        }
+        // Past the saved states a walk follows, a `Q` could not restore the clip: the text is
+        // taken as shown, and the link keeps its own.
+        let deep = format!("{} {} {}", "q ".repeat(super::MAX_SAVED), cite("0 0 0 0 re W n"), "Q ".repeat(super::MAX_SAVED));
+        let mut doc = page(&deep, &[&link(&over(0, 3))]);
+        autotag_text(&mut doc).unwrap();
+        assert!(links(&doc)[0].0.contains(&"[5]".to_string()), "{:?}", links(&doc));
+        // Hidden text right after a link and before other text stays out of the link.
+        let after = "BT /F1 10 Tf 20 300 Td ([5]) Tj ET q 0 0 0 0 re W n BT /F1 10 Tf 20 300 Td (v) Tj ET Q BT /F1 10 Tf 20 200 Td (Next) Tj ET";
+        let mut doc = page(after, &[&link(&over(0, 3))]);
+        autotag_text(&mut doc).unwrap();
+        assert_eq!(links(&doc), [(vec!["[5]".to_string()], "P".to_string())]);
+        let content = "BT /F1 10 Tf 20 300 Td (See the gu) Tj ET q 0 0 0 0 re W n BT /F1 10 Tf 300 100 Td (hidden) Tj ET Q \
+                       BT /F1 10 Tf 80 300 Td (ide here) Tj ET";
+        // Between two parts of one link it joins the link, as whitespace does, so the Link holds
+        // the link's text in one piece; it reads as before, and the description leaves it out.
+        let mut doc = page(content, &[&link(&over(8, 13))]);
+        let shown = String::from_utf8(shown(&doc)).unwrap();
+        autotag_text(&mut doc).unwrap();
+        assert_eq!(links(&doc).iter().map(|l| l.0.concat()).collect::<Vec<_>>(), ["guhiddenide"]);
+        assert_eq!(reading(&doc), shown);
+        assert_eq!(described(&doc).as_deref(), Some("guide"));
+        passes(&doc);
     }
 
     /// A link's text that runs on into a later text object sits in the first object's element: a
