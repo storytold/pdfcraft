@@ -43,7 +43,7 @@ pub fn run(args: &[String]) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
 
-    // Fonts: only the pinned, openly licensed files listed in ATTRIBUTION.toml (AGENTS.md §1).
+    // Fonts: only the pinned, openly licensed files listed in ATTRIBUTION.toml (clean-room.md and licences.md).
     let manifest = crate::assets::load(&root)?;
     let fonts = root.join("target/demo-fonts");
     crate::assets::fetch_all(&manifest, &fonts, "font")?;
