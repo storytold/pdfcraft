@@ -3594,16 +3594,20 @@ fn collection_page(collection: (&str, &str), encoding: &str, descendant: &str, t
     use lopdf::{Document, Object, Stream, dictionary};
     let (registry, ordering) = collection;
     let mut doc = Document::with_version("1.7");
-    let (key, program): (&str, &[u8]) = if descendant == "CIDFontType0" {
-        ("FontFile3", include_bytes!("../../../../vendor/hayro-interpret/assets/FoxitFixed.pfb"))
+    let (key, program): (&str, Vec<u8>) = if descendant == "CIDFontType0" {
+        let (data, _) = (InterpreterSettings::default().font_resolver)(&craft_pdf::interpret::font::FontQuery::Standard(
+            craft_pdf::interpret::font::StandardFont::Courier,
+        ))
+        .expect("bundled Courier stand-in font");
+        ("FontFile3", (*data).as_ref().to_vec())
     } else {
-        ("FontFile2", include_bytes!("../../../../assets/fonts/Inter-Regular.ttf"))
+        ("FontFile2", include_bytes!("../../../../assets/fonts/Inter-Regular.ttf").to_vec())
     };
     let mut file = dictionary! {};
     if descendant == "CIDFontType0" {
         file.set("Subtype", "CIDFontType0C");
     }
-    let program = doc.add_object(Stream::new(file, program.to_vec()));
+    let program = doc.add_object(Stream::new(file, program));
     let descriptor = doc.add_object(dictionary! { "Type" => "FontDescriptor", "FontName" => "TestJapan1", "Flags" => 4, key => program });
     let cid = doc.add_object(dictionary! {
         "Type" => "Font", "Subtype" => descendant, "BaseFont" => "TestJapan1",
