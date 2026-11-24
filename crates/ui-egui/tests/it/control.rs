@@ -52,7 +52,7 @@ pub(crate) fn app_on(host: Host) -> PdfCraftApp {
 
 /// An app on the default host: threads run its jobs and every picker answers Cancelled.
 pub(crate) fn new_app() -> PdfCraftApp {
-    app_on(Host::builder(info()).build())
+    app_on(Host::builder(info()).i18n(pdfcraft_ui_egui::i18n::host_catalogs()).build())
 }
 
 /// An app whose pickers answer from `files`.
