@@ -255,6 +255,14 @@ impl PdfCraftApp {
             pinned_jobs: queue(&host, &wake, "pdfcraft-pinned-folders"),
             recent_check: persist::recent_check::RecentCheck::new(queue(&host, &wake, "pdfcraft-recent-check")),
             text_copies: queue(&host, &wake, "pdfcraft-copy-text"),
+            #[cfg(not(target_arch = "wasm32"))]
+            paste_reads: content_ui::PasteReads::new(JobQueue::new(
+                host.jobs_shared().clone(),
+                wake.clone(),
+                // One paste read at a time, in the order they were pasted: each holds up to
+                // `MAX_PASTE_BYTES`, and a later paste's images go over an earlier one's.
+                QueueOptions { lanes: 1, name: "pdfcraft-paste-files", order: craft::host::queue::QueueOrder::OldestFirst },
+            )),
             reveal_jobs: queue(&host, &wake, "pdfcraft-reveal"),
             ocr_runs: queue(&host, &wake, "pdfcraft-ocr"),
             ocr_batches: queue(&host, &wake, "pdfcraft-ocr-files"),
@@ -825,6 +833,9 @@ impl PdfCraftApp {
         }
         self.reopen_returned_rename(ctx);
         self.settle_presign(ctx);
+        // Copied image files read for ⌘V off the UI thread are placed once they are read.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.finish_paste_reads(ctx);
         self.sync_titles(ctx);
     }
 

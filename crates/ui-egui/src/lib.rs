@@ -503,6 +503,9 @@ pub struct PdfCraftApp {
     pub password_prompt: Option<PasswordPrompt>,
     /// Whole-document text copies (#2639) reading their pages off the UI thread.
     pub(crate) text_copies: Queue<DocId, String>,
+    /// Copied image files being read for ⌘V, off the UI thread (see `content_ui`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) paste_reads: content_ui::PasteReads,
     /// Reveal-in-file-manager calls, which can block on a slow mount; their failures are shown by `drain_reveals`.
     pub(crate) reveal_jobs: Queue<std::path::PathBuf, Result<(), String>>,
     pub unlock_prompt: Option<UnlockPrompt>,

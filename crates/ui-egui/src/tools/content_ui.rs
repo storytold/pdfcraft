@@ -1211,9 +1211,7 @@ impl crate::PdfCraftApp {
     /// bytes on the frame the answer arrives, and only if that document is still the active one.
     #[cfg(not(target_arch = "wasm32"))]
     fn pick_image(&mut self, title: &str, then: impl FnOnce(&mut Self, &egui::Context, String, Vec<u8>) + 'static) {
-        let request = craft::host::PickRequest::open("image")
-            .title(title)
-            .filter(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"]);
+        let request = craft::host::PickRequest::open("image").title(title).filter(tl!("Images"), &IMAGE_EXTENSIONS);
         let target = self.pick_target(self.active_ids().map(|(_, id)| id));
         self.pick_first(request, target, move |app: &mut Self, ctx: &egui::Context, path: std::path::PathBuf| match std::fs::read(&path) {
             Ok(bytes) => {
@@ -1227,7 +1225,9 @@ impl crate::PdfCraftApp {
     /// Edit a PDF ▸ Add content ▸ Image: pick a file and place it in the middle of the current page.
     pub fn add_image_dialog(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        self.pick_image(tl!("Choose an image"), |app, ctx, name, bytes| app.add_image(ctx, name, bytes));
+        self.pick_image(tl!("Choose an image"), |app, ctx, name, bytes| {
+            app.add_image(ctx, name, bytes);
+        });
         #[cfg(target_arch = "wasm32")]
         self.notify_tr("Adding images arrives on the web with file pickers for images");
     }
@@ -1402,13 +1402,21 @@ impl crate::PdfCraftApp {
         }
     }
 
-    /// Place image `bytes` in the middle of the current page and select it.
-    pub fn add_image(&mut self, ctx: &egui::Context, name: String, bytes: Vec<u8>) {
-        let Some((i, id)) = self.active_ids() else { return };
+    /// Place image `bytes` in the middle of the current page and select it. Returns whether it
+    /// was placed (a failure has been said).
+    pub fn add_image(&mut self, ctx: &egui::Context, name: String, bytes: Vec<u8>) -> bool {
+        let Some((i, _)) = self.active_ids() else { return false };
         let page = self.views[i].current();
+        self.add_image_on(ctx, page, name, bytes)
+    }
+
+    /// [`Self::add_image`] on `page` of the active document.
+    fn add_image_on(&mut self, ctx: &egui::Context, page: usize, name: String, bytes: Vec<u8>) -> bool {
+        let Some((i, id)) = self.active_ids() else { return false };
         let before_img = self.session.get(id).map_or(0, |d| d.page_images(page).len());
         let before_added = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
-        if self.apply_edit(ctx, Edit::AddImage { page, rect: None, name, bytes: std::sync::Arc::new(bytes) }) {
+        let placed = self.apply_edit(ctx, Edit::AddImage { page, rect: None, name, bytes: std::sync::Arc::new(bytes) });
+        if placed {
             self.views[i].session.content.selected = Some((page, before_added));
             self.views[i].session.content.select_added = Some((page, before_added));
             self.views[i].session.image_selection = Some(crate::edit_text_ui::ImageSelection::at(page, before_img));
@@ -1416,6 +1424,7 @@ impl crate::PdfCraftApp {
             self.left = crate::LeftPanel::Tool("edit");
             self.set_left_open(true);
         }
+        placed
     }
 
     /// Whether there is an image on the clipboard (or, on the web, in the in-app copy) ready to
@@ -1612,6 +1621,272 @@ impl crate::PdfCraftApp {
             false
         }
     }
+
+    /// ⌘V / Ctrl+V with image files copied in Explorer, Finder or a file manager (#1289) places
+    /// them on `page` of tab `i`, each in its own format, as Add Image does. Returns whether the
+    /// clipboard held files, which then take the paste: the picture and the text the window
+    /// delivers beside them are Finder's icon and name of the file.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn paste_copied_files(&mut self, i: usize, page: usize) -> bool {
+        // A short read of the clipboard's own list on the UI thread; the files themselves are
+        // read off it.
+        let files = match self.clipboard.read_files() {
+            Ok(Some(files)) => files,
+            Ok(None) => return false,
+            // Over the clipboard's own limit for one list: still files, so the picture beside
+            // them isn't pasted either.
+            Err(craft::platform::clipboard::ClipboardError::TooLarge { .. }) => {
+                self.notify_tr("Too many files are copied to paste them");
+                return true;
+            }
+            // No file list to read: the paste is the picture's or the text's.
+            Err(_) => return false,
+        };
+        if files.is_empty() {
+            return false;
+        }
+        self.paste_image_files(i, page, &files);
+        true
+    }
+
+    /// Place the copied image files on `page`, each as Add Image places one (so several lie one
+    /// over the other, the last one selected). The files are read off the UI thread, as a slow
+    /// or network drive must not hold up the frame, and placed on a later frame by
+    /// [`Self::finish_paste_reads`]. Copied files that aren't pictures (PDFs, documents,
+    /// folders) are left alone; when nothing could be placed and no file said why, a notice
+    /// says so.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn paste_image_files(&mut self, i: usize, page: usize, paths: &[std::path::PathBuf]) {
+        let files: Vec<_> = paths.iter().filter(|p| p.is_absolute()).collect();
+        if files.len() > MAX_PASTED_IMAGES {
+            self.notify_fmt("Only the first {n} copied files are pasted", &[("n", &MAX_PASTED_IMAGES.to_string())]);
+        }
+        let pictures: Vec<_> = files.into_iter().take(MAX_PASTED_IMAGES).filter(|p| is_image_file_name(p)).cloned().collect();
+        if pictures.is_empty() {
+            return self.notify(no_picture().to_string());
+        }
+        let Some(doc) = self.views.get(i).map(|v| v.id) else { return };
+        let target = PasteTarget { doc, page, generation: self.session.get(doc).map(|d| d.edit_generation()) };
+        self.paste_reads.next = self.paste_reads.next.wrapping_add(1);
+        self.paste_reads.jobs.submit(self.paste_reads.next, craft::host::queue::Priority::VISIBLE, move |_| {
+            // Folders called like pictures are skipped, as other files that aren't pictures are.
+            let pictures = pictures.into_iter().filter(|p| !p.is_dir());
+            PasteRead { target, files: read_within(pictures, MAX_PASTED_IMAGE_BYTES, MAX_PASTE_BYTES, read_capped) }
+        });
+    }
+
+    /// Whether copied image files are still being read for ⌘V, or read and not yet placed
+    /// (tests wait for it).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn paste_reading(&self) -> bool {
+        let counts = self.paste_reads.jobs.counts();
+        counts.queued + counts.running + counts.finished > 0
+    }
+
+    /// Place the copied image files read since the last frame, on the page they were pasted on,
+    /// if their document is still the active one and unedited. Called every frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn finish_paste_reads(&mut self, ctx: &egui::Context) {
+        while let Some(done) = self.paste_reads.jobs.try_recv() {
+            let PasteRead { target, files } = done.result;
+            let active = self.active_ids();
+            let generation = self.session.get(target.doc).map(|d| d.edit_generation());
+            // Follow the earlier pastes' own edits from the generation this paste saw.
+            let mut seen = target.generation;
+            while let Some(&(_, _, to)) = self.paste_reads.placed.iter().find(|(doc, from, _)| *doc == target.doc && Some(*from) == seen) {
+                seen = Some(to);
+            }
+            if active.is_none_or(|(_, id)| id != target.doc) || generation != seen {
+                self.notify_tr("The document changed while the copied files were read, so nothing was pasted.");
+                continue;
+            }
+            // Only folders called like pictures were copied: nothing else would say why nothing
+            // was placed. Each file read is placed, or its own notice (or the document's
+            // refusal) says why not.
+            if files.is_empty() {
+                self.notify(no_picture().to_string());
+                continue;
+            }
+            // A document that can't take a change says so once, not once per file.
+            if self.session.get(target.doc).is_some_and(|d| !d.allows_modification()) {
+                self.notify_error(tl!("The document's security settings don't allow this change"));
+                continue;
+            }
+            for (path, read) in files {
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                match read {
+                    // A file that isn't the picture its name says has said so; the rest are
+                    // still placed.
+                    FileRead::Bytes(bytes) => {
+                        self.add_image_on(ctx, target.page, name, bytes);
+                    }
+                    FileRead::TooLarge => self.notify_fmt(
+                        "{name} is too large to paste (at most {n} MB)",
+                        &[("name", &name), ("n", &(MAX_PASTED_IMAGE_BYTES >> 20).to_string())],
+                    ),
+                    FileRead::OverTotal => self.notify_fmt(
+                        "{name} wasn't pasted: the copied files together are over {n} MB",
+                        &[("name", &name), ("n", &(MAX_PASTE_BYTES >> 20).to_string())],
+                    ),
+                    FileRead::Failed(e) => {
+                        self.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e)]);
+                    }
+                }
+            }
+            let after = self.session.get(target.doc).map(|d| d.edit_generation());
+            if let (Some(from), Some(to)) = (generation, after)
+                && from != to
+            {
+                self.paste_reads.placed.push((target.doc, from, to));
+            }
+        }
+        if !self.paste_reading() {
+            self.paste_reads.placed.clear();
+        }
+    }
+}
+
+/// What a paste with no picture to place says.
+#[cfg(not(target_arch = "wasm32"))]
+fn no_picture() -> &'static str {
+    tl!("None of the copied files is a picture to place (PNG, JPEG, TIFF, GIF, BMP or JPEG 2000)")
+}
+
+/// Copied image files being read for ⌘V, and the edits their pastes made.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct PasteReads {
+    /// One job per paste, keyed by its number; its result waits for the next frame.
+    jobs: crate::Queue<u64, PasteRead>,
+    /// The last paste's number.
+    next: u64,
+    /// The edit generations the placed pastes moved their documents through (from, to), while
+    /// reads are under way: a paste that finishes after another one placed its images is
+    /// still for an unchanged document.
+    placed: Vec<(pdfcraft_engine::DocId, u64, u64)>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl PasteReads {
+    /// Reads that run on `jobs`.
+    pub(crate) fn new(jobs: crate::Queue<u64, PasteRead>) -> Self {
+        Self { jobs, next: 0, placed: Vec::new() }
+    }
+}
+
+/// The document and page a paste was for, and the document's edit generation then.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug)]
+struct PasteTarget {
+    doc: pdfcraft_engine::DocId,
+    page: usize,
+    generation: Option<u64>,
+}
+
+/// One copied file as read.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, PartialEq)]
+enum FileRead {
+    Bytes(Vec<u8>),
+    /// Over the cap for one file.
+    TooLarge,
+    /// Over what the files read before it left of the cap for the whole paste.
+    OverTotal,
+    /// Why it couldn't be read.
+    Failed(String),
+}
+
+/// Read each of `paths` with `read`, at most `per_file` bytes each and `total` bytes for all
+/// of them, so a paste never holds more than `total` bytes of files waiting to be placed.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_within(
+    paths: impl IntoIterator<Item = std::path::PathBuf>,
+    per_file: u64,
+    total: u64,
+    mut read: impl FnMut(&std::path::Path, u64) -> std::io::Result<Option<Vec<u8>>>,
+) -> Vec<(std::path::PathBuf, FileRead)> {
+    let mut left = total;
+    paths
+        .into_iter()
+        .map(|path| {
+            let cap = per_file.min(left);
+            let result = match read(&path, cap) {
+                Ok(Some(bytes)) => {
+                    left = left.saturating_sub(bytes.len() as u64);
+                    FileRead::Bytes(bytes)
+                }
+                // Over what the paste had left: that is the cap it ran into.
+                Ok(None) if cap < per_file => FileRead::OverTotal,
+                Ok(None) => FileRead::TooLarge,
+                Err(e) => FileRead::Failed(e.to_string()),
+            };
+            (path, result)
+        })
+        .collect()
+}
+
+/// Copied image files read for one paste.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug)]
+pub(crate) struct PasteRead {
+    target: PasteTarget,
+    files: Vec<(std::path::PathBuf, FileRead)>,
+}
+
+/// At most this many copied files are pasted at once.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_PASTED_IMAGES: usize = 50;
+
+/// A copied image file larger than this is not pasted.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_PASTED_IMAGE_BYTES: u64 = 256 << 20;
+
+/// The copied image files of one paste together are not read past this.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_PASTE_BYTES: u64 = 512 << 20;
+
+/// The regular file at `path`, or `None` when it holds more than `cap` bytes. Anything else
+/// (a named pipe or a device, which a file list can name too) is refused before it is read,
+/// because reading one waits until something writes to it.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_capped(path: &std::path::Path, cap: u64) -> std::io::Result<Option<Vec<u8>>> {
+    use std::io::Read;
+    if !std::fs::metadata(path)?.is_file() {
+        return Err(not_a_regular_file());
+    }
+    let mut bytes = Vec::new();
+    open_regular(path)?.take(cap.saturating_add(1)).read_to_end(&mut bytes)?;
+    Ok((bytes.len() as u64 <= cap).then_some(bytes))
+}
+
+/// Open `path` for reading if it is a regular file. On Unix the open doesn't wait: a path
+/// swapped for a named pipe after the caller looked would otherwise wait in the open itself for
+/// a writer. The flag changes nothing for a regular file.
+#[cfg(not(target_arch = "wasm32"))]
+fn open_regular(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let mut open = std::fs::OpenOptions::new();
+    open.read(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut open, libc::O_NONBLOCK);
+    let file = open.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(not_a_regular_file());
+    }
+    Ok(file)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn not_a_regular_file() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidInput, "it isn't a regular file")
+}
+
+/// The image files Add Image offers, by extension.
+#[cfg(not(target_arch = "wasm32"))]
+const IMAGE_EXTENSIONS: [&str; 10] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"];
+
+/// Whether `path` names an image file Add Image takes, by its extension (any case).
+#[cfg(not(target_arch = "wasm32"))]
+fn is_image_file_name(path: &std::path::Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| IMAGE_EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)))
 }
 
 /// What the image tools ask for.
@@ -1708,6 +1983,82 @@ mod tests {
     use egui_kittest::kittest::Queryable;
 
     use super::*;
+
+    /// The files of one paste share a cap: once it is spent, the rest aren't read whole, and say
+    /// which cap they were over.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_paste_reads_its_files_within_one_total() {
+        let sizes = [("b.png", 20usize), ("a.png", 6), ("c.png", 3), ("d.png", 5), ("e.png", 1)];
+        let read = |p: &std::path::Path, cap: u64| -> std::io::Result<Option<Vec<u8>>> {
+            let name = p.to_string_lossy();
+            let size = sizes.iter().find(|(n, _)| name.ends_with(n)).map_or(0, |(_, s)| *s);
+            Ok((size as u64 <= cap).then(|| vec![0; size]))
+        };
+        let paths = sizes.iter().map(|(n, _)| std::path::PathBuf::from(format!("/tmp/{n}")));
+        let got: Vec<_> = read_within(paths, 10, 12, read).into_iter().map(|(_, r)| r).collect();
+        assert_eq!(
+            got,
+            [FileRead::TooLarge, FileRead::Bytes(vec![0; 6]), FileRead::Bytes(vec![0; 3]), FileRead::OverTotal, FileRead::Bytes(vec![0; 1])]
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_pasted_file_over_the_cap_is_not_read_whole() {
+        let path = std::env::temp_dir().join(format!("pdfcraft-read-capped-{}", std::process::id()));
+        std::fs::write(&path, [7u8; 10]).unwrap();
+        assert_eq!(read_capped(&path, 10).unwrap(), Some(vec![7u8; 10]));
+        assert_eq!(read_capped(&path, 9).unwrap(), None);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    /// A named pipe called like a picture is refused without opening it, which would wait for a
+    /// writer forever.
+    #[cfg(unix)]
+    #[test]
+    fn a_pasted_named_pipe_is_refused_without_waiting() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-read-fifo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("photo.png");
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let path = fifo.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(read_capped(&path, 10).map_err(|e| e.kind()));
+        });
+        let result = rx.recv_timeout(std::time::Duration::from_secs(5));
+        // Let a reader that did block go: open the pipe for writing once.
+        if result.is_err() {
+            let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(result.expect("the read returns at once"), Err(std::io::ErrorKind::InvalidInput));
+    }
+
+    /// A path that became a named pipe after it was looked at: the open itself doesn't wait,
+    /// and the pipe is refused.
+    #[cfg(unix)]
+    #[test]
+    fn opening_a_named_pipe_does_not_wait() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-open-fifo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("photo.png");
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let path = fifo.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(open_regular(&path).map(|_| ()).map_err(|e| e.kind()));
+        });
+        let result = rx.recv_timeout(std::time::Duration::from_secs(5));
+        if result.is_err() {
+            let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(result.expect("the open returns at once"), Err(std::io::ErrorKind::InvalidInput));
+    }
 
     // PLAN: these fixtures still build `PdfCraftApp::for_unit_tests()`; moving them onto `with_host` with an
     // `EventClipboard` needs the test host recipe (`AppServices::new` arguments), which no owner set provides yet (pdf-hub-w1).
