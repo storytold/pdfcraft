@@ -259,6 +259,14 @@ impl PdfCraftApp {
                 }
                 v.rerun_find();
             }
+            // `--find-comments on`: Advanced Search's Include comments.
+            ("find-comments", Some(v)) => {
+                v.set_include_comments(match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("find-comments must be on or off".into()),
+                });
+            }
             ("fields", Some(v)) => v.session.highlight_fields = value != "off",
             ("select", Some(v)) => {
                 // The same physical page ranges as the Organize Pages selection field.
@@ -444,6 +452,7 @@ impl PdfCraftApp {
                     "thumbnail-zoom",
                     "fields",
                     "find",
+                    "find-comments",
                     "rotate",
                     "select",
                     "select-text",

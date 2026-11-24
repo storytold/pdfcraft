@@ -35,6 +35,7 @@ pub(crate) mod bars;
 mod cache;
 pub(super) mod crop;
 mod find;
+pub(crate) mod find_comments;
 pub(super) mod image_pick;
 mod navigation;
 pub(crate) mod organize;
@@ -2307,6 +2308,8 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
     }
 }
 
+#[cfg(test)]
+mod find_comments_tests;
 pub(crate) mod page_box_drag;
 #[cfg(test)]
 mod sign_tab_tests;
