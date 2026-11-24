@@ -1159,26 +1159,27 @@ impl OcrVerify {
         self.region = None;
         self.show_a_read_page();
         let total = self.pages.len();
-        self.message = if cancelled {
-            crate::i18n::fmt(
+        // The run's own line: a cancel, or the words read; none when a finished run read no word.
+        let run = if cancelled {
+            Some(crate::i18n::fmt(
                 tl!("Cancelled — {n} words were read on {m} of {t} pages; the rest were not read"),
                 &[("n", &found_words.to_string()), ("m", &read.to_string()), ("t", &total.to_string())],
-            )
+            ))
         } else if found_words == 0 {
-            // A page that could not be read says why (a language pack that is not installed,
-            // for one); "no text recognized" is for a page that was read and has none.
-            ocr_ui::unread_pages_note(&self.pages).unwrap_or_else(|| tl!("OCR complete — no text recognized on this page.").to_string())
+            None
         } else {
-            let mut message = crate::i18n::fmt(
+            Some(crate::i18n::fmt(
                 tl!("Read {n} words on {m} of {t} pages"),
                 &[("n", &found_words.to_string()), ("m", &read.to_string()), ("t", &total.to_string())],
-            );
-            // A page that could not be read says why here, not only once it is selected.
-            if let Some(note) = ocr_ui::unread_pages_note(&self.pages) {
-                message.push_str("; ");
-                message.push_str(&note);
-            }
-            message
+            ))
+        };
+        // A page that could not be read says why (a language pack that is not installed, for
+        // one) here, not only once it is selected: after the run's line, a cancelled run's too,
+        // and alone when there is none ("no text recognized" is for a page that was read).
+        self.message = match (run, ocr_ui::unread_pages_note(&self.pages)) {
+            (Some(run), Some(unread)) => format!("{run}; {unread}"),
+            (Some(only), None) | (None, Some(only)) => only,
+            (None, None) => tl!("OCR complete — no text recognized on this page.").to_string(),
         };
         self.phase = Phase::ReviewReady;
         self.load_dictionary_pref();
@@ -3172,7 +3173,8 @@ mod tests {
     }
 
     /// A run on the Verify screen says in its status why a page could not be read: alone
-    /// when nothing was read (not "no text recognized"), and after the count otherwise.
+    /// when nothing was read (not "no text recognized"), and after the count otherwise, a
+    /// cancelled run's included.
     #[test]
     fn a_run_that_could_not_read_a_page_says_why_in_the_status() {
         let why = "tesseract failed: Error opening data file ara.traineddata";
@@ -3181,8 +3183,10 @@ mod tests {
         let mut v = OcrVerify::default();
         v.finished(vec![unread(0)], false);
         assert!(v.message.contains(why) && !v.message.contains("no text recognized"), "{}", v.message);
-        v.finished(vec![read, unread(1)], false);
+        v.finished(vec![read.clone(), unread(1)], false);
         assert!(v.message.contains("1 of 2 pages") && v.message.contains(why), "{}", v.message);
+        v.finished(vec![read, unread(1)], true);
+        assert!(v.message.starts_with("Cancelled") && v.message.contains(why), "{}", v.message);
     }
 
     /// A re-read that failed says why (the reading's language pack was removed, say), not
