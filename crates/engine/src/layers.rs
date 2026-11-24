@@ -133,9 +133,6 @@ pub(crate) fn use_layer_choices(doc: &mut Document) {
     doc.config.layers = Arc::new(overrides);
     doc.config.print_layers = print_preview_layers(doc.editor.as_ref().map(|e| &e.cos), &doc.info.layers);
     doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), crate::live_scripts::screen_config(doc));
-    if doc.snapshot_generation == doc.generation {
-        doc.snapshot_generation += 1;
-    }
     doc.generation += 1;
 }
 

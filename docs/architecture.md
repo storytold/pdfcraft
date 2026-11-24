@@ -90,7 +90,7 @@ Every user-facing feature is reachable headlessly (app-agents.md rule 14):
   shortcuts and the command palette;
 - the **automation tool table** (`crates/automation`, 141 tools) is shared by `pdfcraft-cli run`
   and the opt-in **MCP server** (stdio only; `pdfcraft-cli mcp`), confined to `--root`;
-- the opt-in **UI control channel** (`pdfcraft --control FILE`; loopback, per-launch token) lets an
+- the opt-in **UI control channel** (`pdfcraft --control PORT`; loopback, token-authenticated) lets an
   agent inspect, click, type, run commands and take screenshots of the real interface.
 
 ## Safety

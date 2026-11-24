@@ -2,6 +2,7 @@
 //! as the Layers panel does.
 
 use egui::Pos2;
+use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{ImageSelection, PdfCraftApp};
@@ -45,13 +46,16 @@ fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, P
 }
 
 fn harness_with(pdf: Vec<u8>, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("layers.pdf", None, pdf).unwrap();
-        app.set_option("zoom", "150").unwrap();
-        setup(&mut app);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::support::test_app(crate::support::host());
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "layers.pdf", None, pdf).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+            setup(&mut app);
+            app
+        }
     });
     h.run_steps(6);
     h
@@ -104,7 +108,7 @@ fn links_set_layer_visibility() {
 #[test]
 fn push_buttons_set_layer_visibility() {
     // Both on, as the Layers panel can leave them.
-    let mut h = harness(|app| app.set_option("layer", "Green=on").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "layer", "Green=on").unwrap());
     assert_eq!(shown(&h), layers(true, true));
     // Turning Red on (it already is) turns Green, its radio-button partner, off.
     let button = at(&h, 70.0, 35.0);
@@ -118,12 +122,14 @@ fn push_buttons_set_layer_visibility() {
 fn layer_options_reset_to_initial_visibility() {
     // Red off and Green on: the opposite of how the file opens.
     let mut h = harness(|app| {
-        app.set_option("layer", "Red=off").unwrap();
-        app.set_option("layer", "Green=on").unwrap();
-        app.set_option("panel", "layers").unwrap();
+        app.set_option(&egui::Context::default(), "layer", "Red=off").unwrap();
+        app.set_option(&egui::Context::default(), "layer", "Green=on").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "layers").unwrap();
     });
     assert_eq!(shown(&h), layers(false, true));
-    h.get_by_label("Layer options").click();
+    // The Layers panel's menu holds the catalog command (`layers.reset_visibility`, L-87).
+    // PLAN: `DockWords::default()` is assumed to give the framework's English words (`panel_menu`).
+    h.get_by_label(craft::ui::docking::DockWords::default().panel_menu.as_str()).click();
     h.run_steps(2);
     h.get_by_label("Reset to Initial Visibility").click();
     h.run_steps(3);
@@ -139,22 +145,22 @@ fn layer_options_reset_to_initial_visibility() {
 /// `/Order` it presents none.
 #[test]
 fn the_layers_panel_shows_the_order_tree() {
-    let mut h = harness_with(fixture_with("/Order [[(Colours) 5 0 R]]"), |app| app.set_option("panel", "layers").unwrap());
+    let mut h = harness_with(fixture_with("/Order [[(Colours) 5 0 R]]"), |app| app.set_option(&egui::Context::default(), "panel", "layers").unwrap());
     h.run_steps(2);
-    let label = h.get_by_label("Colours").rect();
-    let red = h.get_by_label("Red").rect();
+    let label = h.get_by_role_and_label(Role::TreeItem, "Colours").rect();
+    let red = h.get_by_role_and_label(Role::TreeItem, "Red").rect();
     assert!(red.min.y > label.max.y - 1.0, "Red is listed under its label");
     assert!(h.query_by_label("Green").is_none(), "Green isn't in /Order, so it isn't presented");
     assert_eq!(shown(&h), layers(true, false), "but it is still a layer, in its state");
     // Clicking the label changes nothing; clicking Red hides it.
-    h.get_by_label("Colours").click();
+    h.get_by_role_and_label(Role::TreeItem, "Colours").click();
     h.run_steps(2);
     assert_eq!(shown(&h), layers(true, false));
-    h.get_by_label("Red").click();
+    h.get_by_role_and_label(Role::TreeItem, "Red").click();
     h.run_steps(3);
     assert_eq!(shown(&h), layers(false, false));
 
-    let h = harness(|app| app.set_option("panel", "layers").unwrap());
+    let h = harness(|app| app.set_option(&egui::Context::default(), "panel", "layers").unwrap());
     assert!(h.query_by_label("Red").is_none() && h.query_by_label("Green").is_none(), "no /Order: none presented");
     h.get_by_label("This document lists no layers to show.");
 }
@@ -163,30 +169,30 @@ fn the_layers_panel_shows_the_order_tree() {
 /// because its 0-based `index` keys into live-visible `page_images` and shifts when layers change.
 #[test]
 fn layer_visibility_clears_stale_image_selection() {
-    let mut h = harness_with(fixture_with("/Order [5 0 R]"), |app| app.set_option("panel", "layers").unwrap());
+    let mut h = harness_with(fixture_with("/Order [5 0 R]"), |app| app.set_option(&egui::Context::default(), "panel", "layers").unwrap());
     let link = at(&h, 230.0, 35.0);
 
     // 1. Toggling a layer from the Layers panel clears `image_selection`.
-    h.state_mut().views[0].image_selection = Some(ImageSelection::at(0, 1));
-    h.get_by_label("Red").click();
+    h.state_mut().views[0].session.image_selection = Some(ImageSelection::at(0, 1));
+    h.get_by_role_and_label(Role::TreeItem, "Red").click();
     h.run_steps(3);
-    assert_eq!(h.state().views[0].image_selection, None, "panel layer toggle clears stale image_selection");
+    assert_eq!(h.state().views[0].session.image_selection, None, "panel layer toggle clears stale image_selection");
 
     // 2. Resetting layers to initial visibility clears `image_selection`.
-    h.state_mut().views[0].image_selection = Some(ImageSelection::at(0, 1));
-    h.get_by_label("Layer options").click();
+    h.state_mut().views[0].session.image_selection = Some(ImageSelection::at(0, 1));
+    h.get_by_label(craft::ui::docking::DockWords::default().panel_menu.as_str()).click();
     h.run_steps(2);
     h.get_by_label("Reset to Initial Visibility").click();
     h.run_steps(3);
-    assert_eq!(h.state().views[0].image_selection, None, "resetting layers clears stale image_selection");
+    assert_eq!(h.state().views[0].session.image_selection, None, "resetting layers clears stale image_selection");
 
     // 3. Running a `SetOCGState` link action clears `image_selection`.
-    h.state_mut().views[0].image_selection = Some(ImageSelection::at(0, 0));
+    h.state_mut().views[0].session.image_selection = Some(ImageSelection::at(0, 0));
     click(&mut h, link);
-    assert_eq!(h.state().views[0].image_selection, None, "SetOCGState action clears stale image_selection");
+    assert_eq!(h.state().views[0].session.image_selection, None, "SetOCGState action clears stale image_selection");
 
     // 4. Changing a layer via `--layer` option clears `image_selection`.
-    h.state_mut().views[0].image_selection = Some(ImageSelection::at(0, 0));
-    h.state_mut().set_option("layer", "Green=off").unwrap();
-    assert_eq!(h.state().views[0].image_selection, None, "--layer option clears stale image_selection");
+    h.state_mut().views[0].session.image_selection = Some(ImageSelection::at(0, 0));
+    h.state_mut().set_option(&egui::Context::default(), "layer", "Green=off").unwrap();
+    assert_eq!(h.state().views[0].session.image_selection, None, "--layer option clears stale image_selection");
 }
