@@ -320,14 +320,14 @@ fn jpeg_size(data: &[u8]) -> Option<(usize, usize)> {
         return None;
     }
     let mut size = None;
-    let _ = crate::image_probe::walk_jpeg_segments(data, |marker, _span, seg| {
-        if crate::image_probe::is_sof_marker(marker) {
+    let _ = craft_image_codecs::jpeg_probe::walk_jpeg_segments(data, |marker, _span, seg| {
+        if craft_image_codecs::jpeg_probe::is_sof_marker(marker) {
             if let Some(&[_, h0, h1, w0, w1, ..]) = seg.get(..5) {
                 size = Some((usize::from(u16::from_be_bytes([w0, w1])), usize::from(u16::from_be_bytes([h0, h1]))));
             }
-            return Ok(crate::image_probe::JpegVisit::Stop);
+            return Ok(craft_image_codecs::jpeg_probe::JpegVisit::Stop);
         }
-        Ok(crate::image_probe::JpegVisit::Continue)
+        Ok(craft_image_codecs::jpeg_probe::JpegVisit::Continue)
     });
     size
 }
@@ -411,12 +411,12 @@ fn jpeg_samples(data: &[u8], space: &Space, w: usize, h: usize) -> Option<(Vec<u
 /// a decoder converting to RGB inverts them, with YCCK converted to CMYK.
 fn adobe_transform(data: &[u8]) -> Option<u8> {
     let mut transform = None;
-    let _ = crate::image_probe::walk_jpeg_segments(data, |marker, _span, seg| {
+    let _ = craft_image_codecs::jpeg_probe::walk_jpeg_segments(data, |marker, _span, seg| {
         if marker == 0xEE && seg.starts_with(b"Adobe") && seg.len() >= 12 {
             transform = Some(seg[11]);
-            return Ok(crate::image_probe::JpegVisit::Stop);
+            return Ok(craft_image_codecs::jpeg_probe::JpegVisit::Stop);
         }
-        Ok(crate::image_probe::JpegVisit::Continue)
+        Ok(craft_image_codecs::jpeg_probe::JpegVisit::Continue)
     });
     transform
 }
