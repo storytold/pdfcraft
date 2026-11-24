@@ -18,12 +18,17 @@
 //! `W` and the even-odd rule for `W*` (§8.5.3.3), its curves followed exactly. A subpath whose
 //! points lie on one line encloses none. A glyph centred on the outline of the area the clips
 //! leave together (§8.5.4) shows where that area reaches it, from any side, so a line a path
-//! traces with no area beside it, or the edge where two clips only meet, shows nothing. Past
-//! [`MAX_CLIP_QUADS`] turned rectangles in one state a rectangle, and past the document's
-//! [`MAX_CLIP_WORK`] any other path, counts by the box around it, so a glyph inside the box is
-//! taken as shown; past [`MAX_SAVED`] nested `q`, clips are not followed, and clipping by
-//! text (render modes 4 to 7) never is. Hidden text inside a link's text is an artifact: in no
-//! element, and no interruption.
+//! traces with no area beside it, or the edge where two clips only meet, shows nothing. Some
+//! clips aren't followed exactly: past [`MAX_CLIP_QUADS`] turned rectangles in one state, or past
+//! the document's [`MAX_CLIP_WORK`], only a clip's box is (a glyph outside it is still hidden);
+//! a clip set past [`MAX_SAVED`] nested `q`, or by text shown in a clipping mode (`Tr` 4 to 7),
+//! isn't followed at all until it is restored. Whether a glyph such a clip may hide shows is
+//! unknown. Inside a link's box it would leave that link's text unknown, so the page is refused,
+//! naming the link; elsewhere it is taken as shown, as on a page with no links. A change to the
+//! state past [`MAX_SAVED`] nested `q` (the CTM, a font, text state) isn't undone by its `Q`, so
+//! text shown after it, until a saved state is restored, is at no known place: a page with link
+//! areas and such text is refused. Hidden text inside a link's text is an artifact: in no element, and
+//! no interruption.
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -50,7 +55,8 @@ pub(crate) const MAX_LINK_AREAS: usize = 65_536;
 const WORD_GAP: f64 = 0.15;
 /// Saved graphics states followed; deeper `q` nesting keeps the current state.
 const MAX_SAVED: usize = 64;
-/// Clip rectangles not aligned with the axes that are followed exactly in one graphics state.
+/// Clip rectangles not aligned with the axes that are followed exactly in one graphics state:
+/// past them, a rectangle can't be followed, as a path past [`MAX_CLIP_WORK`] can't.
 const MAX_CLIP_QUADS: usize = 16;
 /// The clip work a Bézier curve of a clip path costs, where a line costs one: about what finding
 /// where it crosses a line takes.
@@ -60,7 +66,8 @@ const CURVE_WORK: usize = 64;
 const HALVINGS: usize = 60;
 /// Clip-path work in one document: each line and curve a clip path is kept as, and each a glyph
 /// is tested against (again for each way out of a point on an outline). Every glyph inside a clip
-/// path's box is tested, near a link or not. Past it, a clip path counts by the box around it.
+/// path's box is tested, near a link or not. Past it, whether a glyph a clip path may hide shows
+/// is unknown, and one inside a link's box is refused.
 const MAX_CLIP_WORK: usize = 50_000_000;
 /// Characters of a `/Contents` description written from a link's text or address.
 const MAX_CONTENTS: usize = 200;
@@ -71,7 +78,7 @@ pub(crate) const MAX_AREA_TESTS: usize = 50_000_000;
 pub(crate) struct Allowance {
     /// Glyph-in-area tests left, from [`MAX_AREA_TESTS`]: past them, the document is refused.
     tests: usize,
-    /// Clip-path work left, from [`MAX_CLIP_WORK`]: past it, clip paths count by their boxes.
+    /// Clip-path work left, from [`MAX_CLIP_WORK`]: past it, clip paths can't be followed.
     clip: usize,
 }
 
@@ -273,6 +280,19 @@ impl Link {
     }
 }
 
+/// Why a page's glyphs can't be placed.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Unplaced {
+    /// More glyph-in-area tests than the document has left.
+    Exhausted,
+    /// A glyph inside this link's box (an index into the page's links) that can't be told shown or
+    /// hidden: a clip it doesn't follow exactly may hide it.
+    Undecided(usize),
+    /// A glyph shown after a state change past [`MAX_SAVED`] nested `q`, which its `Q` won't undo:
+    /// where it is, against any link, is unknown.
+    Astray,
+}
+
 /// A page's operators with text-showing operators split where their glyphs change owner.
 pub(crate) struct Placed {
     pub ops: Vec<Op>,
@@ -296,8 +316,9 @@ pub(crate) struct Placed {
 
 /// Where each glyph of `ops` falls, against `links`. `resources` and `states` are the page's `/Font`
 /// and `/ExtGState` resource dictionaries and `fonts` the document's font cache. With no link areas the operators come back as
-/// they are and no glyph has an owner. `allowance` is what the document has left; `None` when
-/// placing this page's glyphs would take more glyph-in-area tests than it has.
+/// they are and no glyph has an owner. `allowance` is what the document has left. Refused when
+/// placing this page's glyphs would take more glyph-in-area tests than it has, or when a glyph
+/// inside a link's box can't be told shown or hidden once the clip work is spent.
 pub(crate) fn place(
     doc: &Document,
     fonts: &mut Fonts,
@@ -306,18 +327,22 @@ pub(crate) fn place(
     ops: Vec<Op>,
     links: &[Link],
     allowance: &mut Allowance,
-) -> Option<Placed> {
+) -> Result<Placed, Unplaced> {
     // Each usable area once, with the link it belongs to: what every glyph near them is tested
     // against, and what it is charged for.
     let areas: Vec<(usize, &Area)> = links.iter().enumerate().flat_map(|(i, l)| l.areas.iter().map(move |a| (i, a))).collect();
     if areas.is_empty() {
         let descriptions = links.iter().map(|l| l.description("")).collect();
-        return Some(Placed { ops, owners: HashMap::new(), blank: HashSet::new(), quiet: HashSet::new(), hidden: HashSet::new(), descriptions });
+        return Ok(Placed { ops, owners: HashMap::new(), blank: HashSet::new(), quiet: HashSet::new(), hidden: HashSet::new(), descriptions });
     }
     let mut walk = Walk {
         state: State::default(),
         saved: Vec::new(),
         unsaved: 0,
+        unfollowed: 0,
+        astray: false,
+        astray_shown: false,
+        clipping: false,
         tm: Matrix::IDENTITY,
         tlm: Matrix::IDENTITY,
         lost: false,
@@ -327,6 +352,11 @@ pub(crate) fn place(
         bounds: areas.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, (_, a)| {
             [b[0].min(a.bounds[0]), b[1].min(a.bounds[1]), b[2].max(a.bounds[2]), b[3].max(a.bounds[3])]
         }),
+        boxes: links
+            .iter()
+            .map(|l| l.areas.iter().map(|a| a.bounds).reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]))
+            .collect(),
+        undecided: None,
         areas,
         texts: vec![Covered::default(); links.len()],
         path: Path::default(),
@@ -353,7 +383,13 @@ pub(crate) fn place(
         let runs = walk.step(&op);
         // Checked before anything else: once spent, later operators would place nothing at all.
         if walk.exhausted {
-            return None;
+            return Err(Unplaced::Exhausted);
+        }
+        if let Some(link) = walk.undecided {
+            return Err(Unplaced::Undecided(link));
+        }
+        if walk.astray_shown {
+            return Err(Unplaced::Astray);
         }
         let Some(runs) = runs else {
             out.push(op);
@@ -385,7 +421,7 @@ pub(crate) fn place(
     }
     (allowance.tests, allowance.clip) = (walk.tests, walk.clip_work);
     let descriptions = links.iter().zip(&walk.texts).map(|(l, t)| l.description(&t.text)).collect();
-    Some(Placed { ops: out, owners, blank, quiet, hidden, descriptions })
+    Ok(Placed { ops: out, owners, blank, quiet, hidden, descriptions })
 }
 
 /// Whether `font` writes vertically (WMode 1, §9.7.4.3): its glyphs advance down the page, which
@@ -435,14 +471,19 @@ struct State {
     hidden: bool,
     /// The clips with area that are active: a glyph whose centre is outside them shows nowhere.
     clip: Clip,
+    /// The text rendering mode (`Tr`).
+    render: f64,
+    /// Text shown in a clipping mode has clipped since its `ET`, by outlines that aren't followed.
+    text_clip: bool,
 }
 
 /// Clips that enclose some area, as far as they are followed: a rectangle (`re`, the only
 /// subpath of its path) exactly, through the CTM; any other path by its shape, through the CTM,
-/// while the document's clip work lasts, and past it by the box around the subpaths that enclose
-/// some area, which holds the clip, so a glyph outside the box is hidden, and one inside it is
-/// taken as shown. Each clip narrows the one before (§8.5.4), so they are kept together, and a
-/// glyph on an outline is tested against all of them at once. In default user space.
+/// while the document's clip work lasts. A clip it can't follow exactly (past the clip work, or
+/// past [`MAX_CLIP_QUADS`] turned rectangles) still narrows the box, which holds it, so a glyph
+/// outside the box is hidden; whether one inside it shows is then unknown ([`Seen::Unknown`]).
+/// Each clip narrows the one before (§8.5.4), so they are kept together, and a glyph on an
+/// outline is tested against all of them at once. In default user space.
 #[derive(Clone, Default)]
 struct Clip {
     /// The intersection of the clips' bounding boxes, `[x0, y0, x1, y1]`; `None` until a clip
@@ -450,11 +491,23 @@ struct Clip {
     /// outside it costs no clip work.
     bounds: Option<[f64; 4]>,
     /// Rectangles not aligned with the axes (a rotated or skewed CTM), each a parallelogram: the
-    /// first [`MAX_CLIP_QUADS`], past which a rectangle counts by its bounding box alone.
+    /// first [`MAX_CLIP_QUADS`].
     quads: Vec<[(f64, f64); 4]>,
     /// The other clip paths, followed by their shapes, the latest first: shared, so saving the
     /// graphics state copies none of them.
     paths: Option<Rc<ClipPath>>,
+    /// A clip narrows it that isn't kept: a path past the clip work, or a turned rectangle past
+    /// [`MAX_CLIP_QUADS`]. Only its box is.
+    unkept: bool,
+}
+
+/// Whether a glyph shows, as far as the clips can tell.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Seen {
+    Shown,
+    Hidden,
+    /// Inside the clips' box, but a clip isn't followed exactly: it may show or not.
+    Unknown,
 }
 
 /// A clip path that is not one rectangle: the subpaths that enclose some area, as their pieces in
@@ -696,8 +749,12 @@ impl Clip {
         let Some(b) = path.bounds().filter(|_| !path.nonfinite) else { return };
         match path.shape {
             Shape::Rect(q) => {
-                if !(q[0].1 == q[1].1 && q[1].0 == q[2].0 || q[0].0 == q[1].0 && q[1].1 == q[2].1) && self.quads.len() < MAX_CLIP_QUADS {
-                    self.quads.push(q);
+                if !(q[0].1 == q[1].1 && q[1].0 == q[2].0 || q[0].0 == q[1].0 && q[1].1 == q[2].1) {
+                    if self.quads.len() < MAX_CLIP_QUADS {
+                        self.quads.push(q);
+                    } else {
+                        self.unkept = true;
+                    }
                 }
             }
             Shape::Other => {
@@ -705,6 +762,8 @@ impl Clip {
                 if let Some(left) = work.checked_sub(segments) {
                     *work = left;
                     self.paths = Some(Rc::new(ClipPath { pieces: path.pieces(), even_odd, segments, under: self.paths.take() }));
+                } else {
+                    self.unkept = true;
                 }
             }
             Shape::Empty => {}
@@ -718,11 +777,11 @@ impl Clip {
     /// Whether a glyph centred at `p` shows: inside every clip, or on the outline of the area they
     /// leave, where some points just off `p` are inside every clip. A point that isn't finite has
     /// no place to test, and is taken as shown. Each clip path it is tested against spends `work`;
-    /// once `work` can't pay for one, it and the clip paths it narrows count by their boxes, and a
-    /// point on an outline is taken as shown.
-    fn shows(&self, p: (f64, f64), work: &mut usize) -> bool {
+    /// once `work` can't pay for one, the glyph is hidden only if a clip already tested, or the
+    /// box, leaves it out, and otherwise unknown; so is one inside the box of a clip not kept.
+    fn shows(&self, p: (f64, f64), work: &mut usize) -> Seen {
         if !(p.0.is_finite() && p.1.is_finite()) {
-            return true;
+            return Seen::Shown;
         }
         // First the point a hair from `p` along the x axis (`p` itself, off every outline), with
         // the directions in which each outline through `p` leaves it.
@@ -730,35 +789,44 @@ impl Clip {
         let (mut inside, mut dirs, mut outlined) = (true, Vec::new(), Vec::new());
         if let Some(b) = self.bounds {
             if !(b[0] <= p.0 && p.0 <= b[2] && b[1] <= p.1 && p.1 <= b[3]) {
-                return false;
+                return Seen::Hidden;
             }
             inside &= box_holds(b, p, across, Some(&mut dirs));
         }
+        for q in &self.quads {
+            let before = dirs.len();
+            let holds = quad_holds(q, p, across, Some(&mut dirs));
+            if dirs.len() == before && !holds {
+                return Seen::Hidden;
+            }
+            inside &= holds;
+        }
+        // Once a path can't be paid for, neither can the ones it narrows: the walk stops there, so
+        // a glyph costs no more than the work left.
+        let mut unknown = self.unkept;
         let mut path = self.paths.as_deref();
         while let Some(c) = path {
-            let Some(left) = work.checked_sub(c.segments) else { break };
+            let Some(left) = work.checked_sub(c.segments) else {
+                unknown = true;
+                break;
+            };
             *work = left;
             if let Some((winding, on)) = c.winding(p, across, Some(&mut dirs)) {
                 let holds = c.encloses(winding);
                 if on {
                     outlined.push(c);
                 } else if !holds {
-                    return false;
+                    return Seen::Hidden;
                 }
                 inside &= holds;
             }
             path = c.under.as_deref();
         }
-        for q in &self.quads {
-            let before = dirs.len();
-            let holds = quad_holds(q, p, across, Some(&mut dirs));
-            if dirs.len() == before && !holds {
-                return false;
-            }
-            inside &= holds;
+        if unknown {
+            return Seen::Unknown;
         }
         if inside {
-            return true;
+            return Seen::Shown;
         }
         // On an outline: the glyph shows when, in some direction between the outlines through
         // `p`, the points just off it are inside every clip.
@@ -768,7 +836,7 @@ impl Clip {
             }
             let mut holds = true;
             for c in &outlined {
-                let Some(left) = work.checked_sub(c.segments) else { return true };
+                let Some(left) = work.checked_sub(c.segments) else { return Seen::Unknown };
                 *work = left;
                 if c.winding(p, d, None).is_some_and(|(winding, _)| !c.encloses(winding)) {
                     holds = false;
@@ -776,10 +844,10 @@ impl Clip {
                 }
             }
             if holds {
-                return true;
+                return Seen::Shown;
             }
         }
-        false
+        Seen::Hidden
     }
 }
 
@@ -888,6 +956,8 @@ impl Default for State {
             metrics: None,
             hidden: false,
             clip: Clip::default(),
+            render: 0.0,
+            text_clip: false,
         }
     }
 }
@@ -1149,6 +1219,16 @@ struct Walk<'a> {
     state: State,
     saved: Vec<State>,
     unsaved: usize,
+    /// How many `q` past [`MAX_SAVED`] deep the first clip there was set, which isn't followed;
+    /// 0 for none. Until the `Q` that ends it, whether a glyph shows is unknown.
+    unfollowed: usize,
+    /// The state was changed (the CTM, a font, text state) past [`MAX_SAVED`] nested `q`: its `Q`
+    /// won't undo it, so until a saved state is restored, where a glyph is shown is unknown.
+    astray: bool,
+    /// A glyph was shown while [`Walk::astray`] was set.
+    astray_shown: bool,
+    /// The text object has shown text in a clipping mode (`Tr` 4 to 7): its glyphs clip from `ET`.
+    clipping: bool,
     tm: Matrix,
     tlm: Matrix,
     /// The text matrix is unknown: a string was shown whose glyphs couldn't be measured. Positions
@@ -1168,6 +1248,11 @@ struct Walk<'a> {
     bounds: [f64; 4],
     /// Clip-path work left in the document's allowance ([`MAX_CLIP_WORK`]).
     clip_work: usize,
+    /// The box around each link's areas, by index into the page's links.
+    boxes: Vec<Option<[f64; 4]>>,
+    /// The first link with a glyph inside its box that can't be told shown or hidden: its text,
+    /// and so its tag and description, can't be known.
+    undecided: Option<usize>,
     /// The current path, and whether `W` (`Some(false)`) or `W*` (`Some(true)`) makes it a clip
     /// when it is ended.
     path: Path,
@@ -1178,14 +1263,24 @@ impl Walk<'_> {
     /// Follows `op`; for a text-showing operator that shows at least one glyph, its glyphs grouped
     /// into runs by owner.
     fn step(&mut self, op: &Op) -> Option<Vec<Run>> {
+        if self.unsaved > 0 && matches!(op.op.as_slice(), b"cm" | b"gs" | b"Tf" | b"Tc" | b"Tw" | b"Tz" | b"TL" | b"Ts" | b"Tr" | b"\"") {
+            self.astray = true;
+        }
         let s = &mut self.state;
         match op.op.as_slice() {
             b"q" if self.saved.len() < MAX_SAVED => self.saved.push(s.clone()),
             b"q" => self.unsaved = self.unsaved.saturating_add(1),
-            b"Q" if self.unsaved > 0 => self.unsaved -= 1,
+            b"Q" if self.unsaved > 0 => {
+                self.unsaved -= 1;
+                if self.unsaved < self.unfollowed {
+                    self.unfollowed = 0;
+                }
+            }
+            // A saved state, from before any change past `MAX_SAVED`, is whole again.
             b"Q" => {
                 if let Some(saved) = self.saved.pop() {
                     *s = saved;
+                    self.astray = false;
                 }
             }
             b"cm" => {
@@ -1199,7 +1294,7 @@ impl Walk<'_> {
             b"Tz" => s.scale = op.num(0).map_or(s.scale, |z| z / 100.0),
             b"TL" => s.leading = op.num(0).unwrap_or(s.leading),
             b"Ts" => s.rise = op.num(0).unwrap_or(s.rise),
-            b"BT" => (self.tm, self.tlm, self.lost) = (Matrix::IDENTITY, Matrix::IDENTITY, false),
+            b"BT" => (self.tm, self.tlm, self.lost, self.clipping) = (Matrix::IDENTITY, Matrix::IDENTITY, false, false),
             b"Td" | b"TD" => {
                 if let Some([x, y]) = op.nums::<2>() {
                     if op.op == b"TD" {
@@ -1220,12 +1315,15 @@ impl Walk<'_> {
             b"h" => self.path.close(),
             b"W" | b"W*" => self.clip = Some(op.op == b"W*"),
             // A clip only narrows until `Q`, so once it encloses nothing it stays so. Past
-            // `MAX_SAVED`, a `Q` would not restore it, so text is then taken as shown.
+            // `MAX_SAVED`, a `Q` would not restore it: it isn't followed, and until the `Q` that
+            // ends it, whether a glyph shows is unknown.
             b"n" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s" => {
-                if let Some(even_odd) = self.clip.take()
-                    && self.unsaved == 0
-                {
-                    if self.path.flat() {
+                if let Some(even_odd) = self.clip.take() {
+                    if self.unsaved > 0 {
+                        if self.unfollowed == 0 {
+                            self.unfollowed = self.unsaved;
+                        }
+                    } else if self.path.flat() {
                         self.state.hidden = true;
                     } else {
                         self.state.clip.narrow(&self.path, even_odd, &mut self.clip_work);
@@ -1233,6 +1331,11 @@ impl Walk<'_> {
                 }
                 self.path = Path::default();
             }
+            b"Tr" => s.render = op.num(0).unwrap_or(s.render),
+            // Text shown in a clipping mode (4 to 7) clips by its glyphs' outlines from `ET`,
+            // whatever the mode is by then, and they aren't followed: until the clip is restored,
+            // whether a glyph shows is unknown. A clipping mode at `ET` counts too, shown or not.
+            b"ET" if self.clipping || (4.0..=7.0).contains(&s.render) => s.text_clip = true,
             _ => {}
         }
         None
@@ -1287,6 +1390,7 @@ impl Walk<'_> {
     }
 
     fn show(&mut self, op: &Op) -> Option<Vec<Run>> {
+        self.clipping |= (4.0..=7.0).contains(&self.state.render);
         if op.op == b"\"" {
             self.state.word_spacing = op.num(0).unwrap_or(self.state.word_spacing);
             self.state.char_spacing = op.num(1).unwrap_or(self.state.char_spacing);
@@ -1350,6 +1454,10 @@ impl Walk<'_> {
         if bytes.is_empty() {
             return Vec::new();
         }
+        if self.astray {
+            self.astray_shown = true;
+            return Vec::new();
+        }
         // Clipped out of view: shown nowhere, so in no link's area; it never interrupts a link
         // ([`settle`]).
         if self.state.hidden {
@@ -1372,7 +1480,24 @@ impl Walk<'_> {
             let width = m.width(code);
             let glyph = Matrix([s.size * s.scale, 0.0, 0.0, s.size, 0.0, s.rise]).then(&self.tm).then(&s.ctm);
             let centre = glyph.apply(width / 2.0, (m.ascent + m.descent) / 2.0);
-            let hidden = !s.clip.shows(centre, &mut self.clip_work);
+            let seen = match s.clip.shows(centre, &mut self.clip_work) {
+                Seen::Shown if s.text_clip || self.unfollowed > 0 => Seen::Unknown,
+                seen => seen,
+            };
+            let hidden = match seen {
+                Seen::Shown => false,
+                Seen::Hidden => true,
+                // Away from every link it changes no link's text: it is taken as shown, as text
+                // on a page with no links is.
+                Seen::Unknown => {
+                    let inside = |b: &[f64; 4]| b[0] <= centre.0 && centre.0 <= b[2] && b[1] <= centre.1 && centre.1 <= b[3];
+                    if let Some(link) = self.boxes.iter().position(|b| b.as_ref().is_some_and(inside)) {
+                        self.undecided = Some(link);
+                        break;
+                    }
+                    false
+                }
+            };
             let b = self.bounds;
             let near = !hidden && b[0] <= centre.0 && centre.0 <= b[2] && b[1] <= centre.1 && centre.1 <= b[3];
             let (owner, inside) = if near {
@@ -2052,12 +2177,6 @@ mod tests {
             autotag_text(&mut doc).unwrap();
             assert_eq!(described(&doc).as_deref(), Some("v [5]"), "{content}");
         }
-        // Past the saved states a walk follows, a `Q` could not restore the clip: the text is
-        // taken as shown, and the link keeps its own.
-        let deep = format!("{} {} {}", "q ".repeat(super::MAX_SAVED), cite("0 0 0 0 re W n"), "Q ".repeat(super::MAX_SAVED));
-        let mut doc = page(&deep, &[&link(&over(0, 3))]);
-        autotag_text(&mut doc).unwrap();
-        assert!(links(&doc)[0].0.contains(&"[5]".to_string()), "{:?}", links(&doc));
         // Hidden text right after a link and before other text stays out of the link.
         let after = "BT /F1 10 Tf 20 300 Td ([5]) Tj ET q 0 0 0 0 re W n BT /F1 10 Tf 20 300 Td (v) Tj ET Q BT /F1 10 Tf 20 200 Td (Next) Tj ET";
         let mut doc = page(after, &[&link(&over(0, 3))]);
@@ -2330,14 +2449,14 @@ mod tests {
         assert_eq!(links(&doc), [(Vec::<String>::new(), "Document".to_string())]);
     }
 
-    /// Past the document's clip work, a clip path counts by the box around it, as it did before
-    /// its shape was followed: the text is still placed, not refused. A clip that misses the
-    /// glyph, with its box around it, then shows it.
+    /// Past the document's clip work, a glyph inside a link's box that a clip it can't follow may
+    /// hide is neither shown nor hidden: the page is refused, naming the link. A glyph away from
+    /// every link changes no link's text, and is placed as before; and a glyph a clip already
+    /// tested, its box, or a clip with no area leaves out is still hidden.
     #[test]
-    fn past_the_documents_clip_work_a_clip_path_counts_by_its_box() {
-        let described = |clip: &str, work: usize| {
-            let content = format!("q {clip} BT /F1 10 Tf 20 300 Td (v) Tj ET Q BT /F1 10 Tf 20 300 Td ([5]) Tj ET");
-            let doc = page(&content, &[&link(&over(0, 3))]);
+    fn past_the_documents_clip_work_text_it_cant_follow_in_a_link_is_refused() {
+        let placed = |content: &str, rect: &str, work: usize| {
+            let doc = page(content, &[&link(rect)]);
             let page = &pdfcraft_model::pages(&doc)[0];
             let links = super::page_links(&doc, &page.dict, 0, &mut super::LinkBudget::default()).unwrap();
             let stream = doc.resolve(page.dict.get(b"Contents").unwrap());
@@ -2347,21 +2466,35 @@ mod tests {
             let fonts = doc.resolve(resources.as_dict().unwrap().get(b"Font").unwrap());
             let mut allowance = super::Allowance { clip: work, ..Default::default() };
             let mut cache = crate::autotag_roles::Fonts::default();
-            let placed = super::place(&doc, &mut cache, fonts.as_dict().unwrap(), &pdfcraft_cos::Dict::default(), ops, &links, &mut allowance);
-            placed.expect("placed").descriptions.remove(0)
+            super::place(&doc, &mut cache, fonts.as_dict().unwrap(), &pdfcraft_cos::Dict::default(), ops, &links, &mut allowance)
+                .map(|mut p| p.descriptions.remove(0))
         };
+        let described = |clip: &str, work: usize| {
+            placed(&format!("q {clip} BT /F1 10 Tf 20 300 Td (v) Tj ET Q BT /F1 10 Tf 20 300 Td ([5]) Tj ET"), &over(0, 3), work)
+        };
+        let undecided = Err(super::Unplaced::Undecided(0));
         let triangle = "0 280 m 400 280 l 400 400 l h W n";
-        assert_eq!(described(triangle, super::MAX_CLIP_WORK).as_deref(), Some("[5]"));
+        assert_eq!(described(triangle, super::MAX_CLIP_WORK), Ok(Some("[5]".into())));
         // Enough to keep the triangle's three sides, but not to test the glyph against them.
-        assert_eq!(described(triangle, 3).as_deref(), Some("v [5]"));
-        // A curve costs more than a line: a clip of two lines and a curve that misses the glyph,
-        // with work one short of keeping it, counts by its box.
-        assert_eq!(described("0 220 m 100 220 l 0 370 0 220 v h W n", 1 + super::CURVE_WORK).as_deref(), Some("v [5]"));
+        assert_eq!(described(triangle, 3), undecided);
+        // A curve costs more than a line: a clip of two lines and a curve, with work one short of
+        // keeping it.
+        assert_eq!(described("0 220 m 100 220 l 0 370 0 220 v h W n", 1 + super::CURVE_WORK), undecided);
         // The triangle narrowed by a circle around the glyph, with work to keep both and to test
-        // the triangle but not the circle: once the latest clip can't be paid for, the ones it
-        // narrows count by their boxes too, so the work spent on a glyph is bounded.
+        // the triangle but not the circle; and, the other way, a circle too costly to keep, then
+        // the triangle, which is kept and tested and leaves the glyph out: hidden.
         let both = format!("{triangle} {}", circle((23.0, 302.0), 30.0));
-        assert_eq!(described(&both, 3 + (1 + 4 * super::CURVE_WORK) + 3).as_deref(), Some("v [5]"));
+        assert_eq!(described(&both, 3 + (1 + 4 * super::CURVE_WORK) + 3), undecided);
+        let first = format!("{} {triangle}", circle((23.0, 302.0), 30.0));
+        assert_eq!(described(&first, 3 + 3), Ok(Some("[5]".into())));
+        // A glyph on a triangle's edge, with work to test it once but not again for the ways out
+        // of the edge.
+        let edge = "23 280 m 23 320 l 0 300 l h W n";
+        assert_eq!(described(edge, super::MAX_CLIP_WORK), Ok(Some("v [5]".into())));
+        assert_eq!(described(edge, 3 + 3), undecided);
+        // Away from the link, the glyph changes nothing: placed as it would be with no clip.
+        let away = format!("q {triangle} BT /F1 10 Tf 20 300 Td (v) Tj ET Q BT /F1 10 Tf 20 200 Td (Go) Tj ET");
+        assert_eq!(placed(&away, "18 196 40 212", 3), Ok(Some("Go".into())));
         // With no work left, two lines from one point, the second drawn on after `h`, enclose
         // nothing and still hide the glyph, however the second runs; and the box is only that of
         // the subpaths that enclose some area, so a point and a line beyond the glyph leave it out.
@@ -2371,10 +2504,80 @@ mod tests {
             "30 280 m 40 280 l h 10 330 l W n",
             "20.1 290.1 m 23.2 300.3 l 26.3 310.5 l W n",
             "20.1 290.1 m 20.10000031 290.10000102 l 26.3 310.5 l W n",
+            "100 100 m 200 100 l 150 200 l h 0 400 m 300 400 m 300 410 l W n",
         ] {
-            assert_eq!(described(lines, 0).as_deref(), Some("[5]"), "{lines}");
+            assert_eq!(described(lines, 0), Ok(Some("[5]".into())), "{lines}");
         }
-        assert_eq!(described("100 100 m 200 100 l 150 200 l h 0 400 m 300 400 m 300 410 l W n", 0).as_deref(), Some("[5]"));
+    }
+
+    /// Under a clip it doesn't follow (past [`super::MAX_CLIP_QUADS`] turned rectangles in one
+    /// state, a clip set past [`super::MAX_SAVED`] nested `q`, or text shown in a clipping mode), a
+    /// glyph inside a link's box can't be told shown or hidden: Apply refuses the document, naming
+    /// the page and the link, and changes nothing. Away from the link, within the limits, or once
+    /// that clip is restored, the text is tagged.
+    #[test]
+    fn text_in_a_link_under_a_clip_it_cant_follow_is_refused() {
+        // Turned rectangles around the glyph at (23, 303.25), each a little smaller.
+        let turned = |n: usize| {
+            (0..n)
+                .map(|i| format!("0.6 0.8 -0.8 0.6 0 0 cm 230 150 {} {} re W n 0.6 -0.8 0.8 0.6 0 0 cm", 100 - i, 100 - i))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        // The font is set first: a change to it past the saved states isn't followed.
+        let font = "BT /F1 10 Tf ET";
+        let (deep, up) = ("q ".repeat(super::MAX_SAVED), "Q ".repeat(super::MAX_SAVED));
+        // `clip` set (after `pre`), then `v` shown, then `text` after the `Q` that restores it.
+        let cite = |pre: &str, clip: &str, text: &str, post: &str| format!("{font} {pre} q {clip} BT 20 300 Td (v) Tj ET Q BT 20 {text} ET {post}");
+        let linked = "300 Td ([5]) Tj";
+        // Text in the lowest clipping mode (fill, then clip): the `v` after it shows in it too.
+        let text_clip = "BT 4 Tr 100 100 Td (X) Tj ET";
+        let tagged = [
+            cite("", &turned(super::MAX_CLIP_QUADS), linked, ""),
+            // The clip past the saved states ended by its `Q` before the link's text.
+            format!("{font} {deep} q 0 0 0 0 re W n Q BT 20 300 Td (v) Tj ET BT 20 300 Td ([5]) Tj ET {up}"),
+            // Clipping text restored by `Q` before the link's text.
+            format!("{font} q {text_clip} Q BT 20 300 Td (v) Tj ET BT 20 300 Td ([5]) Tj ET"),
+            // A change past the saved states, undone by restoring a saved state before the text.
+            format!("{font} {deep} q 2 0 0 2 0 0 cm Q {up} BT 20 300 Td (v) Tj ET BT 20 300 Td ([5]) Tj ET"),
+        ];
+        for content in &tagged {
+            let mut doc = page(content, &[&link(&over(0, 3))]);
+            autotag_text(&mut doc).unwrap();
+            assert_eq!(links(&doc), [(vec!["v".to_string(), "[5]".to_string()], "P".to_string())], "{content}");
+        }
+        let refused = |content: &str, why: &str| {
+            let doc = page(content, &[&link(&over(0, 3))]);
+            let before = doc.clone();
+            let mut after = doc;
+            match autotag_text(&mut after) {
+                Err(AutoTagError::Unsupported { page, reason }) => {
+                    assert_eq!(page, 1);
+                    assert!(reason.contains(why), "{reason}");
+                }
+                other => panic!("{content}: {other:?}"),
+            }
+            assert!(after.get(ObjRef::new(3, 0)) == before.get(ObjRef::new(3, 0)) && tags(&after).is_empty());
+        };
+        // Clips not followed: 17 turned rectangles, a clip past the saved states, and text in a
+        // clipping mode, even one changed back before its `ET`.
+        let unfollowed = [
+            ("", turned(super::MAX_CLIP_QUADS + 1), ""),
+            (deep.as_str(), "0 0 0 0 re W n".to_string(), up.as_str()),
+            ("", text_clip.to_string(), ""),
+            ("", "BT 7 Tr 100 100 Td (X) Tj 0 Tr ET".to_string(), ""),
+        ];
+        for (pre, clip, post) in &unfollowed {
+            refused(&cite(pre, clip, linked, post), "link annotation 1 in /Annots (object 7 0) has text under a clip Apply can't follow");
+            // Away from the link, the text it may hide changes no link: tagged.
+            let away = cite(pre, clip, "200 Td (Go) Tj", post);
+            let mut doc = page(&away, &[&link("18 196 40 212")]);
+            autotag_text(&mut doc).unwrap();
+            assert_eq!(links(&doc), [(vec!["Go".to_string()], "P".to_string())], "{away}");
+        }
+        // A change past the saved states that its own `Q` doesn't undo: where the link's text is
+        // shown is unknown.
+        refused(&format!("{font} {deep} q 2 0 0 2 0 0 cm Q BT 20 300 Td ([5]) Tj ET {up}"), "where it lies against the page's links is unknown");
     }
 
     /// A long chain of clip paths (two rectangles each, so not one rectangle) is freed one at a

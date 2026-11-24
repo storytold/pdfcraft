@@ -252,7 +252,9 @@ update the numbers.
   a bounded auto-tag preview exist. Apply writes valid structure and parent-tree links for
   text-only files, tagging headings by size and weight and links as Link tags with their text and
   annotation; it marks images and paths beside text as artifacts (no Figure tags) and refuses other
-  annotations, other painted content and existing tags;
+  annotations, other painted content and existing tags, and a link over text whose clip it can't
+  follow (past the document's clip work, 16 turned clip rectangles or 64 nested states, or a clip
+  set by text), and a page with link areas whose text follows a state change past 64 nested states;
   `a11y.keyboard-only` (P0) planned, `a11y.app-screen-reader` partial.
 - **Impact:** most untagged files still need another editor to build their structure; PdfCraft itself is
   not yet usable without a mouse.

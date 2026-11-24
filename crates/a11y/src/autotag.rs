@@ -227,8 +227,17 @@ fn plan_page(
     let (resources, states) = (page_resources(doc, &page.dict, b"Font"), page_resources(doc, &page.dict, b"ExtGState"));
     fonts.new_page();
     // Splitting text at a link's edge adds operators, so the operator limits count the split content.
-    let placed = autotag_links::place(doc, fonts, &resources, &states, parsed.ops, &links, allowance)
-        .ok_or_else(|| unsupported(index, "the document has too much text under too many links to place"))?;
+    let placed = autotag_links::place(doc, fonts, &resources, &states, parsed.ops, &links, allowance).map_err(|why| match why {
+        autotag_links::Unplaced::Exhausted => unsupported(index, "the document has too much text under too many links to place"),
+        autotag_links::Unplaced::Astray => unsupported(
+            index,
+            "text is shown after a state change nested past 64 saved graphics states, which its Q won't undo, so where it lies against the page's links is unknown",
+        ),
+        autotag_links::Unplaced::Undecided(link) => unsupported(
+            index,
+            format!("{} has text under a clip Apply can't follow (past the document's clip work, 16 turned clip rectangles in one graphics state or 64 nested q, or set by clipping text), so whether it shows is unknown", autotag_links::name(&links, link)),
+        ),
+    })?;
     if placed.ops.len() > MAX_OPERATORS {
         return Err(unsupported(index, "splitting text at link edges takes too many operators"));
     }
