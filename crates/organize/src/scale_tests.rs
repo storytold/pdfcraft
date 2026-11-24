@@ -153,7 +153,7 @@ fn every_box_present_becomes_the_new_page_and_an_offset_crop_is_what_scales() {
 fn annotation_geometry_moves_and_no_zoom_keeps_its_size() {
     let annots = "/Annots [<< /Subtype /Ink /Rect [0 0 100 100] /InkList [[0 0 100 100]] /RD [10 10 10 10] >> \
                   << /Subtype /Text /F 8 /Rect [300 300 320 320] >> \
-                  << /Subtype /Ink /F 8 /Rect [400 400 440 440] /InkList [[400 400 440 440]] /RD [5 5 5 5] >>]";
+                  << /Subtype /Ink /F 8 /Rect [400 400 440 440] /InkList [[400 400 440 440]] /RD [5 5 5 5] >>                   << /Subtype /Text /F 4 /Rect [500 500 524 524] >>                   << /Subtype /Square /F 4 /Rect [500 100 524 124] >>]";
     let mut doc = letter(annots);
     scale_pages(&mut doc, &[0], request(306.0, 396.0)).unwrap();
     let list = doc.resolve(page(&doc, 0).get(b"Annots").unwrap()).as_array().unwrap().clone();
@@ -172,6 +172,13 @@ fn annotation_geometry_moves_and_no_zoom_keeps_its_size() {
     let stroke: Vec<f64> = ink.get(b"InkList").unwrap().as_array().unwrap()[0].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
     assert!(close(stroke[0] - r[0], 0.0) && close(stroke[1] - r[3], -40.0) && close(stroke[2] - stroke[0], 40.0), "{stroke:?} in {r:?}");
     assert_eq!(ink.get(b"RD").unwrap().as_array().unwrap()[0].as_f64(), Some(5.0), "its margins keep their size");
+    // A text note is no-zoom without the flag (§12.5.6.4); another kind with the same flags is not.
+    let sticky = rect_at(&doc, list[3].as_dict().unwrap(), b"Rect");
+    assert_eq!(size(sticky), (24.0, 24.0), "a text note keeps its size without the no-zoom flag");
+    let corner = mapped(&doc, 0, 500.0, 524.0);
+    assert!(close(sticky[0], corner.0) && close(sticky[3], corner.1), "its upper-left corner moves with the page");
+    let square = rect_at(&doc, list[4].as_dict().unwrap(), b"Rect");
+    assert!(size(square).0 < 24.0, "a square with the same flags shrinks with the page");
 }
 
 #[test]

@@ -241,9 +241,10 @@ fn pairs(doc: &Document, o: &Object, p: &Placement) -> Option<Object> {
     Some(reals(out))
 }
 
-/// `/F` bit 4, NoZoom (§12.5.3): the annotation keeps its size, its upper-left corner fixed.
+/// `/F` bit 4, NoZoom (§12.5.3): the annotation keeps its size, its upper-left corner fixed. A text
+/// annotation always behaves as NoZoom (§12.5.6.4).
 fn no_zoom(doc: &Document, annot: &Dict) -> bool {
-    annot.get(b"F").and_then(|f| doc.resolve(f).as_int()).is_some_and(|f| f & 8 != 0)
+    annot.name(b"Subtype") == Some(b"Text") || annot.get(b"F").and_then(|f| doc.resolve(f).as_int()).is_some_and(|f| f & 8 != 0)
 }
 
 /// Move one annotation's geometry; `None` when it has none recognised. `/Rect`, the point arrays
