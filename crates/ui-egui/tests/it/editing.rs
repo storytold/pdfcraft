@@ -465,6 +465,33 @@ fn reverse_pages_command_disabled_on_single_page_document() {
 }
 
 #[test]
+fn reversing_selected_pages_keeps_a_draft_note_on_a_page_that_stays() {
+    let draft = |page| pdfcraft_ui_egui::comments::Composer {
+        page,
+        at: [100.0, 100.0],
+        kind: pdfcraft_ui_egui::comments::ComposerKind::Note,
+        text: "Draft".into(),
+        focus: false,
+    };
+    let mut h = organize(4);
+    h.get_by_label("Page 1").click();
+    h.run_steps(1);
+    h.get_by_label("Page 2").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+    // Page 4 keeps its position when pages 1 and 2 swap, so its draft stays open.
+    h.state_mut().views[0].session.comments.composer = Some(draft(3));
+    assert!(h.execute("page.reverse"));
+    h.run_steps(3);
+    assert_eq!(page_texts(h.state()), ["Page 2", "Page 1", "Page 3", "Page 4"]);
+    assert_eq!(h.state().views[0].session.comments.composer.as_ref().map(|c| c.page), Some(3));
+    // A draft on a page that moved is cancelled, so it doesn't land on the other page.
+    h.state_mut().views[0].session.comments.composer = Some(draft(0));
+    assert!(h.execute("page.reverse"));
+    h.run_steps(3);
+    assert!(h.state().views[0].session.comments.composer.is_none());
+}
+
+#[test]
 fn reverse_pages_from_organize_panel_reverses_and_preserves_selection() {
     let mut h = organize(3);
     h.get_by_label("Reverse pages").click();
