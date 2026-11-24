@@ -2,12 +2,29 @@
 //! (replaced blue, inserted green, deleted red), shades them on the newer document's pages, and
 //! offers a report or the differences as comments.
 
-use egui::{Align, Color32, Layout};
+use craft::behavior::{IconId, Selection, keyed};
+use craft::pages::ui::{Lead, PageRangeField, SyncedViews, SyncedViewsState};
+use craft::pages::{format_pages, parse_pages};
+use craft::theme::variant::Tone;
+use craft::ui::buttons::Button;
+use craft::ui::choice::{Checkbox, Segmented};
+use craft::ui::contract::{Bind, Entry, Pad, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::dialog::{DialogResult, dialog_id};
+use craft::ui::display::Text;
+use craft::ui::layout_components::{Row, Stack};
+use craft::ui::list::{HueTarget, List, ListRow};
+use craft::ui::notices::Notice;
+use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind};
+use craft::ui::primitives::IconSpec;
+use craft::ui::style::DataColor;
+use egui::Color32;
 use pdfcraft_engine::DocId;
 use pdfcraft_engine::compare::{Comparison, Kind};
 
-use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, RightPanel, widgets};
+use crate::{PdfCraftApp, RightPanel};
+
+/// The key the Compare Files dialog files its answer under.
+const DIALOG_KEY: &str = "compare";
 
 /// The last comparison.
 pub struct CompareState {
@@ -22,10 +39,8 @@ pub struct CompareState {
     /// Side by side: the old file on the left, the new on the right, scrolled and zoomed
     /// together.
     pub side_by_side: bool,
-    /// Which half leads the other (the one the pointer was over last): 0 old, 1 new.
-    pub leader: usize,
-    /// Each half's scroll offset last frame, to tell which one moved.
-    pub prev_scroll: [egui::Vec2; 2],
+    /// The pair's divider and which half leads; the new file leads at first.
+    pub views: SyncedViewsState,
     /// Show: whether the text changes are in the list and the shading, and whether the visual
     /// differences (counted, never listed) are shaded (Acrobat's Filter).
     pub show_text: bool,
@@ -50,140 +65,151 @@ pub fn colour(kind: Kind) -> Color32 {
     Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
 }
 
-/// The Compare Files dialog: pick the older document. Returns (compare, cancel).
-pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
-    ui.label(egui::RichText::new(tl!("Compare Files")).font(theme::semibold(18.0)));
-    ui.add_space(8.0);
-    let Some((active_i, new)) = app.active_ids() else { return (false, true) };
-    let others: Vec<(DocId, String)> =
-        app.views.iter().filter(|v| v.id != new).filter_map(|v| app.session.get(v.id).map(|d| (d.id, d.name.clone()))).collect();
-    if app.compare_old.is_none_or(|o| !others.iter().any(|(id, _)| *id == o)) {
-        app.compare_old = others.first().map(|(id, _)| *id);
-    }
-    let new_name = app.session.get(new).map(|d| d.name.clone()).unwrap_or_default();
-    let page_count = app.views.get(active_i).map_or(0, |v| v.page_count());
-    egui::Grid::new("compare-files").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
-        ui.label(tl!("Old file:"));
-        let shown =
-            others.iter().find(|(id, _)| Some(*id) == app.compare_old).map_or(tl!("Open the older version first").to_string(), |(_, n)| n.clone());
-        craft_ui::ComboBox::from_id_salt("compare-old").selected_text(shown).width(320.0).show_ui(ui, |ui| {
-            for (id, n) in &others {
-                ui.selectable_value(&mut app.compare_old, Some(*id), n);
-            }
-        });
-        ui.end_row();
-        ui.label(tl!("New file:"));
-        ui.label(egui::RichText::new(new_name).strong());
-        ui.end_row();
-        ui.label(tl!("Pages:"));
-        let field = ui.add(egui::TextEdit::singleline(&mut app.compare_pages).desired_width(320.0).hint_text(format!("1-{page_count}")));
-        field.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, ui.is_enabled(), tl!("Pages")));
-        ui.end_row();
-    });
-    let pages_error = crate::page_selection_ui::parse(&app.compare_pages, page_count).err();
-    if let Some(e) = &pages_error {
-        ui.label(e.said(&|s| crate::i18n::t(s).to_string()));
-    }
-    ui.add_space(4.0);
-    ui.label(egui::RichText::new(tl!("Text is compared word by word; the differences are shown on the new file.")).small().color(t.text_muted));
-    ui.add_space(10.0);
-    let (mut go, mut cancel) = (false, false);
-    ui.horizontal(|ui| {
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let ready = app.compare_old.is_some() && pages_error.is_none();
-            if ui.add_enabled_ui(ready, |ui| widgets::pill_button(ui, tl!("Compare"), true)).inner.clicked() {
-                go = true;
-            }
-            if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-                cancel = true;
-            }
-        })
-    });
-    (go, cancel)
+/// The key a document is offered under in the dialog's choice.
+fn option_key(id: DocId) -> String {
+    id.0.to_string()
 }
 
-/// The Compare panel.
-pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, state: &Option<CompareState>, id: DocId) -> Option<PanelAction> {
+/// Opens the Compare Files dialog: the older version among the other open documents, the active file
+/// as the new one, and the pages to compare.
+pub(crate) fn open_compare_dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    let Some((active_i, new)) = app.active_ids() else { return };
+    let others: Vec<(String, String)> =
+        app.views.iter().filter(|v| v.id != new).filter_map(|v| app.session.get(v.id).map(|d| (option_key(d.id), d.name.clone()))).collect();
+    let old = app.compare_old.map(option_key).filter(|key| others.iter().any(|(k, _)| k == key)).or_else(|| others.first().map(|(k, _)| k.clone()));
+    let new_name = app.session.get(new).map(|d| d.name.clone()).unwrap_or_default();
+    let count = app.views.get(active_i).map_or(0, |v| v.page_count());
+    let fields = DialogFields::from_pairs([("old", old.unwrap_or_default()), ("pages", app.compare_pages.clone())]);
+    // Passed inline: a closure made apart from the call gets one lifetime for its argument and result.
+    let dialog = HostedParamDialog::new(ctx, DIALOG_KEY, fields, move |fields: &mut DialogFields| {
+        let chosen = fields.text("old").filter(|o| !o.is_empty()).map(str::to_owned);
+        let pages_ok = parse_pages(fields.text("pages").unwrap_or_default(), count).is_ok();
+        let options = others.iter().map(|(key, name)| (key.clone(), name.clone().into())).collect();
+        let pages = Param::custom("pages", tl!("Pages").to_string(), move |ui, fields, _| {
+            let mut shown = parse_pages(fields.text("pages").unwrap_or_default(), count).unwrap_or_default();
+            if shown.is_empty() {
+                // An empty entry compares every page, so the field shows them all (1-3).
+                shown = (0..count).collect();
+            }
+            let out = PageRangeField::new(tl!("Pages").to_string(), &shown, count, 0).show(ui);
+            if let Some(picked) = out.picked {
+                fields.set("pages", format_pages(&picked));
+            }
+            out.response
+        })
+        .opens_with(String::new());
+        let params = vec![
+            Param::new("old", tl!("Old file:").to_string(), ParamKind::choice(options, chosen.clone())),
+            Param::read_only_text("new", tl!("New file:").to_string(), new_name.clone()),
+            pages,
+        ];
+        let reason = if chosen.is_none() { tl!("Open the older version first") } else { tl!("Enter valid page numbers") };
+        ParamDialog::new(DIALOG_KEY, tl!("Compare Files").to_string(), params)
+            .ok_label(tl!("Compare").into())
+            .ok_enabled(chosen.is_some() && pages_ok)
+            .ok_reason(reason.into())
+            .footer_note(tl!("Text is compared word by word; the differences are shown on the new file.").to_string())
+    });
+    crate::dialogs::host::open(app, dialog);
+}
+
+/// Once per frame: when the Compare Files dialog answered OK, runs the comparison it asked for.
+pub(crate) fn pass(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    let Some(DialogResult::Ok(result)) = app.dialogs.take_by_id::<HostedParamDialog>(dialog_id(DIALOG_KEY)) else { return };
+    let chosen = result.fields.text("old").unwrap_or_default();
+    let Some(old) = app.views.iter().map(|v| v.id).find(|id| option_key(*id) == chosen) else { return };
+    app.compare_old = Some(old);
+    app.compare_pages = result.fields.text("pages").unwrap_or_default().to_owned();
+    app.run_compare(ctx);
+}
+
+/// The text a change shows in the list.
+fn change_text(ch: &pdfcraft_engine::compare::Change) -> String {
+    match ch.kind {
+        Kind::Replaced => format!("\"{}\" → \"{}\"", ch.old.text, ch.new.text),
+        Kind::Inserted => format!("+ \"{}\"", ch.new.text),
+        Kind::Deleted => format!("− \"{}\"", ch.old.text),
+    }
+}
+
+/// The kind's name, written out so the catalogue extraction sees each word.
+fn kind_label(kind: Kind) -> String {
+    match kind {
+        Kind::Replaced => tl!("Replaced").to_string(),
+        Kind::Inserted => tl!("Inserted").to_string(),
+        Kind::Deleted => tl!("Deleted").to_string(),
+    }
+}
+
+/// A count of one kind of difference after its coloured badge.
+fn count_row(ui: &mut egui::Ui, colour: Color32, n: usize, kind: &str) {
+    let text = crate::i18n::fmt(tl!("{n} {kind}"), &[("n", &n.to_string()), ("kind", kind)]);
+    ListRow::new(text).icon(IconSpec::svg(IconId::new("square"))).hue(DataColor::new(colour), HueTarget::Icon).show(ui);
+}
+
+/// The Compare panel, a dock body.
+pub(crate) fn panel(ui: &mut egui::Ui, state: &Option<CompareState>, id: DocId) -> Option<PanelAction> {
     let Some(s) = state.as_ref().filter(|s| s.new == id) else {
-        ui.label(egui::RichText::new(tl!("Compare this file with an older version: Compare files… in All tools.")).color(t.text_muted));
+        Notice::new(Tone::Info, tl!("Compare this file with an older version: Compare files… in All tools.").to_string()).show(ui);
         return None;
     };
     let mut action = None;
     let c = &s.result;
-    if c.identical() {
-        ui.label(tl!("No differences in the text."));
-    }
-    ui.horizontal_wrapped(|ui| {
+    Stack::new().pad(Pad::Control).show(ui, |ui, _| {
+        if c.identical() {
+            Notice::new(Tone::Info, tl!("No differences in the text.").to_string()).show(ui);
+        }
         for k in [Kind::Replaced, Kind::Inserted, Kind::Deleted] {
-            let (dot, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-            ui.painter().rect_filled(dot, egui::CornerRadius::same(2), colour(k));
-            ui.label(crate::i18n::fmt(tl!("{n} {kind}"), &[("n", &c.count(k).to_string()), ("kind", tl!(k.label()))]));
+            count_row(ui, colour(k), c.count(k), &kind_label(k));
         }
-        let (dot, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-        ui.painter().rect_filled(dot, egui::CornerRadius::same(2), VISUAL);
-        ui.label(crate::i18n::fmt(tl!("{n} {kind}"), &[("n", &s.visual.len().to_string()), ("kind", tl!("Visual"))]));
-    });
-    ui.horizontal(|ui| {
-        ui.label(tl!("Show:"));
-        let (mut text, mut visual) = (s.show_text, s.show_visual);
-        let text_changed = ui.add(widgets::checkbox(&mut text, tl!("Text"))).changed();
-        if ui.add(widgets::checkbox(&mut visual, tl!("Visual"))).changed() || text_changed {
-            action = Some(PanelAction::Show { text, visual });
-        }
-    });
-    ui.add_space(6.0);
-    // Side by side, or the new file alone.
-    ui.horizontal(|ui| {
-        if widgets::pill_button(ui, tl!("Side by side"), s.side_by_side).clicked() {
-            action = Some(PanelAction::SideBySide(true));
-        }
-        if widgets::pill_button(ui, tl!("New file only"), !s.side_by_side).clicked() {
-            action = Some(PanelAction::SideBySide(false));
-        }
-    });
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        if ui.button(tl!("Mark as comments")).clicked() {
-            action = Some(PanelAction::Mark);
-        }
-        if ui.button(tl!("Report…")).clicked() {
-            action = Some(PanelAction::Report);
-        }
-        if ui.button(tl!("Clear")).clicked() {
-            action = Some(PanelAction::Clear);
-        }
-    });
-    ui.separator();
-    for (i, ch) in c.changes.iter().enumerate().filter(|_| s.show_text).take(2000) {
-        let text = match ch.kind {
-            Kind::Replaced => format!("\"{}\" → \"{}\"", ch.old.text, ch.new.text),
-            Kind::Inserted => format!("+ \"{}\"", ch.new.text),
-            Kind::Deleted => format!("− \"{}\"", ch.old.text),
-        };
-        let selected = s.selected == Some(i);
-        let r = ui.push_id(i, |ui| {
-            ui.horizontal(|ui| {
-                let (bar, _) = ui.allocate_exact_size(egui::vec2(4.0, 34.0), egui::Sense::hover());
-                ui.painter().rect_filled(bar, egui::CornerRadius::same(2), colour(ch.kind));
-                ui.vertical(|ui| {
-                    ui.label(
-                        egui::RichText::new(crate::i18n::fmt(
-                            tl!("{kind} · page {p}"),
-                            &[("kind", tl!(ch.kind.label())), ("p", &(ch.new.page + 1).to_string())],
-                        ))
-                        .small()
-                        .color(t.text_muted),
-                    );
-                    ui.selectable_label(selected, text)
-                })
-                .inner
-            })
-            .inner
+        count_row(ui, VISUAL, s.visual.len(), tl!("Visual"));
+        Row::new().show(ui, |ui, _| {
+            Text::new(tl!("Show:").to_string()).show(ui);
+            let (mut text, mut visual) = (s.show_text, s.show_visual);
+            Checkbox::new(Bind::bound(&mut text)).label(tl!("Text").to_string()).show(ui);
+            Checkbox::new(Bind::bound(&mut visual)).label(tl!("Visual").to_string()).show(ui);
+            if (text, visual) != (s.show_text, s.show_visual) {
+                action = Some(PanelAction::Show { text, visual });
+            }
         });
-        if r.inner.clicked() {
-            action = Some(PanelAction::Select(i));
+        let entries = [Entry::new(true, tl!("Side by side").to_string()), Entry::new(false, tl!("New file only").to_string())];
+        let mut side = s.side_by_side;
+        Segmented::new(tl!("Layout").to_string(), Bind::bound(&mut side), &entries).show(ui);
+        if side != s.side_by_side {
+            action = Some(PanelAction::SideBySide(side));
         }
-    }
+        Row::new().show(ui, |ui, _| {
+            if Button::new(tl!("Mark as comments").to_string()).show(ui).clicked() {
+                action = Some(PanelAction::Mark);
+            }
+            if Button::new(tl!("Report…").to_string()).show(ui).clicked() {
+                action = Some(PanelAction::Report);
+            }
+            if Button::new(tl!("Clear").to_string()).show(ui).clicked() {
+                action = Some(PanelAction::Clear);
+            }
+        });
+        let order: Vec<usize> = (0..c.changes.len()).filter(|_| s.show_text).take(2000).collect();
+        let mut selection = Selection::new(s.selected.into_iter().collect(), s.selected, s.selected);
+        let rows = keyed(&order, |i| *i);
+        List::new(tl!("Differences").to_string()).select(SelectMode::Single).selection(Bind::bound(&mut selection)).show_items(
+            ui,
+            &rows,
+            &mut |key, item| {
+                let Some(ch) = c.changes.get(*key) else { return ListRow::new(String::new()) };
+                let detail =
+                    crate::i18n::fmt(tl!("{kind} · page {p}"), &[("kind", kind_label(ch.kind).as_str()), ("p", &(ch.new.page + 1).to_string())]);
+                ListRow::new(change_text(ch))
+                    .detail(detail)
+                    .hue(DataColor::new(colour(ch.kind)), HueTarget::Icon)
+                    .icon(IconSpec::svg(IconId::new("square")))
+                    .state(item.row.clone())
+            },
+        );
+        if let Some(picked) = selection.items.first().copied().filter(|p| Some(*p) != s.selected) {
+            action = Some(PanelAction::Select(picked));
+        }
+    });
     action
 }
 
@@ -194,19 +220,19 @@ impl PdfCraftApp {
         let partner = side_by_side(self, index).and_then(|(old, _)| self.views.get(old).map(|v| v.id));
         for view in &mut self.views {
             if view.id == id || partner == Some(view.id) {
-                view.set_page_gaps(show);
+                view.view.page_gaps = show;
             }
         }
     }
 
     /// Compare the chosen older document with the active one and show the differences.
-    pub fn run_compare(&mut self) {
+    pub fn run_compare(&mut self, ctx: &egui::Context) {
         let Some((i, new)) = self.active_ids() else { return };
         let Some(old) = self.compare_old else { return };
         let count = self.views.get(i).map_or(0, |v| v.page_count());
-        let pages = match crate::page_selection_ui::parse(&self.compare_pages, count) {
+        let pages = match parse_pages(&self.compare_pages, count) {
             Ok(pages) => pages,
-            Err(e) => return self.notify_error(e.said(&|s| crate::i18n::t(s).to_string())),
+            Err(e) => return self.notify_error(e.to_string()),
         };
         match self.session.compare_pages(old, new, &pages) {
             Ok(result) => {
@@ -216,7 +242,7 @@ impl PdfCraftApp {
                 }
                 let n = result.changes.len();
                 // Side by side when the old version is open in a tab and the window has the room.
-                let side_by_side = self.views.iter().any(|v| v.id == old) && self.ctx.as_ref().is_none_or(|c| c.content_rect().width() >= 1000.0);
+                let side_by_side = self.views.iter().any(|v| v.id == old) && ctx.content_rect().width() >= 1000.0;
                 self.compare = Some(crate::compare_ui::CompareState {
                     old,
                     new,
@@ -225,13 +251,12 @@ impl PdfCraftApp {
                     visual,
                     selected: None,
                     side_by_side,
-                    leader: 1,
-                    prev_scroll: [egui::Vec2::ZERO; 2],
+                    views: Default::default(),
                     show_text: true,
                     show_visual: true,
                 });
                 self.shade_compare(i);
-                self.right = Some(RightPanel::Compare);
+                self.set_right(Some(RightPanel::Compare));
                 self.notify(if n == 0 {
                     tl!("The text is the same").to_string()
                 } else if n == 1 {
@@ -244,7 +269,7 @@ impl PdfCraftApp {
         }
     }
 
-    pub(crate) fn compare_action(&mut self, index: usize, a: PanelAction) {
+    pub(crate) fn compare_action(&mut self, ctx: &egui::Context, index: usize, a: PanelAction) {
         let Some(s) = self.compare.as_mut() else { return };
         let (old, new, pages) = (s.old, s.new, s.pages.clone());
         match a {
@@ -256,17 +281,16 @@ impl PdfCraftApp {
                 let old_target = (ch.old.page, ch.old.rects.first().copied().or(ch.old.near).unwrap_or_default());
                 let v = &mut self.views[index];
                 v.go_to_page(page);
-                v.flash = Some((page, rect.map(|x| x as f32), 0.0));
+                v.session.flash = Some((page, rect.map(|x| x as f32), 0.0));
                 // The old file's half jumps to its side of the change too.
                 if let Some(oi) = self.views.iter().position(|v| v.id == old) {
                     let v = &mut self.views[oi];
                     v.go_to_page(old_target.0);
-                    v.flash = Some((old_target.0, old_target.1.map(|x| x as f32), 0.0));
+                    v.session.flash = Some((old_target.0, old_target.1.map(|x| x as f32), 0.0));
                 }
             }
             PanelAction::SideBySide(on) => {
                 s.side_by_side = on;
-                s.leader = 1;
             }
             PanelAction::Show { text, visual } => {
                 s.show_text = text;
@@ -276,7 +300,7 @@ impl PdfCraftApp {
             PanelAction::Mark => match self.session.mark_differences_of(old, new, &pages) {
                 Ok(n) => {
                     if let Some(info) = self.session.get(new).map(|d| d.info.clone()) {
-                        self.views[index].document_changed(&info);
+                        self.views[index].document_changed(ctx, &info);
                     }
                     self.notify(if n == 1 {
                         tl!("Added 1 comment").to_string()
@@ -288,7 +312,7 @@ impl PdfCraftApp {
             },
             PanelAction::Report => match self.session.compare_report_of(old, new, &pages) {
                 Ok(bytes) => {
-                    if let Err(e) = self.open_bytes("Compare Report.pdf", None, bytes.to_vec()) {
+                    if let Err(e) = self.open_bytes(ctx, "Compare Report.pdf", None, bytes.to_vec()) {
                         self.notify_error(e);
                     }
                 }
@@ -296,11 +320,11 @@ impl PdfCraftApp {
             },
             PanelAction::Clear => {
                 self.compare = None;
-                self.views[index].compare_marks.clear();
+                self.views[index].session.compare_marks.clear();
                 if let Some(oi) = self.views.iter().position(|v| v.id == old) {
-                    self.views[oi].compare_marks.clear();
+                    self.views[oi].session.compare_marks.clear();
                 }
-                self.right = None;
+                self.set_right(None);
             }
         }
     }
@@ -314,10 +338,10 @@ impl PdfCraftApp {
         let old = s.old;
         let (old_marks, new_marks) = (shading(s, true), shading(s, false));
         if let Some(v) = self.views.get_mut(index) {
-            v.compare_marks = new_marks;
+            v.session.compare_marks = new_marks;
         }
         if let Some(v) = self.views.iter_mut().find(|v| v.id == old) {
-            v.compare_marks = old_marks;
+            v.session.compare_marks = old_marks;
         }
     }
 }
@@ -360,85 +384,41 @@ pub(crate) fn side_by_side(app: &PdfCraftApp, index: usize) -> Option<(usize, us
 }
 
 /// Side by side: the old file on the left, the new on the right, each a page view of its own
-/// with its shading, scrolled and zoomed together. The half the pointer is over leads; the
-/// other follows its zoom, layout and scroll offset.
+/// with its shading. The pair keeps them scrolled and zoomed together, the half last pressed leading.
 pub(crate) fn compare_area(app: &mut PdfCraftApp, old: usize, new: usize, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    let rect = ui.available_rect_before_wrap();
-    let gap = 1.0;
-    let half_w = ((rect.width() - gap) / 2.0).max(1.0);
-    let caption_h = 22.0;
-    let left = egui::Rect::from_min_size(rect.min, egui::vec2(half_w, rect.height()));
-    let right = egui::Rect::from_min_size(egui::pos2(rect.min.x + half_w + gap, rect.min.y), egui::vec2(half_w, rect.height()));
-    // Who leads: the half under the pointer (remembered), the new file at first.
-    if let Some(p) = ui.input(|i| i.pointer.hover_pos())
-        && let Some(c) = app.compare.as_mut()
-    {
-        if left.contains(p) {
-            c.leader = 0;
-        } else if right.contains(p) {
-            c.leader = 1;
+    let (Some(old_view), Some(new_view)) = (app.views.get(old), app.views.get(new)) else { return };
+    let ids = [old_view.id, new_view.id];
+    let mut states = (old_view.view.clone(), new_view.view.clone());
+    let names = ids.map(|id| app.session.get(id).map(|d| d.name.clone()).unwrap_or_default());
+    let Some(mut pair) = app.compare.as_mut().map(|c| std::mem::take(&mut c.views)) else { return };
+    let left = crate::i18n::fmt(tl!("Old file: {name}"), &[("name", &names[0])]);
+    let right = crate::i18n::fmt(tl!("New file: {name}"), &[("name", &names[1])]);
+    SyncedViews::new(tl!("Comparison").to_string(), &mut pair).captions(left, right).halves(
+        ui,
+        (&mut states.0, &mut states.1),
+        |ui, rect, state, half| {
+            let index = if half == Lead::Left { old } else { new };
+            // The app draws through its own view state: the pair's state for this half stands in for it during the draw.
+            if let Some(v) = app.views.get_mut(index) {
+                std::mem::swap(&mut v.view, state);
+            }
+            // Each half's notices lie within its own half: draw in a child ui bounded by the half.
+            let mut half_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt(("compare-half", index)));
+            half_ui.shrink_clip_rect(rect);
+            let output = crate::canvas::document_area_at(app, index, rect, &mut half_ui);
+            if let Some(v) = app.views.get_mut(index) {
+                std::mem::swap(&mut v.view, state);
+            }
+            output
+        },
+    );
+    // A half can close its own tab while it draws (#3915): each is found again by id.
+    for (id, state) in ids.into_iter().zip([states.0, states.1]) {
+        if let Some(v) = app.views.iter_mut().find(|v| v.id == id) {
+            v.view = state;
         }
     }
-    let leader = app.compare.as_ref().map_or(1, |c| c.leader);
-    let (lead, follow) = if leader == 0 { (old, new) } else { (new, old) };
-    // The follower takes the leader's zoom and layout before either is drawn.
-    let (zoom, fit, layout, continuous, page_gaps, rotation) = {
-        let v = &app.views[lead];
-        (v.zoom, v.fit, v.layout, v.continuous, v.show_page_gaps, v.rotation)
-    };
-    {
-        let v = &mut app.views[follow];
-        if v.zoom != zoom
-            || v.fit != fit
-            || v.layout != layout
-            || v.continuous != continuous
-            || v.show_page_gaps != page_gaps
-            || v.rotation != rotation
-        {
-            v.zoom = zoom;
-            v.fit = fit;
-            v.layout = layout;
-            v.continuous = continuous;
-            v.show_page_gaps = page_gaps;
-            v.rotation = rotation;
-        }
-    }
-    let names = [old, new].map(|i| app.session.get(app.views[i].id).map(|d| d.name.clone()).unwrap_or_default());
-    // Drawing a half can close its own tab (its snapshot bar's Close, #3915), which shifts or
-    // removes the indexes below. Each half is found again by id, and the frame stops when one is gone.
-    let ids = [app.views[old].id, app.views[new].id];
-    let find = |app: &PdfCraftApp, id| app.views.iter().position(|v| v.id == id);
-    ui.painter().vline(rect.min.x + half_w, rect.y_range(), egui::Stroke::new(gap, t.border));
-    for (k, r) in [left, right].into_iter().enumerate() {
-        // Both halves must still be open: once either has closed, the pair is over.
-        let (Some(old_index), Some(new_index)) = (find(app, ids[0]), find(app, ids[1])) else { return };
-        let index = if k == 0 { old_index } else { new_index };
-        let caption = egui::Rect::from_min_size(r.min, egui::vec2(r.width(), caption_h));
-        ui.painter().rect_filled(caption, 0.0, t.panel);
-        let label = crate::i18n::fmt(if k == 0 { tl!("Old file: {name}") } else { tl!("New file: {name}") }, &[("name", &names[k])]);
-        ui.painter().text(
-            egui::pos2(caption.min.x + 10.0, caption.center().y),
-            egui::Align2::LEFT_CENTER,
-            label,
-            egui::FontId::proportional(12.0),
-            t.text_muted,
-        );
-        let body = egui::Rect::from_min_max(egui::pos2(r.min.x, r.min.y + caption_h), r.max);
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body).id_salt(("compare-half", k)));
-        child.set_clip_rect(body);
-        crate::canvas::document_area(app, index, &mut child);
-    }
-    // After both drew: the leader's scroll, when it moved, is the follower's next offset.
-    let (Some(old), Some(new)) = (find(app, ids[0]), find(app, ids[1])) else { return };
-    let follow = if leader == 0 { new } else { old };
-    let offsets = [app.views[old].last_scroll, app.views[new].last_scroll];
     if let Some(c) = app.compare.as_mut() {
-        let lead_k = if leader == 0 { 0 } else { 1 };
-        if (offsets[lead_k] - c.prev_scroll[lead_k]).length() > 0.5 && (offsets[1 - lead_k] - offsets[lead_k]).length() > 0.5 {
-            app.views[follow].sync_scroll = Some(offsets[lead_k]);
-            ui.ctx().request_repaint();
-        }
-        c.prev_scroll = offsets;
+        c.views = pair;
     }
 }
