@@ -19,7 +19,7 @@ impl PdfCraftApp {
             self.execute(ctx, command);
             return;
         }
-        // Not implemented yet: say which milestone ships it.
+        // Not implemented yet: say which milestone ships it. 
         let when = pdfcraft_engine::catalog::TOOL_GROUPS
             .iter()
             .flat_map(|g| g.sections.iter().flat_map(|s| s.items.iter()))
