@@ -650,6 +650,15 @@ fn summary(r: &OptimizeReport) -> String {
     if discarded > 0 {
         parts.push(crate::i18n::trn(lang, discarded as u64, "{n} item discarded", "{n} items discarded"));
     }
+    if !o.newer_content.is_empty() {
+        let n = o.newer_content.len() as u64;
+        parts.push(crate::i18n::trn(
+            lang,
+            n,
+            "{n} feature newer than the chosen PDF version left as it is",
+            "{n} features newer than the chosen PDF version left as they are",
+        ));
+    }
     if parts.is_empty() { String::new() } else { format!("; {}", parts.join(", ")) }
 }
 

@@ -42,6 +42,7 @@ mod form_actions;
 pub mod fragments;
 mod images;
 mod links;
+mod newer_content;
 mod pool;
 mod samples;
 mod tiles;
@@ -53,6 +54,7 @@ use pdfcraft_cos::{Dict, Document, ImageBudget, MAX_PAGE_DECODED, ObjRef, Object
 use pdfcraft_filters::{Filter, Params};
 
 pub use images::{ImageTarget, effective_resolutions, recolour_image};
+pub use newer_content::Requirement;
 pub use pool::give_way_to_other_programs;
 pub use samples::{NotDecoded, Samples, decode_samples, encode_samples};
 pub use tiles::{DOWNSAMPLED_ABOVE, TileReport, tile_large_images};
@@ -75,9 +77,9 @@ pub enum OptimizeError {
 
 /// The target header version and object-stream policy for an optimized copy.
 ///
-/// Partial compatibility only: encryption requirements are checked, but content newer than
-/// the target is neither detected nor converted. A lower header does not guarantee that
-/// older readers can read the document.
+/// Partial compatibility only: encryption requirements are checked, and content newer than the
+/// target is detected and listed in [`Report::newer_content`] but not converted. A lower header
+/// does not guarantee that older readers can read the document.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Compatibility {
     /// Keep the document's version (upgraded to 1.5 when object streams are written).
@@ -346,6 +348,12 @@ pub struct Report {
     pub external_bookmarks: usize,
     /// Images and forms the pages listed but never drew, dropped (Clean Up).
     pub unused_xobjects: usize,
+    /// Constructs in the copy newer than the chosen compatibility level, left as they are,
+    /// highest version first; empty when the version is retained.
+    pub newer_content: Vec<Requirement>,
+    /// Content streams and font programs the check for newer content could not read, so it may
+    /// have missed constructs in them.
+    pub newer_content_unread: usize,
 }
 
 /// The minimum PDF version required by `doc`'s active security handler, when it uses features
@@ -508,7 +516,23 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
             }
         }
     }
+    list_newer_content(doc, settings, &mut report, progress)?;
     Ok(report)
+}
+
+/// Fill `report`'s newer-content fields when `settings` choose a version.
+fn list_newer_content(
+    doc: &Document,
+    settings: &Settings,
+    report: &mut Report,
+    progress: &mut dyn FnMut(Stage) -> bool,
+) -> Result<(), OptimizeError> {
+    if let Some(chosen) = settings.compatibility.version() {
+        let found = newer_content::content_versions(doc, &mut || progress(Stage::CleanUp)).ok_or(OptimizeError::Cancelled)?;
+        report.newer_content = found.newer_than(chosen);
+        report.newer_content_unread = found.unread;
+    }
+    Ok(())
 }
 
 /// Largest decoded LZW stream converted, as for a page's content: the data and its check are

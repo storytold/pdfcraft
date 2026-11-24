@@ -5840,3 +5840,95 @@ fn the_fewest_strips_that_make_a_picture_are_merged() {
     let r = optimize(&mut doc, &keep).unwrap();
     assert_eq!((r.merged_images, r.fragments_merged), (0, 0), "{r:?}");
 }
+
+/// A one-page document whose page dictionary also holds `entries`, drawing `content`.
+fn page_with(entries: &[(&str, Object)], content: &str) -> (Document, ObjRef) {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], content);
+    doc.update_dict(p, |d| {
+        for (k, v) in entries {
+            d.set(k.as_bytes().to_vec(), v.clone());
+        }
+    })
+    .unwrap();
+    (doc, p)
+}
+
+fn newer_content(doc: &Document, compatibility: Compatibility) -> pdfcraft_optimize::Report {
+    let mut doc = doc.clone();
+    optimize(&mut doc, &Settings { compatibility, ..Settings::default() }).unwrap()
+}
+
+#[test]
+fn content_newer_than_the_chosen_level_is_reported_and_kept() {
+    let (doc, p) = page_with(&[("UserUnit", Object::Int(2))], "0 0 m 1 1 l S");
+    for compat in Compatibility::ALL {
+        let mut copy = doc.clone();
+        let report = optimize(&mut copy, &Settings { compatibility: compat, ..Settings::default() }).unwrap();
+        let listed = report.newer_content.iter().any(|r| r.construct == "/UserUnit" && r.example == Some(p));
+        let older = matches!(compat, Compatibility::Pdf1_4 | Compatibility::Pdf1_5);
+        assert_eq!(listed, older, "{compat:?}: {:?}", report.newer_content);
+        assert!(copy.get(p).as_dict().unwrap().contains(b"UserUnit"), "reported, not converted");
+    }
+}
+
+#[test]
+fn the_same_key_is_newer_in_one_dictionary_than_in_another() {
+    let with_annot = |subtype: &str| {
+        let mut a = Dict::new();
+        a.set(b"Type".to_vec(), Object::name("Annot"));
+        a.set(b"Subtype".to_vec(), Object::name(subtype));
+        a.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
+        a.set(b"CA".to_vec(), Object::Real(0.5));
+        let mut doc = Document::new_empty();
+        let a = doc.add(Object::Dict(a));
+        let p = page(&mut doc, &[], "");
+        doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(a)]))).unwrap();
+        doc
+    };
+    let ca = |doc: &Document| newer_content(doc, Compatibility::Pdf1_7).newer_content.iter().any(|r| r.construct == "/CA");
+    // Opacity is a markup annotation's since 1.4, and any other annotation's only since 2.0.
+    assert!(ca(&with_annot("Popup")));
+    assert!(!ca(&with_annot("Square")));
+}
+
+#[test]
+fn constructs_only_a_content_stream_shows_are_reported() {
+    let plain = page_with(&[], "q 1 0 0 1 0 0 cm Q").0;
+    let marked = page_with(&[], "/OC /MC0 BDC 0 0 m 1 1 l S EMC").0;
+    let inline = page_with(&[], "BI /W 1 /H 1 /CS /G /BPC 8 /L 1 ID A EI").0;
+    let found = |doc: &Document| newer_content(doc, Compatibility::Pdf1_4).newer_content;
+    assert!(found(&plain).is_empty(), "{:?}", found(&plain));
+    assert!(found(&marked).iter().any(|r| r.version == "1.5"), "{:?}", found(&marked));
+    assert!(found(&inline).iter().any(|r| r.version == "2.0"), "{:?}", found(&inline));
+}
+
+#[test]
+fn a_content_stream_that_cannot_be_read_is_counted_as_unread() {
+    let (mut doc, p) = page_with(&[], "");
+    let c = doc.get(p).as_dict().and_then(|d| d.reference(b"Contents")).unwrap();
+    let mut d = Dict::new();
+    d.set(b"Filter".to_vec(), Object::name("NoSuchDecode"));
+    doc.set(c, Object::Stream(Stream::from_raw(d, b"/OC /MC0 BDC EMC".to_vec())));
+    assert!(
+        newer_content(&doc, Compatibility::Pdf1_4).newer_content_unread
+            > newer_content(&page_with(&[], "").0, Compatibility::Pdf1_4).newer_content_unread
+    );
+}
+
+#[test]
+fn the_encryption_dictionary_is_left_to_the_encryption_check() {
+    let mut doc = page_with(&[], "").0;
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "u",
+        owner_password: "o",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [1; 32],
+    })
+    .unwrap();
+    // The encryption check accepts AES-256 at 1.7; this check names nothing in its dictionary.
+    let report = newer_content(&doc, Compatibility::Pdf1_7);
+    assert!(report.newer_content.is_empty(), "{:?}", report.newer_content);
+}

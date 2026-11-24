@@ -535,6 +535,13 @@ impl Automation {
             "external_links": o.external_links,
             "external_bookmarks": o.external_bookmarks,
             "unused_xobjects": o.unused_xobjects,
+            "newer_content": o.newer_content.iter().map(|r| json!({
+                "version": r.version,
+                "construct": r.construct,
+                "objects": r.objects,
+                "example": r.example.map(|e| e.to_string()),
+            })).collect::<Vec<_>>(),
+            "newer_content_unread": o.newer_content_unread,
             "merged_objects": r.merged,
             "discarded": r.discarded.iter().map(|(h, n)| json!({ "category": h.id(), "count": n })).collect::<Vec<_>>(),
         });
