@@ -56,9 +56,11 @@ mod startup;
 #[path = "windows_manifest.rs"]
 mod windows_manifest;
 
-/// Freedesktop app id: the `.desktop` file name and the hicolor icon name of a stable build. A
-/// Nightly build's window, package and Wayland ids are `pdfcraft_ui_egui::os_window`'s (it is a
-/// separate app beside the stable one, so it has two of them).
+/// Freedesktop app id of a stable build: the `.desktop` file name and the hicolor icon name. The
+/// runtime window id comes from `pdfcraft_ui_egui::os_window` (a Nightly build is a separate app
+/// beside the stable one, so it has two ids); this constant names the entry the Linux and packaging
+/// files install, and `xtask` checks it against them.
+#[allow(dead_code)]
 const APP_ID: &str = "ai.storyteller.pdfcraft";
 
 /// The app icon (assets/app-icon/README.md). macOS gets the version on Apple's icon grid, with a

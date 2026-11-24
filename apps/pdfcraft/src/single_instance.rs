@@ -188,8 +188,8 @@ fn socket_path(nightly_root: Option<&std::path::Path>) -> Option<std::path::Path
         Some(ch) if matches!(ch.as_bytes(), b"nightly-v1") => format!("nightly-v1-{name}"),
         _ => name,
     };
-    // A Nightly launch keeps its socket in its own profile (profile_root::instance_dir), so it
-    // never writes into the stable data folder or hands files to a stable window.
+    // A Nightly launch keeps its socket in its own profile (`profile_root`'s `Instance` folder), so
+    // it never writes into the stable data folder or hands files to a stable window.
     if let Some(root) = nightly_root {
         return Some(root.join("Instance").join(name));
     }
@@ -206,9 +206,9 @@ fn socket_path(nightly_root: Option<&std::path::Path>) -> Option<std::path::Path
         Some(ch) if matches!(ch.as_bytes(), b"nightly-v1") => format!("nightly-v1-{name}"),
         _ => name,
     };
-    // A Nightly launch keeps its socket in its own profile (profile_root::instance_dir). A root
-    // whose socket path is too long for a socket address makes `bind` fail, and the launch opens
-    // its own window instead (`claim_at`).
+    // A Nightly launch keeps its socket in its own profile (`profile_root`'s `Instance` folder). A
+    // root whose socket path is too long for a socket address makes `bind` fail, and the launch
+    // opens its own window instead (`claim_at`).
     if let Some(root) = nightly_root {
         return Some(root.join("Instance").join(name));
     }

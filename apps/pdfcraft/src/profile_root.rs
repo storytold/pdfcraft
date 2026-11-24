@@ -175,12 +175,6 @@ fn entries_stay_inside(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// The profile's own `Instance` folder, where a nightly build keeps its single-instance socket so
-/// two nightly launches hand files to each other and never to the stable window.
-pub fn instance_dir(root: &Path) -> Result<PathBuf, String> {
-    private_subdirectory(root, "Instance", "instance folder")
-}
-
 /// Recognise the shared portable data namespace in both the supplied and resolved path.
 /// This is not an inventory of arbitrary custom Stable overrides or a Launcher ownership proof.
 fn is_portable_layout(path: &Path, platform: Platform) -> bool {

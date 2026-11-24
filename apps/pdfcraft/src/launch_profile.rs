@@ -113,7 +113,7 @@ pub fn parse_startup(args: Vec<OsString>, config_dir: Option<OsString>) -> Resul
         let text = arg.to_string_lossy();
         text.starts_with("--launch-profile") || text.starts_with("--profile-root")
     };
-    if args.iter().any(protocol) {
+    if args.iter().take_while(|arg| *arg != "--").any(protocol) {
         return parse(args);
     }
     let Some(root) = config_dir.filter(|v| !v.is_empty()) else { return parse(args) };
@@ -226,6 +226,9 @@ mod tests {
         assert_eq!(parse_startup(args(&[]), Some("".into())).unwrap().profile, Profile::Stable);
         assert!(parse_startup(args(&[]), Some("relative/pdfcraft".into())).is_err());
         assert!(parse_startup(args(&[]), Some("../escape".into())).is_err());
+        // A file named like one of the protocol's own arguments, after `--`, is just a file.
+        let launch = parse_startup(args(&["--", "--launch-profile", "a.pdf"]), Some(absolute().into())).unwrap();
+        assert_eq!(launch.args, args(&["--", "--launch-profile", "a.pdf"]));
         // The strict protocol still applies when the pair is given.
         assert!(parse_startup(nightly(), None).unwrap().profile.is_nightly());
         assert!(parse_startup(args(&["--launch-profile", VERSION]), Some(absolute().into())).is_err());

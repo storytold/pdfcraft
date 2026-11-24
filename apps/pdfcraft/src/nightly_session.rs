@@ -131,6 +131,8 @@ impl Session {
         Ok(Some(Self { _lease: lease, path, own_record, previous_unclean }))
     }
 
+    /// Whether an earlier session left its record behind: the caller shows the notice for it.
+    #[cfg(test)]
     pub fn previous_unclean(&self) -> bool {
         self.previous_unclean
     }

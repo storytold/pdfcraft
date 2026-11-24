@@ -33,6 +33,14 @@ impl Arguments {
         let mut args = args.into_iter();
         while let Some(a) = args.next() {
             match a.as_str() {
+                // Everything after `--` is a file, as the Launcher's launch protocol asks: a name
+                // that looks like an option there (`--version`, `-h`) opens, and never runs.
+                "--" => {
+                    for file in args.by_ref() {
+                        parsed.files.push(craft::platform::default_app::path_from_arg(file));
+                    }
+                    break;
+                }
                 "--version" => {
                     parsed.version = true;
                     break;
@@ -173,6 +181,19 @@ mod tests {
         assert!(!parsed.may_hand_off());
         let version = parse(&["--two-paged", "--version", "ignored.pdf"]);
         assert!(version.version && version.files.is_empty());
+    }
+
+    #[test]
+    fn everything_after_the_delimiter_is_a_file() {
+        // The Launcher's protocol puts every file after `--`; a name there is never an option or a
+        // version query, and no option swallows it as a value.
+        let args = parse(&["--", "--version", "-h", "--layout", "a.pdf"]);
+        assert!(!args.version && !args.help);
+        assert_eq!(args.files, ["--version", "-h", "--layout", "a.pdf"]);
+        assert!(args.options.is_empty());
+        // Without the delimiter the flags keep their meaning.
+        let args = parse(&["--version"]);
+        assert!(args.version);
     }
 
     #[test]
