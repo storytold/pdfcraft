@@ -37,6 +37,9 @@ pub struct Document {
     /// Interactive form fields of the current state (empty without a form).
     pub form: Arc<Vec<pdfcraft_forms::Field>>,
     pub(crate) marker_scan: OnceLock<pdfcraft_edit::MarkerScan>,
+    /// The SyncTeX file last read for this document ([`Document::synctex_inverse`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) synctex: crate::synctex::Cache,
     pub(crate) links: OnceLock<Vec<pdfcraft_annot::links::LinkItem>>,
     /// Signature fields, validated against the session's trust store (Signatures panel).
     pub signatures: Arc<Vec<SignatureInfo>>,

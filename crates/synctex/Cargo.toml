@@ -1,0 +1,13 @@
+[package]
+name = "pdfcraft-synctex"
+description = "SyncTeX (LaTeX source and PDF position) file parser and lookups"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+flate2 = { workspace = true }
+thiserror = { workspace = true }
