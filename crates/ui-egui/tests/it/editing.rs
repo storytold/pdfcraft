@@ -7953,22 +7953,24 @@ fn a_short_drag_from_a_picture_grip_resizes_it() {
 }
 
 /// With Add text holding text that can't be drawn, a drag from a paragraph moves nothing: the draft
-/// stays where it is being typed (#125), as a click there leaves it.
+/// stays where it is being typed (#125), as a click there leaves it. The emoji is drawn as a tofu
+/// box on purpose: Japanese is drawable where the build has a craft-fonts `Jpan` face (#3707), and
+/// a harness that panics on a missing glyph would only pass on a machine with an emoji font.
 #[test]
 fn add_text_moves_no_paragraph_while_it_holds_a_draft_it_cant_draw() {
     if crate::support::skip_without_glyphs("add_text_moves_no_paragraph_while_it_holds_a_draft_it_cant_draw", "en", "Hello 世界") {
         return;
     }
-    let mut h = edit_page(pdfcraft_ui_egui::QuickTool::AddText);
+    let mut h = edit_page_allowing_missing_glyphs(pdfcraft_ui_egui::QuickTool::AddText);
     assert!(h.execute("edit.text"));
     h.run_steps(3);
     let id = h.state().views[0].id;
     let block = h.state().session.get(id).unwrap().text_blocks(0)[0].clone();
     let blank = point_on(&h, block.rect[0], block.rect[3] + 12.0);
     slipping_click(&mut h, blank, blank);
-    h.event(egui::Event::Text("Hello 世界".into()));
+    h.event(egui::Event::Text("Hello 🙂".into()));
     h.run_steps(2);
-    assert_eq!(h.state().views[0].session.content.draft.as_ref().map(|d| d.text.as_str()), Some("Hello 世界"), "the draft holds the text");
+    assert_eq!(h.state().views[0].session.content.draft.as_ref().map(|d| d.text.as_str()), Some("Hello 🙂"), "the draft holds the text");
     let rect = h.state().views[0].session.content.draft.as_ref().map(|d| d.rect).unwrap();
     let on_text = point_on(&h, (block.rect[0] + block.rect[2]) / 2.0, (block.rect[1] + block.rect[3]) / 2.0);
     h.hover_at(on_text);
@@ -7983,7 +7985,7 @@ fn add_text_moves_no_paragraph_while_it_holds_a_draft_it_cant_draw() {
     h.run_steps(3);
     assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].rect, block.rect, "the paragraph stays");
     let draft = h.state().views[0].session.content.draft.as_ref().map(|d| (d.text.clone(), d.rect));
-    assert_eq!(draft, Some(("Hello 世界".to_string(), rect)), "and the draft stays where it is typed");
+    assert_eq!(draft, Some(("Hello 🙂".to_string(), rect)), "and the draft stays where it is typed");
 }
 
 /// With Edit text, a right-click on a comment over a picture opens the comment's menu, and the
@@ -8414,6 +8416,25 @@ fn slipping_click(h: &mut Harness<'static, PdfCraftApp>, press: egui::Pos2, rele
 /// [`harness`]'s page 1 in Edit text (`tool`), and the screen point at PDF (x, y) on it.
 fn edit_page(tool: pdfcraft_ui_egui::QuickTool) -> Harness<'static, PdfCraftApp> {
     let mut h = harness(2, |_| {});
+    h.state_mut().quick_tool = tool;
+    h.run_steps(3);
+    h
+}
+
+/// [`edit_page`] for a test that types text no font in the build can draw on purpose: egui_kittest
+/// panics on a missing glyph by default, which would make such a draft depend on whether the
+/// machine happens to have a face for it.
+fn edit_page_allowing_missing_glyphs(tool: pdfcraft_ui_egui::QuickTool) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).allow_missing_glyphs().build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = scripted_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture(2)).expect("fixture opens");
+            app
+        }
+    });
+    h.run_steps(4);
     h.state_mut().quick_tool = tool;
     h.run_steps(3);
     h
