@@ -1326,7 +1326,7 @@ impl StampLang {
     /// The faces a label (`bold`) or a "By" line in this language is drawn with when the
     /// standard fonts can't: the bundled Inter for Latin, Greek and Cyrillic, craft-fonts for the
     /// other scripts (see [`pdfcraft_fonts::line_faces`]).
-    pub fn faces(self, bold: bool) -> Vec<&'static pdfcraft_fonts::CraftFont> {
+    pub fn faces(self, bold: bool) -> Vec<&'static pdfcraft_fonts::EmbeddedFace> {
         pdfcraft_fonts::line_faces(self.script(), bold)
     }
 

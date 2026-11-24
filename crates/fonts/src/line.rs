@@ -13,7 +13,7 @@ use skrifa::{FontRef, GlyphId, MetadataProvider};
 use unicode_bidi::BidiInfo;
 
 use crate::script::Flatten;
-use crate::{CRAFT_FONTS, CraftFont, GlyphError, ScriptOutline};
+use crate::{CRAFT_FONTS, EmbeddedFace, GlyphError, ScriptOutline};
 
 /// Characters of one line drawn at most: a label or a "By …" line, not a paragraph.
 pub const MAX_LINE_CHARS: usize = 256;
@@ -28,9 +28,9 @@ const MAX_LINE_POINTS: usize = 262_144;
 /// Greek and Cyrillic, in every build), then every other craft-fonts face, so a name in another
 /// script on the line still finds a face. Faces the script needs may be missing: check
 /// [`line_missing`].
-pub fn line_faces(script: &str, bold: bool) -> Vec<&'static CraftFont> {
-    let made_for = |f: &CraftFont, s: &str| f.covers(s) || (s == "Kore" && f.covers("Hang"));
-    let mut own: Vec<&'static CraftFont> = if script == "Jpan" {
+pub fn line_faces(script: &str, bold: bool) -> Vec<&'static EmbeddedFace> {
+    let made_for = |f: &EmbeddedFace, s: &str| f.has_script(s) || (s == "Kore" && f.has_script("Hang"));
+    let mut own: Vec<&'static EmbeddedFace> = if script == "Jpan" {
         crate::document_japanese_fonts_for_style(false, bold)
     } else {
         CRAFT_FONTS.iter().filter(|f| made_for(f, script)).collect()
@@ -39,15 +39,15 @@ pub fn line_faces(script: &str, bold: bool) -> Vec<&'static CraftFont> {
     own.sort_by_key(|f| f.style.contains("Bold") != bold);
     let han = ["Hans", "Hant", "Jpan", "Kore"];
     // The Japanese Gothic faces first (stamps and labels are sans), then the other Han faces.
-    let others_with_han: Vec<&'static CraftFont> = if han.contains(&script) {
+    let others_with_han: Vec<&'static EmbeddedFace> = if han.contains(&script) {
         crate::document_japanese_fonts_for_style(false, bold)
             .into_iter()
-            .chain(CRAFT_FONTS.iter().filter(|f| han.iter().any(|s| f.covers(s))))
+            .chain(CRAFT_FONTS.iter().filter(|f| han.iter().any(|s| f.has_script(s))))
             .collect()
     } else {
         Vec::new()
     };
-    let mut out: Vec<&'static CraftFont> = Vec::new();
+    let mut out: Vec<&'static EmbeddedFace> = Vec::new();
     for face in own.into_iter().chain(others_with_han).chain(crate::document_latin_fonts(bold)).chain(CRAFT_FONTS.iter()) {
         if !out.iter().any(|f| std::ptr::eq(*f, face)) {
             out.push(face);
@@ -58,7 +58,7 @@ pub fn line_faces(script: &str, bold: bool) -> Vec<&'static CraftFont> {
 
 /// The first character of `text` (other than white space and control characters) that none of
 /// `faces` has a glyph for, so [`line_outline`] would fail. `None` when they cover all of it.
-pub fn line_missing(text: &str, faces: &[&CraftFont]) -> Option<char> {
+pub fn line_missing(text: &str, faces: &[&EmbeddedFace]) -> Option<char> {
     let fonts: Vec<FontRef> = faces.iter().filter_map(|f| FontRef::new(f.bytes).ok()).collect();
     text.chars().find(|c| !c.is_whitespace() && !c.is_control() && !fonts.iter().any(|f| has(f, *c)))
 }
@@ -73,7 +73,7 @@ fn has(font: &FontRef, c: char) -> bool {
 /// drawn as spaces. [`GlyphError::Missing`] when no face has a character (see [`line_missing`]),
 /// [`GlyphError::TooComplex`] past [`MAX_LINE_CHARS`] or the outline budget, [`GlyphError::NoFont`]
 /// without faces.
-pub fn line_outline(text: &str, faces: &[&CraftFont], lang: &str) -> Result<ScriptOutline, GlyphError> {
+pub fn line_outline(text: &str, faces: &[&EmbeddedFace], lang: &str) -> Result<ScriptOutline, GlyphError> {
     if text.chars().take(MAX_LINE_CHARS + 1).count() > MAX_LINE_CHARS {
         return Err(GlyphError::TooComplex);
     }
@@ -181,7 +181,7 @@ fn draw_piece(pen: &mut Flatten, font: &FontRef, piece: &str, rtl: bool, languag
 mod tests {
     use super::*;
 
-    fn latin() -> Vec<&'static CraftFont> {
+    fn latin() -> Vec<&'static EmbeddedFace> {
         crate::document_latin_fonts(true)
     }
 
@@ -230,7 +230,7 @@ mod tests {
             let distinct = faces.iter().enumerate().all(|(i, f)| faces.iter().skip(i + 1).all(|g| !std::ptr::eq(*f, *g)));
             assert!(distinct, "{script}: each face once");
         }
-        if CRAFT_FONTS.iter().all(|f| !f.covers("Cyrl")) {
+        if CRAFT_FONTS.iter().all(|f| !f.has_script("Cyrl")) {
             assert_eq!(line_faces("Cyrl", true).first().map(|f| f.style), Some("SemiBold"), "bold Inter first");
             assert_eq!(line_faces("Cyrl", false).first().map(|f| f.style), Some("Regular"));
         }
