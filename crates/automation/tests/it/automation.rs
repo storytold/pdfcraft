@@ -567,7 +567,7 @@ fn autotag_apply_tags_links_with_their_text() {
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /FR 5 0 R >> >> /Annots [6 0 R] >>".into(),
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
-        "<< /Type /Annot /Subtype /Link /Rect [215 696 300 712] /Border [0 0 0] /A << /S /URI /URI (https://example.org/course) >> >>".into(),
+        "<< /Type /Annot /Subtype /Link /Rect [203 696 260 712] /Border [0 0 0] /A << /S /URI /URI (https://example.org/course) >> >>".into(),
     ];
     let mut bytes = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
@@ -589,6 +589,10 @@ fn autotag_apply_tags_links_with_their_text() {
     let applied = ok(&mut a, "accessibility_autotag_apply", json!({ "doc": doc }));
     let types: Vec<&str> = applied["tags"].as_array().unwrap().iter().map(|t| t["type"].as_str().unwrap()).collect();
     assert_eq!(types, ["Document", "P", "Link"]);
+    let link = &applied["tags"][2];
+    let owned = ok(&mut a, "accessibility_tag_content", json!({ "doc": doc, "object": link["object"], "generation": link["generation"] }));
+    let owned: Vec<&str> = owned["content"].as_array().unwrap().iter().map(|c| c["text"].as_str().unwrap()).collect();
+    assert_eq!(owned, ["course site."]);
     let rules = ["tagged-content", "tagged-annotations", "tab-order"];
     let check = ok(&mut a, "accessibility_check", json!({ "doc": doc, "rules": rules }));
     assert_eq!(check["passed"], 3, "{check}");

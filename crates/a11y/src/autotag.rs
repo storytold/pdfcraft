@@ -108,10 +108,11 @@ fn page_xobjects(doc: &Document, page: &Dict) -> Dict {
         .unwrap_or_default()
 }
 
-fn page_fonts(doc: &Document, page: &Dict) -> Dict {
+/// The page's resource dictionary of kind `kind` (`/Font`, `/ExtGState`), or an empty one.
+fn page_resources(doc: &Document, page: &Dict, kind: &[u8]) -> Dict {
     page.get(b"Resources")
         .map(|r| doc.resolve(r))
-        .and_then(|r| r.as_dict().and_then(|r| r.get(b"Font").map(|x| doc.resolve(x))))
+        .and_then(|r| r.as_dict().and_then(|r| r.get(kind).map(|x| doc.resolve(x))))
         .and_then(|x| x.as_dict().cloned())
         .unwrap_or_default()
 }
@@ -220,9 +221,10 @@ fn plan_page(
     if parsed.skipped > 0 || parsed.ambiguous_images > 0 || parsed.ops.len() > MAX_OPERATORS {
         return Err(unsupported(index, "content has malformed or too many operators"));
     }
-    let resources = page_fonts(doc, &page.dict);
-    // Splitting text at a link's edge adds operators: the limits count the content as it is written.
-    let placed = autotag_links::place(doc, fonts, &resources, parsed.ops, &links, allowance)
+    let (resources, states) = (page_resources(doc, &page.dict, b"Font"), page_resources(doc, &page.dict, b"ExtGState"));
+    fonts.new_page();
+    // Splitting text at a link's edge adds operators, so the operator limits count the split content.
+    let placed = autotag_links::place(doc, fonts, &resources, &states, parsed.ops, &links, allowance)
         .ok_or_else(|| unsupported(index, "the document has too much text under too many links to place"))?;
     if placed.ops.len() > MAX_OPERATORS {
         return Err(unsupported(index, "splitting text at link edges takes too many operators"));
@@ -277,7 +279,7 @@ fn plan_page(
     if path.is_some() {
         return Err(unsupported(index, "unterminated path object"));
     }
-    let evidence = autotag_roles::evidence(doc, fonts, &resources, &ops, &spans);
+    let evidence = autotag_roles::evidence(doc, fonts, &resources, &states, &ops, &spans);
     Ok(Plan { page: page.obj, ops, spans, evidence, artifacts, links, owners: placed.owners, descriptions: placed.descriptions })
 }
 
@@ -395,6 +397,11 @@ pub fn autotag_text(doc: &mut Document) -> Result<AutoTagResult, AutoTagError> {
         // Each link's element once its text is found, the element it sits in, and its MCIDs.
         let mut link_elements: Vec<Option<(ObjRef, ObjRef)>> = vec![None; page.links.len()];
         let mut link_kids: Vec<Vec<Object>> = vec![Vec::new(); page.links.len()];
+        // The link the page's last marked-content sequence went to. A link's text joins its element
+        // only while nothing else has come between, so the tree reads in the order the page shows
+        // its text; text of a link after an interruption (another link inside it, or the rest of
+        // a line) is its text object's own.
+        let mut previous: Option<usize> = None;
         if !page.spans.is_empty() {
             let key = i64::try_from(tagged_pages).map_err(|_| AutoTagError::TooManyPages)?;
             let mut parents = Vec::with_capacity(page.spans.len());
@@ -407,6 +414,8 @@ pub fn autotag_text(doc: &mut Document) -> Result<AutoTagResult, AutoTagError> {
                 for (first, last, owner) in autotag_links::sequences(span, &page.owners) {
                     let mcid = parents.len();
                     let id = Object::Int(i64::try_from(mcid).map_err(|_| AutoTagError::TooManyPages)?);
+                    let owner = owner.filter(|&l| link_elements.get(l).is_some_and(|e| e.is_none() || previous == Some(l)));
+                    previous = owner;
                     let slot = owner.and_then(|l| link_elements.get_mut(l).zip(link_kids.get_mut(l)));
                     if let Some((element, link_mcids)) = slot {
                         // A link whose text runs on into a later text object stays in the first one.
