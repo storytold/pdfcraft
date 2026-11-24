@@ -187,8 +187,10 @@ full save leaves out the objects that only the removed entries refer to. Pages k
 ## Target PDF version: partial compatibility
 
 The target selects the header version, clears the catalog `/Version`, controls object
-streams (disabled for PDF 1.4), and checks encryption requirements. It does **not**
-detect or convert content newer than the target: optional content, JPEG 2000 images,
-16-bit images, OpenType fonts and PDF 2.0 features can remain. A PDF 1.4 header
-therefore does not guarantee compatibility with PDF 1.4 readers or validators.
-`optimize.compatibility-level` remains partial until content compatibility is checked.
+streams (disabled for PDF 1.4), and checks encryption requirements. Content newer than
+the target, such as optional content, JPEG 2000 images, 16-bit images, OpenType fonts and
+PDF 2.0 features, is detected and listed in `Report::newer_content` (and in
+`doc_optimize`'s `newer_content`), but it is **not** converted, and ICC profile versions
+are not checked. A PDF 1.4 header therefore does not guarantee compatibility with PDF 1.4
+readers or validators. `optimize.compatibility-level` remains partial until newer content
+is converted.

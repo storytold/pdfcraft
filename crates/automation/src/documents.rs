@@ -16,17 +16,20 @@ const BOOKMARK_PAGE: usize = 100;
 const MAX_BOOKMARK_PAGE: usize = 1000;
 
 /// The newer-content check of an optimized copy, read back from its `bytes`; nothing when the
-/// version is retained.
+/// version is retained. The listing is report-only: when the copy can't be reopened it is empty,
+/// and the optimized file is still written.
 fn newer_content_of(
     bytes: &Arc<Vec<u8>>,
     password: Option<&str>,
     compatibility: pdfcraft_engine::optimize::Compatibility,
-) -> Result<(Vec<pdfcraft_engine::optimize::Requirement>, usize)> {
+) -> (Vec<pdfcraft_engine::optimize::NewerContent>, usize) {
     if compatibility.version().is_none() {
-        return Ok((Vec::new(), 0));
+        return (Vec::new(), 0);
     }
-    let kept = pdfcraft_cos::Document::open_with_password(bytes.clone(), password).map_err(|e| ToolError::Failed(e.to_string()))?;
-    Ok(pdfcraft_engine::optimize::newer_content(&kept, compatibility))
+    match pdfcraft_cos::Document::open_with_password(bytes.clone(), password) {
+        Ok(kept) => pdfcraft_engine::optimize::newer_content(&kept, compatibility),
+        Err(_) => (Vec::new(), 0),
+    }
 }
 
 impl Automation {
@@ -494,7 +497,7 @@ impl Automation {
         }
         if target.is_some() {
             let pw = self.doc(a).ok().and_then(|d| d.password.as_deref());
-            (r.optimize.newer_content, r.optimize.newer_content_unread) = newer_content_of(&bytes, pw, settings.compatibility)?;
+            (r.optimize.newer_content, r.optimize.newer_content_unread) = newer_content_of(&bytes, pw, settings.compatibility);
         }
         write_atomic(&path, &bytes)?;
         fn valid_version(v: &[u8]) -> Option<&str> {

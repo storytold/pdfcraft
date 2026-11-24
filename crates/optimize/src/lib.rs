@@ -54,7 +54,7 @@ use pdfcraft_cos::{Dict, Document, ImageBudget, MAX_PAGE_DECODED, ObjRef, Object
 use pdfcraft_filters::{Filter, Params};
 
 pub use images::{ImageTarget, effective_resolutions, recolour_image};
-pub use newer_content::Requirement;
+pub use newer_content::NewerContent;
 pub use pool::give_way_to_other_programs;
 pub use samples::{NotDecoded, Samples, decode_samples, encode_samples};
 pub use tiles::{DOWNSAMPLED_ABOVE, TileReport, tile_large_images};
@@ -361,7 +361,7 @@ pub struct Report {
     pub unused_xobjects: usize,
     /// Constructs in the copy newer than the chosen compatibility level, left as they are,
     /// highest version first; empty when the version is retained.
-    pub newer_content: Vec<Requirement>,
+    pub newer_content: Vec<NewerContent>,
     /// Content streams and font programs the check for newer content could not read, so it may
     /// have missed constructs in them.
     pub newer_content_unread: usize,
@@ -534,7 +534,7 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
 /// Constructs in `doc` newer than `compatibility`, highest version first, and the number of
 /// content streams and font programs that could not be read for them; nothing when the version
 /// is retained. The same check [`optimize`] runs on its copy.
-pub fn newer_content(doc: &Document, compatibility: Compatibility) -> (Vec<Requirement>, usize) {
+pub fn newer_content(doc: &Document, compatibility: Compatibility) -> (Vec<NewerContent>, usize) {
     let mut report = Report::default();
     // Never cancelled: the callback always says go on.
     let _ = fill_newer_content(doc, compatibility, &mut report, &mut |_| true);

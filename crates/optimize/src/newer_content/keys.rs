@@ -42,8 +42,9 @@ fn structure(key: &[u8]) -> Option<Rule> {
         // The encryption dictionary and its crypt filters are never scanned (the optimizer's own
         // encryption check covers them), so these keys don't count anywhere else.
         b"CF" | b"StmF" | b"StrF" | b"EncryptMetadata" | b"CFM" | b"AuthEvent" => &[(ENCRYPT, 15)],
-        b"EFF" => A16,
-        b"OE" | b"UE" | b"ExtensionRevision" => A20,
+        b"EFF" => &[(ENCRYPT, 16)],
+        b"OE" | b"UE" => &[(ENCRYPT, 20)],
+        b"ExtensionRevision" => &[(DEV_EXT, 20)],
         b"Perms" => &[(CATALOG, 15), (ENCRYPT | UNKNOWN, 20)],
         b"URL" => &[(DEV_EXT, 20)],
         _ => return None,

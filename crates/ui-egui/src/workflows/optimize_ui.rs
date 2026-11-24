@@ -793,7 +793,7 @@ mod tests {
     #[test]
     fn the_result_counts_features_newer_than_the_chosen_version() {
         let newer =
-            |construct: &str| pdfcraft_engine::optimize::Requirement { version: "2.0", construct: construct.into(), objects: 1, example: None };
+            |construct: &str| pdfcraft_engine::optimize::NewerContent { version: "2.0", construct: construct.into(), objects: 1, example: None };
         let mut r = OptimizeReport::default();
         assert!(!summary(&r).contains("newer than"), "{}", summary(&r));
         r.optimize.newer_content = vec![newer("/Path"), newer("UTF-8 text string")];

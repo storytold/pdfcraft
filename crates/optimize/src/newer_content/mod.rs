@@ -25,7 +25,7 @@ const MAX_DECODED: usize = MAX_PAGE_DECODED;
 
 /// One construct a document uses and the PDF version that introduced it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Requirement {
+pub struct NewerContent {
     /// `"1.4"` to `"2.0"`.
     pub version: &'static str,
     /// A key (`/UserUnit`), a key and value (`/Filter /JPXDecode`), or a short description
@@ -37,7 +37,7 @@ pub struct Requirement {
     pub example: Option<ObjRef>,
 }
 
-impl fmt::Display for Requirement {
+impl fmt::Display for NewerContent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "PDF {}: {} ({} object(s)", self.version, self.construct, self.objects)?;
         if let Some(r) = self.example {
@@ -50,7 +50,7 @@ impl fmt::Display for Requirement {
 /// What [`content_versions`] found.
 pub(crate) struct ContentVersions {
     /// Highest version first.
-    requirements: Vec<Requirement>,
+    requirements: Vec<NewerContent>,
     /// Content streams and font programs that could not be read, so a construct in them may be
     /// missing from `requirements`.
     pub(crate) unread: usize,
@@ -58,7 +58,7 @@ pub(crate) struct ContentVersions {
 
 impl ContentVersions {
     /// The requirements newer than `version` (`"1.4"` to `"2.0"`; any other names none).
-    pub(crate) fn newer_than(&self, version: &str) -> Vec<Requirement> {
+    pub(crate) fn newer_than(&self, version: &str) -> Vec<NewerContent> {
         let Some(chosen) = code(version) else { return Vec::new() };
         self.requirements.iter().filter(|r| code(r.version).is_some_and(|v| v > chosen)).cloned().collect()
     }
@@ -158,11 +158,11 @@ impl Tally {
         }
     }
 
-    fn into_requirements(self) -> Vec<Requirement> {
-        let mut out: Vec<Requirement> = self
+    fn into_requirements(self) -> Vec<NewerContent> {
+        let mut out: Vec<NewerContent> = self
             .0
             .into_iter()
-            .filter_map(|((v, construct), (objects, example))| Some(Requirement { version: name(v)?, construct, objects, example }))
+            .filter_map(|((v, construct), (objects, example))| Some(NewerContent { version: name(v)?, construct, objects, example }))
             .collect();
         // Highest version first; the map already orders constructs within a version.
         out.sort_by_key(|r| std::cmp::Reverse(code(r.version)));

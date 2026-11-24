@@ -5954,6 +5954,31 @@ fn a_key_counts_only_in_the_dictionary_that_defines_it() {
     assert!(in_annot.iter().any(|r| r.construct == "/Path" && r.version == "2.0"), "{in_annot:?}");
 }
 
+#[test]
+fn a_scoped_key_counts_in_the_dictionary_that_defines_it() {
+    let named = |pairs: &[(&str, Object)]| {
+        let mut d = Dict::new();
+        for (k, v) in pairs {
+            d.set(k.as_bytes().to_vec(), v.clone());
+        }
+        d
+    };
+    let (mut doc, p) = page_with(&[], "");
+    let s = doc.add(Object::Stream(Stream::from_raw(named(&[("DL", Object::Int(1))]), b"x".to_vec())));
+    let spec = |key: &str| Object::Dict(named(&[("Type", Object::name("Filespec")), ("F", Object::name("a")), (key, Object::Int(1))]));
+    let trans = named(&[("S", Object::name("Dissolve")), ("SS", Object::Real(2.0))]);
+    let pieces = named(&[("S", Object::Ref(s)), ("C", spec("CI")), ("E", spec("EP"))]);
+    doc.update_dict(p, |d| {
+        d.set(b"Trans".to_vec(), Object::Dict(trans));
+        d.set(b"PieceInfo".to_vec(), Object::Dict(pieces));
+    })
+    .unwrap();
+    let (found, _) = pdfcraft_optimize::newer_content(&doc, Compatibility::Pdf1_4);
+    for (key, version) in [("/DL", "1.5"), ("/SS", "1.5"), ("/CI", "1.7"), ("/EP", "2.0")] {
+        assert!(found.iter().any(|r| r.construct == key && r.version == version), "{key}: {found:?}");
+    }
+}
+
 /// `levels` arrays nested around one UTF-8 text string (2.0).
 fn nested_utf8(levels: usize) -> Object {
     let mut v = Object::String(pdfcraft_cos::PdfString::literal(b"\xEF\xBB\xBFx".to_vec()));
