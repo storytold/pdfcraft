@@ -3,7 +3,6 @@
 use egui::{Color32, CornerRadius, Rect, Response, Sense, Stroke, vec2};
 
 use crate::PdfCraftApp;
-use crate::theme::Tokens;
 
 /// Unique identifier for a tab group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -171,12 +170,23 @@ impl PdfCraftApp {
     }
 
     /// Close all tabs in a group.
-    pub fn close_tab_group(&mut self, group_id: TabGroupId) {
-        let member_indices: Vec<usize> = self.views.iter().enumerate().filter(|(_, v)| v.group == Some(group_id)).map(|(i, _)| i).collect();
-        for &idx in member_indices.iter().rev() {
-            self.request_close_tab(idx);
+    pub fn close_tab_group(&mut self, ctx: &egui::Context, group_id: TabGroupId) {
+        let mut dirty = Vec::new();
+        for i in (0..self.views.len()).rev() {
+            if self.views[i].group == Some(group_id) {
+                if !self.has_unsaved_work(i) {
+                    self.close_tab(i);
+                } else if let Some(v) = self.views.get(i)
+                    && !dirty.contains(&v.id)
+                {
+                    dirty.push(v.id);
+                }
+            }
         }
         self.cleanup_empty_group(group_id);
+        if !dirty.is_empty() {
+            self.begin_close(ctx, craft::quit::CloseScope::Close, dirty);
+        }
     }
 
     /// Toggle collapsed state of a group.
@@ -237,20 +247,38 @@ impl PdfCraftApp {
     }
 
     /// Close all tabs except `keep_index`.
-    pub fn close_other_tabs(&mut self, keep_index: usize) {
-        let len = self.views.len();
-        for i in (0..len).rev() {
+    pub fn close_other_tabs(&mut self, ctx: &egui::Context, keep_index: usize) {
+        let mut dirty = Vec::new();
+        for i in (0..self.views.len()).rev() {
             if i != keep_index {
-                self.request_close_tab(i);
+                if !self.has_unsaved_work(i) {
+                    self.close_tab(i);
+                } else if let Some(v) = self.views.get(i)
+                    && !dirty.contains(&v.id)
+                {
+                    dirty.push(v.id);
+                }
             }
+        }
+        if !dirty.is_empty() {
+            self.begin_close(ctx, craft::quit::CloseScope::Close, dirty);
         }
     }
 
     /// Close all tabs to the right of `from_index`.
-    pub fn close_tabs_to_right(&mut self, from_index: usize) {
-        let len = self.views.len();
-        for i in (from_index + 1..len).rev() {
-            self.request_close_tab(i);
+    pub fn close_tabs_to_right(&mut self, ctx: &egui::Context, from_index: usize) {
+        let mut dirty = Vec::new();
+        for i in (from_index + 1..self.views.len()).rev() {
+            if !self.has_unsaved_work(i) {
+                self.close_tab(i);
+            } else if let Some(v) = self.views.get(i)
+                && !dirty.contains(&v.id)
+            {
+                dirty.push(v.id);
+            }
+        }
+        if !dirty.is_empty() {
+            self.begin_close(ctx, craft::quit::CloseScope::Close, dirty);
         }
     }
 
@@ -271,15 +299,15 @@ pub fn group_pill_natural_width(ui: &egui::Ui, title: &str) -> f32 {
     if title.trim().is_empty() {
         24.0
     } else {
-        let font = crate::theme::medium(11.0);
+        let font = egui::FontId::proportional(11.0);
         let text_w = ui.fonts_mut(|f| f.layout_no_wrap(title.to_string(), font, Color32::WHITE).size().x);
         text_w + 16.0
     }
 }
 
 /// Render an Edge-styled group header pill.
-pub fn group_pill(ui: &mut egui::Ui, group: &TabGroup, _t: &Tokens, height: f32, on_edit: &mut Option<TabGroupId>) -> Response {
-    let font = crate::theme::medium(11.0);
+pub fn group_pill(ui: &mut egui::Ui, group: &TabGroup, height: f32, on_edit: &mut Option<TabGroupId>) -> Response {
+    let font = egui::FontId::proportional(11.0);
     let title = group.title.trim();
     let text_color = group.color.text_color();
     let bg_color = group.color.color32();
@@ -304,7 +332,7 @@ pub fn group_pill(ui: &mut egui::Ui, group: &TabGroup, _t: &Tokens, height: f32,
         // Draw a neat indicator dot if untitled
         ui.painter().circle_filled(pill_rect.center(), 4.0, text_color);
     } else {
-        let galley = crate::bidi::layout_ltr(ui, title.to_string(), font, text_color);
+        let galley = ui.painter().layout_no_wrap(title.to_string(), font, text_color);
         let text_pos = pill_rect.min + vec2((pill_rect.width() - galley.size().x) / 2.0, (pill_rect.height() - galley.size().y) / 2.0);
         ui.painter().galley(text_pos, galley, text_color);
     }
@@ -330,7 +358,6 @@ pub fn group_pill(ui: &mut egui::Ui, group: &TabGroup, _t: &Tokens, height: f32,
 
 /// Render the Group Edit Popup / Context Menu (Edge standard: name input, color swatches, actions).
 pub fn group_editor_popup(app: &mut PdfCraftApp, ui: &mut egui::Ui, group_id: TabGroupId, close_popup: &mut bool) {
-    let _t = Tokens::get(ui.ctx());
     let Some(group) = app.group(group_id).cloned() else {
         *close_popup = true;
         return;
@@ -339,7 +366,7 @@ pub fn group_editor_popup(app: &mut PdfCraftApp, ui: &mut egui::Ui, group_id: Ta
     ui.set_min_width(220.0);
     ui.vertical(|ui| {
         ui.add_space(4.0);
-        ui.label(egui::RichText::new(tl!("Group name")).font(crate::theme::medium(12.0)));
+        ui.label(egui::RichText::new(tl!("Group name")).font(egui::FontId::proportional(12.0)));
         let mut title_buf = app.group_title_draft.clone();
         let edit = ui.text_edit_singleline(&mut title_buf);
         if edit.changed() {
@@ -350,7 +377,7 @@ pub fn group_editor_popup(app: &mut PdfCraftApp, ui: &mut egui::Ui, group_id: Ta
         }
 
         ui.add_space(8.0);
-        ui.label(egui::RichText::new(tl!("Color")).font(crate::theme::medium(12.0)));
+        ui.label(egui::RichText::new(tl!("Color")).font(egui::FontId::proportional(12.0)));
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
             for &color in &TabGroupColor::ALL {
@@ -389,7 +416,7 @@ pub fn group_editor_popup(app: &mut PdfCraftApp, ui: &mut egui::Ui, group_id: Ta
         }
 
         if ui.button(tl!("Close group")).clicked() {
-            app.close_tab_group(group_id);
+            app.close_tab_group(ui.ctx(), group_id);
             *close_popup = true;
         }
     });
@@ -403,10 +430,11 @@ mod tests {
 
     #[test]
     fn create_and_manage_tab_groups() {
-        let mut app = PdfCraftApp::new();
-        app.open_bytes("doc1.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes("doc2.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes("doc3.pdf", None, FIXTURE.to_vec()).unwrap();
+        let mut app = PdfCraftApp::for_unit_tests();
+        let ctx = egui::Context::default();
+        app.open_bytes(&ctx, "doc1.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&ctx, "doc2.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&ctx, "doc3.pdf", None, FIXTURE.to_vec()).unwrap();
 
         assert_eq!(app.views.len(), 3);
         assert_eq!(app.tab_groups.len(), 0);
@@ -440,10 +468,11 @@ mod tests {
 
     #[test]
     fn pin_and_unpin_tabs() {
-        let mut app = PdfCraftApp::new();
-        app.open_bytes("doc1.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes("doc2.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes("doc3.pdf", None, FIXTURE.to_vec()).unwrap();
+        let mut app = PdfCraftApp::for_unit_tests();
+        let ctx = egui::Context::default();
+        app.open_bytes(&ctx, "doc1.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&ctx, "doc2.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&ctx, "doc3.pdf", None, FIXTURE.to_vec()).unwrap();
 
         app.set_tab_pinned(2, true);
         assert!(app.views[0].pinned);
@@ -455,44 +484,47 @@ mod tests {
 
     #[test]
     fn duplicate_and_close_tab_actions() {
-        let mut app = PdfCraftApp::new();
-        app.open_bytes("doc1.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes("doc2.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes("doc3.pdf", None, FIXTURE.to_vec()).unwrap();
+        let mut app = PdfCraftApp::for_unit_tests();
+        let ctx = egui::Context::default();
+        app.open_bytes(&ctx, "doc1.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&ctx, "doc2.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&ctx, "doc3.pdf", None, FIXTURE.to_vec()).unwrap();
 
         app.duplicate_tab(1);
         assert_eq!(app.views.len(), 4);
         assert_eq!(app.views[1].id, app.views[2].id);
 
-        app.close_tabs_to_right(0);
+        app.close_tabs_to_right(&ctx, 0);
         assert_eq!(app.views.len(), 1);
         assert_eq!(app.session.get(app.views[0].id).unwrap().name, "doc1.pdf");
     }
 
     #[test]
     fn close_other_tabs_action() {
-        let mut app = PdfCraftApp::new();
-        app.open_bytes("doc1.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes("doc2.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes("doc3.pdf", None, FIXTURE.to_vec()).unwrap();
+        let mut app = PdfCraftApp::for_unit_tests();
+        let ctx = egui::Context::default();
+        app.open_bytes(&ctx, "doc1.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&ctx, "doc2.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&ctx, "doc3.pdf", None, FIXTURE.to_vec()).unwrap();
 
-        app.close_other_tabs(1);
+        app.close_other_tabs(&ctx, 1);
         assert_eq!(app.views.len(), 1);
         assert_eq!(app.session.get(app.views[0].id).unwrap().name, "doc2.pdf");
     }
 
     #[test]
     fn close_tab_group_action() {
-        let mut app = PdfCraftApp::new();
-        app.open_bytes("doc1.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes("doc2.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes("doc3.pdf", None, FIXTURE.to_vec()).unwrap();
+        let mut app = PdfCraftApp::for_unit_tests();
+        let ctx = egui::Context::default();
+        app.open_bytes(&ctx, "doc1.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&ctx, "doc2.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&ctx, "doc3.pdf", None, FIXTURE.to_vec()).unwrap();
 
         let gid = app.create_tab_group("Work".into(), TabGroupColor::Green);
         app.add_tab_to_group(0, gid);
         app.add_tab_to_group(1, gid);
 
-        app.close_tab_group(gid);
+        app.close_tab_group(&ctx, gid);
         assert_eq!(app.tab_groups.len(), 0);
         assert_eq!(app.views.len(), 1);
         assert_eq!(app.session.get(app.views[0].id).unwrap().name, "doc3.pdf");
@@ -500,10 +532,11 @@ mod tests {
 
     #[test]
     fn add_pinned_tab_to_empty_group_moves_past_pinned_tabs() {
-        let mut app = PdfCraftApp::new();
-        app.open_bytes("doc1.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes("doc2.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes("doc3.pdf", None, FIXTURE.to_vec()).unwrap();
+        let mut app = PdfCraftApp::for_unit_tests();
+        let ctx = egui::Context::default();
+        app.open_bytes(&ctx, "doc1.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&ctx, "doc2.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&ctx, "doc3.pdf", None, FIXTURE.to_vec()).unwrap();
 
         // Pin doc1 and doc2
         app.set_tab_pinned(0, true);
@@ -525,9 +558,10 @@ mod tests {
 
     #[test]
     fn moving_last_member_to_another_group_cleans_up_previous_group() {
-        let mut app = PdfCraftApp::new();
-        app.open_bytes("doc1.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes("doc2.pdf", None, FIXTURE.to_vec()).unwrap();
+        let mut app = PdfCraftApp::for_unit_tests();
+        let ctx = egui::Context::default();
+        app.open_bytes(&ctx, "doc1.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&ctx, "doc2.pdf", None, FIXTURE.to_vec()).unwrap();
 
         let g1 = app.create_tab_group("G1".into(), TabGroupColor::Blue);
         let g2 = app.create_tab_group("G2".into(), TabGroupColor::Green);
@@ -544,175 +578,25 @@ mod tests {
     }
 
     #[test]
-    fn multi_dirty_bulk_close_prompts_sequentially() {
-        let mut app = PdfCraftApp::new();
-        app.open_bytes("doc1.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes("doc2.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes("doc3.pdf", None, FIXTURE.to_vec()).unwrap();
+    fn multi_dirty_bulk_close_with_close_guard() {
+        let mut app = PdfCraftApp::for_unit_tests();
+        let ctx = egui::Context::default();
+        let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
+        app.open_bytes(&ctx, "doc1.pdf", None, bytes.to_vec()).unwrap();
+        app.open_bytes(&ctx, "doc2.pdf", None, bytes.to_vec()).unwrap();
+        app.open_bytes(&ctx, "doc3.pdf", None, bytes.to_vec()).unwrap();
 
         // Mark doc2 and doc3 dirty by applying edits
         app.active = Some(1);
-        assert!(app.apply_edit(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Edit2".into() }));
+        assert!(app.apply_edit(&ctx, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
         app.active = Some(2);
-        assert!(app.apply_edit(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Edit3".into() }));
+        assert!(app.apply_edit(&ctx, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
         app.active = Some(0);
 
-        app.close_tabs_to_right(0);
+        app.close_tabs_to_right(&ctx, 0);
 
-        // The first prompt is for one of the dirty tabs
-        assert!(app.close_request.is_some());
-        assert_eq!(app.pending_close_queue.len(), 1);
-
-        // Answer "Don't Save" to first prompt
-        let ctx = egui::Context::default();
-        app.resolve_close(&ctx, Some(false));
-
-        // The second prompt opens for the other dirty tab
-        assert!(app.close_request.is_some());
-        assert_eq!(app.pending_close_queue.len(), 0);
-
-        // Answer "Don't Save" to second prompt
-        app.resolve_close(&ctx, Some(false));
-        assert!(app.close_request.is_none());
-        assert_eq!(app.views.len(), 1);
-        assert_eq!(app.session.get(app.views[0].id).unwrap().name, "doc1.pdf");
-    }
-
-    #[test]
-    fn cancel_and_discard_resets_pending_lock_and_clears_queue() {
-        let mut app = PdfCraftApp::new();
-        app.open_bytes("doc1.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes("doc2.pdf", None, FIXTURE.to_vec()).unwrap();
-        let id1 = app.views[0].id;
-        let id2 = app.views[1].id;
-
-        // Set up pending_lock and pending_close_queue
-        app.close_request = Some(crate::CloseRequest::Tab(id1));
-        app.pending_close_queue = vec![id2.into()];
-        app.pending_lock = Some(crate::editing::PendingLock { id: id1, target: crate::SaveTarget::InPlace, after: Box::new(|_| {}) });
-        app.lock_remember = true;
-
-        let ctx = egui::Context::default();
-        // Cancel the close prompt
-        app.resolve_close(&ctx, None);
-
-        assert!(app.pending_lock.is_none(), "pending_lock reset on cancel");
-        assert!(!app.lock_remember, "lock_remember reset on cancel");
-        assert!(app.pending_close_queue.is_empty(), "pending_close_queue cleared on cancel");
-    }
-
-    #[test]
-    fn queued_close_does_not_change_active_and_resolves_asking_view() {
-        let mut app = PdfCraftApp::new();
-        app.open_bytes("doc1.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes("doc2.pdf", None, FIXTURE.to_vec()).unwrap();
-        // Create twin for doc2 (index 1) so it has twin at index 2
-        app.duplicate_tab(1);
+        // Dirty tabs held by close_guard
+        assert!(app.close_guard.is_some());
         assert_eq!(app.views.len(), 3);
-        assert!(app.has_twin(1));
-        assert!(app.has_twin(2));
-
-        // Mark doc1 dirty, and give twin 1 unsaved typing
-        app.active = Some(0);
-        assert!(app.apply_edit(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Edit1".into() }));
-        app.views[1].pending_edit = Some(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Edit2".into() });
-        let twin1_key = app.views[1].view_key();
-
-        // Start close on doc1: doc1 is active and prompted
-        app.active = Some(0);
-        app.request_close_tab(0);
-        assert_eq!(app.active, Some(0));
-        assert!(app.close_request.is_some());
-
-        // Now request close on twin 1 while prompt for doc1 is already pending.
-        // It must NOT switch active away from doc1 to twin 1!
-        app.request_close_tab(1);
-        assert_eq!(app.active, Some(0), "active tab stays on doc1 while its prompt is pending");
-        assert_eq!(app.pending_close_queue.len(), 1);
-
-        // Resolve doc1 (Don't save): advances to twin 1
-        let ctx = egui::Context::default();
-        app.resolve_close(&ctx, Some(false));
-
-        // Now prompt is for doc2, and since twin 1 was asking and has a twin,
-        // it activated twin 1 and recorded its view key
-        assert_eq!(app.active, Some(0), "twin 1 is now at index 0 and active");
-        assert_eq!(app.asking_view_key, Some(twin1_key));
-
-        // Resolve twin 1 (Don't save): closes twin 1 specifically
-        app.resolve_close(&ctx, Some(false));
-        assert_eq!(app.views.len(), 1);
-        assert_ne!(app.views[0].view_key(), twin1_key, "twin 1 was closed; twin 2 remains open");
-    }
-
-    #[test]
-    fn queued_close_retains_view_key_and_resolves_or_falls_back() {
-        let mut app = PdfCraftApp::new();
-        app.open_bytes("doc1.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes("doc2.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.duplicate_tab(1);
-        assert_eq!(app.views.len(), 3);
-
-        app.active = Some(0);
-        assert!(app.apply_edit(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Edit1".into() }));
-        app.views[1].pending_edit = Some(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Edit2".into() });
-        app.views[2].pending_edit = Some(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Edit3".into() });
-
-        let twin1_key = app.views[1].view_key();
-        let twin2_key = app.views[2].view_key();
-        let doc2_id = app.views[1].id;
-
-        // Prompt doc1
-        app.active = Some(0);
-        app.request_close_tab(0);
-        assert!(app.close_request.is_some());
-
-        // Queue twin 1
-        app.request_close_tab(1);
-        assert_eq!(app.pending_close_queue.len(), 1);
-        assert_eq!(app.pending_close_queue[0], crate::QueuedClose { id: doc2_id, view_key: Some(twin1_key) });
-
-        // Duplicate request for twin 1 is ignored
-        app.request_close_tab(1);
-        assert_eq!(app.pending_close_queue.len(), 1);
-
-        // Queue twin 2 (different view_key for same doc) is retained
-        app.request_close_tab(2);
-        assert_eq!(app.pending_close_queue.len(), 2);
-        assert_eq!(app.pending_close_queue[1], crate::QueuedClose { id: doc2_id, view_key: Some(twin2_key) });
-
-        // Resolve doc1 -> drains to twin 1
-        let ctx = egui::Context::default();
-        app.resolve_close(&ctx, Some(false));
-        assert_eq!(app.asking_view_key, Some(twin1_key));
-        assert_eq!(app.pending_close_queue.len(), 1);
-
-        // Resolve twin 1 -> drains to twin 2
-        app.resolve_close(&ctx, Some(false));
-        assert_eq!(app.asking_view_key, Some(twin2_key));
-        assert_eq!(app.pending_close_queue.len(), 0);
-
-        // Resolve twin 2 -> closes twin 2
-        app.resolve_close(&ctx, Some(false));
-        assert_eq!(app.views.len(), 0);
-
-        // Also test fallback when view key does not resolve or document ID mismatches
-        app.open_bytes("doc3.pdf", None, FIXTURE.to_vec()).unwrap();
-        let doc3_id = app.views[0].id;
-        let doc3_key = app.views[0].view_key();
-        app.views[0].pending_edit = Some(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Edit3".into() });
-
-        app.open_bytes("doc4.pdf", None, FIXTURE.to_vec()).unwrap();
-        let doc4_id = app.views[1].id;
-
-        // Queue an entry for doc3 with nonexistent view key (999999)
-        app.pending_close_queue = vec![crate::QueuedClose { id: doc3_id, view_key: Some(999999) }];
-        // Closing clean doc4 triggers draining the queue
-        app.close_and_continue(&ctx, 1, crate::CloseRequest::Tab(doc4_id));
-
-        // doc4 closed; queue drained; 999999 could not be resolved, so it fell back to asking_tab(doc3_id)
-        assert_eq!(app.views.len(), 1);
-        assert_eq!(app.asking_view_key, Some(doc3_key));
-        assert_eq!(app.close_request, Some(crate::CloseRequest::Tab(doc3_id)));
     }
 }
