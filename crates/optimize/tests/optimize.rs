@@ -4118,13 +4118,14 @@ fn measured_resolutions_says_whether_every_form_was_read() {
     assert!(res.ppi.is_empty());
     assert!(effective_resolutions(&damaged, &[p]).is_empty());
 
-    // With a direct image also drawn on the same page, `effective_resolutions` still marks it
-    // `INFINITY` so Reduce File Size will not resample it.
+    // With a direct image also drawn on the same page, `measured_resolutions` keeps the ppi it
+    // measured, while `effective_resolutions` marks it `INFINITY` so Reduce File Size will not
+    // resample it.
     let direct = image(&mut damaged, 720, 720, 1, false, None);
     let p_both = page(&mut damaged, &[("Im", direct), ("Fm", bad_fm)], "q 72 0 0 72 0 0 cm /Im Do Q /Fm Do");
     let res = measured_resolutions(&damaged, &[p_both]);
     assert!(!res.complete);
-    assert_eq!(res.ppi.get(&direct).copied(), Some(f64::INFINITY));
+    assert_eq!(res.ppi.get(&direct).copied(), Some(720.0));
     assert_eq!(effective_resolutions(&damaged, &[p_both]).get(&direct).copied(), Some(f64::INFINITY));
 }
 

@@ -551,6 +551,31 @@ mod tests {
     }
 
     #[test]
+    fn a_low_resolution_image_in_a_readable_form_is_still_flagged_beside_an_unreadable_form() {
+        let mut doc = Document::new_empty();
+        let low = image(&mut doc, 50, 50);
+        let readable = form_with_image(&mut doc, low, b"q 72 0 0 72 0 0 cm /Im Do Q".to_vec(), false);
+        let hidden = image(&mut doc, 100, 100);
+        let unreadable = form_with_image(&mut doc, hidden, b"not valid zlib".to_vec(), true);
+        let p = page(&mut doc, "Fm", readable, "/Fm Do /Bad Do");
+        doc.update_dict(p, |d| {
+            if let Some(Object::Dict(res)) = d.get_mut(b"Resources")
+                && let Some(Object::Dict(x)) = res.get_mut(b"XObject")
+            {
+                x.set(b"Bad".to_vec(), Object::Ref(unreadable));
+            }
+        })
+        .unwrap();
+
+        let report = inspect(&doc);
+        assert_eq!(report.images.len(), 1, "{:?}", report.images);
+        assert!((report.images[0].ppi - 50.0).abs() < 0.5, "{}", report.images[0].ppi);
+        assert!(report.findings.iter().any(|f| f.id == "image-ppi"), "{:?}", report.findings);
+        assert_eq!(report.resolution_unknown, 1, "{report:?}");
+        assert!(report.findings.iter().any(|f| f.id == "image-ppi-unknown"), "{:?}", report.findings);
+    }
+
+    #[test]
     fn an_image_in_a_form_that_decodes_is_measured_and_nothing_is_unknown() {
         let mut doc = Document::new_empty();
         let img = image(&mut doc, 600, 600);

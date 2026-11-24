@@ -258,8 +258,8 @@ fn remaps_device_spaces(doc: &Document, resources: &Dict) -> bool {
 /// What [`measured_resolutions`] found for a set of pages.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Resolutions {
-    /// Each drawn image's smallest effective resolution (ppi), or `INFINITY` when `complete` is
-    /// `false`.
+    /// Each drawn image's smallest effective resolution (ppi) over the uses the walk read. When
+    /// `complete` is `false`, a use in the content that wasn't read may be smaller.
     pub ppi: HashMap<ObjRef, f64>,
     /// `true` when every page and form XObject was read in full; `false` when a stream failed to
     /// decode or was damaged, the decode budget ran out, or form nesting or rewalks reached their
@@ -273,14 +273,16 @@ pub struct Resolutions {
 /// decode within its budget or is damaged partway, every image is given `INFINITY` (never
 /// resampled), since its largest use may be among those missed.
 pub fn effective_resolutions(doc: &Document, pages: &[ObjRef]) -> HashMap<ObjRef, f64> {
-    measured_resolutions(doc, pages).ppi
+    let Ok(walked) = walk_pages(doc, pages, &mut |_| true) else { return HashMap::new() };
+    walked.assume_missed_uses().ppi
 }
 
 /// Like [`effective_resolutions`], and also reports whether every page and form XObject was read
 /// in full ([`Resolutions::complete`]).
 ///
-/// When `complete` is `false`, any image the walk did record is given `INFINITY`, and images drawn
-/// only inside unreadable or skipped content are absent from [`Resolutions::ppi`].
+/// Unlike [`effective_resolutions`], the images the walk did reach keep the resolution it measured
+/// when `complete` is `false`; images drawn only inside unreadable or skipped content are absent
+/// from [`Resolutions::ppi`].
 pub fn measured_resolutions(doc: &Document, pages: &[ObjRef]) -> Resolutions {
     match walk_pages(doc, pages, &mut |_| true) {
         Ok(walked) => Resolutions { ppi: walked.ppi, complete: walked.complete },
@@ -297,9 +299,21 @@ struct PagesWalked {
     complete: bool,
 }
 
+impl PagesWalked {
+    /// Gives every image `INFINITY` (never resampled) and counts it as drawn under remapped device
+    /// spaces when the walk didn't read everything, since a use it missed may be larger or remapped.
+    fn assume_missed_uses(mut self) -> Self {
+        if !self.complete {
+            self.ppi.values_mut().for_each(|v| *v = f64::INFINITY);
+            self.defaults.extend(self.ppi.keys().map(|r| r.num));
+        }
+        self
+    }
+}
+
 /// [`effective_resolutions`], the images drawn or listed where `/DefaultGray` or `/DefaultRGB` is
-/// in force, by object number (all of them when a use may have been missed), and the references
-/// followed to reach them.
+/// in force, by object number, the references followed to reach them, and whether every page and
+/// form was read in full. [`PagesWalked::assume_missed_uses`] makes this safe to resample with.
 ///
 /// `tick` hears how many pages are done, and stops the walk by returning false.
 fn walk_pages(doc: &Document, pages: &[ObjRef], tick: &mut dyn FnMut(usize) -> bool) -> Result<PagesWalked, OptimizeError> {
@@ -332,10 +346,6 @@ fn walk_pages(doc: &Document, pages: &[ObjRef], tick: &mut dyn FnMut(usize) -> b
         // Content coordinates are in page units; image resolution is in physical inches.
         let unit = page.user_unit(doc);
         walk.content(&data, &res, holder, Matrix([unit, 0.0, 0.0, unit, 0.0, 0.0]), false);
-    }
-    if !walk.complete {
-        walk.out.values_mut().for_each(|v| *v = f64::INFINITY);
-        walk.defaults.extend(walk.out.keys().map(|r| r.num));
     }
     Ok(PagesWalked { ppi: walk.out, defaults: walk.defaults, read: walk.read, complete: walk.complete })
 }
@@ -1409,7 +1419,8 @@ pub(crate) fn run(
     progress: &mut dyn FnMut(Stage) -> bool,
     budget: &mut ImageBudget,
 ) -> Result<(), OptimizeError> {
-    let PagesWalked { ppi, mut defaults, read, .. } = walk_pages(doc, pages, &mut |done| progress(Stage::Reading { done, total: pages.len() }))?;
+    let PagesWalked { ppi, mut defaults, read, .. } =
+        walk_pages(doc, pages, &mut |done| progress(Stage::Reading { done, total: pages.len() }))?.assume_missed_uses();
     // Black-and-white RGB becomes grey, which default colour spaces would draw otherwise, and an
     // indexed image's palette says which of its samples a resampled one keeps, which they may
     // change: one used where the walk didn't look may be drawn so.
