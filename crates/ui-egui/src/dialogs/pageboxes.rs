@@ -7,10 +7,10 @@ use craft::pages::ui::{PageRangeChoices, PageRangeOptions};
 use craft::pages::{PageRange, PageScope};
 use craft::ui::buttons::Button;
 use craft::ui::contract::{Bind, Show as _};
-use craft::ui::dialog::dialog_id;
+use craft::ui::dialog::{DialogId, dialog_id};
 use craft::ui::display::{Picture, PictureSize};
 use craft::ui::list::{ThumbAspect, ThumbSize};
-use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, NumberUnit, Param, ParamDialog, ParamKind};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, NumberUnit, Param, ParamDialog, ParamKind};
 use craft::ui::primitives::StrokeWidth;
 use craft::ui::runtime::env::UnitKind;
 use egui::{CornerRadius, Rect, Stroke, pos2, vec2};
@@ -21,6 +21,9 @@ use crate::units::Unit;
 
 /// The dialog's key.
 const KEY: &str = "page.boxes";
+
+/// Custom action fired by the "Remove white margins" button in the dialog.
+const REMOVE_WHITE_MARGINS: &str = "remove_white_margins";
 
 /// The margin rows' keys, in the draft's order: left, bottom, right, top.
 const MARGIN_KEYS: [&str; 4] = ["left", "bottom", "right", "top"];
@@ -167,14 +170,18 @@ fn params(count: usize, current: usize, media: Option<[f64; 4]>, page_unit: f64)
         rows.push(Param::number_in_units(key, label, 0.0, 1.0, 3, "unit", units.clone()).bounds(Some(0.0), Some(10_000.0)));
     }
     rows.push(
-        Param::custom("zero", "", |ui, fields, _| {
-            let out = Button::new(tl!("Set to zero")).show(ui);
-            if out.clicked() {
-                for key in MARGIN_KEYS {
-                    fields.set(key, 0.0);
+        Param::custom("zero", "", |ui, fields, cx| {
+            ui.horizontal(|ui| {
+                if Button::new(tl!("Set to zero")).show(ui).clicked() {
+                    for key in MARGIN_KEYS {
+                        fields.set(key, 0.0);
+                    }
                 }
-            }
-            out.response.clone()
+                if Button::new(tl!("Remove white margins")).show(ui).clicked() {
+                    cx.request_action(REMOVE_WHITE_MARGINS);
+                }
+            })
+            .response
         })
         .full_width()
         .companions(MARGIN_KEYS),
@@ -231,9 +238,17 @@ impl PdfCraftApp {
         crate::dialogs::host::open(self, dialog);
     }
 
-    /// Sets the boxes when the dialog was answered with OK.
+    /// Sets the boxes when the dialog was answered with OK, or populates margins when
+    /// "Remove white margins" was clicked.
     pub(crate) fn page_boxes_pass(&mut self, ctx: &egui::Context) {
-        let Some(answer) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(KEY)) else { return };
+        let dialog_key = dialog_id(KEY);
+        if let Some(dialog) = self.dialogs.get_mut_by_id::<HostedParamDialog>(dialog_key)
+            && dialog.take_action().as_deref() == Some(REMOVE_WHITE_MARGINS)
+        {
+            let range = PageRangeOptions::value(dialog.fields(), "range").unwrap_or(self.boxes_draft.range);
+            self.populate_white_margins(dialog_key, range);
+        }
+        let Some(answer) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_key) else { return };
         let Some(result) = answer.ok() else { return };
         let Some((i, id)) = self.active_ids() else { return };
         let (count, user_units) = self.session.get(id).map_or((0, Vec::new()), |d| (d.info.pages.len(), d.page_user_units()));
@@ -254,6 +269,46 @@ impl PdfCraftApp {
         let edit = d.edit(pages, &user_units);
         d.seeded = None;
         self.apply_edit(ctx, edit);
+    }
+
+    /// Computes combined content margins for `range` and writes them into the open dialog's fields.
+    fn populate_white_margins(&mut self, dialog_key: DialogId, range: PageRange) {
+        let Some((i, doc_id)) = self.active_ids() else { return };
+        let current = self.views.get(i).map_or(0, crate::DocView::current);
+        let (count, user_units) = self.session.get(doc_id).map_or((0, Vec::new()), |d| (d.info.pages.len(), d.page_user_units()));
+        let pages = range.pages(count, current, &[]);
+        let mut combined: Option<[f64; 4]> = None;
+        for p in pages {
+            match self.session.content_margins(doc_id, p) {
+                Ok(Some(m)) => {
+                    // `content_margins` returns user-space margins; the dialog keeps physical points (1/72 in).
+                    let u = user_units.get(p).copied().filter(|u| *u > 0.0).unwrap_or(1.0);
+                    let m = m.map(|v| (v * u * 100.0).round() / 100.0);
+                    match &mut combined {
+                        Some(c) => {
+                            c[0] = c[0].min(m[0]);
+                            c[1] = c[1].min(m[1]);
+                            c[2] = c[2].min(m[2]);
+                            c[3] = c[3].min(m[3]);
+                        }
+                        None => combined = Some(m),
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    self.notify(e.to_string());
+                    return;
+                }
+            }
+        }
+        if let Some(m) = combined
+            && let Some(dialog) = self.dialogs.get_mut_by_id::<HostedParamDialog>(dialog_key)
+        {
+            self.boxes_draft.margins = m;
+            for (key, v) in MARGIN_KEYS.iter().zip(m) {
+                dialog.set_field(*key, FieldValue::Number(v));
+            }
+        }
     }
 }
 

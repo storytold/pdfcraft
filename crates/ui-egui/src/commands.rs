@@ -664,6 +664,22 @@ impl PdfCraftApp {
                 self.notify_tr("Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes");
             }
             "page.boxes" => self.open_page_boxes(ctx, false),
+            "page.remove_white_margins" => {
+                if let Some((i, id)) = self.active_ids() {
+                    match self.session.remove_white_margins(id, &targets) {
+                        Ok(()) => {
+                            if let Some(doc) = self.session.get(id)
+                                && let Some(view) = self.views.get_mut(i)
+                            {
+                                view.document_changed(ctx, &doc.info);
+                            }
+                            self.wake.wake();
+                            ctx.request_repaint();
+                        }
+                        Err(e) => self.notify(e.to_string()),
+                    }
+                }
+            }
             "page.extract" => self.open_extract(ctx),
             "page.rotate_dialog" => self.open_rotate(ctx),
             "page.split" => self.open_split(ctx, false),

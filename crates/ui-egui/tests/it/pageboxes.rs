@@ -138,3 +138,53 @@ fn the_crop_tool_leaves_the_page_grid_so_a_page_can_be_cropped() {
     assert!((w - 150.0).abs() < 2.0 && (hh - 200.0).abs() < 2.0, "{w}×{hh}");
     assert_eq!(size(&h, 1), (300.0, 400.0));
 }
+
+/// Harness setup with a document containing visible text content.
+fn harness_with_text() -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        let bytes = app.session.create_from_text("Title", "Page content for white margins test").unwrap();
+        app.open_bytes(&egui::Context::default(), "text_doc.pdf", None, bytes.to_vec()).unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app
+    });
+    h.run_steps(6);
+    h
+}
+
+/// Test executing `page.remove_white_margins` command crops the page to its content.
+#[test]
+fn remove_white_margins_command_crops_to_content() {
+    let mut h = harness_with_text();
+    let (w0, h0) = size(&h, 0);
+    assert_eq!((w0, h0), (612.0, 792.0));
+    assert!(h.execute("page.remove_white_margins"));
+    h.run_steps(4);
+    let (w1, h1) = size(&h, 0);
+    assert!(w1 < 612.0 && w1 > 10.0, "width after white margins removed: {w1}");
+    assert!(h1 < 792.0 && h1 > 10.0, "height after white margins removed: {h1}");
+    // Undo.
+    assert!(h.execute("edit.undo"));
+    h.run_steps(4);
+    assert_eq!(size(&h, 0), (612.0, 792.0));
+}
+
+/// Test the "Remove white margins" button in the Set Page Boxes dialog populates margins.
+#[test]
+fn set_page_boxes_remove_white_margins_button_populates_margins() {
+    let mut h = harness_with_text();
+    assert!(h.execute("page.boxes"));
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Dialog, "Set Page Boxes");
+    h.get_by_label("Remove white margins").click();
+    h.run_steps(2);
+    // Margins should be populated from the content.
+    assert!(h.state().boxes_draft.margins[0] > 10.0, "left margin: {}", h.state().boxes_draft.margins[0]);
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    assert!(h.query_by_label("Set Page Boxes").is_none(), "OK closes the dialog");
+    let (w, hh) = size(&h, 0);
+    assert!(w < 612.0 && hh < 792.0, "cropped: {w}x{hh}");
+}
