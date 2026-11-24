@@ -30,6 +30,10 @@ pub const AUTOSAVE_SECS: f64 = 60.0;
 /// `%LOCALAPPDATA%\PdfCraft\Recovery` on Windows, `$XDG_DATA_HOME/pdfcraft/recovery` elsewhere).
 /// What a crash left there is adopted into the current folder.
 pub fn default_dir() -> Option<PathBuf> {
+    // A Nightly launch adopts nothing: its recovery folder lives in its own profile.
+    if crate::settings::profile_root().is_some() {
+        return None;
+    }
     if let Some(dir) = crate::settings::portable_dir() {
         return Some(dir.join("Recovery"));
     }
@@ -47,6 +51,10 @@ pub fn default_dir() -> Option<PathBuf> {
 /// into it. The app's constructor takes it through its services.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn prepare_platform_recovery_dir() -> Option<PathBuf> {
+    // The Nightly profile holds its own `Recovery`: everything the app writes stays inside it.
+    if let Some(root) = crate::settings::profile_root() {
+        return Some(root.join("Recovery"));
+    }
     let portable = crate::settings::portable_dir();
     let mode = if portable.is_some() { SettingsMode::SelfContained } else { SettingsMode::Platform };
     let dir = recovery_dir("PdfCraft", "pdfcraft", portable.as_deref(), mode, |k| std::env::var_os(k))?;
@@ -61,6 +69,10 @@ pub(crate) fn prepare_platform_recovery_dir() -> Option<PathBuf> {
 /// `…/PdfCraft/Dictionary` in the platform's per-user data folder. `None` where files are not
 /// kept (the web build).
 pub fn default_dictionary_dir() -> Option<PathBuf> {
+    // The Nightly profile holds the OCR dictionaries too.
+    if let Some(root) = crate::settings::profile_root() {
+        return Some(root.join("Dictionary"));
+    }
     if let Some(dir) = crate::settings::portable_dir() {
         return Some(dir.join("Dictionary"));
     }

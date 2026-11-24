@@ -17,8 +17,11 @@ use crate::{PdfCraftApp, RightPanel};
 
 pub(super) mod tab_context;
 
-/// The app's name in the menus the layouts write (About, Hide, Quit).
-pub(crate) const APP_NAME: &str = "PdfCraft";
+/// The app's name in the menus the layouts write (About, Hide, Quit): "PdfCraft Nightly" in a
+/// Nightly build, which is a separate app in the menu bar and in Gatekeeper's dialogs.
+pub(crate) fn app_name() -> &'static str {
+    crate::os_window::name()
+}
 
 /// Menu-only commands. The registry's commands keep their own ids.
 pub(crate) const CUT: &str = "edit.cut";
@@ -261,7 +264,7 @@ fn translate(english: &'static str) -> String {
 
 /// The layouts' own labels (About, Quit, Window…) through the app's translations.
 pub(crate) fn layout_options() -> LayoutOptions<'static> {
-    LayoutOptions::new(APP_NAME).label(&translate)
+    LayoutOptions::new(app_name()).label(&translate)
 }
 
 /// Whether a dialog, a prompt or the command palette holds the window: the one gate over commands

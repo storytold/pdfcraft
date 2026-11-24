@@ -1,0 +1,57 @@
+{
+  "title": "PdfCraft nightly deep-background icons",
+  "author": "@skylartaylor",
+  "license": "MIT OR Apache-2.0",
+  "source_commit": "6e910675c68dd5092e889065cfe8d0274c1b2742",
+  "inputs": [
+    {
+      "path": "assets/app-icon/hicolor/256x256/apps/ai.storyteller.pdfcraft.png",
+      "sha256": "47094c09fb77eb35d465eee46445626a4d78c7ef50629cc7d04a602de3e144e9",
+      "purpose": "Windows/Linux native 256 master"
+    },
+    {
+      "path": "assets/app-icon/pdfcraft-1024.png",
+      "sha256": "68ac6730b8990d07503351d32eacea81e9ec171a7a6f09daf52d6555d8245c8a",
+      "purpose": "native padded Mac 1024 master; not upscaled from 256"
+    }
+  ],
+  "method": {
+    "kind": "original code-generated derivative of the project-owned icon",
+    "original_palette": {
+      "ink": "#0b0b0c",
+      "paper": "#efe9dc",
+      "background": "#b70228"
+    },
+    "nightly_background": "#8a011e",
+    "transform": "Solve each pixel's background contribution from its red excess over its green/blue maximum and change only that contribution. Preserve alpha/padding and neutral foreground/detail RGBA byte for byte. Derive native-size frames separately from their corresponding unchanged-resolution masters and pack them into ICO/ICNS here. No crescent, letter or badge.",
+    "generator": "work/nightlies-lead/fixes/pdfcraft-nightly-icons.py (outside the repository; the recipe is above)",
+    "generator_sha256": "c6d3863d482e595440e8d3d3452978f313db39c14d9be594a2816eb79d20c6b2"
+  },
+  "outputs": {
+    "assets/app-icon/pdfcraft-nightly.png": "add67f0145525d8398b1caa3e551ac860032d533d2b0e0a8b549da99567627f1",
+    "assets/app-icon/pdfcraft-nightly.ico": "4363015f1d62fa4fc4730528fd01866d3d52d250ed949c836d96842e290d4143",
+    "assets/app-icon/pdfcraft-nightly-1024.png": "aa2f7a1e83c3db41e02b847dea57af86ce5bc9bc0d2bb57c110a24d2dd1d8901",
+    "assets/app-icon/pdfcraft-nightly.icns": "d423f408b008118d6a61152fc52c185e678be5bcf28319ee3955a14ae4b8fb9e"
+  },
+  "ico_frame_sizes": [
+    16,
+    20,
+    24,
+    32,
+    40,
+    48,
+    64,
+    128,
+    256
+  ],
+  "icns_png_slots": {
+    "icp4": 16,
+    "icp5": 32,
+    "icp6": 64,
+    "ic07": 128,
+    "ic08": 256,
+    "ic09": 512,
+    "ic10": 1024
+  },
+  "validation": "Source/input/output hashes, PNG dimensions, ICO/ICNS member sizes and the pixel proof checked: every pixel with no background contribution is byte-identical, and the field moved from #b70228 to #8a011e exactly. Visual comparison reviewed at 256 and 1024. Native Explorer/Finder/iconutil qualification remains unrun."
+}

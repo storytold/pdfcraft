@@ -9,4 +9,8 @@ plan/
 /assets/models
 # A craft-fonts checkout used as the optional CRAFT_FONTS_DIR build input (CI and releases put it here).
 /craft-fonts
+# The shared nightly tooling and its inputs, checked out into the workspace by the release workflow.
+/.nightly-tools
+/.nightly-input
+/craft-i18n
 .claude/

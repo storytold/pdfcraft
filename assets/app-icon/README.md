@@ -53,3 +53,18 @@ sidecar. This provides a file type icon; first-page thumbnails still need a thum
 packaging/icons.sh        # needs resvg and python3; iconutil (macOS) for the .icns
 cargo xtask assets        # then update the sha256 values in ATTRIBUTION.toml and run with --write
 ```
+
+## Nightly channel
+
+The Nightly derivatives keep the foreground artwork, alpha and the Mac padding unchanged. Only the
+background contribution changes: the field's `#b70228` becomes the deeper `#8a011e`. There is no
+letter badge or crescent; the app and the Launcher also identify the channel in text.
+
+`pdfcraft-nightly.png` and its nine-frame ICO use the existing 256 px master. The separate
+`pdfcraft-nightly-1024.png` and the ICNS use the actual padded Mac 1024 master, not an upscale.
+Input/output hashes, the palette-fit recipe and the container sizes are recorded in
+[`nightly-provenance.json`](nightly-provenance.json). The stable files are not recoloured.
+
+Windows takes `pdfcraft-nightly.ico` from `build.rs` (with `ProductName` "PdfCraft Nightly"), the
+macOS bundle `pdfcraft-nightly.icns` from `packaging/macos/nightly.sh`, and Linux
+`pdfcraft-nightly.png` from `packaging/linux/nightly.sh`.

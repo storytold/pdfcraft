@@ -159,17 +159,17 @@ pub fn absolute(paths: &[String]) -> Vec<String> {
 /// Decide what this launch does. `files` are absolute ([`absolute`]); `may_hand_off` is false
 /// when the launch asked for anything besides opening (or, with `combine`, combining) files, so
 /// it gets its own window.
-pub fn claim(files: &[String], may_hand_off: bool, combine: bool) -> Claim {
+pub fn claim(files: &[String], may_hand_off: bool, combine: bool, nightly_root: Option<&std::path::Path>) -> Claim {
     #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
     {
-        match socket_path() {
+        match socket_path(nightly_root) {
             Some(path) => claim_at(&path, files, may_hand_off, combine),
             None => Claim::Alone,
         }
     }
     #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
     {
-        let _ = (files, may_hand_off, combine);
+        let _ = (files, may_hand_off, combine, nightly_root);
         Claim::Alone
     }
 }
@@ -177,7 +177,7 @@ pub fn claim(files: &[String], may_hand_off: bool, combine: bool) -> Claim {
 /// The socket in `%LOCALAPPDATA%\PdfCraft` (beside the crash-recovery folder); none when
 /// `%LOCALAPPDATA%` is unset.
 #[cfg(windows)]
-fn socket_path() -> Option<std::path::PathBuf> {
+fn socket_path(nightly_root: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
     let name = socket_name(session_id(), std::env::var("SESSIONNAME").ok().as_deref());
     // %LOCALAPPDATA% is private to the user's sign-in, so other accounts can't receive this
     // user's file paths or send it files to open. A portable copy uses it too (#889), under its
@@ -188,19 +188,30 @@ fn socket_path() -> Option<std::path::PathBuf> {
         Some(ch) if matches!(ch.as_bytes(), b"nightly-v1") => format!("nightly-v1-{name}"),
         _ => name,
     };
+    // A Nightly launch keeps its socket in its own profile (profile_root::instance_dir), so it
+    // never writes into the stable data folder or hands files to a stable window.
+    if let Some(root) = nightly_root {
+        return Some(root.join("Instance").join(name));
+    }
     std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()).map(|d| std::path::PathBuf::from(d).join("PdfCraft").join(name))
 }
 
 /// The socket in `$XDG_RUNTIME_DIR/pdfcraft`; none when `$XDG_RUNTIME_DIR` is unset. Never `/tmp`
 /// instead: other accounts can create files there, and so could listen in this user's place.
 #[cfg(all(unix, not(target_os = "macos")))]
-fn socket_path() -> Option<std::path::PathBuf> {
+fn socket_path(nightly_root: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
     let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     let name = display_socket_name(var("WAYLAND_DISPLAY").or_else(|| var("DISPLAY")).as_deref());
     let name = match option_env!("PDFCRAFT_BUILD_CHANNEL") {
         Some(ch) if matches!(ch.as_bytes(), b"nightly-v1") => format!("nightly-v1-{name}"),
         _ => name,
     };
+    // A Nightly launch keeps its socket in its own profile (profile_root::instance_dir). A root
+    // whose socket path is too long for a socket address makes `bind` fail, and the launch opens
+    // its own window instead (`claim_at`).
+    if let Some(root) = nightly_root {
+        return Some(root.join("Instance").join(name));
+    }
     // The XDG base directory spec makes it the user's own (mode 0700), so the folder inside it is
     // out of other accounts' reach whatever the umask.
     var("XDG_RUNTIME_DIR").map(|d| std::path::PathBuf::from(d).join("pdfcraft").join(name))
@@ -484,7 +495,18 @@ mod tests {
         let id = super::session_id();
         assert!(id.is_some(), "the access token names the session");
         let name = socket_name(id, None);
-        assert!(socket_path().is_none_or(|p| p.file_name().is_some_and(|f| f.to_string_lossy().ends_with(&name))), "{name}");
+        assert!(socket_path(None).is_none_or(|p| p.file_name().is_some_and(|f| f.to_string_lossy().ends_with(&name))), "{name}");
+    }
+
+    /// A Nightly launch keeps its socket in its own profile; the stable build's stays where it was.
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+    #[test]
+    fn a_nightly_socket_lives_in_the_profile_and_never_in_the_stable_folder() {
+        let root = std::env::temp_dir().join(format!("pdfcraft-nightly-profile-{}", std::process::id()));
+        let nightly = socket_path(Some(&root)).expect("a profile root names the socket");
+        assert_eq!(nightly.parent(), Some(root.join("Instance").as_path()));
+        let stable = socket_path(None);
+        assert!(stable.as_deref() != Some(nightly.as_path()), "a stable launch must not share the Nightly socket");
     }
 
     #[cfg(any(windows, all(unix, not(target_os = "macos"))))]

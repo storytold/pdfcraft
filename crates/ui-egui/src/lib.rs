@@ -36,11 +36,14 @@ macro_rules! tl_ctx {
     };
 }
 pub mod canvas;
+mod channel_titles;
 mod chrome;
 pub use combine_ui::{CombineView, Lock as CombineLock, SortKey};
 mod commands;
 pub mod control;
 mod menus;
+/// The app's OS-window identity: the stable and Nightly app ids, names, version and commit.
+pub mod os_window;
 mod properties_session;
 /// Header & footer / watermark / background dialog types (tests and automation).
 pub mod marks {
@@ -659,6 +662,10 @@ pub struct PdfCraftApp {
     pub window_title: String,
     /// The web page's title last set: the window title, but always with the file's name.
     pub page_title: String,
+    /// Runs once when the app leaves: the Nightly session record is finished here, because a macOS
+    /// quit ends the process inside AppKit's terminate, after `on_exit` and before `run_native`
+    /// returns (so code after the event loop never runs there).
+    pub(crate) at_exit: Option<Box<dyn FnOnce()>>,
     /// The UI control channel, when enabled (`--control`; off by default).
     control: Option<craft::automation::ControlChannel>,
     /// The control server, while it listens (the desktop app's `--control`).

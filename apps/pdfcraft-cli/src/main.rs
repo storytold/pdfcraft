@@ -123,6 +123,18 @@ fn main() -> ExitCode {
             }
         }
     }
+    // A Nightly launch protocol belongs to the desktop app, never to the CLI: refuse it before
+    // parsing, so it cannot be read as a value or a file name, with the usage status (2).
+    for arg in &args {
+        let name = arg.split_once('=').map_or(arg.as_str(), |(name, _)| name);
+        if name == "--launch-profile" || name == "--profile-root" {
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "pdfcraft-cli: `{name}` is part of PdfCraft's Launcher launch protocol; the CLI has no launch profile"
+            );
+            return ExitCode::from(2);
+        }
+    }
     // `<command> --help` too; only right after the command, so a later `-h` (a value) still reaches it.
     let command = match args.get(1).map(String::as_str) {
         Some("--help" | "-h") => Some("--help"),
