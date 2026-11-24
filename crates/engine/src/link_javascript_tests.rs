@@ -92,6 +92,19 @@ fn a_link_runs_its_javascript_in_the_document_realm() {
     assert!(s.run_link_javascript(id, 1, 1, &[]).is_err());
 }
 
+/// Under an administrator's policy a link's script doesn't run, and the refusal says why: the
+/// user's own choice is on, and the Preferences check box is locked.
+#[test]
+fn a_link_script_under_an_administrators_policy_says_so() {
+    let (mut s, id) = open("note\\('ran'\\);");
+    s.set_javascript_lock(Some(js::JavaScriptLock { source: "policy".into(), unreadable: None }));
+    assert!(s.javascript_preference());
+    for err in [s.run_link_javascript(id, 1, 1, &[]).unwrap_err().to_string(), s.start_link_javascript(id, 1, 1).err().unwrap().to_string()] {
+        assert!(err.contains("administrator"), "{err}");
+    }
+    assert_eq!(log(&s, id), "");
+}
+
 /// A link script that fails commits nothing: neither its field change nor its requests.
 #[test]
 fn a_failed_link_script_commits_nothing() {

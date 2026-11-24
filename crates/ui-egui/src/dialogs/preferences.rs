@@ -580,7 +580,9 @@ impl PreferencesModel for Prefs<'_> {
                 d.date_format = fresh.date_format;
                 d.date_language = fresh.date_language;
             }
-            "javascript" => d.javascript = fresh.javascript,
+            // Locked by an administrator's policy: Reset Section leaves the choice behind the box
+            // alone too, as the box does.
+            "javascript" if self.texts.javascript_locked.is_none() => d.javascript = fresh.javascript,
             _ => {}
         }
     }

@@ -303,6 +303,25 @@ fn an_administrators_policy_locks_the_preference_off() {
     assert!(fresh.session.javascript(), "the policy isn't saved as the preference");
 }
 
+/// Reset Section on the JavaScript card leaves the person's own choice alone while a policy
+/// locks it, as the locked box does: their "off" is still off once the policy goes.
+#[test]
+fn resetting_the_javascript_section_under_a_policy_keeps_the_persons_choice() {
+    let mut h = harness();
+    h.state_mut().session.set_javascript(false);
+    h.state_mut().session.set_javascript_lock(Some(pdfcraft_engine::js::JavaScriptLock { source: "policy".into(), unreadable: None }));
+    h.state_mut().open_preferences();
+    h.run_steps(2);
+    // The JavaScript card is the last one, so its Reset Section is the last.
+    h.query_all_by_label("Reset Section").last().expect("a Reset Section button").scroll_to_me();
+    h.run_steps(4);
+    h.query_all_by_label("Reset Section").last().expect("a Reset Section button").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert!(!h.state().session.javascript_preference(), "the reset left the person's choice alone");
+}
+
 #[test]
 fn an_unreadable_policy_says_so() {
     let mut h = harness();

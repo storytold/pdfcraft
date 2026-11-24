@@ -925,8 +925,21 @@ impl Session {
         }
     }
 
+    /// The administrator's policy that keeps JavaScript off, if there is one.
     pub fn javascript_lock(&self) -> Option<&JavaScriptLock> {
         self.js_lock.as_ref()
+    }
+
+    /// Refuse to start a script while scripts are off, saying why: an administrator's policy,
+    /// or else the user's own choice (`off`, the caller's wording for it).
+    fn refuse_scripts(&self, off: &str) -> Result<(), EditError> {
+        if self.js_lock.is_some() {
+            return Err(EditError::Invalid("JavaScript is turned off by your administrator's policy".into()));
+        }
+        if self.js_off {
+            return Err(EditError::Invalid(off.into()));
+        }
+        Ok(())
     }
 
     /// Whether the viewer highlights form fields (Highlight fields), which forms' scripts read as
@@ -1225,12 +1238,7 @@ impl Session {
         event_name: Option<&'static str>,
         opening: bool,
     ) -> Result<Outcome, EditError> {
-        if self.js_lock.is_some() {
-            return Err(EditError::Invalid("JavaScript is turned off by your administrator's policy".into()));
-        }
-        if self.js_off {
-            return Err(EditError::Invalid("JavaScript is turned off (Preferences ▸ JavaScript)".into()));
-        }
+        self.refuse_scripts("JavaScript is turned off (Preferences ▸ JavaScript)")?;
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let cos = doc.editor.as_ref().map(|e| e.cos.clone()).ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
         validate_script_target(target, target_id, &doc.form)?;
@@ -1767,9 +1775,7 @@ impl Session {
         page: usize,
         index: usize,
     ) -> Result<(pdfcraft_js::session::Job, std::sync::Arc<Vec<pdfcraft_js::FieldState>>), EditError> {
-        if self.js_off {
-            return Err(EditError::Invalid("JavaScript is turned off (Preferences ▸ JavaScript)".into()));
-        }
+        self.refuse_scripts("JavaScript is turned off (Preferences ▸ JavaScript)")?;
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let link = doc.info.links.iter().find(|l| l.page == page && l.index == index).ok_or_else(|| EditError::Invalid("link not found".into()))?;
         let pdfcraft_render::LinkTarget::JavaScript(script) = &link.target else {
@@ -1873,9 +1879,7 @@ impl Session {
         target: Option<&str>,
         target_id: Option<u64>,
     ) -> Result<PendingScript, EditError> {
-        if self.js_off {
-            return Err(EditError::Invalid("JavaScript is disabled".into()));
-        }
+        self.refuse_scripts("JavaScript is disabled")?;
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let cos = &doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?.cos;
         let mut runner = JsRunner::new(cos, &doc.name, self.field_highlight);
