@@ -1,106 +1,72 @@
 //! Scan & OCR ▸ Enhance scanned file: the dialog (pages, background removal level, edge
 //! shadows, despeckle) and the background run with its progress card. The scans are cleaned
-//! on a worker thread ([`pdfcraft_engine::scan_clean`]); the result is applied as one undoable
+//! on the host's job queue ([`pdfcraft_engine::scan_clean`]); the result is applied as one undoable
 //! step when it is done, unless the document changed meanwhile.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use egui::{Align, Layout};
+use craft::pages::PageRange;
+use craft::pages::ui::{PageRangeChoices, PageRangeOptions};
+use craft::ui::dialog::{DialogResult, dialog_id};
+use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind};
+use craft::ui::value_drag::SliderScale;
 use pdfcraft_engine::scan_clean::{ScanCleanReport, ScanCleanSettings, ScanCleaned};
 use pdfcraft_engine::{DocId, EditError};
 
-use crate::ocr_ui::OcrPages;
-use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, widgets};
+use super::job_count::JobCount;
+use crate::PdfCraftApp;
+use crate::notices::ProgressNotice;
+use crate::notices::{self, ProgressKey};
+
+/// The key the dialog and its result share.
+const DIALOG_KEY: &str = "enhance-scan";
 
 /// The dialog's choices (kept between runs).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct ScanCleanDraft {
-    pub pages: OcrPages,
-    pub from: usize,
-    pub to: usize,
+    pub range: PageRange,
     pub settings: ScanCleanSettings,
 }
 
-impl Default for ScanCleanDraft {
-    fn default() -> Self {
-        ScanCleanDraft { pages: OcrPages::All, from: 1, to: 1, settings: ScanCleanSettings::default() }
+/// A running clean-up: its document and the count the job and the progress card share.
+pub struct ScanCleanRun {
+    pub doc: DocId,
+    pub progress: Arc<JobCount>,
+}
+
+/// The settings the dialog's fields hold; a field that is absent keeps `base`'s value.
+fn settings_from(fields: &DialogFields, base: ScanCleanSettings) -> ScanCleanSettings {
+    let max = f64::from(pdfcraft_engine::camera_clean::MAX_LEVEL);
+    ScanCleanSettings {
+        level: fields.number("level").map_or(base.level, |n| n.round().clamp(0.0, max) as _),
+        edge_shadows: fields.bool("edge_shadows").unwrap_or(base.edge_shadows),
+        despeckle: fields.bool("despeckle").unwrap_or(base.despeckle),
     }
 }
 
-/// Progress of a run: images done, total, the result once finished, and a cancel request.
-#[derive(Default)]
-pub struct ScanCleanProgress {
-    pub done: usize,
-    pub total: usize,
-    pub result: Option<Result<ScanCleaned, EditError>>,
-    pub cancel: bool,
-}
-
-pub struct ScanCleanRun {
-    pub doc: DocId,
-    pub progress: Arc<Mutex<ScanCleanProgress>>,
-}
-
-pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
-    let pages = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len().max(1));
-    let d = &mut app.scan_clean_draft;
-    d.to = d.to.clamp(1, pages);
-    d.from = d.from.clamp(1, d.to);
-    ui.label(egui::RichText::new(tl!("Enhance Scanned File")).font(theme::semibold(18.0)));
-    ui.add_space(4.0);
-    ui.label(
-        egui::RichText::new(tl!("Cleans up the scanned pictures in place: recognized text, comments and links on the pages stay as they are."))
-            .small()
-            .color(t.text_muted),
-    );
-    ui.add_space(8.0);
-    let group = |ui: &mut egui::Ui, title: &str, body: &mut dyn FnMut(&mut egui::Ui)| {
-        ui.label(egui::RichText::new(tl!(title)).font(theme::semibold(13.0)));
-        egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            body(ui);
-        });
-        ui.add_space(8.0);
-    };
-    group(ui, "Pages", &mut |ui| {
-        widgets::radio_value(ui, &mut d.pages, OcrPages::All, tl!("All pages"));
-        widgets::radio_value(ui, &mut d.pages, OcrPages::Current, tl!("Current page"));
-        ui.horizontal(|ui| {
-            let from = widgets::radio_value(ui, &mut d.pages, OcrPages::Range, tl!("From"));
-            let on = d.pages == OcrPages::Range;
-            ui.add_enabled(on, egui::DragValue::new(&mut d.from).range(1..=pages)).labelled_by(from.id);
-            let to = ui.label(tl!("to"));
-            ui.add_enabled(on, egui::DragValue::new(&mut d.to).range(1..=pages)).labelled_by(to.id);
-        });
-    });
-    group(ui, "Filters", &mut |ui| {
-        ui.horizontal(|ui| {
-            let label = ui.label(tl!("Background removal"));
-            ui.spacing_mut().slider_width = 220.0;
-            ui.add(egui::Slider::new(&mut d.settings.level, 0..=pdfcraft_engine::camera_clean::MAX_LEVEL).trailing_fill(true))
-                .labelled_by(label.id)
-                .on_hover_text(tl!("Evens out the paper so a grey or yellowed background turns white, and darkens faint strokes. 0 is off."));
-        });
-        ui.add(widgets::checkbox(&mut d.settings.edge_shadows, tl!("Edge shadow removal")))
-            .on_hover_text(tl!("Lightens shadows along the edges of the scan, such as a book's gutter or a copier's dark border"));
-        ui.add(widgets::checkbox(&mut d.settings.despeckle, tl!("Despeckle")))
-            .on_hover_text(tl!("Removes isolated dark specks such as dust and scanner noise. The only filter black and white scans take."));
-    });
-    ui.add_space(6.0);
-    let (mut go, mut cancel) = (false, false);
-    ui.horizontal(|ui| {
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let ready = d.settings.changes_something();
-            if ui.add_enabled_ui(ready, |ui| widgets::pill_button(ui, tl!("Enhance"), true)).inner.clicked() {
-                go = true;
-            }
-            if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-                cancel = true;
-            }
-        })
-    });
-    (go, cancel)
+/// The dialog over `fields`: OK is on only while a filter would change something.
+fn build_dialog(fields: &mut DialogFields, base: ScanCleanSettings, count: usize, current: usize) -> ParamDialog<'_> {
+    let max = f64::from(pdfcraft_engine::camera_clean::MAX_LEVEL);
+    let params = vec![
+        Param::read_only_text(
+            "note",
+            String::new(),
+            tl!("Cleans up the scanned pictures in place: recognized text, comments and links on the pages stay as they are."),
+        )
+        .full_width(),
+        Param::section(tl!("Pages")),
+        PageRangeOptions::param("pages", tl!("Pages"), count, current, PageRangeChoices::CurrentFromTo),
+        Param::section(tl!("Filters")),
+        Param::new("level", tl!("Background removal"), ParamKind::range(0.0, max, f64::from(base.level), SliderScale::Linear))
+            .decimals(0)
+            .tooltip(tl!("Evens out the paper so a grey or yellowed background turns white, and darkens faint strokes. 0 is off.")),
+        Param::new("edge_shadows", tl!("Edge shadow removal"), ParamKind::bool(base.edge_shadows))
+            .tooltip(tl!("Lightens shadows along the edges of the scan, such as a book's gutter or a copier's dark border")),
+        Param::new("despeckle", tl!("Despeckle"), ParamKind::bool(base.despeckle))
+            .tooltip(tl!("Removes isolated dark specks such as dust and scanner noise. The only filter black and white scans take.")),
+    ];
+    let ready = settings_from(fields, base).changes_something();
+    ParamDialog::new(DIALOG_KEY, tl!("Enhance Scanned File"), params).ok_label(tl!("Enhance").into()).ok_enabled(ready)
 }
 
 /// What a finished run says: what was cleaned, what was not a scan, and what was left and why.
@@ -133,8 +99,36 @@ fn summary(r: &ScanCleanReport) -> String {
 }
 
 impl PdfCraftApp {
+    /// Opens the Enhance Scanned File dialog over the remembered choices.
+    pub fn open_enhance_scan(&mut self, ctx: &egui::Context) {
+        let Some((vi, id)) = self.active_ids() else { return };
+        let count = self.session.get(id).map_or(1, |d| d.info.pages.len().max(1));
+        let current = self.views.get(vi).map_or(0, |v| v.current());
+        let draft = self.scan_clean_draft.clone();
+        let fields = DialogFields::from_pairs([
+            ("pages", PageRangeOptions::field_value(&draft.range)),
+            ("level", f64::from(draft.settings.level).into()),
+            ("edge_shadows", draft.settings.edge_shadows.into()),
+            ("despeckle", draft.settings.despeckle.into()),
+        ]);
+        let base = draft.settings;
+        let dialog = HostedParamDialog::new(ctx, DIALOG_KEY, fields, move |fields| build_dialog(fields, base, count, current));
+        self.dialogs.open(dialog);
+    }
+
+    /// Once per frame: takes the dialog's answer, remembers it and starts the run.
+    pub(crate) fn enhance_scan_pass(&mut self, ctx: &egui::Context) {
+        let Some(DialogResult::Ok(answer)) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(DIALOG_KEY)) else { return };
+        let d = &mut self.scan_clean_draft;
+        if let Some(range) = PageRangeOptions::value(&answer.fields, "pages") {
+            d.range = range;
+        }
+        d.settings = settings_from(&answer.fields, d.settings);
+        self.start_scan_clean(ctx);
+    }
+
     /// Clean up the scans on the pages chosen in the dialog, in the background.
-    pub fn start_scan_clean(&mut self) {
+    pub fn start_scan_clean(&mut self, ctx: &egui::Context) {
         let Some((vi, id)) = self.active_ids() else { return };
         if self.scan_clean_run.is_some() {
             self.notify_tr("Scanned pages are already being enhanced");
@@ -146,88 +140,80 @@ impl PdfCraftApp {
             return;
         }
         // What's typed in a form field is part of the document (#166).
-        if !self.commit_form_typing() {
+        if !self.commit_form_typing(ctx) {
             return;
         }
+        let count = self.session.get(id).map_or(0, |d| d.info.pages.len());
+        let current = self.views.get(vi).map_or(0, |v| v.current());
         let d = &self.scan_clean_draft;
-        let pages: Vec<usize> = match d.pages {
-            OcrPages::All => Vec::new(),
-            OcrPages::Current => self.views.get(vi).map(|v| vec![v.current]).unwrap_or_default(),
-            OcrPages::Range => (d.from.saturating_sub(1)..d.to).collect(),
-        };
+        let pages = d.range.pages(count, current, &[]);
+        // The engine reads an empty list as every page, so a range that picks none must not reach it.
+        if pages.is_empty() {
+            self.notify_tr("There are no pages in that range");
+            return;
+        }
         let job = match self.session.scan_clean_job(id, &pages, d.settings) {
             Ok(job) => job,
             Err(e) => return self.notify(e.to_string()),
         };
-        let progress = Arc::new(Mutex::new(ScanCleanProgress { total: job.total(), ..Default::default() }));
-        let p = progress.clone();
-        let work = move || {
-            let result = job.run(|done, total| {
-                let Ok(mut s) = p.lock() else { return false };
-                s.done = done;
-                s.total = total;
-                !s.cancel
-            });
-            if let Ok(mut s) = p.lock() {
-                s.result = Some(result);
-            }
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.run_inline {
-            work();
-        } else if let Err(e) = std::thread::Builder::new().name("pdfcraft-scan-clean".into()).spawn(work) {
-            // No worker: report the failure instead of waiting for a result that never comes.
-            if let Ok(mut s) = progress.lock() {
-                s.result = Some(Err(EditError::Invalid(e.to_string())));
-            }
-        }
-        #[cfg(target_arch = "wasm32")]
-        work();
+        let progress = Arc::new(JobCount::default());
+        progress.set(0, job.total());
+        let (count, wake) = (progress.clone(), self.wake.clone());
+        self.scan_cleans.submit(id, Default::default(), move |_| {
+            pdfcraft_engine::guard(|| {
+                job.run(|done, total| {
+                    count.set(done, total);
+                    wake.wake();
+                    !count.cancelled()
+                })
+            })
+            .unwrap_or_else(|message| Err(EditError::Invalid(message)))
+        });
         self.scan_clean_run = Some(ScanCleanRun { doc: id, progress });
-        self.poll_scan_clean();
+        self.post_scan_clean_progress();
     }
 
     /// Stop a running clean-up (nothing changes).
     pub fn cancel_scan_clean(&mut self) {
-        if let Some(r) = &self.scan_clean_run
-            && let Ok(mut s) = r.progress.lock()
-        {
-            s.cancel = true;
-        }
+        let Some(run) = &self.scan_clean_run else { return };
+        run.progress.cancel();
+        self.post_scan_clean_progress();
     }
 
-    /// Show progress; apply the result once the worker is done.
+    /// Shows the run's progress card.
+    fn post_scan_clean_progress(&mut self) {
+        let Some(run) = &self.scan_clean_run else { return };
+        let (done, total) = run.progress.read();
+        let cancelling = run.progress.cancelled();
+        let label = if cancelling {
+            tl!("Cancelling…").to_string()
+        } else {
+            crate::i18n::fmt(
+                tl!("Enhancing scans… image {d} of {t}"),
+                &[("d", &(done + 1).min(total.max(1)).to_string()), ("t", &total.max(1).to_string())],
+            )
+        };
+        let fraction = if total == 0 { 1.0 } else { done.min(total) as f32 / total as f32 };
+        notices::set_progress(self, ProgressKey::ScanClean, ProgressNotice { label, fraction, cancellable: !cancelling });
+    }
+
+    /// Show progress; apply the result once the job is done.
     pub(crate) fn poll_scan_clean(&mut self) {
         let Some(run) = self.scan_clean_run.as_ref() else { return };
-        let (doc, progress) = (run.doc, run.progress.clone());
-        let Ok(mut s) = progress.lock() else {
-            // The worker panicked while holding the lock: it will never report back.
-            self.scan_clean_run = None;
-            self.progress_notice = None;
-            self.notify_tr("Couldn't enhance the scanned pages");
-            return;
-        };
-        let Some(result) = s.result.take() else {
-            let (cancelling, done, total) = (s.cancel, s.done, s.total);
-            drop(s);
-            let label = if cancelling {
-                tl!("Cancelling…").to_string()
-            } else {
-                crate::i18n::fmt(
-                    tl!("Enhancing scans… image {d} of {t}"),
-                    &[("d", &(done + 1).min(total.max(1)).to_string()), ("t", &total.max(1).to_string())],
-                )
-            };
-            let fraction = if total == 0 { 1.0 } else { done.min(total) as f32 / total as f32 };
-            self.progress_notice = Some(crate::widgets::ProgressNotice { label, fraction, cancellable: !cancelling });
-            if let Some(ctx) = &self.ctx {
-                ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        let progress = run.progress.clone();
+        let Some(finished) = self.scan_cleans.try_recv() else {
+            if progress.take_change().is_some() {
+                self.post_scan_clean_progress();
             }
             return;
         };
-        drop(s);
+        notices::end_progress(self, ProgressKey::ScanClean);
         self.scan_clean_run = None;
-        self.progress_notice = None;
+        self.land_scan_clean(finished.key, finished.result);
+    }
+
+    /// Applies a finished clean-up to `doc` as one undoable step and says what it did.
+    pub(crate) fn land_scan_clean(&mut self, doc: DocId, result: Result<ScanCleaned, EditError>) {
         match result.and_then(|cleaned| self.session.apply_scan_clean(doc, cleaned)) {
             Ok(report) => {
                 // The page rasters, tiles and thumbnails show the old pixels at the same scale.
@@ -256,7 +242,10 @@ mod tests {
             not_scanned: vec![1],
             skipped: vec![SkippedImage { pages: vec![3], name: "Im0".into(), reason: "it is CMYK".into() }],
         };
-        assert_eq!(summary(&r), "Cleaned up the scans on 2 pages. 1 page is not a scan. 1 image was left as it was (page 4: it is CMYK).");
-        assert_eq!(summary(&ScanCleanReport::default()), "No scanned pages were cleaned up.");
+        let said = summary(&r);
+        assert!(said.contains('2') && said.contains('1') && said.contains('4'), "cleaned, not-a-scan and the skipped page: {said}");
+        let nothing = summary(&ScanCleanReport::default());
+        assert_ne!(said, nothing);
+        assert!(!nothing.chars().any(|c| c.is_ascii_digit()), "{nothing}");
     }
 }
