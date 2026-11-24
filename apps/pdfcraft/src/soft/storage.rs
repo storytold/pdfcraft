@@ -24,24 +24,40 @@ pub(crate) struct FileStore {
     dirty: bool,
     /// The write in progress, if any.
     writing: Option<JoinHandle<Result<(), String>>>,
+    /// The file couldn't be read nor copied aside: nothing is saved over it.
+    read_only: bool,
 }
 
 impl FileStore {
     /// The settings in `path`; none when there is no such file or it can't be read as settings.
     pub(crate) fn open(path: PathBuf) -> Self {
+        Self::open_keeping(path, |from, to| std::fs::copy(from, to).map(drop))
+    }
+
+    /// As [`Self::open`], with `keep` copying an unreadable file aside.
+    fn open_keeping(path: PathBuf, keep: impl FnOnce(&Path, &Path) -> std::io::Result<()>) -> Self {
+        let mut read_only = false;
         let values = match read_settled(&path, READ_ATTEMPTS, READ_RETRY) {
             Ok(values) => values,
             Err(e) => {
                 if path.exists() {
                     // Kept before anything is saved over it, so what it held can be recovered.
                     let kept = sibling(&path, ".unreadable");
-                    let copied = std::fs::copy(&path, &kept).map(|_| format!("; a copy is in {}", kept.display())).unwrap_or_default();
-                    log::warn!("settings in {} were not read: {e}{copied}", path.display());
+                    match keep(&path, &kept) {
+                        Ok(()) => log::warn!("settings in {} were not read: {e}; a copy is in {}", path.display(), kept.display()),
+                        Err(copy) => {
+                            log::warn!(
+                                "settings in {} were not read: {e}; they couldn't be copied aside ({copy}), so nothing is saved over them",
+                                path.display()
+                            );
+                            read_only = true;
+                        }
+                    }
                 }
                 HashMap::new()
             }
         };
-        Self { path, values, dirty: false, writing: None }
+        Self { path, values, dirty: false, writing: None, read_only }
     }
 
     /// Waits for the write in progress, and takes its result: a failed write leaves the changes to
@@ -61,6 +77,7 @@ impl Drop for FileStore {
     fn drop(&mut self) {
         self.settle();
         if self.dirty
+            && !self.read_only
             && let Err(e) = write(&self.path, &self.values)
         {
             log::warn!("settings were not saved to {}: {e}", self.path.display());
@@ -136,14 +153,15 @@ impl eframe::Storage for FileStore {
         self.dirty |= self.values.remove(key).is_some();
     }
 
-    /// Hands the changes to a write on its own thread. While an earlier write is still running they
-    /// stay for the next save (or the last one, when the store is dropped).
+    /// Hands the changes to a write on its own thread. While an earlier write is still running, or
+    /// no thread can be had, they stay for the next save (or the last one, when the store is
+    /// dropped): the window never waits for the disk.
     fn flush(&mut self) {
         if self.writing.as_ref().is_some_and(|writing| !writing.is_finished()) {
             return;
         }
         self.settle();
-        if !self.dirty {
+        if !self.dirty || self.read_only {
             return;
         }
         let (path, values) = (self.path.clone(), self.values.clone());
@@ -152,11 +170,7 @@ impl eframe::Storage for FileStore {
                 self.writing = Some(writing);
                 self.dirty = false;
             }
-            // No thread to be had: saved here instead.
-            Err(_) => match write(&self.path, &self.values) {
-                Ok(()) => self.dirty = false,
-                Err(e) => log::warn!("settings were not saved to {}: {e}", self.path.display()),
-            },
+            Err(e) => log::debug!("settings are saved later: no thread to write them ({e})"),
         }
     }
 }
@@ -200,6 +214,21 @@ mod tests {
         broken.set_string("pdfcraft", "x".to_owned());
         save(&mut broken);
         assert_eq!(FileStore::open(path).get_string("pdfcraft").as_deref(), Some("x"));
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn settings_that_can_be_neither_read_nor_copied_aside_are_not_saved_over() {
+        let folder = std::env::temp_dir().join(format!("pdfcraft-soft-store-kept-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("folder");
+        let path = folder.join("app.ron");
+        let garbage = "not ron at all {{{";
+        std::fs::write(&path, garbage).expect("write");
+        let mut store = FileStore::open_keeping(path.clone(), |_, _| Err(std::io::Error::other("disk full")));
+        store.set_string("pdfcraft", "x".to_owned());
+        save(&mut store);
+        drop(store);
+        assert_eq!(std::fs::read_to_string(&path).ok().as_deref(), Some(garbage), "the only copy of what it held is left alone");
         let _ = std::fs::remove_dir_all(folder);
     }
 
