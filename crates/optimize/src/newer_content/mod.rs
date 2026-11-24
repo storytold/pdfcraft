@@ -9,19 +9,29 @@
 mod checks;
 mod content;
 mod ctx;
+mod joined;
 mod keys;
 mod scan;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
-use pdfcraft_cos::{Document, MAX_PAGE_DECODED, ObjRef, Object, Stream};
+use pdfcraft_cos::{Document, MAX_PAGE_DECODED, ObjRef, Object};
 
-use scan::{Fonts, Notes};
+use joined::Decoder;
+use scan::{Found, Notes};
 
 /// The most stream data one check decodes, over all its streams. Past it, streams are counted in
 /// [`ContentVersions::unread`].
 const MAX_DECODED: usize = MAX_PAGE_DECODED;
+
+/// The most bytes of streams several pages share that are scanned again, joined into a later
+/// page's content. Past it, the stream is left out of that page and counted unread.
+const MAX_REJOINED: usize = MAX_PAGE_DECODED.saturating_mul(4);
+
+/// The most bytes of one page's joined content held at once. Past it, a stream is left out of
+/// that page and counted unread.
+const MAX_JOINED: usize = MAX_PAGE_DECODED;
 
 /// One construct a document uses and the PDF version that introduced it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,8 +61,8 @@ impl fmt::Display for NewerContent {
 pub(crate) struct ContentVersions {
     /// Highest version first.
     requirements: Vec<NewerContent>,
-    /// Content streams and font programs that could not be read, so a construct in them may be
-    /// missing from `requirements`.
+    /// Content streams and font programs that could not be read, each counted once, so a
+    /// construct in them may be missing from `requirements`.
     pub(crate) unread: usize,
 }
 
@@ -79,32 +89,40 @@ fn code(name: &str) -> Option<u8> {
 pub(crate) fn content_versions(doc: &Document, keep_going: &mut dyn FnMut() -> bool) -> Option<ContentVersions> {
     let all = scan::objects(doc);
     let reached = scan::reached(doc, &all);
+    let arrays = joined::content_arrays(doc, &all, &reached);
+    let joined: HashSet<ObjRef> = arrays.values().flatten().copied().collect();
     let mut tally = Tally::default();
-    let mut notes = Notes::new();
-    let mut fonts = Fonts::new();
-    let mut decoder = Decoder { left: MAX_DECODED, unread: 0 };
-    scan::scan_dict(doc.trailer(), ctx::TRAILER, 0, &mut notes, &mut fonts);
-    tally.add(&mut notes, None);
+    let mut found = Found::new(doc);
+    let mut decoder = Decoder::new(MAX_DECODED, MAX_REJOINED, MAX_JOINED, &arrays);
+    scan::scan_dict(doc.trailer(), ctx::TRAILER, 0, &mut found);
+    tally.add(&mut found.notes, None);
     for &r in &all {
         let bits = reached.get(&r).copied().unwrap_or(0);
-        let obj = doc.get(r);
-        match &*obj {
-            Object::Dict(d) => scan::scan_dict(d, bits, 0, &mut notes, &mut fonts),
+        match &*doc.get(r) {
+            Object::Dict(d) => {
+                scan::scan_dict(d, bits, 0, &mut found);
+                if let Some(members) = arrays.get(&r) {
+                    let notes = decoder.joined(doc, members, keep_going, &mut content::scan_content)?;
+                    found.notes.extend(notes);
+                }
+            }
             Object::Stream(s) => {
-                scan::scan_dict(&s.dict, bits | ctx::STREAM, 0, &mut notes, &mut fonts);
-                if (ctx::own(&s.dict, true) | bits) & ctx::CONTENT != 0 && bits & ctx::ENCRYPT == 0 {
+                scan::scan_dict(&s.dict, bits | ctx::STREAM, 0, &mut found);
+                let content = (ctx::own(&s.dict, true) | bits) & ctx::CONTENT != 0;
+                if content && bits & ctx::ENCRYPT == 0 && !joined.contains(&r) {
                     if !keep_going() {
                         return None;
                     }
-                    if let Some(data) = decoder.read(s) {
-                        content::scan_content(&data, &mut notes);
+                    if let Some(data) = decoder.read(r, s) {
+                        content::scan_content(&data, &mut found.notes);
                     }
                 }
             }
             _ => {}
         }
-        tally.add(&mut notes, Some(r));
+        tally.add(&mut found.notes, Some(r));
     }
+    let mut fonts = std::mem::take(&mut found.fonts);
     fonts.sort_unstable();
     fonts.dedup();
     for r in fonts {
@@ -112,34 +130,13 @@ pub(crate) fn content_versions(doc: &Document, keep_going: &mut dyn FnMut() -> b
             return None;
         }
         if let Object::Stream(s) = &*doc.get(r)
-            && let Some(data) = decoder.read(s)
+            && let Some(data) = decoder.read(r, s)
         {
-            content::scan_font(&data, &mut notes);
+            content::scan_font(&data, &mut found.notes);
         }
-        tally.add(&mut notes, Some(r));
+        tally.add(&mut found.notes, Some(r));
     }
-    Some(ContentVersions { requirements: tally.into_requirements(), unread: decoder.unread })
-}
-
-/// Decodes streams within the check's allowance, counting those it cannot read.
-struct Decoder {
-    left: usize,
-    unread: usize,
-}
-
-impl Decoder {
-    fn read(&mut self, s: &Stream) -> Option<Vec<u8>> {
-        match s.decoded_within(self.left) {
-            Ok(data) => {
-                self.left = self.left.saturating_sub(data.len());
-                Some(data)
-            }
-            Err(_) => {
-                self.unread = self.unread.saturating_add(1);
-                None
-            }
-        }
-    }
+    Some(ContentVersions { requirements: tally.into_requirements(), unread: decoder.unread() })
 }
 
 /// Per `(version, construct)`: the objects using it and the lowest of them.

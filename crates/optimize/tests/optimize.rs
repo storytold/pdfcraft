@@ -6024,3 +6024,155 @@ fn a_cyclic_deeply_nested_document_is_checked_to_a_bounded_depth() {
     .unwrap();
     assert!(!utf8(&doc), "nesting past the depth followed is not walked");
 }
+
+#[test]
+fn a_page_content_split_across_streams_is_read_as_one() {
+    // The marked-content tag's operands end the first stream and its operator starts the second.
+    let (mut doc, p) = page_with(&[], "");
+    let first = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"/OC /MC0".to_vec())));
+    let second = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"BDC 0 0 m 1 1 l S EMC".to_vec())));
+    doc.update_dict(p, |d| d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(first), Object::Ref(second)]))).unwrap();
+    let found = pdfcraft_optimize::newer_content(&doc, Compatibility::Pdf1_4).0;
+    let tag = found.iter().find(|r| r.construct == "marked-content tag /OC");
+    assert_eq!(tag.map(|r| (r.version, r.example)), Some(("1.5", Some(p))), "{found:?}");
+}
+
+#[test]
+fn an_array_given_by_reference_passes_on_its_context() {
+    // `/Contents 10 0 R`, object 10 being `[11 0 R]`: object 11 is still the page's content.
+    let (mut doc, p) = page_with(&[], "");
+    let s = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"/OC /MC0 BDC EMC".to_vec())));
+    let list = doc.add(Object::Array(vec![Object::Ref(s)]));
+    doc.update_dict(p, |d| d.set(b"Contents".to_vec(), Object::Ref(list))).unwrap();
+    // `/Fields 20 0 R`, object 20 being `[21 0 R]`: object 21 is a field, though it has no `/FT`.
+    let mut field = Dict::new();
+    field.set(b"T".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"a".to_vec())));
+    field.set(b"Ff".to_vec(), Object::Int(0x0100_0000));
+    let field = doc.add(Object::Dict(field));
+    let fields = doc.add(Object::Array(vec![Object::Ref(field)]));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |d| {
+        let mut form = Dict::new();
+        form.set(b"Fields".to_vec(), Object::Ref(fields));
+        d.set(b"AcroForm".to_vec(), Object::Dict(form));
+    })
+    .unwrap();
+    let found = pdfcraft_optimize::newer_content(&doc, Compatibility::Pdf1_4).0;
+    assert!(found.iter().any(|r| r.construct == "marked-content tag /OC"), "{found:?}");
+    assert!(found.iter().any(|r| r.construct == "field flag" && r.example == Some(field)), "{found:?}");
+}
+
+#[test]
+fn only_a_signatures_contents_and_certificate_are_binary() {
+    let utf8 = |key: &str| {
+        let mut sig = Dict::new();
+        sig.set(b"Type".to_vec(), Object::name("Sig"));
+        sig.set(b"ByteRange".to_vec(), Object::Array(vec![0.into(), 1.into(), 2.into(), 3.into()]));
+        sig.set(b"Contents".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(vec![0; 4])));
+        sig.set(key.as_bytes().to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"\xEF\xBB\xBFx".to_vec())));
+        let (mut doc, _) = page_with(&[], "");
+        doc.add(Object::Dict(sig));
+        pdfcraft_optimize::newer_content(&doc, Compatibility::Pdf1_7).0.iter().any(|r| r.construct == "UTF-8 text string")
+    };
+    assert!(utf8("Reason") && utf8("Location") && utf8("ContactInfo"));
+    assert!(!utf8("Contents") && !utf8("Cert"));
+}
+
+#[test]
+fn a_value_given_by_reference_is_judged_under_its_key() {
+    let (mut doc, _) = page_with(&[], "");
+    let jpx = doc.add(Object::name("JPXDecode"));
+    let brotli = doc.add(Object::name("BrotliDecode"));
+    let shared = doc.add(Object::Array(vec![Object::name("FlateDecode"), Object::Ref(brotli)]));
+    let filtered = |filter: Object| {
+        let mut d = Dict::new();
+        d.set(b"Filter".to_vec(), filter);
+        Object::Stream(Stream::from_raw(d, b"x".to_vec()))
+    };
+    let one = doc.add(filtered(Object::Ref(jpx)));
+    let many: Vec<ObjRef> = (0..1000).map(|_| doc.add(filtered(Object::Ref(shared)))).collect();
+    let found = pdfcraft_optimize::newer_content(&doc, Compatibility::Pdf1_4).0;
+    let listed = |c: &str| found.iter().find(|r| r.construct == c).map(|r| (r.version, r.objects, r.example));
+    assert_eq!(listed("/Filter /JPXDecode"), Some(("1.5", 1, Some(one))), "{found:?}");
+    // One array shared by a thousand streams counts for each of them.
+    assert_eq!(listed("/Filter /BrotliDecode"), Some(("2.0", 1000, many.first().copied())), "{found:?}");
+
+    // A name standing alone is no one's value.
+    let (mut alone, _) = page_with(&[], "");
+    alone.add(Object::name("JPXDecode"));
+    let found = pdfcraft_optimize::newer_content(&alone, Compatibility::Pdf1_4).0;
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn the_entries_of_an_array_given_by_reference_are_judged_under_its_key() {
+    let (mut doc, p) = page_with(&[], "");
+    // `/LE 9 0 R`, object 9 being `[/Butt 10 0 R 9 0 R]`, object 10 `/Slash`: the array names
+    // itself, and the check still ends.
+    let ends = doc.add(Object::Null);
+    let slash = doc.add(Object::name("Slash"));
+    doc.set(ends, Object::Array(vec![Object::name("Butt"), Object::Ref(slash), Object::Ref(ends)]));
+    let mut line = Dict::new();
+    line.set(b"Type".to_vec(), Object::name("Annot"));
+    line.set(b"Subtype".to_vec(), Object::name("Line"));
+    line.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
+    line.set(b"LE".to_vec(), Object::Ref(ends));
+    let line = doc.add(Object::Dict(line));
+    // `/Annots 11 0 R`, object 11 holding a caret annotation directly.
+    let mut caret = Dict::new();
+    caret.set(b"Type".to_vec(), Object::name("Annot"));
+    caret.set(b"Subtype".to_vec(), Object::name("Caret"));
+    caret.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
+    let annots = doc.add(Object::Array(vec![Object::Ref(line), Object::Dict(caret)]));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Ref(annots))).unwrap();
+    let found = pdfcraft_optimize::newer_content(&doc, Compatibility::Pdf1_4).0;
+    let listed = |c: &str| found.iter().find(|r| r.construct == c).map(|r| (r.version, r.example));
+    assert_eq!(listed("/LE /Butt"), Some(("1.5", Some(line))), "{found:?}");
+    assert_eq!(listed("/LE /Slash"), Some(("1.6", Some(line))), "{found:?}");
+    assert_eq!(listed("/Subtype /Caret"), Some(("1.5", Some(p))), "{found:?}");
+}
+
+/// A stream that no filter reads.
+fn unreadable() -> Object {
+    let mut d = Dict::new();
+    d.set(b"Filter".to_vec(), Object::name("NoSuchDecode"));
+    Object::Stream(Stream::from_raw(d, b"/OC /MC0 BDC EMC".to_vec()))
+}
+
+#[test]
+fn an_unreadable_stream_in_content_arrays_is_counted_once() {
+    let unread = |doc: &Document| pdfcraft_optimize::newer_content(doc, Compatibility::Pdf1_4).1;
+    let (mut doc, first) = page_with(&[], "");
+    let base = unread(&doc);
+    let bad = doc.add(unreadable());
+    let good = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"0 0 m S".to_vec())));
+    doc.update_dict(first, |d| d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(bad), Object::Ref(good)]))).unwrap();
+    assert_eq!(unread(&doc), base + 1, "an unreadable member of /Contents is counted");
+    // Two more pages, each joining it with streams of their own: still one stream unread.
+    for _ in 0..2 {
+        let own = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"q Q".to_vec())));
+        let p = page(&mut doc, &[], "");
+        doc.update_dict(p, |d| d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(own), Object::Ref(bad)]))).unwrap();
+    }
+    assert_eq!(unread(&doc), base + 1, "a stream shared by several pages is counted once");
+}
+
+#[test]
+fn a_stream_many_pages_join_is_decoded_once() {
+    // A 1 MiB stream that 300 pages join with one of their own: decoded per page, it would spend
+    // the 256 MiB allowance and leave the later pages unread.
+    let (mut doc, _) = page_with(&[], "");
+    let base = pdfcraft_optimize::newer_content(&doc, Compatibility::Pdf1_4).1;
+    let shared = doc.add(Object::Stream(Stream::flate(Dict::new(), &vec![b' '; 1 << 20])));
+    let mut last = None;
+    for _ in 0..300 {
+        let own = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"/OC /MC0 BDC EMC".to_vec())));
+        let p = page(&mut doc, &[], "");
+        doc.update_dict(p, |d| d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(shared), Object::Ref(own)]))).unwrap();
+        last = Some(p);
+    }
+    let (found, unread) = pdfcraft_optimize::newer_content(&doc, Compatibility::Pdf1_4);
+    assert_eq!(unread, base, "{found:?}");
+    let tag = found.iter().find(|r| r.construct == "marked-content tag /OC").map(|r| r.objects);
+    assert_eq!(tag, Some(300), "every page's own stream is read; last page {last:?}");
+}
