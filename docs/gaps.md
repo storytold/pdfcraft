@@ -1,6 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
-> **Last reviewed:** 2026-11-11 | **Last updated:** 2026-11-11 | **Change:** minor (gap 8: known residual risk for the LibreOffice sidecar, sandbox tracked in #6953; estimates unchanged)
+> **Last reviewed:** 2026-11-11 | **Last updated:** 2026-11-11 | **Change:** minor (local desktop conversion uses embedded Craft readers)
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -194,21 +194,15 @@ update the numbers.
 
 - **Missing:** Word export that keeps layout; Excel and PowerPoint export; creating PDFs from HTML,
   web pages and PostScript; SVG/XML/EPS/PS/JPEG 2000 export. Office documents open from File ▸ Open
-  through an installed LibreOffice, but Insert pages, Combine files and Create ▸ Multiple files
+  through embedded Craft readers, but Insert pages, Combine files and Create ▸ Multiple files
   don't take them yet.
 - **Evidence:** `create.export-docx` partial; the synthetic invoice regression for
   [#773](https://github.com/storytold/pdfcraft/issues/773) now covers absent inferred borders,
   floating watermark text and per-page section sizes. Exact font matching, vector rules and
   broader layout fidelity remain incomplete;
-  `create.from-office` partial (LibreOffice sidecar; Writer and Calc never update linked content,
-  but Impress has no such setting and the process's network access isn't sandboxed);
+  `create.from-office` partial (embedded desktop readers);
   `create.export-xlsx`, `create.export-pptx`,
   `create.from-html` planned.
-- **Known residual risk:** conversion runs the user's installed LibreOffice. PdfCraft
-  opens no connection itself. Macros are disabled, untrusted referer links are blocked,
-  and Writer and Calc never update links. Impress has no link-update setting, and the
-  `soffice` process isn't network-sandboxed, so linked content in presentations could be
-  fetched. Sandboxing the converter is [#6953](https://github.com/storytold/pdfcraft/issues/6953).
 - **Impact:** "Export PDF" and "Create PDF" are two of Acrobat's most used tools.
 - **Gate:** lossy or missing sub-cases of the convert-and-share workflow (partial, not blocking).
   First beta items: the rest of Create PDF from Office (Insert, Combine and Create ▸ Multiple files

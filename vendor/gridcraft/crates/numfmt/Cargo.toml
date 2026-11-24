@@ -1,0 +1,12 @@
+[package]
+name = "gridcraft-numfmt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft number formats: Excel format codes, General display, TEXT()"
+
+[lints]
+workspace = true
+
+[dependencies]
+gridcraft-core = { workspace = true }

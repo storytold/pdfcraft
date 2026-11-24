@@ -1,0 +1,18 @@
+[package]
+name = "deckcraft-fonts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "DeckCraft fonts: font database (craft-fonts + system), substitutes for Office fonts, metrics, outlines, shaping"
+
+[lints]
+workspace = true
+
+[dependencies]
+kurbo = { workspace = true }
+skrifa = { workspace = true }
+harfrust = { workspace = true }
+unicode-bidi = { workspace = true }
+log = { workspace = true }
+# Last-resort face only (Ubuntu Light); no UI code.
+epaint_default_fonts = "0.37"

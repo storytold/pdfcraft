@@ -1,12 +1,8 @@
-//! Office documents converted by a real LibreOffice through the tools that take them
-//! (`doc_create_multiple`, `doc_combine`), with the converted text checked. Every test here
-//! skips when LibreOffice isn't installed, which is the case on CI; run them on a machine that
-//! has it. The Word, Excel and PowerPoint files are written here, as the smallest packages
-//! LibreOffice reads, so no binary fixtures are committed.
+//! Embedded document conversion through the native automation tools.
 
 use std::path::Path;
 
-use pdfcraft_automation::{Automation, Content, ToolError};
+use pdfcraft_automation::{Automation, Content};
 use serde_json::{Value, json};
 
 fn auto(dir: &Path) -> Automation {
@@ -193,29 +189,21 @@ fn rtf(text: &str) -> Vec<u8> {
     format!("{{\\rtf1\\ansi{{\\fonttbl\\f0\\fswiss Helvetica;}}\\f0\\pard {text}\\par}}").into_bytes()
 }
 
-/// A folder with one Word, Excel, PowerPoint and RTF file, each carrying its own word, and the
-/// tools rooted there; `None` when LibreOffice isn't installed.
-fn office_files() -> Option<(tempfile::TempDir, Automation)> {
+fn office_files() -> (tempfile::TempDir, Automation) {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("letter.docx"), docx("Quokka letter")).unwrap();
     std::fs::write(dir.path().join("budget.xlsx"), xlsx("Narwhal budget")).unwrap();
     std::fs::write(dir.path().join("deck.pptx"), pptx("Axolotl deck")).unwrap();
     std::fs::write(dir.path().join("notes.rtf"), rtf("Pangolin notes")).unwrap();
-    let mut a = auto(dir.path());
-    match a.call("doc_create_multiple", &json!({ "paths": ["notes.rtf"] })) {
-        Err(ToolError::Failed(e)) if e.contains("needs LibreOffice") => {
-            eprintln!("skipped: LibreOffice isn't installed");
-            None
-        }
-        _ => Some((dir, a)),
-    }
+    let a = auto(dir.path());
+    (dir, a)
 }
 
 /// Each Office format converts to a PDF of its own that holds the document's text (and, for
 /// the spreadsheet, the formula's value).
 #[test]
 fn office_documents_convert_separately_with_their_text() {
-    let Some((dir, mut a)) = office_files() else { return };
+    let (dir, mut a) = office_files();
     let paths = ["letter.docx", "budget.xlsx", "deck.pptx", "notes.rtf"];
     let made = ok(&mut a, "doc_create_multiple", json!({ "paths": paths, "mode": "separate", "out_dir": "out" }));
     let files = made["files"].as_array().unwrap();
@@ -242,7 +230,7 @@ fn office_documents_convert_separately_with_their_text() {
 /// Office documents combine, in the order given, with a PDF made here, one bookmark each.
 #[test]
 fn office_documents_combine_in_order_with_a_bookmark_each() {
-    let Some((dir, mut a)) = office_files() else { return };
+    let (dir, mut a) = office_files();
     let made = ok(
         &mut a,
         "doc_create_multiple",

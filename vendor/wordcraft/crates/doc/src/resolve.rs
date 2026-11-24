@@ -1,0 +1,634 @@
+//! Style resolution: document defaults → paragraph style chain → character style chain → direct
+//! formatting, into concrete values for layout.
+
+use serde::{Deserialize, Serialize};
+
+use crate::props::{
+    Align, Border, Borders, CharProps, Highlight, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabStop, TextColor, Underline, VertAlign,
+};
+use crate::styles::{StyleKind, StyleSheet};
+
+/// Automatic (HTML-style) paragraph spacing, points: what Word for Windows gives `w:beforeAutospacing`
+/// and `w:afterAutospacing` at any font size (measured).
+pub const AUTO_SPACING: f32 = 14.0;
+/// The largest drop cap distance from the text, in points (22", as Word's dialog allows).
+pub const MAX_DROP_CAP_DISTANCE: f32 = 1584.0;
+
+/// Concrete character formatting.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedChar {
+    pub font: String,
+    pub size: f32,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: Underline,
+    pub underline_color: Option<Rgb>,
+    pub strike: bool,
+    pub double_strike: bool,
+    pub color: TextColor,
+    pub highlight: Option<Rgb>,
+    pub shading: Option<Rgb>,
+    /// Visible character border only (`nil`/`none` resolve to `None`).
+    pub border: Option<Border>,
+    pub vert_align: VertAlign,
+    pub caps: bool,
+    pub small_caps: bool,
+    pub hidden: bool,
+    pub spacing: f32,
+    pub scale: f32,
+    pub position: f32,
+    /// Kerning: the smallest font size, in points, that is kerned (`w:kern`); 0 = never kerned.
+    #[serde(default)]
+    pub kern: f32,
+    /// A mark over or under each character (Font › Emphasis mark).
+    #[serde(default)]
+    pub emphasis: crate::props::EmphasisMark,
+    /// OpenType ligatures (`w14:ligatures`); `None` = the shaper's default (standard and
+    /// contextual).
+    #[serde(default)]
+    pub ligatures: Option<crate::props::Ligatures>,
+    pub outline: bool,
+    pub shadow: bool,
+    pub emboss: bool,
+    pub engrave: bool,
+    /// WordArt text effects (sanitized; `None` when there are none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_effects: Option<Box<crate::wordart::TextEffects>>,
+    pub link: Option<String>,
+    pub ins: Option<u32>,
+    pub del: Option<u32>,
+    /// The revision of a tracked formatting change (`w:rPrChange`) of the run.
+    pub fmt: Option<u32>,
+    pub no_proof: bool,
+    pub lang: Option<String>,
+    /// Right-to-left run (`w:rtl`).
+    pub rtl: bool,
+    /// The whole run uses the complex-script properties (`w:cs`).
+    pub cs: bool,
+    /// Complex-script font, size, bold and italic (Arabic, Persian, Hebrew… text).
+    pub font_cs: String,
+    /// East Asian font (Chinese, Japanese and Korean text), when one is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_ea: Option<String>,
+    pub size_cs: f32,
+    pub bold_cs: bool,
+    pub italic_cs: bool,
+}
+
+impl ResolvedChar {
+    fn from(c: &CharProps) -> ResolvedChar {
+        ResolvedChar {
+            // A symbol character is shown in its own font (`w:sym`), whatever the run's font.
+            font: c.shown_font().map(str::to_string).unwrap_or_else(|| crate::styles::BODY_FONT.to_string()),
+            size: c.size.unwrap_or(crate::props::DEFAULT_FONT_SIZE).clamp(1.0, 1638.0),
+            bold: c.bold.unwrap_or(false),
+            italic: c.italic.unwrap_or(false),
+            underline: c.underline.unwrap_or_default(),
+            underline_color: c.underline_color,
+            strike: c.strike.unwrap_or(false),
+            double_strike: c.double_strike.unwrap_or(false),
+            color: c.color.unwrap_or_default(),
+            highlight: c.highlight.and_then(Highlight::rgb),
+            shading: c.shading,
+            border: c.border.filter(Border::is_visible),
+            vert_align: c.vert_align.unwrap_or_default(),
+            caps: c.caps.unwrap_or(false),
+            small_caps: c.small_caps.unwrap_or(false),
+            hidden: c.hidden.unwrap_or(false),
+            spacing: c.spacing.unwrap_or(0.0).clamp(-100.0, 100.0),
+            scale: c.scale.unwrap_or(100.0).clamp(1.0, 600.0),
+            position: c.position.unwrap_or(0.0).clamp(-800.0, 800.0),
+            kern: c.kern.filter(|k| k.is_finite()).unwrap_or(0.0).clamp(0.0, 1638.0),
+            emphasis: c.emphasis.unwrap_or_default(),
+            ligatures: c.ligatures,
+            outline: c.outline.unwrap_or(false),
+            shadow: c.shadow.unwrap_or(false),
+            emboss: c.emboss.unwrap_or(false),
+            engrave: c.engrave.unwrap_or(false),
+            text_effects: c.text_effects.as_deref().map(crate::wordart::TextEffects::sanitized).filter(|t| !t.is_empty()).map(Box::new),
+            link: c.link.clone(),
+            ins: c.ins,
+            del: c.del,
+            fmt: c.fmt_change.as_ref().map(|f| f.rev),
+            no_proof: c.no_proof.unwrap_or(false),
+            lang: c.lang.clone(),
+            rtl: c.rtl.unwrap_or(false),
+            cs: c.cs.unwrap_or(false),
+            font_cs: c.font_cs.clone().or_else(|| c.font.clone()).unwrap_or_else(|| crate::styles::BODY_FONT.to_string()),
+            font_ea: c.font_ea.clone(),
+            size_cs: c.size_cs.or(c.size).unwrap_or(crate::props::DEFAULT_FONT_SIZE).clamp(1.0, 1638.0),
+            // A run marked complex script (`w:cs`) is bold and italic only by `w:bCs` and `w:iCs`:
+            // Word draws Thai with `<w:b/><w:cs/>` and no `w:bCs` upright and plain (measured in
+            // Word for Windows). Other runs, including those no DOCX marked, still borrow the
+            // Latin values. The size keeps borrowing `w:sz` until generated styles carry a
+            // `w:szCs` (#4197).
+            bold_cs: c.bold_cs.or(c.bold.filter(|_| c.cs != Some(true))).unwrap_or(false),
+            italic_cs: c.italic_cs.or(c.italic.filter(|_| c.cs != Some(true))).unwrap_or(false),
+        }
+    }
+    /// The formatting complex-script text in this run is drawn with: the complex-script font,
+    /// size, bold and italic in place of the others (Word formats Arabic, Persian and Hebrew
+    /// characters, and every character of an `rtl`/`cs` run, this way).
+    pub fn complex(&self) -> ResolvedChar {
+        ResolvedChar { font: self.font_cs.clone(), size: self.size_cs, bold: self.bold_cs, italic: self.italic_cs, ..self.clone() }
+    }
+    /// Whether the text is kerned: Word kerns only a run with Kerning for fonts set (`w:kern`) at
+    /// a size of at least that many points, never by default (measured in Word for Windows).
+    pub fn kerned(&self) -> bool {
+        self.kern > 0.0 && self.size >= self.kern
+    }
+    /// Does a character of this run use the complex-script properties?
+    pub fn uses_complex(&self, c: char) -> bool {
+        self.rtl || self.cs || crate::bidi::is_complex_script(c)
+    }
+    /// The size glyphs are drawn and measured at. Word sets superscript and subscript text at
+    /// 0.65 of the run's size rounded to the half point, a font size the format can store
+    /// (measured in Word for Mac from digit advances: 8 pt → 5, 9 → 6, 11 → 7, 12 → 8,
+    /// 16 → 10.5, 24 → 15.5, 36 → 23.5).
+    pub fn draw_size(&self) -> f32 {
+        if self.vert_align == VertAlign::Baseline { self.size } else { (self.size * 0.65 * 2.0).round() / 2.0 }
+    }
+    /// Baseline shift, points (positive = up).
+    pub fn baseline_shift(&self) -> f32 {
+        self.position
+            + match self.vert_align {
+                VertAlign::Baseline => 0.0,
+                VertAlign::Superscript => self.size * 0.33,
+                VertAlign::Subscript => -self.size * 0.14,
+            }
+    }
+}
+
+/// Concrete paragraph formatting.
+fn default_adjust_right_indent() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedPara {
+    pub style: String,
+    pub align: Align,
+    pub indent_left: f32,
+    pub indent_right: f32,
+    pub indent_first: f32,
+    pub space_before: f32,
+    pub space_after: f32,
+    /// The space before or after is automatic (HTML-style, [`AUTO_SPACING`]): see
+    /// `ParaProps::space_before_auto`.
+    #[serde(default)]
+    pub before_auto: bool,
+    #[serde(default)]
+    pub after_auto: bool,
+    pub line_spacing: LineSpacing,
+    pub contextual_spacing: bool,
+    /// Left/right indents are inside/outside: they swap on even pages.
+    pub mirror_indents: bool,
+    /// Automatically adjust the right indent for the document grid when enabled; keep the specified right indent when disabled.
+    #[serde(default = "default_adjust_right_indent")]
+    pub adjust_right_indent: bool,
+    pub keep_next: bool,
+    pub keep_lines: bool,
+    pub page_break_before: bool,
+    pub widow_control: bool,
+    pub outline_level: Option<u8>,
+    pub numbering: Option<NumRef>,
+    pub tabs: Vec<TabStop>,
+    pub shading: Option<Rgb>,
+    pub borders: Option<Borders>,
+    /// Padding on the sides without a line (top, left, bottom, right), points. ODF's box model
+    /// (XSL's) keeps it for documents opened from ODF (`Settings::odf`); Word drops it.
+    #[serde(default)]
+    pub padding: [f32; 4],
+    pub bidi: bool,
+    pub drop_cap: u8,
+    /// The drop cap hangs in the margin (see `ParaProps::drop_cap_margin`).
+    #[serde(default)]
+    pub drop_cap_margin: bool,
+    /// The drop cap's distance from the text, in points.
+    #[serde(default)]
+    pub drop_cap_distance: f32,
+    /// The drop cap letter's font family; `None` = the text's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drop_cap_font: Option<String>,
+    /// A text frame the paragraph sits in (see `ParaProps::frame`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<crate::props::TextFrame>,
+    pub suppress_hyphens: bool,
+    pub suppress_line_numbers: bool,
+    /// Asian typography (see `ParaProps`): East Asian line-breaking rules.
+    pub kinsoku: bool,
+    /// Latin words wrap whole (`false`: they may break at any character).
+    pub word_wrap: bool,
+    pub overflow_punct: bool,
+    pub top_line_punct: bool,
+    pub auto_space_de: bool,
+    pub auto_space_dn: bool,
+    /// Lines snap to the document grid, when the section has one.
+    pub snap_to_grid: bool,
+    /// Indents in characters (left, right, first line; 0 = in points), which win over the
+    /// point values; see [`ResolvedPara::set_char_unit`].
+    #[serde(default)]
+    pub indent_chars: [f32; 3],
+}
+
+const MAX_INDENT: f32 = 1584.0; // 22"
+
+impl ResolvedPara {
+    /// Visual (left, right) indents. Indents, like alignment, are logical: `indent_left` is the
+    /// start (leading) edge, which is the right edge of a right-to-left paragraph (ISO 29500
+    /// `w:ind/@w:start`, read from `w:left` too).
+    pub fn visual_indents(&self) -> (f32, f32) {
+        if self.bidi { (self.indent_right, self.indent_left) } else { (self.indent_left, self.indent_right) }
+    }
+
+    /// Turn the indents given in characters into points, one character being `size` points: the
+    /// size of the paragraph mark's font (as Word measures `w:firstLineChars` and friends).
+    pub fn set_char_unit(&mut self, size: f32) {
+        let size = if size.is_finite() { size.clamp(1.0, 1638.0) } else { 12.0 };
+        let [l, r, f] = self.indent_chars;
+        for (chars, pts) in [(l, &mut self.indent_left), (r, &mut self.indent_right), (f, &mut self.indent_first)] {
+            if chars != 0.0 {
+                *pts = (chars * size).clamp(-MAX_INDENT, MAX_INDENT);
+            }
+        }
+    }
+}
+
+impl ResolvedPara {
+    fn from(p: &ParaProps, style: &str) -> ResolvedPara {
+        let clampi = |v: Option<f32>| v.unwrap_or(0.0).clamp(-MAX_INDENT, MAX_INDENT);
+        let mut tabs: Vec<TabStop> =
+            p.tabs.clone().unwrap_or_default().into_iter().filter(|t| t.align != TabAlign::Clear && t.pos.is_finite()).collect();
+        tabs.sort_by(|a, b| a.pos.total_cmp(&b.pos));
+        ResolvedPara {
+            style: style.to_string(),
+            align: p.align.unwrap_or_default(),
+            indent_left: clampi(p.indent_left),
+            indent_right: clampi(p.indent_right),
+            indent_first: clampi(p.indent_first),
+            space_before: if p.space_before_auto == Some(true) { AUTO_SPACING } else { p.space_before.unwrap_or(0.0).clamp(0.0, 1584.0) },
+            space_after: if p.space_after_auto == Some(true) { AUTO_SPACING } else { p.space_after.unwrap_or(0.0).clamp(0.0, 1584.0) },
+            before_auto: p.space_before_auto == Some(true),
+            after_auto: p.space_after_auto == Some(true),
+            line_spacing: match p.line_spacing.unwrap_or_default() {
+                LineSpacing::Multiple(m) => LineSpacing::Multiple(if m.is_finite() { m.clamp(0.06, 132.0) } else { 1.0 }),
+                LineSpacing::AtLeast(v) => LineSpacing::AtLeast(if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 }),
+                LineSpacing::Exactly(v) => LineSpacing::Exactly(if v.is_finite() { v.clamp(0.7, 1584.0) } else { 12.0 }),
+            },
+            contextual_spacing: p.contextual_spacing.unwrap_or(false),
+            mirror_indents: p.mirror_indents.unwrap_or(false),
+            adjust_right_indent: p.adjust_right_indent.unwrap_or(true),
+            keep_next: p.keep_next.unwrap_or(false),
+            keep_lines: p.keep_lines.unwrap_or(false),
+            page_break_before: p.page_break_before.unwrap_or(false),
+            widow_control: p.widow_control.unwrap_or(true),
+            outline_level: p.outline_level.filter(|l| *l < 9),
+            numbering: p.numbering.filter(|n| n.num != 0),
+            tabs,
+            shading: p.shading,
+            borders: p.borders.filter(Borders::any_visible),
+            padding: p.borders.map_or([0.0; 4], |b| {
+                [b.top, b.left, b.bottom, b.right]
+                    .map(|s| s.filter(|l| !l.is_visible() && l.space.is_finite() && l.space > 0.0).map_or(0.0, |l| l.space.min(1584.0)))
+            }),
+            bidi: p.bidi.unwrap_or(false),
+            drop_cap: p.drop_cap.unwrap_or(0).min(10),
+            drop_cap_margin: p.drop_cap_margin.unwrap_or(false),
+            drop_cap_distance: p.drop_cap_distance.filter(|d| d.is_finite()).unwrap_or(0.0).clamp(0.0, MAX_DROP_CAP_DISTANCE),
+            drop_cap_font: p.drop_cap_font.clone().filter(|f| !f.trim().is_empty()),
+            // Explicit zero dimensions cancel a frame; omitted dimensions still fit its text.
+            frame: p.frame.clone().filter(|f| p.drop_cap.unwrap_or(0) == 0 && (f.w != Some(0.0) || f.h != Some(0.0))).map(|mut f| {
+                f.w = f.w.filter(|v| *v != 0.0);
+                f.h = f.h.filter(|v| *v != 0.0);
+                f
+            }),
+            suppress_hyphens: p.suppress_hyphens.unwrap_or(false),
+            suppress_line_numbers: p.suppress_line_numbers.unwrap_or(false),
+            kinsoku: p.kinsoku.unwrap_or(true),
+            word_wrap: p.word_wrap.unwrap_or(true),
+            overflow_punct: p.overflow_punct.unwrap_or(true),
+            top_line_punct: p.top_line_punct.unwrap_or(false),
+            auto_space_de: p.auto_space_de.unwrap_or(true),
+            auto_space_dn: p.auto_space_dn.unwrap_or(true),
+            snap_to_grid: p.snap_to_grid.unwrap_or(true),
+            indent_chars: [p.indent_left_chars, p.indent_right_chars, p.indent_first_chars]
+                .map(|c| c.filter(|c| c.is_finite()).unwrap_or(0.0).clamp(-MAX_CHARS, MAX_CHARS)),
+        }
+    }
+}
+
+/// The largest indent in characters (Word allows indents up to 22").
+const MAX_CHARS: f32 = 1584.0;
+
+impl StyleSheet {
+    /// Paragraph properties after defaults and the style chain (without direct formatting).
+    pub fn para_style_props(&self, style: &str) -> (ParaProps, CharProps) {
+        self.para_style_props_over(style, self.default_para.clone(), self.default_chr.clone())
+    }
+
+    /// The paragraph style chain of `style` applied over `pp` / `cp`. A style the document doesn't
+    /// define is the default paragraph style, Normal, as in Word: a footer naming a `Footer` style
+    /// that `styles.xml` leaves out is formatted as Normal, not with the document defaults alone
+    /// (#5077).
+    fn para_style_props_over(&self, style: &str, mut pp: ParaProps, mut cp: CharProps) -> (ParaProps, CharProps) {
+        let style = if self.get(style).is_some() { style } else { "Normal" };
+        for s in self.chain(style) {
+            if s.kind == StyleKind::Paragraph {
+                let mut sp = s.para.clone();
+                // Tabs accumulate along the chain (with Clear removing inherited stops).
+                if let (Some(base), Some(add)) = (pp.tabs.clone(), sp.tabs.clone()) {
+                    let mut merged: Vec<TabStop> = base.into_iter().filter(|t| !add.iter().any(|a| (a.pos - t.pos).abs() < 0.5)).collect();
+                    merged.extend(add);
+                    sp.tabs = Some(merged);
+                }
+                pp.overlay(&sp);
+                cp.overlay(&s.chr);
+            }
+        }
+        pp.style = None;
+        (pp, cp)
+    }
+
+    /// What a table style's paragraph formatting `table` changes for a paragraph with `p`, once
+    /// the paragraph style chain is applied over it (ECMA-376 §17.7.2): each property it gives
+    /// that the chain doesn't set. Formats without table styles state these directly.
+    pub fn table_para_patch(&self, p: &ParaProps, table: &ParaProps) -> ParaProps {
+        let style = p.style.clone().unwrap_or_else(|| "Normal".into());
+        let mut with = self.default_para.clone();
+        with.overlay(&ParaProps { style: None, ..table.clone() });
+        let (with, _) = self.para_style_props_over(&style, with, CharProps::default());
+        let (without, _) = self.para_style_props_over(&style, self.default_para.clone(), CharProps::default());
+        diff_patch(&with, &without)
+    }
+
+    /// What a table style's run formatting `table` changes for a run of character style
+    /// `run_style` in a paragraph of style `para_style`, once the paragraph and character style
+    /// chains are applied over it (ECMA-376 §17.7.2).
+    pub fn table_char_patch(&self, para_style: Option<&str>, run_style: Option<&str>, table: &CharProps) -> CharProps {
+        let chain = |defaults: CharProps| {
+            let (_, mut cp) = self.para_style_props_over(para_style.unwrap_or("Normal"), ParaProps::default(), defaults);
+            if let Some(cs) = run_style {
+                for s in self.chain(cs) {
+                    if s.kind == StyleKind::Character || s.kind == StyleKind::Paragraph {
+                        cp.overlay(&s.chr);
+                    }
+                }
+            }
+            cp
+        };
+        let mut with = self.default_chr.clone();
+        with.overlay(&CharProps { style: None, ..table.clone() });
+        diff_patch(&chain(with), &chain(self.default_chr.clone()))
+    }
+
+    /// Resolve a paragraph's properties.
+    pub fn resolve_para(&self, p: &ParaProps) -> ResolvedPara {
+        self.resolve_para_in(p, None)
+    }
+
+    /// Resolve a paragraph's properties; `table` is the paragraph formatting of the table style of
+    /// the table the paragraph is in. The order is that of ECMA-376 §17.7.2: document defaults, the
+    /// table style, the paragraph style chain, direct formatting. So the table style replaces
+    /// document defaults (Table Grid's single spacing beats the defaults' 8 pt after), but any
+    /// property the paragraph style chain sets, Normal included, beats the table style.
+    pub fn resolve_para_in(&self, p: &ParaProps, table: Option<&ParaProps>) -> ResolvedPara {
+        let style = p.style.clone().unwrap_or_else(|| "Normal".into());
+        let mut defaults = self.default_para.clone();
+        if let Some(t) = table {
+            defaults.overlay(&ParaProps { style: None, ..t.clone() });
+        }
+        let (mut base, _) = self.para_style_props_over(&style, defaults, CharProps::default());
+        let mut direct = p.clone();
+        if let (Some(b), Some(d)) = (base.tabs.clone(), direct.tabs.clone()) {
+            let mut merged: Vec<TabStop> = b.into_iter().filter(|t| !d.iter().any(|a| (a.pos - t.pos).abs() < 0.5)).collect();
+            merged.extend(d);
+            direct.tabs = Some(merged);
+        }
+        base.overlay(&direct);
+        let mut rp = ResolvedPara::from(&base, &style);
+        // Indents in characters: measured in the style's font size here; layout measures them in
+        // the paragraph mark's (`set_char_unit`), which direct formatting may change.
+        if rp.indent_chars.iter().any(|c| *c != 0.0) {
+            rp.set_char_unit(self.resolve_char(Some(&style), &CharProps::default()).size);
+        }
+        rp
+    }
+
+    /// Resolve character formatting for a run in a paragraph of style `para_style`.
+    pub fn resolve_char(&self, para_style: Option<&str>, c: &CharProps) -> ResolvedChar {
+        self.resolve_char_in(para_style, None, c)
+    }
+
+    /// Resolve character formatting for a run in a paragraph of style `para_style`; `table` is the
+    /// run formatting of the table style (with the cell's conditional formatting) of the table the
+    /// paragraph is in. Order: document defaults, the table style, the paragraph style chain, the
+    /// character style chain, direct formatting (ECMA-376 §17.7.2).
+    pub fn resolve_char_in(&self, para_style: Option<&str>, table: Option<&CharProps>, c: &CharProps) -> ResolvedChar {
+        let mut defaults = self.default_chr.clone();
+        if let Some(t) = table {
+            defaults.overlay(&CharProps { style: None, ..t.clone() });
+        }
+        let (_, mut cp) = self.para_style_props_over(para_style.unwrap_or("Normal"), ParaProps::default(), defaults);
+        if let Some(cs) = c.style.as_deref() {
+            for s in self.chain(cs) {
+                if s.kind == StyleKind::Character || s.kind == StyleKind::Paragraph {
+                    cp.overlay(&s.chr);
+                }
+            }
+        }
+        // Only a character itself has a symbol font of its own (`w:sym`); a style never gives one.
+        cp.sym_font = None;
+        let mut direct = c.clone();
+        direct.style = None;
+        cp.overlay(&direct);
+        ResolvedChar::from(&cp)
+    }
+}
+
+/// The properties of `with` that differ from `without` (both fully resolved property sets of one
+/// kind), as a set of only those; empty when serialisation fails.
+fn diff_patch<T: Serialize + serde::de::DeserializeOwned + Default>(with: &T, without: &T) -> T {
+    let (Ok(serde_json::Value::Object(w)), Ok(serde_json::Value::Object(o))) = (serde_json::to_value(with), serde_json::to_value(without)) else {
+        return T::default();
+    };
+    let patch: serde_json::Map<String, serde_json::Value> = w.into_iter().filter(|(k, v)| o.get(k) != Some(v)).collect();
+    serde_json::from_value(serde_json::Value::Object(patch)).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Superscript and subscript sizes as Word for Mac sets them (measured from digit advances in
+    /// its PDF export): 0.65 of the size, rounded to the half point.
+    #[test]
+    fn raised_and_lowered_text_is_sized_to_the_half_point() {
+        for (size, want) in [
+            (8.0, 5.0),
+            (9.0, 6.0),
+            (10.0, 6.5),
+            (11.0, 7.0),
+            (12.0, 8.0),
+            (13.0, 8.5),
+            (14.0, 9.0),
+            (16.0, 10.5),
+            (20.0, 13.0),
+            (24.0, 15.5),
+            (36.0, 23.5),
+        ] {
+            for vert_align in [VertAlign::Superscript, VertAlign::Subscript] {
+                let rc = ResolvedChar { size, vert_align, ..StyleSheet::builtin().resolve_char(None, &CharProps::default()) };
+                assert_eq!(rc.draw_size(), want, "{size} pt {vert_align:?}");
+            }
+        }
+        let rc = StyleSheet::builtin().resolve_char(None, &CharProps { size: Some(11.0), ..Default::default() });
+        assert_eq!(rc.draw_size(), 11.0, "baseline text keeps its size");
+    }
+
+    /// #2036: only a character itself (direct formatting) has a symbol font of its own; a
+    /// style never gives one to its text.
+    #[test]
+    fn a_style_never_gives_text_a_symbol_font() {
+        let mut s = StyleSheet::builtin();
+        if let Some(n) = s.get_mut("Normal") {
+            n.chr.sym_font = Some("Wingdings".into());
+        }
+        assert_ne!(s.resolve_char(None, &CharProps::default()).font, "Wingdings");
+        let direct = CharProps { sym_font: Some("Wingdings".into()), ..Default::default() };
+        assert_eq!(s.resolve_char(None, &direct).font, "Wingdings");
+    }
+
+    /// #5077: a paragraph naming a style the document doesn't define is formatted as Normal,
+    /// paragraph and run alike, not with the document defaults alone.
+    #[test]
+    fn an_undefined_paragraph_style_is_normal() {
+        let mut s = StyleSheet::builtin();
+        s.default_para.space_after = Some(10.0);
+        if let Some(n) = s.get_mut("Normal") {
+            n.para.space_after = Some(2.0);
+            n.chr.size = Some(13.0);
+        }
+        let undefined = ParaProps { style: Some("NoSuchStyle".into()), ..Default::default() };
+        let normal = s.resolve_para(&ParaProps::default());
+        let p = s.resolve_para(&undefined);
+        assert_eq!(p.space_after, 2.0);
+        assert_eq!(p.space_after, normal.space_after);
+        assert_eq!(p.line_spacing, normal.line_spacing);
+        assert_eq!(s.resolve_char(Some("NoSuchStyle"), &CharProps::default()).size, 13.0);
+        // The paragraph keeps the style it names; direct formatting still wins.
+        assert_eq!(p.style, "NoSuchStyle");
+        let direct = ParaProps { space_after: Some(7.0), ..undefined };
+        assert_eq!(s.resolve_para(&direct).space_after, 7.0);
+        // A defined style is unchanged.
+        assert_eq!(s.resolve_para(&ParaProps { style: Some("Heading1".into()), ..Default::default() }).space_after, 4.0);
+    }
+
+    #[test]
+    fn heading_resolves() {
+        let s = StyleSheet::builtin();
+        let p = s.resolve_para(&ParaProps { style: Some("Heading1".into()), ..Default::default() });
+        assert!(p.keep_next);
+        assert_eq!(p.outline_level, Some(0));
+        assert_eq!(p.space_after, 4.0);
+        let c = s.resolve_char(Some("Heading1"), &CharProps::default());
+        assert_eq!(c.size, 20.0);
+        assert_eq!(c.font, crate::styles::HEADING_FONT);
+        let c2 = s.resolve_char(Some("Heading1"), &CharProps { size: Some(30.0), ..Default::default() });
+        assert_eq!(c2.size, 30.0);
+    }
+
+    #[test]
+    fn char_style_then_direct() {
+        let s = StyleSheet::builtin();
+        let c = s.resolve_char(None, &CharProps { style: Some("Strong".into()), italic: Some(true), ..Default::default() });
+        assert!(c.bold && c.italic);
+        assert_eq!(c.size, 12.0);
+        let unknown = s.resolve_char(Some("NoSuchStyle"), &CharProps::default());
+        assert_eq!(unknown.size, 12.0);
+    }
+
+    #[test]
+    fn hostile_values_clamped() {
+        let s = StyleSheet::builtin();
+        let p = s.resolve_para(&ParaProps {
+            indent_left: Some(f32::INFINITY),
+            line_spacing: Some(LineSpacing::Multiple(f32::NAN)),
+            ..Default::default()
+        });
+        assert_eq!(p.indent_left, MAX_INDENT);
+        assert_eq!(p.line_spacing, LineSpacing::Multiple(1.0));
+        let c = s.resolve_char(None, &CharProps { size: Some(-4.0), ..Default::default() });
+        assert_eq!(c.size, 1.0);
+    }
+
+    /// ECMA-376 §17.7.2 for text in a table: document defaults, then the table style, then the
+    /// paragraph style chain (Normal included), then direct formatting.
+    #[test]
+    fn table_style_sits_between_defaults_and_paragraph_style() {
+        let mut s = StyleSheet::builtin();
+        s.styles.push(crate::styles::Style {
+            id: "Spaced".into(),
+            based_on: Some("Normal".into()),
+            para: ParaProps { space_after: Some(12.0), ..Default::default() },
+            chr: CharProps { color: Some(TextColor::Rgb(Rgb(0, 0, 0xFF))), ..Default::default() },
+            ..Default::default()
+        });
+        let table_p = ParaProps { space_after: Some(0.0), line_spacing: Some(LineSpacing::Multiple(1.0)), ..Default::default() };
+        let red = TextColor::Rgb(Rgb(0xC0, 0, 0));
+        let table_c = CharProps { bold: Some(true), color: Some(red), size: Some(9.0), ..Default::default() };
+        // Document defaults alone (outside a table).
+        let out = s.resolve_para(&ParaProps::default());
+        assert_eq!((out.space_after, out.line_spacing), (8.0, LineSpacing::Multiple(1.15)));
+        // The table style replaces the defaults.
+        let p = s.resolve_para_in(&ParaProps::default(), Some(&table_p));
+        assert_eq!((p.space_after, p.line_spacing), (0.0, LineSpacing::Multiple(1.0)));
+        let c = s.resolve_char_in(None, Some(&table_c), &CharProps::default());
+        assert!(c.bold);
+        assert_eq!((c.color, c.size), (red, 9.0));
+        // A paragraph style beats it, for what the style sets only.
+        let spaced = ParaProps { style: Some("Spaced".into()), ..Default::default() };
+        let p = s.resolve_para_in(&spaced, Some(&table_p));
+        assert_eq!((p.space_after, p.line_spacing), (12.0, LineSpacing::Multiple(1.0)));
+        let c = s.resolve_char_in(Some("Spaced"), Some(&table_c), &CharProps::default());
+        assert!(c.bold);
+        assert_eq!((c.color, c.size), (TextColor::Rgb(Rgb(0, 0, 0xFF)), 9.0));
+        // A character style and direct formatting beat both.
+        let c =
+            s.resolve_char_in(Some("Spaced"), Some(&table_c), &CharProps { style: Some("Emphasis".into()), bold: Some(false), ..Default::default() });
+        assert!(!c.bold && c.italic);
+        let p = s.resolve_para_in(&ParaProps { space_after: Some(3.0), ..spaced }, Some(&table_p));
+        assert_eq!(p.space_after, 3.0);
+        // Normal setting a property itself beats the table style too (Word draws such rows tall).
+        if let Some(n) = s.get_mut("Normal") {
+            n.para.space_after = Some(10.0);
+            n.chr.size = Some(11.0);
+        }
+        assert_eq!(s.resolve_para_in(&ParaProps::default(), Some(&table_p)).space_after, 10.0);
+        assert_eq!(s.resolve_char_in(None, Some(&table_c), &CharProps::default()).size, 11.0);
+    }
+
+    #[test]
+    fn header_tabs_inherit() {
+        let s = StyleSheet::builtin();
+        let p = s.resolve_para(&ParaProps {
+            style: Some("Header".into()),
+            tabs: Some(vec![TabStop { pos: 100.0, align: TabAlign::Left, leader: Default::default() }]),
+            ..Default::default()
+        });
+        assert_eq!(p.tabs.len(), 3);
+        assert_eq!(p.tabs[0].pos, 100.0);
+    }
+
+    /// Resolved formatting saved before paragraph padding existed still reads: no padding.
+    #[test]
+    fn resolved_para_without_padding_reads() {
+        let p = StyleSheet::builtin().resolve_para(&ParaProps::default());
+        let mut v = serde_json::to_value(&p).unwrap();
+        v.as_object_mut().unwrap().remove("padding");
+        let back: ResolvedPara = serde_json::from_value(v).unwrap();
+        assert_eq!(back.padding, [0.0; 4]);
+        assert_eq!(back, ResolvedPara { padding: [0.0; 4], ..p });
+    }
+}

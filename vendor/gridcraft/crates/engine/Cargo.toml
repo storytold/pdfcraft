@@ -1,0 +1,35 @@
+[package]
+name = "gridcraft-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft engine: sessions, commands, history, clipboard, fill, sort, filter"
+
+[lints]
+workspace = true
+
+[dependencies]
+gridcraft-core = { workspace = true }
+gridcraft-numfmt = { workspace = true }
+gridcraft-formula = { workspace = true }
+gridcraft-functions = { workspace = true }
+gridcraft-model = { workspace = true }
+gridcraft-calc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+web-time = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+gridcraft-xlsx = { workspace = true }
+craft-csv = { workspace = true }
+craft-gridcraft-format = { workspace = true }
+gridcraft-chart = { workspace = true }
+gridcraft-pdf = { workspace = true }
+gridcraft-math = { workspace = true }
+image = { workspace = true }
+unicode-segmentation = "=1.13.3"
+
+[dev-dependencies]
+gridcraft-xlsx = { workspace = true, features = ["test-support"] }
+gridcraft-model = { workspace = true, features = ["test-support"] }
+zip = { workspace = true }

@@ -671,9 +671,7 @@ fn a_repeated_waiting_open_keeps_the_tool_it_brings() {
     assert!(rig.export_open(), "the second open keeps the tool the first one brought");
 }
 
-/// File ▸ Open of a Word document: LibreOffice runs as a queue job, never on the frame thread,
-/// and the result opens as a new, unsaved PDF. Without LibreOffice the user is told it is needed,
-/// rather than that the file is a broken PDF.
+/// File ▸ Open converts DOCX on the worker into a new, unsaved PDF.
 #[test]
 fn file_open_converts_an_office_document_on_the_worker() {
     let mut rig = Rig::empty();
@@ -682,14 +680,11 @@ fn file_open_converts_an_office_document_on_the_worker() {
     assert_eq!(rig.tabs(), 0, "nothing opens before the conversion finishes");
     rig.release();
     let app = rig.h.state();
-    if let Some(view) = app.views.first() {
-        let doc = app.session.get(view.id).expect("the converted document");
-        // Named after the Word file: `<stem>.docx` opens as `<stem>.pdf`.
-        assert_eq!(doc.name, format!("pdfcraft-open-tool-{}-office.pdf", std::process::id()));
-        assert!(doc.path.is_none(), "the converted PDF is new and unsaved, not the .docx on disk");
-    } else {
-        assert!(rig.notice_says("LibreOffice, which isn't installed"), "the failure names the missing dependency");
-    }
+    let view = app.views.first().expect("the converted DOCX tab");
+    let doc = app.session.get(view.id).expect("the converted document");
+    assert_eq!(doc.name, format!("pdfcraft-open-tool-{}-office.pdf", std::process::id()));
+    assert!(doc.path.is_none(), "the converted PDF is new and unsaved");
+    assert_eq!(doc.info.pages.len(), 2, "the DOCX page break survives conversion");
 }
 
 fn synthetic_docx() -> Vec<u8> {
@@ -702,7 +697,10 @@ fn synthetic_docx() -> Vec<u8> {
             ),
             (
                 "word/document.xml",
-                "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>Synthetic</w:t></w:r></w:p></w:body></w:document>",
+                r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+                    <w:p><w:r><w:t>First page</w:t></w:r></w:p>
+                    <w:p><w:pPr><w:pageBreakBefore/></w:pPr><w:r><w:t>Second page</w:t></w:r></w:p>
+                </w:body></w:document>"#,
             ),
         ] {
             writer.add(name, body.as_bytes(), craft::zip::Compression::Deflated).expect("add zip entry");

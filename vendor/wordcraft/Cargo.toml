@@ -1,0 +1,74 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.18.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.lints.rust]
+
+[workspace.dependencies]
+wordcraft-geom = { path = "crates/geom" }
+wordcraft-doc = { path = "crates/doc" }
+wordcraft-fonts = { path = "crates/fonts" }
+wordcraft-layout = { path = "crates/layout" }
+wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+craft-codepage = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+craft-metafile = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+kurbo = { version = "0.13", features = ["serde"] }
+thiserror = "2"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+log = "0.4"
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+proptest = "1"
+unicode-bidi = "0.3"
+unicode-segmentation = "1"
+unicode-linebreak = "0.1"
+unicode-script = "0.5"
+skrifa = "0.47"
+harfrust = "0.13"
+wuff = "0.2.9"
+brotli-decompressor = "5"
+image = { version = "0.25", default-features = false }
+craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0", default-features = false, features = ["write"] }
+craft-wordmodel = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+craft-docx = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+craft-zip = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+cfb = "0.15"
+base64 = "0.23"
+wordcraft-docx = { path = "crates/docx" }
+wordcraft-docbin = { path = "crates/docbin" }
+wordcraft-formats = { path = "crates/formats" }
+wordcraft-render = { path = "crates/render" }
+wordcraft-pdf = { path = "crates/pdf" }
+craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+craft-ssip = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+craft-keymap = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
+regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "meta", "nfa-pikevm", "unicode"] }
+vello_cpu = "0.2"
+craft-rtf = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0", features = ["doc"] }
+craft-doc-binary = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+craft-flow = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+craft-odf = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0", features = ["text"] }
+craft-markdown = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+craft-html = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0", features = ["flow"] }
+craft-latex = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+craft-math = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+craft-mime = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0", features = ["detect"] }
+craft-sheet = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+craft-ods = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+craft-xlsx = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "=0.1.0" }
+encoding_rs = "0.8"
+chardetng = "1"
+getrandom = "0.3"
+zeroize = "1"
+libc = "0.2"

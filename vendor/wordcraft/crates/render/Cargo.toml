@@ -1,0 +1,22 @@
+[package]
+name = "wordcraft-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WordCraft rasteriser: pages and thumbnails from the layout display list (vello_cpu), PNG/JPEG export"
+
+[lints]
+workspace = true
+
+[dependencies]
+wordcraft-geom = { workspace = true, features = ["image"] }
+wordcraft-doc = { workspace = true }
+wordcraft-fonts = { workspace = true }
+wordcraft-layout = { workspace = true }
+craft-metafile = { workspace = true }
+vello_cpu = { workspace = true }
+image = { workspace = true }
+log = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+vello_cpu = { workspace = true, features = ["multithreading"] }

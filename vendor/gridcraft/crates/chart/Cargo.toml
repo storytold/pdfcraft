@@ -1,0 +1,16 @@
+[package]
+name = "gridcraft-chart"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft charts: data resolution, layout into toolkit-free primitives, sparklines and a small rasteriser"
+
+[lints]
+workspace = true
+
+[dependencies]
+gridcraft-core = { workspace = true }
+gridcraft-model = { workspace = true }
+gridcraft-calc = { workspace = true }
+gridcraft-numfmt = { workspace = true }
+serde = { workspace = true }

@@ -24,12 +24,22 @@ thiserror = { workspace = true }
 # Already in the graph through lopdf; used only to read plain-text files (decode_text).
 encoding_rs = "0.8"
 
-[target.'cfg(unix)'.dependencies]
-# Already in the graph (pdfcraft-platform, ui-egui); stops a timed-out LibreOffice's whole process
-# group, soffice.bin included, without unsafe code.
-rustix = { version = "1", features = ["process"] }
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-opc.workspace = true
+gridcraft-xlsx = { path = "../../vendor/gridcraft/crates/xlsx" }
+serde_json.workspace = true
+gridcraft-engine = { path = "../../vendor/gridcraft/crates/engine" }
+deckcraft-format = { path = "../../vendor/deckcraft/crates/format" }
+deckcraft-pdf = { path = "../../vendor/deckcraft/crates/pdf" }
+deckcraft-ppt = { path = "../../vendor/deckcraft/crates/ppt" }
+deckcraft-pptx = { path = "../../vendor/deckcraft/crates/pptx" }
+wordcraft-engine = { path = "../../vendor/wordcraft/crates/engine" }
+wordcraft-formats = { path = "../../vendor/wordcraft/crates/formats" }
+
 
 [dev-dependencies]
+craft-doc-binary = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844" }
+craft-docx.workspace = true
 # An independent CCITT decoder, to check Create PDF's Group 4 images.
 hayro-ccitt.workspace = true
 hayro-syntax = { workspace = true }

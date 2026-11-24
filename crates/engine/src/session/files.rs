@@ -4,8 +4,8 @@ use super::{
     print_layer_states, print_raster, set_default_layer_state, source_kind, writable, write_full,
 };
 
-/// Whether a conversion may run LibreOffice for an Office document (seconds, in another
-/// process) or must refuse it because the caller is on the frame thread.
+/// Whether a conversion may lay out a Word document in the background
+/// or must refuse it because the caller is on the frame thread.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Office {
     Convert,
@@ -51,14 +51,14 @@ impl Session {
 
     /// Convert a file Create understands (an image, plain text or an Office document) to PDF
     /// bytes; a PDF is checked (it must open and allow copying pages) and returned as it is.
-    /// An Office document runs LibreOffice ([`office_to_pdf`]), which takes seconds: keep it off
+    /// An Office document uses an embedded Office engine ([`office_to_pdf`]), which takes seconds: keep it off
     /// the frame thread ([`Self::convert_to_pdf_inline`] there).
     pub fn convert_to_pdf(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
         self.convert(name, bytes, Office::Convert)
     }
 
     /// [`Self::convert_to_pdf`] for a caller on the frame thread, which must not wait seconds for
-    /// LibreOffice: an Office document is refused, pointing to File ▸ Open, which converts it in
+    /// document layout: an Office document is refused, pointing to File ▸ Open, which converts it in
     /// the background.
     pub fn convert_to_pdf_inline(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
         self.convert(name, bytes, Office::Refuse)
@@ -67,12 +67,12 @@ impl Session {
     fn convert(&self, name: &str, bytes: &Arc<Vec<u8>>, office: Office) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
         let Some(kind) = source_kind(name, bytes) else {
             return Err(EditError::Source(format!(
-                "{name}: this file type can't be converted; use a PDF, an image, a .txt file or a Word, Excel or PowerPoint file"
+                "{name}: this file type can't be converted; use a PDF, an image, a .txt file or a supported Office document"
             )));
         };
         if kind == SourceKind::Office && office == Office::Refuse {
             return Err(EditError::Source(format!(
-                "{name}: Word, Excel and PowerPoint files can't be added here yet; open it with File ▸ Open, which converts it to a PDF"
+                "{name}: Office documents can't be added here yet; open it with File ▸ Open, which converts it to a PDF"
             )));
         }
         let title = name.rsplit_once('.').map_or(name, |(s, _)| s);
@@ -90,7 +90,7 @@ impl Session {
     /// A file for Insert Pages into `dest`, as PDF bytes and its page count: an image, text or
     /// Office file is converted, and a PDF is checked as the insert itself checks it, so a file
     /// under `dest`'s own protection that withholds only page extraction is accepted, as pasted
-    /// pages are (#5081). An Office document runs LibreOffice: keep it off the frame thread
+    /// pages are (#5081). An Office document uses an embedded Office engine: keep it off the frame thread
     /// ([`Self::insert_source_inline`] there).
     pub fn insert_source(&self, dest: DocId, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(usize, Arc<Vec<u8>>), EditError> {
         self.insert_source_with(dest, name, bytes, Office::Convert)

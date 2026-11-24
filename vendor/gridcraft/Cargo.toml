@@ -1,0 +1,62 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.19.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.95"
+repository = "https://github.com/storytold/gridcraft"
+
+
+[workspace.dependencies]
+craft-stream-codecs = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "0.1.0" }
+craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "0.1.0", default-features = false }
+gridcraft-core = { path = "crates/core" }
+gridcraft-numfmt = { path = "crates/numfmt" }
+gridcraft-formula = { path = "crates/formula" }
+gridcraft-functions = { path = "crates/functions" }
+gridcraft-model = { path = "crates/model" }
+gridcraft-calc = { path = "crates/calc" }
+gridcraft-xlsx = { path = "crates/xlsx" }
+gridcraft-chart = { path = "crates/chart" }
+gridcraft-pdf = { path = "crates/pdf" }
+gridcraft-math = { path = "crates/math" }
+craft-cfb = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "0.1.0" }
+craft-offcrypto = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "0.1.0" }
+craft-ods = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "0.1.0" }
+craft-opc = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "0.1.0" }
+craft-csv = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "0.1.0" }
+craft-math = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "0.1.0" }
+craft-gridcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "0.1.0" }
+craft-xlsx = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "0.1.0" }
+craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "0.1.0" }
+craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "0.1.0" }
+craft-drawingml = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "0.1.0" }
+thiserror = "2"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+log = "0.4"
+chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
+web-time = "1.1.0"
+regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
+quick-xml = "0.41"
+zip = { version = "3", default-features = false, features = ["deflate"] }
+sha2 = { version = "0.11", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+ratex-parser = "=0.1.14"
+ratex-layout = "=0.1.14"
+ratex-types = "=0.1.14"
+ratex-font = "=0.1.14"
+skrifa = { version = "0.44", default-features = false, features = ["std"] }
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
+dbg_macro = "warn"
+todo = "warn"
+

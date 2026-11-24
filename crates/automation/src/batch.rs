@@ -69,7 +69,7 @@ impl<'a> Recipe<'a> {
 
     fn accepts(&self, path: &Path) -> bool {
         let extension = path.extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
-        extension == "pdf" || (self.steps.contains(&"convert") && pdfcraft_engine::CONVERTIBLE.contains(&extension.as_str()))
+        extension == "pdf" || (self.steps.contains(&"convert") && (pdfcraft_engine::CONVERTIBLE.contains(&extension.as_str()) || pdfcraft_engine::OFFICE_EXTENSIONS.contains(&extension.as_str())))
     }
 
     /// Run the recipe's steps on the file at `path` in a fresh session; returns the output bytes

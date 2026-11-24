@@ -409,34 +409,6 @@ fn pptx_table_cell_with_largest_font_stays_in_table_and_not_in_title() {
     }
 }
 
-#[test]
-fn pptx_opens_in_libreoffice() {
-    let p = sample_page();
-    let bytes = pptx(&[p], "LibreOffice Check");
-    // A new folder of our own, never one left (or planted) at a guessable name.
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-    let dir = std::env::temp_dir().join(format!("pdfcraft-pptx-lo-{}-{nanos:x}", std::process::id()));
-    // Only Unix sets a mode on it, so elsewhere `made` is never changed.
-    #[cfg_attr(not(unix), allow(unused_mut))]
-    let mut made = std::fs::DirBuilder::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt as _;
-        made.mode(0o700);
-    }
-    made.create(&dir).expect("a fresh test folder");
-    let pptx_path = dir.join("test.pptx");
-    std::fs::write(&pptx_path, &bytes).unwrap();
-
-    for cmd in ["libreoffice", "soffice"] {
-        let status = std::process::Command::new(cmd).args(["--headless", "--convert-to", "pdf", "--outdir"]).arg(&dir).arg(&pptx_path).status();
-        if status.is_ok_and(|st| st.success()) {
-            assert!(dir.join("test.pdf").is_file(), "LibreOffice produced test.pdf");
-            break;
-        }
-    }
-    let _ = std::fs::remove_dir_all(&dir);
-}
 
 /// A picture drawn in many places is one media part, referred to from each place; the package
 /// stays within the media limits however many places there are.

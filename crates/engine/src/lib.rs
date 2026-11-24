@@ -172,7 +172,7 @@ use protection::unrestricted;
 pub use protection::{Changes, Printing, Protection, SecuritySummary};
 pub use rename::{RenameError, new_file_name, rename_target};
 pub use session::Session;
-pub use sources::{CombineSource, Combined, combine_source_check, office_to_pdf, source_page_count};
+pub use sources::{CombineSource, Combined, combine_source_check, office_to_pdf, office_to_pdf_with_password, source_page_count};
 use sources::{open_source, open_source_with};
 #[cfg(test)]
 use test_hooks::{

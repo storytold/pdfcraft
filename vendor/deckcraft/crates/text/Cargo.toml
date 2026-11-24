@@ -1,0 +1,25 @@
+[package]
+name = "deckcraft-text"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "DeckCraft text layout: runs to shaped glyph lines with bullets, indents, spacing, alignment, anchoring, autofit and caret hit testing"
+
+[lints]
+workspace = true
+
+[dependencies]
+deckcraft-model = { workspace = true }
+deckcraft-geom = { workspace = true }
+deckcraft-color = { workspace = true }
+deckcraft-fonts = { workspace = true }
+unicode-linebreak = { workspace = true }
+unicode-segmentation = { workspace = true }
+unicode-bidi = { workspace = true }
+# Unconditional: `is_valid`/`weekday` use chrono on every target, including wasm32.
+# Only the wasm-safe `std` baseline here (inherited from the workspace entry).
+chrono = { workspace = true }
+
+# The local clock for date fields (no clock on wasm: fields keep their saved text).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+chrono = { workspace = true, features = ["clock"] }

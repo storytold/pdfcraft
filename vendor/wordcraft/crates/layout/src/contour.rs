@@ -1,0 +1,437 @@
+//! Contour wrapping: the outline Tight and Through wrapping follow around a floating object
+//! (ECMA-376 Part 1, §20.4.2.17 `wrapThrough`, §20.4.2.18 `wrapTight`), and the picture
+//! outlines worked out from transparency.
+//!
+//! A [`Contour`] is built once per placed object; each line then asks it which stretches of
+//! the line's band it takes ([`Contour::occupied`]), a walk over its edges.
+
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+use wordcraft_doc::para::{Float, InlineObject, Wrap};
+use wordcraft_doc::wrap::{ALPHA_GRID, MAX_WRAP_POINTS, alpha_outline, shape_outline};
+use wordcraft_geom::{Rect, finite};
+
+/// A wrap outline placed on the page, in the coordinates of its wrap area's top-left corner
+/// (see [`crate::para::Exclusion`]).
+#[derive(Clone, PartialEq)]
+pub struct Contour {
+    /// The object's outline (rotated and flipped as the object is), closed.
+    pts: Vec<(f32, f32)>,
+    /// Distance from text at the left and right, above and below.
+    pad_x: f32,
+    pad_top: f32,
+    pad_bottom: f32,
+    /// Through wrapping: text may also go into gaps inside the outline.
+    through: bool,
+    /// A digest of the above (paragraph layout cache keys print it instead of the points).
+    id: u64,
+}
+
+impl std::fmt::Debug for Contour {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Contour#{:x}", self.id)
+    }
+}
+
+impl Contour {
+    /// A contour around `pts` (page coordinates; non-finite points are dropped, at most
+    /// [`MAX_WRAP_POINTS`]) kept `pad_x` from text at the sides and `pad_top` / `pad_bottom`
+    /// above and below. Returns the wrap area (the outline's bounds grown by the distances)
+    /// and the contour relative to its top-left; `None` without at least three points.
+    pub fn new(pts: &[(f32, f32)], pad_x: f32, pad_top: f32, pad_bottom: f32, through: bool) -> Option<(Rect, Contour)> {
+        let pts: Vec<(f32, f32)> = pts.iter().copied().filter(|(x, y)| x.is_finite() && y.is_finite()).take(MAX_WRAP_POINTS).collect();
+        if pts.len() < 3 {
+            return None;
+        }
+        let pad = |v: f32| finite(v).clamp(0.0, 1584.0);
+        let (pad_x, pad_top, pad_bottom) = (pad(pad_x), pad(pad_top), pad(pad_bottom));
+        let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for (x, y) in &pts {
+            (x0, y0, x1, y1) = (x0.min(*x), y0.min(*y), x1.max(*x), y1.max(*y));
+        }
+        let area = Rect::new(x0 - pad_x, y0 - pad_top, x1 - x0 + 2.0 * pad_x, y1 - y0 + pad_top + pad_bottom);
+        let pts: Vec<(f32, f32)> = pts.into_iter().map(|(x, y)| (x - area.x, y - area.y)).collect();
+        Some((area, Contour::with_id(pts, pad_x, pad_top, pad_bottom, through)))
+    }
+
+    fn with_id(pts: Vec<(f32, f32)>, pad_x: f32, pad_top: f32, pad_bottom: f32, through: bool) -> Contour {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for (x, y) in &pts {
+            (x.to_bits(), y.to_bits()).hash(&mut h);
+        }
+        (pad_x.to_bits(), pad_top.to_bits(), pad_bottom.to_bits(), through).hash(&mut h);
+        Contour { pts, pad_x, pad_top, pad_bottom, through, id: h.finish() }
+    }
+
+    /// This contour mirrored left to right in a wrap area `width` wide (right-to-left text).
+    pub fn mirrored(&self, width: f32) -> Contour {
+        let pts = self.pts.iter().map(|(x, y)| (width - x, *y)).collect();
+        Contour::with_id(pts, self.pad_x, self.pad_top, self.pad_bottom, self.through)
+    }
+
+    /// The stretches (x0, x1), left to right, that the object and its distances from text take
+    /// of the band `top..bottom` (both relative to the wrap area's top-left). Tight: one
+    /// stretch, from the outline's leftmost to its rightmost point in the band. Through: the
+    /// outline's own pieces, so text can go into the gaps between them. Empty when the band
+    /// misses the outline.
+    pub fn occupied(&self, top: f32, bottom: f32) -> Vec<(f32, f32)> {
+        // Distance above the object reaches down to bands above it, and the other way round.
+        let (y0, y1) = (top - self.pad_bottom, bottom + self.pad_top);
+        if !(y0.is_finite() && y1.is_finite()) || y1 < y0 {
+            return Vec::new();
+        }
+        let n = self.pts.len();
+        let mut spans: Vec<(f32, f32)> = Vec::new();
+        // The outline's part in the band is bounded by its edges (clipped to the band) and by
+        // the band's top and bottom lines where they're inside it: what those cover across is
+        // what the outline covers.
+        for (i, &(ax, ay)) in self.pts.iter().enumerate() {
+            let Some(&(bx, by)) = self.pts.get((i + 1) % n) else { continue };
+            let (lo, hi) = (ay.min(by), ay.max(by));
+            if hi < y0 || lo > y1 {
+                continue;
+            }
+            if (by - ay).abs() < 1e-6 {
+                spans.push((ax.min(bx), ax.max(bx)));
+                continue;
+            }
+            let x_at = |y: f32| ax + (bx - ax) * (y - ay) / (by - ay);
+            let (xa, xb) = (x_at(lo.max(y0)), x_at(hi.min(y1)));
+            spans.push((xa.min(xb), xa.max(xb)));
+        }
+        for y in [y0, y1] {
+            let mut xs: Vec<f32> = Vec::new();
+            for (i, &(ax, ay)) in self.pts.iter().enumerate() {
+                let Some(&(bx, by)) = self.pts.get((i + 1) % n) else { continue };
+                if (ay <= y) != (by <= y) {
+                    xs.push(ax + (bx - ax) * (y - ay) / (by - ay));
+                }
+            }
+            xs.sort_by(f32::total_cmp);
+            spans.extend(xs.as_chunks::<2>().0.iter().map(|[a, b]| (*a, *b)));
+        }
+        if spans.is_empty() {
+            return spans;
+        }
+        // Distance from text at the sides widens each piece; pieces that then touch merge.
+        let mut spans: Vec<(f32, f32)> = spans.into_iter().map(|(a, b)| (a - self.pad_x, b + self.pad_x)).collect();
+        spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut merged: Vec<(f32, f32)> = Vec::with_capacity(spans.len());
+        for (a, b) in spans {
+            match merged.last_mut() {
+                Some(last) if a <= last.1 + 0.01 => last.1 = last.1.max(b),
+                _ => merged.push((a, b)),
+            }
+        }
+        if !self.through && merged.len() > 1 {
+            let (a, b) = (merged.first().map_or(0.0, |s| s.0), merged.last().map_or(0.0, |s| s.1));
+            return vec![(a, b)];
+        }
+        merged
+    }
+}
+
+/// The outline (unit coordinates across its frame, unrotated) that Tight and Through wrapping
+/// follow around `o`: its wrap polygon, a shape's geometry, or a picture's opaque pixels.
+/// `None`: its rectangle (or it isn't wrapped that way). `picture` works out a picture's
+/// outline from its media key and crop.
+pub fn wrap_outline(o: &InlineObject, picture: impl FnOnce(&str, [f32; 4]) -> Option<Arc<Vec<(f32, f32)>>>) -> Option<Arc<Vec<(f32, f32)>>> {
+    let (w, h, float) = o.frame()?;
+    if !matches!(float.wrap, Wrap::Tight | Wrap::Through) {
+        return None;
+    }
+    if let Some(p) = &float.wrap_polygon {
+        return Some(Arc::new(p.unit()));
+    }
+    match o {
+        InlineObject::Shape { kind, extra, .. } => shape_outline(*kind, w, h, extra.corner).map(Arc::new),
+        InlineObject::Image { media, crop, .. } => picture(media, *crop),
+        _ => None,
+    }
+}
+
+/// The wrap area of a Tight or Through object at `r` (its unrotated frame) following `outline`
+/// (unit coordinates), turned and mirrored as the object is.
+pub fn contour_area(r: Rect, float: &Float, outline: &[(f32, f32)]) -> Option<(Rect, Contour)> {
+    let d = |v: f32| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 };
+    let spin = float.spin();
+    let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+    let pts: Vec<(f32, f32)> = outline.iter().take(MAX_WRAP_POINTS).map(|(u, v)| spin.apply(cx, cy, r.x + u * r.w, r.y + v * r.h)).collect();
+    Contour::new(&pts, d(float.dist), d(float.dist_top), d(float.dist_bottom), float.wrap == Wrap::Through)
+}
+
+/// Largest picture (each side, pixels) whose transparency is looked at.
+const MAX_PICTURE_SIDE: u32 = 8192;
+
+/// Most picture pixels decoded for their transparency in one layout. Every picture a document
+/// wraps tightly is decoded in full whatever its crop; past this, pictures wrap as their
+/// rectangles. Room for four pictures of the largest size looked at, or hundreds of photos.
+pub(crate) const MAX_DECODED_PIXELS: u64 = 1 << 28;
+
+/// A picture's transparency: one alpha byte per pixel, row by row.
+struct Alpha {
+    w: u32,
+    h: u32,
+    a: Vec<u8>,
+}
+
+impl Alpha {
+    fn opaque(&self, x: u32, y: u32) -> bool {
+        x < self.w
+            && (y as usize)
+                .checked_mul(self.w as usize)
+                .and_then(|r| r.checked_add(x as usize))
+                .and_then(|i| self.a.get(i))
+                .is_some_and(|a| *a >= 128)
+    }
+}
+
+/// A picture whose transparency would take its layout past [`MAX_DECODED_PIXELS`]: it wraps
+/// as its rectangle in this layout only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OverBudget;
+
+/// Pictures' transparency decoded during one layout. A picture shown with many crops (each an
+/// outline of its own) is decoded once, however its crops interleave with other pictures', and
+/// decoding stops at [`MAX_DECODED_PIXELS`] (which also bounds what is kept).
+#[derive(Default)]
+pub(crate) struct Alphas {
+    /// Pictures decoded so far, by their bytes (address and length): their transparency (`None`: none).
+    ///
+    /// The address tells pictures apart only while their bytes can't be freed and the address
+    /// reused for other bytes of the same length: an `Alphas` lives for one layout pass (in its
+    /// `Ctx`), and the document whose media hold the bytes is borrowed for the whole pass, so no
+    /// picture's bytes are freed while it's kept. Kept any longer, it would need to hold on to
+    /// the bytes, as [`crate::LayoutCache`]'s outlines do.
+    seen: HashMap<(usize, usize), Option<Arc<Alpha>>>,
+    /// Pictures whose cost was charged for a lasting outline found in [`crate::LayoutCache`]
+    /// ([`Alphas::charge`]) without decoding them in this layout.
+    charged: HashSet<(usize, usize)>,
+    /// Pixels each picture took of the budget (also when it then failed to decode), by bytes.
+    costs: HashMap<(usize, usize), u64>,
+    /// Pictures refused for the budget (bytes' address and length), not looked at again.
+    refused: HashSet<(usize, usize)>,
+    /// Pixels decoded so far.
+    pub(crate) decoded: u64,
+}
+
+impl Alphas {
+    /// The outline of picture `bytes`'s opaque pixels within `crop` (left, top, right, bottom
+    /// fractions), in unit coordinates of the cropped picture. `None` for pictures without
+    /// transparency (or that don't decode), and [`OverBudget`] past the budget: their rectangle
+    /// is their outline.
+    pub(crate) fn outline(&mut self, bytes: &[u8], crop: [f32; 4]) -> Result<Option<Vec<(f32, f32)>>, OverBudget> {
+        let key = (bytes.as_ptr() as usize, bytes.len());
+        let alpha = match self.seen.get(&key) {
+            Some(alpha) => alpha.clone(),
+            None if self.refused.contains(&key) => return Err(OverBudget),
+            None => {
+                // A picture already charged for (its outline was cached) isn't charged twice.
+                let mut free = 0u64;
+                let paid = self.charged.contains(&key);
+                let before = self.decoded;
+                let alpha = decode_alpha(bytes, if paid { &mut free } else { &mut self.decoded }).inspect_err(|_| {
+                    self.refused.insert(key);
+                })?;
+                if !paid {
+                    self.costs.insert(key, self.decoded.saturating_sub(before));
+                }
+                let alpha = alpha.map(Arc::new);
+                self.seen.insert(key, alpha.clone());
+                alpha
+            }
+        };
+        Ok(alpha.and_then(|a| alpha_in_crop(&a, crop)))
+    }
+
+    /// The pixels picture `bytes` took of the budget when it was decoded in this layout (0:
+    /// not decoded, or none to look at; a picture that failed to decode still cost its pixels).
+    pub(crate) fn cost(&self, bytes: &[u8]) -> u64 {
+        self.costs.get(&(bytes.as_ptr() as usize, bytes.len())).copied().unwrap_or(0)
+    }
+
+    /// Charges the budget for picture `bytes`, whose outline was found kept from an earlier
+    /// layout (`cost`: the pixels it took then), as decoding it now would: pictures get an outline
+    /// by their place in the document, not by what the cache holds. [`OverBudget`] when it
+    /// wouldn't have fitted: its rectangle is its outline in this layout.
+    pub(crate) fn charge(&mut self, bytes: &[u8], cost: u64) -> Result<(), OverBudget> {
+        let key = (bytes.as_ptr() as usize, bytes.len());
+        if self.seen.contains_key(&key) || self.charged.contains(&key) {
+            return Ok(());
+        }
+        if self.refused.contains(&key) {
+            return Err(OverBudget);
+        }
+        if cost == 0 {
+            return Ok(());
+        }
+        match self.decoded.checked_add(cost).filter(|t| *t <= MAX_DECODED_PIXELS) {
+            Some(total) => {
+                self.decoded = total;
+                self.charged.insert(key);
+                self.costs.insert(key, cost);
+                Ok(())
+            }
+            None => {
+                self.refused.insert(key);
+                Err(OverBudget)
+            }
+        }
+    }
+}
+
+/// The transparency of picture `bytes`, charging its pixels to `decoded`. `None` for pictures
+/// without transparency or that don't decode; [`OverBudget`] for one that would take `decoded`
+/// past [`MAX_DECODED_PIXELS`]. Pictures whose header says they're opaque cost nothing.
+fn decode_alpha(bytes: &[u8], decoded: &mut u64) -> Result<Option<Alpha>, OverBudget> {
+    let Ok(pic) = wordcraft_geom::picture::probe(bytes) else { return Ok(None) };
+    // Formats that can't be transparent aren't decoded.
+    if pic.format == image::ImageFormat::Jpeg || pic.width > MAX_PICTURE_SIDE || pic.height > MAX_PICTURE_SIDE {
+        return Ok(None);
+    }
+    // Only the header is read here (a PNG's `tRNS` counts as transparency).
+    if !pic.has_alpha() {
+        return Ok(None);
+    }
+    let pixels = u64::from(pic.width) * u64::from(pic.height);
+    *decoded = decoded.checked_add(pixels).filter(|t| *t <= MAX_DECODED_PIXELS).ok_or(OverBudget)?;
+    let Ok(img) = pic.decode(wordcraft_geom::MAX_DECODED_BYTES) else { return Ok(None) };
+    let img = img.into_rgba8();
+    let (w, h) = img.dimensions();
+    Ok(Some(Alpha { w, h, a: img.pixels().map(|p| p.0[3]).collect() }))
+}
+
+/// The outline of `img`'s opaque pixels within `crop`: see [`Alphas::outline`].
+fn alpha_in_crop(img: &Alpha, crop: [f32; 4]) -> Option<Vec<(f32, f32)>> {
+    let (iw, ih) = (img.w, img.h);
+    // The part the renderers draw (#1899): a sliver keeps its partly covered pixels.
+    let [cl, ct, vw, vh] = crate::crop_window(crop);
+    let (fw, fh) = (f64::from(iw), f64::from(ih));
+    let x0 = ((fw * cl) as u32).min(iw);
+    let y0 = ((fh * ct) as u32).min(ih);
+    let x1 = ((fw * (cl + vw)).ceil() as u32).clamp(x0, iw);
+    let y1 = ((fh * (ct + vh)).ceil() as u32).clamp(y0, ih);
+    let (cw, ch) = (x1 - x0, y1 - y0);
+    if cw == 0 || ch == 0 {
+        return None;
+    }
+    // A grid of cells at most ALPHA_GRID a side; a cell is opaque when a pixel sampled in it is.
+    let cell = cw.max(ch).div_ceil(ALPHA_GRID as u32).max(1);
+    let (gw, gh) = (cw.div_ceil(cell), ch.div_ceil(cell));
+    let step = (cell / 8).max(1);
+    let opaque = |gx: usize, gy: usize| {
+        let (px0, py0) = (x0 + gx as u32 * cell, y0 + gy as u32 * cell);
+        let (px1, py1) = ((px0 + cell).min(x1), (py0 + cell).min(y1));
+        (py0..py1).step_by(step as usize).any(|y| (px0..px1).step_by(step as usize).any(|x| img.opaque(x, y)))
+    };
+    let pts = alpha_outline(gw as usize, gh as usize, opaque)?;
+    // Grid points onto the picture as the renderers draw the window, whose edges fall within
+    // pixels (crop fractions are f32 too: 0.7 is 0.69999…). The grid may reach a little past the
+    // pixels (its last cells are partial).
+    let place =
+        |g: f32, cells: u32, p0: u32, lo: f64, len: f64| ((f64::from(p0) + f64::from(g) * f64::from(cells * cell) - lo) / len).clamp(0.0, 1.0) as f32;
+    Some(pts.into_iter().map(|(x, y)| (place(x, gw, x0, fw * cl, fw * vw), place(y, gh, y0, fh * ct, fh * vh))).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn picture_outline(bytes: &[u8], crop: [f32; 4]) -> Option<Vec<(f32, f32)>> {
+        Alphas::default().outline(bytes, crop).ok().flatten()
+    }
+
+    fn diamond(through: bool) -> Contour {
+        Contour::new(&[(50.0, 0.0), (100.0, 50.0), (50.0, 100.0), (0.0, 50.0)], 0.0, 0.0, 0.0, through).unwrap().1
+    }
+
+    #[test]
+    fn occupied_follows_the_outline() {
+        crate::test_fonts();
+        let c = diamond(false);
+        let s = c.occupied(0.0, 10.0);
+        assert_eq!(s.len(), 1);
+        assert!((s[0].0 - 40.0).abs() < 0.01 && (s[0].1 - 60.0).abs() < 0.01, "{s:?}");
+        let s = c.occupied(45.0, 55.0);
+        assert!((s[0].0 - 0.0).abs() < 0.01 && (s[0].1 - 100.0).abs() < 0.01, "{s:?}");
+        assert!(c.occupied(120.0, 130.0).is_empty());
+        // A band wholly inside the outline.
+        let big = Contour::new(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)], 5.0, 0.0, 0.0, false).unwrap().1;
+        assert_eq!(big.occupied(40.0, 50.0), vec![(0.0, 110.0)]);
+    }
+
+    #[test]
+    fn through_keeps_interior_gaps() {
+        crate::test_fonts();
+        // A U: two prongs joined at the bottom.
+        let u = [(0.0, 0.0), (20.0, 0.0), (20.0, 80.0), (80.0, 80.0), (80.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)];
+        let (_, tight) = Contour::new(&u, 0.0, 0.0, 0.0, false).unwrap();
+        let (_, through) = Contour::new(&u, 0.0, 0.0, 0.0, true).unwrap();
+        assert_eq!(tight.occupied(10.0, 20.0).len(), 1);
+        assert_eq!(through.occupied(10.0, 20.0).len(), 2);
+        assert_eq!(through.occupied(85.0, 90.0).len(), 1);
+    }
+
+    #[test]
+    fn pictures_wrap_around_their_opaque_pixels() {
+        crate::test_fonts();
+        let png = |img: image::DynamicImage| wordcraft_geom::picture::encode_format(&img, image::ImageFormat::Png).unwrap();
+        // An opaque disc in the middle of a transparent 64 × 64 picture.
+        let disc = image::RgbaImage::from_fn(64, 64, |x, y| {
+            let (dx, dy) = (x as f32 + 0.5 - 32.0, y as f32 + 0.5 - 32.0);
+            image::Rgba([0, 0, 0, if dx * dx + dy * dy < 400.0 { 255 } else { 0 }])
+        });
+        let pts = picture_outline(&png(disc.clone().into()), [0.0; 4]).unwrap();
+        assert!(pts.len() >= 8 && pts.len() <= wordcraft_doc::wrap::MAX_DERIVED_POINTS);
+        assert!(pts.iter().all(|(x, y)| (0.15..=0.85).contains(x) && (0.15..=0.85).contains(y)), "{pts:?}");
+        // Cropped to its left half, the disc reaches the right edge.
+        let half = picture_outline(&png(disc.into()), [0.0, 0.0, 0.5, 0.0]).unwrap();
+        assert!(half.iter().any(|(x, _)| *x > 0.99), "{half:?}");
+        // No transparency: the rectangle.
+        assert!(picture_outline(&png(image::RgbImage::new(8, 8).into()), [0.0; 4]).is_none());
+        // #1899: the sliver the renderers draw (0.5% of the axis, when two sides overlap or keep
+        // less) has an outline too. Only the bottom-right quarter is opaque, so a column or a row
+        // through it is opaque in its second half.
+        let quarter = png(image::RgbaImage::from_fn(100, 100, |x, y| image::Rgba([0, 0, 0, if x >= 50 && y >= 50 { 255 } else { 0 }])).into());
+        for (crop, column) in [([0.6, 0.0, 0.6, 0.0], true), ([0.6, 0.0, 0.398, 0.0], true), ([0.0, 0.6, 0.0, 0.6], false)] {
+            let pts = picture_outline(&quarter, crop).unwrap_or_default();
+            let across = |p: &(f32, f32)| if column { p.1 } else { p.0 };
+            // The grid's cells are 3 pixels, so the half starts a little before 0.5.
+            assert!(pts.len() >= 3 && pts.iter().all(|p| across(p) > 0.4), "{crop:?}: {pts:?}");
+        }
+        // Crop fractions are f32 (0.7 is 0.69999…), so an edge on a whole pixel comes out a hair
+        // off it: the outline neither takes in the neighbouring column nor drops the last one. Only
+        // the top half of the 30 columns each crop keeps (of 100) is opaque, so it spans 0–1 across.
+        for (crop, kept) in [([0.7, 0.0, 0.0, 0.0], 70..100), ([0.0, 0.0, 0.7, 0.0], 0..30)] {
+            let img = image::RgbaImage::from_fn(100, 20, |x, y| image::Rgba([0, 0, 0, if kept.contains(&x) && y < 10 { 255 } else { 0 }]));
+            let pts = picture_outline(&png(img.into()), crop).unwrap_or_default();
+            let xs = pts.iter().map(|p| p.0);
+            let (lo, hi) = (xs.clone().fold(f32::MAX, f32::min), xs.fold(f32::MIN, f32::max));
+            assert!(lo < 1e-6 && hi > 1.0 - 1e-6, "{crop:?}: {pts:?}");
+        }
+        // A window whose edges fall within pixels (2.5–5.5 of 10) is placed as the renderers draw
+        // it: pixel 2, the only opaque one (in half the rows), covers the first sixth of the
+        // picture, not a quarter (whole pixels 2–5 stretched over it). Across and down alike.
+        for down in [false, true] {
+            let img = image::RgbaImage::from_fn(10, 10, |x, y| {
+                let (a, b) = if down { (y, x) } else { (x, y) };
+                image::Rgba([0, 0, 0, if a == 2 && b < 5 { 255 } else { 0 }])
+            });
+            let crop = if down { [0.0, 0.25, 0.0, 0.45] } else { [0.25, 0.0, 0.45, 0.0] };
+            let pts = picture_outline(&png(img.into()), crop).unwrap_or_default();
+            let far = pts.iter().map(|p| if down { p.1 } else { p.0 }).fold(f32::MIN, f32::max);
+            assert!(pts.len() >= 3 && (far - 1.0 / 6.0).abs() < 1e-3, "{crop:?}: {pts:?}");
+        }
+    }
+
+    #[test]
+    fn hostile_points_are_dropped() {
+        crate::test_fonts();
+        assert!(Contour::new(&[(f32::NAN, 0.0), (1.0, 1.0), (f32::INFINITY, 2.0)], 0.0, 0.0, 0.0, false).is_none());
+        let c = diamond(true);
+        assert!(c.occupied(f32::NAN, 1.0).is_empty());
+        assert!(picture_outline(b"not a picture", [0.0; 4]).is_none());
+    }
+}

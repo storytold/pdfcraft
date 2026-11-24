@@ -1,0 +1,12 @@
+[package]
+name = "deckcraft-color"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "DeckCraft colour: RGB/HSL, theme colour slots, DrawingML-style colour transforms"
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-drawingml = { workspace = true }

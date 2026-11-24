@@ -1,0 +1,22 @@
+[package]
+name = "deckcraft-ppt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "DeckCraft legacy PowerPoint 97-2003 (.ppt/.pot/.pps) import, written from the public [MS-PPT], [MS-ODRAW] and [MS-CFB] Open Specifications"
+
+[lints]
+workspace = true
+
+[dependencies]
+deckcraft-model = { workspace = true }
+deckcraft-geom = { workspace = true }
+deckcraft-color = { workspace = true }
+miniz_oxide = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+
+[dev-dependencies]
+deckcraft-engine = { workspace = true }
+serde_json = { workspace = true }
+image = { workspace = true }

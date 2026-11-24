@@ -1,0 +1,448 @@
+{
+  "active_sheet": 0,
+  "calc": {
+    "iterative": false,
+    "max_change": 0.001,
+    "max_iterations": 100,
+    "mode": "Automatic",
+    "precision_as_displayed": false,
+    "r1c1": false
+  },
+  "cell_styles": [],
+  "custom_lists": [],
+  "date_system": "D1900",
+  "macros": [
+    {
+      "description": "",
+      "inputs": [],
+      "name": "Fill",
+      "output": {
+        "onConflict": "ask"
+      },
+      "permissions": [],
+      "steps": [
+        {
+          "id": "cell.set",
+          "params": {
+            "cell": "C1",
+            "input": "x"
+          },
+          "type": "command"
+        }
+      ],
+      "v": 1
+    },
+    {
+      "extra": [
+        1,
+        2
+      ],
+      "name": "Future",
+      "v": 2
+    }
+  ],
+  "names": [],
+  "props": {
+    "author": "GridCraft User",
+    "company": "",
+    "description": "",
+    "keywords": "",
+    "subject": "",
+    "title": ""
+  },
+  "protected_structure": false,
+  "sheets": [
+    {
+      "autofilter": null,
+      "cells": {
+        "bands": {
+          "0": {
+            "rows": {
+              "0": {
+                "0": {
+                  "formula": null,
+                  "style": 1,
+                  "value": {
+                    "t": "Text",
+                    "v": "Item"
+                  }
+                },
+                "1": {
+                  "formula": null,
+                  "style": 1,
+                  "value": {
+                    "t": "Text",
+                    "v": "Qty"
+                  }
+                }
+              },
+              "1": {
+                "0": {
+                  "formula": null,
+                  "style": 0,
+                  "value": {
+                    "t": "Text",
+                    "v": "Äpfel ✓"
+                  }
+                },
+                "1": {
+                  "formula": null,
+                  "style": 2,
+                  "value": {
+                    "t": "Number",
+                    "v": 3.5
+                  }
+                }
+              },
+              "2": {
+                "0": {
+                  "formula": null,
+                  "style": 0,
+                  "value": {
+                    "t": "Text",
+                    "v": "Pears"
+                  }
+                },
+                "1": {
+                  "formula": null,
+                  "style": 2,
+                  "value": {
+                    "t": "Number",
+                    "v": 2.0
+                  }
+                }
+              },
+              "3": {
+                "1": {
+                  "formula": {
+                    "array": null,
+                    "text": "SUM(B2:B3)"
+                  },
+                  "style": 2,
+                  "value": {
+                    "t": "Number",
+                    "v": 5.5
+                  }
+                }
+              }
+            }
+          }
+        },
+        "len": 7
+      },
+      "charts": [],
+      "cols": {},
+      "comments": {},
+      "cond_formats": [],
+      "default_col_width": 64.0,
+      "default_row_height": 20.0,
+      "freeze": null,
+      "hyperlinks": {},
+      "images": [],
+      "merges": [],
+      "name": "Sheet1",
+      "pivots": [],
+      "print": {
+        "center_h": false,
+        "center_v": false,
+        "col_breaks": [],
+        "different_first": false,
+        "different_odd_even": false,
+        "even_footer": "",
+        "even_header": "",
+        "first_footer": "",
+        "first_header": "",
+        "fit_to": null,
+        "footer": "",
+        "gridlines": false,
+        "header": "",
+        "headings": false,
+        "hf_align_with_margins": true,
+        "hf_scale_with_doc": true,
+        "margins": [
+          0.699999988079071,
+          0.699999988079071,
+          0.75,
+          0.75,
+          0.30000001192092896,
+          0.30000001192092896
+        ],
+        "orientation": "Portrait",
+        "page_order": "downThenOver",
+        "paper": "Letter",
+        "print_area": null,
+        "row_breaks": [],
+        "scale": 100,
+        "title_cols": null,
+        "title_rows": null
+      },
+      "protection": null,
+      "right_to_left": false,
+      "rows": {},
+      "shapes": [],
+      "show_formulas": false,
+      "show_gridlines": true,
+      "show_headings": true,
+      "show_outline_symbols": true,
+      "show_zeros": true,
+      "slicers": [],
+      "sparklines": [],
+      "summary_below": true,
+      "summary_right": true,
+      "tab_color": null,
+      "tables": [],
+      "validations": [],
+      "view": "normal",
+      "view_active": {
+        "col": 0,
+        "row": 0
+      },
+      "view_top_left": {
+        "col": 0,
+        "row": 0
+      },
+      "visibility": "Visible",
+      "zoom": 100
+    }
+  ],
+  "styles": {
+    "styles": [
+      {
+        "align": {
+          "h": "General",
+          "indent": 0,
+          "reading_order": null,
+          "rotation": 0,
+          "shrink": false,
+          "v": "Bottom",
+          "wrap": false
+        },
+        "borders": {
+          "bottom": {
+            "color": "Auto",
+            "style": "None"
+          },
+          "diag_down": {
+            "color": "Auto",
+            "style": "None"
+          },
+          "diag_up": {
+            "color": "Auto",
+            "style": "None"
+          },
+          "left": {
+            "color": "Auto",
+            "style": "None"
+          },
+          "right": {
+            "color": "Auto",
+            "style": "None"
+          },
+          "top": {
+            "color": "Auto",
+            "style": "None"
+          }
+        },
+        "dxf_stated": {
+          "bold": false,
+          "italic": false,
+          "name": false,
+          "protection": false,
+          "scheme": null,
+          "size": false,
+          "strike": false,
+          "underline": false
+        },
+        "fill": {
+          "bg": "Auto",
+          "fg": "Auto",
+          "pattern": "None"
+        },
+        "font": {
+          "bold": false,
+          "charset": null,
+          "color": "Auto",
+          "family": null,
+          "italic": false,
+          "minor": true,
+          "name": "Calibri",
+          "size": 11.0,
+          "strike": false,
+          "underline": "None",
+          "vert": "Baseline"
+        },
+        "num_fmt": "General",
+        "protection": {
+          "hidden": false,
+          "locked": true
+        }
+      },
+      {
+        "align": {
+          "h": "General",
+          "indent": 0,
+          "reading_order": null,
+          "rotation": 0,
+          "shrink": false,
+          "v": "Bottom",
+          "wrap": false
+        },
+        "borders": {
+          "bottom": {
+            "color": "Auto",
+            "style": "None"
+          },
+          "diag_down": {
+            "color": "Auto",
+            "style": "None"
+          },
+          "diag_up": {
+            "color": "Auto",
+            "style": "None"
+          },
+          "left": {
+            "color": "Auto",
+            "style": "None"
+          },
+          "right": {
+            "color": "Auto",
+            "style": "None"
+          },
+          "top": {
+            "color": "Auto",
+            "style": "None"
+          }
+        },
+        "dxf_stated": {
+          "bold": false,
+          "italic": false,
+          "name": false,
+          "protection": false,
+          "scheme": null,
+          "size": false,
+          "strike": false,
+          "underline": false
+        },
+        "fill": {
+          "bg": "Auto",
+          "fg": "Auto",
+          "pattern": "None"
+        },
+        "font": {
+          "bold": true,
+          "charset": null,
+          "color": "Auto",
+          "family": null,
+          "italic": false,
+          "minor": true,
+          "name": "Calibri",
+          "size": 11.0,
+          "strike": false,
+          "underline": "None",
+          "vert": "Baseline"
+        },
+        "num_fmt": "General",
+        "protection": {
+          "hidden": false,
+          "locked": true
+        }
+      },
+      {
+        "align": {
+          "h": "General",
+          "indent": 0,
+          "reading_order": null,
+          "rotation": 0,
+          "shrink": false,
+          "v": "Bottom",
+          "wrap": false
+        },
+        "borders": {
+          "bottom": {
+            "color": "Auto",
+            "style": "None"
+          },
+          "diag_down": {
+            "color": "Auto",
+            "style": "None"
+          },
+          "diag_up": {
+            "color": "Auto",
+            "style": "None"
+          },
+          "left": {
+            "color": "Auto",
+            "style": "None"
+          },
+          "right": {
+            "color": "Auto",
+            "style": "None"
+          },
+          "top": {
+            "color": "Auto",
+            "style": "None"
+          }
+        },
+        "dxf_stated": {
+          "bold": false,
+          "italic": false,
+          "name": false,
+          "protection": false,
+          "scheme": null,
+          "size": false,
+          "strike": false,
+          "underline": false
+        },
+        "fill": {
+          "bg": "Auto",
+          "fg": "Auto",
+          "pattern": "None"
+        },
+        "font": {
+          "bold": false,
+          "charset": null,
+          "color": "Auto",
+          "family": null,
+          "italic": false,
+          "minor": true,
+          "name": "Calibri",
+          "size": 11.0,
+          "strike": false,
+          "underline": "None",
+          "vert": "Baseline"
+        },
+        "num_fmt": "0.00",
+        "protection": {
+          "hidden": false,
+          "locked": true
+        }
+      }
+    ]
+  },
+  "theme": {
+    "colors": [
+      16777215,
+      0,
+      15263976,
+      927809,
+      1400962,
+      15298866,
+      1665828,
+      1023701,
+      10496915,
+      5154606,
+      4618374,
+      9855101
+    ],
+    "major_font": "Calibri",
+    "major_font_cs": "",
+    "major_font_ea": "",
+    "major_font_scripts": [],
+    "minor_font": "Calibri",
+    "minor_font_cs": "",
+    "minor_font_ea": "",
+    "minor_font_scripts": [],
+    "name": "Craft"
+  },
+  "vba_project": null
+}
