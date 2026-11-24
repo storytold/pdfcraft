@@ -1,9 +1,22 @@
 //! Convert a Windows DIB (Device-Independent Bitmap, as returned by TWAIN `DAT_IMAGENATIVEXFER`)
 //! into a standalone BMP file with accurate physical DPI metadata.
 
-/// Convert raw DIB bytes (starting with `BITMAPINFOHEADER`) into a valid `.bmp` file,
-/// patching `biXPelsPerMeter` and `biYPelsPerMeter` when the driver left them unset or
-/// when an explicit DPI from `TW_IMAGEINFO` is available.
+/// Read embedded physical resolution `(dpi_x, dpi_y)` from a raw DIB's `BITMAPINFOHEADER`.
+pub fn dib_header_dpi(dib: &[u8]) -> (Option<f64>, Option<f64>) {
+    if dib.len() < 40 {
+        return (None, None);
+    }
+    let ppm_x = i32::from_le_bytes([dib[24], dib[25], dib[26], dib[27]]);
+    let ppm_y = i32::from_le_bytes([dib[28], dib[29], dib[30], dib[31]]);
+    let x = (ppm_x > 0).then(|| f64::from(ppm_x) * 0.0254);
+    let y = (ppm_y > 0).then(|| f64::from(ppm_y) * 0.0254);
+    (x, y)
+}
+
+/// Convert raw DIB bytes (starting with `BITMAPINFOHEADER`) into a valid `.bmp` file.
+///
+/// When `dpi_x` or `dpi_y` is finite and positive, writes that resolution into `biXPelsPerMeter`
+/// or `biYPelsPerMeter`; when zero or non-positive, preserves the DIB header's existing value.
 pub fn dib_to_bmp(dib: &[u8], dpi_x: f64, dpi_y: f64) -> Result<Vec<u8>, String> {
     if dib.len() < 40 {
         return Err("scanner returned a truncated bitmap header".into());
@@ -73,15 +86,13 @@ pub fn dib_to_bmp(dib: &[u8], dpi_x: f64, dpi_y: f64) -> Result<Vec<u8>, String>
     out.extend_from_slice(&bf_off_bits.to_le_bytes());
     out.extend_from_slice(dib);
 
-    // Patch biXPelsPerMeter (offset 14+24) and biYPelsPerMeter (offset 14+28) if valid DPI is given
-    // and the DIB left them 0.
-    let existing_x = i32::from_le_bytes([out[38], out[39], out[40], out[41]]);
-    let existing_y = i32::from_le_bytes([out[42], out[43], out[44], out[45]]);
-    if existing_x <= 0 && dpi_x.is_finite() && dpi_x > 0.0 {
+    // Write explicit positive DPI into biXPelsPerMeter (offset 14+24) and biYPelsPerMeter (offset 14+28);
+    // preserve existing header values when caller passes 0.0.
+    if dpi_x.is_finite() && dpi_x > 0.0 {
         let ppm_x = (dpi_x / 0.0254).round() as i32;
         out[38..42].copy_from_slice(&ppm_x.to_le_bytes());
     }
-    if existing_y <= 0 && dpi_y.is_finite() && dpi_y > 0.0 {
+    if dpi_y.is_finite() && dpi_y > 0.0 {
         let ppm_y = (dpi_y / 0.0254).round() as i32;
         out[42..46].copy_from_slice(&ppm_y.to_le_bytes());
     }
@@ -134,5 +145,30 @@ mod tests {
         let mut dib = sample_dib_24bit(4, 2);
         dib[20..24].copy_from_slice(&0u32.to_le_bytes());
         assert!(dib_to_bmp(&dib, 300.0, 300.0).is_ok());
+    }
+
+    #[test]
+    fn dib_to_bmp_overwrites_stale_header_dpi_when_explicit_dpi_given() {
+        let mut dib = sample_dib_24bit(4, 2);
+        let stale_72_ppm: i32 = 2835;
+        dib[24..28].copy_from_slice(&stale_72_ppm.to_le_bytes());
+        dib[28..32].copy_from_slice(&stale_72_ppm.to_le_bytes());
+        let bmp = dib_to_bmp(&dib, 300.0, 300.0).expect("valid BMP");
+        assert_eq!(i32::from_le_bytes([bmp[38], bmp[39], bmp[40], bmp[41]]), 11811);
+        assert_eq!(i32::from_le_bytes([bmp[42], bmp[43], bmp[44], bmp[45]]), 11811);
+    }
+
+    #[test]
+    fn dib_to_bmp_preserves_header_dpi_when_explicit_dpi_zero() {
+        let mut dib = sample_dib_24bit(4, 2);
+        let ppm_300: i32 = 11811;
+        dib[24..28].copy_from_slice(&ppm_300.to_le_bytes());
+        dib[28..32].copy_from_slice(&ppm_300.to_le_bytes());
+        let (dx, dy) = dib_header_dpi(&dib);
+        assert!(dx.is_some_and(|v| (v - 300.0).abs() < 0.1));
+        assert!(dy.is_some_and(|v| (v - 300.0).abs() < 0.1));
+        let bmp = dib_to_bmp(&dib, 0.0, 0.0).expect("valid BMP");
+        assert_eq!(i32::from_le_bytes([bmp[38], bmp[39], bmp[40], bmp[41]]), ppm_300);
+        assert_eq!(i32::from_le_bytes([bmp[42], bmp[43], bmp[44], bmp[45]]), ppm_300);
     }
 }

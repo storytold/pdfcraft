@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::dib::dib_to_bmp;
+use crate::dib::{dib_header_dpi, dib_to_bmp};
 use crate::{PaperSource, PixelMode, ScanBatch, ScanRequest, ScannedPage, TwainDevice, TwainError};
 
 /// Maximum cumulative uncompressed BMP bytes buffered in one multi-page feeder batch (512 MiB).
@@ -137,6 +137,7 @@ const DAT_IMAGEINFO: u16 = 0x0101;
 const DAT_IMAGENATIVEXFER: u16 = 0x0104;
 
 const MSG_GET: u16 = 0x0001;
+const MSG_GETCURRENT: u16 = 0x0002;
 const MSG_GETDEFAULT: u16 = 0x0003;
 const MSG_GETFIRST: u16 = 0x0004;
 const MSG_GETNEXT: u16 = 0x0005;
@@ -518,18 +519,18 @@ impl TwainMem {
     }
 }
 
-fn set_cap_one_value(dsm: &DsmLib, mem: &TwainMem, app: &mut TwIdentity, ds: &mut TwIdentity, cap: u16, item_type: u16, item: u32) -> bool {
+fn set_cap_one_value(dsm: &DsmLib, mem: &TwainMem, app: &mut TwIdentity, ds: &mut TwIdentity, cap: u16, item_type: u16, item: u32) -> u16 {
     // SAFETY: Allocates a `TwOneValue` container, populates it, passes it to `DAT_CAPABILITY / MSG_SET`,
     // and always frees the handle afterwards per TWAIN 2.x ownership rules.
     unsafe {
         let h = mem.alloc(std::mem::size_of::<TwOneValue>() as u32);
         if h.is_null() {
-            return false;
+            return TWRC_FAILURE;
         }
         let ptr = mem.lock(h).cast::<TwOneValue>();
         if ptr.is_null() {
             mem.free(h);
-            return false;
+            return TWRC_FAILURE;
         }
         ptr::write_unaligned(ptr, TwOneValue { item_type, item });
         mem.unlock(h);
@@ -537,7 +538,44 @@ fn set_cap_one_value(dsm: &DsmLib, mem: &TwainMem, app: &mut TwIdentity, ds: &mu
         let mut tw_cap = TwCapability { cap, con_type: TWON_ONEVALUE, h_container: h };
         let rc = (dsm.entry)(app, ds, DG_CONTROL, DAT_CAPABILITY, MSG_SET, (&raw mut tw_cap).cast());
         mem.free(h);
-        rc == TWRC_SUCCESS || rc == TWRC_CHECKSTATUS
+        rc
+    }
+}
+
+fn get_cap_bool_current(dsm: &DsmLib, mem: &TwainMem, app: &mut TwIdentity, ds: &mut TwIdentity, cap: u16) -> Option<bool> {
+    // SAFETY: Queries `DAT_CAPABILITY / MSG_GETCURRENT` and frees any container handle returned by the source.
+    unsafe {
+        let mut tw_cap = TwCapability { cap, con_type: TWON_ONEVALUE, h_container: ptr::null_mut() };
+        let rc = (dsm.entry)(app, ds, DG_CONTROL, DAT_CAPABILITY, MSG_GETCURRENT, (&raw mut tw_cap).cast());
+        let h = tw_cap.h_container;
+        if h.is_null() {
+            return None;
+        }
+        let result = if rc == TWRC_SUCCESS && tw_cap.con_type == TWON_ONEVALUE {
+            let ptr = mem.lock(h).cast::<TwOneValue>();
+            if ptr.is_null() {
+                None
+            } else {
+                let val = ptr::read_unaligned(ptr);
+                mem.unlock(h);
+                Some((val.item & 0xFFFF) != 0)
+            }
+        } else {
+            None
+        };
+        mem.free(h);
+        result
+    }
+}
+
+/// Set a `TWTY_BOOL` capability and verify it actually took the requested value.
+/// When a source responds with `TWRC_CHECKSTATUS`, reads back `MSG_GETCURRENT` per TWAIN 2.4.
+fn set_cap_bool_strict(dsm: &DsmLib, mem: &TwainMem, app: &mut TwIdentity, ds: &mut TwIdentity, cap: u16, wanted: bool) -> bool {
+    let rc = set_cap_one_value(dsm, mem, app, ds, cap, TWTY_BOOL, u32::from(wanted));
+    match rc {
+        TWRC_SUCCESS => true,
+        TWRC_CHECKSTATUS => get_cap_bool_current(dsm, mem, app, ds, cap) == Some(wanted),
+        _ => false,
     }
 }
 
@@ -692,9 +730,11 @@ fn acquire_in_ds(
             let _ = set_cap_one_value(dsm, mem, app, ds, CAP_DUPLEXENABLED, TWTY_BOOL, 0);
         }
         PaperSource::FeederDuplex => {
-            let _ = set_cap_one_value(dsm, mem, app, ds, CAP_FEEDERENABLED, TWTY_BOOL, 1);
+            if !set_cap_bool_strict(dsm, mem, app, ds, CAP_FEEDERENABLED, true) {
+                return Err(TwainError::Failed("scanner driver does not support feeder scanning".into()));
+            }
             let _ = set_cap_one_value(dsm, mem, app, ds, CAP_AUTOFEED, TWTY_BOOL, 1);
-            if !set_cap_one_value(dsm, mem, app, ds, CAP_DUPLEXENABLED, TWTY_BOOL, 1) {
+            if !set_cap_bool_strict(dsm, mem, app, ds, CAP_DUPLEXENABLED, true) {
                 return Err(TwainError::Failed("scanner driver does not support duplex scanning".into()));
             }
         }
@@ -799,17 +839,6 @@ unsafe fn read_final_image_dpi(dsm: &DsmLib, app: &mut TwIdentity, ds: &mut TwId
     }
 }
 
-fn bmp_header_dpi(bmp: &[u8]) -> (Option<f64>, Option<f64>) {
-    if bmp.len() < 46 {
-        return (None, None);
-    }
-    let ppm_x = i32::from_le_bytes([bmp[38], bmp[39], bmp[40], bmp[41]]);
-    let ppm_y = i32::from_le_bytes([bmp[42], bmp[43], bmp[44], bmp[45]]);
-    let x = (ppm_x > 0).then(|| f64::from(ppm_x) * 0.0254);
-    let y = (ppm_y > 0).then(|| f64::from(ppm_y) * 0.0254);
-    (x, y)
-}
-
 unsafe fn transfer_all_pages(
     dsm: &DsmLib,
     app: &mut TwIdentity,
@@ -839,15 +868,16 @@ unsafe fn transfer_all_pages(
                 // Read final image info after TWRC_XFERDONE and before MSG_ENDXFER so drivers that
                 // refine resolution during transfer report accurate DPI.
                 let (info_x, info_y) = unsafe { read_final_image_dpi(dsm, app, ds) };
-                let patch_x = info_x.unwrap_or(fallback_dpi);
-                let patch_y = info_y.unwrap_or(fallback_dpi);
 
                 if !hdib.is_null() {
                     let size = unsafe { GlobalSize(hdib) };
                     let ptr = unsafe { GlobalLock(hdib) }.cast::<u8>();
                     let bmp_res = if !ptr.is_null() && size >= 40 {
                         let slice = unsafe { std::slice::from_raw_parts(ptr, size) };
-                        dib_to_bmp(slice, patch_x, patch_y)
+                        let (dib_x, dib_y) = dib_header_dpi(slice);
+                        let dpi_x = info_x.or(dib_x).unwrap_or(fallback_dpi);
+                        let dpi_y = info_y.or(dib_y).unwrap_or(fallback_dpi);
+                        dib_to_bmp(slice, dpi_x, dpi_y).map(|bmp| (bmp, dpi_x, dpi_y))
                     } else {
                         Err("scanner returned an empty bitmap handle".into())
                     };
@@ -856,7 +886,7 @@ unsafe fn transfer_all_pages(
                         GlobalFree(hdib);
                     }
                     match bmp_res {
-                        Ok(bmp_bytes) => {
+                        Ok((bmp_bytes, dpi_x, dpi_y)) => {
                             if !pages.is_empty() && total_bytes.saturating_add(bmp_bytes.len()) > MAX_BATCH_BYTES {
                                 let _ = unsafe { (dsm.entry)(app, ds, DG_CONTROL, DAT_PENDINGXFERS, MSG_ENDXFER, (&raw mut pending).cast()) };
                                 unsafe { reset_pending(dsm, app, ds, &mut pending) };
@@ -866,9 +896,6 @@ unsafe fn transfer_all_pages(
                                 ));
                                 break;
                             }
-                            let (bmp_x, bmp_y) = bmp_header_dpi(&bmp_bytes);
-                            let dpi_x = info_x.or(bmp_x).unwrap_or(fallback_dpi);
-                            let dpi_y = info_y.or(bmp_y).unwrap_or(fallback_dpi);
                             total_bytes = total_bytes.saturating_add(bmp_bytes.len());
                             pages.push(ScannedPage { bmp_bytes, dpi_x, dpi_y });
                         }
