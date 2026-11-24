@@ -1709,8 +1709,6 @@ fn post_name<'a>(post: &skrifa::raw::tables::post::Post<'a>, custom: &[&'a str],
     }
 }
 
-/// Code → Unicode for a font: its ToUnicode CMap (for a composite font, also the name
-/// `/Identity-H` or `/Identity-V`, read as code = Unicode), else (simple fonts) its encoding.
 /// The table of a Latin base encoding a simple font names.
 fn named_base_table(name: Option<&[u8]>) -> Option<&'static [u32; 256]> {
     match name? {
@@ -1721,6 +1719,8 @@ fn named_base_table(name: Option<&[u8]>) -> Option<&'static [u32; 256]> {
     }
 }
 
+/// Code → Unicode for a font: its ToUnicode CMap (for a composite font, also the name
+/// `/Identity-H` or `/Identity-V`, read as code = Unicode), else (simple fonts) its encoding.
 fn unicode_map(doc: &Document, font: &Dict, composite: bool, reads: &mut Reads<'_>) -> Unicode {
     let mut out = Unicode::default();
     if !composite {
