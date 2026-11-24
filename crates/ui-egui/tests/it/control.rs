@@ -824,13 +824,14 @@ fn middle_button_pans_while_held_outside_linux() {
     h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Crop;
     let p = h.state().views[0].viewport_rect().center();
     let top = h.state().views[0].page_screen_rect(1).unwrap().top();
-    drag(&mut h, &c, json!([p.x, p.y]), json!([p.x, p.y - 60.0]), 12, &[], "middle");
+    // Both axes span a real crop, so misrouting cannot pass as an undersized selection.
+    drag(&mut h, &c, json!([p.x, p.y]), json!([p.x + 60.0, p.y - 60.0]), 12, &[], "middle");
     h.run_steps(2);
     let moved = h.state().views[0].page_screen_rect(1).unwrap().top();
     assert!((moved - (top - 60.0)).abs() < 1.0, "the page follows the pointer 1:1: {top} -> {moved}");
     h.run_steps(8);
     assert_eq!(h.state().views[0].page_screen_rect(1).unwrap().top(), moved, "no drift after release");
-    assert!(h.state().views[0].crop_drag.is_none(), "the Crop tool must not receive a wheel drag");
+    assert!(!crate::support::dialog_open(&h), "the Crop tool must not receive a wheel drag");
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
 }
 
