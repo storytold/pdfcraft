@@ -382,7 +382,7 @@ mod tests {
         let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap());
         let mut s = Session::new();
         let id = s.open("locked.pdf", None, bytes, None).unwrap();
-        let text = pdfcraft_render::PageText { glyphs: Vec::new(), line_of: Vec::new(), space_before: Vec::new() };
+        let text = pdfcraft_render::PageText { glyphs: Vec::new(), line_of: Vec::new(), space_before: Vec::new(), truncated: false };
         let err = s.get(id).unwrap().rich_copy(0, &text, &[]).unwrap_err();
         assert!(matches!(err, crate::EditError::NotPermitted(_)), "{err:?}");
     }

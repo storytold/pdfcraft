@@ -65,14 +65,23 @@ impl Session {
     /// so the next save appends only newer edits. Undo history is kept.
     pub fn mark_saved(&mut self, id: DocId, bytes: Arc<Vec<u8>>, path: Option<String>) -> Result<(), EditError> {
         let doc = self.doc_mut(id)?;
+        let mut renumbered = false;
         if let Some(editor) = doc.editor.as_mut() {
             // An encrypted file needs the password it is protected with now (the owner
             // password when known, so saving never downgrades this session's rights).
             let keys = editor.keys.clone();
             // The saved file carries no Password-field values (#3943, #3944); the open document keeps them.
             let typed = pdfcraft_forms::password_values(&editor.cos);
-            editor.cos =
+            // An incremental save keeps the old byte prefix and its object identities. A
+            // rewrite can reuse the same numbers for unrelated fields and icons.
+            let preserves_objects = bytes.starts_with(editor.saved.as_slice()) || bytes.starts_with(editor.cos.bytes().as_slice());
+            let reopened =
                 pdfcraft_cos::Document::open_with_password(bytes.clone(), keys.reopen.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
+            if !preserves_objects {
+                renumbered = true;
+                crate::js::replace_runtime(&mut doc.js_runtime);
+            }
+            editor.cos = reopened;
             pdfcraft_forms::restore_password_values(&mut editor.cos, &typed).map_err(|e| EditError::Reopen(e.to_string()))?;
             if !typed.is_empty() && doc.info.xfa.is_some() {
                 let mut datasets = None;
@@ -88,7 +97,8 @@ impl Session {
         }
         doc.dirty = false;
         doc.generation += 1;
-        Self::refresh(doc).inspect_err(|_| Self::show_released(doc))
+        let refreshed = if renumbered { Self::refresh_renumbered(doc) } else { Self::refresh(doc) };
+        refreshed.inspect_err(|_| Self::show_released(doc))
     }
 
     /// Enter the permissions (owner) password of a document opened with its user password,
@@ -125,8 +135,9 @@ impl Session {
     }
 
     /// File ▸ Revert: back to the last saved version (or the file as opened). Undo history is
-    /// cleared, as in Acrobat.
+    /// cleared, as in Acrobat, and the document's opening scripts run again.
     pub fn revert(&mut self, id: DocId) -> Result<(), EditError> {
+        self.invalidate_javascript(id);
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
         let base = editor.saved.clone();
@@ -145,8 +156,14 @@ impl Session {
         editor.redo.clear();
         Self::adopt_keys(doc);
         Self::sync_dirty(doc);
+        // The changes whose exits ran are gone with the rest: skip no exit.
+        doc.xfa_exited.clear();
         doc.generation += 1;
-        Self::refresh(doc).inspect_err(|_| Self::show_released(doc))
+        Self::refresh(doc).inspect_err(|_| Self::show_released(doc))?;
+        // Reverting reopens the saved file, in a fresh realm: its opening scripts run again,
+        // as they do on opening it (#269).
+        self.run_open_scripts(id);
+        Ok(())
     }
 
     /// The document's file changed on disk (a LaTeX or Typst build rewrote it, #431): open
@@ -157,6 +174,12 @@ impl Session {
     pub fn reload(&mut self, id: DocId, bytes: Arc<Vec<u8>>) -> Result<(), OpenError> {
         let old = self.docs.iter().position(|d| d.id == id).ok_or_else(|| OpenError::Invalid("the document is not open".into()))?;
         let doc = &self.docs[old];
+        // Opening the replacement can initialize a new worker. Wait for the old
+        // invocation to finish before allowing repeated reloads of this document.
+        #[cfg(not(target_arch = "wasm32"))]
+        if doc.js_runtime.lock().map_err(|_| OpenError::Invalid("script runtime unavailable".into()))?.is_executing() {
+            return Err(OpenError::Invalid("a script is still running in this document; retry the reload once it finishes".into()));
+        }
         let (name, path, generation) = (doc.name.clone(), doc.path.clone(), doc.generation);
         let password = doc.editor.as_ref().and_then(|e| e.keys.reopen.clone()).or_else(|| doc.password.clone());
         let new_id = self.open(name, path, bytes, password.as_deref())?;
@@ -172,49 +195,41 @@ impl Session {
             doc.config.hide_comments = old.config.hide_comments;
             doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         }
-        // Caches keyed by the edit generation (edit lines, images, measurements) must see a new
-        // one; there is nothing new to autosave.
+        // Caches keyed by the edit generation (edit lines, images, measurements) must see a new one.
         doc.generation = generation + 1;
-        doc.snapshot_generation = doc.generation;
         // `open` pushed the new version last, so the old one is still at `old`.
         *self.docs.get_mut(old).ok_or_else(|| OpenError::Invalid("the document is not open".into()))? = doc;
         Ok(())
     }
 
-    /// Whether a changed document still needs a recovery snapshot. This does not consume it.
-    pub fn has_pending_autosave(&self) -> bool {
-        self.docs.iter().any(|d| d.dirty && d.generation != d.snapshot_generation)
+    /// Every open document with its edit generation and whether it has unsaved changes: what the
+    /// autosave timer decides from. The timer, not the session, tracks what was already written.
+    pub fn autosave_docs(&self) -> impl Iterator<Item = (DocId, u64, bool)> + '_ {
+        self.docs.iter().map(|d| (d.id, d.generation, d.dirty))
     }
 
-    /// Documents with unsaved changes made since the last call: their current working file,
-    /// for crash recovery. Encrypted documents stay encrypted in the snapshot.
-    pub fn autosave_snapshots(&mut self) -> Vec<RecoverySnapshot> {
-        let mut out = Vec::new();
-        for d in &mut self.docs {
-            if d.dirty && d.generation != d.snapshot_generation {
-                // The working bytes hold typed Password-field values (#3926, #3944): a recovery file
-                // is written from a copy without them, and none is written if that copy fails.
-                let bytes =
-                    match d.editor.as_ref().filter(|e| pdfcraft_forms::has_password_values(&e.cos) || pdfcraft_xfa::has_password_values(&e.cos)) {
-                        Some(e) => match writable(&e.cos)
-                            .and_then(|c| write_incremental(&c, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string())))
-                        {
-                            Ok(b) => Arc::new(b),
-                            Err(_) => continue,
-                        },
-                        None => d.bytes.clone(),
-                    };
-                d.snapshot_generation = d.generation;
-                out.push(RecoverySnapshot {
-                    doc: d.id,
-                    name: d.name.clone(),
-                    path: d.path.clone(),
-                    bytes,
-                    encrypted: d.info.encrypted || d.editor.as_ref().is_some_and(|e| e.cos.security().is_some()),
-                });
+    /// The recovery snapshot of document `id`: its current working file, encrypted documents
+    /// staying encrypted. `None` for a clean or unknown document. Nothing is marked as written.
+    pub fn recovery_snapshot(&self, id: DocId) -> Option<RecoverySnapshot> {
+        let d = self.get(id).filter(|d| d.dirty)?;
+        // The working bytes hold typed Password-field values (#3926, #3944): a recovery file
+        // is written from a copy without them, and none is written if that copy fails.
+        let bytes = match d.editor.as_ref().filter(|e| pdfcraft_forms::has_password_values(&e.cos) || pdfcraft_xfa::has_password_values(&e.cos)) {
+            Some(e) => {
+                match writable(&e.cos).and_then(|c| write_incremental(&c, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))) {
+                    Ok(b) => Arc::new(b),
+                    Err(_) => return None,
+                }
             }
-        }
-        out
+            None => d.bytes.clone(),
+        };
+        Some(RecoverySnapshot {
+            doc: d.id,
+            name: d.name.clone(),
+            path: d.path.clone(),
+            bytes,
+            encrypted: d.info.encrypted || d.editor.as_ref().is_some_and(|e| e.cos.security().is_some()),
+        })
     }
 
     /// Mark a document opened from a recovery file: it has unsaved changes and belongs at
@@ -227,7 +242,6 @@ impl Session {
                 e.unsaved_file = true;
             }
             d.generation += 1;
-            d.snapshot_generation = d.generation; // its bytes are already in the recovery store
         }
     }
 

@@ -20,8 +20,8 @@ let doc = Document::open(bytes)?;                               // Arc<Vec<u8>>
 let doc = Document::open_with_password(bytes, Some("owner"))?;  // encrypted files
 
 let root = doc.root();                               // Option<ObjRef> — the catalog
-let obj  = doc.get(ObjRef { num: 12, gen: 0 });      // load (and cache): Arc<Object>
-let real = doc.resolve(&obj);                        // follow one indirect reference
+let obj  = doc.get(ObjRef::new(12, 0));             // load (and cache): Arc<Object>
+let real = doc.resolve(&obj);                        // follow a bounded reference chain
 let d    = doc.dict(&obj);                           // Option<Dict>, resolving first
 let data = stream.decoded()?;                        // filters applied on demand
 let data = doc.with_direct_parms(&stream).decoded()?; // /DecodeParms given by reference too

@@ -3,72 +3,84 @@
     "crate": "pdfcraft-cli",
     "name": "hyper",
     "reachable": true,
-    "path": "pdfcraft-cli -> pdfcraft-engine -> pdfcraft-print -> craft-print -> winprint -> reqwest -> hyper"
+    "path": "pdfcraft-cli -> craft -> craft-print -> winprint -> reqwest -> hyper"
   },
   {
     "crate": "pdfcraft-cli",
     "name": "reqwest",
     "reachable": true,
-    "path": "pdfcraft-cli -> pdfcraft-engine -> pdfcraft-print -> craft-print -> winprint -> reqwest"
+    "path": "pdfcraft-cli -> craft -> craft-print -> winprint -> reqwest"
   },
   {
     "crate": "pdfcraft-cli",
     "name": "socket2",
     "reachable": true,
-    "path": "pdfcraft-cli -> pdfcraft-engine -> pdfcraft-print -> craft-print -> winprint -> reqwest -> hyper-util -> socket2"
+    "path": "pdfcraft-cli -> craft -> craft-platform -> wasm-bindgen-futures -> tokio -> socket2"
   },
   {
     "crate": "pdfcraft-cli",
     "name": "tokio",
     "reachable": true,
-    "path": "pdfcraft-cli -> pdfcraft-engine -> pdfcraft-print -> craft-print -> winprint -> reqwest -> tokio"
+    "path": "pdfcraft-cli -> craft -> craft-platform -> wasm-bindgen-futures -> tokio"
+  },
+  {
+    "crate": "pdfcraft-cli",
+    "name": "ureq",
+    "reachable": true,
+    "path": "pdfcraft-cli -> craft -> craft-update -> ureq"
   },
   {
     "crate": "pdfcraft-automation",
     "name": "hyper",
     "reachable": true,
-    "path": "pdfcraft-automation -> pdfcraft-engine -> pdfcraft-print -> craft-print -> winprint -> reqwest -> hyper"
+    "path": "pdfcraft-automation -> craft -> craft-print -> winprint -> reqwest -> hyper"
   },
   {
     "crate": "pdfcraft-automation",
     "name": "reqwest",
     "reachable": true,
-    "path": "pdfcraft-automation -> pdfcraft-engine -> pdfcraft-print -> craft-print -> winprint -> reqwest"
+    "path": "pdfcraft-automation -> craft -> craft-print -> winprint -> reqwest"
   },
   {
     "crate": "pdfcraft-automation",
     "name": "socket2",
     "reachable": true,
-    "path": "pdfcraft-automation -> pdfcraft-engine -> pdfcraft-print -> craft-print -> winprint -> reqwest -> hyper-util -> socket2"
+    "path": "pdfcraft-automation -> craft -> craft-platform -> wasm-bindgen-futures -> tokio -> socket2"
   },
   {
     "crate": "pdfcraft-automation",
     "name": "tokio",
     "reachable": true,
-    "path": "pdfcraft-automation -> pdfcraft-engine -> pdfcraft-print -> craft-print -> winprint -> reqwest -> tokio"
+    "path": "pdfcraft-automation -> craft -> craft-platform -> wasm-bindgen-futures -> tokio"
+  },
+  {
+    "crate": "pdfcraft-automation",
+    "name": "ureq",
+    "reachable": true,
+    "path": "pdfcraft-automation -> craft -> craft-update -> ureq"
   },
   {
     "crate": "pdfcraft-engine",
     "name": "hyper",
     "reachable": true,
-    "path": "pdfcraft-engine -> pdfcraft-print -> craft-print -> winprint -> reqwest -> hyper"
+    "path": "pdfcraft-engine -> pdfcraft-print -> winprint -> reqwest -> hyper"
   },
   {
     "crate": "pdfcraft-engine",
     "name": "reqwest",
     "reachable": true,
-    "path": "pdfcraft-engine -> pdfcraft-print -> craft-print -> winprint -> reqwest"
+    "path": "pdfcraft-engine -> pdfcraft-print -> winprint -> reqwest"
   },
   {
     "crate": "pdfcraft-engine",
     "name": "socket2",
     "reachable": true,
-    "path": "pdfcraft-engine -> pdfcraft-print -> craft-print -> winprint -> reqwest -> hyper-util -> socket2"
+    "path": "pdfcraft-engine -> pdfcraft-print -> winprint -> reqwest -> hyper-util -> socket2"
   },
   {
     "crate": "pdfcraft-engine",
     "name": "tokio",
     "reachable": true,
-    "path": "pdfcraft-engine -> pdfcraft-print -> craft-print -> winprint -> reqwest -> tokio"
+    "path": "pdfcraft-engine -> pdfcraft-print -> winprint -> reqwest -> tokio"
   }
 ]

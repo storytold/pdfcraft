@@ -116,6 +116,7 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
             disallowed.push(what);
         }
     }
+    refuse_unlisted_bodies(doc, &old, &signed_role, &mut disallowed);
     // The trailer chooses the catalog. A later revision that points it at another catalog (one
     // already in the signed file, so no object changes) shows another document.
     if doc.root() != old.root() {
@@ -165,16 +166,23 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
             }
             continue;
         }
+        // A new place for the object. What is read there is what the renderer reads only when
+        // the entry locates the object itself: where this reader had to search for it, another
+        // reader may arrive at a different body, and an entry that leads to no object at all
+        // (which this reader reads as null, and so as nothing) makes the renderer rebuild its
+        // object index from the file's headers (#6754). Whatever the object reads as here, no
+        // writer has a reason to write such an entry after signing.
+        if !doc.is_edited(num) && !doc.xref_entry_is_exact(num) {
+            if !disallowed.contains(&kind::OTHER) {
+                disallowed.push(kind::OTHER);
+            }
+            continue;
+        }
         let r = ObjRef { num, generation: doc.generation(num) };
         let new = doc.get(r);
         let before = old.try_get(num).ok().filter(|o| !matches!(**o, Object::Null));
-        if before.as_deref() == Some(&*new) {
-            // The same content at a new place. That is true for the renderer as well only when
-            // the entry locates the object itself: where this reader had to search for the
-            // object, another reader may arrive at a different one.
-            if !doc.is_edited(num) && !doc.xref_entry_is_exact(num) && !disallowed.contains(&kind::OTHER) {
-                disallowed.push(kind::OTHER);
-            }
+        if before.as_deref().is_some_and(|b| same_object(b, &new)) {
+            // The same content at a new place.
             continue;
         }
         // A resource of a signed page is page content whatever keys its new version carries
@@ -238,7 +246,7 @@ fn only_validation_data(allowed: &mut Vec<&'static str>, disallowed: &mut Vec<&'
     // Compared by content: an indirect /Perms rewritten in place keeps its reference (and, shared
     // with the trailer's /Info, would otherwise pass as a metadata change).
     let perms = |d: &Document| d.root().and_then(|r| d.get(r).as_dict().and_then(|c| c.get(b"Perms").map(|p| (*d.resolve(p)).clone())));
-    if perms(doc) != perms(old) && !disallowed.contains(&kind::STRUCTURE) {
+    if !same_entry(perms(doc).as_ref(), perms(old).as_ref()) && !disallowed.contains(&kind::STRUCTURE) {
         disallowed.push(kind::STRUCTURE);
     }
 }
@@ -269,7 +277,7 @@ fn only_invisible_timestamps_added(doc: &Document, old: &Document) -> bool {
             continue;
         }
         // Unchanged since signing: the certification already covered it.
-        if old.try_get(num).ok().filter(|o| !matches!(**o, Object::Null)).as_deref() == Some(&*new) {
+        if old.try_get(num).ok().filter(|o| !matches!(**o, Object::Null)).is_some_and(|o| same_object(&o, &new)) {
             continue;
         }
         let value = if is_value { Some(d.clone()) } else { d.get(b"V").map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()) };
@@ -330,7 +338,7 @@ impl ChangedObjectClassifier<'_> {
     }
 
     fn keeps_previous_entries(&self, dict: &Dict, before: Option<&Object>) -> bool {
-        before.and_then(Object::as_dict).is_some_and(|previous| previous.iter().all(|(key, value)| dict.get(key) == Some(value)))
+        before.and_then(Object::as_dict).is_some_and(|previous| previous.iter().all(|(key, value)| same_entry(dict.get(key), Some(value))))
     }
 
     fn is_signed_annotation_array(&self, r: ObjRef, before: Option<&Object>) -> bool {
@@ -402,7 +410,7 @@ impl ChangedObjectClassifier<'_> {
     /// `/Type`) is a page content change.
     fn page_change_kind(&self, d: &Dict, before: Option<&Dict>) -> Option<&'static str> {
         match before {
-            Some(b) if without(d, &[b"Annots"]) != without(b, &[b"Annots"]) => Some(kind::PAGE_CONTENT),
+            Some(b) if !same_but_annots(d, b) => Some(kind::PAGE_CONTENT),
             Some(b) => match (annot_refs(self.old, b.get(b"Annots"), self.annot_budget), annot_refs(self.doc, d.get(b"Annots"), self.annot_budget)) {
                 (Some(was), Some(now)) => self.annots_change(&was, &now),
                 _ => Some(kind::OTHER),
@@ -520,14 +528,14 @@ pub(crate) fn only_grew(doc: &Document, old: &Document, before: &Object, now: &O
             let refs = |a: &[Object]| a.iter().map(Object::as_ref).collect::<Option<HashSet<ObjRef>>>();
             match (refs(b), refs(n)) {
                 (Some(b), Some(n)) => b.is_subset(&n),
-                _ => b.len() <= MAX_COMPARED && n.len() <= MAX_COMPARED && b.iter().all(|x| n.contains(x)),
+                _ => b.len() <= MAX_COMPARED && n.len() <= MAX_COMPARED && b.iter().all(|x| n.iter().any(|y| same_object(x, y))),
             }
         }
         (Object::Dict(b), Object::Dict(n)) => b.iter().all(|(k, v)| match n.get(k) {
-            Some(nv) => nv == v || (depth < 4 && only_grew(doc, old, &old.resolve(v), &doc.resolve(nv), depth + 1)),
+            Some(nv) => same_object(nv, v) || (depth < 4 && only_grew(doc, old, &old.resolve(v), &doc.resolve(nv), depth + 1)),
             None => false,
         }),
-        _ => before == now,
+        _ => same_object(before, now),
     }
 }
 
@@ -632,6 +640,168 @@ fn references(doc: &Document) -> Option<HashSet<ObjRef>> {
     doc.trailer().iter().all(|(_, v)| walk(v, 0, &mut found)).then_some(found)
 }
 
+/// When an entry it follows leads to no object, the renderer rebuilds its object index from the
+/// `N G obj` headers in the file, and there the last header for a number wins. A body appended
+/// after signing that is not where this reader reads its number can then be drawn in place of
+/// the object compared: a new body for a signed page's content that no section lists, or a
+/// revision written back to an earlier body (#6754). No writer leaves one, so each is refused,
+/// as page content when the number had a signed role (`signed_role`).
+fn refuse_unlisted_bodies(doc: &Document, old: &Document, signed_role: &dyn Fn(u32) -> bool, disallowed: &mut Vec<&'static str>) {
+    let refused: Vec<&'static str> = match unlisted_bodies(doc, old) {
+        Some(nums) => nums.into_iter().map(|num| if signed_role(num) { kind::PAGE_CONTENT } else { kind::OTHER }).collect(),
+        None => vec![kind::OTHER],
+    };
+    for what in refused {
+        if !disallowed.contains(&what) {
+            disallowed.push(what);
+        }
+    }
+}
+
+/// The object numbers with a body in the bytes appended after the signed revision `old` that
+/// `doc` does not read for them: for each number and generation, the last `N G obj` header there
+/// must be where `doc`'s cross-reference entry for that number points, with that generation. A
+/// renderer that rebuilds its object index from the file's headers takes the last one, so any
+/// other body is one it may draw while this reader compares another. `None` past a bound on the
+/// headers found, or on the work spent finding them, when the appended bytes cannot be judged.
+///
+/// The scan finds more headers than a renderer's would (it does not skip dictionaries or check
+/// that an object follows), so it errs towards refusing.
+fn unlisted_bodies(doc: &Document, old: &Document) -> Option<Vec<u32>> {
+    const MAX_HEADERS: usize = 1 << 20;
+    let data = doc.bytes();
+    let start = old.bytes().len();
+    let Some(appended) = data.get(start..) else { return Some(Vec::new()) };
+    // Each candidate header may read a comment, a generation token or white space to its end, and
+    // later ones can start inside or before it (`%1%1%1…`, `1 +1+1+1…`, `1+1+1…` before long
+    // white space): without a bound, that is quadratic in the appended bytes. Ordinary bytes,
+    // binary stream data included, spend a small fraction of it.
+    let mut work = appended.len().saturating_mul(16).saturating_add(1 << 20);
+    let mut last: HashMap<(u32, u16), usize> = HashMap::new();
+    let mut i = 0;
+    while let Some(b) = appended.get(i) {
+        if work == 0 {
+            return None;
+        }
+        let starts_number = b.is_ascii_digit() && i.checked_sub(1).and_then(|p| appended.get(p)).is_none_or(|p| !p.is_ascii_digit());
+        if let Some((num, generation, end)) = starts_number.then(|| object_header(appended, i, &mut work)).flatten() {
+            last.insert((num, generation), start.saturating_add(i));
+            if last.len() > MAX_HEADERS {
+                return None;
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    // Where an entry's offset leads, past any white space before the header, that white space
+    // spent from `work`: many entries can point before one long run of it. Offsets may count from
+    // a `%PDF-` header that does not start the file.
+    let header_at = |offset: u64, work: &mut usize| -> Vec<usize> {
+        let Ok(offset) = usize::try_from(offset) else { return Vec::new() };
+        let shifted = (doc.header_offset() != 0).then(|| offset.checked_add(doc.header_offset())).flatten();
+        let mut found = Vec::new();
+        for at in [Some(offset), shifted].into_iter().flatten() {
+            let Some(rest) = data.get(at..).filter(|_| *work > 0) else { continue };
+            let blank = rest.iter().take_while(|b| is_white_space(**b)).count();
+            *work = work.saturating_sub(blank);
+            found.push(at.saturating_add(blank));
+        }
+        found
+    };
+    // A revision's own cross-reference stream with no row for itself, as many writers leave it
+    // (ISO 32000-2 §7.5.8.3 asks for one; readers do without): the section this reader followed
+    // from `startxref` or `/Prev`, so the object there is that stream. Exempt only at exactly
+    // where such a section starts, and only under a number that names nothing else: the signed
+    // revision has no entry for it, this one lists none, and nothing refers to it. A stream
+    // numbered as a signed object, or one a page lists as an annotation, is judged as any body.
+    let sections = xref_stream_sections(doc);
+    let referenced = OnceCell::new();
+    let own_section = |num: u32, at: usize| {
+        sections.contains(&at)
+            && old.xref_entry(num).is_none()
+            && referenced.get_or_init(|| references(doc)).as_ref().is_some_and(|found: &HashSet<ObjRef>| !found.iter().any(|r| r.num == num))
+    };
+    let mut unlisted: Vec<u32> = last
+        .into_iter()
+        .filter(|((num, generation), at)| match doc.xref_entry(*num) {
+            Some(pdfcraft_cos::XrefEntry::InFile { offset, generation: g }) => g != *generation || !header_at(offset, &mut work).contains(at),
+            None => !own_section(*num, *at),
+            _ => true,
+        })
+        .map(|((num, _), _)| num)
+        .collect();
+    if work == 0 {
+        return None;
+    }
+    unlisted.sort_unstable();
+    unlisted.dedup();
+    Some(unlisted)
+}
+
+/// Where each of `doc`'s cross-reference stream sections starts in the file: the header of the
+/// stream object the reader followed from `startxref` or a `/Prev`, past any white space before it.
+fn xref_stream_sections(doc: &Document) -> Vec<usize> {
+    let data = doc.bytes();
+    doc.revisions()
+        .iter()
+        .filter(|r| r.is_stream)
+        .filter_map(|r| {
+            let offset = usize::try_from(r.xref_offset).ok()?;
+            // An offset may count from a `%PDF-` header that does not start the file.
+            let offset = if r.header_relative { offset.checked_add(doc.header_offset())? } else { offset };
+            data.get(offset..).map(|rest| offset.saturating_add(rest.iter().take_while(|b| is_white_space(**b)).count()))
+        })
+        .collect()
+}
+
+/// PDF white space (ISO 32000-2 §7.2.3, Table 1).
+fn is_white_space(b: u8) -> bool {
+    matches!(b, b'\0' | b'\t' | b'\n' | b'\x0c' | b'\r' | b' ')
+}
+
+/// An `N G obj` header starting at `at` in `bytes`: its number, its generation (0 when it is no
+/// generation number, as a renderer rebuilding its index reads it) and where it ends. White space
+/// and comments may separate the parts, and the generation may be any number. The white space,
+/// comment and generation bytes read are spent from `work`.
+fn object_header(bytes: &[u8], at: usize, work: &mut usize) -> Option<(u32, u16, usize)> {
+    let number_end = at.checked_add(count_while(bytes, at, |c| c.is_ascii_digit()))?;
+    let num = std::str::from_utf8(bytes.get(at..number_end)?).ok()?.parse::<u32>().ok()?;
+    let generation_at = skip_space_and_comments(bytes, number_end, work);
+    let generation_len = count_while(bytes, generation_at, |c| c.is_ascii_digit() || matches!(c, b'.' | b'+' | b'-'));
+    *work = work.saturating_sub(generation_len);
+    if generation_len == 0 {
+        return None;
+    }
+    let generation_end = generation_at.checked_add(generation_len)?;
+    let generation = std::str::from_utf8(bytes.get(generation_at..generation_end)?).ok().and_then(|g| g.parse::<u16>().ok()).unwrap_or(0);
+    let keyword = skip_space_and_comments(bytes, generation_end, work);
+    (bytes.get(keyword..keyword.checked_add(3)?)? == b"obj").then_some((num, generation, keyword + 3))
+}
+
+/// How many bytes from `from` on `accept` takes.
+fn count_while(bytes: &[u8], from: usize, accept: fn(u8) -> bool) -> usize {
+    bytes.get(from..).map_or(0, |rest| rest.iter().take_while(|b| accept(**b)).count())
+}
+
+/// Where the white space and comments from `from` end, every byte passed spent from `work`: many
+/// candidate headers can end in the same long run of white space, as in `1+1+1…` before it.
+fn skip_space_and_comments(bytes: &[u8], mut from: usize, work: &mut usize) -> usize {
+    while let Some(b) = bytes.get(from) {
+        if is_white_space(*b) {
+            *work = work.saturating_sub(1);
+            from = from.saturating_add(1);
+        } else if *b == b'%' {
+            let comment = count_while(bytes, from.saturating_add(1), |c| c != b'\n' && c != b'\r').saturating_add(1);
+            *work = work.saturating_sub(comment);
+            from = from.saturating_add(comment);
+        } else {
+            break;
+        }
+    }
+    from
+}
+
 fn refs(doc: &Document, o: Option<&Object>) -> Vec<ObjRef> {
     o.map(|o| doc.resolve(o)).and_then(|a| a.as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default()
 }
@@ -651,13 +821,7 @@ fn acroform_kind(doc: &Document, old: &Document, now: &Dict, before: Option<&Dic
     if lost_entries(doc, old, before.get(b"Fields"), now.get(b"Fields")) {
         return kind::OTHER;
     }
-    let strip = |d: &Dict| -> Vec<(Vec<u8>, Object)> {
-        let mut v: Vec<(Vec<u8>, Object)> =
-            d.iter().filter(|(k, _)| !matches!(k.as_slice(), b"Fields" | b"SigFlags")).map(|(k, o)| (k.to_vec(), o.clone())).collect();
-        v.sort_by(|a, b| a.0.cmp(&b.0));
-        v
-    };
-    if strip(now) != strip(before) {
+    if !same_entries(now, before, &[b"Fields", b"SigFlags"]) {
         return kind::FORM_FILL;
     }
     let old_fields = refs(old, before.get(b"Fields"));
@@ -665,11 +829,53 @@ fn acroform_kind(doc: &Document, old: &Document, now: &Dict, before: Option<&Dic
     if added.is_empty() || added_annots(doc, &added) == kind::SIGNATURE { kind::SIGNATURE } else { kind::FORM_FILL }
 }
 
-/// Dictionary entries in a stable order, without `keys`.
-fn without(x: &Dict, keys: &[&[u8]]) -> Vec<(Vec<u8>, Object)> {
-    let mut v: Vec<(Vec<u8>, Object)> = x.iter().filter(|(k, _)| !keys.contains(&k.as_slice())).map(|(k, o)| (k.to_vec(), o.clone())).collect();
-    v.sort_by(|a, b| a.0.cmp(&b.0));
-    v
+/// Whether two page dictionaries are the same apart from `/Annots`. Dictionaries are compared
+/// without regard to key order at every depth: a writer may re-serialise a page's inline
+/// resources in another order without changing what the page shows.
+fn same_but_annots(d: &Dict, b: &Dict) -> bool {
+    same_entries(d, b, &[b"Annots"])
+}
+
+/// Whether two dictionaries hold the same entries apart from `skip`: both sorted by key, then
+/// compared pairwise, so neither side can hide a key the other lacks.
+fn same_entries(a: &Dict, b: &Dict, skip: &[&[u8]]) -> bool {
+    fn sorted<'a>(x: &'a Dict, skip: &[&[u8]]) -> Vec<(&'a [u8], &'a Object)> {
+        let mut v: Vec<(&[u8], &Object)> = x.iter().map(|(k, o)| (k.as_slice(), o)).filter(|(k, _)| !skip.contains(k)).collect();
+        v.sort_by(|p, q| p.0.cmp(q.0));
+        v
+    }
+    let (x, y) = (sorted(a, skip), sorted(b, skip));
+    x.len() == y.len() && x.iter().zip(&y).all(|((k, v), (l, w))| k == l && same_object(v, w))
+}
+
+/// Object equality where dictionaries (and stream dictionaries) ignore key order; arrays keep it.
+/// A string is its bytes (ISO 32000-2 §7.3.4.1): written as a literal or as hexadecimal, it is the
+/// same string, so a later save that respells one changes nothing it says. Likewise a number is
+/// its value (§7.3.3: "wherever a real number is expected, an integer may be used instead"), so a
+/// signed `/Rect [20.0 20.0 120.0 40.0]` saved again as `[20 20 120 40]` is the same rectangle.
+/// References compare by object and generation, and stream data byte for byte as stored. The
+/// recursion follows the parsed nesting, which the parser bounds.
+fn same_object(a: &Object, b: &Object) -> bool {
+    match (a, b) {
+        (Object::String(a), Object::String(b)) => a.bytes == b.bytes,
+        // Compared in i128, where every i64 and every whole real near its range is exact (the cast
+        // saturates far beyond it): no fractional real, NaN or infinity (whose fract is NaN)
+        // equals an integer, nor does the real 2^63 pass for i64::MAX.
+        (Object::Int(i), Object::Real(r)) | (Object::Real(r), Object::Int(i)) => r.fract() == 0.0 && *r as i128 == i128::from(*i),
+        (Object::Dict(a), Object::Dict(b)) => same_entries(a, b, &[]),
+        (Object::Stream(a), Object::Stream(b)) => a.raw == b.raw && same_entries(&a.dict, &b.dict, &[]),
+        (Object::Array(a), Object::Array(b)) => a.len() == b.len() && a.iter().zip(b).all(|(v, w)| same_object(v, w)),
+        _ => a == b,
+    }
+}
+
+/// [`same_object`] for an entry that may be absent: both absent, or both present and the same.
+fn same_entry(a: Option<&Object>, b: Option<&Object>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => same_object(a, b),
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 /// Whether a dictionary was a signature object: a signature or timestamp value, a signature
@@ -769,7 +975,7 @@ fn extensions_kept(doc: &Document, old: &Document, d: &Dict, b: &Dict) -> bool {
     let was = b.get(b"Extensions").map(|e| old.resolve(e)).and_then(|e| e.as_dict().cloned());
     match (was, now) {
         (None, _) => true,
-        (Some(was), Some(now)) => was.iter().all(|(k, v)| now.get(k) == Some(v)),
+        (Some(was), Some(now)) => was.iter().all(|(k, v)| same_entry(now.get(k), Some(v))),
         (Some(_), None) => false,
     }
 }
@@ -777,18 +983,18 @@ fn extensions_kept(doc: &Document, old: &Document, d: &Dict, b: &Dict) -> bool {
 /// A change to the signed catalog `b`, now `d`.
 fn catalog_kind(doc: &Document, old: &Document, d: &Dict, b: &Dict) -> &'static str {
     let keys: &[&[u8]] = &[b"AcroForm", b"DSS", b"Perms", b"Metadata", b"NeedsRendering", b"Extensions"];
-    if without(d, keys) != without(b, keys) {
+    if !same_entries(d, b, keys) {
         kind::STRUCTURE
     } else if !extensions_kept(doc, old, d, b) {
         // Developer extensions (ISO 32000-2 §7.12) only declare what the file uses. A writer
         // adding a /DSS also declares the ESIC extension it belongs to, so a declaration may be
         // added, but none that was signed may change or go.
         kind::STRUCTURE
-    } else if d.get(b"AcroForm") != b.get(b"AcroForm") {
+    } else if !same_entry(d.get(b"AcroForm"), b.get(b"AcroForm")) {
         // Compare the forms themselves, inline or not.
         let now = acroform(doc).unwrap_or_default();
         acroform_kind(doc, old, &now, None)
-    } else if b.get(b"Perms") != d.get(b"Perms") {
+    } else if !same_entry(b.get(b"Perms"), d.get(b"Perms")) {
         kind::SIGNATURE
     } else {
         kind::METADATA
@@ -840,7 +1046,7 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
     // so relabelling the widget now does not change that.
     if before.is_some_and(|b| {
         b.name(b"Subtype") == Some(b"Widget") && b.name(b"FT") == Some(b"Sig") && b.get(b"V").is_some_and(|v| old.resolve(v).as_dict().is_some())
-    }) && before != Some(d)
+    }) && !before.is_some_and(|b| same_entries(d, b, &[]))
     {
         return kind::PAGE_CONTENT;
     }
@@ -854,7 +1060,9 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
     }
     // Where a signed widget sits and whether it shows are what the page shows: filling the form
     // changes its value and appearance, never its rectangle or its flags.
-    if before.is_some_and(|b| b.name(b"Subtype") == Some(b"Widget") && (d.get(b"Rect") != b.get(b"Rect") || d.get(b"F") != b.get(b"F"))) {
+    if before.is_some_and(|b| {
+        b.name(b"Subtype") == Some(b"Widget") && (!same_entry(d.get(b"Rect"), b.get(b"Rect")) || !same_entry(d.get(b"F"), b.get(b"F")))
+    }) {
         return kind::PAGE_CONTENT;
     }
     match ty {
@@ -863,7 +1071,7 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
         Some(b"Catalog") => return before.map_or(kind::FORM_FILL, |b| catalog_kind(doc, old, d, b)),
         Some(b"Page") => {
             return match before {
-                Some(b) if without(d, &[b"Annots"]) != without(b, &[b"Annots"]) => kind::PAGE_CONTENT,
+                Some(b) if !same_but_annots(d, b) => kind::PAGE_CONTENT,
                 Some(b) => {
                     let was = refs(old, b.get(b"Annots"));
                     let added: Vec<ObjRef> = refs(doc, d.get(b"Annots")).into_iter().filter(|r| !was.contains(r)).collect();
@@ -915,6 +1123,154 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    /// A signed page's change, judged by [`ChangedObjectClassifier::page_change_kind`] with no
+    /// other signed roles in play; `None` when nothing the page shows changed.
+    fn page_change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) -> Option<&'static str> {
+        let (none, budget, resources) = (HashSet::new(), Cell::new(MAX_ANNOT_ENTRIES), HashMap::new());
+        let classifier = ChangedObjectClassifier {
+            doc,
+            old,
+            old_content: &none,
+            old_metadata: None,
+            old_xfa_data: &none,
+            signed_pages: &none,
+            signed_annots: &none,
+            page_nodes: &none,
+            kids_arrays: &none,
+            placed_annots: &none,
+            annot_budget: &budget,
+            signed_resources: &resources,
+            old_info: None,
+            old_form: None,
+            dss: &none,
+        };
+        classifier.page_change_kind(d, before)
+    }
+
+    fn font(order: &[&str], base: &str) -> Object {
+        let mut d = Dict::new();
+        for k in order {
+            match *k {
+                "Type" => d.set(b"Type".to_vec(), Object::name("Font")),
+                "Subtype" => d.set(b"Subtype".to_vec(), Object::name("Type1")),
+                "BaseFont" => d.set(b"BaseFont".to_vec(), Object::name(base)),
+                _ => {
+                    let mut w = Dict::new();
+                    w.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(32), Object::name("space")]));
+                    w.set(b"Type".to_vec(), Object::name("Encoding"));
+                    d.set(b"Encoding".to_vec(), Object::Dict(w));
+                }
+            }
+        }
+        Object::Dict(d)
+    }
+
+    fn page(fonts: Vec<(&str, Object)>, annots: Vec<Object>) -> Dict {
+        let mut f = Dict::new();
+        fonts.into_iter().for_each(|(k, v)| f.set(k.as_bytes().to_vec(), v));
+        let mut r = Dict::new();
+        r.set(b"Font".to_vec(), Object::Dict(f));
+        let mut p = Dict::new();
+        p.set(b"Type".to_vec(), Object::name("Page"));
+        p.set(b"Resources".to_vec(), Object::Dict(r));
+        p.set(b"Annots".to_vec(), Object::Array(annots));
+        p
+    }
+
+    #[test]
+    fn reordered_inline_resources_are_not_page_content() {
+        let doc = Document::new_empty();
+        let order = ["Type", "Subtype", "BaseFont", "Encoding"];
+        let before = page(vec![("F1", font(&order, "Times-Roman")), ("F2", font(&order, "Helvetica"))], vec![]);
+        let unchanged = page_change_kind(&doc, &doc, &before, Some(&before));
+        let reordered = page(
+            vec![
+                ("F2", font(&["Encoding", "BaseFont", "Type", "Subtype"], "Helvetica")),
+                ("F1", font(&["BaseFont", "Subtype", "Encoding", "Type"], "Times-Roman")),
+            ],
+            vec![],
+        );
+        assert_eq!(page_change_kind(&doc, &doc, &reordered, Some(&before)), unchanged);
+        assert_eq!(change_kind(&doc, &doc, &reordered, Some(&before)), change_kind(&doc, &doc, &before, Some(&before)));
+
+        // A changed value inside the nested dictionary still is a page content change.
+        let changed = page(vec![("F2", font(&order, "Helvetica")), ("F1", font(&order, "Courier"))], vec![]);
+        assert_eq!(page_change_kind(&doc, &doc, &changed, Some(&before)), Some(kind::PAGE_CONTENT));
+        assert_eq!(change_kind(&doc, &doc, &changed, Some(&before)), kind::PAGE_CONTENT);
+    }
+
+    /// The page as signed and the same page with its inline resources reordered are each no
+    /// page change at all, stated as `None` rather than only equal to each other, and so is a page
+    /// whose numbers and strings are respelled as well (§7.3.3, §7.3.4.1).
+    #[test]
+    fn reordered_and_respelled_pages_are_no_page_change() {
+        let doc = Document::new_empty();
+        let order = ["Type", "Subtype", "BaseFont", "Encoding"];
+        let mut before = page(vec![("F1", font(&order, "Times-Roman")), ("F2", font(&order, "Helvetica"))], vec![]);
+        before.set(b"MediaBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Real(612.0), Object::Real(792.0)]));
+        before.set(
+            b"PieceInfo".to_vec(),
+            Object::Dict(Dict::from_iter([(b"Note".to_vec(), Object::String(pdfcraft_cos::PdfString::literal("signed")))])),
+        );
+        let mut reordered = page(
+            vec![
+                ("F2", font(&["Encoding", "BaseFont", "Type", "Subtype"], "Helvetica")),
+                ("F1", font(&["BaseFont", "Subtype", "Encoding", "Type"], "Times-Roman")),
+            ],
+            vec![],
+        );
+        reordered.set(b"MediaBox".to_vec(), Object::Array(vec![Object::Real(0.0), Object::Int(0), Object::Int(612), Object::Int(792)]));
+        reordered.set(
+            b"PieceInfo".to_vec(),
+            Object::Dict(Dict::from_iter([(b"Note".to_vec(), Object::String(pdfcraft_cos::PdfString { bytes: b"signed".to_vec(), hex: true }))])),
+        );
+        assert_eq!(page_change_kind(&doc, &doc, &before, Some(&before)), None);
+        assert_eq!(page_change_kind(&doc, &doc, &reordered, Some(&before)), None);
+        assert_eq!(page_change_kind(&doc, &doc, &before, Some(&reordered)), None);
+
+        // A real that is not the integer it replaced is a moved box.
+        let mut moved = reordered.clone();
+        moved.set(b"MediaBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Real(612.5), Object::Int(792)]));
+        assert_eq!(page_change_kind(&doc, &doc, &moved, Some(&before)), Some(kind::PAGE_CONTENT));
+    }
+
+    /// Numbers compare by value across integer and real, and only when the values are equal.
+    #[test]
+    fn integers_and_reals_compare_by_value() {
+        let same = |a: Object, b: Object| same_object(&a, &b) && same_object(&b, &a);
+        assert!(same(Object::Int(20), Object::Real(20.0)));
+        assert!(same(Object::Int(0), Object::Real(-0.0)));
+        assert!(same(Object::Int(-7), Object::Real(-7.0)));
+        assert!(!same(Object::Int(20), Object::Real(20.5)));
+        assert!(!same(Object::Int(20), Object::Real(f64::NAN)));
+        assert!(!same(Object::Int(i64::MAX), Object::Real(f64::INFINITY)));
+        assert!(!same(Object::Int(i64::MAX), Object::Real(9_223_372_036_854_775_808.0)));
+        assert!(!same(Object::Int(1), Object::Bool(true)));
+    }
+
+    #[test]
+    fn a_swapped_nested_key_is_page_content_both_ways() {
+        let doc = Document::new_empty();
+        let order = ["Type", "Subtype", "BaseFont"];
+        let signed = page(vec![("F1", font(&order, "Times-Roman"))], vec![]);
+        // Same entry count, but /Subtype was dropped and /Encoding added in its place.
+        let swapped = page(vec![("F1", font(&["Type", "Encoding", "BaseFont"], "Times-Roman"))], vec![]);
+        for (now, then) in [(&swapped, &signed), (&signed, &swapped)] {
+            assert_eq!(page_change_kind(&doc, &doc, now, Some(then)), Some(kind::PAGE_CONTENT));
+            assert_eq!(change_kind(&doc, &doc, now, Some(then)), kind::PAGE_CONTENT);
+        }
+    }
+
+    #[test]
+    fn reordered_arrays_are_still_page_content() {
+        let doc = Document::new_empty();
+        let mut before = page(vec![], vec![]);
+        before.set(b"MediaBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(612), Object::Int(792)]));
+        let mut after = before.clone();
+        after.set(b"MediaBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(792), Object::Int(612)]));
+        assert_eq!(page_change_kind(&doc, &doc, &after, Some(&before)), Some(kind::PAGE_CONTENT));
+    }
+
     /// A PDF of `objs` (numbered from 1) whose trailer also holds `trailer_extra`.
     fn pdf(objs: &[&str], trailer_extra: &str) -> Vec<u8> {
         let mut out = b"%PDF-1.7\n".to_vec();
@@ -959,5 +1315,70 @@ mod tests {
             Modification::Disallowed(kinds) => assert!(kinds.contains(&kind::STRUCTURE), "{kinds:?}"),
             other => panic!("the certification's /Perms changed in place under P=1: {other:?}"),
         }
+    }
+
+    /// `signed` with a revision appended that writes `before` and then object 3, listed where its
+    /// header is.
+    fn append_object_3(signed: &[u8], before: &[u8]) -> Vec<u8> {
+        let at = signed.windows(9).rposition(|w| w == b"startxref").unwrap() + 9;
+        let prev: String =
+            signed.get(at..).unwrap().iter().skip_while(|b| b.is_ascii_whitespace()).take_while(|b| b.is_ascii_digit()).map(|b| *b as char).collect();
+        let mut bytes = signed.to_vec();
+        bytes.extend_from_slice(before);
+        let object = bytes.len();
+        bytes.extend_from_slice(b"3 0 obj\n(x)\nendobj\n");
+        let section = bytes.len();
+        bytes.extend_from_slice(
+            format!("xref\n3 1\n{object:010} 00000 n \ntrailer\n<< /Size 4 /Root 1 0 R /Prev {prev} >>\nstartxref\n{section}\n%%EOF\n").as_bytes(),
+        );
+        bytes
+    }
+
+    /// A comment of digits (`%1%1%1…`), a run of signed numbers (`1 +1+1+1…`), or a short one
+    /// before long white space, appended after signing, would make the header scan start at each
+    /// digit and read to the end of the run every time, quadratic in the appended bytes. Past a
+    /// bound on that work the appended bytes are not judged; an ordinary revision is.
+    #[test]
+    fn the_header_scan_is_bounded_on_runs_that_restart_it() {
+        let signed = pdf(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"], "");
+        let old = Document::open(Arc::new(signed.clone())).unwrap();
+        let comment = [b"%".to_vec(), b"1%".repeat(50_000), b"\n".to_vec()].concat();
+        let numbers = [b"1 ".to_vec(), b"+1".repeat(50_000), b"\n".to_vec()].concat();
+        // Each start reads the short run of numbers, then the same long white space after it.
+        let spaced = [b"1".to_vec(), b"+1".repeat(2_000), b" ".repeat(1 << 20), b"\n".to_vec()].concat();
+        for (what, run) in [("a comment of digits", comment), ("a run of signed numbers", numbers), ("signed numbers before white space", spaced)] {
+            let doc = Document::open(Arc::new(append_object_3(&signed, &run))).unwrap();
+            assert_eq!(unlisted_bodies(&doc, &old), None, "{what}");
+        }
+        let doc = Document::open(Arc::new(append_object_3(&signed, b"% an ordinary comment 1 2 3\n"))).unwrap();
+        assert_eq!(unlisted_bodies(&doc, &old), Some(Vec::new()));
+    }
+
+    /// Many entries of an appended section that point at one place before a long run of white
+    /// space would make matching each header to its entry read that run again every time. Past
+    /// the same bound on work, the appended bytes are not judged.
+    #[test]
+    fn matching_headers_to_their_entries_is_bounded_too() {
+        let signed = pdf(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"], "");
+        let old = Document::open(Arc::new(signed.clone())).unwrap();
+        let at = signed.windows(9).rposition(|w| w == b"startxref").unwrap() + 9;
+        let prev: String =
+            signed.get(at..).unwrap().iter().skip_while(|b| b.is_ascii_whitespace()).take_while(|b| b.is_ascii_digit()).map(|b| *b as char).collect();
+        let mut bytes = signed.clone();
+        let blank = bytes.len();
+        bytes.extend_from_slice(&b" ".repeat(1 << 20));
+        bytes.push(b'\n');
+        let count = 2_000u32;
+        for num in 3..3 + count {
+            bytes.extend_from_slice(format!("{num} 0 obj\n(x)\nendobj\n").as_bytes());
+        }
+        let section = bytes.len();
+        bytes.extend_from_slice(format!("xref\n3 {count}\n").as_bytes());
+        for _ in 0..count {
+            bytes.extend_from_slice(format!("{blank:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R /Prev {prev} >>\nstartxref\n{section}\n%%EOF\n", 3 + count).as_bytes());
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        assert_eq!(unlisted_bodies(&doc, &old), None);
     }
 }

@@ -38,10 +38,17 @@ workspace and Save target stay selected. Click the downloaded file's tab to swit
   `.js` files, and `no-cache` on `index.html`.
 - **HTTPS:** WebGPU (and the clipboard) only work in a secure context, which means `https://`
   or `http://localhost`. Over plain HTTP elsewhere, the app falls back to WebGL2.
-- **No special isolation headers:** PdfCraft doesn't use `SharedArrayBuffer`, so it doesn't
-  need `Cross-Origin-Opener-Policy` or `Cross-Origin-Embedder-Policy`. If your site already sends
-  COEP `require-corp`, also send `Cross-Origin-Resource-Policy: same-origin` (or `cross-origin`
-  when the files live on a CDN) on the app's files.
+- **Opener isolation:** send `Cross-Origin-Opener-Policy: same-origin` (the sample `_headers`
+  and `.htaccess` do; Apache needs `mod_headers` for it). Pages opened from a document's links
+  then can't reach or navigate the PdfCraft tab. The app opens links with `noopener` already;
+  the header also cuts the opener for pages on another origin opened by any other means. A page
+  on the same origin that sends the same policy keeps its opener. The header has no effect
+  inside an iframe, so the embedding bridge below is unaffected, but a page on another origin
+  that opens PdfCraft with `window.open` loses its handle to that window.
+- **No cross-origin isolation:** PdfCraft doesn't use `SharedArrayBuffer`, so it doesn't need
+  `Cross-Origin-Embedder-Policy`. If your site already sends COEP `require-corp`, also send
+  `Cross-Origin-Resource-Policy: same-origin` (or `cross-origin` when the files live on a CDN) on
+  the app's files.
 
 nginx example:
 
@@ -50,8 +57,10 @@ location /pdfcraft/ {
     types { application/wasm wasm; text/javascript js; text/html html; }
     gzip on;
     gzip_types application/wasm text/javascript text/html;
+    add_header Cross-Origin-Opener-Policy "same-origin";
     location ~* \.(wasm|js)$ { add_header Cache-Control "public, max-age=31536000, immutable"; }
-    location ~* index\.html$ { add_header Cache-Control "no-cache"; }
+    # A location with its own add_header drops the outer ones, so the page repeats COOP.
+    location ~* index\.html$ { add_header Cache-Control "no-cache"; add_header Cross-Origin-Opener-Policy "same-origin"; }
 }
 ```
 
@@ -160,7 +169,7 @@ The messages and both transports are the shared contract of [`craft-web-host`](h
 
 ### Driving it from the page (`window.pdfcraft`)
 
-`?control` on the page's URL puts `window.pdfcraft` on the page, from [`craft-web-api`](https://github.com/storytold/craft-libs/tree/main/crates/web-api) (storytold/craft-libs#413), the same shape in every Craft app (`index.html?control`, which can be combined with other flags). It is opt-in because the control channel keeps the accessibility tree of every frame. The browser already exposes PdfCraft's canvas (`id="pdfcraft"`) as `window.pdfcraft`, so the functions are added to that element. `pdfcraft.request(method, params)` calls any method of the UI control channel the desktop app serves with `--control` (`ui.state`, `ui.inspect`, `ui.click`, `ui.key`, `ui.set`…; `ui.open` needs a file system, so on the web it answers with an error and a file is dropped on the page instead), and `execute(command, params)` (`ui.command`: a registry command id), `commands()` (`ui.commands`), `docInspect(params)` (`ui.state`), `uiInspect(params)` (`ui.inspect`) and `screenshot(params)` are shortcuts for the common ones. Each returns a Promise that resolves with the method's result and rejects with an `Error`; a call the app does not answer within 30 seconds rejects, and the app may still reach it later and run it (or reject it), as it does for a desktop client that timed out, so a timed-out call is not guaranteed to have been skipped.
+`?control` on the page's URL puts `window.pdfcraft` on the page, from [`craft-web-api`](https://github.com/storytold/craft-libs/tree/main/crates/web-api) (storytold/craft-libs#413), the same shape in every Craft app (`index.html?control`, which can be combined with other flags). It is opt-in because the control channel keeps the accessibility tree of every frame. The browser already exposes PdfCraft's canvas (`id="pdfcraft"`) as `window.pdfcraft`, so the functions are added to that element. `pdfcraft.request(method, params)` calls any method of the UI control channel the desktop app serves with `--control` (`ui.state`, `ui.inspect`, `ui.click`, `ui.key`, `ui.set`…; `ui.open` needs a file system, so on the web it answers with an error and a file is dropped on the page instead), and `execute(command, params)` (`ui.command`: a registry command id), `commands()` (`ui.commands`), `docInspect(params)` (`ui.state`), `uiInspect(params)` (`ui.inspect`) and `screenshot(params)` are shortcuts for the common ones. Each returns a Promise that resolves with the method's result and rejects with an `Error`; a call the app does not answer within 30 seconds rejects, and the app may still reach it later and run it (or reject it), as it does for a desktop client that timed out, so a timed-out call is not guaranteed to have been skipped. The API is installed after `pdfcraft:ready` is posted, and `window.pdfcraft` is the canvas element before that, so wait for a function rather than for the name: `await new Promise(r => { const t = setInterval(() => typeof pdfcraft.request === "function" && (clearInterval(t), r()), 50); })`.
 
 ```js
 const state = await pdfcraft.docInspect();               // open documents, page, zoom, panels, dialog
