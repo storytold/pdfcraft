@@ -339,19 +339,24 @@ impl Automation {
         let (paper, media) = resolve_paper(a.opt_str("paper")?, resolved_printer.as_deref())?;
         // Print as image (Acrobat's Advanced Print Setup): pictures at `dpi`, grey when
         // `grayscale` is also asked for.
-        // App-managed colour converts those pictures into the printer's profile, so it prints
-        // as image whether or not as_image is given.
+        // App-managed colour converts those pictures into the printer's profile, and black_only
+        // makes them black and white, so either prints as image whether or not as_image is given.
         let colour = self.managed_colour(a)?;
+        let black_only = a.opt_bool("black_only")?.unwrap_or(false);
+        if black_only && colour.is_some() {
+            return Err(bad("black_only prints black and white pictures: leave out color_management app"));
+        }
         let as_image = match a.opt_bool("as_image")? {
             Some(false) if colour.is_some() => return Err(bad("color_management app prints the pages as images: leave out as_image false")),
-            asked => asked.unwrap_or(false) || colour.is_some(),
+            Some(false) if black_only => return Err(bad("black_only prints the pages as images: leave out as_image false")),
+            asked => asked.unwrap_or(false) || colour.is_some() || black_only,
         };
         let raster = if as_image {
             let dpi = a.opt_num("dpi")?.unwrap_or(300.0);
             if !(72.0..=600.0).contains(&dpi) {
                 return Err(bad("dpi must be between 72 and 600"));
             }
-            Some(print::Raster { dpi, grayscale: a.opt_bool("grayscale")?.unwrap_or(false), colour })
+            Some(print::Raster { dpi, grayscale: a.opt_bool("grayscale")?.unwrap_or(false), black_only, colour })
         } else {
             None
         };
@@ -562,8 +567,8 @@ mod tests {
     /// grayscale, which Microsoft Print to PDF keeps no setting for and the job was refused.
     #[test]
     fn grey_pictures_dont_ask_the_driver_for_grayscale() {
-        let grey = print::Raster { dpi: 300.0, grayscale: true, colour: None };
-        let colour = print::Raster { dpi: 300.0, grayscale: false, colour: None };
+        let grey = print::Raster { dpi: 300.0, grayscale: true, black_only: false, colour: None };
+        let colour = print::Raster { dpi: 300.0, grayscale: false, black_only: false, colour: None };
         let job = |args: Value, raster: Option<print::Raster>| {
             spool_job(&Args(&args), "Office", String::new(), None, Some("Letter"), raster.as_ref(), &[]).unwrap().grayscale
         };

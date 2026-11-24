@@ -73,6 +73,8 @@ pub struct PrintDraft {
     /// Print as image (Acrobat's Advanced Print Setup) at `dpi`.
     pub as_image: bool,
     pub dpi: f64,
+    /// Print colours as black: the pages go as pure black and white pictures at `dpi`.
+    pub black_only: bool,
     /// Index into the paper list: the standard sizes, then `custom_papers`.
     pub paper: usize,
     /// Paper sizes added with Custom…, kept with the settings.
@@ -150,6 +152,7 @@ impl Default for PrintDraft {
             orientation: Orientation::Auto,
             content: Content::DocumentAndMarkups,
             as_image: false,
+            black_only: false,
             dpi: 300.0,
             paper: 0,
             custom_papers: Vec::new(),
@@ -496,9 +499,15 @@ impl PrintDraft {
         })
     }
 
-    /// Print as image: pictures at the chosen resolution, grey when grayscale is asked for.
+    /// Print as image: pictures at the chosen resolution, grey when grayscale is asked for, black
+    /// and white when colours print as black (which prints as image by itself).
     fn raster(&self) -> Option<print::Raster> {
-        self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale, colour: None })
+        (self.as_image || self.black_only).then_some(print::Raster {
+            dpi: self.dpi,
+            grayscale: self.grayscale,
+            black_only: self.black_only,
+            colour: None,
+        })
     }
 
     /// Whether multiple pages per sheet should be cut and stacked into sorted piles.

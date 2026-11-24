@@ -2027,7 +2027,7 @@ fn low_resolution_printing_prints_pictures_of_at_most_150_dpi() {
     let low = s.open("low.pdf", None, bytes.clone(), None).unwrap();
     let width = f64::from(s.get(low).unwrap().info.pages[0].width);
     let actual = print::Settings { pages: vec![0], layout: print::Layout::Size(print::SizeMode::Actual), ..Default::default() };
-    for raster in [None, Some(print::Raster { dpi: 600.0, grayscale: false, colour: None })] {
+    for raster in [None, Some(print::Raster { dpi: 600.0, grayscale: false, black_only: false, colour: None })] {
         let printed = s.print_pdf(low, &print::Settings { raster: raster.clone(), ..actual.clone() }).unwrap();
         let mut s2 = Session::new();
         let id2 = s2.open("print.pdf", None, Arc::new(printed.clone()), None).unwrap();
@@ -4187,7 +4187,7 @@ fn printing_applies_the_print_auto_state() {
     }
     // Hidden in the panel, View entry (no Print recommendation) leaves the preview too.
     assert!(printed_blue[1] * 4 < printed_blue[0] * 3, "the preview follows the panel: {printed_blue:?} blue");
-    for raster in [None, Some(print::Raster { dpi: 72.0, grayscale: false, colour: None })] {
+    for raster in [None, Some(print::Raster { dpi: 72.0, grayscale: false, black_only: false, colour: None })] {
         let bytes = Arc::new(s.print_pdf(id, &print::Settings { pages: vec![0], raster: raster.clone(), ..Default::default() }).unwrap());
         let mut out = Session::new();
         let printed = out.open("print.pdf", None, bytes.clone(), None).unwrap();
@@ -6068,7 +6068,7 @@ fn assert_signature_artwork_survives_trust(mut cos: pdfcraft_cos::Document, expe
     }
     let mut settings = print::Settings { pages: vec![0], paper: (200.0, 200.0), ..Default::default() };
     let original_vector_print = printed_pixels(session.print_pdf(id, &settings).unwrap());
-    settings.raster = Some(print::Raster { dpi: 72.0, grayscale: false, colour: None });
+    settings.raster = Some(print::Raster { dpi: 72.0, grayscale: false, black_only: false, colour: None });
     let original_raster_print = printed_pixels(session.print_pdf(id, &settings).unwrap());
     session.set_trusted_certificates(vec![anchor.clone()]);
     let doc = session.get(id).unwrap();
@@ -6433,7 +6433,7 @@ fn named_layer_states_reach_exports_and_both_print_modes() {
     assert!(text.contains("Signature valid") && !text.contains("Not Verified"), "{text:?}");
     let mut settings = print::Settings { pages: vec![0], paper: (400.0, 300.0), ..Default::default() };
     let (_, _, vector) = printed_pixels(s.print_pdf(id, &settings).unwrap());
-    settings.raster = Some(print::Raster { dpi: 72.0, grayscale: false, colour: None });
+    settings.raster = Some(print::Raster { dpi: 72.0, grayscale: false, black_only: false, colour: None });
     let (_, _, raster) = printed_pixels(s.print_pdf(id, &settings).unwrap());
     for (mode, pixels) in [("vector", &vector), ("raster", &raster)] {
         assert!(pixels_near(pixels, VALID_GREEN) > 500, "{mode} print draws the valid state");
@@ -11566,7 +11566,7 @@ fn printing_as_image_sends_pictures_instead_of_pages() {
     let settings = print::Settings {
         pages: vec![1, 2, 1],
         layout: print::Layout::Size(print::SizeMode::Actual),
-        raster: Some(print::Raster { dpi: 100.0, grayscale: false, colour: None }),
+        raster: Some(print::Raster { dpi: 100.0, grayscale: false, black_only: false, colour: None }),
         ..Default::default()
     };
     let bytes = s.print_pdf(id, &settings).unwrap();
@@ -11588,14 +11588,92 @@ fn printing_as_image_sends_pictures_instead_of_pages() {
     assert!((w as f64 - page_size.0 * 100.0 / 72.0).abs() <= 1.0, "{w} px for {} pt", page_size.0);
     assert!(images.iter().all(|d| d.name(b"ColorSpace") == Some(b"DeviceRGB")), "{images:?}");
     // Grayscale renders the pictures grey (the printer is not merely asked for monochrome).
-    let grey =
-        s.print_pdf(id, &print::Settings { raster: Some(print::Raster { dpi: 72.0, grayscale: true, colour: None }), ..settings.clone() }).unwrap();
+    let grey = s
+        .print_pdf(
+            id,
+            &print::Settings { raster: Some(print::Raster { dpi: 72.0, grayscale: true, black_only: false, colour: None }), ..settings.clone() },
+        )
+        .unwrap();
     let mut s3 = Session::new();
     let id3 = s3.open("grey.pdf", None, Arc::new(grey), None).unwrap();
     let mut ex = crate::export::Exporter::new(s3.get(id3).unwrap());
     let png = ex.png(0, 36.0).unwrap();
     let img = image::load_from_memory(&png).unwrap().to_rgba8();
     assert!(img.pixels().all(|p| p[0] == p[1] && p[1] == p[2]), "every pixel grey");
+}
+
+/// Print colours as black: the printed pictures are pure black and white. Colour and light grey
+/// print solid black, near-white paper noise prints white, and nothing in between is left for a
+/// printer to screen.
+#[test]
+fn printing_colours_as_black_leaves_only_black_and_white() {
+    let mut s = Session::new();
+    let id = s.open("swatches.pdf", None, Arc::new(swatches_pdf()), None).unwrap();
+    let print = |black_only| print_swatches(&s, id, black_only);
+    let colour = print(false);
+    let (red, grey) = (swatch(&colour, 0), swatch(&colour, 1));
+    assert!(red[0] > 200 && red[1] < 50, "red as drawn: {red:?}");
+    assert!((220..=235).contains(&grey[0]), "light grey as drawn: {grey:?}");
+    let black = print(true);
+    assert_eq!(swatch(&black, 0), [0, 0, 0, 255], "red prints black");
+    assert_eq!(swatch(&black, 1), [0, 0, 0, 255], "light grey prints black");
+    assert_eq!(swatch(&black, 2), [255, 255, 255, 255], "near-white prints as paper");
+    assert!(only_black_and_white(&black), "only black and white");
+}
+
+/// A 216 × 72 pt page of three swatches: red, 90 % grey and 99 % grey.
+fn swatches_pdf() -> Vec<u8> {
+    pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 216 72] /Contents 4 0 R >>")
+        .stream("", "1 0 0 rg 0 0 72 72 re f 0.9 g 72 0 72 72 re f 0.99 g 144 0 72 72 re f")
+        .build()
+}
+
+/// The swatch page printed as 72 dpi pictures at actual size, rendered back.
+fn print_swatches(s: &Session, id: DocId, black_only: bool) -> image::RgbaImage {
+    let settings = print::Settings {
+        pages: vec![0],
+        paper: (216.0, 72.0),
+        layout: print::Layout::Size(print::SizeMode::Actual),
+        raster: Some(print::Raster { dpi: 72.0, grayscale: false, black_only, colour: None }),
+        ..Default::default()
+    };
+    let mut out = Session::new();
+    let printed = out.open("print.pdf", None, Arc::new(s.print_pdf(id, &settings).unwrap()), None).unwrap();
+    let png = crate::export::Exporter::new(out.get(printed).unwrap()).png(0, 72.0).unwrap();
+    image::load_from_memory(&png).unwrap().to_rgba8()
+}
+
+/// Swatch `i` of [`swatches_pdf`], sampled at its centre.
+fn swatch(img: &image::RgbaImage, i: u32) -> [u8; 4] {
+    img.get_pixel(img.width() * (2 * i + 1) / 6, img.height() / 2).0
+}
+
+fn only_black_and_white(img: &image::RgbaImage) -> bool {
+    img.pixels().all(|p| p[0] == p[1] && p[1] == p[2] && (p[0] == 0 || p[0] == 255))
+}
+
+/// A document that only allows low-resolution printing still prints colours as black.
+#[test]
+fn low_resolution_printing_keeps_colours_as_black() {
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(swatches_pdf())).unwrap();
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1 ^ (1 << 11),
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let mut s = Session::new();
+    let low = s.open("low.pdf", None, Arc::new(bytes), None).unwrap();
+    let black = print_swatches(&s, low, true);
+    assert_eq!(swatch(&black, 0), [0, 0, 0, 255], "red prints black");
+    assert!(only_black_and_white(&black), "only black and white");
 }
 
 /// #6269: with app-managed colour the printed pictures carry the printer profile's values, not
@@ -11621,7 +11699,7 @@ fn app_managed_colour_converts_the_printed_pictures() {
         let settings = print::Settings {
             pages: vec![0],
             layout: print::Layout::Size(print::SizeMode::Actual),
-            raster: Some(print::Raster { dpi: 72.0, grayscale: false, colour }),
+            raster: Some(print::Raster { dpi: 72.0, grayscale: false, black_only: false, colour }),
             ..Default::default()
         };
         let mut out = Session::new();
@@ -13402,7 +13480,7 @@ fn buttons_and_combs_left_to_the_viewer_are_displayed() {
     }
     assert_eq!(count(&shown, (95, 84, 97, 106), &blue), 0, "no line inside a cell");
     // Print as Image: the page as a picture, at 72 dpi so it is the size of the page here.
-    let raster = pdfcraft_print::Raster { dpi: 72.0, grayscale: false, colour: None };
+    let raster = pdfcraft_print::Raster { dpi: 72.0, grayscale: false, black_only: false, colour: None };
     let pictures = crate::print_raster::rasterize(s.get(id).unwrap(), &[0], &raster, pdfcraft_print::Content::Document).unwrap();
     let printed = render(Arc::new(pictures));
     assert!(count(&printed, (24, 154, 56, 186), &red) > 60, "the check box prints");
@@ -13572,7 +13650,7 @@ fn need_appearances_buttons_are_displayed_from_their_captions() {
     let mut s = Session::new();
     let id = s.open("form.pdf", None, Arc::new(pdf(true)), None).unwrap();
     let shown = render(s.get(id).unwrap().display.clone());
-    let raster = pdfcraft_print::Raster { dpi: 72.0, grayscale: false, colour: None };
+    let raster = pdfcraft_print::Raster { dpi: 72.0, grayscale: false, black_only: false, colour: None };
     let pictures = crate::print_raster::rasterize(s.get(id).unwrap(), &[0], &raster, pdfcraft_print::Content::Document).unwrap();
     let printed = render(Arc::new(pictures));
     for (page, how) in [(&shown, "shown"), (&printed, "printed")] {

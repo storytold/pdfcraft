@@ -39,8 +39,8 @@ spool::submit(&pdf, &spool::Job { printer: None, copies: 2, ..Default::default()
   the PPD's own defaults in force instead of holding the dialog (#1818; `spool::output_within`
   kills and reaps the command at the deadline).
 - **Remembered choices** (#2001): the dialog keeps two-sided (including leaving it to the
-  printer), grayscale, collate, page sizing (with its custom percent), Comments & forms and a
-  booklet's binding side across restarts, in the settings file under `print` with the names
+  printer), grayscale, collate, page sizing (with its custom percent), Comments & forms, a
+  booklet's binding side and Print colours as black across restarts, in the settings file under `print` with the names
   `doc_print` takes (`names::duplex`, `names::content`, `names::size_mode` and their `parse_*`
   counterparts are the one vocabulary). The paper is saved by its own setting (#2156).
 - **Each job starts afresh**: copies, pages (the choice, the range, odd/even and reverse), the

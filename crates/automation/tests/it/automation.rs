@@ -12568,6 +12568,35 @@ fn doc_print_as_image() {
     }
 }
 
+/// `doc_print` black_only prints colours as black: the pages go as pictures without as_image,
+/// and as_image false or app-managed colour beside it are refused.
+#[test]
+fn doc_print_colours_as_black() {
+    let dir = workdir("print-black");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "black_only": true, "dpi": 72, "path": "black.pdf" }));
+    assert_eq!(r["sheets"], 1);
+    let printed = ok(&mut a, "doc_open", json!({ "path": "black.pdf" }))["doc"].as_u64().unwrap();
+    let png = a.call("page_render", &json!({ "doc": printed, "page": 1, "dpi": 72 })).unwrap();
+    let Content::Png { data, .. } = &png[0] else { panic!("expected an image") };
+    let (_, _, rgba) = decode_rgba(data);
+    let px: Vec<&[u8]> = rgba.chunks(4).collect();
+    assert!(px.iter().all(|p| p[0] == p[1] && p[1] == p[2] && (p[0] == 0 || p[0] == 255)), "only black and white");
+    assert!(px.iter().any(|p| p[0] == 0), "the page's text prints black");
+    std::fs::write(dir.join("wide.icc"), craft_cms::Builtin::AdobeRgbCompat.profile().to_bytes().as_slice()).unwrap();
+    for (extra, says) in
+        [(json!({ "as_image": false }), "as_image"), (json!({ "color_management": "app", "color_profile": "wide.icc" }), "color_management")]
+    {
+        let mut args = json!({ "doc": doc, "black_only": true, "path": "x.pdf" });
+        args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        match a.call("doc_print", &args) {
+            Err(ToolError::InvalidArgs(m)) => assert!(m.contains(says), "{extra}: {m}"),
+            other => panic!("{extra}: {other:?}"),
+        }
+    }
+}
+
 /// #6269: color_management app prints converted pictures and says how; the profile must be an
 /// RGB or grey one, and the colour arguments need app.
 #[test]
