@@ -1294,7 +1294,11 @@ fn pdfs_and_pictures_from_the_file_managers_combine_entry_fill_one_list_in_order
         std::fs::write(dir.join(name), bytes).unwrap();
     }
     let (mut h, sender) = intake_harness();
-    sender.open_for(vec![path("b.pdf"), path("missing.pdf"), path("photo.png"), path("a.pdf")], "combine");
+    // A running PdfCraft is handed a `--combine` list a file at a time (`single_instance`), since
+    // the intake sorts each batch.
+    for name in ["b.pdf", "missing.pdf", "photo.png", "a.pdf"] {
+        sender.open_for(vec![path(name)], "combine");
+    }
     let names = |h: &Harness<'_, PdfCraftApp>| h.state().combine_draft.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
     support::wait_until(&mut h, "the files to combine", |app| app.combine_draft.len() == 3);
     assert!(h.state().combine_showing(), "the Combine files tab shows");
