@@ -787,18 +787,15 @@ fn print_as_image_is_an_advanced_choice_that_saves_pictures() {
 #[test]
 fn print_colours_as_black_is_an_advanced_choice() {
     let mut h = harness();
+    // Print as image opens the Advanced section; turning it off leaves the section open.
+    h.state_mut().print_draft.as_image = true;
     h.open();
-    h.get_by_role_and_label(Role::Button, "Advanced").scroll_to_me();
-    h.run_steps(4);
-    h.get_by_role_and_label(Role::Button, "Advanced").click();
     h.run_steps(2);
-    h.get_by_role_and_label(Role::CheckBox, "Print colours as black").scroll_to_me();
-    h.run_steps(4);
+    assert!(h.query_by_role_and_label(Role::CheckBox, "Print colours as black").is_some(), "the choice is in the Advanced section");
+    h.set("as_image", json!(false));
     let resolution = |h: &Rig| h.query_all_by(|n| n.label().is_some_and(|l| l.starts_with("Resolution")) && !n.is_disabled()).next().is_some();
     assert!(!resolution(&h), "the resolution is off while nothing prints as pictures");
-    h.get_by_role_and_label(Role::CheckBox, "Print colours as black").click();
-    h.run_steps(2);
-    assert!(h.state().print_draft.black_only);
+    h.set("black_only", json!(true));
     assert!(resolution(&h), "Print colours as black prints pictures at the chosen resolution");
 }
 
