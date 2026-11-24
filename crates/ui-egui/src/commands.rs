@@ -737,10 +737,19 @@ impl PdfCraftApp {
             "edit.bates" => {
                 // Bates numbering ▸ Add: the header & footer dialog with a Bates number in the
                 // bottom-right box (6 digits from 1), ready to edit.
-                if self.marks_draft.hf.text.iter().all(|t| !t.contains("<<Bates")) {
-                    self.marks_draft.hf.text[5] = "<<Bates Number#6#1##>>".into();
-                }
                 self.marks_draft.focused_box = 5;
+                self.marks_draft.sync_bates_from_hf();
+                if let Some(box5) = self.marks_draft.hf.text.get_mut(5)
+                    && crate::marks_ui::parse_bates_token(box5).is_none()
+                {
+                    let token = crate::marks_ui::format_bates_token(
+                        self.marks_draft.bates_digits,
+                        self.marks_draft.bates_start,
+                        &self.marks_draft.bates_prefix,
+                        &self.marks_draft.bates_suffix,
+                    );
+                    box5.push_str(&token);
+                }
                 self.open_marks(ctx, pdfcraft_engine::MarkKind::HeaderFooter, false);
             }
             "prepress.marks" => self.open_printer_marks(ctx),
