@@ -483,7 +483,10 @@ fn a_fields_array_of_its_own_only_accepts_new_signature_fields_appended() {
     // object to one that ignores generations.
     let (parent_gen, kids_gen) = (widget("/Parent 6 1 R /V 12 0 R"), widget("/Kids 31 1 R /V 12 0 R"));
     let (actions_gen, value_gen) = (widget("/AA 30 1 R /V 12 0 R"), widget("/V 7 1 R"));
-    let cases: [Case; 20] = [
+    // A new object that is itself a reference to the signed value: the field's `/V` resolves
+    // through it to the signature the earlier revision signed.
+    let chained = widget("/V 17 0 R");
+    let cases: [Case; 22] = [
         ("in-place entry taken out", IN_PLACE, LISTED, &[]),
         ("in-place entry rewritten", IN_PLACE, "[<< /FT /Sig /T (Other) /V 7 0 R >> 6 0 R 13 0 R]", &[]),
         ("in-place entry moved", IN_PLACE, "[6 0 R << /FT /Sig /T (Approval) /V 7 0 R >> 13 0 R]", &[]),
@@ -522,6 +525,8 @@ fn a_fields_array_of_its_own_only_accepts_new_signature_fields_appended() {
             &[(11, &actions_gen), (12, TIMESTAMP), (30, "<< /PO << /S /URI /URI (https://example.com) >> >>")],
         ),
         ("signed value by another generation", LISTED, "[6 0 R 13 0 R 11 0 R]", &[(11, &value_gen)]),
+        ("signed value behind a new reference", LISTED, "[6 0 R 13 0 R 11 0 R]", &[(11, &chained), (17, "7 0 R")]),
+        ("signed value behind two new references", LISTED, "[6 0 R 13 0 R 11 0 R]", &[(11, &chained), (17, "18 0 R"), (18, "7 0 R")]),
     ];
     /// A name, the signed `/Fields`, objects the signed revision holds besides, the later
     /// `/Fields`, and objects the later revision adds.
@@ -588,6 +593,15 @@ fn a_fields_array_of_its_own_only_accepts_new_signature_fields_appended() {
             old.clone().revision(&[(8, Row::Obj(0, 0, "[6 0 R 13 0 R 11 0 R]")), (11, Row::Obj(0, 0, &field)), (12, Row::Obj(0, 0, TIMESTAMP))]);
         assert_eq!(verdict(&later.open(), old.open(), Some(1)), Modification::Allowed(vec![kind::SIGNATURE]), "{nulls}");
     }
+    // A value reached through new references, all the way to a new object, is a signer's too.
+    let chained = widget("/V 17 0 R");
+    let later = old.clone().revision(&[
+        (8, Row::Obj(0, 0, "[6 0 R 13 0 R 11 0 R]")),
+        (11, Row::Obj(0, 0, &chained)),
+        (17, Row::Obj(0, 0, "12 0 R")),
+        (12, Row::Obj(0, 0, TIMESTAMP)),
+    ]);
+    assert_eq!(verdict(&later.open(), old.open(), Some(1)), Modification::Allowed(vec![kind::SIGNATURE]));
     let empty = widget("/V null");
     let later = old.clone().revision(&[(8, Row::Obj(0, 0, "[6 0 R 13 0 R 11 0 R]")), (11, Row::Obj(0, 0, &empty))]);
     assert_eq!(verdict(&later.open(), old.open(), Some(2)), Modification::Allowed(vec![kind::SIGNATURE]));

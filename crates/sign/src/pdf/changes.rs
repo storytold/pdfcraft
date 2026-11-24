@@ -770,11 +770,31 @@ fn new_signature_field(doc: &Document, old: &Document, referred: &HashSet<u32>, 
             _ => true,
         })
     };
-    let value_is_new = entry(b"V").is_none_or(|v| v.as_ref().is_some_and(|v| !holds(old, v.num) && !referred.contains(&v.num)));
+    let value_is_new = entry(b"V").is_none_or(|v| value_chain_is_new(doc, old, referred, v));
     d.name(b"Subtype") == Some(b"Widget")
         && d.name(b"FT") == Some(b"Sig")
         && [&b"Kids"[..], b"Parent", b"AA", b"A"].iter().all(|k| entry(k).is_none())
         && value_is_new
+}
+
+/// Whether `value`, an entry's value, is a reference and every object on its chain is new: an
+/// object can be nothing but a reference to another, which the entry resolves through, so a new
+/// object may lead on to a signed value. Each object, down to the first that is no reference,
+/// must be absent from the signed revision and not referred to by anything signed. A direct
+/// value is refused, and so is a chain of more than `MAX_HOPS` references, which also ends a cycle.
+fn value_chain_is_new(doc: &Document, old: &Document, referred: &HashSet<u32>, value: &Object) -> bool {
+    const MAX_HOPS: usize = 32;
+    let Some(mut r) = value.as_ref() else { return false };
+    for _ in 0..=MAX_HOPS {
+        if holds(old, r.num) || referred.contains(&r.num) {
+            return false;
+        }
+        match &*doc.get(r) {
+            Object::Ref(next) => r = *next,
+            _ => return true,
+        }
+    }
+    false
 }
 
 /// Whether two page dictionaries are the same apart from `/Annots`. Dictionaries are compared
