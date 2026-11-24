@@ -523,7 +523,8 @@ mod tests {
 
     #[test]
     fn unlisted_asset_is_rejected() {
-        let p = check(&root(), &Manifest::default(), &["assets/icons/x.svg".into()], &lock(&[]));
+        // A file that is in the tree (the port took the old `x.svg` out with the chrome icons).
+        let p = check(&root(), &Manifest::default(), &["assets/icons/accessibility.svg".into()], &lock(&[]));
         assert!(p.iter().any(|p| p.contains("no ATTRIBUTION.toml entry")), "{p:?}");
     }
 
@@ -558,7 +559,7 @@ mod tests {
 
     #[test]
     fn changed_file_fails_hash_check() {
-        let mut a = asset("assets/icons/x.svg", "Lucide", "icon", "ISC");
+        let mut a = asset("assets/icons/accessibility.svg", "Lucide", "icon", "ISC");
         a.sha256 = Some("0".repeat(64));
         let p = check(&root(), &Manifest { asset: vec![a], ..Default::default() }, &[], &lock(&[]));
         assert!(p.iter().any(|p| p.contains("SHA-256 does not match")), "{p:?}");
