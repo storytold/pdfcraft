@@ -1,16 +1,33 @@
-//! Prepare for accessibility ▸ Check for accessibility: the Accessibility Checker Options dialog
-//! and the Accessibility Checker panel (results by category, with Fix, Skip rule, Explain,
-//! Check again and Show report on each rule).
+//! Prepare for accessibility ▸ Check for accessibility: the Accessibility Checker Options dialog,
+//! the Accessibility Checker panel (results by category, with Fix, Skip rule, Explain, Check
+//! again and Show report on each rule) and the Set Alternate Text dialog.
 
 use std::collections::BTreeSet;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
-use egui::{Align, Layout};
+use craft::behavior::{DisplayOrder, IconId, ItemSource, Selection, SelectionChange};
+use craft::pages::ui::{PageRangeChoices, PageRangeOptions};
+use craft::pages::{PageRange, PageScope};
+use craft::theme::variant::Tone;
+use craft::ui::buttons::{Button, IconButton};
+use craft::ui::contract::{Bind, CollectionEvent, Entry, Outcome as _, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::dialog::{Alert, DialogId, DialogResult, DialogStack, HostedAlert, StackDialog, dialog_id};
+use craft::ui::display::{Picture, PictureSize, Shade, Text};
+use craft::ui::layout_components::Stack;
+use craft::ui::list::{List, ListRow, RowInk, ThumbAspect, ThumbSize};
+use craft::ui::menu::Menu;
+use craft::ui::notices::{Notice, NoticeAction, NoticeIcon};
+use craft::ui::patterns::form_dialogs::{DialogFields, FormDialog, HostedParamDialog, Param, ParamDialog, ParamKind};
+use craft::ui::primitives::{IconSpec, has_icon};
+use craft::ui::sections::Section;
+use craft::ui::text::{AltText, AltTextField};
+use egui::Ui;
 use pdfcraft_cos::ObjRef;
 use pdfcraft_engine::DocId;
-use pdfcraft_engine::a11y::{Category, Options, Report, Rule, Status};
+use pdfcraft_engine::a11y::{Category, Figure, Options, Report, Rule, Status};
 
-use crate::theme::{self, Tokens};
-use crate::{Dialog, PdfCraftApp, PropsTab, RightPanel, icons, widgets};
+use crate::{PdfCraftApp, PropsTab, RightPanel};
 
 /// The options dialog's settings (kept for the session, like Acrobat's).
 #[derive(Clone, Debug, PartialEq)]
@@ -54,6 +71,8 @@ pub struct A11yState {
     pub expanded: BTreeSet<Rule>,
     /// The rule whose explanation is showing.
     pub explain: Option<Rule>,
+    /// The rule whose context menu is open.
+    pub menu: Option<Rule>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -72,271 +91,398 @@ pub(crate) fn fixable(rule: Rule) -> bool {
     matches!(rule, Rule::PrimaryLanguage | Rule::Title | Rule::TabOrder)
 }
 
-pub(crate) fn options_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
-    let pages = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len().max(1));
-    let o = &mut app.a11y_options;
-    o.to = o.to.clamp(1, pages);
-    o.from = o.from.clamp(1, o.to);
-    ui.label(egui::RichText::new(tl!("Accessibility Checker Options")).font(theme::semibold(18.0)));
-    ui.add_space(8.0);
-    let group = |ui: &mut egui::Ui, title: &str, body: &mut dyn FnMut(&mut egui::Ui)| {
-        ui.label(egui::RichText::new(tl!(title)).font(theme::semibold(13.0)));
-        egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            body(ui);
-        });
-        ui.add_space(8.0);
-    };
-    group(ui, "Report Options", &mut |ui| {
-        ui.add(widgets::checkbox(&mut o.create_report, tl!("Create accessibility report")));
-    });
-    group(ui, "Page Range", &mut |ui| {
-        ui.horizontal(|ui| {
-            widgets::radio_value(ui, &mut o.all_pages, true, tl!("All pages in document"));
-            widgets::radio_value(ui, &mut o.all_pages, false, tl!("Pages from"));
-            ui.add_enabled(!o.all_pages, egui::DragValue::new(&mut o.from).range(1..=pages));
-            ui.label(tl!("to"));
-            ui.add_enabled(!o.all_pages, egui::DragValue::new(&mut o.to).range(1..=pages));
-        });
-    });
-    let on = o.rules.len();
-    group(ui, &crate::i18n::fmt(tl!("Checking Options ({on} of 32 in all categories)"), &[("on", &on.to_string())]), &mut |ui| {
-        ui.horizontal(|ui| {
-            ui.label(tl!("Category:"));
-            craft_ui::ComboBox::from_id_salt("a11y-category").selected_text(tl!(o.category.label())).width(260.0).show_ui(ui, |ui| {
-                for c in Category::ALL {
-                    ui.selectable_value(&mut o.category, c, tl!(c.label()));
+/// The key of a rule's check box in the options dialog.
+fn rule_key(rule: Rule) -> String {
+    format!("rule.{rule:?}")
+}
+
+/// The id of a category among the dialog's choices.
+fn category_id(category: Category) -> String {
+    format!("{category:?}")
+}
+
+/// The category the options dialog lists rules of.
+fn shown_category(fields: &DialogFields) -> Category {
+    fields.text("category").and_then(|id| Category::ALL.into_iter().find(|c| category_id(*c) == id)).unwrap_or(Category::Document)
+}
+
+/// The keys of the rules the options dialog lists now.
+fn shown_rule_keys(fields: &DialogFields) -> Vec<String> {
+    let category = shown_category(fields);
+    Rule::ALL.into_iter().filter(|r| r.category() == category).map(rule_key).collect()
+}
+
+/// The options dialog's values at opening: the saved options, the range held to the document.
+fn options_fields(o: &A11yOptions, pages: usize) -> DialogFields {
+    let to = o.to.clamp(1, pages);
+    let from = o.from.clamp(1, to);
+    let range = PageRange { scope: if o.all_pages { PageScope::All } else { PageScope::Range }, from, to: Some(to), ..PageRange::default() };
+    let mut fields = DialogFields::new();
+    fields.set("create_report", o.create_report);
+    fields.set("range", PageRangeOptions::field_value(&range));
+    fields.set("category", category_id(o.category));
+    for rule in Rule::ALL {
+        fields.set(rule_key(rule), o.rules.contains(&rule));
+    }
+    fields.set("show_dialog", o.show_dialog);
+    fields
+}
+
+/// The options dialog over its values.
+fn options_dialog(fields: &mut DialogFields, pages: usize, current: usize) -> ParamDialog<'_> {
+    let _category = shown_category(fields);
+    let on = Rule::ALL.into_iter().filter(|r| fields.bool(&rule_key(*r)) == Some(true)).count();
+    let heading = crate::i18n::fmt(
+        tl!("Checking Options ({on} of {all} in all categories)"),
+        &[("on", &on.to_string()), ("all", &Rule::ALL.len().to_string())],
+    );
+    let categories = Category::ALL.into_iter().map(|c| (category_id(c), tl!(c.label()).into())).collect();
+    let mut params = vec![
+        Param::section(tl!("Report Options")),
+        Param::new("create_report", tl!("Create accessibility report"), ParamKind::bool(false)),
+        PageRangeOptions::param("range", tl!("Page Range"), pages, current, PageRangeChoices::FromTo),
+        // Keyed apart from its changing label, so the section keeps its identity as the count moves.
+        Param::new("section:checking", heading, ParamKind::Section),
+        Param::new("category", tl!("Category:"), ParamKind::choice(categories, Some(category_id(Category::Document)))),
+    ];
+    for rule in Rule::ALL {
+        params
+            .push(Param::new(rule_key(rule), tl!(rule.description()), ParamKind::bool(true)).visible_when("category", category_id(rule.category())));
+    }
+    params.push(
+        Param::custom("rules.all", tl!("Rules"), |ui, fields, _| {
+            let keys = shown_rule_keys(fields);
+            let all = Button::new(tl!("Select All")).show(ui);
+            let none = Button::new(tl!("Clear All")).show(ui);
+            if all.response().clicked() {
+                for key in &keys {
+                    fields.set(key.clone(), true);
                 }
-            });
-        });
-        ui.add_space(4.0);
-        for r in Rule::ALL.into_iter().filter(|r| r.category() == o.category) {
-            let mut checked = o.rules.contains(&r);
-            if ui.add(widgets::checkbox(&mut checked, tl!(r.description()))).changed() {
-                if checked {
-                    o.rules.insert(r);
-                } else {
-                    o.rules.remove(&r);
+            }
+            if none.response().clicked() {
+                for key in &keys {
+                    fields.set(key.clone(), false);
                 }
             }
-        }
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            if ui.button(tl!("Select All")).clicked() {
-                o.rules.extend(Rule::ALL.into_iter().filter(|r| r.category() == o.category));
-            }
-            if ui.button(tl!("Clear All")).clicked() {
-                let c = o.category;
-                o.rules.retain(|r| r.category() != c);
-            }
-        });
-    });
-    ui.add(widgets::checkbox(&mut o.show_dialog, tl!("Show this dialog when the Checker starts")));
-    ui.add_space(10.0);
-    let (mut start, mut cancel) = (false, false);
-    ui.horizontal(|ui| {
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::pill_button(ui, tl!("Start Checking"), true).clicked() {
-                start = true;
-            }
-            if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-                cancel = true;
-            }
+            all.response().union(none.response().clone())
         })
-    });
-    (start, cancel)
+        .companions(shown_rule_keys(fields)),
+    );
+    params.push(Param::new("show_dialog", tl!("Show this dialog when the Checker starts"), ParamKind::bool(true)));
+    ParamDialog::new("a11y.options", tl!("Accessibility Checker Options"), params).values(Bind::bound(fields)).ok_label(tl!("Start Checking").into())
 }
 
-/// The red of failed checks (as for invalid signatures).
-const FAILED: egui::Color32 = egui::Color32::from_rgb(0xD7, 0x37, 0x3F);
+/// Opens the Accessibility Checker Options dialog over the saved options.
+pub(crate) fn open_a11y_options(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    let Some((index, id)) = app.active_ids() else { return };
+    let Some(doc) = app.session.get(id) else { return };
+    let pages = doc.info.pages.len().max(1);
+    let current = app.views.get(index).map_or(1, |v| v.current() + 1);
+    let fields = options_fields(&app.a11y_options, pages);
+    app.dialogs.open(HostedParamDialog::new(ctx, "a11y.options", fields, move |fields| options_dialog(fields, pages, current)));
+}
 
-fn status_icon(t: &Tokens, s: Status) -> (&'static str, egui::Color32) {
+/// What the dialogs of this module answered: called once a pass, after the host ran.
+pub(crate) fn pass(ctx: &egui::Context, app: &mut PdfCraftApp) {
+    if let Some(DialogResult::Ok(result)) = app.dialogs.take_by_id::<HostedParamDialog>(dialog_id("a11y.options")) {
+        let Some((_, id)) = app.active_ids() else { return };
+        let pages = app.session.get(id).map_or(1, |d| d.info.pages.len().max(1));
+        let fields = &result.fields;
+        let o = &mut app.a11y_options;
+        o.create_report = fields.bool("create_report").unwrap_or(o.create_report);
+        o.show_dialog = fields.bool("show_dialog").unwrap_or(o.show_dialog);
+        o.category = shown_category(fields);
+        o.rules = Rule::ALL.into_iter().filter(|r| fields.bool(&rule_key(*r)).unwrap_or_else(|| o.rules.contains(r))).collect();
+        // `FromTo` offers neither Current page nor a subset, so only All and Range arrive.
+        if let Some(range) = PageRangeOptions::value(fields, "range") {
+            o.all_pages = range.scope == PageScope::All;
+            o.from = range.from;
+            o.to = range.to.unwrap_or(pages);
+        }
+        // Starting again forgets the skips made in this document.
+        app.a11y_skipped.retain(|(doc, _)| *doc != id);
+        app.run_accessibility_check();
+    }
+    if let Some(DialogResult::Ok(answer)) = app.dialogs.take::<AltTextDialog>() {
+        app.save_alt_text(ctx, answer);
+    }
+}
+
+/// The icon and tone of a rule's status.
+fn status_icon(s: Status) -> (&'static str, Tone) {
     match s {
-        Status::Passed => ("circle-check", egui::Color32::from_rgb(0x2D, 0x9D, 0x4F)),
-        Status::Failed => ("circle-x", FAILED),
-        Status::Manual => ("circle-help", egui::Color32::from_rgb(0xD9, 0x8E, 0x04)),
-        Status::Skipped => ("circle-dashed", t.text_faint),
+        Status::Passed => ("circle-check", Tone::Good),
+        Status::Failed => ("circle-x", Tone::Bad),
+        Status::Manual => ("circle-help", Tone::Warn),
+        Status::Skipped => ("circle-dashed", Tone::Neutral),
     }
 }
 
-/// The Accessibility Checker panel.
-pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, state: &mut A11yState, doc: DocId) -> Option<PanelAction> {
-    let mut action = None;
-    let Some((_, report)) = state.report.as_ref().filter(|(d, _)| *d == doc) else {
-        ui.add_space(24.0);
-        ui.vertical_centered(|ui| {
-            ui.add(icons::image("accessibility", 32.0, t.text_faint));
-            ui.add_space(6.0);
-            ui.label(egui::RichText::new(tl!("This document hasn't been checked yet.")).color(t.text_muted));
-            ui.add_space(6.0);
-            if widgets::pill_button(ui, tl!("Check for accessibility"), true).clicked() {
-                action = Some(PanelAction::Options);
-            }
-        });
-        return action;
-    };
-    let failed = report.count(Status::Failed);
-    let manual = report.count(Status::Manual);
-    let skipped = report.count(Status::Skipped);
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new(if failed == 0 && manual == 0 && skipped == 0 {
-                tl!("No issues found").to_string()
-            } else if failed == 1 {
-                tl!("1 issue").to_string()
-            } else if failed > 1 {
-                crate::i18n::fmt(tl!("{n} issues"), &[("n", &failed.to_string())])
-            } else if manual > 0 {
-                format!("{}: {manual}", tl!("Needs manual check"))
-            } else {
-                format!("{}: {skipped}", tl!("Skipped"))
-            })
-            .color(t.text_muted),
-        );
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::pill_button(ui, tl!("Check again"), false).clicked() {
-                action = Some(PanelAction::CheckAgain);
-            }
-            if widgets::pill_button(ui, tl!("Report"), false).on_hover_text(tl!("Show the accessibility report")).clicked() {
-                action = Some(PanelAction::ShowReport);
-            }
-        });
-    });
-    if failed > 0 && manual > 0 {
-        ui.label(egui::RichText::new(format!("{}: {manual}", tl!("Needs manual check"))).small().color(t.text_muted));
+/// What a row of the results list stands for.
+enum LineKind {
+    Category { label: String, issues: usize },
+    Rule { rule: Rule, status: Status },
+    Finding { rule: Rule, index: usize },
+}
+
+/// One row of the results tree, in display order.
+struct Line {
+    key: u64,
+    depth: usize,
+    /// `Some(open)` for a row with children.
+    group: Option<bool>,
+    kind: LineKind,
+}
+
+/// The results rows as the list's display order.
+struct Lines(Vec<Line>);
+
+/// Rule rows come after the categories' keys; finding rows after every rule's.
+const RULE_KEY_BASE: u64 = 100;
+const FINDING_KEY_BASE: u64 = 1_000_000;
+const FINDING_KEY_STRIDE: u64 = 1_000_000;
+
+impl DisplayOrder<u64> for Lines {
+    fn len(&self) -> usize {
+        self.0.len()
     }
-    if let Some((_, previous)) = state.previous.as_ref().filter(|(d, _)| *d == doc) {
-        egui::CollapsingHeader::new(tl!("Compare")).default_open(true).show(ui, |ui| {
-            for status in [Status::Passed, Status::Failed, Status::Manual, Status::Skipped] {
-                ui.label(format!("{}: {} → {}", tl!(status.label()), previous.count(status), report.count(status)));
-            }
-            for current in &report.results {
-                let Some(prior) = previous.result(current.rule) else { continue };
-                if prior.status != current.status || prior.findings.len() != current.findings.len() {
-                    ui.label(format!(
-                        "{}: {} ({}) → {} ({})",
-                        tl!(current.rule.name()),
-                        tl!(prior.status.label()),
-                        prior.findings.len(),
-                        tl!(current.status.label()),
-                        current.findings.len()
-                    ));
-                }
-            }
-        });
+    fn key(&self, at: usize) -> u64 {
+        self.0.get(at).map_or(0, |line| line.key)
     }
-    ui.add_space(6.0);
-    for c in Category::ALL {
+    fn depth(&self, at: usize) -> usize {
+        self.0.get(at).map_or(0, |line| line.depth)
+    }
+    fn has_children(&self, at: usize) -> bool {
+        self.0.get(at).is_some_and(|line| line.group.is_some())
+    }
+    fn open(&self, at: usize) -> bool {
+        self.0.get(at).is_some_and(|line| line.group == Some(true))
+    }
+}
+
+impl ItemSource<u64> for Lines {}
+
+fn rule_position(rule: Rule) -> u64 {
+    Rule::ALL.iter().position(|r| *r == rule).unwrap_or(0) as u64
+}
+
+/// The results tree: categories with their rules, and the findings of the expanded rules.
+fn result_lines(report: &Report, collapsed: &BTreeSet<Category>, expanded: &BTreeSet<Rule>) -> Lines {
+    let mut lines = Vec::new();
+    for (position, c) in Category::ALL.into_iter().enumerate() {
         let rules: Vec<_> = report.in_category(c).collect();
         let issues = rules.iter().filter(|r| r.status == Status::Failed).count();
-        let open = !state.collapsed.contains(&c);
-        let head = if issues == 0 {
+        let open = !collapsed.contains(&c);
+        let label = if issues == 0 {
             tl!(c.label()).to_string()
         } else if issues == 1 {
             crate::i18n::fmt(tl!("{label} (1 issue)"), &[("label", tl!(c.label()))])
         } else {
             crate::i18n::fmt(tl!("{label} ({n} issues)"), &[("label", tl!(c.label())), ("n", &issues.to_string())])
         };
-        let clicked = ui
-            .horizontal(|ui| {
-                let toggle = icons::button(
-                    ui,
-                    if open { "chevron-down" } else { "chevron-right" },
-                    20.0,
-                    false,
-                    if open { tl!("Collapse") } else { tl!("Expand") },
-                )
-                .clicked();
-                let color = if issues > 0 { FAILED } else { t.text };
-                let l = ui.add(egui::Label::new(egui::RichText::new(&head).font(theme::semibold(13.0)).color(color)).sense(egui::Sense::click()));
-                toggle || l.clicked()
-            })
-            .inner;
-        if clicked {
-            if open {
-                state.collapsed.insert(c);
-            } else {
-                state.collapsed.remove(&c);
-            }
-        }
+        lines.push(Line { key: position as u64, depth: 0, group: Some(open), kind: LineKind::Category { label, issues } });
         if !open {
             continue;
         }
         for r in rules {
-            let (icon, color) = status_icon(t, r.status);
-            let row = ui
-                .horizontal(|ui| {
-                    ui.add_space(24.0);
-                    ui.add(icons::image(icon, 15.0, color));
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(crate::i18n::fmt(
-                                tl!("{rule} - {status}"),
-                                &[("rule", tl!(r.rule.name())), ("status", tl!(r.status.label()))],
-                            ))
-                            .font(theme::regular(12.5))
-                            .color(t.text),
-                        )
-                        .sense(egui::Sense::click()),
-                    )
-                })
-                .inner;
-            if row.clicked() && !r.findings.is_empty() && !state.expanded.remove(&r.rule) {
-                state.expanded.insert(r.rule);
-            }
-            row.context_menu(|ui| {
-                ui.set_min_width(170.0);
-                if ui.add_enabled(fixable(r.rule) && r.status == Status::Failed, egui::Button::new(tl!("Fix"))).clicked() {
-                    action = Some(PanelAction::Fix(r.rule));
-                    ui.close();
-                }
-                if ui.add_enabled(r.status != Status::Skipped, egui::Button::new(tl!("Skip Rule"))).clicked() {
-                    action = Some(PanelAction::Skip(r.rule));
-                    ui.close();
-                }
-                if ui.button(tl!("Explain")).clicked() {
-                    state.explain = if state.explain == Some(r.rule) { None } else { Some(r.rule) };
-                    ui.close();
-                }
-                ui.separator();
-                if ui.button(tl!("Check Again")).clicked() {
-                    action = Some(PanelAction::CheckAgain);
-                    ui.close();
-                }
-                if ui.button(tl!("Show Report")).clicked() {
-                    action = Some(PanelAction::ShowReport);
-                    ui.close();
-                }
-                if ui.button(tl!("Options…")).clicked() {
-                    action = Some(PanelAction::Options);
-                    ui.close();
-                }
+            let at = rule_position(r.rule);
+            let shown = !r.findings.is_empty() && expanded.contains(&r.rule);
+            lines.push(Line {
+                key: RULE_KEY_BASE + at,
+                depth: 1,
+                group: (!r.findings.is_empty()).then_some(shown),
+                kind: LineKind::Rule { rule: r.rule, status: r.status },
             });
-            if state.explain == Some(r.rule) {
-                egui::Frame::NONE.inner_margin(egui::Margin { left: 46, right: 4, top: 0, bottom: 6 }).show(ui, |ui| {
-                    ui.label(egui::RichText::new(tl!(r.rule.explanation())).small().color(t.text_muted));
-                });
+            if shown {
+                for index in 0..r.findings.len() {
+                    lines.push(Line {
+                        key: FINDING_KEY_BASE + at * FINDING_KEY_STRIDE + index as u64,
+                        depth: 2,
+                        group: None,
+                        kind: LineKind::Finding { rule: r.rule, index },
+                    });
+                }
             }
-            if state.expanded.contains(&r.rule) {
-                egui::Frame::NONE.inner_margin(egui::Margin { left: 46, right: 4, top: 0, bottom: 6 }).show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    for f in &r.findings {
-                        // The checker hands over the sentence and the document's own words apart, so
-                        // the sentence is said in the panel's language with those words still in it.
-                        let said = f.said(&crate::i18n::words);
-                        let l = ui.add(egui::Label::new(egui::RichText::new(said).small().color(t.text_muted)).sense(egui::Sense::click()));
-                        if let Some(object) = f.object {
-                            if l.on_hover_text(tl!("Tags")).clicked() {
-                                action = Some(PanelAction::GoToTag(object, f.page, f.bbox));
-                            }
-                        } else if let Some(p) = f.page
-                            && l.on_hover_text(tl!("Go to the page")).clicked()
-                        {
-                            action = Some(PanelAction::GoTo(p, f.bbox));
+        }
+    }
+    Lines(lines)
+}
+
+/// What opening a finding does: its tag when it has one, else its page.
+fn finding_action(report: &Report, rule: Rule, index: usize) -> Option<PanelAction> {
+    let f = report.result(rule)?.findings.get(index)?;
+    if let Some(object) = f.object { Some(PanelAction::GoToTag(object, f.page, f.bbox)) } else { f.page.map(|p| PanelAction::GoTo(p, f.bbox)) }
+}
+
+/// The summary line over the results.
+fn summary(report: &Report) -> String {
+    let failed = report.count(Status::Failed);
+    let manual = report.count(Status::Manual);
+    let skipped = report.count(Status::Skipped);
+    if failed == 0 && manual == 0 && skipped == 0 {
+        tl!("No issues found").to_string()
+    } else if failed == 1 {
+        tl!("1 issue").to_string()
+    } else if failed > 1 {
+        crate::i18n::fmt(tl!("{n} issues"), &[("n", &failed.to_string())])
+    } else if manual > 0 {
+        format!("{}: {manual}", tl!("Needs manual check"))
+    } else {
+        format!("{}: {skipped}", tl!("Skipped"))
+    }
+}
+
+/// The Accessibility Checker panel.
+pub(crate) fn panel(ui: &mut Ui, state: &mut A11yState, doc: DocId) -> Option<PanelAction> {
+    let A11yState { report, previous, collapsed, expanded, explain, menu, .. } = state;
+    let mut action = None;
+    let Some((_, report)) = report.as_ref().filter(|(d, _)| *d == doc) else {
+        let mut notice = Notice::new(Tone::Neutral, tl!("This document hasn't been checked yet."));
+        let icon = IconId::new("accessibility");
+        if has_icon(&icon) {
+            notice = notice.icon(NoticeIcon::Custom(IconSpec::svg(icon)));
+        }
+        let shown = notice.action(NoticeAction::new(tl!("Check for accessibility"))).show(ui);
+        if shown.action == Some(0) {
+            action = Some(PanelAction::Options);
+        }
+        return action;
+    };
+    let failed = report.count(Status::Failed);
+    let manual = report.count(Status::Manual);
+    Text::new(summary(report)).shade(Shade::Muted).show(ui);
+    if Button::new(tl!("Check again")).show(ui).response().clicked() {
+        action = Some(PanelAction::CheckAgain);
+    }
+    if Button::new(tl!("Report")).show(ui).response().clicked() {
+        action = Some(PanelAction::ShowReport);
+    }
+    if failed > 0 && manual > 0 {
+        Text::new(format!("{}: {manual}", tl!("Needs manual check"))).shade(Shade::Muted).show(ui);
+    }
+    if let Some((_, previous)) = previous.as_ref().filter(|(d, _)| *d == doc) {
+        Section::new(tl!("Compare")).show(ui, |ui, _| {
+            for status in [Status::Passed, Status::Failed, Status::Manual, Status::Skipped] {
+                Text::new(format!("{}: {} → {}", tl!(status.label()), previous.count(status), report.count(status))).show(ui);
+            }
+            for current in &report.results {
+                let Some(prior) = previous.result(current.rule) else { continue };
+                if prior.status != current.status || prior.findings.len() != current.findings.len() {
+                    Text::new(format!(
+                        "{}: {} ({}) → {} ({})",
+                        tl!(current.rule.name()),
+                        tl!(prior.status.label()),
+                        prior.findings.len(),
+                        tl!(current.status.label()),
+                        current.findings.len()
+                    ))
+                    .show(ui);
+                }
+            }
+        });
+    }
+
+    let lines = result_lines(report, collapsed, expanded);
+    let explained = *explain;
+    // A click on a finding is reported as a selection of it; the selection is not kept, so the same finding
+    // can be opened again.
+    let mut picked = Selection::new(Vec::new(), None, None);
+    let out = List::<u64>::new(tl!("Accessibility results"))
+        .tree(true)
+        .natural_height(true)
+        .select(SelectMode::Single)
+        .selection(Bind::bound(&mut picked))
+        .show_items(ui, &lines, &mut |key, _| {
+            let Some(line) = lines.0.iter().find(|l| l.key == *key) else { return ListRow::new("") };
+            let row = ListRow::new(match &line.kind {
+                LineKind::Category { label, .. } => label.clone(),
+                LineKind::Rule { rule, status } => {
+                    crate::i18n::fmt(tl!("{rule} - {status}"), &[("rule", tl!(rule.name())), ("status", tl!(status.label()))])
+                }
+                // The checker hands over the sentence and the document's own words apart, so the sentence is said in
+                // the panel's language with those words still in it.
+                LineKind::Finding { rule, index } => {
+                    report.result(*rule).and_then(|r| r.findings.get(*index)).map(|f| f.said(&crate::i18n::words).to_string()).unwrap_or_default()
+                }
+            })
+            .depth(line.depth);
+            let row = match line.group {
+                Some(open) => row.group(open),
+                None => row,
+            };
+            match &line.kind {
+                LineKind::Category { issues, .. } if *issues > 0 => row.icon(IconSpec::svg(IconId::new("circle-x"))).tone(Tone::Bad),
+                LineKind::Category { .. } | LineKind::Finding { .. } => row,
+                LineKind::Rule { rule, status } => {
+                    let (icon, tone) = status_icon(*status);
+                    let row = row.icon(IconSpec::svg(IconId::new(icon))).tone(tone);
+                    let row = if *status == Status::Skipped { row.ink(RowInk::Muted) } else { row };
+                    if explained == Some(*rule) { row.below(Text::new(tl!(rule.explanation())).shade(Shade::Muted), |_| {}) } else { row }
+                }
+            }
+        });
+    for event in &out.events {
+        match event {
+            CollectionEvent::Open(change) => match lines.0.iter().find(|l| l.key == change.key).map(|l| &l.kind) {
+                Some(LineKind::Category { .. }) => {
+                    if let Some(c) = Category::ALL.into_iter().nth(change.key as usize) {
+                        if change.open {
+                            collapsed.remove(&c);
+                        } else {
+                            collapsed.insert(c);
                         }
                     }
-                });
+                }
+                Some(LineKind::Rule { rule, .. }) => {
+                    if change.open {
+                        expanded.insert(*rule);
+                    } else {
+                        expanded.remove(rule);
+                    }
+                }
+                _ => {}
+            },
+            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+                if let Some(LineKind::Finding { rule, index }) = keys.last().and_then(|k| lines.0.iter().find(|l| l.key == *k)).map(|l| &l.kind) {
+                    action = finding_action(report, *rule, *index).or(action);
+                }
             }
+            CollectionEvent::Activate(key) => {
+                if let Some(LineKind::Finding { rule, index }) = lines.0.iter().find(|l| l.key == *key).map(|l| &l.kind) {
+                    action = finding_action(report, *rule, *index).or(action);
+                }
+            }
+            CollectionEvent::ContextMenu(request) => {
+                if let Some(LineKind::Rule { rule, .. }) = lines.0.iter().find(|l| l.key == request.key).map(|l| &l.kind) {
+                    *menu = Some(*rule);
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(rule) = *menu {
+        let status = report.result(rule).map(|r| r.status);
+        let entries = [
+            Entry::new(String::from("fix"), tl!("Fix")).enabled(fixable(rule) && status == Some(Status::Failed)),
+            Entry::new(String::from("skip"), tl!("Skip Rule")).enabled(status != Some(Status::Skipped)),
+            Entry::new(String::from("explain"), tl!("Explain")),
+            Entry::separator(),
+            Entry::new(String::from("again"), tl!("Check Again")),
+            Entry::new(String::from("report"), tl!("Show Report")),
+            Entry::new(String::from("options"), tl!("Options…")),
+        ];
+        let shown = Menu::context(tl!("Accessibility results"), &out.response).pick(ui, &entries);
+        match shown.picked.as_deref() {
+            Some("fix") => action = Some(PanelAction::Fix(rule)),
+            Some("skip") => action = Some(PanelAction::Skip(rule)),
+            Some("explain") => *explain = if *explain == Some(rule) { None } else { Some(rule) },
+            Some("again") => action = Some(PanelAction::CheckAgain),
+            Some("report") => action = Some(PanelAction::ShowReport),
+            Some("options") => action = Some(PanelAction::Options),
+            _ => {}
+        }
+        if shown.closed.is_some() {
+            *menu = None;
         }
     }
     action
@@ -356,7 +502,7 @@ impl PdfCraftApp {
         self.a11y.previous = None;
         self.a11y.options = Some(options);
         self.a11y.report = Some((id, report));
-        self.right = Some(RightPanel::Accessibility);
+        self.set_right(Some(RightPanel::Accessibility));
         self.notify(if failed == 0 {
             tl!("No untagged content was found.").to_string()
         } else {
@@ -365,9 +511,10 @@ impl PdfCraftApp {
     }
 
     /// Check for accessibility: the options first, unless they are turned off.
-    pub(crate) fn start_accessibility_check(&mut self) {
+    // PLAN: takes the context the options dialog needs; pdf-hub-w3 passes it from `commands.rs`.
+    pub(crate) fn start_accessibility_check(&mut self, ctx: &egui::Context) {
         if self.a11y_options.show_dialog {
-            self.dialog = Some(Dialog::AccessibilityOptions);
+            open_a11y_options(self, ctx);
         } else {
             self.run_accessibility_check();
         }
@@ -400,7 +547,7 @@ impl PdfCraftApp {
             if self.a11y.options.as_ref() == Some(&options) { self.a11y.report.take().filter(|(prior_id, _)| *prior_id == id) } else { None };
         self.a11y.options = Some(options);
         self.a11y.report = Some((id, report));
-        self.right = Some(RightPanel::Accessibility);
+        self.set_right(Some(RightPanel::Accessibility));
         self.notify(if failed == 0 && manual == 0 && skipped == 0 {
             tl!("The checker found no problems in this document.").to_string()
         } else if failed == 1 {
@@ -444,14 +591,15 @@ impl PdfCraftApp {
         let Some(view) = self.views.get_mut(index) else { return };
         view.go_to_page(page);
         if let Some(bbox) = bbox {
-            view.flash = Some((page, bbox.map(|v| v as f32), 0.0));
+            view.session.flash = Some((page, bbox.map(|v| v as f32), 0.0));
         }
     }
 
-    pub(crate) fn a11y_action(&mut self, index: usize, action: PanelAction) {
+    // PLAN: takes `ctx` for the dialogs it opens; pdf-chrome-w13 passes `ui.ctx()` from `panels/right.rs`.
+    pub(crate) fn a11y_action(&mut self, ctx: &egui::Context, index: usize, action: PanelAction) {
         match action {
             PanelAction::CheckAgain => self.run_accessibility_check(),
-            PanelAction::Options => self.dialog = Some(Dialog::AccessibilityOptions),
+            PanelAction::Options => open_a11y_options(self, ctx),
             PanelAction::ShowReport => self.show_accessibility_report(),
             PanelAction::GoTo(p, bbox) => self.a11y_show_on_page(index, p, bbox),
             PanelAction::GoToTag(object, page, bbox) => {
@@ -464,7 +612,7 @@ impl PdfCraftApp {
                     return;
                 }
                 if self.tags_state.select(id, &tags, object) {
-                    self.right = Some(RightPanel::Tags);
+                    self.set_right(Some(RightPanel::Tags));
                     if let Some(page) = page {
                         self.a11y_show_on_page(index, page, bbox);
                     }
@@ -485,18 +633,18 @@ impl PdfCraftApp {
                 let Some((_, id)) = self.active_ids() else { return };
                 match rule {
                     // The language is chosen in Document Properties ▸ Advanced.
-                    Rule::PrimaryLanguage => self.dialog = Some(Dialog::Properties(PropsTab::Advanced)),
+                    Rule::PrimaryLanguage => self.open_properties(ctx, PropsTab::Advanced),
                     _ => {
                         let edit = self.session.get(id).map(|d| d.accessibility_fix(rule, None));
                         match edit {
                             Some(Ok(e)) => {
-                                if !self.apply_edit(e) {
+                                if !self.apply_edit(ctx, e) {
                                     return;
                                 }
                                 self.run_accessibility_check();
                                 // The title can then be edited.
                                 if rule == Rule::Title {
-                                    self.dialog = Some(Dialog::Properties(PropsTab::Description));
+                                    self.open_properties(ctx, PropsTab::Description);
                                 }
                             }
                             Some(Err(e)) => self.notify_error(e),
@@ -509,32 +657,28 @@ impl PdfCraftApp {
     }
 }
 
-/// Add alternate text: the figures one by one.
-#[derive(Clone, Default)]
-pub struct AltDraft {
-    pub doc: Option<DocId>,
-    pub figures: Vec<pdfcraft_engine::a11y::Figure>,
-    pub index: usize,
-    pub texts: Vec<String>,
-    pub decorative: Vec<bool>,
-    /// The figure shown (index, picture).
-    preview: Option<(usize, egui::TextureHandle)>,
+/// Where a figure sits on its page, in the page's view space, for its preview.
+struct FigureShot {
+    page: usize,
+    x0: f32,
+    y0: f32,
+    w: f32,
+    h: f32,
 }
 
-impl std::fmt::Debug for AltDraft {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AltDraft").field("figures", &self.figures.len()).field("index", &self.index).finish()
-    }
-}
-
-/// Render a figure's area for the dialog, at the preview pane's device resolution.
-fn figure_picture(ctx: &egui::Context, doc: &pdfcraft_engine::Document, f: &pdfcraft_engine::a11y::Figure) -> Option<egui::TextureHandle> {
+fn figure_shot(doc: &pdfcraft_engine::Document, f: &Figure) -> Option<FigureShot> {
     let (page, b) = (f.page?, f.bbox?);
     let info = doc.info.pages.get(page)?;
     let (u, v) = (info.user_to_view(b[0] as f32, b[1] as f32), info.user_to_view(b[2] as f32, b[3] as f32));
     let (x0, y0, x1, y1) = (u[0].min(v[0]), u[1].min(v[1]), u[0].max(v[0]), u[1].max(v[1]));
-    let (w, h) = ((x1 - x0).max(1.0), (y1 - y0).max(1.0));
-    let ppp = ctx.pixels_per_point().max(1.0);
+    Some(FigureShot { page, x0, y0, w: (x1 - x0).max(1.0), h: (y1 - y0).max(1.0) })
+}
+
+/// Render a figure's area for the dialog, at the preview's device resolution; a blank picture when it can't be drawn.
+fn figure_image(bytes: &Arc<Vec<u8>>, password: Option<&str>, shot: Option<&FigureShot>, ppp: f32) -> egui::ColorImage {
+    let blank = || egui::ColorImage::filled([1, 1], egui::Color32::TRANSPARENT);
+    let Some(FigureShot { page, x0, y0, w, h }) = shot else { return blank() };
+    let ppp = ppp.max(1.0);
     let scale = ((380.0 * ppp) / w).min((220.0 * ppp) / h).clamp(0.05, 32.0);
     let tile = pdfcraft_render::Tile {
         x: (x0 * scale).floor().max(0.0) as u32,
@@ -543,11 +687,11 @@ fn figure_picture(ctx: &egui::Context, doc: &pdfcraft_engine::Document, f: &pdfc
         h: (h * scale).ceil().max(1.0) as u32,
     };
     // The picture is only shown in the panel, so it draws like the viewer (installed CJK faces
-    // for fonts the PDF doesn't embed); nothing is saved from it (AGENTS.md §1.4).
-    let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() }.on_screen();
-    let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
+    // for fonts the PDF doesn't embed); nothing is saved from it (docs/development.md "Fonts and attribution").
+    let config = pdfcraft_render::RenderConfig { password: password.map(Arc::from), ..Default::default() }.on_screen();
+    let mut r = pdfcraft_render::PageRenderer::new(bytes.clone(), config);
     let out = r.render(pdfcraft_render::RenderRequest {
-        page,
+        page: *page,
         kind: pdfcraft_render::RequestKind::Pixels,
         tile: Some(tile),
         scale,
@@ -555,117 +699,157 @@ fn figure_picture(ctx: &egui::Context, doc: &pdfcraft_engine::Document, f: &pdfc
         preview: false,
     });
     if out.error.is_some() || out.width == 0 {
-        return None;
+        return blank();
     }
-    let img = egui::ColorImage::from_rgba_premultiplied([out.width as usize, out.height as usize], &out.rgba);
-    Some(ctx.load_texture("alt-figure", img, egui::TextureOptions::LINEAR))
+    egui::ColorImage::from_rgba_premultiplied([out.width as usize, out.height as usize], &out.rgba)
 }
 
-pub(crate) fn alt_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
-    let ctx = ui.ctx().clone();
-    let doc = app.alt_draft.doc.and_then(|id| app.session.get(id));
-    let d = &mut app.alt_draft;
-    ui.label(egui::RichText::new(tl!("Set Alternate Text")).font(theme::semibold(18.0)));
-    ui.add_space(8.0);
-    let n = d.figures.len();
-    if n == 0 {
-        ui.label(egui::RichText::new(tl!("This document has no tagged figures.")).color(t.text_muted));
-        let mut cancel = false;
-        ui.horizontal(|ui| {
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| cancel = widgets::pill_button(ui, tl!("Close"), true).clicked())
-        });
-        return (false, cancel);
+/// The figure the Set Alternate Text dialog is on and what has been typed for each figure.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AltTextValue {
+    index: usize,
+    texts: Vec<String>,
+    decorative: Vec<bool>,
+}
+
+/// What Save & Close answers: the figures as they were and what was set for them.
+pub struct AltTextAnswer {
+    figures: Vec<Figure>,
+    value: AltTextValue,
+}
+
+/// Add alternate text: the figures one by one.
+pub struct AltTextDialog {
+    id: DialogId,
+    figures: Vec<Figure>,
+    shots: Vec<Option<FigureShot>>,
+    /// The document's bytes and password, which draw the previews.
+    bytes: Arc<Vec<u8>>,
+    password: Option<String>,
+    /// The document and its edit generation, which keep a figure's preview apart from another document's.
+    doc: DocId,
+    generation: u64,
+    value: AltTextValue,
+    open: bool,
+}
+
+impl StackDialog for AltTextDialog {
+    type Result = AltTextAnswer;
+
+    fn id(&self) -> DialogId {
+        self.id
     }
-    d.index = d.index.min(n - 1);
-    let i = d.index;
-    if d.preview.as_ref().is_none_or(|(k, _)| *k != i)
-        && let Some(doc) = doc
-    {
-        d.preview = figure_picture(&ctx, doc, &d.figures[i]).map(|tex| (i, tex));
+
+    fn key(&self) -> Option<&str> {
+        Some("a11y.alt_text")
     }
-    let page = d.figures[i].page.map(|p| crate::i18n::fmt(tl!(" on page {p}"), &[("p", &(p + 1).to_string())])).unwrap_or_default();
-    ui.label(
-        egui::RichText::new(crate::i18n::fmt(tl!("Figure {i} of {n}{page}"), &[("i", &(i + 1).to_string()), ("n", &n.to_string()), ("page", &page)]))
-            .color(t.text_muted),
-    );
-    ui.add_space(6.0);
-    egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
-        let (area, _) = ui.allocate_exact_size(egui::vec2(380.0, 220.0), egui::Sense::hover());
-        match &d.preview {
-            Some((_, tex)) => {
-                let s = tex.size_vec2();
-                let k = (area.width() / s.x).min(area.height() / s.y).min(2.0);
-                let fit = egui::Rect::from_center_size(area.center(), s * k);
-                ui.painter().image(tex.id(), fit, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
-            }
-            None => {
-                ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, tl!("No preview"), theme::regular(13.0), t.text_faint);
-            }
+
+    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<AltTextAnswer>> {
+        let AltTextDialog { figures, shots, bytes, password, doc, generation, value, open, .. } = self;
+        let ppp = ui.ctx().pixels_per_point();
+        let n = figures.len();
+        let shown = FormDialog::new(tl!("Set Alternate Text"), Bind::bound(&mut *value))
+            .opened(Bind::bound(&mut *open))
+            .ok_label(tl!("Save & Close"))
+            .show(ui, |ui, _, value| {
+                let i = value.index.min(n.saturating_sub(1));
+                value.index = i;
+                let (Some(figure), Some(text), Some(decorative)) = (figures.get(i), value.texts.get_mut(i), value.decorative.get_mut(i)) else {
+                    return true;
+                };
+                Stack::new().show(ui, |ui, _| {
+                    let page = figure.page.map(|p| crate::i18n::fmt(tl!(" on page {p}"), &[("p", &(p + 1).to_string())])).unwrap_or_default();
+                    Text::new(crate::i18n::fmt(
+                        tl!("Figure {i} of {n}{page}"),
+                        &[("i", &(i + 1).to_string()), ("n", &n.to_string()), ("page", &page)],
+                    ))
+                    .shade(Shade::Muted)
+                    .show(ui);
+                    // The picture renders once per key: the dialog keeps no image of its own.
+                    let key = {
+                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                        (*doc, *generation, figure.obj.num).hash(&mut hasher);
+                        hasher.finish()
+                    };
+                    let shot = shots.get(i).and_then(Option::as_ref);
+                    let render = || figure_image(bytes, password.as_deref(), shot, ppp);
+                    Picture::new(tl!("Figure"), key, &render).aspect(ThumbAspect::new(19, 11)).extent(PictureSize::Sample(ThumbSize::Large)).show(ui);
+                    let mut alt = AltText::new(text.clone()).decorative(*decorative);
+                    AltTextField::new(tl!("Alternate text"), Bind::bound(&mut alt)).show(ui);
+                    if let Some(typed) = alt.text.same() {
+                        *text = typed.clone();
+                    }
+                    if let Some(on) = alt.decorative.same() {
+                        *decorative = *on;
+                    }
+                    let back = IconButton::new(IconSpec::svg(IconId::new("chevron-left"))).label(tl!("Previous figure")).enabled(i > 0).show(ui);
+                    let next = IconButton::new(IconSpec::svg(IconId::new("chevron-right"))).label(tl!("Next figure")).enabled(i + 1 < n).show(ui);
+                    if back.response().clicked() {
+                        value.index = i.saturating_sub(1);
+                    }
+                    if next.response().clicked() {
+                        value.index = (i + 1).min(n.saturating_sub(1));
+                    }
+                });
+                true
+            });
+        match (shown.accepted, shown.closed) {
+            (Some(value), _) => Some(DialogResult::Ok(AltTextAnswer { figures: figures.clone(), value })),
+            (None, Some(_)) => Some(DialogResult::Cancel),
+            (None, None) => None,
         }
-    });
-    ui.add_space(8.0);
-    ui.add_enabled_ui(!d.decorative[i], |ui| {
-        let l = ui.label(tl!("Alternate text"));
-        ui.add(crate::widgets::block(&mut d.texts[i]).desired_rows(3).desired_width(380.0).hint_text(tl!("Describe the figure"))).labelled_by(l.id);
-    });
-    ui.add(widgets::checkbox(&mut d.decorative[i], tl!("Decorative figure")));
-    ui.add_space(10.0);
-    let (mut save, mut cancel) = (false, false);
-    ui.horizontal(|ui| {
-        if ui.add_enabled_ui(i > 0, |ui| icons::button(ui, "chevron-left", 28.0, false, tl!("Previous figure"))).inner.clicked() {
-            d.index -= 1;
-        }
-        if ui.add_enabled_ui(i + 1 < n, |ui| icons::button(ui, "chevron-right", 28.0, false, tl!("Next figure"))).inner.clicked() {
-            d.index += 1;
-        }
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::pill_button(ui, tl!("Save & Close"), true).clicked() {
-                save = true;
-            }
-            if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-                cancel = true;
-            }
-        });
-    });
-    (save, cancel)
+    }
+}
+
+/// Opens Set Alternate Text over the figures of the active document, or says it has none.
+pub(crate) fn open_alt_text(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    let Some((_, id)) = app.active_ids() else { return };
+    let Some(doc) = app.session.get(id) else { return };
+    let figures = doc.figures();
+    if figures.is_empty() {
+        app.dialogs.open(HostedAlert::new(Alert::new(tl!("Set Alternate Text"), tl!("This document has no tagged figures.")).ok_label(tl!("Close"))));
+        return;
+    }
+    let dialog = AltTextDialog {
+        id: dialog_id("a11y.alt_text"),
+        shots: figures.iter().map(|f| figure_shot(doc, f)).collect(),
+        bytes: doc.bytes.clone(),
+        password: doc.password.clone(),
+        doc: id,
+        generation: doc.edit_generation(),
+        value: AltTextValue {
+            index: 0,
+            texts: figures.iter().map(|f| f.alt.clone().unwrap_or_default()).collect(),
+            decorative: vec![false; figures.len()],
+        },
+        figures,
+        open: true,
+    };
+    // A second request while the dialog is open leaves it as it is.
+    let _ = app.dialogs.open_unless_open_in(ctx, dialog);
 }
 
 impl PdfCraftApp {
     /// Prepare for accessibility ▸ Tag form fields.
-    pub(crate) fn autotag_form_fields(&mut self) {
-        self.apply_edit(pdfcraft_engine::Edit::AutoTagFormFields);
+    pub(crate) fn autotag_form_fields(&mut self, ctx: &egui::Context) {
+        self.apply_edit(ctx, pdfcraft_engine::Edit::AutoTagFormFields);
         self.choose_right_panel(Some(RightPanel::Tags));
     }
 
-    /// Prepare for accessibility ▸ Add alternate text.
-    pub(crate) fn start_alt_text(&mut self) {
-        let Some((_, id)) = self.active_ids() else { return };
-        let Some(doc) = self.session.get(id) else { return };
-        let figures = doc.figures();
-        self.alt_draft = AltDraft {
-            doc: Some(id),
-            texts: figures.iter().map(|f| f.alt.clone().unwrap_or_default()).collect(),
-            decorative: vec![false; figures.len()],
-            figures,
-            index: 0,
-            preview: None,
-        };
-        self.dialog = Some(Dialog::AltText);
-    }
-
     /// Save & Close: one undo step for every change.
-    pub(crate) fn save_alt_text(&mut self) {
-        let d = std::mem::take(&mut self.alt_draft);
+    pub(crate) fn save_alt_text(&mut self, ctx: &egui::Context, answer: AltTextAnswer) {
+        let AltTextAnswer { figures, value: d } = answer;
         let mut edits = Vec::new();
-        for (k, f) in d.figures.iter().enumerate() {
-            if d.decorative[k] {
+        for (k, f) in figures.iter().enumerate() {
+            let (Some(text), Some(decorative)) = (d.texts.get(k), d.decorative.get(k)) else { continue };
+            if *decorative {
                 edits.push(pdfcraft_engine::Edit::MarkDecorative { figure: f.obj.num });
-            } else if d.texts[k].trim() != f.alt.as_deref().unwrap_or("").trim() {
-                edits.push(pdfcraft_engine::Edit::SetAltText { figure: f.obj.num, alt: Some(d.texts[k].clone()) });
+            } else if text.trim() != f.alt.as_deref().unwrap_or("").trim() {
+                edits.push(pdfcraft_engine::Edit::SetAltText { figure: f.obj.num, alt: Some(text.clone()) });
             }
         }
         if !edits.is_empty() {
-            self.apply_edit(pdfcraft_engine::Edit::Batch { label: "Set alternate text".into(), edits });
+            self.apply_edit(ctx, pdfcraft_engine::Edit::Batch { label: "Set alternate text".into(), edits });
         }
     }
 }
