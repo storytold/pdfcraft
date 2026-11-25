@@ -110,9 +110,10 @@ pub struct OcrSettings {
     pub dpi: f32,
     /// Language code from [`LANGUAGES`] (the models read the Latin alphabet, whatever this says).
     pub language: String,
-    /// Leave pages that already have text alone (Acrobat reports "page contains renderable
-    /// text" and skips them). When `false`, such pages are read too (a picture on a page that
-    /// also has text, #1028) and only the words that aren't already there are added.
+    /// Leave pages with substantial existing text alone (Acrobat reports "page contains
+    /// renderable text" and skips them); short isolated clerk stamps do not trigger the skip. When
+    /// `false`, such pages are read too (a picture on a page that also has text, #1028) and only
+    /// the words that aren't already there are added.
     pub skip_text_pages: bool,
     /// What counts as the page's text when `skip_text_pages` is on: only its own (page content
     /// and form fields). Comments and text boxes are left out, and are not drawn into the picture
@@ -159,6 +160,11 @@ pub struct OcrSettings {
 /// text read again, not a word in a picture.
 const ALREADY_ON_PAGE: f32 = 0.5;
 
+/// Preserve the established 13-nonblank-glyph text-page boundary; shorter isolated clerk stamps are read.
+const MIN_SUBSTANTIAL_TEXT_GLYPHS: usize = 13;
+/// Their union must also cover at least this much of the page's area.
+const SUBSTANTIAL_TEXT_COVERAGE: f32 = 0.0015;
+
 /// The long side of an A4 sheet in points (a letter page's, 792, is shorter): "Downsample to"
 /// is a resolution on paper this size or smaller.
 const SHEET: f32 = 842.0;
@@ -169,10 +175,114 @@ pub(crate) fn own_text(r: &mut PageRenderer, page: usize) -> Result<pdfcraft_ren
     r.filtered_text(page, TextFilter { painted: true, ..Default::default() })
 }
 
-/// Whether `page` has text of its own ([`own_text`]). A stamp drawn as outlines on a scan still
-/// leaves the scan to read; its words are not read twice, since they count as already on the page.
-fn has_own_text(r: &mut PageRenderer, page: usize) -> bool {
-    own_text(r, page).is_ok_and(|t| t.glyphs.iter().any(|g| !g.text.trim().is_empty()))
+/// Whether `page` has a substantial text layer of its own ([`own_text`]). A stamp drawn as
+/// outlines on a scan still leaves the scan to read; its words are not read twice, since they
+/// count as already on the page.
+fn has_own_text(r: &mut PageRenderer, page: usize, page_size: [f32; 2]) -> bool {
+    own_text(r, page).is_ok_and(|t| {
+        let glyphs: Vec<[f32; 4]> = t.glyphs.iter().filter(|g| !g.text.trim().is_empty()).map(|g| g.rect).collect();
+        glyphs.len() >= MIN_SUBSTANTIAL_TEXT_GLYPHS && union_coverage(&glyphs, page_size) >= SUBSTANTIAL_TEXT_COVERAGE
+    })
+}
+
+/// The fraction of a page covered by `boxes`, clipped to its edges and counting overlaps once.
+/// X events update a segment tree over compressed y intervals: exact union area in O(n log n)
+/// time and O(n) scratch space.
+fn union_coverage(boxes: &[[f32; 4]], page_size: [f32; 2]) -> f32 {
+    let [width, height] = page_size;
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return 0.0;
+    }
+    let boxes: Vec<[f32; 4]> = boxes
+        .iter()
+        .filter_map(|b| {
+            if !b.iter().all(|v| v.is_finite()) {
+                return None;
+            }
+            let (x0, y0) = (b[0].clamp(0.0, width), b[1].clamp(0.0, height));
+            let (x1, y1) = (b[2].clamp(0.0, width), b[3].clamp(0.0, height));
+            (x1 > x0 && y1 > y0).then_some([x0, y0, x1, y1])
+        })
+        .collect();
+    if boxes.is_empty() {
+        return 0.0;
+    }
+
+    let mut ys: Vec<f32> = boxes.iter().flat_map(|b| [b[1], b[3]]).collect();
+    ys.sort_unstable_by(|a, b| a.total_cmp(b));
+    ys.dedup();
+    let mut events = Vec::with_capacity(boxes.len().saturating_mul(2));
+    for b in &boxes {
+        let y0 = ys.partition_point(|&y| y < b[1]);
+        let y1 = ys.partition_point(|&y| y < b[3]);
+        events.push((b[0], y0, y1, 1));
+        events.push((b[2], y0, y1, -1));
+    }
+    events.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+
+    let mut coverage = YCoverage::new(&ys);
+    let mut previous_x: Option<f32> = None;
+    let mut area = 0.0f64;
+    for (x, y0, y1, delta) in events {
+        if let Some(previous) = previous_x {
+            area += f64::from(x - previous) * f64::from(coverage.covered_length());
+        }
+        coverage.update(y0, y1, delta);
+        previous_x = Some(x);
+    }
+    let page_area = f64::from(width) * f64::from(height);
+    ((area / page_area).min(1.0)) as f32
+}
+
+/// Active rectangle coverage over a sorted list of compressed y coordinates.
+struct YCoverage<'a> {
+    points: &'a [f32],
+    cover: Vec<i32>,
+    length: Vec<f32>,
+}
+
+impl<'a> YCoverage<'a> {
+    fn new(points: &'a [f32]) -> Self {
+        let size = points.len().saturating_mul(4);
+        Self { points, cover: vec![0; size], length: vec![0.0; size] }
+    }
+
+    fn update(&mut self, query_left: usize, query_right: usize, delta: i32) {
+        if query_left >= query_right || self.points.len() < 2 {
+            return;
+        }
+        let intervals = self.points.len() - 1;
+        if query_right > intervals {
+            return;
+        }
+        self.update_at(1, 0, intervals, query_left, query_right, delta);
+    }
+
+    fn update_at(&mut self, node: usize, left: usize, right: usize, query_left: usize, query_right: usize, delta: i32) {
+        if query_left <= left && right <= query_right {
+            self.cover[node] += delta;
+        } else {
+            let middle = left + (right - left) / 2;
+            if query_left < middle {
+                self.update_at(node * 2, left, middle, query_left, query_right, delta);
+            }
+            if query_right > middle {
+                self.update_at(node * 2 + 1, middle, right, query_left, query_right, delta);
+            }
+        }
+        let length = if self.cover[node] > 0 {
+            self.points[right] - self.points[left]
+        } else if right - left == 1 {
+            0.0
+        } else {
+            self.length[node * 2] + self.length[node * 2 + 1]
+        };
+        self.length[node] = length;
+    }
+
+    fn covered_length(&self) -> f32 {
+        self.length.get(1).copied().unwrap_or(0.0)
+    }
 }
 
 /// How much of `word` the `text` boxes cover, from 0 to 1. Boxes are `[x0, y0, x1, y1]` in page
@@ -793,7 +903,7 @@ impl OcrSteps {
             .text
             .map(|t| t.glyphs.iter().filter(|g| !g.text.trim().is_empty()).map(|g| g.rect).collect())
             .unwrap_or_default();
-        if settings.skip_text_pages && !settings.force_ocr && !existing.is_empty() && has_own_text(r, page) {
+        if settings.skip_text_pages && !settings.force_ocr && !existing.is_empty() && has_own_text(r, page, [info.width, info.height]) {
             return Err(skip("the page already contains text"));
         }
         // A scan is read at its own resolution (enlarging it only blurs the letters), at
@@ -1312,11 +1422,18 @@ mod tests {
         assert_eq!(qty(true), ["2"], "the initialize script did not run with JavaScript on");
     }
 
+    const BODY_TEXT: &str = "BT /F1 12 Tf 40 700 Td (The quick brown fox jumps over the lazy dog.) Tj ET BT /F1 12 Tf 40 680 Td (Pack my box with five dozen liquor jugs.) Tj ET";
+
     /// One 300 × 300 page drawing `content`, with Helvetica as `/F1`.
     fn page(content: &str) -> Arc<Vec<u8>> {
+        page_with_size(content, [300; 2])
+    }
+
+    fn page_with_size(content: &str, size: [u32; 2]) -> Arc<Vec<u8>> {
+        let [width, height] = size;
         let pdf = format!(
             "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
-             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
              4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
              5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
             content.len()
@@ -1324,11 +1441,26 @@ mod tests {
         Arc::new(pdf.into_bytes())
     }
 
+    fn prepare_page(content: &str, size: [u32; 2]) -> Result<OcrShot, OcrPage> {
+        let (s, id) = open_file("page.pdf", page_with_size(content, size), None, false).unwrap();
+        let settings = OcrSettings { dpi: 72.0, ..Default::default() };
+        let mut steps = s.ocr_job(id, &[], settings).unwrap().steps();
+        steps.next_page().unwrap()
+    }
+
+    fn summed_own_text_coverage(content: &str, size: [u32; 2]) -> (usize, f32) {
+        let mut r = PageRenderer::new(page_with_size(content, size), RenderConfig::default());
+        let text = own_text(&mut r, 0).unwrap();
+        let glyphs: Vec<[f32; 4]> = text.glyphs.iter().filter(|g| !g.text.trim().is_empty()).map(|g| g.rect).collect();
+        let coverage = covered([0.0, 0.0, size[0] as f32, size[1] as f32], &glyphs);
+        (glyphs.len(), coverage)
+    }
+
     #[test]
     fn a_stamp_drawn_as_outlines_leaves_a_scan_to_read() {
         let stamp = page("/Span <</ActualText (APPROVED)>> BDC 100 40 60 20 re f EMC");
         let mut r = PageRenderer::new(stamp, RenderConfig::default());
-        assert!(!has_own_text(&mut r, 0), "words only /ActualText names are no text of the page's own");
+        assert!(!has_own_text(&mut r, 0, [300.0; 2]), "words only /ActualText names are no text of the page's own");
         // They still count as on the page, so reading the scan doesn't add them twice.
         let text = r.render(RenderRequest { page: 0, kind: RequestKind::Text, scale: 1.0, ..Default::default() }).text.unwrap();
         assert_eq!(text.plain_text(), "APPROVED");
@@ -1336,8 +1468,57 @@ mod tests {
 
     #[test]
     fn printed_glyphs_count_as_own_text() {
-        let mut r = PageRenderer::new(page("BT /F1 12 Tf 20 150 Td (Total) Tj ET"), RenderConfig::default());
-        assert!(has_own_text(&mut r, 0));
+        let mut r = PageRenderer::new(page_with_size(BODY_TEXT, [612, 792]), RenderConfig::default());
+        assert!(has_own_text(&mut r, 0, [612.0, 792.0]));
+    }
+
+    #[test]
+    fn stamp_only_page_is_prepared_for_recognition() {
+        let text = prepare_page(BODY_TEXT, [612, 792]);
+        assert!(text.is_err(), "a substantial text layer still skips recognition");
+        let shot = prepare_page("BT /F1 8 Tf 250 20 Td (OK) Tj ET", [300; 2]).unwrap();
+        assert!(shot.image().is_some());
+    }
+
+    #[test]
+    fn approved_stamp_on_letter_is_prepared_for_recognition() {
+        let content = "BT /F1 12 Tf 40 700 Td (APPROVED) Tj ET";
+        let (glyph_count, summed) = summed_own_text_coverage(content, [612, 792]);
+        assert!(glyph_count < MIN_SUBSTANTIAL_TEXT_GLYPHS, "the fixture must catch an area-only rule");
+        assert!(summed > SUBSTANTIAL_TEXT_COVERAGE, "the fixture must catch an area-only rule: {summed}");
+        let shot = prepare_page(content, [612, 792]).unwrap();
+        assert!(shot.image().is_some());
+    }
+
+    #[test]
+    fn not_approved_stamp_on_letter_is_prepared_for_recognition() {
+        let content = "BT /F1 12 Tf 40 700 Td (NOT APPROVED) Tj ET";
+        let (glyph_count, summed) = summed_own_text_coverage(content, [612, 792]);
+        assert!(glyph_count < 13, "the stamp must stay below the established text-page boundary");
+        assert!(summed > SUBSTANTIAL_TEXT_COVERAGE, "the fixture must catch an area-only rule: {summed}");
+        let shot = prepare_page(content, [612, 792]).unwrap();
+        assert!(shot.image().is_some());
+    }
+
+    #[test]
+    fn confidential_stamp_on_letter_is_prepared_for_recognition() {
+        let content = "BT /F1 12 Tf 40 700 Td (CONFIDENTIAL) Tj ET";
+        let (glyph_count, summed) = summed_own_text_coverage(content, [612, 792]);
+        assert!(glyph_count < 13, "the stamp must stay below the established text-page boundary");
+        assert!(summed > SUBSTANTIAL_TEXT_COVERAGE, "the fixture must catch an area-only rule: {summed}");
+        let shot = prepare_page(content, [612, 792]).unwrap();
+        assert!(shot.image().is_some());
+    }
+
+    #[test]
+    fn overlapping_stamp_boxes_do_not_trigger_text_page_skip() {
+        let content = "BT /F1 12 Tf 40 700 Td (STAMP) Tj ET BT /F1 12 Tf 41 700 Td (STAMP) Tj ET BT /F1 12 Tf 42 700 Td (STAMP) Tj ET BT /F1 12 Tf 43 700 Td (STAMP) Tj ET BT /F1 12 Tf 44 700 Td (STAMP) Tj ET BT /F1 12 Tf 45 700 Td (STAMP) Tj ET BT /F1 12 Tf 46 700 Td (STAMP) Tj ET BT /F1 12 Tf 47 700 Td (STAMP) Tj ET";
+        let (glyph_count, summed) = summed_own_text_coverage(content, [612, 792]);
+        assert!(glyph_count >= MIN_SUBSTANTIAL_TEXT_GLYPHS, "the count gate must not rescue this fixture");
+        assert!(summed > SUBSTANTIAL_TEXT_COVERAGE, "the fixture must catch double-counted boxes: {summed}");
+        // Only their union keeps these overlapping glyph boxes below the coverage threshold.
+        let shot = prepare_page(content, [612, 792]).unwrap();
+        assert!(shot.image().is_some());
     }
 
     /// #1028: a recognised word over the page's own text is that text again; one in an empty
@@ -1369,6 +1550,29 @@ mod tests {
         let broken = [[f32::NAN; 4], [f32::NEG_INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::INFINITY]];
         let c = covered([0.0, 0.0, 10.0, 10.0], &broken);
         assert!((0.0..=1.0).contains(&c), "{c}");
+    }
+
+    #[test]
+    fn union_coverage_clips_and_counts_each_region_once() {
+        let boxes = [
+            [-10.0, -10.0, 50.0, 50.0],
+            [25.0, 25.0, 75.0, 75.0],
+            [50.0, 0.0, 60.0, 10.0],
+            [80.0, 80.0, 90.0, 90.0],
+            [150.0, 150.0, 200.0, 200.0],
+            [40.0, 40.0, 40.0, 90.0],
+        ];
+        // 2,500 + 2,500 - 625 overlap + 100 disjoint + 100 separate = 4,575 / 10,000.
+        let coverage = union_coverage(&boxes, [100.0; 2]);
+        assert!((coverage - 0.4575).abs() < 1e-6, "{coverage}");
+    }
+
+    #[test]
+    fn union_coverage_handles_extreme_and_degenerate_boxes() {
+        assert_eq!(union_coverage(&[[f32::MIN, f32::MIN, f32::MAX, f32::MAX]], [100.0; 2]), 1.0);
+        let empty = [[0.0, 0.0, 0.0, 10.0], [10.0, 0.0, 0.0, 10.0], [f32::NAN, 0.0, 10.0, 10.0], [0.0, 0.0, f32::INFINITY, 10.0]];
+        assert_eq!(union_coverage(&empty, [100.0; 2]), 0.0);
+        assert_eq!(union_coverage(&[], [100.0; 2]), 0.0);
     }
     use crate::tests::fixture;
     use pdfcraft_render::TextGlyph;
