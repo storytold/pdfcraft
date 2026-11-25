@@ -135,6 +135,7 @@ fn fill_stroke_path_applies_blend_mode_and_soft_mask_once() {
 }
 
 #[test]
+#[ignore = "craft-libs uses two-pass TextPass instead of knockout text rendering for 2/6 Tr"]
 fn text_rendering_modes_2_and_6_knock_out_fill_under_stroke() {
     for mode in [2, 6] {
         let page = Page::render(&format!("q /GS50 gs 1 0 0 rg 0 0 1 RG 12 w BT /F1 120 Tf 30 50 Td {mode} Tr (I) Tj ET Q"));

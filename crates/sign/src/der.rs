@@ -8,7 +8,7 @@ use craft_pkcs7::der as shared;
 pub use shared::{Form, Time, algorithm, bit_string, boolean, explicit, ia5, int, null, octets, oid, printable, seq, set_of, tag, tlv, uint, utf8};
 use std::borrow::Cow;
 
-fn app_error(error: craft_pkcs7::Error) -> SignError {
+pub(crate) fn app_error(error: craft_pkcs7::Error) -> SignError {
     match error {
         craft_pkcs7::Error::Malformed(message) => SignError::Malformed(message),
         craft_pkcs7::Error::Unsupported(message) => SignError::Unsupported(message),

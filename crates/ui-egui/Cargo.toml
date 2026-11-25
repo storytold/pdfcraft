@@ -10,6 +10,8 @@ rust-version = "1.95"
 workspace = true
 
 [dependencies]
+# The framework facade with the crates the UI uses (owed by pdf-hub-w1, which owns this manifest).
+craft = { workspace = true, features = ["ui", "ui-app","draw", "pages", "print", "review", "docpath", "font-catalog", "text", "text-font-picker", "text-find", "font-manager", "theme-store", "imaging", "window", "settings", "platform", "platform-clipboard", "atomic", "automation", "keymap", "menu", "quit", "web-host"] }
 edit-session = { workspace = true }
 craft-ui = { workspace = true }
 # The menus: native on macOS, an egui bar elsewhere, from one definition (menus.rs).
@@ -19,7 +21,7 @@ craft-keymap = { workspace = true }
 craft-i18n = { workspace = true }
 # Quit from the menus asks the window to close, so the unsaved-changes check runs; on macOS a window
 # close also quits through `terminate:` (the Touch Bar crash, #1136).
-craft-quit = { workspace = true, features = ["egui"] }
+craft-quit = { workspace = true, features = ["ui"] }
 pdfcraft-fonts = { workspace = true }
 pdfcraft-engine = { workspace = true }
 pdfcraft-cos = { workspace = true }
@@ -55,17 +57,14 @@ unicode-bidi = "0.3"
 skrifa = "0.44"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-craft-update = { workspace = true }
+# Help ▸ Check for updates: the facade's update crate builds only natively. The file service and the save flow
+# (`dialogs`) sit on rfd's blocking panels and threads, so they are native too; the web saves through the
+# platform's BrowserFiles (`editing/save.rs`).
+craft = { workspace = true, features = ["update", "platform-clipboard-system", "dialogs"] }
 # Control-channel tokens.
 getrandom = "0.4"
 # Create ▸ Clipboard (images; already in the tree through egui-winit).
 arboard = { version = "3.6", default-features = false, features = ["image-data"] }
-# Waits for native file pickers off the UI thread (already in the tree through wgpu).
-pollster = "1.0"
-
-[target.'cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
-# Discover configured font directories without linking libfontconfig or running a subprocess.
-fontconfig-parser = "0.5.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Safe AppKit calls for drag coordinates and repairing an existing per-file PDFCraft binding.
@@ -93,7 +92,8 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "HtmlIFrameElement", "HtmlImageElement", "HtmlCollection", "Node", "EventTarget", "Navigator", "RequestCache", "RequestInit", "Response", "Worker", "WorkerOptions", "WorkerType", "MessageEvent"] }
 
 [dev-dependencies]
-craft-update = { workspace = true }
+# The fixture and suite runner the component trials drive the app's components with.
+craft = { workspace = true, features = ["ui-testing", "zip"] }
 pdfcraft-xfa = { workspace = true }
 # A content stream that inflates past the renderer's limits, for the cut-content notice test.
 flate2 = { workspace = true }
@@ -113,6 +113,11 @@ toml = "1"
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 # Only synthetic attribute fixtures use xattr; product reads/writes use rustix.
 xattr = "1.6"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# `Updater::ready_for_tests` (through the facade): an updater whose update has installed, for the
+# Restart to Update screen tests.
+craft-update = { workspace = true, features = ["screen-testing"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 tempfile = "3.27"
