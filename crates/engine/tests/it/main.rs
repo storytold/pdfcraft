@@ -13,4 +13,5 @@ mod office_export_images;
 mod page_templates;
 mod private_image_resize;
 mod private_text_glyphs;
+mod rename_name_length;
 mod xfa_repeat;
