@@ -67,7 +67,8 @@ struct Found {
 /// The inks named anywhere in `doc`, and the pages of `pages` (as [`pdfcraft_model::pages`] lists
 /// them) whose resources name each. `All` and `None` are not inks.
 pub fn inks(doc: &Document, pages: &[pdfcraft_model::Page]) -> InkList {
-    let mut scan = Scan { doc, found: BTreeMap::new(), dropped: BTreeSet::new(), dropped_more: 0, page: None, capped: false };
+    let page_refs = pages.iter().map(|p| p.obj).collect();
+    let mut scan = Scan { doc, found: BTreeMap::new(), dropped: BTreeSet::new(), dropped_more: 0, page: None, page_refs, capped: false };
     for n in doc.object_numbers() {
         let o = doc.get(ObjRef::new(n, doc.generation(n)));
         scan.walk(&o, 0);
@@ -103,6 +104,8 @@ struct Scan<'a> {
     dropped_more: usize,
     /// The page being walked, when the walk is a page's.
     page: Option<usize>,
+    /// The page objects, so a walk stops at one even when it has no `/Type`.
+    page_refs: HashSet<ObjRef>,
     /// An ink had more alternates than [`MAX_ALTERNATES`].
     capped: bool,
 }
@@ -131,6 +134,8 @@ impl Scan<'_> {
         let mut complete = page.get(b"Resources").is_none_or(|r| self.follow(r, 0, seen, visits));
         let annots = page.get(b"Annots").map(|a| self.doc.resolve(a));
         for annot in annots.as_deref().and_then(Object::as_array).into_iter().flatten() {
+            let Some(left) = visits.checked_sub(1) else { return false };
+            *visits = left;
             let annot = self.doc.resolve(annot);
             if let Some(ap) = annot.as_dict().and_then(|d| d.get(b"AP")) {
                 complete &= self.follow(ap, 0, seen, visits);
@@ -139,8 +144,8 @@ impl Scan<'_> {
         complete
     }
 
-    /// Look at `o` and everything it refers to, except page objects (a link or an annotation's
-    /// `/P` leads to another page's resources), within `visits`. False when `visits` ran out or
+    /// Look at `o` and everything it refers to, except page objects and page-tree nodes (a link
+    /// or an annotation's `/P` leads to another page's resources), within `visits`. False when `visits` ran out or
     /// the nesting passed [`MAX_DEPTH`] somewhere; the rest is still looked at.
     fn follow(&mut self, o: &Object, depth: u8, seen: &mut HashSet<ObjRef>, visits: &mut usize) -> bool {
         if depth > MAX_DEPTH {
@@ -152,6 +157,9 @@ impl Scan<'_> {
         match o {
             Object::Ref(r) => {
                 if !seen.insert(*r) {
+                    return true;
+                }
+                if self.page_refs.contains(r) {
                     return true;
                 }
                 let o = self.doc.get(*r);
@@ -344,6 +352,26 @@ mod tests {
         ]);
         assert!(found.inks.iter().any(|i| i.name == "Black" && i.process), "a process ink met after the cap is kept");
         assert!(!found.complete, "an ink's alternates were cut off");
+    }
+
+    #[test]
+    fn a_page_with_no_type_is_still_a_page_the_walk_stops_at() {
+        let found = list(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>",
+            // Page 1, with no /Type, names Silver.
+            "<< /Parent 2 0 R /Resources << /ColorSpace << /S [/Separation /Silver /DeviceGray 7 0 R] >> >> >>",
+            // Page 2's annotation appearance points back at page 1.
+            "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>",
+            "<< /Type /Annot /Subtype /Square /Rect [0 0 1 1] /AP << /N 6 0 R >> >>",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Page 3 0 R /Length 0 >>
+stream
+
+endstream",
+            "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>",
+        ]);
+        let silver = found.inks.iter().find(|i| i.name == "Silver").map(|i| i.pages.clone());
+        assert_eq!(silver, Some(vec![0]), "page 1's ink isn't page 2's");
     }
 
     #[test]
