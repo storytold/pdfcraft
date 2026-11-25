@@ -17,6 +17,19 @@ use crate::{DocId, Edit, EditError, Markup, NewAnnotation, NoteIcon, Session, Sh
 /// (the Word and PowerPoint writers keep at most 512 MiB of them as well).
 pub const MAX_EXPORT_IMAGE_BYTES: usize = 512 << 20;
 
+/// One page of a visual compare ([`Session::compare_visual_pages`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct VisualPage {
+    /// 0-based page.
+    pub page: usize,
+    /// Where the newer page looks different, as user-space boxes in the newer document.
+    pub regions: Vec<[f64; 4]>,
+    /// How alike the two renderings look ([`pdfcraft_compare::structural_similarity`]): 1 for
+    /// the same picture, lower the more they differ. `None` when the page was not compared: a
+    /// render failed or the two pages render at different sizes.
+    pub similarity: Option<f64>,
+}
+
 /// Acrobat's compare colours: replaced blue, inserted green, deleted red.
 pub fn colour(kind: Kind) -> crate::Rgb {
     match kind {
@@ -75,6 +88,18 @@ impl Session {
     /// Visual compare: regions where page n of `new` looks different from page n of `old`
     /// (rendered at `dpi`), as (page, user-space box in `new`).
     pub fn compare_visual(&self, old: DocId, new: DocId, dpi: f32) -> Result<Vec<(usize, [f64; 4])>, EditError> {
+        let pages = self.visual_pages(old, new, dpi, false)?;
+        Ok(pages.into_iter().flat_map(|p| p.regions.into_iter().map(move |r| (p.page, r))).collect())
+    }
+
+    /// [`Session::compare_visual`] page by page, with each page's structural similarity: one
+    /// entry for every page both documents have, in order.
+    pub fn compare_visual_pages(&self, old: DocId, new: DocId, dpi: f32) -> Result<Vec<VisualPage>, EditError> {
+        self.visual_pages(old, new, dpi, true)
+    }
+
+    /// The visual compare, scoring each page's similarity only when `score` is set.
+    fn visual_pages(&self, old: DocId, new: DocId, dpi: f32, score: bool) -> Result<Vec<VisualPage>, EditError> {
         let a = self.get(old).ok_or(EditError::NoDocument)?;
         let b = self.get(new).ok_or(EditError::NoDocument)?;
         let renderer = |d: &crate::Document| {
@@ -89,15 +114,18 @@ impl Session {
         for (page, info) in b.info.pages.iter().enumerate().take(a.info.pages.len()) {
             let req = pdfcraft_render::RenderRequest { page, scale, ..Default::default() };
             let (x, y) = (ra.render(req), rb.render(req));
-            if x.error.is_some() || y.error.is_some() {
-                continue;
+            let mut entry = VisualPage { page, regions: Vec::new(), similarity: None };
+            if x.error.is_none() && y.error.is_none() {
+                let (x, y) = ((&x.rgba[..], x.width, x.height), (&y.rgba[..], y.width, y.height));
+                entry.similarity = if score { pdfcraft_compare::structural_similarity(x, y) } else { None };
+                let s = y.1 as f32 / info.width.max(1e-3);
+                for r in pdfcraft_compare::visual_regions(y, x, 24) {
+                    let p = info.view_to_user(r[0] as f32 / s, r[1] as f32 / s);
+                    let q = info.view_to_user(r[2] as f32 / s, r[3] as f32 / s);
+                    entry.regions.push([p[0].min(q[0]) as f64, p[1].min(q[1]) as f64, p[0].max(q[0]) as f64, p[1].max(q[1]) as f64]);
+                }
             }
-            let s = y.width as f32 / info.width.max(1e-3);
-            for r in pdfcraft_compare::visual_regions((&y.rgba, y.width, y.height), (&x.rgba, x.width, x.height), 24) {
-                let p = info.view_to_user(r[0] as f32 / s, r[1] as f32 / s);
-                let q = info.view_to_user(r[2] as f32 / s, r[3] as f32 / s);
-                out.push((page, [p[0].min(q[0]) as f64, p[1].min(q[1]) as f64, p[0].max(q[0]) as f64, p[1].max(q[1]) as f64]));
-            }
+            out.push(entry);
         }
         Ok(out)
     }

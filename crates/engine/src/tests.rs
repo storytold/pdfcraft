@@ -7941,6 +7941,9 @@ fn comparing_two_versions_of_a_document() {
     let vis = s.compare_visual(old, new, 72.0).unwrap();
     assert!(!vis.is_empty() && vis.iter().all(|(p, r)| *p == 0 && r[3] > 600.0), "{vis:?}");
     assert!(s.compare_visual(old, old, 72.0).unwrap().is_empty());
+    // The changed page looks less alike than a page compared with itself.
+    let score = |a, b| s.compare_visual_pages(a, b, 72.0).unwrap()[0].similarity.unwrap();
+    assert!(score(old, new) < score(old, old), "{} {}", score(old, new), score(old, old));
 
     assert_eq!(s.mark_differences(old, new).unwrap(), 2);
     let d = s.get(new).unwrap();

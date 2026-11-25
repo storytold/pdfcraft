@@ -187,13 +187,14 @@ impl Automation {
             .take(limit)
             .map(|ch| json!({ "kind": ch.kind.label().to_lowercase(), "old": side(&ch.old), "new": side(&ch.new) }))
             .collect();
-        let visual: Vec<Value> = if a.opt_bool("visual")?.unwrap_or(false) {
-            self.session.compare_visual(old, new, 72.0).map_err(failed)?.iter().map(|(p, r)| json!({ "page": p + 1, "rect": r2(r) })).collect()
-        } else {
-            Vec::new()
-        };
+        let pages =
+            if a.opt_bool("visual")?.unwrap_or(false) { self.session.compare_visual_pages(old, new, 72.0).map_err(failed)? } else { Vec::new() };
+        let visual: Vec<Value> = pages.iter().flat_map(|p| p.regions.iter().map(|r| json!({ "page": p.page + 1, "rect": r2(r) }))).collect();
+        let similarity: Vec<Value> =
+            pages.iter().map(|p| json!({ "page": p.page + 1, "ssim": p.similarity.map(|v| (v * 10_000.0).round() / 10_000.0) })).collect();
         Ok(json!({
             "visual": visual,
+            "similarity": similarity,
             "identical": c.identical(),
             "replaced": c.count(Kind::Replaced),
             "inserted": c.count(Kind::Inserted),
