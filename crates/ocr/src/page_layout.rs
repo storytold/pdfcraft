@@ -266,7 +266,7 @@ fn running_text(lines: &[Line]) -> String {
 
 /// Whether the line is an exhibit label — `Exhibit A`, `EXHIBIT 12` — and not a sentence that
 /// happens to start with the word.
-fn is_exhibit_label(text: &str) -> bool {
+pub(crate) fn is_exhibit_label(text: &str) -> bool {
     let Some(head) = text.get(..7) else { return false };
     if !head.eq_ignore_ascii_case("exhibit") {
         return false;
@@ -282,13 +282,13 @@ fn is_exhibit_label(text: &str) -> bool {
 
 /// Whether the line holds a signature marker: what a signature block, an affidavit or a
 /// verification opens or closes with.
-fn is_signature_line(text: &str) -> bool {
+pub(crate) fn is_signature_line(text: &str) -> bool {
     text.contains("Dated:") || text.contains("Sworn to") || text.contains("By:")
 }
 
 /// Whether the line starts with a numbering marker — `1.`, `12)`, `(a)`, `A.` — and so opens a
 /// list item.
-fn is_list_item(text: &str) -> bool {
+pub(crate) fn is_list_item(text: &str) -> bool {
     let rest = text.strip_prefix('(').unwrap_or(text);
     let mut chars = rest.chars();
     let marker = match chars.next() {
