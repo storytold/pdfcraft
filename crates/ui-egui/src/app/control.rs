@@ -395,6 +395,14 @@ impl PdfCraftApp {
                     _ => return Err("secured-notice must be true or false".into()),
                 };
             }
+            // `--page-indicator true` / `--page_indicator true`: show a persistent `1 / N` indicator pill over the document.
+            ("page_indicator" | "page-indicator" | "show_page_indicator", _) => {
+                self.show_page_indicator = match value {
+                    "true" | "on" => true,
+                    "false" | "off" => false,
+                    _ => return Err(format!("{key} must be true or false")),
+                };
+            }
             ("system-title-bar", _) => {
                 self.title_bar_choice = match value {
                     "true" => craft::window::policy::TitleBarPref::System,
@@ -458,6 +466,14 @@ impl PdfCraftApp {
             (other, _) => return Err(format!("unknown option {other}")),
         }
         Ok(())
+    }
+
+    /// The current value of an option [`Self::set_option`] sets, as text: only the page indicator so far.
+    pub fn get_option(&self, key: &str) -> Option<String> {
+        match key {
+            "page_indicator" | "page-indicator" | "show_page_indicator" => Some(self.show_page_indicator.to_string()),
+            _ => None,
+        }
     }
 
     /// `ui.set dialog <name>`: opens the dialog through the same opener its command uses. `none`

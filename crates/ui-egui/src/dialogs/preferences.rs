@@ -72,6 +72,7 @@ struct PrefsDraft {
     recent_limit: usize,
     system_title_bar: bool,
     show_page_edge_shadows: bool,
+    show_page_indicator: bool,
     reading_colors: pdfcraft_render::ReadingColors,
     default_mode: Mode,
     view_defaults: ViewDefaults,
@@ -108,6 +109,7 @@ impl PrefsDraft {
             recent_limit: app.recent_limit,
             system_title_bar: app.title_bar_choice == TitleBarPref::System,
             show_page_edge_shadows: app.show_page_edge_shadows,
+            show_page_indicator: app.show_page_indicator,
             reading_colors: app.reading_colors,
             default_mode: app.default_mode,
             view_defaults: app.view_defaults,
@@ -149,6 +151,7 @@ impl PrefsDraft {
             recent_limit: crate::RECENT_FILES_DEFAULT,
             system_title_bar: false,
             show_page_edge_shadows: true,
+            show_page_indicator: false,
             reading_colors: Default::default(),
             default_mode: Mode::AllTools,
             view_defaults: ViewDefaults::default(),
@@ -419,6 +422,7 @@ impl PreferencesModel for Prefs<'_> {
             ("general.recent", PrefValue::Int(v)) => d.recent_limit = usize::try_from(v).unwrap_or(0).min(crate::RECENT_FILES_MAX),
             ("general.title_bar", PrefValue::Bool(v)) => d.system_title_bar = v,
             ("appearance.edge_shadows", PrefValue::Bool(v)) => d.show_page_edge_shadows = v,
+            ("appearance.page_indicator", PrefValue::Bool(v)) => d.show_page_indicator = v,
             ("appearance.highlight_fields", PrefValue::Bool(v)) => d.highlight_fields = v,
             ("appearance.reading.mode", PrefValue::Choice(id)) => {
                 if id == "custom" {
@@ -543,6 +547,7 @@ impl PreferencesModel for Prefs<'_> {
             "appearance" => {
                 *self.selection = SelectionChange::default();
                 d.show_page_edge_shadows = fresh.show_page_edge_shadows;
+                d.show_page_indicator = fresh.show_page_indicator;
                 d.reading_colors = fresh.reading_colors;
                 d.highlight_fields = fresh.highlight_fields;
             }
@@ -623,6 +628,7 @@ impl PreferencesDraft for Prefs<'_> {
             self.app.set_title_bar_choice(self.ctx, title_bar);
         }
         self.app.show_page_edge_shadows = d.show_page_edge_shadows;
+        self.app.show_page_indicator = d.show_page_indicator;
         self.app.set_reading_colors(d.reading_colors);
         self.app.default_mode = d.default_mode;
         self.app.view_defaults = d.view_defaults;
@@ -739,6 +745,7 @@ impl Prefs<'_> {
         ];
         let display = vec![
             RowSpec::new("appearance.edge_shadows", tl!("Show Page Edge Shadows"), RowKind::Bool(d.show_page_edge_shadows)),
+            RowSpec::new("appearance.page_indicator", tl!("Always show page number indicator"), RowKind::Bool(d.show_page_indicator)),
             RowSpec::new("appearance.highlight_fields", tl!("Highlight fields"), RowKind::Bool(d.highlight_fields)),
         ];
         PageSpec::custom("appearance", tl_ctx!("theme", "Appearance"))

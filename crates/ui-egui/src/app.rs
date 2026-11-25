@@ -367,6 +367,7 @@ impl PdfCraftApp {
             show_secured_notice: true,
             text_links: true,
             always_default_view: false,
+            show_page_indicator: false,
             #[cfg(not(target_arch = "wasm32"))]
             watch,
             #[cfg(not(target_arch = "wasm32"))]

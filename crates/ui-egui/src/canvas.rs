@@ -55,7 +55,7 @@ pub(super) mod zoom_snap;
 pub(crate) use area::signature_badges;
 pub(crate) use area::signature_states_changed;
 use area::{run_button, set_layers};
-use bars::{Notice, notices, page_size_hint};
+use bars::{Notice, notices, page_indicator, page_size_hint};
 pub(crate) use cache::{BASE_SIDE, TILE_THRESHOLD, texture_image};
 pub use craft::pages::{Fit, PageDisplay, PageSpacing, ViewDefaults, display_token, parse_display_token};
 pub use find::Find;
@@ -886,6 +886,7 @@ struct PageBodyCx<'a> {
     can_copy: bool,
     comments_hidden: bool,
     text_links: bool,
+    show_page_indicator: bool,
     /// No dialog, close prompt or palette over the pages.
     unobstructed: bool,
     /// Every page's size in view space, unturned by the view (`DocView::page_sizes`).
@@ -1587,6 +1588,9 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbac
     {
         page_size_hint(ui, body, page, cx.units);
     }
+    if cx.show_page_indicator {
+        page_indicator(ui, body, cx.current, cx.info.pages.len());
+    }
 }
 
 /// The text layers the pass asks for, as `(visible, rest)` for [`DocView::want_text`], which skips pages whose layer is
@@ -1812,6 +1816,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         can_copy: doc.allows_copying(),
         comments_hidden: doc.comments_hidden(),
         text_links: app.text_links,
+        show_page_indicator: app.show_page_indicator,
         unobstructed,
         prefs: &app.comment_prefs,
         redact_hover: (app.redact_prefs.hover_fill, app.redact_prefs.opacity),
