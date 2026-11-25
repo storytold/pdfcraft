@@ -547,10 +547,15 @@ fn selected_text_menu_opens_at_the_end_of_selected_text() {
     h.run_steps(3);
     let start_rect = h.state().views[0].glyph_screen_rect(0, 0).unwrap();
     let end_rect = h.state().views[0].glyph_screen_rect(0, 18).unwrap();
-    let id = egui::Id::unique(("text-selection-actions", h.state().views[0].view_key()));
-    let bar = h.ctx.memory(|m| m.area_rect(id)).expect("the selection bar is shown");
-    assert!(bar.left() > start_rect.left(), "bar should open towards the end of the text, not at the start");
-    assert!((bar.right() - end_rect.right()).abs() < 16.0, "bar right edge {} should be near end glyph right {}", bar.right(), end_rect.right());
+    let add_comment_btn = h.get_by_label("Add comment").rect();
+    let copy_btn = h.get_by_label("Copy").rect();
+    assert!(add_comment_btn.left() > start_rect.left(), "bar should open towards the end of the text, not at the start");
+    assert!(
+        (copy_btn.right() - end_rect.right()).abs() < 16.0,
+        "bar right edge {} should be near end glyph right {}",
+        copy_btn.right(),
+        end_rect.right()
+    );
 }
 
 /// A backward same-page multiline selection (anchor on a lower line, head on an upper line)
@@ -582,19 +587,18 @@ fn selected_text_menu_anchors_to_head_on_backward_same_page_multiline_selection(
     h.run_steps(3);
     let head_rect = h.state().views[0].glyph_screen_rect(0, head_glyph).unwrap();
     let anchor_rect = h.state().views[0].glyph_screen_rect(0, anchor_glyph).unwrap();
-    let id = egui::Id::unique(("text-selection-actions", h.state().views[0].view_key()));
-    let bar = h.ctx.memory(|m| m.area_rect(id)).expect("the selection bar is shown");
+    let bar_btn = h.get_by_label("Add comment").rect();
     // The bar must be near the head (first line), above the anchor (second line).
     assert!(
-        bar.top() < anchor_rect.top(),
+        bar_btn.top() < anchor_rect.top(),
         "bar top {} should be above the anchor line top {} (bar must follow the head, not anchor)",
-        bar.top(),
+        bar_btn.top(),
         anchor_rect.top()
     );
     assert!(
-        (bar.bottom() - head_rect.bottom()).abs() < 48.0,
+        (bar_btn.bottom() - head_rect.bottom()).abs() < 48.0,
         "bar bottom {} should be near the head line bottom {}",
-        bar.bottom(),
+        bar_btn.bottom(),
         head_rect.bottom()
     );
 }
@@ -609,7 +613,7 @@ fn selected_text_menu_does_not_spawn_when_using_comment_box() {
     // Click Add comment to open the comment composer
     h.get_by_label("Add comment").click();
     h.run_steps(3);
-    assert!(h.state().views[0].comments.composer.is_some(), "composer is open");
+    assert!(h.state().views[0].session.comments.composer.is_some(), "composer is open");
     assert!(h.query_by_label("Replace text").is_none(), "selection bar is hidden while composer is open");
 
     // Type text into the composer and select text inside it
@@ -639,10 +643,10 @@ fn focusing_selection_toolbar_button_does_not_hide_the_toolbar() {
 #[test]
 fn interacting_with_comment_box_does_not_select_page_text() {
     let mut h = harness(|_| {});
-    h.state_mut().set_option("quick", "note").unwrap();
+    h.set_option("quick", "note").unwrap();
     click_pt(&mut h, (250.0, 180.0));
     h.run_steps(3);
-    assert!(h.state().views[0].comments.composer.is_some());
+    assert!(h.state().views[0].session.comments.composer.is_some());
     assert!(h.state().views[0].selected_text().is_none());
 
     let composer_field = field(&h, "Add a comment");
