@@ -43,10 +43,11 @@ fn png() -> Vec<u8> {
 #[test]
 fn invert_colors_preference_round_trips() {
     use pdfcraft_render::InvertPalette;
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, pdf()).expect("opens");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf()).expect("opens");
         app
     });
     h.run_steps(4);
@@ -56,33 +57,33 @@ fn invert_colors_preference_round_trips() {
     assert_eq!(h.state().session.invert_colors(id), Some(false));
 
     // The command toggles it, and the document follows.
-    h.state_mut().execute("view.invert_colors");
+    h.state_mut().execute(&egui::Context::default(), "view.invert_colors");
     h.run_steps(1);
     assert!(h.state().invert_colors);
     assert_eq!(h.state().session.invert_colors(id), Some(true));
-    h.state_mut().execute("view.invert_colors");
+    h.state_mut().execute(&egui::Context::default(), "view.invert_colors");
     h.run_steps(1);
     assert!(!h.state().invert_colors);
     assert_eq!(h.state().session.invert_colors(id), Some(false));
 
     // The startup option, both spellings.
-    h.state_mut().set_option("invert-colors", "on").unwrap();
+    h.state_mut().set_option(&egui::Context::default(), "invert-colors", "on").unwrap();
     assert!(h.state().invert_colors);
-    h.state_mut().set_option("invert_colors", "off").unwrap();
+    h.state_mut().set_option(&egui::Context::default(), "invert_colors", "off").unwrap();
     assert!(!h.state().invert_colors);
-    assert!(h.state_mut().set_option("invert-colors", "maybe").is_err());
+    assert!(h.state_mut().set_option(&egui::Context::default(), "invert-colors", "maybe").is_err());
 
     // The choice, the mode and the palette survive a restart; a settings file without them keeps the defaults.
     h.state_mut().set_invert_palette(InvertPalette::SEPIA);
     h.state_mut().set_invert_keep_images(false);
     h.state_mut().set_invert_colors(true);
-    let json = h.state().persist();
-    let mut restored = PdfCraftApp::new();
-    restored.restore(&json);
+    let mut restored = crate::control::new_app();
+    restored.apply_settings(&h.state().settings_snapshot());
     assert!(restored.invert_colors && !restored.invert_keep_images);
     assert_eq!(restored.invert_palette, InvertPalette::SEPIA);
-    let mut fresh = PdfCraftApp::new();
-    fresh.restore(r#"{"theme": "dark", "invert_palette": [1, 2]}"#);
+    let restore = |app: &mut PdfCraftApp, json: &str| app.apply_settings(&pdfcraft_ui_egui::settings::import_json(json).0);
+    let mut fresh = crate::control::new_app();
+    restore(&mut fresh, r#"{"theme": "dark", "invert_palette": [1, 2]}"#);
     assert!(!fresh.invert_colors && fresh.invert_keep_images);
     assert_eq!(fresh.invert_palette, InvertPalette::default(), "an unreadable palette keeps the default");
 }
@@ -90,13 +91,14 @@ fn invert_colors_preference_round_trips() {
 #[test]
 fn invert_colors_seed_on_open() {
     use pdfcraft_render::InvertPalette;
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.invert_palette = InvertPalette::SOFT_DARK;
         app.invert_keep_images = false;
         app.invert_colors = true;
-        app.open_bytes("doc.pdf", None, pdf()).expect("opens");
+        app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf()).expect("opens");
         app
     });
     h.run_steps(4);
@@ -159,10 +161,11 @@ fn invert_colors_seed_on_open() {
 #[test]
 fn invert_mode_and_palette_reach_open_documents_and_leave_reading_colours_alone() {
     use pdfcraft_render::{InvertPalette, ReadingColors};
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, pdf()).expect("opens");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf()).expect("opens");
         app
     });
     h.run_steps(4);
