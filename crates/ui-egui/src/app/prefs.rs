@@ -191,6 +191,7 @@ impl PdfCraftApp {
             fill_text_size: Some(self.fill_text_size),
             fill_text_color: Some(self.fill_text_color),
             show_page_edge_shadows: Some(self.show_page_edge_shadows),
+            show_rulers: Some(self.show_rulers),
             fill_text_border: Some(self.fill_text_default.width),
             fill_text_border_shape: Some(self.fill_text_default.shape.name().to_string()),
             // Absent is "the text's colour": TOML has no null.
@@ -510,6 +511,9 @@ impl PdfCraftApp {
         }
         if let Some(show) = b.show_page_edge_shadows {
             self.show_page_edge_shadows = show;
+        }
+        if let Some(show) = b.show_rulers {
+            self.show_rulers = show;
         }
         if let Some(width) = b.fill_text_border.and_then(fill_sign::valid_text_border) {
             self.fill_text_default.width = width;

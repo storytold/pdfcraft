@@ -2874,3 +2874,52 @@ fn the_accessible_window_has_the_window_title_as_its_name() {
     assert_eq!(name(&h).as_deref(), Some("Quarterly report • — PdfCraft"));
     assert_eq!(name(&h), Some(h.state().window_title.clone()));
 }
+
+/// View ▸ Show/Hide ▸ Rulers (`view.rulers`, `Ctrl+R` / `⌘R`): toggles the top and left rulers,
+/// reports the state through the control channel, reserves `RULER_THICKNESS` so pages are not
+/// covered, and restores the full page area when turned off.
+#[test]
+fn rulers_toggle_reserves_space_and_reports_state() {
+    use pdfcraft_ui_egui::canvas::rulers::RULER_THICKNESS;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.attach_control(craft::automation::ControlChannel::new(rx), None);
+        app.open_bytes(&egui::Context::default(), "a.pdf", None, fixture(2)).unwrap();
+        app
+    });
+    h.run_steps(4);
+
+    let initial = crate::control::ok(&mut h, &tx, "ui.state", json!({}));
+    assert_eq!(initial["rulers"], false);
+    assert_eq!(initial["active"]["rulers"], false);
+    let before = h.state().views[0].viewport_rect();
+
+    // Toggle rulers on: state reports it and page viewport shrinks by RULER_THICKNESS on top and left.
+    assert!(h.execute("view.rulers"));
+    h.run_steps(3);
+    let shown = crate::control::ok(&mut h, &tx, "ui.state", json!({}));
+    assert_eq!(shown["rulers"], true);
+    assert_eq!(shown["active"]["rulers"], true);
+    let after = h.state().views[0].viewport_rect();
+    assert!((after.min.x - before.min.x - RULER_THICKNESS).abs() < 0.5, "left edge reserved: before={before:?} after={after:?}");
+    assert!((after.min.y - before.min.y - RULER_THICKNESS).abs() < 0.5, "top edge reserved: before={before:?} after={after:?}");
+    assert!((before.width() - after.width() - RULER_THICKNESS).abs() < 0.5, "width shrunk by ruler thickness");
+    assert!((before.height() - after.height() - RULER_THICKNESS).abs() < 0.5, "height shrunk by ruler thickness");
+
+    // Control option rejects invalid values with an error naming the allowed ones.
+    let err = h.set_option("rulers", "maybe").unwrap_err();
+    assert!(err.contains("on") && err.contains("off"), "unexpected error: {err}");
+
+    // Toggle rulers off: state reports false and viewport returns to its full area.
+    assert!(h.execute("view.rulers"));
+    h.run_steps(3);
+    let hidden = crate::control::ok(&mut h, &tx, "ui.state", json!({}));
+    assert_eq!(hidden["rulers"], false);
+    assert_eq!(hidden["active"]["rulers"], false);
+    let restored = h.state().views[0].viewport_rect();
+    assert!((restored.min.x - before.min.x).abs() < 0.5 && (restored.min.y - before.min.y).abs() < 0.5);
+    assert!((restored.width() - before.width()).abs() < 0.5 && (restored.height() - before.height()).abs() < 0.5);
+}

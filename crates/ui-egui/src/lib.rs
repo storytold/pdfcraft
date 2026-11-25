@@ -326,6 +326,8 @@ pub struct PdfCraftApp {
     pub reading_colors: pdfcraft_render::ReadingColors,
     /// App-wide page decoration only; never part of a PDF edit or render request.
     pub show_page_edge_shadows: bool,
+    /// View ▸ Show/Hide ▸ Rulers: horizontal and vertical rulers around the page area.
+    pub show_rulers: bool,
     /// How far a mouse-wheel notch scrolls.
     pub scroll_speed: scroll_speed::ScrollSpeed,
     /// Preferences ▸ Invert middle-button drag: the middle button's pan or auto-scroll moves the

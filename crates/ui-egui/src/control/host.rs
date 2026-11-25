@@ -83,6 +83,7 @@ impl crate::PdfCraftApp {
                 }),
                 "viewport": [v.viewport_rect().min.x, v.viewport_rect().min.y, v.viewport_rect().max.x, v.viewport_rect().max.y],
                 "find_open": v.find.is_some(),
+                "rulers": self.show_rulers,
                 "page_errors": v.page_errors().iter().map(|(p, e)| json!({ "page": p + 1, "error": e })).collect::<Vec<_>>(),
                 // Pages cut at the renderer's limits (#623), 1-based.
                 "cut_pages": v.cut_pages().iter().map(|p| p + 1).collect::<Vec<_>>(),
@@ -149,6 +150,7 @@ impl crate::PdfCraftApp {
             "theme": format!("{:?}", self.root_env(ctx).resolved(ctx).mode),
             "theme_preference": format!("{:?}", self.theme_preference),
             "show_page_edge_shadows": self.show_page_edge_shadows,
+            "rulers": self.show_rulers,
             "language": self.language,
             "notice": notice,
             "progress": progress,

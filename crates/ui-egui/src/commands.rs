@@ -568,6 +568,7 @@ impl PdfCraftApp {
                 self.set_full_screen(on);
             }
             "view.read_mode" => self.switch_mode(ctx, if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false),
+            "view.rulers" => self.show_rulers = !self.show_rulers,
             "view.split" => self.toggle_split(ctx),
             crate::viewer_prefs::TOGGLE => self.toggle_interface(),
             "view.previous_view" | "view.next_view" => {

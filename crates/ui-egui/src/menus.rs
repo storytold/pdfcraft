@@ -85,6 +85,7 @@ const TITLES: &[&str] = &[
     "Rotate view",
     "Page navigation",
     "Page display",
+    "Show/Hide",
     "Side panels",
     "Display theme",
     "Tools",
@@ -161,6 +162,7 @@ const DISPLAY: &[&str] = &[
     "view.fit_one_page",
 ];
 const THEMES: &[&str] = &["view.theme.system", "view.theme.light", "view.theme.dark"];
+const SHOW_HIDE: &[&str] = &["view.rulers"];
 const PANES: &[&str] = &["view.side_panel", "view.tools_pane", "view.split"];
 const PANE_COMMANDS: &[&str] = &["comment.list", "form.fields", "ui.dock.reset"];
 const MODES: &[&str] = &["view.full_screen", "view.read_mode", crate::viewer_prefs::TOGGLE];
@@ -348,6 +350,7 @@ impl PdfCraftApp {
             Node::submenu(tl!("Rotate view"), list(&[ROTATE_CW, ROTATE_CCW], &mut used)),
             Node::submenu(tl!("Page navigation"), list(NAVIGATION, &mut used)),
             Node::submenu(tl!("Page display"), list(DISPLAY, &mut used)),
+            Node::submenu(tl!("Show/Hide"), list(SHOW_HIDE, &mut used)),
             Node::Separator,
         ];
         view.extend(list(PANES, &mut used));

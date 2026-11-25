@@ -319,6 +319,7 @@ impl PdfCraftApp {
             suite: craft::theme_store::SuiteClient::memory(),
             reading_colors: Default::default(),
             show_page_edge_shadows: true,
+            show_rulers: false,
             scroll_speed: scroll_speed::ScrollSpeed::default(),
             invert_middle_drag: false,
             animation_effects: craft::theme::MotionChoice::System,

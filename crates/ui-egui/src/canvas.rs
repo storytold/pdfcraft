@@ -45,6 +45,7 @@ pub(crate) mod page_parts;
 pub(crate) mod page_tools;
 pub(crate) mod pictures;
 mod presenter;
+pub mod rulers;
 pub mod scroll_speed;
 mod selection;
 pub(super) mod signature_drag;
@@ -1674,6 +1675,8 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     }
     // The room under the notice bars, inside the rect the caller gave.
     let rect = rect.intersect(ui.available_rect_before_wrap());
+    let (ruler_outer, rect) =
+        if app.show_rulers && !app.views[index].presenting() && !app.full_screen() { rulers::reserve(rect) } else { (None, rect) };
 
     let preparing = app.is_preparing();
     // Prepare a form ▸ Calculation order: the order's steps and links on the page.
@@ -1902,6 +1905,22 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     view.viewport = rect;
     view.canvas = body_out.shown;
     view.middle_scrolling = out.canvas.auto_scrolling;
+    if let Some(outer) = ruler_outer {
+        let pointer =
+            if unobstructed && ui.rect_contains_pointer(rect) { ui.input(|i| i.pointer.hover_pos()).filter(|p| rect.contains(*p)) } else { None };
+        rulers::show(
+            ui,
+            outer,
+            rect,
+            &view.session.placed,
+            &view.page_sizes,
+            view.view.current,
+            view.view.rotation,
+            view.view.zoom,
+            app.units,
+            pointer,
+        );
+    }
     // Addresses written as plain text are found once per text layer that has arrived; the link parts read them.
     if app.text_links {
         for page in out.visible.clone() {
