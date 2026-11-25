@@ -67,3 +67,44 @@ fn test_barcode_overlay_exact_dimensions() {
     assert_eq!(min_y, 50, "barcode black pixels should start at y=50, found {min_y}");
     assert!(max_y == 149 || max_y == 150, "barcode black pixels should end at y=149/150, found {max_y}");
 }
+
+#[test]
+fn test_barcode_overlay_off_center_y_placement() {
+    let mut session = Session::new();
+    let blank = session.create_blank(300.0, 400.0, 1).expect("create blank page");
+    let id = session.open_new("barcode_offcenter_test.pdf", blank).expect("open new");
+
+    // Off-center user-space rectangle near the top of the page (y=[250, 350] on height=400).
+    // In rendered top-down pixels (height=400), black pixels must land in y=[50, 150], not [250, 350].
+    let rect = [20.0, 250.0, 140.0, 350.0];
+    let png_bytes = Document::generate_replacement_code(CodeKind::Code128, "ASYMMETRIC", 120, 100).expect("generate code");
+
+    session
+        .apply(id, Edit::AddImage { page: 0, rect: Some(rect), name: "OffCenter.png".into(), bytes: Arc::new(png_bytes) })
+        .expect("apply add image");
+
+    let doc = session.get(id).expect("get doc");
+    let mut renderer = PageRenderer::new(doc.display.clone(), Default::default());
+    let rendered = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(rendered.error.is_none(), "render failed: {:?}", rendered.error);
+
+    let mut min_x = usize::MAX;
+    let mut max_x = 0usize;
+    let mut min_y = usize::MAX;
+    let mut max_y = 0usize;
+    for y in 0..rendered.height as usize {
+        for x in 0..rendered.width as usize {
+            let idx = (y * rendered.width as usize + x) * 4;
+            if rendered.rgba[idx] < 50 && rendered.rgba[idx + 1] < 50 && rendered.rgba[idx + 2] < 50 {
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+                min_y = min_y.min(y);
+                max_y = max_y.max(y);
+            }
+        }
+    }
+    assert_eq!(min_x, 20, "x start mismatch: {min_x}");
+    assert!((139..=140).contains(&max_x), "x end mismatch: {max_x}");
+    assert_eq!(min_y, 50, "top-down y start mismatch (expected 50, got {min_y})");
+    assert!((149..=150).contains(&max_y), "top-down y end mismatch (expected 149..=150, got {max_y})");
+}

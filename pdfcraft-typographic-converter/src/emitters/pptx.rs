@@ -118,14 +118,30 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
       <a:folHlink><a:srgbClr val="800080"/></a:folHlink>
     </a:clrScheme>
     <a:fontScheme name="Office">
-      <a:majorFont><a:latin typeface="Calibri"/></a:majorFont>
-      <a:minorFont><a:latin typeface="Calibri"/></a:minorFont>
+      <a:majorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont>
+      <a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont>
     </a:fontScheme>
     <a:fmtScheme name="Office">
-      <a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst>
-      <a:lnStyleLst><a:ln w="9525"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln></a:lnStyleLst>
-      <a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst>
-      <a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst>
+      <a:fillStyleLst>
+        <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+        <a:solidFill><a:schemeClr val="phClr"><a:tint val="95000"/></a:schemeClr></a:solidFill>
+        <a:solidFill><a:schemeClr val="phClr"><a:shade val="95000"/></a:schemeClr></a:solidFill>
+      </a:fillStyleLst>
+      <a:lnStyleLst>
+        <a:ln w="9525"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln>
+        <a:ln w="19050"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln>
+        <a:ln w="38100"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln>
+      </a:lnStyleLst>
+      <a:effectStyleLst>
+        <a:effectStyle><a:effectLst/></a:effectStyle>
+        <a:effectStyle><a:effectLst/></a:effectStyle>
+        <a:effectStyle><a:effectLst/></a:effectStyle>
+      </a:effectStyleLst>
+      <a:bgFillStyleLst>
+        <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+        <a:solidFill><a:schemeClr val="phClr"><a:tint val="40000"/></a:schemeClr></a:solidFill>
+        <a:solidFill><a:schemeClr val="phClr"><a:shade val="40000"/></a:schemeClr></a:solidFill>
+      </a:bgFillStyleLst>
     </a:fmtScheme>
   </a:themeElements>
 </a:theme>"#;
@@ -429,4 +445,30 @@ pub fn export_pptx(doc: &DocumentLayout, output_path: &Path) -> Result<()> {
     zip.finish().with_context(|| format!("Failed to finalize PPTX zip archive at {}", output_path.display()))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout::DocumentLayout;
+    use std::io::Read;
+
+    #[test]
+    fn pptx_theme_includes_required_fonts_and_style_matrices() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-pptx-theme-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("out.pptx");
+        export_pptx(&DocumentLayout { pages: Vec::new() }, &out).unwrap();
+        let file = std::fs::File::open(&out).unwrap();
+        let mut zip = zip::ZipArchive::new(file).unwrap();
+        let mut theme = String::new();
+        zip.by_name("ppt/theme/theme1.xml").unwrap().read_to_string(&mut theme).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(theme.contains(r#"<a:majorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont>"#));
+        assert!(theme.contains(r#"<a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont>"#));
+        assert_eq!(theme.matches("<a:effectStyle>").count(), 3);
+        assert_eq!(theme.matches("<a:ln w=").count(), 3);
+        assert!(theme.matches("<a:solidFill>").count() >= 9);
+    }
 }

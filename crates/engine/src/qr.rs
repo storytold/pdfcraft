@@ -12,6 +12,8 @@ use thiserror::Error;
 pub enum QrError {
     #[error("the text can't be encoded as a QR code: {0}")]
     Encoding(String),
+    #[error("QR image dimensions exceed maximum allowed pixel budget")]
+    DimensionsTooLarge,
     #[error("failed to encode PNG: {0}")]
     PngEncoding(String),
 }
@@ -49,12 +51,18 @@ impl QrMatrix {
 
     /// Render QR matrix to PNG image bytes.
     pub fn to_png_bytes(&self, module_px: u32, border_modules: u32) -> Result<Vec<u8>, QrError> {
+        const MAX_QR_PIXELS: usize = 16_000_000;
         let module_px = module_px.max(1);
         let border_modules = border_modules.max(1);
-        let total_modules = (self.size as u32).saturating_add(border_modules.saturating_mul(2));
-        let img_side = total_modules.saturating_mul(module_px);
+        let size_u32 = u32::try_from(self.size).map_err(|_| QrError::DimensionsTooLarge)?;
+        let border_twice = border_modules.checked_mul(2).ok_or(QrError::DimensionsTooLarge)?;
+        let total_modules = size_u32.checked_add(border_twice).ok_or(QrError::DimensionsTooLarge)?;
+        let img_side = total_modules.checked_mul(module_px).ok_or(QrError::DimensionsTooLarge)?;
+        let side_usize = usize::try_from(img_side).map_err(|_| QrError::DimensionsTooLarge)?;
+        let pixels = side_usize.checked_mul(side_usize).filter(|&p| p <= MAX_QR_PIXELS).ok_or(QrError::DimensionsTooLarge)?;
+        let byte_len = pixels.checked_mul(4).ok_or(QrError::DimensionsTooLarge)?;
 
-        let mut rgba = vec![255u8; (img_side as usize).saturating_mul(img_side as usize).saturating_mul(4)];
+        let mut rgba = vec![255u8; byte_len];
 
         for r in 0..self.size {
             for c in 0..self.size {

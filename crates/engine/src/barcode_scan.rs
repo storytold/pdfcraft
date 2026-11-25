@@ -346,79 +346,17 @@ fn try_decode_code128(runs: &[(bool, usize)], start_run_idx: usize) -> Option<(S
     let mut symbols = vec![start_code];
 
     while current_idx < runs.len() {
-        // Check for 7-element Stop pattern
+        // Check for 7-element Stop pattern, only committing if symbols + checksum validate;
+        // a tentative stop match whose checksum/payload fails must still try decoding as a data symbol.
         if current_idx + 7 <= runs.len() {
             let mut stop_runs = Vec::with_capacity(7);
             for i in 0..7 {
                 stop_runs.push(runs.get(current_idx + i)?.1);
             }
-            if is_code128_stop(&stop_runs) {
-                // Verified Stop pattern found
-                let stop_end_idx = current_idx + 7;
-                if symbols.len() < 2 {
-                    return None;
-                }
-                let checksum = symbols.pop()?;
-                let mut calc_sum = start_code;
-                for (weight, &sym) in symbols.iter().skip(1).enumerate() {
-                    calc_sum = calc_sum.saturating_add((weight + 1).saturating_mul(sym));
-                }
-                let expected = calc_sum % 103;
-                if expected != checksum {
-                    return None;
-                }
-
-                // Decode symbols to ASCII string based on start code mode
-                let mut text = String::new();
-                let mut mode = start_code;
-                for &sym in symbols.iter().skip(1) {
-                    match mode {
-                        105 => {
-                            // Code C: numeric pairs 00-99
-                            if sym <= 99 {
-                                text.push_str(&format!("{:02}", sym));
-                            } else if sym == 100 {
-                                mode = 104; // Switch to B
-                            } else if sym == 101 {
-                                mode = 103; // Switch to A
-                            } else {
-                                return None;
-                            }
-                        }
-                        104 => {
-                            // Code B: ASCII 32..127
-                            if sym <= 95 {
-                                text.push((sym as u8).saturating_add(32) as char);
-                            } else if sym == 99 {
-                                mode = 105; // Switch to C
-                            } else if sym == 100 || sym == 101 {
-                                mode = 103; // Switch to A
-                            } else {
-                                return None;
-                            }
-                        }
-                        103 => {
-                            // Code A: ASCII 0..95
-                            if sym <= 63 {
-                                text.push((sym as u8).saturating_add(32) as char);
-                            } else if sym <= 95 {
-                                text.push((sym as u8).saturating_sub(64) as char);
-                            } else if sym == 99 {
-                                mode = 105; // Switch to C
-                            } else if sym == 100 || sym == 101 {
-                                mode = 104; // Switch to B
-                            } else {
-                                return None;
-                            }
-                        }
-                        _ => return None,
-                    }
-                }
-
-                if !text.is_empty() {
-                    return Some((text, start_run_idx, stop_end_idx));
-                }
-                return None;
+            if is_code128_stop(&stop_runs)
+                && let Some(text) = try_finalize_code128_stop(start_code, &symbols)
+            {
+                return Some((text, start_run_idx, current_idx + 7));
             }
         }
 
@@ -436,6 +374,68 @@ fn try_decode_code128(runs: &[(bool, usize)], start_run_idx: usize) -> Option<(S
     }
 
     None
+}
+
+fn try_finalize_code128_stop(start_code: usize, symbols: &[usize]) -> Option<String> {
+    if symbols.len() < 2 {
+        return None;
+    }
+    let (&checksum, data_symbols) = symbols.split_last()?;
+    let mut calc_sum = start_code;
+    for (weight, &sym) in data_symbols.iter().skip(1).enumerate() {
+        calc_sum = calc_sum.saturating_add((weight + 1).saturating_mul(sym));
+    }
+    if calc_sum % 103 != checksum {
+        return None;
+    }
+
+    let mut text = String::new();
+    let mut mode = start_code;
+    for &sym in data_symbols.iter().skip(1) {
+        match mode {
+            105 => {
+                // Code C: numeric pairs 00-99
+                if sym <= 99 {
+                    text.push_str(&format!("{:02}", sym));
+                } else if sym == 100 {
+                    mode = 104; // Switch to B
+                } else if sym == 101 {
+                    mode = 103; // Switch to A
+                } else {
+                    return None;
+                }
+            }
+            104 => {
+                // Code B: ASCII 32..127
+                if sym <= 95 {
+                    text.push((sym as u8).saturating_add(32) as char);
+                } else if sym == 99 {
+                    mode = 105; // Switch to C
+                } else if sym == 100 || sym == 101 {
+                    mode = 103; // Switch to A
+                } else {
+                    return None;
+                }
+            }
+            103 => {
+                // Code A: ASCII 0..95
+                if sym <= 63 {
+                    text.push((sym as u8).saturating_add(32) as char);
+                } else if sym <= 95 {
+                    text.push((sym as u8).saturating_sub(64) as char);
+                } else if sym == 99 {
+                    mode = 105; // Switch to C
+                } else if sym == 100 || sym == 101 {
+                    mode = 104; // Switch to B
+                } else {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+
+    (!text.is_empty()).then_some(text)
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -715,6 +715,10 @@ pub fn scan_rgba_buffer(width: usize, height: usize, rgba: &[u8], page: usize) -
 
             if is_1d {
                 refine_1d_bounds(&gray, width, height, &mut min_x, &mut max_x, &mut min_y, &mut max_y);
+            } else {
+                let mut bounds = [min_x, min_y, max_x, max_y];
+                refine_qr_bounds(&gray.pixels, [width, height], points, pad as f32, &mut bounds);
+                [min_x, min_y, max_x, max_y] = bounds;
             }
 
             let rect = [
@@ -972,7 +976,14 @@ impl Document {
                     if w == 0 || h == 0 {
                         continue;
                     }
-                    total_scanned_pixels = total_scanned_pixels.saturating_add((w as usize).saturating_mul(h as usize));
+                    let Some(next_total) = (w as usize)
+                        .checked_mul(h as usize)
+                        .and_then(|p| total_scanned_pixels.checked_add(p))
+                        .filter(|&t| t <= MAX_EMBEDDED_SCAN_PIXELS)
+                    else {
+                        continue;
+                    };
+                    total_scanned_pixels = next_total;
                     let codes = scan_rgba_buffer(w as usize, h as usize, &rgba, page);
                     cached_image_scans.insert(cache_key, (w, h, codes.clone()));
                     (w, h, codes)
@@ -1203,9 +1214,18 @@ impl Document {
 
         let modules_w = if min_x <= max_x { max_x - min_x + 1 } else { 1 };
         let modules_h = if min_y <= max_y { max_y - min_y + 1 } else { 1 };
-        let tw = (target_width as usize).max(modules_w);
-        let th = (target_height as usize).max(modules_h);
-        let mut rgba = vec![255u8; tw.saturating_mul(th).saturating_mul(4)];
+        let tw = target_width as usize;
+        let th = target_height as usize;
+        if modules_w > tw || modules_h > th {
+            return Err(format!("Encoded barcode requires at least {modules_w}x{modules_h} pixels, which exceeds requested dimensions {tw}x{th}"));
+        }
+        let Some(total_out_pixels) = tw.checked_mul(th).filter(|&p| p <= 16_000_000) else {
+            return Err("Target dimensions exceed maximum raster budget of 16 megapixels".into());
+        };
+        let Some(byte_len) = total_out_pixels.checked_mul(4) else {
+            return Err("Target pixel buffer size overflow".into());
+        };
+        let mut rgba = vec![255u8; byte_len];
 
         if min_x <= max_x && min_y <= max_y {
             let cw = modules_w as f64;
@@ -1232,6 +1252,66 @@ impl Document {
 
         encode_png_exact(tw as u32, th as u32, &rgba)
     }
+}
+
+/// Expand QR finder-pattern center bounds (`[min_x, min_y, max_x, max_y]`) to include the full
+/// outer finder band (3.5 modules).
+fn refine_qr_bounds(gray: &[u8], dims: [usize; 2], points: &[rxing::Point], pad: f32, bounds: &mut [f32; 4]) {
+    let [width, height] = dims;
+    if points.is_empty() || width == 0 || height == 0 {
+        return;
+    }
+    let pixel = |x: isize, y: isize| -> Option<u8> {
+        let ux = usize::try_from(x).ok()?;
+        let uy = usize::try_from(y).ok()?;
+        if ux < width && uy < height { gray.get(uy * width + ux).copied() } else { None }
+    };
+
+    let mut finder_radii = Vec::new();
+    let max_probe = (width.max(height) / 2).max(16) as isize;
+    for pt in points.iter().take(3) {
+        let cx = (pt.x - pad).round() as isize;
+        let cy = (pt.y - pad).round() as isize;
+        let Some(center_val) = pixel(cx, cy) else { continue };
+        let thresh = center_val.saturating_add(40).min(180);
+        for &(dx, dy) in &[(1isize, 0isize), (-1, 0), (0, 1), (0, -1)] {
+            // Walk dark center (1.5m) -> light ring (1m) -> dark outer border (1m) -> light outside
+            let mut stage = 0u8;
+            let mut last_dark_step = 0isize;
+            for step in 1..=max_probe {
+                let Some(val) = pixel(cx + dx * step, cy + dy * step) else { break };
+                let is_dark = val <= thresh;
+                match stage {
+                    0 if !is_dark => stage = 1,
+                    1 if is_dark => {
+                        stage = 2;
+                        last_dark_step = step;
+                    }
+                    2 if is_dark => last_dark_step = step,
+                    2 if !is_dark => {
+                        if last_dark_step >= 3 {
+                            finder_radii.push(last_dark_step as f32 + 0.5);
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let expand = if !finder_radii.is_empty() {
+        finder_radii.sort_by(|a, b| a.total_cmp(b));
+        finder_radii[finder_radii.len() / 2]
+    } else {
+        // Fallback for Version 1 (21x21): finder centers span 14 modules, outer band is 3.5 modules each side.
+        let span = (bounds[2] - bounds[0]).max(bounds[3] - bounds[1]);
+        (span * (3.5 / 14.0)).max(1.0)
+    };
+    bounds[0] = (bounds[0] - expand).clamp(0.0, width as f32);
+    bounds[1] = (bounds[1] - expand).clamp(0.0, height as f32);
+    bounds[2] = (bounds[2] + expand).clamp(0.0, width as f32);
+    bounds[3] = (bounds[3] + expand).clamp(0.0, height as f32);
 }
 
 /// Encode RGBA buffer into a PNG byte stream.
@@ -1291,5 +1371,39 @@ mod tests {
         assert!(!scanned.is_empty(), "must detect generated QR code");
         assert_eq!(scanned[0].kind, CodeKind::QrCode);
         assert_eq!(scanned[0].text, payload);
+        // For module=6px and quiet=4 modules, the 21x21 QR symbol covers x=24..150, y=24..150 (126x126px),
+        // including the outer 3.5-module finder bands outside the finder centers (45..129).
+        assert!(scanned[0].rect[0] <= 26.0 && scanned[0].rect[1] <= 26.0, "expected outer top-left near 24, got {:?}", scanned[0].rect);
+        assert!(scanned[0].rect[2] >= 148.0 && scanned[0].rect[3] >= 148.0, "expected outer bottom-right near 150, got {:?}", scanned[0].rect);
+        assert!(scanned[0].pixel_size[0] >= 122 && scanned[0].pixel_size[1] >= 122, "expected full ~126px size, got {:?}", scanned[0].pixel_size);
+    }
+
+    #[test]
+    fn test_code128_tentative_stop_falls_back_to_data_symbol() {
+        // Sequence: Start B (104), data sym 18 ('2'), data sym 19 ('3'), checksum ((104 + 1*18 + 2*19) % 103 = 57), STOP (106).
+        // The 6 runs of sym 18 followed by the first bar of sym 19 look similar to STOP; a failed tentative stop
+        // check must fall back to reading sym 18 rather than aborting.
+        let pattern_to_runs = |pat: [u8; 6], out: &mut Vec<(bool, usize)>| {
+            for (i, w) in pat.iter().enumerate() {
+                out.push((i % 2 == 0, usize::from(*w) * 2));
+            }
+        };
+        let mut runs = Vec::new();
+        pattern_to_runs(CODE128_PATTERNS[104], &mut runs);
+        pattern_to_runs(CODE128_PATTERNS[18], &mut runs);
+        pattern_to_runs(CODE128_PATTERNS[19], &mut runs);
+        pattern_to_runs(CODE128_PATTERNS[57], &mut runs);
+        for (i, w) in CODE128_STOP.iter().enumerate() {
+            runs.push((i % 2 == 0, usize::from(*w) * 2));
+        }
+        let decoded = try_decode_code128(&runs, 0).expect("must decode Code 128 past tentative stop false match");
+        assert_eq!(decoded.0, "23");
+    }
+
+    #[test]
+    fn test_generate_replacement_code_rejects_oversized_dark_span() {
+        let err = Document::generate_replacement_code(CodeKind::Code128, "EXACT100", 100, 40)
+            .expect_err("must reject 1D barcode whose module span exceeds target width");
+        assert!(err.contains("exceeds requested dimensions"), "unexpected error: {err}");
     }
 }

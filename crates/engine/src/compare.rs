@@ -199,9 +199,14 @@ pub struct OfficeExport {
     pub bytes: Vec<u8>,
     /// Pages (0-based) that draw forms nested deeper than [`MAX_FORM_DEPTH`] or more of them
     /// than [`MAX_FORM_VISITS`], or pictures past [`MAX_EXPORT_IMAGE_BYTES`] or past what one export
-    /// may decode: export stops reading there to stay bounded on hostile files, so the text and images of those forms, or
-    /// those pictures, are missing from `bytes`.
+    /// may decode, or whose `/Contents` stream could not be decoded: export stops reading there to stay bounded on hostile files, so the text and images of those forms, or
+    /// those pictures, or unreadable `/Contents` text, are missing from `bytes`. RTF also lists the pages that lost a picture to
+    /// its own limits (it repeats a picture's data at every placement) or one whose rotation it
+    /// couldn't bake in; their other content is kept. A picture no format can encode (a JPX image,
+    /// say) is left out of every format without being listed.
     pub truncated_pages: Vec<usize>,
+    /// Subset of `truncated_pages` whose `/Contents` stream failed to read (`reading_blocks_checked` returned `Err`).
+    pub unreadable_pages: Vec<usize>,
 }
 
 /// An image object prepared for Office export: its file extension and encoded bytes, or why it is
@@ -257,8 +262,20 @@ impl crate::Document {
         image_work: &mut pdfcraft_cos::ImageBudget,
         split_rows: bool,
     ) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
-        let Some(cos) = self.editor.as_ref().map(|e| &e.cos) else { return (Vec::new(), Vec::new()) };
+        let (pages, truncated, _) = self.export_pages_within_split_with_reasons(images, image_budget, image_work, split_rows);
+        (pages, truncated)
+    }
+
+    pub(crate) fn export_pages_within_split_with_reasons(
+        &self,
+        images: bool,
+        image_budget: usize,
+        image_work: &mut pdfcraft_cos::ImageBudget,
+        split_rows: bool,
+    ) -> (Vec<pdfcraft_export::Page>, Vec<usize>, Vec<usize>) {
+        let Some(cos) = self.editor.as_ref().map(|e| &e.cos) else { return (Vec::new(), Vec::new(), Vec::new()) };
         let mut truncated = Vec::new();
+        let mut unreadable = Vec::new();
         // Each image object is encoded once and shared by every place that draws it.
         let mut encoded: HashMap<ObjRef, PreparedImage> = HashMap::new();
         let mut image_bytes = image_budget;
@@ -276,8 +293,13 @@ impl crate::Document {
                     [a[0].min(b[0]) as f64, (info.height - a[1].max(b[1])) as f64, a[0].max(b[0]) as f64, (info.height - a[1].min(b[1])) as f64]
                 };
                 let unit = display_unit(info);
-                let reading = pdfcraft_edit::reading_blocks_checked(cos, i).unwrap_or_default();
-                let forms_unread = reading.truncated;
+                let (reading, forms_unread, content_unreadable) = match pdfcraft_edit::reading_blocks_checked(cos, i) {
+                    Ok(reading) => {
+                        let truncated = reading.truncated;
+                        (reading, truncated, false)
+                    }
+                    Err(_) => (Default::default(), true, true),
+                };
                 let mut blocks = Vec::new();
                 for b in reading.blocks {
                     if b.text.trim().is_empty() {
@@ -293,14 +315,23 @@ impl crate::Document {
                         for row_indices in &b.rows {
                             let mut row_rect: Option<[f64; 4]> = None;
                             let mut row_text = String::new();
+                            let mut prev_span_end: Option<usize> = None;
                             for &idx in row_indices {
                                 if let Some(line) = reading.lines.get(idx) {
                                     row_rect = Some(match row_rect {
                                         Some(r) => [r[0].min(line.rect[0]), r[1].min(line.rect[1]), r[2].max(line.rect[2]), r[3].max(line.rect[3])],
                                         None => line.rect,
                                     });
-                                    if !row_text.is_empty() && !row_text.ends_with(' ') && !line.text.starts_with(' ') {
+                                    let span_range = b.spans.iter().find(|(_, span_idx)| *span_idx == idx).map(|(r, _)| r.clone());
+                                    if let (Some(prev_end), Some(range)) = (prev_span_end, &span_range)
+                                        && range.start > prev_end
+                                        && !row_text.ends_with(char::is_whitespace)
+                                        && !line.text.starts_with(char::is_whitespace)
+                                    {
                                         row_text.push(' ');
+                                    }
+                                    if let Some(range) = span_range {
+                                        prev_span_end = Some(range.end);
                                     }
                                     row_text.push_str(&line.text);
                                 }
@@ -357,6 +388,9 @@ impl crate::Document {
                         })
                     })
                     .collect();
+                if content_unreadable {
+                    unreadable.push(i);
+                }
                 if forms_unread || over_budget {
                     truncated.push(i);
                 }
@@ -367,7 +401,7 @@ impl crate::Document {
                 pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images, background, rules }
             })
             .collect();
-        (pages, truncated)
+        (pages, truncated, unreadable)
     }
 
     /// The document as a Word, Excel, PowerPoint, HTML or RTF file.
@@ -378,10 +412,13 @@ impl crate::Document {
     /// [`Self::export_office`], and the pages whose text it had to leave out
     /// ([`OfficeExport::truncated_pages`]).
     pub fn export_office_checked(&self, format: OfficeFormat) -> OfficeExport {
-        let (pages, truncated_pages) = {
-            let Some(editor) = self.editor.as_ref() else { return OfficeExport { bytes: Vec::new(), truncated_pages: Vec::new() } };
-            self.export_pages_within_split(
-                !matches!(format, OfficeFormat::Rtf | OfficeFormat::Markdown),
+        // Markdown leaves pictures out.
+        let (pages, mut truncated_pages, unreadable_pages) = {
+            let Some(editor) = self.editor.as_ref() else {
+                return OfficeExport { bytes: Vec::new(), truncated_pages: Vec::new(), unreadable_pages: Vec::new() };
+            };
+            self.export_pages_within_split_with_reasons(
+                !matches!(format, OfficeFormat::Markdown),
                 MAX_EXPORT_IMAGE_BYTES,
                 &mut pdfcraft_cos::ImageBudget::new(&editor.cos),
                 format == OfficeFormat::Xlsx,
@@ -396,9 +433,135 @@ impl crate::Document {
             OfficeFormat::Pptx => pdfcraft_export::pptx(&pages, &title),
             OfficeFormat::Html => pdfcraft_export::html_with_language(&pages, &title, language.as_deref()).into_bytes(),
             OfficeFormat::HtmlSimple => pdfcraft_export::html_simple_with_language(&pages, &title, language.as_deref()).into_bytes(),
-            OfficeFormat::Rtf => pdfcraft_export::rtf(&pages).into_bytes(),
+            OfficeFormat::Rtf => {
+                let (rtf, omitted) = pdfcraft_export::rtf_with_title_checked(&pages, &title);
+                truncated_pages.extend(omitted);
+                truncated_pages.sort_unstable();
+                truncated_pages.dedup();
+                rtf.into_bytes()
+            }
             OfficeFormat::Markdown => pdfcraft_export::markdown(&pages).into_bytes(),
         };
-        OfficeExport { bytes, truncated_pages }
+        OfficeExport { bytes, truncated_pages, unreadable_pages }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pdfcraft_cos::{Dict, Object, SaveOptions, Stream, write_full};
+
+    fn make_doc_with_page(contents: Object) -> crate::Document {
+        let mut cos = pdfcraft_cos::Document::new_empty();
+        let pages = cos.get(cos.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+        let mut font = Dict::new();
+        font.set(b"Type".to_vec(), Object::name("Font"));
+        font.set(b"Subtype".to_vec(), Object::name("Type1"));
+        font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+        let font_ref = cos.add(font);
+        let mut font_bold = Dict::new();
+        font_bold.set(b"Type".to_vec(), Object::name("Font"));
+        font_bold.set(b"Subtype".to_vec(), Object::name("Type1"));
+        font_bold.set(b"BaseFont".to_vec(), Object::name("Helvetica-Bold"));
+        let bold_ref = cos.add(font_bold);
+        let mut fonts = Dict::new();
+        fonts.set(b"F1".to_vec(), Object::Ref(font_ref));
+        fonts.set(b"F2".to_vec(), Object::Ref(bold_ref));
+        let mut res = Dict::new();
+        res.set(b"Font".to_vec(), Object::Dict(fonts));
+
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Parent".to_vec(), Object::Ref(pages));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
+        page.set(b"Resources".to_vec(), Object::Dict(res));
+        page.set(b"Contents".to_vec(), contents);
+        let page_ref = cos.add(page);
+        cos.update_dict(pages, |d| {
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page_ref)]));
+            d.set(b"Count".to_vec(), Object::Int(1));
+        })
+        .unwrap();
+        let bytes = write_full(&cos, &SaveOptions::default()).unwrap();
+        let mut session = crate::Session::new();
+        let id = session.open("test.pdf".into(), None, Arc::new(bytes), None).unwrap();
+        session.take(id).unwrap()
+    }
+
+    #[test]
+    fn export_office_checked_records_unreadable_contents_pages() {
+        let mut cos = pdfcraft_cos::Document::new_empty();
+        let pages = cos.get(cos.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Parent".to_vec(), Object::Ref(pages));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
+        // Corrupted stream dict (non-stream indirect object / invalid compressed stream won't decode)
+        let bad_obj = cos.add(Object::Dict(Dict::new()));
+        page.set(b"Contents".to_vec(), Object::Ref(bad_obj));
+        let page_ref = cos.add(page);
+        cos.update_dict(pages, |d| {
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page_ref)]));
+            d.set(b"Count".to_vec(), Object::Int(1));
+        })
+        .unwrap();
+        let bytes = write_full(&cos, &SaveOptions::default()).unwrap();
+        let mut session = crate::Session::new();
+        let id = session.open("bad.pdf".into(), None, Arc::new(bytes), None).unwrap();
+        let doc = session.get(id).unwrap();
+        let export = doc.export_office_checked(OfficeFormat::Xlsx);
+        assert_eq!(export.truncated_pages, vec![0]);
+        assert_eq!(export.unreadable_pages, vec![0]);
+    }
+
+    #[test]
+    fn xlsx_export_joins_style_runs_without_false_spaces() {
+        let stream_bytes = b"BT /F1 12 Tf 50 700 Td (hel) Tj /F2 12 Tf (lo) Tj 1 0 0 1 50 680 Tm /F1 12 Tf (second row) Tj ET\n";
+        let mut cos = pdfcraft_cos::Document::new_empty();
+        let sref = cos.add(Object::Stream(Stream::from_raw(Dict::new(), stream_bytes.to_vec())));
+        drop(cos);
+        let _ = sref;
+        // Build full doc cleanly using a helper with stream bytes
+        let mut cos = pdfcraft_cos::Document::new_empty();
+        let pages = cos.get(cos.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+        let mut font = Dict::new();
+        font.set(b"Type".to_vec(), Object::name("Font"));
+        font.set(b"Subtype".to_vec(), Object::name("Type1"));
+        font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+        let font_ref = cos.add(font);
+        let mut font_bold = Dict::new();
+        font_bold.set(b"Type".to_vec(), Object::name("Font"));
+        font_bold.set(b"Subtype".to_vec(), Object::name("Type1"));
+        font_bold.set(b"BaseFont".to_vec(), Object::name("Helvetica-Bold"));
+        let bold_ref = cos.add(font_bold);
+        let mut fonts = Dict::new();
+        fonts.set(b"F1".to_vec(), Object::Ref(font_ref));
+        fonts.set(b"F2".to_vec(), Object::Ref(bold_ref));
+        let mut res = Dict::new();
+        res.set(b"Font".to_vec(), Object::Dict(fonts));
+        let stream_ref = cos.add(Object::Stream(Stream::from_raw(Dict::new(), stream_bytes.to_vec())));
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Parent".to_vec(), Object::Ref(pages));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
+        page.set(b"Resources".to_vec(), Object::Dict(res));
+        page.set(b"Contents".to_vec(), Object::Ref(stream_ref));
+        let page_ref = cos.add(page);
+        cos.update_dict(pages, |d| {
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page_ref)]));
+            d.set(b"Count".to_vec(), Object::Int(1));
+        })
+        .unwrap();
+        let bytes = write_full(&cos, &SaveOptions::default()).unwrap();
+        let mut session = crate::Session::new();
+        let id = session.open("runs.pdf".into(), None, Arc::new(bytes), None).unwrap();
+        let doc = session.get(id).unwrap();
+        let editor = doc.editor.as_ref().unwrap();
+        let (pages_out, _, _) =
+            doc.export_pages_within_split_with_reasons(false, MAX_EXPORT_IMAGE_BYTES, &mut pdfcraft_cos::ImageBudget::new(&editor.cos), true);
+        let texts: Vec<&str> = pages_out[0].blocks.iter().map(|b| b.text.as_str()).collect();
+        assert!(texts.iter().any(|t| t.contains("hello")), "adjacent style runs must join as 'hello', got {texts:?}");
+        assert!(!texts.iter().any(|t| t.contains("hel lo")), "must not insert false space mid-word: {texts:?}");
+        let _ = make_doc_with_page;
     }
 }

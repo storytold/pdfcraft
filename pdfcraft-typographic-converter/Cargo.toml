@@ -12,3 +12,6 @@ docx-rs = "0.4"
 rust_xlsxwriter = "0.80"
 png = "0.17"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
+
+[lints]
+workspace = true

@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
 
-use crate::{GlyphError, GlyphOutline, ShapedCluster, ShapedScript, literal, shape_thai, shaped_glyph};
+use crate::{GlyphError, GlyphOutline, ShapedCluster, ShapedScript, latin_has, literal, shape_latin, shape_thai, shaped_glyph};
 
 /// Most glyphs in one Type 3 font: its codes are single bytes, 1–240. Text gets one such font per
 /// 240 distinct clusters it needs.
@@ -34,6 +34,93 @@ pub fn thai_message(e: GlyphError, text: &str) -> String {
             .into(),
         GlyphError::Missing => format!("the Thai font can't show \"{text}\""),
         GlyphError::TooComplex => "the Thai glyphs are too complex; use shorter text".into(),
+    }
+}
+
+/// Whether a generated appearance draws `c` from the bundled Inter face rather than the standard
+/// font: a Latin, Greek or Cyrillic character WinAnsiEncoding lacks (`Γ`, `ř`, `ж`) that the face
+/// has. Line breaks and Thai never are.
+pub fn latin_fallback(c: char) -> bool {
+    !matches!(c, '\n' | '\r') && !is_thai(c) && !crate::win_ansi_encodable(c) && latin_has(c)
+}
+
+/// Why the bundled Inter face can't draw `text`, for a message an agent or user can act on.
+pub fn latin_message(e: GlyphError, text: &str) -> String {
+    match e {
+        GlyphError::NoFont | GlyphError::Missing => format!("the bundled Inter face can't show \"{text}\""),
+        GlyphError::TooComplex => format!("the bundled Inter face's glyphs for \"{text}\" are too complex"),
+    }
+}
+
+/// `line` split as a generated appearance draws it, in typing order: with `thai`, its Thai runs
+/// shaped with the Thai face; with `latin`, its runs of [`latin_fallback`] characters shaped with
+/// the bundled Inter face; and the text between them, left to the standard font. An error when a
+/// run can't be shaped (no Thai face, a missing character).
+pub fn fallback_pieces(line: &str, thai: bool, latin: bool) -> Result<Vec<Piece>, GlyphError> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Run {
+        Thai,
+        Latin,
+        Standard,
+    }
+    let kind = |c: char| {
+        if thai && is_thai(c) {
+            Run::Thai
+        } else if latin && latin_fallback(c) {
+            Run::Latin
+        } else {
+            Run::Standard
+        }
+    };
+    let mut runs: Vec<(Run, String)> = Vec::new();
+    for c in line.chars() {
+        let k = kind(c);
+        // A combining mark the standard font lacks is drawn on its letter by the bundled face:
+        // the letter moves from the standard font's run into a run of the face's.
+        if k == Run::Latin
+            && is_mark(c)
+            && let Some((Run::Standard, s)) = runs.last_mut()
+            && let Some(base) = s.chars().last().filter(|b| latin_has(*b) && !matches!(b, '\n' | '\r'))
+        {
+            s.pop();
+            if s.is_empty() {
+                runs.pop();
+            }
+            match runs.last_mut() {
+                Some((Run::Latin, s)) => s.extend([base, c]),
+                _ => runs.push((Run::Latin, [base, c].into_iter().collect())),
+            }
+            continue;
+        }
+        match runs.last_mut() {
+            Some((run, s)) if *run == k => s.push(c),
+            _ => runs.push((k, c.to_string())),
+        }
+    }
+    runs.into_iter()
+        .map(|(run, s)| match run {
+            Run::Thai => shape_thai(&s).map(Piece::Shaped),
+            Run::Latin => shape_latin(&s).map(Piece::Shaped),
+            Run::Standard => Ok(Piece::Latin(s)),
+        })
+        .collect()
+}
+
+/// A combining diacritical mark (U+0300–U+036F), drawn on the letter before it.
+fn is_mark(c: char) -> bool {
+    matches!(u32::from(c), 0x0300..=0x036F)
+}
+
+/// The width of `text` at `size` as [`fallback_pieces`] splits it, the standard font's pieces
+/// measured by `standard`. Text with nothing for the fallback faces, or that they can't shape, is
+/// measured by `standard` as a whole (drawing then reports why).
+pub fn fallback_width(text: &str, size: f64, thai: bool, latin: bool, standard: impl Fn(&str, f64) -> f64) -> f64 {
+    if !text.chars().any(|c| (thai && is_thai(c)) || (latin && latin_fallback(c))) {
+        return standard(text, size);
+    }
+    match fallback_pieces(text, thai, latin) {
+        Ok(pieces) => pieces_width(&pieces, size, 0.0, standard),
+        Err(_) => standard(text, size),
     }
 }
 
@@ -243,10 +330,21 @@ impl ShapedFonts {
 /// appearance. Thai the face can't draw, and every line when a glyph can't be read, is left to the
 /// standard font, whose encoder writes `?` for it; [`first_undrawable`] reports that.
 pub fn appearance_lines(lines: &[String], fonts: &mut Dict) -> (Vec<Vec<Piece>>, ShapedFonts) {
+    fallback_appearance_lines(lines, true, false, fonts)
+}
+
+/// [`appearance_lines`] with the pieces [`fallback_pieces`] splits each line into: its Thai with
+/// `thai`, and with `latin` the Latin, Greek and Cyrillic characters the standard fonts lack, drawn
+/// from the bundled Inter face. Their Type 3 fonts are named `PCTh…` when Thai is drawn, else
+/// `PCLa…`. A line whose runs can't be shaped, and every line when a glyph can't be read, is left
+/// to the standard font, which writes `?` for what it lacks; the caller reports that.
+pub fn fallback_appearance_lines(lines: &[String], thai: bool, latin: bool, fonts: &mut Dict) -> (Vec<Vec<Piece>>, ShapedFonts) {
     let plain = |l: &String| vec![Piece::Latin(l.clone())];
+    let needs = |c: char| (thai && is_thai(c)) || (latin && latin_fallback(c));
     let pieces: Vec<Vec<Piece>> =
-        lines.iter().map(|l| if l.chars().any(is_thai) { thai_pieces(l).unwrap_or_else(|_| plain(l)) } else { plain(l) }).collect();
-    match ShapedFonts::new(clusters(pieces.iter().map(Vec::as_slice)), shaped_glyph, &Dict::new(), fonts, "PCTh", &mut |o| o).map_err(|(e, _)| e) {
+        lines.iter().map(|l| if l.chars().any(needs) { fallback_pieces(l, thai, latin).unwrap_or_else(|_| plain(l)) } else { plain(l) }).collect();
+    let prefix = if thai { "PCTh" } else { "PCLa" };
+    match ShapedFonts::new(clusters(pieces.iter().map(Vec::as_slice)), shaped_glyph, &Dict::new(), fonts, prefix, &mut |o| o).map_err(|(e, _)| e) {
         Ok(shaped) => (pieces, shaped),
         Err(_) => (lines.iter().map(plain).collect(), ShapedFonts::default()),
     }
@@ -361,6 +459,7 @@ fn type3_font(clusters: &[&ShapedCluster], outlines: &HashMap<(ShapedScript, u32
                 ShapedScript::Arabic => "Arabic",
                 ShapedScript::Hebrew => "Hebrew",
                 ShapedScript::Thai => "Thai",
+                ShapedScript::Latin => "Inter",
             },
             |f| f.family,
         ),
@@ -485,6 +584,44 @@ mod tests {
         });
         assert!(matches!(made, Err((GlyphError::Missing, c)) if c.text == "ก"));
         assert_eq!((stored, fonts.iter().count()), (0, 0));
+    }
+
+    /// #6822: Greek, and the Latin and Cyrillic letters WinAnsiEncoding lacks, are shaped with the
+    /// bundled Inter face, which every build has; what WinAnsi holds stays the standard font's.
+    #[test]
+    fn letters_the_standard_fonts_lack_are_shaped_with_the_bundled_face() {
+        assert!(latin_fallback('Γ') && latin_fallback('ř') && latin_fallback('ж'));
+        assert!(!latin_fallback('é') && !latin_fallback('a') && !latin_fallback('\n') && !latin_fallback('北') && !latin_fallback('ก'));
+        // Text WinAnsi holds is one piece for the standard font, measured by it.
+        assert_eq!(fallback_pieces("Café (±)", false, true).unwrap(), [Piece::Latin("Café (±)".into())]);
+        assert_eq!(fallback_width("Café", 10.0, false, true, |s, size| s.chars().count() as f64 * size), 40.0);
+        // Greek words, with the standard font's space between them.
+        let pieces = fallback_pieces("Γειά σου", false, true).unwrap();
+        assert!(
+            matches!(&pieces[..], [Piece::Shaped(a), Piece::Latin(sp), Piece::Shaped(b)] if sp == " " && a.len() == 4 && b.len() == 3),
+            "{pieces:?}"
+        );
+        let text: String = clusters([pieces.as_slice()]).map(|c| c.text.as_str()).collect();
+        assert_eq!(text, "Γειάσου", "each character copies once");
+        assert!(clusters([pieces.as_slice()]).all(|c| c.script == ShapedScript::Latin && c.advance > 0.0));
+        assert!(fallback_width("Γειά", 10.0, false, true, |_, _| 0.0) > 0.0);
+        // Mixed: the Latin stays the standard font's.
+        let mixed = fallback_pieces("Name: Γειά ok", false, true).unwrap();
+        assert!(matches!(&mixed[..], [Piece::Latin(a), Piece::Shaped(_), Piece::Latin(b)] if a == "Name: " && b == " ok"), "{mixed:?}");
+        // A combining accent the standard font lacks takes its letter with it.
+        let accent = fallback_pieces("Cafe\u{301}!", false, true).unwrap();
+        assert!(
+            matches!(&accent[..], [Piece::Latin(a), Piece::Shaped(c), Piece::Latin(b)] if a == "Caf" && b == "!" && c.iter().map(|c| c.text.as_str()).collect::<String>() == "e\u{301}"),
+            "{accent:?}"
+        );
+        // Without `latin`, nothing changes.
+        assert_eq!(fallback_pieces("Γειά", false, false).unwrap(), [Piece::Latin("Γειά".into())]);
+        // The fonts are built under PCLa names, and a character no face here has stays `?`.
+        let mut fonts = Dict::new();
+        let (lines, shaped) = fallback_appearance_lines(&["Γειά 北".to_string()], false, true, &mut fonts);
+        assert!(fonts.iter().any(|(k, _)| k.starts_with(b"PCLa")));
+        assert!(matches!(&lines[0][..], [Piece::Shaped(c), Piece::Latin(rest)] if shaped.code(&c[0]).is_some() && rest == " 北"), "{lines:?}");
+        assert_eq!(first_undrawable_in_line(" 北"), Some('北'));
     }
 
     #[test]

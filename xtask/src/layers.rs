@@ -288,7 +288,7 @@ mod tests {
     fn current_graph_shape_passes() {
         let g = [
             c("pdfcraft-geom", &[]),
-            c("pdfcraft-render", &[("hayro", Normal, false), ("lopdf", Normal, false)]),
+            c("pdfcraft-render", &[("craft-pdf", Normal, false), ("lopdf", Normal, false)]),
             c("pdfcraft-engine", &[("pdfcraft-render", Normal, true)]),
             c("pdfcraft-ui-egui", &[("pdfcraft-engine", Normal, true), ("egui", Normal, false), ("egui_kittest", Dev, false)]),
             c("pdfcraft", &[("pdfcraft-ui-egui", Normal, true)]),

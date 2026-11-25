@@ -437,6 +437,36 @@ xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">
     )
 }
 
+struct PreparedPageRows {
+    rows: Vec<XlsxRow>,
+    row_tops: Vec<(f64, usize)>,
+    merges: Vec<String>,
+    col_max_len: Vec<usize>,
+    col_edges: Vec<f64>,
+    current_row: usize,
+}
+
+fn prepare_page_rows(p: &Page) -> PreparedPageRows {
+    let (tables, consumed) = crate::tables(&p.blocks, &p.rules);
+    let mut rows: Vec<XlsxRow> = Vec::new();
+    let mut row_tops: Vec<(f64, usize)> = Vec::new();
+    let mut merges: Vec<String> = Vec::new();
+    let mut col_max_len: Vec<usize> = Vec::new();
+    let mut current_row = 1usize;
+
+    let col_edges = compute_col_edges(&p.blocks);
+    let mut acc = PageRowsAccumulator {
+        rows: &mut rows,
+        row_tops: &mut row_tops,
+        merges: &mut merges,
+        col_max_len: &mut col_max_len,
+        current_row: &mut current_row,
+    };
+    process_page_content(p, &consumed, &tables, &col_edges, &mut acc);
+    row_tops.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    PreparedPageRows { rows, row_tops, merges, col_max_len, col_edges, current_row }
+}
+
 /// An Excel document (.xlsx, Office Open XML SpreadsheetML).
 pub fn xlsx(pages: &[Page], title: &str) -> Vec<u8> {
     let dummy = [Page::default()];
@@ -448,28 +478,14 @@ pub fn xlsx(pages: &[Page], title: &str) -> Vec<u8> {
     let mut global_image_counter = 0usize;
 
     for (page_index, p) in pages.iter().enumerate() {
-        let (tables, consumed) = crate::tables(&p.blocks, &p.rules);
-        let mut rows: Vec<XlsxRow> = Vec::new();
-        let mut row_tops: Vec<(f64, usize)> = Vec::new();
-        let mut merges: Vec<String> = Vec::new();
-        let mut col_max_len: Vec<usize> = Vec::new();
-        let mut current_row = 1usize;
+        let prepared = prepare_page_rows(p);
 
-        let col_edges = compute_col_edges(&p.blocks);
-        let mut acc = PageRowsAccumulator {
-            rows: &mut rows,
-            row_tops: &mut row_tops,
-            merges: &mut merges,
-            col_max_len: &mut col_max_len,
-            current_row: &mut current_row,
-        };
-        process_page_content(p, &consumed, &tables, &col_edges, &mut acc);
-
-        let drawings = build_page_drawings(p, &col_edges, &row_tops, current_row, &mut global_image_counter, &mut media_files);
+        let drawings =
+            build_page_drawings(p, &prepared.col_edges, &prepared.row_tops, prepared.current_row, &mut global_image_counter, &mut media_files);
         let has_drawing = drawings.is_some();
         sheet_drawings.push(drawings);
 
-        sheets.push(build_sheet_xml(page_index, &rows, &merges, &col_max_len, has_drawing));
+        sheets.push(build_sheet_xml(page_index, &prepared.rows, &prepared.merges, &prepared.col_max_len, has_drawing));
     }
 
     // Styles XML
@@ -745,5 +761,37 @@ mod tests {
         assert!(xml.contains("<v>19.99</v>"));
         assert!(xml.contains("<mergeCell ref=\"A1:B1\"/>"));
         assert!(xml.contains("<drawing r:id=\"rIdDrw1\"/>"));
+    }
+
+    #[test]
+    fn row_tops_sort_keeps_overlapping_standalone_line_in_order() {
+        let block = |text: &str, rect: [f64; 4]| Block {
+            text: text.into(),
+            rect,
+            size: 10.0,
+            bold: false,
+            italic: false,
+            color: [0.0; 3],
+            rotation: 0.0,
+            space_around: [false, false],
+        };
+        let p = Page {
+            width: 600.0,
+            height: 800.0,
+            blocks: vec![
+                block("ColA", [60.0, 690.0, 140.0, 705.0]),
+                block("ColB", [300.0, 690.0, 380.0, 705.0]),
+                block("ValA", [60.0, 660.0, 140.0, 675.0]),
+                block("ValB", [300.0, 660.0, 380.0, 675.0]),
+                // Standalone block vertically between the two table rows
+                block("Mid", [520.0, 680.0, 560.0, 692.0]),
+            ],
+            images: Vec::new(),
+            background: None,
+            rules: vec![[50.0, 650.0, 500.0, 650.0], [50.0, 710.0, 500.0, 710.0], [50.0, 650.0, 50.0, 710.0], [500.0, 650.0, 500.0, 710.0]],
+        };
+        let prepared = prepare_page_rows(&p);
+        assert!(prepared.row_tops.len() >= 3, "expected table + standalone rows in {:?}", prepared.row_tops);
+        assert!(prepared.row_tops.windows(2).all(|w| w[0].0 <= w[1].0), "row_tops must be sorted by vertical position: {:?}", prepared.row_tops);
     }
 }

@@ -11,7 +11,6 @@
 mod cjk_scripts;
 mod craft;
 pub mod embedding;
-mod encodings;
 pub mod fallback;
 pub mod pdf;
 pub mod plan;
@@ -19,12 +18,13 @@ mod script;
 pub mod shaped_text;
 mod shaping;
 pub mod source_shaping;
-mod std14;
-mod std14_metrics;
 pub use craft::{
-    CRAFT_FONTS, CraftFont, SHIPPORI_MINCHO, document_arabic_font, document_devanagari_font, document_hebrew_font, document_japanese_font,
+    CRAFT_FONTS, EmbeddedFace, SHIPPORI_MINCHO, document_arabic_font, document_devanagari_font, document_hebrew_font, document_japanese_font,
     document_japanese_font_for_style, document_japanese_fonts_for_style, document_latin_fonts, document_thai_font, ui_arabic_fonts, ui_chinese_fonts,
     ui_cjk_fonts, ui_devanagari_fonts, ui_hebrew_fonts, ui_japanese_fonts, ui_telugu_fonts, ui_thai_fonts,
+};
+pub use craft_pdf::fonts::{
+    Std14, Std14Match, UnicodeCMap, encodings, first_non_win_ansi, fits_win_ansi, win_ansi, win_ansi_byte, win_ansi_char, win_ansi_encodable,
 };
 pub use plan::{MAX_PLAN_GLYPHS, MAX_TYPE3_GLYPHS, PlannedType3, TextPlan};
 pub use script::{
@@ -32,9 +32,9 @@ pub use script::{
     script_missing, script_outline,
 };
 pub use shaping::{
-    ShapedCluster, ShapedScript, arabic_glyph, arabic_has, face_glyph, hebrew_has, shape_arabic, shape_hebrew, shape_thai, shaped_glyph, thai_has,
+    ShapedCluster, ShapedScript, arabic_glyph, arabic_has, face_glyph, hebrew_has, latin_has, shape_arabic, shape_hebrew, shape_latin, shape_thai,
+    shaped_glyph, thai_has,
 };
-pub use std14::{Match as Std14Match, Std14};
 
 /// Advance of `s` in Helvetica at `size` points, using the exact standard-14 metrics.
 ///
@@ -151,104 +151,10 @@ pub fn wrap_with(text: &str, size: f64, width: f64, measure: impl Fn(&str, f64) 
     lines
 }
 
-/// The WinAnsiEncoding (ISO 32000-2 Annex D) code for `c`, if the encoding has one.
-///
-/// Codes 0x80–0x9F come from the same table the text extractor decodes with, so encoding and
-/// decoding agree (Š š Ž ž Œ œ Ÿ ƒ † ‡ ˆ ˜ ‰ ‹ › as well as quotes, dashes, € and ™).
-pub fn win_ansi_byte(c: char) -> Option<u8> {
-    match c {
-        '\u{20}'..='\u{7e}' | '\u{a0}'..='\u{ff}' => u8::try_from(u32::from(c)).ok(),
-        _ => {
-            let high = encodings::WIN_ANSI.get(0x80..0xa0)?;
-            let i = high.iter().position(|&u| u != 0 && u == u32::from(c))?;
-            u8::try_from(0x80 + i).ok()
-        }
-    }
-}
-
-/// Encode text in WinAnsiEncoding (ISO 32000-2 Annex D); tabs become spaces and unmappable
-/// characters become `?`.
-pub fn win_ansi(s: &str) -> Vec<u8> {
-    s.chars().map(|c| if c == '\t' { b' ' } else { win_ansi_byte(c).unwrap_or(b'?') }).collect()
-}
-
-/// The character encoding of a predefined Unicode CMap (`UniJIS-UTF16-H`, `UniGB-UCS2-H`, …;
-/// ISO 32000-2 §9.7.5.2), which maps Unicode text straight to codes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UnicodeCMap {
-    Ucs2,
-    Utf16,
-    Utf8,
-    Utf32,
-}
-
-impl UnicodeCMap {
-    /// The encoding of the predefined CMap `name`, if it is a horizontal Unicode one. Vertical
-    /// (`-V`) CMaps are refused: field appearances are laid out horizontally, so their glyphs
-    /// would be drawn stacked down the field instead of across it.
-    pub fn from_name(name: &[u8]) -> Option<Self> {
-        let name = std::str::from_utf8(name).ok()?;
-        if !name.starts_with("Uni") || !name.ends_with("-H") {
-            return None;
-        }
-        name.split('-').find_map(|part| match part {
-            "UCS2" => Some(Self::Ucs2),
-            "UTF16" => Some(Self::Utf16),
-            "UTF8" => Some(Self::Utf8),
-            "UTF32" => Some(Self::Utf32),
-            _ => None,
-        })
-    }
-
-    /// The first character of `s` this encoding can't hold, which [`Self::encode`] would write as
-    /// `?`: a character beyond U+FFFF in UCS-2 (`𠀋`). UTF-16, UTF-8 and UTF-32 hold every one.
-    pub fn first_unencodable(self, s: &str) -> Option<char> {
-        match self {
-            Self::Ucs2 => s.chars().find(|c| u16::try_from(u32::from(*c)).is_err()),
-            Self::Utf16 | Self::Utf8 | Self::Utf32 => None,
-        }
-    }
-
-    /// Encode `s`; tabs become spaces, and characters UCS-2 can't hold become `?` (check them
-    /// first with [`Self::first_unencodable`]: PdfCraft refuses such text rather than write `?`).
-    pub fn encode(self, s: &str) -> Vec<u8> {
-        let mut out = Vec::with_capacity(s.len().saturating_mul(2));
-        let mut units = [0u16; 2];
-        let mut buf = [0u8; 4];
-        for c in s.chars() {
-            let c = if c == '\t' { ' ' } else { c };
-            match self {
-                Self::Ucs2 => {
-                    let unit = u16::try_from(u32::from(c)).unwrap_or(u16::from(b'?'));
-                    out.extend_from_slice(&unit.to_be_bytes());
-                }
-                Self::Utf16 => {
-                    for unit in c.encode_utf16(&mut units) {
-                        out.extend_from_slice(&unit.to_be_bytes());
-                    }
-                }
-                Self::Utf8 => out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes()),
-                Self::Utf32 => out.extend_from_slice(&u32::from(c).to_be_bytes()),
-            }
-        }
-        out
-    }
-}
-
-/// Whether [`win_ansi`] keeps `c` rather than writing `?` (a tab becomes a space).
-pub fn win_ansi_encodable(c: char) -> bool {
-    c == '\t' || win_ansi_byte(c).is_some()
-}
-
-/// The first character of `s` that [`win_ansi`] can't encode and would write as `?`.
-pub fn first_non_win_ansi(s: &str) -> Option<char> {
-    s.chars().find(|c| !win_ansi_encodable(*c))
-}
-
 /// The first character of `s` the standard fonts (Helvetica and the rest of the standard 14, in
 /// WinAnsiEncoding) can't draw, so that a generated appearance would show it as `?`. Line breaks
 /// don't count: appearances lay lines out themselves. PdfCraft refuses such text with
-/// [`undrawable_message`] instead of writing `?` (AGENTS.md §4: never lose work silently).
+/// [`undrawable_message`] instead of writing `?` (app-agents.md rule 13: never lose work silently).
 pub fn first_undrawable(s: &str) -> Option<char> {
     s.chars().find(|c| !matches!(c, '\n' | '\r') && !win_ansi_encodable(*c))
 }
@@ -284,16 +190,6 @@ pub fn set_undrawn_mark(d: &mut pdfcraft_cos::Dict, c: Option<char>) {
             d.remove(UNDRAWN_MARK);
         }
     }
-}
-
-/// The byte used by Unicode text plans, from the shared WinAnsi table (tabs become spaces).
-pub fn win_ansi_char(c: char) -> Option<u8> {
-    if c == '\t' { Some(b' ') } else { win_ansi_byte(c) }
-}
-
-/// Whether every character can be represented without substitution in WinAnsi.
-pub fn fits_win_ansi(s: &str) -> bool {
-    s.chars().all(win_ansi_encodable)
 }
 
 /// Bytes as a PDF literal string, `(` … `)`, with delimiters escaped.

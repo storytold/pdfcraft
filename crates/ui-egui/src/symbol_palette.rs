@@ -6,8 +6,11 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use crate::theme::Tokens;
-use egui::{Color32, CornerRadius, Pos2, Stroke, Vec2};
+use craft::theme::TypeRole;
+use craft::ui::contract::Show as _;
+use craft::ui::display::Text;
+use craft::ui::runtime::env::Env;
+use egui::{Color32, CornerRadius, FontId, Pos2, Stroke, Vec2};
 
 /// Common symbol categories for rapid insertion.
 pub struct SymbolCategory {
@@ -35,29 +38,33 @@ impl SymbolPalette {
     /// Render the symbol picker popup anchored at `anchor`.
     /// Returns the inserted character string if a symbol button was clicked.
     pub fn show(ui: &mut egui::Ui, anchor: Pos2) -> Option<&'static str> {
-        let t = Tokens::get(ui.ctx());
+        let env = Env::of(ui);
+        let to_c32 = |c: [u8; 4]| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+        let card = to_c32(env.tokens.color.surface.raised.0);
+        let border = to_c32(env.tokens.color.line.border.0);
+        let dark = card.r() < 128;
         let mut inserted = None;
 
         egui::Area::new(egui::Id::unique("floating-symbol-palette")).order(egui::Order::Foreground).fixed_pos(anchor).show(ui.ctx(), |ui| {
             egui::Frame::NONE
-                .fill(t.card)
-                .stroke(Stroke::new(1.0, t.border))
+                .fill(card)
+                .stroke(Stroke::new(1.0, border))
                 .corner_radius(CornerRadius::same(8))
-                .shadow(egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(if t.dark() { 100 } else { 36 }) })
+                .shadow(egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(if dark { 100 } else { 36 }) })
                 .inner_margin(egui::Margin::same(10))
                 .show(ui, |ui| {
                     ui.set_width(280.0);
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Insert Symbol").font(crate::theme::semibold(13.0)));
+                        Text::new("Insert Symbol").role(TypeRole::Label).show(ui);
                     });
                     ui.add_space(6.0);
 
                     for cat in SYMBOL_CATEGORIES {
-                        ui.label(egui::RichText::new(tl!(cat.name)).font(crate::theme::medium(11.0)).color(t.text_muted));
+                        Text::new(tl!(cat.name).to_string()).role(TypeRole::Caption).show(ui);
                         ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing = Vec2::splat(3.0);
                             for &sym in cat.symbols {
-                                let btn = egui::Button::new(egui::RichText::new(sym).font(crate::theme::medium(13.0)))
+                                let btn = egui::Button::new(egui::RichText::new(sym).font(FontId::proportional(13.0)))
                                     .min_size(Vec2::splat(26.0))
                                     .corner_radius(CornerRadius::same(4));
                                 if ui.add(btn).clicked() {

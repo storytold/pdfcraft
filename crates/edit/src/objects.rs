@@ -358,11 +358,13 @@ pub fn update_line_endpoints(doc: &mut Document, page: usize, target: ObjectTarg
             _ => {}
         }
 
-        let (final_x, final_w) = if new_w < 0.0 { (new_x + new_w, -new_w) } else { (new_x, new_w) };
-        let (final_y, final_h) = if new_h < 0.0 { (new_y + new_h, -new_h) } else { (new_y, new_h) };
-        if final_w.abs() < 1e-4 && final_h.abs() < 1e-4 {
-            return Err(EditError::Invalid("rectangle dimensions collapsed to zero".into()));
+        let crossed_w = (rw > 0.0 && new_w <= 1e-4) || (rw < 0.0 && new_w >= -1e-4) || (rw == 0.0 && new_w.abs() < 1e-4);
+        let crossed_h = (rh > 0.0 && new_h <= 1e-4) || (rh < 0.0 && new_h >= -1e-4) || (rh == 0.0 && new_h.abs() < 1e-4);
+        if crossed_w || crossed_h || new_w.abs() < 1e-4 || new_h.abs() < 1e-4 {
+            return Err(EditError::Invalid("rectangle dimensions collapsed or crossed the opposite edge".into()));
         }
+        let (final_x, final_w) = (new_x, new_w);
+        let (final_y, final_h) = (new_y, new_h);
 
         let mut re_bytes = pdfcraft_content::serialize_ops(&[Op::new(
             "re",
@@ -725,19 +727,22 @@ impl LineSegment {
     }
 }
 
+const MAX_RAW_SEGMENTS: usize = 200_000;
+
 #[derive(Clone, Debug)]
 struct ParsedLine {
     start: [f64; 2],
     end: [f64; 2],
     thickness: f64,
     #[allow(dead_code)]
-    color: [f64; 3],
+    color: Option<[f64; 3]>,
     #[allow(dead_code)]
     dash: (Vec<f64>, f64),
     matrix: Matrix,
     m_op_idx: usize,
     l_op_indices: Vec<usize>,
     stroke_op_idx: usize,
+    straight_group: usize,
     re_info: Option<(usize, usize)>,
 }
 
@@ -750,28 +755,30 @@ fn parse_page_lines(streams: &[ContentStream]) -> Result<Vec<ParsedLine>, EditEr
     struct GState {
         matrix: Matrix,
         width: f64,
-        color: [f64; 3],
+        color: Option<[f64; 3]>,
         dash: (Vec<f64>, f64),
     }
 
-    let mut state = GState { matrix: Matrix::IDENTITY, width: 1.0, color: [0.0, 0.0, 0.0], dash: (Vec::new(), 0.0) };
+    let mut state = GState { matrix: Matrix::IDENTITY, width: 1.0, color: Some([0.0, 0.0, 0.0]), dash: (Vec::new(), 0.0) };
     let mut stack: Vec<GState> = Vec::new();
 
     struct PendingSeg {
         start_user: [f64; 2],
         end_user: [f64; 2],
         thickness: f64,
-        color: [f64; 3],
+        color: Option<[f64; 3]>,
         dash: (Vec<f64>, f64),
         matrix: Matrix,
         m_op_idx: usize,
         l_op_idx: usize,
+        straight_group: usize,
         re_info: Option<(usize, usize)>,
     }
 
     let mut current_point: Option<([f64; 2], [f64; 2])> = None;
     let mut subpath_start: Option<([f64; 2], [f64; 2])> = None;
     let mut current_m_idx: usize = 0;
+    let mut straight_group: usize = 0;
     let mut pending_segs: Vec<PendingSeg> = Vec::new();
     let mut raw_lines: Vec<ParsedLine> = Vec::new();
     let mut total_dash_allocations: usize = 0;
@@ -779,22 +786,26 @@ fn parse_page_lines(streams: &[ContentStream]) -> Result<Vec<ParsedLine>, EditEr
     for (idx, op) in ops.iter().enumerate() {
         match op.op.as_slice() {
             b"q" => {
+                straight_group = straight_group.saturating_add(1);
                 if stack.len() >= 1024 {
                     return Err(EditError::Invalid("the page graphics state is nested too deeply".into()));
                 }
                 stack.push(state.clone());
             }
             b"Q" => {
+                straight_group = straight_group.saturating_add(1);
                 if let Some(prev) = stack.pop() {
                     state = prev;
                 }
             }
             b"cm" => {
+                straight_group = straight_group.saturating_add(1);
                 if let Some(m) = op.nums::<6>() {
                     state.matrix = Matrix(m).then(&state.matrix);
                 }
             }
             b"w" => {
+                straight_group = straight_group.saturating_add(1);
                 if let Some(w) = op.num(0)
                     && w.is_finite()
                     && w >= 0.0
@@ -803,28 +814,36 @@ fn parse_page_lines(streams: &[ContentStream]) -> Result<Vec<ParsedLine>, EditEr
                 }
             }
             b"RG" => {
+                straight_group = straight_group.saturating_add(1);
                 if let Some(rgb) = op.nums::<3>()
                     && rgb.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
                 {
-                    state.color = rgb;
+                    state.color = Some(rgb);
                 }
             }
             b"G" => {
+                straight_group = straight_group.saturating_add(1);
                 if let Some(g) = op.num(0)
                     && g.is_finite()
                     && (0.0..=1.0).contains(&g)
                 {
-                    state.color = [g, g, g];
+                    state.color = Some([g, g, g]);
                 }
             }
             b"K" => {
+                straight_group = straight_group.saturating_add(1);
                 if let Some([c, m, y, k]) = op.nums::<4>()
                     && [c, m, y, k].iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
                 {
-                    state.color = [(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)];
+                    state.color = Some([(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)]);
                 }
             }
+            b"CS" | b"SC" | b"SCN" => {
+                straight_group = straight_group.saturating_add(1);
+                state.color = None;
+            }
             b"d" => {
+                straight_group = straight_group.saturating_add(1);
                 if let Some(arr) = op.operands.first().and_then(Object::as_array) {
                     let dash_vec: Vec<f64> = arr.iter().take(16).filter_map(Object::as_f64).collect();
                     let phase = op.num(1).unwrap_or(0.0);
@@ -832,6 +851,7 @@ fn parse_page_lines(streams: &[ContentStream]) -> Result<Vec<ParsedLine>, EditEr
                 }
             }
             b"m" => {
+                straight_group = straight_group.saturating_add(1);
                 if let Some([x, y]) = op.nums::<2>() {
                     let (ux, uy) = state.matrix.apply(x, y);
                     current_point = Some(([x, y], [ux, uy]));
@@ -847,7 +867,7 @@ fn parse_page_lines(streams: &[ContentStream]) -> Result<Vec<ParsedLine>, EditEr
                         let dy = uy - prev_user[1];
                         if (dx * dx + dy * dy).sqrt() > 1e-4 {
                             total_dash_allocations = total_dash_allocations.saturating_add(state.dash.0.len());
-                            if total_dash_allocations > 100_000 || pending_segs.len() >= MAX_PAGE_LINES {
+                            if total_dash_allocations > 100_000 || pending_segs.len() >= MAX_RAW_SEGMENTS {
                                 return Err(EditError::Invalid("the page has too many line segments to edit as a group".into()));
                             }
                             let [a, b, c, d, _, _] = state.matrix.0;
@@ -862,6 +882,7 @@ fn parse_page_lines(streams: &[ContentStream]) -> Result<Vec<ParsedLine>, EditEr
                                 matrix: state.matrix,
                                 m_op_idx: current_m_idx,
                                 l_op_idx: idx,
+                                straight_group,
                                 re_info: None,
                             });
                         }
@@ -870,12 +891,13 @@ fn parse_page_lines(streams: &[ContentStream]) -> Result<Vec<ParsedLine>, EditEr
                 }
             }
             b"h" => {
+                straight_group = straight_group.saturating_add(1);
                 if let (Some((_prev_local, prev_user)), Some((start_local, start_user))) = (current_point, subpath_start) {
                     let dx = start_user[0] - prev_user[0];
                     let dy = start_user[1] - prev_user[1];
                     if (dx * dx + dy * dy).sqrt() > 1e-4 {
                         total_dash_allocations = total_dash_allocations.saturating_add(state.dash.0.len());
-                        if total_dash_allocations > 100_000 || pending_segs.len() >= MAX_PAGE_LINES {
+                        if total_dash_allocations > 100_000 || pending_segs.len() >= MAX_RAW_SEGMENTS {
                             return Err(EditError::Invalid("the page has too many line segments to edit as a group".into()));
                         }
                         let [a, b, c, d, _, _] = state.matrix.0;
@@ -890,25 +912,30 @@ fn parse_page_lines(streams: &[ContentStream]) -> Result<Vec<ParsedLine>, EditEr
                             matrix: state.matrix,
                             m_op_idx: current_m_idx,
                             l_op_idx: idx,
+                            straight_group,
                             re_info: None,
                         });
                     }
                     current_point = Some((start_local, start_user));
                 }
+                straight_group = straight_group.saturating_add(1);
             }
             b"c" => {
+                straight_group = straight_group.saturating_add(1);
                 if let Some(pts) = op.nums::<6>() {
                     let (ux, uy) = state.matrix.apply(pts[4], pts[5]);
                     current_point = Some(([pts[4], pts[5]], [ux, uy]));
                 }
             }
             b"v" | b"y" => {
+                straight_group = straight_group.saturating_add(1);
                 if let Some(pts) = op.nums::<4>() {
                     let (ux, uy) = state.matrix.apply(pts[2], pts[3]);
                     current_point = Some(([pts[2], pts[3]], [ux, uy]));
                 }
             }
             b"re" => {
+                straight_group = straight_group.saturating_add(1);
                 if let Some([x, y, w, h]) = op.nums::<4>() {
                     let p0 = [x, y];
                     let p1 = [x + w, y];
@@ -931,7 +958,7 @@ fn parse_page_lines(streams: &[ContentStream]) -> Result<Vec<ParsedLine>, EditEr
                         let dy = end_user[1] - start_user[1];
                         if dx.hypot(dy) > 1e-4 {
                             total_dash_allocations = total_dash_allocations.saturating_add(state.dash.0.len());
-                            if total_dash_allocations > 100_000 || pending_segs.len() >= MAX_PAGE_LINES {
+                            if total_dash_allocations > 100_000 || pending_segs.len() >= MAX_RAW_SEGMENTS {
                                 return Err(EditError::Invalid("the page has too many line segments to edit as a group".into()));
                             }
                             pending_segs.push(PendingSeg {
@@ -943,6 +970,7 @@ fn parse_page_lines(streams: &[ContentStream]) -> Result<Vec<ParsedLine>, EditEr
                                 matrix: state.matrix,
                                 m_op_idx: idx,
                                 l_op_idx: idx,
+                                straight_group,
                                 re_info: Some((idx, i)),
                             });
                         }
@@ -953,6 +981,7 @@ fn parse_page_lines(streams: &[ContentStream]) -> Result<Vec<ParsedLine>, EditEr
                 }
             }
             b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*" => {
+                straight_group = straight_group.saturating_add(1);
                 if matches!(op.op.as_slice(), b"s" | b"b" | b"b*")
                     && let (Some((_prev_local, prev_user)), Some((_start_local, start_user))) = (current_point, subpath_start)
                 {
@@ -960,7 +989,7 @@ fn parse_page_lines(streams: &[ContentStream]) -> Result<Vec<ParsedLine>, EditEr
                     let dy = start_user[1] - prev_user[1];
                     if (dx * dx + dy * dy).sqrt() > 1e-4 {
                         total_dash_allocations = total_dash_allocations.saturating_add(state.dash.0.len());
-                        if total_dash_allocations > 100_000 || pending_segs.len() >= MAX_PAGE_LINES {
+                        if total_dash_allocations > 100_000 || pending_segs.len() >= MAX_RAW_SEGMENTS {
                             return Err(EditError::Invalid("the page has too many line segments to edit as a group".into()));
                         }
                         let [a, b, c, d, _, _] = state.matrix.0;
@@ -975,11 +1004,15 @@ fn parse_page_lines(streams: &[ContentStream]) -> Result<Vec<ParsedLine>, EditEr
                             matrix: state.matrix,
                             m_op_idx: current_m_idx,
                             l_op_idx: idx,
+                            straight_group,
                             re_info: None,
                         });
                     }
                 }
                 for seg in pending_segs.drain(..) {
+                    if raw_lines.len() >= MAX_RAW_SEGMENTS {
+                        return Err(EditError::Invalid("the page has too many line segments to edit as a group".into()));
+                    }
                     raw_lines.push(ParsedLine {
                         start: seg.start_user,
                         end: seg.end_user,
@@ -990,6 +1023,7 @@ fn parse_page_lines(streams: &[ContentStream]) -> Result<Vec<ParsedLine>, EditEr
                         m_op_idx: seg.m_op_idx,
                         l_op_indices: vec![seg.l_op_idx],
                         stroke_op_idx: idx,
+                        straight_group: seg.straight_group,
                         re_info: seg.re_info,
                     });
                 }
@@ -997,6 +1031,7 @@ fn parse_page_lines(streams: &[ContentStream]) -> Result<Vec<ParsedLine>, EditEr
                 subpath_start = None;
             }
             b"f" | b"f*" | b"F" | b"n" => {
+                straight_group = straight_group.saturating_add(1);
                 pending_segs.clear();
                 current_point = None;
                 subpath_start = None;
@@ -1005,7 +1040,11 @@ fn parse_page_lines(streams: &[ContentStream]) -> Result<Vec<ParsedLine>, EditEr
         }
     }
 
-    Ok(merge_collinear_parsed(raw_lines))
+    let merged = merge_collinear_parsed(raw_lines);
+    if merged.len() > MAX_PAGE_LINES {
+        return Err(EditError::Invalid("this page has too many line segments to edit as a group".into()));
+    }
+    Ok(merged)
 }
 
 fn merge_collinear_parsed(raw: Vec<ParsedLine>) -> Vec<ParsedLine> {
@@ -1017,6 +1056,7 @@ fn merge_collinear_parsed(raw: Vec<ParsedLine>) -> Vec<ParsedLine> {
             let lw = last.thickness;
             if last.re_info.is_none()
                 && item.re_info.is_none()
+                && last.straight_group == item.straight_group
                 && (lw - item.thickness).abs() < MERGE_DIST_EPS
                 && endpoints_merge(le, item.start)
                 && collinear(ls, le, item.end)
@@ -1054,24 +1094,31 @@ pub fn editable_lines(doc: &Document, page: usize) -> Result<Vec<LineSegment>, E
                 && pl.thickness.is_finite()
                 && pl.thickness > 0.0
         })
-        .map(|(index, pl)| LineSegment { page, index, start: pl.start, end: pl.end, thickness: pl.thickness, stroke_color: Some(pl.color) })
+        .map(|(index, pl)| LineSegment { page, index, start: pl.start, end: pl.end, thickness: pl.thickness, stroke_color: pl.color })
         .collect())
 }
 
 #[cfg(test)]
-fn merge_collinear(raw: &[([f64; 2], [f64; 2], f64)]) -> Vec<([f64; 2], [f64; 2], f64)> {
-    let mut out: Vec<([f64; 2], [f64; 2], f64)> = Vec::with_capacity(raw.len());
-    for &(s, e, w) in raw {
-        if let Some(last) = out.last_mut() {
-            let (ls, le, lw) = *last;
-            if (lw - w).abs() < MERGE_DIST_EPS && endpoints_merge(le, s) && collinear(ls, le, e) {
-                *last = (ls, e, lw);
-                continue;
-            }
-        }
-        out.push((s, e, w));
-    }
-    out
+fn lines_for_stream_bytes(stream_bytes: &[u8]) -> Result<Vec<LineSegment>, EditError> {
+    let mut doc = Document::new_empty();
+    let pages = doc
+        .get(doc.root().ok_or_else(|| EditError::Invalid("no root".into()))?)
+        .as_dict()
+        .ok_or_else(|| EditError::Invalid("no root dict".into()))?
+        .reference(b"Pages")
+        .ok_or_else(|| EditError::Invalid("no pages".into()))?;
+    let stream = Object::Ref(doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(Dict::new(), stream_bytes.to_vec()))));
+    let mut page = Dict::new();
+    page.set(b"Type".to_vec(), Object::name("Page"));
+    page.set(b"Parent".to_vec(), Object::Ref(pages));
+    page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
+    page.set(b"Contents".to_vec(), Object::Array(vec![stream]));
+    let page = doc.add(page);
+    doc.update_dict(pages, |d| {
+        d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+        d.set(b"Count".to_vec(), Object::Int(1));
+    })?;
+    editable_lines(&doc, 0)
 }
 
 fn endpoints_merge(a: [f64; 2], b: [f64; 2]) -> bool {
@@ -1107,32 +1154,54 @@ mod line_tests {
 
     #[test]
     fn merge_collinear_joins_two_halves() {
-        let raw = vec![([0.0, 0.0], [5.0, 0.0], 1.0), ([5.0, 0.0], [10.0, 0.0], 1.0)];
-        let merged = merge_collinear(&raw);
-        assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].0, [0.0, 0.0]);
-        assert_eq!(merged[0].1, [10.0, 0.0]);
+        let lines = lines_for_stream_bytes(b"0 0 m 5 0 l 10 0 l S\n").unwrap();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].start, [0.0, 0.0]);
+        assert_eq!(lines[0].end, [10.0, 0.0]);
     }
 
     #[test]
     fn merge_does_not_join_perpendicular() {
-        let raw = vec![([0.0, 0.0], [5.0, 0.0], 1.0), ([5.0, 0.0], [5.0, 5.0], 1.0)];
-        let merged = merge_collinear(&raw);
-        assert_eq!(merged.len(), 2);
+        let lines = lines_for_stream_bytes(b"0 0 m 5 0 l 5 5 l S\n").unwrap();
+        assert_eq!(lines.len(), 2);
     }
 
     #[test]
     fn merge_does_not_join_different_widths() {
-        let raw = vec![([0.0, 0.0], [5.0, 0.0], 1.0), ([5.0, 0.0], [10.0, 0.0], 2.0)];
-        let merged = merge_collinear(&raw);
-        assert_eq!(merged.len(), 2);
+        let lines = lines_for_stream_bytes(b"1 w 0 0 m 5 0 l S\n2 w 5 0 m 10 0 l S\n").unwrap();
+        assert_eq!(lines.len(), 2);
     }
 
     #[test]
     fn merge_does_not_join_reversed() {
-        let raw = vec![([0.0, 0.0], [5.0, 0.0], 1.0), ([5.0, 0.0], [2.0, 0.0], 1.0)];
-        let merged = merge_collinear(&raw);
-        assert_eq!(merged.len(), 2);
+        let lines = lines_for_stream_bytes(b"0 0 m 5 0 l 2 0 l S\n").unwrap();
+        assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn merge_does_not_join_across_curve() {
+        let lines = lines_for_stream_bytes(b"0 0 m 10 0 l 20 10 0 20 10 0 c 20 0 l S\n").unwrap();
+        assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn merge_allows_over_max_raw_collinear_segments() {
+        let mut s = String::from("0 0 m ");
+        for i in 1..=10_005 {
+            s.push_str(&format!("{i} 0 l "));
+        }
+        s.push_str("S\n");
+        let lines = lines_for_stream_bytes(s.as_bytes()).unwrap();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].start, [0.0, 0.0]);
+        assert_eq!(lines[0].end, [10_005.0, 0.0]);
+    }
+
+    #[test]
+    fn unknown_color_operator_clears_stroke_color() {
+        let lines = lines_for_stream_bytes(b"/DeviceRGB CS 1 0 0 SC 0 0 m 10 0 l S\n").unwrap();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].stroke_color, None);
     }
 
     #[test]
@@ -1343,5 +1412,41 @@ mod line_tests {
         assert_eq!(lines_after.len(), 4);
         assert_eq!(lines_after[1].start, [130.0, 20.0]);
         assert_eq!(lines_after[1].end, [130.0, 70.0]);
+    }
+
+    #[test]
+    fn test_rectangle_resize_collapse_and_crossing_rejected() {
+        let mut doc = Document::new_empty();
+        let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+        let stream_bytes = b"10 20 100 50 re S\n".to_vec();
+        let stream = Object::Ref(doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(Dict::new(), stream_bytes))));
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Parent".to_vec(), Object::Ref(pages));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
+        page.set(b"Contents".to_vec(), Object::Array(vec![stream]));
+        let page = doc.add(page);
+        doc.update_dict(pages, |d| {
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+            d.set(b"Count".to_vec(), Object::Int(1));
+        })
+        .unwrap();
+
+        let target_right = ObjectTarget { kind: ObjectKind::VectorLine, index: 1 };
+        let target_top = ObjectTarget { kind: ObjectKind::VectorLine, index: 2 };
+        let target_left = ObjectTarget { kind: ObjectKind::VectorLine, index: 3 };
+
+        // Width collapse (right edge dragged to x = 10) must be rejected.
+        assert!(update_line_endpoints(&mut doc, 0, target_right, [10.0, 20.0], [10.0, 70.0]).is_err());
+        // Height collapse (top edge dragged to y = 20) must be rejected.
+        assert!(update_line_endpoints(&mut doc, 0, target_top, [110.0, 20.0], [10.0, 20.0]).is_err());
+        // Vertical edge crossing opposite edge (right edge past x = 10 to x = 9, or left past 110 to 120) must be rejected.
+        assert!(update_line_endpoints(&mut doc, 0, target_right, [9.0, 20.0], [9.0, 70.0]).is_err());
+        assert!(update_line_endpoints(&mut doc, 0, target_left, [120.0, 20.0], [120.0, 70.0]).is_err());
+
+        // Document must remain completely unchanged.
+        let lines = editable_lines(&doc, 0).unwrap();
+        assert_eq!(lines[1].start, [110.0, 20.0]);
+        assert_eq!(lines[2].end, [10.0, 70.0]);
     }
 }

@@ -187,6 +187,12 @@ fn main() {
     println!("  -> Extracted raw page data in {:.2?}", extract_duration);
 
     // 3. Build document layout
+    let total_skipped_images: usize = page_data.iter().map(|p| p.skipped_images).sum();
+    if total_skipped_images > 0 {
+        eprintln!("Warning: skipped {total_skipped_images} image(s) exceeding the 128 MiB per-page image extraction budget.");
+    }
+    let layout_duration = Instant::now();
+    let _ = layout_duration;
     let t_layout = Instant::now();
     let layout = layout::build_layout(page_data);
     let layout_duration = t_layout.elapsed();

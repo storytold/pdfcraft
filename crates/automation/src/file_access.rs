@@ -510,7 +510,6 @@ mod tests {
         // resolves its paths before checking output collisions and using the probe helpers.
         const RESOLVED_BY_CALLER: &[&str] = &[
             "write_atomic",
-            "write_atomic_with",
             "read_input",
             "read_input_bytes",
             "read_model",

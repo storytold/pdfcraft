@@ -6,20 +6,30 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+use craft::ui::contract::{Bind, Entry, Show as _};
+use craft::ui::pickers::Select;
 use egui::{Color32, CornerRadius, Margin, Pos2, Rect, Stroke, pos2, vec2};
 use pdfcraft_engine::barcode_scan::ScannedCode;
 use pdfcraft_engine::{Document, Edit};
 use pdfcraft_render::DocInfo;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::canvas::DocView;
-use crate::theme;
+
+fn hud_font(size: f32) -> egui::FontId {
+    egui::FontId::proportional(size)
+}
 
 /// Persistent HUD state for barcode / QR detection and interactive editing.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BarcodeHudState {
     /// Cached detected codes for the active page.
     pub scanned_codes: Vec<ScannedCode>,
+    /// Cached detected codes per 0-based page index so clicks work on any visible page.
+    pub page_codes: BTreeMap<usize, Vec<ScannedCode>>,
+    /// Edit generation that populated `page_codes`.
+    pub cache_generation: Option<u64>,
     /// Index in `scanned_codes` currently focused by the HUD.
     pub active_index: usize,
     /// Whether HUD is currently open and visible.
@@ -40,6 +50,8 @@ pub struct BarcodeHudState {
     pub last_scanned_page: Option<usize>,
     /// Target rectangle coordinates to track and refocus after rescanning.
     pub target_rect: Option<[f64; 4]>,
+    /// Queued PNG download `(filename, bytes)` for the web shell to hand to the browser host.
+    pub pending_download: Option<(String, Arc<Vec<u8>>)>,
 }
 
 impl BarcodeHudState {
@@ -128,6 +140,24 @@ impl BarcodeHudState {
     /// Current active code.
     pub fn active_code(&self) -> Option<&ScannedCode> {
         self.scanned_codes.get(self.active_index)
+    }
+
+    /// Cached detected codes for `page`, if scanned at the current edit generation.
+    pub fn codes_for_page(&self, page: usize) -> Option<&[ScannedCode]> {
+        self.page_codes.get(&page).map(Vec::as_slice)
+    }
+
+    /// Focus the HUD on `code_index` within `page`'s cached scanned codes and open the panel.
+    pub fn focus_page_code(&mut self, page: usize, code_index: usize) {
+        if let Some(codes) = self.page_codes.get(&page).cloned() {
+            self.scanned_codes = codes;
+            self.active_index = code_index.min(self.scanned_codes.len().saturating_sub(1));
+            self.last_scanned_page = Some(page);
+            self.edit_buffer = None;
+            self.reembed_kind = self.active_code().map(|c| c.kind);
+            self.open = true;
+            self.panel_open = true;
+        }
     }
 
     /// Show feedback toast in HUD.
@@ -293,7 +323,7 @@ fn render_floating_menu(
                             if can_modify
                                 && ui
                                     .add(egui::Button::new(
-                                        egui::RichText::new("🗑 Delete").font(theme::medium(11.0)).color(Color32::from_rgb(0xEF, 0x44, 0x44)),
+                                        egui::RichText::new("🗑 Delete").font(hud_font(11.0)).color(Color32::from_rgb(0xEF, 0x44, 0x44)),
                                     ))
                                     .on_hover_text("Delete barcode and whiteout region")
                                     .clicked()
@@ -302,7 +332,7 @@ fn render_floating_menu(
                             }
                             if ui
                                 .add(egui::Button::new(
-                                    egui::RichText::new("⬇ Download").font(theme::medium(11.0)).color(Color32::from_rgb(0x60, 0xA5, 0xFA)),
+                                    egui::RichText::new("⬇ Download").font(hud_font(11.0)).color(Color32::from_rgb(0x60, 0xA5, 0xFA)),
                                 ))
                                 .on_hover_text("Export barcode PNG to Downloads folder")
                                 .clicked()
@@ -318,39 +348,93 @@ fn render_floating_menu(
 }
 
 impl BarcodeScannerHud {
+    /// Paint highlight boxes over detected barcodes/QR codes on `page`.
+    pub fn paint_page_highlights(ui: &egui::Ui, clip: Rect, xf: &crate::canvas::PageXform, info: &DocInfo, state: &BarcodeHudState, page: usize) {
+        let codes = state.codes_for_page(page).unwrap_or(state.scanned_codes.as_slice());
+        let active_key = state.active_code().map(|c| (c.page, c.id, c.rect));
+        let painter = ui.painter().with_clip_rect(clip);
+        let accent = Color32::from_rgb(0x3B, 0x82, 0xF6);
+        for code in codes.iter().filter(|c| c.page == page) {
+            let rect = xf.user_rect(info, page, code.rect.map(|v| v as f32));
+            if !rect.is_positive() {
+                continue;
+            }
+            let is_active = active_key == Some((code.page, code.id, code.rect));
+            let stroke = if is_active { Stroke::new(1.5, accent) } else { Stroke::new(1.0, accent.gamma_multiply(0.55)) };
+            painter.rect_stroke(rect, CornerRadius::same(2), stroke, egui::StrokeKind::Outside);
+            if is_active {
+                painter.rect_filled(rect, CornerRadius::same(2), accent.gamma_multiply(0.08));
+            }
+        }
+    }
+
     /// Reactive Auto-Page Tracking hook:
     ///
-    /// Scans current page on page change so interactive canvas clicks work immediately.
-    /// `active` is the HUD being open or the barcode tool being picked: the scan runs only then,
-    /// but it never opens the HUD by itself. The page itself is scanned on a worker thread; its
-    /// result is shown only if the document and page still match when it arrives.
-    pub fn auto_scan_on_page_change(view: &mut DocView, doc: &Document, now: f64, active: bool, ctx: Option<&egui::Context>) {
-        // A finished scan belongs to the document and page it was asked for: the user may have
-        // turned the page or switched tabs while it ran.
-        if let Some((doc_id, page, generation, rx)) = &view.barcode_scan {
+    /// Scans the current page and any other visible pages so interactive canvas clicks work
+    /// immediately on every visible page. `active` is the HUD being open or the barcode tool
+    /// being picked: the scan runs only then, and never opens the HUD by itself.
+    pub fn auto_scan_on_page_change(
+        view: &mut DocView,
+        doc: &Document,
+        now: f64,
+        active: bool,
+        ctx: Option<&egui::Context>,
+        visible_pages: &[usize],
+    ) {
+        let generation = doc.edit_generation();
+        if view.session.barcode_hud.cache_generation != Some(generation) {
+            view.session.barcode_hud.cache_generation = Some(generation);
+            view.session.barcode_hud.page_codes.clear();
+            view.session.barcode_hud.last_scanned_page = None;
+            view.session.barcode_scan = None;
+        }
+
+        // A finished scan belongs to the document and generation it was asked for: the user may
+        // have switched tabs or edited the document while it ran.
+        if let Some((doc_id, scanned_page, scan_gen, rx)) = &view.session.barcode_scan {
             match rx.try_recv() {
                 Ok(codes) => {
-                    let (doc_id, page, generation) = (*doc_id, *page, *generation);
-                    view.barcode_scan = None;
-                    if view.id.0 == doc_id && view.current == page && doc.edit_generation() == generation {
-                        Self::apply_scan(view, codes, now);
+                    let (doc_id, scanned_page, scan_gen) = (*doc_id, *scanned_page, *scan_gen);
+                    view.session.barcode_scan = None;
+                    if view.id.0 == doc_id && doc.edit_generation() == scan_gen {
+                        view.session.barcode_hud.page_codes.insert(scanned_page, codes.clone());
+                        if view.view.current == scanned_page {
+                            Self::apply_scan(view, scanned_page, codes, now);
+                        }
                     }
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => view.barcode_scan = None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => view.session.barcode_scan = None,
             }
         }
         if !active {
             return;
         }
-        let current_page = view.current;
-        if view.barcode_scan.is_some() || view.barcode_hud.last_scanned_page == Some(current_page) {
+        if view.session.barcode_scan.is_some() {
             return;
         }
-        view.barcode_hud.last_scanned_page = Some(current_page);
+        let current_page = view.view.current;
+        let next_page = if view.session.barcode_hud.last_scanned_page != Some(current_page) {
+            view.session.barcode_hud.last_scanned_page = Some(current_page);
+            if let Some(cached) = view.session.barcode_hud.page_codes.get(&current_page).cloned() {
+                Self::apply_scan(view, current_page, cached, now);
+                visible_pages.iter().copied().find(|p| !view.session.barcode_hud.page_codes.contains_key(p))
+            } else {
+                Some(current_page)
+            }
+        } else {
+            visible_pages.iter().copied().find(|p| !view.session.barcode_hud.page_codes.contains_key(p))
+        };
+        let Some(target_page) = next_page else {
+            return;
+        };
         if cfg!(target_arch = "wasm32") {
             // No threads on the web: scan here rather than never.
-            Self::apply_scan(view, doc.scan_page_codes(current_page), now);
+            let codes = doc.scan_page_codes(target_page);
+            view.session.barcode_hud.page_codes.insert(target_page, codes.clone());
+            if target_page == current_page {
+                Self::apply_scan(view, target_page, codes, now);
+            }
             return;
         }
         let (bytes, password, name) = (doc.bytes.clone(), doc.password.clone(), doc.name.clone());
@@ -360,7 +444,7 @@ impl BarcodeScannerHud {
             // A scan-only session: the interface's own session cannot be moved to a worker.
             let mut session = pdfcraft_engine::Session::new();
             let codes = match session.open(name, None, bytes, password.as_deref()) {
-                Ok(id) => session.get(id).map(|d| d.scan_page_codes(current_page)).unwrap_or_default(),
+                Ok(id) => session.get(id).map(|d| d.scan_page_codes(target_page)).unwrap_or_default(),
                 Err(_) => Vec::new(),
             };
             let _ = tx.send(codes);
@@ -368,27 +452,31 @@ impl BarcodeScannerHud {
                 ctx.request_repaint();
             }
         });
-        let generation = doc.edit_generation();
         match spawned {
-            Ok(_) => view.barcode_scan = Some((view.id.0, current_page, generation, rx)),
+            Ok(_) => view.session.barcode_scan = Some((view.id.0, target_page, generation, rx)),
             // No thread could be started: fall back to scanning this frame.
-            Err(_) => Self::apply_scan(view, doc.scan_page_codes(current_page), now),
+            Err(_) => {
+                let codes = doc.scan_page_codes(target_page);
+                view.session.barcode_hud.page_codes.insert(target_page, codes.clone());
+                if target_page == current_page {
+                    Self::apply_scan(view, target_page, codes, now);
+                }
+            }
         }
     }
 
     /// Show a finished page scan, keeping whether the HUD and its panel were open.
-    fn apply_scan(view: &mut DocView, codes: Vec<ScannedCode>, now: f64) {
-        let page = view.current;
+    fn apply_scan(view: &mut DocView, page: usize, codes: Vec<ScannedCode>, now: f64) {
         let count = codes.len();
-        let open = view.barcode_hud.open;
-        let panel_open = view.barcode_hud.panel_open;
-        view.barcode_hud.update_codes_conditional(codes, open);
-        view.barcode_hud.panel_open = panel_open;
+        let open = view.session.barcode_hud.open;
+        let panel_open = view.session.barcode_hud.panel_open;
+        view.session.barcode_hud.update_codes_conditional(codes, open);
+        view.session.barcode_hud.panel_open = panel_open;
         if open {
             if count > 0 {
-                view.barcode_hud.show_toast(format!("Detected {count} code(s) on page {}", page + 1), now);
+                view.session.barcode_hud.show_toast(format!("Detected {count} code(s) on page {}", page + 1), now);
             } else {
-                view.barcode_hud.show_toast(format!("No codes on page {}", page + 1), now);
+                view.session.barcode_hud.show_toast(format!("No codes on page {}", page + 1), now);
             }
         }
     }
@@ -397,18 +485,18 @@ impl BarcodeScannerHud {
     ///
     /// Returns a pending replacement `Edit` if the user modified and applied a code.
     pub fn show(ui: &mut egui::Ui, view: &mut DocView, doc: &Document, info: &DocInfo, can_modify: bool) -> Option<Edit> {
-        if !view.barcode_hud.open || !view.barcode_hud.panel_open {
+        if !view.session.barcode_hud.open || !view.session.barcode_hud.panel_open {
             return None;
         }
 
-        let current_page = view.current;
+        let current_page = view.session.barcode_hud.active_code().map_or(view.view.current, |c| c.page);
         let total_pages = info.pages.len();
         let viewport = view.viewport_rect();
         let view_id = view.id.0;
         let now = ui.input(|i| i.time);
         let page_xf = view.page_xform(current_page);
 
-        let state = &mut view.barcode_hud;
+        let state = &mut view.session.barcode_hud;
         let total_codes = state.scanned_codes.len();
 
         // 2. Keyboard arrow navigation when viewing (not editing text)
@@ -470,11 +558,17 @@ impl BarcodeScannerHud {
                         .show(ui, |ui| {
                             ui.set_width((hud_w - 28.0).max(ui.available_width()));
 
-                            // Header: Icon + Title + Close button
+                            // Header: Badge + Title + Close button
                             ui.horizontal(|ui| {
-                                crate::icons::paint(ui, Rect::from_min_size(ui.cursor().min, vec2(16.0, 16.0)), "scan", 16.0, accent_blue);
-                                ui.add_space(22.0);
-                                ui.label(egui::RichText::new("QR & Barcodes").font(theme::semibold(13.5)).color(text_primary));
+                                let (icon_r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::hover());
+                                ui.painter().rect_stroke(
+                                    icon_r.shrink(1.0),
+                                    CornerRadius::same(3),
+                                    Stroke::new(1.5, accent_blue),
+                                    egui::StrokeKind::Inside,
+                                );
+                                ui.painter().rect_filled(icon_r.shrink(5.0), CornerRadius::same(1), accent_blue);
+                                ui.label(egui::RichText::new("QR & Barcodes").font(hud_font(13.5)).color(text_primary));
 
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     if ui.small_button("✕").on_hover_text("Close HUD").clicked() {
@@ -493,16 +587,17 @@ impl BarcodeScannerHud {
                                 .inner_margin(Margin::symmetric(10, 8))
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
+                                        let hud_page = state.active_code().map_or(current_page, |c| c.page);
                                         ui.label(
-                                            egui::RichText::new(format!("Page {} of {}", current_page + 1, total_pages))
-                                                .font(theme::medium(11.5))
+                                            egui::RichText::new(format!("Page {} of {}", hud_page + 1, total_pages))
+                                                .font(hud_font(11.5))
                                                 .color(text_muted),
                                         );
                                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                            if ui.small_button("⟳").on_hover_text("Rescan current page").clicked() {
+                                            if ui.small_button("⟳").on_hover_text("Rescan visible pages").clicked() {
                                                 trigger_rescan = true;
                                             }
-                                            ui.label(egui::RichText::new("● AUTO").font(theme::semibold(9.5)).color(emerald_green));
+                                            ui.label(egui::RichText::new("● AUTO").font(hud_font(9.5)).color(emerald_green));
                                         });
                                     });
 
@@ -526,7 +621,7 @@ impl BarcodeScannerHud {
                                                 ui.add_space(8.0);
                                                 ui.label(
                                                     egui::RichText::new(format!("Code {} of {}", state.active_index + 1, total_codes))
-                                                        .font(theme::semibold(12.0))
+                                                        .font(hud_font(12.0))
                                                         .color(accent_blue),
                                                 );
                                             });
@@ -541,9 +636,7 @@ impl BarcodeScannerHud {
                                             });
                                         });
                                     } else {
-                                        ui.label(
-                                            egui::RichText::new("No barcodes or QR codes on this page").font(theme::regular(11.0)).color(text_muted),
-                                        );
+                                        ui.label(egui::RichText::new("No barcodes or QR codes on this page").font(hud_font(11.0)).color(text_muted));
                                     }
                                 });
 
@@ -558,12 +651,12 @@ impl BarcodeScannerHud {
                                     .show(ui, |ui| {
                                         // Symbology + Dimensions
                                         ui.horizontal(|ui| {
-                                            ui.label(egui::RichText::new("●").color(accent_blue).font(theme::semibold(11.0)));
-                                            ui.label(egui::RichText::new(active.kind.label()).font(theme::semibold(12.0)).color(text_primary));
+                                            ui.label(egui::RichText::new("●").color(accent_blue).font(hud_font(11.0)));
+                                            ui.label(egui::RichText::new(active.kind.label()).font(hud_font(12.0)).color(text_primary));
                                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                                 ui.label(
                                                     egui::RichText::new(format!("{}×{}px • 100%", active.pixel_size[0], active.pixel_size[1]))
-                                                        .font(theme::semibold(10.0))
+                                                        .font(hud_font(10.0))
                                                         .color(Color32::from_rgb(0x38, 0xBD, 0xF8)),
                                                 );
                                             });
@@ -573,41 +666,20 @@ impl BarcodeScannerHud {
 
                                         // Payload View or Edit Mode
                                         if let Some(buf) = &mut state.edit_buffer {
-                                            ui.label(egui::RichText::new("EDIT PAYLOAD & SYMBOLOGY").font(theme::semibold(9.5)).color(text_muted));
+                                            ui.label(egui::RichText::new("EDIT PAYLOAD & SYMBOLOGY").font(hud_font(9.5)).color(text_muted));
                                             ui.add_space(3.0);
                                             ui.add(egui::TextEdit::multiline(buf).desired_width(ui.available_width()).desired_rows(3));
                                             ui.add_space(4.0);
 
                                             // Symbology Dropdown
                                             let mut selected_kind = state.reembed_kind.unwrap_or(active.kind);
-                                            ui.horizontal(|ui| {
-                                                ui.label(egui::RichText::new("Format:").font(theme::medium(11.0)).color(text_muted));
-                                                craft_ui::ComboBox::from_id_salt("reembed-symbology-dropdown")
-                                                    .selected_text(selected_kind.label())
-                                                    .width(180.0)
-                                                    .show_ui(ui, |ui| {
-                                                        ui.selectable_value(
-                                                            &mut selected_kind,
-                                                            pdfcraft_engine::barcode_scan::CodeKind::QrCode,
-                                                            "QR Code",
-                                                        );
-                                                        ui.selectable_value(
-                                                            &mut selected_kind,
-                                                            pdfcraft_engine::barcode_scan::CodeKind::Code39,
-                                                            "Code 39 Barcode (139)",
-                                                        );
-                                                        ui.selectable_value(
-                                                            &mut selected_kind,
-                                                            pdfcraft_engine::barcode_scan::CodeKind::Code128,
-                                                            "Code 128 Barcode",
-                                                        );
-                                                        ui.selectable_value(
-                                                            &mut selected_kind,
-                                                            pdfcraft_engine::barcode_scan::CodeKind::Ean13,
-                                                            "EAN-13 Barcode",
-                                                        );
-                                                    });
-                                            });
+                                            let kind_entries = [
+                                                Entry::new(pdfcraft_engine::barcode_scan::CodeKind::QrCode, tl!("QR Code")),
+                                                Entry::new(pdfcraft_engine::barcode_scan::CodeKind::Code39, tl!("Code 39 Barcode (139)")),
+                                                Entry::new(pdfcraft_engine::barcode_scan::CodeKind::Code128, tl!("Code 128 Barcode")),
+                                                Entry::new(pdfcraft_engine::barcode_scan::CodeKind::Ean13, tl!("EAN-13 Barcode")),
+                                            ];
+                                            Select::new(tl!("Format"), Bind::bound(&mut selected_kind), &kind_entries).show(ui);
                                             state.reembed_kind = Some(selected_kind);
 
                                             ui.add_space(8.0);
@@ -630,10 +702,7 @@ impl BarcodeScannerHud {
                                                 .show(ui, |ui| {
                                                     ui.horizontal_wrapped(|ui| {
                                                         ui.label(
-                                                            egui::RichText::new(&active.text)
-                                                                .font(theme::medium(12.0))
-                                                                .monospace()
-                                                                .color(text_primary),
+                                                            egui::RichText::new(&active.text).font(hud_font(12.0)).monospace().color(text_primary),
                                                         );
                                                     });
                                                 });
@@ -660,7 +729,7 @@ impl BarcodeScannerHud {
                                                 ui.add_space(2.0);
                                                 ui.label(
                                                     egui::RichText::new("⚠ Vector code: changes cover original graphics with an overlay.")
-                                                        .font(theme::regular(10.0))
+                                                        .font(hud_font(10.0))
                                                         .color(Color32::from_rgb(0xF5, 0x9E, 0x0B)),
                                                 );
                                             }
@@ -672,7 +741,7 @@ impl BarcodeScannerHud {
                             ui.add_space(8.0);
                             ui.separator();
                             ui.add_space(4.0);
-                            ui.label(egui::RichText::new("Generate & Embed Code on Page").font(theme::semibold(12.0)).color(text_primary));
+                            ui.label(egui::RichText::new("Generate & Embed Code on Page").font(hud_font(12.0)).color(text_primary));
                             ui.add_space(4.0);
                             ui.horizontal_wrapped(|ui| {
                                 ui.selectable_value(&mut state.generate_kind, pdfcraft_engine::barcode_scan::CodeKind::QrCode, "QR Code");
@@ -706,7 +775,7 @@ impl BarcodeScannerHud {
                                 && *expiry > now
                             {
                                 ui.add_space(6.0);
-                                ui.label(egui::RichText::new(msg).font(theme::medium(11.0)).color(emerald_green));
+                                ui.label(egui::RichText::new(msg).font(hud_font(11.0)).color(emerald_green));
                             }
                         });
                 });
@@ -714,6 +783,7 @@ impl BarcodeScannerHud {
 
         if trigger_rescan {
             state.target_rect = state.active_code().map(|c| c.rect);
+            state.page_codes.clear();
             // The background scan picks this up next frame (see auto_scan_on_page_change).
             state.last_scanned_page = None;
             state.show_toast("Rescanning…".into(), now);
@@ -727,18 +797,19 @@ impl BarcodeScannerHud {
             state.reembed_kind = Some(kind);
         }
         if let Some((active, buf, kind)) = apply_code {
+            let target_page = active.page;
             let (whiteout_rect, new_image_rect, pw, ph) = safe_rect_and_pixels(active.rect, active.pixel_size, kind, Some(&active.text), Some(&buf));
             let (edit_whiteout, edit_image) =
-                (display_rect(whiteout_rect, Some(info), current_page), display_rect(new_image_rect, Some(info), current_page));
+                (display_rect(whiteout_rect, Some(info), target_page), display_rect(new_image_rect, Some(info), target_page));
 
             match Document::generate_replacement_code(kind, &buf, pw, ph) {
                 Ok(png_bytes) => {
                     let whole_image_idx =
-                        active.image_index.filter(|i| doc.page_images(current_page).get(*i).is_some_and(|im| code_is_whole_image(&active, im.rect)));
+                        active.image_index.filter(|i| doc.page_images(target_page).get(*i).is_some_and(|im| code_is_whole_image(&active, im.rect)));
                     if let Some(image_idx) = whole_image_idx {
                         // Replace the embedded raster image directly so no old payload remains underneath.
                         pending_edit = Some(Edit::EditPageImage {
-                            page: current_page,
+                            page: target_page,
                             index: image_idx,
                             change: pdfcraft_engine::ImageEdit::Replace { name: "UpdatedCode.png".into(), bytes: Arc::new(png_bytes) },
                         });
@@ -748,13 +819,13 @@ impl BarcodeScannerHud {
                         let edits = if !whiteout_bytes.is_empty() {
                             vec![
                                 Edit::AddImage {
-                                    page: current_page,
+                                    page: target_page,
                                     rect: Some(edit_whiteout),
                                     name: "Whiteout.png".into(),
                                     bytes: Arc::new(whiteout_bytes),
                                 },
                                 Edit::AddImage {
-                                    page: current_page,
+                                    page: target_page,
                                     rect: Some(edit_image),
                                     name: "UpdatedCode.png".into(),
                                     bytes: Arc::new(png_bytes),
@@ -762,7 +833,7 @@ impl BarcodeScannerHud {
                             ]
                         } else {
                             vec![Edit::AddImage {
-                                page: current_page,
+                                page: target_page,
                                 rect: Some(edit_image),
                                 name: "UpdatedCode.png".into(),
                                 bytes: Arc::new(png_bytes),
@@ -772,6 +843,7 @@ impl BarcodeScannerHud {
                         pending_edit = Some(Edit::Batch { label: "Replace code".into(), edits });
                     }
                     state.target_rect = Some(new_image_rect);
+                    state.page_codes.remove(&target_page);
                     state.last_scanned_page = None;
                     state.edit_buffer = None;
                     state.reembed_kind = None;
@@ -782,10 +854,11 @@ impl BarcodeScannerHud {
                 }
             }
         }
-        if let Some(active) = delete_code
-            && let Some(edit) = handle_barcode_delete(state, active, current_page, doc, info, now)
-        {
-            pending_edit = Some(edit);
+        if let Some(active) = delete_code {
+            let target_page = active.page;
+            if let Some(edit) = handle_barcode_delete(state, active, target_page, doc, info, now) {
+                pending_edit = Some(edit);
+            }
         }
         if let Some(active) = download_code {
             handle_barcode_download(state, &active, now);
@@ -826,6 +899,7 @@ impl BarcodeScannerHud {
                     };
 
                     pending_edit = Some(Edit::AddImage { page: current_page, rect: Some(rect), name: filename.into(), bytes: Arc::new(png_bytes) });
+                    state.page_codes.remove(&current_page);
                     state.last_scanned_page = None;
                     state.show_toast(format!("{} placed on page!", kind.label()), now);
                 }
@@ -852,28 +926,28 @@ fn code_is_whole_image(code: &ScannedCode, img_rect: [f64; 4]) -> bool {
 fn handle_barcode_delete(
     state: &mut BarcodeHudState,
     active: ScannedCode,
-    current_page: usize,
+    target_page: usize,
     doc: &Document,
     info: &DocInfo,
     now: f64,
 ) -> Option<Edit> {
     state.target_rect = None;
+    state.page_codes.remove(&target_page);
     state.last_scanned_page = None;
     state.edit_buffer = None;
 
-    let whole_image_idx =
-        active.image_index.filter(|i| doc.page_images(current_page).get(*i).is_some_and(|im| code_is_whole_image(&active, im.rect)));
+    let whole_image_idx = active.image_index.filter(|i| doc.page_images(target_page).get(*i).is_some_and(|im| code_is_whole_image(&active, im.rect)));
 
     if let Some(image_idx) = whole_image_idx {
         state.show_toast("Image code deleted from page!".into(), now);
-        Some(Edit::EditPageImage { page: current_page, index: image_idx, change: pdfcraft_engine::ImageEdit::Delete })
+        Some(Edit::EditPageImage { page: target_page, index: image_idx, change: pdfcraft_engine::ImageEdit::Delete })
     } else {
         let (whiteout_rect, _, pw, ph) = safe_rect_and_pixels(active.rect, active.pixel_size, active.kind, Some(&active.text), None);
-        let edit_whiteout = display_rect(whiteout_rect, Some(info), current_page);
+        let edit_whiteout = display_rect(whiteout_rect, Some(info), target_page);
         match Document::generate_whiteout(pw, ph) {
             Ok(whiteout_png) => {
                 state.show_toast("Vector code covered with whiteout (original vector data preserved)".into(), now);
-                Some(Edit::AddImage { page: current_page, rect: Some(edit_whiteout), name: "Whiteout.png".into(), bytes: Arc::new(whiteout_png) })
+                Some(Edit::AddImage { page: target_page, rect: Some(edit_whiteout), name: "Whiteout.png".into(), bytes: Arc::new(whiteout_png) })
             }
             Err(e) => {
                 state.show_toast(format!("Delete failed: {e}"), now);
@@ -893,8 +967,7 @@ fn handle_barcode_download(state: &mut BarcodeHudState, active: &ScannedCode, no
             #[cfg(target_arch = "wasm32")]
             {
                 let filename = format!("barcode_{}_{}.png", kind_name, now as u64);
-                let _ = crate::editing::download(&filename, &png_bytes);
-                state.show_toast(format!("Downloaded {filename}!"), now);
+                state.pending_download = Some((filename, Arc::new(png_bytes)));
             }
             #[cfg(not(target_arch = "wasm32"))]
             {

@@ -139,19 +139,19 @@ impl Edit {
         targets.dedup();
         match targets.as_slice() {
             [] => None,
-            [t] => Some(delete_one(page, *t)),
+            [t] => delete_one(page, *t),
             _ => Some(Edit::DeleteObjects { page, objects: targets }),
         }
     }
 }
 
-fn delete_one(page: usize, t: ObjectTarget) -> Edit {
+fn delete_one(page: usize, t: ObjectTarget) -> Option<Edit> {
     use crate::ObjectKind;
     match t.kind {
-        ObjectKind::Text => Edit::EditTextBlock { page, block: t.index, text: String::new(), style: crate::BlockStyle::default() },
-        ObjectKind::Image => Edit::EditPageImage { page, index: t.index, change: crate::ImageEdit::Delete },
-        ObjectKind::Added => Edit::DeleteContent { page, index: t.index },
-        ObjectKind::VectorLine => Edit::SetLineProperties { page, target: t, color: None, width: Some(0.0), dash: None },
+        ObjectKind::Text => Some(Edit::EditTextBlock { page, block: t.index, text: String::new(), style: crate::BlockStyle::default() }),
+        ObjectKind::Image => Some(Edit::EditPageImage { page, index: t.index, change: crate::ImageEdit::Delete }),
+        ObjectKind::Added => Some(Edit::DeleteContent { page, index: t.index }),
+        ObjectKind::VectorLine => None,
     }
 }
 
@@ -167,7 +167,7 @@ pub(crate) fn delete(
     mut run: impl FnMut(&mut pdfcraft_cos::Document, &Edit) -> Result<(), EditError>,
 ) -> Result<(), EditError> {
     use crate::ObjectKind;
-    let mut targets = objects.to_vec();
+    let mut targets: Vec<ObjectTarget> = objects.iter().copied().filter(|t| t.kind != ObjectKind::VectorLine).collect();
     targets.sort_by_key(|t| (t.kind == ObjectKind::Added, std::cmp::Reverse(t.index)));
     targets.dedup();
     let blocks = pdfcraft_edit::text_blocks(doc, page)?;
@@ -178,9 +178,13 @@ pub(crate) fn delete(
                     EditError::Edit(pdfcraft_edit::EditError::Invalid("a selected paragraph no longer exists; select the objects again".into()))
                 })?;
                 let Some(block) = key.find(&pdfcraft_edit::text_blocks(doc, page)?, t.index) else { continue };
-                delete_one(page, ObjectTarget { kind: t.kind, index: block })
+                let Some(e) = delete_one(page, ObjectTarget { kind: t.kind, index: block }) else { continue };
+                e
             }
-            _ => delete_one(page, t),
+            _ => {
+                let Some(e) = delete_one(page, t) else { continue };
+                e
+            }
         };
         run(doc, &edit)?;
     }

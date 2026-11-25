@@ -5,6 +5,13 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+use craft::behavior::IconId;
+use craft::theme::TypeRole;
+use craft::ui::buttons::IconButton;
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft::ui::display::Text;
+use craft::ui::pickers::Select;
+use craft::ui::runtime::env::Env;
 use egui::{Color32, CornerRadius, CursorIcon, Key, Pos2, Rect, Stroke, vec2};
 use pdfcraft_engine::{Edit, ImageEdit, LineSegment};
 use pdfcraft_render::DocInfo;
@@ -325,7 +332,25 @@ impl SelectionLayoutEngine {
         xf: &PageXform,
         info: &DocInfo,
         state: &mut SelectionState,
+        line_editor: Option<&mut crate::edit_text_ui::LineEditor>,
+    ) -> Option<Edit> {
+        let mut no_drag = None;
+        Self::paint_selection_overlay_with_lines(ui, painter, page, xf, info, state, line_editor, &[], false, &mut no_drag)
+    }
+
+    /// Render selection overlays with access to page vector lines and perpendicular-grid extension state.
+    #[allow(clippy::too_many_arguments)]
+    pub fn paint_selection_overlay_with_lines(
+        ui: &egui::Ui,
+        painter: &egui::Painter,
+        page: usize,
+        xf: &PageXform,
+        info: &DocInfo,
+        state: &mut SelectionState,
         mut line_editor: Option<&mut crate::edit_text_ui::LineEditor>,
+        page_lines: &[LineSegment],
+        extend_perpendicular: bool,
+        line_drag: &mut Option<(SelectionHandle, [f64; 2], [f64; 2])>,
     ) -> Option<Edit> {
         if page >= info.pages.len() {
             return None;
@@ -353,7 +378,7 @@ impl SelectionLayoutEngine {
                 return None;
             }
             if sel.kind == SelectableKind::VectorLine {
-                return handle_vector_line_overlay(ui, painter, page, xf, info, sel);
+                return handle_vector_line_overlay(ui, painter, page, xf, info, sel, page_lines, extend_perpendicular, line_drag);
             }
             let unpadded_rect = sel.screen_rect(xf, info);
             let rect = unpadded_rect.expand(2.0);
@@ -492,6 +517,7 @@ impl SelectionLayoutEngine {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_vector_line_overlay(
     ui: &egui::Ui,
     painter: &egui::Painter,
@@ -499,6 +525,9 @@ fn handle_vector_line_overlay(
     xf: &PageXform,
     info: &DocInfo,
     sel: &mut SelectableElement,
+    page_lines: &[LineSegment],
+    extend_perpendicular: bool,
+    line_drag: &mut Option<(SelectionHandle, [f64; 2], [f64; 2])>,
 ) -> Option<Edit> {
     let line = sel.line.as_mut()?;
     paint_line_highlight(painter, line, LineHighlightState::Selected, xf, info);
@@ -510,6 +539,9 @@ fn handle_vector_line_overlay(
         if resp.hovered() || resp.dragged() {
             ui.ctx().set_cursor_icon(handle.cursor_icon());
         }
+        if resp.drag_started() {
+            *line_drag = Some((handle, line.start, line.end));
+        }
         if resp.dragged()
             && let Some(curr_pos) = ui.input(|i| i.pointer.interact_pos())
         {
@@ -520,10 +552,30 @@ fn handle_vector_line_overlay(
                 _ => {}
             }
             sel.user_rect = line.bbox();
+            if extend_perpendicular && let Some((_, orig_start, orig_end)) = *line_drag {
+                for upd in compute_connected_perpendicular_line_updates(page_lines, line.index, orig_start, orig_end, line.start, line.end) {
+                    let preview =
+                        LineSegment { page, index: upd.index, start: upd.new_start, end: upd.new_end, thickness: line.thickness, stroke_color: None };
+                    paint_line_highlight(painter, &preview, LineHighlightState::Hover, xf, info);
+                }
+            }
         }
         if resp.drag_stopped() {
+            let drag_origin = line_drag.take().map(|(_, s, e)| (s, e));
             let target = pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: line.index };
-            return Some(Edit::UpdateLineEndpoints { page, target, new_start: line.start, new_end: line.end });
+            let primary = Edit::UpdateLineEndpoints { page, target, new_start: line.start, new_end: line.end };
+            if extend_perpendicular && let Some((orig_start, orig_end)) = drag_origin {
+                let updates = compute_connected_perpendicular_line_updates(page_lines, line.index, orig_start, orig_end, line.start, line.end);
+                if !updates.is_empty() {
+                    let mut edits = Vec::with_capacity(updates.len() + 1);
+                    edits.push(primary);
+                    for upd in updates {
+                        edits.push(Edit::UpdateLineEndpoints { page, target: upd.target, new_start: upd.new_start, new_end: upd.new_end });
+                    }
+                    return Some(Edit::Batch { label: "Edit connected lines".into(), edits });
+                }
+            }
+            return Some(primary);
         }
     }
     None
@@ -675,15 +727,23 @@ impl FloatingContextMenu {
     ///
     /// Shows a pill toolbar with Cut, Copy, Paste, Format Painter, Edit Text, Bold, Italic, Strikethrough, Symbols, and Delete icon buttons.
     pub fn show(ui: &mut egui::Ui, viewport: Rect, view: &DocView, info: &DocInfo, can_modify: bool, can_copy: bool) -> Option<FloatingMenuAction> {
-        let (screen_rect, is_vector_line, is_text, is_image, is_line_editor, area_id) = if let Some(ed) = &view.line_editor {
+        let (screen_rect, is_vector_line, is_text, is_image, is_line_editor, area_id) = if let Some(ed) = &view.session.line_editor {
             (ed.rect, false, true, false, true, ("floating-editor-menu", view.id.0, ed.page, ed.block))
         } else {
-            let sel = view.canvas_selection.selected.as_ref()?;
+            let sel = view.session.canvas_selection.selected.as_ref()?;
             let xf = view.page_xform(sel.page)?;
             let is_vl = sel.kind == SelectableKind::VectorLine;
             let is_txt = matches!(sel.kind, SelectableKind::TextLine | SelectableKind::TextBlock);
             let is_img = matches!(sel.kind, SelectableKind::Image);
             (sel.screen_rect(&xf, info), is_vl, is_txt, is_img, false, ("floating-selection-menu", view.id.0, sel.page, sel.index))
+        };
+
+        let to_c32 = |c: [u8; 4]| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+        let (card, border, dark) = {
+            let env = Env::of(ui);
+            let card = to_c32(env.tokens.color.surface.raised.0);
+            let border = to_c32(env.tokens.color.line.border.0);
+            (card, border, card.r() < 128)
         };
 
         if is_vector_line {
@@ -693,28 +753,33 @@ impl FloatingContextMenu {
             let menu_width = 240.0;
             let menu_height = 36.0;
             let anchor = Self::compute_anchor(screen_rect, viewport, menu_width, menu_height)?;
-            let t = crate::theme::Tokens::get(ui.ctx());
             let mut action = None;
 
             egui::Area::new(egui::Id::unique(area_id)).order(egui::Order::Foreground).fixed_pos(anchor).show(ui.ctx(), |ui| {
                 egui::Frame::NONE
-                    .fill(t.card)
-                    .stroke(Stroke::new(1.0, t.border))
+                    .fill(card)
+                    .stroke(Stroke::new(1.0, border))
                     .corner_radius(CornerRadius::same(8))
-                    .shadow(egui::Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(if t.dark() { 90 } else { 32 }) })
+                    .shadow(egui::Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(if dark { 90 } else { 32 }) })
                     .inner_margin(egui::Margin::symmetric(6, 4))
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
                         ui.horizontal(|ui| {
                             // 1. Color Swatch & Quick Palette
-                            let cur_color = view.line_properties.color;
+                            let cur_color = view.session.line_properties.color;
                             let color_32 =
                                 Color32::from_rgb((cur_color[0] * 255.0) as u8, (cur_color[1] * 255.0) as u8, (cur_color[2] * 255.0) as u8);
                             let (rect, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::click());
                             ui.painter().rect_filled(rect, 4.0, color_32);
-                            ui.painter().rect_stroke(rect, CornerRadius::same(4), Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
+                            ui.painter().rect_stroke(rect, CornerRadius::same(4), Stroke::new(1.0, border), egui::StrokeKind::Outside);
+                            let trigger_label = tl!("Line color").to_string();
+                            resp.widget_info({
+                                let label = trigger_label.clone();
+                                move || egui::WidgetInfo::labeled(egui::Role::Button, true, label.clone())
+                            });
+                            let resp = resp.on_hover_text(trigger_label);
                             egui::Popup::menu(&resp).show(|ui| {
-                                ui.label("Line Color:");
+                                Text::new(tl!("Line color").to_string()).role(TypeRole::Label).show(ui);
                                 let palette = [
                                     ([0.0, 0.0, 0.0], "Black"),
                                     ([0.85, 0.15, 0.15], "Red"),
@@ -727,9 +792,17 @@ impl FloatingContextMenu {
                                     for (rgb, name) in palette {
                                         let col = Color32::from_rgb((rgb[0] * 255.0) as u8, (rgb[1] * 255.0) as u8, (rgb[2] * 255.0) as u8);
                                         let (cr, cresp) = ui.allocate_exact_size(vec2(18.0, 18.0), egui::Sense::click());
+                                        let is_selected = (cur_color[0] - rgb[0] as f32).abs() < 0.02
+                                            && (cur_color[1] - rgb[1] as f32).abs() < 0.02
+                                            && (cur_color[2] - rgb[2] as f32).abs() < 0.02;
                                         ui.painter().rect_filled(cr, 3.0, col);
-                                        ui.painter().rect_stroke(cr, CornerRadius::same(3), Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
-                                        if cresp.on_hover_text(name).clicked() {
+                                        ui.painter().rect_stroke(cr, CornerRadius::same(3), Stroke::new(1.0, border), egui::StrokeKind::Outside);
+                                        let swatch_label = tl!(name).to_string();
+                                        cresp.widget_info({
+                                            let label = swatch_label.clone();
+                                            move || egui::WidgetInfo::selected(egui::Role::Button, true, is_selected, label.clone())
+                                        });
+                                        if cresp.on_hover_text(swatch_label).clicked() {
                                             action = Some(FloatingMenuAction::SetStrokeColor(rgb));
                                             ui.close();
                                         }
@@ -740,27 +813,26 @@ impl FloatingContextMenu {
                             ui.separator();
 
                             // 2. Stroke Width (Thickness)
-                            let cur_w = view.line_properties.width;
-                            if crate::icons::button(ui, "minus", 20.0, false, "Thinner").clicked() {
+                            let cur_w = view.session.line_properties.width;
+                            if IconButton::new(IconId::new("minus")).label(tl!("Thinner").to_string()).show(ui).clicked() {
                                 action = Some(FloatingMenuAction::SetStrokeWidth((cur_w - 0.5).max(0.5)));
                             }
-                            ui.label(format!("{:.1}pt", cur_w));
-                            if crate::icons::button(ui, "plus", 20.0, false, "Thicker").clicked() {
+                            Text::new(format!("{cur_w:.1}pt")).role(TypeRole::Caption).show(ui);
+                            if IconButton::new(IconId::new("plus")).label(tl!("Thicker").to_string()).show(ui).clicked() {
                                 action = Some(FloatingMenuAction::SetStrokeWidth((cur_w + 0.5).min(20.0)));
                             }
 
                             ui.separator();
 
-                            // 3. Dash Type (Solid, Dotted, Dashed)
-                            let dash_names = ["Solid ──", "Dotted ··", "Dashed --", "DashDot -·-"];
-                            let cur_dash = dash_names.get(view.line_properties.dash_idx).copied().unwrap_or(dash_names[0]);
-                            craft_ui::ComboBox::from_id_salt("floating_line_dash").selected_text(cur_dash).width(72.0).show_ui(ui, |ui| {
-                                for (idx, name) in dash_names.iter().enumerate() {
-                                    if ui.selectable_label(view.line_properties.dash_idx == idx, *name).clicked() {
-                                        action = Some(FloatingMenuAction::SetDash(idx));
-                                    }
-                                }
-                            });
+                            // 3. Dash Type (Solid, Dotted, Dashed, DashDot)
+                            let dash_names = ["Solid", "Dotted", "Dashed", "DashDot"];
+                            let dash_entries: Vec<Entry<usize>> = dash_names.iter().enumerate().map(|(i, n)| Entry::new(i, tl!(n))).collect();
+                            if let Some(idx) =
+                                Select::new(tl!("Dash"), Bind::given(view.session.line_properties.dash_idx), &dash_entries).show(ui).value().copied()
+                                && idx != view.session.line_properties.dash_idx
+                            {
+                                action = Some(FloatingMenuAction::SetDash(idx));
+                            }
                         });
                     });
             });
@@ -773,19 +845,19 @@ impl FloatingContextMenu {
 
         let anchor = Self::compute_anchor(screen_rect, viewport, menu_width, menu_height)?;
 
-        let t = crate::theme::Tokens::get(ui.ctx());
         let mut action = None;
 
         egui::Area::new(egui::Id::unique(area_id)).order(egui::Order::Foreground).fixed_pos(anchor).show(ui.ctx(), |ui| {
             egui::Frame::NONE
-                .fill(t.card)
-                .stroke(Stroke::new(1.0, t.border))
+                .fill(card)
+                .stroke(Stroke::new(1.0, border))
                 .corner_radius(CornerRadius::same(8))
-                .shadow(egui::Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(if t.dark() { 90 } else { 32 }) })
+                .shadow(egui::Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(if dark { 90 } else { 32 }) })
                 .inner_margin(egui::Margin::symmetric(6, 4))
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
-                    let shortcut = |key: &'static str| crate::commands::shortcut_label(ui.ctx(), pdfcraft_engine::commands::Shortcut::cmd(key));
+                    let mac = crate::commands::mac_shortcuts(ui.ctx());
+                    let shortcut = |key: &'static str| pdfcraft_engine::commands::Shortcut::cmd(key).label(mac);
                     let cut_tip = format!("Cut ({})", shortcut("X"));
                     let copy_tip = format!("Copy ({})", shortcut("C"));
                     ui.horizontal(|ui| {
@@ -793,38 +865,43 @@ impl FloatingContextMenu {
                             // Cut (Ctrl+X)
                             if can_modify
                                 && can_copy
-                                && view.canvas_selection.selected.as_ref().and_then(|s| s.text.as_ref()).is_some()
-                                && crate::icons::button(ui, "scissors", 26.0, false, &cut_tip).clicked()
+                                && view.session.canvas_selection.selected.as_ref().and_then(|s| s.text.as_ref()).is_some()
+                                && IconButton::new(IconId::new("scissors")).label(cut_tip).show(ui).clicked()
                             {
                                 action = Some(FloatingMenuAction::Cut);
                             }
                             // Copy (Ctrl+C)
                             if can_copy
-                                && view.canvas_selection.selected.as_ref().and_then(|s| s.text.as_ref()).is_some()
-                                && crate::icons::button(ui, "copy", 26.0, false, &copy_tip).clicked()
+                                && view.session.canvas_selection.selected.as_ref().and_then(|s| s.text.as_ref()).is_some()
+                                && IconButton::new(IconId::new("copy")).label(copy_tip).show(ui).clicked()
                             {
                                 action = Some(FloatingMenuAction::Copy);
                             }
 
                             // Edit Text (for text elements)
-                            if is_text && can_modify && crate::icons::button(ui, "text-cursor-input", 26.0, false, tl!("Edit text")).clicked() {
+                            if is_text && can_modify && IconButton::new(IconId::new("text-cursor-input")).label(tl!("Edit text")).show(ui).clicked() {
                                 action = Some(FloatingMenuAction::EditText);
                             }
                         }
 
                         // Quick Text Styles
                         if is_text && can_modify {
-                            if crate::icons::button(ui, "sparkles", 26.0, view.canvas_selection.symbol_palette_open, "Insert symbol").clicked() {
+                            if IconButton::new(IconId::new("sparkles"))
+                                .label(tl!("Insert symbol"))
+                                .selected(view.session.canvas_selection.symbol_palette_open)
+                                .show(ui)
+                                .clicked()
+                            {
                                 action = Some(FloatingMenuAction::OpenSymbolPalette);
                             }
                             if !is_line_editor {
-                                let reflow_on = view.reflow_paragraphs;
+                                let reflow_on = view.session.reflow_paragraphs;
                                 let reflow_tip = if reflow_on {
-                                    "Paragraph Reflow: ON (editing shifts paragraphs below) - click to toggle"
+                                    tl!("Paragraph Reflow: ON (editing shifts paragraphs below) - click to toggle")
                                 } else {
-                                    "Paragraph Reflow: OFF (bottom paragraphs stay fixed) - click to toggle"
+                                    tl!("Paragraph Reflow: OFF (bottom paragraphs stay fixed) - click to toggle")
                                 };
-                                if crate::icons::button(ui, "arrow-up-down", 26.0, reflow_on, reflow_tip).clicked() {
+                                if IconButton::new(IconId::new("arrow-up-down")).label(reflow_tip).selected(reflow_on).show(ui).clicked() {
                                     action = Some(FloatingMenuAction::ToggleReflow);
                                 }
                             }
@@ -833,17 +910,17 @@ impl FloatingContextMenu {
                         // Image dimensions
                         if is_image
                             && can_modify
-                            && let Some(sel) = view.canvas_selection.selected.as_ref()
+                            && let Some(sel) = view.session.canvas_selection.selected.as_ref()
                         {
                             let w = (sel.user_rect[2] - sel.user_rect[0]).abs();
                             let h = (sel.user_rect[3] - sel.user_rect[1]).abs();
-                            ui.label(format!("{:.0}×{:.0}pt", w, h));
+                            Text::new(format!("{w:.0}×{h:.0}pt")).role(TypeRole::Caption).show(ui);
                         }
 
                         // Separator before Delete
                         if can_modify && !is_line_editor && (is_text || is_image) {
                             ui.separator();
-                            if crate::icons::button(ui, "trash-2", 26.0, false, "Delete (Del)").clicked() {
+                            if IconButton::new(IconId::new("trash-2")).label(tl!("Delete (Del)")).show(ui).clicked() {
                                 action = Some(FloatingMenuAction::Delete);
                             }
                         }
@@ -1004,7 +1081,13 @@ pub fn compute_connected_perpendicular_line_updates(
     let tol = 4.0;
 
     let is_horizontal = orig_dx >= orig_dy;
-    let is_vertical = orig_dy >= orig_dx;
+    let is_vertical = orig_dy > orig_dx;
+    let within_segment_tolerance = |pt: [f64; 2]| -> bool {
+        let t = if len_sq > 1e-12 { (((pt[0] - orig_start[0]) * vx + (pt[1] - orig_start[1]) * vy) / len_sq).clamp(0.0, 1.0) } else { 0.0 };
+        let dx = pt[0] - (orig_start[0] + t * vx);
+        let dy = pt[1] - (orig_start[1] + t * vy);
+        dx * dx + dy * dy <= tol * tol
+    };
 
     for line in lines {
         if line.index == dragged_index {
@@ -1017,20 +1100,16 @@ pub fn compute_connected_perpendicular_line_updates(
         if is_horizontal {
             // Dragged line is predominantly horizontal. Perpendicular lines are vertical.
             if l_dy > l_dx {
-                let x_min = orig_start[0].min(orig_end[0]) - tol;
-                let x_max = orig_start[0].max(orig_end[0]) + tol;
-                let y_ref = (orig_start[1] + orig_end[1]) * 0.5;
-
                 let mut modified = false;
                 let mut updated_start = line.start;
                 let mut updated_end = line.end;
 
-                if (line.start[1] - y_ref).abs() <= tol && line.start[0] >= x_min && line.start[0] <= x_max {
+                if within_segment_tolerance(line.start) {
                     let (_, dy) = displacement_at(line.start);
                     updated_start[1] += dy;
                     modified = true;
                 }
-                if (line.end[1] - y_ref).abs() <= tol && line.end[0] >= x_min && line.end[0] <= x_max {
+                if within_segment_tolerance(line.end) {
                     let (_, dy) = displacement_at(line.end);
                     updated_end[1] += dy;
                     modified = true;
@@ -1051,20 +1130,16 @@ pub fn compute_connected_perpendicular_line_updates(
         } else if is_vertical {
             // Dragged line is predominantly vertical. Perpendicular lines are horizontal.
             if l_dx > l_dy {
-                let y_min = orig_start[1].min(orig_end[1]) - tol;
-                let y_max = orig_start[1].max(orig_end[1]) + tol;
-                let x_ref = (orig_start[0] + orig_end[0]) * 0.5;
-
                 let mut modified = false;
                 let mut updated_start = line.start;
                 let mut updated_end = line.end;
 
-                if (line.start[0] - x_ref).abs() <= tol && line.start[1] >= y_min && line.start[1] <= y_max {
+                if within_segment_tolerance(line.start) {
                     let (dx, _) = displacement_at(line.start);
                     updated_start[0] += dx;
                     modified = true;
                 }
-                if (line.end[0] - x_ref).abs() <= tol && line.end[1] >= y_min && line.end[1] <= y_max {
+                if within_segment_tolerance(line.end) {
                     let (dx, _) = displacement_at(line.end);
                     updated_end[0] += dx;
                     modified = true;
@@ -1258,5 +1333,26 @@ mod tests {
         assert_eq!(el.kind, SelectableKind::VectorLine);
         assert_eq!(el.index, 4);
         assert_eq!(el.user_rect, [10.0, 50.0, 110.0, 50.0]);
+    }
+
+    #[test]
+    fn test_connected_perpendicular_lines_uses_segment_distance_not_midpoint() {
+        // Sloped horizontal-ish segment (0, 0) -> (100, 20): midpoint y_ref is 10.
+        let dragged = LineSegment { page: 0, index: 0, start: [0.0, 0.0], end: [100.0, 20.0], thickness: 1.0, stroke_color: None };
+        // Vertical line touching at (0, 0): must be detected and updated.
+        let touches_start = LineSegment { page: 0, index: 1, start: [0.0, -30.0], end: [0.0, 0.0], thickness: 1.0, stroke_color: None };
+        // Vertical line ending at (0, 10): ~9.8pt away from segment (0,0)->(100,20), must NOT match.
+        let near_midpoint_y = LineSegment { page: 0, index: 2, start: [0.0, 10.0], end: [0.0, 50.0], thickness: 1.0, stroke_color: None };
+        let updates = compute_connected_perpendicular_line_updates(
+            &[dragged, touches_start, near_midpoint_y],
+            0,
+            [0.0, 0.0],
+            [100.0, 20.0],
+            [0.0, 10.0],
+            [100.0, 30.0],
+        );
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].index, 1);
+        assert_eq!(updates[0].new_end, [0.0, 10.0]);
     }
 }

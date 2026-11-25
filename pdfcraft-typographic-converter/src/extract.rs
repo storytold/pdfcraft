@@ -126,6 +126,7 @@ fn is_xml_valid_char(c: char) -> bool {
 struct ExtractionBudget {
     form_visits: usize,
     image_bytes: usize,
+    skipped_images: usize,
 }
 
 fn extract_object_content(
@@ -189,14 +190,17 @@ fn extract_object_content(
             if next_total <= 128 * 1024 * 1024 {
                 budget.image_bytes = next_total;
                 page_images.push(PageImage { bytes, bounds: (left, top, right, bottom), width_pt, height_pt });
+            } else {
+                budget.skipped_images = budget.skipped_images.saturating_add(1);
             }
         }
     } else if let Some(form_object) = object.as_x_object_form_object() {
         budget.form_visits = budget.form_visits.saturating_add(1);
-        if budget.form_visits <= 1_000 {
-            for child in form_object.iter() {
-                let _ = extract_object_content(&child, text_page_opt, document, page_glyphs, page_images, found_text_object, budget);
-            }
+        if budget.form_visits > 1_000 {
+            anyhow::bail!("Exceeded maximum nested form XObject visit limit (1000) while extracting page");
+        }
+        for child in form_object.iter() {
+            extract_object_content(&child, text_page_opt, document, page_glyphs, page_images, found_text_object, budget)?;
         }
     }
     Ok(())
@@ -254,7 +258,14 @@ pub fn extract_pages_full_with_pdfium<P: AsRef<Path>>(pdfium: &Pdfium, pdf_path:
             }
         }
 
-        pages_result.push(ExtractedPageData { page_index, width, height, glyphs: page_glyphs, images: page_images });
+        pages_result.push(ExtractedPageData {
+            page_index,
+            width,
+            height,
+            glyphs: page_glyphs,
+            images: page_images,
+            skipped_images: budget.skipped_images,
+        });
     }
 
     Ok(pages_result)

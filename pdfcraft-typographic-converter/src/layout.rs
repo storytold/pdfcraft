@@ -60,17 +60,18 @@ pub struct ExtractedPageData {
     pub height: f32,
     pub glyphs: Vec<RawGlyph>,
     pub images: Vec<PageImage>,
+    pub skipped_images: usize,
 }
 
 impl From<(usize, f32, f32, Vec<RawGlyph>)> for ExtractedPageData {
     fn from((page_index, width, height, glyphs): (usize, f32, f32, Vec<RawGlyph>)) -> Self {
-        Self { page_index, width, height, glyphs, images: Vec::new() }
+        Self { page_index, width, height, glyphs, images: Vec::new(), skipped_images: 0 }
     }
 }
 
 impl From<(usize, f32, f32, Vec<RawGlyph>, Vec<PageImage>)> for ExtractedPageData {
     fn from((page_index, width, height, glyphs, images): (usize, f32, f32, Vec<RawGlyph>, Vec<PageImage>)) -> Self {
-        Self { page_index, width, height, glyphs, images }
+        Self { page_index, width, height, glyphs, images, skipped_images: 0 }
     }
 }
 
@@ -194,13 +195,7 @@ fn build_page_lines(glyphs: Vec<RawGlyph>) -> Vec<TextLine> {
 
         for (is_rtl, seg_glyphs) in &mut segments {
             if *is_rtl {
-                if seg_glyphs.len() > 1 {
-                    let first_x = seg_glyphs.first().map(|g| g.origin_x).unwrap_or(0.0);
-                    let last_x = seg_glyphs.last().map(|g| g.origin_x).unwrap_or(0.0);
-                    if first_x < last_x {
-                        seg_glyphs.reverse();
-                    }
-                }
+                seg_glyphs.sort_by(|a, b| b.origin_x.partial_cmp(&a.origin_x).unwrap_or(std::cmp::Ordering::Equal));
             } else {
                 seg_glyphs.sort_by(|a, b| {
                     a.origin_x
@@ -458,4 +453,35 @@ fn build_line_runs(glyphs: &[RawGlyph], scripts: &[ScriptType]) -> Vec<TextRun> 
     }
 
     runs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rtl_segment_sorts_by_descending_origin_x_across_jittered_y() {
+        let glyph = |ch: char, x: f32, y: f32| RawGlyph {
+            char_code: ch,
+            font_name: "David".into(),
+            font_size: 12.0,
+            is_bold: false,
+            is_italic: false,
+            bounds: (x, y, x + 8.0, y + 10.0),
+            origin_x: x,
+            origin_y: y,
+        };
+        // Same baseline cluster (within 2pt) where y-sorting places 'ל' (y=501) before 'ש' (y=500).
+        let page = ExtractedPageData {
+            page_index: 0,
+            width: 400.0,
+            height: 600.0,
+            glyphs: vec![glyph('ש', 80.0, 500.0), glyph('ל', 70.0, 501.0), glyph('ו', 60.0, 500.0), glyph('ם', 50.0, 500.0)],
+            images: Vec::new(),
+            skipped_images: 0,
+        };
+        let layout = build_layout(vec![page]);
+        let text: String = layout.pages[0].lines[0].runs.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(text, "שלום");
+    }
 }
