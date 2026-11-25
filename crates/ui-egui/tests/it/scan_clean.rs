@@ -10,6 +10,7 @@ use craft::pages::{PageRange, PageScope};
 use craft::ui::dialog::dialog_id;
 use craft::ui::patterns::form_dialogs::HostedParamDialog;
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::{Edit, NewAnnotation, NoteIcon, Session, Shape, Style};
 use pdfcraft_ui_egui::PdfCraftApp;
 
@@ -146,8 +147,11 @@ fn unticking_restore_halftone_scans_leaves_a_dotted_scan_as_it_is() {
     for restore in [false, true] {
         assert!(h.execute("ocr.enhance"));
         h.run_steps(2);
-        h.state_mut().dialogs.set_json_field(&ctx, dialog_id("enhance-scan"), "restore_halftones", restore.into()).unwrap();
-        h.run_steps(1);
+        // Ticked to begin with, then as the last run left it.
+        h.get_by_label("Restore halftone scans").scroll_to_me();
+        h.run_steps(2);
+        h.get_by_label("Restore halftone scans").click();
+        h.run_steps(2);
         assert!(h.state_mut().dialogs.confirm::<HostedParamDialog>(&ctx));
         h.run_steps(2);
         run_jobs(&mut h, &jobs);

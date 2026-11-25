@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use craft::pages::PageRange;
 use craft::pages::ui::{PageRangeChoices, PageRangeOptions};
+use craft::ui::contract::Bind;
 use craft::ui::dialog::{DialogResult, dialog_id};
 use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind};
 use craft::ui::value_drag::SliderScale;
@@ -71,7 +72,7 @@ fn build_dialog(fields: &mut DialogFields, base: ScanCleanSettings, count: usize
         )),
     ];
     let ready = settings_from(fields, base).changes_something();
-    ParamDialog::new(DIALOG_KEY, tl!("Enhance Scanned File"), params).ok_label(tl!("Enhance").into()).ok_enabled(ready)
+    ParamDialog::new(DIALOG_KEY, tl!("Enhance Scanned File"), params).ok_label(tl!("Enhance").into()).ok_enabled(ready).values(Bind::bound(fields))
 }
 
 /// What a finished run says: what was cleaned, what was not a scan, and what was left and why.
