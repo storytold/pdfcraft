@@ -2106,7 +2106,7 @@ pub(crate) fn rewrite_styled_block(
     // glyph widths stay exactly as they were instead of being rebuilt from the text state. A row
     // aligned on its own is reached; the rows around it are not. A wrap the edit introduces
     // pushes the rows after it down, so those stop keeping their operators too.
-    let (mut kept, paired, per_draft_row) = kept_source_rows(block, draft, style, &row_lines, &row_ranges, &rows, source_count);
+    let (mut kept, paired, _per_draft_row) = kept_source_rows(block, draft, style, &row_lines, &row_ranges, &rows, source_count);
     let kept_lines: std::collections::HashSet<usize> = kept
         .iter()
         .enumerate()
