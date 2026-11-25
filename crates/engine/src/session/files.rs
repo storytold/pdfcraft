@@ -216,11 +216,11 @@ impl Session {
 
     /// What [`Edit::RenameInk`] would change in `id`, without changing the document; the
     /// default (nothing) when the names are refused or the document isn't open for editing.
-    pub fn count_ink_rename(&self, id: DocId, from: &str, to: &str) -> pdfcraft_edit::InkRenamed {
-        let Some(doc) = self.get(id) else { return Default::default() };
-        let Some(editor) = doc.editor.as_ref() else { return Default::default() };
+    pub fn count_ink_rename(&self, id: DocId, from: &str, to: &str) -> Result<pdfcraft_edit::InkRenamed, EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
         let mut cos = editor.cos.clone();
-        pdfcraft_edit::rename_ink(&mut cos, from, to).unwrap_or_default()
+        pdfcraft_edit::rename_ink(&mut cos, from, to).map_err(EditError::Edit)
     }
 
     /// XFDF with these comments (0-based page, position in the page's `/Annots`) and their

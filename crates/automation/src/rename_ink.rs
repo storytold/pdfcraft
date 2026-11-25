@@ -3,7 +3,7 @@
 use pdfcraft_engine::Edit;
 use serde_json::{Value, json};
 
-use crate::{Args, Automation, Result, ToolError};
+use crate::{Args, Automation, Result, ToolError, error::failed};
 
 impl Automation {
     /// Every colour space naming spot ink `from` names `to` instead. No space naming `from` is
@@ -15,8 +15,8 @@ impl Automation {
             return Err(ToolError::InvalidArgs(why));
         }
         let id = self.doc(a)?.id;
-        let found = self.session.count_ink_rename(id, &from, &to);
-        let mut out = json!({
+        let found = self.session.count_ink_rename(id, &from, &to).map_err(failed)?;
+        let counts = json!({
             "spaces": found.spaces,
             "objects": found.objects,
             "refused": found.refused,
@@ -24,9 +24,12 @@ impl Automation {
             "alternates_differ": found.alternates_differ,
             "complete": found.complete,
         });
-        if found.spaces > 0 {
-            let r = self.apply(a, Edit::RenameInk { from, to })?;
-            out["undo"] = r["undo"].clone();
+        if found.spaces == 0 {
+            return Ok(counts);
+        }
+        let mut out = self.apply(a, Edit::RenameInk { from, to })?;
+        if let (Some(out), Value::Object(counts)) = (out.as_object_mut(), counts) {
+            out.extend(counts);
         }
         Ok(out)
     }

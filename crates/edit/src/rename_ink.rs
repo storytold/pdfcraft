@@ -127,6 +127,11 @@ pub fn rename_ink(doc: &mut Document, from: &str, to: &str) -> Result<InkRenamed
             r.work.insert(at, obj);
         }
     }
+    if r.work.keys().any(|at| r.protected.contains(at)) {
+        return Err(EditError::Invalid(
+            "a DeviceN space naming both inks shares objects with a space being renamed, so renaming would change it; nothing was changed".into(),
+        ));
+    }
     let alternates_differ = !r.from_alternates.is_empty() && !r.to_alternates.is_empty() && r.from_alternates != r.to_alternates;
     let mut report = r.report;
     report.objects = r.work.len();
@@ -147,6 +152,8 @@ struct Renamer<'d> {
     report: InkRenamed,
     from_alternates: BTreeSet<Vec<u8>>,
     to_alternates: BTreeSet<Vec<u8>>,
+    /// Objects a refused `DeviceN` reaches through its names or attributes: none may change.
+    protected: BTreeSet<ObjRef>,
     visits: usize,
     complete: bool,
 }
@@ -161,6 +168,7 @@ impl<'d> Renamer<'d> {
             report: InkRenamed::default(),
             from_alternates: BTreeSet::new(),
             to_alternates: BTreeSet::new(),
+            protected: BTreeSet::new(),
             visits: MAX_VISITS,
             complete: true,
         }
@@ -298,11 +306,18 @@ impl<'d> Renamer<'d> {
         }
         if !separation && names_to {
             self.report.refused = self.report.refused.saturating_add(1);
+            for slot in [items.get(1), items.get(4)].into_iter().flatten() {
+                self.protect(slot, depth);
+            }
             return false;
         }
         self.report.spaces = self.report.spaces.saturating_add(1);
         self.from_alternates.extend(alternate);
-        let mut changed = items.get_mut(1).is_some_and(|names| self.through(names, Self::entries));
+        let mut changed = match items.get_mut(1) {
+            Some(name) if self.original(name).as_name().is_some() => self.entry(name),
+            Some(names) => self.through(names, Self::entries),
+            None => false,
+        };
         if let Some(attrs) = items.get_mut(4) {
             changed |= self.through(attrs, Self::attributes);
             changed |= self.rename(attrs, depth);
@@ -310,15 +325,45 @@ impl<'d> Renamer<'d> {
         changed
     }
 
-    /// A `Separation`'s name, or each entry of a `DeviceN` names array.
+    /// Each entry of a names array.
     fn entries(&mut self, obj: &mut Object) -> bool {
         match obj {
-            Object::Name(n) if *n == self.from => {
-                *n = self.to.to_vec();
-                true
+            Object::Array(entries) => entries.iter_mut().fold(false, |changed, e| self.entry(e) | changed),
+            other => self.entry(other),
+        }
+    }
+
+    /// One ink name, given directly or through a reference. A reference is replaced by the new
+    /// name itself, so an indirect name object that other spaces may share is never rewritten.
+    fn entry(&self, e: &mut Object) -> bool {
+        if self.original(e).as_name() != Some(self.from) {
+            return false;
+        }
+        *e = Object::Name(self.to.to_vec());
+        true
+    }
+
+    /// Record every object `o` reaches, through references, as [`Renamer::protected`].
+    fn protect(&mut self, o: &Object, depth: u8) {
+        if depth > MAX_DEPTH {
+            self.complete = false;
+            return;
+        }
+        if !self.spend() {
+            return;
+        }
+        let deeper = depth.saturating_add(1);
+        match o {
+            Object::Ref(at) => {
+                if self.protected.insert(*at) {
+                    let target = self.doc.get(*at);
+                    self.protect(&target, deeper);
+                }
             }
-            Object::Array(entries) => entries.iter_mut().fold(false, |changed, e| self.entries(e) | changed),
-            _ => false,
+            Object::Array(items) => items.iter().for_each(|i| self.protect(i, deeper)),
+            Object::Dict(d) => d.iter().for_each(|(_, v)| self.protect(v, deeper)),
+            Object::Stream(s) => s.dict.iter().for_each(|(_, v)| self.protect(v, deeper)),
+            _ => {}
         }
     }
 
@@ -473,6 +518,50 @@ mod tests {
         let hints = attrs.get(b"MixingHints").and_then(Object::as_dict).cloned().unwrap_or_default();
         let order = hints.get(b"PrintingOrder").and_then(Object::as_array).cloned().unwrap_or_default();
         assert_eq!(order.iter().filter(|o| o.as_name() == Some(b"Silver")).count(), 1, "{order:?}");
+    }
+
+    #[test]
+    fn an_indirect_name_is_renamed_where_it_is_used_and_never_in_the_object_shared() {
+        let mut d = doc(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << /A [/DeviceN [5 0 R /Cyan] /DeviceCMYK 4 0 R] /B [/Separation 5 0 R /DeviceCMYK 4 0 R] /C [/DeviceN [5 0 R /Silver] /DeviceCMYK 4 0 R] >> >> >>",
+            TINT,
+            "/Gold",
+        ]);
+        let done = rename_ink(&mut d, "Gold", "Silver").unwrap();
+        assert_eq!((done.spaces, done.refused), (2, 1), "{done:?}");
+        assert_eq!(get(&d, 5), Object::Name(b"Gold".to_vec()), "the shared name object is left alone");
+        let spaces = get(&d, 3);
+        let cs = |key: &[u8]| {
+            let d = spaces
+                .as_dict()
+                .and_then(|p| p.get(b"Resources"))
+                .and_then(Object::as_dict)
+                .and_then(|r| r.get(b"ColorSpace"))
+                .and_then(Object::as_dict);
+            d.and_then(|d| d.get(key)).and_then(Object::as_array).cloned().unwrap_or_default()
+        };
+        assert_eq!(cs(b"A").get(1).and_then(Object::as_array).and_then(|n| n.first()), Some(&Object::Name(b"Silver".to_vec())));
+        assert_eq!(cs(b"B").get(1), Some(&Object::Name(b"Silver".to_vec())));
+        assert_eq!(
+            cs(b"C").get(1).and_then(Object::as_array).and_then(|n| n.first()),
+            Some(&Object::Ref(ObjRef::new(5, 0))),
+            "the refused space still names Gold"
+        );
+    }
+
+    #[test]
+    fn a_refused_devicen_sharing_objects_with_a_renamed_space_refuses_the_rename() {
+        let mut d = doc(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << /A 5 0 R /B [/DeviceN [/Gold /Silver] /DeviceCMYK 4 0 R << /Colorants << /Gold 5 0 R >> >>] >> >> >>",
+            TINT,
+            "[/Separation /Gold /DeviceCMYK 4 0 R]",
+        ]);
+        assert!(rename_ink(&mut d, "Gold", "Silver").is_err());
+        assert!(!d.is_modified(), "nothing was changed");
     }
 
     #[test]

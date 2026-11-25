@@ -704,7 +704,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             }
         }
         Edit::RenameInk { from, to } => {
-            if pdfcraft_edit::rename_ink(doc, from, to)?.spaces == 0 {
+            let done = pdfcraft_edit::rename_ink(doc, from, to)?;
+            if !done.complete {
+                return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(format!(
+                    "the rename stopped at a limit or an object it couldn't read, so a colour space may still name the ink {from}; the document was not changed"
+                ))));
+            }
+            if done.spaces == 0 {
                 return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("no colour space names the ink {from}"))));
             }
         }
