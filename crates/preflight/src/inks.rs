@@ -5,6 +5,8 @@
 //! Read only. A page counts when its resources, the forms, patterns, shadings, images and Type 3
 //! fonts they hold, or its annotations' appearances name the ink, whether or not its content
 //! paints with it.
+//!
+//! Adapted from pdfcer's `crates/pdfcer-core/src/prepress/inks.rs` at b76734ff (same author, MIT).
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -12,29 +14,30 @@ use pdfcraft_cos::{Document, ObjRef, Object};
 
 /// How deep a direct object is followed: as deep as the parser nests them.
 const MAX_DEPTH: u8 = 128;
-/// Indirect objects one document's page walks visit in all. Past it, pages are not followed
-/// further and [`InkList::complete`] is false.
-const MAX_VISITS: usize = 1 << 20;
-/// Distinct inks listed. Further names are counted in [`InkList::dropped`].
+/// Objects, direct or indirect, one document's page walks look at in all. Past it, pages are not
+/// followed further and [`InkList::complete`] is false.
+const MAX_VISITS: usize = 1 << 22;
+/// Distinct spot inks listed; the four process inks are always kept. Further names are counted in
+/// [`InkList::dropped`].
 pub const MAX_INKS: usize = 1024;
-/// Distinct alternate spaces kept for one ink.
-const MAX_ALTERNATES: usize = 16;
+/// Distinct alternate spaces kept for one ink. Past it, [`InkList::complete`] is false.
+pub const MAX_ALTERNATES: usize = 16;
+/// Distinct dropped names remembered, to count them; past it each further sighting counts.
+const MAX_DROPPED_NAMES: usize = 1 << 16;
 /// The process colorants, in plate order.
 const PROCESS: [&str; 4] = ["Cyan", "Magenta", "Yellow", "Black"];
-/// Entries that lead away from what a page draws: up the page tree, or to the page an annotation
-/// is on.
-const NOT_FOLLOWED: [&[u8]; 2] = [b"Parent", b"P"];
 
 /// One ink a document names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Ink {
-    /// The colorant name, as written (lossily decoded).
+    /// The colorant name: its bytes as UTF-8, with `#` and any bytes that aren't UTF-8 written
+    /// `#XX` as in a PDF name, so two different names never read the same.
     pub name: String,
     /// `Cyan`, `Magenta`, `Yellow` or `Black`, which print on the process plates.
     pub process: bool,
     /// The family of each alternate space it is defined with (`DeviceCMYK`, `ICCBased`, `Lab`,
     /// ...), sorted. More than one means the definitions disagree on how the ink looks without
-    /// its own plate.
+    /// its own plate. An alternate whose family can't be read is left out.
     pub alternates: Vec<String>,
     /// 0-based pages whose resources name it, ascending. Empty when only objects no page draws
     /// from name it.
@@ -46,10 +49,12 @@ pub struct Ink {
 pub struct InkList {
     /// Process inks first, in plate order, then spot inks by name.
     pub inks: Vec<Ink>,
-    /// Distinct names past [`MAX_INKS`], not listed.
+    /// Names past [`MAX_INKS`], not listed: distinct up to 65 536 of them, and past that each
+    /// further sighting counts, so the count is approximate.
     pub dropped: usize,
-    /// False when the page walks ran out of their allowance, so some pages may be missing from
-    /// [`Ink::pages`].
+    /// False when a walk stopped at a limit (its allowance, its depth, or [`MAX_ALTERNATES`] for
+    /// one ink), so a page or an alternate may be missing. It covers the pages
+    /// [`pdfcraft_model::pages`] yields; a reference to a missing object counts as null.
     pub complete: bool,
 }
 
@@ -62,7 +67,7 @@ struct Found {
 /// The inks named anywhere in `doc`, and the pages of `pages` (as [`pdfcraft_model::pages`] lists
 /// them) whose resources name each. `All` and `None` are not inks.
 pub fn inks(doc: &Document, pages: &[pdfcraft_model::Page]) -> InkList {
-    let mut scan = Scan { doc, found: BTreeMap::new(), dropped: BTreeSet::new(), page: None };
+    let mut scan = Scan { doc, found: BTreeMap::new(), dropped: BTreeSet::new(), dropped_more: 0, page: None, capped: false };
     for n in doc.object_numbers() {
         let o = doc.get(ObjRef::new(n, doc.generation(n)));
         scan.walk(&o, 0);
@@ -85,7 +90,8 @@ pub fn inks(doc: &Document, pages: &[pdfcraft_model::Page]) -> InkList {
         })
         .collect();
     inks.sort_by_key(|i| (!i.process, PROCESS.iter().position(|p| *p == i.name), i.name.clone()));
-    InkList { inks, dropped: scan.dropped.len(), complete }
+    let dropped = scan.dropped.len().saturating_add(scan.dropped_more);
+    InkList { inks, dropped, complete: complete && !scan.capped }
 }
 
 struct Scan<'a> {
@@ -93,8 +99,12 @@ struct Scan<'a> {
     found: BTreeMap<String, Found>,
     /// Names past [`MAX_INKS`], kept to count them once each; at most one per name met.
     dropped: BTreeSet<String>,
+    /// Sightings of dropped names past [`MAX_DROPPED_NAMES`].
+    dropped_more: usize,
     /// The page being walked, when the walk is a page's.
     page: Option<usize>,
+    /// An ink had more alternates than [`MAX_ALTERNATES`].
+    capped: bool,
 }
 
 impl Scan<'_> {
@@ -129,29 +139,30 @@ impl Scan<'_> {
         complete
     }
 
-    /// Look at `o` and everything it refers to, except up the page tree, within `visits`.
-    /// False when `visits` ran out or the nesting passed [`MAX_DEPTH`].
+    /// Look at `o` and everything it refers to, except page objects (a link or an annotation's
+    /// `/P` leads to another page's resources), within `visits`. False when `visits` ran out or
+    /// the nesting passed [`MAX_DEPTH`] somewhere; the rest is still looked at.
     fn follow(&mut self, o: &Object, depth: u8, seen: &mut HashSet<ObjRef>, visits: &mut usize) -> bool {
         if depth > MAX_DEPTH {
             return false;
         }
+        let Some(left) = visits.checked_sub(1) else { return false };
+        *visits = left;
         let deeper = depth.saturating_add(1);
         match o {
             Object::Ref(r) => {
                 if !seen.insert(*r) {
                     return true;
                 }
-                let Some(left) = visits.checked_sub(1) else { return false };
-                *visits = left;
                 let o = self.doc.get(*r);
-                self.follow(&o, deeper, seen, visits)
+                is_page(&o) || self.follow(&o, deeper, seen, visits)
             }
             Object::Array(a) => {
                 self.space(a);
-                a.iter().all(|v| self.follow(v, deeper, seen, visits))
+                a.iter().map(|v| self.follow(v, deeper, seen, visits)).fold(true, |ok, done| ok & done)
             }
-            Object::Dict(d) => d.iter().filter(|(k, _)| !NOT_FOLLOWED.contains(&k.as_slice())).all(|(_, v)| self.follow(v, deeper, seen, visits)),
-            Object::Stream(s) => s.dict.iter().all(|(_, v)| self.follow(v, deeper, seen, visits)),
+            Object::Dict(d) => d.iter().map(|(_, v)| self.follow(v, deeper, seen, visits)).fold(true, |ok, done| ok & done),
+            Object::Stream(s) => s.dict.iter().map(|(_, v)| self.follow(v, deeper, seen, visits)).fold(true, |ok, done| ok & done),
             _ => true,
         }
     }
@@ -167,47 +178,83 @@ impl Scan<'_> {
         };
         let (Some(names), Some(alternate)) = (a.get(1).map(|n| self.doc.resolve(n)), a.get(2)) else { return };
         let alternate = self.family(alternate);
+        let alternate = alternate.as_deref();
         let names: Vec<Vec<u8>> = if separation {
             names.as_name().map(<[u8]>::to_vec).into_iter().collect()
         } else {
             names.as_array().map(|n| n.iter().filter_map(|n| self.doc.resolve(n).as_name().map(<[u8]>::to_vec)).collect()).unwrap_or_default()
         };
         for name in names.iter().filter(|n| n.as_slice() != b"All" && n.as_slice() != b"None") {
-            self.record(String::from_utf8_lossy(name).into_owned(), &alternate);
+            self.record(name_text(name), alternate);
         }
     }
 
-    fn record(&mut self, name: String, alternate: &str) {
-        if !self.found.contains_key(&name) && self.found.len() >= MAX_INKS {
-            self.dropped.insert(name);
+    fn record(&mut self, name: String, alternate: Option<&str>) {
+        let process = PROCESS.contains(&name.as_str());
+        let spots = self.found.len().saturating_sub(PROCESS.iter().filter(|p| self.found.contains_key(**p)).count());
+        if !process && !self.found.contains_key(&name) && spots >= MAX_INKS {
+            if self.dropped.len() < MAX_DROPPED_NAMES || self.dropped.contains(&name) {
+                self.dropped.insert(name);
+            } else {
+                self.dropped_more = self.dropped_more.saturating_add(1);
+            }
             return;
         }
         let page = self.page;
         let f = self.found.entry(name).or_default();
-        if f.alternates.len() < MAX_ALTERNATES {
-            f.alternates.insert(alternate.to_owned());
+        if let Some(alternate) = alternate.filter(|a| !f.alternates.contains(*a)) {
+            if f.alternates.len() < MAX_ALTERNATES {
+                f.alternates.insert(alternate.to_owned());
+            } else {
+                self.capped = true;
+            }
         }
         f.pages.extend(page);
     }
 
     /// The family name of a colour space: its name, or its array's first entry.
-    fn family(&self, cs: &Object) -> String {
+    fn family(&self, cs: &Object) -> Option<String> {
         let cs = self.doc.resolve(cs);
         let name = match &*cs {
             Object::Array(a) => a.first().and_then(|v| self.doc.resolve(v).as_name().map(<[u8]>::to_vec)),
             o => o.as_name().map(<[u8]>::to_vec),
         };
-        name.map_or_else(|| "unreadable".to_owned(), |n| String::from_utf8_lossy(&n).into_owned())
+        name.map(|n| name_text(&n))
     }
+}
+
+/// `name` as text that keeps distinct names distinct: UTF-8 as is, `#` and bytes that aren't UTF-8
+/// as `#XX`.
+fn name_text(name: &[u8]) -> String {
+    let mut out = String::with_capacity(name.len());
+    for chunk in name.utf8_chunks() {
+        for c in chunk.valid().chars() {
+            if c == '#' {
+                out.push_str("#23");
+            } else {
+                out.push(c);
+            }
+        }
+        for b in chunk.invalid() {
+            out.push_str(&format!("#{b:02X}"));
+        }
+    }
+    out
+}
+
+/// A page or page-tree node.
+fn is_page(o: &Object) -> bool {
+    o.as_dict().and_then(|d| d.get(b"Type")).and_then(Object::as_name).is_some_and(|t| t == b"Page" || t == b"Pages")
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::sync::Arc;
 
     use pdfcraft_cos::Document;
 
-    use super::{InkList, MAX_INKS, inks};
+    use super::{InkList, MAX_ALTERNATES, MAX_INKS, inks};
 
     /// A document of the objects `objs`, numbered from 1, with object 1 its catalog.
     fn build(objs: &[String]) -> Document {
@@ -237,14 +284,15 @@ mod tests {
             "<< /Type /Catalog /Pages 2 0 R >>",
             "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>",
             // Page 1: a spot in its own resources, and a form whose resources name process and spot.
-            "<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << /A [/Separation /Gold /DeviceCMYK 7 0 R] >> /XObject << /F 5 0 R >> >> >>",
-            // Page 2: the same spot defined differently, in an annotation's appearance, and a
-            // link whose destination is page 1, which doesn't make page 1's inks page 2's.
+            "<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << /P [/Separation /Gold /DeviceCMYK 7 0 R] >> /XObject << /F 5 0 R >> >> >>",
+            // Page 2: the same spot defined differently, in an annotation's appearance whose
+            // form points back at page 1, and a link to page 1. Neither makes page 1's inks page
+            // 2's.
             "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 9 0 R] >>",
             "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /ColorSpace << /N [/DeviceN [/Cyan /Silver /None] /DeviceRGB 7 0 R] >> >> /Length 0 >>\nstream\n\nendstream",
             "<< /Type /Annot /Subtype /Square /Rect [0 0 1 1] /P 4 0 R /AP << /N 8 0 R >> >>",
             "<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 0 1 0] /N 1 >>",
-            "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /ColorSpace << /G [/Separation /Gold [/Lab << /WhitePoint [1 1 1] >>] 7 0 R] >> >> /Length 0 >>\nstream\n\nendstream",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Page 3 0 R /Resources << /ColorSpace << /G [/Separation /Gold [/Lab << /WhitePoint [1 1 1] >>] 7 0 R] >> >> /Length 0 >>\nstream\n\nendstream",
             "<< /Type /Annot /Subtype /Link /Rect [0 0 1 1] /Dest [3 0 R /Fit] >>",
             // Named, but drawn from by no page.
             "[/Separation /Unused /DeviceGray 7 0 R]",
@@ -277,6 +325,37 @@ mod tests {
         ]);
         assert!(found.inks.len() <= MAX_INKS && found.dropped > 0, "{} listed, {} dropped", found.inks.len(), found.dropped);
         assert!(found.inks.iter().all(|i| i.pages == [0]));
+        assert!(found.complete, "a cycle is not a limit");
+    }
+
+    #[test]
+    fn process_inks_survive_a_flood_and_too_many_alternates_leave_the_list_incomplete() {
+        let names: String = (0..MAX_INKS + 10).map(|i| format!("/S{i} ")).collect();
+        let flood = format!("[/DeviceN [{names}] /DeviceCMYK 4 0 R]");
+        let alternates: String = (0..=MAX_ALTERNATES).map(|i| format!("/A{i} [/Separation /Gold /Alt{i} 4 0 R] ")).collect();
+        let found = list(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            &format!("<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << {alternates} /F 5 0 R /K 6 0 R >> >> >>"),
+            "<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 0 1 0] /N 1 >>",
+            &flood,
+            // Met after the flood, in object order.
+            "[/Separation /Black /DeviceCMYK 4 0 R]",
+        ]);
+        assert!(found.inks.iter().any(|i| i.name == "Black" && i.process), "a process ink met after the cap is kept");
+        assert!(!found.complete, "an ink's alternates were cut off");
+    }
+
+    #[test]
+    fn names_that_differ_only_in_bytes_that_arent_text_stay_two_inks() {
+        let found = list(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << /A [/Separation /Spot#80 /DeviceGray 4 0 R] /B [/Separation /Spot#81 /DeviceGray 4 0 R] /C [/Separation /Spot#2380 /DeviceGray 4 0 R] >> >> >>",
+            "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>",
+        ]);
+        let names: BTreeSet<&str> = found.inks.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names.len(), 3, "three different names: {names:?}");
     }
 
     #[test]
@@ -284,7 +363,7 @@ mod tests {
         let mut objs = vec![
             "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
             "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
-            "<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << /C 4 0 R >> >> >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << /C 4 0 R /D [/Separation /Beside /DeviceGray << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>] >> >> >>".to_owned(),
         ];
         // A chain of references deeper than the walk goes, a spot at its far end.
         let links = usize::from(super::MAX_DEPTH) + 10;
@@ -293,5 +372,7 @@ mod tests {
         let doc = build(&objs);
         let found = inks(&doc, &pdfcraft_model::pages(&doc));
         assert!(!found.complete, "the page walk stopped before the end of the chain");
+        let beside = found.inks.iter().find(|i| i.name == "Beside").map(|i| i.pages.clone());
+        assert_eq!(beside, Some(vec![0]), "the rest of the page is still read past the limit");
     }
 }
