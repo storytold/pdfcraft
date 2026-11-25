@@ -676,3 +676,254 @@ fn replace_all_is_one_undo_step_and_counts_pages_whose_matches_had_no_paragraph(
     let doc = h.state().session.get(id).unwrap();
     assert_eq!((doc.undo_depth(), &doc.bytes), (depth, &before), "one undo puts both pages back");
 }
+use craft::pages::PageSpacing;
+use craft::pages::ui::view::GoTo;
+use craft::text::find::FindMatches;
+
+/// A view of `pages` 300x400 pt pages, as the history tests drive it.
+fn view(pages: usize, display: PageDisplay, continuous: bool) -> DocView {
+    let info = pdfcraft_render::DocInfo { pages: (0..pages).map(|_| page_info()).collect(), ..Default::default() };
+    DocView::new(DocId(1), &info, ViewDefaults { display, continuous, ..Default::default() }, true)
+}
+
+/// The last pass drew `page` with the window's top `down` points into it (negative: above it).
+fn drawn_at(v: &mut DocView, page: usize, down: f32) {
+    v.view.go_to = None;
+    v.view.current = page;
+    v.viewport = Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 600.0));
+    v.spacing = Some(PageSpacing { gap: 8.0, margin: 0.0, side: 0.0, white_space_pad: 0.0, seam: 0.0 });
+    let top = 8.0 - down;
+    v.session.placed = vec![PlacedPage::new(page, Rect::from_min_size(pos2(0.0, top), vec2(300.0, 400.0)), 1.0, (0.0, 400.0))];
+}
+
+/// The pending jump goes to `page`, `frac` of the way down it.
+fn assert_goto(v: &DocView, page: usize, frac: f32, what: &str) {
+    match v.view.go_to {
+        Some(GoTo::Top { page: p, fraction }) => {
+            assert!(p == page && (fraction as f32 - frac).abs() < 1e-4, "{what}: went to ({p}, {fraction}), expected ({page}, {frac})");
+        }
+        other => panic!("{what}: expected a pending jump to ({page}, {frac}), got {other:?}"),
+    }
+}
+
+/// One glyph per character on one line, for the search-order tests below.
+fn find_test_text(s: &str) -> PageText {
+    PageText {
+        glyphs: s
+            .chars()
+            .map(|c| pdfcraft_render::TextGlyph { text: c.into(), rect: [0.0, 0.0, 10.0, 10.0], quad: [[0.0, 0.0]; 4], direction: [1.0, 0.0] })
+            .collect(),
+        line_of: s.chars().map(|_| 0).collect(),
+        space_before: s.chars().map(|_| false).collect(),
+        truncated: false,
+    }
+}
+
+/// Page 3's text for the search tests: two "match" glyphs, the first centred at (40, 270) on
+/// the 300x400 page, the second at (40, 110).
+fn match_page_text() -> PageText {
+    let glyphs = |rect: [f32; 4]| {
+        "match"
+            .chars()
+            .map(|c| pdfcraft_render::TextGlyph {
+                text: c.into(),
+                rect,
+                quad: [[rect[0], rect[1]], [rect[2], rect[1]], [rect[2], rect[3]], [rect[0], rect[3]]],
+                direction: [1.0, 0.0],
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut all = glyphs([20.0, 260.0, 60.0, 280.0]);
+    all.extend(glyphs([20.0, 100.0, 60.0, 120.0]));
+    let n = all.len();
+    PageText { glyphs: all, line_of: vec![0; n], space_before: vec![false; n], truncated: false }
+}
+
+/// A search over `match_page_text` on page 3 and one match on page 1, the page-1 match
+/// current, the reader still on page 0.
+fn history_search_view() -> DocView {
+    let mut v = view(5, PageDisplay::Single, true);
+    v.session.texts.insert(3, Arc::new(match_page_text()));
+    let mut matches = FindMatches::new(0);
+    matches.set_page(1, vec![0..5]);
+    matches.set_page(3, vec![0..5, 5..10]);
+    v.find = Some(Find { query: "match".into(), matches, ..Default::default() });
+    v
+}
+
+#[test]
+fn previous_view_comes_back_to_the_place_on_the_page_left() {
+    // Halfway down page 1 when a link goes to page 3 (#6848).
+    let mut v = view(5, PageDisplay::Single, true);
+    drawn_at(&mut v, 1, 200.0);
+    v.go_to_page(3);
+    drawn_at(&mut v, 3, 0.0);
+    assert!(v.view_history(false));
+    assert_eq!(v.view.current, 1);
+    assert_goto(&v, 1, 0.5, "Previous view goes back halfway down page 1, not to its top");
+}
+
+#[test]
+fn a_page_left_from_its_top_comes_back_at_its_top() {
+    // At the page's top, and within a pixel of it either way (rounding).
+    for down in [0.0, 0.5, -0.5] {
+        let mut v = view(5, PageDisplay::Single, true);
+        drawn_at(&mut v, 1, down);
+        v.go_to_page(3);
+        assert_eq!(v.back, vec![(1, 0.0)], "window's top {down} pt into the page");
+        drawn_at(&mut v, 3, 0.0);
+        assert!(v.view_history(false));
+        assert_goto(&v, 1, 0.0, "window's top {down} pt into the page");
+    }
+}
+
+#[test]
+fn previous_view_comes_back_above_a_current_page_that_starts_below_the_window_top() {
+    // Page 2 shows most, so it is current, but the window's top is 100 pt above it, in page 1.
+    let mut v = view(5, PageDisplay::Single, true);
+    drawn_at(&mut v, 2, -100.0);
+    v.go_to_page(4);
+    drawn_at(&mut v, 4, 0.0);
+    assert!(v.view_history(false));
+    assert_goto(&v, 2, -0.25, "Previous view goes back to the window's top above page 2, not to page 2's top");
+}
+
+#[test]
+fn next_view_comes_back_to_the_place_previous_view_left() {
+    let mut v = view(5, PageDisplay::Single, true);
+    drawn_at(&mut v, 1, 200.0);
+    v.go_to_page(3);
+    // A quarter of the way down page 3 when the reader goes back.
+    drawn_at(&mut v, 3, 100.0);
+    assert!(v.view_history(false));
+    drawn_at(&mut v, 1, 200.0);
+    assert!(v.view_history(true));
+    assert_eq!(v.view.current, 3);
+    assert_goto(&v, 3, 0.25, "Next view goes back a quarter of the way down page 3");
+    // And Previous view again round-trips the other place.
+    drawn_at(&mut v, 3, 100.0);
+    assert!(v.view_history(false));
+    assert_goto(&v, 1, 0.5, "Previous view again goes halfway down page 1");
+}
+
+#[test]
+fn a_history_step_not_drawn_yet_records_where_it_goes() {
+    let mut v = view(5, PageDisplay::Single, true);
+    v.back = vec![(0, 0.25), (2, 0.75)];
+    drawn_at(&mut v, 4, 0.0);
+    assert!(v.view_history(false));
+    // Back again before a frame has drawn page 2: the screen still shows page 4, and the place
+    // left is the one the first step was going to.
+    assert!(v.view_history(false));
+    assert!(v.view_history(true));
+    assert_goto(&v, 2, 0.75, "Next view goes back three quarters of the way down page 2");
+}
+
+#[test]
+fn previous_view_comes_back_to_where_a_same_page_link_was_clicked() {
+    // A link to another place on the page already showing: the click's origin is a history
+    // entry, so Previous view returns to it instead of skipping it (or doing nothing).
+    let info = pdfcraft_render::DocInfo { pages: (0..3).map(|_| page_info()).collect(), ..Default::default() };
+    let mut v = view(5, PageDisplay::Single, true);
+    // Halfway down page 1 when a link goes to a point a quarter down the same page.
+    drawn_at(&mut v, 1, 200.0);
+    v.go_to_dest(1, DestView::Xyz { left: None, top: Some(300.0), zoom: None }, &info);
+    assert_eq!(v.back, vec![(1, 0.5)], "a same-page link records where it was clicked from");
+    assert!(matches!(v.view.go_to, Some(GoTo::Corner { .. })), "the link's point is parked, as before");
+    assert!(v.view_history(false));
+    assert_eq!(v.view.current, 1);
+    assert_goto(&v, 1, 0.5, "Previous view goes back to where the link was clicked");
+}
+
+#[test]
+fn previous_view_discards_a_pending_link_point() {
+    let info = pdfcraft_render::DocInfo { pages: (0..5).map(|_| page_info()).collect(), ..Default::default() };
+    // Halfway down page 1, a link goes to a point a quarter down page 3; Previous view comes
+    // before a frame has drawn it.
+    let mut v = view(5, PageDisplay::Single, true);
+    drawn_at(&mut v, 1, 200.0);
+    v.go_to_dest(3, DestView::Xyz { left: None, top: Some(300.0), zoom: None }, &info);
+    assert!(matches!(v.view.go_to, Some(GoTo::Corner { .. })), "the link's point is pending");
+    assert!(v.view_history(false));
+    assert_goto(&v, 1, 0.5, "Previous view goes back halfway down page 1");
+    assert!(!matches!(v.view.go_to, Some(GoTo::Corner { .. })), "the link's point must not scroll the restored place away");
+    // Next view returns to the link's place: a jump not drawn yet counts as where the reader
+    // is, so the history recorded the link's own fraction for it.
+    assert!(v.view_history(true));
+    assert_goto(&v, 3, 0.25, "Next view returns to the link's place a quarter down page 3");
+}
+
+#[test]
+fn two_same_page_links_keep_both_origins() {
+    // Each same-page link leaves its own place: the second click's origin does not replace
+    // the first's entry.
+    let info = pdfcraft_render::DocInfo { pages: (0..3).map(|_| page_info()).collect(), ..Default::default() };
+    let mut v = view(5, PageDisplay::Single, true);
+    drawn_at(&mut v, 1, 200.0);
+    v.go_to_dest(1, DestView::Xyz { left: None, top: Some(300.0), zoom: None }, &info);
+    // Drawn at the first link's target, three quarters down page 1, when the second is clicked.
+    drawn_at(&mut v, 1, 300.0);
+    v.go_to_dest(1, DestView::Xyz { left: None, top: Some(100.0), zoom: None }, &info);
+    assert_eq!(v.back, vec![(1, 0.5), (1, 0.75)], "distinct places on one page stay distinct entries");
+}
+
+#[test]
+fn explicit_search_jumps_record_history_and_keep_match_destination() {
+    for step in [false, true] {
+        let mut v = history_search_view();
+        v.page_input = "draft in progress".into();
+        if step {
+            v.find_step(true);
+        } else {
+            v.go_to_match(1);
+        }
+        assert_eq!(v.back, vec![(0, 0.0)], "explicit search jump must remember its origin");
+        assert_eq!(v.view.current, 3);
+        assert_eq!(v.current_page_label(None), "4");
+        // Chrome refreshes the idle page box; navigation must not overwrite a draft
+        // that may still be focused. DocView does not own the editor's focus state.
+        assert_eq!(v.page_input, "draft in progress");
+        match v.view.go_to {
+            Some(GoTo::Point { page: 3, at, view: (0.5, 0.5) }) => {
+                assert!(at.x == 40.0 && at.y == 270.0, "the match centre goes to the middle of the viewport: {at:?}");
+            }
+            other => panic!("the match's point alone: {other:?}"),
+        }
+        v.go_to_match(2);
+        assert_eq!(v.back, vec![(0, 0.0)], "same-page matches do not duplicate history");
+        assert!(v.view_history(false));
+        assert_eq!(v.view.current, 0);
+        assert!(v.view_history(true));
+        assert_eq!(v.view.current, 3);
+        assert!(v.view_history(false));
+        v.go_to_match(2);
+        assert!(v.forward.is_empty(), "a new explicit jump discards Forward");
+        assert_eq!(v.back, vec![(0, 0.0)]);
+    }
+}
+
+#[test]
+fn automatic_search_updates_do_not_record_history_or_discard_forward() {
+    let mut v = view(5, PageDisplay::Single, true);
+    v.session.texts.insert(3, Arc::new(match_page_text()));
+    v.forward = vec![(4, 0.0)];
+    v.find = Some(Find { query: "match".into(), ..Default::default() });
+    v.rerun_find();
+    assert_eq!(v.view.current, 3);
+    assert!(matches!(v.view.go_to, Some(GoTo::Point { page: 3, .. })), "the match's point on its page");
+    assert!(v.back.is_empty());
+    assert_eq!(v.forward, vec![(4, 0.0)]);
+    v.session.texts.insert(1, Arc::new(find_test_text("match")));
+    v.refresh_find_page(1);
+    assert_eq!(v.view.current, 1, "an automatic late match still follows its anchor");
+    assert!(v.back.is_empty(), "automatic search updates do not record history");
+    assert_eq!(v.forward, vec![(4, 0.0)]);
+}
+
+#[test]
+fn previous_view_after_a_find_step_lets_go_of_the_match() {
+    let mut v = history_search_view();
+    v.find_step(true);
+    assert!(v.view_history(false));
+    assert_goto(&v, 0, 0.0, "Previous view leaves the match for the place the step came from");
+}
