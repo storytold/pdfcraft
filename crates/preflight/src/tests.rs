@@ -1738,6 +1738,19 @@ fn only_fonts_something_draws_with_must_be_embedded() {
     assert_eq!(fonts(&form("/Font << /Helv 4 0 R >>")), ["The font Helvetica isn't embedded"]);
     // Named through a reference to it, it is still the font something draws with.
     assert_eq!(fonts(&form("/Font << /Helv 8 0 R >>")), ["The font Helvetica isn't embedded"]);
+    // Written into the appearance itself, with no object of its own, as a visible signature does.
+    assert_eq!(
+        fonts(&form(
+            "/Font << /Helv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> >>"
+        )),
+        ["The font Helvetica isn't embedded"]
+    );
+    assert!(
+        fonts(&form(
+            "/Font << /Helv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FontDescriptor << /Type /FontDescriptor /FontName /Helvetica /FontFile2 4 0 R >> >> >>"
+        ))
+        .is_empty()
+    );
     // A page's own font is checked as before.
     assert_eq!(fonts(&messy()), ["The font Helvetica isn't embedded"]);
 }

@@ -483,25 +483,25 @@ pub fn display_date(pdf: &str) -> String {
 }
 
 /// The visible signature: the signer's name large on the left, or the graphic in its place, and
-/// the details on the right (Acrobat's standard layout), in Helvetica, or in the bundled Inter
-/// font when a detail needs characters beyond Western European. A graphic with no details beside
-/// it fills the box. An error, before anything is drawn, when a detail it writes (the signer's
-/// name, the certificate's subject, the reason or the location) has a character neither font can
-/// draw: signing invisibly, or leaving that part out, still works. A graphic doesn't change this:
-/// the name it replaces on the left is still among the details. A label that is drawn
-/// ([`AppearanceLabels`], the caller's words) must be drawable in Helvetica, and is refused otherwise.
+/// the details on the right (Acrobat's standard layout), in the bundled Inter font, which is
+/// embedded so a PDF/A file stays PDF/A (ISO 19005-3, 6.2.11.4.1). A graphic with no details
+/// beside it fills the box and names no font. An error, before anything is drawn, when a detail
+/// it writes (the signer's name, the certificate's subject, the reason or the location) has a
+/// character Inter cannot draw: signing invisibly, or leaving that part out, still works. A
+/// graphic doesn't change this: the name it replaces on the left is still among the details. A
+/// label that is drawn ([`AppearanceLabels`], the caller's words) must be drawable in Helvetica,
+/// and is refused otherwise.
 ///
 /// `turn` is the widget's `/MK /R` (0, 90, 180 or 270; anything else counts as 0): the layout is
 /// drawn upright in the box as turned by it, and a `/Matrix` maps that box onto `rect`.
 fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &Certificate, opts: &SignOptions) -> Result<Stream, SignError> {
-    use pdfcraft_fonts::{first_undrawable, helvetica_width, inter_width, literal, undrawable_message, win_ansi, wrap, wrap_with};
+    use pdfcraft_fonts::{first_undrawable, inter_width, literal, undrawable_message, win_ansi, wrap_with};
     let turn = if matches!(turn, 90 | 180 | 270) { turn } else { 0 };
     let (rw, rh) = ((rect[2] - rect[0]).max(0.0), (rect[3] - rect[1]).max(0.0));
     // The upright layout box: a quarter turn swaps its sides.
     let (w, h) = if turn % 180 == 0 { (rw, rh) } else { (rh, rw) };
     let a = &opts.appearance;
     let dn = cert.subject.display();
-    let mut needs_unicode = false;
     if w > 1.0 && h > 1.0 {
         let shown = [
             (a.name, "the signer's name", Some(name)),
@@ -525,7 +525,6 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
                         )));
                     }
                 }
-                needs_unicode = true;
             }
         }
         // The labels are the caller's words (a translation), checked as the details are: only
@@ -568,7 +567,9 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
     let mut out = Vec::new();
     let mut image = None;
     let mut fonts = Dict::new();
-    let (font_tag, metrics) = if needs_unicode {
+    // Text is drawn only in the embedded Inter program. A graphic with nothing written beside it
+    // keeps an empty font dictionary, so the appearance does not name an unembedded standard font.
+    let embedded = if w > 1.0 && h > 1.0 && !lines.is_empty() {
         let tag = pdfcraft_fonts::embedding::embed(doc, &mut fonts, pdfcraft_fonts::INTER_REGULAR, "Inter")
             .map_err(|e| SignError::Pdf(format!("failed to embed signature font: {e}")))?;
         let font_dict = fonts
@@ -576,22 +577,12 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
             .map(|o| doc.resolve(o))
             .and_then(|o| o.as_dict().cloned())
             .ok_or_else(|| SignError::Pdf("embedded signature font dictionary not found".into()))?;
-        let m = pdfcraft_fonts::pdf::Metrics::from_dict(doc, &font_dict);
-        (tag, Some(m))
+        Some((tag, pdfcraft_fonts::pdf::Metrics::from_dict(doc, &font_dict)))
     } else {
-        let mut font = Dict::new();
-        font.set(b"Type".to_vec(), Object::name("Font"));
-        font.set(b"Subtype".to_vec(), Object::name("Type1"));
-        font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
-        font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
-        fonts.set(b"Helv".to_vec(), Object::Dict(font));
-        ("Helv".to_string(), None)
+        None
     };
-    let measure = |s: &str, sz: f64| -> f64 { if needs_unicode { inter_width(s, sz) } else { helvetica_width(s, sz) } };
-    let wrap_text =
-        |s: &str, sz: f64, max_w: f64| -> Vec<String> { if needs_unicode { wrap_with(s, sz, max_w, inter_width) } else { wrap(s, sz, max_w) } };
-    let encode_line =
-        |l: &str| -> Vec<u8> { if let Some(m) = &metrics { literal(&m.encode(l).unwrap_or_else(|| win_ansi(l))) } else { literal(&win_ansi(l)) } };
+    let measure = |s: &str, sz: f64| -> f64 { inter_width(s, sz) };
+    let wrap_text = |s: &str, sz: f64, max_w: f64| -> Vec<String> { wrap_with(s, sz, max_w, inter_width) };
     if w > 1.0 && h > 1.0 {
         let pad = (h * 0.06).clamp(1.0, 6.0);
         let (left_w, right_x) = match (&opts.graphic, a.name) {
@@ -605,40 +596,43 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
             out.extend(ops.bytes());
             image = im;
         }
-        out.extend_from_slice(b"BT\n0 g\n");
-        if a.name && opts.graphic.is_none() {
-            // The name fills the left half.
-            let mut size = (h * 0.4).min(36.0);
-            let fit = (left_w - 2.0 * pad).max(1.0);
-            let longest = measure(name, 1.0).max(0.01);
-            size = size.min(fit / longest).max(4.0);
-            let words = wrap_text(name, size, fit);
-            let total = words.len() as f64 * size * 1.1;
-            let mut y = (h + total) / 2.0 - size * 0.85;
-            for l in &words {
-                out.extend(format!("/{font_tag} {} Tf 1 0 0 1 {} {} Tm ", fmt(size), fmt(pad), fmt(y)).bytes());
+        if let Some((font_tag, metrics)) = &embedded {
+            let encode_line = |l: &str| -> Vec<u8> { literal(&metrics.encode(l).unwrap_or_else(|| win_ansi(l))) };
+            out.extend_from_slice(b"BT\n0 g\n");
+            if a.name && opts.graphic.is_none() {
+                // The name fills the left half.
+                let mut size = (h * 0.4).min(36.0);
+                let fit = (left_w - 2.0 * pad).max(1.0);
+                let longest = measure(name, 1.0).max(0.01);
+                size = size.min(fit / longest).max(4.0);
+                let words = wrap_text(name, size, fit);
+                let total = words.len() as f64 * size * 1.1;
+                let mut y = (h + total) / 2.0 - size * 0.85;
+                for l in &words {
+                    out.extend(format!("/{font_tag} {} Tf 1 0 0 1 {} {} Tm ", fmt(size), fmt(pad), fmt(y)).bytes());
+                    out.extend(encode_line(l));
+                    out.extend_from_slice(b" Tj\n");
+                    y -= size * 1.1;
+                }
+            }
+            // The details, shrunk to fit the right side.
+            let mut size = (h / (lines.len().max(1) as f64 * 1.15)).min(12.0);
+            let wrapped = loop {
+                let all: Vec<String> = lines.iter().flat_map(|l| wrap_text(l, size, right_w)).collect();
+                if all.len() as f64 * size * 1.15 <= h - 2.0 * pad || size <= 3.0 {
+                    break all;
+                }
+                size *= 0.9;
+            };
+            let mut y = h - pad - size * 0.9;
+            for l in &wrapped {
+                out.extend(format!("/{font_tag} {} Tf 1 0 0 1 {} {} Tm ", fmt(size), fmt(right_x), fmt(y)).bytes());
                 out.extend(encode_line(l));
                 out.extend_from_slice(b" Tj\n");
-                y -= size * 1.1;
+                y -= size * 1.15;
             }
+            out.extend_from_slice(b"ET\n");
         }
-        // The details, shrunk to fit the right side.
-        let mut size = (h / (lines.len().max(1) as f64 * 1.15)).min(12.0);
-        let wrapped = loop {
-            let all: Vec<String> = lines.iter().flat_map(|l| wrap_text(l, size, right_w)).collect();
-            if all.len() as f64 * size * 1.15 <= h - 2.0 * pad || size <= 3.0 {
-                break all;
-            }
-            size *= 0.9;
-        };
-        let mut y = h - pad - size * 0.9;
-        for l in &wrapped {
-            out.extend(format!("/{font_tag} {} Tf 1 0 0 1 {} {} Tm ", fmt(size), fmt(right_x), fmt(y)).bytes());
-            out.extend(encode_line(l));
-            out.extend_from_slice(b" Tj\n");
-            y -= size * 1.15;
-        }
-        out.extend_from_slice(b"ET\n");
     }
     let mut d = Dict::new();
     d.set(b"Type".to_vec(), Object::name("XObject"));
@@ -655,7 +649,9 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
         d.set(b"Matrix".to_vec(), Object::Array(m.iter().map(|x| Object::Real(*x)).collect()));
     }
     let mut res = Dict::new();
-    res.set(b"Font".to_vec(), Object::Dict(fonts));
+    if embedded.is_some() {
+        res.set(b"Font".to_vec(), Object::Dict(fonts));
+    }
     if let Some(im) = image {
         let mut xobjects = Dict::new();
         xobjects.set(b"Im1".to_vec(), Object::Ref(im));
