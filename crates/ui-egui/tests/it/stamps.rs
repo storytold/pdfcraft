@@ -1,22 +1,26 @@
 //! Add a stamp: the palette and placing stamps on the page.
 
+use crate::support::AppHarness as _;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
+use pdfcraft_ui_egui::QuickTool;
 
 #[test]
 fn choosing_and_placing_stamps() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
-        app.set_option("zoom", "150").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+            app
+        }
     });
     h.run_steps(6);
-    assert!(h.state_mut().execute("comment.stamp"));
+    assert!(h.execute("comment.stamp"));
     h.run_steps(2);
-    h.get_by_label("Add a stamp");
+    h.get_by_label("Stamps");
     h.get_all_by_label("APPROVED").next().expect("dynamic approved").click();
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Stamp(pdfcraft_engine::StampKind::DynApproved));
@@ -35,35 +39,31 @@ fn choosing_and_placing_stamps() {
     let stamps: Vec<_> = doc.info.annotations.iter().filter(|a| a.subtype == "Stamp").collect();
     assert_eq!(stamps.len(), 1);
     assert_eq!(s.quick_tool, QuickTool::Select, "back to selecting after one stamp");
-    for _ in 0..30 {
-        h.run_steps(2);
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
-        let _gpu = crate::gpu();
-        h.render().unwrap().save(format!("{dir}/stamps.png")).unwrap();
-    }
 }
 
 #[test]
 fn natural_image_stamps_keep_displayed_bounds_on_rotated_pages() {
     for degrees in [0, 90, 180, 270] {
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-            let mut app = PdfCraftApp::new();
-            app.set_option("language", "en").unwrap();
-            app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
-            let id = app.views[0].id;
-            app.session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees }).unwrap();
-            app.set_option("zoom", "100").unwrap();
-            app
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = crate::control::new_app();
+                app.set_option(&egui::Context::default(), "language", "en").unwrap();
+                app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+                let id = app.views[0].id;
+                app.session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees }).unwrap();
+                app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
+                app
+            }
         });
         h.run_steps(6);
-        assert!(h.state_mut().execute("comment.stamp"));
+        assert!(h.execute("comment.stamp"));
         let mut png = Vec::new();
         image::RgbImage::from_pixel(80, 40, image::Rgb([20, 120, 220]))
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
-        h.state_mut().start_custom_stamp("rectangle.png".into(), png);
+        let ctx = h.ctx.clone();
+        h.state_mut().start_custom_stamp(&ctx, "rectangle.png".into(), png);
         h.run_steps(2);
         h.get_by_label("OK").click();
         h.run_steps(2);
@@ -90,27 +90,37 @@ fn natural_image_stamps_keep_displayed_bounds_on_rotated_pages() {
 
 #[test]
 fn creating_placing_and_keeping_custom_stamps() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
-        app.set_option("zoom", "150").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+            app
+        }
     });
     h.run_steps(6);
-    assert!(h.state_mut().execute("comment.stamp"));
+    assert!(h.execute("comment.stamp"));
     h.run_steps(2);
     // An image becomes a stamp: Create ▸ category and name.
     let mut png = Vec::new();
     image::RgbImage::from_pixel(60, 20, image::Rgb([20, 120, 220])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    h.state_mut().start_custom_stamp("logo.png".into(), png);
+    let ctx = h.ctx.clone();
+    h.state_mut().start_custom_stamp(&ctx, "logo.png".into(), png);
     h.run_steps(2);
-    h.get_by_label("Create Custom Stamp");
-    h.state_mut().stamp_draft.category = "Company".into();
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Create Custom Stamp");
+    h.get_by_label("Category").click();
     h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.get_by_label("Category").type_text("Company");
+    h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::CustomStamp(0));
+    h.get_by_label("Company").scroll_to_me();
+    h.run_steps(2);
     h.get_by_label("Company");
     h.get_by_label("logo");
     // Place it.
@@ -132,10 +142,10 @@ fn creating_placing_and_keeping_custom_stamps() {
     assert!(((r[2] - r[0]) / (r[3] - r[1]) - 3.0).abs() < 0.05, "keeps the picture's shape: {r:?}");
     assert_eq!(doc.can_undo(), Some("Add stamp"));
     // The library is kept with the app's settings.
-    let saved = s.persist();
-    let mut again = PdfCraftApp::new();
-    again.set_option("language", "en").unwrap();
-    again.restore(&saved);
+    let saved = s.settings_snapshot();
+    let mut again = crate::control::new_app();
+    again.set_option(&egui::Context::default(), "language", "en").unwrap();
+    again.apply_settings(&saved);
     assert_eq!(again.custom_stamps.len(), 1);
     assert_eq!((again.custom_stamps[0].category.as_str(), again.custom_stamps[0].name.as_str()), ("Company", "logo"));
     assert_eq!(again.custom_stamps[0].data, s.custom_stamps[0].data);
@@ -145,24 +155,31 @@ fn creating_placing_and_keeping_custom_stamps() {
 /// kept in the library, and placed with the band under the picture.
 #[test]
 fn a_dynamic_custom_stamp_keeps_its_line_and_fills_it_in_when_placed() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
-        app.set_option("zoom", "150").unwrap();
-        app.set_option("author", "Ada").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+            app.set_option(&egui::Context::default(), "author", "Ada").unwrap();
+            app
+        }
     });
     h.run_steps(6);
-    assert!(h.state_mut().execute("comment.stamp"));
+    assert!(h.execute("comment.stamp"));
     h.run_steps(2);
     let mut png = Vec::new();
     image::RgbImage::from_pixel(60, 20, image::Rgb([20, 120, 220])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    h.state_mut().start_custom_stamp("logo.png".into(), png);
+    let ctx = h.ctx.clone();
+    h.state_mut().start_custom_stamp(&ctx, "logo.png".into(), png);
     h.run_steps(2);
+    // The dialog's body scrolls; the check box may sit below the room it shows.
+    h.get_by_label("Add a line filled in when the stamp is placed").scroll_to_me();
+    h.run_steps(3);
     h.get_by_label("Add a line filled in when the stamp is placed").click();
     h.run_steps(2);
-    h.get_by_label_contains("become your name, the date and the time");
+
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert_eq!(h.state().custom_stamps[0].line.as_deref(), Some("By {name} at {time}, {date}"));
@@ -197,7 +214,7 @@ fn a_dynamic_custom_stamp_keeps_its_line_and_fills_it_in_when_placed() {
     let aspect = (r[2] - r[0]) / (r[3] - r[1]);
     // A band under the 3:1 picture (so less wide than 3:1), at least as wide as the picture.
     assert!(aspect > 3.0 * (1.0 - 0.22) - 0.05 && aspect < 3.0 - 0.05, "a band under the 3:1 picture: {r:?}");
-    let mut again = PdfCraftApp::new();
-    again.restore(&s.persist());
+    let mut again = crate::control::new_app();
+    again.apply_settings(&s.settings_snapshot());
     assert_eq!(again.custom_stamps[0].line, s.custom_stamps[0].line, "kept with the library");
 }

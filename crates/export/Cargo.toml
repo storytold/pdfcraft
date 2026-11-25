@@ -13,8 +13,12 @@ workspace = true
 [dependencies]
 craft-markdown.workspace = true
 craft-mime.workspace = true
-craft-opc.workspace = true
-craft-rtf.workspace = true
+craft-rtf = { workspace = true, features = ["doc"] }
+craft-wordmodel.workspace = true
+craft-docx.workspace = true
+craft-html = { git = "https://github.com/storytold/craft-libs", rev = "0a6e42b80bfd586aee6ee1144aa98cf1ea37a844", version = "0.1.0", features = ["standalone"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+craft-pptx.workspace = true
 craft-xml.workspace = true
 craft-zip.workspace = true
 
