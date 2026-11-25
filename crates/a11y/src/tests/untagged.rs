@@ -155,6 +155,18 @@ fn a_form_drawn_too_deep_to_read_is_never_enclosed() {
 }
 
 #[test]
+fn a_form_with_unreadable_bytes_is_never_enclosed() {
+    // The unterminated string swallows the rest of the form; the `f` before it still parses.
+    let damaged = form("0 0 1 1 re f (unterminated", "");
+    let mut doc = tagged(&[&format!("{CLAIMED} /Fm Do 2 2 1 1 re f")], "/Fm 9 0 R", &[damaged]);
+    let done = mark_untagged_artifacts(&mut doc, &[]).unwrap();
+    assert_eq!((done.sequences, done.items), (1, 1), "{done:?}");
+    assert!(done.notes.iter().any(|n| n.contains("read in full")), "{done:?}");
+    let (_, text) = &contents(&doc)[0];
+    assert!(text.find("/Artifact BMC") > text.find("/Fm Do"), "{text}");
+}
+
+#[test]
 fn loose_text_beside_tagged_text_is_wrapped_inside_its_text_object() {
     let mut doc = tagged(&["BT /F1 12 Tf 20 150 Td (Loose) Tj /P <</MCID 0>> BDC (Tagged) Tj EMC (More) Tj ET"], "", &[]);
     mark_untagged_artifacts(&mut doc, &[]).unwrap();
@@ -222,12 +234,23 @@ fn a_path_built_in_one_stream_and_ended_in_the_next_is_left_and_disclosed() {
         let mut doc = tagged(&[CLAIMED, built, ended], "", &[]);
         let done = mark_untagged_artifacts(&mut doc, &[]).unwrap();
         assert_eq!((done.sequences, done.items), (1, 1), "{done:?}");
-        assert!(done.notes.iter().any(|n| n.contains("painted in the next")), "{done:?}");
+        assert!(done.notes.iter().any(|n| n.contains("ended in the next")), "{done:?}");
         let after = contents(&doc);
         assert_eq!(after[1].1, built, "{after:?}");
         assert!(after[2].1.trim_start().starts_with(&ended[..1]) && nests(&after[2].1), "{after:?}");
         assert_eq!(after[2].1.matches("/Artifact BMC").count(), 1, "{after:?}");
     }
+}
+
+#[test]
+fn a_path_left_open_at_the_end_of_the_last_stream_gets_no_mark_inside_it() {
+    let mut doc = tagged(&[CLAIMED, "0 0 1 1 re f 2 2 1 1 re"], "", &[]);
+    let done = mark_untagged_artifacts(&mut doc, &[]).unwrap();
+    assert_eq!((done.sequences, done.items), (1, 1), "{done:?}");
+    let after = contents(&doc);
+    // The open path stays after the wrap, untouched.
+    assert_eq!(after[1].1.rsplit_once("EMC").map(|(_, tail)| tail.trim()), Some("2 2 1 1 re"), "{after:?}");
+    assert!(nests(&after[1].1), "{after:?}");
 }
 
 #[test]

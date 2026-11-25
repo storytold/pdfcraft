@@ -323,7 +323,8 @@ impl<'a> Planner<'a> {
         let (props, xobjects) = (sub(self.doc, &res, b"Properties"), sub(self.doc, &res, b"XObject"));
         out.active.push(r);
         let mut stack: Vec<bool> = Vec::new();
-        for op in pdfcraft_content::ops(&data) {
+        let mut ops = pdfcraft_content::ops(&data);
+        for op in ops.by_ref() {
             let inside = covered || stack.last().copied().unwrap_or(false);
             match op.op.as_slice() {
                 b"BMC" => stack.push(inside || op.name(0) == Some(b"Artifact")),
@@ -343,6 +344,7 @@ impl<'a> Planner<'a> {
                 break;
             }
         }
+        out.unread |= ops.skipped() > 0 || ops.ambiguous_images() > 0;
         out.active.pop();
     }
 

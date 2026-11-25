@@ -253,7 +253,7 @@ impl Left {
         }
         if self.split_paths > 0 {
             notes.push(format!(
-                "Left {} path(s) built in one content stream and painted in the next; marking them would split the path.",
+                "Left {} path(s) built in one content stream and ended in the next; marking them would split the path.",
                 self.split_paths
             ));
         }
