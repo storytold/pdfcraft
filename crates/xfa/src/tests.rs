@@ -5239,6 +5239,15 @@ fn an_inherited_namespace_does_not_multiply_an_import() {
     }
 }
 
+#[test]
+fn data_import_keeps_malformed_xml_distinct_from_namespace_limits() {
+    use crate::data::parse_data_file;
+    for xml in ["<form1><a></form1>", "<form1><p:a/></form1>"] {
+        assert!(matches!(parse_data_file(xml, None), Err(XfaError::Malformed(_))), "{xml}");
+    }
+    let nodes = parse_data_file("<form1 xmlns:p='urn:small'><p:a>value</p:a></form1>", None).unwrap();
+    assert!(!nodes.is_empty());
+}
 /// A long data name with a high index is not copied into every sibling created before it.
 #[test]
 fn long_names_repeated_by_an_index_are_capped() {

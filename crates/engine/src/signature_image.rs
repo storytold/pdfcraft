@@ -191,6 +191,16 @@ impl SignatureImage {
         Ok(Self { bytes: Arc::new(bytes), rgba: Arc::new(raw), size })
     }
 
+    /// An image from straight RGBA pixels, within the same side and pixel limits as a decoded
+    /// file. A pixel buffer of another length is refused.
+    pub fn from_rgba(width: u32, height: u32, rgba: Vec<u8>) -> Result<Self, SignatureImageError> {
+        if width == 0 || height == 0 || width > MAX_SIDE || height > MAX_SIDE || u64::from(width) * u64::from(height) > MAX_PIXELS {
+            return Err(SignatureImageError::Size);
+        }
+        let (bytes, raw) = encode_png(width, height, rgba)?;
+        Ok(Self { bytes: Arc::new(bytes), rgba: Arc::new(raw), size: [width as usize, height as usize] })
+    }
+
     pub fn bytes(&self) -> &Arc<Vec<u8>> {
         &self.bytes
     }
@@ -210,32 +220,11 @@ impl SignatureImage {
         pdfcraft_sign::Graphic::Image { width: side(self.size[0]), height: side(self.size[1]), rgba: self.rgba.clone() }
     }
 
-    /// Make near-white paper transparent, keeping darker ink.
-    pub fn remove_white_background(&self, cutoff: u8, feather: u8) -> Result<Self, SignatureImageError> {
-        let [w, h] = self.size;
-        let (w32, h32) = (u32::try_from(w).map_err(|_| SignatureImageError::Size)?, u32::try_from(h).map_err(|_| SignatureImageError::Size)?);
-        let mut raw = self.rgba.as_ref().clone();
-        let high = f32::from(cutoff);
-        let span = f32::from(feather.max(1));
-        for px in raw.as_chunks_mut::<4>().0 {
-            let whiteness = f32::from(px[0].min(px[1]).min(px[2]));
-            let keep = ((high - whiteness) / span).clamp(0.0, 1.0);
-            px[3] = (f32::from(px[3]) * keep).round() as u8;
-        }
-        let (bytes, raw) = encode_png(w32, h32, raw)?;
-        Ok(Self { bytes: Arc::new(bytes), rgba: Arc::new(raw), size: [w, h] })
-    }
-
     /// The user-space box for the image with its left edge at `at` (a user-space point on `page`),
     /// vertically centered, with the same 150 pt width cap as typed names. Left and centered are
     /// as displayed: on a page with `/Rotate` the box runs along the turned page's axes.
     pub fn rect(&self, page: &PageInfo, at: [f64; 2], initials: bool) -> Option<[f64; 4]> {
-        if !at.iter().all(|v| v.is_finite()) {
-            return None;
-        }
-        let [w, h] = self.size;
-        let scale = (150.0 / w as f64).min(if initials { 24.0 } else { 32.0 } / h as f64);
-        upright_box(i64::from(page.rotation), at, w as f64 * scale, h as f64 * scale)
+        image_signature_box(self.size, page, at, initials)
     }
 
     pub fn edit(&self, page: usize, info: &PageInfo, at: [f64; 2], initials: bool, author: &str) -> Option<Edit> {
@@ -253,6 +242,19 @@ impl SignatureImage {
             }],
         })
     }
+}
+
+/// The user-space box for an image of `size` pixels with its left edge at `at` on `page`,
+/// vertically centered, with the 150 pt width cap of typed names. Left and centered are as
+/// displayed: on a page with `/Rotate` the box runs along the turned page's axes. `None` for a
+/// non-finite point. One rule for the placed image and the ghost that follows the pointer.
+pub fn image_signature_box(size: [usize; 2], page: &PageInfo, at: [f64; 2], initials: bool) -> Option<[f64; 4]> {
+    if !at.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let [w, h] = size;
+    let scale = (150.0 / w as f64).min(if initials { 24.0 } else { 32.0 } / h as f64);
+    upright_box(i64::from(page.rotation), at, w as f64 * scale, h as f64 * scale)
 }
 
 #[cfg(test)]
@@ -398,24 +400,14 @@ mod tests {
     }
 
     #[test]
-    fn white_background_becomes_transparent_and_ink_is_kept() {
-        let img = craft_image_codecs::Image::from_u8(
-            4,
-            1,
-            craft_image_codecs::ChannelLayout::Rgba,
-            vec![255, 255, 255, 255, 20, 20, 20, 255, 227, 227, 227, 255, 10, 10, 10, 100],
-        )
-        .unwrap();
-        let encoded = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
-
-        let image = SignatureImage::from_bytes(&encoded).unwrap();
-        let cleaned = image.remove_white_background(245, 35).unwrap();
-        let pixels = cleaned.rgba().as_chunks::<4>().0;
-
-        assert_eq!(cleaned.size(), [4, 1]);
-        assert_eq!(pixels[0][3], 0, "white paper must be transparent");
-        assert_eq!(pixels[1], [20, 20, 20, 255], "dark ink must be unchanged");
-        assert!(pixels[2][3] > 0 && pixels[2][3] < 255, "near-white must fade");
-        assert_eq!(pixels[3][3], 100, "existing transparency must be kept");
+    fn rgba_images_keep_their_pixels_and_the_ghost_box_is_the_placed_box() {
+        let rgba = [40u8, 60, 80, 128].repeat(400 * 40);
+        let image = SignatureImage::from_rgba(400, 40, rgba.clone()).unwrap();
+        assert_eq!(image.size(), [400, 40]);
+        assert_eq!(image.rgba(), &rgba[..]);
+        assert_eq!(image_signature_box([400, 40], &page(0), [20.0, 100.0], false), Some([20.0, 92.5, 170.0, 107.5]));
+        assert_eq!(image_signature_box([400, 40], &page(0), [f64::NAN, 0.0], false), None);
+        assert!(SignatureImage::from_rgba(400, 40, vec![0; 7]).is_err());
+        assert!(SignatureImage::from_rgba(0, 40, Vec::new()).is_err());
     }
 }
