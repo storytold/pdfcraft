@@ -154,6 +154,7 @@ mod tests {
                 Block { bold: true, ..block("\u{0}\u{2}", 72.0, 660.0, 120.0, 672.0) },
             ],
             images: Vec::new(),
+            ocr: false,
             background: None,
             rules: Vec::new(),
         };

@@ -40,6 +40,9 @@ pub struct Page {
     pub height: f64,
     pub blocks: Vec<Block>,
     pub images: Vec<Image>,
+    /// Every non-empty text block is invisible OCR text, with no unread forms. Word flows that
+    /// text without the redundant page-sized scan; visible and mixed pages keep their layout.
+    pub ocr: bool,
     /// The colour the whole page is painted before its content (a page background), as sRGB
     /// components in 0..=1; `None` for a page with no background of its own.
     pub background: Option<[f64; 3]>,
@@ -696,6 +699,11 @@ pub(crate) fn reading_order<T>(page: &Page, parts: Vec<([f64; 4], f64, T)>) -> V
 }
 
 pub(crate) fn items(pages: &[Page]) -> Vec<Item<'_>> {
+    items_filtered(pages, |_, _| true)
+}
+
+/// The pages' items with images `keep_image` rejects left out before reading order is computed.
+pub(crate) fn items_filtered(pages: &[Page], keep_image: impl Fn(&Page, &Image) -> bool) -> Vec<Item<'_>> {
     let body = body_size(pages);
     let mut out = Vec::new();
     for (i, p) in pages.iter().enumerate() {
@@ -715,7 +723,7 @@ pub(crate) fn items(pages: &[Page]) -> Vec<Item<'_>> {
             })
             .collect();
         parts.extend(tables.into_iter().map(|t| (t.rect, body, Item::Table(t))));
-        parts.extend(p.images.iter().map(|im| (im.rect, (im.rect[3] - im.rect[1]).max(body), Item::Img(im))));
+        parts.extend(p.images.iter().filter(|im| keep_image(p, im)).map(|im| (im.rect, (im.rect[3] - im.rect[1]).max(body), Item::Img(im))));
         out.extend(reading_order(p, parts));
     }
     out

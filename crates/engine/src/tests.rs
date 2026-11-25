@@ -8077,8 +8077,99 @@ fn exporting_office_files_keeps_images() {
     assert!(String::from_utf8(d.export_office(compare::OfficeFormat::Html)).unwrap().contains("data:image/png;base64,"));
 }
 
-/// #314: a page whose content is drawn through a form XObject exports its text (the file from
-/// the report: no xref table, wrong stream lengths).
+/// One XML part of a DOCX package, decoded with the filters already available to these tests.
+fn docx_part(zip: &[u8], name: &str) -> String {
+    let at = |i: usize, n: usize| zip[i..i + n].iter().rev().fold(0usize, |v, b| v << 8 | *b as usize);
+    let mut i = 0;
+    while zip[i..].starts_with(b"PK\x03\x04") {
+        let (method, size, name_len, extra_len) = (at(i + 8, 2), at(i + 18, 4), at(i + 26, 2), at(i + 28, 2));
+        let data = i + 30 + name_len + extra_len;
+        if &zip[i + 30..i + 30 + name_len] == name.as_bytes() {
+            let body = &zip[data..data + size];
+            let decoded = match method {
+                0 => body.to_vec(),
+                8 => pdfcraft_filters::decode(&[(pdfcraft_filters::Filter::Flate, pdfcraft_filters::Params::default())], body, 16 << 20).unwrap(),
+                other => panic!("unsupported DOCX compression {other}"),
+            };
+            return String::from_utf8(decoded).unwrap();
+        }
+        i = data + size;
+    }
+    panic!("{name} missing")
+}
+
+/// Invisible page text followed by forms nested past the reading limit.
+fn invisible_text_with_deep_forms() -> Vec<u8> {
+    let depth = compare::MAX_FORM_DEPTH + 1;
+    let xobjects: String = (1..=depth).map(|i| format!("/D{i} {} 0 R ", 5 + i)).collect();
+    let content = "BT /F1 12 Tf 3 Tr 20 100 Td (Hidden) Tj ET /D1 Do";
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> /XObject << {xobjects} >> >> >>"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    for i in 1..=depth {
+        let body = if i == depth { "q Q".to_string() } else { format!("/D{} Do", i + 1) };
+        objs.push(format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /XObject << {xobjects} >> >> /Length {} >>\nstream\n{body}\nendstream",
+            body.len()
+        ));
+    }
+    pdfcraft_testkit::Pdf::new().objs(objs).build()
+}
+
+/// The export's OCR provenance comes from the actual invisible text layer, not page geometry.
+#[test]
+fn ocr_office_export_uses_real_invisible_text_provenance() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let (id, size) = synthetic_ocr_scan(&mut s);
+    assert!(!s.get(id).unwrap().export_pages()[0].ocr, "an image-only page has no OCR text");
+    let (w, h) = (f64::from(size[0]), f64::from(size[1]));
+    let word = |text: &str, origin: [f64; 2], across: [f64; 2]| ocr::PlacedWord {
+        text: text.into(),
+        origin,
+        across,
+        up: [0.0, 12.0],
+        confidence: None,
+        source: "ocrs".into(),
+    };
+    let found = [ocr::OcrPage {
+        page: 0,
+        words: vec![word("Body flows", [w / 3.0, h * 0.85], [w / 2.0, 0.0]), word("Folio 7", [20.0, 20.0], [20.0, 0.0])],
+        already_on_page: 0,
+        skipped: None,
+        notes: Vec::new(),
+    }];
+    s.apply_ocr(id, &found).unwrap();
+    let doc = s.get(id).unwrap();
+    assert!(doc.export_pages()[0].ocr, "the mode-3 words mark the page as wholly OCR");
+    let docx = doc.export_office(compare::OfficeFormat::Docx);
+    let xml = docx_part(&docx, "word/document.xml");
+    assert!(!xml.contains("<wps:txbx>") && !xml.contains("<v:textbox"), "OCR text flows instead of using text boxes: {xml}");
+    assert!(!docx.windows(b"word/media/".len()).any(|w| w == b"word/media/"), "the redundant scan is not packaged");
+    let body = xml.find("Body flows").expect("body paragraph");
+    let folio = xml.find("Folio 7").expect("folio paragraph");
+    assert!(body < folio, "the omitted scan must not reorder the body and folio: {xml}");
+
+    let visible = AddedText { rect: [20.0, h * 0.5, 200.0, h * 0.5 + 30.0], text: "Visible addition".into(), size: 12.0, ..Default::default() };
+    s.apply(id, Edit::AddText { page: 0, text: visible }).unwrap();
+    assert!(!s.get(id).unwrap().export_pages()[0].ocr, "visible and mode-3 text is mixed, not wholly OCR");
+
+    let text = s.create_from_text("visible", "Visible text").unwrap();
+    let visible_id = s.open("visible.pdf", None, text, None).unwrap();
+    assert!(!s.get(visible_id).unwrap().export_pages()[0].ocr, "ordinary visible text is not OCR");
+
+    let deep_id = s.open("deep.pdf", None, Arc::new(invisible_text_with_deep_forms()), None).unwrap();
+    let deep = s.get(deep_id).unwrap();
+    let (pages, truncated) = deep.export_pages_checked(false, 0);
+    assert_eq!(truncated, [0], "the deep forms exercise the truncation safeguard");
+    assert!(!pages[0].ocr, "unread forms prevent a wholly-OCR classification");
+}
+
+/// #314: a page whose content is drawn through a form XObject exports its text (the file from the
+/// report: no xref table, wrong stream lengths).
 #[test]
 fn exporting_office_files_reads_form_xobjects() {
     let pdf = b"%PDF-1.4
