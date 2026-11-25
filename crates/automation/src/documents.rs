@@ -117,7 +117,7 @@ impl Automation {
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let id = self.session.open(name, Some(path.to_string_lossy().into_owned()), Arc::new(bytes), a.opt_str("password")?).map_err(failed)?;
         let doc = self.session.get(id).ok_or_else(|| failed("the document vanished"))?;
-        let mut value = summary(doc);
+        let mut value = self.with_save_in_place(doc, summary(doc));
         if let Some(destination) = destination {
             let (applied, destination, warning) = crate::links::destination_report(doc, destination);
             value["destination_applied"] = json!(applied);
@@ -125,6 +125,19 @@ impl Automation {
             value["warning"] = json!(warning);
         }
         Ok(value)
+    }
+
+    /// Add to a document's summary whether `doc_save` without a path may write it back where it
+    /// came from (#8286). That save is held to --root and the automation write root, so a file
+    /// opened from the read root alone is editable but can only be saved as a copy.
+    pub(crate) fn with_save_in_place(&self, doc: &Document, mut value: Value) -> Value {
+        let refused = match &doc.path {
+            None => Some("the document has never been saved: pass a path".to_owned()),
+            Some(own) => self.resolve(own, true).err().map(|e| e.to_string()),
+        };
+        value["save_in_place"] = json!(refused.is_none());
+        value["save_in_place_refused"] = json!(refused);
+        value
     }
 
     pub(crate) fn doc_close(&mut self, a: &Args) -> Result<Value> {

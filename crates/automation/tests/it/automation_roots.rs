@@ -297,6 +297,36 @@ fn tools_that_write_a_path_are_held_to_the_write_root() {
     assert_eq!(names(&base.join("outside")), ["pic.png", "secret.pdf"]);
 }
 
+/// A file opened from the read root can be edited but not saved in place: the open, info and list
+/// replies say so before a save is tried (#8286), and say a copy saved in the write root can be.
+#[test]
+fn a_document_says_whether_it_can_be_saved_in_place() {
+    let (mut server, base) = confined("in-place", true, true);
+    let opened = ok(&mut server, "doc_open", json!({"path": s(&base.join("in/a.pdf"))}));
+    assert_eq!(opened["editable"], true, "{opened}");
+    assert_eq!(opened["save_in_place"], false, "{opened}");
+    assert!(opened["save_in_place_refused"].as_str().is_some_and(|w| w.contains("outside the write root")), "{opened}");
+    let listed = ok(&mut server, "doc_list", json!({}));
+    assert_eq!(listed["documents"][0]["save_in_place"], false, "{listed}");
+    let info = ok(&mut server, "doc_info", json!({"doc": 1}));
+    assert_eq!(info["document"]["save_in_place"], false, "{info}");
+    // What the reply says matches what a save does.
+    refused(&mut server, "doc_save", json!({"doc": 1}), "outside the write root");
+
+    let saved = ok(&mut server, "doc_save", json!({"doc": 1, "path": s(&base.join("out/copy.pdf"))}));
+    assert!(saved["document"]["path"].as_str().is_some_and(|p| p.ends_with("copy.pdf")), "{saved}");
+    let info = ok(&mut server, "doc_info", json!({"doc": 1}));
+    assert_eq!(info["document"]["save_in_place"], true, "{info}");
+    assert!(info["document"]["save_in_place_refused"].is_null(), "{info}");
+    ok(&mut server, "doc_save", json!({"doc": 1}));
+
+    // Without write authority nothing can be saved in place.
+    let (mut server, base) = confined("in-place-ro", true, false);
+    let opened = ok(&mut server, "doc_open", json!({"path": s(&base.join("in/a.pdf"))}));
+    assert_eq!(opened["save_in_place"], false, "{opened}");
+    assert!(opened["save_in_place_refused"].as_str().is_some_and(|w| w.contains("write authority is absent")), "{opened}");
+}
+
 #[test]
 fn signing_writes_and_reads_only_inside_the_roots() {
     // One folder for both roots, so a digital ID can be made and then read back.
