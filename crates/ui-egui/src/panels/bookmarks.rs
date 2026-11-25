@@ -1,4 +1,18 @@
-use super::{DocInfo, Nav, OutlineItem, Rect, Sense, Tokens, icons, pos2, theme, vec2};
+use super::right::PanelResult;
+use super::{Nav, PdfCraftApp};
+use craft::behavior::IconId;
+use craft::behavior::{DisplayOrder, GesturePhase, ItemSource, Mixed, Selection};
+use craft::keymap::CommandRef;
+use craft::ui::buttons::IconButton;
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{ActivateOn, Bind, CollectionEvent, Props, SelectMode, Show, ShowCollection, ShowContainer, request_rename};
+use craft::ui::list::{HueTarget, List, ListRow, OpenSet};
+use craft::ui::menu::{Menu, MenuItem, PanelRow};
+use craft::ui::notices::Notice;
+use craft::ui::primitives::IconSpec;
+use craft::ui::style::DataColor;
+use craft::ui::text::TextField;
+use pdfcraft_render::OutlineItem;
 
 /// What the user asked to do with a bookmark (applied after the panel is drawn).
 #[derive(Clone, Debug, PartialEq)]
@@ -34,426 +48,348 @@ pub enum BmAction {
     FromTextStyles,
 }
 
-/// Matching titles plus their ancestors, keeping document paths rather than filtered indexes.
-/// `query` is folded with [`pdfcraft_render::text::fold_case`], as titles are here.
-pub(super) fn outline_matches(items: &[OutlineItem], query: &str) -> std::collections::HashSet<Vec<usize>> {
-    let mut matches = std::collections::HashSet::new();
-    if query.is_empty() {
-        return matches;
+/// Outline nesting the panel lists; the engine bounds what it reads, this bounds what the panel walks.
+const MAX_DEPTH: usize = 256;
+
+/// The id of a document's bookmark list, so a new bookmark's rename can be requested from outside the panel.
+pub(crate) fn list_id(doc: pdfcraft_engine::DocId) -> egui::Id {
+    egui::Id::unique(("bookmark-list", doc.0))
+}
+
+/// Asks the bookmark list of `doc` to open the rename editor on the bookmark at `path`.
+pub(crate) fn start_rename(ctx: &egui::Context, doc: pdfcraft_engine::DocId, path: &[usize]) {
+    request_rename(ctx, list_id(doc), &path.to_vec());
+}
+
+/// The Bookmark options menu rows.
+pub(super) fn options_menu(_app: &PdfCraftApp) -> Vec<PanelRow> {
+    [
+        "bookmark.from_structure",
+        "bookmark.from_text_styles",
+        "bookmark.paste",
+        "bookmark.expand_all",
+        "bookmark.collapse_all",
+        "bookmark.expand_level",
+    ]
+    .into_iter()
+    .map(|id| PanelRow::Command(CommandRef::new(id)))
+    .collect()
+}
+
+/// The header's New bookmark button, shown while the document may be edited.
+pub(super) fn header(app: &PdfCraftApp, ui: &mut egui::Ui) {
+    let editable = app.active_ids().and_then(|(_, id)| app.session.get(id)).is_some_and(|d| d.allows_assembly() && d.read_only_reason.is_none());
+    if editable {
+        IconButton::command(IconSpec::svg(IconId::new("bookmark-plus")), CommandRef::new("bookmark.add")).show(ui);
     }
-    let mut pending: Vec<_> = items.iter().enumerate().map(|(i, item)| (vec![i], item)).collect();
-    while let Some((path, item)) = pending.pop() {
-        if pdfcraft_render::text::fold_case(&item.title).contains(query) {
-            let mut ancestor = path.clone();
-            while !ancestor.is_empty() {
-                matches.insert(ancestor.clone());
-                ancestor.pop();
+}
+
+/// Opens the groups of `outline` shallower than `level` and closes the others: `usize::MAX` opens every group, `0`
+/// closes every group.
+pub(crate) fn expand_to(view: &mut crate::DocView, outline: &[OutlineItem], level: usize) {
+    fn walk(items: &[OutlineItem], depth: usize, level: usize, path: &mut Vec<usize>, open: &mut OpenSet<Vec<usize>>) {
+        if depth >= MAX_DEPTH {
+            return;
+        }
+        for (i, item) in items.iter().enumerate() {
+            path.push(i);
+            if !item.children.is_empty() {
+                open.set(path, depth < level);
+                walk(&item.children, depth + 1, level, path, open);
             }
-        }
-        for (i, child) in item.children.iter().enumerate() {
-            let mut child_path = path.clone();
-            child_path.push(i);
-            pending.push((child_path, child));
+            path.pop();
         }
     }
-    matches
+    // PLAN: assumed `DocView::bookmarks_open: OpenSet<Vec<usize>>` (pdf-canvas-w8); the outline's open state lives
+    // on the view, not in the document.
+    walk(outline, 0, level, &mut Vec::new(), &mut view.bookmarks_open);
 }
 
-pub(super) struct OutlineCtx<'a> {
-    pub(super) nav: &'a mut Option<Nav>,
-    pub(super) action: &'a mut Option<BmAction>,
-    pub(super) rename: &'a mut Option<(Vec<usize>, String)>,
-    pub(super) editable: bool,
-    /// The bookmark clipboard holds something to paste.
-    pub(super) can_paste: bool,
-    pub(super) current: usize,
-    /// Expand all (`Some(usize::MAX)`), collapse all (`Some(0)`) or expand to a depth, this frame.
-    pub(super) expand: Option<usize>,
-    pub(super) matches: &'a std::collections::HashSet<Vec<usize>>,
-    pub(super) searching: bool,
-}
-
-/// The destination page label gets its own right-aligned column in a bookmark row; drawing
-/// tools put whole section titles in /PageLabels, so the column is bounded (#124).
-const LABEL_COLUMN_MAX: f32 = 72.0;
-
-/// More characters than ever fit [`LABEL_COLUMN_MAX`] at the label size.
-const LABEL_MEASURE_CHARS: usize = 64;
-
-/// The longest head of `text` that `fits`, plus an ellipsis when the whole string doesn't.
-/// Whole characters are dropped from the end, so the string is only ever cut at a char
-/// boundary, and the loop always ends (at the ellipsis alone). A label is document text: only
-/// its first [`LABEL_MEASURE_CHARS`] characters are measured, so a huge one can't make each
-/// frame lay out thousands of candidates.
-pub(crate) fn ellipsized_prefix(text: &str, mut fits: impl FnMut(&str) -> bool) -> String {
-    let mut s: String = text.chars().take(LABEL_MEASURE_CHARS).collect();
-    if s.len() == text.len() && fits(text) {
-        return text.to_owned();
-    }
-    loop {
-        s.pop();
-        let candidate = format!("{s}\u{2026}");
-        if s.is_empty() || fits(&candidate) {
-            return candidate;
+/// The groups of `outline` open as the file says: only a positive `/Count` opens one, at every level (ISO 32000-2
+/// §12.3.3, Table 151). A view starts with them so; the reader's opening and closing changes them from there.
+pub(crate) fn opened_as_filed(outline: &[OutlineItem]) -> OpenSet<Vec<usize>> {
+    fn walk(items: &[OutlineItem], depth: usize, path: &mut Vec<usize>, open: &mut OpenSet<Vec<usize>>) {
+        if depth >= MAX_DEPTH {
+            return;
+        }
+        for (i, item) in items.iter().enumerate() {
+            path.push(i);
+            if !item.children.is_empty() {
+                open.set(path, item.open);
+                walk(&item.children, depth + 1, path, open);
+            }
+            path.pop();
         }
     }
+    let mut open = OpenSet::default();
+    walk(outline, 0, &mut Vec::new(), &mut open);
+    open
 }
 
-/// The inline rename field (#5529). On the frame it takes focus it selects the whole title, so
-/// typing replaces the old text at once; later frames leave the user's own caret and selection
-/// alone. Same pattern as the zoom box in `chrome.rs`.
-fn rename_field(ui: &mut egui::Ui, text: &mut String, id: egui::Id) -> egui::Response {
-    let first_frame = !ui.memory(|m| m.has_focus(id));
-    let resp = ui.add(crate::widgets::line(text).desired_width(ui.available_width() - 8.0).id(id));
-    if !resp.has_focus() && !resp.lost_focus() {
-        if first_frame {
-            let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
-            let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(text.chars().count()));
-            state.cursor.set_char_range(Some(all));
-            state.store(ui.ctx(), id);
-        }
-        resp.request_focus();
-    }
-    resp
-}
-
-/// How a bookmark's title is drawn: in its own style and colour (ISO 32000-2 §12.3.3, Tables 151
-/// and 152), bold in the heavier face and italic slanted, its colour kept readable on the panel.
-/// Top-level bookmarks without a style keep the medium face.
-fn title_format(item: &OutlineItem, depth: usize, t: &Tokens) -> egui::TextFormat {
-    let font_id = match (item.bold, depth) {
-        (true, _) => theme::semibold(13.0),
-        (false, 0) => theme::medium(13.0),
-        (false, _) => theme::regular(13.0),
-    };
-    let color = item.color.map_or(t.text, |rgb| {
+/// How a bookmark's title is drawn: bold at depth 0 and where the file says, italic where it says, in its own colour
+/// (ISO 32000-2 §12.3.3, Tables 151 and 152). The row keeps the colour readable.
+fn title_style(item: &OutlineItem, depth: usize) -> (bool, bool, Option<DataColor>) {
+    let color = item.color.map(|rgb| {
         // Each component is within 0–1, so the rounded value fits a byte.
         let [r, g, b] = rgb.map(|c| (c * 255.0).round() as u8);
-        theme::readable(egui::Color32::from_rgb(r, g, b), t.panel, t.text)
+        DataColor::new(egui::Color32::from_rgb(r, g, b))
     });
-    egui::TextFormat { font_id, color, italics: item.italic, ..Default::default() }
+    (item.bold || depth == 0, item.italic, color)
 }
 
-/// Draw one bookmark row with expansion, inline rename and the editable context menu.
-pub(super) fn outline_item(
-    ui: &mut egui::Ui,
-    t: &Tokens,
-    info: &DocInfo,
-    item: &OutlineItem,
-    path: &[usize],
-    siblings: usize,
-    cx: &mut OutlineCtx<'_>,
-) {
-    if cx.searching && !cx.matches.contains(path) {
+fn item_at<'a>(outline: &'a [OutlineItem], path: &[usize]) -> Option<&'a OutlineItem> {
+    let (&first, rest) = path.split_first()?;
+    let mut item = outline.get(first)?;
+    for &i in rest {
+        item = item.children.get(i)?;
+    }
+    Some(item)
+}
+
+fn groups(items: &[OutlineItem], path: &mut Vec<usize>, out: &mut Vec<Vec<usize>>) {
+    if path.len() >= MAX_DEPTH {
         return;
     }
-    let depth = path.len() - 1;
-    let indent = depth as f32 * 16.0;
-    let id = ui.scope_id().with(("outline", path));
-    if let Some(levels) = cx.expand {
-        ui.data_mut(|d| d.insert_temp(id, depth < levels));
-    }
-    // A bookmark opens as the file says at every level: a positive /Count is open, a negative
-    // one (or none) closed (ISO 32000-2 §12.3.3, Table 151). The reader's own toggles and a
-    // search override it.
-    let mut open = cx.searching || ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(item.open);
-    let x_text = indent + 20.0;
-    if let Some((rpath, text)) = cx.rename.as_mut()
-        && rpath.as_slice() == path
-    {
-        // Inline rename: Enter commits, Escape cancels.
-        let mut commit = None;
-        let mut cancel = false;
-        ui.horizontal(|ui| {
-            ui.add_space(x_text);
-            crate::widgets::begin_dialog(ui);
-            let resp = rename_field(ui, text, id.with("rename"));
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                cancel = true;
-            } else if resp.lost_focus() {
-                commit = Some(text.trim().to_string());
-            }
-        });
-        if cancel {
-            *cx.rename = None;
-        } else if let Some(title) = commit {
-            *cx.rename = None;
-            if !title.is_empty() && title != item.title {
-                *cx.action = Some(BmAction::Rename(path.to_vec(), title));
-            }
-        }
-    } else {
-        // The page label sits right-aligned in its own bounded column, and the title wraps to
-        // what is really left of it — a long label painted over a long title was the overlap
-        // of #124.
-        let label_font = theme::regular(11.0);
-        let label_galley = item.page.and_then(|p| info.pages.get(p)).map(|page| {
-            ui.fonts_mut(|f| {
-                let text =
-                    ellipsized_prefix(&page.label, |s| f.layout_no_wrap(s.to_owned(), label_font.clone(), t.text_faint).size().x <= LABEL_COLUMN_MAX);
-                f.layout_no_wrap(text, label_font, t.text_faint)
-            })
-        });
-        let label_w = label_galley.as_ref().map_or(0.0, |g| g.size().x);
-        let wrap_w = (ui.available_width() - indent - 20.0 - label_w - 12.0).max(60.0);
-        let mut job = egui::text::LayoutJob::single_section(item.title.clone(), title_format(item, depth, t));
-        job.wrap.max_width = wrap_w;
-        let galley = ui.fonts_mut(|f| f.layout_job(job));
-        let h = (galley.size().y + 12.0).max(28.0);
-        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &item.title));
-        theme::Press::track(ui, &resp).wash(ui, rect, 6, false);
-        let x0 = rect.left() + indent;
+    for (i, item) in items.iter().enumerate() {
+        path.push(i);
         if !item.children.is_empty() {
-            let tri = Rect::from_min_size(pos2(x0, rect.top() + 6.0), vec2(16.0, 16.0));
-            icons::paint(ui, tri, if open { "chevron-down" } else { "chevron-right" }, 14.0, t.text_muted);
-            if !cx.searching && ui.interact(tri, id.with("tri"), Sense::click()).clicked() {
-                open = !open;
-                ui.data_mut(|d| d.insert_temp(id, open));
+            out.push(path.clone());
+            groups(&item.children, path, out);
+        }
+        path.pop();
+    }
+}
+
+struct Row<'a> {
+    path: Vec<usize>,
+    item: &'a OutlineItem,
+    open: bool,
+}
+
+/// The outline as a tree's display order: the rows under open groups.
+struct Rows<'a>(Vec<Row<'a>>);
+
+impl<'a> Rows<'a> {
+    fn collect(items: &'a [OutlineItem], path: &mut Vec<usize>, open: &dyn Fn(&[usize]) -> bool, out: &mut Vec<Row<'a>>) {
+        if path.len() >= MAX_DEPTH {
+            return;
+        }
+        for (i, item) in items.iter().enumerate() {
+            path.push(i);
+            let shown = open(path);
+            out.push(Row { path: path.clone(), item, open: shown });
+            if shown {
+                Self::collect(&item.children, path, open, out);
             }
+            path.pop();
         }
-        ui.painter().galley(pos2(x0 + 20.0, rect.top() + 6.0), galley, t.text);
-        if let Some(g) = label_galley {
-            // Right-aligned, vertically centred at the first line, inside the column the title
-            // wrapped around.
-            let pos = pos2(rect.right() - 6.0 - g.size().x, rect.top() + 14.0 - g.size().y / 2.0);
-            ui.painter().galley(pos, g, t.text_faint);
-        }
-        if theme::hand(resp.clone()).clicked() {
-            match (item.page, &item.action) {
-                (Some(p), _) => *cx.nav = Some(Nav::Dest(p, item.view)),
-                // A web address, another PDF or a layer change, as a link runs it.
-                (None, Some(action)) => *cx.nav = Some(Nav::Action(action.clone())),
-                (None, None) => {}
+    }
+}
+
+impl DisplayOrder<Vec<usize>> for Rows<'_> {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    fn key(&self, at: usize) -> Vec<usize> {
+        self.0.get(at).map(|r| r.path.clone()).unwrap_or_default()
+    }
+    fn depth(&self, at: usize) -> usize {
+        self.0.get(at).map_or(0, |r| r.path.len().saturating_sub(1))
+    }
+    fn has_children(&self, at: usize) -> bool {
+        self.0.get(at).is_some_and(|r| !r.item.children.is_empty())
+    }
+    fn open(&self, at: usize) -> bool {
+        self.0.get(at).is_some_and(|r| r.open)
+    }
+    /// The title: what the rename field starts from and type-ahead matches.
+    fn text(&self, at: usize) -> Option<std::borrow::Cow<'_, str>> {
+        self.0.get(at).map(|r| std::borrow::Cow::Borrowed(r.item.title.as_str()))
+    }
+}
+
+impl ItemSource<Vec<usize>> for Rows<'_> {}
+
+/// The Bookmarks panel body: the search field, then the outline as a tree. Navigation goes in `nav`, the actions in
+/// `bookmark`.
+pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
+    let mut result = PanelResult::default();
+    let Some((index, id)) = app.active_ids() else { return result };
+    let Some(doc) = app.session.get(id) else { return result };
+    let editable = doc.allows_assembly() && doc.read_only_reason.is_none();
+    let can_paste = app.bookmark_clipboard.is_some();
+    let info = &doc.info;
+    let outline = info.outline.as_slice();
+    let Some(view) = app.views.get_mut(index) else { return result };
+    let current = view.current();
+
+    if outline.is_empty() {
+        // Centred in the panel with a glyph above, as the old panel showed an empty list.
+        ui.add_space(40.0);
+        ui.vertical_centered(|ui| {
+            craft::ui::display::Icon::new(IconSpec::svg(IconId::new("bookmark-plus"))).show(ui);
+            ui.add_space(8.0);
+            craft::ui::display::Text::new(tl!("This document has no bookmarks.").to_string()).show(ui);
+        });
+        return result;
+    }
+
+    // The query is the search field's kept value, inside the document's id scope so each document keeps its own.
+    let query = ui
+        .push_id(view.id.0, |ui| {
+            // A kept binding raises no event: the shown value after the pass is the query.
+            match TextField::search(tl!("Search"), Bind::<String>::kept()).show(ui).shown {
+                Some(Mixed::Same(text)) => text.as_str().to_owned(),
+                _ => String::new(),
             }
+        })
+        .inner;
+    let searching = !query.trim().is_empty();
+
+    // While searching every group lists open without writing the outline's open state, so the filter sees every
+    // bookmark.
+    let open_set = &view.bookmarks_open;
+    let open = |path: &[usize]| searching || open_set.is_open(&path.to_vec());
+    let mut rows = Vec::new();
+    Rows::collect(outline, &mut Vec::new(), &open, &mut rows);
+    let rows = Rows(rows);
+
+    let list_id = list_id(id);
+    let mut held = Selection::<Vec<usize>>::default();
+    let row_key = |key: &Vec<usize>| item_at(outline, key).map(|i| vec![i.title.clone().into()]).unwrap_or_default();
+    let list = List::<Vec<usize>>::new(tl!("Bookmarks"))
+        .id(list_id)
+        .tree(true)
+        .select(SelectMode::Single)
+        .activate(ActivateOn::Click)
+        .rename(editable)
+        .selection(Bind::bound(&mut held))
+        .empty(tl!("No matches."))
+        .filter(&query, row_key);
+
+    let out = list.show_items(ui, &rows, &mut |path, icx| {
+        let Some(item) = item_at(outline, path) else { return ListRow::new("") };
+        let depth = path.len().saturating_sub(1);
+        let (strong, italic, color) = title_style(item, depth);
+        let mut r = ListRow::new(item.title.clone()).state(icx.row.clone()).depth(depth).strong(strong).italic(italic);
+        if !item.children.is_empty() {
+            r = r.group(open(path));
         }
-        if resp.double_clicked() && cx.editable {
-            *cx.action = Some(BmAction::StartRename(path.to_vec()));
+        if let Some(color) = color {
+            r = r.hue(color, HueTarget::Label);
         }
-        if cx.editable
-            && let Some(&i) = path.last()
-        {
-            let current = cx.current;
-            resp.context_menu(|ui| {
-                let mut pick = |ui: &mut egui::Ui, label: &str, enabled: bool, a: BmAction| {
-                    if ui.add_enabled(enabled, egui::Button::new(tl!(label))).clicked() {
-                        *cx.action = Some(a);
-                        ui.close();
+        if let Some(page) = item.page.and_then(|p| info.pages.get(p)) {
+            r = r.trailing(page.label.clone());
+        }
+        r
+    });
+
+    let menu_id = list_id.with("target");
+    let mut target: Option<Vec<usize>> = ui.data(|d| d.get_temp::<Option<Vec<usize>>>(menu_id)).flatten();
+    for event in out.events {
+        match event {
+            CollectionEvent::Activate(path) => {
+                if let Some(item) = item_at(outline, &path) {
+                    result.nav = match (item.page, &item.action) {
+                        (Some(p), _) => Some(Nav::Dest(p, item.view)),
+                        // A web address, another PDF or a layer change, as a link runs it.
+                        (None, Some(action)) => Some(Nav::Action(action.clone())),
+                        (None, None) => None,
+                    };
+                }
+            }
+            CollectionEvent::Open(change) if !searching => {
+                let mut all = Vec::new();
+                groups(outline, &mut Vec::new(), &mut all);
+                view.bookmarks_open.apply(&change.key, change.open, change.all, all.iter());
+            }
+            CollectionEvent::Rename(edit) => {
+                let ended = matches!(edit.phase(), Some(GesturePhase::Commit) | None);
+                if let (true, Some(rename)) = (ended, edit.value()) {
+                    let title = rename.name.trim();
+                    if !title.is_empty() && item_at(outline, &rename.key).is_some_and(|i| i.title != title) {
+                        result.bookmark = Some(BmAction::Rename(rename.key.clone(), title.to_owned()));
                     }
-                };
-                pick(ui, tl!("Rename"), true, BmAction::StartRename(path.to_vec()));
-                let set_page = crate::i18n::fmt(tl!("Set to current page ({n})"), &[("n", &(current + 1).to_string())]);
-                pick(ui, &set_page, true, BmAction::SetToCurrentPage(path.to_vec()));
+                }
+            }
+            CollectionEvent::ContextMenu(request) if editable => target = Some(request.key),
+            _ => {}
+        }
+    }
+
+    if let Some(path) = target.clone() {
+        let menu = Menu::context(tl!("Bookmark"), &out.response).show(ui, |ui, _| {
+            let depth = path.len().saturating_sub(1);
+            let i = path.last().copied().unwrap_or(0);
+            let siblings = match path.split_last() {
+                Some((_, parent)) if !parent.is_empty() => item_at(outline, parent).map_or(0, |p| p.children.len()),
+                _ => outline.len(),
+            };
+            // Held apart from `result` so the style and colour submenus can set the choice too.
+            let picked = std::cell::Cell::new(None);
+            let pick = |ui: &mut egui::Ui, label: &'static str, enabled: bool, action: BmAction| {
+                if MenuItem::new(label).enabled(enabled).show(ui).ran {
+                    picked.set(Some(action));
+                }
+            };
+            if MenuItem::new(tl!("Rename")).show(ui).ran {
+                request_rename(ui.ctx(), list_id, &path);
+            }
+            let set_page = crate::i18n::fmt(tl!("Set to current page ({n})"), &[("n", &(current + 1).to_string())]);
+            if MenuItem::new(set_page).show(ui).ran {
+                picked.set(Some(BmAction::SetToCurrentPage(path.clone())));
+            }
+            if let Some(item) = item_at(outline, &path) {
                 // The title's style and colour (ISO 32000-2 §12.3.3, Tables 151 and 152).
+                let style = MenuItem::new(tl!("Style")).show(ui);
                 let mut styled = None;
-                ui.menu_button(tl!("Style"), |ui| {
+                Menu::submenu(tl!("Style"), &style.response).show(ui, |ui, _| {
                     let (mut bold, mut italic) = (item.bold, item.italic);
-                    if ui.add(crate::widgets::checkbox(&mut bold, tl!("Bold"))).clicked() {
-                        styled = Some(BmAction::SetStyle(path.to_vec(), Some(bold), None));
+                    if Checkbox::new(Bind::bound(&mut bold)).label(tl!("Bold")).show(ui).value().is_some() {
+                        styled = Some(BmAction::SetStyle(path.clone(), Some(bold), None));
                     }
-                    if ui.add(crate::widgets::checkbox(&mut italic, tl!("Italic"))).clicked() {
-                        styled = Some(BmAction::SetStyle(path.to_vec(), None, Some(italic)));
+                    if Checkbox::new(Bind::bound(&mut italic)).label(tl!("Italic")).show(ui).value().is_some() {
+                        styled = Some(BmAction::SetStyle(path.clone(), None, Some(italic)));
                     }
                 });
-                ui.menu_button(tl!("Colour"), |ui| {
-                    let current = item.color.map_or([0.0; 3], |c| c.map(f64::from));
-                    if let Some(c) = crate::comments::swatch_grid(ui, Some(current)) {
-                        styled = Some(BmAction::SetColor(path.to_vec(), c));
+                let colour = MenuItem::new(tl!("Colour")).show(ui);
+                Menu::submenu(tl!("Colour"), &colour.response).show(ui, |ui, _| {
+                    let current = item.color.map(|c| c.map(f64::from));
+                    if let Some(c) = crate::comments::colours::palette(ui, tl!("Colour"), current, "bookmark.colour", &app.recent_colours).picked {
+                        styled = Some(BmAction::SetColor(path.clone(), c));
                     }
                 });
                 if styled.is_some() {
-                    ui.close();
+                    picked.set(styled);
                 }
-                ui.separator();
-                pick(ui, tl!("Move up"), i > 0, BmAction::MoveUp(path.to_vec()));
-                pick(ui, tl!("Move down"), i + 1 < siblings, BmAction::MoveDown(path.to_vec()));
-                pick(ui, tl!("Indent"), i > 0, BmAction::Indent(path.to_vec()));
-                pick(ui, tl!("Outdent"), depth > 0, BmAction::Outdent(path.to_vec()));
-                ui.separator();
-                pick(ui, tl!("Cut"), true, BmAction::Cut(path.to_vec()));
-                pick(ui, tl!("Copy"), true, BmAction::Copy(path.to_vec()));
-                let parent = path.get(..depth).unwrap_or_default().to_vec();
-                pick(ui, tl!("Paste"), cx.can_paste, BmAction::Paste { parent, index: i.saturating_add(1) });
-                ui.separator();
-                pick(ui, tl!("Delete"), true, BmAction::Delete(path.to_vec()));
-                if let Some(a) = styled {
-                    *cx.action = Some(a);
-                }
-            });
-        }
-    }
-    if open {
-        for (ci, c) in item.children.iter().enumerate() {
-            let mut p = path.to_vec();
-            p.push(ci);
-            outline_item(ui, t, info, c, &p, item.children.len(), cx);
-        }
-    }
-}
-
-#[cfg(test)]
-mod label_column {
-    use super::ellipsized_prefix;
-
-    /// A short page label (the usual "3", "iv", "1-1") is shown unchanged.
-    #[test]
-    fn short_labels_are_not_touched() {
-        for label in ["3", "iv", "1-1", "A-201"] {
-            assert_eq!(ellipsized_prefix(label, |s| s.len() <= 10), label);
-        }
-    }
-
-    /// A label wider than its column (#124: whole section titles in /PageLabels) keeps only
-    /// the head that fits, with an ellipsis, and that head is a prefix of the real label.
-    #[test]
-    fn long_labels_are_cut_to_their_column_with_an_ellipsis() {
-        let label = "Floor Plans (001 Floor Plans): GROUND FLOOR PLAN";
-        let shown = ellipsized_prefix(label, |s| s.len() <= 20);
-        assert!(shown.ends_with('\u{2026}'), "{shown:?}");
-        assert!(shown.len() <= 20, "{shown:?}");
-        assert!(label.starts_with(shown.trim_end_matches('\u{2026}')), "{shown:?}");
-    }
-
-    /// CJK labels (three bytes per character) are cut on character boundaries too.
-    #[test]
-    fn multibyte_labels_are_cut_on_char_boundaries() {
-        let label = "図面（一階平面図）：配置図";
-        let shown = ellipsized_prefix(label, |s| s.len() <= 12);
-        assert!(shown.ends_with('\u{2026}'), "{shown:?}");
-        assert!(shown.len() <= 12, "{shown:?}");
-        assert!(label.starts_with(shown.trim_end_matches('\u{2026}')), "{shown:?}");
-    }
-
-    /// The pathological floor: nothing fits, the loop still ends with the lone ellipsis.
-    #[test]
-    fn the_loop_ends_when_nothing_fits() {
-        assert_eq!(ellipsized_prefix("Floor Plans", |_| false), "\u{2026}");
-    }
-
-    /// A huge label from a hostile file is measured a bounded number of times per frame.
-    #[test]
-    fn a_huge_label_is_measured_a_bounded_number_of_times() {
-        let label = "x".repeat(1_000_000);
-        let mut calls = 0;
-        let shown = ellipsized_prefix(&label, |s| {
-            calls += 1;
-            s.len() <= 12
+            }
+            pick(ui, tl!("Move up"), i > 0, BmAction::MoveUp(path.clone()));
+            pick(ui, tl!("Move down"), i + 1 < siblings, BmAction::MoveDown(path.clone()));
+            pick(ui, tl!("Indent"), i > 0, BmAction::Indent(path.clone()));
+            pick(ui, tl!("Outdent"), depth > 0, BmAction::Outdent(path.clone()));
+            pick(ui, tl!("Cut"), true, BmAction::Cut(path.clone()));
+            pick(ui, tl!("Copy"), true, BmAction::Copy(path.clone()));
+            let parent = path.get(..depth).unwrap_or_default().to_vec();
+            pick(ui, tl!("Paste"), can_paste, BmAction::Paste { parent, index: i.saturating_add(1) });
+            pick(ui, tl!("Delete"), true, BmAction::Delete(path.clone()));
+            if let Some(action) = picked.take() {
+                result.bookmark = Some(action);
+            }
         });
-        assert!(calls <= super::LABEL_MEASURE_CHARS + 1, "{calls} measurements");
-        assert!(shown.ends_with('\u{2026}') && label.starts_with(shown.trim_end_matches('\u{2026}')), "{shown:?}");
-    }
-}
-
-#[cfg(test)]
-mod bookmark_filter {
-    use super::{outline_matches, title_format};
-    use crate::theme::{self, Tokens};
-    use pdfcraft_render::OutlineItem;
-
-    /// #3193: a bookmark's title is drawn in its own style and colour.
-    #[test]
-    fn bookmark_titles_take_their_style_and_colour() {
-        let t = Tokens::for_kind(crate::theme::ThemeKind::Light);
-        let plain = item("Plain", Vec::new());
-        assert_eq!(title_format(&plain, 0, &t).font_id, theme::medium(13.0));
-        assert_eq!(title_format(&plain, 1, &t).font_id, theme::regular(13.0));
-        assert_eq!(title_format(&plain, 1, &t).color, t.text);
-        assert!(!title_format(&plain, 1, &t).italics);
-        let styled = OutlineItem { color: Some([1.0, 0.0, 0.0]), italic: true, bold: true, ..item("Styled", Vec::new()) };
-        let f = title_format(&styled, 1, &t);
-        assert_eq!(f.font_id, theme::semibold(13.0));
-        assert!(f.italics);
-        assert_eq!(f.color, egui::Color32::from_rgb(255, 0, 0));
-        let half = OutlineItem { color: Some([0.0, 0.5, 0.0]), ..item("Green", Vec::new()) };
-        assert_eq!(title_format(&half, 1, &t).color, egui::Color32::from_rgb(0, 128, 0));
-    }
-
-    fn item(title: &str, children: Vec<OutlineItem>) -> OutlineItem {
-        OutlineItem {
-            title: title.into(),
-            page: Some(0),
-            view: pdfcraft_render::DestView::Top,
-            action: None,
-            children,
-            open: true,
-            color: None,
-            italic: false,
-            bold: false,
+        if menu.output.closed.is_some() {
+            target = None;
         }
     }
+    // PLAN: the open menu's target is egui temp data; the panel's component memory would hold it (as `history.rs`
+    // does) once pdf-chrome-w13 passes the body its `BodyCx`.
+    ui.data_mut(|d| d.insert_temp(menu_id, target));
 
-    /// Turkish dotted and dotless i match in any case, as in Find (#892).
-    #[test]
-    fn titles_match_in_any_case_with_turkish_i() {
-        let outline = [item("İSTANBUL ŞUBESİ", vec![item("Kış dönemi", vec![])]), item("Ankara", vec![])];
-        let fold = pdfcraft_render::text::fold_case;
-        assert_eq!(outline_matches(&outline, &fold("istanbul")).len(), 1);
-        assert_eq!(outline_matches(&outline, &fold("şubesi")).len(), 1);
-        // A child match keeps its parent: [0] and [0, 0].
-        assert_eq!(outline_matches(&outline, &fold("KIŞ")).len(), 2);
-        assert!(outline_matches(&outline, &fold("izmir")).is_empty());
+    if info.outline_more {
+        Notice::new(
+            craft::theme::variant::Tone::Neutral,
+            tl!("Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth."),
+        )
+        .show(ui);
     }
-}
-
-#[cfg(test)]
-mod rename_field {
-    use super::rename_field as field;
-
-    fn cursor_range(ctx: &egui::Context, id: egui::Id) -> Option<(usize, usize)> {
-        egui::TextEdit::load_state(ctx, id)
-            .and_then(|s| s.cursor.char_range())
-            .map(|r| (r.primary.index.0.min(r.secondary.index.0), r.primary.index.0.max(r.secondary.index.0)))
-    }
-
-    /// #5529: the rename field opens with the whole title selected, so typing replaces it.
-    #[test]
-    fn first_focus_selects_the_whole_title() {
-        let ctx = egui::Context::default();
-        let id = egui::Id::unique("bm-rename-test");
-        let mut text = String::from("Untitled");
-        for _ in 0..2 {
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                field(ui, &mut text, id);
-            });
-            output.drop_without_applying_deltas();
-        }
-        assert_eq!(cursor_range(&ctx, id), Some((0, 8)));
-        assert!(ctx.memory(|m| m.has_focus(id)), "the field takes focus");
-    }
-
-    /// A Unicode title is counted in characters, not bytes.
-    #[test]
-    fn a_multibyte_title_is_selected_in_characters() {
-        let ctx = egui::Context::default();
-        let id = egui::Id::unique("bm-rename-unicode");
-        let mut text = String::from("図面（一階平面図）");
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            field(ui, &mut text, id);
-        });
-        output.drop_without_applying_deltas();
-        assert_eq!(cursor_range(&ctx, id), Some((0, 9)));
-    }
-
-    /// A later frame must not reset the selection the user made; a caret stays a caret.
-    #[test]
-    fn a_later_frame_keeps_the_users_selection() {
-        let ctx = egui::Context::default();
-        let id = egui::Id::unique("bm-rename-keep");
-        let mut text = String::from("Chapter");
-        for _ in 0..2 {
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                field(ui, &mut text, id);
-            });
-            output.drop_without_applying_deltas();
-        }
-        // The user moves the caret to 3 with no selection.
-        let mut state = egui::TextEdit::load_state(&ctx, id).unwrap_or_default();
-        state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(3))));
-        state.store(&ctx, id);
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            field(ui, &mut text, id);
-        });
-        output.drop_without_applying_deltas();
-        assert_eq!(cursor_range(&ctx, id), Some((3, 3)), "the user's caret is kept");
-    }
+    result
 }

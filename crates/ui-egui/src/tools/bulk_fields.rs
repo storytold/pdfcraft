@@ -1,13 +1,34 @@
 //! Shared Field Properties for Prepare a form. Each property is opt-in, and appearance
 //! changes are merged per field so a mixed selection keeps everything the user did not edit.
 
-use pdfcraft_engine::{BorderStyle, CheckStyle, DocId, Edit, FieldFont, FieldLookPatch, FieldProps, FormFieldKind, field_flags};
+use std::borrow::Cow;
 
-use crate::{prepare, theme, widgets};
+use craft::behavior::{Mixed, SelectionChange, Value, keyed};
+use craft::theme::Srgba;
+use craft::theme::variant::Tone;
+use craft::ui::contract::{Bind, CollectionEvent, Entry, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::dialog::{DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id};
+use craft::ui::display::Text;
+use craft::ui::layout_components::Stack;
+use craft::ui::notices::{Notice, NoticeLayout};
+use craft::ui::patterns::form_dialogs::FormDialog;
+use craft::ui::pickers::Select;
+use craft::ui::runtime::env::Label;
+use craft::ui::runtime::overlay::CloseReason;
+use craft::ui::runtime::requests::ColorRequest;
+use craft::ui::sections::GroupBox;
+use craft::ui::tabs::{Tab as TabItem, TabKind, TabStrip};
+use craft::ui::text::{NumberField, TextField};
+use egui::{Context, Ui};
+use pdfcraft_engine::{BorderStyle, CheckStyle, DocId, Edit, FieldFont, FieldLookPatch, FieldProps, FormFieldKind, field_flags};
+use serde_json::{Value as Json, json};
+
+use crate::comments::colours::{self, RecentColours};
+use crate::{PdfCraftApp, prepare};
 
 /// One property shown by the dialog. `apply` is explicit: merely opening the dialog, or
 /// visiting a tab, must never turn mixed values into the first field's value.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Change<T> {
     pub value: T,
     pub mixed: bool,
@@ -27,7 +48,7 @@ impl<T: Clone + PartialEq> Change<T> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Tab {
     General,
     Appearance,
@@ -35,7 +56,7 @@ pub enum Tab {
 }
 
 /// A dialog is bound to its source document, not whichever tab happens to be active later.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Draft {
     pub doc: DocId,
     pub names: Vec<String>,
@@ -60,11 +81,47 @@ pub struct Draft {
     pub check_style: Change<CheckStyle>,
     /// A flag, its label, whether the UI wording is inverted, and its proposed value.
     pub flags: Vec<(u32, &'static str, bool, Change<bool>)>,
-    pub error: Option<String>,
     text_fields: bool,
     choice_fields: bool,
     check_fields: bool,
     text_appearance: bool,
+}
+
+/// A property no field has been compared for yet: off, so it applies nothing.
+fn unset<T>(value: T) -> Change<T> {
+    Change { value, mixed: false, apply: false }
+}
+
+/// The empty draft the form dialog's value type needs; a real one comes from [`Draft::new`].
+impl Default for Draft {
+    fn default() -> Self {
+        Draft {
+            doc: DocId(0),
+            names: Vec::new(),
+            tab: Tab::General,
+            tooltip: unset(String::new()),
+            read_only: unset(false),
+            required: unset(false),
+            locked: unset(false),
+            font_size: unset(0.0),
+            font: unset(FieldFont::Helvetica),
+            font_label: String::new(),
+            text: unset([0.0; 3]),
+            border: unset(None),
+            fill: unset(None),
+            width: unset(1.0),
+            style: unset(BorderStyle::Solid),
+            align: unset(0),
+            multiline: unset(false),
+            max_length: unset(0),
+            check_style: unset(CheckStyle::Check),
+            flags: Vec::new(),
+            text_fields: false,
+            choice_fields: false,
+            check_fields: false,
+            text_appearance: false,
+        }
+    }
 }
 
 impl Draft {
@@ -147,7 +204,6 @@ impl Draft {
             max_length: Change::from_values(fields.iter().map(|f| f.max_len.unwrap_or(0)))?,
             check_style: Change::from_values(fields.iter().map(|f| doc.field_check_style(&f.name).unwrap_or(CheckStyle::Check)))?,
             flags,
-            error: None,
             text_fields,
             choice_fields,
             check_fields,
@@ -202,178 +258,374 @@ impl Draft {
     }
 }
 
-fn row<T>(ui: &mut egui::Ui, label: &str, c: &mut Change<T>, edit: impl FnOnce(&mut egui::Ui, &mut T)) {
-    ui.add(widgets::checkbox(&mut c.apply, tl!(label)));
-    // Colour swatches contain their own grid; give every property's editor a separate
-    // namespace so border and fill controls do not share widget identities.
-    ui.push_id(label, |ui| ui.add_enabled_ui(c.apply, |ui| edit(ui, &mut c.value)));
-    ui.label(if c.mixed { tl!("Mixed") } else { "" });
-    ui.end_row();
+/// The shared field properties window, held as an open dialog of `app.dialogs`. OK files the draft with the
+/// app, which applies it as one edit and either accepts it (the window closes) or refuses it with a reason shown in
+/// the window beside everything typed.
+pub struct SharedFieldPropsDialog {
+    draft: Draft,
+    /// The filed draft keeps beside a refusal the values it refused, so the reason shows only until they change.
+    held: HeldAnswer<Draft>,
+    recent: RecentColours,
+    /// The "Other colour..." request a row made this pass, for [`finish`] to open.
+    pending_colour: Option<ColorRequest>,
 }
 
-impl crate::PdfCraftApp {
-    pub(crate) fn apply_bulk_field_props(&mut self) -> bool {
-        let result = self.bulk_field_props.as_ref().ok_or("The field properties dialog is no longer open.".to_string()).and_then(|d| {
-            if self.active_ids().map(|(_, id)| id) != Some(d.doc) {
-                return Err("The document changed while you were editing field properties.".into());
-            }
-            self.session.get(d.doc).ok_or("The document is no longer open.".to_string()).and_then(|doc| d.edits(doc))
-        });
-        let error = match result {
-            Ok(edits) if edits.is_empty() => return true,
-            Ok(edits) => {
-                if self.apply_edit(Edit::Batch { label: "Change field properties".into(), edits }) {
-                    return true;
+impl SharedFieldPropsDialog {
+    /// The dialog for editing `names` together, or why they can't be (a message for `tl!`).
+    pub fn new(doc: &pdfcraft_engine::Document, names: Vec<String>) -> Result<Self, &'static str> {
+        // PLAN: assumed `RecentColours: Default` (pdf-comments-w10); `finish` replaces it with the app's handle each pass.
+        Ok(SharedFieldPropsDialog { draft: Draft::new(doc, names)?, held: HeldAnswer::new(), recent: RecentColours::default(), pending_colour: None })
+    }
+
+    /// Gives the row that asked with `key` the colour the picker answered.
+    pub(crate) fn set_colour(&mut self, key: &str, colour: [f64; 3]) {
+        let d = &mut self.draft;
+        match key {
+            TEXT_KEY => (d.text.value, d.text.mixed) = (colour, false),
+            BORDER_KEY => (d.border.value, d.border.mixed) = (Some(colour), false),
+            FILL_KEY => (d.fill.value, d.fill.mixed) = (Some(colour), false),
+            _ => {}
+        }
+    }
+}
+
+/// The keys of the colour rows, which the colour pickers answer by.
+const TEXT_KEY: &str = "bulk.props.text";
+const BORDER_KEY: &str = "bulk.props.border";
+const FILL_KEY: &str = "bulk.props.fill";
+
+impl StackDialog for SharedFieldPropsDialog {
+    type Result = ();
+
+    fn id(&self) -> DialogId {
+        dialog_id("shared-field-props")
+    }
+
+    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<()>> {
+        let measuring = craft::ui::runtime::measure::active(ui.ctx());
+        let finish = self.held.is_accepted();
+        let SharedFieldPropsDialog { draft, held, recent, pending_colour } = self;
+        let refusal = held.refusal().filter(|(_, refused)| **refused == *draft).map(|(reason, _)| reason.clone());
+        let waiting = held.is_waiting();
+        let shown = FormDialog::new(tl!("Shared Field Properties").to_owned(), Bind::bound(&mut *draft))
+            .accept_stays_open(true)
+            .collection_body(true)
+            .ok_enabled(!waiting)
+            .show(ui, |ui, cx, values| {
+                // A measuring run closes nothing: the real run of the pass makes the close.
+                if finish && !measuring {
+                    cx.request_close_as(CloseReason::Activated);
                 }
-                self.toast.as_ref().map(|(message, _)| message.clone()).unwrap_or_else(|| "The field properties could not be changed.".into())
+                body(ui, values, recent, pending_colour, refusal.as_ref());
+                true
+            });
+        if held.refusal().is_some_and(|(_, refused)| *refused != *draft) {
+            held.clear_refusal();
+        }
+        // The first footer button is OK; a pass without the press files nothing, so a second pass of a frame files once.
+        if shown.picked == Some(0) && !waiting {
+            held.file(draft.clone());
+        }
+        match shown.closed {
+            Some(CloseReason::Activated) if finish => Some(held.finish().map_or(DialogResult::Cancel, |_| DialogResult::Ok(()))),
+            Some(_) => Some(DialogResult::Cancel),
+            None => None,
+        }
+    }
+
+    fn held_state(&self) -> Option<HeldOk> {
+        self.held.state()
+    }
+
+    /// Files the draft as OK does and answers none until the app accepted it; then it answers.
+    fn confirm(&mut self, _: &Context) -> Option<()> {
+        if self.held.is_accepted() {
+            return self.held.finish().map(|_| ());
+        }
+        if !self.held.is_waiting() {
+            self.held.file(self.draft.clone());
+        }
+        None
+    }
+
+    /// Each property as `{ value, mixed, apply }`, by the name of its row.
+    fn json_fields(&self) -> Option<Json> {
+        let d = &self.draft;
+        fn field<T>(c: &Change<T>, value: impl FnOnce(&T) -> Json) -> Json {
+            json!({ "value": value(&c.value), "mixed": c.mixed, "apply": c.apply })
+        }
+        let mut map = serde_json::Map::new();
+        map.insert("tab".into(), json!(format!("{:?}", d.tab)));
+        map.insert("fields".into(), json!(d.names));
+        map.insert("tooltip".into(), field(&d.tooltip, |v| json!(v)));
+        map.insert("read_only".into(), field(&d.read_only, |v| json!(v)));
+        map.insert("required".into(), field(&d.required, |v| json!(v)));
+        map.insert("locked".into(), field(&d.locked, |v| json!(v)));
+        map.insert("font_size".into(), field(&d.font_size, |v| json!(v)));
+        map.insert("font".into(), field(&d.font, |v| json!(v.label())));
+        map.insert("text".into(), field(&d.text, |v| json!(v)));
+        map.insert("border".into(), field(&d.border, |v| json!(v)));
+        map.insert("fill".into(), field(&d.fill, |v| json!(v)));
+        map.insert("width".into(), field(&d.width, |v| json!(v)));
+        map.insert("style".into(), field(&d.style, |v| json!(v.label())));
+        map.insert("align".into(), field(&d.align, |v| json!(v)));
+        map.insert("multiline".into(), field(&d.multiline, |v| json!(v)));
+        map.insert("max_length".into(), field(&d.max_length, |v| json!(v)));
+        map.insert("check_style".into(), field(&d.check_style, |v| json!(v.label())));
+        for (_, label, _, change) in &d.flags {
+            map.insert((*label).to_owned(), field(change, |v| json!(v)));
+        }
+        Some(Json::Object(map))
+    }
+}
+
+/// Applies a filed draft to the document the dialog was opened on, once per pass from the dialogs' results: refreshes the
+/// recent colours, opens a colour picker a row asked for, and answers the held OK. A refusal keeps the dialog open with
+/// everything typed.
+pub(crate) fn finish(ctx: &egui::Context, app: &mut PdfCraftApp) {
+    let recent = app.recent_colours.clone();
+    let Some(dialog) = app.dialogs.get_mut::<SharedFieldPropsDialog>() else { return };
+    dialog.recent = recent;
+    let request = dialog.pending_colour.take();
+    let filed = dialog.held.take();
+    if let Some(request) = request {
+        let key = request.key.clone();
+        app.open_colour_picker(crate::colour_picker::PickerHost::App, request, move |app: &mut PdfCraftApp, _: &egui::Context, colour: Srgba| {
+            if let Some(dialog) = app.dialogs.get_mut::<SharedFieldPropsDialog>() {
+                dialog.set_colour(&key, colours::to_rgb(colour));
             }
-            Err(error) => error,
+        });
+    }
+    let Some(draft) = filed else { return };
+    let answer = apply(ctx, app, &draft);
+    if let Some(dialog) = app.dialogs.get_mut::<SharedFieldPropsDialog>() {
+        dialog.held.answer(answer);
+    }
+}
+
+/// The draft's chosen changes as one edit; an empty draft changes nothing and is accepted.
+fn apply(ctx: &egui::Context, app: &mut PdfCraftApp, draft: &Draft) -> Result<(), Label> {
+    if app.active_ids().map(|(_, id)| id) != Some(draft.doc) {
+        return Err(tl!("The document changed while you were editing field properties.").to_owned().into());
+    }
+    let Some(doc) = app.session.get(draft.doc) else { return Err(tl!("The document is no longer open.").to_owned().into()) };
+    let edits = draft.edits(doc).map_err(Label::from)?;
+    if edits.is_empty() {
+        return Ok(());
+    }
+    // `apply_edit` posts its own reason as a notice; the dialog's refusal is this fixed text.
+    app.last_edit_refusal = None;
+    if app.apply_edit(ctx, Edit::Batch { label: "Change field properties".into(), edits }) {
+        Ok(())
+    } else {
+        // The edit's own reason (a locked field says to unlock it), as the dialog shows it.
+        Err(app.last_edit_refusal.take().map_or_else(|| tl!("The field properties could not be changed.").to_owned().into(), Label::from))
+    }
+}
+
+/// One property: a group box whose check box is `apply`, enclosing the control, which binds the value as a `Mixed`.
+/// An edit makes a mixed value concrete. `unknown` shows the control as mixed while the row is not applied, for a value the
+/// control cannot show.
+fn row<T: Value>(ui: &mut Ui, label: &str, c: &mut Change<T>, unknown: bool, mut control: impl FnMut(&mut Ui, &mut Mixed<T>)) {
+    let Change { value, mixed, apply } = c;
+    let hidden = unknown && !*apply;
+    GroupBox::apply(tl!(label).to_owned(), Bind::bound(apply)).show(ui, |ui, _| {
+        let mut shown = if *mixed || hidden { Mixed::Mixed } else { Mixed::Same(value.clone()) };
+        control(ui, &mut shown);
+        if let Mixed::Same(edited) = shown {
+            *value = edited;
+            *mixed = false;
+        }
+    });
+}
+
+/// A Yes/No choice.
+fn yes_no(ui: &mut Ui, label: &str, c: &mut Change<bool>) {
+    let entries = [Entry::new(true, tl!("Yes").to_owned()), Entry::new(false, tl!("No").to_owned())];
+    row(ui, label, c, false, |ui, shown| {
+        Select::new(tl!(label).to_owned(), Bind::bound_mixed(shown), &entries).show(ui);
+    });
+}
+
+/// A choice among `entries`.
+fn choose<T: Value>(ui: &mut Ui, label: &str, c: &mut Change<T>, entries: &[Entry<T>]) {
+    row(ui, label, c, false, |ui, shown| {
+        Select::new(tl!(label).to_owned(), Bind::bound_mixed(shown), entries).show(ui);
+    });
+}
+
+/// A number within `range`, converted to and from the property's own type.
+fn number<T: Value>(
+    ui: &mut Ui,
+    label: &str,
+    c: &mut Change<T>,
+    range: std::ops::RangeInclusive<f64>,
+    unit: Option<&'static str>,
+    to: fn(&T) -> f64,
+    from: fn(f64) -> T,
+) {
+    row(ui, label, c, false, |ui, shown| {
+        let mut typed = match shown {
+            Mixed::Same(v) => Mixed::Same(Some(to(v))),
+            _ => Mixed::Mixed,
         };
-        if let Some(draft) = self.bulk_field_props.as_mut() {
-            draft.error = Some(error);
+        let mut field = NumberField::new(tl!(label).to_owned(), Bind::bound_mixed(&mut typed)).range(range.clone());
+        if let Some(unit) = unit {
+            field = field.unit(unit);
         }
-        false
-    }
-}
-
-fn bool_row(ui: &mut egui::Ui, label: &str, c: &mut Change<bool>) {
-    row(ui, label, c, |ui, value| {
-        craft_ui::ComboBox::from_id_salt(label).selected_text(tl!(if *value { "Yes" } else { "No" })).show_ui(ui, |ui| {
-            ui.selectable_value(value, true, tl!("Yes"));
-            ui.selectable_value(value, false, tl!("No"));
-        });
-    });
-}
-
-fn color(ui: &mut egui::Ui, value: &mut Option<[f64; 3]>) {
-    ui.horizontal(|ui| {
-        let mut none = value.is_none();
-        if ui.add(widgets::checkbox(&mut none, tl!("No color"))).changed() {
-            *value = if none { None } else { Some([0.0; 3]) };
-        }
-        if let Some(c) = crate::comments::swatch_grid(ui, *value) {
-            *value = Some(c);
+        field.show(ui);
+        if let Mixed::Same(Some(v)) = typed {
+            *shown = Mixed::Same(from(v));
         }
     });
 }
 
-/// Check a property to apply its value to every selected field. No unchecked value is used.
-pub(crate) fn body(ui: &mut egui::Ui, d: &mut Draft, t: &theme::Tokens) -> (bool, bool) {
-    ui.set_width(600.0);
-    ui.label(egui::RichText::new(tl!("Shared Field Properties")).font(theme::semibold(18.0)));
-    ui.label(crate::i18n::fmt(tl!("{n} fields selected"), &[("n", &d.names.len().to_string())]));
-    ui.label(
-        egui::RichText::new(tl!("Only checked properties will change. Mixed means the selected fields have different values."))
-            .small()
-            .color(t.text_muted),
-    );
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        for (tab, label) in [(Tab::General, "General"), (Tab::Appearance, "Appearance"), (Tab::Options, "Options")] {
-            if tab == Tab::Options && !(d.text_fields || d.choice_fields || d.check_fields) {
-                continue;
-            }
-            if widgets::mode_tab(ui, tl!(label), d.tab == tab).clicked() {
-                d.tab = tab;
-            }
+/// The colour of the text, a palette whose "Other colour..." asks the app's picker.
+fn text_colour(ui: &mut Ui, label: &str, c: &mut Change<[f64; 3]>, recent: &RecentColours, request: &mut Option<ColorRequest>) {
+    let Change { value, mixed, apply } = c;
+    GroupBox::apply(tl!(label).to_owned(), Bind::bound(apply)).show(ui, |ui, _| {
+        let current = (!*mixed).then_some(*value);
+        let pick = colours::palette(ui, tl!(label), current, TEXT_KEY, recent);
+        if let Some(picked) = pick.picked {
+            *value = picked;
+            *mixed = false;
+        }
+        if pick.request.is_some() {
+            *request = pick.request;
         }
     });
-    ui.separator();
-    egui::ScrollArea::vertical().max_height(430.0).auto_shrink([false, true]).show(ui, |ui| {
-        egui::Grid::new("bulk-field-properties").num_columns(3).spacing([16.0, 10.0]).show(ui, |ui| match d.tab {
+}
+
+/// A colour that may be none: `choice` is the row's border or fill chooser. Its Other… request is parked in `request`.
+fn optional_colour(
+    ui: &mut Ui,
+    label: &str,
+    c: &mut Change<Option<[f64; 3]>>,
+    request: &mut Option<ColorRequest>,
+    mut choice: impl FnMut(&mut Ui, Option<[f64; 3]>, bool) -> colours::ColourChoice,
+) {
+    let Change { value, mixed, apply } = c;
+    GroupBox::apply(tl!(label).to_owned(), Bind::bound(apply)).show(ui, |ui, _| {
+        let current = if *mixed { None } else { *value };
+        let picked = choice(ui, current, *mixed);
+        if let Some(chosen) = picked.choice {
+            *value = chosen;
+            *mixed = false;
+        }
+        if picked.request.is_some() {
+            *request = picked.request;
+        }
+    });
+}
+
+/// A note under the rows.
+fn note(ui: &mut Ui, text: &str) {
+    Text::new(tl!(text).to_owned()).show(ui);
+}
+
+/// The tabs and the rows of the open tab. Check a property to apply its value to every selected field; no unchecked
+/// value is used.
+fn body(ui: &mut Ui, d: &mut Draft, recent: &RecentColours, request: &mut Option<ColorRequest>, refusal: Option<&Label>) {
+    Stack::new().show(ui, |ui, _| {
+        Text::new(crate::i18n::fmt(tl!("{n} fields selected"), &[("n", &d.names.len().to_string())])).show(ui);
+        note(ui, "Only checked properties will change. Mixed means the selected fields have different values.");
+        tabs(ui, d);
+        match d.tab {
             Tab::General => {
-                row(ui, "Tooltip:", &mut d.tooltip, |ui, v| {
-                    ui.add(egui::TextEdit::singleline(v).desired_width(280.0)).accessible_name(tl!("Tooltip"));
-                });
-                bool_row(ui, "Read Only", &mut d.read_only);
-                bool_row(ui, "Required", &mut d.required);
-                bool_row(ui, "Locked", &mut d.locked);
-            }
-            Tab::Appearance => {
-                if d.text_appearance {
-                    row(ui, "Font Size:", &mut d.font_size, |ui, v| {
-                        ui.add(egui::DragValue::new(v).range(0.0..=100.0).speed(0.25).suffix(" pt"));
-                    });
-                    let font_label = if d.font.apply { d.font.value.label().to_string() } else { d.font_label.clone() };
-                    row(ui, "Font:", &mut d.font, |ui, v| {
-                        craft_ui::ComboBox::from_id_salt("bulk-font").selected_text(tl!(&font_label)).show_ui(ui, |ui| {
-                            for font in FieldFont::ALL {
-                                ui.selectable_value(v, font, font.label());
-                            }
-                        });
-                    });
-                    row(ui, "Text Color:", &mut d.text, |ui, v| {
-                        if let Some(c) = crate::comments::swatch_grid(ui, Some(*v)) {
-                            *v = c;
-                        }
-                    });
-                }
-                row(ui, "Border Color:", &mut d.border, color);
-                row(ui, "Fill Color:", &mut d.fill, color);
-                row(ui, "Line Thickness:", &mut d.width, |ui, v| {
-                    ui.add(egui::DragValue::new(v).range(0.0..=12.0).speed(0.25).suffix(" pt"));
-                });
-                row(ui, "Line Style:", &mut d.style, |ui, v| {
-                    craft_ui::ComboBox::from_id_salt("bulk-style").selected_text(tl!(v.label())).show_ui(ui, |ui| {
-                        for style in BorderStyle::ALL {
-                            ui.selectable_value(v, style, tl!(style.label()));
+                let c = &mut d.tooltip;
+                // A mixed tooltip shows the first field's text, editable, and says it is mixed.
+                let was_mixed = c.mixed;
+                let mut text = c.value.clone();
+                row(ui, "Tooltip:", c, false, |ui, _| {
+                    ui.horizontal(|ui| {
+                        TextField::new(tl!("Tooltip").to_owned(), Bind::bound(&mut text)).show(ui);
+                        if was_mixed {
+                            Text::new(tl!("Mixed").to_owned()).show(ui);
                         }
                     });
                 });
+                if text != c.value {
+                    c.value = text;
+                    c.mixed = false;
+                }
+                yes_no(ui, "Read Only", &mut d.read_only);
+                yes_no(ui, "Required", &mut d.required);
+                yes_no(ui, "Locked", &mut d.locked);
+                note(ui, "To change locked fields, also set Locked to No.");
             }
-            Tab::Options => {
-                if d.text_fields || d.choice_fields {
-                    row(ui, "Alignment:", &mut d.align, |ui, v| {
-                        let label = match *v {
-                            1 => "Center",
-                            2 => "Right",
-                            _ => "Left",
-                        };
-                        craft_ui::ComboBox::from_id_salt("bulk-align").selected_text(tl!(label)).show_ui(ui, |ui| {
-                            for (value, label) in [(0, "Left"), (1, "Center"), (2, "Right")] {
-                                ui.selectable_value(v, value, tl!(label));
-                            }
-                        });
-                    });
-                }
-                if d.text_fields {
-                    bool_row(ui, "Multi-line", &mut d.multiline);
-                    row(ui, "Character limit:", &mut d.max_length, |ui, v| {
-                        ui.add(egui::DragValue::new(v).range(0..=1_000_000));
-                    });
-                }
-                if d.check_fields {
-                    row(ui, "Button Style:", &mut d.check_style, |ui, v| {
-                        craft_ui::ComboBox::from_id_salt("bulk-check-style").selected_text(tl!(v.label())).show_ui(ui, |ui| {
-                            for style in CheckStyle::ALL {
-                                ui.selectable_value(v, style, tl!(style.label()));
-                            }
-                        });
-                    });
-                }
-                for (_, label, _, change) in &mut d.flags {
-                    bool_row(ui, label, change);
-                }
-            }
-        });
-        ui.add_space(8.0);
-        if d.tab == Tab::Appearance && d.text_appearance {
-            ui.label(egui::RichText::new(tl!("Font size 0 uses automatic sizing.")).small().color(t.text_muted));
-        } else if d.tab == Tab::Options && d.text_fields {
-            ui.label(egui::RichText::new(tl!("Character limit 0 means no limit. A comb of characters needs a limit.")).small().color(t.text_muted));
-        } else if d.tab == Tab::General {
-            ui.label(egui::RichText::new(tl!("To change locked fields, also set Locked to No.")).small().color(t.text_muted));
+            Tab::Appearance => appearance(ui, d, recent, request),
+            Tab::Options => options(ui, d),
+        }
+        if let Some(reason) = refusal {
+            Notice::new(Tone::Bad, reason.clone()).layout(NoticeLayout::Inline).show(ui);
         }
     });
-    if let Some(error) = &d.error {
-        ui.add_space(8.0);
-        ui.label(egui::RichText::new(tl!(error)).color(t.text));
-    }
-    ui.separator();
-    let (mut apply, mut cancel) = (false, false);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        apply = widgets::pill_button(ui, tl!("OK"), true).clicked();
-        cancel = widgets::pill_button(ui, tl!("Cancel"), false).clicked();
+}
+
+/// The strip of tabs; Options only when every selected field has some.
+fn tabs(ui: &mut Ui, d: &mut Draft) {
+    let options = d.text_fields || d.choice_fields || d.check_fields;
+    let items: Vec<(Tab, String)> = [(Tab::General, "General"), (Tab::Appearance, "Appearance"), (Tab::Options, "Options")]
+        .into_iter()
+        .filter(|(tab, _)| *tab != Tab::Options || options)
+        .map(|(tab, label)| (tab, tl!(label).to_owned()))
+        .collect();
+    let source = keyed(&items[..], |item: &(Tab, String)| item.0).with_text(|item| Cow::Borrowed(item.1.as_str()));
+    let strip = TabStrip::new(tl!("Shared Field Properties").to_owned()).kind(TabKind::Text).shown(d.tab).natural_height(true);
+    let out = strip.show_items(ui, &source, &mut |key, _| {
+        TabItem::new(items.iter().find(|item| item.0 == *key).map_or_else(String::new, |item| item.1.clone()))
     });
-    (apply, cancel)
+    for event in out.response.events {
+        if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+            && let Some(chosen) = keys.last()
+        {
+            d.tab = *chosen;
+        }
+    }
+}
+
+/// The Appearance tab: font and text colour for fields that show text, then the border and the line.
+fn appearance(ui: &mut Ui, d: &mut Draft, recent: &RecentColours, request: &mut Option<ColorRequest>) {
+    if d.text_appearance {
+        number(ui, "Font Size:", &mut d.font_size, 0.0..=100.0, Some("pt"), |v| *v, |v| v);
+        let fonts: Vec<Entry<FieldFont>> = FieldFont::ALL.into_iter().map(|font| Entry::new(font, font.label().to_owned())).collect();
+        // A custom font, or fonts that differ, show their name as the placeholder until the row is applied.
+        let shown_label = d.font.value.label() != d.font_label;
+        let (font, placeholder) = (&mut d.font, d.font_label.clone());
+        row(ui, "Font:", font, shown_label, |ui, shown| {
+            Select::new(tl!("Font:").to_owned(), Bind::bound_mixed(shown), &fonts).placeholder(placeholder.clone()).show(ui);
+        });
+        text_colour(ui, "Text Color:", &mut d.text, recent, request);
+    }
+    optional_colour(ui, "Border Color:", &mut d.border, request, |ui, current, mixed| colours::field_choice(ui, current, mixed, BORDER_KEY, recent));
+    optional_colour(ui, "Fill Color:", &mut d.fill, request, |ui, current, mixed| colours::field_choice(ui, current, mixed, FILL_KEY, recent));
+    number(ui, "Line Thickness:", &mut d.width, 0.0..=12.0, Some("pt"), |v| *v, |v| v);
+    let styles: Vec<Entry<BorderStyle>> = BorderStyle::ALL.into_iter().map(|style| Entry::new(style, tl!(style.label()).to_owned())).collect();
+    choose(ui, "Line Style:", &mut d.style, &styles);
+    if d.text_appearance {
+        note(ui, "Font size 0 uses automatic sizing.");
+    }
+}
+
+/// The Options tab: what applies to the kind of field selected.
+fn options(ui: &mut Ui, d: &mut Draft) {
+    if d.text_fields || d.choice_fields {
+        let aligns: Vec<Entry<i64>> =
+            [(0, "Left"), (1, "Center"), (2, "Right")].into_iter().map(|(v, label)| Entry::new(v, tl!(label).to_owned())).collect();
+        choose(ui, "Alignment:", &mut d.align, &aligns);
+    }
+    if d.text_fields {
+        yes_no(ui, "Multi-line", &mut d.multiline);
+        number(ui, "Character limit:", &mut d.max_length, 0.0..=1_000_000.0, None, |v| *v as f64, |v| v.round().max(0.0) as usize);
+    }
+    if d.check_fields {
+        let styles: Vec<Entry<CheckStyle>> = CheckStyle::ALL.into_iter().map(|style| Entry::new(style, tl!(style.label()).to_owned())).collect();
+        choose(ui, "Button Style:", &mut d.check_style, &styles);
+    }
+    for (_, label, _, change) in &mut d.flags {
+        yes_no(ui, label, change);
+    }
+    if d.text_fields {
+        note(ui, "Character limit 0 means no limit. A comb of characters needs a limit.");
+    }
 }

@@ -598,6 +598,11 @@ pub fn apply_overrides(tpl: &Template, ov: &Overrides) -> Template {
 
 /// The generated fields of the AcroForm by SOM path: `som → (field name, is a radio group)`.
 pub fn fields_by_som(doc: &Document) -> HashMap<String, String> {
+    field_objects_by_som(doc).into_iter().map(|(som, (name, _))| (som, name)).collect()
+}
+
+/// Resolve each generated SOM path to its AcroForm name and exact field dictionary.
+pub fn field_objects_by_som(doc: &Document) -> HashMap<String, (String, pdfcraft_cos::ObjRef)> {
     // Each field is read once: a field listed twice in `/Kids` (or among its own kids) would
     // otherwise be walked again for every path to it, doubling the work at each level. Fields
     // are told apart by object number, as `Document::get` finds them, so `5 0 R` and `5 1 R`
@@ -606,7 +611,7 @@ pub fn fields_by_som(doc: &Document) -> HashMap<String, String> {
     // long `/Kids` array stay bounded too; `walk_all` returns false once it is spent, and every
     // loop then stops.
     struct Walk {
-        out: HashMap<String, String>,
+        out: HashMap<String, (String, pdfcraft_cos::ObjRef)>,
         /// The shallowest depth each object number was read at.
         seen: HashMap<u32, usize>,
         steps: usize,
@@ -636,7 +641,7 @@ pub fn fields_by_som(doc: &Document) -> HashMap<String, String> {
         if let Some(som) = d.get(crate::pdf::SOM_KEY).map(|s| doc.resolve(s)).and_then(|s| s.as_string().map(|s| s.to_text()))
             && t.is_some()
         {
-            w.out.insert(som, name.clone());
+            w.out.insert(som, (name.clone(), r));
         }
         // Read in place: a copy of the array at every level would cost its length each time.
         let kids = d.get(b"Kids").map(|k| doc.resolve(k));

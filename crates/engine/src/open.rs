@@ -101,6 +101,7 @@ impl Session {
             Self::draw_captions(&mut document, self.captions.clone());
         }
         self.docs.push(document);
+        self.run_open_scripts(id);
         id
     }
 
@@ -369,7 +370,6 @@ impl Session {
             password: render_password,
             dirty: false,
             generation: 0,
-            snapshot_generation: 0,
             read_only_reason,
             form: Arc::new(form),
             marker_scan: OnceLock::new(),
@@ -381,6 +381,10 @@ impl Session {
             editor,
             config,
             js_output: Default::default(),
+            js_runtime: Default::default(),
+            js_zoom: 100.0,
+            js_page: 0,
+            live: Default::default(),
             xfa,
             xfa_template: None,
             xfa_scripts_off: false,

@@ -130,18 +130,22 @@ pub fn program_is_usable(program: &Path) -> bool {
 /// executable FILE (on Unix the executable bits must be set; elsewhere being a file is what
 /// the OS requires). A directory or a missing file is simply unavailable — never a panic.
 fn program_is_executable(program: &Path) -> bool {
-    if !program.is_absolute() || !program.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(program).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
+    program.is_absolute() && program.is_file() && has_execute_permission(program)
+}
+
+/// Unix: an executable bit is set.
+#[cfg(unix)]
+fn has_execute_permission(program: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(program).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+}
+
+/// Elsewhere, being a file is what the OS requires. A function of its own: inlined above, the
+/// Windows build reduced to `if … { return false; } true`, which clippy's `needless_bool`
+/// refuses (Rust 1.100).
+#[cfg(not(unix))]
+fn has_execute_permission(_program: &Path) -> bool {
+    true
 }
 
 /// One row of Tesseract's TSV output. `level` 5 rows are the words; `conf` is −1 on the header
@@ -492,14 +496,10 @@ impl Recognizer for TesseractCli {
 
 /// Encode an RGBA raster as PNG (the interchange format Tesseract reads best).
 fn encode_png(image: &OcrImage) -> Result<Vec<u8>, OcrError> {
-    let mut out = Vec::new();
-    let mut enc = png::Encoder::new(&mut out, image.width, image.height);
-    enc.set_color(png::ColorType::Rgba);
-    enc.set_depth(png::BitDepth::Eight);
-    let mut writer = enc.write_header().map_err(|e| OcrError::Process(format!("encoding the page image failed: {e}")))?;
-    writer.write_image_data(&image.rgba).map_err(|e| OcrError::Process(format!("encoding the page image failed: {e}")))?;
-    writer.finish().map_err(|e| OcrError::Process(format!("encoding the page image failed: {e}")))?;
-    Ok(out)
+    let img = craft_image_codecs::Image::from_u8(image.width, image.height, craft_image_codecs::ChannelLayout::Rgba, image.rgba.clone())
+        .map_err(|e| OcrError::Process(format!("encoding the page image failed: {e}")))?;
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default())
+        .map_err(|e| OcrError::Process(format!("encoding the page image failed: {e}")))
 }
 
 /// Make a just-created file owner-only, where the OS supports it (Unix). Windows relies on the
