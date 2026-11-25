@@ -510,85 +510,19 @@ impl PageCx<'_> {
         self.xf.norm_to_screen(v[0] / self.xf.pw, v[1] / self.xf.ph)
     }
 
-    /// Where the point `q` of `a` (an end or corner) is drawn in user space at this page's
-    /// magnification ([`zoomed_point`]).
-    pub(super) fn shown_point(&self, a: &Annotation, q: [f64; 2]) -> [f64; 2] {
-        zoomed_point(a, q, self.magnification())
-    }
-
-    /// Where the point `q` of `a` is drawn on screen.
-    pub(super) fn point_to_screen(&self, a: &Annotation, q: [f64; 2]) -> Pos2 {
-        self.to_screen(self.shown_point(a, q))
-    }
-
-    /// `points` of `a` with point `i` dragged to the screen position `to`, as drawn: the new
-    /// point is where the drag ends on screen once the comment is drawn at this magnification.
-    pub(super) fn reshaped_as_drawn(&self, a: &Annotation, points: &[[f64; 2]], i: usize, to: Pos2, shift: bool) -> Vec<[f64; 2]> {
-        let m = self.magnification();
-        let shown: Vec<[f64; 2]> = points.iter().map(|q| zoomed_point(a, *q, m)).collect();
-        // The other points stay exactly as stored rather than going through the scale and back.
-        let mut out = points.to_vec();
-        if let (Some(d), Some(s)) = (out.get_mut(i), self.reshape_shown(a, &shown, i, self.to_user(to), shift).get(i)) {
-            *d = point_for_zoomed(a, *s, m);
-        }
-        out
-    }
-
-    /// `shown`, the points of `a` as drawn at this magnification, with point `i` dragged to the
-    /// user-space point `to`, also as drawn: [`reshaped`], or for a callout
-    /// [`callout_reshaped`] against its text box as drawn.
-    pub(super) fn reshape_shown(&self, a: &Annotation, shown: &[[f64; 2]], i: usize, to: [f64; 2], shift: bool) -> Vec<[f64; 2]> {
-        match a.text_box.filter(|_| is_callout(a)) {
-            Some(tb) => callout_reshaped(shown, zoomed_quad(a, tb.map(f64::from), self.magnification()).map(|v| v as f32), i, to, shift),
-            None => reshaped(shown, i, to, shift),
-        }
-    }
-
     /// The page's clockwise `/Rotate`.
     pub(super) fn rotation(&self) -> u16 {
         self.info.pages.get(self.page).map_or(0, |p| p.rotation)
     }
 
-    /// Where a comment is drawn on screen (a NoZoom comment or a note keeps its size, and a
-    /// sticky note stays upright on a turned page).
+    /// Where a comment is drawn on screen (a sticky note stays upright on a turned page).
     pub(super) fn screen_rect(&self, a: &Annotation) -> Rect {
-        self.zoomed_screen_rect(a, a.rect.map(f64::from))
+        self.xf.user_rect(self.info, self.page, a.shown_rect(self.rotation()))
     }
 
-    /// The page's magnification on screen (1.0 = 100%): what the canvas asks the renderer to
-    /// draw it at.
-    pub(super) fn magnification(&self) -> f32 {
-        self.xf.zoom() / crate::canvas::PT
-    }
-
-    /// Where `a` is drawn on screen with its `/Rect` at `rect`: [`zoomed_rect`] at this page's
-    /// magnification, then turned upright for a NoRotate comment ([`Annotation::shown`]). Both
-    /// keep the upper-left corner of `/Rect` in place, as the renderer's scale and turn do.
-    fn zoomed_screen_rect(&self, a: &Annotation, rect: [f64; 4]) -> Rect {
-        let shown = a.shown(zoomed_rect(a, rect, self.magnification()), self.rotation());
-        self.xf.user_rect(self.info, self.page, shown.map(|v| v as f32))
-    }
-
-    /// Where a comment's selection frame and resize handles go on screen
-    /// ([`super::geometry::frame`]): a callout's text box, otherwise where the comment is drawn
-    /// ([`Self::screen_rect`]). A NoZoom callout's box is scaled about its `/Rect` with the rest
-    /// of it ([`zoomed_quad`]).
+    /// Where a comment's selection frame and resize handles go on screen ([`frame`]).
     pub(super) fn frame_rect(&self, a: &Annotation) -> Rect {
-        self.frame_rect_moved(a, 0.0, 0.0)
-    }
-
-    /// [`Self::frame_rect`] with the comment moved by `(dx, dy)` in user space.
-    fn frame_rect_moved(&self, a: &Annotation, dx: f64, dy: f64) -> Rect {
-        match a.text_box {
-            Some(tb) => {
-                let z = zoomed_quad(a, tb.map(f64::from), self.magnification());
-                self.xf.user_rect(self.info, self.page, [z[0] + dx, z[1] + dy, z[2] + dx, z[3] + dy].map(|v| v as f32))
-            }
-            None => {
-                let r = a.rect.map(f64::from);
-                self.zoomed_screen_rect(a, [r[0] + dx, r[1] + dy, r[2] + dx, r[3] + dy])
-            }
-        }
+        self.xf.user_rect(self.info, self.page, frame(a, self.rotation()))
     }
 
     /// Top-level comments on this page, in inspection order.
@@ -600,7 +534,16 @@ impl PageCx<'_> {
     pub(crate) fn screen_rects<'b>(&'b self, a: &'b Annotation) -> impl Iterator<Item = Rect> + 'b {
         let quads = if is_markup(&a.subtype) { a.quads.as_slice() } else { &[] };
         let fallback = quads.is_empty().then(|| self.screen_rect(a));
-        quads.iter().map(|q| self.quad_screen_rect(a, q)).chain(fallback)
+        quads
+            .iter()
+            .map(|q| {
+                let xs = [q[0], q[2], q[4], q[6]];
+                let ys = [q[1], q[3], q[5], q[7]];
+                let (x0, x1) = (xs.iter().copied().fold(f32::MAX, f32::min), xs.iter().copied().fold(f32::MIN, f32::max));
+                let (y0, y1) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
+                self.xf.user_rect(self.info, self.page, [x0, y0, x1, y1])
+            })
+            .chain(fallback)
     }
 
     /// The topmost comment's body under `p`: the one drawn last, in `/Annots` order (inspection lists
@@ -675,12 +618,13 @@ impl PageCx<'_> {
         if let Some(Edit::ResizeAnnotation { page, index, rect }) = pending
             && (*page, *index) == (self.page, a.index)
         {
-            return self.zoomed_screen_rect(a, *rect);
+            return self.xf.user_rect(self.info, self.page, a.shown(*rect, self.rotation()).map(|v| v as f32));
         }
         if let Some(Edit::MoveAnnotation { page, index, dx, dy }) = pending
             && (*page, *index) == (self.page, a.index)
         {
-            return self.frame_rect_moved(a, *dx, *dy);
+            let f = frame(a, self.rotation());
+            return self.xf.user_rect(self.info, self.page, [f[0] + *dx as f32, f[1] + *dy as f32, f[2] + *dx as f32, f[3] + *dy as f32]);
         }
         match in_flight.and_then(|edit| bridge::edited_user_rect(map, a, &edit)) {
             Some(r) => self.xf.user_rect(self.info, self.page, r),
