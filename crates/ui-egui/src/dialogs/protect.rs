@@ -5,17 +5,19 @@
 //! Advanced Options can also set the other password so an open password and a permissions
 //! password can be configured together.
 
+use craft::theme::variant::Tone;
 use craft::ui::choice::{Checkbox, Radio, RadioGroup};
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 use craft::ui::controls::disclosure::Disclosure;
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft::ui::display::{Shade, Text};
-use craft::ui::form::Field;
+use craft::ui::form::{Field, Help};
 use craft::ui::layout_components::Row;
 use craft::ui::patterns::form_dialogs::{FormDialog, PasswordFields};
 use craft::ui::pickers::Select;
 use craft::ui::runtime::env::Label;
 use craft::ui::style::TypeRole;
+use craft::ui::text::TextField;
 use egui::Ui;
 use pdfcraft_engine::{Algorithm, Changes, Edit, Printing, Protection};
 
@@ -203,9 +205,27 @@ fn advanced_rows(ui: &mut Ui, d: &mut ProtectDraft) {
     let both_label = text(if d.viewing { "Restrict editing and printing of the document" } else { "Require a password to open the document" });
     Checkbox::new(Bind::bound(&mut d.both)).label(both_label).show(ui);
     if d.both {
-        let first_label = if d.viewing { text("Change Permissions Password") } else { text("Document Open Password") };
+        let (first_label, second_label) = if d.viewing {
+            (text("Change Permissions Password"), text("Re-type Permissions Password"))
+        } else {
+            (text("Document Open Password"), text("Re-type Document Open Password"))
+        };
         let second_error = d.problem().filter(|_| !d.second.is_empty() || !d.second_confirm.is_empty()).map(|p| Label::from(text(p)));
-        PasswordFields::new(first_label, Bind::bound(&mut d.second)).confirm(Bind::bound(&mut d.second_confirm)).error(second_error).show(ui);
+        let mut first_field = Field::new(first_label.clone());
+        if let Some(err) = second_error {
+            first_field = first_field.help(Help::Status(Tone::Bad, err));
+        }
+        first_field.show(ui, |ui, _| {
+            TextField::new(first_label.clone(), Bind::bound(&mut d.second)).masked().show(ui);
+        });
+        let mismatch = (!d.second_confirm.is_empty() && d.second != d.second_confirm).then(|| Label::from(text("The passwords don't match.")));
+        let mut second_field = Field::new(second_label.clone());
+        if let Some(mismatch) = mismatch {
+            second_field = second_field.help(Help::Status(Tone::Bad, mismatch));
+        }
+        second_field.show(ui, |ui, _| {
+            TextField::new(second_label.clone(), Bind::bound(&mut d.second_confirm)).masked().show(ui);
+        });
     }
     if !restricts {
         return;
