@@ -5,6 +5,8 @@
 - 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-25 | **Last updated:** 2026-11-25 | **Change:** patch (M5.7 #8278: image signatures, scanned photos and the digital-signature graphic also take TIFF, GIF, BMP and WebP images; estimates unchanged)
+
 > **Last reviewed:** 2026-11-16 | **Last updated:** 2026-11-16 | **Change:** patch (M5 #3741: Ctrl+M opens Comments on Windows/Linux without toggling it closed; macOS leaves Command+M for Minimize; platform-specific shortcut surfaces and regressions retained; estimates unchanged)
 
 > **Last reviewed:** 2026-11-15 | **Last updated:** 2026-11-15 | **Change:** minor (craft-libs cutover for codecs, XFA XML, crypt/filters/COS/export/XFDF, PRC and ZIP; print colour management for pictures; M7 line replacement keeps source fonts; auto-tag headings by size and weight; arrow-key comment moves; stream-filter JPEG export; form, signature, optimize, redaction, measurement, PRC-normal and CMYK fixes; v0.21.1 Flatpak fix; estimates unchanged)
@@ -265,6 +267,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-25 (M5.7, #8278):** Fill & Sign image signatures, scanned photos (Scan tab) and the image graphic of a digital signature (Sign as ▸ Choose image…) take PNG, JPEG, TIFF, GIF, BMP and WebP files, not only PNG and JPEG; `fill_sign_add` `path` and `sign_document` `graphic.image` accept the same files. Any of them is normalized to PNG as before, with the same limits (4 MiB, 32 megapixels, 8192 pixels per side, scaled down to 4 megapixels) and the EXIF orientation applied; an animated GIF or WebP uses its first frame. The file pickers list the same extensions, and anything else (HEIC, AVIF, JPEG XL, JPEG 2000, QOI and the like) is refused with a message naming the accepted formats. Synthetic engine and automation tests cover each format, a truncated GIF (now a decode error rather than a format error) and a refused QOI file. Estimates unchanged.
 - **2026-11-16 (M5, #3741):** Ctrl+M opens Comments on Windows/Linux and repeated activation keeps it open. macOS leaves Command+M unbound for Minimize. Dispatch, menus, palette, shortcut help and control/headless metadata resolve the platform-specific registry binding. Mapping and real-input regressions are retained through the rebase; estimates unchanged.
 - **2026-11-03 (M3, #3669):** A drag across a table selects its rows, as Preview does, instead of reading order's detour down each column; a cell padded with spaces reads with the next cell of its row. Synthetic render and UI drag regressions; estimates unchanged.
 

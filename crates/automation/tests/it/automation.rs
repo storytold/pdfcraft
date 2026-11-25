@@ -5325,6 +5325,37 @@ fn image_signatures_through_tools_preserve_transparency_and_survive_save() {
 }
 
 #[test]
+fn image_signatures_through_tools_accept_tiff_webp_gif_and_bmp_but_refuse_other_formats() {
+    use craft_image_codecs::Format;
+    let dir = workdir("image-signature-formats");
+    let rgba: Vec<u8> = (0..40)
+        .flat_map(|y| (0..120).flat_map(move |x| if (40..80).contains(&x) && (10..30).contains(&y) { [0, 0, 0, 255] } else { [0, 0, 0, 0] }))
+        .collect();
+    let img = craft_image_codecs::Image::from_u8(120, 40, craft_image_codecs::ChannelLayout::Rgba, rgba).unwrap();
+    let write = |name: &str, format: Format| {
+        let bytes = craft_image_codecs::encode(&img, format, &craft_image_codecs::EncodeOptions::default()).unwrap();
+        std::fs::write(dir.join(name), bytes).unwrap();
+    };
+    let mut a = auto(&dir);
+    for (name, format) in [("s.tiff", Format::Tiff), ("s.webp", Format::WebP), ("s.gif", Format::Gif), ("s.bmp", Format::Bmp)] {
+        write(name, format);
+        let doc = ok(&mut a, "doc_create", json!({ "from": "blank", "width": 200, "height": 300 }))["doc"].as_u64().unwrap();
+        ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "signature", "at": [20, 60], "path": name }));
+        let output = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
+        let Content::Png { data, .. } = &output[0] else { panic!() };
+        let (w, _, px) = decode_rgba(data);
+        assert_eq!(rgba_at(w, &px, 65, 60), [0, 0, 0, 255], "{name}: signature ink is embedded");
+        assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc }))["count"], 1, "{name}");
+    }
+    // Formats the codecs read but a signature does not take (QOI here) are refused, naming what is accepted.
+    write("s.qoi", Format::Qoi);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "blank", "width": 200, "height": 300 }))["doc"].as_u64().unwrap();
+    let err = a.call("fill_sign_add", &json!({ "doc": doc, "page": 1, "type": "signature", "at": [20, 60], "path": "s.qoi" })).unwrap_err();
+    assert!(err.to_string().contains("PNG, JPEG, TIFF, GIF, BMP or WebP"), "{err}");
+    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc }))["count"], 0, "a refused image leaves the PDF intact");
+}
+
+#[test]
 fn scanned_signatures_through_tools_drop_the_paper_and_report_bad_arguments() {
     let dir = workdir("scanned-signatures");
     // A grey, unevenly lit sheet with a pen stroke for the signature, and a blank one.
