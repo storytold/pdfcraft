@@ -10,6 +10,8 @@ workspace = true
 
 [dependencies]
 pdfcraft-engine = { workspace = true }
+# The framework, through its facade: `craft::atomic` for crash-safe writes.
+craft = { workspace = true, features = ["atomic"] }
 pdfcraft-cos = { workspace = true }
 pdfcraft-render = { workspace = true }
 pdfcraft-organize = { workspace = true }

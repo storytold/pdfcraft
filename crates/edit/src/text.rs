@@ -17,7 +17,7 @@ use std::rc::Rc;
 use pdfcraft_content::{Matrix, Op, Pieces, parse, serialize_ops};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, Object, PdfString, Stream};
 use pdfcraft_fonts::pdf::Metrics;
-use pdfcraft_fonts::{CraftFont, GlyphError, japanese_glyph_from};
+use pdfcraft_fonts::{EmbeddedFace, GlyphError, japanese_glyph_from};
 
 use crate::EditError;
 
@@ -360,11 +360,11 @@ mod tests {
     #[test]
     fn fallback_face_moves_on_when_the_best_face_lacks_a_character() {
         static JPAN: &[&str] = &["Jpan"];
-        let mincho = CraftFont { family: "Mincho", style: "Regular", scripts: JPAN, bytes: b"" };
-        let gothic = CraftFont { family: "Gothic", style: "Regular", scripts: JPAN, bytes: b"" };
+        let mincho = EmbeddedFace { family: "Mincho", style: "Regular", scripts: JPAN, index: 0, bytes: b"", role: None };
+        let gothic = EmbeddedFace { family: "Gothic", style: "Regular", scripts: JPAN, index: 0, bytes: b"", role: None };
         let faces = [&mincho, &gothic];
         // Only the Gothic face has the Cyrillic letter.
-        let has = |face: &CraftFont, ch: char| ch.is_ascii() || face.family == "Gothic";
+        let has = |face: &EmbeddedFace, ch: char| ch.is_ascii() || face.family == "Gothic";
         assert_eq!(fallback_face(&faces, &['a', 'ф'], has).map(|f| f.family), Some("Gothic"));
         // Characters the best face has keep it.
         assert_eq!(fallback_face(&faces, &['a', 'b'], has).map(|f| f.family), Some("Mincho"));
@@ -376,7 +376,7 @@ mod tests {
     #[test]
     fn hebrew_and_japanese_fallback_shards_are_recognized_as_ours() {
         static HEBR: &[&str] = &["Hebr"];
-        let face = CraftFont { family: "FakeHebrew", style: "Regular", scripts: HEBR, bytes: b"" };
+        let face = EmbeddedFace { family: "FakeHebrew", style: "Regular", scripts: HEBR, index: 0, bytes: b"", role: None };
         let glyph = |code, ch| Type3Glyph { code, ch, path: b"0 0 0 0 0 0 d1\nf\n".to_vec(), width: 0.5 };
         let mut doc = Document::new_empty();
         let mut fonts = Dict::new();

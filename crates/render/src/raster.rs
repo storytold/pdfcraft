@@ -212,8 +212,8 @@ pub enum RequestKind {
     Text,
     /// The same text layer as `Text`, byte for byte, and in the same pass Copy with
     /// formatting's recovered layer ([`crate::RecoveredText`]) when a recovery rule read some
-    /// glyph of the page. Only for readers that copy with formatting (the view's selection
-    /// layer, HTML extraction); `scale` is ignored.
+    /// glyph of the page. Only for readers that copy with formatting (HTML extraction);
+    /// `scale` is ignored.
     RecoveredText,
 }
 
