@@ -56,6 +56,9 @@ function Copy-NightlyNotices([string] $RepositoryRoot, [string] $FontRepository,
     $source = Join-Path $RepositoryRoot $name
     if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $Destination }
   }
+  # The document icon embeds Lucide artwork: its ISC notice ships beside the binaries, as in
+  # package.ps1's stable ZIP.
+  Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'assets/app-icon/LICENSE-document.txt') -Destination $Destination
   if ($FontRepository) {
     $fonts = Join-Path $FontRepository 'fonts'
     if (-not (Test-Path -LiteralPath $fonts -PathType Container)) { throw 'CRAFT_FONTS_DIR has no fonts directory for the bundled notices' }

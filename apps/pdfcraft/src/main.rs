@@ -686,7 +686,6 @@ fn app_creator<'a>(
         // different fact with its own message: it has no record to clear.
         if previous_unclean {
             app.notify("PdfCraft Nightly ended unexpectedly last time. Documents with unsaved changes were kept in its recovery folder.".to_string());
-            notice_shown.store(true, std::sync::atomic::Ordering::Release);
         } else if health_unavailable {
             app.notify(
                 "PdfCraft Nightly could not record session health in its private profile. It still works, but an unexpected exit cannot be detected."
@@ -761,6 +760,11 @@ fn app_creator<'a>(
             if let Err(e) = result {
                 log::warn!("--{k} {v}: {e}");
             }
+        }
+        // Only now can nothing else fail: a creator error before this leaves the record for the next
+        // launch to report, because no window ever showed the notice.
+        if previous_unclean {
+            notice_shown.store(true, std::sync::atomic::Ordering::Release);
         }
         Ok(Box::new(app))
     })

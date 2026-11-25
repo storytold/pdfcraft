@@ -134,7 +134,10 @@ jobs:
         shell: pwsh
         run: |
           pwsh -NoProfile -File packaging/windows/nightly-package-tests.ps1 -FixtureRoot $env:RUNNER_TEMP
+          # Each suite's own status: the next invocation would otherwise replace it.
+          if ($LASTEXITCODE -ne 0) { throw "nightly-package-tests.ps1 failed: $LASTEXITCODE" }
           pwsh -NoProfile -File packaging/windows/nightly-signing-tests.ps1 -FixtureRoot $env:RUNNER_TEMP
+          if ($LASTEXITCODE -ne 0) { throw "nightly-signing-tests.ps1 failed: $LASTEXITCODE" }
       - name: Keep the unsigned ZIP
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

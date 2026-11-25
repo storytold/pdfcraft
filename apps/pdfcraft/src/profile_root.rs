@@ -582,7 +582,9 @@ mod tests {
         assert!(fixture.check(Platform::Linux, &candidate).unwrap_err().contains("Flatpak"));
         // The Nightly Flatpak is a different app id: its own sandbox is where its profile belongs.
         fixture.env.insert("FLATPAK_ID".into(), "ai.storyteller.pdfcraft.nightly".into());
-        let own = candidate.join("flatpak");
+        // A sibling, not a child: validation creates the root and its missing parents, so a child
+        // of `candidate` would leave the root behind for the missing-HOME assertion below.
+        let own = fixture.home().join("nightly-flatpak");
         assert!(fixture.check(Platform::Linux, &own).is_ok());
         std::fs::remove_dir_all(&own).unwrap();
         fixture.env.remove("FLATPAK_ID");

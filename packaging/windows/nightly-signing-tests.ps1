@@ -15,13 +15,30 @@ function Invoke-Refusal([scriptblock] $Operation, [string] $Message) {
   Assert-Policy ($errorText.Contains($Message)) "expected refusal: $Message; got: $errorText"
 }
 function global:cargo { $global:SigningFixtureCargoCalls++; throw 'FIXTURE_COMPILER_BOUNDARY' }
+# The source preflight reads the real checkout, so the fixture answers for its own commit: the
+# version names `a`*40 and the tree is clean. Without this the clean case stops at the preflight
+# instead of reaching the mocked compiler.
+function global:git {
+  param([Parameter(ValueFromRemainingArguments=$true)][object[]] $Arguments)
+  $joined = ($Arguments | ForEach-Object { "$_" }) -join ' '
+  if ($joined -match 'rev-parse HEAD$') { $global:LASTEXITCODE = 0; return ('a' * 40) }
+  if ($joined -match 'status --porcelain$') { $global:LASTEXITCODE = 0; return '' }
+  throw "the fixture must not run git: $joined"
+}
 function global:Invoke-WebRequest { throw 'fixture must not perform signing downloads' }
 $global:SigningFixtureCargoCalls = 0
+# The caller's own values, restored in `finally`: this script may run inside a developer's session.
+$savedEnvironment = foreach ($name in (@('PDFCRAFT_VERSION', 'PDFCRAFT_BUILD_SHA', 'PDFCRAFT_BUILD_DATE') + $names)) {
+  [pscustomobject]@{ Name = $name; Value = [Environment]::GetEnvironmentVariable($name) }
+}
 if (-not [IO.Path]::IsPathRooted($FixtureRoot)) { throw 'use an owned absolute FixtureRoot' }
 $root = Join-Path $FixtureRoot ('signing-policy-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $root | Out-Null
 $version = '0.22.1-nightly.20261121.12345.1.gaaaaaaaaaaaa'
 $env:PDFCRAFT_VERSION = $version
+# The identity the version names: the mocked HEAD and its run date.
+$env:PDFCRAFT_BUILD_SHA = 'a' * 40
+$env:PDFCRAFT_BUILD_DATE = '2026-11-21'
 function Invoke-Build([switch] $BuildOnly) {
   $arguments = @{Arch='x64';Version=$version;Target='x86_64-pc-windows-msvc';TargetDir=$root;Dist=(Join-Path $root 'dist')}
   if ($BuildOnly) { $arguments.BuildOnly = $true }
