@@ -23,6 +23,7 @@
 pub mod confidence;
 pub mod merge;
 mod ocrs;
+pub mod page_layout;
 mod pitch;
 pub mod preprocess;
 #[cfg(not(target_arch = "wasm32"))]
@@ -35,6 +36,7 @@ pub use ocrs::{
     ALPHABET, DETECTION_MODEL, DETECTION_MODEL_SHA256, LANGUAGES, Models, Ocr, OcrsRecognizer, RECOGNITION_MODEL, RECOGNITION_MODEL_SHA256,
 };
 
+pub use page_layout::{Rect, Region, RegionKind, analyze_page};
 pub use pdfcraft_fonts::TextPlan;
 pub use pdfcraft_fonts::helvetica_width;
 

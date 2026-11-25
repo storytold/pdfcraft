@@ -10988,7 +10988,11 @@ fn ocr_words_refresh_only_the_page_content_they_add() {
     take_full_refreshes();
     let word =
         PlacedWord { text: "HELLO".into(), origin: [40.0, 40.0], across: [60.0, 0.0], up: [0.0, 20.0], confidence: None, source: "ocrs".into() };
-    assert_eq!(s.apply_ocr(id, &[OcrPage { page: 1, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() }]).unwrap(), 1);
+    assert_eq!(
+        s.apply_ocr(id, &[OcrPage { regions: Vec::new(), page: 1, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() }])
+            .unwrap(),
+        1
+    );
     assert_eq!(take_full_refreshes(), 0, "applying OCR words doesn't re-inspect the document");
     let after = s.get(id).unwrap();
     assert_eq!(format!("{:?}", (&after.info.pages, &after.info.annotations, &after.info.fields, &after.links, after.marks())), view);

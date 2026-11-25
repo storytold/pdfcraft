@@ -16,7 +16,7 @@ use pdfcraft_render::{PageInfo, PageRenderer, RenderConfig, RenderRequest, Reque
 
 pub use pdfcraft_ocr::{
     ConfidenceBand, DETECTION_MODEL, LANGUAGES, Line, MergeStrategy, Models, Ocr, OcrError, OcrImage, PlacedWord, RECOGNITION_MODEL, Recognizer,
-    StrategyOutcome, Word, band_for, is_suspect, lines_from_json, low_confidence,
+    Region, RegionKind, StrategyOutcome, Word, analyze_page, band_for, is_suspect, lines_from_json, low_confidence,
 };
 
 use crate::{DocId, Edit, EditError, Session};
@@ -225,6 +225,11 @@ pub struct OcrPage {
     /// Notes about a partial reading: the words stand, but something on the way did not (an
     /// ensemble partner failed and the page keeps the primary engine's reading alone).
     pub notes: Vec<String>,
+    /// The words recognition found, grouped into typed regions with a reading order
+    /// ([`analyze_page`]), in the pixels it read: the page, or the chosen region of it. This
+    /// includes words left out of `words` because the page already had them. What the page
+    /// writes does not depend on these regions.
+    pub regions: Vec<Region>,
 }
 
 impl OcrPage {
@@ -724,11 +729,16 @@ impl OcrJob {
         let total = self.pages.len();
         let mut steps = self.steps();
         let mut out = Vec::new();
+        let mut previous: Option<Vec<Region>> = None;
         while progress(steps.done(), total) {
             match steps.next_page() {
                 None => break,
                 Some(Err(skipped)) => out.push(skipped),
-                Some(Ok(shot)) => out.push(shot.read(recognizers)),
+                Some(Ok(shot)) => {
+                    let page = shot.read_with_previous(recognizers, previous.as_deref());
+                    previous = Some(page.regions.clone());
+                    out.push(page);
+                }
             }
         }
         progress(total, total);
@@ -784,7 +794,8 @@ impl OcrSteps {
 
     fn prepare(&mut self, page: usize, info: PageInfo) -> Result<OcrShot, OcrPage> {
         let settings = &self.job.settings;
-        let skip = |why: &str| OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: Some(why.into()), notes: Vec::new() };
+        let skip =
+            |why: &str| OcrPage { regions: Vec::new(), page, words: Vec::new(), already_on_page: 0, skipped: Some(why.into()), notes: Vec::new() };
         let r = &mut self.renderer;
         // The boxes of all text on the page, in view space: an earlier OCR layer's, and words
         // only /ActualText names, so neither is read again.
@@ -831,9 +842,11 @@ impl OcrSteps {
             },
         )
         .map_err(|e| skip(&e.to_string()))?;
+        let pixels = [pre.image.width() as f32, pre.image.height() as f32];
         Ok(OcrShot {
             page,
             image: Some(pre.image),
+            pixels,
             inverse: pre.inverse_transform,
             offset,
             pixels_per_point: shot.width as f32 / info.width.max(1e-3),
@@ -853,6 +866,9 @@ pub struct OcrShot {
     /// The page's pixels as the engines read them: rendered, cropped to the region and
     /// preprocessed (`None` once [`OcrShot::take_image`] has handed them on).
     image: Option<OcrImage>,
+    /// `image`'s size in pixels, kept when the image is handed on: the word boxes recognised in
+    /// it are measured in these.
+    pixels: [f32; 2],
     /// Processed pixels → the rendered raster's (the exact inverse of preprocessing).
     inverse: pdfcraft_ocr::preprocess::InverseTransform,
     /// Where the region crop starts in the rendered raster.
@@ -881,7 +897,13 @@ impl OcrShot {
 
     /// Recognise the image with `recognizers` (per the job's strategy) and place the words.
     pub fn read(&self, recognizers: &Recognizers) -> OcrPage {
-        let Some(image) = &self.image else { return self.place(Err("the page's image was handed to another reader".into())) };
+        self.read_with_previous(recognizers, None)
+    }
+
+    /// [`Self::read`], given the regions of the page before ([`OcrPage::regions`]) so a running
+    /// header or footer is told from a heading that happens to sit at the top of this page.
+    pub fn read_with_previous(&self, recognizers: &Recognizers, previous: Option<&[Region]>) -> OcrPage {
+        let Some(image) = &self.image else { return self.place_with_previous(Err("the page's image was handed to another reader".into()), previous) };
         let outcome = pdfcraft_ocr::recognize_with_strategy(
             recognizers.primary.as_ref(),
             recognizers.secondary.as_deref(),
@@ -889,7 +911,7 @@ impl OcrShot {
             image,
             &self.options,
         );
-        self.place(outcome.map_err(|e| e.to_string()))
+        self.place_with_previous(outcome.map_err(|e| e.to_string()), previous)
     }
 
     /// Put the lines recognised in [`Self::image`] on the page (or skip the page with the
@@ -897,11 +919,19 @@ impl OcrShot {
     /// `StrategyOutcome { lines, ..Default::default() }`: every strategy reads that way when
     /// there is no second engine.
     pub fn place(&self, outcome: Result<StrategyOutcome, String>) -> OcrPage {
+        self.place_with_previous(outcome, None)
+    }
+
+    /// [`Self::place`], given the regions of the page before for the layout analysis (see
+    /// [`OcrShot::read_with_previous`]).
+    pub fn place_with_previous(&self, outcome: Result<StrategyOutcome, String>, previous: Option<&[Region]>) -> OcrPage {
         let page = self.page;
         let outcome = match outcome {
             Ok(o) => o,
-            Err(e) => return OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: Some(e), notes: Vec::new() },
+            Err(e) => return OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: Some(e), notes: Vec::new(), regions: Vec::new() },
         };
+        let recognised: Vec<Word> = outcome.lines.iter().flat_map(|l| l.words.iter().cloned()).collect();
+        let regions = analyze_page(&recognised, (self.pixels[0], self.pixels[1]), previous);
         let (info, inverse, offset, scale) = (&self.info, self.inverse, self.offset, self.pixels_per_point);
         let to_user = |x: f32, y: f32| {
             // processed pixels → original raster pixels (the exact inverse) → past the
@@ -939,7 +969,7 @@ impl OcrShot {
                 notes.push(format!("{missing} characters had no font that could show them and appear as ? in the output"));
             }
         }
-        OcrPage { page, words, already_on_page: already.len(), skipped: None, notes }
+        OcrPage { page, words, already_on_page: already.len(), skipped: None, notes, regions }
     }
 }
 
@@ -1256,6 +1286,7 @@ impl FileJob {
                 .pages
                 .iter()
                 .map(|&page| OcrPage {
+                    regions: Vec::new(),
                     already_on_page: 0,
                     page,
                     words: Vec::new(),
@@ -1540,6 +1571,7 @@ mod tests {
             source: "ocrs".into(),
         };
         let page = OcrPage {
+            regions: Vec::new(),
             already_on_page: 0,
             page: 0,
             words: vec![word("a", Some(95.0)), word("b", Some(50.0)), word("c", None), word("d", Some(69.0))],
@@ -1923,6 +1955,7 @@ mod tests {
             source: "ocrs".into(),
         };
         let page = |n: usize, confs: &[f32], skipped: Option<&str>| OcrPage {
+            regions: Vec::new(),
             already_on_page: 0,
             page: n,
             words: confs.iter().map(|c| word(*c)).collect(),
@@ -1949,7 +1982,11 @@ mod tests {
         let mut s = Session::new();
         let id = s.open("src.pdf", None, Arc::new(fixture(2)), None).unwrap();
         assert!(
-            s.editable_ocr_bytes(id, &[OcrPage { already_on_page: 0, page: 0, words: vec![], skipped: None, notes: Vec::new() }]).is_err(),
+            s.editable_ocr_bytes(
+                id,
+                &[OcrPage { regions: Vec::new(), already_on_page: 0, page: 0, words: vec![], skipped: None, notes: Vec::new() }]
+            )
+            .is_err(),
             "zero words are refused"
         );
         let info = s.get(id).unwrap().info.pages[0].clone();
@@ -1964,8 +2001,8 @@ mod tests {
             source: "ocrs".into(),
         };
         let found = vec![
-            OcrPage { already_on_page: 0, page: 0, words: vec![w], skipped: None, notes: Vec::new() },
-            OcrPage { already_on_page: 0, page: 1, words: vec![], skipped: None, notes: Vec::new() },
+            OcrPage { regions: Vec::new(), already_on_page: 0, page: 0, words: vec![w], skipped: None, notes: Vec::new() },
+            OcrPage { regions: Vec::new(), already_on_page: 0, page: 1, words: vec![], skipped: None, notes: Vec::new() },
         ];
         let before = s.get(id).unwrap().bytes.clone();
         let bytes = s.editable_ocr_bytes(id, &found).unwrap();
@@ -2004,7 +2041,9 @@ mod tests {
             confidence: None,
             source: "ocrs".into(),
         };
-        let bytes = s.editable_ocr_bytes(id, &[OcrPage { already_on_page: 0, page: 0, words: vec![w], skipped: None, notes: Vec::new() }]).unwrap();
+        let bytes = s
+            .editable_ocr_bytes(id, &[OcrPage { regions: Vec::new(), already_on_page: 0, page: 0, words: vec![w], skipped: None, notes: Vec::new() }])
+            .unwrap();
         let mut out = Session::new();
         let oid = out.open("ocr.pdf", None, bytes, None).unwrap();
         let otext = crate::tests::page_texts(&out, oid)[0].clone();
@@ -2101,7 +2140,7 @@ mod tests {
         let before = s.save_bytes(id).unwrap();
         let word =
             PlacedWord { text: "word".into(), origin: [20.0, 80.0], across: [30.0, 0.0], up: [0.0, 5.0], confidence: None, source: "test".into() };
-        let page = |page, words| OcrPage { already_on_page: 0, page, words, skipped: None, notes: Vec::new() };
+        let page = |page, words| OcrPage { regions: Vec::new(), already_on_page: 0, page, words, skipped: None, notes: Vec::new() };
         let mut invalid = word.clone();
         invalid.origin[0] = f64::INFINITY;
         let mut long = word.clone();
@@ -2130,7 +2169,9 @@ mod tests {
             confidence: None,
             source: "ocrs".into(),
         };
-        let bytes = s.editable_ocr_bytes(id, &[OcrPage { already_on_page: 0, page: 0, words: vec![w], skipped: None, notes: Vec::new() }]).unwrap();
+        let bytes = s
+            .editable_ocr_bytes(id, &[OcrPage { regions: Vec::new(), already_on_page: 0, page: 0, words: vec![w], skipped: None, notes: Vec::new() }])
+            .unwrap();
         let mut out = Session::new();
         let oid = out.open("ocr.pdf", None, bytes, None).unwrap();
         let text = crate::tests::page_texts(&out, oid)[0].clone();
@@ -2162,7 +2203,9 @@ mod tests {
             source: "ocrs".into(),
         };
         let words = vec![word("Привет", 250.0, 80.0), word("Hello", 100.0, 50.0)];
-        let bytes = s.editable_ocr_bytes(id, &[OcrPage { already_on_page: 0, page: 0, words, skipped: None, notes: Vec::new() }]).unwrap();
+        let bytes = s
+            .editable_ocr_bytes(id, &[OcrPage { regions: Vec::new(), already_on_page: 0, page: 0, words, skipped: None, notes: Vec::new() }])
+            .unwrap();
         let mut out = Session::new().with_clock(|| 1_700_000_000);
         let oid = out.open("ocr.pdf", None, bytes, None).unwrap();
         let before = crate::tests::page_texts(&out, oid)[0].clone();
@@ -2214,8 +2257,8 @@ mod tests {
         // Different scripts, so each page's words live in different planned fonts (and page 2
         // would inherit page 1's codes under page-local indexing into the shared plan).
         let found = vec![
-            OcrPage { already_on_page: 0, page: 0, words: vec![word("日本語")], skipped: None, notes: Vec::new() },
-            OcrPage { already_on_page: 0, page: 1, words: vec![word("Привет")], skipped: None, notes: Vec::new() },
+            OcrPage { regions: Vec::new(), already_on_page: 0, page: 0, words: vec![word("日本語")], skipped: None, notes: Vec::new() },
+            OcrPage { regions: Vec::new(), already_on_page: 0, page: 1, words: vec![word("Привет")], skipped: None, notes: Vec::new() },
         ];
         let bytes = s.editable_ocr_bytes(id, &found).unwrap();
         let mut out = Session::new();
