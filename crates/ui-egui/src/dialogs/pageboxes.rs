@@ -160,11 +160,11 @@ fn paint_preview(cx: &craft::ui::primitives::ContentPainterCx<'_>, rect: Rect, m
 }
 
 /// The draft box size in physical points, ordered as the page is displayed.
-fn preview_size(media: [f64; 4], margins: [f64; 4], page_unit: f64, rotation: u16) -> Option<[f64; 2]> {
+fn preview_size(rect: [f64; 4], margins: [f64; 4], page_unit: f64, rotation: u16, removal: bool) -> Option<[f64; 2]> {
     let [left, bottom, right, top] = margins;
-    let width = (media[2] - media[0]) * page_unit - left - right;
-    let height = (media[3] - media[1]) * page_unit - bottom - top;
-    if ![width, height].into_iter().all(|side| side.is_finite() && side >= page_unit) {
+    let width = (rect[2] - rect[0]) * page_unit - left - right;
+    let height = (rect[3] - rect[1]) * page_unit - bottom - top;
+    if ![width, height].into_iter().all(|side| side.is_finite() && side > 0.0 && (removal || side >= page_unit)) {
         return None;
     }
     Some(if rotation.is_multiple_of(180) { [width, height] } else { [height, width] })
@@ -203,19 +203,20 @@ fn params(count: usize, current: usize, page: Option<[[f64; 4]; 5]>, page_unit: 
             ThumbAspect::new((media[2] - media[0]).round().clamp(1.0, 65535.0) as u16, (media[3] - media[1]).round().clamp(1.0, 65535.0) as u16);
         rows.push(
             Param::custom("preview", "", move |ui, fields, _| {
-                let mut margins = margins_of(fields);
-                // Removing a trim, bleed or art box falls back to the crop box.
-                if margins == [0.0; 4] && matches!(fields.text("box"), Some("trim" | "bleed" | "art")) {
-                    margins = page_margins(&page, PageBox::Crop, page_unit);
-                }
+                let margins = margins_of(fields);
+                // Removing a trim, bleed or art box falls back to the resolved crop box.
+                let removal = margins == [0.0; 4] && fields.text("box") != Some("media");
+                let crop_fallback = removal && matches!(fields.text("box"), Some("trim" | "bleed" | "art"));
+                let rect = if crop_fallback { page[1] } else { media };
                 let unit = unit_of(fields).unwrap_or_default();
-                let text = match preview_size(media, margins, page_unit, rotation) {
+                let text = match preview_size(rect, margins, page_unit, rotation, removal) {
                     Some([width, height]) => {
                         let size = unit.size(width, height);
                         crate::i18n::fmt(tl!("Box size: {size}"), &[("size", &size)])
                     }
                     None => tl!("The margins leave no valid box.").to_string(),
                 };
+                let margins = if crop_fallback { page_margins(&page, PageBox::Crop, page_unit) } else { margins };
                 Stack::new()
                     .show(ui, |ui, _| {
                         Picture::painter(label.clone(), aspect, move |cx, rect| paint_preview(cx, rect, media, margins, page_unit))
@@ -306,6 +307,14 @@ mod tests {
         d.margins = [0.0; 4];
         d.which = PageBox::Media;
         assert!(matches!(d.edit(vec![0], &[]), Edit::SetPageBox { spec: BoxSpec::Margins(_), which: PageBox::Media, .. }));
+    }
+
+    #[test]
+    fn sub_unit_box_is_previewed_only_as_a_removal_fallback() {
+        let fallback = [0.0, 0.0, 0.5, 100.0];
+        assert_eq!(preview_size(fallback, [0.0; 4], 2.0, 0, true), Some([1.0, 200.0]));
+        let media = [0.0, 0.0, 100.0, 100.0];
+        assert_eq!(preview_size(media, [0.0, 0.0, 199.0, 0.0], 2.0, 0, false), None);
     }
 
     /// Two pages of 432 x 360 points, the first with `/UserUnit` 1 and the second with 2, opened in a session.
