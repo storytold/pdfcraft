@@ -25,6 +25,9 @@ pub struct BoxOutside {
 /// (§7.7.3.3, the page object's entries; §7.7.3.4), so only the page's own count; an absent one defaults to
 /// the crop box and is covered by the crop entry. A box that is not four finite numbers with a
 /// positive width and height frames nothing and is skipped.
+///
+/// Containment is exact, with no tolerance, so a box the smallest amount past an edge is listed.
+/// A page given twice is listed twice.
 pub fn boxes_outside_media(doc: &Document, pages: &[usize]) -> Result<Vec<BoxOutside>, OrganizeError> {
     let all = walk(doc)?;
     check(pages, all.len())?;
