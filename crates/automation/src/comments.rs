@@ -897,6 +897,11 @@ impl Automation {
         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let name = a.opt_str("name")?.map(str::to_owned).unwrap_or_else(|| file.rsplit_once('.').map_or(file.clone(), |(s, _)| s.to_owned()));
         let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
+        let template = a.opt_str("line")?;
+        let line_over_picture = a.opt_bool("line_over_picture")?.unwrap_or(false);
+        if line_over_picture && template.is_none_or(|s| s.trim().is_empty()) {
+            return Err(ToolError::InvalidArgs("line_over_picture requires a non-empty line".into()));
+        }
         let edit = Edit::AddCustomStamp {
             page,
             rect,
@@ -906,16 +911,9 @@ impl Automation {
                 bytes: std::sync::Arc::new(bytes),
                 page: a.opt_int("file_page")?.unwrap_or(1).max(1) as usize - 1,
             },
-            line: None,
+            line: template.filter(|s| !s.trim().is_empty()).map(|s| self.session().stamp_line(s, &author)),
+            line_over_picture,
             author: author.clone(),
-        };
-        // A dynamic line (#1741): `{name}`, `{date}` and `{time}` filled in now.
-        let edit = match (edit, a.opt_str("line")?) {
-            (Edit::AddCustomStamp { page, rect, name, file, author, .. }, Some(t)) if !t.trim().is_empty() => {
-                let line = Some(self.session().stamp_line(t, &author));
-                Edit::AddCustomStamp { page, rect, name, file, author, line }
-            }
-            (edit, _) => edit,
         };
         self.apply(a, edit)
     }

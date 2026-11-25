@@ -74,6 +74,11 @@ impl Session {
     /// stamps' "By" line has them. Cut to [`MAX_STAMP_LINE`](crate::MAX_STAMP_LINE) characters.
     pub fn stamp_line(&self, template: &str, author: &str) -> String {
         let (date, time) = self.stamp_date_time();
+        Self::stamp_line_with_date_time(template, author, &date, &time)
+    }
+
+    /// Fill a stamp preview with the date and time captured when its editor opened.
+    pub fn stamp_line_with_date_time(template: &str, author: &str, date: &str, time: &str) -> String {
         // One pass over the template, so a placeholder the author's name happens to contain
         // (`Ada {date}`) stays as written rather than being filled in too.
         let mut filled = String::new();
@@ -83,10 +88,10 @@ impl Session {
                 filled.push_str(author.trim());
                 rest = after;
             } else if let Some(after) = rest.strip_prefix("{date}") {
-                filled.push_str(&date);
+                filled.push_str(date);
                 rest = after;
             } else if let Some(after) = rest.strip_prefix("{time}") {
-                filled.push_str(&time);
+                filled.push_str(time);
                 rest = after;
             } else {
                 filled.push(c);

@@ -151,10 +151,9 @@ fn creating_placing_and_keeping_custom_stamps() {
     assert_eq!(again.custom_stamps[0].data, s.custom_stamps[0].data);
 }
 
-/// A custom stamp with a line filled in when it is placed (#1741): chosen in the Create dialog,
-/// kept in the library, and placed with the band under the picture.
+/// A PNG background and a line filled in when placed are kept together in the library and PDF.
 #[test]
-fn a_dynamic_custom_stamp_keeps_its_line_and_fills_it_in_when_placed() {
+fn a_dynamic_png_stamp_keeps_its_background_and_fills_its_line_when_placed() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
         crate::support::install_runtime(&cc.egui_ctx);
         {
@@ -179,10 +178,15 @@ fn a_dynamic_custom_stamp_keeps_its_line_and_fills_it_in_when_placed() {
     h.run_steps(3);
     h.get_by_label("Add a line filled in when the stamp is placed").click();
     h.run_steps(2);
+    h.get_by_label("Place line over picture").scroll_to_me();
+    h.run_steps(2);
+    h.get_by_label("Place line over picture").click();
+    h.run_steps(2);
 
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert_eq!(h.state().custom_stamps[0].line.as_deref(), Some("By {name} at {time}, {date}"));
+    assert!(h.state().custom_stamps[0].line_over_picture);
     let p = {
         let r = h.state().views[0].page_screen_rect(0).unwrap();
         r.min + egui::vec2(r.width() * 0.5, r.height() * 0.85)
@@ -196,13 +200,15 @@ fn a_dynamic_custom_stamp_keeps_its_line_and_fills_it_in_when_placed() {
     let s = h.state();
     let saved = s.session.save_bytes(s.views[0].id).unwrap();
     let pdf = pdfcraft_cos::Document::open(saved).unwrap();
-    let line = pdf
+    let stamp = pdf
         .scan_objects()
         .find_map(|(_, object)| match object.as_ref() {
-            pdfcraft_cos::Object::Dict(dict) => dict.get(b"PCByLine").and_then(pdfcraft_cos::Object::as_string).map(pdfcraft_cos::PdfString::to_text),
+            pdfcraft_cos::Object::Dict(dict) if dict.contains(b"PCByLine") => Some(dict.clone()),
             _ => None,
         })
         .expect("placed custom stamp stores PCByLine in the PDF");
+    assert!(matches!(stamp.get(b"PCLineOverPicture"), Some(pdfcraft_cos::Object::Bool(true))));
+    let line = stamp.get(b"PCByLine").and_then(pdfcraft_cos::Object::as_string).map(pdfcraft_cos::PdfString::to_text).unwrap();
     assert!(line.starts_with("By Ada at "), "expanded stamp line: {line:?}");
     assert!(
         !line.contains("{name}") && !line.contains("{date}") && !line.contains("{time}"),
@@ -212,9 +218,9 @@ fn a_dynamic_custom_stamp_keeps_its_line_and_fills_it_in_when_placed() {
     let doc = s.session.get(s.views[0].id).unwrap();
     let r = doc.info.annotations.iter().find(|a| a.subtype == "Stamp").expect("placed").rect;
     let aspect = (r[2] - r[0]) / (r[3] - r[1]);
-    // A band under the 3:1 picture (so less wide than 3:1), at least as wide as the picture.
-    assert!(aspect > 3.0 * (1.0 - 0.22) - 0.05 && aspect < 3.0 - 0.05, "a band under the 3:1 picture: {r:?}");
+    assert!((aspect - 3.0).abs() < 0.05, "the line overlays the 3:1 PNG background: {r:?}");
     let mut again = crate::control::new_app();
     again.apply_settings(&s.settings_snapshot());
     assert_eq!(again.custom_stamps[0].line, s.custom_stamps[0].line, "kept with the library");
+    assert!(again.custom_stamps[0].line_over_picture, "placement mode is kept with the library");
 }

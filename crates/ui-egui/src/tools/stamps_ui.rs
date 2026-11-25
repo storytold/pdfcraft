@@ -44,6 +44,9 @@ pub struct CustomStamp {
     /// `{date}` and `{time}` become the author and now.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<String>,
+    /// Place the resolved line over the image's lower edge. Older saved stamps keep the band.
+    #[serde(default)]
+    pub line_over_picture: bool,
 }
 
 /// The line a new dynamic custom stamp offers: what the built-in dynamic stamps write.
@@ -56,6 +59,7 @@ const CATEGORY: &str = "category";
 const NAME: &str = "name";
 const DYNAMIC: &str = "dynamic";
 const LINE: &str = "line";
+const LINE_OVER_PICTURE: &str = "line_over_picture";
 
 mod b64 {
     use std::sync::Arc;
@@ -151,6 +155,7 @@ impl<'a> StampTool<'a> {
                 file: MarkFile { name: stamp.file.clone(), bytes: stamp.data.clone(), page: stamp.page },
                 author: self.author.clone(),
                 line: self.line.clone(),
+                line_over_picture: stamp.line_over_picture,
             }),
         }
     }
@@ -210,7 +215,15 @@ fn categories(stamps: &[CustomStamp]) -> Vec<String> {
 }
 
 /// The dialog's rows over `file` and the existing `categories`.
-fn create_params(file: &str, categories: &[String]) -> Vec<Param> {
+fn create_params(
+    file: &str,
+    categories: &[String],
+    preview: Option<egui::TextureHandle>,
+    preview_size: [usize; 2],
+    author: String,
+    date: String,
+    time: String,
+) -> Vec<Param> {
     let categories = categories.to_vec();
     vec![
         Param::read_only_text("file", "", crate::i18n::fmt(tl!("From {file}"), &[("file", file)])).full_width(),
@@ -231,9 +244,46 @@ fn create_params(file: &str, categories: &[String]) -> Vec<Param> {
             shown.response
         })
         .visible_when(DYNAMIC, true),
+        Param::new(LINE_OVER_PICTURE, tl!("Place line over picture"), ParamKind::bool(false)).visible_when(DYNAMIC, true),
         Param::read_only_text("hint", "", tl!("{name}, {date} and {time} become your name, the date and the time."))
             .full_width()
             .visible_when(DYNAMIC, true),
+        Param::custom("preview", tl!("Preview"), move |ui, fields, _| {
+            let Some(texture) = preview.as_ref() else { return ui.label(tl!("Preview unavailable for this picture")) };
+            let dynamic = fields.bool(DYNAMIC).unwrap_or(false);
+            let overlay = dynamic && fields.bool(LINE_OVER_PICTURE).unwrap_or(false);
+            let template = fields.text(LINE).unwrap_or_default();
+            let filled = pdfcraft_engine::Session::stamp_line_with_date_time(template, &author, &date, &time);
+            let source = egui::vec2(preview_size[0] as f32, preview_size[1] as f32);
+            let natural = if dynamic && !overlay {
+                let (w, h) = pdfcraft_engine::custom_stamp_size((f64::from(source.x), f64::from(source.y)), Some(&filled));
+                egui::vec2(w as f32, h as f32)
+            } else {
+                source
+            };
+            let scale = (280.0 / natural.x).min(160.0 / natural.y);
+            let picture = source * scale;
+            let canvas = natural * scale;
+            let band = if dynamic { canvas.y * pdfcraft_engine::CUSTOM_LINE_BAND as f32 } else { 0.0 };
+            let picture_height = canvas.y - if overlay { 0.0 } else { band };
+            let (rect, response) = ui.allocate_exact_size(canvas, egui::Sense::hover());
+            let picture_rect =
+                egui::Rect::from_min_size(egui::pos2(rect.center().x - picture.x / 2.0, rect.min.y + (picture_height - picture.y) / 2.0), picture);
+            let painter = ui.painter().with_clip_rect(rect);
+            painter.image(texture.id(), picture_rect, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+            if dynamic {
+                let mut text_size = band * pdfcraft_engine::CUSTOM_LINE_TEXT as f32;
+                let width = painter.layout_no_wrap(filled.clone(), egui::FontId::proportional(text_size), egui::Color32::from_gray(51)).size().x;
+                if width > canvas.x - 4.0 && width > 0.0 {
+                    text_size *= ((canvas.x - 4.0) / width).max(0.0);
+                }
+                let at = egui::pos2(rect.center().x, rect.max.y - band / 2.0);
+                painter.text(at, egui::Align2::CENTER_CENTER, &filled, egui::FontId::proportional(text_size), egui::Color32::from_gray(51));
+                ui.label(crate::i18n::fmt(tl!("Preview: {line}"), &[("line", &filled)]));
+            }
+            response
+        })
+        .full_width(),
     ]
 }
 
@@ -373,14 +423,30 @@ impl PdfCraftApp {
         }
 
         let name = file.rsplit_once('.').map_or(file.as_str(), |(s, _)| s).to_string();
+        let preview_image = file.to_ascii_lowercase().ends_with(".png").then(|| pdfcraft_engine::SignatureImage::from_bytes(&bytes).ok()).flatten();
+        let preview_size = preview_image.as_ref().map_or([0, 0], pdfcraft_engine::SignatureImage::size);
+        let preview = preview_image.map(|image| {
+            ctx.load_texture(
+                "custom-stamp-preview",
+                egui::ColorImage::from_rgba_unmultiplied(image.size(), image.rgba()),
+                egui::TextureOptions::LINEAR,
+            )
+        });
         let category = self.custom_stamps.last().map(|s| s.category.clone()).unwrap_or_else(|| "My stamps".into());
         let existing = categories(&self.custom_stamps);
         let fields = DialogFields::from_pairs([(CATEGORY, category), (NAME, name), (LINE, DEFAULT_LINE.to_owned())]);
         let shown_file = file.clone();
+        let author = self.comment_prefs.author.clone();
+        let date = self.session.stamp_line("{date}", "");
+        let time = self.session.stamp_line("{time}", "");
         let dialog = HostedParamDialog::new(ctx, DIALOG_KEY, fields, move |fields| {
-            ParamDialog::new(DIALOG_KEY, tl!("Create Custom Stamp"), create_params(&shown_file, &existing))
-                .ok_enabled(fields_ok(fields))
-                .values(Bind::bound(fields))
+            ParamDialog::new(
+                DIALOG_KEY,
+                tl!("Create Custom Stamp"),
+                create_params(&shown_file, &existing, preview.clone(), preview_size, author.clone(), date.clone(), time.clone()),
+            )
+            .ok_enabled(fields_ok(fields))
+            .values(Bind::bound(fields))
         });
         let id = crate::dialogs::host::open(self, dialog);
         self.stamp_dialog = Some(CreateStampDialog { id, file, data: Arc::new(bytes) });
@@ -405,7 +471,16 @@ impl PdfCraftApp {
     fn save_custom_stamp(&mut self, d: CreateStampDialog, fields: &DialogFields) {
         let text = |key: &str| fields.text(key).unwrap_or_default().trim().to_string();
         let line = fields.bool(DYNAMIC).unwrap_or(false).then(|| text(LINE)).filter(|l| !l.is_empty());
-        self.custom_stamps.push(CustomStamp { category: text(CATEGORY), name: text(NAME), file: d.file, page: 0, data: d.data, line });
+        let line_over_picture = line.is_some() && fields.bool(LINE_OVER_PICTURE).unwrap_or(false);
+        self.custom_stamps.push(CustomStamp {
+            category: text(CATEGORY),
+            name: text(NAME),
+            file: d.file,
+            page: 0,
+            data: d.data,
+            line,
+            line_over_picture,
+        });
         self.quick_tool = QuickTool::CustomStamp(self.custom_stamps.len() - 1);
     }
 }

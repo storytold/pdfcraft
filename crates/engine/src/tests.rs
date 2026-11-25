@@ -107,6 +107,7 @@ fn custom_image_stamp_keeps_displayed_orientation_on_rotated_pages() {
                     file: MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 },
                     author: "Test".into(),
                     line: None,
+                    line_over_picture: false,
                 },
             )
             .unwrap();
@@ -443,6 +444,7 @@ fn explicit_image_stamps_keep_displayed_orientation_on_rotated_pages() {
                     file: MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 },
                     author: "Test".into(),
                     line: None,
+                    line_over_picture: false,
                 },
             )
             .unwrap();
@@ -496,6 +498,7 @@ fn pdf_page_stamps_keep_displayed_orientation_on_rotated_pages() {
                     file: MarkFile { name: "half.pdf".into(), bytes: bytes.clone(), page: 0 },
                     author: "Test".into(),
                     line: None,
+                    line_over_picture: false,
                 },
             )
             .unwrap();
@@ -526,6 +529,7 @@ fn pdf_page_stamps_fit_inside_an_explicit_box() {
         file: MarkFile { name: "diagram.pdf".into(), bytes: bytes.clone(), page: 0 },
         author: "Test".into(),
         line: None,
+        line_over_picture: false,
     };
     session.apply(id, stamp([56.0, 400.0, 539.0, 700.0])).unwrap();
     assert_eq!(session.get(id).unwrap().info.annotations[0].rect, [56.0, 429.25, 539.0, 670.75]);
@@ -11819,8 +11823,15 @@ fn a_phone_photo_used_as_a_custom_stamp_is_embedded_upright() {
     // A click places the stamp at its natural size: 30 x 20 pt as stored, 20 x 30 pt upright.
     // Named "Signature" so `signature_image` finds its picture.
     let file = MarkFile { name: "photo.jpg".into(), bytes: Arc::new(phone_jpeg()), page: 0 };
-    let stamp =
-        Edit::AddCustomStamp { page: 0, rect: [100.0, 100.0, 100.0, 100.0], name: "Signature".into(), file, author: "Ada".into(), line: None };
+    let stamp = Edit::AddCustomStamp {
+        page: 0,
+        rect: [100.0, 100.0, 100.0, 100.0],
+        name: "Signature".into(),
+        file,
+        author: "Ada".into(),
+        line: None,
+        line_over_picture: false,
+    };
     session.apply(id, stamp).unwrap();
     let cos = &session.get(id).unwrap().editor.as_ref().unwrap().cos;
     let picture = pdfcraft_annot::signature_image(cos, 0, 0).unwrap().unwrap();
@@ -13873,6 +13884,7 @@ fn a_custom_stamp_line_keeps_accented_letters() {
         file: MarkFile { name: "logo.png".into(), bytes: Arc::new(png.into_inner()), page: 0 },
         author: "Zoë".into(),
         line: Some(session.stamp_line("Reçu à Zürich par {name}", "Zoë")),
+        line_over_picture: false,
     };
     session.apply(id, edit).unwrap();
     let saved = session.save_bytes(id).unwrap();
@@ -13910,6 +13922,7 @@ fn a_lined_custom_stamp_keeps_its_layout_on_turned_pages() {
             file: MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 },
             author: "Test".into(),
             line: Some("OK".into()),
+            line_over_picture: false,
         };
         session.apply(id, edit).unwrap();
         let doc = session.get(id).unwrap();
@@ -13928,6 +13941,54 @@ fn a_lined_custom_stamp_keeps_its_layout_on_turned_pages() {
         // The band under it holds no picture.
         assert_eq!(pixel(64.0, top + h - 3.0), [255, 255, 255, 255], "page rotation {degrees}: the band");
     }
+}
+
+/// A resolved date is drawn above the PNG pixels, and saving fixes that date in the annotation.
+#[test]
+fn a_png_background_keeps_its_date_overlay_after_save() {
+    let image = image::RgbaImage::from_pixel(80, 40, image::Rgba([20, 120, 220, 255]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let blank = session.create_blank(300.0, 400.0, 1).unwrap();
+    let id = session.open_new("date.pdf", blank).unwrap();
+    let date = session.stamp_line("{date}", "");
+    session
+        .apply(
+            id,
+            Edit::AddCustomStamp {
+                page: 0,
+                rect: [100.0, 100.0, 100.0, 100.0],
+                name: "Dated logo".into(),
+                file: MarkFile { name: "logo.png".into(), bytes: Arc::new(png.into_inner()), page: 0 },
+                author: "Ada".into(),
+                line: Some(date.clone()),
+                line_over_picture: true,
+            },
+        )
+        .unwrap();
+    let rect = session.get(id).unwrap().info.annotations[0].rect;
+    assert!(((rect[2] - rect[0]) / (rect[3] - rect[1]) - 2.0).abs() < 0.01, "the date adds no band: {rect:?}");
+    let saved = session.save_bytes(id).unwrap();
+    let doc = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+    let stamp = doc
+        .scan_objects()
+        .find_map(|(_, object)| match object.as_ref() {
+            pdfcraft_cos::Object::Dict(dict) if dict.contains(b"PCByLine") => Some(dict.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(matches!(stamp.get(b"PCLineOverPicture"), Some(pdfcraft_cos::Object::Bool(true))));
+    assert_eq!(stamp.get(b"PCByLine").and_then(pdfcraft_cos::Object::as_string).map(pdfcraft_cos::PdfString::to_text), Some(date));
+    let id2 = session.open("dated.pdf", None, saved, None).unwrap();
+    let reopened = session.get(id2).unwrap();
+    let mut renderer = pdfcraft_render::PageRenderer::new(reopened.bytes.clone(), reopened.config.clone());
+    let rendered = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    assert!(rendered.error.is_none(), "{:?}", rendered.error);
+    let x = (rect[0] + 5.0) as usize;
+    let y = (400.0 - rect[1] - 5.0) as usize;
+    let pixel = (y * rendered.width as usize + x) * 4;
+    assert_eq!(&rendered.rgba[pixel..pixel + 4], &[20, 120, 220, 255], "the PNG still reaches behind the date");
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {

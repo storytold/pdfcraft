@@ -392,7 +392,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             let list = contours.iter().filter(|c| c.len() > 2).map(|c| num_array(&c.iter().flat_map(|p| [p[0], p[1]]).collect::<Vec<_>>())).collect();
             d.set(b"PCOutline".to_vec(), Object::Array(list));
         }
-        Shape::CustomStamp { name, picture, image, size, line, .. } => {
+        Shape::CustomStamp { name, picture, image, size, line, line_over_picture, .. } => {
             let clean: String = name.chars().filter(char::is_ascii_alphanumeric).collect();
             d.set(b"Name".to_vec(), Object::name(&format!("PCCustom{clean}")));
             d.set(b"PCPicture".to_vec(), Object::Ref(*picture));
@@ -401,6 +401,9 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             let lined = line.as_deref().map(str::trim).filter(|l| !l.is_empty());
             if let Some(l) = lined {
                 d.set(b"PCByLine".to_vec(), PdfString::text(l));
+                if *line_over_picture {
+                    d.set(b"PCLineOverPicture".to_vec(), Object::Bool(true));
+                }
             }
             // An image signature's rectangle is in user space; on a turned page its appearance is
             // turned back (see `appearance::build`), so it reads upright as displayed. A stamp
