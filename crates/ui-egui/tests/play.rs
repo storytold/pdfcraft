@@ -19,8 +19,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use egui::accesskit::Role;
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
 use serde::Deserialize;
 
@@ -69,10 +71,6 @@ enum Step {
     },
     /// Select everything in the open paragraph and type, including line breaks.
     Type {
-        text: String,
-    },
-    /// Replace the open paragraph's text without keystrokes. Prefer `type`.
-    Editor {
         text: String,
     },
     Key {
@@ -136,7 +134,7 @@ fn play_file(path: &Path) -> Result<(), String> {
 
 fn play_desk(session: &Session, desk: &Desk) -> Result<(), String> {
     let mut h = open_letter(&session.name, &session.content, desk);
-    if let Err(e) = h.state_mut().set_option("zoom", &desk.zoom) {
+    if let Err(e) = h.set_option("zoom", &desk.zoom) {
         return Err(format!("{name} at {desk:?}: zoom: {e}", name = session.name));
     }
     h.run_steps(4);
@@ -163,20 +161,13 @@ impl Step {
     fn run(&self, h: &mut Harness<'static, PdfCraftApp>, session: &Session) -> Result<(), String> {
         match self {
             Step::Command { id } => {
-                if !h.state_mut().execute(id) {
+                if !h.execute(id) {
                     return Err(format!("command {id:?} did not run"));
                 }
                 h.run_steps(2);
             }
             Step::ClickPage { x, y } => click_page(h, session, *x, *y)?,
             Step::Type { text } => type_into_paragraph(h, text)?,
-            Step::Editor { text } => {
-                let Some(editor) = h.state_mut().views.first_mut().and_then(|v| v.line_editor.as_mut()) else {
-                    return Err("no paragraph is open for typing".into());
-                };
-                editor.text.clone_from(text);
-                h.run_steps(1);
-            }
             Step::Key { key, modifiers } => {
                 let Some(key) = Key::from_name(key) else { return Err(format!("unknown key {key:?}")) };
                 h.key_press_modifiers(modifiers_of(modifiers)?, key);
@@ -187,8 +178,8 @@ impl Step {
                 // The open editor is what a click just showed. Otherwise take the shortest
                 // paragraph that contains the words, so a heading that merely mentions them
                 // does not win.
-                let actual = if let Some(open) = h.state().views.first().and_then(|v| v.line_editor.as_ref()) {
-                    open.text.clone()
+                let actual = if let Some(open) = open_editor_text(h) {
+                    open
                 } else {
                     let mut matches: Vec<_> =
                         paragraphs_full(h).into_iter().map(|p| p.editor_text).filter(|p| p.contains(contains.as_str())).collect();
@@ -235,8 +226,15 @@ impl Step {
     }
 }
 
+/// The text of the open paragraph editor: the focused multiline input's line runs, in order.
+fn open_editor_text(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
+    let editor = h.query_by(|n| n.role() == Role::MultilineTextInput && n.is_focused())?;
+    // Text runs describe the laid-out pieces; the editor's value preserves line breaks.
+    editor.value()
+}
+
 fn type_into_paragraph(h: &mut Harness<'static, PdfCraftApp>, text: &str) -> Result<(), String> {
-    if h.state().views.first().and_then(|v| v.line_editor.as_ref()).is_none() {
+    if open_editor_text(h).is_none() {
         return Err("no paragraph is open for typing".into());
     }
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
@@ -340,11 +338,14 @@ fn save_named(h: &mut Harness<'static, PdfCraftApp>, name: &str) -> String {
 fn open_letter(name: &str, content: &str, desk: &Desk) -> Harness<'static, PdfCraftApp> {
     let bytes = letter_pdf(content);
     let title = name.to_string();
-    let mut h = Harness::builder().with_size(egui::vec2(desk.width, desk.height)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        let _ = app.set_option("language", "en");
-        let _ = app.open_bytes(&title, None, bytes);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(desk.width, desk.height)).build_eframe(move |cc| {
+        install_runtime(&cc.egui_ctx);
+        {
+            let mut app = new_app();
+            let _ = app.set_option(&egui::Context::default(), "language", "en");
+            let _ = app.open_bytes(&egui::Context::default(), &title, None, bytes);
+            app
+        }
     });
     h.run_steps(4);
     h
@@ -371,4 +372,48 @@ fn letter_pdf(content: &str) -> Vec<u8> {
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     out
+}
+
+/// An app on the default host with test services: no wake-ups, no autosave folder, the GitHub update
+/// source, a fresh intake and an inline watch (as `tests/it/control.rs`' `new_app`).
+fn new_app() -> pdfcraft_ui_egui::PdfCraftApp {
+    use craft::host::{AppInfo, Host, Wake};
+    use craft::platform::clipboard::{Clipboard, SystemClipboard};
+    use craft::platform::open::FileIntake;
+    use craft::platform::watch::FileWatch;
+    let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "test" }).build();
+    let services = pdfcraft_ui_egui::AppServices::new(
+        Wake::none(),
+        Clipboard::new(SystemClipboard::new()),
+        None,
+        None,
+        FileIntake::new(Wake::none()).0,
+        FileWatch::new(Wake::none()).inline(),
+    );
+    pdfcraft_ui_egui::PdfCraftApp::with_host(std::sync::Arc::new(host), services)
+}
+
+/// The app's command and option entry points with the harness's own context (L-208).
+trait AppHarness {
+    fn execute(&mut self, id: &str) -> bool;
+    fn set_option(&mut self, key: &str, value: &str) -> Result<(), String>;
+}
+
+impl AppHarness for egui_kittest::Harness<'_, pdfcraft_ui_egui::PdfCraftApp> {
+    fn execute(&mut self, id: &str) -> bool {
+        let ctx = self.ctx.clone();
+        self.state_mut().execute(&ctx, id)
+    }
+
+    fn set_option(&mut self, key: &str, value: &str) -> Result<(), String> {
+        let ctx = self.ctx.clone();
+        self.state_mut().set_option(&ctx, key, value)
+    }
+}
+
+/// Installs the framework runtime on a harness context, as `tests/it/support`'s `install_runtime` (L-227).
+fn install_runtime(ctx: &egui::Context) {
+    let spec = craft::ui::InstallSpec::new(craft::host::target::ShellInfo::default(), std::sync::Arc::new(craft::window::system::NoWindows));
+    craft::ui::shell::embed::install(ctx, spec, &pdfcraft_ui_egui::fonts::ui_fonts(pdfcraft_ui_egui::i18n::Lang::EN))
+        .expect("the runtime installs on a fresh context");
 }
