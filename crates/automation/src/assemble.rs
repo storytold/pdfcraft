@@ -166,6 +166,69 @@ impl Automation {
         self.apply(a, Edit::InsertPagesFrom { name, bytes: Arc::new(bytes), pages, at, field_conflicts: pdfcraft_organize::FieldConflicts::Rename })
     }
 
+    pub(crate) fn insert_clipboard(&mut self, a: &Args) -> Result<Value> {
+        let doc = self.doc(a)?;
+        let (id, total, allows_assembly) = (doc.id, doc.info.pages.len(), doc.allows_assembly());
+        let at = match a.get("at") {
+            Some(_) => self.position(a, "at")?,
+            None => total,
+        };
+        let text = a.opt_str("text")?;
+        let image = a.opt_str("image")?;
+        let from_doc = a.opt_int("from_doc")?;
+        let pages_arg = a.opt_ints("pages")?;
+        if pages_arg.is_some() && from_doc.is_none() {
+            return Err(ToolError::InvalidArgs("pages requires from_doc".into()));
+        }
+        let sources = usize::from(text.is_some()) + usize::from(image.is_some()) + usize::from(from_doc.is_some());
+        if sources == 0 {
+            return Err(failed(pdfcraft_engine::EMPTY_CLIPBOARD_NOTICE));
+        }
+        if sources > 1 {
+            return Err(ToolError::InvalidArgs("pass only one of text, image or from_doc".into()));
+        }
+        let source = if let Some(src_raw) = from_doc {
+            let src_id = u64::try_from(src_raw)
+                .ok()
+                .filter(|&n| n > 0)
+                .map(pdfcraft_engine::DocId)
+                .ok_or_else(|| ToolError::InvalidArgs("from_doc must be a positive document id".into()))?;
+            let src = self.session.get(src_id).ok_or_else(|| failed(format!("no document {src_raw}")))?;
+            let src_n = src.info.pages.len();
+            let pages = match pages_arg {
+                Some(p) => {
+                    let zero = one_based(&p)?;
+                    if let Some(&bad) = zero.iter().find(|&&i| i >= src_n) {
+                        return Err(ToolError::InvalidArgs(format!("page {} out of range (1..={src_n})", bad + 1)));
+                    }
+                    zero
+                }
+                None => (0..src_n).collect(),
+            };
+            let field_conflicts = if src_id == id { pdfcraft_organize::FieldConflicts::Merge } else { pdfcraft_organize::FieldConflicts::Rename };
+            pdfcraft_engine::ClipboardPages::Pages { bytes: src.bytes.clone(), pages, field_conflicts }
+        } else if let Some(image_path) = image {
+            let path = self.resolve(image_path, false)?;
+            let bytes = read_input(&path)?;
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Clipboard.png".into());
+            pdfcraft_engine::ClipboardPages::Image { name, bytes }
+        } else if let Some(text) = text {
+            pdfcraft_engine::ClipboardPages::Text(text.to_string())
+        } else {
+            return Err(failed(pdfcraft_engine::EMPTY_CLIPBOARD_NOTICE));
+        };
+        if !allows_assembly {
+            return Err(failed(pdfcraft_engine::EditError::NotPermitted("page assembly")));
+        }
+        let (edit, inserted) = self.session.prepare_clipboard_insert(source, at).map_err(|e| match e {
+            pdfcraft_engine::EditError::Create(pdfcraft_engine::CreateError::Invalid(m)) => ToolError::InvalidArgs(m),
+            e => failed(e),
+        })?;
+        let mut out = self.apply(a, edit)?;
+        out["inserted"] = json!(inserted);
+        Ok(out)
+    }
+
     /// Write freshly created bytes to `out` and/or open them as a new document.
     pub(crate) fn deliver(&mut self, a: &Args, name: &str, bytes: Arc<Vec<u8>>) -> Result<Value> {
         let mut result = json!({ "bytes": bytes.len() });

@@ -497,6 +497,8 @@ pub enum ViewAction {
     },
     /// Paste copied pages after the selection.
     PastePages,
+    /// Insert pages from clipboard (copied pages, image or text).
+    InsertFromClipboard,
     /// Enhance ▸ Camera image: straighten what the corners enclose.
     EnhanceCamera,
     /// Leave Enhance ▸ Camera image (Cancel before Enhance page, Done after it).
@@ -2247,6 +2249,9 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
         }
         Some(PageMenuAction::AddImage) => {
             app.add_image_dialog();
+        }
+        Some(PageMenuAction::InsertFromClipboard) => {
+            app.insert_from_clipboard(ctx);
         }
         Some(PageMenuAction::DeletePage(page)) => {
             app.views[index].session.pending_edit = Some(pdfcraft_engine::Edit::DeletePages { pages: vec![page] });

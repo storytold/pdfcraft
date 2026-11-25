@@ -2797,11 +2797,15 @@ title = "Insert pages from the clipboard"
 area = "D"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["page.insert_clipboard"]
+tools = ["page_insert_clipboard"]
+evidence = [
+    "crates/engine/src/tests.rs::insert_clipboard_pages_inserts_image_text_and_pages_and_enforces_limits",
+    "crates/automation/tests/it/automation.rs::page_insert_clipboard_inserts_text_image_and_doc_pages",
+    "crates/ui-egui/tests/it/create.rs::insert_from_clipboard_inserts_copied_pages_image_and_text",
+]
+notes = "Organize ▸ Insert, Pages menu, page/thumbnail context menus, and page_insert_clipboard tool: inserts copied pages, clipboard image, or clipboard text (in that order) after the selection, at a grid gap, or at the end, as one undoable edit."
 
 [[feature]]
 id = "organize.insert-from-scanner"

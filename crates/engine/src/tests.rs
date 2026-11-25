@@ -15765,3 +15765,78 @@ fn inline_conversions_refuse_office_documents_without_running_libreoffice() {
     assert_eq!(s.convert_to_pdf_inline("notes.txt", &Arc::new(b"hello".to_vec())).unwrap().0, SourceKind::Text);
     assert!(s.as_pdf_inline("scan.jpg", &Arc::new(jpeg_bytes())).unwrap().starts_with(b"%PDF-"));
 }
+
+#[test]
+fn insert_clipboard_pages_inserts_image_text_and_pages_and_enforces_limits() {
+    let (mut s, id) = session_with(2);
+
+    // 1. Empty / whitespace clipboard sources are refused without changing the document.
+    for empty in [
+        ClipboardPages::Text(String::new()),
+        ClipboardPages::Text("   \r\n\t ".into()),
+        ClipboardPages::Image { name: "Clipboard.png".into(), bytes: Vec::new() },
+        ClipboardPages::Pages { bytes: s.get(id).unwrap().bytes.clone(), pages: Vec::new(), field_conflicts: FieldConflicts::Merge },
+    ] {
+        let err = s.insert_clipboard_pages(id, empty, 1).unwrap_err();
+        assert!(err.to_string().contains(EMPTY_CLIPBOARD_NOTICE), "{err}");
+    }
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+
+    // 2. Size caps refuse oversized text, oversized RGBA dimensions, and oversized encoded images.
+    let big_text = "a".repeat(MAX_CLIPBOARD_TEXT_BYTES + 1);
+    let err = s.insert_clipboard_pages(id, ClipboardPages::Text(big_text), 1).unwrap_err();
+    assert!(err.to_string().contains("size limit"), "{err}");
+
+    let err =
+        s.insert_clipboard_pages(id, ClipboardPages::RgbaImage { width: MAX_CLIPBOARD_IMAGE_SIDE + 1, height: 1, rgba: Vec::new() }, 1).unwrap_err();
+    assert!(err.to_string().contains("size limit"), "{err}");
+
+    let err = s.insert_clipboard_pages(id, ClipboardPages::RgbaImage { width: 4, height: 4, rgba: vec![0; 3] }, 1).unwrap_err();
+    assert!(err.to_string().contains("malformed"), "{err}");
+
+    let big_img = vec![0u8; MAX_CLIPBOARD_IMAGE_BYTES + 1];
+    let err = s.insert_clipboard_pages(id, ClipboardPages::Image { name: "big.png".into(), bytes: big_img }, 1).unwrap_err();
+    assert!(err.to_string().contains("size limit"), "{err}");
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+
+    // 3. Insert an RGBA clipboard image at position 1 (between Page 1 and Page 2).
+    let inserted =
+        s.insert_clipboard_pages(id, ClipboardPages::RgbaImage { width: 40, height: 20, rgba: [10u8, 20, 30, 255].repeat(40 * 20) }, 1).unwrap();
+    assert_eq!(inserted, 1);
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.pages.len(), 3);
+    assert_eq!(doc.can_undo(), Some("Insert pages from clipboard"));
+    let p = &doc.info.pages[1];
+    assert!((p.width / p.height - 2.0).abs() < 0.01, "{} × {}", p.width, p.height);
+    assert_eq!(page_texts(&s, id)[0].trim(), "Page 1");
+    assert_eq!(page_texts(&s, id)[2].trim(), "Page 2");
+
+    // 4. Insert clipboard text at position 0 (before Page 1).
+    let inserted = s.insert_clipboard_pages(id, ClipboardPages::Text("Clipboard line".into()), 0).unwrap();
+    assert_eq!(inserted, 1);
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 4);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Insert pages from clipboard"));
+    assert!(page_texts(&s, id)[0].contains("Clipboard line"));
+
+    // 5. Insert copied PDF pages at the end.
+    let bytes = s.get(id).unwrap().bytes.clone();
+    let inserted = s.insert_clipboard_pages(id, ClipboardPages::Pages { bytes, pages: vec![1], field_conflicts: FieldConflicts::Merge }, 4).unwrap();
+    assert_eq!(inserted, 1);
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 5);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Insert pages from clipboard"));
+    assert_eq!(page_texts(&s, id)[4].trim(), "Page 1");
+
+    // 6. Undo each step cleanly.
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 4);
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 3);
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+
+    // 7. A document disallowing page assembly refuses clipboard insertion.
+    s.apply(id, Edit::Protect(Protection { permissions_password: Some("owner".into()), changes: Changes::None, ..Default::default() })).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    let restricted = s.open("restricted.pdf", None, saved, None).unwrap();
+    assert!(matches!(s.insert_clipboard_pages(restricted, ClipboardPages::Text("Blocked".into()), 0), Err(EditError::NotPermitted(_))));
+}

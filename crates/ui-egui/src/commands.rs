@@ -643,6 +643,7 @@ impl PdfCraftApp {
                 }
             }
             "page.insert" => self.insert_from_file_dialog(),
+            "page.insert_clipboard" => self.insert_from_clipboard(ctx),
             "page.replace" => self.replace_pages_dialog(),
             "page.copy" => self.copy_pages(ctx, false),
             "page.cut" => self.copy_pages(ctx, true),

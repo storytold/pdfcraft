@@ -32,17 +32,11 @@ pub enum Clip {
     Text(String),
 }
 
-pub(crate) const MAX_IMAGE_SIDE: usize = 16384;
-pub(crate) const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_IMAGE_SIDE: usize = pdfcraft_engine::MAX_CLIPBOARD_IMAGE_SIDE;
+pub(crate) const MAX_IMAGE_BYTES: usize = pdfcraft_engine::MAX_CLIPBOARD_IMAGE_BYTES;
 
 pub(crate) fn png_from_rgba(width: usize, height: usize, rgba: &[u8]) -> Result<Vec<u8>, String> {
-    let (w, h) = (u32::try_from(width).map_err(|e| e.to_string())?, u32::try_from(height).map_err(|e| e.to_string())?);
-    let expected = width.checked_mul(height).and_then(|p| p.checked_mul(4));
-    if w == 0 || h == 0 || width > MAX_IMAGE_SIDE || height > MAX_IMAGE_SIDE || expected != Some(rgba.len()) || rgba.len() > MAX_IMAGE_BYTES {
-        return Err("the clipboard image is empty, malformed or exceeds size limits".into());
-    }
-    let img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgba, rgba.to_vec()).map_err(|e| e.to_string())?;
-    craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).map_err(|e| e.to_string())
+    pdfcraft_engine::png_from_rgba(width, height, rgba).map_err(|e| e.to_string())
 }
 
 fn stem(name: &str) -> &str {
@@ -157,9 +151,112 @@ impl PdfCraftApp {
                 let png = png_from_rgba(width, height, &rgba)?;
                 self.session.create_from_images(&[("Clipboard.png".into(), png)])
             }
-            Clip::Text(t) => self.session.create_from_text("Clipboard", &t),
+            Clip::Text(t) => {
+                if t.len() > pdfcraft_engine::MAX_CLIPBOARD_TEXT_BYTES {
+                    return Err("the clipboard text exceeds the size limit".into());
+                }
+                self.session.create_from_text("Clipboard", &t)
+            }
         };
         created.map_err(|e| e.to_string()).and_then(|bytes| self.open_new_document("Clipboard.pdf", bytes))
+    }
+
+    /// Read the system clipboard for `page.insert_clipboard`: an image first, then non-empty text.
+    fn read_system_clipboard_for_insert(&mut self) -> Result<Option<pdfcraft_engine::ClipboardPages>, String> {
+        use craft::platform::clipboard::ClipboardError;
+        let mut platform_error = None;
+        match self.clipboard.read_image() {
+            Ok(Some(image)) => {
+                return Ok(Some(pdfcraft_engine::ClipboardPages::RgbaImage {
+                    width: image.width as usize,
+                    height: image.height as usize,
+                    rgba: image.rgba,
+                }));
+            }
+            Ok(None) => {}
+            Err(ClipboardError::NoFormat) => {}
+            Err(err) => {
+                if let Some(t) = err.text() {
+                    platform_error = Some(crate::i18n::platform_text(t));
+                }
+            }
+        }
+        match self.clipboard.read(&[TEXT]) {
+            Ok(Some(flavor)) => {
+                if flavor.data.len() > pdfcraft_engine::MAX_CLIPBOARD_TEXT_BYTES {
+                    return Err(tl!("The clipboard text exceeds the size limit").to_string());
+                }
+                if let Ok(text) = String::from_utf8(flavor.data)
+                    && !text.trim().is_empty()
+                {
+                    return Ok(Some(pdfcraft_engine::ClipboardPages::Text(text)));
+                }
+            }
+            Ok(None) => {}
+            Err(ClipboardError::NoFormat) => {}
+            Err(err) => {
+                if platform_error.is_none()
+                    && let Some(t) = err.text()
+                {
+                    platform_error = Some(crate::i18n::platform_text(t));
+                }
+            }
+        }
+        if let Some(msg) = platform_error {
+            return Err(msg);
+        }
+        Ok(None)
+    }
+
+    /// Organize ▸ Insert ▸ Insert pages from clipboard: insert copied pages, an image, or text at
+    /// the Organize grid's insertion gap, else after the selection, else at the end.
+    pub fn insert_from_clipboard(&mut self, ctx: &egui::Context) {
+        let Some((i, id)) = self.active_ids() else {
+            self.notify_tr("Open a document first");
+            return;
+        };
+        let Some(doc) = self.session.get(id) else { return };
+        if !doc.allows_assembly() {
+            self.notify_tr("The document's security settings don't allow this change");
+            return;
+        }
+        let total = doc.info.pages.len();
+        let chosen = self.views.get_mut(i).and_then(|v| v.insert_at.take());
+        let target_at = match chosen {
+            Some(gap) => gap.min(total),
+            None => self.views.get(i).and_then(|v| v.selected.items.iter().copied().max()).map_or(total, |p| p.saturating_add(1)).min(total),
+        };
+
+        // Source priority: copied PdfCraft pages, then system clipboard image, then system clipboard text.
+        let source = if let Some(page_clip) = self.page_clipboard.clone().filter(|c| !c.pages.is_empty()) {
+            let field_conflicts = if id == page_clip.from { pdfcraft_engine::FieldConflicts::Merge } else { pdfcraft_engine::FieldConflicts::Rename };
+            pdfcraft_engine::ClipboardPages::Pages { bytes: page_clip.bytes, pages: page_clip.pages, field_conflicts }
+        } else {
+            match self.read_system_clipboard_for_insert() {
+                Ok(Some(source)) => source,
+                Ok(None) => {
+                    self.notify_tr(pdfcraft_engine::EMPTY_CLIPBOARD_NOTICE);
+                    return;
+                }
+                Err(msg) => {
+                    self.notify(msg);
+                    return;
+                }
+            }
+        };
+
+        let (edit, count) = match self.session.prepare_clipboard_insert(source, target_at) {
+            Ok(prepared) => prepared,
+            Err(e) => {
+                self.notify_error(e);
+                return;
+            }
+        };
+        if self.apply_edit(ctx, edit)
+            && let Some(view) = self.views.get_mut(i)
+        {
+            view.select_pages(&(target_at..target_at.saturating_add(count)).collect::<Vec<_>>());
+        }
     }
 
     /// Create ▸ Blank page: a new untitled document on the system region's paper (#5644).

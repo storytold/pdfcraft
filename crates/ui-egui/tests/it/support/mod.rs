@@ -159,6 +159,7 @@ pub struct RecordingClipboard {
 struct Recorded {
     writes: Vec<Vec<Flavor>>,
     held: Option<String>,
+    held_image: Option<ClipboardImage>,
     refused: Option<&'static str>,
 }
 
@@ -168,6 +169,16 @@ impl RecordingClipboard {
         let clipboard = Self::default();
         clipboard.lock().refused = Some(mime);
         clipboard
+    }
+
+    /// Replace the text currently held on this test clipboard.
+    pub fn set_text(&self, text: Option<String>) {
+        self.lock().held = text;
+    }
+
+    /// Replace the image currently held on this test clipboard.
+    pub fn set_image(&self, image: Option<ClipboardImage>) {
+        self.lock().held_image = image;
     }
 
     /// The text the app last copied.
@@ -205,7 +216,7 @@ impl ClipboardBackend for RecordingClipboard {
     }
 
     fn read_image(&mut self, _limit: u64) -> Result<Option<ClipboardImage>, ClipboardError> {
-        Ok(None)
+        Ok(self.lock().held_image.clone())
     }
 
     fn read_files(&mut self, _limit: usize) -> Result<Option<Vec<PathBuf>>, ClipboardError> {

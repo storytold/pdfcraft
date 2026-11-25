@@ -159,6 +159,80 @@ fn clipboard_images_and_text_become_new_pdfs() {
 }
 
 #[test]
+fn insert_from_clipboard_inserts_copied_pages_image_and_text() {
+    use craft::platform::clipboard::ClipboardImage;
+    let clipboard = crate::support::RecordingClipboard::default();
+    let app_clip = clipboard.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::support::app_with_clipboard(app_clip);
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+        let pdf = app.session.create_blank(612.0, 792.0, 2).unwrap();
+        app.open_bytes(&cc.egui_ctx, "base.pdf", None, pdf.to_vec()).unwrap();
+        app
+    });
+    h.run_steps(2);
+    let id = h.state().views[0].id;
+    let page_count = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.pages.len();
+
+    // 1. Empty clipboard reports a notice and inserts nothing.
+    assert!(h.execute("page.insert_clipboard"));
+    h.run_steps(2);
+    assert_eq!(page_count(&h), 2);
+    assert!(
+        crate::support::shown_notice(&h).is_some_and(|n| n.contains(pdfcraft_engine::EMPTY_CLIPBOARD_NOTICE)),
+        "expected empty-clipboard notice, got {:?}",
+        crate::support::shown_notice(&h)
+    );
+
+    // 2. Copied PdfCraft pages insert after the selection in one undo step, and become selected.
+    h.state_mut().views[0].select_pages(&[0]);
+    assert!(h.execute("page.copy"));
+    h.state_mut().views[0].select_pages(&[1]);
+    assert!(h.execute("page.insert_clipboard"));
+    h.run_steps(2);
+    assert_eq!(page_count(&h), 3);
+    assert_eq!(h.state().views[0].selected.items, vec![2]);
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Insert pages from clipboard"));
+    h.undo();
+    h.run_steps(2);
+    assert_eq!(page_count(&h), 2);
+
+    // 3. System clipboard image inserts after the selection in one undo step, and becomes selected.
+    h.state_mut().page_clipboard = None;
+    clipboard.set_image(Some(ClipboardImage { width: 32, height: 16, rgba: [200u8, 50, 50, 255].repeat(32 * 16) }));
+    h.state_mut().views[0].select_pages(&[0]);
+    assert!(h.execute("page.insert_clipboard"));
+    h.run_steps(2);
+    assert_eq!(page_count(&h), 3);
+    assert_eq!(h.state().views[0].selected.items, vec![1]);
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Insert pages from clipboard"));
+    h.undo();
+    h.run_steps(2);
+    assert_eq!(page_count(&h), 2);
+
+    // 4. System clipboard text inserts after the selection in one undo step, and becomes selected.
+    clipboard.set_image(None);
+    clipboard.set_text(Some("Clipboard text page".into()));
+    h.state_mut().views[0].select_pages(&[0]);
+    assert!(h.execute("page.insert_clipboard"));
+    h.run_steps(2);
+    assert_eq!(page_count(&h), 3);
+    assert_eq!(h.state().views[0].selected.items, vec![1]);
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Insert pages from clipboard"));
+    h.undo();
+    h.run_steps(2);
+    assert_eq!(page_count(&h), 2);
+
+    // 5. With no selection, inserting from clipboard appends at the end.
+    h.state_mut().views[0].clear_page_selection(None);
+    assert!(h.execute("page.insert_clipboard"));
+    h.run_steps(2);
+    assert_eq!(page_count(&h), 3);
+    assert_eq!(h.state().views[0].selected.items, vec![2]);
+}
+
+#[test]
 fn the_pdf_optimizer_dialog_saves_an_optimized_copy() {
     let out = PathBuf::from("/optimized/optimized.pdf");
     let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![out.clone()])]));

@@ -175,7 +175,8 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         let entries = [
             Entry::new(0u8, tl!("Insert a blank page after the selection").to_owned()),
             Entry::new(1u8, tl!("Insert pages from a file…").to_owned()),
-            Entry::new(2u8, tl!("Duplicate pages").to_owned()),
+            Entry::new(2u8, tl!("Insert pages from clipboard").to_owned()),
+            Entry::new(3u8, tl!("Duplicate pages").to_owned()),
         ];
         let mut open = true;
         let picked =
@@ -183,7 +184,8 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         match picked {
             Some(0) => act = Some(Act::Edit(Box::new(Edit::InsertBlankPage { at: last.saturating_add(1), width: w, height: h }))),
             Some(1) => act = Some(Act::View(ViewAction::InsertFromFile)),
-            Some(2) => act = Some(Act::Command("page.duplicate")),
+            Some(2) => act = Some(Act::Command("page.insert_clipboard")),
+            Some(3) => act = Some(Act::Command("page.duplicate")),
             _ => {}
         }
         if !open || picked.is_some() {

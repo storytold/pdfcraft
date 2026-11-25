@@ -348,6 +348,19 @@ pub fn tools() -> Vec<ToolDef> {
         t("page_insert_file", "Insert pages from a file", "Insert pages of another PDF so the first becomes page `at`. Its bookmarks come along, collapsed under one bookmark named after the file, placed among the document's bookmarks where the pages went. Undoable.")
             .cmd("page.insert")
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" }, "at": { "type": "integer", "minimum": 1 }, "pages": pages("of the source file (default: all)") }), &["doc", "path", "at"])),
+        t("page_insert_clipboard", "Insert pages from clipboard content", "Insert pages made from plain text (`text`), an image file (`image`), or pages copied from an open document (`from_doc`, with optional 1-based `pages`, default all) so the first becomes page `at` (1-based; default at the end). Pass exactly one of `text`, `image` or `from_doc`. Enforces the clipboard text (16 MiB) and image (64 MiB) size limits. One undoable step labelled \"Insert pages from clipboard\".")
+            .cmd("page.insert_clipboard")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "at": { "type": "integer", "minimum": 1, "description": "1-based position where the inserted pages start (default: at the end)." },
+                    "text": { "type": "string", "description": "Plain UTF-8 text converted to pages." },
+                    "image": { "type": "string", "description": "A file path to an image converted to a page." },
+                    "from_doc": { "type": "integer", "minimum": 1, "description": "Open document id whose pages to copy and insert." },
+                    "pages": pages("of `from_doc` to insert (default: all)"),
+                }),
+                &["doc"],
+            )),
         t("page_extract", "Extract pages", "Copy pages into a new PDF (links, bookmarks, fields and layers that belong to them come along). separate: true writes each page as its own file into out_dir; delete: true removes the pages from this document afterwards (undoable).")
             .cmd("page.extract")
             .with(schema(

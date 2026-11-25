@@ -143,6 +143,9 @@ fn page_menu(ui: &mut egui::Ui, view: &mut DocView, editable: bool) {
     if MenuItem::new(tl!("Paste after")).enabled(editable).show(ui).ran {
         view.pending_action = Some(ViewAction::PastePages);
     }
+    if MenuItem::new(tl!("Insert pages from clipboard")).enabled(editable).show(ui).ran {
+        view.pending_action = Some(ViewAction::InsertFromClipboard);
+    }
 }
 
 /// Organize pages: the page operations bar over a thumbnail grid (Acrobat's Organize Pages view). Click picks,
