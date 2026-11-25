@@ -8583,8 +8583,8 @@ milestone = "M11"
 status = "partial"
 commands = []
 tools = ["doc_rename_ink"]
-evidence = ["crates/edit/src/rename_ink.rs::renaming_an_ink_renames_every_space_and_attribute_that_names_it", "crates/edit/src/rename_ink.rs::renaming_onto_a_named_ink_merges_them_and_leaves_a_devicen_naming_both", "crates/automation/tests/it/automation.rs::renaming_an_ink_through_tools"]
-notes = "doc_rename_ink renames a spot ink in the file: every Separation and DeviceN space naming it, the DeviceN colorant and mixing-hint entries keyed by it, and a page's separation info; renaming onto an ink already named prints both on one plate, each space keeping its own alternate. One undo step. A DeviceN naming both inks is left as it is and reported. Missing: inline images' own colour spaces keep the old name (content streams aren't rewritten); converting a spot to process; an output-time alias that leaves the file alone; a panel"
+evidence = ["crates/edit/src/rename_ink.rs::renaming_an_ink_renames_every_space_and_attribute_that_names_it", "crates/edit/src/rename_ink.rs::renaming_onto_a_named_ink_merges_them_and_leaves_a_devicen_naming_both", "crates/edit/src/rename_ink.rs::a_name_given_with_hex_escapes_is_the_ink_with_those_bytes", "crates/automation/tests/it/automation.rs::renaming_an_ink_through_tools"]
+notes = "doc_rename_ink renames a spot ink in the file: every Separation and DeviceN space naming it, the DeviceN colorant and mixing-hint entries keyed by it, and a page's separation info. Names are written as print_inks lists them, #XX for bytes that aren't text. Renaming onto an ink already named prints both on one plate, each space keeping its own alternate. One undo step. A DeviceN naming both inks is left as it is and reported. Missing: inline images' own colour spaces keep the old name (content streams aren't rewritten); converting a spot to process; an output-time alias that leaves the file alone; a panel"
 
 [[feature]]
 id = "print.printer-marks"

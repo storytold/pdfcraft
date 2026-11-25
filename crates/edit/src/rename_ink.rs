@@ -9,6 +9,10 @@
 //! alternates. A `DeviceN` space naming both inks is left as it is and counted in
 //! [`InkRenamed::refused`]: renaming would give it two components of one ink.
 //!
+//! Ink names are given as text: UTF-8, with `#` followed by two hex digits for any other byte
+//! and for `#` itself, as in a PDF name (ISO 32000-1 7.3.5), so a name listed that way can be
+//! renamed.
+//!
 //! Content streams aren't read or rewritten: they name colour spaces by resource name, not by
 //! ink. An inline image's own colour space keeps the old name.
 //!
@@ -29,12 +33,13 @@ const MAX_VISITS: usize = 1 << 22;
 /// The longest name a PDF reader has to accept (ISO 32000-1 Annex C).
 pub const MAX_INK_NAME: usize = 127;
 /// The process colorants, which name the device's own plates.
-const PROCESS: [&str; 4] = ["Cyan", "Magenta", "Yellow", "Black"];
+const PROCESS: [&[u8]; 4] = [b"Cyan", b"Magenta", b"Yellow", b"Black"];
 
 /// What [`rename_ink`] changed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct InkRenamed {
-    /// Colour spaces that named the ink and now name the new one.
+    /// Colour spaces, and pages' `/SeparationInfo` colorants, that named the ink and now name
+    /// the new one.
     pub spaces: usize,
     /// Objects rewritten.
     pub objects: usize,
@@ -49,10 +54,36 @@ pub struct InkRenamed {
     pub complete: bool,
 }
 
+/// The bytes of ink name `name`, given as text with `#XX` for a byte (see the module doc), or
+/// `None` when a `#` isn't followed by two hex digits.
+#[must_use]
+pub fn ink_name_bytes(name: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(name.len());
+    let mut rest = name.as_bytes();
+    while let Some((&b, tail)) = rest.split_first() {
+        if b == b'#' {
+            let hex = tail.get(..2).filter(|h| h.iter().all(u8::is_ascii_hexdigit)).and_then(|h| std::str::from_utf8(h).ok())?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            rest = tail.get(2..).unwrap_or_default();
+        } else {
+            out.push(b);
+            rest = tail;
+        }
+    }
+    Some(out)
+}
+
 /// Why `from` can't be renamed to `to`, or `None` when it can.
 #[must_use]
 pub fn ink_rename_refusal(from: &str, to: &str) -> Option<String> {
-    let reserved = |n: &str| n == "All" || n == "None";
+    match (ink_name_bytes(from), ink_name_bytes(to)) {
+        (Some(from), Some(to)) => byte_refusal(&from, &to),
+        _ => Some("a # in an ink name must be followed by two hex digits".into()),
+    }
+}
+
+fn byte_refusal(from: &[u8], to: &[u8]) -> Option<String> {
+    let reserved = |n: &[u8]| n == b"All" || n == b"None";
     if from.is_empty() || to.is_empty() {
         return Some("an ink name can't be empty".into());
     }
@@ -63,7 +94,7 @@ pub fn ink_rename_refusal(from: &str, to: &str) -> Option<String> {
         return Some("All and None aren't inks".into());
     }
     if PROCESS.contains(&from) {
-        return Some(format!("{from} is a process ink and can't be renamed"));
+        return Some(format!("{} is a process ink and can't be renamed", String::from_utf8_lossy(from)));
     }
     if from == to {
         return Some("the ink already has that name".into());
@@ -82,7 +113,10 @@ pub fn rename_ink(doc: &mut Document, from: &str, to: &str) -> Result<InkRenamed
     if let Some(why) = ink_rename_refusal(from, to) {
         return Err(EditError::Invalid(why));
     }
-    let mut r = Renamer::new(doc, from.as_bytes(), to.as_bytes());
+    let (Some(from), Some(to)) = (ink_name_bytes(from), ink_name_bytes(to)) else {
+        return Err(EditError::Invalid("a # in an ink name must be followed by two hex digits".into()));
+    };
+    let mut r = Renamer::new(doc, &from, &to);
     for (at, read) in doc.scan_objects_checked() {
         if read.is_err() {
             r.complete = false;
@@ -200,6 +234,7 @@ impl<'d> Renamer<'d> {
             let Some(value) = d.get_mut(&key) else { continue };
             if colorant && self.is_from(value) {
                 *value = Object::Name(self.to.to_vec());
+                self.report.spaces = self.report.spaces.saturating_add(1);
                 changed = true;
             } else {
                 changed |= self.rename(value, depth);
@@ -455,6 +490,29 @@ mod tests {
         let done = rename_ink(&mut d, "Rust", "Silver").unwrap();
         assert_eq!((done.spaces, done.objects), (0, 0), "{done:?}");
         assert!(!d.is_modified());
+    }
+
+    #[test]
+    fn a_name_given_with_hex_escapes_is_the_ink_with_those_bytes() {
+        let mut d = doc(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << /A [/Separation /Spot#80 /DeviceCMYK 4 0 R] /B [/Separation /No#232 /DeviceCMYK 4 0 R] >> >> /SeparationInfo << /Pages [3 0 R] /DeviceColorant /Plate#80 >> >>",
+            TINT,
+        ]);
+        assert_eq!(rename_ink(&mut d, "Spot#80", "Gold#20Leaf").unwrap().spaces, 1);
+        assert_eq!(rename_ink(&mut d, "No#232", "Silver").unwrap().spaces, 1, "#23 is a literal #");
+        assert_eq!(rename_ink(&mut d, "Plate#80", "Copper").unwrap().spaces, 1, "a page's separation colorant alone counts");
+        assert_eq!(mentions(&d, b"Gold Leaf"), 1);
+        assert_eq!(mentions(&d, b"Silver") + mentions(&d, b"Copper"), 2);
+        assert_eq!(mentions(&d, b"Spot\x80") + mentions(&d, b"No#2") + mentions(&d, b"Plate\x80"), 0);
+        for bad in ["Gold#2", "Gold#+1", "Gold#zz"] {
+            assert!(rename_ink(&mut d, bad, "X").is_err(), "{bad}: a # needs two hex digits");
+        }
+        let at_limit = "#41".repeat(MAX_INK_NAME);
+        assert!(rename_ink(&mut d, "Silver", &at_limit).is_ok(), "the limit is on the decoded bytes");
+        let past = "#41".repeat(MAX_INK_NAME + 1);
+        assert!(rename_ink(&mut d, &at_limit, &past).is_err(), "one byte past the limit");
     }
 
     #[test]

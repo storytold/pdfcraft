@@ -165,12 +165,12 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc"],
             )),
-        t("doc_rename_ink", "Rename ink", "Print production: every Separation and DeviceN colour space naming spot ink from names to instead, with the DeviceN colorant and mixing-hint entries and a page's separation info; each keeps its own alternate and tint transform. to may be a process ink or another spot; renaming onto an ink the file already names prints the two on one plate (merged), and alternates_differ says their alternate spaces differ. A DeviceN naming both is left as it is and counted in refused. Content streams aren't rewritten, so an inline image's own colour space keeps the old name. Process inks, All and None can't be renamed. Returns spaces, objects, refused, merged, alternates_differ and complete (false when a limit stopped the walk); no space naming from gives 0 and no edit.")
+        t("doc_rename_ink", "Rename ink", "Print production: every Separation and DeviceN colour space naming spot ink from names to instead, with the DeviceN colorant and mixing-hint entries and a page's separation info; each keeps its own alternate and tint transform. to may be a process ink or another spot; renaming onto an ink the file already names prints the two on one plate (merged), and alternates_differ says their alternate spaces differ. A DeviceN naming both is left as it is and counted in refused. Content streams aren't rewritten, so an inline image's own colour space keeps the old name. Process inks, All and None can't be renamed. Names are UTF-8 text, with # and two hex digits for any other byte and for # itself, as in a PDF name and as print_inks lists them; at most 127 bytes once decoded. Returns spaces, objects, refused, merged, alternates_differ and complete (false when a limit stopped the walk); no space naming from gives 0 and no edit.")
             .with(schema(
                 json!({
                     "doc": doc(),
-                    "from": { "type": "string", "minLength": 1, "maxLength": 127, "description": "The spot ink to rename." },
-                    "to": { "type": "string", "minLength": 1, "maxLength": 127, "description": "Its new name." },
+                    "from": { "type": "string", "minLength": 1, "maxLength": 381, "description": "The spot ink to rename." },
+                    "to": { "type": "string", "minLength": 1, "maxLength": 381, "description": "Its new name." },
                 }),
                 &["doc", "from", "to"],
             )),
