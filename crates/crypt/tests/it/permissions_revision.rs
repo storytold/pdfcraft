@@ -3,7 +3,7 @@
 //!
 //! Bit n has the mask `1 << (n - 1)`. Readers use bits 3 to 6 and 9 to 12 and ignore the rest.
 
-use pdfcraft_crypt::{Algorithm, Auth, NewEncryption, Permissions, SecurityHandler, create};
+use pdfcraft_crypt::{Algorithm, Auth, NewEncryption, Permissions, SecurityHandler, create_legacy};
 
 const ID: &[u8] = b"0123456789abcdef";
 const T: bool = true;
@@ -18,7 +18,7 @@ fn cells(p: &Permissions) -> [bool; 8] {
 /// Creates a file with `flags` at revision `revision`, opens it with the user password, and
 /// returns the user's permissions.
 fn user_view(alg: Algorithm, revision: i64, flags: i32) -> Permissions {
-    let made = create(
+    let made = create_legacy(
         &NewEncryption { algorithm: alg, user_password: "user", owner_password: "owner", permissions: flags, encrypt_metadata: true, seed: [42; 32] },
         ID,
     )
@@ -56,7 +56,7 @@ fn revision_three_rows_hold_through_a_created_and_reopened_file() {
 
 #[test]
 fn owner_access_gives_every_flag() {
-    let made = create(
+    let made = create_legacy(
         &NewEncryption {
             algorithm: Algorithm::Rc4_128,
             user_password: "user",

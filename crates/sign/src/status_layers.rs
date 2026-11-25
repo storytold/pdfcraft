@@ -1529,7 +1529,7 @@ mod tests {
             let has_face = match script {
                 "Jpan" => !pdfcraft_fonts::document_japanese_fonts_for_style(false, false).is_empty(),
                 "Hani" => false,
-                script => pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.covers(script)),
+                script => pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.has_script(script)),
             };
             if has_face {
                 assert!(shown.is_empty() && font.is_none(), "{script}: outlines, not text");

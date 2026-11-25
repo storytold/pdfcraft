@@ -7,11 +7,21 @@
 //! beneficial"); with 40-bit RC4 the options it says need 128-bit encryption are unavailable; and
 //! a document that already has security asks first whether to change it.
 
-use egui::{Align, Color32, Layout};
-use pdfcraft_engine::{Changes, Edit, Printing, Protection};
+use craft::ui::choice::{Checkbox, Radio, RadioGroup};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use craft::ui::controls::disclosure::Disclosure;
+use craft::ui::dialog::{DialogId, DialogResult, DialogStack, PromptChoice, StackDialog, StandardPrompt, dialog_id};
+use craft::ui::display::{Shade, Text};
+use craft::ui::form::Field;
+use craft::ui::layout_components::Row;
+use craft::ui::patterns::form_dialogs::{FormDialog, PasswordFields};
+use craft::ui::pickers::Select;
+use craft::ui::runtime::env::Label;
+use craft::ui::style::TypeRole;
+use egui::Ui;
+use pdfcraft_engine::{Algorithm, Changes, Edit, Printing, Protection};
 
-use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, widgets};
+use crate::PdfCraftApp;
 
 /// The dialog's state while it is open.
 #[derive(Clone, Debug, PartialEq)]
@@ -27,9 +37,6 @@ pub struct ProtectDraft {
     /// The other password and its confirmation (used only with `both`).
     pub second: String,
     pub second_confirm: String,
-    /// The document already has security and changing it has not been confirmed yet: the dialog
-    /// asks first ("If you receive a prompt, click Yes to change the security").
-    pub ask_change: bool,
     pub protection: Protection,
 }
 
@@ -43,7 +50,6 @@ impl Default for ProtectDraft {
             both: false,
             second: String::new(),
             second_confirm: String::new(),
-            ask_change: false,
             protection: Protection::default(),
         }
     }
@@ -68,22 +74,42 @@ impl Drop for ProtectDraft {
 impl ProtectDraft {
     /// Why Apply is disabled, if it is.
     pub fn problem(&self) -> Option<&'static str> {
-        let ascii_only = |pw: &str| self.protection.algorithm != pdfcraft_engine::Algorithm::Aes256 && !pw.chars().all(|c| (' '..='~').contains(&c));
+        self.first_problem().or_else(|| self.second_problem())
+    }
+
+    /// What is wrong with the password and its re-type, if anything.
+    fn first_problem(&self) -> Option<&'static str> {
         if self.password.is_empty() {
             Some("Type a password.")
         } else if self.password != self.confirm {
             Some("The passwords don't match.")
-        } else if ascii_only(&self.password) || (self.both && ascii_only(&self.second)) {
-            Some("This compatibility level supports only plain ASCII passwords.")
-        } else if self.both && self.second.is_empty() {
+        } else if self.ascii_only(&self.password) {
+            Some(ASCII_ONLY)
+        } else {
+            None
+        }
+    }
+
+    /// What is wrong with the other password (Advanced Options), if it is set and anything is.
+    fn second_problem(&self) -> Option<&'static str> {
+        if !self.both {
+            None
+        } else if self.ascii_only(&self.second) {
+            Some(ASCII_ONLY)
+        } else if self.second.is_empty() {
             Some(if self.viewing { "Type a permissions password." } else { "Type a document open password." })
-        } else if self.both && self.second != self.second_confirm {
+        } else if self.second != self.second_confirm {
             Some(if self.viewing { "The permissions passwords don't match." } else { "The document open passwords don't match." })
-        } else if self.both && self.same_to_the_file(&self.second, &self.password) {
+        } else if self.same_to_the_file(&self.second, &self.password) {
             Some("The document open password and the permissions password must be different.")
         } else {
             None
         }
+    }
+
+    /// Whether the compatibility level refuses `pw`: all but 256-bit AES take plain ASCII only.
+    fn ascii_only(&self, pw: &str) -> bool {
+        self.protection.algorithm != Algorithm::Aes256 && !pw.chars().all(|c| (' '..='~').contains(&c))
     }
 
     /// Whether the file would take `a` and `b` as one password: encryption keys on a password as
@@ -120,7 +146,7 @@ impl ProtectDraft {
     /// readers follow copying. A choice it can't keep falls back to the stricter "None".
     pub fn keep_to_compatibility(&mut self) {
         let p = &mut self.protection;
-        if p.algorithm != pdfcraft_engine::Algorithm::Rc4_40 {
+        if p.algorithm != Algorithm::Rc4_40 {
             return;
         }
         if p.printing == Printing::Low {
@@ -133,224 +159,216 @@ impl ProtectDraft {
     }
 }
 
-/// A rough password strength, as Acrobat's meter shows (Weak / Medium / Strong).
-pub fn strength(pw: &str) -> (&'static str, Color32) {
-    let classes = [
-        pw.chars().any(char::is_lowercase),
-        pw.chars().any(char::is_uppercase),
-        pw.chars().any(|c| c.is_ascii_digit()),
-        pw.chars().any(|c| !c.is_alphanumeric()),
-    ]
-    .iter()
-    .filter(|b| **b)
-    .count();
-    let n = pw.chars().count();
-    if n >= 12 && classes >= 3 {
-        ("Strong", Color32::from_rgb(0x2D, 0x9D, 0x5B))
-    } else if n >= 8 && classes >= 2 {
-        ("Medium", Color32::from_rgb(0xE8, 0x8A, 0x1A))
-    } else {
-        ("Weak", Color32::from_rgb(0xD3, 0x2F, 0x2F))
+const ASCII_ONLY: &str = "This compatibility level supports only plain ASCII passwords.";
+
+/// Protect Using Password, owned by the dialog host. The draft, passwords included, dies with the dialog.
+pub(crate) struct ProtectDialog {
+    id: DialogId,
+    draft: ProtectDraft,
+}
+
+impl ProtectDialog {
+    fn new() -> Self {
+        ProtectDialog { id: dialog_id("protect"), draft: ProtectDraft::default() }
     }
 }
 
-/// A radio button drawn like Acrobat's: an outlined circle, filled blue with a white dot when on.
-fn radio(ui: &mut egui::Ui, t: &Tokens, on: bool, label: &str) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(220.0, 26.0), egui::Sense::click());
-    let c = egui::pos2(rect.left() + 9.0, rect.center().y);
-    if on {
-        ui.painter().circle_filled(c, 8.0, t.accent);
-        ui.painter().circle_filled(c, 3.0, Color32::WHITE);
-    } else {
-        ui.painter().circle_stroke(c, 7.5, egui::Stroke::new(1.5, t.text_muted));
-    }
-    ui.painter().text(egui::pos2(rect.left() + 26.0, rect.center().y), egui::Align2::LEFT_CENTER, tl!(label), theme::regular(14.0), t.text);
-    let info = tl!(label).to_string();
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, on, info.clone()));
-    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+fn text(s: &str) -> String {
+    tl!(s).to_string()
 }
 
-/// Draw the dialog body; returns (apply, cancel).
-pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
-    use pdfcraft_engine::Algorithm as A;
-    let d = &mut app.protect_draft;
-    ui.label(egui::RichText::new(tl!("Protect Using Password")).font(theme::semibold(18.0)));
-    ui.add_space(4.0);
-    ui.separator();
-    ui.add_space(6.0);
-    if d.ask_change {
-        ui.label(tl!("This document already has security settings. Do you want to change them?"));
-        ui.add_space(12.0);
-        let mut cancel = false;
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::pill_button(ui, tl!("Yes"), true).clicked() {
-                d.ask_change = false;
-            }
-            if widgets::pill_button(ui, tl!("No"), false).clicked() {
-                cancel = true;
-            }
+/// The dialog's rows; returns whether Apply can be pressed.
+fn body(ui: &mut Ui, d: &mut ProtectDraft) -> bool {
+    let error = d.first_problem().filter(|_| !d.password.is_empty() || !d.confirm.is_empty()).map(|p| Label::from(text(p)));
+    let requires = text("Requires user to enter a password for:");
+    Field::new(requires.clone()).show(ui, |ui, _| {
+        RadioGroup::new(requires.clone(), Bind::bound(&mut d.viewing)).show(ui, |ui, _| {
+            Radio::new(true).label(text("Viewing")).show(ui);
+            Radio::new(false).label(text("Editing")).show(ui);
         });
-        return (false, cancel);
-    }
-    ui.label(tl!("Requires user to enter a password for:"));
-    ui.add_space(4.0);
-    if radio(ui, t, d.viewing, "Viewing").clicked() {
-        d.viewing = true;
-    }
-    if radio(ui, t, !d.viewing, "Editing").clicked() {
-        d.viewing = false;
-    }
-    ui.add_space(10.0);
-    let field = |ui: &mut egui::Ui, label: &str, text: &mut String, id: &str| {
-        let l = ui.label(tl!(label));
-        ui.add(crate::widgets::line(text).password(true).desired_width(290.0).id_salt(id)).labelled_by(l.id)
-    };
-    let r = field(ui, "Type Password", &mut d.password, "protect-pw");
-    if r.changed() || !d.password.is_empty() {
-        let (s, c) = strength(&d.password);
-        if !d.password.is_empty() {
-            ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Strength: {s}"), &[("s", tl!(s))])).font(theme::medium(11.5)).color(c));
-        }
-    }
-    ui.add_space(6.0);
-    field(ui, "Re-type Password", &mut d.confirm, "protect-pw2");
-    ui.add_space(6.0);
-    let chevron = if d.advanced { "⌃" } else { "⌄" };
-    if ui
-        .add(
-            egui::Button::new(
-                egui::RichText::new(crate::i18n::fmt(tl!("Advanced Options {chevron}"), &[("chevron", chevron)])).font(theme::semibold(13.0)),
-            )
-            .frame(false),
-        )
-        .clicked()
-    {
-        d.advanced = !d.advanced;
-    }
+    });
+    PasswordFields::new(text("Type Password"), Bind::bound(&mut d.password)).confirm(Bind::bound(&mut d.confirm)).error(error).show(ui);
+    let advanced = text("Advanced Options");
+    Row::new().show(ui, |ui, _| {
+        Disclosure::new(Bind::bound(&mut d.advanced)).label(advanced.clone()).show(ui);
+        Text::new(advanced.clone()).show(ui);
+    });
     if d.advanced {
-        let p = &mut d.protection;
-        egui::Grid::new("protect-advanced").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-            ui.label(tl!("Compatibility"));
-            let algos = [
-                (A::Aes256, tl!("Acrobat X and later (256-bit AES)")),
-                (A::Aes128, tl!("Acrobat 7.0 and later (128-bit AES)")),
-                (A::Rc4_128, tl!("Acrobat 5.0 and later (128-bit RC4)")),
-                (A::Rc4_40, tl!("Acrobat 3.0 and later (40-bit RC4)")),
-            ];
-            let cur = algos.iter().find(|(a, _)| *a == p.algorithm).map_or(algos[0].1, |(_, l)| *l);
-            craft_ui::ComboBox::from_id_salt("protect-algo").width(300.0).selected_text(cur).show_ui(ui, |ui| {
-                for (a, l) in algos {
-                    ui.selectable_value(&mut p.algorithm, a, l);
-                }
-            });
-            ui.end_row();
-            ui.label(tl!("Encrypt"));
-            ui.vertical(|ui| {
-                widgets::radio_value(ui, &mut p.encrypt_metadata, true, tl!("All document contents"));
-                // Unencrypted metadata needs crypt filters (Acrobat 6.0 and later).
-                ui.add_enabled_ui(p.algorithm != A::Rc4_40 && p.algorithm != A::Rc4_128, |ui| {
-                    widgets::radio_value(ui, &mut p.encrypt_metadata, false, tl!("All document contents except metadata"));
-                });
-            });
-            ui.end_row();
-            // The other password, as the full Password Security settings offer both at once.
-            ui.label("");
-            ui.vertical(|ui| {
-                let other =
-                    if d.viewing { tl!("Restrict editing and printing of the document") } else { tl!("Require a password to open the document") };
-                ui.add(widgets::checkbox(&mut d.both, other));
-                if d.both {
-                    let (pw, again) = if d.viewing {
-                        (tl!("Change Permissions Password"), tl!("Re-type Permissions Password"))
-                    } else {
-                        (tl!("Document Open Password"), tl!("Re-type Document Open Password"))
-                    };
-                    let l = ui.label(pw);
-                    ui.add(crate::widgets::line(&mut d.second).password(true).desired_width(290.0).id_salt("protect-second")).labelled_by(l.id);
-                    let l = ui.label(again);
-                    ui.add(crate::widgets::line(&mut d.second_confirm).password(true).desired_width(290.0).id_salt("protect-second2"))
-                        .labelled_by(l.id);
-                }
-            });
-            ui.end_row();
-            // Only high (128-bit RC4 or AES) encryption has low-resolution printing, page
-            // changes, form filling and screen-reader access on their own.
-            let high = p.algorithm != A::Rc4_40;
-            if !d.viewing || d.both {
-                ui.label(tl!("Printing allowed"));
-                let opts =
-                    [(Printing::None, tl!("None")), (Printing::Low, tl!("Low Resolution (150 dpi)")), (Printing::High, tl!("High Resolution"))];
-                let cur = opts.iter().find(|(o, _)| *o == p.printing).map_or(tl!("High Resolution"), |(_, l)| *l);
-                craft_ui::ComboBox::from_id_salt("protect-print").width(300.0).selected_text(cur).show_ui(ui, |ui| {
-                    for (o, l) in opts {
-                        ui.add_enabled_ui(high || o != Printing::Low, |ui| ui.selectable_value(&mut p.printing, o, l));
-                    }
-                });
-                ui.end_row();
-                ui.label(tl!("Changes allowed"));
-                let opts = [
-                    (Changes::None, tl!("None")),
-                    (Changes::Pages, tl!("Inserting, deleting, and rotating pages")),
-                    (Changes::FillSign, tl!("Filling in form fields and signing existing signature fields")),
-                    (Changes::CommentFillSign, tl!("Commenting, filling in form fields, and signing existing signature fields")),
-                    (Changes::AnyExceptExtract, tl!("Any except extracting pages")),
-                ];
-                let cur = opts.iter().find(|(o, _)| *o == p.changes).map_or(tl!("None"), |(_, l)| *l);
-                craft_ui::ComboBox::from_id_salt("protect-changes").width(300.0).selected_text(cur).show_ui(ui, |ui| {
-                    for (o, l) in opts {
-                        ui.add_enabled_ui(high || !matches!(o, Changes::Pages | Changes::FillSign), |ui| ui.selectable_value(&mut p.changes, o, l));
-                    }
-                });
-                ui.end_row();
-                ui.label("");
-                ui.vertical(|ui| {
-                    ui.add(widgets::checkbox(&mut p.copy, tl!("Enable copying of text, images, and other content")));
-                    ui.add_enabled(
-                        high,
-                        widgets::checkbox(&mut p.accessibility, tl!("Enable text access for screen reader devices for the visually impaired")),
-                    );
-                });
-                ui.end_row();
-            }
-        });
-        if p.algorithm == A::Rc4_40 || p.algorithm == A::Rc4_128 {
-            p.encrypt_metadata = true;
-        }
-        d.keep_to_compatibility();
+        advanced_rows(ui, d);
     }
-    ui.add_space(8.0);
-    if let Some(problem) = d.problem().filter(|_| !d.password.is_empty() || !d.confirm.is_empty()) {
-        // problem() stays English (tested); only the display translates.
-        ui.label(egui::RichText::new(tl!(problem)).color(t.text_muted).font(theme::regular(12.0)));
-    }
-    ui.label(
-        egui::RichText::new(if d.both {
-            tl!("The document needs its open password to open, and its permissions password to change the restrictions. Both are applied when you save.")
-        } else if d.viewing {
-            tl!("Anyone opening the document will need this password. It's applied when you save.")
+    let note = if d.both {
+        text("The document needs its open password to open, and its permissions password to change the restrictions. Both are applied when you save.")
+    } else if d.viewing {
+        text("Anyone opening the document will need this password. It's applied when you save.")
+    } else {
+        text("The document opens without a password; this password is needed to change the restrictions. It's applied when you save.")
+    };
+    Text::new(note).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+    d.problem().is_none()
+}
+
+/// The classic Password Security settings.
+fn advanced_rows(ui: &mut Ui, d: &mut ProtectDraft) {
+    compatibility_rows(ui, &mut d.protection);
+    // The other password, as the full Password Security settings offer both at once.
+    let other = if d.viewing { text("Restrict editing and printing of the document") } else { text("Require a password to open the document") };
+    Checkbox::new(Bind::bound(&mut d.both)).label(other).show(ui);
+    if d.both {
+        let (pw, again) = if d.viewing {
+            (text("Change Permissions Password"), text("Re-type Permissions Password"))
         } else {
-            tl!("The document opens without a password; this password is needed to change the restrictions. It's applied when you save.")
-        })
-        .color(t.text_faint)
-        .font(theme::regular(11.5)),
-    );
-    ui.add_space(12.0);
-    let (mut apply, mut cancel) = (false, false);
-    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        let ok = d.problem().is_none();
-        if ui.add_enabled_ui(ok, |ui| widgets::pill_button(ui, tl!("Apply"), true)).inner.clicked() {
-            apply = true;
-        }
-        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-            cancel = true;
+            (text("Document Open Password"), text("Re-type Document Open Password"))
+        };
+        // Said once anything is typed, as for the password above.
+        let typed = !d.password.is_empty() || !d.second.is_empty() || !d.second_confirm.is_empty();
+        let error = d.second_problem().filter(|_| typed).map(|p| Label::from(text(p)));
+        PasswordFields::new(pw, Bind::bound(&mut d.second)).show(ui);
+        PasswordFields::new(again, Bind::bound(&mut d.second_confirm)).error(error).show(ui);
+    }
+    if d.restricts() {
+        restriction_rows(ui, &mut d.protection);
+    }
+    d.keep_to_compatibility();
+}
+
+/// Compatibility and what to encrypt.
+fn compatibility_rows(ui: &mut Ui, p: &mut Protection) {
+    use Algorithm as A;
+    let algos = [
+        Entry::new(A::Aes256, text("Acrobat X and later (256-bit AES)")),
+        Entry::new(A::Aes128, text("Acrobat 7.0 and later (128-bit AES)")),
+        Entry::new(A::Rc4_128, text("Acrobat 5.0 and later (128-bit RC4)")),
+        Entry::new(A::Rc4_40, text("Acrobat 3.0 and later (40-bit RC4)")),
+    ];
+    let label = text("Compatibility");
+    Field::new(label.clone()).show(ui, |ui, _| {
+        if let Some(a) = Select::new(label.clone(), Bind::given(p.algorithm), &algos).show(ui).value().copied() {
+            p.algorithm = a;
         }
     });
-    (apply, cancel)
+    // Unencrypted metadata needs crypt filters (Acrobat 6.0 and later), which RC4 lacks.
+    let rc4 = p.algorithm == A::Rc4_40 || p.algorithm == A::Rc4_128;
+    if rc4 {
+        p.encrypt_metadata = true;
+    }
+    let mut what = vec![Entry::new(true, text("All document contents"))];
+    if !rc4 {
+        what.push(Entry::new(false, text("All document contents except metadata")));
+    }
+    let label = text("Encrypt");
+    Field::new(label.clone()).show(ui, |ui, _| {
+        if let Some(all) = Select::new(label.clone(), Bind::given(p.encrypt_metadata), &what).show(ui).value().copied() {
+            p.encrypt_metadata = all;
+        }
+    });
+}
+
+/// Printing, changes, copying and screen readers: what a permissions password restricts.
+fn restriction_rows(ui: &mut Ui, p: &mut Protection) {
+    // Only high (128-bit RC4 or AES) encryption has low-resolution printing, page changes, form
+    // filling and screen-reader access on their own.
+    let high = p.algorithm != Algorithm::Rc4_40;
+    let printing = [
+        Entry::new(Printing::None, text("None")),
+        Entry::new(Printing::Low, text("Low Resolution (150 dpi)")).enabled(high),
+        Entry::new(Printing::High, text("High Resolution")),
+    ];
+    let label = text("Printing allowed");
+    Field::new(label.clone()).show(ui, |ui, _| {
+        if let Some(v) = Select::new(label.clone(), Bind::given(p.printing), &printing).show(ui).value().copied() {
+            p.printing = v;
+        }
+    });
+    let changes = [
+        Entry::new(Changes::None, text("None")),
+        Entry::new(Changes::Pages, text("Inserting, deleting, and rotating pages")).enabled(high),
+        Entry::new(Changes::FillSign, text("Filling in form fields and signing existing signature fields")).enabled(high),
+        Entry::new(Changes::CommentFillSign, text("Commenting, filling in form fields, and signing existing signature fields")),
+        Entry::new(Changes::AnyExceptExtract, text("Any except extracting pages")),
+    ];
+    let label = text("Changes allowed");
+    Field::new(label.clone()).show(ui, |ui, _| {
+        if let Some(v) = Select::new(label.clone(), Bind::given(p.changes), &changes).show(ui).value().copied() {
+            p.changes = v;
+        }
+    });
+    Checkbox::new(Bind::bound(&mut p.copy)).label(text("Enable copying of text, images, and other content")).show(ui);
+    Checkbox::new(Bind::bound(&mut p.accessibility))
+        .label(text("Enable text access for screen reader devices for the visually impaired"))
+        .enabled(high)
+        .show(ui);
+}
+
+impl StackDialog for ProtectDialog {
+    type Result = ProtectDraft;
+
+    fn id(&self) -> DialogId {
+        self.id
+    }
+
+    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<ProtectDraft>> {
+        let problem = self.draft.problem();
+        let mut form = FormDialog::new(text("Protect Using Password"), Bind::bound(&mut self.draft)).ok_label(text("Apply"));
+        if let Some(problem) = problem {
+            form = form.ok_reason(text(problem));
+        }
+        let shown = form.show(ui, |ui, _, draft| body(ui, draft));
+        match (shown.accepted, shown.closed) {
+            (Some(draft), _) => Some(DialogResult::Ok(draft)),
+            (None, Some(_)) => Some(DialogResult::Cancel),
+            (None, None) => None,
+        }
+    }
+}
+
+impl PdfCraftApp {
+    /// Protect Using Password from the menu: a document that already has security asks first
+    /// whether to change it ("If you receive a prompt, click Yes to change the security"); one
+    /// without goes straight to the settings.
+    pub(crate) fn request_protect(&mut self) {
+        let secured = self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.security_summary().is_some());
+        if !secured {
+            self.open_protect();
+            return;
+        }
+        let prompt = StandardPrompt::custom(text("This document already has security settings. Do you want to change them?"))
+            .title(text("Protect Using Password"))
+            .button(PromptChoice::Proceed, text("Yes"))
+            .button(PromptChoice::Cancel, text("No"))
+            .instance("change-security");
+        self.prompts.change_security = Some(self.dialogs.open(prompt));
+    }
+
+    /// Opens Protect Using Password with an empty draft.
+    pub(crate) fn open_protect(&mut self) {
+        // PLAN: assumed `fn open<D: StackDialog>(app: &mut PdfCraftApp, dialog: D)` (pdf-hub-w2)
+        crate::dialogs::host::open(self, ProtectDialog::new());
+    }
+
+    /// Applies the draft of a Protect dialog that finished with Apply.
+    pub(crate) fn protect_pass(&mut self, ctx: &egui::Context) {
+        // The question before changing existing security: Yes goes on to the settings.
+        if let Some(dialog) = self.prompts.change_security
+            && let Some(answer) = self.dialogs.take_by_id::<StandardPrompt>(dialog)
+        {
+            self.prompts.change_security = None;
+            if matches!(answer, DialogResult::Ok(a) if a.choice == PromptChoice::Proceed) {
+                self.open_protect();
+            }
+        }
+        // PLAN: assumed `self.dialogs: DialogHost` with `fn take<D: StackDialog>(&mut self) -> Option<DialogResult<D::Result>>` (pdf-hub-w1 field, pdf-hub-w2 host)
+        if let Some(DialogResult::Ok(draft)) = self.dialogs.take::<ProtectDialog>()
+            && self.apply_edit(ctx, draft.edit())
+        {
+            self.notify_tr("Password protection will be applied when you save");
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::{Harness, kittest::Queryable};
 
     #[test]
     fn drafts_validate_and_map_to_the_right_password() {
@@ -400,44 +418,59 @@ mod tests {
         assert_eq!(d.problem(), Some("The document open password and the permissions password must be different."));
         d.protection.algorithm = pdfcraft_engine::Algorithm::Aes256;
         assert_eq!(d.problem(), None, "256-bit AES keeps them apart");
-        assert_eq!(strength("abc").0, "Weak");
-        assert_eq!(strength("Abcdefg1").0, "Medium");
-        assert_eq!(strength("Correct-Horse-9").0, "Strong");
+    }
+
+    /// Types into the password field `label`: its input, not the field group or its label that share the name.
+    fn type_into(h: &mut Harness<'static, PdfCraftApp>, label: &str, text: &str) {
+        use egui::accesskit::Role;
+        h.get_by(|n| n.label().as_deref() == Some(label) && matches!(n.role(), Role::PasswordInput | Role::TextInput)).click();
+        h.run_steps(2);
+        h.get_by(|n| n.label().as_deref() == Some(label) && matches!(n.role(), Role::PasswordInput | Role::TextInput)).type_text(text);
+        h.run_steps(2);
+    }
+
+    fn open_and_fill(h: &mut Harness<'static, PdfCraftApp>, password: &str) {
+        h.state_mut().open_protect();
+        h.run_steps(2);
+        type_into(h, "Type Password", password);
+        type_into(h, "Re-type Password", password);
+        assert!(h.query_by(|n| n.label().as_deref() == Some("Apply") && !n.is_disabled()).is_some(), "matching passwords enable Apply");
+    }
+
+    fn assert_fresh(h: &mut Harness<'static, PdfCraftApp>) {
+        h.state_mut().open_protect();
+        h.run_steps(2);
+        assert!(
+            h.query_by(|n| n.label().as_deref() == Some("Apply") && n.is_disabled()).is_some(),
+            "a reopened dialog starts with empty passwords, so Apply is disabled"
+        );
     }
 
     #[test]
     fn closing_the_protect_dialog_clears_the_password_draft() {
-        use egui_kittest::{Harness, kittest::Queryable};
-
-        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_| {
-            let mut app = PdfCraftApp::new();
-            app.set_option("language", "en").unwrap();
-            app.dialog = Some(crate::Dialog::Protect);
-            app.protect_draft.password = "TopSecret123!".into();
-            app.protect_draft.confirm = "TopSecret123!".into();
-            app
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = PdfCraftApp::for_unit_tests();
+                app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+                app
+            }
         });
-        h.run_steps(2);
 
-        // Clicking Cancel closes Dialog::Protect and clears the draft passwords.
+        open_and_fill(&mut h, "TopSecret123!");
         h.get_by_label("Cancel").click();
         h.run_steps(2);
-        assert_eq!(h.state().dialog, None);
-        assert!(h.state().protect_draft.password.is_empty(), "password must not linger after cancelling Dialog::Protect");
-        assert!(h.state().protect_draft.confirm.is_empty(), "confirm must not linger after cancelling Dialog::Protect");
+        assert!(h.query_by_label("Apply").is_none(), "Cancel closes the dialog");
+        assert_fresh(&mut h);
 
-        // Pressing Escape on Dialog::Protect also clears the draft passwords.
-        {
-            let app = h.state_mut();
-            app.dialog = Some(crate::Dialog::Protect);
-            app.protect_draft.password = "AnotherSecret!".into();
-            app.protect_draft.confirm = "AnotherSecret!".into();
-        }
-        h.run_steps(2);
         h.key_press(egui::Key::Escape);
         h.run_steps(2);
-        assert_eq!(h.state().dialog, None);
-        assert!(h.state().protect_draft.password.is_empty(), "password must not linger after closing Dialog::Protect");
-        assert!(h.state().protect_draft.confirm.is_empty(), "confirm must not linger after closing Dialog::Protect");
+        assert!(h.query_by_label("Apply").is_none(), "Escape closes the dialog");
+
+        open_and_fill(&mut h, "AnotherSecret!");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert!(h.query_by_label("Apply").is_none());
+        assert_fresh(&mut h);
     }
 }

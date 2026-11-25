@@ -1,9 +1,9 @@
 //! Protect Using Password in the real shell (egui_kittest).
 
+use crate::support::AppHarness as _;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
-use pdfcraft_engine::{Changes, Printing};
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
+use egui_kittest::kittest::{NodeT, Queryable};
+use pdfcraft_ui_egui::PdfCraftApp;
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -13,39 +13,42 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, FIXTURE.to_vec()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h
 }
 
+/// Types into the masked field named `label` (its field row carries the same name).
 fn type_into(h: &mut Harness<'static, PdfCraftApp>, label: &str, text: &str) {
-    h.get_by_label(label).click();
+    use egui::accesskit::Role;
+    h.get_by(|n| n.label().as_deref() == Some(label) && matches!(n.role(), Role::PasswordInput | Role::TextInput)).click();
     h.run_steps(2);
-    h.get_by_label(label).type_text(text);
+    h.get_by(|n| n.label().as_deref() == Some(label) && matches!(n.role(), Role::PasswordInput | Role::TextInput)).type_text(text);
     h.run_steps(2);
 }
 
 #[test]
 fn protecting_for_viewing_requires_matching_passwords_and_saves_encrypted() {
     let mut h = harness();
-    assert!(h.state_mut().execute("protect.password"));
+    assert!(h.execute("protect.password"));
     h.run_steps(2);
-    assert_eq!(h.state().dialog, Some(Dialog::Protect));
     h.get_by_label("Viewing");
     type_into(&mut h, "Type Password", "Open-Sesame-42");
     type_into(&mut h, "Re-type Password", "Open-Sesame-4");
-    h.get_by_label_contains("don't match");
-    assert!(h.query_by(|n| n.label().as_deref() == Some("Apply") && n.is_disabled()).is_some(), "Apply is disabled");
+    assert!(h.query_by(|n| n.label().as_deref() == Some("Apply") && n.is_disabled()).is_some(), "Apply is disabled while the passwords differ");
     type_into(&mut h, "Re-type Password", "2");
-    h.get_by_label("Strength: Strong");
+    assert!(h.query_by(|n| n.label().as_deref() == Some("Apply") && !n.is_disabled()).is_some(), "Apply is enabled once they match");
     h.get_by_label("Apply").click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, None);
+    assert!(h.query_by_label("Apply").is_none(), "Apply closes the dialog");
     let id = h.state().views[0].id;
     let doc = h.state().session.get(id).unwrap();
     assert!(doc.info.encrypted && doc.dirty);
@@ -56,20 +59,20 @@ fn protecting_for_viewing_requires_matching_passwords_and_saves_encrypted() {
     assert!(s.open("p.pdf", None, bytes.clone(), None).is_err());
     assert!(s.open("p.pdf", None, bytes, Some("Open-Sesame-42")).is_ok());
     // Remove security is now offered, and undo also takes the protection back.
-    assert!(h.state_mut().execute("protect.remove"));
-    h.state_mut().undo();
-    h.state_mut().undo();
+    assert!(h.execute("protect.remove"));
+    h.undo();
+    h.undo();
     assert!(!h.state().session.get(id).unwrap().info.encrypted);
 }
 
 #[test]
 fn editing_restrictions_via_advanced_options() {
     let mut h = harness();
-    h.state_mut().execute("protect.password");
+    h.execute("protect.password");
     h.run_steps(2);
     h.get_by_label("Editing").click();
     h.run_steps(2);
-    h.get_by_label("Advanced Options ⌄").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Advanced Options").click();
     h.run_steps(2);
     h.get_by_label("Enable copying of text, images, and other content").click();
     h.run_steps(1);
@@ -89,6 +92,15 @@ fn open_password_pair(h: &mut Harness<'static, PdfCraftApp>, password: &str) {
     type_into(h, "Re-type Password", password);
 }
 
+fn advanced_options(h: &mut Harness<'static, PdfCraftApp>) {
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Advanced Options").click();
+    h.run_steps(2);
+}
+
+fn apply_enabled(h: &Harness<'static, PdfCraftApp>) -> bool {
+    h.query_by(|n| n.label().as_deref() == Some("Apply") && !n.is_disabled()).is_some()
+}
+
 /// Advanced Options sets an open password and a permissions password together, as the guide's
 /// Password Security settings do ("setting both types of passwords is often beneficial"): the
 /// saved file needs the open password to open, opens restricted with it, and the permissions
@@ -96,26 +108,26 @@ fn open_password_pair(h: &mut Harness<'static, PdfCraftApp>, password: &str) {
 #[test]
 fn an_open_password_and_a_permissions_password_together() {
     let mut h = harness();
-    h.state_mut().execute("protect.password");
+    assert!(h.execute("protect.password"));
     h.run_steps(2);
     h.get_by_label("Viewing");
-    h.get_by_label("Advanced Options ⌄").click();
-    h.run_steps(2);
+    advanced_options(&mut h);
     assert!(h.query_by_label("Printing allowed").is_none(), "no restrictions without a permissions password");
     h.get_by_label("Restrict editing and printing of the document").click();
     h.run_steps(2);
     h.get_by_label("Printing allowed");
     open_password_pair(&mut h, "Open-Sesame-42");
     h.get_by_label_contains("Type a permissions password");
-    assert!(h.query_by(|n| n.label().as_deref() == Some("Apply") && n.is_disabled()).is_some());
+    assert!(!apply_enabled(&h));
     type_into(&mut h, "Change Permissions Password", "Boss-Key-7");
-    type_into(&mut h, "Re-type Permissions Password", "Boss-Key-8");
+    type_into(&mut h, "Re-type Permissions Password", "Boss-Key");
     h.get_by_label_contains("permissions passwords don't match");
-    h.state_mut().protect_draft.second_confirm = "Boss-Key-7".into();
-    h.run_steps(2);
+    assert!(!apply_enabled(&h));
+    type_into(&mut h, "Re-type Permissions Password", "-7");
+    assert!(apply_enabled(&h), "Apply waits for a matching second password");
     h.get_by_label("Apply").click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, None);
+    assert!(h.query_by_label("Apply").is_none(), "Apply closes the dialog");
     let id = h.state().views[0].id;
     let bytes = h.state().session.save_bytes(id).unwrap();
     let auth = |pw: Option<&str>| pdfcraft_cos::Document::open_with_password(bytes.clone(), pw).ok().and_then(|d| d.security().map(|s| s.auth()));
@@ -133,69 +145,79 @@ fn an_open_password_and_a_permissions_password_together() {
 /// stricter "None".
 #[test]
 fn forty_bit_rc4_offers_only_what_it_can_keep() {
-    use egui::accesskit::Role;
+    use egui::accesskit::{Role, Toggled};
 
     let mut h = harness();
-    h.state_mut().execute("protect.password");
+    assert!(h.execute("protect.password"));
     h.run_steps(2);
     h.get_by_label("Editing").click();
     h.run_steps(2);
-    h.get_by_label("Advanced Options ⌄").click();
-    h.run_steps(2);
-    let combo = |h: &mut Harness<'static, PdfCraftApp>, value: &str| {
-        h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some(value)).expect(value).click();
+    advanced_options(&mut h);
+    let open = |h: &mut Harness<'static, PdfCraftApp>, caption: &str| {
+        h.get_by_role_and_label(Role::ComboBox, caption).click();
         h.run_steps(2);
     };
-    let disabled = |h: &Harness<'static, PdfCraftApp>, label: &str| h.query_by(|n| n.label().as_deref() == Some(label) && n.is_disabled()).is_some();
+    let close = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+    };
+    let pick = |h: &mut Harness<'static, PdfCraftApp>, caption: &str, item: &str| {
+        h.get_by_role_and_label(Role::ComboBox, caption).click();
+        h.run_steps(2);
+        h.get_by(|n| n.label().as_deref() == Some(item) && n.role() != Role::ComboBox).click_accesskit();
+        h.run_steps(2);
+    };
+    let disabled = |h: &Harness<'static, PdfCraftApp>, label: &str| {
+        h.query_all_by(|n| n.label().as_deref() == Some(label) && n.role() != Role::ComboBox && n.is_disabled()).next().is_some()
+    };
+    let value = |h: &Harness<'static, PdfCraftApp>, caption: &str| h.get_by_role_and_label(Role::ComboBox, caption).value();
+    let screen_readers = "Enable text access for screen reader devices for the visually impaired";
+    let ticked = |h: &Harness<'static, PdfCraftApp>, label: &str| {
+        h.get_by(|n| n.label().as_deref() == Some(label) && n.role() == Role::CheckBox).accesskit_node().toggled() == Some(Toggled::True)
+    };
     // 256-bit AES: every choice is available; pick the ones 40-bit RC4 can't keep.
-    combo(&mut h, "High Resolution");
+    open(&mut h, "Printing allowed");
     assert!(!disabled(&h, "Low Resolution (150 dpi)"));
-    h.get_by_label("Low Resolution (150 dpi)").click();
-    h.run_steps(2);
-    combo(&mut h, "None");
+    close(&mut h);
+    pick(&mut h, "Printing allowed", "Low Resolution (150 dpi)");
+    open(&mut h, "Changes allowed");
     assert!(!disabled(&h, "Inserting, deleting, and rotating pages"));
-    h.get_by_label("Filling in form fields and signing existing signature fields").click();
+    close(&mut h);
+    pick(&mut h, "Changes allowed", "Filling in form fields and signing existing signature fields");
+    assert!(!disabled(&h, screen_readers));
+    assert_eq!(value(&h, "Printing allowed").as_deref(), Some("Low Resolution (150 dpi)"));
+    assert_eq!(value(&h, "Changes allowed").as_deref(), Some("Filling in form fields and signing existing signature fields"));
+    assert!(!ticked(&h, "Enable copying of text, images, and other content") && ticked(&h, screen_readers));
+    pick(&mut h, "Compatibility", "Acrobat 3.0 and later (40-bit RC4)");
     h.run_steps(2);
-    assert!(!disabled(&h, "Enable text access for screen reader devices for the visually impaired"));
-    let p = h.state().protect_draft.protection.clone();
-    assert_eq!((p.printing, p.changes, p.copy, p.accessibility), (Printing::Low, Changes::FillSign, false, true));
-    combo(&mut h, "Acrobat X and later (256-bit AES)");
-    h.get_by_label("Acrobat 3.0 and later (40-bit RC4)").click();
-    h.run_steps(3);
-    let p = h.state().protect_draft.protection.clone();
-    assert_eq!(
-        (p.printing, p.changes, p.accessibility),
-        (Printing::None, Changes::None, false),
-        "back to the stricter choice; screen readers follow copying"
-    );
-    assert!(disabled(&h, "Enable text access for screen reader devices for the visually impaired"));
-    // Printing and changes both say "None" now: the first list is printing, the second changes.
-    let open = |h: &mut Harness<'static, PdfCraftApp>, nth: usize| {
-        h.query_all_by_role(Role::ComboBox).filter(|n| n.value().as_deref() == Some("None")).nth(nth).expect("the list").click();
-        h.run_steps(2);
-    };
-    open(&mut h, 0);
+    assert_eq!(value(&h, "Printing allowed").as_deref(), Some("None"), "back to the stricter choice");
+    assert_eq!(value(&h, "Changes allowed").as_deref(), Some("None"), "back to the stricter choice");
+    assert!(!ticked(&h, screen_readers), "screen readers follow copying");
+    assert!(disabled(&h, screen_readers));
+    open(&mut h, "Printing allowed");
     assert!(disabled(&h, "Low Resolution (150 dpi)"), "low-resolution printing is unavailable with 40-bit RC4");
     assert!(!disabled(&h, "High Resolution"));
-    open(&mut h, 0);
-    open(&mut h, 1);
+    close(&mut h);
+    open(&mut h, "Changes allowed");
     for label in ["Inserting, deleting, and rotating pages", "Filling in form fields and signing existing signature fields"] {
         assert!(disabled(&h, label), "{label} is unavailable with 40-bit RC4");
     }
     for label in ["Commenting, filling in form fields, and signing existing signature fields", "Any except extracting pages"] {
         assert!(!disabled(&h, label), "{label} stays available");
     }
-    open(&mut h, 1);
+    close(&mut h);
     // Copying allowed: screen readers come with it.
     h.get_by_label("Enable copying of text, images, and other content").click();
     h.run_steps(2);
-    assert!(h.state().protect_draft.protection.accessibility);
+    assert!(ticked(&h, screen_readers));
 }
 
 /// A document that already has security asks before its security is changed ("If you receive a
 /// prompt, click Yes to change the security"): No leaves it as it is, Yes goes on to the settings.
 #[test]
 fn changing_existing_security_asks_first() {
+    use egui::accesskit::Role;
+
     let mut cos = pdfcraft_cos::Document::open(std::sync::Arc::new(FIXTURE.to_vec())).unwrap();
     cos.set_encryption(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes256,
@@ -207,33 +229,34 @@ fn changing_existing_security_asks_first() {
     })
     .unwrap();
     let protected = pdfcraft_cos::write_full(&cos, &Default::default()).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("secured.pdf", None, protected.clone()).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.open_bytes(&egui::Context::default(), "secured.pdf", None, protected.clone()).unwrap();
         app
     });
     h.run_steps(4);
     let id = h.state().views[0].id;
     assert!(h.state().session.get(id).unwrap().security_summary().is_some());
-    h.state_mut().execute("protect.password");
+    assert!(h.execute("protect.password"));
     h.run_steps(2);
     h.get_by_label_contains("already has security settings");
     assert!(h.query_by_label("Type Password").is_none(), "the settings wait for the answer");
-    h.get_by_label("No").click();
-    h.run_steps(2);
-    assert_eq!(h.state().dialog, None);
+    h.get_by_role_and_label(Role::Button, "No").click();
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("already has security settings").is_none());
+    assert!(h.query_by_label("Type Password").is_none(), "No leaves the settings closed");
     assert!(!h.state().session.get(id).unwrap().dirty, "nothing changed");
-    h.state_mut().execute("protect.password");
+    assert!(h.execute("protect.password"));
     h.run_steps(2);
-    h.get_by_label("Yes").click();
+    h.get_by_role_and_label(Role::Button, "Yes").click();
     h.run_steps(4);
-    assert!(!h.state().protect_draft.ask_change);
     open_password_pair(&mut h, "New-Secret-9");
-    assert_eq!(h.state().protect_draft.password, "New-Secret-9", "typed into the settings");
+    assert!(apply_enabled(&h), "typed into the settings");
     h.get_by_label("Apply").click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, None, "{:?} / {:?}", h.state().protect_draft.problem(), h.state().protect_draft.ask_change);
+    assert!(h.query_by_label("Apply").is_none(), "Apply closes the dialog");
     let doc = h.state().session.get(id).unwrap();
     assert!(doc.security_summary().is_some_and(|s| s.pending), "{:?}", doc.security_summary());
     let bytes = h.state().session.save_bytes(id).unwrap();
@@ -245,8 +268,8 @@ fn changing_existing_security_asks_first() {
 #[test]
 fn an_unprotected_document_is_not_asked() {
     let mut h = harness();
-    h.state_mut().execute("protect.password");
+    assert!(h.execute("protect.password"));
     h.run_steps(2);
     assert!(h.query_by_label_contains("already has security settings").is_none());
-    h.get_by_label("Type Password");
+    assert!(h.query_all_by_label("Type Password").next().is_some(), "the settings show at once");
 }
