@@ -1728,6 +1728,15 @@ fn a_single_line_break_beside_shaped_text_keeps_the_fields_font() {
     assert!(text_box(&doc, f, &f.widgets[0]).fits(value));
     set_value(&mut doc, "one", &FieldValue::Text(value.into())).unwrap();
     assert!(undrawn_fields(&doc).is_empty(), "{:?}", undrawn_fields(&doc));
+    // The field's own font shows `Ж`, at the code its encoding gives it: no other face could.
+    let all = fields(&doc);
+    let wd = doc.get(field(&all, "one").widgets[0].obj).as_dict().unwrap().clone();
+    let n = wd.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+    let Object::Stream(s) = &*doc.get(n) else { panic!() };
+    let ap = s.decoded().unwrap();
+    let shown = ap.windows(6).position(|w| w == b"(\xe0) Tj").expect("the code of `Ж`");
+    let font = String::from_utf8_lossy(&ap[..shown]).rsplit(" Tf").nth(1).and_then(|s| s.rsplit('/').next().map(str::to_owned));
+    assert!(font.as_deref().is_some_and(|f| f.starts_with("Cyr ")), "{font:?}");
 }
 
 /// A combo box draws its value as a text field does, so in a build without the script's face it

@@ -11712,6 +11712,9 @@ fn arabic_and_hebrew_in_text_boxes_and_fill_sign_text_are_drawn_and_found() {
     let cases = [
         ("test بت التناسب", "التناسب", pdfcraft_fonts::document_arabic_font().is_some()),
         ("שלום עולם test", "עולם", pdfcraft_fonts::document_hebrew_font(false).is_some()),
+        // With no Latin, a line is read back from its glyphs, without `/ActualText`.
+        ("بت التناسب", "التناسب", pdfcraft_fonts::document_arabic_font().is_some()),
+        ("שלום עולם", "עולם", pdfcraft_fonts::document_hebrew_font(false).is_some()),
     ];
     for (i, (typed, word, has_face)) in cases.into_iter().enumerate() {
         let dir = workdir(&format!("rtl-text-boxes-{i}"));
@@ -11748,12 +11751,16 @@ fn arabic_and_hebrew_in_fields_and_page_marks_are_drawn_and_found() {
     let cases = [
         ("Arabic", "test بت التناسب", "التناسب", pdfcraft_fonts::document_arabic_font().is_some()),
         ("Hebrew", "שלום עולם test", "עולם", pdfcraft_fonts::document_hebrew_font(false).is_some()),
+        // With no Latin, a line is read back from its glyphs, without `/ActualText`.
+        ("Arabic", "بت التناسب", "التناسب", pdfcraft_fonts::document_arabic_font().is_some()),
+        ("Hebrew", "שלום עולם", "עולם", pdfcraft_fonts::document_hebrew_font(false).is_some()),
     ];
     for (i, (script, typed, word, has_face)) in cases.into_iter().enumerate() {
         let dir = workdir(&format!("rtl-fields-and-marks-{i}"));
         let mut a = auto(&dir);
         let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
-        let field = ok(&mut a, "form_add_field", json!({"doc": doc, "page": 1, "type": "text", "rect": [20, 120, 220, 142]}))["field"]
+        // Clear of the page's own text: text drawn over text is read mixed with it, whatever its script.
+        let field = ok(&mut a, "form_add_field", json!({"doc": doc, "page": 1, "type": "text", "rect": [20, 60, 190, 82]}))["field"]
             .as_str()
             .unwrap()
             .to_string();

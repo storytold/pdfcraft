@@ -51,6 +51,27 @@ pub fn is_bidi_control(c: char) -> bool {
     matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
+/// The zero-width joiner and non-joiner: they choose the forms of the letters beside them and are
+/// not drawn.
+fn is_joiner(c: char) -> bool {
+    matches!(c, '\u{200C}' | '\u{200D}')
+}
+
+/// `line`, none of it shaped, as the standard font draws it: without its direction controls when
+/// they leave every character in typing order, else as it is (the font then draws a control as `?`,
+/// and [`line_undrawable`] reports it).
+fn standard_text(line: &str) -> Cow<'_, str> {
+    if line.contains(is_bidi_control) && Line::new(line, false).levels().iter().all(Level::is_ltr) {
+        return Cow::Owned(without_controls(line));
+    }
+    Cow::Borrowed(line)
+}
+
+/// `line` without its direction controls.
+fn without_controls(line: &str) -> String {
+    line.chars().filter(|c| !is_bidi_control(*c)).collect()
+}
+
 /// Whether `text` has a character [`line_pieces`] shapes in a script face (Arabic, Hebrew or Thai).
 pub fn has_shaped_script(text: &str) -> bool {
     text.chars().any(|c| is_thai(c) || is_arabic(c) || is_hebrew(c))
@@ -70,6 +91,7 @@ pub fn joins_previous(c: char) -> bool {
         u32::from(c),
         0x0E31 | 0x0E33..=0x0E3A | 0x0E47..=0x0E4E
             | 0x0610..=0x061A | 0x064B..=0x065F | 0x0670 | 0x06D6..=0x06DC | 0x06DF..=0x06E4 | 0x06E7 | 0x06E8 | 0x06EA..=0x06ED
+            | 0x0897..=0x089F | 0x08CA..=0x08E1 | 0x08E3..=0x08FF
             | 0x0591..=0x05BD | 0x05BF | 0x05C1 | 0x05C2 | 0x05C4 | 0x05C5 | 0x05C7
     )
 }
@@ -316,6 +338,15 @@ impl Line {
         self.levels.iter().all(|l| l.is_ltr())
     }
 
+    /// The line as the standard font draws it, when nothing of it is shaped or reordered: its
+    /// paragraph keeps it in typing order, or it does on its own ([`standard_text`]).
+    fn standard(&self) -> Option<Cow<'_, str>> {
+        if self.rtl || has_shaped_script(&self.text) || !self.in_typing_order() {
+            return None;
+        }
+        Some(if self.levels.is_empty() { standard_text(&self.text) } else { Cow::Owned(without_controls(&self.text)) })
+    }
+
     /// The line in drawing order: [`line_pieces`], with its paragraph's levels.
     pub fn pieces(&self) -> Result<Vec<Piece>, ShapeError> {
         pieces_by_levels(&self.text, &self.levels())
@@ -323,16 +354,16 @@ impl Line {
 
     /// [`appearance_pieces`], with its paragraph's levels.
     pub fn appearance_pieces(&self) -> Vec<Piece> {
-        if !self.rtl && !has_shaped_script(&self.text) && self.in_typing_order() {
-            return plain(&self.text);
+        if let Some(text) = self.standard() {
+            return plain(&text);
         }
         self.pieces().or_else(|_| thai_pieces(&self.text)).unwrap_or_else(|_| plain(&self.text))
     }
 
     /// [`line_width`], with its paragraph's levels.
     pub fn width(&self, size: f64, latin: impl Fn(&str, f64) -> f64) -> f64 {
-        if !self.rtl && !has_shaped_script(&self.text) && self.in_typing_order() {
-            return latin(&self.text, size);
+        if let Some(text) = self.standard() {
+            return latin(&text, size);
         }
         pieces_width(&self.appearance_pieces(), size, 0.0, latin)
     }
@@ -474,6 +505,10 @@ fn pieces_by_levels(line: &str, levels: &[Level]) -> Result<Vec<Piece>, ShapeErr
             } else {
                 None
             };
+            // A joiner beside Latin text has no letter to join there.
+            if script.is_none() && is_joiner(c) {
+                continue;
+            }
             match segments.last_mut() {
                 Some((kind, s)) if *kind == script => s.push(c),
                 _ => segments.push((script, c.to_string())),
@@ -515,7 +550,7 @@ fn plain(line: &str) -> Vec<Piece> {
 /// they agree on every line.
 pub fn appearance_pieces(line: &str, rtl: bool) -> Vec<Piece> {
     if !rtl && !has_shaped_script(line) {
-        return plain(line);
+        return plain(&standard_text(line));
     }
     line_pieces(line, rtl).or_else(|_| thai_pieces(line)).unwrap_or_else(|_| plain(line))
 }
@@ -524,7 +559,7 @@ pub fn appearance_pieces(line: &str, rtl: bool) -> Vec<Piece> {
 /// of direction `rtl`: shaped text by its clusters' advances, the rest measured by `latin`.
 pub fn line_width(text: &str, rtl: bool, size: f64, latin: impl Fn(&str, f64) -> f64) -> f64 {
     if !rtl && !has_shaped_script(text) {
-        return latin(text, size);
+        return latin(&standard_text(text), size);
     }
     pieces_width(&appearance_pieces(text, rtl), size, 0.0, latin)
 }
@@ -918,7 +953,7 @@ pub fn first_undrawable_shaped(s: &str) -> Option<char> {
 /// draws. The direction marks of a shaped line don't count: they are never drawn.
 pub fn line_undrawable(line: &str) -> Option<char> {
     if !has_shaped_script(line) {
-        return crate::first_non_win_ansi(line);
+        return crate::first_non_win_ansi(&standard_text(line));
     }
     // Shaped, the pieces are in drawing order; left to the standard font, in typing order.
     match line_pieces(line, rtl_base(line)) {
@@ -1388,6 +1423,50 @@ mod tests {
         assert_eq!(letters(&laid[2].pieces().unwrap()), "XY");
         assert_eq!(laid[3].pieces().unwrap(), []);
         assert_eq!(Line::in_paragraph("", true, vec![String::new()])[0].pieces().unwrap(), []);
+    }
+
+    /// A direction control that leaves a left-to-right line in typing order is not drawn, and not
+    /// measured or reported either, on its own or at the end of a paragraph wrapped beside Hebrew.
+    /// One that would turn Latin text around is still left to the standard font, and reported.
+    #[test]
+    fn a_direction_control_in_a_left_to_right_line_is_not_drawn() {
+        let count = |s: &str, _: f64| s.chars().count() as f64;
+        let ab = [Piece::Latin("ab".into())];
+        for line in ["a\u{200E}b", "a\u{2066}b\u{2069}", "ab\u{202C}"] {
+            assert_eq!((appearance_pieces(line, false), Line::new(line, false).appearance_pieces()), (ab.to_vec(), ab.to_vec()), "{line:?}");
+            assert_eq!((line_width(line, false, 1.0, count), Line::new(line, false).width(1.0, count)), (2.0, 2.0), "{line:?}");
+            assert_eq!(line_undrawable(line), None, "{line:?}");
+        }
+        let laid = Line::in_paragraph("שלום \u{202A}cd ab\u{202C}", false, vec!["שלום \u{202A}cd".into(), "ab\u{202C}".into()]);
+        assert_eq!(laid[1].appearance_pieces(), ab);
+        assert_eq!(line_undrawable("\u{202E}ab"), Some('\u{202E}'));
+        assert_eq!(line_undrawable("a\u{200E}☃"), Some('☃'));
+    }
+
+    /// Zero-width joiners choose the forms of the Arabic letters beside them, and one beside Latin
+    /// text is not drawn: neither reaches the standard font, which would draw `?`.
+    #[test]
+    fn joiners_choose_arabic_forms_and_never_reach_the_standard_font() {
+        if crate::document_arabic_font().is_none() {
+            return;
+        }
+        let glyphs = |s: &str| -> Vec<u32> {
+            clusters([line_pieces(s, true).unwrap().as_slice()])
+                .filter(|c| !c.text.contains(is_joiner))
+                .flat_map(|c| c.glyphs.iter().map(|g| g.0))
+                .collect()
+        };
+        assert_eq!(glyphs("ب\u{200D}ب"), glyphs("بب"), "a joiner keeps them joined");
+        assert_ne!(glyphs("ب\u{200C}ب"), glyphs("بب"), "a non-joiner parts them");
+        for (line, rtl) in [("ب\u{200D}ب", true), ("می\u{200C}خواهم test", true), ("a\u{200D}ب", false), ("a ب\u{200C} b", false)] {
+            let pieces = line_pieces(line, rtl).unwrap();
+            assert!(
+                pieces.iter().all(|p| !matches!(p, Piece::Latin(s) if s.contains(is_joiner))),
+                "{line:?}: {:?}",
+                drawn_chars(&pieces).collect::<String>()
+            );
+            assert_eq!(pieces_undrawable(&pieces), None, "{line:?}");
+        }
     }
 
     /// A right-to-left line its glyphs alone read back from goes without `/ActualText`, which

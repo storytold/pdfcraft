@@ -1638,9 +1638,9 @@ fn show_text_lines(out: &mut Vec<u8>, laid: &[Line], fonts: &mut Dict, face: pdf
             break;
         }
         // Right-to-left text shaped in its face is painted in drawing order: its typing order goes
-        // with it, so copy and search read the line as `/Contents` has it. A line drawn as `?`
-        // gets none: what can be copied is what can be seen.
-        let reordered = line.reordered(pieces);
+        // with it, so copy and search read the line as `/Contents` has it. A line with a character
+        // drawn as `?` gets none: what can be copied is what can be seen.
+        let reordered = line.reordered(pieces) && shaped_text::pieces_undrawable(pieces).is_none();
         if reordered {
             out.extend(shaped_text::actual_text_span(&line.text).bytes());
         }

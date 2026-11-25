@@ -5526,6 +5526,25 @@ fn thai_in_fill_sign_text_and_text_boxes_is_drawn_from_the_thai_face() {
     assert!(ys[0] + hi * 24.0 <= r[3] + 1e-3 && ys[ys.len() - 1] + lo * 24.0 >= r[1] - 1e-3, "{ys:?} in {r:?}");
 }
 
+/// A right-to-left line with a character no face here draws shows `?` for it and keeps the rest
+/// shaped, and carries no `/ActualText`: the character it would copy isn't what is seen.
+#[test]
+fn a_right_to_left_line_drawn_with_a_question_mark_carries_no_actual_text() {
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        return;
+    }
+    let shape = Shape::TextBox { rect: [100.0, 400.0, 400.0, 430.0], font_size: 12.0 };
+    let item = NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: "שלום test ☃".into(), author: "Ada".into() };
+    let mut doc = fixture();
+    let t = add_annotation(&mut doc, &item, &meta("t")).unwrap();
+    let doc = reopen(&doc);
+    let d = &list(&doc, 0)[t];
+    let content = ap_content(&doc, d);
+    assert!(content.contains("/PCAr1 ") && content.contains('?') && content.contains("test"), "{content}");
+    assert_eq!(appearance::undrawable_text(d).map(|(_, c)| c), Some('☃'));
+    assert!(!content.contains("ActualText"), "{content}");
+}
+
 /// #6879: Arabic and Hebrew typed into a text box or Fill & Sign text are laid out and shaped as
 /// Add text lays them out (`shaped_text::line_pieces`): Type 3 glyphs from the script's face in
 /// drawing order, never `?`, with the line's typing order beside them for copy and search. Latin in
