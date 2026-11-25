@@ -3477,6 +3477,28 @@ fn thai_marks_drawn_one_glyph_at_a_time_keep_their_place_and_words() {
     }
 }
 
+/// Old Thai fonts map the alternate glyphs they draw for a tone mark or above vowel moved left to the legacy
+/// presentation forms U+F700–U+F71A. Next to Thai they read as the Thai character they stand for, ride on their
+/// letter as marks do, and the word can be found; the same code points between Latin letters (an icon font) stay.
+#[test]
+fn legacy_thai_presentation_forms_read_as_thai() {
+    for mark_x0 in [12.0, 8.0] {
+        let v = vec![g("เ", 0.0, 10.0, 6.0), g("ป", 6.0, 10.0, 12.0), g("\u{F712}", mark_x0, 10.0, 12.0), g("น", 12.0, 10.0, 18.0)];
+        let page = layout(v);
+        assert_eq!(page.plain_text(), "เป็น", "alternate drawn from {mark_x0}");
+        assert_eq!(page.find_opts("เป็น", true, true).len(), 1);
+        let v =
+            vec![g("ป", 0.0, 10.0, 6.0), g("\u{F710}", mark_x0 - 6.0, 10.0, 6.0), g("\u{F70B}", mark_x0 - 6.0, 10.0, 6.0), g("น", 6.0, 10.0, 12.0)];
+        assert_eq!(layout(v).plain_text(), "ปั้น", "stacked alternates drawn from {}", mark_x0 - 6.0);
+    }
+    let v = vec![g("a", 0.0, 10.0, 6.0), g("\u{F712}", 6.0, 10.0, 12.0), g("b", 12.0, 10.0, 18.0)];
+    assert_eq!(layout(v).plain_text(), "a\u{F712}b");
+    // Through the page: Copy and Find read the page's glyphs, not `layout`.
+    let page = extract_page(&one_glyph_per_show("เป\u{F712}น", 0.0, false), 0, &InterpreterSettings::default()).unwrap();
+    assert_eq!(page.plain_text(), "เป็น");
+    assert_eq!(page.find_opts("เป็น", true, true).len(), 1);
+}
+
 /// Combining marks of other left-to-right scripts ride on their base the same way: Devanagari signs (virama,
 /// anusvara, a below vowel; the spacing vowel sign ि is a letter of its own), and Latin combining accents.
 #[test]
