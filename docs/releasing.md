@@ -66,7 +66,7 @@ date in the AppStream metadata. The binaries don't embed the commit yet.
 
 **Fonts:** every job checks out [craft-fonts](https://github.com/storytold/craft-fonts) at the commit
 pinned in `release.yml` and builds with `CRAFT_FONTS_DIR` and `CRAFT_FONTS_REQUIRED=1`, so releases
-embed its Japanese fonts and fail rather than ship without them (`AGENTS.md` §1.4). Bump the pin
+embed its Japanese fonts and fail rather than ship without them (docs/development.md "Fonts and attribution"). Bump the pin
 deliberately.
 
 **OCR models:** desktop packaging stages the Scan & OCR models (#103).
@@ -154,7 +154,7 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
   doesn't have. "Combine files in PdfCraft" (#585) is a second verb in the same component,
   `PdfCraft.Combine`, running `pdfcraft --combine "<file>"` once per selected file; the
   single-instance hand-off sends them with `"combine": true`, and the running app adds them to
-  its Combine files tab (`OsEvent::Combine`). Both verbs come and go with `INSTALLPDFCONTEXTMENU`.
+  its Combine files tab (`Intake::OpenFor` with action "combine"). Both verbs come and go with `INSTALLPDFCONTEXTMENU`.
 - The image right-click entry (#190) is the same kind of verb, `PdfCraft.CreatePdf`, for ten image
   types, in its own component (`PdfcraftImageContextMenu`) since it became optional. Its rows moved
   out of `PdfcraftApp`; that's safe because `MajorUpgrade` removes the old version before installing
@@ -163,7 +163,7 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
   system's language) while PdfCraft is the default for `.pdf`. It runs `pdfcraft.exe --print
   "<file>"`, which prints on the default printer without a window and opens the file with the
   Print dialog only when it can't (a password, printing not permitted, no default printer, a
-  refused job; the reason is in the log).
+  refused job; the reason goes to standard error).
 - `test-msi.ps1 <file.msi>` checks the compiled shortcut, context-menu and dialog tables, and
   evaluates the first-install and update conditions of the desktop shortcut and both menus. Packaging
   runs it in a child process before signing, so the MSI isn't held open when signtool runs. The ARM64 install
