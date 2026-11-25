@@ -1665,6 +1665,61 @@ fn added_hebrew_text_is_drawn_right_to_left_and_stays_searchable() {
     assert!(mapped.contains("<05E905"), "{mapped}");
 }
 
+/// #8013: a shekel beside a number is a European terminator, so the bidi algorithm puts it in the
+/// number's run or in a run of its own. The Hebrew face still draws it when the item has Hebrew.
+/// A shekel with no Hebrew, and any other character the standard fonts lack, stays refused.
+#[test]
+fn a_shekel_sign_beside_a_number_in_hebrew_text_uses_the_hebrew_face() {
+    let samples = ["המחיר ₪ 120", "המחיר: ₪", "המחיר ₪120", "המחיר 120 ₪"];
+    let text = |s: &str, top: f64| AddedText {
+        rect: [72.0, top - 30.0, 400.0, top],
+        text: s.into(),
+        size: 14.0,
+        align: Align::Right,
+        ..AddedText::default()
+    };
+    if !pdfcraft_fonts::hebrew_has('₪') {
+        assert_eq!(first_undrawable(&text(samples[2], 700.0)), Some('ה'));
+        eprintln!("skipping the shekel drawing checks: built without a craft-fonts Hebr face (set CRAFT_FONTS_DIR)");
+        return;
+    }
+    let mut doc = fixture();
+    for (k, typed) in samples.into_iter().enumerate() {
+        let item = text(typed, 700.0 - 40.0 * k as f64);
+        assert_eq!(first_undrawable(&item), None, "{typed}");
+        add_content(&mut doc, 0, &Content::Text(item)).unwrap();
+    }
+    // No Hebrew in the item: still the standard-font path (#4078).
+    assert_eq!(first_undrawable(&text("₪120", 500.0)), Some('₪'));
+    assert_eq!(first_undrawable(&text("120 ₪", 500.0)), Some('₪'));
+    // A sign the Hebrew face has is not enough: U+2010 between Latin letters, a ruble beside
+    // digits, and a combining accent on a Latin letter stay refused.
+    assert_eq!(first_undrawable(&text("המחיר a\u{2010}b", 500.0)), Some('\u{2010}'));
+    assert_eq!(first_undrawable(&text("המחיר ₽120", 500.0)), Some('₽'));
+    assert_eq!(first_undrawable(&text("המחיר e\u{301}", 500.0)), Some('\u{301}'));
+    let doc = reopen(&doc);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    for typed in samples {
+        assert!(lines.iter().any(|l| l.text.contains(typed)), "{typed} in {:?}", lines.iter().map(|l| &l.text).collect::<Vec<_>>());
+    }
+    let p = &pdfcraft_model::pages(&doc)[0];
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap()).as_dict().unwrap().clone();
+    let mut shekels = 0;
+    for (_, f) in fonts.iter().filter(|(k, _)| k.starts_with(b"PCAr")) {
+        let f = doc.resolve(f).as_dict().unwrap().clone();
+        let mapped = String::from_utf8_lossy(&stream_bytes(&doc, f.get(b"ToUnicode").unwrap()).unwrap()).into_owned();
+        let n = mapped.matches("<20AA>").count();
+        if n == 0 {
+            continue;
+        }
+        shekels += n;
+        let name = doc.resolve(f.get(b"FontDescriptor").unwrap()).as_dict().unwrap().name(b"FontName").map(<[u8]>::to_vec);
+        assert_eq!(name.as_deref(), Some(&b"NotoSansHebrew"[..]), "₪ is a glyph of the Hebrew face");
+    }
+    assert_eq!(shekels, samples.len(), "each added text draws its shekel with the Hebrew face");
+}
+
 #[test]
 fn odd_hebrew_text_never_panics() {
     let mut doc = fixture();

@@ -265,20 +265,32 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
     let base = if rtl { Level::rtl() } else { Level::ltr() };
     let info = ParagraphBidiInfo::new(line, Some(base));
     let (levels, runs) = info.visual_runs(0..line.len());
+    // U+20AA is a European terminator, so beside a digit it joins the number's left-to-right run
+    // (`₪120`) or starts a run after the number (`120 ₪`). It then does not follow Hebrew inside
+    // that run, and the standard font lacks it (#8013). In an item that already has Hebrew, the
+    // Hebrew face draws the shekel wherever the run puts it. Other signs stay as they were: this
+    // looks for Hebrew only when the line holds a shekel, and once.
+    let shekel_with_hebrew = line.contains('\u{20AA}') && pdfcraft_fonts::hebrew_has('\u{20AA}') && t.text.chars().any(is_hebrew);
     let mut pieces = Vec::new();
     for run in runs {
         let run_rtl = levels.get(run.start).is_some_and(Level::is_rtl);
         // Runs lie on character boundaries; a missing slice is skipped, never a panic.
         let Some(text) = line.get(run) else { continue };
         // Arabic and Hebrew letters take their face; so do spaces and punctuation between them
-        // (Hebrew's when they follow Hebrew), which the shaper then mirrors. Latin text (and what
-        // the faces lack) keeps the item's font.
+        // (Hebrew's when they follow Hebrew), which the shaper then mirrors. A shekel in a Hebrew
+        // item does too, and so does a space in that shekel's own run: otherwise the Arabic face
+        // takes the space (#8013). Latin text (and what the faces lack) keeps the item's font.
+        let with_shekel = shekel_with_hebrew && text.contains('\u{20AA}');
         let mut segments: Vec<(Option<ShapedScript>, String)> = Vec::new();
         for c in text.chars().filter(|c| !is_bidi_control(*c)) {
             let after_hebrew = segments.last().is_some_and(|(kind, _)| *kind == Some(ShapedScript::Hebrew));
             let script = if is_thai(c) {
                 Some(ShapedScript::Thai)
-            } else if is_hebrew(c) || (run_rtl && after_hebrew && !c.is_alphanumeric() && pdfcraft_fonts::hebrew_has(c)) {
+            } else if is_hebrew(c)
+                || (c == '\u{20AA}' && shekel_with_hebrew)
+                || (run_rtl && after_hebrew && !c.is_alphanumeric() && pdfcraft_fonts::hebrew_has(c))
+                || (with_shekel && c.is_whitespace() && pdfcraft_fonts::hebrew_has(c))
+            {
                 Some(ShapedScript::Hebrew)
             } else if is_arabic(c) || (run_rtl && !c.is_alphanumeric() && pdfcraft_fonts::arabic_has(c)) {
                 Some(ShapedScript::Arabic)
