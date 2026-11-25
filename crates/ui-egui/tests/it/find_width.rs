@@ -104,6 +104,18 @@ fn search_and_redact_follows_the_preference() {
     assert_eq!(h.state_mut().redact_search(&ctx), 1, "ガイド marks ｶﾞｲﾄﾞ");
 }
 
+/// The control channel's `set` reaches open views at once, before the window draws again (a
+/// hidden window does not draw), so a view's search agrees with `ui.state`.
+#[test]
+fn set_reaches_open_views_without_a_draw() {
+    let mut h = harness();
+    assert_eq!(matches(&h), 1);
+    h.set_option("ignore_asian_width", "false").unwrap();
+    assert_eq!(matches(&h), 0, "the view searched again without a frame");
+    h.set_option("ignore_asian_width", "true").unwrap();
+    assert_eq!(matches(&h), 1);
+}
+
 /// The choice survives a restart, also from the last release's settings file; settings saved
 /// before the preference existed leave it on.
 #[test]

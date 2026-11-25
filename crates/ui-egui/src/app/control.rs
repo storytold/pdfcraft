@@ -56,6 +56,11 @@ impl PdfCraftApp {
             }
             ("ignore_asian_width", _) => {
                 self.ignore_asian_width = value.parse::<bool>().map_err(|_| "ignore_asian_width must be true or false")?;
+                // Open views take it now, not on the next draw, so they agree with `ui.state` while
+                // the window is hidden.
+                for view in &mut self.views {
+                    view.set_find_ignore_width(self.ignore_asian_width);
+                }
             }
             ("animation_effects", _) => {
                 // PLAN: assumed `crate::settings::motion_from_name(&str) -> Option<MotionChoice>` and `set_motion(&mut self, MotionChoice)`, which writes the field and the store (pdf-shell-w9).
