@@ -103,12 +103,10 @@ impl DocView {
         if let Some(go_to) = &self.view.go_to {
             let pending = match go_to {
                 GoTo::Top { page: p, fraction } if *p == page => Some(*fraction as f32),
-                GoTo::Corner { page: p, at } | GoTo::Point { page: p, at, .. } if *p == page => {
-                    self.page_sizes.get(page).map(|&(w, h)| {
-                        let dh = if self.view.rotation % 180 == 90 { w } else { h };
-                        (at.y as f32) / dh
-                    })
-                }
+                GoTo::Corner { page: p, at } | GoTo::Point { page: p, at, .. } if *p == page => self.page_sizes.get(page).map(|&(w, h)| {
+                    let dh = if self.view.rotation % 180 == 90 { w } else { h };
+                    (at.y as f32) / dh
+                }),
                 _ => None,
             };
             if let Some(frac) = pending {
