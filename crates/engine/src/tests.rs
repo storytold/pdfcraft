@@ -986,7 +986,7 @@ fn undo_to_the_opened_file_is_not_dirty() {
     let opened = Arc::new(fixture(2));
     let id = session.open("existing.pdf", None, opened.clone(), None).unwrap();
     assert!(!session.get(id).unwrap().dirty);
-    assert!(session.autosave_snapshots().is_empty());
+    assert!(session.recovery_snapshot(id).is_none());
 
     session.apply(id, Edit::DeletePages { pages: vec![0] }).unwrap();
     assert_eq!(session.get(id).unwrap().info.pages.len(), 1);
@@ -995,7 +995,7 @@ fn undo_to_the_opened_file_is_not_dirty() {
     assert!(!document.dirty, "the opened bytes are the saved version");
     assert_eq!(document.bytes, opened);
     assert_eq!(document.info.pages.len(), 2);
-    assert!(session.autosave_snapshots().is_empty(), "nothing unsaved to recover");
+    assert!(session.recovery_snapshot(id).is_none(), "nothing unsaved to recover");
 
     session.redo(id).unwrap();
     assert!(session.get(id).unwrap().dirty);
@@ -2287,47 +2287,49 @@ fn render_password_for_recovers_the_user_password_of_older_revisions() {
 #[test]
 fn autosave_snapshots_only_changed_documents() {
     let (mut s, id) = session_with(2);
-    assert!(!s.has_pending_autosave());
-    assert!(s.autosave_snapshots().is_empty(), "clean documents are not snapshotted");
+    let entry = |s: &Session| s.autosave_docs().find(|(d, ..)| *d == id).unwrap();
+    assert!(!entry(&s).2);
+    assert!(s.recovery_snapshot(id).is_none(), "clean documents are not snapshotted");
     s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
-    assert!(s.has_pending_autosave());
-    assert!(s.has_pending_autosave(), "checking a deadline must not consume a snapshot");
-    let snaps = s.autosave_snapshots();
-    assert!(!s.has_pending_autosave());
-    assert_eq!(snaps.len(), 1);
-    assert_eq!(snaps[0].bytes, s.get(id).unwrap().bytes, "the working file");
-    assert!(s.autosave_snapshots().is_empty(), "nothing new since the last snapshot");
+    let (_, first, dirty) = entry(&s);
+    assert!(dirty);
+    let snap = s.recovery_snapshot(id).unwrap();
+    assert_eq!(snap.bytes, s.get(id).unwrap().bytes, "the working file");
+    assert_eq!(entry(&s).1, first, "taking a snapshot marks nothing");
     s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
-    assert_eq!(s.autosave_snapshots().len(), 1);
+    assert_ne!(entry(&s).1, first, "an edit is a new generation");
+    let second = entry(&s).1;
     s.undo(id).unwrap();
     assert!(s.get(id).unwrap().dirty, "the rotation is still unsaved");
-    assert_eq!(s.autosave_snapshots().len(), 1, "undo that leaves unsaved work is a change");
+    assert!(entry(&s).2 && entry(&s).1 != second, "undo that leaves unsaved work is a change");
+    assert!(s.recovery_snapshot(id).is_some());
     s.undo(id).unwrap();
     assert!(!s.get(id).unwrap().dirty, "undo back to the opened file is saved");
-    assert!(s.autosave_snapshots().is_empty(), "a clean document needs no recovery");
+    assert!(s.recovery_snapshot(id).is_none(), "a clean document needs no recovery");
     let saved = s.save_bytes(id).unwrap();
     s.mark_saved(id, saved, None).unwrap();
-    assert!(s.autosave_snapshots().is_empty(), "saved documents need no recovery");
+    assert!(!entry(&s).2 && s.recovery_snapshot(id).is_none(), "saved documents need no recovery");
 }
 
 #[test]
 fn autosave_snapshots_a_new_unsaved_document_once() {
     let (mut s, clean) = session_with(1);
     let id = s.open_new("Untitled.pdf", Arc::new(fixture(1))).unwrap();
-    let snaps = s.autosave_snapshots();
-    assert_eq!(snaps.len(), 1, "the new document is unsaved work");
-    assert_eq!(snaps[0].doc, id);
-    assert!(snaps.iter().all(|x| x.doc != clean), "the clean document stays out");
-    assert!(s.autosave_snapshots().is_empty(), "nothing new since the last snapshot");
+    let dirty: Vec<(DocId, u64)> = s.autosave_docs().filter(|d| d.2).map(|d| (d.0, d.1)).collect();
+    assert_eq!(dirty.len(), 1, "the new document is unsaved work");
+    assert_eq!(dirty[0].0, id);
+    assert!(s.recovery_snapshot(clean).is_none(), "the clean document stays out");
+    assert_eq!(s.recovery_snapshot(id).unwrap().doc, id);
     s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
-    assert_eq!(s.autosave_snapshots().len(), 1, "a later edit is snapshotted again");
+    let after = s.autosave_docs().find(|d| d.0 == id).unwrap().1;
+    assert_ne!(after, dirty[0].1, "a later edit is a new generation");
 }
 
 #[test]
 fn recovered_documents_reopen_unsaved_at_their_original_path() {
     let (mut s, id) = session_with(2);
     s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
-    let snap = s.autosave_snapshots().remove(0);
+    let snap = s.recovery_snapshot(id).unwrap();
     // A new session after a crash.
     let mut s2 = Session::new();
     let rid = s2.open(snap.name.clone(), None, snap.bytes.clone(), None).unwrap();
@@ -2336,7 +2338,7 @@ fn recovered_documents_reopen_unsaved_at_their_original_path() {
     assert!(d.dirty);
     assert_eq!(d.path.as_deref(), Some("/docs/report.pdf"));
     assert_eq!(d.info.pages.len(), 1, "the edit survived");
-    assert!(s2.autosave_snapshots().is_empty(), "already in the recovery store");
+    assert!(s2.autosave_docs().any(|(d, _, dirty)| d == rid && dirty), "listed as unsaved work");
 }
 
 fn outline_titles(items: &[pdfcraft_render::OutlineItem]) -> Vec<String> {
@@ -3216,9 +3218,8 @@ fn password_field_values_are_kept_in_memory_but_written_to_no_file() {
     assert!(!appears_in_pdf(&saved, "*******"), "the typed length is not kept in the appearance");
     assert!(!appears_in_pdf(&s.save_full_bytes(id).unwrap(), "hunter2"), "a full rewrite");
     assert!(!appears_in_pdf(&s.reduced_bytes(id).unwrap().0, "hunter2"), "Reduce File Size");
-    let snaps = s.autosave_snapshots();
-    assert_eq!(snaps.len(), 1);
-    assert!(!appears_in_pdf(&snaps[0].bytes, "hunter2"), "the recovery snapshot");
+    let snap = s.recovery_snapshot(id).expect("the document has unsaved work");
+    assert!(!appears_in_pdf(&snap.bytes, "hunter2"), "the recovery snapshot");
     // New files built from its pages too (#3943 review): Extract copies the fields of the pages it
     // takes, and Split writes each part the same way.
     let extracted = s.extract(id, &[0]).unwrap();
@@ -3415,10 +3416,9 @@ fn xfa_password_field_values_are_not_saved_in_datasets_or_widgets() {
         assert!(!appears_in_pdf(&s.save_full_bytes(id).unwrap(), leak), "save_full_bytes leaked {leak}");
         assert!(!appears_in_pdf(&s.reduced_bytes(id).unwrap().0, leak), "reduced_bytes leaked {leak}");
     }
-    let snaps = s.autosave_snapshots();
-    assert_eq!(snaps.len(), 1);
+    let snap = s.recovery_snapshot(id).expect("the document has unsaved work");
     for leak in ["hunter2", "secret1", "*******"] {
-        assert!(!appears_in_pdf(&snaps[0].bytes, leak), "autosave snapshot leaked {leak}");
+        assert!(!appears_in_pdf(&snap.bytes, leak), "autosave snapshot leaked {leak}");
     }
 
     // Reopening the saved file in a new session leaves the password field empty (it does not
@@ -11874,7 +11874,7 @@ fn undo_never_makes_an_unsaved_document_clean() {
     s.apply(new, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
     s.undo(new).unwrap();
     assert!(s.get(new).unwrap().dirty, "a new document is unsaved until it is saved");
-    assert_eq!(s.autosave_snapshots().len(), 1, "and still needs recovery");
+    assert!(s.recovery_snapshot(new).is_some(), "and still needs recovery");
     s.revert(new).unwrap();
     assert!(s.get(new).unwrap().dirty, "Revert goes back to the created bytes, which aren't saved anywhere");
 
