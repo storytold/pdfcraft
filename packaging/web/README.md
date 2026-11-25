@@ -14,6 +14,27 @@ static site in `pdfcraft-web-<version>/`:
 
 There is no server-side code. Upload the folder's contents anywhere that serves static files.
 
+## Publish from this repository
+
+The `Publish web app` workflow (`.github/workflows/web-pages.yml`) builds the WebAssembly app,
+stages the OCR models, and deploys the static site to GitHub Pages whenever `main` is updated.
+To turn it on, set **Settings → Pages → Build and deployment → Source** to **GitHub Actions**.
+The deployment URL is reported by the workflow (for a project repository, it is usually
+`https://<owner>.github.io/<repository>/`). The build uses relative asset URLs, so it works at
+that project subpath as well as at a domain root. You can also run the workflow manually from
+`main` in the Actions tab.
+
+For Vercel, the root `vercel.json` defines one public static service, `pdfcraft-web`, routed at
+`/`. Set the Vercel project's **Root Directory** to the repository root (`.`); the service root
+is `apps/pdfcraft-web`. Its install/build scripts install the Rust/WASM toolchain, run Trunk, and
+stage OCR models into the service's `dist` output. The OCR worker is part of that static build, not
+a separate Vercel service, and there are no service bindings because the app has no internal HTTP
+backend. Netlify, Cloudflare Pages or another static host can instead deploy the contents of
+`dist/web` after running `trunk build --release` from `apps/pdfcraft-web` and
+`cargo xtask models dist/web/models`. Document processing stays in the browser; no server,
+database, account or environment variables are needed. Follow the server requirements below
+when configuring a host.
+
 ## Any path works
 
 All URLs in `index.html` are relative (`public_url = "./"` in `apps/pdfcraft-web/Trunk.toml`),

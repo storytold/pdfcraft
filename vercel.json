@@ -1,0 +1,17 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "pdfcraft-web": {
+      "root": "apps/pdfcraft-web",
+      "installCommand": "bash vercel-install.sh",
+      "buildCommand": "bash vercel-build.sh",
+      "outputDirectory": "dist"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": { "service": "pdfcraft-web" }
+    }
+  ]
+}

@@ -554,7 +554,7 @@ Every other Linux build needs glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+, Fe
 
 | Build | File | Notes |
 |---|---|---|
-| Static site | `pdfcraft-web-<ver>.zip` | Runs in a modern browser; host it on any static server |
+| Static site | `pdfcraft-web-<ver>.zip` | Runs in a modern browser; host it on any static server. The `Publish web app` workflow can deploy the current `main` build to GitHub Pages. |
 
 ---
 

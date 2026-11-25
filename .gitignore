@@ -2,6 +2,7 @@
 plan/
 /target
 /dist
+/apps/pdfcraft-web/dist
 /corpus
 /log
 .DS_Store
