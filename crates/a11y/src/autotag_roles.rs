@@ -97,6 +97,9 @@ struct State {
     /// Text render mode 3 or 7: shown text that paints nothing, such as an OCR layer or a
     /// clip-only object.
     invisible: bool,
+    /// The current clip encloses no area (`0 0 0 0 re W n` and the like). Text inside it is
+    /// not shown (#8212).
+    clip_empty: bool,
     metrics: Option<Rc<Metrics>>,
 }
 
@@ -140,7 +143,7 @@ struct Shown {
 
 impl Shown {
     fn show(&mut self, state: &State, bytes: &[u8]) {
-        let Some(metrics) = state.metrics.as_ref().filter(|_| !state.invisible) else { return };
+        let Some(metrics) = state.metrics.as_ref().filter(|_| !state.invisible && !state.clip_empty) else { return };
         let text = metrics.decode(bytes);
         let chars = text.chars().filter(|c| !c.is_whitespace()).count();
         if chars == 0 {
@@ -183,9 +186,19 @@ impl Shown {
 /// `/Font` resource dictionary; `fonts` is shared by the document's pages.
 pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops: &[Op], spans: &[(usize, usize)]) -> Vec<Evidence> {
     let mut by_name: HashMap<Vec<u8>, Option<Rc<Metrics>>> = HashMap::new();
-    let mut state =
-        State { ctm: Matrix::IDENTITY, tm: Matrix::IDENTITY, tlm: Matrix::IDENTITY, size: 0.0, leading: 0.0, invisible: false, metrics: None };
+    let mut state = State {
+        ctm: Matrix::IDENTITY,
+        tm: Matrix::IDENTITY,
+        tlm: Matrix::IDENTITY,
+        size: 0.0,
+        leading: 0.0,
+        invisible: false,
+        clip_empty: false,
+        metrics: None,
+    };
     let (mut saved, mut unsaved) = (Vec::new(), 0usize);
+    // The path is not part of the graphics state, so `q`/`Q` do not keep it.
+    let mut path_empty = None;
     let mut out = Vec::with_capacity(spans.len());
     let mut spans = spans.iter().peekable();
     let mut current: Option<(usize, Shown)> = None;
@@ -217,6 +230,21 @@ pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops:
             }
             b"TL" => state.leading = op.num(0).unwrap_or(state.leading),
             b"Tr" => state.invisible = matches!(op.num(0), Some(m) if m == 3.0 || m == 7.0),
+            b"re" => {
+                path_empty = op.nums::<4>().map(|[_, _, w, h]| {
+                    let [a, b, c, d, _, _] = state.ctm.0;
+                    (a * d - b * c).abs() * w.abs() * h.abs() == 0.0
+                });
+            }
+            b"m" | b"l" | b"c" | b"v" | b"y" | b"h" => path_empty = Some(false),
+            // A path that encloses nothing replaces the clip with nothing. A later path is
+            // intersected with that, so the clip stays empty.
+            b"W" | b"W*" => {
+                if state.clip_empty || path_empty == Some(true) {
+                    state.clip_empty = true;
+                }
+                path_empty = None;
+            }
             b"Td" | b"TD" => {
                 if let Some([x, y]) = op.nums::<2>() {
                     if op.op == b"TD" {
@@ -378,5 +406,16 @@ mod tests {
         assert_eq!(found[1].lines, 4, "\" and TD each start a line, and T* uses TD's leading");
         assert_eq!(found[2].chars, 5, "render mode 3 and 7 text is not counted");
         assert_eq!(found[3], Evidence::default(), "a size past 1e6 is dropped");
+    }
+
+    /// Text inside a clip that encloses no area is not evidence. It must not become a heading
+    /// or pull the other headings down a level (#8212).
+    #[test]
+    fn text_inside_a_zero_area_clip_is_not_counted() {
+        let found = walk(b"BT /F1 10 Tf (body) Tj ET q 0 0 0 0 re W n BT /F1 30 Tf (HIDDEN) Tj ET Q BT /F1 10 Tf (more) Tj ET");
+        assert_eq!(found[0].chars, 4);
+        assert_eq!(found[1], Evidence::default());
+        assert_eq!(found[2].chars, 4);
+        assert_eq!(roles(&found), ["P", "P", "P"]);
     }
 }
