@@ -25,6 +25,7 @@ pub mod merge;
 mod ocrs;
 mod pitch;
 pub mod preprocess;
+pub mod resolution;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tesseract;
 mod tiles;

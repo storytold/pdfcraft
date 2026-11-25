@@ -828,6 +828,7 @@ impl OcrSteps {
                 deskew: settings.deskew,
                 denoise: settings.denoise,
                 binarize: settings.binarize,
+                resolution: pdfcraft_ocr::resolution::ResolutionPolicy::Native,
             },
         )
         .map_err(|e| skip(&e.to_string()))?;
