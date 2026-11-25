@@ -36,6 +36,8 @@ pub(crate) struct Wraps {
     pub unread_forms: Vec<ObjRef>,
     /// Untagged items whose operands and operator are in different content streams.
     pub split_items: usize,
+    /// Paths begun in one content stream and painted or ended in a later one.
+    pub split_paths: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,7 +99,7 @@ impl Frame {
 /// What a form draws, read as the checker reads it.
 #[derive(Debug, Default)]
 struct Census {
-    /// Marked content with an `/MCID`, or a form with `/StructParent`.
+    /// Marked content with an `/MCID`, or an image or form with `/StructParent` (§14.7.4.3).
     tagged: bool,
     /// Items neither in marked content with an `/MCID` nor in an artifact.
     untagged: usize,
@@ -108,6 +110,10 @@ struct Census {
 }
 
 const ITEMS: &[&[u8]] = &[b"Tj", b"TJ", b"'", b"\"", b"f", b"F", b"f*", b"B", b"B*", b"b", b"b*", b"S", b"s", b"sh", b"BI"];
+/// Operators that build a path or set it as the clip (ISO 32000-1 §8.5.2, §8.5.4).
+const PATH: &[&[u8]] = &[b"m", b"l", b"c", b"v", b"y", b"h", b"re", b"W", b"W*"];
+/// Operators that end a path (§8.5.3).
+const PATH_ENDS: &[&[u8]] = &[b"S", b"s", b"f", b"F", b"f*", b"B", b"B*", b"b", b"b*", b"n"];
 
 fn sub(doc: &Document, res: &Dict, key: &[u8]) -> Dict {
     res.get(key).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default()
@@ -141,6 +147,8 @@ pub(crate) struct Planner<'a> {
     resources: Dict,
     budget: DecodeBudget,
     forms: HashMap<ObjRef, Leaf>,
+    /// The content stream the path being built began in.
+    path: Option<usize>,
     wraps: Wraps,
 }
 
@@ -156,6 +164,7 @@ impl<'a> Planner<'a> {
             resources,
             budget: DecodeBudget::page(),
             forms: HashMap::new(),
+            path: None,
             wraps: Wraps::default(),
         }
     }
@@ -166,7 +175,7 @@ impl<'a> Planner<'a> {
     ///
     /// Why nothing can be planned: the pairs don't match, or nest deeper than this reads.
     pub(crate) fn plan(mut self, pieces: &Pieces, ops: &[Op]) -> Result<Wraps, String> {
-        let frames = self.read(ops)?;
+        let frames = self.read(pieces, ops)?;
         let root = frames.len().checked_sub(1).ok_or("its content has no root")?;
         let mut marks: Vec<(usize, u8, &'static [u8])> = Vec::new();
         wrap_frame(&frames, root, pieces, &mut marks, &mut self.wraps);
@@ -176,7 +185,7 @@ impl<'a> Planner<'a> {
     }
 
     /// The pairs of the content, children before parents; the root is last.
-    fn read(&mut self, ops: &[Op]) -> Result<Vec<Frame>, String> {
+    fn read(&mut self, pieces: &Pieces, ops: &[Op]) -> Result<Vec<Frame>, String> {
         let mut done: Vec<Frame> = Vec::new();
         let mut open: Vec<Frame> = vec![Frame::new(Kind::Root, 0)];
         for op in ops {
@@ -205,7 +214,8 @@ impl<'a> Planner<'a> {
                     None => {}
                 }
             }
-            let class = self.leaf(op);
+            let leaf = self.leaf(op);
+            let class = self.path(op, pieces, leaf);
             let top = open.last_mut().ok_or("its content has no root")?;
             top.items = top.items.saturating_add(usize::from(class == Leaf::Item));
             top.barrier |= class == Leaf::Barrier;
@@ -216,6 +226,26 @@ impl<'a> Planner<'a> {
         }
         done.extend(open.pop());
         Ok(done)
+    }
+
+    /// `class` for `op`, or a barrier when `op` ends a path begun in an earlier content stream:
+    /// no marked-content operator may come inside a path object (§8.2, Figure 9).
+    fn path(&mut self, op: &Op, pieces: &Pieces, class: Leaf) -> Leaf {
+        let name = op.op.as_slice();
+        if PATH.contains(&name) {
+            self.path.get_or_insert(pieces.piece_of(op.span.start));
+            return class;
+        }
+        if !PATH_ENDS.contains(&name) {
+            return class;
+        }
+        match self.path.take() {
+            Some(first) if first != pieces.piece_of(op.span.end.saturating_sub(1)) => {
+                self.wraps.split_paths = self.wraps.split_paths.saturating_add(1);
+                Leaf::Barrier
+            }
+            _ => class,
+        }
     }
 
     fn mark(&self, op: &Op) -> Mark {
@@ -253,8 +283,8 @@ impl<'a> Planner<'a> {
         let obj = self.doc.get(r);
         let Object::Stream(x) = &*obj else { return Leaf::Neutral };
         match x.dict.name(b"Subtype") {
+            Some(b"Image" | b"Form") if x.dict.contains(b"StructParent") => Leaf::Barrier,
             Some(b"Image") => Leaf::Item,
-            Some(b"Form") if x.dict.contains(b"StructParent") => Leaf::Barrier,
             Some(b"Form") => {
                 let mut census = Census::default();
                 let resources = self.resources.clone();
@@ -321,8 +351,8 @@ impl<'a> Planner<'a> {
         let obj = self.doc.get(r);
         let Object::Stream(x) = &*obj else { return };
         match x.dict.name(b"Subtype") {
+            Some(b"Image" | b"Form") if x.dict.contains(b"StructParent") => out.tagged = true,
             Some(b"Image") => out.untagged = out.untagged.saturating_add(usize::from(!inside)),
-            Some(b"Form") if x.dict.contains(b"StructParent") => out.tagged = true,
             Some(b"Form") => self.census(r, res, inside, depth.saturating_add(1), out),
             _ => {}
         }

@@ -558,14 +558,17 @@ impl Automation {
     }
 
     /// Mark the untagged content of tagged pages as artifacts, in one undo step when anything
-    /// changes; reports what was marked, the pages skipped and what was left.
+    /// changes; reports what was marked, the pages skipped and what was left, with the
+    /// document's summary under `document`.
     pub(crate) fn accessibility_mark_untagged_artifact(&mut self, a: &Args) -> Result<Value> {
         let pages = a.opt_ints("pages")?.map(|_| self.pages(a, "pages")).transpose()?.unwrap_or_default();
         let doc = self.doc(a)?;
         let (id, plan) = (doc.id, doc.untagged_artifacts(&pages).map_err(|e| failed(e.to_string()))?);
         let warnings =
             if plan.sequences > 0 { self.apply_with_warnings(id, pdfcraft_engine::Edit::MarkUntaggedArtifact { pages })? } else { Vec::new() };
-        Ok(with_warnings(untagged_json(&plan), warnings))
+        let mut out = untagged_json(&plan);
+        out["document"] = crate::summary(self.doc(a)?);
+        Ok(with_warnings(out, warnings))
     }
 
     pub(crate) fn accessibility_layout_table_to_blocks(&mut self, a: &Args) -> Result<Value> {

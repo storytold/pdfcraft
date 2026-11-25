@@ -4404,10 +4404,19 @@ trailer << /Root 1 0 R >>
     let marked = ok(&mut a, "accessibility_mark_untagged_artifact", json!({ "doc": doc }));
     assert_eq!(marked["changed"], true, "{marked}");
     assert_eq!(marked["pages"][0]["page"], 1, "{marked}");
+    assert_eq!(
+        (marked["document"]["doc"].as_u64(), &marked["document"]["dirty"], &marked["document"]["undo"]),
+        (Some(doc), &json!(true), &json!("Mark untagged content as artifacts"))
+    );
     assert!(marked["notes"].as_array().unwrap().iter().any(|n| n.as_str().unwrap().contains("assistive technology")), "{marked}");
     assert_eq!(failed(&mut a), 0);
     // Nothing is left to mark, and no second undo step is made.
-    assert_eq!(ok(&mut a, "accessibility_mark_untagged_artifact", json!({ "doc": doc }))["changed"], false);
+    let again = ok(&mut a, "accessibility_mark_untagged_artifact", json!({ "doc": doc }));
+    assert_eq!(
+        (&again["changed"], again["document"]["doc"].as_u64(), &again["document"]["dirty"]),
+        (&json!(false), Some(doc), &json!(true)),
+        "{again}"
+    );
     ok(&mut a, "doc_save", json!({ "doc": doc, "path": "marked.pdf" }));
     let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("marked.pdf")).unwrap())).unwrap();
     let options = pdfcraft_engine::a11y::Options { rules: [pdfcraft_engine::a11y::Rule::TaggedContent].into(), pages: None };

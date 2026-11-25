@@ -193,3 +193,53 @@ fn a_graphics_state_that_spans_two_streams_is_wrapped_inside_each() {
     assert!(after[1..].iter().all(|(_, t)| balanced(t)), "{after:?}");
     assert_eq!(tagged_content(&doc), Status::Passed);
 }
+
+const STRUCT_IMAGE: &str = "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /StructParent 1 /Length 1 >>\nstream\nx\nendstream";
+
+#[test]
+fn an_image_with_a_struct_parent_is_never_enclosed() {
+    let mut doc = tagged(&[&format!("{CLAIMED} /Im Do 0 0 1 1 re f")], "/Im 9 0 R", &[STRUCT_IMAGE.into()]);
+    let done = mark_untagged_artifacts(&mut doc, &[]).unwrap();
+    assert_eq!((done.sequences, done.items), (1, 1), "{done:?}");
+    let (_, text) = &contents(&doc)[0];
+    assert!(text.find("/Artifact BMC") > text.find("/Im Do"), "{text}");
+}
+
+#[test]
+fn a_form_drawing_an_image_with_a_struct_parent_is_never_enclosed() {
+    let wrapper = form("/Im Do", "/Resources << /XObject << /Im 9 0 R >> >>");
+    let mut doc = tagged(&[&format!("{CLAIMED} /Fm Do 0 0 1 1 re f")], "/Fm 10 0 R", &[STRUCT_IMAGE.into(), wrapper]);
+    let done = mark_untagged_artifacts(&mut doc, &[]).unwrap();
+    assert_eq!((done.sequences, done.items), (1, 1), "{done:?}");
+    let (_, text) = &contents(&doc)[0];
+    assert!(text.find("/Artifact BMC") > text.find("/Fm Do"), "{text}");
+}
+
+#[test]
+fn a_path_built_in_one_stream_and_ended_in_the_next_is_left_and_disclosed() {
+    // A painted path, and a clip ended by `n`; each stream also holds a path of its own.
+    for (built, ended) in [("0 0 1 1 re", "f 2 2 1 1 re f"), ("0 0 5 5 re W", "n 2 2 1 1 re f")] {
+        let mut doc = tagged(&[CLAIMED, built, ended], "", &[]);
+        let done = mark_untagged_artifacts(&mut doc, &[]).unwrap();
+        assert_eq!((done.sequences, done.items), (1, 1), "{done:?}");
+        assert!(done.notes.iter().any(|n| n.contains("painted in the next")), "{done:?}");
+        let after = contents(&doc);
+        assert_eq!(after[1].1, built, "{after:?}");
+        assert!(after[2].1.trim_start().starts_with(&ended[..1]) && nests(&after[2].1), "{after:?}");
+        assert_eq!(after[2].1.matches("/Artifact BMC").count(), 1, "{after:?}");
+    }
+}
+
+#[test]
+fn an_inline_image_split_across_two_streams_is_never_entered() {
+    let mut doc = tagged(&[CLAIMED, "0 0 1 1 re f BI /W 1 /H 1 /BPC 8 /CS /G ID", "x EI 2 2 1 1 re f"], "", &[]);
+    let done = mark_untagged_artifacts(&mut doc, &[]).unwrap();
+    assert_eq!((done.sequences, done.items), (2, 2), "{done:?}");
+    assert!(done.notes.iter().any(|n| n.contains("split across two content streams")), "{done:?}");
+    let after = contents(&doc);
+    let (first, second) = (&after[1].1, &after[2].1);
+    // A wrap may close before `BI` and open after `EI`, never between them.
+    let marks = |t: &str| t.contains("BMC") || t.contains("EMC");
+    assert!(first.split_once("BI").is_some_and(|(_, image)| !marks(image)), "{done:?} {after:?}");
+    assert!(second.split_once("EI").is_some_and(|(image, _)| !marks(image)), "{done:?} {after:?}");
+}

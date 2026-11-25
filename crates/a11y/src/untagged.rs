@@ -213,6 +213,7 @@ struct Left {
     mixed: HashSet<ObjRef>,
     unread: HashSet<ObjRef>,
     split: usize,
+    split_paths: usize,
 }
 
 impl Left {
@@ -221,6 +222,7 @@ impl Left {
         self.mixed.extend(wraps.mixed_forms.iter().copied());
         self.unread.extend(wraps.unread_forms.iter().copied());
         self.split = self.split.saturating_add(wraps.split_items);
+        self.split_paths = self.split_paths.saturating_add(wraps.split_paths);
     }
 
     fn notes(&self, out: &UntaggedArtifacts) -> Vec<String> {
@@ -248,6 +250,12 @@ impl Left {
         }
         if self.split > 0 {
             notes.push(format!("Left {} untagged item(s) whose operator is split across two content streams.", self.split));
+        }
+        if self.split_paths > 0 {
+            notes.push(format!(
+                "Left {} path(s) built in one content stream and painted in the next; marking them would split the path.",
+                self.split_paths
+            ));
         }
         notes
     }
