@@ -2,9 +2,11 @@
 //! fullwidth forms at their ordinary width: in the find bar, in Search & Redact, and across a
 //! restart.
 
+use crate::support::AppHarness as _;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
+use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::settings::import_json;
 
 /// One page in a Helvetica whose `/ToUnicode` maps its codes to halfwidth and fullwidth forms:
 /// `ＡＢＣ１２３` on one line, and below it `ｶﾞｲﾄﾞ` with each halfwidth sound mark a glyph of its own.
@@ -39,17 +41,27 @@ fn width_pdf() -> Vec<u8> {
 }
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("width.pdf", None, width_pdf()).expect("opens");
-        app.set_option("find", "abc123").unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let ctx = egui::Context::default();
+        let mut app = crate::control::new_app();
+        app.set_option(&ctx, "language", "en").unwrap();
+        app.open_bytes(&ctx, "width.pdf", None, width_pdf()).expect("opens");
+        app.set_option(&ctx, "find", "abc123").unwrap();
         app
     });
     // Fonts install on frame 1 and apply on frame 2.
     h.run_steps(4);
     crate::support::settle(&mut h);
     h
+}
+
+/// Click Preferences' row `label` (one scrolling page: brought into view first).
+fn click_row(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    h.get_by(|n| !n.is_hidden() && n.role() != egui::accesskit::Role::Label && n.label().as_deref() == Some(label)).scroll_to_me();
+    h.run_steps(3);
+    h.get_by(|n| !n.is_hidden() && n.role() != egui::accesskit::Role::Label && n.label().as_deref() == Some(label)).click();
+    h.run_steps(4);
 }
 
 fn matches(h: &Harness<'static, PdfCraftApp>) -> usize {
@@ -64,17 +76,13 @@ fn unticking_ignore_asian_character_width_makes_the_find_bar_match_width() {
     assert!(h.state().ignore_asian_width, "on by default");
     assert_eq!(matches(&h), 1, "ABC123 finds ＡＢＣ１２３");
 
-    h.state_mut().dialog = Some(Dialog::Preferences);
-    h.run_steps(2);
-    h.get_by_label("Ignore Asian character width").scroll_to_me();
+    h.state_mut().open_preferences();
     h.run_steps(4);
-    h.get_by_label("Ignore Asian character width").click();
-    h.run_steps(4);
+    click_row(&mut h, "Ignore Asian character width");
     assert!(!h.state().ignore_asian_width);
     assert_eq!(matches(&h), 0, "with width significant, ASCII is not fullwidth");
 
-    h.get_by_label("Ignore Asian character width").click();
-    h.run_steps(4);
+    click_row(&mut h, "Ignore Asian character width");
     assert!(h.state().ignore_asian_width);
     assert_eq!(matches(&h), 1);
 }
@@ -83,31 +91,37 @@ fn unticking_ignore_asian_character_width_makes_the_find_bar_match_width() {
 #[test]
 fn search_and_redact_follows_the_preference() {
     let mut h = harness();
-    h.state_mut().set_option("ignore_asian_width", "false").unwrap();
+    let ctx = h.ctx.clone();
+    h.set_option("ignore_asian_width", "false").unwrap();
     h.run_steps(2);
     assert_eq!(matches(&h), 0);
     h.state_mut().redact_search.text = "ガイド".into();
-    assert_eq!(h.state_mut().redact_search(), 0, "ガ is not ｶﾞ with width significant");
-    assert!(h.state_mut().set_option("ignore_asian_width", "off").is_err());
-    h.state_mut().set_option("ignore_asian_width", "true").unwrap();
+    assert_eq!(h.state_mut().redact_search(&ctx), 0, "ガ is not ｶﾞ with width significant");
+    assert!(h.set_option("ignore_asian_width", "off").is_err());
+    h.set_option("ignore_asian_width", "true").unwrap();
     h.run_steps(2);
     assert_eq!(matches(&h), 1);
-    assert_eq!(h.state_mut().redact_search(), 1, "ガイド marks ｶﾞｲﾄﾞ");
+    assert_eq!(h.state_mut().redact_search(&ctx), 1, "ガイド marks ｶﾞｲﾄﾞ");
 }
 
-/// The choice survives a restart; settings saved before the preference existed leave it on.
+/// The choice survives a restart, also from the last release's settings file; settings saved
+/// before the preference existed leave it on.
 #[test]
 fn the_preference_is_remembered() {
-    let mut app = PdfCraftApp::new();
+    let mut app = crate::control::new_app();
     app.ignore_asian_width = false;
-    let saved = app.persist();
-    let mut fresh = PdfCraftApp::new();
-    fresh.restore(&saved);
+    let saved = app.settings_snapshot();
+    let mut fresh = crate::control::new_app();
+    fresh.apply_settings(&saved);
     assert!(!fresh.ignore_asian_width, "the preference is remembered");
 
-    let mut old: serde_json::Value = serde_json::from_str(&saved).unwrap();
-    old.as_object_mut().unwrap().remove("ignore_asian_width");
-    let mut fresh = PdfCraftApp::new();
-    fresh.restore(&old.to_string());
+    let mut imported = crate::control::new_app();
+    imported.apply_settings(&import_json(r#"{"ignore_asian_width": false}"#).0);
+    assert!(!imported.ignore_asian_width, "read from the last release's settings");
+
+    let mut old = saved;
+    old.layout.ignore_asian_width = None;
+    let mut fresh = crate::control::new_app();
+    fresh.apply_settings(&old);
     assert!(fresh.ignore_asian_width, "missing means the default, on");
 }

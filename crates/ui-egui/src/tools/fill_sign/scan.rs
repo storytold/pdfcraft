@@ -1,7 +1,24 @@
-use super::{
-    Color32, CornerRadius, DEFAULT_SENSITIVITY, PREVIEW_MAX_SIDE, PhotoRect, Pos2, SCAN_MAX_SIDE, SavedSig, ScanError, Sense, SigDraft,
-    SignatureImage, SignaturePhoto, Stroke, Tokens, Turn, image_preview, pos2, vec2,
-};
+use std::sync::Arc;
+
+use craft::behavior::geometry::CropBox;
+use craft::behavior::kurbo::{Point, Rect as DocRect, Size};
+use craft::behavior::{CanvasView, EditEvent, PixelSize};
+use craft::host::queue::{JobQueue, Priority, QueueOptions};
+use craft::host::{Host, PickId, PickRequest, Picked, Wake};
+use craft::review::ui::signature::DrawPad;
+use craft::review::{SignatureDraft, SignatureImage as PadImage};
+use craft::theme::variant::Tone;
+use craft::ui::buttons::{Button, IconButton};
+use craft::ui::canvas::{Canvas, CropOutside, CropOverlay, PixelRect, RasterDisplay, RasterSource};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
+use craft::ui::display::{Shade, Text};
+use craft::ui::form::SliderField;
+use craft::ui::layout_components::Row;
+use craft::ui::notices::{Notice, NoticeLayout};
+use craft::ui::primitives::Revision;
+use craft::ui::runtime::drag::OsFile;
+use pdfcraft_engine::signature_scan::{DEFAULT_SENSITIVITY, MAX_PHOTO_BYTES, PREVIEW_MAX_SIDE, SCAN_MAX_SIDE, ScanError};
+use pdfcraft_engine::{PhotoRect, SignatureImage, SignaturePhoto, Turn};
 
 /// The Scan tab's photo, the frame around the signature and how strongly faint ink is picked up.
 #[derive(Clone, Debug, PartialEq)]
@@ -9,15 +26,12 @@ pub struct ScanDraft {
     pub photo: SignaturePhoto,
     pub frame: PhotoRect,
     pub sensitivity: u8,
-    /// Changes whenever the photo's pixels do (a new photo or a turn), to refresh its texture.
+    /// Changes whenever the photo's pixels do (a new photo or a turn), as the photo raster's revision.
     version: u64,
-    pub(super) drag: Option<FrameDrag>,
     /// The draft's image is the full-resolution result, not a quick preview.
     pub(super) full: bool,
     /// Why the frame gives no signature, shown in place of the preview.
     pub problem: Option<String>,
-    /// Scans run here while the frame or slider moves, so a frame never waits for one.
-    worker: ScanWorker,
 }
 
 /// What one scan cleans: the frame and sensitivity at the time it was asked for.
@@ -30,41 +44,8 @@ struct ScanRequest {
 
 type ScanAnswer = Result<Result<SignatureImage, ScanError>, String>;
 
-/// The scan running on a worker thread (desktop) and the newest request made meanwhile, which
-/// starts when it answers; requests in between are skipped. It is not part of the draft's value:
-/// a clone has nothing running and comparisons ignore it.
-#[derive(Default)]
-struct ScanWorker {
-    running: Option<(ScanRequest, std::sync::mpsc::Receiver<ScanAnswer>)>,
-    queued: Option<ScanRequest>,
-}
-
-impl Clone for ScanWorker {
-    fn clone(&self) -> Self {
-        Self::default()
-    }
-}
-
-impl PartialEq for ScanWorker {
-    fn eq(&self, _: &Self) -> bool {
-        true
-    }
-}
-
-impl std::fmt::Debug for ScanWorker {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ScanWorker").field("running", &self.running.as_ref().map(|(r, _)| r)).field("queued", &self.queued).finish()
-    }
-}
-
-/// A drag on the photo, in photo pixels.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum FrameDrag {
-    /// Moving the frame, grabbed at this offset from its top-left corner.
-    Move([f32; 2]),
-    /// Drawing a new frame or resizing from a corner, with the opposite corner fixed here.
-    Span([f32; 2]),
-}
+/// A finished scan with the photo version and request it answers.
+type ScanDone = (u64, u64, ScanRequest, ScanAnswer);
 
 fn next_photo_version() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -75,16 +56,7 @@ impl ScanDraft {
     /// Frame the signature (turning a sideways one upright) with the default sensitivity.
     pub fn new(mut photo: SignaturePhoto) -> Self {
         let frame = photo.auto_frame();
-        Self {
-            photo,
-            frame,
-            sensitivity: DEFAULT_SENSITIVITY,
-            version: next_photo_version(),
-            drag: None,
-            full: false,
-            problem: None,
-            worker: ScanWorker::default(),
-        }
+        Self { photo, frame, sensitivity: DEFAULT_SENSITIVITY, version: next_photo_version(), full: false, problem: None }
     }
 
     fn request(&self, full: bool) -> ScanRequest {
@@ -94,78 +66,6 @@ impl ScanDraft {
     fn run(photo: &SignaturePhoto, req: ScanRequest) -> ScanAnswer {
         let max_side = if req.full { SCAN_MAX_SIDE } else { PREVIEW_MAX_SIDE };
         pdfcraft_engine::guard(|| photo.scan(req.frame, req.sensitivity, max_side))
-    }
-
-    /// Clean the framed area into `image` now: quickly (`full` false) while something is being
-    /// dragged, at full resolution otherwise. A scan still running in the background is dropped.
-    pub fn rescan(&mut self, image: &mut Option<SignatureImage>, full: bool) {
-        self.worker = ScanWorker::default();
-        let req = self.request(full);
-        let answer = Self::run(&self.photo, req);
-        self.apply(image, req, answer);
-    }
-
-    /// Like [`Self::rescan`], but on a worker thread on desktop, so the frame that asked doesn't
-    /// wait (a scan of a large frame takes a noticeable fraction of a second). The draft isn't
-    /// ready until the answer for the current frame and sensitivity arrives; [`Self::poll`]
-    /// picks it up. Where threads are unavailable (the web) it scans at once.
-    pub fn rescan_in_background(&mut self, image: &mut Option<SignatureImage>, full: bool, ctx: Option<&egui::Context>) {
-        if cfg!(target_arch = "wasm32") {
-            return self.rescan(image, full);
-        }
-        let req = self.request(full);
-        self.full = false;
-        if self.worker.running.is_some() {
-            self.worker.queued = Some(req);
-        } else if !self.start(req, ctx) {
-            self.rescan(image, full);
-        }
-    }
-
-    /// Start `req` on a worker thread; false if no thread could be started.
-    fn start(&mut self, req: ScanRequest, ctx: Option<&egui::Context>) -> bool {
-        let photo = self.photo.clone();
-        let ctx = ctx.cloned();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let spawned = std::thread::Builder::new().name("signature-scan".into()).spawn(move || {
-            // The receiver may be gone (the dialog closed or a newer photo): nothing to report.
-            let _ = tx.send(Self::run(&photo, req));
-            if let Some(ctx) = ctx {
-                ctx.request_repaint();
-            }
-        });
-        if spawned.is_err() {
-            return false;
-        }
-        self.worker.running = Some((req, rx));
-        true
-    }
-
-    /// Whether a background scan is running or waiting to run.
-    pub fn scanning(&self) -> bool {
-        self.worker.running.is_some() || self.worker.queued.is_some()
-    }
-
-    /// Pick up a finished background scan (each frame), and start the newest waiting request.
-    pub fn poll(&mut self, image: &mut Option<SignatureImage>, ctx: Option<&egui::Context>) {
-        let Some((req, rx)) = &self.worker.running else { return };
-        let answer = match rx.try_recv() {
-            Ok(answer) => answer,
-            Err(std::sync::mpsc::TryRecvError::Empty) => return,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("the scan stopped unexpectedly".into()),
-        };
-        let req = *req;
-        self.worker.running = None;
-        match self.worker.queued.take() {
-            Some(next) => {
-                // Shown as a preview while the newer request runs.
-                self.apply(image, ScanRequest { full: false, ..req }, answer);
-                if !self.start(next, ctx) {
-                    self.rescan(image, next.full);
-                }
-            }
-            None => self.apply(image, req, answer),
-        }
     }
 
     /// Show a scan's answer. It is the result only if it was full and for the current frame and
@@ -193,176 +93,319 @@ impl ScanDraft {
         }
     }
 
-    pub fn turn(&mut self, turn: Turn, image: &mut Option<SignatureImage>, ctx: Option<&egui::Context>) {
+    /// Turn the photo and the frame with it.
+    pub fn turn(&mut self, turn: Turn) {
         self.frame = self.photo.turn(turn, self.frame);
         self.version = next_photo_version();
-        self.rescan_in_background(image, true, ctx);
+        self.full = false;
     }
 }
 
-/// The Scan tab above the pad buttons. Returns whether a photo should be chosen.
-pub(super) fn scan_tab(
-    ui: &mut egui::Ui,
-    t: &Tokens,
-    d: &mut SigDraft,
-    preview: &mut Option<(SavedSig, egui::TextureHandle)>,
-    photo_texture: &mut Option<(u64, egui::TextureHandle)>,
-) -> bool {
-    ui.label(
-        egui::RichText::new(tl!(
+/// The photo as the canvas's raster. The photo is opaque, so its pixels are the premultiplied texels.
+struct PhotoSource<'a> {
+    photo: &'a SignaturePhoto,
+    version: u64,
+}
+
+impl RasterSource for PhotoSource<'_> {
+    fn size(&self) -> PixelSize {
+        let [w, h] = self.photo.size();
+        PixelSize::new(w, h)
+    }
+
+    fn revision(&self) -> Revision {
+        Revision::new(self.version)
+    }
+
+    fn damage(&self, _: Revision) -> Option<PixelRect> {
+        None
+    }
+
+    fn read(&self, region: PixelRect, factor: u32, out: &mut egui::ColorImage) {
+        let rgb = self.photo.rgb();
+        let [w, h] = self.photo.size();
+        let width = out.size[0].max(1);
+        let step = i64::from(factor.max(1));
+        let (last_x, last_y) = (i64::from(w.max(1)) - 1, i64::from(h.max(1)) - 1);
+        for (i, texel) in out.pixels.iter_mut().enumerate() {
+            let (column, row) = ((i % width) as i64, (i / width) as i64);
+            let x = (i64::from(region.x0) + column * step + step / 2).clamp(0, last_x) as u32;
+            let y = (i64::from(region.y0) + row * step + step / 2).clamp(0, last_y) as u32;
+            if let Some(pixel) = rgb.get_pixel_checked(x, y) {
+                *texel = egui::Color32::from_rgb(pixel.0[0], pixel.0[1], pixel.0[2]);
+            }
+        }
+    }
+}
+
+/// The cleaned scan as the pad's image; none when its size does not fit the pad's.
+fn pad_image(image: &SignatureImage) -> Option<PadImage> {
+    let [w, h] = image.size();
+    Some(PadImage::new(u32::try_from(w).ok()?, u32::try_from(h).ok()?, image.rgba().to_vec()))
+}
+
+/// The frame as the overlay's box, in photo pixels.
+fn crop_of(frame: PhotoRect) -> CropBox {
+    let (x, y) = (f64::from(frame.x), f64::from(frame.y));
+    CropBox::upright(DocRect::new(x, y, x + f64::from(frame.width), y + f64::from(frame.height)))
+}
+
+/// The frame an overlay box stands for: whole pixels, at least one, inside the photo.
+fn frame_of(rect: DocRect, size: [u32; 2]) -> PhotoRect {
+    let whole = |v: f64| v.round().max(0.0) as u32;
+    PhotoRect { x: whole(rect.x0), y: whole(rect.y0), width: whole(rect.width()).max(1), height: whole(rect.height()).max(1) }
+        .clamped(size[0], size[1])
+}
+
+/// What the Scan tab keeps between passes.
+struct ScanTabState {
+    host: Arc<Host>,
+    scan: Option<ScanDraft>,
+    /// The latest cleaned image, quick or full; the draft's own image is set only from a full one.
+    preview: Option<SignatureImage>,
+    /// `preview` as the pad's image type, converted once per answer.
+    shown: Option<PadImage>,
+    pick: Option<PickId>,
+    /// One key: a newer request replaces a waiting one.
+    queue: JobQueue<u8, ScanDone>,
+    request: u64,
+    view: CanvasView,
+    /// Why the last photo was not used.
+    error: Option<String>,
+}
+
+impl Drop for ScanTabState {
+    fn drop(&mut self) {
+        if let Some(id) = self.pick.take() {
+            self.host.files().forget(id);
+        }
+    }
+}
+
+/// A view that fits the photo on its first pass with room.
+fn unfitted() -> CanvasView {
+    CanvasView::new(egui::Rect::NOTHING, Point::ORIGIN, 1.0)
+}
+
+impl ScanTabState {
+    /// Load a photo from `bytes`, keeping the previous photo and draft when they are no photo.
+    fn load(&mut self, draft: &mut SignatureDraft, bytes: Result<Vec<u8>, String>) {
+        let photo = bytes.and_then(|bytes| {
+            if bytes.len() > MAX_PHOTO_BYTES {
+                return Err(ScanError::Size.to_string());
+            }
+            SignaturePhoto::from_bytes(&bytes).map_err(|e| e.to_string())
+        });
+        match photo {
+            Ok(photo) => {
+                self.error = None;
+                self.scan = Some(ScanDraft::new(photo));
+                self.preview = None;
+                self.shown = None;
+                self.view = unfitted();
+                self.submit(draft, true);
+            }
+            Err(e) => self.error = Some(crate::i18n::fmt(tl!("Couldn't use the photo: {e}"), &[("e", &e)])),
+        }
+    }
+
+    /// The bytes of a picked or dropped file: a path on desktop, the content where the platform gives no path.
+    fn file_bytes(&self, file: OsFile) -> Result<Vec<u8>, String> {
+        if let Some(path) = &file.path {
+            return self.host.files().read(path).map_err(|e| e.to_string());
+        }
+        match file.bytes {
+            Some(bytes) => Ok(bytes.to_vec()),
+            None => Err(tl!("The photo could not be read.").to_string()),
+        }
+    }
+
+    /// Takes the answer of the pick, once it has come. Cancelled and unavailable pickers choose nothing.
+    fn take_pick(&mut self, draft: &mut SignatureDraft) {
+        let Some(id) = self.pick else { return };
+        let Some(picked) = self.host.files().take_answer(id) else { return };
+        self.pick = None;
+        match picked {
+            Picked::Paths(paths) => {
+                if let Some(path) = paths.into_iter().next() {
+                    let bytes = self.host.files().read(&path).map_err(|e| e.to_string());
+                    self.load(draft, bytes);
+                }
+            }
+            Picked::Contents(files) => {
+                if let Some((_, bytes)) = files.into_iter().next() {
+                    self.load(draft, Ok(bytes));
+                }
+            }
+            // Save answers (a failed write, a download) never come to an open pick.
+            Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => {}
+        }
+    }
+
+    /// Queue a scan of the current frame and sensitivity; the draft is not ready until a full one answers.
+    fn submit(&mut self, draft: &mut SignatureDraft, full: bool) {
+        let Some(frame) = self.scan.as_ref().map(|scan| scan.frame) else { return };
+        self.submit_frame(draft, frame, full);
+    }
+
+    fn submit_frame(&mut self, draft: &mut SignatureDraft, frame: PhotoRect, full: bool) {
+        let Some(scan) = self.scan.as_mut() else { return };
+        scan.full = false;
+        draft.image = None;
+        let (photo, mut req, version) = (scan.photo.clone(), scan.request(full), scan.version);
+        req.frame = frame;
+        self.request = self.request.wrapping_add(1);
+        let request = self.request;
+        self.queue.submit(0, Priority::VISIBLE, move |_| (version, request, req, ScanDraft::run(&photo, req)));
+    }
+
+    /// Takes only the newest scan for the current photo.
+    fn collect(&mut self, draft: &mut SignatureDraft) {
+        while let Some(done) = self.queue.try_recv() {
+            let (version, request, req, answer) = done.result;
+            let Some(scan) = self.scan.as_mut() else { continue };
+            if version != scan.version || request != self.request {
+                continue;
+            }
+            scan.apply(&mut self.preview, req, answer);
+            self.shown = self.preview.as_ref().and_then(pad_image);
+            draft.image = if scan.full { self.shown.clone() } else { None };
+        }
+    }
+
+    fn show(&mut self, ui: &mut egui::Ui, draft: &mut SignatureDraft, dropped: Option<OsFile>) {
+        self.take_pick(draft);
+        if let Some(file) = dropped {
+            let bytes = self.file_bytes(file);
+            self.load(draft, bytes);
+        }
+        self.collect(draft);
+
+        Text::new(tl!(
             "Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper."
         ))
-        .color(t.text_muted),
-    );
-    let mut browse = false;
-    ui.horizontal(|ui| {
-        browse = crate::widgets::ghost_button(ui, "camera", tl!("Choose photo…")).clicked();
-        if let Some(scan) = d.scan.as_mut() {
-            ui.add_space(8.0);
-            if crate::icons::button(ui, "rotate-ccw", 28.0, false, tl!("Rotate counterclockwise")).clicked() {
-                scan.turn(Turn::CounterClockwise, &mut d.image, Some(ui.ctx()));
+        .shade(Shade::Muted)
+        .show(ui);
+        let (mut choose, mut turn) = (false, None);
+        Row::new().show(ui, |ui, _| {
+            choose = clicked(&Button::new(tl!("Choose photo…")).icon(craft::behavior::IconId::new("camera")).show(ui));
+            if self.scan.is_some() {
+                if clicked(&IconButton::new(craft::behavior::IconId::new("rotate-ccw")).label(tl!("Rotate counterclockwise")).show(ui)) {
+                    turn = Some(Turn::CounterClockwise);
+                }
+                if clicked(&IconButton::new(craft::behavior::IconId::new("rotate-cw")).label(tl!("Rotate clockwise")).show(ui)) {
+                    turn = Some(Turn::Clockwise);
+                }
             }
-            if crate::icons::button(ui, "rotate-cw", 28.0, false, tl!("Rotate clockwise")).clicked() {
-                scan.turn(Turn::Clockwise, &mut d.image, Some(ui.ctx()));
-            }
-        }
-    });
-    let (area, resp) = ui.allocate_exact_size(vec2(460.0, 230.0), Sense::drag());
-    let painter = ui.painter_at(area);
-    painter.rect_filled(area, CornerRadius::same(6), t.pasteboard);
-    painter.rect_stroke(area, CornerRadius::same(6), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-    if let Some(scan) = d.scan.as_mut() {
-        scan.poll(&mut d.image, Some(ui.ctx()));
-    }
-    let Some(scan) = d.scan.as_mut() else {
-        painter.text(area.center(), egui::Align2::CENTER_CENTER, tl!("No photo chosen"), egui::FontId::proportional(13.0), t.text_muted);
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, tl!("Photo")));
-        return browse;
-    };
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, tl!("Photo")));
-    // The photo, fitted into the area; `to_screen`/`to_photo` map between its pixels and points.
-    let [pw, ph] = scan.photo.size();
-    let (pw, ph) = (pw.max(1) as f32, ph.max(1) as f32);
-    let fit = area.shrink(8.0);
-    let scale = (fit.width() / pw).min(fit.height() / ph);
-    let shown = egui::Rect::from_center_size(fit.center(), vec2(pw * scale, ph * scale));
-    if photo_texture.as_ref().is_none_or(|(v, _)| *v != scan.version) {
-        let thumb = scan.photo.thumbnail(1024);
-        let size = [thumb.width() as usize, thumb.height() as usize];
-        let pixels = egui::ColorImage::from_rgba_unmultiplied(size, thumb.as_raw());
-        *photo_texture = Some((scan.version, ui.ctx().load_texture("signature-photo", pixels, egui::TextureOptions::LINEAR)));
-    }
-    if let Some((_, tex)) = photo_texture {
-        painter.image(tex.id(), shown, egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-    }
-    let to_screen = |x: f32, y: f32| pos2(shown.left() + x * scale, shown.top() + y * scale);
-    let to_photo = |p: Pos2| [((p.x - shown.left()) / scale).clamp(0.0, pw), ((p.y - shown.top()) / scale).clamp(0.0, ph)];
-    let frame_screen = |f: PhotoRect| {
-        egui::Rect::from_min_max(
-            to_screen(f.x as f32, f.y as f32),
-            to_screen(f.x.saturating_add(f.width) as f32, f.y.saturating_add(f.height) as f32),
-        )
-    };
-
-    // Move the frame from inside, resize it from a corner, or draw a new one elsewhere.
-    let handle = 10.0;
-    if resp.drag_started()
-        && let Some(p) = resp.interact_pointer_pos()
-    {
-        let fr = frame_screen(scan.frame);
-        let corners = [fr.left_top(), fr.right_top(), fr.left_bottom(), fr.right_bottom()];
-        let opposite = [fr.right_bottom(), fr.left_bottom(), fr.right_top(), fr.left_top()];
-        let at = to_photo(p);
-        scan.drag = Some(if let Some(i) = corners.iter().position(|c| c.distance(p) <= handle) {
-            FrameDrag::Span(opposite.get(i).map_or(at, |o| to_photo(*o)))
-        } else if fr.contains(p) {
-            FrameDrag::Move([at[0] - scan.frame.x as f32, at[1] - scan.frame.y as f32])
-        } else {
-            FrameDrag::Span(at)
         });
-    }
-    if resp.dragged()
-        && let (Some(drag), Some(p)) = (scan.drag, resp.interact_pointer_pos())
-    {
-        let at = to_photo(p);
-        let (x0, y0, x1, y1) = match drag {
-            FrameDrag::Move(grab) => {
-                let (w, h) = (scan.frame.width as f32, scan.frame.height as f32);
-                let x = (at[0] - grab[0]).clamp(0.0, (pw - w).max(0.0));
-                let y = (at[1] - grab[1]).clamp(0.0, (ph - h).max(0.0));
-                (x, y, x + w, y + h)
+        if choose {
+            if let Some(old) = self.pick.take() {
+                self.host.files().forget(old);
             }
-            FrameDrag::Span(anchor) => (anchor[0].min(at[0]), anchor[1].min(at[1]), anchor[0].max(at[0]), anchor[1].max(at[1])),
-        };
-        // At least a few screen points, so a frame can always be grabbed again.
-        let min = (12.0 / scale).max(1.0);
-        let frame = PhotoRect {
-            x: x0.round() as u32,
-            y: y0.round() as u32,
-            width: (x1 - x0).max(min).round() as u32,
-            height: (y1 - y0).max(min).round() as u32,
+            let request = PickRequest::open("signature-photo").title(tl!("Choose a photo")).filter(tl!("Image"), &["png", "jpg", "jpeg"]);
+            self.pick = Some(self.host.files().pick(request));
         }
-        .clamped(pw as u32, ph as u32);
-        if frame != scan.frame {
-            scan.frame = frame;
-            scan.rescan_in_background(&mut d.image, false, Some(ui.ctx()));
+        if let Some(turn) = turn
+            && let Some(scan) = self.scan.as_mut()
+        {
+            scan.turn(turn);
+            self.view = unfitted();
+            self.submit(draft, true);
         }
-    }
-    if resp.drag_stopped() && scan.drag.take().is_some() {
-        scan.rescan_in_background(&mut d.image, true, Some(ui.ctx()));
+        if let Some(error) = &self.error {
+            Notice::new(Tone::Warn, error.clone()).layout(NoticeLayout::Inline).show(ui);
+        }
+
+        if self.scan.is_none() {
+            Text::new(tl!("No photo chosen")).shade(Shade::Muted).show(ui);
+            return;
+        }
+        self.show_photo(ui, draft);
+        self.show_sensitivity(ui, draft);
+        if let Some(problem) = self.scan.as_ref().and_then(|s| s.problem.clone()) {
+            Notice::new(Tone::Warn, problem).layout(NoticeLayout::Inline).show(ui);
+        } else {
+            DrawPad::image(tl!("Preview"), self.shown.as_ref()).show(ui);
+        }
     }
 
-    // Dim the photo outside the frame, then outline it with corner handles.
-    let fr = frame_screen(scan.frame).intersect(shown);
-    let dim = Color32::from_black_alpha(120);
-    for r in [
-        egui::Rect::from_min_max(shown.left_top(), pos2(shown.right(), fr.top())),
-        egui::Rect::from_min_max(pos2(shown.left(), fr.bottom()), shown.right_bottom()),
-        egui::Rect::from_min_max(pos2(shown.left(), fr.top()), pos2(fr.left(), fr.bottom())),
-        egui::Rect::from_min_max(pos2(fr.right(), fr.top()), pos2(shown.right(), fr.bottom())),
-    ] {
-        if r.is_positive() {
-            painter.rect_filled(r, CornerRadius::ZERO, dim);
+    /// The photo on a canvas with the frame over it; dragging the frame scans quickly, releasing it scans in full.
+    fn show_photo(&mut self, ui: &mut egui::Ui, draft: &mut SignatureDraft) {
+        let Some(scan) = self.scan.as_ref() else { return };
+        let size = scan.photo.size();
+        let (pw, ph) = (f64::from(size[0].max(1)), f64::from(size[1].max(1)));
+        let width = ui.available_width();
+        let room = ui.allocate_space(egui::vec2(width, width * (ph / pw).min(0.6) as f32)).1;
+        let source = PhotoSource { photo: &scan.photo, version: scan.version };
+        let crop = crop_of(scan.frame);
+        let bounds = DocRect::new(0.0, 0.0, pw, ph);
+        let corners = [Point::new(0.0, 0.0), Point::new(pw, 0.0), Point::new(pw, ph), Point::new(0.0, ph)];
+        let shown = Canvas::new(tl!("Photo")).view(Bind::bound(&mut self.view)).document(Size::new(pw, ph)).show_at(ui, room, |ui, body| {
+            RasterDisplay::new(tl!("Signature photo"), &source).show_at(ui, body.rect);
+            CropOverlay::new(tl!("Frame"), Bind::given(crop)).outside(CropOutside::NewFrame).area(corners).bounds(bounds).show_at(ui, body.rect)
+        });
+        let Some(overlay) = shown.inner else { return };
+        let mut commit = false;
+        for event in overlay.edit.events.iter() {
+            match event {
+                EditEvent::Update { value, .. } => {
+                    self.submit_frame(draft, frame_of(value.rect, size), false);
+                }
+                EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => {
+                    if let Some(scan) = self.scan.as_mut() {
+                        scan.frame = frame_of(after.rect, size);
+                        commit = true;
+                    }
+                }
+                EditEvent::Cancel { .. } => {
+                    commit = true;
+                }
+                _ => {}
+            }
         }
-    }
-    painter.rect_stroke(fr, CornerRadius::ZERO, Stroke::new(2.0, t.accent), egui::StrokeKind::Middle);
-    for c in [fr.left_top(), fr.right_top(), fr.left_bottom(), fr.right_bottom()] {
-        let r = egui::Rect::from_center_size(c, vec2(9.0, 9.0));
-        painter.rect_filled(r, CornerRadius::same(2), Color32::WHITE);
-        painter.rect_stroke(r, CornerRadius::same(2), Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
-    }
-    if resp.hovered() && scan.drag.is_none() {
-        let hover = ui.input(|i| i.pointer.hover_pos());
-        let fr = frame_screen(scan.frame);
-        let icon = match hover {
-            Some(p) if [fr.left_top(), fr.right_bottom()].iter().any(|c| c.distance(p) <= handle) => egui::CursorIcon::ResizeNwSe,
-            Some(p) if [fr.right_top(), fr.left_bottom()].iter().any(|c| c.distance(p) <= handle) => egui::CursorIcon::ResizeNeSw,
-            Some(p) if fr.contains(p) => egui::CursorIcon::Grab,
-            _ => egui::CursorIcon::Crosshair,
-        };
-        ui.ctx().set_cursor_icon(icon);
+        if commit {
+            self.submit(draft, true);
+        }
     }
 
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        let l = ui.label(tl!("Ink sensitivity"));
-        let slider = ui.add(egui::Slider::new(&mut scan.sensitivity, 0..=100)).labelled_by(l.id);
-        if slider.changed() {
-            // Quick previews while dragging; keyboard steps get the full result at once.
-            scan.rescan_in_background(&mut d.image, !slider.dragged(), Some(ui.ctx()));
+    /// The ink sensitivity: quick scans while the slider moves, a full one on its commit.
+    fn show_sensitivity(&mut self, ui: &mut egui::Ui, draft: &mut SignatureDraft) {
+        let Some(scan) = self.scan.as_ref() else { return };
+        let mut value = f64::from(scan.sensitivity);
+        let out = SliderField::new(tl!("Ink sensitivity"), Bind::bound(&mut value), 0.0..=100.0).step(1.0).show(ui);
+        for event in out.edit.events.iter() {
+            let (proposed, full) = match event {
+                EditEvent::Update { value, .. } => (*value, false),
+                EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => (*after, true),
+                _ => continue,
+            };
+            if let Some(scan) = self.scan.as_mut() {
+                scan.sensitivity = proposed.round().clamp(0.0, 100.0) as u8;
+            }
+            self.submit(draft, full);
         }
-        if slider.drag_stopped() {
-            scan.rescan_in_background(&mut d.image, true, Some(ui.ctx()));
-        }
-    });
-    ui.add_space(4.0);
-    let (rect, _) = ui.allocate_exact_size(vec2(460.0, 110.0), Sense::hover());
-    ui.painter().rect_filled(rect, CornerRadius::same(6), Color32::WHITE);
-    ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-    if let Some(image) = &d.image {
-        image_preview(ui, rect.shrink(8.0), image, preview);
-    } else if let Some(problem) = &scan.problem {
-        ui.put(rect.shrink(12.0), egui::Label::new(egui::RichText::new(problem.as_str()).color(Color32::from_rgb(0x8A, 0x5A, 0x00))).wrap());
     }
-    browse
+}
+
+/// The Scan tab of the signature pad: choose or drop a photo, frame the signature, adjust the ink. Cleaning runs on
+/// the host's jobs, so a pass never waits for a scan. `draft.image` is set only by a full scan of the current frame
+/// and sensitivity, and cleared on any change, so the pad's Apply waits for the result.
+pub(crate) fn tab(host: Arc<Host>, wake: Wake) -> impl FnMut(&mut egui::Ui, &mut SignatureDraft, craft::review::ui::ScanEvent) + Send + 'static {
+    let queue = JobQueue::new(host.jobs_shared().clone(), wake, QueueOptions::default());
+    let mut state = ScanTabState { host, scan: None, preview: None, shown: None, pick: None, queue, request: 0, view: unfitted(), error: None };
+    move |ui, draft, event| match event {
+        craft::review::ui::ScanEvent::Show(dropped) => state.show(ui, draft, dropped),
+        craft::review::ui::ScanEvent::Clear => {
+            if let Some(id) = state.pick.take() {
+                state.host.files().forget(id);
+            }
+            state.queue.reprioritize(|_, _| None);
+            state.request = state.request.wrapping_add(1);
+            state.scan = None;
+            state.preview = None;
+            state.shown = None;
+            state.view = unfitted();
+            state.error = None;
+        }
+    }
 }

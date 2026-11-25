@@ -43,6 +43,13 @@ licence files unchanged. Every patch is marked `PdfCraft patch:` in the source, 
 PdfCraft test, and should be proposed upstream. Remove the vendored copy once upstream releases
 the fix. Vendoring copyleft code is never allowed (plan/adr/0001).
 
+The TrueType name lookup patch probes Unicode `(0, *)` and Windows `(3, 10)` cmap records,
+recognizes post-name aliases, and retains known descriptor flags when unknown bits are present.
+`crates/render/tests/truetype_cmap.rs` covers these synthetic cases and verifies that Symbolic
+Encoding/Differences and ToUnicode do not override the existing glyph-selection policy.
+ToUnicode still controls extraction. The CFF fallback is unchanged. No original affected PDF
+from #2159 or #2426 is available, so those reported files remain unverified.
+
 A PdfCraft patch in `hayro-syntax::Page::base_dimensions` expresses the existing one-point floor as a raw reciprocal of `/UserUnit`, rounded upward only when f32 multiplication would fall below one point. Five `pdfcraft-render` regressions with prefix `raster::tests::raw_crop_` cover the observed dimensions, origins and rotations, units 41/47, bounded vector rasters and the nearly-zero fallback, which is US Letter since patch 44. Accepted page-unit policy and licences are unchanged.
 
 In `hayro-interpret`, Type 3 glyph bounding boxes are transformed to device space before intersecting clip and shading bounds; `raster::tests::shaded_type3_glyph_draws_at_multiple_positions` covers translated glyphs (#3178).
@@ -155,6 +162,26 @@ ones, as ISO 32000-2 §9.6.5.4 prescribes for symbolic fonts; the
 order the font lists them, platform ID first, so a wrong (1, 0) table (SAS 9.4's AMT fonts)
 drew "8" as "p" and "+" as "V". Covered by `raster::tests::symbolic_truetype_cmap`, whose font
 is built in memory.
+
+JPX decode-size hint on rotated pages (#3884): in `hayro` `Renderer::image_draw_size`, the
+size an image is decoded at is the length of each image axis on the device, taken from the
+transform's linear part, and each side is at least 1. It mapped the corners `(w, 0)` and
+`(0, h)` as points, which took in the translation, so on a `/Rotate 90` page (Acrobat Paper
+Capture scans) a corner on the device origin gave a side of 0 and `hayro-jpeg2000` 0.3.5
+divided the image size by it: "attempt to divide by zero" on every rotated page. Covered by
+`raster::tests::jpx_image_on_a_rotated_page_draws_instead_of_crashing`. With an accurate hint
+more images decode at a reduced resolution, and 0.3.5 places a reduced resolution's samples
+using the image area's reference-grid offset (`XOsiz`, `YOsiz`) unscaled: rows are left out,
+or a row is sliced past its end (a panic). So `hayro-syntax` `filter::jpx::decode` drops the
+hint unless both offsets are 0 (`image_area_offset` reads them from the SIZ segment of a raw
+codestream or a JP2 `jp2c` box). Covered by
+`filter::jpx::tests::jpx_size_hint_is_dropped_only_for_an_offset_image_area`. A colour-key
+`/Mask` array is matched against the decoded samples, and a reduced JPX decode has averaged
+ones, so `hayro-interpret` `ImageXObject::decoded_raster` drops the hint when that key is the
+image's mask (no `/SMask` stream, no `/SMaskInData 1`): it is decoded at full size and
+resampled with its mask like any other image. Covered by
+`raster::tests::jpx_with_a_colour_key_mask_is_decoded_at_full_size` (the decoded size) and
+`raster::tests::jpx_colour_key_mask_keeps_its_transparency_when_drawn_small` (the pixels drawn).
 
 ## KenM76 integration patches
 
