@@ -416,6 +416,11 @@ pub struct PageSession {
 }
 
 impl PageSession {
+    /// Whether a page-box drag (Snapshot, Crop, Redact, or signature area) is currently active.
+    pub fn is_box_dragging(&self) -> bool {
+        self.box_drag.is_active()
+    }
+
     /// The session of a newly opened document.
     fn new(info: &DocInfo, highlight_fields: bool) -> Self {
         Self {

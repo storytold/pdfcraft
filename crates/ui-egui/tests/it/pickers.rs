@@ -1018,13 +1018,14 @@ fn a_saved_attachment_carries_the_documents_zone() {
     let local = dir.0.join("local.pdf");
     std::fs::write(&local, attachment_fixture()).unwrap();
     let mut h = harness(&[]);
+    let ctx_h = h.ctx.clone();
     let opened = [(Some(&mail), zone), (Some(&local), pdfcraft_platform::zone::INTERNET_ZONE), (None, pdfcraft_platform::zone::INTERNET_ZONE)];
     for (i, (path, expected)) in opened.into_iter().enumerate() {
-        h.state_mut().open_bytes(&format!("doc{i}.pdf"), path.map(|p| p.to_string_lossy().into_owned()), attachment_fixture()).unwrap();
+        h.state_mut().open_bytes(&ctx_h, &format!("doc{i}.pdf"), path.map(|p| p.to_string_lossy().into_owned()), attachment_fixture()).unwrap();
         h.steps(2);
         let id = h.state().views.last().unwrap().id;
         let chosen = dir.0.join(format!("saved{i}.exe"));
-        h.state_mut().attachment_action(id, 0, false);
+        h.state_mut().attachment_action(&ctx_h, id, 0, false);
         h.answer(Picked::Paths(vec![chosen.clone()]));
         assert_eq!(std::fs::read(&chosen).unwrap(), b"hello notes");
         assert_eq!(zone_of(&chosen).as_deref(), Some(expected.as_bytes()), "document {i}");

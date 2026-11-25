@@ -830,7 +830,7 @@ fn middle_button_pans_while_held_outside_linux() {
     assert!((moved - (top - 60.0)).abs() < 1.0, "the page follows the pointer 1:1: {top} -> {moved}");
     h.run_steps(8);
     assert_eq!(h.state().views[0].page_screen_rect(1).unwrap().top(), moved, "no drift after release");
-    assert!(h.state().views[0].crop_drag.is_none(), "the Crop tool must not receive a wheel drag");
+    assert!(!h.state().views[0].session.is_box_dragging(), "the Crop tool must not receive a wheel drag");
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
 }
 
