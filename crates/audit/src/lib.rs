@@ -283,11 +283,16 @@ fn rect_kind(rect: &cover::FilledRect) -> FindingKind {
 /// Does `rect` hide `line`: painted after the start of the line and over it, and white or a cover
 /// ([`is_cover`]). Light covers in between (table shading) are not flagged.
 fn hides(rect: &cover::FilledRect, line: &TextLine) -> bool {
-    let hides = match rect_kind(rect) {
+    let kind = rect_kind(rect);
+    let hides = match kind {
         FindingKind::HiddenUnderWhite => rect.pos > line.first_paint_pos() && covers(&rect.rect, line),
         _ => is_cover(rect, line),
     };
-    hides && !rect.glyph_source.as_ref().is_some_and(|source| line.drawn_within(source))
+    hides
+        && !rect
+            .glyph_source
+            .as_ref()
+            .is_some_and(|source| line.drawn_within(&source.operators) && !(source.painted && kind == FindingKind::HiddenUnderWhite))
 }
 
 /// Does `cover` hide a substantial part of what `line` draws? Three ways, any is enough:

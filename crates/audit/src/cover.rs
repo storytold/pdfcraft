@@ -47,7 +47,13 @@ pub struct FilledRect {
     /// Rectangles inside a form XObject carry the `Do` operator's position.
     pub pos: (usize, usize),
     /// Page operators of the text object whose own glyphs this paint fills.
-    pub glyph_source: Option<Range<usize>>,
+    pub glyph_source: Option<GlyphSource>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GlyphSource {
+    pub operators: Range<usize>,
+    pub painted: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -82,8 +88,8 @@ struct Gs {
     stroke: [f64; 3],
     stroke_alpha: f64,
     clip: Clip,
-    glyph_clip_mode: bool,
-    glyph_source: Option<Range<usize>>,
+    text_render_mode: u8,
+    glyph_source: Option<GlyphSource>,
     /// Line width, in the space the path is drawn in.
     width: f64,
     /// Line cap (`J`, `/LC`): 0 butt, 1 round, 2 projecting square.
@@ -179,7 +185,7 @@ impl Default for Gs {
             stroke: [0.0, 0.0, 0.0],
             stroke_alpha: 1.0,
             clip: Clip::Unbounded,
-            glyph_clip_mode: false,
+            text_render_mode: 0,
             glyph_source: None,
             width: 1.0,
             cap: 0,
@@ -244,6 +250,7 @@ impl<'a> Walker<'a> {
         let mut clip_next = false;
         let mut glyph_clip_pending = false;
         let mut glyph_only_text = false;
+        let mut glyph_source_painted = false;
         let mut text_start = 0;
         let mut hidden_depth = 0usize;
         for (i, op) in ops.enumerate() {
@@ -371,22 +378,28 @@ impl<'a> Walker<'a> {
                 b"BT" => {
                     glyph_clip_pending = false;
                     glyph_only_text = true;
+                    glyph_source_painted = false;
                     text_start = i;
                 }
                 b"Tr" => {
                     if let Some(mode) = op.num(0).filter(|v| (0.0..=7.0).contains(v) && v.fract() == 0.0) {
-                        gs.glyph_clip_mode = mode >= 4.0;
+                        gs.text_render_mode = mode as u8;
                     }
                 }
                 b"Tj" | b"TJ" | b"'" | b"\"" if shows_glyphs(op) => {
-                    glyph_clip_pending |= gs.glyph_clip_mode && (at_do.is_some() || !self.blank_clips.contains(&i));
-                    glyph_only_text &= gs.glyph_clip_mode;
+                    let clips = gs.text_render_mode >= 4;
+                    glyph_clip_pending |= clips && (at_do.is_some() || !self.blank_clips.contains(&i));
+                    glyph_only_text &= clips;
+                    glyph_source_painted |= hidden_depth == 0
+                        && ((matches!(gs.text_render_mode, 4 | 6) && gs.alpha > 0.0)
+                            || (matches!(gs.text_render_mode, 5 | 6) && gs.stroke_alpha > 0.0));
                 }
                 b"ET" => {
                     if std::mem::take(&mut glyph_clip_pending) {
                         // Without glyph outlines, retain the rectangular bound as a conservative
                         // estimate. Paint through the clip can still cover independently drawn text.
-                        gs.glyph_source = (glyph_only_text && at_do.is_none()).then_some(text_start..i);
+                        gs.glyph_source =
+                            (glyph_only_text && at_do.is_none()).then_some(GlyphSource { operators: text_start..i, painted: glyph_source_painted });
                     }
                 }
                 b"BDC" => {

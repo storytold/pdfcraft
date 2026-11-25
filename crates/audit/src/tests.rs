@@ -1273,6 +1273,23 @@ fn text_clipping_mode_fill_is_not_reported_as_cover() {
 }
 
 #[test]
+fn white_cover_distinguishes_painted_and_clip_only_glyph_sources() {
+    let doc = open(one_page(b"BT /F1 24 Tf 100 700 Td (Sample) Tj ET", ""));
+    let lines = pdfcraft_edit::glyph_text_lines(&doc, &pdfcraft_model::pages(&doc)[0]).expect("text");
+    let line = &lines[0];
+    let mut cover = crate::cover::FilledRect {
+        rect: line.rect,
+        rgb: [1.0; 3],
+        pos: (0, 10),
+        glyph_source: Some(crate::cover::GlyphSource { operators: 0..5, painted: false }),
+    };
+
+    assert!(!crate::hides(&cover, line));
+    cover.glyph_source.as_mut().unwrap().painted = true;
+    assert!(crate::hides(&cover, line));
+}
+
+#[test]
 fn glyph_clipping_keeps_covers_over_independent_text() {
     let content = b"BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET q BT /F1 24 Tf 7 Tr 100 700 Td (MASK) Tj ET 0 g 100 688 220 32 re f Q";
     let findings = audit_redactions(&open(one_page(content, ""))).expect("audit must run");
