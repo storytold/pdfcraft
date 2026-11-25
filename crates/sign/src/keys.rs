@@ -490,7 +490,7 @@ impl PublicKey {
     }
 }
 
-fn shared_digest(alg: DigestAlg) -> craft_pkcs7::DigestAlg {
+pub(crate) fn shared_digest(alg: DigestAlg) -> craft_pkcs7::DigestAlg {
     use craft_pkcs7::DigestAlg as Shared;
     match alg {
         DigestAlg::Sha1 => Shared::Sha1,
