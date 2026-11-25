@@ -117,11 +117,11 @@ fn read<T>(path: &std::path::Path, fallback: &str, parse: impl Fn(&str) -> Resul
     r.ok()
 }
 
-/// A non-empty string field of someone's people.toml entry, as a Rust `Option<&str>` literal.
-fn name(v: Option<&str>) -> String {
+/// A non-empty string field of someone's people.toml entry, as the builder call `.<method>("..")`; nothing when empty.
+fn name(method: &str, v: Option<&str>) -> String {
     match v.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(x) => format!("Some({x:?})"),
-        None => "None".into(),
+        Some(x) => format!(".{method}({x:?})"),
+        None => String::new(),
     }
 }
 
@@ -139,8 +139,9 @@ fn rows(json: &Value, k: &str) -> Vec<Value> {
 
 fn generate(json: &Value, people: &toml::Table) -> String {
     let mut o = String::new();
-    let _ = writeln!(o, "pub static TOTAL_COMMITS: u64 = {};", n(json, "commits"));
-    let _ = writeln!(o, "pub static CONTRIBUTORS: &[Contributor] = &[");
+    let _ = writeln!(o, "/// The credits tables baked from contributors/contributors.json.");
+    let _ = writeln!(o, "pub(crate) fn credits() -> Credits {{");
+    let _ = writeln!(o, "    let contributors: Vec<Contributor> = vec![");
     for c in rows(json, "contributors") {
         let login = c.get("login").and_then(Value::as_str).unwrap_or("");
         if login.is_empty() {
@@ -155,9 +156,10 @@ fn generate(json: &Value, people: &toml::Table) -> String {
             .or_else(|| if synced { c.get("github_name").and_then(Value::as_str) } else { None });
         let _ = writeln!(
             o,
-            "    Contributor {{ login: {login:?}, display_name: {}, real_name: {}, prs: {}, commits: {}, lines_added: {}, lines_deleted: {}, binary_added: {}, binary_deleted: {}, first_commit: {}, last_commit: {} }},",
-            name(display),
-            name(field("real_name")),
+            "        Contributor::new({login:?}){}{}.profile({:?}).counts({}, {}).lines({}, {}).binary({}, {}).active({}, {}),",
+            name("display_name", display),
+            name("real_name", field("real_name")),
+            format!("https://github.com/{login}"),
             n(&c, "prs"),
             n(&c, "commits"),
             n(&c, "lines_added"),
@@ -168,12 +170,12 @@ fn generate(json: &Value, people: &toml::Table) -> String {
             s(&c, "last_commit"),
         );
     }
-    let _ = writeln!(o, "];");
-    let _ = writeln!(o, "pub static MODELS: &[Model] = &[");
+    let _ = writeln!(o, "    ];");
+    let _ = writeln!(o, "    let models: Vec<ModelCredit> = vec![");
     for m in rows(json, "models") {
         let _ = writeln!(
             o,
-            "    Model {{ company: {}, model: {}, version: {}, commits: {}, lines_added: {}, lines_deleted: {} }},",
+            "        ModelCredit::new({}, {}, {}).work({}, {}, {}),",
             s(&m, "company"),
             s(&m, "model"),
             s(&m, "version"),
@@ -182,6 +184,8 @@ fn generate(json: &Value, people: &toml::Table) -> String {
             n(&m, "lines_deleted"),
         );
     }
-    let _ = writeln!(o, "];");
+    let _ = writeln!(o, "    ];");
+    let _ = writeln!(o, "    Credits::new(contributors, models, {})", n(json, "commits"));
+    let _ = writeln!(o, "}}");
     o
 }

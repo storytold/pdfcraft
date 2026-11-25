@@ -1,5 +1,4 @@
-use super::state::PageCx;
-use super::{Annotation, DocInfo, PageInfo, PageText, Pos2, QuickTool, Rect, pos2, vec2};
+use super::{Annotation, DocInfo, PageInfo, PageText};
 
 pub(super) fn is_markup(subtype: &str) -> bool {
     matches!(subtype, "Highlight" | "Underline" | "StrikeOut" | "Squiggly")
@@ -42,126 +41,6 @@ pub(super) fn frame(a: &Annotation, rotation: u16) -> [f32; 4] {
     a.text_box.unwrap_or_else(|| a.shown_rect(rotation))
 }
 
-/// A callout's points while one is dragged to `to`. Its knee moves along its knee line only
-/// (Acrobat: "The knee line can be resized in one direction only; horizontal knee lines can be
-/// resized horizontally only; vertical knee lines can be resized vertically only", Acrobat DC Help,
-/// 11/28/2019, p. 357), and no nearer the box than [`pdfcraft_engine::CALLOUT_KNEE_LINE`]
-/// (Acrobat Pro DC, a 2021 Continuous release, lays a knee dragged into the box out again at that
-/// distance). Its arrow point moves freely, with Shift held to 45° from the knee.
-pub(super) fn callout_reshaped(points: &[[f64; 2]], text_box: [f32; 4], i: usize, to: [f64; 2], shift: bool) -> Vec<[f64; 2]> {
-    let tb = text_box.map(f64::from);
-    let gap = pdfcraft_engine::CALLOUT_KNEE_LINE;
-    match (i, points.get(1)) {
-        (1, Some(knee)) => {
-            let to = match pdfcraft_engine::callout_side(tb, *knee) {
-                pdfcraft_engine::CalloutSide::Left => [to[0].min(tb[0] - gap), knee[1]],
-                pdfcraft_engine::CalloutSide::Right => [to[0].max(tb[2] + gap), knee[1]],
-                pdfcraft_engine::CalloutSide::Top => [knee[0], to[1].max(tb[3] + gap)],
-                pdfcraft_engine::CalloutSide::Bottom => [knee[0], to[1].min(tb[1] - gap)],
-            };
-            let mut out = points.to_vec();
-            if let Some(k) = out.get_mut(1) {
-                *k = to;
-            }
-            out
-        }
-        _ => reshaped(points, i, to, shift),
-    }
-}
-
-/// A selected comment's points moved as handle `i` is dragged to `to` ([`reshaped`], or
-/// [`callout_reshaped`] for a callout).
-pub(super) fn reshape_for(a: &Annotation, points: &[[f64; 2]], i: usize, to: [f64; 2], shift: bool) -> Vec<[f64; 2]> {
-    match a.text_box.filter(|_| is_callout(a)) {
-        Some(tb) => callout_reshaped(points, tb, i, to, shift),
-        None => reshaped(points, i, to, shift),
-    }
-}
-
-/// Whether `tool` reaches a line's end and corner handles: the Select and Fill & Sign tools.
-/// The drawing tools draw from where they are pressed, so a new line starts at the end of the
-/// one just drawn rather than dragging it.
-pub(super) fn reaches_points(tool: QuickTool) -> bool {
-    !matches!(tool, QuickTool::Comment(t) if t.draws() || t.clicks_points())
-}
-
-/// The point of `a` (an end or a corner) whose handle is at `p` on screen.
-pub(super) fn point_handle(cx: &PageCx<'_>, a: &Annotation, p: Pos2) -> Option<usize> {
-    a.points.iter().position(|q| cx.to_screen([f64::from(q[0]), f64::from(q[1])]).distance(p) <= 7.0)
-}
-
-/// `to` held level or plumb with `last` while Shift is down (ortho, as in a CAD drawing): the
-/// next end or corner of a line, arrow, connected lines, polygon or cloud.
-pub(crate) fn held(last: Option<&[f64; 2]>, to: [f64; 2], shift: bool) -> [f64; 2] {
-    match last {
-        Some(l) if shift => pdfcraft_engine::measure::snap::ortho(*l, to),
-        _ => to,
-    }
-}
-
-/// `points` with point `i` moved to `to`; with Shift, held level or plumb with the point before
-/// it (a line's other end; the first corner is held to the second).
-pub(crate) fn reshaped(points: &[[f64; 2]], i: usize, to: [f64; 2], shift: bool) -> Vec<[f64; 2]> {
-    let mut out = points.to_vec();
-    let anchor = if i == 0 { points.get(1) } else { points.get(i - 1) };
-    let to = held(anchor, to, shift);
-    if let Some(p) = out.get_mut(i) {
-        *p = to;
-    }
-    out
-}
-
-pub(super) const HANDLES: [(i8, i8); 8] = [(-1, -1), (0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0)];
-
-pub(super) fn handle_pos(r: Rect, (hx, hy): (i8, i8)) -> Pos2 {
-    let x = match hx {
-        -1 => r.left(),
-        0 => r.center().x,
-        _ => r.right(),
-    };
-    let y = match hy {
-        -1 => r.top(),
-        0 => r.center().y,
-        _ => r.bottom(),
-    };
-    pos2(x, y)
-}
-
-/// The proportions a corner drag of `r` keeps: the box's own fixed ratio (an image signature's),
-/// else `r`'s current one while Shift is held, else none.
-pub(crate) fn corner_ratio(r: Rect, fixed: Option<f32>, shift: bool) -> Option<f32> {
-    fixed.or_else(|| (shift && r.width() > 0.0 && r.height() > 0.0).then(|| r.width() / r.height()))
-}
-
-pub(crate) fn resized(r: Rect, (hx, hy): (i8, i8), d: egui::Vec2, aspect_ratio: Option<f32>) -> Rect {
-    if hx != 0
-        && hy != 0
-        && let Some(ratio) = aspect_ratio.filter(|v| v.is_finite() && *v > 0.0)
-    {
-        // As in content_ui, the larger requested dimension drives proportional corner resizing.
-        // Keep the opposite corner fixed and prevent crossing it from flipping the image.
-        let width = (r.width() + f32::from(hx) * d.x).max((r.height() + f32::from(hy) * d.y) * ratio).max(4.0).max(4.0 * ratio);
-        let anchor = handle_pos(r, (-hx, -hy));
-        return Rect::from_two_pos(anchor, anchor + vec2(f32::from(hx) * width, f32::from(hy) * width / ratio));
-    }
-    let mut r = r;
-    match hx {
-        -1 => r.min.x += d.x,
-        1 => r.max.x += d.x,
-        _ => {}
-    }
-    match hy {
-        -1 => r.min.y += d.y,
-        1 => r.max.y += d.y,
-        _ => {}
-    }
-    Rect::from_two_pos(r.min, r.max)
-}
-
-pub(super) fn clamp_to(r: Rect, p: Pos2) -> Pos2 {
-    pos2(p.x.clamp(r.left(), r.right()), p.y.clamp(r.top(), r.bottom()))
-}
-
 /// The side of the caret's box, in user space units, away from text.
 pub(super) const CARET_SIZE: f64 = 8.0;
 
@@ -170,6 +49,7 @@ pub(super) const CARET_SIZE: f64 = 8.0;
 /// The caret is drawn upright in user space, so it only snaps on an unrotated page, where up on
 /// the page is up on screen; its size goes through the same mapping as the tip, so a page with
 /// `/UserUnit` gets a caret of the same size relative to its text.
+#[cfg(test)]
 pub(crate) fn snapped_caret(page: &PageInfo, text: &PageText, vx: f32, vy: f32) -> Option<([f64; 2], f64)> {
     if !page.rotation.is_multiple_of(360) {
         return None;
