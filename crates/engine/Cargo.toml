@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 craft-docpath = { workspace = true }
+craft-font-catalog = { workspace = true }
 craft-image-codecs = { workspace = true }
 pdfcraft-measure = { workspace = true }
 image = { version = "0.25", default-features = false }
@@ -50,6 +51,11 @@ unicode-segmentation = "1.13"
 # entry is std-only; this target adds `clock` for `chrono::Local::now`.
 chrono = { workspace = true, features = ["clock"] }
 getrandom = "0.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Already in the graph (platform, automation): the rename an automation root confines is made
+# below the root's open folder (rename::rooted).
+rustix = { version = "1", features = ["fs"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.4", features = ["wasm_js"] }
