@@ -1052,8 +1052,14 @@ pub fn check_box_states(doc: &mut Document, w: &Widget, kind: FieldKind, on_name
     let (page_w, page_h) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
     let place = placement(mk_rotation(doc, &wd), page_w, page_h);
     let (width, height) = (place.layout_w, place.layout_h);
-    let (frame_c, _) = frame(doc, &wd, width, height);
     let style = crate::author::CheckStyle::of_widget(doc, &wd, kind);
+    // Circle is the button's shape, not only the mark inside a square (#8216).
+    let (frame_c, _) = if style == crate::author::CheckStyle::Circle {
+        let mk = wd.get(b"MK").map(|m| doc.resolve(m)).and_then(|m| m.as_dict().cloned());
+        round_frame(doc, &wd, mk.as_ref(), width, height)
+    } else {
+        frame(doc, &wd, width, height)
+    };
     let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(f_da));
     let mut form = |content: String| -> Object {
         let mut d = Dict::new();

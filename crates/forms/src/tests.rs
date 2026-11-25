@@ -2677,6 +2677,19 @@ fn check_box_styles_change_the_mark() {
     let text = add_field(&mut doc, 0, [50.0, 500.0, 250.0, 520.0], &NewField::Text { multiline: false }, None).unwrap();
     let style = |doc: &Document, name: &str| check_style(doc, field(&fields(doc), name));
     assert_eq!((style(&doc, &check), style(&doc, &radio)), (CheckStyle::Check, CheckStyle::Circle), "the defaults");
+    let off_ap = |doc: &Document, name: &str| {
+        let all = fields(doc);
+        let w = &field(&all, name).widgets[0];
+        let n =
+            doc.get(w.obj).as_dict().unwrap().get(b"AP").unwrap().as_dict().unwrap().get(b"N").unwrap().as_dict().unwrap().reference(b"Off").unwrap();
+        let Object::Stream(s) = &*doc.get(n) else { panic!() };
+        String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+    };
+    let radio_off = off_ap(&doc, &radio);
+    assert!(radio_off.contains(" c "), "a circle style draws a round border: {radio_off}");
+    assert!(!radio_off.contains(" re "), "a circle style does not draw a square border: {radio_off}");
+    let check_off = off_ap(&doc, &check);
+    assert!(check_off.contains(" re "), "a check style keeps a square border: {check_off}");
     // The "on" appearance: the widget's /AP /N entry for its on state.
     let on_ap = |doc: &Document, name: &str| {
         let all = fields(doc);
