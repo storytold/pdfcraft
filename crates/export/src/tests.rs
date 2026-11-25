@@ -12,6 +12,9 @@ fn varied_page(n: usize) -> Page {
             color: [(i % 256) as f64 / 255.0, (i / 256 % 256) as f64 / 255.0, 0.5],
             rotation: 0.0,
             space_around: [false; 2],
+            kind: ParagraphKind::Body,
+            order: 0,
+            metrics: Metrics::default(),
         })
         .collect();
     Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() }
@@ -53,6 +56,9 @@ fn page() -> Page {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     };
     Page {
         width: 612.0,
@@ -224,6 +230,9 @@ fn word_overlap_does_not_consume_invoice_body_space() {
         color: [0.8; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     });
     p.images = page().images;
     let d = docx(&[p], "Invoice");
@@ -382,6 +391,9 @@ fn word_opens_text_with_control_characters_and_long_pages() {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     });
     let d = docx(&[p.clone()], "Receipt\u{1}");
     let xml = part(&d, "word/document.xml");
@@ -452,6 +464,9 @@ fn rtf_escapes_and_sizes() {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     });
     let r = rtf(&[p]);
     assert!(r.starts_with("{\\rtf1") && r.trim_end().ends_with('}'));
@@ -547,6 +562,9 @@ fn table_page() -> Page {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     };
     Page {
         width: 612.0,
@@ -571,6 +589,9 @@ fn table_page() -> Page {
                 color: [0.0; 3],
                 rotation: 0.0,
                 space_around: [false; 2],
+                kind: ParagraphKind::Body,
+                order: 0,
+                metrics: Metrics::default(),
             },
         ],
         images: Vec::new(),
@@ -645,6 +666,9 @@ fn a_staircase_of_blocks_is_not_a_huge_table() {
                 color: [0.0; 3],
                 rotation: 0.0,
                 space_around: [false; 2],
+                kind: ParagraphKind::Body,
+                order: 0,
+                metrics: Metrics::default(),
             }
         })
         .collect();
@@ -673,6 +697,9 @@ fn word_opens_tables_up_to_its_column_limit() {
                         color: [0.0; 3],
                         rotation: 0.0,
                         space_around: [false; 2],
+                        kind: ParagraphKind::Body,
+                        order: 0,
+                        metrics: Metrics::default(),
                     }
                 })
             })
@@ -688,7 +715,19 @@ fn word_opens_tables_up_to_its_column_limit() {
 }
 
 fn block(t: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> Block {
-    Block { text: t.into(), rect: [x0, y0, x1, y1], size: 12.0, bold: false, italic: false, color: [0.0; 3], rotation: 0.0, space_around: [false; 2] }
+    Block {
+        text: t.into(),
+        rect: [x0, y0, x1, y1],
+        size: 12.0,
+        bold: false,
+        italic: false,
+        color: [0.0; 3],
+        rotation: 0.0,
+        space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
+    }
 }
 
 /// #2806: a sentence whose link is set in another colour or font runs on as separate blocks
@@ -809,6 +848,9 @@ fn two_column_body_text_is_not_mistaken_for_a_table() {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     };
     let p = Page {
         width: 612.0,
@@ -1034,6 +1076,52 @@ fn a_paragraph_is_a_heading_only_when_its_text_is() {
     assert_eq!(word_paragraphs(&xml).len(), 2, "{xml}");
 }
 
+/// A one-line block of `text` at the body size on a US Letter page, of the structure a synthesizer
+/// read it as.
+fn typed_block(kind: ParagraphKind, text: &str, y: f64) -> Block {
+    Block {
+        text: text.into(),
+        rect: [72.0, y, 500.0, y + 12.0],
+        size: 12.0,
+        bold: false,
+        italic: false,
+        color: [0.0; 3],
+        rotation: 0.0,
+        space_around: [false; 2],
+        kind,
+        order: 0,
+        metrics: Metrics::default(),
+    }
+}
+
+/// A US Letter page holding `blocks`.
+fn typed_page(blocks: Vec<Block>) -> Page {
+    Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() }
+}
+
+/// A numbered item reaches Word as a list paragraph, not as text with a typed number: Word
+/// regenerates the number from the list's own definition. The point headings are a lettered list
+/// of their own, so the two schemes each keep their own sequence (ECMA-376 §17.9).
+#[test]
+fn numbered_paragraphs_are_real_word_lists() {
+    let p = typed_page(vec![
+        typed_block(ParagraphKind::Numbered(Decimal), "1. The first numbered item", 700.0),
+        typed_block(ParagraphKind::Numbered(Decimal), "2. The second numbered item", 680.0),
+        typed_block(ParagraphKind::PointHeading { letter: 'A' }, "THE COMPLAINT FAILS TO STATE A CLAIM", 660.0),
+    ]);
+    let bytes = docx(std::slice::from_ref(&p), "Points");
+    let xml = part(&bytes, "word/document.xml");
+    assert!(xml.contains("<w:numPr>"), "{xml}");
+    assert!(!xml.contains(">1. </w:t>") && !xml.contains(">2. </w:t>"), "the number belongs to the list: {xml}");
+    assert!(xml.contains(">The first numbered item</w:t>"), "the item's text stays: {xml}");
+    let doc = craft_docx::read(&bytes).unwrap();
+    let lists: Vec<u32> = body_paragraphs(&doc).iter().filter_map(|p| p.props.numbering.map(|n| n.num)).collect();
+    assert_eq!(lists.len(), 3, "every paragraph is in a list");
+    assert_eq!(lists[0], lists[1], "the numbered items run in one list");
+    assert_ne!(lists[0], lists[2], "the lettered point headings keep a list of their own");
+    assert!(doc.numbering.num(lists[2]).is_some(), "the package defines both lists");
+}
+
 /// #1595: Markdown gets the headings, paragraphs and a rule between pages, in reading order;
 /// images are left out.
 #[test]
@@ -1063,6 +1151,9 @@ fn markdown_escapes_markup_and_keeps_emphasis_and_tables() {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     };
     let p = Page {
         width: 612.0,
@@ -1121,6 +1212,9 @@ fn two_column_and_turned_text_export_in_reading_order() {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     };
     let columns = Page {
         width: 595.0,
@@ -1159,6 +1253,9 @@ fn two_column_and_turned_text_export_in_reading_order() {
         color: [0.0; 3],
         rotation: -90.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     };
     let rotated = Page {
         width: 792.0,
@@ -1694,6 +1791,9 @@ fn word_rotated_text_is_a_turned_line() {
         color: [0.0; 3],
         rotation: 90.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     });
     let doc = craft_docx::read(&docx(&[p], "Draft")).unwrap();
     let objects = body_objects(&doc);

@@ -6391,6 +6391,7 @@ dependencies = [
  "craft-zip",
  "flate2",
  "image",
+ "pdfcraft-ocr",
 ]
 
 [[package]]

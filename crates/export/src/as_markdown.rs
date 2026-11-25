@@ -26,7 +26,7 @@ pub fn markdown(pages: &[Page]) -> String {
     let mut writer = Writer::new();
     for item in items(pages) {
         match item {
-            Item::Para(runs, level) => {
+            Item::Para(runs, level, _) => {
                 // Heading weight comes from the heading marker, as in the HTML export.
                 let runs: Vec<_> = runs.iter().map(|r| (r.text.as_str(), r.block.bold && level == 0, r.block.italic)).collect();
                 writer.paragraph(&runs, level);

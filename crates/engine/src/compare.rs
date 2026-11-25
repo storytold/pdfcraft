@@ -284,6 +284,10 @@ impl crate::Document {
                             italic,
                             color: b.color,
                             rotation: b.rotation - f64::from(info.rotation),
+                            // The editor's blocks are plain body text: a PDF is not synthesized.
+                            kind: pdfcraft_export::ParagraphKind::Body,
+                            order: 0,
+                            metrics: pdfcraft_export::Metrics::default(),
                         }
                     })
                     .collect();

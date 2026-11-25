@@ -8,10 +8,12 @@ mod pictures;
 
 use super::as_docx::{rgb8, room_for};
 use super::as_html::{allowed, language_tag};
-use super::layout::{Image, Item, Page, Table, body_size, items, reading_order};
+use super::layout::{Image, Item, Page, Run, Table, body_size, items, reading_order};
+use craft_wordmodel::numbering::ListKind;
 use craft_wordmodel::para::{Anchor, Float, ShapeKind, Wrap};
-use craft_wordmodel::props::{Border, BorderStyle, Borders, CellProps, LineSpacing, TableProps};
+use craft_wordmodel::props::{Border, BorderStyle, Borders, CellProps, LineSpacing, NumRef, TableProps};
 use craft_wordmodel::{Block, CharProps, Document, InlineObject, ParaProps, Paragraph, PartKind, Rgb, SectionProps, Style, StyleSheet, TextColor};
+use pdfcraft_ocr::ParagraphKind;
 
 /// A run's formatting: its size, bold, italic and colour (none for black, the default).
 fn chr(size: f64, bold: bool, italic: bool, color: [f64; 3]) -> CharProps {
@@ -177,6 +179,10 @@ struct Builder<'a> {
     /// For RTF, which repeats a picture's data at every placement and doesn't turn pictures: what
     /// its pictures may still cost, and the rotations baked into them ([`pictures::Budget`]).
     rtf: Option<pictures::Budget>,
+    /// The `num` id of the decimal list numbered items share, and of the lettered list point
+    /// headings share (`None`: the document has neither kind, so no numbering part is written).
+    numbered: Option<u32>,
+    points: Option<u32>,
     /// The page (0-based) being built, and the pages that lost a picture to a limit or to a
     /// picture that couldn't be prepared.
     page: usize,
@@ -194,7 +200,14 @@ impl<'a> Builder<'a> {
         if let Some(c) = shared.filter(|c| *c != [255; 3] && pages.iter().all(|p| p.background.map(rgb8) == Some(*c))) {
             doc.settings.page_color = Some(Rgb(c[0], c[1], c[2]));
         }
-        Builder { doc, body: Vec::new(), media: Vec::new(), rtf, page: 0, omitted: Vec::new() }
+        // Real lists: the numbered items share one decimal list and the point headings a lettered
+        // one, so each scheme keeps its own sequence (ECMA-376 §17.9). A document with neither
+        // kind gets no numbering part at all.
+        let numbered = has_kind(pages, |k| matches!(k, ParagraphKind::Numbered(_)))
+            .then(|| std::sync::Arc::make_mut(&mut doc.numbering).add_list(ListKind::Numbered));
+        let points = has_kind(pages, |k| matches!(k, ParagraphKind::PointHeading { .. }))
+            .then(|| std::sync::Arc::make_mut(&mut doc.numbering).add_list(ListKind::UpperLetter));
+        Builder { doc, body: Vec::new(), media: Vec::new(), rtf, numbered, points, page: 0, omitted: Vec::new() }
     }
 
     /// The media key for `im`, or `None` for an empty picture, and past the limits or for one that
@@ -225,16 +238,7 @@ impl<'a> Builder<'a> {
     /// `sec`.
     fn flow(&mut self, it: Item<'a>, sec: &SectionProps) {
         match it {
-            Item::Para(runs, lvl) => {
-                let mut p = Paragraph::new();
-                if matches!(lvl, 1 | 2) {
-                    p.props.style = Some(format!("Heading{lvl}"));
-                }
-                for r in &runs {
-                    push_text(&mut p, &r.text, chr(r.block.size, r.block.bold, r.block.italic, r.block.color));
-                }
-                self.body.push(Block::Para(p));
-            }
+            Item::Para(runs, lvl, kind) => self.paragraph(&runs, lvl, kind),
             Item::Table(t) => {
                 // Tables that touch become one table: a paragraph keeps them apart.
                 if matches!(self.body.last(), Some(Block::Table(_))) {
@@ -248,6 +252,34 @@ impl<'a> Builder<'a> {
             }
             Item::PageBreak => {}
         }
+    }
+
+    /// One paragraph, by what the document's structure makes it: a numbered item or a point
+    /// heading is a real list paragraph (Word regenerates the number, so it is not in the text),
+    /// and everything else is body text at the geometry its producer measured.
+    fn paragraph(&mut self, runs: &[Run<'a>], lvl: u8, kind: ParagraphKind) {
+        let mut p = Paragraph::new();
+        p.props = match kind {
+            ParagraphKind::Numbered(_) => list_props(self.numbered, runs),
+            ParagraphKind::PointHeading { .. } => list_props(self.points, runs),
+            _ => {
+                let mut props = block_props(runs);
+                if matches!(lvl, 1 | 2) {
+                    props.style = Some(format!("Heading{lvl}"));
+                }
+                props
+            }
+        };
+        // A numbered item's typed number is the list's to regenerate (synthesis strips it already;
+        // a producer that left it in gets the same real list).
+        for (i, r) in runs.iter().enumerate() {
+            let text = match (i, kind) {
+                (0, ParagraphKind::Numbered(_)) => without_typed_number(&r.text),
+                _ => r.text.as_str(),
+            };
+            push_text(&mut p, text, chr(r.block.size, r.block.bold, r.block.italic, r.block.color));
+        }
+        self.body.push(Block::Para(p));
     }
 
     /// End a page: its section ends here, and the next page's starts on a new page.
@@ -264,6 +296,55 @@ impl<'a> Builder<'a> {
         self.doc.ensure_nonempty();
         self.doc
     }
+}
+
+/// Whether any block of `pages` is of the structure `matches` accepts.
+fn has_kind(pages: &[Page], matches: fn(&ParagraphKind) -> bool) -> bool {
+    pages.iter().flat_map(|p| &p.blocks).any(|b| matches(&b.kind))
+}
+
+/// A list paragraph's properties: the `num` of its list at the list's first level, with the
+/// geometry its producer measured. `num` 0 is the model's "no list", so it is never referenced.
+fn list_props(num: Option<u32>, runs: &[Run]) -> ParaProps {
+    let mut props = block_props(runs);
+    props.numbering = num.filter(|n| *n != 0).map(|num| NumRef { num, level: 0 });
+    props
+}
+
+/// The paragraph properties a block's measured geometry asks for: its indents in points and its
+/// line spacing, each left unset when it is the body's own. A hostile measurement (not finite,
+/// past Word's limits) is clamped rather than written through.
+fn block_props(runs: &[Run]) -> ParaProps {
+    let Some(m) = runs.first().map(|r| r.block.metrics) else { return ParaProps::default() };
+    // A point or less is no indent; 22 inches is Word's own limit for one.
+    let indent = |v: f32| (v.is_finite() && v.abs() > 0.5).then(|| v.clamp(-1584.0, 1584.0));
+    let spacing = m.line_spacing.is_finite().then(|| m.line_spacing.clamp(0.5, 5.0)).filter(|s| (*s - 1.0).abs() > 0.01);
+    ParaProps {
+        indent_left: indent(m.indent_left),
+        indent_first: indent(m.indent_first),
+        line_spacing: spacing.map(LineSpacing::Multiple),
+        ..ParaProps::default()
+    }
+}
+
+/// `text` without a typed list number at its start ("1. ", "12) "), which a real list regenerates;
+/// a number that runs into the text ("1.5 kg") stays.
+fn without_typed_number(text: &str) -> &str {
+    let t = text.trim_start();
+    let digits = t.chars().take_while(char::is_ascii_digit).count();
+    if !(1..=3).contains(&digits) {
+        return text;
+    }
+    let Some(rest) = t.get(digits..) else { return text };
+    let mut after = rest.chars();
+    if !matches!(after.next(), Some('.') | Some(')')) {
+        return text;
+    }
+    let after = after.as_str();
+    if after.is_empty() {
+        return "";
+    }
+    if after.starts_with(char::is_whitespace) { after.trim_start() } else { text }
 }
 
 /// A paragraph holding the picture `media`, scaled down to fit between the margins of `sec`, side

@@ -1,6 +1,6 @@
 use super::*;
-use crate::Block;
 use crate::tests::part;
+use crate::{Block, Metrics, ParagraphKind};
 
 fn xml(text: &str) -> craft_xml::El {
     craft_xml::parse(text.as_bytes()).expect("valid package XML")
@@ -35,6 +35,9 @@ fn sample_page() -> Page {
                 color: [0.1, 0.2, 0.3],
                 rotation: 0.0,
                 space_around: [false; 2],
+                kind: ParagraphKind::Body,
+                order: 0,
+                metrics: Metrics::default(),
             },
             Block {
                 text: "Revenue grew 25% year over year across all regions.".into(),
@@ -45,6 +48,9 @@ fn sample_page() -> Page {
                 color: [0.0; 3],
                 rotation: 0.0,
                 space_around: [false; 2],
+                kind: ParagraphKind::Body,
+                order: 0,
+                metrics: Metrics::default(),
             },
             Block {
                 text: "Operational expenses remained flat.".into(),
@@ -55,6 +61,9 @@ fn sample_page() -> Page {
                 color: [0.0; 3],
                 rotation: 0.0,
                 space_around: [false; 2],
+                kind: ParagraphKind::Body,
+                order: 0,
+                metrics: Metrics::default(),
             },
         ],
         images: vec![Image {
@@ -183,6 +192,9 @@ fn pptx_package_parts_are_complete_and_consistent() {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     };
     let table_page = Page {
         width: 612.0,
@@ -286,6 +298,9 @@ fn hostile_sizes_do_not_overflow_the_slide_position() {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     };
     let mut blocks = vec![huge("Title", f64::MAX, 500.0)];
     for k in 0..40 {
@@ -357,6 +372,9 @@ fn pptx_table_cell_with_largest_font_stays_in_table_and_not_in_title() {
         color: [0.0; 3],
         rotation: 0.0,
         space_around: [false; 2],
+        kind: ParagraphKind::Body,
+        order: 0,
+        metrics: Metrics::default(),
     };
     let p = Page {
         width: 720.0,
@@ -372,6 +390,9 @@ fn pptx_table_cell_with_largest_font_stays_in_table_and_not_in_title() {
                 color: [0.0; 3],
                 rotation: 0.0,
                 space_around: [false; 2],
+                kind: ParagraphKind::Body,
+                order: 0,
+                metrics: Metrics::default(),
             },
             // Table where one cell has a very large number (e.g. 36 pt callout in the table)
             cell("Metric", 72.0, 400.0, 100.0, 12.0),

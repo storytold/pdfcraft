@@ -40,10 +40,11 @@ pub(crate) use craft_html::standalone::esc;
 use craft_html::standalone::{allowed, base64};
 #[cfg(test)]
 use flow::list_item;
-pub use layout::{Block, Cell, Image, Page, Table};
+pub use layout::{Block, Cell, Image, Metrics, Page, Table};
 #[cfg(test)]
 use layout::{LOOKUP_STEPS, MAX_COLS, body_size};
 pub(crate) use layout::{Run, flowing_paragraphs, reading_order, tables};
+pub use pdfcraft_ocr::{Decimal, ParagraphKind};
 
 #[cfg(test)]
 mod tests;
