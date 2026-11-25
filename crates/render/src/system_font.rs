@@ -7,7 +7,7 @@
 //! first (see `japanese_fallback` in `raster.rs`); this module is the last resort: one face
 //! already installed on this machine, used for the viewer only (`RenderConfig::system_fonts`, off
 //! for exports, printing and OCR). It is read at runtime and never embedded or shipped
-//! (AGENTS.md §1.4), Noto CJK and Source Han are left out on purpose (§1.1), and
+//! (docs/development.md "Fonts and attribution"), Noto CJK and Source Han are left out on purpose (clean-room.md), and
 //! `PDFCRAFT_SYSTEM_FONTS=0` turns it off, as for the interface font.
 
 use std::collections::HashMap;
@@ -15,8 +15,8 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use hayro::hayro_interpret::font::{FallbackFontQuery, FontData};
-use hayro::hayro_interpret::hayro_cmap::CidFamily;
+use craft_pdf::interpret::font::{FallbackFontQuery, FontData};
+use craft_pdf::interpret::hayro_cmap::CidFamily;
 use skrifa::MetadataProvider as _;
 use skrifa::string::StringId;
 
@@ -433,7 +433,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_preserves_installed_chinese_document_families() {
-        use hayro::hayro_interpret::hayro_cmap::CharacterCollection;
+        use craft_pdf::interpret::hayro_cmap::CharacterCollection;
         for (name, expected, file) in [
             ("SimSun", "SimSun", "simsun.ttc"),
             ("SimHei", "SimHei", "simhei.ttf"),

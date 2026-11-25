@@ -1,20 +1,34 @@
-//! Read-only statistics for a document snapshot. At most one worker per dialog, with cancellation
-//! between pages and no stale results after edits, page changes or changed exclusions.
+//! Read-only statistics for a document snapshot. The count runs on the host's job queue; changing the page choice,
+//! the exclusions or the document cancels the running count, and closing the dialog drops the queue.
 
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    mpsc,
+    atomic::{AtomicUsize, Ordering},
 };
 
+use craft::host::Wake;
+use craft::host::queue::{Cancel, JobQueue, Priority, QueueOptions};
+use craft::theme::variant::Tone;
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft::ui::display::{Shade, Spinner, Text};
+use craft::ui::form::Field;
+use craft::ui::layout_components::Row;
+use craft::ui::notices::{Notice, NoticeLayout};
+use craft::ui::patterns::form_dialogs::FormDialog;
+use craft::ui::sections::{DialogRole, FooterButton};
+use craft::ui::style::TypeRole;
+use egui::Ui;
 use pdfcraft_engine::{
     DocId,
     export::ExportSource,
     word_count::{self, Options, Report},
 };
 
-use crate::{PdfCraftApp, widgets};
+use crate::PdfCraftApp;
 
+/// What the dialog counted for: a change in any part starts a new count.
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Key {
     doc: DocId,
@@ -23,203 +37,230 @@ struct Key {
     options: Options,
 }
 
-struct Job {
-    key: Key,
-    receiver: mpsc::Receiver<Result<Report, String>>,
-    cancel: Arc<AtomicBool>,
-    done: Arc<AtomicUsize>,
+/// The choices the dialog remembers across openings.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub(crate) struct WordCountOptions {
+    pub options: Options,
+    pub current_page: bool,
 }
 
-impl Drop for Job {
-    fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Relaxed);
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct Draft {
-    options: Options,
-    current_page: bool,
+/// Word count, owned by the dialog host.
+pub(crate) struct WordCountDialog {
+    id: DialogId,
+    options: WordCountOptions,
+    /// What the running or finished count is for.
     key: Option<Key>,
-    job: Option<Job>,
-    result: Option<Result<Report, String>>,
+    // PLAN: `JobQueue` keys must be `Hash`, which `Options` is not known to be: jobs are keyed by `serial`.
+    queue: JobQueue<u64, Result<Report, String>>,
+    /// The serial of the count for `key`; a result of any other serial is stale.
+    serial: u64,
+    wake: Wake,
+    /// Pages the running count has read.
+    done: Arc<AtomicUsize>,
+    shown: Option<Result<Report, String>>,
 }
 
-impl Draft {
-    pub(crate) fn cancel(&mut self) {
-        if let Some(job) = &self.job {
-            job.cancel.store(true, Ordering::Relaxed);
-        }
+impl WordCountDialog {
+    fn new(options: WordCountOptions, queue: JobQueue<u64, Result<Report, String>>, wake: Wake) -> Self {
+        WordCountDialog { id: dialog_id("word-count"), options, key: None, queue, serial: 0, wake, done: Arc::new(AtomicUsize::new(0)), shown: None }
+    }
+
+    /// Whether the count for the current key has finished (with a report or an error).
+    #[cfg(test)]
+    pub(crate) fn finished(&self) -> bool {
+        self.shown.is_some()
+    }
+
+    /// Shows `message` in place of a count and cancels any running one.
+    fn refuse(&mut self, message: String) {
+        self.queue.reprioritize(|_, _| None);
         self.key = None;
-        self.result = None;
+        self.shown = Some(Err(message));
     }
 
-    fn update(&mut self, key: Key, source: impl FnOnce() -> ExportSource, ctx: &egui::Context, inline: bool) {
+    /// Starts a count when `key` is not the one counted, cancelling the old one, and takes the result that arrived
+    /// for the current count.
+    fn update(&mut self, key: Key, source: impl FnOnce() -> ExportSource) {
         if self.key != Some(key) {
-            self.cancel();
+            self.queue.reprioritize(|_, _| None);
             self.key = Some(key);
-        }
-        if let Some(job) = &self.job {
-            let received = match job.receiver.try_recv() {
-                Ok(result) => Some(result),
-                Err(mpsc::TryRecvError::Empty) => None,
-                Err(mpsc::TryRecvError::Disconnected) => Some(Err(tl!("Word counting stopped unexpectedly.").into())),
-            };
-            if let Some(result) = received {
-                if job.key == key && !job.cancel.load(Ordering::Relaxed) {
-                    self.result = Some(result);
-                }
-                self.job = None;
-            }
-        }
-        if self.job.is_some() || self.result.is_some() {
-            return;
-        }
-        let source = source();
-        let pages: Vec<_> = key.page.map_or_else(|| (0..source.pages).collect(), |page| vec![page]);
-        let (sender, receiver) = mpsc::channel();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let done = Arc::new(AtomicUsize::new(0));
-        self.job = Some(Job { key, receiver, cancel: cancel.clone(), done: done.clone() });
-        let ctx = ctx.clone();
-        let work = move || {
-            let result = word_count::count(source, &pages, key.options, |n| {
-                done.store(n, Ordering::Relaxed);
-                ctx.request_repaint();
-                !cancel.load(Ordering::Relaxed)
+            self.shown = None;
+            self.serial += 1;
+            let source = source();
+            let pages: Vec<usize> = key.page.map_or_else(|| (0..source.pages).collect(), |page| vec![page]);
+            let done = Arc::new(AtomicUsize::new(0));
+            self.done = done.clone();
+            let wake = self.wake.clone();
+            self.queue.submit(self.serial, Priority::VISIBLE, move |cancel: &Cancel| {
+                word_count::count(source, &pages, key.options, |n| {
+                    done.store(n, Ordering::Relaxed);
+                    wake.wake();
+                    !cancel.is_cancelled()
+                })
             });
-            let _ = sender.send(result);
-            ctx.request_repaint();
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        if !inline {
-            if let Err(error) = std::thread::Builder::new().name("word-count".into()).spawn(work) {
-                self.job = None;
-                self.result = Some(Err(error.to_string()));
-            }
-            return;
         }
-        let _ = inline;
-        work();
+        while let Some(finished) = self.queue.try_recv() {
+            if finished.key == self.serial {
+                self.shown = Some(finished.result);
+            }
+        }
     }
 }
 
-pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> bool {
-    ui.heading(tl!("Word count"));
-    let Some((view, id)) = app.active_ids() else { return true };
-    let Some(doc) = app.session.get(id) else { return true };
-    if let Err(error) = doc.check_copying() {
-        app.word_count_draft.cancel();
-        ui.label(error.to_string());
-        return false;
+impl StackDialog for WordCountDialog {
+    type Result = ();
+
+    fn id(&self) -> DialogId {
+        self.id
     }
-    let draft = &mut app.word_count_draft;
-    ui.add(widgets::checkbox(&mut draft.current_page, tl!("Current page only")));
-    ui.separator();
-    ui.add(widgets::checkbox(&mut draft.options.exclude_tables, tl!("Exclude tagged tables")));
-    ui.add(widgets::checkbox(&mut draft.options.exclude_code, tl!("Exclude tagged code blocks")));
-    ui.add(widgets::checkbox(&mut draft.options.exclude_images, tl!("Exclude image/OCR text")));
-    ui.label(tl!("Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text."));
-    let key = Key { doc: id, generation: doc.edit_generation(), page: draft.current_page.then_some(app.views[view].current), options: draft.options };
-    draft.update(key, || doc.export_source(), ui.ctx(), app.run_inline);
-    ui.separator();
-    match &draft.result {
-        Some(Ok(report)) => {
-            egui::Grid::new("word-count-totals").show(ui, |ui| {
-                for (label, value) in [
-                    (tl!("Words"), report.total.words),
-                    (tl!("Characters"), report.total.characters),
-                    (tl!("Characters without spaces"), report.total.characters_without_spaces),
-                    (tl!("Pages counted"), report.pages.len()),
-                ] {
-                    ui.label(label);
-                    ui.strong(value.to_string());
-                    ui.end_row();
+
+    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<()>> {
+        let WordCountDialog { options, shown, done, key, .. } = self;
+        let close = FooterButton::new(tl!("Close").to_string(), DialogRole::Cancel);
+        let out = FormDialog::new(tl!("Word count").to_string(), Bind::bound(options)).shaped(|d| d.buttons([close])).show(ui, |ui, _, o| {
+            if key.is_none()
+                && let Some(Err(error)) = shown
+            {
+                Text::new(error.clone()).show(ui);
+                return true;
+            }
+            Checkbox::new(Bind::bound(&mut o.current_page)).label(tl!("Current page only").to_string()).show(ui);
+            Checkbox::new(Bind::bound(&mut o.options.exclude_tables)).label(tl!("Exclude tagged tables").to_string()).show(ui);
+            Checkbox::new(Bind::bound(&mut o.options.exclude_code)).label(tl!("Exclude tagged code blocks").to_string()).show(ui);
+            Checkbox::new(Bind::bound(&mut o.options.exclude_images)).label(tl!("Exclude image/OCR text").to_string()).show(ui);
+            Text::new(
+                tl!("Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.").to_string(),
+            )
+            .role(TypeRole::Caption)
+            .shade(Shade::Muted)
+            .show(ui);
+            match shown {
+                Some(Ok(report)) => {
+                    for (label, value) in [
+                        (tl!("Words"), report.total.words),
+                        (tl!("Characters"), report.total.characters),
+                        (tl!("Characters without spaces"), report.total.characters_without_spaces),
+                        (tl!("Pages counted"), report.pages.len()),
+                    ] {
+                        let value = value.to_string();
+                        Field::new(label.to_string()).value(value.clone()).show(ui, |ui, _| {
+                            Text::new(value.clone()).show(ui);
+                        });
+                    }
+                    if report.pages_without_text > 0 {
+                        Text::new(tl!("Some pages contain no countable text. Scanned images need OCR first.").to_string()).show(ui);
+                    }
+                    if report.unclassified_structure {
+                        Text::new(tl!("Some content could not be classified safely and was kept in the count.").to_string()).show(ui);
+                    }
                 }
-            });
-            if report.pages_without_text > 0 {
-                ui.label(tl!("Some pages contain no countable text. Scanned images need OCR first."));
+                Some(Err(error)) => {
+                    Notice::new(Tone::Bad, error.clone()).layout(NoticeLayout::Inline).show(ui);
+                }
+                None => {
+                    Row::new().show(ui, |ui, _| {
+                        Spinner::new().show(ui);
+                        let n = done.load(Ordering::Relaxed);
+                        Text::new(crate::i18n::fmt(tl!("Counting words… {n} pages read"), &[("n", &n.to_string())])).show(ui);
+                    });
+                }
             }
-            if report.unclassified_structure {
-                ui.label(tl!("Some content could not be classified safely and was kept in the count."));
-            }
-        }
-        Some(Err(error)) => {
-            ui.colored_label(ui.visuals().error_fg_color, error);
-        }
-        None => {
-            ui.spinner();
-            let done = draft.job.as_ref().map_or(0, |job| job.done.load(Ordering::Relaxed));
-            ui.label(crate::i18n::fmt(tl!("Counting words… {n} pages read"), &[("n", &done.to_string())]));
-        }
+            true
+        });
+        out.closed.map(|_| DialogResult::Cancel)
     }
-    false
+}
+
+impl PdfCraftApp {
+    /// Opens Word count on the options the last one left, with its own one-lane queue on the host's jobs.
+    pub(crate) fn open_word_count(&mut self) {
+        // PLAN: assumed `self.wake: Wake` (pdf-hub-w1, `AppServices::wake`)
+        let wake = self.wake.clone();
+        let queue =
+            JobQueue::new(self.host.jobs_shared().clone(), wake.clone(), QueueOptions { lanes: 1, name: "word-count", ..QueueOptions::default() });
+        let dialog = WordCountDialog::new(self.word_count_options, queue, wake);
+        crate::dialogs::host::open(self, dialog);
+    }
+
+    /// Feeds the open Word count dialog the active document and takes the count's result.
+    pub(crate) fn word_count_pass(&mut self, ctx: &egui::Context) {
+        let Some(options) = self.dialogs.get::<WordCountDialog>().map(|d| d.options) else { return };
+        self.word_count_options = options;
+        let Some((view, id)) = self.active_ids() else {
+            self.dialogs.cancel::<WordCountDialog>(ctx);
+            return;
+        };
+        let current = self.views[view].current();
+        let Some(doc) = self.session.get(id) else {
+            self.dialogs.cancel::<WordCountDialog>(ctx);
+            return;
+        };
+        let Some(dialog) = self.dialogs.get_mut::<WordCountDialog>() else { return };
+        if let Err(error) = doc.check_copying() {
+            dialog.refuse(error.to_string());
+            return;
+        }
+        let key = Key { doc: id, generation: doc.edit_generation(), page: options.current_page.then_some(current), options: options.options };
+        dialog.update(key, || doc.export_source());
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Dialog;
+    use craft::host::ManualJobs;
     use egui_kittest::{Harness, kittest::Queryable};
 
-    #[test]
-    fn word_count_dialog_counts_changes_pages_and_closes() {
-        for inline in [true, false] {
-            let bytes = pdfcraft_engine::Session::new().create_from_text("Words", "Hello world\u{c}Another three words").unwrap();
-            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_eframe(|_| {
-                let mut app = PdfCraftApp::new();
-                app.run_inline = inline;
-                app.set_option("language", "en").unwrap();
-                app.open_bytes("words.pdf", None, bytes.as_ref().clone()).unwrap();
-                app.run_command("file.word_count");
-                app
-            });
-            let wait = |h: &mut Harness<'_, PdfCraftApp>| {
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-                while h.state().word_count_draft.result.is_none() {
-                    assert!(std::time::Instant::now() < deadline, "word-count worker timed out");
-                    h.run_steps(1);
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                }
-                h.run_steps(2);
-            };
-            wait(&mut h);
-            assert_eq!(h.state().dialog, Some(Dialog::WordCount));
-            assert_eq!(h.state().word_count_draft.result.as_ref().unwrap().as_ref().unwrap().total.words, 5);
-            h.get_by_label("Current page only").click();
-            h.run_steps(1);
-            wait(&mut h);
-            assert_eq!(h.state().word_count_draft.result.as_ref().unwrap().as_ref().unwrap().total.words, 2);
-            h.state_mut().apply_edit(pdfcraft_engine::Edit::DeletePages { pages: vec![0] });
-            h.run_steps(1);
-            wait(&mut h);
-            assert_eq!(h.state().word_count_draft.result.as_ref().unwrap().as_ref().unwrap().total.words, 3);
-            h.get_by_label("Close").click();
-            h.run_steps(2);
-            assert!(h.state().dialog.is_none());
-            assert!(h.state().word_count_draft.result.is_none());
-        }
+    /// An app whose background jobs wait on `jobs` until the test runs them.
+    fn app_on(jobs: Arc<ManualJobs>) -> PdfCraftApp {
+        let info = craft::host::AppInfo { id: "pdfcraft", name: "PdfCraft", version: env!("CARGO_PKG_VERSION") };
+        let host = craft::host::Host::builder(info).jobs(jobs).build();
+        let (intake, _) = craft::platform::open::FileIntake::new(Wake::none());
+        let clipboard = craft::platform::clipboard::Clipboard::new(craft::platform::clipboard::EventClipboard::new(|| 0, |_| Ok(0)));
+        let watch = craft::platform::watch::FileWatch::new(Wake::none());
+        let services = crate::AppServices::new(Wake::none(), clipboard, None, None, intake, watch);
+        PdfCraftApp::with_host(Arc::new(host), services)
+    }
+
+    /// The figure in the Words row of the open dialog: the value its readout field reports.
+    fn words_shown(h: &Harness<'_, PdfCraftApp>) -> String {
+        h.get_by_role_and_label(egui::accesskit::Role::Group, "Words").value().expect("the Words row reports a figure")
     }
 
     #[test]
-    fn word_count_cancelled_worker_cannot_publish_an_old_result() {
-        let key = Key { doc: DocId(1), generation: 0, page: None, options: Options::default() };
-        let (tx, rx) = mpsc::channel();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let mut draft = Draft {
-            key: Some(key),
-            job: Some(Job { key, receiver: rx, cancel: cancel.clone(), done: Arc::new(AtomicUsize::new(0)) }),
-            ..Draft::default()
+    fn word_count_dialog_counts_changes_pages_and_closes() {
+        let jobs = Arc::new(ManualJobs::new());
+        let bytes = pdfcraft_engine::Session::new().create_from_text("Words", "Hello world\u{c}Another three words").unwrap();
+        let build_jobs = jobs.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_eframe(move |cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = app_on(build_jobs);
+                app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+                app.open_bytes(&egui::Context::default(), "words.pdf", None, bytes.as_ref().clone()).unwrap();
+                app.run_command(&cc.egui_ctx, "file.word_count");
+                app
+            }
+        });
+        // One frame submits the count, the job runs, the next frames take its result.
+        let settle = |h: &mut Harness<'_, PdfCraftApp>| {
+            h.run_steps(1);
+            jobs.run_all();
+            h.run_steps(2);
+            assert!(h.state().dialogs.get::<WordCountDialog>().is_some_and(WordCountDialog::finished), "the count finished");
         };
-        draft.cancel();
-        assert!(cancel.load(Ordering::Relaxed));
-        let bytes = pdfcraft_engine::Session::new().create_blank(200.0, 300.0, 1).unwrap();
-        let source = || ExportSource { bytes: bytes.clone(), pages: 1, sizes: vec![(200.0, 300.0)], config: Default::default() };
-        draft.update(key, source, &egui::Context::default(), true);
-        assert!(draft.result.is_none()); // still one worker, no competing replacement
-        tx.send(Ok(Report { total: word_count::Counts { words: 999, ..Default::default() }, ..Default::default() })).unwrap();
-        draft.update(key, source, &egui::Context::default(), true);
-        draft.update(key, source, &egui::Context::default(), true);
-        assert_eq!(draft.result.unwrap().unwrap().total.words, 0);
+        settle(&mut h);
+        assert_eq!(words_shown(&h), "5");
+        h.get_by_label("Current page only").click();
+        settle(&mut h);
+        assert_eq!(words_shown(&h), "2");
+        let ctx_h = h.ctx.clone();
+        h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeletePages { pages: vec![0] });
+        settle(&mut h);
+        assert_eq!(words_shown(&h), "3");
+        h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Close").last().expect("the dialog's Close").click();
+        h.run_steps(2);
+        assert!(!h.state().modal_open());
+        assert!(h.state().dialogs.get::<WordCountDialog>().is_none(), "closing drops the dialog and its queue");
     }
 }
