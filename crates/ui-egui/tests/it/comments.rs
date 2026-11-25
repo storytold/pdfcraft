@@ -5247,3 +5247,102 @@ fn comment_menu_rows_follow_permissions_and_run_their_action() {
     }
     attachment_page_menu_row();
 }
+
+/// #4825: a comment, shape or text box near the edge of a page has resize handles that stick out
+/// past the page boundary. Grabbing an off-page handle must enter a resize gesture and update the
+/// annotation, while an off-page press away from any handle neither selects nor starts drawing.
+#[test]
+fn off_page_resize_handle_is_selectable_and_resizes() {
+    use craft::review::AnnotationEdit;
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+
+    let mut h = visible_page_harness(|app| app.set_option(&egui::Context::default(), "quick", "select").unwrap());
+    let shape = Shape::TextBox { rect: [0.0, 50.0, 100.0, 150.0], font_size: 12.0 };
+    let style = Style::default_for(&shape);
+    let ctx = h.ctx.clone();
+    assert!(
+        h.state_mut()
+            .apply_edit(&ctx, Edit::AddAnnotation(NewAnnotation { page: 0, shape, style, contents: "Edge box".into(), author: "Tester".into() }))
+    );
+    h.run_steps(2);
+    let idx = comments(&h)[0].index;
+
+    let page_rect = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
+    // The comment's left edge is at x = 0.0 (page_rect.left()), centred vertically on the 200 pt page.
+    let handle_y = page_rect.top() + 0.5 * page_rect.height();
+
+    // Unselected: pressing just off the page next to the edge box must neither select nor move it.
+    h.state_mut().views[0].session.comments.clear_selection();
+    h.run_steps(2);
+    let just_off_page = pos2(page_rect.left() - 2.0, handle_y);
+    assert!(!page_rect.contains(just_off_page), "unselected probe is outside page bounds");
+    h.hover_at(just_off_page);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "no move cursor off-page");
+    click(&mut h, just_off_page);
+    assert!(h.state().views[0].session.comments.selection().is_empty(), "off-page press does not select an unselected edge comment");
+
+    // Select the comment so its resize handles appear, then grab its left-middle handle 2 px past
+    // the page edge (outside page_rect, within the framework's handle tolerance).
+    h.state_mut().views[0].session.comments.select_only((0, idx));
+    h.run_steps(2);
+    let off_page_from = pos2(page_rect.left() - 2.0, handle_y);
+    assert!(!page_rect.contains(off_page_from), "start point is outside the page bounds");
+    h.hover_at(off_page_from);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeHorizontal, "off-page handle offers resize cursor");
+
+    // Clicking the off-page handle without dragging keeps the comment selected.
+    click(&mut h, off_page_from);
+    assert_eq!(h.state().views[0].session.comments.selection(), vec![(0, idx)], "clicking an off-page handle keeps selection");
+
+    // Dragging the off-page handle inward resizes the comment and records an undo step.
+    let to = pos2(page_rect.left() + 30.0, handle_y);
+    h.hover_at(off_page_from);
+    h.run_steps(1);
+    h.drag_at(off_page_from);
+    h.run_steps(1);
+    h.hover_at(off_page_from + (to - off_page_from) * 0.25);
+    h.run_steps(1);
+    assert!(
+        matches!(h.state().views[0].session.comments.tool.in_flight(), Some(AnnotationEdit::Resize { .. })),
+        "dragging an off-page handle starts a live resize gesture",
+    );
+    for k in 2..=4 {
+        h.hover_at(off_page_from + (to - off_page_from) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(3);
+
+    let c = comments(&h);
+    assert_eq!(c.len(), 1);
+    let after_rect = c[0].rect;
+    assert!(after_rect[0] > 0.0, "left edge moved inward: {after_rect:?}");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Resize comment"));
+
+    // Clicking off-page away from any handle leaves selection unchanged and starts no gesture.
+    let far_off_page = pos2(page_rect.left() - 20.0, handle_y);
+    h.hover_at(far_off_page);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default);
+    click(&mut h, far_off_page);
+    assert_eq!(h.state().views[0].session.comments.selection(), vec![(0, idx)], "off-page miss leaves selection alone");
+
+    // Drawing a new shape starting off-page (not on a handle) neither starts a gesture nor creates a comment.
+    let mut h_draw = visible_page_harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
+    let page_rect_draw = h_draw.state().views[0].page_screen_rect(0).expect("page 1 on screen");
+    let off_page_draw = pos2(page_rect_draw.left() - 4.0, page_rect_draw.top() + 50.0);
+    assert!(!page_rect_draw.contains(off_page_draw));
+    h_draw.hover_at(off_page_draw);
+    h_draw.run_steps(2);
+    assert_eq!(h_draw.output().platform_output.cursor_icon, egui::CursorIcon::Default, "no drawing cursor off-page");
+    h_draw.drag_at(off_page_draw);
+    h_draw.run_steps(1);
+    h_draw.hover_at(pos2(page_rect_draw.left() + 40.0, page_rect_draw.top() + 50.0));
+    h_draw.run_steps(1);
+    assert!(h_draw.state().views[0].session.comments.tool.in_flight().is_none(), "off-page drag does not start a new drawing");
+    h_draw.drop_at(pos2(page_rect_draw.left() + 40.0, page_rect_draw.top() + 50.0));
+    h_draw.run_steps(3);
+    assert_eq!(comments(&h_draw).len(), 0, "no comment created from off-page press");
+}

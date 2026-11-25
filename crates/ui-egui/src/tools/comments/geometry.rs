@@ -44,6 +44,13 @@ pub(super) fn frame(a: &Annotation, rotation: u16) -> [f32; 4] {
 /// The side of the caret's box, in user space units, away from text.
 pub(super) const CARET_SIZE: f64 = 8.0;
 
+/// Screen-point hit radius of a selected comment's resize or point handle.
+pub(crate) const HANDLE_HIT_RADIUS: f32 = 7.0;
+
+/// Screen-point margin past a page's edge within which a selected comment's handle can still be
+/// grabbed (`HANDLE_HIT_RADIUS` plus 2 pt of slack, #4825).
+pub(crate) const HANDLE_PAGE_MARGIN: f32 = HANDLE_HIT_RADIUS + 2.0;
+
 /// [`caret_snap`] in the page's user space: the caret's tip and the side of its box.
 ///
 /// The caret is drawn upright in user space, so it only snaps on an unrotated page, where up on

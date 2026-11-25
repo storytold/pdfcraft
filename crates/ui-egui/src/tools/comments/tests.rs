@@ -626,3 +626,87 @@ fn a_pdf_date_with_a_zone_reads_as_the_same_instant_in_unix_seconds() {
     assert_eq!(bridge::pdf_date_seconds("D:20240103").zip(day).map(|(next, this)| next - this), Some(86_400));
     assert_eq!(bridge::pdf_date_seconds("not a date"), None);
 }
+
+/// #4825: a selected comment's handle is reachable past its page edge within `HANDLE_PAGE_MARGIN`
+/// using the framework's handle tolerance (including when `annotate.page` was another page), while
+/// an off-page pointer away from any handle shows the default cursor and starts no drawing.
+#[test]
+fn off_page_handle_reach_and_cursor_follow_handle_hit_radius() {
+    use craft::behavior::{Cursor, CursorIcon, PointerButton};
+    use craft::ui::canvas::{CanvasSpace, CanvasTool as _, ToolAction, ToolContext, ToolPointer};
+
+    use super::geometry::HANDLE_PAGE_MARGIN;
+
+    let page_info = || PageInfo { width: 300.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 300.0, 200.0], rotation: 0 };
+    // A text box touching the left edge of page 1 (second page), with `annotate.page` left on page 0.
+    let edge_box = Annotation { page: 1, index: 0, rect: [0.0, 50.0, 100.0, 150.0], ..annotation("FreeText", Some("Edge"), false) };
+    let info = DocInfo { pages: vec![page_info(), page_info()], annotations: vec![edge_box], ..Default::default() };
+    let page0_rect = Rect::from_min_size(pos2(100.0, 50.0), vec2(300.0, 200.0));
+    let page1_rect = Rect::from_min_size(pos2(100.0, 270.0), vec2(300.0, 200.0));
+    let placed = [PlacedPage::new(0, page0_rect, 1.0, (0.0, 200.0)), PlacedPage::new(1, page1_rect, 1.0, (0.0, 200.0))];
+    let map = page_map(&placed, &info, 0);
+    let view_rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 800.0));
+    let space = CanvasSpace::new(map.view, 1.0);
+    let prefs = CommentPrefs::default();
+    let handle_y = page1_rect.top() + 0.5 * page1_rect.height();
+    let on_off_page_handle = pos2(page1_rect.left() - 2.0, handle_y);
+    let past_handle_reach = pos2(page1_rect.left() - (HANDLE_PAGE_MARGIN + 1.0), handle_y);
+    let beside_edge_no_handle = pos2(page1_rect.left() - 2.0, page1_rect.top() + 5.0);
+    assert!(!page1_rect.contains(on_off_page_handle));
+
+    let mut cv = CommentView::from_info(&info);
+    let mut done = false;
+    let mut pressed = false;
+    // Unselected: no handle is reached and off-page cursor stays Default even right beside the box.
+    {
+        let mut tool = CommentsTool::new(&mut cv.tool, &mut cv.paste, PageMap::new(&info, &placed, 0, map.view), &mut done, &mut pressed).settings(
+            QuickTool::Select,
+            &prefs,
+            true,
+            false,
+        );
+        let mut cx =
+            ToolContext::new(view_rect, Some(space)).slop(3.0).pointer(Some(ToolPointer::new(on_off_page_handle, PointerButton::Primary, 0.0)));
+        tool.each_pass(&mut cx);
+        assert_eq!(tool.handle_near(on_off_page_handle, cx.slop), None, "unselected comment has no off-page handle");
+        assert_eq!(tool.cursor(&cx), Cursor::System(CursorIcon::Default));
+    }
+
+    // Selected on page 1 while annotate.page is 0: off-page handle within the framework's tolerance
+    // routes to page 1 and shows AnnotateTool's ResizeHorizontal cursor; off-page misses return None and Default.
+    cv.select_only((1, 0));
+    cv.tool.page = 0;
+    {
+        let mut tool = CommentsTool::new(&mut cv.tool, &mut cv.paste, PageMap::new(&info, &placed, 0, map.view), &mut done, &mut pressed).settings(
+            QuickTool::Select,
+            &prefs,
+            true,
+            false,
+        );
+        let mut cx =
+            ToolContext::new(view_rect, Some(space)).slop(3.0).pointer(Some(ToolPointer::new(on_off_page_handle, PointerButton::Primary, 0.0)));
+        tool.each_pass(&mut cx);
+        assert_eq!(tool.handle_near(on_off_page_handle, cx.slop), Some(1), "off-page handle routes to page 1");
+        assert_eq!(tool.cursor(&cx), Cursor::System(CursorIcon::ResizeHorizontal));
+        assert_eq!(tool.handle_near(past_handle_reach, cx.slop), None, "past HANDLE_PAGE_MARGIN does not hit");
+        assert_eq!(tool.handle_near(beside_edge_no_handle, cx.slop), None, "off-page away from any handle does not hit");
+        let miss_cx =
+            ToolContext::new(view_rect, Some(space)).slop(3.0).pointer(Some(ToolPointer::new(beside_edge_no_handle, PointerButton::Primary, 0.0)));
+        assert_eq!(tool.cursor(&miss_cx), Cursor::System(CursorIcon::Default));
+    }
+
+    // Drawing tool off-page away from any handle ignores the press and shows Default.
+    {
+        let mut tool = CommentsTool::new(&mut cv.tool, &mut cv.paste, PageMap::new(&info, &placed, 0, map.view), &mut done, &mut pressed).settings(
+            QuickTool::Comment(CommentTool::Rectangle),
+            &prefs,
+            true,
+            false,
+        );
+        let ptr = ToolPointer::new(beside_edge_no_handle, PointerButton::Primary, 0.0).clicks(1);
+        let mut cx = ToolContext::new(view_rect, Some(space)).slop(3.0).pointer(Some(ptr));
+        tool.each_pass(&mut cx);
+        assert_eq!(tool.cursor(&cx), Cursor::System(CursorIcon::Default));
+        assert_eq!(tool.press(&ptr, &mut cx), ToolAction::Ignored, "off-page press does not start drawing");
+    }
+}
