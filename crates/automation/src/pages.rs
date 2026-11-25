@@ -290,7 +290,7 @@ impl Automation {
         };
         // Column select (#740): only the text inside the rectangle, row by row.
         let rect = a.nums::<4>("rect")?.map(|r| r.map(|v| v as f32));
-        // Copy with formatting also copies what the strict text can't name: with HTML, each
+        // The HTML also copies what the strict text can't name: with HTML, each
         // page's strict text and recovered layer come from one pass; without, no recovery runs.
         let layers =
             if html { self.page_layers(id, &pages, extract)? } else { self.page_texts(id, &pages)?.into_iter().map(|t| (t, None)).collect() };
