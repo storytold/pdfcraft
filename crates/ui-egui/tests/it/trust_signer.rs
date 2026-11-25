@@ -4,6 +4,7 @@
 //! self-signed root) differs from its `certificate` (the signer); the click must trust the signer.
 
 use crate::support;
+use crate::support::AppHarness as _;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::SignatureStatus;
@@ -30,14 +31,18 @@ fn dir() -> std::path::PathBuf {
 }
 
 fn harness(dir: std::path::PathBuf) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("contract.pdf", None, FIXTURE.to_vec()).expect("opens");
-        app.set_option("left", "closed").unwrap();
-        app.export_dir_override = Some(dir.to_string_lossy().into_owned());
-        app.save_override = Some(dir.join("contract_signed.pdf").to_string_lossy().into_owned());
-        app
+    // The signed copy is saved where the pick answers: the test's own folder.
+    let files =
+        std::sync::Arc::new(craft::host::ScriptedFiles::answering((0..4).map(|_| craft::host::Picked::Paths(vec![dir.join("contract_signed.pdf")]))));
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::app_with_files(files);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "contract.pdf", None, FIXTURE.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app
+        }
     });
     h.run_steps(6);
     h
@@ -51,7 +56,7 @@ fn one_click_trust_stores_the_displayed_signer_not_the_embedded_root() {
     let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/chain.p12");
     let id = pdfcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap();
     let entry = h.state_mut().add_digital_id(p12, &id.certificate);
-    h.state_mut().start_signing(0, None, None, None);
+    h.start_signing(0, None, None, None);
     {
         let d = h.state_mut().sign_draft.as_mut().unwrap();
         d.selected = Some(entry);
@@ -75,8 +80,13 @@ fn one_click_trust_stores_the_displayed_signer_not_the_embedded_root() {
         (signer, root)
     };
 
-    // Expand the signature row and use the one-click trust button.
-    h.get_by_label_contains("Signed by").click();
+    // Open the signature row (a click picks it, Right opens a tree row) and use the one-click trust button.
+    h.query_all_by(|n| n.role() == egui::accesskit::Role::TreeItem && n.label().is_some_and(|l| l.contains("Signed by")))
+        .next()
+        .expect("the signature's row")
+        .click();
+    h.run_steps(1);
+    h.key_press(egui::Key::ArrowRight);
     h.run_steps(2);
     h.get_by_label("Add to trusted certificates").click();
     h.run_steps(3);

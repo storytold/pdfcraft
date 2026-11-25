@@ -443,7 +443,7 @@ impl PublicKey {
     }
 
     /// Check `sig` over a message whose digest (with `alg`) is `digest`. Encodings are read
-    /// leniently (see [`crate::rsa_pad`], [`ecdsa_rs`]); the cryptographic check never is.
+    /// leniently by the existing shared `craft-pkcs7` verifier; the cryptographic check never is.
     /// `Err(Unsupported)` means "can't tell", as opposed to `Ok(false)`: "doesn't match".
     pub fn verify(&self, scheme: Scheme, alg: DigestAlg, digest: &[u8], sig: &[u8]) -> Result<bool, SignError> {
         self.verify_noting(scheme, alg, digest, sig, &mut Vec::new())
@@ -453,13 +453,7 @@ impl PublicKey {
     /// too small to rely on ([`PublicKey::weakness`]). Only meaningful when it returns `Ok(true)`:
     /// a signature that doesn't verify may leave notes about how far it got.
     pub fn verify_noting(&self, scheme: Scheme, alg: DigestAlg, digest: &[u8], sig: &[u8], notes: &mut Vec<&'static str>) -> Result<bool, SignError> {
-        let verified = self.verify_scheme(scheme, alg, digest, sig, notes);
-        if let Ok(true) = verified
-            && let Some(weak) = self.weakness()
-        {
-            notes.push(weak);
-        }
-        verified
+        self.shared_key().verify_noting(shared_scheme(scheme), shared_digest(alg), digest, sig, notes).map_err(crate::der::app_error)
     }
 
     /// What to tell the user when a signature that still validates was made with this key, or
@@ -473,99 +467,55 @@ impl PublicKey {
         }
     }
 
-    fn verify_scheme(&self, scheme: Scheme, alg: DigestAlg, digest: &[u8], sig: &[u8], notes: &mut Vec<&'static str>) -> Result<bool, SignError> {
-        match (self, scheme) {
-            (PublicKey::Unsupported { what, .. }, _) => Err(SignError::Unsupported(what.clone())),
-            (PublicKey::Rsa { n, e }, Scheme::RsaPkcs1) => crate::rsa_pad::pkcs1_verify(n, e, alg, digest, sig, notes),
-            (PublicKey::Rsa { n, e }, Scheme::RsaPss(params)) => crate::rsa_pad::pss_verify(n, e, alg, params, digest, sig, notes),
-            (PublicKey::Ed25519(_), _) => Err(SignError::Unsupported("Ed25519 signs the message, not a digest".into())),
-            (PublicKey::P256(p), Scheme::Ecdsa) => {
-                use p256::ecdsa::signature::hazmat::PrehashVerifier;
-                let key = p256::ecdsa::VerifyingKey::from_sec1_bytes(p).map_err(|_| SignError::Malformed("P-256 key".into()))?;
-                let Some(s) = ecdsa_rs(sig, 32, notes).and_then(|rs| p256::ecdsa::Signature::from_slice(&rs).ok()) else { return Ok(false) };
-                Ok(key.verify_prehash(digest, &s).is_ok())
-            }
-            (PublicKey::P384(p), Scheme::Ecdsa) => {
-                use p384::ecdsa::signature::hazmat::PrehashVerifier;
-                let key = p384::ecdsa::VerifyingKey::from_sec1_bytes(p).map_err(|_| SignError::Malformed("P-384 key".into()))?;
-                let Some(s) = ecdsa_rs(sig, 48, notes).and_then(|rs| p384::ecdsa::Signature::from_slice(&rs).ok()) else { return Ok(false) };
-                Ok(key.verify_prehash(digest, &s).is_ok())
-            }
-            (PublicKey::P521(p), Scheme::Ecdsa) => {
-                use p521::ecdsa::signature::hazmat::PrehashVerifier;
-                let key = p521::ecdsa::VerifyingKey::from_sec1_bytes(p).map_err(|_| SignError::Malformed("P-521 key".into()))?;
-                let Some(s) = ecdsa_rs(sig, 66, notes).and_then(|rs| p521::ecdsa::Signature::from_slice(&rs).ok()) else { return Ok(false) };
-                Ok(key.verify_prehash(digest, &s).is_ok())
-            }
-            (PublicKey::BrainpoolP256(p), Scheme::Ecdsa) => {
-                use ecdsa::signature::hazmat::PrehashVerifier;
-                type Curve = bp256::BrainpoolP256r1;
-                let key = ecdsa::VerifyingKey::<Curve>::from_sec1_bytes(p).map_err(|_| SignError::Malformed("brainpoolP256r1 key".into()))?;
-                let Some(s) = ecdsa_rs(sig, 32, notes).and_then(|rs| ecdsa::Signature::<Curve>::from_slice(&rs).ok()) else { return Ok(false) };
-                Ok(key.verify_prehash(digest, &s).is_ok())
-            }
-            (PublicKey::BrainpoolP384(p), Scheme::Ecdsa) => {
-                use ecdsa::signature::hazmat::PrehashVerifier;
-                type Curve = bp384::BrainpoolP384r1;
-                let key = ecdsa::VerifyingKey::<Curve>::from_sec1_bytes(p).map_err(|_| SignError::Malformed("brainpoolP384r1 key".into()))?;
-                let Some(s) = ecdsa_rs(sig, 48, notes).and_then(|rs| ecdsa::Signature::<Curve>::from_slice(&rs).ok()) else { return Ok(false) };
-                Ok(key.verify_prehash(digest, &s).is_ok())
-            }
-            (PublicKey::BrainpoolP512(p), Scheme::Ecdsa) => {
-                let Some(rs) = ecdsa_rs(sig, 64, notes) else { return Ok(false) };
-                crate::ec512::verify(p, digest, &rs).ok_or_else(|| SignError::Malformed("brainpoolP512r1 key or signature".into()))
-            }
-            _ => Ok(false),
+    /// Translate representation only; trust decisions and platform signing stay in PdfCraft.
+    fn shared_key(&self) -> craft_pkcs7::PublicKey {
+        use craft_pkcs7::PublicKey as Shared;
+        match self {
+            Self::Rsa { n, e } => Shared::Rsa { n: n.clone(), e: e.clone() },
+            Self::P256(p) => Shared::P256(p.clone()),
+            Self::P384(p) => Shared::P384(p.clone()),
+            Self::P521(p) => Shared::P521(p.clone()),
+            Self::BrainpoolP256(p) => Shared::BrainpoolP256(p.clone()),
+            Self::BrainpoolP384(p) => Shared::BrainpoolP384(p.clone()),
+            Self::BrainpoolP512(p) => Shared::BrainpoolP512(p.clone()),
+            Self::Ed25519(p) => Shared::Ed25519(p.clone()),
+            Self::Unsupported { what, spki } => Shared::Unsupported { what: what.clone(), spki: spki.clone() },
         }
     }
 
     /// Check `sig` over `msg` itself, for the schemes that don't sign a digest (Ed25519,
     /// RFC 8419: with signed attributes, the message is their DER encoding).
     pub fn verify_message(&self, scheme: Scheme, msg: &[u8], sig: &[u8]) -> Result<bool, SignError> {
-        match (self, scheme) {
-            (PublicKey::Unsupported { what, .. }, _) => Err(SignError::Unsupported(what.clone())),
-            (PublicKey::Ed25519(k), Scheme::Ed25519) => {
-                let bytes: [u8; 32] = k.as_slice().try_into().map_err(|_| SignError::Malformed("Ed25519 key".into()))?;
-                let key = ed25519_dalek::VerifyingKey::from_bytes(&bytes).map_err(|_| SignError::Malformed("Ed25519 key".into()))?;
-                let Ok(sig) = ed25519_dalek::Signature::from_slice(sig) else { return Ok(false) };
-                Ok(key.verify_strict(msg, &sig).is_ok())
-            }
-            _ => Ok(false),
-        }
+        self.shared_key().verify_message(shared_scheme(scheme), msg, sig).map_err(crate::der::app_error)
     }
 }
 
-/// An ECDSA signature as the fixed-width `r ‖ s` the curve crates read: from the standard DER
-/// `SEQUENCE { INTEGER r, INTEGER s }` (also with integers that have redundant leading zeros or
-/// the sign byte missing), or already raw `r ‖ s` as PKCS #11 tokens return it. `notes` gets an
-/// entry when the signature was not canonical DER.
-fn ecdsa_rs(sig: &[u8], field_len: usize, notes: &mut Vec<&'static str>) -> Option<Vec<u8>> {
-    let pad = |int: &[u8]| -> Option<Vec<u8>> {
-        let int = int.get(int.iter().position(|b| *b != 0).unwrap_or(int.len())..).unwrap_or_default();
-        let zeros = field_len.checked_sub(int.len())?;
-        Some(std::iter::repeat_n(0u8, zeros).chain(int.iter().copied()).collect())
-    };
-    if let Ok((t, rest)) = Tlv::parse(sig)
-        && t.tag == tag::SEQUENCE
-        && rest.iter().all(|b| *b == 0)
-        && let Ok(parts) = t.children()
-        && let [r, s] = parts.as_slice()
-        && r.tag == tag::INTEGER
-        && s.tag == tag::INTEGER
-    {
-        // Canonical DER: nothing after the sequence, minimal positive integers.
-        let minimal = |i: &Tlv<'_>| i.value.first().is_some_and(|b| b & 0x80 == 0) && !matches!(i.value, [0, b, ..] if b & 0x80 == 0);
-        if !rest.is_empty() || !minimal(r) || !minimal(s) {
-            notes.push("The ECDSA signature is not in canonical DER (trailing bytes, padding or a missing sign byte); it was read anyway.");
-        }
-        let mut out = pad(r.value)?;
-        out.extend(pad(s.value)?);
-        return Some(out);
+pub(crate) fn shared_digest(alg: DigestAlg) -> craft_pkcs7::DigestAlg {
+    use craft_pkcs7::DigestAlg as Shared;
+    match alg {
+        DigestAlg::Sha1 => Shared::Sha1,
+        DigestAlg::Sha224 => Shared::Sha224,
+        DigestAlg::Sha256 => Shared::Sha256,
+        DigestAlg::Sha384 => Shared::Sha384,
+        DigestAlg::Sha512 => Shared::Sha512,
+        DigestAlg::Sha512_224 => Shared::Sha512_224,
+        DigestAlg::Sha512_256 => Shared::Sha512_256,
+        DigestAlg::Sha3_224 => Shared::Sha3_224,
+        DigestAlg::Sha3_256 => Shared::Sha3_256,
+        DigestAlg::Sha3_384 => Shared::Sha3_384,
+        DigestAlg::Sha3_512 => Shared::Sha3_512,
+        DigestAlg::Ripemd160 => Shared::Ripemd160,
     }
-    (sig.len() == field_len * 2).then(|| {
-        notes.push("The ECDSA signature is the raw r and s values instead of a DER sequence; it was read anyway.");
-        sig.to_vec()
-    })
+}
+
+fn shared_scheme(scheme: Scheme) -> craft_pkcs7::keys::Scheme {
+    use craft_pkcs7::keys::{PssParams as Params, Scheme as Shared};
+    match scheme {
+        Scheme::RsaPkcs1 => Shared::RsaPkcs1,
+        Scheme::RsaPss(params) => Shared::RsaPss(Params { mgf: shared_digest(params.mgf), salt_len: params.salt_len }),
+        Scheme::Ecdsa => Shared::Ecdsa,
+        Scheme::Ed25519 => Shared::Ed25519,
+    }
 }
 
 enum Inner {
@@ -765,5 +715,34 @@ impl PrivateKey {
                 Ok(s.to_der().as_bytes().to_vec())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod shared_verification_tests {
+    use super::*;
+
+    #[test]
+    fn adapters_preserve_all_hashes_and_pss_parameters() {
+        for alg in DigestAlg::ALL {
+            assert_eq!(shared_digest(alg).oid(), alg.oid());
+            for salt_len in [None, Some(0), Some(20), Some(usize::MAX)] {
+                assert_eq!(
+                    shared_scheme(Scheme::RsaPss(PssParams { mgf: alg, salt_len })),
+                    craft_pkcs7::keys::Scheme::RsaPss(craft_pkcs7::keys::PssParams { mgf: shared_digest(alg), salt_len }),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn adapter_keeps_unsupported_distinct_from_invalid() {
+        let key = PublicKey::Unsupported { what: "unknown signature algorithm".into(), spki: vec![] };
+        assert!(
+            matches!(key.verify(Scheme::Ecdsa, DigestAlg::Sha256, &[], &[]), Err(SignError::Unsupported(s)) if s == "unknown signature algorithm")
+        );
+        assert!(matches!(PublicKey::P256(vec![]).verify(Scheme::Ecdsa, DigestAlg::Sha256, &[], &[]), Err(SignError::Malformed(_))));
+        assert!(matches!(PublicKey::Ed25519(vec![]).verify_message(Scheme::Ed25519, &[], &[]), Err(SignError::Malformed(_))));
+        assert!(matches!(PublicKey::P256(vec![]).verify_message(Scheme::Ed25519, &[], &[]), Ok(false)));
     }
 }

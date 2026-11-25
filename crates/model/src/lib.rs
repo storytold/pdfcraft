@@ -100,6 +100,11 @@ pub fn pages(doc: &Document) -> Vec<Page> {
     PageTree::new(doc).collect()
 }
 
+/// Leaf page `index` (0-based), walking the page tree only as far as it.
+pub fn page_at(doc: &Document, index: usize) -> Option<Page> {
+    PageTree::new(doc).nth(index)
+}
+
 /// Approximate bytes of inherited values copied into leaf dictionaries by one page walk.
 pub const MAX_INHERITED_COPIES: usize = 1 << 30;
 
