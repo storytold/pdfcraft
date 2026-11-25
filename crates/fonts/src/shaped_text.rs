@@ -475,6 +475,27 @@ pub fn line_pieces(line: &str, rtl: bool) -> Result<Vec<Piece>, ShapeError> {
     Line::new(line, rtl).pieces()
 }
 
+/// `levels` with each joiner in a left-to-right run at the level of the Arabic letter right after
+/// it, whose form it chooses. (One after its letter is at that letter's level already.)
+fn joined_levels<'a>(line: &str, levels: &'a [Level]) -> Cow<'a, [Level]> {
+    if !line.contains(is_joiner) {
+        return Cow::Borrowed(levels);
+    }
+    let mut joined = levels.to_vec();
+    let mut letter = None;
+    for (i, c) in line.char_indices().rev() {
+        if is_joiner(c) {
+            let own = joined.get_mut(i..i.saturating_add(c.len_utf8()));
+            if let (Some(letter), Some(own)) = (letter, own.filter(|own| own.iter().all(Level::is_ltr))) {
+                own.fill(letter);
+            }
+        } else if !is_bidi_control(c) {
+            letter = levels.get(i).copied().filter(|level| is_arabic(c) && level.is_rtl());
+        }
+    }
+    Cow::Owned(joined)
+}
+
 /// `line` in drawing order, its bytes at `levels` (one each, ready to reorder).
 fn pieces_by_levels(line: &str, levels: &[Level]) -> Result<Vec<Piece>, ShapeError> {
     if line.is_empty() {
@@ -484,7 +505,8 @@ fn pieces_by_levels(line: &str, levels: &[Level]) -> Result<Vec<Piece>, ShapeErr
     if levels.len() != line.len() {
         return Ok(plain(line));
     }
-    let runs = visual_runs(levels);
+    let levels = joined_levels(line, levels);
+    let runs = visual_runs(&levels);
     let mut pieces = Vec::new();
     for run in runs {
         let run_rtl = levels.get(run.start).is_some_and(Level::is_rtl);
@@ -1450,14 +1472,24 @@ mod tests {
         if crate::document_arabic_font().is_none() {
             return;
         }
-        let glyphs = |s: &str| -> Vec<u32> {
-            clusters([line_pieces(s, true).unwrap().as_slice()])
+        let glyphs_in = |s: &str, rtl: bool| -> Vec<u32> {
+            clusters([line_pieces(s, rtl).unwrap().as_slice()])
                 .filter(|c| !c.text.contains(is_joiner))
                 .flat_map(|c| c.glyphs.iter().map(|g| g.0))
                 .collect()
         };
+        let glyphs = |s: &str| glyphs_in(s, true);
         assert_eq!(glyphs("ب\u{200D}ب"), glyphs("بب"), "a joiner keeps them joined");
         assert_ne!(glyphs("ب\u{200C}ب"), glyphs("بب"), "a non-joiner parts them");
+        // Between Latin and Arabic, it still chooses the form of the Arabic letter.
+        for joiner in ["\u{200D}", "\u{200C}"] {
+            for before in ["a", "a ", "a\u{200E}"] {
+                let (line, alone) = (format!("{before}{joiner}ب"), format!("{joiner}ب"));
+                assert_eq!(glyphs_in(&line, false), glyphs(&alone), "{line:?}");
+                assert_eq!(glyphs_in(&format!("ب{joiner}b"), false), glyphs(&format!("ب{joiner}")), "{line:?}");
+            }
+        }
+        assert_ne!(glyphs_in("a\u{200D}ب", false), glyphs_in("aب", false));
         for (line, rtl) in [("ب\u{200D}ب", true), ("می\u{200C}خواهم test", true), ("a\u{200D}ب", false), ("a ب\u{200C} b", false)] {
             let pieces = line_pieces(line, rtl).unwrap();
             assert!(
