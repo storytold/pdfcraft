@@ -7177,6 +7177,74 @@ fn fill_sign_flatten_bakes_marks_keeps_other_comments_and_does_not_reuse_pcfl0()
     assert_eq!(summaries(&doc).iter().filter(|s| s.intent.as_deref() == Some("FreeTextTypeWriter")).count(), 1);
 }
 
+/// #8101: two pages share one indirect `/Annots`. A Fill & Sign check added on the second page
+/// must not show on the first, and flattening must bake it on the second only. A check already
+/// in an array three pages share is baked on the page that is flattened; the others keep sharing
+/// that array and still list the check.
+#[test]
+fn fill_sign_mark_on_a_shared_annots_array_stays_on_its_page() {
+    use pdfcraft_annot::{FillMark, Meta, NewAnnotation, Shape, Style, add_annotation, summaries};
+    use pdfcraft_cos::ObjRef;
+
+    let fill_pages = |doc: &Document| -> Vec<usize> { summaries(doc).iter().filter(|s| s.fill_sign).map(|s| s.page).collect() };
+    let baked = |doc: &Document, page: usize| streams(doc, page).iter().any(|s| s.contains(" Do"));
+    let annots_of = |doc: &Document, page: usize| pdfcraft_model::pages(doc)[page].dict.reference(b"Annots");
+
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots 5 0 R >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots 5 0 R >>",
+        "[]",
+    ]);
+    let shape = Shape::Mark { rect: [100.0, 100.0, 120.0, 120.0], mark: FillMark::Check };
+    let style = Style::default_for(&shape);
+    add_annotation(
+        &mut doc,
+        &NewAnnotation { page: 1, shape, style, contents: String::new(), author: "a".into() },
+        &Meta { date: None, id: "check".into() },
+    )
+    .unwrap();
+    let shared = ObjRef::new(5, 0);
+    assert_eq!(fill_pages(&doc), vec![1], "the check is listed on page 2 only");
+    assert_eq!(annots_of(&doc, 0), Some(shared), "the page that was not modified keeps the shared array");
+    assert_eq!(doc.get(shared).as_array().map(|a| a.len()), Some(0), "the shared array stays empty");
+    assert_ne!(annots_of(&doc, 1), Some(shared), "page 2 has its own array");
+
+    assert_eq!(flatten_fill_sign(&mut doc, &[0, 1]).unwrap(), 1);
+    let doc = reopen(&doc);
+    assert!(!baked(&doc, 0), "page 1 does not gain the check: {:?}", streams(&doc, 0));
+    assert!(baked(&doc, 1), "page 2 has the check baked in: {:?}", streams(&doc, 1));
+    assert!(fill_pages(&doc).is_empty(), "the baked check is no longer an annotation");
+    assert_eq!(annots_of(&doc, 0), Some(shared));
+    assert_eq!(doc.get(shared).as_array().map(|a| a.len()), Some(0), "page 1's array was not emptied of someone else's marks");
+
+    let ap = stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", "0 0 m S");
+    let mut shared_doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots 6 0 R >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots 6 0 R >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots 6 0 R >>",
+        "[7 0 R]",
+        "<< /Type /Annot /Subtype /Stamp /Rect [40 40 60 60] /Name /PCCheck /AP << /N 8 0 R >> >>",
+        &ap,
+    ]);
+    let array = ObjRef::new(6, 0);
+    assert_eq!(fill_pages(&shared_doc), vec![0, 1, 2]);
+    assert_eq!(flatten_fill_sign(&mut shared_doc, &[0]).unwrap(), 1);
+    assert!(baked(&shared_doc, 0), "the first page gets the check: {:?}", streams(&shared_doc, 0));
+    assert!(!baked(&shared_doc, 1) && !baked(&shared_doc, 2));
+    assert_eq!(fill_pages(&shared_doc), vec![1, 2], "the other pages still list the check");
+    assert_eq!((annots_of(&shared_doc, 1), annots_of(&shared_doc, 2)), (Some(array), Some(array)), "unmodified pages keep sharing");
+    assert_eq!(shared_doc.get(array).as_array().map(|a| a.len()), Some(1), "flattening the first page does not empty the shared array");
+    assert_ne!(annots_of(&shared_doc, 0), Some(array));
+
+    assert_eq!(flatten_fill_sign(&mut shared_doc, &[1, 2]).unwrap(), 2);
+    assert!(baked(&shared_doc, 0) && baked(&shared_doc, 1) && baked(&shared_doc, 2), "each page keeps the check that was on it");
+    assert!(fill_pages(&shared_doc).is_empty());
+}
+
 /// A one-page document from its objects (object 1 is the catalog).
 fn build(objs: &[&str]) -> Document {
     let mut out = b"%PDF-1.7\n".to_vec();

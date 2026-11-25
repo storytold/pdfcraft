@@ -586,17 +586,9 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
             let page = refreshed(doc, &page);
             place_tagged(doc, &page, "Flattened", content.into_bytes(), false)?;
         }
-        let page_now = refreshed(doc, &page);
-        match page_now.dict.get(b"Annots").and_then(|a| a.as_ref()).filter(|r| doc.get(*r).as_array().is_some()) {
-            Some(r) => doc.set(r, Object::Array(kept)),
-            None => doc.update_dict(page.obj, |d| {
-                if kept.is_empty() {
-                    d.remove(b"Annots");
-                } else {
-                    d.set(b"Annots".to_vec(), Object::Array(kept));
-                }
-            })?,
-        }
+        // `set_annots` gives this page its own array when `/Annots` is shared, so writing `kept`
+        // cannot empty the array the pages flattened after this one still read (#8101).
+        pdfcraft_annot::set_annots(doc, page.obj, kept)?;
     }
     // A field whose widgets are on no page has nothing to draw, but flattening every field of the
     // document must still take it out of the form, or other software keeps seeing one (#1470).
