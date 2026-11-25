@@ -8,12 +8,20 @@
 //! The page actions queue on the view (`pending_edit`, `pending_action`) exactly as the grid's
 //! toolbar did, so they run, refuse and undo the same way.
 
-use egui::{Align2, CornerRadius, Rect, Sense, Stroke, vec2};
+use craft::behavior::{IconId, Selection};
+use craft::pages::ui::PageRangeField;
+use craft::ui::buttons::IconButton;
+use craft::ui::contract::overlay::Anchor;
+use craft::ui::contract::{ActivateOn, Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::layout_components::Row;
+use craft::ui::list::{List, ListRow, RowInk};
+use craft::ui::menu::Menu;
+use craft::ui::primitives::IconSpec;
 use pdfcraft_engine::Edit;
 
+use super::tools::{Rows, caption_row};
 use crate::canvas::ViewAction;
-use crate::theme::{self, Tokens};
-use crate::{LeftPanel, PdfCraftApp, icons, widgets};
+use crate::{LeftPanel, PdfCraftApp};
 
 /// Whether the left panel is Organize pages: the tool is chosen, or the active view shows the grid.
 pub(crate) fn showing(app: &PdfCraftApp) -> bool {
@@ -39,215 +47,163 @@ enum Act {
     Command(&'static str),
 }
 
-pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+/// One line of the panel's list.
+enum Line {
+    Row {
+        icon: &'static str,
+        label: &'static str,
+        act: Option<Act>,
+        /// Whether the row works now: needs page assembly allowed.
+        enabled: bool,
+        /// Not in PdfCraft yet: shown dimmed, as Acrobat lists it, and says it is planned when hovered.
+        later: bool,
+        /// Starts a group: room above it.
+        space: bool,
+    },
+}
+
+/// The menu of the page range field: pages by kind.
+fn page_menu(info: &pdfcraft_render::DocInfo, n: usize) -> Vec<Entry<Vec<usize>>> {
+    use pdfcraft_engine::{PageOrientation as O, PageParity as P, filter_pages};
+    let all: Vec<usize> = (0..n).collect();
+    let mut entries: Vec<Entry<Vec<usize>>> = [
+        ("All pages", P::Both, O::Both),
+        ("Even pages", P::Even, O::Both),
+        ("Odd pages", P::Odd, O::Both),
+        ("Landscape pages", P::Both, O::Landscape),
+        ("Portrait pages", P::Both, O::Portrait),
+    ]
+    .into_iter()
+    .map(|(label, parity, orient)| Entry::new(filter_pages(info, &all, parity, orient), tl!(label).to_owned()))
+    .collect();
+    entries.push(Entry::new(Vec::new(), tl!("None").to_owned()));
+    entries
+}
+
+/// The Organize pages body. Its Back (`tools.all`) and Close belong to the dock's group header.
+// PLAN: the panel's own Close (it also closed the page grid and went back to the workspace's panel) is now the
+// dock's Close; pdf-chrome-w13's group header owns closing the grid with it.
+pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let Some((index, id)) = app.active_ids() else { return };
     let Some(doc) = app.session.get(id) else { return };
     let info = &doc.info;
     let editable = doc.allows_assembly();
     let n = info.pages.len();
     let mut act: Option<Act> = None;
-    let mut back = false;
-    let mut close = false;
     let Some(view) = app.views.get_mut(index) else { return };
 
-    ui.horizontal(|ui| {
-        if icons::button(ui, "chevron-left", 26.0, false, tl!("Back to all tools")).clicked() {
-            back = true;
-        }
-        let title = tl!("Organize pages");
-        let title_width = (ui.available_width() - 26.0 - ui.spacing().item_spacing.x).max(1.0);
-        ui.add_sized([title_width, 26.0], egui::Label::new(egui::RichText::new(title).font(theme::semibold(15.5)).color(t.text)).truncate())
-            .on_hover_text(title);
-        if icons::button(ui, "x", 26.0, false, tl!("Close panel")).clicked() {
-            close = true;
-        }
-    });
-    ui.add_space(4.0);
-    ui.separator();
-    ui.add_space(6.0);
-
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        ui.add_space(2.0);
-        widgets::section_title(ui, tl!("Pages selected"));
-        let current = view.current;
-        let picked = view.organize_range.show(ui, &view.selected, n, current, |ui| {
-            use pdfcraft_engine::{PageOrientation as O, PageParity as P, filter_pages};
-            let all: Vec<usize> = (0..n).collect();
-            let mut chosen = None;
-            for (label, parity, orient) in [
-                ("All pages", P::Both, O::Both),
-                ("Even pages", P::Even, O::Both),
-                ("Odd pages", P::Odd, O::Both),
-                ("Landscape pages", P::Both, O::Landscape),
-                ("Portrait pages", P::Both, O::Portrait),
-            ] {
-                if ui.button(tl!(label)).clicked() {
-                    chosen = Some(filter_pages(info, &all, parity, orient));
-                }
-            }
-            if ui.button(tl!("None")).clicked() {
-                chosen = Some(Vec::new());
-            }
-            chosen
-        });
-        if let Some(pages) = picked {
-            view.select_pages(&pages);
-        }
-
-        let targets = view.target_pages();
-        let last = targets.last().copied().unwrap_or(0);
-        widgets::section_title(ui, tl!("Page options"));
-        ui.add_enabled_ui(editable, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                if icons::button(ui, "rotate-ccw", 34.0, false, tl!("Rotate counterclockwise")).clicked() {
-                    act = Some(Act::Edit(Box::new(Edit::RotatePages { pages: targets.clone(), degrees: -90 })));
-                }
-                if icons::button(ui, "rotate-cw", 34.0, false, tl!("Rotate clockwise")).clicked() {
-                    act = Some(Act::Edit(Box::new(Edit::RotatePages { pages: targets.clone(), degrees: 90 })));
-                }
-                // A document keeps at least one page.
-                let can_delete = targets.len() < n;
-                if ui.add_enabled_ui(can_delete, |ui| icons::button(ui, "trash-2", 34.0, false, tl!("Delete pages (Delete)"))).inner.clicked() {
-                    act = Some(Act::Edit(Box::new(Edit::DeletePages { pages: targets.clone() })));
-                }
-                if icons::button(ui, "file-output", 34.0, false, tl!("Extract pages to a new document")).clicked() {
-                    act = Some(Act::View(ViewAction::Extract));
-                }
-            });
-            ui.add_space(2.0);
-            // Insert ▸: a blank page, pages from a file, or copies of the selected pages.
-            let insert = row(ui, t, "file-plus-2", tl!("Insert"), Availability::Ready, true);
-            egui::Popup::menu(&insert).align(egui::RectAlign::RIGHT_START).gap(6.0).show(|ui| {
-                if ui.button(tl!("Insert a blank page after the selection")).clicked() {
-                    let crop = info.pages.get(last).map_or([0.0, 0.0, 612.0, 792.0], |p| p.crop);
-                    let (w, h) = ((crop[2] - crop[0]).abs().max(1.0) as f64, (crop[3] - crop[1]).abs().max(1.0) as f64);
-                    act = Some(Act::Edit(Box::new(Edit::InsertBlankPage { at: last.saturating_add(1), width: w, height: h })));
-                }
-                if ui.button(tl!("Insert pages from a file…")).clicked() {
-                    act = Some(Act::View(ViewAction::InsertFromFile));
-                }
-                if ui.button(tl!("Duplicate pages")).clicked() {
-                    act = Some(Act::Command("page.duplicate"));
-                }
-            });
-            if row(ui, t, "replace", tl!("Replace"), Availability::Ready, false).clicked() {
-                act = Some(Act::View(ViewAction::ReplacePages));
-            }
-            if row(ui, t, "scissors", tl!("Split"), Availability::Ready, false).clicked() {
-                act = Some(Act::View(ViewAction::Split));
-            }
-        });
-        if row(ui, t, "hash", tl!("Bates numbering"), Availability::Ready, false).clicked() {
-            act = Some(Act::Command("edit.bates"));
-        }
-        divider(ui, t);
-        for (icon, label, availability, command) in [
-            ("square-dashed-mouse-pointer", "Set page boxes", Availability::Ready, Some("page.boxes")),
-            ("crop", "Crop pages", Availability::Ready, Some("page.crop")),
-            ("presentation", "Page transitions", Availability::Later, Some("page.transitions")),
-            ("file-text", "Page templates", Availability::Later, None),
-            ("printer", "Print pages", Availability::Ready, Some("print.dialog")),
-        ] {
-            if row(ui, t, icon, tl!(label), availability, false).clicked()
-                && let Some(command) = command
-            {
-                act = Some(Act::Command(command));
-            }
-        }
-        divider(ui, t);
-        if row(ui, t, "tag", tl!("Page labels"), Availability::Ready, false).clicked() {
-            act = Some(Act::Command("page.number"));
-        }
-        if row(ui, t, "info", tl!("Page properties"), Availability::Ready, false).clicked() {
-            act = Some(Act::Command("page.properties"));
-        }
-    });
-
-    if close {
-        view.organize = false;
-        app.left = workspace_panel(app.mode);
-    } else if back {
-        view.organize = false;
-        app.left = LeftPanel::AllTools;
+    caption_row(ui, tl!("Pages selected"), true);
+    let current = view.current();
+    let selected: Vec<usize> = view.selected.items.clone();
+    let entries = page_menu(info, n);
+    let picked = PageRangeField::new(tl!("Pages selected").to_owned(), &selected, n, current).menu(&entries).show(ui).picked;
+    if let Some(pages) = picked {
+        view.select_pages(&pages);
     }
+
+    let targets = view.target_pages();
+    let last = targets.last().copied().unwrap_or(0);
+    caption_row(ui, tl!("Page options"), true);
+    // A document keeps at least one page.
+    let can_delete = editable && targets.len() < n;
+    Row::new().show(ui, |ui, _| {
+        let buttons = [
+            ("rotate-ccw", "Rotate counterclockwise", editable),
+            ("rotate-cw", "Rotate clockwise", editable),
+            ("trash-2", "Delete pages (Delete)", can_delete),
+            ("file-output", "Extract pages to a new document", editable),
+        ];
+        for (at, (icon, label, enabled)) in buttons.into_iter().enumerate() {
+            if !IconButton::new(IconId::new(icon)).label(tl!(label).to_owned()).enabled(enabled).show(ui).clicked() {
+                continue;
+            }
+            act = Some(match at {
+                0 => Act::Edit(Box::new(Edit::RotatePages { pages: targets.clone(), degrees: -90 })),
+                1 => Act::Edit(Box::new(Edit::RotatePages { pages: targets.clone(), degrees: 90 })),
+                2 => Act::Edit(Box::new(Edit::DeletePages { pages: targets.clone() })),
+                _ => Act::View(ViewAction::Extract),
+            });
+        }
+    });
+
+    // Insert: a blank page, pages from a file, or copies of the selected pages.
+    let crop = info.pages.get(last).map_or([0.0, 0.0, 612.0, 792.0], |p| p.crop);
+    let (w, h) = ((crop[2] - crop[0]).abs().max(1.0) as f64, (crop[3] - crop[1]).abs().max(1.0) as f64);
+    let row = |icon, label, act, enabled, later, space| Line::Row { icon, label, act, enabled, later, space };
+    let mut lines = vec![
+        // Production's Insert is one row that opens a menu of the three ways to insert.
+        row("file-plus-2", "Insert", None, editable, false, false),
+        row("replace", "Replace", Some(Act::View(ViewAction::ReplacePages)), editable, false, true),
+        row("scissors", "Split", Some(Act::View(ViewAction::Split)), editable, false, false),
+        row("hash", "Bates numbering", Some(Act::Command("edit.bates")), true, false, false),
+        row("square-dashed-mouse-pointer", "Set page boxes", Some(Act::Command("page.boxes")), true, false, true),
+        row("crop", "Crop pages", Some(Act::Command("page.crop")), true, false, false),
+        row("presentation", "Page transitions", Some(Act::Command("page.transitions")), true, true, false),
+        row("file-text", "Page templates", None, true, true, false),
+        row("printer", "Print pages", Some(Act::Command("print.dialog")), true, false, false),
+        row("tag", "Page labels", Some(Act::Command("page.number")), true, false, true),
+        row("info", "Page properties", Some(Act::Command("page.properties")), true, false, false),
+    ];
+    let out = List::<usize>::new(tl!("Page actions").to_owned())
+        .select(SelectMode::Single)
+        .activate(ActivateOn::Click)
+        .selection(Bind::given(Selection::default()))
+        .show_items(ui, &Rows(lines.len()), &mut |at, _| match lines.get(*at) {
+            Some(Line::Row { icon, label, enabled, later, space, .. }) => {
+                let mut row = ListRow::new(tl!(label).to_owned()).icon(IconSpec::svg(IconId::new(icon))).enabled(*enabled).space_above(*space);
+                if *label == "Insert" {
+                    row = row.row_menu();
+                }
+                if *later { row.ink(RowInk::Dimmed).tooltip(tl!("Planned").to_owned()) } else { row }
+            }
+            None => ListRow::spacer(),
+        });
+    // The Insert menu hangs where it was asked for (the row's More button, a right click or a plain click on the
+    // row) and stays until a pick or a click elsewhere closes it.
+    let menu_id = ui.scope_id().with("insert-menu-at");
+    let mut menu_at: Option<egui::Pos2> = ui.ctx().data(|d| d.get_temp::<Option<egui::Pos2>>(menu_id)).flatten();
+    for event in &out.events {
+        match event {
+            CollectionEvent::ContextMenu(request) => menu_at = Some(request.at),
+            CollectionEvent::Activate(at) if matches!(lines.get(*at), Some(Line::Row { label: "Insert", enabled: true, .. })) => {
+                menu_at = Some(ui.ctx().pointer_latest_pos().unwrap_or_else(|| out.response.rect.left_top()));
+            }
+            _ => {}
+        }
+    }
+    if let Some(at) = menu_at {
+        let entries = [
+            Entry::new(0u8, tl!("Insert a blank page after the selection").to_owned()),
+            Entry::new(1u8, tl!("Insert pages from a file…").to_owned()),
+            Entry::new(2u8, tl!("Duplicate pages").to_owned()),
+        ];
+        let mut open = true;
+        let picked =
+            Menu::context(tl!("Insert").to_owned(), &out.response).anchor(Anchor::Point(at)).open(Bind::bound(&mut open)).pick(ui, &entries).picked;
+        match picked {
+            Some(0) => act = Some(Act::Edit(Box::new(Edit::InsertBlankPage { at: last.saturating_add(1), width: w, height: h }))),
+            Some(1) => act = Some(Act::View(ViewAction::InsertFromFile)),
+            Some(2) => act = Some(Act::Command("page.duplicate")),
+            _ => {}
+        }
+        if !open || picked.is_some() {
+            menu_at = None;
+        }
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(menu_id, menu_at));
+    for event in out.events {
+        if let CollectionEvent::Activate(at) = event
+            && let Some(Line::Row { act: slot, enabled: true, later: false, .. }) = lines.get_mut(at)
+            && let Some(done) = slot.take()
+        {
+            act = Some(done);
+        }
+    }
+
     match act {
-        Some(Act::Edit(edit)) => view.pending_edit = Some(*edit),
+        Some(Act::Edit(edit)) => view.session.pending_edit = Some(*edit),
         Some(Act::View(action)) => view.pending_action = Some(action),
-        Some(Act::Command(command)) => app.run_command(command),
+        Some(Act::Command(command)) => app.run_command(ui.ctx(), command),
         None => {}
     }
-    // Leaving the workspace needs the whole app, so it waits until the view is done with: leaving
-    // Edit puts Edit text down and applies a paragraph still open on the page.
-    if back && !close {
-        app.enter_mode(crate::Mode::AllTools);
-    }
-}
-
-/// Page Properties ▸ Tab Order for the pages it opened on: Use Row Order, Use Column Order, Use
-/// Document Structure and Unspecified, then OK and Cancel. OK is off until a choice is made.
-/// Returns (OK, Cancel).
-pub(crate) fn page_props_body(ui: &mut egui::Ui, d: &mut crate::PagePropsDraft) -> (bool, bool) {
-    use pdfcraft_engine::TabOrder;
-    ui.label(egui::RichText::new(tl!("Page Properties")).font(theme::semibold(18.0)));
-    widgets::section_title(ui, tl!("Tab Order"));
-    for (order, label) in [
-        (TabOrder::Row, tl!("Use Row Order")),
-        (TabOrder::Column, tl!("Use Column Order")),
-        (TabOrder::Structure, tl!("Use Document Structure")),
-        (TabOrder::Annotations, tl!("Unspecified")),
-    ] {
-        widgets::radio_value(ui, &mut d.tab_order, Some(order), label);
-    }
-    let (mut ok, mut cancel) = (false, false);
-    ui.add_space(12.0);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        ok = ui.add_enabled_ui(d.tab_order.is_some(), |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked();
-        cancel = widgets::pill_button(ui, tl!("Cancel"), false).clicked();
-    });
-    (ok, cancel)
-}
-
-/// Whether a row works in this build.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Availability {
-    Ready,
-    /// Not in PdfCraft yet: shown muted, as Acrobat lists it, and says it is planned when hovered.
-    Later,
-}
-
-/// One row of the panel: a monochrome icon and the label, as Acrobat draws them, with a corner
-/// mark when it opens a menu.
-fn row(ui: &mut egui::Ui, t: &Tokens, icon: &str, label: &str, availability: Availability, menu: bool) -> egui::Response {
-    let ready = availability == Availability::Ready && ui.is_enabled();
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), if ready { Sense::click() } else { Sense::hover() });
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ready, label));
-    let press = theme::Press::track(ui, &resp);
-    if ready {
-        press.wash(ui, rect, 6, false);
-    }
-    let body = rect.translate(press.offset());
-    let fg = if ready { t.text } else { t.text_faint };
-    let icon_rect = Rect::from_min_size(body.min + vec2(6.0, 8.0), vec2(18.0, 18.0));
-    icons::paint(ui, icon_rect, icon, 17.0, fg);
-    let font = theme::regular(13.5);
-    let width = crate::widgets::text_width(ui, label, &font);
-    ui.painter().text(body.left_center() + vec2(34.0, 0.0), Align2::LEFT_CENTER, label, font, fg);
-    if menu {
-        // The small corner triangle Acrobat puts after a label that opens a menu.
-        let tip = body.left_center() + vec2(34.0 + width + 6.0, 6.0);
-        let tri = vec![tip, tip + vec2(-5.0, 0.0), tip + vec2(0.0, -5.0)];
-        ui.painter().add(egui::Shape::convex_polygon(tri, fg, Stroke::NONE));
-    }
-    match availability {
-        Availability::Ready => theme::hand(resp),
-        Availability::Later => resp.on_hover_text(tl!("Planned")),
-    }
-}
-
-fn divider(ui: &mut egui::Ui, t: &Tokens) {
-    ui.add_space(6.0);
-    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-    ui.painter().rect_filled(r, CornerRadius::ZERO, t.divider);
-    ui.add_space(6.0);
 }
