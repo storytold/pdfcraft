@@ -15,7 +15,8 @@
 //!   FirstPage and LastPage (ISO 32000-1 12.6.4.11, Table 212); no additional actions on the
 //!   catalog, pages, fields or widgets; `NeedAppearances` not true;
 //! - images: no `Interpolate`, no `Alternates`, no OPI; no PostScript XObjects;
-//! - embedded files: PDF/A-2 only allows embedded PDF/A files; PDF/A-3 needs `AFRelationship`.
+//! - embedded files: PDF/A-2 only allows embedded PDF/A files; PDF/A-3 needs `AFRelationship`;
+//! - optional content: every configuration dictionary has a `/Name` (ISO 19005-2/-3 6.9).
 //!
 //! [`convert`] fixes what can be fixed without changing how pages look (XMP, the sRGB output
 //! intent, forbidden actions, annotation flags, Interpolate, NeedAppearances, encryption) and
@@ -222,6 +223,8 @@ pub const WORDINGS: &[&str] = &[
     "PostScript XObjects aren't allowed",
     "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)",
     "An embedded file has no AFRelationship",
+    // Optional content (ISO 19005-2/-3 6.9).
+    "An optional content configuration has no name",
 ];
 
 /// What a document declares (the Standards panel).
@@ -698,6 +701,7 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     check_limits(doc, &objs, &pages, &mut issue);
     check_spots(doc, &objs, &mut issue);
     check_graphics_states(doc, &mut issue);
+    check_optional_content(doc, &mut issue);
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
     let mut out = out.into_inner();
     let mut seen = std::collections::HashSet::new();
@@ -1616,8 +1620,115 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
             fixed.push(format!("{n}: {what}"));
         }
     }
+    let named = name_optional_content(doc)?;
+    if named > 0 {
+        fixed.push(format!("{named}: named optional content configurations"));
+    }
     let remaining = verify(doc, level);
     Ok(Report { fixed, remaining })
+}
+
+/// ISO 19005-2/-3 clause 6.9: a PDF/A file that has optional content needs a non-empty `/Name`
+/// on the default configuration and on every entry of `/Configs`.
+fn check_optional_content(doc: &Document, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+    let Some(props) = catalog(doc).get(b"OCProperties").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()) else { return };
+    let nameless = |config: &Dict| !config_has_name(doc, config);
+    if props.get(b"D").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).is_some_and(|d| nameless(&d)) {
+        issue("6.9", "An optional content configuration has no name", None, None, true);
+    }
+    let Some(configs) = props.get(b"Configs").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()) else { return };
+    for config in configs {
+        if doc.resolve(&config).as_dict().is_some_and(nameless) {
+            issue("6.9", "An optional content configuration has no name", None, None, true);
+        }
+    }
+}
+
+fn config_has_name(doc: &Document, config: &Dict) -> bool {
+    config.get(b"Name").map(|n| doc.resolve(n)).is_some_and(|n| n.as_string().is_some_and(|s| !s.bytes.is_empty()))
+}
+
+/// Give each nameless optional-content configuration a `/Name`. Returns how many were named.
+fn name_optional_content(doc: &mut Document) -> Result<usize, pdfcraft_cos::CosError> {
+    let cat = catalog(doc);
+    let (holder, mut props) = match cat.get(b"OCProperties") {
+        Some(Object::Ref(r)) => (Some(*r), doc.get(*r).as_dict().cloned().unwrap_or_default()),
+        Some(Object::Dict(d)) => (None, d.clone()),
+        _ => return Ok(0),
+    };
+    let mut named = name_config_entry(doc, &mut props, b"D", "Default")?;
+    if let Some(configs) = props.get(b"Configs").cloned() {
+        let resolved = doc.resolve(&configs);
+        if let Some(items) = resolved.as_array() {
+            let mut next = items.clone();
+            let mut changed = false;
+            for (i, item) in items.iter().enumerate() {
+                let fallback = format!("Configuration {}", i + 1);
+                match item {
+                    Object::Ref(r) => {
+                        let Some(mut config) = doc.get(*r).as_dict().cloned() else { continue };
+                        if !config_has_name(doc, &config) {
+                            config.set(b"Name".to_vec(), Object::String(PdfString::text(&fallback)));
+                            doc.set_existing(*r, Object::Dict(config))?;
+                            named += 1;
+                        }
+                    }
+                    Object::Dict(config) => {
+                        let mut config = config.clone();
+                        if !config_has_name(doc, &config) {
+                            config.set(b"Name".to_vec(), Object::String(PdfString::text(&fallback)));
+                            next[i] = Object::Dict(config);
+                            changed = true;
+                            named += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if changed {
+                match props.get(b"Configs").and_then(Object::as_ref) {
+                    Some(r) => doc.set_existing(r, Object::Array(next))?,
+                    None => props.set(b"Configs".to_vec(), Object::Array(next)),
+                }
+            }
+        }
+    }
+    if named == 0 {
+        return Ok(0);
+    }
+    match holder {
+        Some(r) => doc.set_existing(r, Object::Dict(props))?,
+        None => {
+            let root = doc.root().ok_or_else(|| pdfcraft_cos::CosError::Syntax { offset: 0, detail: "no catalog".into() })?;
+            doc.update_dict(root, |c| c.set(b"OCProperties".to_vec(), Object::Dict(props)))?;
+        }
+    }
+    Ok(named)
+}
+
+fn name_config_entry(doc: &mut Document, props: &mut Dict, key: &[u8], fallback: &str) -> Result<usize, pdfcraft_cos::CosError> {
+    let Some(entry) = props.get(key).cloned() else { return Ok(0) };
+    match entry {
+        Object::Ref(r) => {
+            let Some(mut config) = doc.get(r).as_dict().cloned() else { return Ok(0) };
+            if config_has_name(doc, &config) {
+                return Ok(0);
+            }
+            config.set(b"Name".to_vec(), Object::String(PdfString::text(fallback)));
+            doc.set_existing(r, Object::Dict(config))?;
+            Ok(1)
+        }
+        Object::Dict(config) => {
+            let mut config = config.clone();
+            if config_has_name(doc, &config) {
+                return Ok(0);
+            }
+            config.set(b"Name".to_vec(), Object::String(PdfString::text(fallback)));
+            props.set(key.to_vec(), Object::Dict(config));
+            Ok(1)
+        }
+        _ => Ok(0),
+    }
 }
 
 #[cfg(test)]

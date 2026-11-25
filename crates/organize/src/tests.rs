@@ -1610,6 +1610,72 @@ fn layers_are_registered_with_their_default_state() {
     assert!(!catalog(&out).contains(b"OCProperties"));
 }
 
+/// Issue #8238: inserting a file rebuilds `/OCProperties /D` and used to drop `/Name`, `/BaseState`
+/// and `/Order`. PDF/A-2 and PDF/A-3 require the name (ISO 19005-2/-3 clause 6.9).
+#[test]
+fn inserted_file_keeps_its_layer_configuration() {
+    let layers = open(build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [4 0 R 5 0 R] /D << /Name (Layers) /BaseState /OFF /Order [(Group) 5 0 R 4 0 R] >> >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Resources << /Properties << /A 4 0 R /B 5 0 R >> >> >>".into(),
+            "<< /Type /OCG /Name (A) >>".into(),
+            "<< /Type /OCG /Name (B) >>".into(),
+        ],
+        "/Root 1 0 R",
+    ));
+    let mut host = open(build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(),
+            "<< /Type /Page /Parent 2 0 R >>".into(),
+        ],
+        "/Root 1 0 R",
+    ));
+    insert_file_pages(&mut host, &layers, "layers", &[0], 1, FieldConflicts::Rename).unwrap();
+    let props = host.resolve(catalog(&host).get(b"OCProperties").unwrap()).as_dict().cloned().unwrap();
+    let groups = props.get(b"OCGs").and_then(Object::as_array).unwrap();
+    let config = props.get(b"D").and_then(Object::as_dict).unwrap();
+    assert_eq!(config.get(b"Name").and_then(Object::as_string).map(|s| s.to_text()).as_deref(), Some("Layers"));
+    assert_eq!(config.get(b"BaseState").and_then(Object::as_name), Some(b"OFF".as_slice()));
+    let order = config.get(b"Order").and_then(Object::as_array).unwrap();
+    assert_eq!(order.len(), 3, "{order:?}");
+    assert_eq!(order[0].as_string().map(|s| s.to_text()).as_deref(), Some("Group"));
+    let by_name = |n: &str| {
+        groups
+            .iter()
+            .find(|g| host.resolve(g).as_dict().and_then(|d| d.get(b"Name")).and_then(Object::as_string).is_some_and(|s| s.to_text() == n))
+            .cloned()
+    };
+    assert_eq!(order[1], by_name("B").unwrap(), "order follows the source, not the property list");
+    assert_eq!(order[2], by_name("A").unwrap());
+    let off = config.get(b"OFF").and_then(Object::as_array).unwrap();
+    assert!(off.contains(&order[1]) && off.contains(&order[2]), "base state OFF still hides both layers");
+
+    // A source configuration with no name still gets one: clause 6.9 rejects an empty `/D`.
+    let unnamed = open(build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [4 0 R] /D << /OFF [4 0 R] >> >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Resources << /Properties << /A 4 0 R >> >> >>".into(),
+            "<< /Type /OCG /Name (A) >>".into(),
+        ],
+        "/Root 1 0 R",
+    ));
+    let mut host = open(build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(),
+            "<< /Type /Page /Parent 2 0 R >>".into(),
+        ],
+        "/Root 1 0 R",
+    ));
+    insert_file_pages(&mut host, &unnamed, "layers", &[0], 1, FieldConflicts::Rename).unwrap();
+    let props = host.resolve(catalog(&host).get(b"OCProperties").unwrap()).as_dict().cloned().unwrap();
+    let config = props.get(b"D").and_then(Object::as_dict).unwrap();
+    assert_eq!(config.get(b"Name").and_then(Object::as_string).map(|s| s.to_text()).as_deref(), Some("Default"));
+}
+
 /// The top-level bookmarks' titles, in order.
 fn top_titles(doc: &Document) -> Vec<String> {
     let Some(outlines) = catalog(doc).reference(b"Outlines") else { return Vec::new() };

@@ -2367,3 +2367,43 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// Issue #8238: PDF/A-2 and PDF/A-3 clause 6.9 requires a `/Name` on every optional-content
+/// configuration. `verify` reports one that has none, and `convert` fills it in.
+#[test]
+fn optional_content_configurations_need_a_name() {
+    let doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [4 0 R] /D << /BaseState /ON /Order [4 0 R] >> /Configs [<< /OFF [4 0 R] >> << /Name () /OFF [4 0 R] >>] >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+            "<< /Type /OCG /Name (A) >>",
+        ],
+        "",
+    );
+    let issues = verify(&doc, Level::A3b);
+    assert!(issues.iter().any(|i| i.clause == "6.9" && i.fixable && i.message == "An optional content configuration has no name"));
+    let mut doc = doc;
+    let report = convert(&mut doc, Level::A3b).unwrap();
+    assert!(report.fixed.iter().any(|f| f.contains("named optional content")), "{:?}", report.fixed);
+    assert!(report.remaining.iter().all(|i| i.clause != "6.9"), "{:#?}", report.remaining);
+    let props = doc.resolve(catalog(&doc).get(b"OCProperties").unwrap()).as_dict().cloned().unwrap();
+    let config = props.get(b"D").and_then(Object::as_dict).unwrap();
+    assert_eq!(config.get(b"Name").and_then(Object::as_string).map(|s| s.to_text()).as_deref(), Some("Default"));
+    assert_eq!(config.get(b"BaseState").and_then(Object::as_name), Some(b"ON".as_slice()));
+    let configs = props.get(b"Configs").and_then(Object::as_array).unwrap();
+    let name_of = |i: usize| configs[i].as_dict().and_then(|d| d.get(b"Name")).and_then(Object::as_string).map(|s| s.to_text());
+    assert_eq!(name_of(0).as_deref(), Some("Configuration 1"));
+    assert_eq!(name_of(1).as_deref(), Some("Configuration 2"));
+
+    let named = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [4 0 R] /D << /Name (Layers) /BaseState /ON >> >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+            "<< /Type /OCG /Name (A) >>",
+        ],
+        "",
+    );
+    assert!(verify(&named, Level::A2b).iter().all(|i| i.clause != "6.9"));
+}
