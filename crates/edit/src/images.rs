@@ -1634,7 +1634,7 @@ fn remove_image_crop(doc: &mut Document, p: &pdfcraft_model::Page, all: &[Conten
     if crops_there.is_empty() {
         // A crop in a scope that closes past a stream not read whole may clip what that stream draws.
         return Err(EditError::Invalid(if crops(ops.len())?.is_empty() {
-            "the image has no PdfCraft crop to remove".into()
+            "the image has no PdfChocolate crop to remove".into()
         } else {
             "the image's crop may also clip what a content stream that is damaged or can't be decoded draws, so it isn't removed".into()
         }));

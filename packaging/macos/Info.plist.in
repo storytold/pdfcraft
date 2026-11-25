@@ -48,13 +48,13 @@
     <string>nb</string>
   </array>
   <key>CFBundleDisplayName</key>
-  <string>PdfCraft</string>
+  <string>PdfChocolate</string>
   <key>CFBundleName</key>
-  <string>PdfCraft</string>
+  <string>PdfChocolate</string>
   <key>CFBundleExecutable</key>
-  <string>PdfCraft</string>
+  <string>PdfChocolate</string>
   <key>CFBundleIdentifier</key>
-  <string>ai.storyteller.pdfcraft</string>
+  <string>io.github.latechocolate.pdfchocolate</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundlePackageType</key>
@@ -70,7 +70,7 @@
   <key>PdfCraftBuildCommit</key>
   <string>@BUILD_SHA@</string>
   <key>CFBundleIconFile</key>
-  <string>PdfCraft</string>
+  <string>PdfChocolate</string>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.graphics-design</string>
   <!-- Must match MACOSX_DEPLOYMENT_TARGET in package.sh. Big Sur is the first release on
@@ -84,9 +84,9 @@
   <key>NSRequiresAquaSystemAppearance</key>
   <false/>
   <key>NSHumanReadableCopyright</key>
-  <string>Copyright © the PdfCraft authors. MIT OR Apache-2.0.</string>
+  <string>Copyright © the PdfCraft and PdfChocolate authors. MIT OR Apache-2.0.</string>
 
-  <!-- Documents PdfCraft opens (#73): it is offered under Open With and can be made the default
+  <!-- Documents PdfChocolate opens (#73): it is offered under Open With and can be made the default
        for PDFs, without taking over from the system's viewer on install ("Alternate"). Declared by
        UTI (LSItemContentTypes, what modern macOS filters Open With > Recommended Applications on),
        plus extension and MIME type for backward compatibility. Finder hands the
@@ -101,7 +101,7 @@
       <key>LSHandlerRank</key>
       <string>Alternate</string>
       <key>CFBundleTypeIconFile</key>
-      <string>PdfCraft</string>
+      <string>PdfChocolate</string>
       <key>LSItemContentTypes</key>
       <array><string>com.adobe.pdf</string></array>
       <key>CFBundleTypeExtensions</key>

@@ -1,18 +1,18 @@
 # Batch conversion, OCR and compression
 
-`pdfcraft-cli batch` runs the same steps over files or folders, one file at a time.
+`pdfchocolate-cli batch` runs the same steps over files or folders, one file at a time.
 It writes separate PDF outputs and a JSON report to stdout. It does not change
 source files or documents open in the editor.
 
 ```sh
 # Compress all PDFs, including subfolders.
-pdfcraft-cli batch scans --root . --recursive --steps optimize --out-dir compressed
+pdfchocolate-cli batch scans --root . --recursive --steps optimize --out-dir compressed
 
 # Convert images and text, then compress. Existing PDFs are accepted too.
-pdfcraft-cli batch inputs --root . --recursive --steps convert,optimize --out-dir pdfs --ppi 150 --quality 80
+pdfchocolate-cli batch inputs --root . --recursive --steps convert,optimize --out-dir pdfs --ppi 150 --quality 80
 
 # Add searchable text before compression. Requires the installed OCR models.
-pdfcraft-cli batch scans --root . --recursive --steps ocr,optimize --out-dir searchable
+pdfchocolate-cli batch scans --root . --recursive --steps ocr,optimize --out-dir searchable
 ```
 
 Multiple input files or folders can be listed before the options. Directories are
@@ -71,7 +71,7 @@ The same implementation is available as `doc_batch`:
 }
 ```
 
-In `pdfcraft-cli run --script`, put this object in the `args` of a `doc_batch`
+In `pdfchocolate-cli run --script`, put this object in the `args` of a `doc_batch`
 step. MCP marks a report with failed files as `isError: true` and retains the
 structured report. Tool names and OCR settings match the existing automation API
 (`skip_text_pages: false` corresponds to `--ocr-all-pages`).

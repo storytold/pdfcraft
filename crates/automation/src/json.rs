@@ -372,7 +372,7 @@ pub(crate) fn info(d: &Document) -> Value {
 /// A user-space rectangle on 0-based `page` in displayed-page coordinates (points from the
 /// top-left of the page as displayed, y down, after `/Rotate`), the way every tool reports
 /// rectangles; unchanged when the page is unknown (a malformed annotation that points at no page).
-/// Public so `pdfcraft-cli` reports the same rectangles as the tools.
+/// Public so `pdfchocolate-cli` reports the same rectangles as the tools.
 pub fn view_rect(i: &pdfcraft_render::DocInfo, page: usize, rect: [f32; 4]) -> [f32; 4] {
     i.pages.get(page).map_or(rect, |p| comments::rect_to_view(p, rect))
 }

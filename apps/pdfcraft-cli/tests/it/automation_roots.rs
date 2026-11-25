@@ -1,4 +1,4 @@
-//! `pdfcraft-cli mcp --automation-read-root DIR --automation-write-root DIR`, on the real binary:
+//! `pdfchocolate-cli mcp --automation-read-root DIR --automation-write-root DIR`, on the real binary:
 //! both spellings of the flags confine the server, and a malformed flag stops it instead of
 //! leaving it unconfined.
 #![cfg(feature = "mcp")]
@@ -9,7 +9,7 @@ use std::process::{Command, Output, Stdio};
 
 use serde_json::{Value, json};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
+const BIN: &str = env!("CARGO_BIN_EXE_pdfchocolate-cli");
 
 /// `in/a.pdf` and `outside/secret.pdf`, blank one-page PDFs made by the binary itself.
 fn folders(tag: &str) -> PathBuf {

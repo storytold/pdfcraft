@@ -1,4 +1,4 @@
-//! `pdfcraft-cli ui --control PORT`: the CLI reaches the app on the port the user names and
+//! `pdfchocolate-cli ui --control PORT`: the CLI reaches the app on the port the user names and
 //! sends the token it read from the user's own token file.
 
 use std::io::{BufRead, BufReader, Write};
@@ -89,7 +89,7 @@ fn a_token_file_of_your_own_reaches_the_app() {
     let spy = spy();
     let token_file = dir.join("token");
     write_private(&token_file, TOKEN);
-    let o = Command::new(env!("CARGO_BIN_EXE_pdfcraft-cli"))
+    let o = Command::new(env!("CARGO_BIN_EXE_pdfchocolate-cli"))
         .arg("ui")
         .arg("--control")
         .arg(spy.port.to_string())

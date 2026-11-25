@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
+const BIN: &str = env!("CARGO_BIN_EXE_pdfchocolate-cli");
 
 /// A one-page 200×300 pt PDF.
 fn fixture() -> Vec<u8> {
@@ -35,7 +35,7 @@ fn tmp(test: &str, name: &str) -> PathBuf {
     d.join(name)
 }
 
-/// The page rotation `pdfcraft-cli info` reports for the first page, via the inspector.
+/// The page rotation `pdfchocolate-cli info` reports for the first page, via the inspector.
 fn first_page_rotation(path: &std::path::Path) -> u16 {
     let bytes = std::sync::Arc::new(std::fs::read(path).unwrap());
     pdfcraft_render::inspect(bytes, None).unwrap().pages[0].rotation
@@ -147,7 +147,7 @@ mod one_based_arguments {
                 ] {
                     let out = Command::new(BIN).current_dir(&dir.0).args([command, input, "--out", destination, option, value]).output().unwrap();
                     assert_eq!(out.status.code(), Some(1), "{command} {input} {option} {value}");
-                    assert_eq!(out.stderr, format!("pdfcraft-cli: {diagnostic}\n").as_bytes());
+                    assert_eq!(out.stderr, format!("pdfchocolate-cli: {diagnostic}\n").as_bytes());
                     assert!(out.stdout.is_empty());
                     assert_eq!(std::fs::read(dir.0.join("input.pdf")).unwrap(), source);
                     assert_eq!(std::fs::read(dir.0.join("output.pam")).unwrap(), b"keep destination");
@@ -210,7 +210,7 @@ fn a_value_an_option_cannot_hold_is_named_before_the_file_is_opened() {
     ] {
         let out = Command::new(BIN).current_dir(&dir).args(["edit", "missing.pdf", "--out", "out.pdf", option, value]).output().unwrap();
         assert_eq!(out.status.code(), Some(1), "{option} {value}");
-        assert_eq!(out.stderr, format!("pdfcraft-cli: {diagnostic}\n").as_bytes(), "{option} {value}");
+        assert_eq!(out.stderr, format!("pdfchocolate-cli: {diagnostic}\n").as_bytes(), "{option} {value}");
         assert!(out.stdout.is_empty(), "{option} {value}");
         assert!(!dir.join("out.pdf").exists(), "{option} {value}: no output may be written");
     }
@@ -235,7 +235,7 @@ fn a_destination_past_the_end_fails_and_writes_nothing() {
     ] {
         let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap(), option, value]).output().unwrap();
         assert_eq!(out.status.code(), Some(1), "{option} {value}");
-        assert_eq!(String::from_utf8_lossy(&out.stderr), format!("pdfcraft-cli: {diagnostic}\n"), "{option} {value}");
+        assert_eq!(String::from_utf8_lossy(&out.stderr), format!("pdfchocolate-cli: {diagnostic}\n"), "{option} {value}");
         assert!(!output.exists(), "{option} {value}: no output may be written");
     }
 }
@@ -358,7 +358,7 @@ fn a_page_tree_is_not_rebuilt_when_the_reader_shows_other_pages() {
     let output = tmp("scan-disagrees", "out.pdf");
     let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap(), "--delete", "2"]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
-    assert_eq!(String::from_utf8_lossy(&out.stderr), "pdfcraft-cli: the document's page tree lists no pages: the file is damaged\n");
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "pdfchocolate-cli: the document's page tree lists no pages: the file is damaged\n");
     assert!(!output.exists(), "no page may be deleted");
 }
 

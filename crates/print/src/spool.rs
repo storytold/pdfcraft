@@ -411,7 +411,7 @@ pub(crate) fn with_job_info(job: &Job, owner: Option<&str>) -> Job {
     let mut named = job.clone();
     for (key, value) in [(JOB_NAME_KEY, job.title.as_str()), (JOB_OWNER_KEY, owner.unwrap_or_default())] {
         if !job.options.iter().any(|(k, _)| k.eq_ignore_ascii_case(key)) {
-            named.options.push((key.to_string(), job_option_value(value, "PdfCraft")));
+            named.options.push((key.to_string(), job_option_value(value, "PdfChocolate")));
         }
     }
     named

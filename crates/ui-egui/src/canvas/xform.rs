@@ -63,6 +63,11 @@ impl DocView {
         self.presentation.is_none() || self.session.presenter.settled_on(self.view.current)
     }
 
+    /// Whether a page-box drag (the Crop tool's rectangle) is under way.
+    pub fn box_drag_active(&self) -> bool {
+        self.session.box_drag.is_active()
+    }
+
     /// The document area on screen in the last pass.
     pub fn viewport_rect(&self) -> Rect {
         self.viewport

@@ -125,11 +125,6 @@ pub fn test_app(host: Arc<Host>) -> PdfCraftApp {
     PdfCraftApp::with_host(host, services(RecordingClipboard::default()))
 }
 
-/// The app over a host whose jobs wait in `jobs` until the test runs them.
-pub fn held_app(jobs: Arc<ManualJobs>) -> PdfCraftApp {
-    test_app(Arc::new(Host::builder(app_info()).jobs(jobs).build()))
-}
-
 /// The app over a host whose jobs run at once, where they are queued.
 pub fn inline_app() -> PdfCraftApp {
     test_app(Arc::new(Host::builder(app_info()).jobs(Arc::new(InlineJobs)).build()))

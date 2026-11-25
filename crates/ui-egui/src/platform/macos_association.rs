@@ -7,7 +7,7 @@ use std::{io, path::Path};
 
 const OPEN_WITH: &str = "com.apple.LaunchServices.OpenWith";
 const QUARANTINE: &str = "com.apple.quarantine";
-const BUNDLE_ID: &str = "ai.storyteller.pdfcraft";
+const BUNDLE_ID: &str = "io.github.latechocolate.pdfchocolate";
 const MAX_ATTRIBUTE: usize = 64 * 1024;
 
 /// A bounded snapshot used only to decide whether native association recovery is eligible.

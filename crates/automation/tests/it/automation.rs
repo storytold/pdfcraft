@@ -3354,7 +3354,7 @@ fn protecting_with_a_password_encryption_ignores_is_refused() {
 #[test]
 fn forms_through_tools() {
     let dir = workdir("forms");
-    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/demo/pdfcraft-showcase.pdf");
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/demo/pdfchocolate-showcase.pdf");
     if !src.exists() {
         eprintln!("skipped: run `cargo xtask demo-pdf` for the showcase form");
         return;

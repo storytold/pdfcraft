@@ -160,7 +160,7 @@ pub(crate) fn strip_xfa(doc: &mut pdfcraft_cos::Document, cx: &mut EditCtx) -> R
     cx.xfa_removed.extend(r.notes());
     if differ > 0 {
         cx.xfa_removed.push(format!(
-            "{differ} field(s) held a value other than the form's XFA data (data PdfCraft could not read into them); the data's version is gone"
+            "{differ} field(s) held a value other than the form's XFA data (data PdfChocolate could not read into them); the data's version is gone"
         ));
     }
     Ok(())

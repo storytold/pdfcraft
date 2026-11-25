@@ -795,7 +795,7 @@ fn windows_store_identity_does_not_ask_for_a_file_password() {
     h.run_steps(3);
     h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Sign as \"Store signer\"");
     assert_eq!(h.query_all_by_label("Digital ID password").count(), 0);
-    h.get_by_label("The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.");
+    h.get_by_label("The key is in the Windows certificate store, which may ask to allow PdfChocolate to use it.");
     support::outside_menus(&h, "Sign").click();
     h.run_steps(3);
     assert!(h.state().sign_draft.is_some());

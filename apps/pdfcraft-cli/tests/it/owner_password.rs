@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use pdfcraft_cos::{Algorithm, NewEncryption};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
+const BIN: &str = env!("CARGO_BIN_EXE_pdfchocolate-cli");
 
 /// A one-page 200×300 pt PDF reading "Page 1", drawn by `content`.
 fn fixture(content: &str) -> Vec<u8> {

@@ -2,7 +2,7 @@
 //!
 //! Seeds are small PDFs (synthetic ones, plus pdf.js corpus files under 64 KB when `corpus/` is
 //! present). Each iteration mutates a seed, writes it to `fuzz-out/work/`, and runs
-//! `pdfcraft-cli check-one <file> --edit` in a child process with a timeout. That opens,
+//! `pdfchocolate-cli check-one <file> --edit` in a child process with a timeout. That opens,
 //! inspects, renders and extracts text from every page (the bootstrap renderer), then runs our
 //! object layer end to end: decode streams, edit, save incrementally and in full, reopen.
 //!
@@ -507,7 +507,7 @@ pub fn run(args: &[String]) -> Result<()> {
         .args(["build", "--release", "-q", "-p", "pdfcraft-cli"])
         .status()?;
     if !status.success() {
-        bail!("building pdfcraft-cli failed");
+        bail!("building pdfchocolate-cli failed");
     }
     let exe = release_cli();
     if !exe.is_file() {

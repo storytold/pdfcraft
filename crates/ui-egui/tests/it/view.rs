@@ -3081,7 +3081,7 @@ fn a_page_whose_content_was_cut_is_named_in_a_notice() {
     h.run_steps(2);
     assert_eq!(h.state().views[0].cut_pages(), [0]);
     assert!(h.state().views[0].page_errors().is_empty(), "a cut page still draws");
-    h.get_by_label_contains("Page 1 holds more content than PdfCraft can read");
+    h.get_by_label_contains("Page 1 holds more content than PdfChocolate can read");
     // Automation counts pages from 1, as the notice does (review on #2113).
     let state = crate::control::ok(&mut h, &client, "ui.state", serde_json::json!({}));
     assert_eq!(state["active"]["cut_pages"], serde_json::json!([1]), "{state}");

@@ -167,7 +167,7 @@ pub fn decode_pgm(bytes: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
     (pixels.len() >= wanted).then(|| (width, height, pixels.get(..wanted).unwrap_or_default().to_vec()))
 }
 
-/// Decode the netpbm `P7` RGB_ALPHA image `pdfcraft-cli render --out x.pam` writes, flattening it
+/// Decode the netpbm `P7` RGB_ALPHA image `pdfchocolate-cli render --out x.pam` writes, flattening it
 /// to grayscale the way a viewer would show it: composited over white, then luminance.
 ///
 /// The alpha is premultiplied, which is why the composite is `channel + white * (1 - alpha)`

@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
+const BIN: &str = env!("CARGO_BIN_EXE_pdfchocolate-cli");
 
 /// A PDF with `n` empty 200×300 pt pages.
 fn fixture(n: usize) -> Vec<u8> {

@@ -3,11 +3,11 @@
   Regenerate PdfChocolate's Windows and hicolor icons from assets/app-icon/pdfchocolate-512.png.
 
 .DESCRIPTION
-  The master is pixel art on a 64-dot grid (8 px per dot at 512 px). Sizes of 64 px and up are
-  scaled with nearest neighbour, so the dots stay square; smaller ones are smoothed, so no detail
+  The master is pixel art on a 192-dot grid (3 dots per 8 px at 512 px). Sizes of 64 px and up are
+  scaled with nearest neighbour, so the dots stay sharp; smaller ones are smoothed, so no detail
   drops out at random. Writes:
 
-    assets/app-icon/hicolor/<n>x<n>/apps/ai.storyteller.pdfcraft.png   16-512 px
+    assets/app-icon/hicolor/<n>x<n>/apps/io.github.latechocolate.pdfchocolate.png   16-512 px
     assets/app-icon/pdfcraft-1024.png                                  1024 px
     assets/app-icon/pdfcraft.ico                                       app icon, 16-256 px (resource 1)
     assets/app-icon/pdfcraft-document.ico                              PDF file icon, 16-256 px (resource 2)
@@ -16,8 +16,8 @@
   tile) and a red PDF label, drawn on the same 8 px grid. Only System.Drawing is needed (Windows).
   Afterwards update the sha256 values in ATTRIBUTION.toml and run `cargo xtask assets --write`.
 
-  The macOS .icns, the SVG masters and the macOS/Linux packaging art still show the upstream
-  PdfCraft lion; this script does not touch them.
+  It also writes the SVGs (pdfcraft.svg, pdfcraft-small.svg, hicolor/scalable/...svg: the dot
+  grid as rectangles) and the macOS pdfcraft.icns (PNG entries, 16-1024 px).
 
 .EXAMPLE
   powershell -File packaging/icons.ps1
@@ -70,7 +70,7 @@ function Write-Ico($image, [string]$path) {
 # 1. App icon: hicolor PNGs, the 1024 px PNG and pdfcraft.ico.
 foreach ($size in 16, 24, 32, 48, 64, 128, 256, 512) {
     $bmp = Resize $src $size
-    $path = Join-Path $dir "hicolor\${size}x${size}\apps\ai.storyteller.pdfcraft.png"
+    $path = Join-Path $dir "hicolor\${size}x${size}\apps\io.github.latechocolate.pdfchocolate.png"
     [IO.File]::WriteAllBytes($path, (PngBytes $bmp))
     $bmp.Dispose()
     "wrote $path"
@@ -151,4 +151,50 @@ foreach ($ch in 'P', 'D', 'F') {
 $g.Dispose()
 Write-Ico $m (Join-Path $dir 'pdfcraft-document.ico')
 $m.Dispose()
+
+# 3. SVG: the dot grid as rectangles (one per horizontal run of a colour), so the same pixel art
+# scales without blur. The master's dots are 8/3 px (192 per side; edges at 0, 3, 5, 8, ...).
+# Used for pdfcraft.svg, pdfcraft-small.svg and hicolor/scalable.
+$n = 192
+function Dot([int]$k) { [int][math]::Floor(($k + 0.5) * 512 / $n) }
+$sb = [System.Text.StringBuilder]::new()
+[void]$sb.Append("<svg xmlns=`"http://www.w3.org/2000/svg`" width=`"512`" height=`"512`" viewBox=`"0 0 $n $n`" shape-rendering=`"crispEdges`">")
+[void]$sb.Append("`n<title>PdfChocolate</title>`n")
+for ($y = 0; $y -lt $n; $y++) {
+    $x = 0
+    while ($x -lt $n) {
+        $c = $src.GetPixel((Dot $x), (Dot $y))
+        $run = 1
+        while ($x + $run -lt $n -and $src.GetPixel((Dot ($x + $run)), (Dot $y)).ToArgb() -eq $c.ToArgb()) { $run++ }
+        if ($c.A -ne 0) {
+            $fill = '#{0:x2}{1:x2}{2:x2}' -f $c.R, $c.G, $c.B
+            $op = if ($c.A -lt 255) { ' fill-opacity="{0}"' -f [math]::Round($c.A / 255, 3).ToString([Globalization.CultureInfo]::InvariantCulture) } else { '' }
+            [void]$sb.Append("<rect x=`"$x`" y=`"$y`" width=`"$run`" height=`"1`" fill=`"$fill`"$op/>`n")
+        }
+        $x += $run
+    }
+}
+[void]$sb.Append("</svg>`n")
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+foreach ($rel in 'pdfcraft.svg', 'pdfcraft-small.svg', 'hicolor\scalable\apps\io.github.latechocolate.pdfchocolate.svg') {
+    $path = Join-Path $dir $rel
+    [IO.File]::WriteAllText($path, $sb.ToString().Replace("`r`n", "`n"), $utf8)
+    "wrote $path"
+}
+
+# 4. macOS .icns with PNG entries (16 px to 1024 px, 1x and 2x).
+$icnsTypes = [ordered]@{ 'icp4' = 16; 'icp5' = 32; 'ic11' = 32; 'ic12' = 64; 'ic07' = 128; 'ic13' = 256; 'ic08' = 256; 'ic14' = 512; 'ic09' = 512; 'ic10' = 1024 }
+$ms = [System.IO.MemoryStream]::new()
+function BE([uint32]$v) { $b = [BitConverter]::GetBytes($v); [Array]::Reverse($b); return , $b }
+$body = [System.IO.MemoryStream]::new()
+foreach ($t in $icnsTypes.Keys) {
+    $b = Resize $src $icnsTypes[$t]; $png = PngBytes $b; $b.Dispose()
+    $hdr = [Text.Encoding]::ASCII.GetBytes($t)
+    $body.Write($hdr, 0, 4); $len = BE ([uint32]($png.Length + 8)); $body.Write($len, 0, 4); $body.Write($png, 0, $png.Length)
+}
+$magic = [Text.Encoding]::ASCII.GetBytes('icns'); $ms.Write($magic, 0, 4)
+$total = BE ([uint32]($body.Length + 8)); $ms.Write($total, 0, 4)
+$body.WriteTo($ms)
+[IO.File]::WriteAllBytes((Join-Path $dir 'pdfcraft.icns'), $ms.ToArray())
+"wrote $(Join-Path $dir 'pdfcraft.icns')"
 $src.Dispose()

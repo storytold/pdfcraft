@@ -1,7 +1,7 @@
 //! A Model Context Protocol server over the automation tools.
 //!
 //! **Opt-in only.** Nothing in PdfCraft starts this server on its own: it runs when a user
-//! launches `pdfcraft-cli mcp` (usually by adding that command to their agent's MCP
+//! launches `pdfchocolate-cli mcp` (usually by adding that command to their agent's MCP
 //! configuration), and stops when its input closes. It opens no network port; the transport is
 //! newline-delimited JSON-RPC 2.0 over stdin/stdout.
 //!
@@ -31,7 +31,7 @@ const INTERNAL_ERROR: i64 = -32603;
 /// Longest JSON-RPC request line [`McpServer::serve`] buffers into memory (16 MiB).
 pub const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 
-const INSTRUCTIONS: &str = "PdfCraft edits PDFs. Open a file with doc_open to get a document id, then inspect \
+const INSTRUCTIONS: &str = "PdfChocolate edits PDFs. Open a file with doc_open to get a document id, then inspect \
 (doc_info, text_extract, text_find, page_render) or edit it (page_*, doc_set_info). Edits are undoable \
 (edit_undo) and stay in memory until doc_save. Page numbers are 1-based. Open documents are also \
 resources: pdfcraft://doc/{doc}/info, /text, /page/{page}/text and /page/{page}/image. \
@@ -208,8 +208,8 @@ fn meta_tools() -> [Value; 2] {
     [
         json!({
             "name": TOOL_SEARCH,
-            "title": "Find PdfCraft tools",
-            "description": "Search and list all PdfCraft automation tools, including the core tools, with a one-sentence description each. Filter by query \
+            "title": "Find PdfChocolate tools",
+            "description": "Search and list all PdfChocolate automation tools, including the core tools, with a one-sentence description each. Filter by query \
         (words matched against name, title and description) and/or category (the name prefix: doc, page, text, form, …). \
         With name, return that one tool in full, including its input_schema. Run a tool with tool_call.",
             "inputSchema": {
@@ -222,12 +222,12 @@ fn meta_tools() -> [Value; 2] {
                 "required": [],
                 "additionalProperties": false,
             },
-            "annotations": { "title": "Find PdfCraft tools", "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+            "annotations": { "title": "Find PdfChocolate tools", "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
         }),
         json!({
             "name": TOOL_CALL,
-            "title": "Run any PdfCraft tool",
-            "description": "Run any PdfCraft tool by name with its arguments, exactly as if it were called directly. \
+            "title": "Run any PdfChocolate tool",
+            "description": "Run any PdfChocolate tool by name with its arguments, exactly as if it were called directly. \
         Find names and argument schemas with tool_search. The result is the tool's own result.",
             "inputSchema": {
                 "type": "object",
@@ -238,7 +238,7 @@ fn meta_tools() -> [Value; 2] {
                 "required": ["name"],
                 "additionalProperties": false,
             },
-            "annotations": { "title": "Run any PdfCraft tool", "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": false },
+            "annotations": { "title": "Run any PdfChocolate tool", "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": false },
         }),
     ]
 }

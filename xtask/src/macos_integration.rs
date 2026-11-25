@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn reads_pdf_bundle_values_without_invoking_macos_tools() {
         let plist = r#"
-            <key>CFBundleIdentifier</key><string>ai.storyteller.pdfcraft</string>
+            <key>CFBundleIdentifier</key><string>io.github.latechocolate.pdfchocolate</string>
             <key>LSMinimumSystemVersion</key><string>11.0</string>
             <key>CFBundleDocumentTypes</key><array><dict>
               <key>CFBundleTypeRole</key><string>Editor</string>
@@ -337,7 +337,7 @@ mod tests {
               <key>LSItemContentTypes</key><array><string>com.adobe.pdf</string></array>
             </dict></array>
         "#;
-        assert_eq!(plist_value(plist, "CFBundleIdentifier").as_deref(), Some("ai.storyteller.pdfcraft"));
+        assert_eq!(plist_value(plist, "CFBundleIdentifier").as_deref(), Some("io.github.latechocolate.pdfchocolate"));
         assert_eq!(plist_value(plist, "LSMinimumSystemVersion").as_deref(), Some("11.0"));
         assert_eq!(pdf_registration(plist), "com.adobe.pdf (role=Editor, rank=Alternate)");
     }

@@ -40,6 +40,6 @@ findings".
 A document whose permissions withhold copying (Table 22, bit 5) still gets every finding, with
 an empty `covered_text`: the audit hands out no text that copying would refuse.
 
-Surfaces: the `doc_audit_redactions` automation tool and `pdfcraft-cli audit`. Both report each
+Surfaces: the `doc_audit_redactions` automation tool and `pdfchocolate-cli audit`. Both report each
 rectangle in points from the top-left of the page as displayed (y down, after `/Rotate`), like
 the other tools; `AuditFinding::rect` itself stays in PDF user space.

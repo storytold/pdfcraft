@@ -4,11 +4,11 @@
 //! - [`Automation`] is a tool set over an engine [`Session`]: open, inspect, render, extract and
 //!   find text, edit pages and metadata, undo/redo, save, combine, extract and split. Every tool
 //!   has a JSON Schema ([`tools`]) and takes and returns JSON, so the same table drives the MCP
-//!   server ([`mcp`]), `pdfcraft-cli run` and (later) the UI control channel.
+//!   server ([`mcp`]), `pdfchocolate-cli run` and (later) the UI control channel.
 //! - Pages are **1-based** in every tool, as people number them. Rectangles are in PDF points
 //!   with the origin at the top-left of the displayed page.
 //! - An optional root directory confines every path a tool reads or writes. Separately,
-//!   [`file_access::AutomationRoots`] (`pdfcraft-cli mcp --automation-read-root` and
+//!   [`file_access::AutomationRoots`] (`pdfchocolate-cli mcp --automation-read-root` and
 //!   `--automation-write-root`) holds a read folder and a write folder, each left out meaning no
 //!   access of its kind.
 
@@ -165,7 +165,7 @@ impl Automation {
         &self.session
     }
 
-    /// Save `bytes` that a caller writes on the session's behalf, such as `pdfcraft-cli run`
+    /// Save `bytes` that a caller writes on the session's behalf, such as `pdfchocolate-cli run`
     /// saving a rendered page. With a root, it is confined like a tool's own output (a relative
     /// path resolves inside it). Written atomically either way (#2166), except to something
     /// that is not a regular file, such as `/dev/stdout` or a pipe, which is written as given.

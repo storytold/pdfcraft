@@ -114,7 +114,7 @@ Use the actual generation and references from your document, rather than assumin
 values. `offset` is in displayed points: positive x moves right, positive y moves down. The optional
 generation guard rejects a changed document before interpreting references. Re-list after any edit,
 undo, redo, or save; there is no claim that an index persists across generations. Run a script with
-`pdfcraft-cli run --script steps.json --root DIR` or call these tools through the opt-in MCP server.
+`pdfchocolate-cli run --script steps.json --root DIR` or call these tools through the opt-in MCP server.
 
 Regression coverage: `crates/edit/src/tests.rs` (glyph bytes, neighbours, split streams, shared Forms,
 rotated/cropped/UserUnit pages and refusal), `crates/edit/src/objects/clip_tests.rs` (copies that

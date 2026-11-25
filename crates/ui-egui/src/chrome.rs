@@ -86,7 +86,7 @@ fn window_body(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// The title bar: Home, the document tabs and Open, then the community, shortcuts, theme and
+/// The title bar: Home, the document tabs and Open, then the shortcuts, theme and
 /// Preferences buttons. The window's caption buttons are the bar's own.
 fn title_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();

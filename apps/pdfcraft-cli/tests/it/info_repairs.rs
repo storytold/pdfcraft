@@ -4,7 +4,7 @@
 
 use std::process::Command;
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
+const BIN: &str = env!("CARGO_BIN_EXE_pdfchocolate-cli");
 
 /// A PDF with `pages` pages, each drawing a rectangle (a page found by scanning has content), and
 /// `catalog` as object 1; `startxref` points at its cross-reference table, or at `bad_startxref`.

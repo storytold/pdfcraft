@@ -81,6 +81,13 @@ fn main() -> Result<(), String> {
         }
     }
     let mut harness = Harness::builder().with_size(size).with_pixels_per_point(scale).build_eframe(move |cc| {
+        // The interface fonts and services, as the app installs them before it is built: without
+        // them the shot draws in egui's default face and aborts on any glyph it lacks.
+        let spec = craft::ui::InstallSpec::new(craft::host::target::ShellInfo::default(), std::sync::Arc::new(craft::window::system::NoWindows));
+        if let Err(e) = craft::ui::shell::embed::install(&cc.egui_ctx, spec, &pdfcraft_ui_egui::fonts::ui_fonts(pdfcraft_ui_egui::i18n::Lang::EN)) {
+            eprintln!("shot: the runtime could not be installed: {e}");
+            std::process::exit(1);
+        }
         let mut app = PdfCraftApp::new(&cc.egui_ctx);
         if ocr_verify {
             if let Err(e) = load_ocr_verify(&mut app) {

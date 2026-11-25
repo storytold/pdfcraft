@@ -31,6 +31,6 @@ jobs:
     uses: storytold/craft-common-actions/.github/workflows/windows-arm64.yml@main
     with:
       app-name: pdfcraft
-      app-dir: PdfCraft
-      install-relative-path: Programs/ArtCraft/PdfCraft
+      app-dir: PdfChocolate
+      install-relative-path: Programs/PdfChocolate
       install-scope: perUser

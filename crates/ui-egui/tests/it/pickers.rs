@@ -724,7 +724,7 @@ fn a_late_startup_url_preserves_home_even_after_all_other_tabs_are_closed() {
         h.deliver("late.pdf", fixture(1));
         h.steps(2);
         assert_eq!(h.state().active, None, "Home stays selected (closed tabs: {close})");
-        h.get_by_label_contains("Welcome to PdfCraft");
+        h.get_by_label_contains("Welcome to PdfChocolate");
         h.get_by_label("late.pdf").click();
         h.steps(2);
         assert!(h.state().active.is_some());
@@ -1020,11 +1020,13 @@ fn a_saved_attachment_carries_the_documents_zone() {
     let mut h = harness(&[]);
     let opened = [(Some(&mail), zone), (Some(&local), pdfcraft_platform::zone::INTERNET_ZONE), (None, pdfcraft_platform::zone::INTERNET_ZONE)];
     for (i, (path, expected)) in opened.into_iter().enumerate() {
-        h.state_mut().open_bytes(&format!("doc{i}.pdf"), path.map(|p| p.to_string_lossy().into_owned()), attachment_fixture()).unwrap();
+        let ctx = h.ctx.clone();
+        h.state_mut().open_bytes(&ctx, &format!("doc{i}.pdf"), path.map(|p| p.to_string_lossy().into_owned()), attachment_fixture()).unwrap();
         h.steps(2);
         let id = h.state().views.last().unwrap().id;
         let chosen = dir.0.join(format!("saved{i}.exe"));
-        h.state_mut().attachment_action(id, 0, false);
+        let ctx = h.ctx.clone();
+        h.state_mut().attachment_action(&ctx, id, 0, false);
         h.answer(Picked::Paths(vec![chosen.clone()]));
         assert_eq!(std::fs::read(&chosen).unwrap(), b"hello notes");
         assert_eq!(zone_of(&chosen).as_deref(), Some(expected.as_bytes()), "document {i}");

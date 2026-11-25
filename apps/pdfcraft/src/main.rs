@@ -22,7 +22,7 @@
 //! 127.0.0.1:<PORT> (`0` picks a free one) and asks for the token `--control-token <TOKEN>` or
 //! `--control-token-file <FILE>` gives (or `PDFCRAFT_CONTROL_PORT`, `PDFCRAFT_CONTROL_TOKEN`,
 //! `PDFCRAFT_CONTROL_TOKEN_FILE`). The app doesn't start if it can't listen.
-//! Agents then drive it with `pdfcraft-cli ui …`.
+//! Agents then drive it with `pdfchocolate-cli ui …`.
 //!
 // PLAN: apps/pdfcraft/Cargo.toml needs `craft = { workspace = true, features = ["automation", "window", "platform", "settings", "host", "ui"] }`; the manifest is not in this set's Files table.
 // PLAN: forms-02's `reorder_keys` wiring names no signature this set can call; its owner wires it here.
@@ -49,17 +49,17 @@ mod startup;
 mod windows_manifest;
 
 /// Freedesktop app id: the `.desktop` file name and the hicolor icon name.
-const APP_ID: &str = "ai.storyteller.pdfcraft";
+const APP_ID: &str = "io.github.latechocolate.pdfchocolate";
 
 /// The app icon (assets/app-icon/README.md). macOS gets the version on Apple's icon grid, with a
 /// transparent margin; Windows and Linux get the full-bleed tile.
 #[cfg(target_os = "macos")]
 const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/pdfcraft-1024.png");
 #[cfg(not(target_os = "macos"))]
-const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/ai.storyteller.pdfcraft.png");
+const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/io.github.latechocolate.pdfchocolate.png");
 
 /// What `-h` / `--help` prints (#4076): a hint, not the full option list (that is this file's
-/// doc comment and the README). Scripts want `pdfcraft-cli`, which never opens a window.
+/// doc comment and the README). Scripts want `pdfchocolate-cli`, which never opens a window.
 const USAGE: &str = "\
 Usage: pdfcraft [options] [files…]
 
@@ -77,7 +77,7 @@ Options:
   -h, --help                  print this and exit
   --version                   print the version and exit
 
-To inspect, convert or edit PDFs from a script, use pdfcraft-cli (pdfcraft-cli --help).";
+To inspect, convert or edit PDFs from a script, use pdfchocolate-cli (pdfchocolate-cli --help).";
 
 /// Print `text` for `--help` and `--version`. `println!` would panic on a full or closed
 /// standard output; this exits normally instead.
@@ -357,7 +357,7 @@ fn native_options(integrated: bool, renderer: eframe::Renderer) -> eframe::Nativ
         .with_inner_size([1440.0, 920.0])
         .with_min_inner_size(pdfcraft_ui_egui::MIN_WINDOW_SIZE)
         .with_drag_and_drop(true)
-        // Wayland app id: matches packaging/linux/ai.storyteller.pdfcraft.desktop.
+        // Wayland app id: matches packaging/linux/io.github.latechocolate.pdfchocolate.desktop.
         .with_app_id(APP_ID);
     // eframe replaces ICON_BIG with a system-sized icon on its first active frame.
     // An explicitly empty icon disables that setter (None selects eframe's default).

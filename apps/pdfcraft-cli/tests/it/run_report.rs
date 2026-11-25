@@ -1,4 +1,4 @@
-//! `pdfcraft-cli run --script --report`: one JSON document for the whole run (#1891).
+//! `pdfchocolate-cli run --script --report`: one JSON document for the whole run (#1891).
 
 use std::process::{Command, Output};
 
@@ -9,7 +9,7 @@ fn run_script(test: &str, steps: &serde_json::Value, extra: &[&str]) -> Output {
     let script = dir.join("steps.json");
     std::fs::write(&script, steps.to_string()).unwrap();
     let out =
-        Command::new(env!("CARGO_BIN_EXE_pdfcraft-cli")).current_dir(&dir).arg("run").arg("--script").arg(&script).args(extra).output().unwrap();
+        Command::new(env!("CARGO_BIN_EXE_pdfchocolate-cli")).current_dir(&dir).arg("run").arg("--script").arg(&script).args(extra).output().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
     out
 }
@@ -65,7 +65,7 @@ fn without_the_flag_the_output_is_unchanged() {
 
 #[test]
 fn the_flag_needs_a_script() {
-    let o = Command::new(env!("CARGO_BIN_EXE_pdfcraft-cli")).args(["run", "doc_create", "--report"]).output().unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_pdfchocolate-cli")).args(["run", "doc_create", "--report"]).output().unwrap();
     assert_eq!(o.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&o.stderr).contains("--report needs --script"));
 }

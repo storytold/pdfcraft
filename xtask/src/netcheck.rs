@@ -1,6 +1,6 @@
 //! `cargo xtask netcheck`: which network-capable crates the batch path can reach.
 //!
-//! The batch folder job runs `pdfcraft-cli`, which drives `pdfcraft-automation` over
+//! The batch folder job runs `pdfchocolate-cli`, which drives `pdfcraft-automation` over
 //! `pdfcraft-engine`; none of them may open a socket. That promise is only as strong as the
 //! dependency graph behind those three packages, so this gate walks the resolved graph recorded
 //! in `Cargo.lock` and asks, for each of them and each crate that can open a socket, whether that
@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use crate::gates::root;
 
 /// The packages the batch path is built from.
-const PACKAGES: &[&str] = &["pdfcraft-cli", "pdfcraft-automation", "pdfcraft-engine"];
+const PACKAGES: &[&str] = &["pdfchocolate-cli", "pdfcraft-automation", "pdfcraft-engine"];
 
 /// Crates that can open a socket: HTTP clients, TLS stacks, async runtimes, socket wrappers and
 /// libcurl bindings.

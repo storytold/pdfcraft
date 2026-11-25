@@ -1,6 +1,6 @@
 # MCP conventions
 
-Start explicitly with `pdfcraft-cli mcp [--root DIR] [--compact] [--automation-read-root DIR] [--automation-write-root DIR]`. The server uses JSON lines on
+Start explicitly with `pdfchocolate-cli mcp [--root DIR] [--compact] [--automation-read-root DIR] [--automation-write-root DIR]`. The server uses JSON lines on
 stdin/stdout, opens no port, and stops on EOF. `--root` confines all reads and writes, including
 commands invoked through the common tools. Logs stay on stderr.
 
@@ -17,8 +17,8 @@ From the repository root, with Rust 1.95+ and a native linker installed
 cargo install --path apps/pdfcraft-cli --locked
 # POSIX shells, for Cargo's default install location:
 export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
-pdfcraft-cli --help
-pdfcraft-cli mcp --help
+pdfchocolate-cli --help
+pdfchocolate-cli mcp --help
 ```
 
 The default features include MCP; do not pass `--no-default-features` for this use.
@@ -33,23 +33,23 @@ the client after changing its environment.
 Register the installed command explicitly (replace `/work/project` with an existing folder):
 
 ```sh
-claude mcp add pdfcraft -- pdfcraft-cli mcp --root /work/project
+claude mcp add pdfcraft -- pdfchocolate-cli mcp --root /work/project
 ```
 
 Other MCP clients can use this bare-name configuration:
 
 ```json
-{"mcpServers":{"pdfcraft":{"command":"pdfcraft-cli","args":["mcp","--root","/work/project"]}}}
+{"mcpServers":{"pdfcraft":{"command":"pdfchocolate-cli","args":["mcp","--root","/work/project"]}}}
 ```
 
-Linux `.deb` and `.rpm` packages already install `/usr/bin/pdfcraft-cli`; those users
+Linux `.deb` and `.rpm` packages already install `/usr/bin/pdfchocolate-cli`; those users
 can skip the source install. The [downloads list](../README.md#downloads) also includes
 standalone Linux CLI tarballs and a macOS CLI zip; unpack and copy the executable into
 a directory on the client's `PATH`. Installing does not start or register a server:
 MCP remains opt-in and uses stdio only.
 
 If a client reports `ENOENT` or "Executable not found in $PATH", verify the install with
-`command -v pdfcraft-cli` (PowerShell: `Get-Command pdfcraft-cli`) in the client's
+`command -v pdfchocolate-cli` (PowerShell: `Get-Command pdfchocolate-cli`) in the client's
 environment. If that environment cannot be changed, set JSON `command` to the absolute
 installed binary path, not a literal `~` or `$HOME` expression. Avoid symlinks into
 `target/release`: cleaning the build directory breaks them. A source build alone does
@@ -58,11 +58,11 @@ not put the CLI on `PATH`.
 ## Confining file access
 
 ```sh
-pdfcraft-cli mcp --automation-read-root /work/project --automation-write-root /work/project/out
+pdfchocolate-cli mcp --automation-read-root /work/project --automation-write-root /work/project/out
 ```
 
 ```json
-{"mcpServers": {"pdfcraft": {"command": "pdfcraft-cli",
+{"mcpServers": {"pdfcraft": {"command": "pdfchocolate-cli",
   "args": ["mcp", "--automation-read-root", "/work/project", "--automation-write-root", "/work/project/out"]}}}
 ```
 
@@ -103,7 +103,7 @@ config works across the suite) keep the agent to the folders you give it:
 - `--root DIR` still works and can be combined with these flags. Both then apply: a path must be
   inside `--root` and inside the matching automation root.
 
-`pdfcraft-cli mcp` always runs the session in its own process (there is no flag to connect it to a
+`pdfchocolate-cli mcp` always runs the session in its own process (there is no flag to connect it to a
 running app), so the roots cover every server it starts. The desktop app is not confined by them.
 
 What the roots do not cover: tools that take no path still read and change the open documents, and

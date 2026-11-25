@@ -830,7 +830,7 @@ fn middle_button_pans_while_held_outside_linux() {
     assert!((moved - (top - 60.0)).abs() < 1.0, "the page follows the pointer 1:1: {top} -> {moved}");
     h.run_steps(8);
     assert_eq!(h.state().views[0].page_screen_rect(1).unwrap().top(), moved, "no drift after release");
-    assert!(h.state().views[0].crop_drag.is_none(), "the Crop tool must not receive a wheel drag");
+    assert!(!h.state().views[0].box_drag_active(), "the Crop tool must not receive a wheel drag");
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
 }
 
@@ -992,7 +992,7 @@ fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
     // the label.
     let (menu, preferences) = if cfg!(target_os = "macos") {
         let ja = pdfcraft_ui_egui::i18n::Lang::from_code("ja").unwrap();
-        ("PdfCraft", pdfcraft_ui_egui::i18n::tr(ja, "Settings…").trim_end_matches('…'))
+        ("PdfChocolate", pdfcraft_ui_egui::i18n::tr(ja, "Settings…").trim_end_matches('…'))
     } else {
         ("編集", "環境設定")
     };

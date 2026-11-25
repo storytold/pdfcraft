@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "pdfcraft-cli"
+name = "pdfchocolate-cli"
 path = "src/main.rs"
 
 [lints]
@@ -29,10 +29,10 @@ craft = { workspace = true, features = ["automation", "atomic"] }
 craft-image-codecs = { workspace = true }
 
 [build-dependencies]
-# VERSIONINFO for pdfcraft-cli.exe; build.rs only uses it when targeting Windows.
+# VERSIONINFO for pdfchocolate-cli.exe; build.rs only uses it when targeting Windows.
 winresource = "0.1"
 
 [features]
 default = ["mcp"]
-# The opt-in MCP server (`pdfcraft-cli mcp`). Build with --no-default-features to leave it out.
+# The opt-in MCP server (`pdfchocolate-cli mcp`). Build with --no-default-features to leave it out.
 mcp = ["pdfcraft-automation/mcp"]

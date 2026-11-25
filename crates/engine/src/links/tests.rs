@@ -111,13 +111,9 @@ fn remote_document_paths_to_other_computers_and_devices_are_refused() {
 }
 
 #[test]
-fn urls_follow_the_artcraft_scheme() {
-    assert_eq!(super::APP_PAGE, format!("{}/apps/{}", super::WEBSITE, super::APP));
-    assert_eq!(super::GITHUB, format!("https://github.com/storytold/{}", super::APP));
-    for l in super::LINKS {
-        assert!(l.url.starts_with("https://"), "{}", l.url);
-        assert!(crate::commands::command(l.command).is_some(), "{} is a registered command", l.command);
-    }
+/// PdfChocolate links to no website, community or code host from its menus.
+fn the_app_links_nowhere() {
+    assert!(super::LINKS.is_empty(), "{:?}", super::LINKS.iter().map(|l| l.url).collect::<Vec<_>>());
 }
 
 #[test]

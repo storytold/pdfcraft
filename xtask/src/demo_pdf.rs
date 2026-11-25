@@ -36,7 +36,7 @@ pub fn run(args: &[String]) -> Result<()> {
     }
 
     let root = repo_root();
-    let out = out_override.unwrap_or_else(|| root.join("dist/demo/pdfcraft-showcase.pdf"));
+    let out = out_override.unwrap_or_else(|| root.join("dist/demo/pdfchocolate-showcase.pdf"));
     let build = root.join("dist/demo/build");
     fs::create_dir_all(&build).with_context(|| format!("creating {}", build.display()))?;
     if let Some(parent) = out.parent() {

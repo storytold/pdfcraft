@@ -3,7 +3,7 @@
 
 use std::process::Command;
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
+const BIN: &str = env!("CARGO_BIN_EXE_pdfchocolate-cli");
 
 /// Two US Letter pages with "TOP SECRET" under an opaque `90 688 220 32 re`; the second page is
 /// turned a quarter (`/Rotate 90`).

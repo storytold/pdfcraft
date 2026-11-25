@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::process::Command;
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
+const BIN: &str = env!("CARGO_BIN_EXE_pdfchocolate-cli");
 
 #[test]
 fn cli_batch_reports_partial_failure_and_continues_into_subfolders() {

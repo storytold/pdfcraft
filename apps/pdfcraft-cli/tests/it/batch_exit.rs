@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
+const BIN: &str = env!("CARGO_BIN_EXE_pdfchocolate-cli");
 
 /// A fresh folder for one test, so the tests can run in parallel and leave nothing behind.
 fn workdir(name: &str) -> PathBuf {

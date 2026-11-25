@@ -344,7 +344,7 @@ fn native_script_prompts_show_an_app_owned_caption() {
         wait_for(&mut h, body);
         assert!(h.query_by_role_and_label(egui::accesskit::Role::Dialog, "This document's script is asking").is_some(), "{script}");
         assert_eq!(
-            h.query_by_label("This request comes from the document, not PdfCraft. Only enter a password if you trust this document.").is_some(),
+            h.query_by_label("This request comes from the document, not PdfChocolate. Only enter a password if you trust this document.").is_some(),
             script.contains("bPassword:true"),
             "{script}"
         );
@@ -376,7 +376,7 @@ fn native_script_prompt_uses_the_german_catalog_when_available() {
     wait_for(&mut h, heading);
     assert!(h.query_by_label("Dokument: form.pdf").is_some());
     // The warning in the catalog's words, which translators may reword, and never the English.
-    let warning = "This request comes from the document, not PdfCraft. Only enter a password if you trust this document.";
+    let warning = "This request comes from the document, not PdfChocolate. Only enter a password if you trust this document.";
     assert_ne!(tr(german, warning), warning, "the German catalog translates the password warning");
     assert!(h.query_by_label(tr(german, warning)).is_some());
 }

@@ -39,8 +39,8 @@ the current choice and the other valid settings.
 The existing opt-in UI control channel uses the same preference:
 
 ```sh
-pdfcraft-cli ui --control 4242 --control-token-file /path/to/token set key=comment-tool-pinned value=true
-pdfcraft-cli ui --control 4242 --control-token-file /path/to/token state
+pdfchocolate-cli ui --control 4242 --control-token-file /path/to/token set key=comment-tool-pinned value=true
+pdfchocolate-cli ui --control 4242 --control-token-file /path/to/token state
 ```
 
 `ui.state.comment_tool_pinned` reports the boolean. `ui.set` accepts `true` or `false` and refuses

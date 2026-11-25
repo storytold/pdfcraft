@@ -202,7 +202,7 @@
       </Component>
 
       <Component Id="PdfcraftCli">
-        <File Id="PdfcraftCliExe" Source="$(var.BinDir)\pdfcraft-cli.exe" KeyPath="yes" />
+        <File Id="PdfcraftCliExe" Source="$(var.BinDir)\pdfchocolate-cli.exe" KeyPath="yes" />
       </Component>
       <!-- The project licences travel with the binaries. -->
       <Component Id="PdfcraftMitLicense">

@@ -472,7 +472,7 @@ fn linux_display_gpus_reads_connected_connectors() -> std::io::Result<()> {
 /// so it has to be the class the window carries: the app id, on Wayland and X11 alike.
 #[test]
 fn the_desktop_entry_names_the_window_class() {
-    let entry = include_str!("../../../packaging/linux/ai.storyteller.pdfcraft.desktop");
+    let entry = include_str!("../../../packaging/linux/io.github.latechocolate.pdfchocolate.desktop");
     let class = entry.lines().find_map(|line| line.strip_prefix("StartupWMClass="));
     assert_eq!(class, Some(super::APP_ID));
 }
@@ -486,7 +486,7 @@ fn the_flatpak_manifests_pin_the_craft_i18n_rev() {
     let rev = std::fs::read_to_string(root.join("craft-i18n.rev")).unwrap();
     let rev = rev.trim();
     assert!(rev.len() == 40 && rev.bytes().all(|b| b.is_ascii_hexdigit()), "craft-i18n.rev holds one full SHA: {rev:?}");
-    for manifest in ["ai.storyteller.pdfcraft.yml", "ai.storyteller.pdfcraft.bundle.yml"] {
+    for manifest in ["io.github.latechocolate.pdfchocolate.yml", "io.github.latechocolate.pdfchocolate.bundle.yml"] {
         let text = std::fs::read_to_string(root.join("packaging/linux/flatpak").join(manifest)).unwrap();
         let source =
             text.split("url: https://github.com/storytold/craft-i18n").nth(1).unwrap_or_else(|| panic!("{manifest}: a craft-i18n git source"));

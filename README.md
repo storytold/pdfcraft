@@ -22,6 +22,10 @@ PDF-Funktionen, ist aber auf das Programm selbst reduziert:
 
 PdfChocolate wird nicht vom ArtCraft-Team gemacht oder unterstützt.
 
+<p align="center">
+  <img src="docs/images/pdfcraft-viewer.png" width="800" alt="PdfChocolate mit geöffnetem Beispieldokument, links die Werkzeugliste, rechts die Kommentare">
+</p>
+
 ## Was es kann
 
 - **Lesen:** präzises Rendering mit Schriften aller Schriftsysteme, vertikalem Japanisch, Farb-Emoji,
@@ -44,17 +48,17 @@ PdfChocolate wird nicht vom ArtCraft-Team gemacht oder unterstützt.
 
 ## Kommandozeile und Automatisierung
 
-`pdfcraft-cli` kann alles ohne Oberfläche: Dokumente untersuchen, Text auslesen, Seiten bearbeiten,
+`pdfchocolate-cli` kann alles ohne Oberfläche: Dokumente untersuchen, Text auslesen, Seiten bearbeiten,
 zusammenführen und aufteilen.
 
 ```sh
-pdfcraft-cli info    formular.pdf                                   # Aufbau als JSON
-pdfcraft-cli text    bericht.pdf --page 3                           # Text in Lesereihenfolge
-pdfcraft-cli combine bericht.pdf anhang.pdf --out gesamt.pdf
-pdfcraft-cli split   bericht.pdf --every 10 --out-dir teile/
+pdfchocolate-cli info    formular.pdf                                   # Aufbau als JSON
+pdfchocolate-cli text    bericht.pdf --page 3                           # Text in Lesereihenfolge
+pdfchocolate-cli combine bericht.pdf anhang.pdf --out gesamt.pdf
+pdfchocolate-cli split   bericht.pdf --every 10 --out-dir teile/
 ```
 
-Für KI-Assistenten gibt es einen **MCP-Server** (`pdfcraft-cli mcp`), über den ein Assistent PDFs
+Für KI-Assistenten gibt es einen **MCP-Server** (`pdfchocolate-cli mcp`), über den ein Assistent PDFs
 bearbeiten kann. Er ist standardmäßig aus, öffnet keinen Netzwerk-Port und läuft nur, solange ein
 Assistent ihn startet. Mit `--root <Ordner>` bleibt jeder Dateizugriff auf diesen Ordner beschränkt.
 Wer ihn gar nicht im Programm haben will, baut mit `cargo build -p pdfcraft-cli --no-default-features`.

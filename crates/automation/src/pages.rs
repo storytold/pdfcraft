@@ -70,7 +70,7 @@ impl Automation {
     }
 
     /// The page as a PNG, followed by a JSON part listing the render warnings when there are any,
-    /// so a caller can tell that the picture is incomplete, as `pdfcraft-cli render` does (#4340).
+    /// so a caller can tell that the picture is incomplete, as `pdfchocolate-cli render` does (#4340).
     pub(crate) fn page_render(&mut self, a: &Args) -> Result<Vec<Content>> {
         let id = self.doc(a)?.id;
         let page = self.page(a)?;
@@ -505,7 +505,7 @@ pub(crate) fn rendered_content(out: &pdfcraft_render::RenderedPage, page: usize)
     Ok(content)
 }
 
-/// What a render warning means, in the words `pdfcraft-cli render` prints for it.
+/// What a render warning means, in the words `pdfchocolate-cli render` prints for it.
 fn render_warning_text(warning: pdfcraft_render::RenderWarning) -> &'static str {
     use pdfcraft_render::RenderWarning;
     match warning {

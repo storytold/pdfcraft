@@ -3,7 +3,7 @@
 use std::io::{Read, pipe};
 use std::process::{Command, Output, Stdio};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
+const BIN: &str = env!("CARGO_BIN_EXE_pdfchocolate-cli");
 
 fn closed_stdout(args: &[&str]) -> Output {
     let (reader, writer) = pipe().unwrap();

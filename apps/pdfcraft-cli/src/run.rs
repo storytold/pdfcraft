@@ -131,7 +131,7 @@ pub(crate) fn run(args: &[String]) -> Result<(), CliError> {
         }
         return Ok(());
     }
-    let tool = *positional(args, RUN_OPTIONS).first().ok_or("run: missing tool name (see `pdfcraft-cli tools`)")?;
+    let tool = *positional(args, RUN_OPTIONS).first().ok_or("run: missing tool name (see `pdfchocolate-cli tools`)")?;
     let mut obj = serde_json::Map::new();
     for kv in positional(args, RUN_OPTIONS).iter().skip(1) {
         let (k, v) = kv.split_once('=').ok_or(format!("run: expected key=value, got {kv:?}"))?;
@@ -171,7 +171,7 @@ pub(crate) fn mcp(args: &[String]) -> Result<(), CliError> {
         let show = |root: Option<&Path>| root.map_or_else(|| "none".to_string(), |r| r.display().to_string());
         let _ = writeln!(
             std::io::stderr().lock(),
-            "pdfcraft-cli: files confined: read root {}, write root {}",
+            "pdfchocolate-cli: files confined: read root {}, write root {}",
             show(roots.read_root()),
             show(roots.write_root())
         );
@@ -180,7 +180,7 @@ pub(crate) fn mcp(args: &[String]) -> Result<(), CliError> {
     let mut server = pdfcraft_automation::mcp::McpServer::new(auto).with_compact(compact);
     let _ = writeln!(
         std::io::stderr().lock(),
-        "pdfcraft-cli: MCP server on stdio (protocol {}{}); close stdin to stop",
+        "pdfchocolate-cli: MCP server on stdio (protocol {}{}); close stdin to stop",
         pdfcraft_automation::mcp::PROTOCOL_VERSIONS[0],
         if compact { ", compact tool list" } else { "" }
     );

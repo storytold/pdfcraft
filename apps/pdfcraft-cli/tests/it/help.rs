@@ -3,7 +3,7 @@
 
 use std::process::{Command, Output};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft-cli");
+const BIN: &str = env!("CARGO_BIN_EXE_pdfchocolate-cli");
 
 fn run(args: &[&str]) -> Output {
     Command::new(BIN).args(args).output().unwrap()
@@ -20,7 +20,7 @@ fn help_flags_print_full_usage_to_stdout() {
         assert!(out.status.success(), "{args:?} exited {:?}", out.status);
         let stdout = text(&out.stdout);
         // Per-command options, not just the command list.
-        assert!(stdout.contains("pdfcraft-cli render <file.pdf> --page N"), "{args:?}: {stdout}");
+        assert!(stdout.contains("pdfchocolate-cli render <file.pdf> --page N"), "{args:?}: {stdout}");
         assert!(stdout.contains("--every N"), "{args:?}: {stdout}");
         assert!(out.stderr.is_empty(), "{args:?}: {}", text(&out.stderr));
     }
@@ -31,7 +31,7 @@ fn no_command_fails_with_usage_on_stderr() {
     let out = run(&[]);
     assert!(!out.status.success());
     assert!(out.stdout.is_empty());
-    assert!(text(&out.stderr).contains("pdfcraft-cli render <file.pdf> --page N"));
+    assert!(text(&out.stderr).contains("pdfchocolate-cli render <file.pdf> --page N"));
 }
 
 /// `mcp` is listed only when the build has it (`--no-default-features` leaves it out).
@@ -39,11 +39,11 @@ fn no_command_fails_with_usage_on_stderr() {
 fn usage_lists_mcp_only_when_built_with_it() {
     let out = run(&["--help"]);
     let stdout = text(&out.stdout);
-    assert_eq!(stdout.contains("pdfcraft-cli mcp"), cfg!(feature = "mcp"), "{stdout}");
+    assert_eq!(stdout.contains("pdfchocolate-cli mcp"), cfg!(feature = "mcp"), "{stdout}");
     assert_eq!(stdout.contains("--compact"), cfg!(feature = "mcp"), "{stdout}");
     // The lines around it are still there.
-    assert!(stdout.contains("pdfcraft-cli run    --script steps.json"), "{stdout}");
-    assert!(stdout.contains("pdfcraft-cli ui     --control PORT"), "{stdout}");
+    assert!(stdout.contains("pdfchocolate-cli run    --script steps.json"), "{stdout}");
+    assert!(stdout.contains("pdfchocolate-cli ui     --control PORT"), "{stdout}");
 }
 
 #[cfg(not(feature = "mcp"))]
@@ -61,5 +61,5 @@ fn unknown_command_names_it_and_points_to_help() {
     assert!(!out.status.success());
     let stderr = text(&out.stderr);
     assert!(stderr.contains("unknown command 'frobnicate'"), "{stderr}");
-    assert!(stderr.contains("pdfcraft-cli --help"), "{stderr}");
+    assert!(stderr.contains("pdfchocolate-cli --help"), "{stderr}");
 }

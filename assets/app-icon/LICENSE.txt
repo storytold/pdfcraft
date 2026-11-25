@@ -6,9 +6,5 @@ Icons in this directory, licensed like the rest of the project under either of
 at your option.
 
 PdfChocolate icon: pdfchocolate-512.png (pixel art supplied by the fork owner) and the files
-packaging/icons.ps1 renders from it: pdfcraft.ico, pdfcraft-document.ico, pdfcraft-1024.png and
-hicolor/<n>x<n>/. No third-party material.
-
-PdfCraft icon (upstream): pdfcraft.svg, pdfcraft-small.svg, pdfcraft.icns and
-hicolor/scalable/. Original artwork by the PdfCraft project owner, drawn in ArtCraft and
-vectorised for PdfCraft (no third-party material). Still used by the macOS and Linux packaging.
+packaging/icons.ps1 renders from it: pdfcraft.ico, pdfcraft-document.ico, pdfcraft-1024.png,
+pdfcraft.icns, pdfcraft.svg, pdfcraft-small.svg and hicolor/. No third-party material.

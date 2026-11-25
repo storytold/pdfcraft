@@ -13,7 +13,7 @@
 /// prompt shows both, and an AppImage's menu entry gets the icon.
 #[cfg(not(target_arch = "wasm32"))]
 pub const UPDATE_APP: craft::update::app::App = craft::update::app::App {
-    icon_png: Some(include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/ai.storyteller.pdfcraft.png")),
+    icon_png: Some(include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/io.github.latechocolate.pdfchocolate.png")),
     accent: Some([0xb7, 0x02, 0x28]),
     ..craft::update::suite::PDFCRAFT
 };
@@ -728,8 +728,6 @@ pub struct PdfCraftApp {
     /// host's file), held while a prompt, dialog or open is under way so that they don't take its
     /// place.
     pub(crate) startup_files: Vec<(String, std::sync::Arc<[u8]>)>,
-    /// The home screen's community card was closed; it comes back next launch (not remembered).
-    pub community_card_closed: bool,
     /// A document asked to open this address; the user hasn't answered yet (#90, #91).
     pub pending_link: Option<PendingLink>,
     /// A document just opened asks for its window to fit its first page or to be centred

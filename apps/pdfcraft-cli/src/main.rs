@@ -1,6 +1,6 @@
-//! pdfcraft-cli — headless PdfCraft.
+//! pdfchocolate-cli — headless PdfChocolate.
 //!
-//! Usage: `pdfcraft-cli --help`, which prints `USAGE` below.
+//! Usage: `pdfchocolate-cli --help`, which prints `USAGE` below.
 //!
 //! `run` and `mcp` drive the same tool table (`pdfcraft-automation`). In `run`, values parse as
 //! JSON when they can (`pages=[1,3]`, `degrees=90`) and are strings otherwise. A script runs its
@@ -35,7 +35,7 @@ use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind, in
 macro_rules! mcp_usage {
     () => {
         "\
-pdfcraft-cli mcp    [--root DIR] [--compact] [--automation-read-root DIR] [--automation-write-root DIR]
+pdfchocolate-cli mcp    [--root DIR] [--compact] [--automation-read-root DIR] [--automation-write-root DIR]
                                                            MCP server on stdin/stdout (opt-in)
                                                            --compact lists a core set of tools plus tool_search and tool_call
                                                            --automation-read-root / --automation-write-root confine the files the
@@ -70,31 +70,30 @@ use ui::ui;
 /// The full usage, printed by `--help` (also after a command, e.g. `render --help`).
 const USAGE: &str = concat!(
     "\
-pdfcraft-cli info   <file.pdf> [--password PW]            document summary as JSON
+pdfchocolate-cli info   <file.pdf> [--password PW]            document summary as JSON
                                                           (includes any declared PDF/A or PDF/UA level)
-pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .tif or .pam)
-pdfcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
-pdfcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
+pdfchocolate-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .tif or .pam)
+pdfchocolate-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
+pdfchocolate-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
                       [--insert-blank 1] [--title T] [--author A] [--full]
                       (options run in order; page numbers refer to the document after the earlier options)
-pdfcraft-cli combine <a.pdf> <b.pdf> … --out combined.pdf
-pdfcraft-cli extract <in.pdf> --pages 1,3,5-8 --out out.pdf    (pages and ranges, in the order given)
-pdfcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
-pdfcraft-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.json]
-pdfcraft-cli audit  <file.pdf> [--password PW]            find faux redactions (fails when found)
-pdfcraft-cli batch <files or dirs...> --steps convert,ocr,optimize --out-dir DIR
+pdfchocolate-cli combine <a.pdf> <b.pdf> … --out combined.pdf
+pdfchocolate-cli extract <in.pdf> --pages 1,3,5-8 --out out.pdf    (pages and ranges, in the order given)
+pdfchocolate-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
+pdfchocolate-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.json]
+pdfchocolate-cli audit  <file.pdf> [--password PW]            find faux redactions (fails when found)
+pdfchocolate-cli batch <files or dirs...> --steps convert,ocr,optimize --out-dir DIR
                       [--recursive] [--root DIR] [--stop-on-error]
                       [--ppi 150] [--quality 60] [--dpi 300] [--language en] [--ocr-all-pages]
-pdfcraft-cli tools                                       automation tools and their JSON Schemas
-pdfcraft-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
-pdfcraft-cli run    --script steps.json [--root DIR] [--report]
+pdfchocolate-cli tools                                       automation tools and their JSON Schemas
+pdfchocolate-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
+pdfchocolate-cli run    --script steps.json [--root DIR] [--report]
                       [{\"tool\": \"doc_open\", \"args\": {…}}, …]; --report prints one JSON document for the run
 ",
     mcp_usage!(),
     "\
-pdfcraft-cli ui     --control PORT (--control-token-file FILE | --control-token TOKEN) <method> [key=value …] [--out shot.png]
-                                                           drive a running app started with --control PORT
-help and feedback: https://discord.gg/artcraft"
+pdfchocolate-cli ui     --control PORT (--control-token-file FILE | --control-token TOKEN) <method> [key=value …] [--out shot.png]
+                                                           drive a running app started with --control PORT"
 );
 
 fn main() -> ExitCode {
@@ -116,7 +115,7 @@ fn main() -> ExitCode {
             Err(bad) => {
                 let _ = writeln!(
                     std::io::stderr().lock(),
-                    "pdfcraft-cli: `{}` is not valid UTF-8, so it cannot be used as an argument",
+                    "pdfchocolate-cli: `{}` is not valid UTF-8, so it cannot be used as an argument",
                     bad.to_string_lossy()
                 );
                 return ExitCode::FAILURE;
@@ -150,13 +149,13 @@ fn main() -> ExitCode {
         #[cfg(not(feature = "mcp"))]
         Some("mcp") => Err("mcp: this build leaves out the MCP server (built without the `mcp` feature)".into()),
         Some("--version") => version(),
-        Some(other) => Err(format!("unknown command '{other}'; see pdfcraft-cli --help").into()),
+        Some(other) => Err(format!("unknown command '{other}'; see pdfchocolate-cli --help").into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(CliError::Stdout(e)) if e.kind() == std::io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
         Err(e) => {
-            let _ = writeln!(std::io::stderr().lock(), "pdfcraft-cli: {e}");
+            let _ = writeln!(std::io::stderr().lock(), "pdfchocolate-cli: {e}");
             ExitCode::FAILURE
         }
     }
@@ -196,6 +195,6 @@ fn stdout_line(line: std::fmt::Arguments<'_>) -> Result<(), CliError> {
 }
 
 fn version() -> Result<(), CliError> {
-    stdout_line(format_args!("pdfcraft-cli {}", pdfcraft_engine::build_info::version()))?;
+    stdout_line(format_args!("pdfchocolate-cli {}", pdfcraft_engine::build_info::version()))?;
     Ok(())
 }

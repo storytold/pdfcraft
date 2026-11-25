@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build and package PdfCraft for Linux (<arch> is x86_64 or aarch64, or riscv64 when cross-compiling):
+# Build and package PdfChocolate for Linux (<arch> is x86_64 or aarch64, or riscv64 when cross-compiling):
 #
-#   $DIST/pdfcraft-<version>-linux-<arch>.AppImage  any distro with glibc >= the build host's
-#   $DIST/pdfcraft-<version>-linux-<arch>.AppImage.zsync  delta updates (needs zsyncmake)
-#   $DIST/pdfcraft-<version>-linux-<arch>.deb       Debian, Ubuntu, Mint, Pop!_OS, ...
-#   $DIST/pdfcraft-<version>-linux-<arch>.rpm       Fedora, openSUSE, RHEL, ...
-#   $DIST/pdfcraft-<version>-linux-<arch>.tar.gz    plain FHS-style tree (bin/, share/)
-#   $DIST/pdfcraft-cli-<version>-linux-<arch>.tar.gz  the headless CLI alone (servers, CI, agents)
+#   $DIST/pdfchocolate-<version>-linux-<arch>.AppImage  any distro with glibc >= the build host's
+#   $DIST/pdfchocolate-<version>-linux-<arch>.AppImage.zsync  delta updates (needs zsyncmake)
+#   $DIST/pdfchocolate-<version>-linux-<arch>.deb       Debian, Ubuntu, Mint, Pop!_OS, ...
+#   $DIST/pdfchocolate-<version>-linux-<arch>.rpm       Fedora, openSUSE, RHEL, ...
+#   $DIST/pdfchocolate-<version>-linux-<arch>.tar.gz    plain FHS-style tree (bin/, share/)
+#   $DIST/pdfchocolate-cli-<version>-linux-<arch>.tar.gz  the headless CLI alone (servers, CI, agents)
 #
 # A local or patched build: set PDFCRAFT_BUILD_LABEL (e.g. `titlebar`). `--version` and About then
 # show `0.7.1 (titlebar)`, file names carry `-titlebar`, and the .rpm/.deb release becomes
@@ -26,7 +26,7 @@ set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/linux"
-APP_ID=ai.storyteller.pdfcraft
+APP_ID=io.github.latechocolate.pdfchocolate
 
 SKIP_BUILD=0
 FORMATS="appimage deb rpm tar cli"
@@ -46,11 +46,11 @@ case "$ARCH" in
   aarch64 | arm64) ARCH=aarch64; DEB_ARCH=arm64 ;;
   *) echo "unsupported architecture $ARCH" >&2; exit 2 ;;
 esac
-export PDFCRAFT_MAINTAINER="${PDFCRAFT_MAINTAINER:-PdfCraft maintainers <pdfcraft@storyteller.ai>}"
+export PDFCRAFT_MAINTAINER="${PDFCRAFT_MAINTAINER:-PdfChocolate maintainers <latechocolate@users.noreply.github.com>}"
 LABEL_SUFFIX="${PDFCRAFT_BUILD_LABEL:+-$PDFCRAFT_BUILD_LABEL}"
-BASENAME="pdfcraft-$VERSION$LABEL_SUFFIX-linux-$ARCH"
+BASENAME="pdfchocolate-$VERSION$LABEL_SUFFIX-linux-$ARCH"
 
-echo "==> PdfCraft $VERSION$LABEL_SUFFIX for Linux $ARCH ($FORMATS)"
+echo "==> PdfChocolate $VERSION$LABEL_SUFFIX for Linux $ARCH ($FORMATS)"
 
 if [[ "$SKIP_BUILD" = 0 ]]; then
   if [[ -n "${CROSS_TARGET:-}" ]]; then
@@ -65,9 +65,9 @@ STAGE="$WORK/root"
 rm -rf "$WORK"
 
 # ---- stage an FHS tree (shared by every format) -------------------------------------------------
-install -Dm755 "$BIN/pdfcraft" "$STAGE/usr/bin/pdfcraft"
-install -Dm755 "$BIN/pdfcraft-cli" "$STAGE/usr/bin/pdfcraft-cli"
-"${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/pdfcraft" "$STAGE/usr/bin/pdfcraft-cli" 2>/dev/null || true
+install -Dm755 "$BIN/pdfchocolate" "$STAGE/usr/bin/pdfchocolate"
+install -Dm755 "$BIN/pdfchocolate-cli" "$STAGE/usr/bin/pdfchocolate-cli"
+"${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/pdfchocolate" "$STAGE/usr/bin/pdfchocolate-cli" 2>/dev/null || true
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
 mkdir -p "$STAGE/usr/share/metainfo"
@@ -75,8 +75,8 @@ sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$PDFCRAFT_BUILD_DATE/g" \
   "$HERE/$APP_ID.metainfo.xml.in" >"$STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"
 mkdir -p "$STAGE/usr/share/icons"
 cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/usr/share/icons/"
-mkdir -p "$STAGE/usr/share/doc/pdfcraft"
-copy_docs "$STAGE/usr/share/doc/pdfcraft"
+mkdir -p "$STAGE/usr/share/doc/pdfchocolate"
+copy_docs "$STAGE/usr/share/doc/pdfchocolate"
 # OCR models: the app finds them at <bin>/../share/pdfcraft/models, so in every format below.
 stage_models "$STAGE/usr/share/pdfcraft/models"
 
@@ -107,13 +107,13 @@ if has tar; then
 fi
 
 # ---- CLI-only .tar.gz ---------------------------------------------------------------------------
-# The stripped pdfcraft-cli (and its opt-in MCP server) with the licences, for machines that never
+# The stripped pdfchocolate-cli (and its opt-in MCP server) with the licences, for machines that never
 # open a window. Like the other formats it needs glibc >= the build host's.
 if has cli; then
-  CLI_NAME="pdfcraft-cli-$VERSION$LABEL_SUFFIX-linux-$ARCH"
+  CLI_NAME="pdfchocolate-cli-$VERSION$LABEL_SUFFIX-linux-$ARCH"
   CLI_DIR="$WORK/cli/$CLI_NAME"
   mkdir -p "$CLI_DIR"
-  cp "$STAGE/usr/bin/pdfcraft-cli" "$CLI_DIR/"
+  cp "$STAGE/usr/bin/pdfchocolate-cli" "$CLI_DIR/"
   copy_docs "$CLI_DIR"
   tar -C "$WORK/cli" -czf "$DIST/$CLI_NAME.tar.gz" "$CLI_NAME"
   echo "wrote $DIST/$CLI_NAME.tar.gz"
@@ -151,9 +151,9 @@ if has appimage; then
     echo "no pinned AppImage runtime for $ARCH; build the AppImage on x86_64 or aarch64" >&2
     exit 2
   fi
-  APPDIR="$WORK/PdfCraft.AppDir"
+  APPDIR="$WORK/PdfChocolate.AppDir"
   cp -R "$STAGE" "$APPDIR"
-  ln -s usr/bin/pdfcraft "$APPDIR/AppRun"
+  ln -s usr/bin/pdfchocolate "$APPDIR/AppRun"
   cp "$HERE/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
   cp "$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"
   ln -s "$APP_ID.png" "$APPDIR/.DirIcon"
@@ -196,8 +196,8 @@ if has appimage; then
   # fetch only the blocks that changed in a newer release, through the .zsync published next to
   # each AppImage on GitHub Releases. `latest` is the newest published release that is not a
   # pre-release. A fork's builds point at its own releases through GITHUB_REPOSITORY.
-  REPO="${GITHUB_REPOSITORY:-storytold/pdfcraft}"
-  UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest|pdfcraft-*-linux-$ARCH.AppImage.zsync"
+  REPO="${GITHUB_REPOSITORY:-latechocolate/pdfchocolate}"
+  UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest|pdfchocolate-*-linux-$ARCH.AppImage.zsync"
   # Extract-and-run: works without FUSE (containers, CI). The output embeds the static runtime,
   # so users don't need libfuse2 either. With zsyncmake on the host (CI installs the zsync
   # package) appimagetool also writes the .zsync, into its working directory, hence the cd.
@@ -211,9 +211,9 @@ if has appimage; then
 fi
 
 if [[ -z "${CROSS_TARGET:-}" ]]; then
-  "$STAGE/usr/bin/pdfcraft-cli" --version
+  "$STAGE/usr/bin/pdfchocolate-cli" --version
 elif [[ -n "${EMULATOR:-}" ]]; then
-  "$EMULATOR" "$STAGE/usr/bin/pdfcraft-cli" --version
+  "$EMULATOR" "$STAGE/usr/bin/pdfchocolate-cli" --version
 fi
 echo "==> done"
 ls -lh "$DIST"

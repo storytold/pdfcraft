@@ -81,7 +81,7 @@ impl Kind {
     }
 }
 
-const AUTHOR: &str = "PdfCraft Reviewer";
+const AUTHOR: &str = "PdfChocolate Reviewer";
 const AUTHOR_2: &str = "Layout Editor";
 
 /// Builds annotation dictionaries (and their appearance XObjects) for one document.
@@ -269,7 +269,7 @@ impl Annotator {
         reply.set("AP", dictionary! { "N" => icon });
         let reply_id = doc.add_object(reply);
 
-        let mut state = self.base("Text", r, colors::TEAL, AUTHOR, "Accepted set by PdfCraft Reviewer", page);
+        let mut state = self.base("Text", r, colors::TEAL, AUTHOR, "Accepted set by PdfChocolate Reviewer", page);
         state.set("F", 30); // hidden: review-state annotations are shown only in the comments list
         state.set("Name", "Comment");
         state.set("IRT", self_id);
@@ -479,7 +479,7 @@ impl Annotator {
         let size = 22.0;
         let tw = Font::HelvBold.width(title, size) + 3.0 * (title.len() as f32 - 1.0);
         c.tracked_text(Font::HelvBold, size, (w - tw) / 2.0, h * 0.42, 3.0, title);
-        let date = format!("PDFCRAFT QA  \u{2022}  {}", &self.now.iso[..10]);
+        let date = format!("PDFCHOCOLATE QA  \u{2022}  {}", &self.now.iso[..10]);
         let dw = Font::Helv.width(&date, 7.0) + 1.0 * (date.chars().count() as f32 - 1.0);
         c.tracked_text(Font::Helv, 7.0, (w - dw) / 2.0, h * 0.2, 1.0, &date);
         let res = self.fonts.resources();

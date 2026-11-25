@@ -1,12 +1,12 @@
 //! `page_render` reports the renderer's warnings next to the PNG, so a headless caller can tell
-//! that a picture is incomplete or approximate, as `pdfcraft-cli render` can (#4340).
+//! that a picture is incomplete or approximate, as `pdfchocolate-cli render` can (#4340).
 
 use std::path::PathBuf;
 
 use pdfcraft_automation::{Automation, Content};
 use serde_json::{Value, json};
 
-/// The warning a colour that falls back gives, worded as `pdfcraft-cli render` prints it.
+/// The warning a colour that falls back gives, worded as `pdfchocolate-cli render` prints it.
 const FALLBACK: &str = "a colour that could not be computed was painted in a fallback colour";
 
 /// A one-page 200 × 200 pt PDF that draws `content`, with the colour space `CS1` defined as
@@ -97,7 +97,7 @@ fn a_clean_page_renders_to_the_png_alone() {
 }
 
 /// An image whose Indexed lookup table is too short (ISO 32000-2 §8.6.6.3) is drawn recovered, and
-/// `page_render` says so in the words `pdfcraft-cli render` prints.
+/// `page_render` says so in the words `pdfchocolate-cli render` prints.
 #[test]
 fn page_render_reports_a_recovered_malformed_indexed_image() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-render-warnings-indexed-{}", std::process::id()));
@@ -124,7 +124,7 @@ fn page_render_reports_a_recovered_malformed_indexed_image() {
 }
 
 /// A picture whose JBIG2 soft mask is past one of the decoder's limits isn't drawn (#6722), and
-/// `page_render` says why the page is incomplete, in the words `pdfcraft-cli render` prints.
+/// `page_render` says why the page is incomplete, in the words `pdfchocolate-cli render` prints.
 #[test]
 fn page_render_says_a_picture_was_left_out_for_its_jbig2_mask() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-render-warnings-jbig2-mask-{}", std::process::id()));

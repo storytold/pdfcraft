@@ -212,7 +212,7 @@ impl std::fmt::Display for TextNotice {
         match (&self.field, self.redrawn_elsewhere) {
             (Some(name), true) => write!(
                 f,
-                "form field {name:?} (page {page}) holds {ch}, which its font can't draw: the value is saved, PdfCraft shows ? in its place, and other PDF viewers redraw the field from the value"
+                "form field {name:?} (page {page}) holds {ch}, which its font can't draw: the value is saved, PdfChocolate shows ? in its place, and other PDF viewers redraw the field from the value"
             ),
             (Some(name), false) => write!(
                 f,

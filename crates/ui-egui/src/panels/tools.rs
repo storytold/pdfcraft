@@ -9,7 +9,7 @@ use craft::ui::contract::{
     ActivateOn, Bind, CollectionEvent, Entry, Outcome as _, Props as _, SelectMode, Show as _, ShowCollection as _, Sizing, clicked,
 };
 use craft::ui::display::Badge;
-use craft::ui::list::{HueTarget, List, ListRow, RowEvent, RowInk, TrailingFace, TrailingPart};
+use craft::ui::list::{HueTarget, List, ListRow, RowInk};
 use craft::ui::primitives::IconSpec;
 use craft::ui::style::DataColor;
 use egui::Color32;
@@ -18,9 +18,6 @@ use super::edit::{actions_menu, edit_panel, stamp_palette};
 use super::{Availability, LeftPanel, PdfCraftApp, TOOL_GROUPS, ToolGroup, ToolItem, catalog};
 
 const COLLAPSED_TOOLS: usize = 14;
-
-/// The pin part of a tool row.
-const PIN: TrailingPart = TrailingPart::new(0);
 
 /// A display order over `0..len`, keyed by position: the source of a list or grid whose rows the caller builds from
 /// its own vector.
@@ -80,16 +77,13 @@ pub fn left_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// One tool-group row: its icon, label, badge and the pin part.
-fn tool_row(g: &'static ToolGroup, pinned: bool) -> ListRow<'static> {
+/// One tool-group row: its icon, label and badge.
+fn tool_row(g: &'static ToolGroup) -> ListRow<'static> {
     let mut row = ListRow::new(tl!(g.label).to_owned()).icon(IconSpec::svg(IconId::new(g.icon)));
     row = row.hue(data_hue(g), HueTarget::Icon);
     if let Some(b) = g.badge {
         row = row.trailing_named(tl!(b).to_owned(), tl!(b).to_owned());
     }
-    let pin_name = if pinned { tl!("Unpin from Home") } else { tl!("Pin to Home") }.to_owned();
-    let face = TrailingFace::Icon(IconSpec::svg(IconId::new("pin")));
-    row = if pinned { row.trailing_part(PIN, face, pin_name) } else { row.trailing_part_revealed(PIN, face, pin_name) };
     let tip = match g.availability {
         Availability::Ready => tl!("Available").to_string(),
         Availability::Planned(m) => format!("{} {m} — {}", tl!("Planned for milestone"), tl!("open to see what it will include")),
@@ -102,26 +96,20 @@ fn tool_row(g: &'static ToolGroup, pinned: bool) -> ListRow<'static> {
 /// Close belong to the dock's group header.
 fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let shown = if app.all_tools_expanded { TOOL_GROUPS.len() } else { COLLAPSED_TOOLS.min(TOOL_GROUPS.len()) };
-    let pins: Vec<bool> = TOOL_GROUPS[..shown].iter().map(|g| app.is_tool_pinned(g.id)).collect();
     let out = List::<usize>::new(tl!("All tools").to_owned())
         .natural_height(true)
         .select(SelectMode::Single)
         .activate(ActivateOn::Click)
         .selection(Bind::given(Selection::default()))
-        .show_items(ui, &Rows(shown), &mut |at, _| match (TOOL_GROUPS.get(*at), pins.get(*at)) {
-            (Some(g), Some(pinned)) => tool_row(g, *pinned),
-            _ => ListRow::spacer(),
+        .show_items(ui, &Rows(shown), &mut |at, _| match TOOL_GROUPS.get(*at) {
+            Some(g) => tool_row(g),
+            None => ListRow::spacer(),
         });
     for event in out.events {
         match event {
             CollectionEvent::Activate(at) => {
                 if let Some(g) = TOOL_GROUPS.get(at) {
                     app.select_tool(ui.ctx(), g.id);
-                }
-            }
-            CollectionEvent::Item(at, RowEvent::Trailing { part, .. }) if part == PIN => {
-                if let Some(g) = TOOL_GROUPS.get(at) {
-                    app.toggle_pin_tool(g.id);
                 }
             }
             _ => {}

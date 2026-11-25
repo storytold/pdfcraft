@@ -49,7 +49,7 @@ pub const MAX_PIXELS: u32 = 64_000_000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OcrError {
-    #[error("the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)")]
+    #[error("the text recognition models are not installed (reinstall PdfChocolate, or set PDFCRAFT_MODELS to the folder that holds them)")]
     NoModels,
     #[error("loading {0}: {1}")]
     Load(String, String),
@@ -813,11 +813,11 @@ mod tests {
     fn finds_the_models_in_every_release_package_layout() {
         let base = std::env::temp_dir().join(format!("pdfcraft-ocr-layouts-{}", std::process::id()));
         let layouts = [
-            ("windows", "PdfCraft", "PdfCraft/models"),
-            ("macos", "PdfCraft.app/Contents/MacOS", "PdfCraft.app/Contents/Resources/models"),
+            ("windows", "PdfChocolate", "PdfChocolate/models"),
+            ("macos", "PdfChocolate.app/Contents/MacOS", "PdfChocolate.app/Contents/Resources/models"),
             ("linux-deb-rpm", "usr/bin", "usr/share/pdfcraft/models"),
             ("linux-tar", "pdfcraft-1.0.0-linux-x86_64/bin", "pdfcraft-1.0.0-linux-x86_64/share/pdfcraft/models"),
-            ("appimage", "PdfCraft.AppDir/usr/bin", "PdfCraft.AppDir/usr/share/pdfcraft/models"),
+            ("appimage", "PdfChocolate.AppDir/usr/bin", "PdfChocolate.AppDir/usr/share/pdfcraft/models"),
             ("flatpak", "app/bin", "app/share/pdfcraft/models"),
             ("freebsd", "usr/local/bin", "usr/local/share/pdfcraft/models"),
         ];

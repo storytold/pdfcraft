@@ -18,9 +18,9 @@ pub fn target_dir() -> PathBuf {
     std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root().join("target"), |d| root().join(d))
 }
 
-/// The release `pdfcraft-cli` that `cargo build --release -p pdfcraft-cli` produced.
+/// The release `pdfchocolate-cli` that `cargo build --release -p pdfcraft-cli` produced.
 pub fn release_cli() -> PathBuf {
-    target_dir().join("release").join(format!("pdfcraft-cli{}", std::env::consts::EXE_SUFFIX))
+    target_dir().join("release").join(format!("pdfchocolate-cli{}", std::env::consts::EXE_SUFFIX))
 }
 
 fn cargo() -> Command {
@@ -202,7 +202,7 @@ pub fn check(args: &[String]) -> anyhow::Result<()> {
     let report = target_dir().join("check-pdfjs.json");
     let mut c = Command::new(release_cli());
     c.args(["check"]).arg(&corpus).args(["--timeout", "20", "--dpi", "36", "--json"]).arg(&report);
-    run(c, "pdfcraft-cli check corpus/pdfjs")?;
+    run(c, "pdfchocolate-cli check corpus/pdfjs")?;
     let results: Vec<serde_json::Value> = serde_json::from_str(&std::fs::read_to_string(&report)?)?;
     let name =
         |v: &serde_json::Value| Path::new(v["file"].as_str().unwrap_or("")).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -240,7 +240,7 @@ pub fn check(args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `cargo xtask text-oracle [--limit N]`: compare `pdfcraft-cli text` with poppler's `pdftotext`
+/// `cargo xtask text-oracle [--limit N]`: compare `pdfchocolate-cli text` with poppler's `pdftotext`
 /// (external oracle process, never linked) over the corpus.
 ///
 /// Two scores per file, because one hides the other. **Word F1** ([`f1`]) is a bag of words: it
@@ -267,7 +267,7 @@ pub fn text_oracle(args: &[String]) -> anyhow::Result<()> {
     let mut not_permitted = 0usize;
     let mut truncated = 0usize;
     for f in files.iter().take(limit) {
-        // A document may forbid copying its text, and we honour that: `pdfcraft-cli text` refuses
+        // A document may forbid copying its text, and we honour that: `pdfchocolate-cli text` refuses
         // and says how to override it with the owner password. pdftotext ignores the flag and
         // extracts anyway, so scoring us against it there measures obedience, not quality --
         // bug1815476.pdf scored 0.000 for behaving correctly on a page we render perfectly.
@@ -653,9 +653,9 @@ mod tests {
     // The bundle id must match the app id the binary uses; renames change both (#174).
     #[test]
     fn macos_bundle_id_matches_app_id() {
-        assert!(read("packaging/macos/Info.plist.in").contains("<string>ai.storyteller.pdfcraft</string>"), "bundle id");
+        assert!(read("packaging/macos/Info.plist.in").contains("<string>io.github.latechocolate.pdfchocolate</string>"), "bundle id");
         let main = read("apps/pdfcraft/src/main.rs");
-        assert!(main.contains(r#"const APP_ID: &str = "ai.storyteller.pdfcraft""#), "APP_ID drifted from the bundle id");
+        assert!(main.contains(r#"const APP_ID: &str = "io.github.latechocolate.pdfchocolate""#), "APP_ID drifted from the bundle id");
     }
 
     // Committed file with `<!-- -->` comments stripped, so a commented-out claim cannot pass.
