@@ -117,9 +117,8 @@ const PICKERS: &[&str] = &[
 #[test]
 fn every_registered_command_is_implemented() {
     for spec in COMMANDS {
-        // Page-text Copy and Copy with formatting need a loaded view, a selection and an egui
-        // context: covered by text_select and recovered_text.
-        if PICKERS.contains(&spec.id) || matches!(spec.id, "edit.copy" | "edit.copy-with-formatting") {
+        // Page-text Copy needs a loaded view and egui context, covered by text_select.
+        if PICKERS.contains(&spec.id) || spec.id == "edit.copy" {
             continue;
         }
         // A picker the list above misses (file.pin_folder, create.multiple_separate did) must not

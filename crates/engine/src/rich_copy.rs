@@ -140,8 +140,8 @@ impl crate::Document {
         Ok(finish(b, incomplete))
     }
 
-    /// Selected `glyphs` of `page` with their formatting, as Copy with formatting puts them on
-    /// the clipboard: indices into `text`, which is `layer`'s text where the page has a
+    /// Selected `glyphs` of `page` with their formatting, as Copy with formatting (text_extract's
+    /// HTML) gives them: indices into `text`, which is `layer`'s text where the page has a
     /// recovered layer (what a `RequestKind::RecoveredText` request reads), whose recovered
     /// glyphs then read as their recovered text. It is [`Self::rich_copy`]'s copy with the
     /// recovered glyphs styled to blend in: every strict glyph keeps exactly the style Copy gives

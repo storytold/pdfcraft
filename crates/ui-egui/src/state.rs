@@ -127,11 +127,9 @@ pub struct PageClip {
 }
 
 /// One page of a whole-document copy: its text as read for display, to read, or not to try
-/// (reading it failed before). A selection's part of a page selected on its recovered layer is
-/// taken on the UI thread, as text (`Selected`).
+/// (reading it failed before).
 pub(crate) enum CopyPage {
     Read(std::sync::Arc<pdfcraft_render::PageText>),
-    Selected(String),
     ToRead,
     Skip,
 }
@@ -159,20 +157,12 @@ impl DocumentCopyJob {
     }
 
     /// A copy of the reading-order text `span` covers: its pages as [`Self::of`] takes them, every
-    /// other page skipped. A page selected on its recovered layer, whose glyph indices `span` is
-    /// in, gives its selected text as the view reads it ([`DocView::selected_layer_texts`]).
+    /// other page skipped.
     pub(crate) fn of_selection(v: &DocView, doc: &pdfcraft_engine::Document, span: crate::canvas::TextSpan) -> DocumentCopyJob {
         let mut job = DocumentCopyJob::of(v, doc);
         for (page, p) in job.pages.iter_mut().enumerate() {
             if page < span.start.0 || page > span.end.0 {
                 *p = CopyPage::Skip;
-            }
-        }
-        for (page, text) in v.selected_layer_texts() {
-            if let Some(p) = job.pages.get_mut(page)
-                && !matches!(p, CopyPage::Skip)
-            {
-                *p = CopyPage::Selected(text);
             }
         }
         job.span = Some(span);
@@ -205,7 +195,6 @@ impl DocumentCopyJob {
             }
             match p {
                 CopyPage::Read(t) => push(part(page, &t)),
-                CopyPage::Selected(text) => push(text),
                 CopyPage::ToRead => {
                     let r = renderer.get_or_insert_with(|| {
                         let config = pdfcraft_render::RenderConfig { password: self.password.clone(), ..Default::default() };
