@@ -83,6 +83,8 @@ pub(crate) struct RunningPrint {
     pub(crate) printer: String,
     /// `(sent, sheets)`, set by the job as the spooler takes each sheet.
     pub(crate) count: Arc<super::job_count::JobCount>,
+    /// Originating batch row in `batch_print.items`, if this job belongs to a batch print.
+    pub(crate) batch_item: Option<usize>,
 }
 
 /// The Print dialog's work in the background: the printer list, the per-printer reads and the
@@ -446,7 +448,7 @@ impl PdfCraftApp {
             let Some(at) = self.print_tasks.running.iter().position(|r| r.ticket == done.key) else { continue };
             let finished = self.print_tasks.running.remove(at);
             ended = true;
-            self.report_print_job(&finished.printer, done.result);
+            self.report_print_job(&finished.printer, done.result, finished.batch_item);
         }
         match self.print_tasks.running.first() {
             Some(oldest) => {
@@ -494,7 +496,7 @@ impl PdfCraftApp {
         while let Some(done) = self.print_tasks.two_sided.try_recv() {
             self.print_draft.two_sided.insert(done.key, done.result);
         }
-        if !self.dialogs.is_open::<HostedPrint>() {
+        if !self.dialogs.is_open::<HostedPrint>() && !self.batch_print.open {
             return;
         }
         let Some(source) = self.two_sided_source.clone() else { return };
@@ -514,7 +516,15 @@ impl PdfCraftApp {
     }
 
     /// Report the outcome of a finished print job to the user.
-    fn report_print_job(&mut self, printer: &str, result: Result<String, String>) {
+    fn report_print_job(&mut self, printer: &str, result: Result<String, String>, batch_item: Option<usize>) {
+        if let Some(row) = batch_item
+            && result.is_ok()
+        {
+            if let Some(target) = self.batch_print.items.get_mut(row) {
+                target.selected = false;
+            }
+            self.batch_print.preview_cache.clear();
+        }
         match result {
             Ok(msg) if msg.is_empty() => self.notify(crate::i18n::fmt(tl!("Sent to {printer}"), &[("printer", printer)])),
             Ok(msg) => self.notify(crate::i18n::fmt(tl!("Sent to {printer}: {msg}"), &[("printer", printer), ("msg", &msg)])),
@@ -567,7 +577,7 @@ impl PdfCraftApp {
                 if let Ok(sheets) = print::layout(&sizes, &settings) {
                     print::add_cups_orientation(&mut job.options, &sheets);
                 }
-                self.send_to_printer(printer, bytes, job)
+                self.send_to_printer(printer, bytes, job, None)
             }
             None => self.save_print_pdf(&name, bytes),
         }?;
@@ -583,7 +593,13 @@ impl PdfCraftApp {
     /// the progress card counts the sheets as they reach the spooler, and the spooler's answer
     /// arrives as a notice.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn send_to_printer(&mut self, printer: String, bytes: Vec<u8>, mut job: spool::Job) -> Result<PrintStart, String> {
+    pub(crate) fn send_to_printer(
+        &mut self,
+        printer: String,
+        bytes: Vec<u8>,
+        mut job: spool::Job,
+        batch_item: Option<usize>,
+    ) -> Result<PrintStart, String> {
         let ticket = self.print_tasks.next_ticket;
         self.print_tasks.next_ticket = ticket.wrapping_add(1);
         let count = Arc::new(super::job_count::JobCount::default());
@@ -609,16 +625,22 @@ impl PdfCraftApp {
             })
             .unwrap_or_else(|_| Err("the print job stopped unexpectedly".into()))
         });
-        self.print_tasks.running.push(RunningPrint { ticket, printer: printer.clone(), count });
+        self.print_tasks.running.push(RunningPrint { ticket, printer: printer.clone(), count, batch_item });
         self.show_print_progress(&printer, None);
         Ok(PrintStart::Sent)
     }
 
     /// A browser has no spooler: `submit` answers at once.
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn send_to_printer(&mut self, printer: String, bytes: Vec<u8>, job: spool::Job) -> Result<PrintStart, String> {
+    pub(crate) fn send_to_printer(
+        &mut self,
+        printer: String,
+        bytes: Vec<u8>,
+        job: spool::Job,
+        batch_item: Option<usize>,
+    ) -> Result<PrintStart, String> {
         let msg = spool::submit(&bytes, &job).map_err(|e| e.to_string())?;
-        self.report_print_job(&printer, Ok(msg));
+        self.report_print_job(&printer, Ok(msg), batch_item);
         Ok(PrintStart::Sent)
     }
 
@@ -957,7 +979,7 @@ mod tests {
         };
 
         let count = Arc::new(crate::JobCount::default());
-        app.print_tasks.running.push(RunningPrint { ticket: 0, printer: "Office".into(), count: count.clone() });
+        app.print_tasks.running.push(RunningPrint { ticket: 0, printer: "Office".into(), count: count.clone(), batch_item: None });
         app.show_print_progress("Office", None);
         let (started, cancellable) = card(&mut app).expect("a card shows while the job runs");
         assert!(!cancellable);
@@ -983,7 +1005,12 @@ mod tests {
         assert!(posted.last().is_some_and(|m| m.contains("Office")), "it names the printer: {posted:?}");
 
         // A job the spooler refuses ends its card too, and says why.
-        app.print_tasks.running.push(RunningPrint { ticket: 1, printer: "Office".into(), count: Arc::new(crate::JobCount::default()) });
+        app.print_tasks.running.push(RunningPrint {
+            ticket: 1,
+            printer: "Office".into(),
+            count: Arc::new(crate::JobCount::default()),
+            batch_item: None,
+        });
         app.print_tasks.jobs.submit(1, Priority::VISIBLE, |_| Err("the spooler refused the job".into()));
         jobs.run_all();
         app.poll_print();

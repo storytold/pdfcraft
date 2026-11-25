@@ -622,6 +622,7 @@ impl PdfCraftApp {
             || self.js_dialog.is_some()
             || self.comment_props.is_some()
             || self.stamp_dialog.is_some()
+            || self.batch_print.open
     }
 
     /// Show `msg` as a notice.

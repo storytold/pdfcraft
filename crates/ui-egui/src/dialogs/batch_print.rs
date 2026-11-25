@@ -38,11 +38,13 @@ pub enum BatchPrintStep {
 #[derive(Default)]
 pub struct BatchPrintDraft {
     pub open: bool,
+    pub session_id: u64,
     pub step: BatchPrintStep,
     pub items: Vec<BatchPrintItem>,
     pub preview_cache: HashMap<usize, egui::TextureHandle>,
     pub last_grayscale: bool,
     pub preview_sheet: usize,
+    pub settings_initialized: bool,
 }
 
 impl BatchPrintDraft {
@@ -51,6 +53,7 @@ impl BatchPrintDraft {
         self.items.clear();
         self.preview_cache.clear();
         self.preview_sheet = 0;
+        self.settings_initialized = false;
     }
 
     pub fn select_all(&mut self, select: bool) {
@@ -119,6 +122,7 @@ impl PdfCraftApp {
         if !self.commit_form_typing(ctx) {
             return;
         }
+        self.batch_print.session_id = self.batch_print.session_id.wrapping_add(1);
         self.batch_print.clear();
         self.batch_print.open = true;
         self.batch_print_add_open_documents();
@@ -151,54 +155,70 @@ impl PdfCraftApp {
     /// Prepare print draft for batch print settings, reading printers in the background.
     pub fn prepare_batch_print_settings(&mut self) {
         let raw_printers = print_ui::listed_printers();
+        self.record_listed(&raw_printers);
         let printers = print_ui::offered_printers(&raw_printers);
-        let mut keep = std::mem::take(&mut self.print_draft);
-        if keep.handling == Handling::Label {
-            keep.set_handling(Handling::Size);
-        }
-        let default = print_ui::default_printer(&keep, &printers);
-        let picked = keep.printer_picked && print_ui::offered(keep.printer.as_deref(), &printers);
-        let printer = if picked { keep.printer.clone() } else { default };
-        let changed = printer != keep.printer;
-        let fresh = PrintDraft::default();
-        self.print_draft = PrintDraft {
-            copies: fresh.copies,
-            range: fresh.range,
-            subset: fresh.subset,
-            reverse: fresh.reverse,
-            handling: fresh.handling,
-            per_sheet: fresh.per_sheet,
-            custom_grid: fresh.custom_grid,
-            cols: fresh.cols,
-            rows: fresh.rows,
-            order: fresh.order,
-            border: fresh.border,
-            auto_rotate: fresh.auto_rotate,
-            booklet_subset: fresh.booklet_subset,
-            poster_scale: fresh.poster_scale,
-            overlap: fresh.overlap,
-            cut_marks: fresh.cut_marks,
-            label_flip: fresh.label_flip,
-            orientation: fresh.orientation,
-            crops: Vec::new(),
-            crop_pages: None,
-            printer_picked: picked,
-            units: self.units,
-            printer: printer.clone(),
-            current_page: 0,
-            sheet: 0,
-            selected: Vec::new(),
-            which: Which::All,
-            area: None,
-            custom_new: None,
-            ..keep
-        };
-        if changed {
-            self.print_draft.apply_setup();
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(p) = printer {
-            self.read_papers_in_background(p);
+
+        if !self.batch_print.settings_initialized {
+            let mut keep = std::mem::take(&mut self.print_draft);
+            if keep.handling == Handling::Label {
+                keep.set_handling(Handling::Size);
+            }
+            let default = print_ui::default_printer(&keep, &printers);
+            let picked = keep.printer_picked && print_ui::offered(keep.printer.as_deref(), &printers);
+            let printer = if picked { keep.printer.clone() } else { default };
+            let changed = printer != keep.printer;
+            let fresh = PrintDraft::default();
+            self.print_draft = PrintDraft {
+                copies: fresh.copies,
+                range: fresh.range,
+                subset: fresh.subset,
+                reverse: fresh.reverse,
+                handling: fresh.handling,
+                per_sheet: fresh.per_sheet,
+                custom_grid: fresh.custom_grid,
+                cols: fresh.cols,
+                rows: fresh.rows,
+                order: fresh.order,
+                border: fresh.border,
+                auto_rotate: fresh.auto_rotate,
+                booklet_subset: fresh.booklet_subset,
+                poster_scale: fresh.poster_scale,
+                overlap: fresh.overlap,
+                cut_marks: fresh.cut_marks,
+                label_flip: fresh.label_flip,
+                orientation: fresh.orientation,
+                crops: Vec::new(),
+                crop_pages: None,
+                printer_picked: picked,
+                units: self.units,
+                printer: printer.clone(),
+                current_page: 0,
+                sheet: 0,
+                selected: Vec::new(),
+                which: Which::All,
+                area: None,
+                custom_new: None,
+                ..keep
+            };
+            if changed {
+                self.print_draft.apply_setup();
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(p) = printer {
+                self.read_papers_in_background(p);
+            }
+            self.batch_print.settings_initialized = true;
+        } else {
+            let current = self.print_draft.printer.clone();
+            if !print_ui::offered(current.as_deref(), &printers) {
+                let default = print_ui::default_printer(&self.print_draft, &printers);
+                self.print_draft.printer = default.clone();
+                self.print_draft.apply_setup();
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(p) = default {
+                    self.read_papers_in_background(p);
+                }
+            }
         }
     }
 
@@ -207,8 +227,11 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let title = tl!("Choose a folder of PDFs to print");
+            let session_id = self.batch_print.session_id;
             self.pick_first(craft::host::PickRequest::folder("batch_print.folder").title(title), None, move |app, _, dir| {
-                app.batch_print.add_folder_pdfs(&dir);
+                if app.batch_print.open && app.batch_print.session_id == session_id {
+                    app.batch_print.add_folder_pdfs(&dir);
+                }
             });
         }
     }
@@ -219,7 +242,8 @@ impl PdfCraftApp {
             return false;
         }
 
-        let selected: Vec<BatchPrintItem> = self.batch_print.items.iter().filter(|i| i.selected).cloned().collect();
+        let selected: Vec<(usize, BatchPrintItem)> =
+            self.batch_print.items.iter().enumerate().filter(|(_, i)| i.selected).map(|(idx, i)| (idx, i.clone())).collect();
 
         if selected.is_empty() {
             return false;
@@ -231,10 +255,24 @@ impl PdfCraftApp {
             return false;
         }
 
-        let mut printed_count = 0usize;
+        if self.print_draft.papers_loading() {
+            self.notify_tr("Waiting for printer paper setup to finish");
+            return false;
+        }
+
+        // Ensure printer's two-sided support is obtained/cached if unknown before building jobs
+        if let Some(ref p) = printer
+            && !self.print_draft.two_sided.contains_key(p)
+            && let Some(ref source) = self.two_sided_source
+        {
+            let support = pdfcraft_engine::guard(|| source(p)).unwrap_or(None);
+            self.print_draft.two_sided.insert(p.clone(), support);
+        }
+
+        let mut queued_count = 0usize;
         let mut failed_count = 0usize;
 
-        for item in &selected {
+        for (idx, item) in &selected {
             let mut succeeded = false;
 
             if let Some(doc_id) = item.doc_id {
@@ -260,8 +298,11 @@ impl PdfCraftApp {
                         if let Ok(sheets) = print::layout(&sizes, &settings) {
                             print::add_cups_orientation(&mut job.options, &sheets);
                         }
+                        if self.print_draft.handling == Handling::Booklet && self.print_draft.printer_two_sided().is_none() {
+                            job.duplex = None;
+                        }
                         if let Some(ref p) = printer
-                            && self.send_to_printer(p.clone(), bytes, job).is_ok()
+                            && self.send_to_printer(p.clone(), bytes, job, Some(*idx)).is_ok()
                         {
                             succeeded = true;
                         }
@@ -291,8 +332,11 @@ impl PdfCraftApp {
                                     if let Ok(sheets) = print::layout(&sizes, &settings) {
                                         print::add_cups_orientation(&mut job.options, &sheets);
                                     }
+                                    if self.print_draft.handling == Handling::Booklet && self.print_draft.printer_two_sided().is_none() {
+                                        job.duplex = None;
+                                    }
                                     if let Some(ref p) = printer
-                                        && self.send_to_printer(p.clone(), bytes, job).is_ok()
+                                        && self.send_to_printer(p.clone(), bytes, job, Some(*idx)).is_ok()
                                     {
                                         succeeded = true;
                                     }
@@ -305,28 +349,20 @@ impl PdfCraftApp {
             }
 
             if succeeded {
-                printed_count += 1;
-                if let Some(target) = self
-                    .batch_print
-                    .items
-                    .iter_mut()
-                    .find(|i| (item.doc_id.is_some() && i.doc_id == item.doc_id) || (item.path.is_some() && i.path == item.path))
-                {
-                    target.selected = false;
-                }
+                queued_count += 1;
             } else {
                 failed_count += 1;
             }
         }
 
-        if printed_count > 0 {
-            self.notify_fmt("Sent {n} documents to printer", &[("n", &printed_count.to_string())]);
+        if queued_count > 0 {
+            self.notify_fmt("Sent {n} documents to printer", &[("n", &queued_count.to_string())]);
         }
         if failed_count > 0 {
             self.notify_fmt("{n} documents could not be printed", &[("n", &failed_count.to_string())]);
         }
 
-        failed_count == 0 && printed_count > 0
+        failed_count == 0 && queued_count > 0
     }
 }
 
@@ -403,14 +439,15 @@ fn show_file_selection(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     ui.horizontal(|ui| {
                         Checkbox::new(Bind::bound(&mut item.selected)).show(ui);
                         if item.is_tab {
-                            ui.colored_label(Color32::from_rgb(46, 160, 67), "[Tab]");
+                            ui.colored_label(Color32::from_rgb(46, 160, 67), format!("[{}]", tl!("Tab")));
                         } else {
-                            ui.colored_label(Color32::from_rgb(56, 139, 253), "[File]");
+                            ui.colored_label(Color32::from_rgb(56, 139, 253), format!("[{}]", tl!("File")));
                         }
                         ui.label(&item.name);
 
                         if item.page_count > 0 {
-                            ui.label(RichText::new(format!("({} p.)", item.page_count)).color(ui.visuals().weak_text_color()));
+                            let p_text = crate::i18n::fmt(tl!("({n} p.)"), &[("n", &item.page_count.to_string())]);
+                            ui.label(RichText::new(p_text).color(ui.visuals().weak_text_color()));
                         }
 
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -430,9 +467,17 @@ fn show_file_selection(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 
             ui.add_space(8.0);
             if total_selected_pages > 0 {
-                ui.label(format!("Selected: {selected_count} / {total_count} documents ({total_selected_pages} pages)"));
+                let text = crate::i18n::fmt(
+                    tl!("Selected: {selected} / {total} documents ({pages} pages)"),
+                    &[("selected", &selected_count.to_string()), ("total", &total_count.to_string()), ("pages", &total_selected_pages.to_string())],
+                );
+                ui.label(text);
             } else {
-                ui.label(format!("Selected: {selected_count} / {total_count} documents"));
+                let text = crate::i18n::fmt(
+                    tl!("Selected: {selected} / {total} documents"),
+                    &[("selected", &selected_count.to_string()), ("total", &total_count.to_string())],
+                );
+                ui.label(text);
             }
             true
         });
@@ -502,14 +547,18 @@ fn show_print_settings(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 
     let back_btn = FooterButton::new(tl!("Back to documents"), DialogRole::Other);
 
-    let can_print = selected_count > 0 && app.print_draft.printer.is_some();
+    let can_print = selected_count > 0 && app.print_draft.printer.is_some() && !app.print_draft.papers_loading();
     let shown = FormDialog::new(tl!("Batch Print - Settings"), Bind::bound(&mut form_state))
         .opened(Bind::bound(&mut open))
         .ok_label(tl!("Print"))
         .ok_enabled(can_print)
         .extra_buttons(vec![back_btn])
         .show(ui, |ui, _, _| {
-            ui.label(RichText::new(format!("Batch Print: {selected_count} documents · {total_pages} total pages")).strong());
+            let summary_text = crate::i18n::fmt(
+                tl!("Batch Print: {documents} documents · {pages} total pages"),
+                &[("documents", &selected_count.to_string()), ("pages", &total_pages.to_string())],
+            );
+            ui.label(RichText::new(summary_text).strong());
             ui.add_space(8.0);
 
             ui.horizontal(|ui| {
@@ -524,6 +573,10 @@ fn show_print_settings(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     if !current_printer.is_empty() && app.print_draft.printer.as_deref() != Some(&current_printer) {
                         app.print_draft.printer = Some(current_printer.clone());
                         app.print_draft.printer_picked = true;
+                        app.print_draft.driver_error = None;
+                        app.print_draft.apply_setup();
+                        app.print_draft.reset_unoverridden_custom_paper();
+                        app.print_draft.apply_printer_papers(Vec::new());
                         #[cfg(not(target_arch = "wasm32"))]
                         app.read_papers_in_background(current_printer);
                     }
@@ -579,7 +632,9 @@ fn show_print_settings(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         if Button::new("◀").enabled(sheet_idx > 0).show(ui).clicked() {
                             d.preview_sheet = sheet_idx.saturating_sub(1);
                         }
-                        ui.label(format!("Sheet {} / {}", sheet_idx + 1, total_pages.max(1)));
+                        let sheet_text =
+                            crate::i18n::fmt(tl!("Sheet {s} / {n}"), &[("s", &(sheet_idx + 1).to_string()), ("n", &total_pages.max(1).to_string())]);
+                        ui.label(sheet_text);
                         if Button::new("▶").enabled(sheet_idx + 1 < total_pages).show(ui).clicked() {
                             d.preview_sheet = sheet_idx.saturating_add(1);
                         }
@@ -610,6 +665,12 @@ fn show_print_settings(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     apply_grayscale(&mut img);
                                 }
                                 let handle = ctx.load_texture(format!("batch-sheet-{p}"), img, egui::TextureOptions::LINEAR);
+                                const MAX_PREVIEW_CACHE: usize = 6;
+                                if d.preview_cache.len() >= MAX_PREVIEW_CACHE
+                                    && let Some(&farthest) = d.preview_cache.keys().max_by_key(|&&k| (k as isize - p as isize).abs())
+                                {
+                                    d.preview_cache.remove(&farthest);
+                                }
                                 d.preview_cache.insert(p, handle);
                             }
                         }
@@ -713,7 +774,11 @@ mod tests {
         assert!(draft.items[0].selected);
         assert!(!draft.items[1].selected);
 
+        draft.settings_initialized = true;
+        draft.preview_sheet = 3;
         draft.clear();
         assert!(draft.items.is_empty());
+        assert!(!draft.settings_initialized);
+        assert_eq!(draft.preview_sheet, 0);
     }
 }
