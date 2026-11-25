@@ -397,3 +397,54 @@ fn a_widget_rect_saved_back_as_integers_is_a_form_fill() {
     let moved = save(Some(20.5));
     assert_eq!(verdict(&moved, signed.open(), Some(2)), Modification::Disallowed(vec![super::kind::PAGE_CONTENT]));
 }
+
+/// A signed page, then `count` new signature widgets. `ap` builds each widget's `/AP` from the
+/// object number of its appearance stream. The stream names `font`, which names `font + 1`.
+fn signatures_with_fonts(count: u32, ap: impl Fn(u32) -> String) -> (Document, Document) {
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R >>")),
+        (2, Row::Obj(0, 0, PAGES)),
+        (3, Row::Obj(0, 0, &page("/Annots []"))),
+        (4, Row::Obj(0, 0, &page("/Annots []"))),
+    ]);
+    let mut bodies = Vec::new();
+    let mut widgets = Vec::new();
+    for i in 0..count {
+        let widget = 5 + i * 4;
+        let stream = widget + 1;
+        let font = widget + 2;
+        let desc = widget + 3;
+        widgets.push(widget);
+        bodies.push((widget, format!("<< /Type /Annot /Subtype /Widget /FT /Sig /T (S{i}) /Rect [0 0 1 1] /AP {} >>", ap(stream))));
+        bodies.push((
+            stream,
+            format!(
+                "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /Font << /F {font} 0 R >> >> /Length 3 >>\nstream\nq Q\nendstream"
+            ),
+        ));
+        bodies.push((font, format!("<< /Type /Font /Subtype /Type0 /BaseFont /F{i} /FontDescriptor {desc} 0 R >>")));
+        bodies.push((desc, format!("<< /Type /FontDescriptor /FontName /F{i} >>")));
+    }
+    let annots = widgets.iter().map(|n| format!("{n} 0 R")).collect::<Vec<_>>().join(" ");
+    let page3 = page(&format!("/Annots [{annots}]"));
+    let mut rows = vec![(3, Row::Obj(0, 0, page3.as_str()))];
+    rows.extend(bodies.iter().map(|(n, body)| (*n, Row::Obj(0, 0, body.as_str()))));
+    let now = signed.clone().revision(&rows);
+    (now.open(), signed.open())
+}
+
+/// Twenty-two appearances name more font objects than one shared budget of 64. Each appearance
+/// spends its own budget, so the last signature's font is still a signature change.
+#[test]
+fn each_signature_appearance_keeps_its_own_font_budget() {
+    let (doc, old) = signatures_with_fonts(22, |stream| format!("<< /N {stream} 0 R >>"));
+    assert_eq!(verdict(&doc, old, Some(2)), Modification::Allowed(vec![super::kind::SIGNATURE]));
+}
+
+/// `/AP /N` may be named states (`/On`) rather than the stream itself. The font that state draws
+/// with is part of the signature.
+#[test]
+fn a_named_appearance_state_keeps_its_font_a_signature_change() {
+    let (doc, old) = signatures_with_fonts(1, |stream| format!("<< /N << /On {stream} 0 R >> >>"));
+    assert_eq!(verdict(&doc, old, Some(2)), Modification::Allowed(vec![super::kind::SIGNATURE]));
+}

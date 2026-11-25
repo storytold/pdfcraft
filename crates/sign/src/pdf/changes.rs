@@ -895,7 +895,8 @@ fn font_resource_dict(d: &Dict) -> bool {
 
 /// Object numbers of the font dictionaries reachable from a signature widget `doc` added or
 /// changed since `old`. Following stops at the appearance's font resources, so a widget's page
-/// or signature value is not swept in with them.
+/// or signature value is not swept in with them. Each appearance has its own budget: an earlier
+/// signature must not use it up and leave a later signature's font to be read as a form fill.
 fn signature_appearance_fonts(doc: &Document, old: &Document) -> HashSet<u32> {
     let mut out = HashSet::new();
     for num in doc.object_numbers() {
@@ -909,7 +910,9 @@ fn signature_appearance_fonts(doc: &Document, old: &Document) -> HashSet<u32> {
             continue;
         }
         let Some(ap) = widget.get(b"AP") else { continue };
-        walk_appearance_fonts(doc, &doc.resolve(ap), &mut out, 0);
+        let mut seen = HashSet::new();
+        walk_appearance_fonts(doc, &doc.resolve(ap), &mut seen, 0);
+        out.extend(seen);
     }
     out
 }
@@ -918,38 +921,79 @@ fn signature_appearance_fonts(doc: &Document, old: &Document) -> HashSet<u32> {
 const APPEARANCE_FONT_DEPTH: u8 = 16;
 const APPEARANCE_FONT_OBJECTS: usize = 64;
 
-fn walk_appearance_fonts(doc: &Document, obj: &Object, out: &mut HashSet<u32>, depth: u8) {
-    if depth > APPEARANCE_FONT_DEPTH || out.len() >= APPEARANCE_FONT_OBJECTS {
+fn walk_appearance_fonts(doc: &Document, obj: &Object, seen: &mut HashSet<u32>, depth: u8) {
+    if depth > APPEARANCE_FONT_DEPTH || seen.len() >= APPEARANCE_FONT_OBJECTS {
         return;
     }
     match obj {
         Object::Ref(r) => {
-            if out.insert(r.num) {
-                walk_appearance_fonts(doc, &doc.get(*r), out, depth + 1);
+            if seen.insert(r.num) {
+                walk_appearance_fonts(doc, &doc.get(*r), seen, depth + 1);
             }
         }
         Object::Array(a) => {
             for entry in a {
-                walk_appearance_fonts(doc, entry, out, depth + 1);
+                walk_appearance_fonts(doc, entry, seen, depth + 1);
             }
         }
-        Object::Dict(d) => walk_appearance_dict(doc, d, out, depth),
-        Object::Stream(s) => walk_appearance_dict(doc, &s.dict, out, depth),
+        Object::Dict(d) => walk_appearance_dict(doc, d, seen, depth),
+        Object::Stream(s) => walk_appearance_dict(doc, &s.dict, seen, depth),
         _ => {}
     }
 }
 
-fn walk_appearance_dict(doc: &Document, d: &Dict, out: &mut HashSet<u32>, depth: u8) {
-    for key in [b"N".as_slice(), b"R", b"D", b"Resources", b"DescendantFonts", b"FontDescriptor"] {
+fn walk_appearance_dict(doc: &Document, d: &Dict, seen: &mut HashSet<u32>, depth: u8) {
+    // `/N`, `/R` and `/D` are one stream, or a dictionary of named states (`/On`, `/Off`).
+    for key in [b"N".as_slice(), b"R", b"D"] {
         if let Some(value) = d.get(key) {
-            walk_appearance_fonts(doc, value, out, depth + 1);
+            if named_appearance_states(doc, value) {
+                walk_named_states(doc, value, seen, depth + 1);
+            } else {
+                walk_appearance_fonts(doc, value, seen, depth + 1);
+            }
+        }
+    }
+    for key in [b"Resources".as_slice(), b"DescendantFonts", b"FontDescriptor"] {
+        if let Some(value) = d.get(key) {
+            walk_appearance_fonts(doc, value, seen, depth + 1);
         }
     }
     // `/Font` maps resource names to fonts. The names are not the keys followed above.
     if let Some(fonts) = d.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()) {
         for (_, entry) in fonts.iter() {
-            walk_appearance_fonts(doc, entry, out, depth + 1);
+            walk_appearance_fonts(doc, entry, seen, depth + 1);
         }
+    }
+}
+
+/// `/N`, `/R` or `/D` holds named appearance states when it is a dictionary. A stream is the
+/// appearance itself, and `as_dict` on a stream is that stream's own dictionary, not states.
+fn named_appearance_states(doc: &Document, value: &Object) -> bool {
+    match value {
+        Object::Dict(_) => true,
+        Object::Ref(r) => matches!(&*doc.get(*r), Object::Dict(_)),
+        _ => false,
+    }
+}
+
+fn walk_named_states(doc: &Document, value: &Object, seen: &mut HashSet<u32>, depth: u8) {
+    if depth > APPEARANCE_FONT_DEPTH || seen.len() >= APPEARANCE_FONT_OBJECTS {
+        return;
+    }
+    if let Object::Dict(states) = value {
+        for (_, entry) in states.iter() {
+            walk_appearance_fonts(doc, entry, seen, depth + 1);
+        }
+        return;
+    }
+    let Some(r) = value.as_ref() else { return };
+    if !seen.insert(r.num) {
+        return;
+    }
+    let got = doc.get(r);
+    let Object::Dict(states) = &*got else { return };
+    for (_, entry) in states.iter() {
+        walk_appearance_fonts(doc, entry, seen, depth + 1);
     }
 }
 

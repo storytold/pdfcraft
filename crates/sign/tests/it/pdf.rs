@@ -638,10 +638,11 @@ fn invisible_signatures_and_refusals() {
 
 /// The normal appearance of the signature field `name`: its decoded content and resources.
 fn appearance_of(bytes: &[u8], name: &str) -> (String, pdfcraft_cos::Dict) {
-    appearance_in(&open(bytes), name)
+    let (content, res) = appearance_in(&open(bytes), name);
+    (String::from_utf8_lossy(&content).into_owned(), res)
 }
 
-fn appearance_in(doc: &Document, name: &str) -> (String, pdfcraft_cos::Dict) {
+fn appearance_in(doc: &Document, name: &str) -> (Vec<u8>, pdfcraft_cos::Dict) {
     let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
     let form = doc.resolve(catalog.get(b"AcroForm").unwrap()).as_dict().cloned().unwrap();
     let fields = doc.resolve(form.get(b"Fields").unwrap()).as_array().cloned().unwrap();
@@ -653,7 +654,7 @@ fn appearance_in(doc: &Document, name: &str) -> (String, pdfcraft_cos::Dict) {
     let ap = doc.resolve(field.get(b"AP").unwrap()).as_dict().cloned().unwrap();
     let Object::Stream(s) = &*doc.resolve(ap.get(b"N").unwrap()) else { panic!("no normal appearance") };
     let res = doc.resolve(s.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
-    (String::from_utf8_lossy(&s.decoded().unwrap()).into_owned(), res)
+    (s.decoded().unwrap(), res)
 }
 
 /// The text a visible signature shows, read back through the font its appearance embeds.
@@ -665,7 +666,7 @@ fn appearance_text(bytes: &[u8], name: &str) -> String {
     };
     let mut tag = None;
     let mut out = String::new();
-    for op in pdfcraft_content::ops(content.as_bytes()) {
+    for op in pdfcraft_content::ops(&content) {
         match op.op.as_slice() {
             b"Tf" => tag = op.operands.first().and_then(Object::as_name).map(<[u8]>::to_vec),
             b"Tj" | b"'" => {
@@ -2858,6 +2859,7 @@ fn an_encrypted_documents_signature_graphic_is_encrypted_with_it() {
         // Read back through the security handler, the pixels and their mask are exact; a stream
         // written in the clear would be "decrypted" into noise and fail to inflate.
         let (content, res) = appearance_in(&doc, "Signature1");
+        let content = String::from_utf8_lossy(&content);
         assert!(content.contains("/Im1 Do"), "{alg:?}: {content}");
         let xobjects = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
         let Object::Stream(im) = &*doc.resolve(xobjects.get(b"Im1").unwrap()) else { panic!() };
@@ -3021,6 +3023,10 @@ fn visible_appearance_draws_central_european_characters_with_embedded_font() {
     let (content, res) = appearance_of(&signed, "Signature1");
     // Verify that the appearance stream does not write `?` in place of non-WinAnsi characters.
     assert!(!content.contains('?'), "appearance content should not write '?' for Central European characters: {content}");
+    // The shown text is read from the stream's own bytes. A lossy UTF-8 copy would turn a glyph
+    // code at or above 0x80 into U+FFFD before the operators are parsed.
+    let shown = appearance_text(&signed, "Signature1");
+    assert!(shown.contains("Petravić"), "{shown}");
     // Verify an embedded TrueType font was added to the appearance resources.
     let fonts = res.get(b"Font").and_then(|o| o.as_dict()).unwrap();
     assert!(fonts.contains(b"PCFull0"), "appearance should reference the embedded font: {fonts:?}");
