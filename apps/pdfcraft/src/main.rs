@@ -547,6 +547,8 @@ fn app_creator<'a>(
         }
         // The OCR Verify screen stores its per-language dictionary in the data folder.
         app.ocr_verify.dictionary_dir = pdfcraft_ui_egui::settings::dictionary_dir();
+        // Every file opened, with the time, in the data folder.
+        app.open_history.file = pdfcraft_ui_egui::OpenHistory::default_file();
         if let Some(state) = &cc.wgpu_render_state {
             let adapter = state.adapter.get_info();
             let max_texture_dimension_2d = state.device.limits().max_texture_dimension_2d;

@@ -95,6 +95,7 @@ mod hooks;
 pub(crate) mod icons;
 pub(crate) mod notices;
 mod persist;
+pub use persist::open_history::OpenHistory;
 mod platform;
 #[cfg(not(target_arch = "wasm32"))]
 mod script_dialog;
@@ -481,6 +482,8 @@ pub struct PdfCraftApp {
     pub(crate) pinned_jobs: Queue<(), Vec<folders_ui::FolderListing>>,
     /// The recent files restored from settings, checked off the UI thread (#5682).
     recent_check: persist::recent_check::RecentCheck,
+    /// Every file the user opens, with the time (`open-history.tsv`).
+    pub open_history: persist::open_history::OpenHistory,
     /// Tools pinned to Home, in user-defined order.
     pub pinned_tools: Vec<String>,
     /// Form script messages waiting for a notice, in the order the scripts showed them, so every

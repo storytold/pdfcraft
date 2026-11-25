@@ -464,9 +464,10 @@ impl PdfCraftApp {
         }
         if let Some(p) = path {
             #[cfg(target_os = "macos")]
-            macos_association::repair(std::path::Path::new(&p));
+            crate::macos_association::repair(std::path::Path::new(&p));
             self.recent.retain(|r| r.path != p);
             self.recent_check.opened(&p);
+            self.open_history.opened(&p);
             self.recent.insert(0, RecentFile { name: name.to_string(), path: p, pages, size });
             self.recent.truncate(self.recent_limit);
         }
