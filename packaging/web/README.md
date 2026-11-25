@@ -24,11 +24,16 @@ The deployment URL is reported by the workflow (for a project repository, it is 
 that project subpath as well as at a domain root. You can also run the workflow manually from
 `main` in the Actions tab.
 
-For Vercel, Netlify, Cloudflare Pages or another static host, deploy the contents of
+For Vercel, the root `vercel.json` defines one public static service, `pdfcraft-web`, routed at
+`/`. Set the Vercel project's **Root Directory** to the repository root (`.`); the service root
+is `apps/pdfcraft-web`. Its install/build scripts install the Rust/WASM toolchain, run Trunk, and
+stage OCR models into the service's `dist` output. The OCR worker is part of that static build, not
+a separate Vercel service, and there are no service bindings because the app has no internal HTTP
+backend. Netlify, Cloudflare Pages or another static host can instead deploy the contents of
 `dist/web` after running `trunk build --release` from `apps/pdfcraft-web` and
-`cargo xtask models dist/web/models`. No server, database, account or environment variables are
-needed; document processing stays in the browser. Follow the server requirements below when
-configuring a host.
+`cargo xtask models dist/web/models`. Document processing stays in the browser; no server,
+database, account or environment variables are needed. Follow the server requirements below
+when configuring a host.
 
 ## Any path works
 
