@@ -179,10 +179,17 @@ struct Builder<'a> {
     /// For RTF, which repeats a picture's data at every placement and doesn't turn pictures: what
     /// its pictures may still cost, and the rotations baked into them ([`pictures::Budget`]).
     rtf: Option<pictures::Budget>,
+    /// Whether a running header/footer line becomes the page's own section part (the Word path).
+    /// The RTF writer has no section header of its own, so there the line stays body text.
+    sections: bool,
     /// The `num` id of the decimal list numbered items share, and of the lettered list point
     /// headings share (`None`: the document has neither kind, so no numbering part is written).
     numbered: Option<u32>,
     points: Option<u32>,
+    /// The header and footer parts the page being built has opened; its section gets them when
+    /// the page ends.
+    header: Option<u32>,
+    footer: Option<u32>,
     /// The page (0-based) being built, and the pages that lost a picture to a limit or to a
     /// picture that couldn't be prepared.
     page: usize,
@@ -190,7 +197,7 @@ struct Builder<'a> {
 }
 
 impl<'a> Builder<'a> {
-    fn new(pages: &[Page], meta: &Meta, rtf: Option<pictures::Budget>) -> Self {
+    fn new(pages: &[Page], meta: &Meta, rtf: Option<pictures::Budget>, sections: bool) -> Self {
         let mut doc = Document::new();
         doc.styles = std::sync::Arc::new(styles(meta.font, meta.language));
         doc.core.title = meta.title.to_string();
@@ -207,7 +214,19 @@ impl<'a> Builder<'a> {
             .then(|| std::sync::Arc::make_mut(&mut doc.numbering).add_list(ListKind::Numbered));
         let points = has_kind(pages, |k| matches!(k, ParagraphKind::PointHeading { .. }))
             .then(|| std::sync::Arc::make_mut(&mut doc.numbering).add_list(ListKind::UpperLetter));
-        Builder { doc, body: Vec::new(), media: Vec::new(), rtf, numbered, points, page: 0, omitted: Vec::new() }
+        Builder {
+            doc,
+            body: Vec::new(),
+            media: Vec::new(),
+            rtf,
+            sections,
+            numbered,
+            points,
+            header: None,
+            footer: None,
+            page: 0,
+            omitted: Vec::new(),
+        }
     }
 
     /// The media key for `im`, or `None` for an empty picture, and past the limits or for one that
@@ -238,7 +257,7 @@ impl<'a> Builder<'a> {
     /// `sec`.
     fn flow(&mut self, it: Item<'a>, sec: &SectionProps) {
         match it {
-            Item::Para(runs, lvl, kind) => self.paragraph(&runs, lvl, kind),
+            Item::Para(runs, lvl, kind) => self.paragraph(&runs, lvl, kind, sec),
             Item::Table(t) => {
                 // Tables that touch become one table: a paragraph keeps them apart.
                 if matches!(self.body.last(), Some(Block::Table(_))) {
@@ -255,16 +274,21 @@ impl<'a> Builder<'a> {
     }
 
     /// One paragraph, by what the document's structure makes it: a numbered item or a point
-    /// heading is a real list paragraph (Word regenerates the number, so it is not in the text),
-    /// and everything else is body text at the geometry its producer measured.
-    fn paragraph(&mut self, runs: &[Run<'a>], lvl: u8, kind: ParagraphKind) {
+    /// heading is a real list paragraph (Word regenerates the number, so it is not in the text), a
+    /// section heading takes its named style, a running header/footer line is the page's own
+    /// section part, and everything else is body text at the geometry its producer measured.
+    fn paragraph(&mut self, runs: &[Run<'a>], lvl: u8, kind: ParagraphKind, sec: &SectionProps) {
         let mut p = Paragraph::new();
         p.props = match kind {
+            ParagraphKind::HeaderFooterBlock if self.sections => return self.header_footer(runs, sec),
             ParagraphKind::Numbered(_) => list_props(self.numbered, runs),
             ParagraphKind::PointHeading { .. } => list_props(self.points, runs),
+            ParagraphKind::SectionHeading { level } => ParaProps { style: Some(heading_style(level)), ..ParaProps::default() },
             _ => {
                 let mut props = block_props(runs);
-                if matches!(lvl, 1 | 2) {
+                // Only body text takes the font-size heading guess: a synthesized paragraph's
+                // kind already says what it is.
+                if kind == ParagraphKind::Body && matches!(lvl, 1 | 2) {
                     props.style = Some(format!("Heading{lvl}"));
                 }
                 props
@@ -282,15 +306,45 @@ impl<'a> Builder<'a> {
         self.body.push(Block::Para(p));
     }
 
-    /// End a page: its section ends here, and the next page's starts on a new page.
-    fn end_page(&mut self, sec: SectionProps) {
+    /// A running header or footer line: the page's own header (in its top half) or footer (in its
+    /// bottom half), written as a part of the section rather than as body text.
+    fn header_footer(&mut self, runs: &[Run<'a>], sec: &SectionProps) {
+        let mut p = Paragraph::new();
+        for r in runs {
+            push_text(&mut p, &r.text, chr(r.block.size, r.block.bold, r.block.italic, r.block.color));
+        }
+        // A running line above the middle of the page is its header, below it its footer.
+        let header = runs.first().is_some_and(|r| (r.block.rect[1] + r.block.rect[3]) / 2.0 >= f64::from(sec.page_h) / 2.0);
+        if let Some(part) = if header { self.header } else { self.footer } {
+            if let Some(stored) = self.doc.parts.get_mut(&part) {
+                stored.blocks.push(craft_wordmodel::para_block(p));
+            }
+            return;
+        }
+        // One part per page: a line of the page joins the part its page opened.
+        let kind = if header { PartKind::Header } else { PartKind::Footer };
+        let part = self.doc.add_part(kind, vec![craft_wordmodel::para_block(p)]);
+        if header {
+            self.header = Some(part);
+        } else {
+            self.footer = Some(part);
+        }
+    }
+
+    /// End a page: its section ends here, with the header and footer its own lines made, and the
+    /// next page's starts on a new page.
+    fn end_page(&mut self, mut sec: SectionProps) {
+        sec.headers.default = self.header.take();
+        sec.footers.default = self.footer.take();
         let mut p = Paragraph::new();
         p.props = exact_1pt();
         p.section = Some(Box::new(sec));
         self.body.push(Block::Para(p));
     }
 
-    fn finish(mut self, last: SectionProps) -> Document {
+    fn finish(mut self, mut last: SectionProps) -> Document {
+        last.headers.default = self.header.take();
+        last.footers.default = self.footer.take();
         self.doc.last_section = last;
         self.doc.body = self.body.into_iter().map(std::sync::Arc::new).collect();
         self.doc.ensure_nonempty();
@@ -301,6 +355,13 @@ impl<'a> Builder<'a> {
 /// Whether any block of `pages` is of the structure `matches` accepts.
 fn has_kind(pages: &[Page], matches: fn(&ParagraphKind) -> bool) -> bool {
     pages.iter().flat_map(|p| &p.blocks).any(|b| matches(&b.kind))
+}
+
+/// The style a section heading of `level` takes: the sheet names Heading 1 and Heading 2 (each
+/// keeping with the text below it and carrying its outline level), and Heading 2 is the deepest
+/// the legal exemplars use, so a deeper level is set as one.
+fn heading_style(level: u8) -> String {
+    format!("Heading{}", level.clamp(1, 2))
 }
 
 /// A list paragraph's properties: the `num` of its list at the list's first level, with the
@@ -384,7 +445,7 @@ pub(crate) fn flow_doc(pages: &[Page], meta: &Meta) -> (Document, Vec<usize>) {
 }
 
 fn flow_doc_with_budget(pages: &[Page], meta: &Meta, budget: pictures::Budget) -> (Document, Vec<usize>) {
-    let mut b = Builder::new(pages, meta, Some(budget));
+    let mut b = Builder::new(pages, meta, Some(budget), false);
     let mut sec = pages.first().map(section).unwrap_or_default();
     for it in items(pages) {
         if matches!(it, Item::PageBreak) {
@@ -539,7 +600,7 @@ fn positioned_page<'a>(b: &mut Builder<'a>, page: &'a Page) {
 /// positioned text boxes and pictures, and the others flow as paragraphs, tables and pictures.
 /// Each page is a section of its own size, and its headings are told from its own body size.
 pub(crate) fn word_doc(pages: &[Page], meta: &Meta) -> Document {
-    let mut b = Builder::new(pages, meta, None);
+    let mut b = Builder::new(pages, meta, None, true);
     let mut last = SectionProps::default();
     for (i, page) in pages.iter().enumerate() {
         b.page = i;

@@ -1122,6 +1122,55 @@ fn numbered_paragraphs_are_real_word_lists() {
     assert!(doc.numbering.num(lists[2]).is_some(), "the package defines both lists");
 }
 
+/// A section heading takes the sheet's named Heading 2 style, whose definition keeps it with the
+/// text below and puts it at outline level 1, and the stamp line over a filing becomes the
+/// section's real header part rather than body text: what an assembler maps onto its own outline
+/// and running headers.
+#[test]
+fn heading_styles_and_header_footer_blocks_are_assembly_ready() {
+    let stamped = typed_page(vec![
+        typed_block(ParagraphKind::HeaderFooterBlock, "FILED: NEW YORK COUNTY CLERK 01/01/2026", 740.0),
+        typed_block(ParagraphKind::SectionHeading { level: 2 }, "ARGUMENT", 700.0),
+        typed_block(ParagraphKind::Body, "Plaintiff submits this memorandum of law.", 680.0),
+    ]);
+    let next = typed_page(vec![typed_block(ParagraphKind::Body, "The second page carries the argument on.", 700.0)]);
+    let bytes = docx(&[stamped, next], "Motion");
+    let doc = craft_docx::read(&bytes).unwrap();
+    let heading = doc.styles.styles.iter().find(|s| s.id == "Heading2").expect("the sheet names Heading 2");
+    assert_eq!(heading.para.keep_next, Some(true), "a heading stays with the text below it");
+    assert_eq!(heading.para.outline_level, Some(1), "Heading 2 sits at outline level 1");
+    let xml = part(&bytes, "word/document.xml");
+    assert!(xml.contains("<w:pStyle w:val=\"Heading2\"/>"), "the section heading takes the style: {xml}");
+    let header = part(&bytes, "word/header1.xml");
+    assert!(header.contains("FILED: NEW YORK COUNTY CLERK"), "{header}");
+    assert!(!xml.contains("FILED:"), "the running header is not repeated in the body: {xml}");
+    assert_eq!(xml.matches("<w:headerReference").count(), 1, "only the page whose line it is has that header: {xml}");
+}
+
+/// A caption the synthesis measured keeps its geometry: the indent, the first line's hanging
+/// indent and the line spacing reach Word as paragraph properties, not as loose runs.
+#[test]
+fn caption_indents_and_line_spacing_survive_the_export() {
+    let caption = Block {
+        text: "Exhibit A to the moving papers".into(),
+        rect: [144.0, 700.0, 480.0, 712.0],
+        size: 12.0,
+        bold: false,
+        italic: false,
+        color: [0.0; 3],
+        rotation: 0.0,
+        space_around: [false; 2],
+        kind: ParagraphKind::Caption,
+        order: 0,
+        metrics: Metrics { indent_left: 72.0, indent_first: -18.0, line_spacing: 1.5 },
+    };
+    let doc = craft_docx::read(&docx(&[typed_page(vec![caption])], "Caption")).unwrap();
+    let para = body_paragraphs(&doc).first().copied().expect("the caption is one paragraph");
+    assert_eq!(para.props.indent_left, Some(72.0), "the caption keeps its indent");
+    assert_eq!(para.props.indent_first, Some(-18.0), "and its hanging first line");
+    assert_eq!(para.props.line_spacing, Some(craft_wordmodel::props::LineSpacing::Multiple(1.5)), "and its spacing");
+}
+
 /// #1595: Markdown gets the headings, paragraphs and a rule between pages, in reading order;
 /// images are left out.
 #[test]
