@@ -9,7 +9,9 @@ use std::sync::Arc;
 use craft::host::queue::{JobQueue, Priority, QueueOptions, QueueOrder};
 use craft::host::{Jobs, Wake};
 use craft::print::ui::HostedPrint;
-use craft::ui::dialog::{DialogResult, PromptChoice, StandardPrompt};
+use craft::ui::contract::Bind;
+use craft::ui::dialog::{DialogId, DialogResult, DialogStack, Prompt, StackDialog, dialog_id};
+use craft::ui::sections::{DialogRole, FooterButton};
 use pdfcraft_engine::print::{self, Binding, BookletSubset, Content, Layout, Orientation, PageOrder, SizeMode, Subset, spool};
 
 use crate::PdfCraftApp;
@@ -89,23 +91,65 @@ pub(crate) struct RunningPrint {
 }
 
 /// The backs of a manual two-sided print (#2860): the printer, the pass's print-ready PDF and its
-/// job, which pass is still on its way to the spooler, and the prompt asking for the stack.
+/// job, and which pass is still on its way to the spooler.
 pub(crate) struct SecondSide {
     printer: String,
     bytes: Vec<u8>,
     job: spool::Job,
     waiting: Waiting,
-    prompt: Option<craft::ui::dialog::DialogId>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Waiting {
-    /// The fronts: their answer opens the prompt, and their failing drops the backs.
+    /// The fronts: their answer enables the window's Continue, and their failing drops the backs.
     Fronts,
-    /// Nothing: the prompt's Continue sends the backs.
+    /// Nothing: the window's Continue sends the backs.
     Ready,
     /// The backs: kept until they reach the spooler, so a failure can send them again.
     Backs,
+}
+
+/// The window asking for the printed stack to be put back, with Continue (print the backs).
+struct SecondSideDialog {
+    /// The fronts reached the spooler: Continue can be chosen.
+    ready: bool,
+}
+
+impl StackDialog for SecondSideDialog {
+    type Result = ();
+
+    fn id(&self) -> DialogId {
+        dialog_id("manual-two-sided")
+    }
+
+    fn show(&mut self, ui: &mut egui::Ui, _: &DialogStack) -> Option<DialogResult<()>> {
+        // Continue prints on real paper, and can become available while the person is typing: Enter with
+        // no button focused is left over from something else.
+        let stray = ui.memory(|m| m.focused().is_none()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let mut open = true;
+        let mut go = FooterButton::new(tl!("Continue"), DialogRole::Accept).enabled(self.ready);
+        if !self.ready {
+            go = go.disabled_reason(tl!("Waiting for the first side to reach the printer…"));
+        }
+        let out = Prompt::new(
+            tl!("Print the second side"),
+            tl!(
+                "When the first side has finished printing, take the printed sheets out without changing their order. Put them back in the paper tray so the printer prints on the blank side, with the top of the pages going in first. On most printers with a front tray, that means printed side up. Then choose Continue. If the backs land on the wrong sheets, change \"Second side in reverse order\" and print again."
+            ),
+        )
+        .answers([go, FooterButton::new(tl!("Cancel"), DialogRole::Cancel)])
+        .opened(Bind::bound(&mut open))
+        .show(ui);
+        match out.picked {
+            Some(0) => (!stray).then_some(DialogResult::Ok(())),
+            Some(_) => Some(DialogResult::Cancel),
+            None => None,
+        }
+    }
+
+    fn confirm(&mut self, _: &egui::Context) -> Option<()> {
+        self.ready.then_some(())
+    }
 }
 
 /// The Print dialog's work in the background: the printer list, the per-printer reads and the
@@ -603,7 +647,7 @@ impl PdfCraftApp {
                 let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
                 let sheets = print::layout(&sizes, &settings).unwrap_or_default();
                 match self.print_draft.manual() {
-                    Some(manual) => self.print_first_side(ctx, printer, &bytes, job, &sheets, manual),
+                    Some(manual) => self.print_first_side(printer, &bytes, job, &sheets, manual),
                     None => {
                         print::add_cups_orientation(&mut job.options, &sheets);
                         self.send_to_printer(printer, bytes, job)
@@ -656,20 +700,19 @@ impl PdfCraftApp {
     }
 
     /// Manual two-sided (#2860): send the fronts of the `sheets` (the sides of the print-ready
-    /// `bytes`), and keep the backs; once the fronts reach the spooler a prompt asks for the stack
-    /// to be turned over. One side has no back to wait for.
+    /// `bytes`), and keep the backs for `second_side_pass` to ask for the stack.
+    /// One side has no back to wait for.
     fn print_first_side(
         &mut self,
-        ctx: &egui::Context,
         printer: String,
         bytes: &[u8],
         job: spool::Job,
         sheets: &[print::Sheet],
         (flip, reverse): (print::manual_duplex::Flip, bool),
     ) -> Result<PrintStart, String> {
-        // One saved second side at a time: a new one would take the place of backs still on
-        // their way, which a failure then could not offer again.
-        if self.print_tasks.second_side.as_ref().is_some_and(|s| s.waiting == Waiting::Backs) {
+        // One saved second side at a time: a new one would take the place of backs whose fronts are
+        // printed.
+        if self.print_tasks.second_side.is_some() {
             return Err(tl!("Wait until the second side of the last two-sided print has reached the printer, then print again.").to_string());
         }
         // Each pass tells CUPS which way its own sheets run: in a job laid out both ways, one
@@ -684,49 +727,50 @@ impl PdfCraftApp {
             Ok((print::manual_duplex::pass_pdf(bytes, &p.fronts)?, pass_job(&p.fronts), backs))
         });
         let (fronts, front_job, backs) = passes.map_err(|e| e.to_string())?;
-        // A second side still waiting for its stack is replaced by this one.
-        if let Some(prompt) = self.print_tasks.second_side.take().and_then(|s| s.prompt) {
-            self.dialogs.cancel_by_id(ctx, prompt);
-        }
         let sent = self.send_to_printer(printer.clone(), fronts, front_job)?;
         if let Some((bytes, job)) = backs {
             let waiting = if self.wait_on_last_job() { Waiting::Fronts } else { Waiting::Ready };
-            self.print_tasks.second_side = Some(SecondSide { printer, bytes, job, waiting, prompt: None });
+            self.print_tasks.second_side = Some(SecondSide { printer, bytes, job, waiting });
         }
         Ok(sent)
     }
 
-    /// The prompt asking for the printed stack to be put back, with Continue (print the backs).
-    fn ask_second_side(&mut self) {
-        let prompt = StandardPrompt::custom(tl!(
-            "When the first side has finished printing, take the printed sheets out without changing their order. Put them back in the paper tray so the printer prints on the blank side, with the top of the pages going in first. On most printers with a front tray, that means printed side up. Then choose Continue. If the backs land on the wrong sheets, change \"Second side in reverse order\" and print again."
-        ))
-        .title(tl!("Print the second side"))
-        .button(PromptChoice::Proceed, tl!("Continue"))
-        .button(PromptChoice::Cancel, tl!("Cancel"))
-        .instance("manual-two-sided");
-        let id = self.dialogs.open(prompt);
-        if let Some(side) = &mut self.print_tasks.second_side {
-            side.prompt = Some(id);
-        }
-    }
-
-    /// Asks for the stack once the backs are ready and no other dialog is open (Print has closed:
-    /// a prompt opened under its finishing OK would be cancelled with it), and takes the prompt's
+    /// Keeps the [`SecondSideDialog`] open while backs wait for their stack, from the moment Print has
+    /// closed (a dialog opened under its finishing OK would be cancelled with it), and takes its
     /// answer: Continue sends the backs, anything else drops them.
-    pub(crate) fn second_side_pass(&mut self) {
-        let unasked = self.print_tasks.second_side.as_ref().is_some_and(|s| s.waiting == Waiting::Ready && s.prompt.is_none());
-        if unasked && self.dialogs.stack().top().is_none() {
-            self.ask_second_side();
-        }
-        let Some(id) = self.print_tasks.second_side.as_ref().and_then(|s| s.prompt) else { return };
-        let Some(answer) = self.dialogs.take_by_id::<StandardPrompt>(id) else { return };
-        if !matches!(answer, DialogResult::Ok(a) if a.choice == PromptChoice::Proceed) {
-            self.print_tasks.second_side = None;
+    pub(crate) fn second_side_pass(&mut self, ctx: &egui::Context) {
+        let answer = self.dialogs.take::<SecondSideDialog>();
+        let Some(side) = &mut self.print_tasks.second_side else {
+            // The fronts failed: nothing to put back. This Cancel is not a later window's answer.
+            if self.dialogs.cancel::<SecondSideDialog>(ctx) {
+                self.dialogs.take::<SecondSideDialog>();
+            }
+            return;
+        };
+        if side.waiting == Waiting::Backs {
             return;
         }
-        let Some(side) = self.print_tasks.second_side.as_mut().filter(|s| s.waiting == Waiting::Ready) else { return };
-        side.prompt = None;
+        let ready = side.waiting == Waiting::Ready;
+        match answer {
+            Some(DialogResult::Ok(())) if ready => {}
+            Some(_) => {
+                self.print_tasks.second_side = None;
+                return;
+            }
+            None => {
+                if let Some(open) = self.dialogs.get_mut::<SecondSideDialog>() {
+                    open.ready = ready;
+                } else if self.dialogs.stack().top().is_none() {
+                    // Opened blocked, and with nothing focused (Print's button was), so no button of it starts
+                    // focused for a stray key to press: Cancel drops the backs.
+                    if let Some(focused) = ctx.memory(|m| m.focused()) {
+                        ctx.memory_mut(|m| m.surrender_focus(focused));
+                    }
+                    self.dialogs.open(SecondSideDialog { ready: false });
+                }
+                return;
+            }
+        }
         let (printer, bytes, job) = (side.printer.clone(), side.bytes.clone(), side.job.clone());
         match self.send_to_printer(printer, bytes, job) {
             Ok(_) if self.wait_on_last_job() => {
@@ -757,7 +801,7 @@ impl PdfCraftApp {
     }
 
     /// The spooler's answer to the pass the saved backs wait on. Fronts that reached it make the
-    /// backs ready to ask for; fronts that failed take the backs with them (the error notice says
+    /// backs ready to send; fronts that failed take the backs with them (the error notice says
     /// why). Backs that failed are asked for again, so only they are sent again, unless some of
     /// their sheets reached the spooler (`partly`): sending them all again would print those twice.
     #[cfg(not(target_arch = "wasm32"))]
@@ -1175,8 +1219,7 @@ mod tests {
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.print_tasks = PrintTasks::new(jobs.clone(), Wake::none());
             let job = PrintDraft::default().job("a.pdf");
-            app.print_tasks.second_side =
-                Some(SecondSide { printer: "Office".into(), bytes: Vec::new(), job, waiting: Waiting::Backs, prompt: None });
+            app.print_tasks.second_side = Some(SecondSide { printer: "Office".into(), bytes: Vec::new(), job, waiting: Waiting::Backs });
             let count = Arc::new(crate::JobCount::default());
             count.set(sent, 2);
             app.print_tasks.running.push(RunningPrint { ticket: 0, printer: "Office".into(), count, second_side: true });
@@ -1196,18 +1239,18 @@ mod tests {
         }
     }
 
-    /// #2860: a second manual two-sided print while the last one's backs are still on their way to
-    /// the spooler is refused: it would take the place of those backs, which a failure then could
-    /// not offer again. They stay saved.
+    /// #2860: a second manual two-sided print is refused while the last one's backs are saved, however
+    /// far they are: it would take the place of backs whose fronts are printed. They stay saved.
     #[test]
     fn a_manual_two_sided_print_waits_for_the_last_ones_backs() {
-        let mut app = PdfCraftApp::for_unit_tests();
-        let job = PrintDraft::default().job("a.pdf");
-        app.print_tasks.second_side =
-            Some(SecondSide { printer: "Office".into(), bytes: Vec::new(), job: job.clone(), waiting: Waiting::Backs, prompt: None });
-        let refused = app.print_first_side(&egui::Context::default(), "Office".into(), &[], job, &[], Default::default());
-        assert!(refused.is_err_and(|e| e.contains("Wait until the second side")));
-        assert!(app.print_tasks.second_side.as_ref().is_some_and(|s| s.waiting == Waiting::Backs));
+        for waiting in [Waiting::Fronts, Waiting::Ready, Waiting::Backs] {
+            let mut app = PdfCraftApp::for_unit_tests();
+            let job = PrintDraft::default().job("a.pdf");
+            app.print_tasks.second_side = Some(SecondSide { printer: "Office".into(), bytes: Vec::new(), job: job.clone(), waiting });
+            let refused = app.print_first_side("Office".into(), &[], job, &[], Default::default());
+            assert!(refused.is_err_and(|e| e.contains("Wait until the second side")));
+            assert!(app.print_tasks.second_side.as_ref().is_some_and(|s| s.waiting == waiting));
+        }
     }
 
     /// Issue #1308: Current page is the page on screen, even when a later page is labelled with

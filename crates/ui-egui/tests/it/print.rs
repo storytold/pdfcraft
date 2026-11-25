@@ -1767,24 +1767,28 @@ fn manual_two_sided_rig(fail: Arc<std::sync::atomic::AtomicBool>) -> (Rig, Manua
 impl Rig {
     /// Prints with Manual two-sided on and runs the fronts' job.
     fn print_fronts(&mut self) {
+        self.send_fronts();
+        self.run_print();
+    }
+
+    /// Prints with Manual two-sided on; the fronts' job has not run.
+    fn send_fronts(&mut self) {
         self.open();
         self.settle();
         self.pick(Some("Test_Queue"));
         self.settle();
         self.set("manual_duplex", json!(true));
-        // The fronts' job answers in the frame after OK, while Print is still closing.
         let (ctx, id) = (self.ctx.clone(), self.id());
         self.h.state_mut().dialogs.confirm_by_id(&ctx, id);
         self.run_steps(1);
-        self.run_print();
     }
 
-    /// Whether the prompt asking for the printed stack is open.
+    /// Whether the window asking for the printed stack is open.
     fn second_side_asked(&self) -> bool {
         self.query_all_by_label("Print the second side").next().is_some()
     }
 
-    /// Answers the prompt: Continue (`go`) or Cancel, then runs the jobs that follow.
+    /// Answers the window: Continue (`go`) or Cancel, then runs the jobs that follow.
     fn answer_second_side(&mut self, go: bool) {
         let (ctx, id) = (self.ctx.clone(), self.id());
         let dialogs = &mut self.h.state_mut().dialogs;
@@ -1819,6 +1823,39 @@ fn manual_two_sided_prints_the_fronts_then_the_backs_on_continue() {
     assert!(!h.second_side_asked());
 }
 
+/// #2860: the window opens with the print and can't be continued until the fronts reach the spooler,
+/// so nothing opens over what the person is doing; and only its own button prints, as Continue can
+/// become available while they type.
+#[test]
+fn manual_two_sided_opens_at_once_and_no_stray_key_prints_the_backs() {
+    let (mut h, sent) = manual_two_sided_rig(Default::default());
+    h.send_fronts();
+    h.run_steps(4);
+    assert!(h.second_side_asked(), "open while the fronts are on their way");
+    let (ctx, id) = (h.ctx.clone(), h.id());
+    assert!(!h.h.state_mut().dialogs.confirm_by_id(&ctx, id), "Continue waits for the fronts");
+    h.run_print();
+    for key in [egui::Key::Enter, egui::Key::C, egui::Key::Space] {
+        h.key_press(key);
+        h.run_steps(4);
+        h.run_print();
+        assert_eq!(sent.lock().unwrap().len(), 1, "{key:?} prints nothing");
+        assert!(h.second_side_asked(), "{key:?} keeps the backs");
+    }
+    // Continue is still reached by keyboard.
+    for _ in 0..6 {
+        if h.get_by_role_and_label(Role::Button, "Continue").is_focused() {
+            break;
+        }
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+    }
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    h.run_print();
+    assert_eq!(sent.lock().unwrap().len(), 2);
+}
+
 /// #2860: fronts the spooler refuses take their backs with them: nothing asks for the stack, and
 /// the error notice says why.
 #[test]
@@ -1831,7 +1868,7 @@ fn manual_two_sided_drops_the_backs_when_the_fronts_fail() {
     assert_eq!(sent.lock().unwrap().len(), 1, "the backs are not sent");
 }
 
-/// #2860: backs the spooler refuses stay saved, and the prompt comes back so Continue sends only
+/// #2860: backs the spooler refuses stay saved, and the window comes back so Continue sends only
 /// them again, on the sheets whose fronts are printed.
 #[test]
 fn manual_two_sided_offers_the_backs_again_when_they_fail() {
@@ -1843,7 +1880,7 @@ fn manual_two_sided_offers_the_backs_again_when_they_fail() {
     fail.store(true, Ordering::SeqCst);
     h.answer_second_side(true);
     assert_eq!(sent.lock().unwrap().len(), 2);
-    assert!(h.second_side_asked(), "the backs failed: the prompt asks again");
+    assert!(h.second_side_asked(), "the backs failed: the window asks again");
     fail.store(false, Ordering::SeqCst);
     h.answer_second_side(true);
     assert_eq!(sent.lock().unwrap().iter().map(|j| j.1).collect::<Vec<_>>(), [0, 1, 1], "the fronts once, the backs twice");
