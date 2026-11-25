@@ -283,6 +283,7 @@ impl Edit {
             Edit::MoveTag { .. } => Label::of("Move object"),
             Edit::MarkDecorative { .. } => Label::of("Mark figure as decorative"),
             Edit::MarkTagArtifact { .. } => Label::of("Mark content as artifact"),
+            Edit::MarkUntaggedArtifact { .. } => Label::of("Mark untagged content as artifacts"),
             Edit::LayoutTableToBlocks { .. } => Label::of("Change tag properties"),
             Edit::AddOcrText { .. } => Label::of("Recognize text"),
             Edit::EnhanceScan { .. } => Label::of("Enhance scanned file"),

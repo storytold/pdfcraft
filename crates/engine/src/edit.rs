@@ -445,6 +445,11 @@ pub enum Edit {
     MarkTagArtifact {
         object: pdfcraft_cos::ObjRef,
     },
+    /// Mark the untagged content of tagged pages as artifacts (0-based pages; empty is every
+    /// page). See [`a11y::mark_untagged_artifacts`].
+    MarkUntaggedArtifact {
+        pages: Vec<usize>,
+    },
     /// A layout table as plain blocks: the table, its row groups and rows become Div tags and its
     /// cells P tags (Div when they hold tags), without their Table attributes.
     LayoutTableToBlocks {

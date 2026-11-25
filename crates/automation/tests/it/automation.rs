@@ -4378,6 +4378,46 @@ trailer << /Root 1 0 R >>
 }
 
 #[test]
+fn marking_untagged_content_as_artifacts_through_automation_is_one_undo_step_and_saved() {
+    let dir = workdir("a11y-untagged-artifact");
+    let content = "/Figure << /MCID 0 >> BDC 10 150 40 20 re f EMC 10 10 20 20 re f";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /StructTreeRoot /K 6 0 R /ParentTree 7 0 R >> endobj
+6 0 obj << /S /Figure /P 5 0 R /Pg 3 0 R /K 0 /Alt (A box) >> endobj
+7 0 obj << /Nums [0 [6 0 R]] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len()
+    );
+    std::fs::write(dir.join("loose.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "loose.pdf" }))["doc"].as_u64().unwrap();
+    let failed = |a: &mut Automation| ok(a, "accessibility_check", json!({ "doc": doc, "rules": ["tagged-content"] }))["failed"].clone();
+    assert_eq!(failed(&mut a), 1);
+    let marked = ok(&mut a, "accessibility_mark_untagged_artifact", json!({ "doc": doc }));
+    assert_eq!(marked["changed"], true, "{marked}");
+    assert_eq!(marked["pages"][0]["page"], 1, "{marked}");
+    assert!(marked["notes"].as_array().unwrap().iter().any(|n| n.as_str().unwrap().contains("assistive technology")), "{marked}");
+    assert_eq!(failed(&mut a), 0);
+    // Nothing is left to mark, and no second undo step is made.
+    assert_eq!(ok(&mut a, "accessibility_mark_untagged_artifact", json!({ "doc": doc }))["changed"], false);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "marked.pdf" }));
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("marked.pdf")).unwrap())).unwrap();
+    let options = pdfcraft_engine::a11y::Options { rules: [pdfcraft_engine::a11y::Rule::TaggedContent].into(), pages: None };
+    let report = pdfcraft_engine::a11y::check(&saved, &options);
+    assert_eq!(report.result(pdfcraft_engine::a11y::Rule::TaggedContent).unwrap().status, pdfcraft_engine::a11y::Status::Passed);
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Mark untagged content as artifacts");
+    assert_eq!(failed(&mut a), 1);
+}
+
+#[test]
 fn accessibility_review_record_compares_two_versions_without_changing_them() {
     let dir = workdir("a11y-review-record");
     let source = std::fs::read(dir.join("a.pdf")).unwrap();

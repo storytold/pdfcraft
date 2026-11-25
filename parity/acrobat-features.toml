@@ -9287,6 +9287,18 @@ evidence = ["crates/automation/tests/it/automation.rs::finding_untagged_content_
 notes = "Lists findings for untagged painted page content, non-widget annotations and form widgets, optionally on selected pages. It reuses the checker and does not identify untagged table structure, links already represented by an annotation, or structure-tree elements that lack content."
 
 [[feature]]
+id = "a11y.mark-untagged-artifact"
+title = "Mark leftover untagged content as artifacts"
+area = "M"
+tier = "P2"
+milestone = "M12"
+status = "partial"
+commands = []
+tools = ["accessibility_mark_untagged_artifact"]
+evidence = ["crates/a11y/src/tests/untagged.rs::untagged_content_on_a_tagged_page_becomes_an_artifact", "crates/automation/tests/it/automation.rs::marking_untagged_content_as_artifacts_through_automation_is_one_undo_step_and_saved"]
+notes = "Automation only, no panel yet. On pages with tags it wraps painted content that is neither in claimed marked content nor an artifact in /Artifact marked content, nested inside the page's q/Q, BT/ET, BX/EX and marked-content pairs and inside one content stream, in one undo step; only the streams that change are rewritten. Treating the content as decorative is an inference and the result says so. Pages without tags or with damaged, unreadable or unpaired content are skipped with a reason; marked content with an MCID the tree doesn't claim, forms holding tagged and untagged content and forms too deep to read are left and reported. Annotation appearances aren't touched or reported."
+
+[[feature]]
 id = "a11y.table-editor"
 title = "Table editor (headers, scope, spans)"
 area = "M"
