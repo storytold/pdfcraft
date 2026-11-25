@@ -74,8 +74,9 @@ pub struct Page {
     pub height: f64,
     pub blocks: Vec<Block>,
     pub images: Vec<Image>,
-    /// Every non-empty text block is invisible OCR text, with no unread forms. Word flows that
-    /// text without the redundant page-sized scan; visible and mixed pages keep their layout.
+    /// The page is a scan's OCR text: its invisible text layer carries most of the page's
+    /// characters (or all of them), with no unread forms. Word flows that text without the
+    /// redundant page-sized scan; visible and mostly-visible pages keep their layout.
     pub ocr: bool,
     /// The colour the whole page is painted before its content (a page background), as sRGB
     /// components in 0..=1; `None` for a page with no background of its own.

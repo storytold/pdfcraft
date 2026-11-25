@@ -1166,7 +1166,7 @@ fn typed_block(kind: ParagraphKind, text: &str, y: f64) -> Block {
 
 /// A US Letter page holding `blocks`.
 fn typed_page(blocks: Vec<Block>) -> Page {
-    Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() }
+    Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), ocr: false, background: None, rules: Vec::new() }
 }
 
 /// A numbered item reaches Word as a list paragraph, not as text with a typed number: Word

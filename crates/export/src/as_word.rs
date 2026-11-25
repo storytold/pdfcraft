@@ -472,8 +472,8 @@ pub(crate) fn positioned(page: &Page) -> bool {
     let overlays = page
         .images
         .iter()
-        // Only a wholly OCR page's scan is exempt: on visible or mixed pages a full-page image
-        // remains artwork whose overlap with text must keep the page positioned.
+        // Only an OCR page's scan is exempt: on visible and mostly-visible pages a full-page
+        // image remains artwork whose overlap with text must keep the page positioned.
         .filter(|im| !page.ocr || !covers_page(im.rect, page))
         .map(|im| (im.rect, None))
         .chain(page.blocks.iter().enumerate().filter(|(_, b)| b.size >= 2.0 * body).map(|(i, b)| (b.rect, Some(i))));

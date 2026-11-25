@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use pdfcraft_cos::ObjRef;
+use pdfcraft_ocr::{Line, Paragraph, Rect, Region, RegionKind, Word, analyze_page, synthesize};
 
 pub use pdfcraft_compare::{Change, Comparison, Kind, Side};
 // How far Office export reads into form XObjects; `OfficeExport::truncated_pages` lists the pages
@@ -223,6 +224,61 @@ pub(crate) fn weight_and_slant(base_font: &str) -> (bool, bool) {
     (f.contains("bold") || f.contains("black") || f.contains("heavy"), f.contains("italic") || f.contains("oblique"))
 }
 
+/// One OCR page's blocks as the paragraphs synthesis reads: each block's kind and the geometry
+/// its line gives it, in the page's points. `None` for a block with no usable box.
+///
+/// The page-layout rules type the blocks — a running stamp or footer, a caption, a signature, an
+/// exhibit, body text — and synthesis kinds them. Each block is also a region of its own, so it
+/// becomes a paragraph of its own and the paragraph's kind, order and geometry go straight back
+/// onto it.
+fn synthesized_blocks(blocks: &[pdfcraft_edit::TextBlock], width: f32, height: f32) -> Vec<Option<Paragraph>> {
+    let box_of = |b: &pdfcraft_edit::TextBlock| [b.rect[0] as f32, b.rect[1] as f32, b.rect[2] as f32, b.rect[3] as f32];
+    let usable = |b: &pdfcraft_edit::TextBlock| {
+        let r = box_of(b);
+        !b.text.trim().is_empty() && r.iter().all(|v| v.is_finite()) && r[2] > r[0] && r[3] > r[1]
+    };
+    let words: Vec<Word> = blocks.iter().filter(|b| usable(b)).map(|b| Word::new(b.text.clone(), box_of(b), "text layer")).collect();
+    // What each block is on the page comes from the layout rules, over one word per block.
+    let classified = analyze_page(&words, (width, height), None);
+    let mut kind = vec![RegionKind::Text; words.len()];
+    let mut free: Vec<usize> = (0..words.len()).rev().collect();
+    for region in &classified {
+        for line in &region.lines {
+            for word in &line.words {
+                if let Some(at) = free.iter().position(|i| words.get(*i) == Some(word)) {
+                    let i = free.remove(at);
+                    if let Some(slot) = kind.get_mut(i) {
+                        *slot = region.kind;
+                    }
+                }
+            }
+        }
+    }
+    let page: Vec<Region> = words
+        .iter()
+        .enumerate()
+        .map(|(order, word)| Region {
+            kind: kind.get(order).copied().unwrap_or(RegionKind::Text),
+            rect: Rect::new(word.rect[0], word.rect[1], word.rect[2], word.rect[3]),
+            lines: vec![Line { words: vec![word.clone()] }],
+            order,
+        })
+        .collect();
+    let paragraphs = synthesize(&page);
+    let count = blocks.iter().filter(|b| usable(b)).count();
+    if paragraphs.len() != count {
+        return vec![None; blocks.len()];
+    }
+    let mut out = vec![None; blocks.len()];
+    let mut paragraphs = paragraphs.into_iter();
+    for (i, block) in blocks.iter().enumerate() {
+        if usable(block) {
+            out[i] = paragraphs.next();
+        }
+    }
+    out
+}
+
 impl crate::Document {
     /// The pages as paragraphs and images (for Word, HTML and RTF export), including what
     /// form XObjects draw.
@@ -267,17 +323,26 @@ impl crate::Document {
                 let unit = display_unit(info);
                 let reading = pdfcraft_edit::reading_blocks_checked(cos, i).unwrap_or_default();
                 let forms_unread = reading.truncated;
-                let ocr = !forms_unread
-                    && reading.blocks.iter().any(|b| !b.text.trim().is_empty())
-                    && reading.blocks.iter().filter(|b| !b.text.trim().is_empty()).all(|b| b.invisible);
-                let blocks = reading
-                    .blocks
+                let text: Vec<pdfcraft_edit::TextBlock> = reading.blocks.into_iter().filter(|b| !b.text.trim().is_empty()).collect();
+                let chars = |invisible: bool| text.iter().filter(|b| b.invisible == invisible).map(|b| b.text.chars().count()).sum::<usize>();
+                let (invisible_chars, visible_chars) = (chars(true), chars(false));
+                // A scan's OCR layer can sit beside a small visible stamp (a clerk's RECEIVED mark,
+                // a bates number): the page is OCR when the invisible text carries most of its
+                // characters, not only when it carries all of them. A wholly invisible page is
+                // this rule's own special case.
+                let ocr = !forms_unread && invisible_chars > 0 && invisible_chars > visible_chars;
+                // The stamp is in the OCR layer too, so exporting the visible blocks beside it
+                // would print it twice.
+                let text: Vec<pdfcraft_edit::TextBlock> = text.into_iter().filter(|b| !ocr || b.invisible).collect();
+                let synthesized = if ocr { synthesized_blocks(&text, info.width, info.height) } else { Vec::new() };
+                let blocks = text
                     .into_iter()
-                    .filter(|b| !b.text.trim().is_empty())
-                    .map(|b| {
+                    .enumerate()
+                    .map(|(n, b)| {
                         let (bold, italic) = weight_and_slant(&b.base_font);
                         // `text` is trimmed; the editor text keeps the source's own spaces.
                         let space_around = [b.editor_text.starts_with(char::is_whitespace), b.editor_text.ends_with(char::is_whitespace)];
+                        let paragraph = synthesized.get(n).and_then(Option::as_ref);
                         pdfcraft_export::Block {
                             space_around,
                             text: b.text,
@@ -287,10 +352,15 @@ impl crate::Document {
                             italic,
                             color: b.color,
                             rotation: b.rotation - f64::from(info.rotation),
-                            // The editor's blocks are plain body text: a PDF is not synthesized.
-                            kind: pdfcraft_export::ParagraphKind::Body,
-                            order: 0,
-                            metrics: pdfcraft_export::Metrics::default(),
+                            // A synthesized OCR page's block keeps the kind and geometry of the
+                            // paragraph it is; a PDF's own visible text stays plain body text.
+                            kind: paragraph.map_or(pdfcraft_export::ParagraphKind::Body, |p| p.kind),
+                            order: if paragraph.is_some() { n } else { 0 },
+                            metrics: paragraph.map_or_else(pdfcraft_export::Metrics::default, |p| pdfcraft_export::Metrics {
+                                indent_left: p.indent_left,
+                                indent_first: p.indent_first,
+                                line_spacing: p.line_spacing,
+                            }),
                         }
                     })
                     .collect();
