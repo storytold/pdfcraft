@@ -39,8 +39,9 @@ mod image;
 mod layout;
 mod worker;
 
+use background::DraftDrawing;
 pub(crate) use background::TextBackground;
-use draft::{ParagraphCover, ParagraphText};
+use draft::{ParagraphCover, ParagraphText, cover_rect};
 pub use image::{CropMode, ImageAction, ImageSelection};
 pub(crate) use image::{PictureMenu, delete_picture, picture_context, picture_controls, picture_menu, picture_parts, picture_press, user_to_screen};
 pub(crate) use layout::editor_font;
@@ -1334,6 +1335,7 @@ fn editor_session(
     let layout = background.layout_for(&ctx, doc, ed, &ed.text).filter(|_| !cover);
     let laid = ParagraphCover::new(doc, ed, scale, room, draft_rect, layout, cover).show_at(ui, page_clip);
     let (faces, width, live) = (laid.faces, laid.width, laid.live);
+    let covered = cover_rect(ed, live);
     let frame = [rect_path(doc_rect(&body.view, live.expand(2.0)))];
     let _ = SelectionOutline::solid(tl!("Text editing line").to_string(), &frame).show_at(ui, page_clip);
     ed.overflow = laid.overflow;
@@ -1374,6 +1376,8 @@ fn editor_session(
     // PDF rasters supply the visible glyphs, including while typing: the draft's layout is drawn
     // unseen, keeping only its geometry. Without a raster of the changed text the editor draws it.
     let visible = draws_draft(fallback, background_ready && !fallback, ed.has_changes());
+    // Applied before a raster shows it, the draft stays up as the editor draws it.
+    let drawing = DraftDrawing::new(&xf, ed, Arc::clone(&galley), origin, text_color, covered);
     // Over a raster of other text the provisional layout is left out with the caret: the worker
     // publishes the PDF ink and the exact geometry together on a later pass.
     if visible || background.current(ed) {
@@ -1386,7 +1390,7 @@ fn editor_session(
         let _ = Notice::new(Tone::Bad, error).layout(NoticeLayout::Inline).show_at(ui, at);
     }
     let ended = output.ended.filter(|end| !(fresh && *end == EditorEnd::Commit));
-    session.text_background.remember(&xf, page, block);
+    session.text_background.remember(&xf, page, block, Some(drawing));
     match ended {
         None => None,
         Some(EditorEnd::Cancel) => {
@@ -1817,16 +1821,69 @@ mod tests {
         background.submitted_at = Some(web_time::Instant::now() - std::time::Duration::from_secs(21));
         background.prepare(&ctx, doc, Some(&ed), None, 1.0);
         assert!(background.error_for(0, 0).is_some(), "the preview of B timed out");
-        background.remember(&xf, 0, 0);
+        background.remember(&xf, 0, 0, None);
         background.committed(&applied(&ed));
         assert!(!background.settling(), "A's raster stood in for applied draft B");
         background.worker.as_ref().unwrap().pause(false);
         // The draft on screen is the one applied: its raster stays up until the page is redrawn.
         let mut background = TextBackground::default();
         shown(&mut background, &ed);
-        background.remember(&xf, 0, 0);
+        background.remember(&xf, 0, 0, None);
         background.committed(&applied(&ed));
         assert!(background.settling());
+    }
+
+    /// A draft applied before its preview came, or after it failed, has no raster: the editor's own
+    /// drawing of that very draft stands in until the page is redrawn, and nothing stays pending.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn an_applied_draft_without_a_raster_stays_up_as_the_editor_draws_it() {
+        let (app, mut ed) = preview_app();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        let ctx = egui::Context::default();
+        // The raster store counts its frames by pass.
+        ctx.begin_pass(egui::RawInput::default());
+        let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, egui::vec2(600.0, 800.0)), rot: 0, pw: 600.0, ph: 800.0 };
+        let drawing = |ed: &LineEditor| {
+            let galley = draft_galley(&ctx, ed, &BTreeMap::new(), &ed.text, 1.0, 400.0, None);
+            Some(DraftDrawing::new(&xf, ed, galley, Pos2::ZERO, Color32::BLACK, Rect::from_min_size(Pos2::ZERO, vec2(400.0, 20.0))))
+        };
+        let applied = |ed: &LineEditor| Edit::EditTextBlock { page: 0, block: 0, text: ed.text.clone(), style: ed.style() };
+        // Applied while its preview, the paragraph's first, is in flight.
+        let mut background = TextBackground::default();
+        let worker = worker::DraftWorker::new(&ctx).unwrap();
+        worker.pause(true);
+        background.worker = Some(worker);
+        ed.text = "Draft A".into();
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        assert!(background.pending() && !background.ready(0, 0), "no raster yet");
+        background.remember(&xf, 0, 0, drawing(&ed));
+        background.committed(&applied(&ed));
+        assert_eq!(background.settling_drawing(), Some("Draft A"));
+        assert!(!background.pending(), "released work is not pending");
+        background.page_received(0);
+        assert!(!background.settling(), "the redrawn page ends it");
+        // A raster of the draft before it is on screen: that text doesn't stand in for the applied one.
+        background.worker.as_ref().unwrap().pause(false);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        while !background.current(&ed) {
+            background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        background.worker.as_ref().unwrap().pause(true);
+        let earlier = drawing(&ed);
+        ed.text = "Draft B".into();
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        background.remember(&xf, 0, 0, earlier);
+        background.committed(&applied(&ed));
+        assert!(!background.settling(), "nor does a drawing of it");
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        background.remember(&xf, 0, 0, drawing(&ed));
+        background.committed(&applied(&ed));
+        assert_eq!(background.settling_drawing(), Some("Draft B"));
+        background.worker.as_ref().unwrap().pause(false);
     }
 
     /// Closing the paragraph releases the worker's session and the document snapshot it holds,
@@ -1926,7 +1983,7 @@ mod tests {
         background.worker.as_ref().unwrap().pause(true);
         background.prepare(&ctx, doc, Some(&ed), None, 0.5);
         assert!(background.pending(), "the redraw is in flight");
-        background.remember(&xf, 0, 0);
+        background.remember(&xf, 0, 0, None);
         background.committed(&Edit::EditTextBlock { page: 0, block: 0, text: ed.text.clone(), style: ed.style() });
         assert!(background.settling(), "the applied draft's raster stands in for it");
         assert!(!background.pending(), "released work is not pending");

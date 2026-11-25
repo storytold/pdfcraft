@@ -3,8 +3,9 @@ use std::sync::Arc;
 use craft::ui::primitives::textures::{CachedTexture, Revision, TextureState, TextureStore, TextureStoreOptions};
 use craft::ui::primitives::{ContentPainterCx, Draw};
 
+use super::layout::editor_fill;
 use super::worker::{DraftWorker, Request};
-use super::{Edit, LineEditor, PageXform, Pos2, TextTarget};
+use super::{Edit, LineEditor, PageXform, Pos2, Rect, TextTarget};
 
 /// The store's salt: the one raster of the open paragraph's page lives under it.
 pub(super) const BACKGROUND_SALT: &str = "pdf-text-editor-background";
@@ -49,7 +50,8 @@ pub(crate) struct TextBackground {
     /// How the open paragraph looked in its editor last frame.
     look: Option<EditorLook>,
     /// An applied paragraph's last look. The page raster still has the old text until the page
-    /// is rendered again, so the draft raster stays up until then.
+    /// is rendered again, so the draft stays up until then: its raster, or, when it has none, the
+    /// editor's own drawing of it.
     settling: Option<EditorLook>,
 }
 
@@ -59,6 +61,35 @@ struct EditorLook {
     block: usize,
     page_width: f32,
     rot: u16,
+    /// The editor's own drawing of the draft, for a draft without a raster.
+    drawing: Option<DraftDrawing>,
+}
+
+/// The open paragraph's draft as its editor lays it out, to draw where no raster shows that draft.
+pub(super) struct DraftDrawing {
+    text: String,
+    style: pdfcraft_engine::BlockStyle,
+    galley: Arc<egui::Galley>,
+    color: egui::Color32,
+    /// The text's top left, and the corners of the box that hides the page's own text, on the page.
+    at: (f32, f32),
+    cover: [(f32, f32); 2],
+}
+
+impl DraftDrawing {
+    /// `ed`'s draft drawn by `galley` at `origin`, over the box `cover` and what the text typed in this
+    /// pass adds to it.
+    pub(super) fn new(xf: &PageXform, ed: &LineEditor, galley: Arc<egui::Galley>, origin: Pos2, color: egui::Color32, cover: Rect) -> Self {
+        let cover = cover.union(galley.rect.translate(origin.to_vec2()));
+        Self {
+            text: ed.text.clone(),
+            style: ed.style(),
+            galley,
+            color,
+            at: xf.screen_to_norm(origin),
+            cover: [xf.screen_to_norm(cover.min), xf.screen_to_norm(cover.max)],
+        }
+    }
 }
 
 impl TextBackground {
@@ -71,20 +102,27 @@ impl TextBackground {
     }
 
     /// The open paragraph's editor was drawn at this page placement this frame.
-    pub fn remember(&mut self, xf: &PageXform, page: usize, block: usize) {
-        self.look = Some(EditorLook { page, block, page_width: xf.rect.width(), rot: xf.rot });
+    pub(super) fn remember(&mut self, xf: &PageXform, page: usize, block: usize, drawing: Option<DraftDrawing>) {
+        self.look = Some(EditorLook { page, block, page_width: xf.rect.width(), rot: xf.rot, drawing });
     }
 
-    /// An edit was applied. When it is the open paragraph's, its last look stays up over the
-    /// draft raster until the page is rendered again; any other edit ends both.
+    /// An edit was applied. When it is the open paragraph's, its last look stays up until the page
+    /// is rendered again; any other edit ends it.
     pub fn committed(&mut self, edit: &Edit) {
-        let look = self.look.take().filter(|look| {
-            // Only a raster of the applied text and style stands in for it.
-            matches!(edit, Edit::EditTextBlock { page, block, text, style }
-                if (look.page, look.block) == (*page, *block)
-                    && self.texture_key.as_ref().is_some_and(|(shown, shown_style)| shown == text && shown_style == style))
-                && self.key.is_some_and(|(_, page, target)| (page, target) == (look.page, TextTarget::Block(look.block)))
-                && self.shown.is_some()
+        let look = self.look.take().and_then(|mut look| {
+            let Edit::EditTextBlock { page, block, text, style } = edit else { return None };
+            if (look.page, look.block) != (*page, *block)
+                || !self.key.is_some_and(|(_, page, target)| (page, target) == (look.page, TextTarget::Block(look.block)))
+            {
+                return None;
+            }
+            // Only a raster of the applied text and style stands in for it. Applied before its preview
+            // came, or after it failed, the draft has none: the editor's own drawing of it does.
+            if self.shown.is_some() && self.texture_key.as_ref().is_some_and(|(shown, shown_style)| shown == text && shown_style == style) {
+                look.drawing = None;
+                return Some(look);
+            }
+            look.drawing.as_ref().is_some_and(|drawn| drawn.text == *text && drawn.style == *style).then_some(look)
         });
         match look {
             Some(look) => {
@@ -92,9 +130,10 @@ impl TextBackground {
                 if let Some(worker) = &mut self.worker {
                     worker.release();
                 }
-                // The released worker publishes nothing more: no draft is in flight.
+                // The released worker publishes nothing more: no draft is in flight or asked for.
                 self.serial = None;
                 self.submitted_at = None;
+                self.draft_key = self.render_key.clone();
                 self.settling = Some(look);
             }
             None => self.reset(None),
@@ -298,6 +337,12 @@ impl TextBackground {
         self.settling.is_some()
     }
 
+    /// The draft whose editor drawing stands in for the applied paragraph.
+    #[cfg(test)]
+    pub(super) fn settling_drawing(&self) -> Option<&str> {
+        self.settling.as_ref().and_then(|look| look.drawing.as_ref()).map(|drawn| drawn.text.as_str())
+    }
+
     #[cfg(test)]
     pub(super) fn source(&self) -> Option<&Arc<pdfcraft_engine::TextDraftSource>> {
         self.source.as_ref()
@@ -337,7 +382,8 @@ impl TextBackground {
     }
 
     /// Paints the PDF draft over `page` where a paragraph is being changed (the textless page for
-    /// added text), and an applied paragraph's draft until the page raster catches up. An open
+    /// added text), and an applied paragraph's draft, its raster or the editor's own drawing of it, until
+    /// the page raster catches up. An open
     /// paragraph that has not changed paints nothing: the page draws its own text.
     pub fn paint(
         &self,
@@ -353,6 +399,14 @@ impl TextBackground {
         // the page raster (with the old text) shows until the new one arrives instead.
         let settled =
             self.settling.as_ref().filter(|look| look.page == page && look.rot == xf.rot && (look.page_width - xf.rect.width()).abs() < 0.5);
+        if let Some(drawn) = settled.and_then(|look| look.drawing.as_ref()) {
+            // As the editor drew it: its box over the page's own text, then the text, on its page only.
+            let [a, b] = drawn.cover.map(|(u, v)| xf.norm_to_screen(u, v));
+            let painter = content.painter.with_clip_rect(content.painter.clip_rect().intersect(xf.rect));
+            painter.rect_filled(Rect::from_two_pos(a, b), egui::CornerRadius::ZERO, editor_fill(drawn.color));
+            painter.galley(xf.norm_to_screen(drawn.at.0, drawn.at.1), Arc::clone(&drawn.galley), drawn.color);
+            return;
+        }
         let ready =
             for_editor || draft.is_some_and(|d| d.page == page && d.index.is_some_and(|index| self.ready_added(page, index))) || settled.is_some();
         if !ready {

@@ -22,6 +22,11 @@ pub struct ParagraphPaintStyle {
     metrics: Metrics,
 }
 
+/// The box that hides the page's own text under the draft `live` covers: the whole source box, with the draft.
+pub(super) fn cover_rect(ed: &LineEditor, live: Rect) -> Rect {
+    ed.rect.expand(1.0).union(live)
+}
+
 /// The open paragraph laid out for this pass.
 struct Laid {
     faces: BTreeMap<String, FontRef>,
@@ -147,7 +152,7 @@ impl Component for ParagraphCover<'_> {
         // that is ready, a cover over the entire source box, including lines the draft no longer occupies, so
         // shrinking the text never exposes a copy.
         let fill = editor_fill(color32(self.ed.look.color));
-        ui.content_painter(cx).data_shapes([Shape::rect_filled(self.ed.rect.expand(1.0).union(live), CornerRadius::ZERO, fill)]);
+        ui.content_painter(cx).data_shapes([Shape::rect_filled(cover_rect(self.ed, live), CornerRadius::ZERO, fill)]);
     }
 
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {

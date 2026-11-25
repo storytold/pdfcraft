@@ -3848,6 +3848,20 @@ fn ink(pixels: &image::RgbaImage, r: egui::Rect) -> usize {
 /// used to come back under the new outline for those frames and then jump to the new one.
 #[test]
 fn an_applied_paragraph_keeps_its_edited_look_until_the_page_is_redrawn() {
+    apply_and_watch(true);
+}
+
+/// The same when Apply comes in the frame of the last change, before the draft worker can have drawn
+/// that draft: the applied text shows as the editor draws it. The old text used to come back until the
+/// page was redrawn.
+#[test]
+fn a_paragraph_applied_before_its_preview_shows_its_new_text_until_the_page_is_redrawn() {
+    apply_and_watch(false);
+}
+
+/// Changes a paragraph's "Topmost" to "T", applies it, once the draft's preview is on screen or before
+/// it can be (`previewed`), and checks the frames until the page is redrawn.
+fn apply_and_watch(previewed: bool) {
     let _gpu = gpu();
     let bytes = source_font_fixture_with_text("BT /F1 24 Tf 20 220 Td (Topmost) Tj ET BT /F2 24 Tf 20 120 Td (Bottom) Tj ET");
     // The jobs, the page renders among them, wait until the test runs them.
@@ -3880,21 +3894,32 @@ fn an_applied_paragraph_keeps_its_edited_look_until_the_page_is_redrawn() {
     let head = egui::Rect::from_min_max(top.min, egui::pos2(top.left() + top.width() * 0.12, top.bottom()));
     let tail = egui::Rect::from_min_max(egui::pos2(top.left() + top.width() * 0.3, top.top()), top.max).shrink(2.0);
     click_at(&mut h, top.center());
-    // The editor's textless page.
+    // The raster of the paragraph as it opened.
     support::settle_held(&mut h, &jobs);
     h.state_mut().views[0].session.line_editor.as_mut().expect("the top box is open").text = "T".into();
-    h.run_steps(2);
-    // The editor now draws a PDF raster asynchronously. Preserve the look the user has
-    // actually seen when Apply runs, rather than relying on two frames finishing the raster.
-    support::settle_held(&mut h, &jobs);
+    if previewed {
+        h.run_steps(2);
+        // The editor now draws a PDF raster asynchronously. Preserve the look the user has
+        // actually seen when Apply runs, rather than relying on two frames finishing the raster.
+        support::settle_held(&mut h, &jobs);
+    }
     // From here the renders wait: the frames below see the page as it was before applying.
-    h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+    if previewed {
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+    } else {
+        // Change and key in one frame (a queued key press takes several): the worker is asked for the
+        // draft in the frame that applies it. That frame still shows the draft before.
+        let apply = egui::Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND };
+        h.input_mut().events.push(apply);
+        h.step();
+        assert!(h.state().views[0].session.line_editor.is_none(), "applied in the frame of the change");
+    }
     for frame in 0..4 {
         h.step();
         assert!(h.state().views[0].session.line_editor.is_none(), "applied");
         let pixels = h.render().unwrap();
-        assert!(ink(&pixels, head) > 20, "frame {frame} after applying shows no text");
-        assert_eq!(ink(&pixels, tail), 0, "frame {frame} after applying shows the old text again");
+        assert!(ink(&pixels, head) > 20, "previewed {previewed}: frame {frame} after applying shows no text");
+        assert_eq!(ink(&pixels, tail), 0, "previewed {previewed}: frame {frame} after applying shows the old text again");
     }
     // The page drawn with the edit.
     support::settle_held(&mut h, &jobs);
@@ -4284,12 +4309,17 @@ fn a_serif_paragraph_keeps_its_pdf_font_while_typing() {
             _ => None,
         })
         .expect("the inline editor retains its caret layout");
-    assert!(
-        galley.rows.iter().flat_map(|row| &row.row.visuals.mesh.vertices).all(|vertex| vertex.color == egui::Color32::TRANSPARENT),
-        "interface fallback glyphs must stay invisible after typing, too"
-    );
+    let drawn: Vec<egui::Color32> = galley.rows.iter().flat_map(|row| &row.row.visuals.mesh.vertices).map(|vertex| vertex.color).collect();
+    assert!(drawn.iter().all(|color| *color == egui::Color32::TRANSPARENT), "interface fallback glyphs must stay invisible after typing, too");
     let id = h.state().views[0].id;
-    assert_eq!(h.state().session.get(id).unwrap().text_lines(0)[0].text, "Page 1");
+    let line = h.state().session.get(id).unwrap().text_lines(0)[0].clone();
+    assert_eq!(line.text, "Page 1");
+    // The PDF draft shows the typed "2": ink after the page's own text, clear of the caret and the outline.
+    let page = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let at = |x: f64, y: f64| page.min + egui::vec2(x as f32, 300.0 - y as f32) * (page.width() / 200.0);
+    let [_, bottom, right, top] = line.rect;
+    let typed = egui::Rect::from_min_max(at(right + 0.05 * line.size, top), at(right + 0.4 * line.size, bottom));
+    assert!(ink(&h.render().unwrap(), typed) > 5, "the PDF draft doesn't show the typed character");
     if std::env::var_os("PDFCRAFT_ORGANIZE_SNAPSHOT").is_some() {
         save_live_shot(&mut h, "font-preview-typing.png");
     }
