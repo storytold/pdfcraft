@@ -34,6 +34,7 @@ mod print_colour;
 mod printing;
 mod reading;
 mod redact;
+mod rename_ink;
 mod signing;
 mod text_cache;
 mod tools;

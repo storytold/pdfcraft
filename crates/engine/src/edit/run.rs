@@ -144,6 +144,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::SetCalculationOrder { .. }
         | Edit::SetInitialView(_)
         | Edit::FixHairlines { .. }
+        | Edit::RenameInk { .. }
         | Edit::AddAttachment { .. }
         | Edit::DeleteAttachment { .. }
         | Edit::ConvertColours { .. }
@@ -700,6 +701,11 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             let fixed = pdfcraft_edit::fix_hairlines(doc, pages, settings)?;
             if fixed.lines == 0 {
                 return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("no hairlines found on those pages".into())));
+            }
+        }
+        Edit::RenameInk { from, to } => {
+            if pdfcraft_edit::rename_ink(doc, from, to)?.spaces == 0 {
+                return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("no colour space names the ink {from}"))));
             }
         }
         Edit::AddAttachment { name, bytes, description, mime } => {
