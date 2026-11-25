@@ -26,6 +26,7 @@ mod ocrs;
 pub mod page_layout;
 mod pitch;
 pub mod preprocess;
+pub mod resolution;
 pub mod synthesis;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tesseract;

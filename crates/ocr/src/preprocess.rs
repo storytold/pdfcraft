@@ -1,11 +1,12 @@
 //! Preprocessing: a pure function between the page raster and recognition, in fixed order —
-//! (a) DPI normalization, then the four opt-in steps (b) orientation, (c) deskew, (d) denoise,
-//! (e) binarization. Normalization exists for those steps (their windows and thresholds are
-//! calibrated for 300 dpi), so it runs only when at least one of them is on: with every step
-//! off the raster is handed to the engines exactly as it was rendered. (Enlarging a render
-//! on its own changes what the models read: a 72 dpi scan of "due: €250" read as "ue: ?250"
-//! after a 4× bilinear enlargement.) Everything is plain Rust on the RGBA raster: no
-//! Leptonica, no process, no new dependencies.
+//! (a) DPI normalization, (b) orientation, (c) resolution normalisation, then the opt-in steps
+//! (d) deskew, (e) denoise, (f) binarization. Normalization exists for those steps (their
+//! windows and thresholds are calibrated for 300 dpi), so it runs only when at least one of
+//! them is on: with every step off the raster is handed to the engines exactly as it was
+//! rendered. (Enlarging a render on its own changes what the models read: a 72 dpi scan of
+//! "due: €250" read as "ue: ?250" after a 4× bilinear enlargement. The enlargement that
+//! helps is the Lanczos one of [`crate::resolution`], asked for as a policy.) Everything is
+//! plain Rust on the RGBA raster: no Leptonica, no process, no new dependencies.
 //!
 //! Every geometric step records its inverse; the result carries one exact
 //! [`InverseTransform`] (an affine map, composed in f64), and callers map every word box
@@ -14,9 +15,11 @@
 //! The heuristics are deliberately conservative and panic-free: an image too small to judge,
 //! a blank page, or a score without a clear margin is a no-op, never a guess.
 
+use crate::resolution::{self, ResolutionPolicy};
 use crate::{MAX_PIXELS, MAX_SIDE, OcrError, OcrImage};
 
-/// The four opt-in steps. All off by default: a scan is passed through as rendered.
+/// The opt-in steps and the resolution policy. Everything off (native) by default: a scan
+/// is passed through as rendered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PreprocessOptions {
     /// Detect pages scanned at 90°/180°/270° and turn them upright.
@@ -27,6 +30,11 @@ pub struct PreprocessOptions {
     pub denoise: bool,
     /// Sauvola binarization (window 8, k 0.34).
     pub binarize: bool,
+    /// Enlarge a page whose letters measure too small to read, before the geometric steps
+    /// run ([`crate::resolution::choose`] works the policy out from the words of a pass over
+    /// the rendered raster). [`ResolutionPolicy::Native`] by default: the raster is read as
+    /// rendered.
+    pub resolution: ResolutionPolicy,
 }
 
 impl PreprocessOptions {
@@ -44,8 +52,9 @@ pub struct Preprocessed {
     /// Maps pixel coordinates in [`Preprocessed::image`] back to the input raster's.
     pub inverse_transform: InverseTransform,
     /// The image's resolution in dots per inch: 300 after normalization (only when a step is
-    /// on), or the source's own
-    /// when it already rendered at 300 or more.
+    /// on), the source's own
+    /// when it already rendered at 300 or more, and either of those times the resolution
+    /// policy's factor when the page was enlarged.
     pub dpi: f32,
 }
 
@@ -74,7 +83,20 @@ pub fn preprocess(image: OcrImage, source_dpi: f32, options: &PreprocessOptions)
             inverse = compose(&inverse, &inverse_quarter_turns(turns, w, h));
         }
     }
-    // (c) Deskew: straighten skewed lines (opt-in; no-op under 64 px, blank, or without a
+    // (c) Resolution: a page whose letters measure too small to read is enlarged here, before
+    // the steps below see it, with a Lanczos kernel — so the strokes gain detail instead of
+    // being smoothed away. The policy is measured from a recognition pass on the rendered
+    // raster (resolution::choose); past the raster caps the enlargement is refused, as the
+    // dpi normalization's own is.
+    if let ResolutionPolicy::UpscaleLanczos { factor } = options.resolution
+        && factor > 1
+    {
+        scaled_size(current.width, current.height, f64::from(factor))?;
+        current = resolution::upscale_lanczos(&current, factor);
+        inverse = compose(&inverse, &InverseTransform::scale(1.0 / f64::from(factor)));
+        dpi *= f32::from(factor);
+    }
+    // (d) Deskew: straighten skewed lines (opt-in; no-op under 64 px, blank, or without a
     // clear margin or below 0.1°).
     if options.deskew
         && let Some(angle) = estimate_skew(&current)
@@ -83,11 +105,11 @@ pub fn preprocess(image: OcrImage, source_dpi: f32, options: &PreprocessOptions)
         current = straightened;
         inverse = compose(&inverse, &back);
     }
-    // (d) Denoise: 3×3 median with edge clamping (opt-in; dimensions never change).
+    // (e) Denoise: 3×3 median with edge clamping (opt-in; dimensions never change).
     if options.denoise {
         current = median3(&current);
     }
-    // (e) Binarize: Sauvola (window 8, k 0.34) via an integral image (opt-in); dark ink stays
+    // (f) Binarize: Sauvola (window 8, k 0.34) via an integral image (opt-in); dark ink stays
     // dark and paper stays light.
     if options.binarize {
         current = sauvola(&current);
@@ -690,6 +712,38 @@ mod tests {
         assert_eq!(preprocess(src, f32::NAN, &on).unwrap().image.width, 100);
     }
 
+    /// The resolution policy enlarges the raster before the steps run, records the resolution
+    /// the enlarged image stands for, and its boxes map back to the original scan; past the caps
+    /// the enlargement is refused like the dpi normalization's own.
+    #[test]
+    fn the_resolution_policy_enlarges_the_page_and_boxes_map_back() {
+        let src = white(100, 50);
+        let policy = PreprocessOptions { resolution: ResolutionPolicy::UpscaleLanczos { factor: 3 }, ..Default::default() };
+        let p = preprocess(src, 72.0, &policy).unwrap();
+        assert_eq!((p.image.width, p.image.height), (300, 150), "three times each side");
+        assert_eq!(p.dpi, 216.0, "the enlarged raster stands for three times the resolution");
+        assert_eq!(p.inverse_transform.map_rect([0.0, 0.0, 300.0, 150.0]), [0.0, 0.0, 100.0, 50.0]);
+        assert_eq!(p.inverse_transform.apply(30.0, 15.0), (10.0, 5.0));
+        let wide = white(9999, 10);
+        assert!(matches!(preprocess(wide, 72.0, &policy), Err(OcrError::ImageTooLarge)), "past the side cap");
+    }
+
+    /// The enlargement composes with the geometric steps: a page scanned on its side is turned
+    /// upright, doubled, and its ink still maps back onto the original scan's ink.
+    #[test]
+    fn the_enlargement_composes_with_a_quarter_turn() {
+        let scanned = rotated(1);
+        let opts = PreprocessOptions { auto_rotate: true, resolution: ResolutionPolicy::UpscaleLanczos { factor: 2 }, ..Default::default() };
+        let p = preprocess(scanned.clone(), 300.0, &opts).unwrap();
+        assert_eq!((p.image.width, p.image.height), (scanned.height * 2, scanned.width * 2), "turned upright, then doubled");
+        let corrected = ink_bbox(&p.image).unwrap_or_else(|| panic!("the corrected page still has ink"));
+        let back = p.inverse_transform.map_rect(corrected);
+        let original = ink_bbox(&scanned).unwrap();
+        for i in 0..4 {
+            assert!((back[i] - original[i]).abs() <= 2.0, "{back:?} vs {original:?}");
+        }
+    }
+
     /// With every step off a low-dpi render is read exactly as rendered: not resampled, with
     /// the identity as its way back. (Reading a 72 dpi scan through a 4x enlargement changed
     /// what the models read: "due: \€250" came back as "ue: ?250".)
@@ -749,7 +803,8 @@ mod tests {
     #[test]
     fn blank_pages_are_a_noop() {
         let src = white(200, 200);
-        let p = preprocess(src, 300.0, &PreprocessOptions { auto_rotate: true, deskew: true, denoise: true, binarize: true }).unwrap();
+        let p = preprocess(src, 300.0, &PreprocessOptions { auto_rotate: true, deskew: true, denoise: true, binarize: true, ..Default::default() })
+            .unwrap();
         assert_eq!(p.inverse_transform, InverseTransform::identity());
     }
 
@@ -888,7 +943,7 @@ mod tests {
     #[test]
     fn hostile_inputs_never_panic() {
         let tiny = white(1, 1);
-        let all = PreprocessOptions { auto_rotate: true, deskew: true, denoise: true, binarize: true };
+        let all = PreprocessOptions { auto_rotate: true, deskew: true, denoise: true, binarize: true, ..Default::default() };
         let p = preprocess(tiny, 300.0, &all).unwrap();
         assert_eq!((p.image.width, p.image.height), (1, 1));
         // All-black: no paper, nothing to judge.
