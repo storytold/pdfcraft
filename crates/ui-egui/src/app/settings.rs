@@ -238,10 +238,10 @@ pub struct PdfCraftSettings {
 
 impl Settings for PdfCraftSettings {
     const APP_ID: &'static str = "pdfcraft";
-    const FOLDER_NAME: &'static str = "PdfCraft";
+    const FOLDER_NAME: &'static str = "PdfChocolate";
     const SCHEMA_VERSION: u32 = 1;
-    const PORTABLE_MARKERS: &'static [&'static str] = &["portable.txt", "PdfCraft.portable"];
-    const PORTABLE_DIR: &'static str = "PdfCraftData";
+    const PORTABLE_MARKERS: &'static [&'static str] = &["portable.txt", "PdfChocolate.portable"];
+    const PORTABLE_DIR: &'static str = "PdfChocolateData";
 }
 
 /// The settings store the app reads its preferences from and writes them to.
@@ -310,7 +310,7 @@ fn legacy_folders() -> Vec<PathBuf> {
                 .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
             folders.extend(config.map(|c| c.join("pdfcraft")));
         }
-        folders.extend(eframe::storage_dir("PdfCraft"));
+        folders.extend(eframe::storage_dir("PdfChocolate"));
         folders.extend(eframe::storage_dir("PrintCraft"));
         folders
     }

@@ -174,7 +174,7 @@ codegen-units = 1
 
 # Vendored, patched third-party crates (see vendor/README.md). Each patch is meant to go upstream.
 [workspace.metadata.cl]
-selection = ["pdfcraft", "pdfcraft-ui-egui", "pdfcraft-web"]
+selection = ["pdfcraft", "pdfcraft-ui-egui"]
 tracked = ["egui", "eframe"]
 unset_env = ["CRAFT_FONTS_DIR", "CRAFT_FONTS_REQUIRED", "CRAFT_I18N_DIR", "CRAFT_I18N_REQUIRED", "PDFCRAFT_REQUIRE_WINRES"]
 

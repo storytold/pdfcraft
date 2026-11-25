@@ -1,43 +1,43 @@
-PdfCraft portable mode
+PdfChocolate portable mode
 
-While this file sits next to pdfcraft.exe, PdfCraft keeps its settings, log files, crash-recovery
-autosaves and new digital IDs in the PdfCraftData folder beside it, and writes nothing to
-%APPDATA% or %LOCALAPPDATA%. Copy the whole folder to move PdfCraft with its settings.
+While this file sits next to pdfchocolate.exe, PdfChocolate keeps its settings, log files, crash-recovery
+autosaves and new digital IDs in the PdfChocolateData folder beside it, and writes nothing to
+%APPDATA% or %LOCALAPPDATA%. Copy the whole folder to move PdfChocolate with its settings.
 
-Delete this file to use the normal per-user folders (%APPDATA%\PdfCraft and
-%LOCALAPPDATA%\PdfCraft) instead. If PdfCraftData can't be written (for example on a read-only
-drive), PdfCraft says so and uses the per-user folders instead.
+Delete this file to use the normal per-user folders (%APPDATA%\PdfChocolate and
+%LOCALAPPDATA%\PdfChocolate) instead. If PdfChocolateData can't be written (for example on a read-only
+drive), PdfChocolate says so and uses the per-user folders instead.
 
 Opening PDF files with this copy
 
 The portable copy doesn't register itself with Windows, so picking it under "Open with" may not
 stick. To offer it in Settings > Apps > Default apps, open PowerShell in this folder and run:
 
-  $exe = (Resolve-Path .\pdfcraft.exe).Path
+  $exe = (Resolve-Path .\pdfchocolate.exe).Path
   $c = "HKCU:\Software\Classes"
-  $cap = "HKCU:\Software\PdfCraft.Portable\Capabilities"
-  foreach ($k in "$c\PdfCraft.Portable\shell\open\command", "$c\.pdf\OpenWithProgids",
+  $cap = "HKCU:\Software\PdfChocolate.Portable\Capabilities"
+  foreach ($k in "$c\PdfChocolate.Portable\shell\open\command", "$c\.pdf\OpenWithProgids",
                  "$cap\FileAssociations", "HKCU:\Software\RegisteredApplications") {
     if (!(Test-Path $k)) { New-Item -Path $k -Force | Out-Null }
   }
-  Set-Item -Path "$c\PdfCraft.Portable" -Value "PDF Document"
-  Set-Item -Path "$c\PdfCraft.Portable\shell\open\command" -Value "`"$exe`" `"%1`""
-  New-ItemProperty -Path "$c\.pdf\OpenWithProgids" -Name PdfCraft.Portable -Value "" -PropertyType String -Force | Out-Null
-  New-ItemProperty -Path $cap -Name ApplicationName -Value "PdfCraft (portable)" -PropertyType String -Force | Out-Null
+  Set-Item -Path "$c\PdfChocolate.Portable" -Value "PDF Document"
+  Set-Item -Path "$c\PdfChocolate.Portable\shell\open\command" -Value "`"$exe`" `"%1`""
+  New-ItemProperty -Path "$c\.pdf\OpenWithProgids" -Name PdfChocolate.Portable -Value "" -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $cap -Name ApplicationName -Value "PdfChocolate (portable)" -PropertyType String -Force | Out-Null
   New-ItemProperty -Path $cap -Name ApplicationDescription -Value "Open-source PDF workbench" -PropertyType String -Force | Out-Null
-  New-ItemProperty -Path "$cap\FileAssociations" -Name .pdf -Value PdfCraft.Portable -PropertyType String -Force | Out-Null
-  New-ItemProperty -Path "HKCU:\Software\RegisteredApplications" -Name "PdfCraft (portable)" -Value "Software\PdfCraft.Portable\Capabilities" -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path "$cap\FileAssociations" -Name .pdf -Value PdfChocolate.Portable -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path "HKCU:\Software\RegisteredApplications" -Name "PdfChocolate (portable)" -Value "Software\PdfChocolate.Portable\Capabilities" -PropertyType String -Force | Out-Null
 
-Then open Settings > Apps > Default apps, search for .pdf (or for PdfCraft) and choose it. This
+Then open Settings > Apps > Default apps, search for .pdf (or for PdfChocolate) and choose it. This
 changes only your own user's settings (HKEY_CURRENT_USER), and it doesn't change the default app by
 itself. If you move or rename this folder, run it again from the new place.
 
 To undo, first choose another app for .pdf in Settings > Apps > Default apps (otherwise Windows
 keeps pointing PDF files at the removed entry), then run:
 
-  Remove-Item -Path "HKCU:\Software\Classes\PdfCraft.Portable", "HKCU:\Software\PdfCraft.Portable" -Recurse -ErrorAction SilentlyContinue
-  Remove-ItemProperty -Path "HKCU:\Software\Classes\.pdf\OpenWithProgids" -Name PdfCraft.Portable -ErrorAction SilentlyContinue
-  Remove-ItemProperty -Path "HKCU:\Software\RegisteredApplications" -Name "PdfCraft (portable)" -ErrorAction SilentlyContinue
+  Remove-Item -Path "HKCU:\Software\Classes\PdfChocolate.Portable", "HKCU:\Software\PdfChocolate.Portable" -Recurse -ErrorAction SilentlyContinue
+  Remove-ItemProperty -Path "HKCU:\Software\Classes\.pdf\OpenWithProgids" -Name PdfChocolate.Portable -ErrorAction SilentlyContinue
+  Remove-ItemProperty -Path "HKCU:\Software\RegisteredApplications" -Name "PdfChocolate (portable)" -ErrorAction SilentlyContinue
   foreach ($k in "HKCU:\Software\Classes\.pdf\OpenWithProgids", "HKCU:\Software\Classes\.pdf") {
     $i = Get-Item -Path $k -ErrorAction SilentlyContinue
     if ($i -and $i.ValueCount -eq 0 -and $i.SubKeyCount -eq 0) { Remove-Item -Path $k }

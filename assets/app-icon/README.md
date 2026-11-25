@@ -1,55 +1,35 @@
-# PdfCraft app icon
+# PdfChocolate app icon
 
-<img src="pdfcraft-small.svg" alt="PdfCraft app icon: an engraved lion's head on red" width="128">
+<img src="pdfchocolate-512.png" alt="PdfChocolate app icon: a pixel-art chocolate bar in a red wrapper on a beige tile" width="128">
 
-**Creature:** a lion, in a frontal head-and-shoulders portrait, mane running off the bottom of the tile.
-
-**Style:** an engraving (woodcut-weight line work) portrait in the Crafting Apps "owl template" framing:
-a full-bleed colour field, no frame or roundel, the animal looking at the viewer and filling the tile.
-
-**Palette:** exactly three colours.
-
-| Colour | Hex | Used for |
-|---|---|---|
-| Ink | `#0b0b0c` | line work and the figure's contour |
-| Paper | `#efe9dc` | the figure (the lion's silhouette) |
-| PdfCraft red (app colour) | `#b70228` | the full-bleed field |
-
-**Tile:** `viewBox="0 0 512 512"`, a rounded square with `rx=112` that clips everything. Windows and Linux
-icons use the full-bleed tile. macOS icons put it on Apple's grid (an 824 px body centred on a transparent
-1024 px canvas).
-
-**Provenance:** the project owner's original drawing, made in ArtCraft (2880 px, keyed to the palette), then
-vectorised (potrace; no filtering or warping).
-Licence: [LICENSE.txt](LICENSE.txt) (`MIT OR Apache-2.0`, like the repo).
+A chocolate bar, half unwrapped from a red wrapper with a gold band, as pixel art on a 64-dot grid
+(8 px per dot at 512 px), on a beige rounded tile. Licence: [LICENSE.txt](LICENSE.txt)
+(`MIT OR Apache-2.0`, like the repo).
 
 ## Files
 
 | File | What it is |
 |---|---|
-| `pdfcraft.svg` | the master vector (traced at 2048 px); every PNG, `.ico` and `.icns` is rendered from it |
-| `pdfcraft-small.svg` | a lighter vector (traced at 1024 px) for places where size matters, such as this README |
-| `pdfcraft-1024.png` | 1024 px on Apple's grid; also the runtime Dock icon on macOS |
-| `pdfcraft.icns` | macOS icon (16–1024 px) |
-| `pdfcraft.ico` | Windows icon (16–256 px), embedded in `pdfcraft.exe` by `apps/pdfcraft/build.rs` |
-| `pdfcraft-document.svg` | Windows PDF file icon master: a Lucide document outline, red badge and outlined PDF lettering; no font dependency |
-| `pdfcraft-document.ico` | Windows PDF file icon (16–256 px), embedded as resource 2 in `pdfcraft.exe` |
-| `hicolor/<n>x<n>/apps/ai.storyteller.pdfcraft.png` | Linux hicolor theme, 16–512 px; the 256 px one is the runtime icon on Windows and Linux |
-| `hicolor/scalable/apps/ai.storyteller.pdfcraft.svg` | Linux scalable icon (copy of the master) |
+| `pdfchocolate-512.png` | the master; every Windows and hicolor file below is rendered from it |
+| `pdfcraft.ico` | Windows app icon (16–256 px), resource 1 of `pdfchocolate.exe` (`apps/pdfcraft/build.rs`) |
+| `pdfcraft-document.ico` | Windows PDF file icon (16–256 px), resource 2: a page with a folded corner, the chocolate bar and a red PDF label |
+| `pdfcraft-1024.png` | 1024 px; the runtime Dock icon on macOS |
+| `hicolor/<n>x<n>/apps/ai.storyteller.pdfcraft.png` | 16–512 px; the 256 px one is the runtime window icon on Windows and Linux |
 
-Where it shows: `apps/pdfcraft/src/main.rs` sets the window icon (Dock, taskbar, Alt-Tab, launcher) and the
-Wayland app id `ai.storyteller.pdfcraft`; `packaging/linux/ai.storyteller.pdfcraft.desktop` names the
-hicolor icon.
+The file names keep their upstream `pdfcraft` names so the build and packaging scripts need no changes.
 
-Windows PDF files use resource 2 (`"pdfcraft.exe",-2`) when PdfCraft is chosen as the default
-reader; the app keeps resource 1. The document outline is adapted from Lucide `file-text`
-1.49.0 (ISC); its badge and outlined lettering are original (`MIT OR Apache-2.0`), covered by
-[LICENSE-document.txt](LICENSE-document.txt). Both icons are embedded, requiring no runtime
-sidecar. This provides a file type icon; first-page thumbnails still need a thumbnail provider.
+Windows PDF files show resource 2 (`"pdfchocolate.exe",-2`) once PdfChocolate is the default PDF app;
+the program itself keeps resource 1.
+
+### Still the upstream PdfCraft lion
+
+`pdfcraft.svg`, `pdfcraft-small.svg`, `pdfcraft.icns` and `hicolor/scalable/` are PdfCraft's
+engraved lion. Only the macOS and Linux packaging use them; Windows doesn't.
 
 ## Regenerate
 
-```sh
-packaging/icons.sh        # needs resvg and python3; iconutil (macOS) for the .icns
-cargo xtask assets        # then update the sha256 values in ATTRIBUTION.toml and run with --write
+```powershell
+powershell -File packaging/icons.ps1   # Windows; System.Drawing only
 ```
+
+Then update the sha256 values in `ATTRIBUTION.toml` and run `cargo xtask assets --write`.

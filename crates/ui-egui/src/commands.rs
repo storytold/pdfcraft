@@ -451,7 +451,6 @@ impl PdfCraftApp {
             "optimize.reduce" => self.reduce_file_size(ctx),
             "help.shortcuts" => self.open_shortcuts(ctx),
             "help.about" => self.open_about(craft::ui::patterns::form_dialogs::AboutTab::default()),
-            "help.check_updates" => self.check_for_updates(),
             _ => return None,
         }
         Some(true)

@@ -15,7 +15,6 @@ pub(super) mod marks_ui;
 pub(crate) mod page_dialogs;
 pub(crate) mod page_props;
 pub(super) mod pageboxes;
-mod pin_tools;
 pub(super) mod preferences;
 pub(super) mod printer_marks_ui;
 pub(crate) mod prompts;

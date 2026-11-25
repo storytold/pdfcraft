@@ -701,7 +701,6 @@ impl Prefs<'_> {
                 RowKind::Bool(d.restore_last_view),
             ));
             rows.push(RowSpec::new("general.reload", tl!("Reload documents when their files change on disk"), RowKind::Bool(d.reload_changed_files)));
-            rows.push(RowSpec::new("general.updates", tl!("Check for updates when PdfCraft starts"), RowKind::Bool(d.update_check_at_start)));
         }
         rows.push(RowSpec::new("general.secured_notice", tl!("Show a notice when a document is secured"), RowKind::Bool(d.show_secured_notice)));
         #[cfg(not(target_arch = "wasm32"))]

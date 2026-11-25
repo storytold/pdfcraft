@@ -98,7 +98,6 @@ mod text_select;
 mod theme;
 mod trust_signer;
 mod ui;
-mod updates;
 mod view;
 mod viewer;
 mod viewer_prefs;

@@ -1,7 +1,7 @@
 {
   "id": "pdfcraft",
-  "name": "PdfCraft",
-  "upgradeCode": "EA00C367-7270-4C50-9D8B-A7A5C88AD27F",
+  "name": "PdfChocolate",
+  "upgradeCode": "3BFD2ED7-FF44-4C41-9251-19C3F3C46972",
   "sources": [
     "pdfcraft.wxs",
     "installer-ui.wxs"
@@ -12,315 +12,314 @@
   "payloads": [
     "LICENSE-APACHE",
     "LICENSE-MIT",
-    "LICENSE-document.txt",
     "NOTICE",
     "pdfcraft-cli.exe",
-    "pdfcraft.exe"
+    "pdfchocolate.exe"
   ],
   "registry": [
     [
       "-1",
-      "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\pdfcraft.exe",
+      "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\pdfchocolate.exe",
       "",
       "[#PdfcraftExe]"
     ],
     [
       "-1",
-      "Software\\Classes\\PdfCraft.Document",
+      "Software\\Classes\\PdfChocolate.Document",
       "",
       "PDF Document"
     ],
     [
       "-1",
-      "Software\\Classes\\PdfCraft.Document\\DefaultIcon",
+      "Software\\Classes\\PdfChocolate.Document\\DefaultIcon",
       "",
       "\"[#PdfcraftExe]\",-2"
     ],
     [
       "-1",
-      "Software\\Classes\\PdfCraft.Document\\shell\\open\\command",
+      "Software\\Classes\\PdfChocolate.Document\\shell\\open\\command",
       "",
       "\"[#PdfcraftExe]\" \"%1\""
     ],
     [
       "-1",
-      "Software\\Classes\\PdfCraft.Document",
+      "Software\\Classes\\PdfChocolate.Document",
       "TypeOverlay",
       ""
     ],
     [
       "-1",
       "Software\\Classes\\.pdf\\OpenWithProgids",
-      "PdfCraft.Document",
+      "PdfChocolate.Document",
       ""
     ],
     [
       "-1",
-      "Software\\Classes\\Applications\\pdfcraft.exe",
+      "Software\\Classes\\Applications\\pdfchocolate.exe",
       "FriendlyAppName",
-      "PdfCraft"
+      "PdfChocolate"
     ],
     [
       "-1",
-      "Software\\Classes\\Applications\\pdfcraft.exe\\DefaultIcon",
+      "Software\\Classes\\Applications\\pdfchocolate.exe\\DefaultIcon",
       "",
       "\"[#PdfcraftExe]\",-2"
     ],
     [
       "-1",
-      "Software\\Classes\\Applications\\pdfcraft.exe\\SupportedTypes",
+      "Software\\Classes\\Applications\\pdfchocolate.exe\\SupportedTypes",
       ".pdf",
       ""
     ],
     [
       "-1",
-      "Software\\Classes\\Applications\\pdfcraft.exe\\shell\\open\\command",
+      "Software\\Classes\\Applications\\pdfchocolate.exe\\shell\\open\\command",
       "",
       "\"[#PdfcraftExe]\" \"%1\""
     ],
     [
       "-1",
-      "Software\\PdfCraft\\Capabilities",
+      "Software\\PdfChocolate\\Capabilities",
       "ApplicationName",
-      "PdfCraft"
+      "PdfChocolate"
     ],
     [
       "-1",
-      "Software\\PdfCraft\\Capabilities",
+      "Software\\PdfChocolate\\Capabilities",
       "ApplicationDescription",
       "Open-source PDF workbench"
     ],
     [
       "-1",
-      "Software\\PdfCraft\\Capabilities",
+      "Software\\PdfChocolate\\Capabilities",
       "ApplicationIcon",
       "[#PdfcraftExe],0"
     ],
     [
       "-1",
-      "Software\\PdfCraft\\Capabilities\\FileAssociations",
+      "Software\\PdfChocolate\\Capabilities\\FileAssociations",
       ".pdf",
-      "PdfCraft.Document"
+      "PdfChocolate.Document"
     ],
     [
       "-1",
       "Software\\RegisteredApplications",
-      "PdfCraft",
-      "Software\\PdfCraft\\Capabilities"
+      "PdfChocolate",
+      "Software\\PdfChocolate\\Capabilities"
     ],
     [
       "-1",
-      "Software\\PdfCraft\\Shortcuts",
+      "Software\\PdfChocolate\\Shortcuts",
       "StartMenu",
       "#1"
     ],
     [
       "-1",
-      "Software\\PdfCraft\\Shortcuts",
+      "Software\\PdfChocolate\\Shortcuts",
       "Desktop",
       "#1"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.pdf\\shell\\PdfCraft.Edit",
+      "Software\\Classes\\SystemFileAssociations\\.pdf\\shell\\PdfChocolate.Edit",
       "",
-      "Edit with PdfCraft"
+      "Edit with PdfChocolate"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.pdf\\shell\\PdfCraft.Edit",
+      "Software\\Classes\\SystemFileAssociations\\.pdf\\shell\\PdfChocolate.Edit",
       "Icon",
       "\"[#PdfcraftExe]\",0"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.pdf\\shell\\PdfCraft.Edit",
+      "Software\\Classes\\SystemFileAssociations\\.pdf\\shell\\PdfChocolate.Edit",
       "MultiSelectModel",
       "Document"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.pdf\\shell\\PdfCraft.Edit\\command",
+      "Software\\Classes\\SystemFileAssociations\\.pdf\\shell\\PdfChocolate.Edit\\command",
       "",
       "\"[#PdfcraftExe]\" \"%1\""
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.png\\shell\\PdfCraft.CreatePdf",
+      "Software\\Classes\\SystemFileAssociations\\.png\\shell\\PdfChocolate.CreatePdf",
       "",
-      "Create PDF with PdfCraft\u2026"
+      "Create PDF with PdfChocolate\u2026"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.png\\shell\\PdfCraft.CreatePdf",
+      "Software\\Classes\\SystemFileAssociations\\.png\\shell\\PdfChocolate.CreatePdf",
       "MultiSelectModel",
       "Single"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.png\\shell\\PdfCraft.CreatePdf\\command",
+      "Software\\Classes\\SystemFileAssociations\\.png\\shell\\PdfChocolate.CreatePdf\\command",
       "",
       "\"[#PdfcraftExe]\" --create-images \"%1\""
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.jpg\\shell\\PdfCraft.CreatePdf",
+      "Software\\Classes\\SystemFileAssociations\\.jpg\\shell\\PdfChocolate.CreatePdf",
       "",
-      "Create PDF with PdfCraft\u2026"
+      "Create PDF with PdfChocolate\u2026"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.jpg\\shell\\PdfCraft.CreatePdf",
+      "Software\\Classes\\SystemFileAssociations\\.jpg\\shell\\PdfChocolate.CreatePdf",
       "MultiSelectModel",
       "Single"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.jpg\\shell\\PdfCraft.CreatePdf\\command",
+      "Software\\Classes\\SystemFileAssociations\\.jpg\\shell\\PdfChocolate.CreatePdf\\command",
       "",
       "\"[#PdfcraftExe]\" --create-images \"%1\""
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.jpeg\\shell\\PdfCraft.CreatePdf",
+      "Software\\Classes\\SystemFileAssociations\\.jpeg\\shell\\PdfChocolate.CreatePdf",
       "",
-      "Create PDF with PdfCraft\u2026"
+      "Create PDF with PdfChocolate\u2026"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.jpeg\\shell\\PdfCraft.CreatePdf",
+      "Software\\Classes\\SystemFileAssociations\\.jpeg\\shell\\PdfChocolate.CreatePdf",
       "MultiSelectModel",
       "Single"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.jpeg\\shell\\PdfCraft.CreatePdf\\command",
+      "Software\\Classes\\SystemFileAssociations\\.jpeg\\shell\\PdfChocolate.CreatePdf\\command",
       "",
       "\"[#PdfcraftExe]\" --create-images \"%1\""
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.tif\\shell\\PdfCraft.CreatePdf",
+      "Software\\Classes\\SystemFileAssociations\\.tif\\shell\\PdfChocolate.CreatePdf",
       "",
-      "Create PDF with PdfCraft\u2026"
+      "Create PDF with PdfChocolate\u2026"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.tif\\shell\\PdfCraft.CreatePdf",
+      "Software\\Classes\\SystemFileAssociations\\.tif\\shell\\PdfChocolate.CreatePdf",
       "MultiSelectModel",
       "Single"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.tif\\shell\\PdfCraft.CreatePdf\\command",
+      "Software\\Classes\\SystemFileAssociations\\.tif\\shell\\PdfChocolate.CreatePdf\\command",
       "",
       "\"[#PdfcraftExe]\" --create-images \"%1\""
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.tiff\\shell\\PdfCraft.CreatePdf",
+      "Software\\Classes\\SystemFileAssociations\\.tiff\\shell\\PdfChocolate.CreatePdf",
       "",
-      "Create PDF with PdfCraft\u2026"
+      "Create PDF with PdfChocolate\u2026"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.tiff\\shell\\PdfCraft.CreatePdf",
+      "Software\\Classes\\SystemFileAssociations\\.tiff\\shell\\PdfChocolate.CreatePdf",
       "MultiSelectModel",
       "Single"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.tiff\\shell\\PdfCraft.CreatePdf\\command",
+      "Software\\Classes\\SystemFileAssociations\\.tiff\\shell\\PdfChocolate.CreatePdf\\command",
       "",
       "\"[#PdfcraftExe]\" --create-images \"%1\""
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.gif\\shell\\PdfCraft.CreatePdf",
+      "Software\\Classes\\SystemFileAssociations\\.gif\\shell\\PdfChocolate.CreatePdf",
       "",
-      "Create PDF with PdfCraft\u2026"
+      "Create PDF with PdfChocolate\u2026"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.gif\\shell\\PdfCraft.CreatePdf",
+      "Software\\Classes\\SystemFileAssociations\\.gif\\shell\\PdfChocolate.CreatePdf",
       "MultiSelectModel",
       "Single"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.gif\\shell\\PdfCraft.CreatePdf\\command",
+      "Software\\Classes\\SystemFileAssociations\\.gif\\shell\\PdfChocolate.CreatePdf\\command",
       "",
       "\"[#PdfcraftExe]\" --create-images \"%1\""
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.bmp\\shell\\PdfCraft.CreatePdf",
+      "Software\\Classes\\SystemFileAssociations\\.bmp\\shell\\PdfChocolate.CreatePdf",
       "",
-      "Create PDF with PdfCraft\u2026"
+      "Create PDF with PdfChocolate\u2026"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.bmp\\shell\\PdfCraft.CreatePdf",
+      "Software\\Classes\\SystemFileAssociations\\.bmp\\shell\\PdfChocolate.CreatePdf",
       "MultiSelectModel",
       "Single"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.bmp\\shell\\PdfCraft.CreatePdf\\command",
+      "Software\\Classes\\SystemFileAssociations\\.bmp\\shell\\PdfChocolate.CreatePdf\\command",
       "",
       "\"[#PdfcraftExe]\" --create-images \"%1\""
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.jp2\\shell\\PdfCraft.CreatePdf",
+      "Software\\Classes\\SystemFileAssociations\\.jp2\\shell\\PdfChocolate.CreatePdf",
       "",
-      "Create PDF with PdfCraft\u2026"
+      "Create PDF with PdfChocolate\u2026"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.jp2\\shell\\PdfCraft.CreatePdf",
+      "Software\\Classes\\SystemFileAssociations\\.jp2\\shell\\PdfChocolate.CreatePdf",
       "MultiSelectModel",
       "Single"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.jp2\\shell\\PdfCraft.CreatePdf\\command",
+      "Software\\Classes\\SystemFileAssociations\\.jp2\\shell\\PdfChocolate.CreatePdf\\command",
       "",
       "\"[#PdfcraftExe]\" --create-images \"%1\""
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.j2k\\shell\\PdfCraft.CreatePdf",
+      "Software\\Classes\\SystemFileAssociations\\.j2k\\shell\\PdfChocolate.CreatePdf",
       "",
-      "Create PDF with PdfCraft\u2026"
+      "Create PDF with PdfChocolate\u2026"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.j2k\\shell\\PdfCraft.CreatePdf",
+      "Software\\Classes\\SystemFileAssociations\\.j2k\\shell\\PdfChocolate.CreatePdf",
       "MultiSelectModel",
       "Single"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.j2k\\shell\\PdfCraft.CreatePdf\\command",
+      "Software\\Classes\\SystemFileAssociations\\.j2k\\shell\\PdfChocolate.CreatePdf\\command",
       "",
       "\"[#PdfcraftExe]\" --create-images \"%1\""
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.jpx\\shell\\PdfCraft.CreatePdf",
+      "Software\\Classes\\SystemFileAssociations\\.jpx\\shell\\PdfChocolate.CreatePdf",
       "",
-      "Create PDF with PdfCraft\u2026"
+      "Create PDF with PdfChocolate\u2026"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.jpx\\shell\\PdfCraft.CreatePdf",
+      "Software\\Classes\\SystemFileAssociations\\.jpx\\shell\\PdfChocolate.CreatePdf",
       "MultiSelectModel",
       "Single"
     ],
     [
       "-1",
-      "Software\\Classes\\SystemFileAssociations\\.jpx\\shell\\PdfCraft.CreatePdf\\command",
+      "Software\\Classes\\SystemFileAssociations\\.jpx\\shell\\PdfChocolate.CreatePdf\\command",
       "",
       "\"[#PdfcraftExe]\" --create-images \"%1\""
     ]

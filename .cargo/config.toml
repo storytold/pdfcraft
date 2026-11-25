@@ -13,3 +13,8 @@ rustflags = ["-C", "target-feature=+simd128"]
 # which it can only do once `main` runs.
 [env]
 AWS_LC_SYS_CFLAGS = "-DBORINGSSL_NO_STATIC_INITIALIZER"
+# Interface translations: a storytold/craft-i18n checkout beside this repository, at the commit in
+# `craft-i18n.rev` (git clone https://github.com/storytold/craft-i18n ../craft-i18n, then check out
+# that commit). Without it the build warns and the interface is English only. An environment
+# variable of the same name overrides this.
+CRAFT_I18N_DIR = { value = "../craft-i18n", relative = true }

@@ -107,11 +107,11 @@ fn migrate_legacy_folders() {
     if portable() {
         return;
     }
-    let mut moves = vec![(eframe::storage_dir("PrintCraft"), eframe::storage_dir("PdfCraft"))];
+    let mut moves = vec![(eframe::storage_dir("PrintCraft"), eframe::storage_dir("PdfChocolate"))];
     // Recovery lives in the settings folder except on Windows, where it is under %LOCALAPPDATA%.
     if cfg!(windows) {
         let local = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()).map(std::path::PathBuf::from);
-        moves.push((local.as_ref().map(|d| d.join("PrintCraft")), local.map(|d| d.join("PdfCraft"))));
+        moves.push((local.as_ref().map(|d| d.join("PrintCraft")), local.map(|d| d.join("PdfChocolate"))));
     }
     for (old, new) in moves {
         let (Some(old), Some(new)) = (old, new) else { continue };
@@ -165,11 +165,6 @@ fn main() -> eframe::Result {
     }
     // aws-lc detects the CPU's features here, where it used to before `main` (`init_crypto`).
     pdfcraft_engine::sign::init_crypto();
-    // Windows: the update helper is a copy of this program started with `--finish-update`.
-    #[cfg(windows)]
-    if let Some(result) = craft_update::self_update::finish(&pdfcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
-        std::process::exit(i32::from(result.is_err()));
-    }
     // First, so the panic hook and every start-up warning are recorded.
     let logger = craft::platform::logs::install(craft::platform::logs::LogNames::new("pdfcraft"));
     if let Some(value) = pdfcraft_platform::crypto_env::dropped() {
@@ -212,7 +207,7 @@ fn main() -> eframe::Result {
     // The log file stays in the data folder; opened after the arguments (so `--version` leaves
     // no file behind) and after the PrintCraft migration (which a fresh folder would block).
     // Records logged until now are written to it first.
-    let data_dir = if portable() { settings_dir() } else { eframe::storage_dir("PdfCraft") };
+    let data_dir = if portable() { settings_dir() } else { eframe::storage_dir("PdfChocolate") };
     if let (Some(logger), Some(dir)) = (logger, data_dir) {
         match logger.attach_dir(&dir.join("logs")) {
             Ok(path) => log::info!("PdfCraft {}, log file {}", pdfcraft_engine::build_info::version(), path.display()),
@@ -256,7 +251,7 @@ fn main() -> eframe::Result {
     let started = Rc::new(Cell::new(false));
     let first = if choice == RendererChoice::Gl { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
     let result = eframe::run_native(
-        "PdfCraft",
+        "PdfChocolate",
         native_options(launch.integrated(), first),
         app_creator(
             launch.clone(),
@@ -274,7 +269,7 @@ fn main() -> eframe::Result {
             // usually still works there, so that's better than quitting.
             log::error!("the GPU renderer (wgpu) didn't start: {e}. Starting with OpenGL instead; set PDFCRAFT_RENDERER=gl to skip wgpu.");
             eframe::run_native(
-                "PdfCraft",
+                "PdfChocolate",
                 native_options(launch.integrated(), eframe::Renderer::Glow),
                 app_creator(
                     launch,
@@ -358,7 +353,7 @@ fn retry_with_gl(choice: RendererChoice, app_started: bool) -> bool {
 /// The window and renderer settings for one run.
 fn native_options(integrated: bool, renderer: eframe::Renderer) -> eframe::NativeOptions {
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("PdfCraft")
+        .with_title("PdfChocolate")
         .with_inner_size([1440.0, 920.0])
         .with_min_inner_size(pdfcraft_ui_egui::MIN_WINDOW_SIZE)
         .with_drag_and_drop(true)
@@ -526,7 +521,6 @@ fn app_creator<'a>(
         if let Some(window) = cc.winit_window() {
             set_taskbar_icon(window);
         }
-        app.set_startup_update_check(true);
         app.printer_source = Some(pdfcraft_ui_egui::system_printers());
         app.two_sided_source = Some(pdfcraft_ui_egui::system_two_sided());
         app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows"));

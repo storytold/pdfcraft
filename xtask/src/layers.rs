@@ -357,7 +357,7 @@ mod tests {
 
     #[test]
     fn apps_exempt() {
-        for app in ["pdfcraft", "pdfcraft-cli", "pdfcraft-web", "pdfcraft-ocr-worker", "xtask"] {
+        for app in ["pdfcraft", "pdfcraft-cli", "xtask"] {
             assert!(check(&[c(app, &[("egui", Normal, false), ("pdfcraft-ui-egui", Normal, true)])]).is_empty());
         }
     }

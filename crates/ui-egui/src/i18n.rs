@@ -553,7 +553,35 @@ pub fn key_name(s: &str) -> &str {
 
 /// Translate an English UI string; unknown strings come back unchanged.
 pub fn tr(lang: Lang, s: &str) -> &str {
-    lang.i18n().t(lang.lang, s)
+    rebrand(lang.i18n().t(lang.lang, s))
+}
+
+/// The name this build shows. The catalogs (and the English keys) say "PdfCraft"; the name is
+/// swapped after lookup, so every translation keeps working.
+pub const APP_NAME: &str = "PdfChocolate";
+const UPSTREAM_NAME: &str = "PdfCraft";
+
+/// `text` with the upstream app name replaced by [`APP_NAME`]. Rewritten strings are interned:
+/// they are UI strings, a bounded set, so each one is leaked once and reused.
+pub fn rebrand(text: &str) -> &str {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static INTERNED: LazyLock<Mutex<HashMap<String, &'static str>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+    if !text.contains(UPSTREAM_NAME) {
+        return text;
+    }
+    let Ok(mut map) = INTERNED.lock() else { return text };
+    if let Some(done) = map.get(text) {
+        return done;
+    }
+    let done: &'static str = Box::leak(text.replace(UPSTREAM_NAME, APP_NAME).into_boxed_str());
+    map.insert(text.to_owned(), done);
+    done
+}
+
+/// [`rebrand`] for an owned string.
+pub fn rebrand_owned(text: String) -> String {
+    if text.contains(UPSTREAM_NAME) { text.replace(UPSTREAM_NAME, APP_NAME) } else { text }
 }
 
 /// How the layers below say their own sentences in the current language.
@@ -569,19 +597,19 @@ pub fn words(wording: &str) -> String {
 
 /// Like [`tr`], for an English string that needs a disambiguating `context`.
 pub fn tr_ctx<'a>(lang: Lang, context: &str, s: &'a str) -> &'a str {
-    lang.i18n().tc(lang.lang, context, s)
+    rebrand(lang.i18n().tc(lang.lang, context, s))
 }
 
 /// A string keyed by its command id, falling back to the translation of the English `label`. Only
 /// PdfCraft's own `@id` rows count ([`own_id`]).
 pub fn tr_id<'a>(lang: Lang, id: &str, label: &'a str) -> &'a str {
-    if own_id(lang, id, label) { lang.i18n().tid(lang.lang, id, label) } else { tr(lang, label) }
+    if own_id(lang, id, label) { rebrand(lang.i18n().tid(lang.lang, id, label)) } else { tr(lang, label) }
 }
 
 /// A platform service's message in the current language: its catalog id's row, else the translation of its English.
 pub fn platform_text(text: craft::platform::PlatformText) -> String {
     let lang = current();
-    lang.i18n().tid(lang.lang, text.key(), text.english).to_owned()
+    rebrand(lang.i18n().tid(lang.lang, text.key(), text.english)).to_owned()
 }
 
 /// Whether `lang` has PdfCraft's own `@id` row for `id` ([`Lang::has_own`]: command ids are each
@@ -674,7 +702,7 @@ pub fn command_label(text: &str) -> String {
 pub fn menu_label(id: &str, label: &str) -> String {
     let lang = current();
     match own_id(lang, id, label).then(|| lang.i18n().get(lang.lang, "@id", id)).flatten() {
-        Some(translated) => translated.to_owned(),
+        Some(translated) => rebrand(translated).to_owned(),
         None => command_label(label),
     }
 }
@@ -683,7 +711,7 @@ pub fn menu_label(id: &str, label: &str) -> String {
 /// The form is the language's CLDR category; `{n}` is written in `0`–`9` without grouping or
 /// isolate marks, as PdfCraft always has.
 pub fn trn(lang: Lang, n: u64, one: &str, other: &str) -> String {
-    lang.i18n().trn_plain(lang.lang, n, one, other)
+    rebrand_owned(lang.i18n().trn_plain(lang.lang, n, one, other))
 }
 
 /// `name` lowercased with the Latin accents that occur in language names folded away, so a

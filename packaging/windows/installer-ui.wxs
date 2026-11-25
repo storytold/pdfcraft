@@ -134,7 +134,7 @@
       </Dialog>
 
       <!-- Shown by Windows Installer (Restart Manager) when an upgrade or repair must replace files
-           that a running PdfCraft holds open. OK closes those programs (MSIRMSHUTDOWN=2) and
+           that a running PdfChocolate holds open. OK closes those programs (MSIRMSHUTDOWN=2) and
            continues; Cancel ends setup. -->
       <Dialog Id="MsiRMFilesInUse" Width="370" Height="200" Title="[ProductName] Setup" KeepModeless="yes">
         <Control Id="Title" Type="Text" X="20" Y="15" Width="330" Height="25" Text="{\InstallerTitle}Files in use" />

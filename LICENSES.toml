@@ -31,14 +31,9 @@ destination = "vendor/edit-session/LICENSE-APACHE"
 sha256 = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
 
 [[document]]
-source = "assets/app-icon/LICENSE-document.txt"
-destination = "assets/app-icon/LICENSE-document.txt"
-sha256 = "64a3137e3d5cc41e5b78d2ad8dd9ddddd6588283f9f7b3128aa6a8a50852fb9a"
-
-[[document]]
 source = "assets/app-icon/LICENSE.txt"
 destination = "assets/app-icon/LICENSE.txt"
-sha256 = "b768acafe6cbad8247eedf86b5b5381feefcd4ee0f8c7808b86811bc687cf37b"
+sha256 = "eebe460d049b784507c4d162a51b787dc41fb035a6b8a3a8698137b10b71329f"
 
 [[document]]
 source = "assets/fonts/OFL-DancingScript.txt"

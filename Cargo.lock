@@ -2469,17 +2469,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "craft-web-api"
-version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=0a6e42b80bfd586aee6ee1144aa98cf1ea37a844#0a6e42b80bfd586aee6ee1144aa98cf1ea37a844"
-dependencies = [
- "js-sys",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
-]
-
-[[package]]
 name = "craft-web-host"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=0a6e42b80bfd586aee6ee1144aa98cf1ea37a844#0a6e42b80bfd586aee6ee1144aa98cf1ea37a844"
@@ -6153,7 +6142,6 @@ name = "pdfcraft"
 version = "0.22.0"
 dependencies = [
  "craft",
- "craft-update",
  "eframe",
  "egui",
  "egui_kittest",
@@ -6474,16 +6462,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pdfcraft-ocr-worker"
-version = "0.22.0"
-dependencies = [
- "js-sys",
- "pdfcraft-ocr",
- "wasm-bindgen",
- "web-sys",
-]
-
-[[package]]
 name = "pdfcraft-optimize"
 version = "0.22.0"
 dependencies = [
@@ -6714,22 +6692,6 @@ dependencies = [
  "winsafe",
  "xattr",
  "zeroize",
-]
-
-[[package]]
-name = "pdfcraft-web"
-version = "0.22.0"
-dependencies = [
- "craft",
- "craft-web-api",
- "craft-web-host",
- "eframe",
- "egui",
- "js-sys",
- "pdfcraft-ui-egui",
- "serde_json",
- "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]

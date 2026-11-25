@@ -4,7 +4,7 @@
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-const BIN: &str = env!("CARGO_BIN_EXE_pdfcraft");
+const BIN: &str = env!("CARGO_BIN_EXE_pdfchocolate");
 
 /// Run the app with `args`, failing if it is still running after 60 s (it opened its window).
 fn run(args: &[&str], stdout: Stdio) -> Output {

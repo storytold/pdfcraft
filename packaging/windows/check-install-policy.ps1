@@ -50,35 +50,6 @@ try {
   if ('INSTALLFOLDER' -notin $secureProperties) {
     throw 'The selected installation folder must survive elevation (secure INSTALLFOLDER).'
   }
-  if ($policy.mode -eq 'perUser') {
-    if ($properties.ContainsKey('ALLUSERS')) { throw 'Launcher must remain per-user; machine self-update is not part of this change.' }
-    if ($properties['UpgradeCode'].Trim('{}') -ne $policy.upgradeCode) { throw 'Launcher upgrade identity changed.' }
-    $dirs = @{}
-    foreach ($row in (Read-Rows $database 'SELECT `Directory`, `Directory_Parent`, `DefaultDir` FROM `Directory`' 3)) { $dirs[$row[0]] = @($row[1],$row[2]) }
-    if ($dirs['INSTALLFOLDER'][0] -ne 'CraftSuiteFolder' -or $dirs['CraftSuiteFolder'][1] -ne 'ArtCraft' -or
-        $dirs['CraftSuiteFolder'][0] -ne 'LocalProgramsFolder' -or $dirs['LocalProgramsFolder'][0] -ne 'LocalAppDataFolder') {
-      throw 'Launcher new-install folder must be under the per-user ArtCraft suite root.'
-    }
-    foreach ($explicit in @('', 'F:\Chosen exact launcher')) {
-      Set-SessionProperty $session 'PREVIOUSINSTALLFOLDER' 'E:\Existing exact launcher'
-      Set-SessionProperty $session 'INSTALLFOLDER' $explicit
-      $row = @(Read-Rows $database 'SELECT `Condition` FROM `InstallUISequence` WHERE `Action` = ''CraftRestoreLauncherFolder''' 1)[0]
-      if ($session.EvaluateCondition($row[0]) -eq 1) {
-        if ($session.DoAction('CraftRestoreLauncherFolder') -ne 1) { throw 'Launcher restore action failed.' }
-      }
-      $expected = if ($explicit) { $explicit } else { 'E:\Existing exact launcher' }
-      if ((Get-SessionProperty $session 'INSTALLFOLDER') -ne $expected) { throw 'Launcher custom or existing path was lost.' }
-    }
-    $rows = @(Read-Rows $database 'SELECT `Root`, `Key`, `Name`, `Value` FROM `Registry`' 4)
-    if (@($rows | Where-Object { $_[0] -ne '1' }).Count) { throw 'Launcher registration must stay under the current account.' }
-    foreach ($entry in $policy.registry) {
-      if (@($rows | Where-Object { $_[0] -eq $entry[0] -and $_[1] -eq $entry[1] -and $_[2] -eq $entry[2] -and $_[3] -eq $entry[3] }).Count -ne 1) {
-        throw 'Launcher registration or shortcut preference changed unexpectedly.'
-      }
-    }
-    Write-Output 'PASS ArtCraft Launcher: per-user scope, suite folder, remembered/custom paths and existing registration. No installation performed.'
-    return
-  }
   if ($properties['ALLUSERS'] -ne '2' -or $properties['MSIINSTALLPERUSER'] -ne '1') {
     throw 'Policy regression: new packages must default to the per-user dual-scope context.'
   }
@@ -87,9 +58,8 @@ try {
   foreach ($row in (Read-Rows $database 'SELECT `Directory`, `Directory_Parent`, `DefaultDir` FROM `Directory`' 3)) {
     $directories[$row[0]] = @($row[1], $row[2])
   }
-  if ($directories['INSTALLFOLDER'][0] -ne 'CraftSuiteFolder' -or
-      $directories['CraftSuiteFolder'][1] -ne 'ArtCraft') { throw 'Expected the app under the ArtCraft suite folder.' }
-  $programs = $directories['CraftSuiteFolder'][0]
+  if ($directories['INSTALLFOLDER'][1] -notmatch 'PdfChocolate$') { throw 'Expected the app in its own PdfChocolate folder.' }
+  $programs = $directories['INSTALLFOLDER'][0]
   if ($programs -eq 'ProgramFiles6432Folder') { $programs = $directories[$programs][0] }
   if ($programs -notin 'ProgramFilesFolder', 'ProgramFiles64Folder') {
     throw 'Use Windows Installer native folder redirection, not a hard-coded profile path.'
@@ -161,7 +131,7 @@ try {
   $machineRoot = if ((Get-PackageTemplate $database) -match '^Intel') {
     if (Get-SessionProperty $session 'VersionNT64') { ${env:ProgramFiles(x86)} } else { $env:ProgramFiles }
   } elseif ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
-  $machineFolder = (Join-Path $machineRoot "ArtCraft\$($policy.name)") + '\'
+  $machineFolder = (Join-Path $machineRoot "$($policy.name)") + '\'
   foreach ($scope in @('1', '')) {
     Set-SessionProperty $session 'ALLUSERS' $scope
     Set-SessionProperty $session 'INSTALLFOLDER' ''
@@ -171,7 +141,7 @@ try {
       if ($session.EvaluateCondition($row[2]) -eq 1 -and $session.DoAction($row[0]) -ne 1) { throw "$($row[0]) failed." }
     }
     $folder = Get-SessionProperty $session 'INSTALLFOLDER'
-    $wanted = if ($scope -eq '1') { $machineFolder } else { (Join-Path $env:LOCALAPPDATA "Programs\ArtCraft\$($policy.name)") + '\' }
+    $wanted = if ($scope -eq '1') { $machineFolder } else { (Join-Path $env:LOCALAPPDATA "Programs\$($policy.name)") + '\' }
     if ($folder -ine $wanted) { throw "Wizard default folder for ALLUSERS='$scope' is '$folder', expected '$wanted'." }
   }
   $execute = @{}

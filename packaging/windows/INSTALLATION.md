@@ -1,6 +1,6 @@
 # Windows installation policy checks
 
-New installations default to the current account under `Programs\ArtCraft\<App>`.
+New installations default to the current account under `Programs\PdfChocolate`.
 The first setup page offers installation for everyone. Scope is selected before duplicate
 checks and directory costing. An update uses the existing context's remembered exact folder;
 `INSTALLFOLDER` supplied explicitly is never replaced. It is a secure MSI property so the

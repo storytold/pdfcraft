@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Record the facts behind a scanner detection of PdfCraft Windows files: SHA-256, Authenticode
+  Record the facts behind a scanner detection of PdfChocolate Windows files: SHA-256, Authenticode
   status and, with -YaraExe and -YaraRule, the matched strings and offsets of an external YARA rule.
 
 .DESCRIPTION
@@ -13,10 +13,10 @@
   condition branch that fired.
 
 .EXAMPLE
-  pwsh packaging/windows/security-audit.ps1 -Path dist\release\pdfcraft-0.5.0-windows-x64-portable\pdfcraft.exe
+  pwsh packaging/windows/security-audit.ps1 -Path dist\release\pdfchocolate-0.5.0-windows-x64-portable\pdfchocolate.exe
 
 .EXAMPLE
-  pwsh packaging/windows/security-audit.ps1 -Path .\pdfcraft.exe, .\pdfcraft-cli.exe -YaraExe C:\tools\yara64.exe -YaraRule C:\rules\CobaltStrikeBeacon.yar
+  pwsh packaging/windows/security-audit.ps1 -Path .\pdfchocolate.exe, .\pdfcraft-cli.exe -YaraExe C:\tools\yara64.exe -YaraRule C:\rules\CobaltStrikeBeacon.yar
 #>
 param(
   [Parameter(Mandatory)] [string[]] $Path,
