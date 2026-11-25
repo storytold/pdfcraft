@@ -188,7 +188,7 @@ pub(super) fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document,
         view.organize = false;
     }
 
-    let pages = super::pictures::DocPages::new(cx.session, view.id);
+    let pages = super::pictures::DocPages::new(cx.session, view.id).quality(view.gpu_quality);
     let actions = [
         (IconId::new("rotate_ccw"), CommandRef::new("page.rotate_ccw")),
         (IconId::new("rotate_cw"), CommandRef::new("page.rotate")),

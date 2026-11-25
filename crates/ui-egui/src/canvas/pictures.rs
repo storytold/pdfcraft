@@ -111,6 +111,7 @@ pub struct DocPages<'a> {
     rotation: u16,
     revisions: Option<&'a PageRevisions>,
     reports: Option<RenderReports>,
+    quality: f32,
 }
 
 impl<'a> DocPages<'a> {
@@ -124,7 +125,15 @@ impl<'a> DocPages<'a> {
             rotation: 0,
             revisions: None,
             reports: None,
+            quality: 1.0,
         }
+    }
+
+    /// Scales raster dimensions by `quality` (floor 1/8, #606); 1.0 asks for the full device scale.
+    #[must_use]
+    pub fn quality(mut self, quality: f32) -> Self {
+        self.quality = if quality.is_finite() && quality > 0.0 { quality.clamp(0.125, 1.0) } else { 1.0 };
+        self
     }
 
     /// Shows the pages turned by the view's rotation (degrees clockwise).
@@ -151,7 +160,7 @@ impl<'a> DocPages<'a> {
     fn revision_of(&self, page: usize, request: &ThumbRequest, print: Option<bool>) -> Revision {
         let generation = self.revisions.map_or((0, 0), |r| r.of(page));
         let region = request.region.map(|r| [r.min.x.to_bits(), r.min.y.to_bits(), r.max.x.to_bits(), r.max.y.to_bits()]);
-        Revision::of(&(generation, request.side, region, self.rotation, print))
+        Revision::of(&(generation, request.side, region, self.rotation, print, self.quality.to_bits()))
     }
 
     /// The job making `page` at `request`; `print` is `Some(grayscale)` for a print preview.
@@ -164,7 +173,7 @@ impl<'a> DocPages<'a> {
         let region = request.region.map(|r| unturned(r, self.rotation));
         let (pw, ph) = (f64::from(info.width), f64::from(info.height));
         let part = region.map_or((pw, ph), |r| (f64::from(r.width()) * pw, f64::from(r.height()) * ph));
-        let scale = (f64::from(request.side) / part.0.max(part.1).max(1e-3)) as f32;
+        let scale = ((f64::from(request.side) / part.0.max(part.1).max(1e-3)) as f32 * self.quality).max(1e-4);
         if !scale.is_finite() || scale <= 0.0 {
             return ThumbRender::Later(Box::new(|_| Err(LoadFailure::Unreadable)));
         }
@@ -332,5 +341,39 @@ mod tests {
         let all = jobs.waiting();
         assert!(edited >= 1, "the edited page is rendered again");
         assert!(edited < all, "the other pages keep their pictures: {edited} jobs for one page, {all} for the document");
+    }
+
+    /// Issue #606: a lowered GPU quality factor must change the request's revision so cached
+    /// textures are invalidated, and produce rasters with smaller pixel dimensions.
+    #[test]
+    fn reduced_gpu_quality_lowers_page_picture_dimensions_and_bumps_revision() {
+        use craft::host::queue::Cancel;
+
+        let mut session = Session::new();
+        let blank = session.create_blank(200.0, 300.0, 1).expect("a blank document");
+        let id = session.open_new("doc.pdf", blank).expect("opens");
+
+        let full = DocPages::new(&session, id).quality(1.0);
+        let half = DocPages::new(&session, id).quality(0.5);
+
+        let request = ThumbRequest::for_cell(300.0, 2.0); // 300 pt at 2 px/pt = 600 px
+        assert_ne!(
+            full.revision(&0, &request),
+            half.revision(&0, &request),
+            "a lowered quality factor must change the revision so cached textures are re-rendered"
+        );
+
+        let render_full = full.render(&0, &request);
+        let render_half = half.render(&0, &request);
+
+        let cancel = Cancel::new();
+        let ThumbRender::Later(job_full) = render_full else { panic!("expected later job") };
+        let ThumbRender::Later(job_half) = render_half else { panic!("expected later job") };
+
+        let Ok(LoadedPicture::Image(img_full)) = job_full(&cancel) else { panic!("expected image") };
+        let Ok(LoadedPicture::Image(img_half)) = job_half(&cancel) else { panic!("expected image") };
+
+        assert_eq!(img_full.size, [406, 608], "full quality renders at device scale");
+        assert_eq!(img_half.size, [203, 304], "half quality halves the rendered texture dimensions");
     }
 }
