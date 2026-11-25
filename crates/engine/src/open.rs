@@ -373,7 +373,6 @@ impl Session {
             password: render_password,
             dirty: false,
             generation: 0,
-            snapshot_generation: 0,
             read_only_reason,
             form: Arc::new(form),
             marker_scan: OnceLock::new(),
