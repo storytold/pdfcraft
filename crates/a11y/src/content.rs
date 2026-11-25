@@ -100,10 +100,12 @@ impl Walk<'_> {
                     let Some(r) = op.name(0).and_then(|n| xobjects.get(n)).and_then(Object::as_ref) else { continue };
                     let obj = self.doc.get(r);
                     let Object::Stream(x) = &*obj else { continue };
+                    // An XObject with `/StructParent` is a content item itself (ISO 32000-1 §14.7.4.3).
+                    let item = inside || x.dict.contains(b"StructParent");
                     match x.dict.name(b"Subtype") {
                         Some(b"Image") => {
                             self.scan.has_images = true;
-                            untagged += usize::from(!inside);
+                            untagged += usize::from(!item);
                         }
                         Some(b"Form") if depth < MAX_FORM_DEPTH && !self.forms.contains(&r) => {
                             if !self.budget.enter_form() {
@@ -126,7 +128,7 @@ impl Walk<'_> {
                                 .map(|o| self.doc.resolve(o))
                                 .and_then(|o| o.as_dict().cloned())
                                 .unwrap_or_else(|| res.clone());
-                            self.content(&data, &inner, inside, depth + 1);
+                            self.content(&data, &inner, item, depth + 1);
                             self.forms.remove(&r);
                         }
                         _ => {}
