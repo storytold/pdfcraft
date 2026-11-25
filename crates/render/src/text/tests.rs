@@ -4019,3 +4019,29 @@ fn an_unattached_alphabetic_mark_reads_with_the_glyphs_at_its_place() {
     let text = layout(v).plain_text();
     assert_eq!(text, "שלום\u{345}ab");
 }
+
+/// Issue #8213: glyphs drawn while the clip encloses no area are left out. That is a point
+/// (`0 0 0 0 re`) and a rectangle whose width or height is zero after the CTM. Text after the
+/// matching `Q` is extracted. Invisible text (`3 Tr`) stays. A zero-height or zero-width line
+/// the renderer widens to one device pixel (`10 50 100 0 re`, `50 10 0 100 re`) still has area,
+/// so its text stays with the strip it paints.
+#[test]
+fn glyphs_inside_a_zero_area_clip_are_not_extracted() {
+    let pdf = marked_pages(&[
+        "q 0 0 0 0 re W n BT /F1 12 Tf 1 0 0 1 100 150 Tm (v) Tj ET Q BT /F1 12 Tf 1 0 0 1 120 150 Tm (5) Tj ET",
+        "q 0 0 0 1 10 0 cm 10 10 50 50 re W n BT /F1 12 Tf 1 0 0 1 20 150 Tm (hidden) Tj ET Q BT /F1 12 Tf 1 0 0 1 20 120 Tm (after) Tj ET",
+        "q 1 0 0 0 0 10 cm 10 10 50 50 re W n BT /F1 12 Tf 1 0 0 1 20 150 Tm (hidden) Tj ET Q BT /F1 12 Tf 1 0 0 1 20 120 Tm (after) Tj ET",
+        "q 10 50 100 0 re W n BT /F1 12 Tf 1 0 0 1 20 150 Tm (line) Tj ET Q BT /F1 12 Tf 1 0 0 1 20 120 Tm (kept) Tj ET",
+        "q 50 10 0 100 re W n BT /F1 12 Tf 1 0 0 1 20 150 Tm (line) Tj ET Q",
+        "BT /F1 12 Tf 3 Tr 1 0 0 1 50 150 Tm (ocr) Tj ET q 0 0 0 0 re W n BT /F1 12 Tf 3 Tr 1 0 0 1 50 120 Tm (layer) Tj ET Q",
+        "q 40 80 100 40 re W n BT /F1 12 Tf 1 0 0 1 50 100 Tm (shown) Tj ET Q",
+    ]);
+    assert_eq!(marked_text(&pdf, 0).plain_text(), "5");
+    assert_eq!(marked_text(&pdf, 1).plain_text(), "after");
+    assert_eq!(marked_text(&pdf, 2).plain_text(), "after");
+    assert_eq!(marked_text(&pdf, 3).plain_text(), "line\nkept");
+    assert_eq!(marked_text(&pdf, 4).plain_text(), "line");
+    let invisible = marked_text(&pdf, 5).plain_text();
+    assert!(invisible.contains("ocr") && invisible.contains("layer"), "{invisible}");
+    assert_eq!(marked_text(&pdf, 6).plain_text(), "shown");
+}

@@ -289,11 +289,27 @@ impl TextDevice {
         self.replaced.push(Replaced { at, text, originals });
     }
 
+    /// Whether the clip in force encloses no area. Clip paths arrive in view space, after the
+    /// CTM, and each one is cut to the clip outside it, so this is a point (`0 0 0 0 re`), a
+    /// rectangle a singular CTM flattens to zero width or height, or an intersection that does
+    /// not overlap. A NaN edge (a damaged clip) is not empty: that edge stays unclipped.
+    ///
+    /// A user-space line with exactly one zero side is not this. The renderer widens it to the
+    /// one-pixel strip a fill of it marks (`degenerate_fill_area`, ISO 32000-2 §10.7.4) before
+    /// the device sees it, and that strip has area, so the glyph stays with the pixels.
+    fn clip_empty(&self) -> bool {
+        self.clips.last().is_some_and(|c| c.x0 >= c.x1 || c.y0 >= c.y1)
+    }
+
     /// Record view-space box `b`, drawn with `transform`, as painted by the open `/ActualText`
     /// replacement, cut to the visible area (the crop box, and the clip in force); paint wholly
     /// outside the crop box, or that an exclusion leaves out (`excluded`), only marks the
     /// replacement.
     fn paint(&mut self, b: Rect, transform: Affine, excluded: bool) {
+        // Nothing of it can show: the clip in force encloses no area.
+        if self.clip_empty() {
+            return;
+        }
         // Wholly outside the crop box, as a glyph dropped there is: the replacement can't be read.
         let Some(on_page) = cut(b, self.page) else {
             self.paint_cropped = true;
@@ -459,6 +475,14 @@ impl<'a> Device<'a> for TextDevice {
     }
     fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
     fn draw_glyph(&mut self, glyph: &Glyph<'a>, transform: Affine, glyph_transform: Affine, _: &Paint<'a>, mode: &GlyphDrawMode) {
+        // A glyph drawn while the clip encloses no area never paints. Invisible text (`3 Tr`, an
+        // OCR layer) is still recorded: whether it is extracted is separate from clipping.
+        if self.clip_empty() && !matches!(mode, GlyphDrawMode::Invisible) {
+            // A replacement that loses a glyph this way keeps only the glyphs it still draws, as
+            // one the crop box cuts does: its full text would bring the hidden glyph back.
+            self.actual_cropped |= self.actual.is_some();
+            return;
+        }
         if self.excluded_depth.is_some() || (self.filter.images && matches!(mode, GlyphDrawMode::Invisible)) {
             self.actual_filtered |= self.actual.is_some();
             return;
