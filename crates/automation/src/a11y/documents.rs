@@ -100,6 +100,18 @@ impl Automation {
         }))
     }
 
+    pub(crate) fn print_inks(&self, a: &Args) -> Result<Value> {
+        let Some(list) = self.doc(a)?.inks() else {
+            return Err(ToolError::Failed("the document has no object graph to read inks from".into()));
+        };
+        let inks: Vec<Value> = list
+            .inks
+            .iter()
+            .map(|i| json!({ "name": i.name, "process": i.process, "alternates": i.alternates, "pages": i.pages.iter().map(|p| p + 1).collect::<Vec<_>>() }))
+            .collect();
+        Ok(json!({ "inks": inks, "dropped": list.dropped, "complete": list.complete }))
+    }
+
     pub(crate) fn pdfa_convert(&mut self, a: &Args) -> Result<Value> {
         let level = self.pdfa_level(a)?;
         let id = self.doc(a)?.id;

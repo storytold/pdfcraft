@@ -1487,6 +1487,9 @@ pub fn tools() -> Vec<ToolDef> {
         t("print_readiness", "Print readiness", "Verification only. Reports effective image resolution where each image is drawn (not against the page size), page boxes and bleed past the trim, output intents, fonts that are not embedded, and the PDF/A-2b structural result. Does not modify the document, embed fonts, invent a press profile, or check PDF/X.")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t("print_inks", "List inks", "Read only. Every ink a Separation or DeviceN colour space names: its name, whether it is a process ink (Cyan, Magenta, Yellow, Black), the family of each alternate space it is defined with (more than one means the definitions disagree), and the 1-based pages whose resources, forms, patterns, Type 3 fonts or annotation appearances name it. A page counts whether or not its content paints with the ink; an ink no page draws from has no pages. All and None aren't inks. At most 1024 inks are listed, the rest counted in dropped; complete is false when the page walks stopped at their limit.")
+            .ro()
+            .with(schema(json!({ "doc": doc() }), &["doc"])),
         t("pdfa_convert", "Save as PDF/A", "Standards ▸ Save as PDF/A: fix what can be fixed for PDF/A-2b or 3b (XMP identification and metadata, an sRGB output intent, forbidden actions and JavaScript, annotation print flags, image interpolation, encryption, the file header, the file identifier). Returns what was fixed and what remains (e.g. fonts that aren't embedded). Undoable; save the document to keep it.")
             .cmd("standards.pdfa")
             .with(schema(json!({ "doc": doc(), "level": { "type": "string", "enum": ["2b", "3b"] } }), &["doc"])),
