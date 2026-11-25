@@ -3,8 +3,10 @@
 //! middle of the window, on pages larger and smaller than the window, and also when a zoom and a
 //! step land in the same frame.
 
+use crate::support::AppHarness as _;
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::canvas::{Fit, PageDisplay};
 
 /// The word searched for, placed (x, y in PDF user space) on each page.
 const NEEDLE: &str = "needle";
@@ -75,12 +77,15 @@ fn harness() -> Harness<'static, PdfCraftApp> {
 
 /// [`harness`] with frames `dt` seconds apart.
 fn harness_dt(dt: f32) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_step_dt(dt).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("search.pdf", None, fixture()).expect("opens");
-        app.set_option("left", "closed").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_step_dt(dt).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "search.pdf", None, fixture()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     settle(&mut h);
@@ -96,6 +101,13 @@ fn harness_dt(dt: f32) -> Harness<'static, PdfCraftApp> {
     assert_eq!(h.state().views[0].find.as_ref().unwrap().matches.len(), needles(), "every needle is found");
     settle(&mut h);
     h
+}
+
+/// Zoom the first view to `zoom`, off any fit.
+fn set_zoom(h: &mut Harness<'static, PdfCraftApp>, zoom: f64) {
+    let v = &mut h.state_mut().views[0].view;
+    v.zoom = zoom;
+    v.fit = Fit::None;
 }
 
 /// Run frames until rendering has finished and the layout holds still.
@@ -114,15 +126,15 @@ fn settle(h: &mut Harness<'static, PdfCraftApp>) {
 fn assert_match_shown(h: &Harness<'static, PdfCraftApp>, what: &str) {
     let v = &h.state().views[0];
     let f = v.find.as_ref().unwrap();
-    let i = f.current.unwrap_or_else(|| panic!("{what}: no current match"));
-    let (page, range) = f.matches[i].clone();
+    let i = f.matches.current().unwrap_or_else(|| panic!("{what}: no current match"));
+    let (page, range) = (f.matches.matches()[i].page, f.matches.matches()[i].range.clone());
     let window = v.viewport_rect();
     let at = |g: usize| v.glyph_screen_pos(page, g).unwrap_or_else(|| panic!("{what}: match {i} (page {}) is not on screen", page + 1));
     let (first, last) = (at(range.start), at(range.end - 1));
     // At the highest zooms one word is wider than the window: then its middle is what shows.
     let ends = if last.x - first.x < window.width() * 0.8 { vec![first, last] } else { vec![first.lerp(last, 0.5)] };
     for p in ends {
-        assert!(window.contains(p), "{what}: match {i} (page {}) at {p:?} is outside the window {window:?} (zoom {})", page + 1, v.zoom);
+        assert!(window.contains(p), "{what}: match {i} (page {}) at {p:?} is outside the window {window:?} (zoom {})", page + 1, v.view.zoom);
     }
     let Some(page_rect) = v.page_screen_rect(page) else { return };
     let centre = first.lerp(last, 0.5);
@@ -134,10 +146,20 @@ fn assert_match_shown(h: &Harness<'static, PdfCraftApp>, what: &str) {
     let room_y = (page_rect.top() < window.top() - 1.0 || centre.y > window.center().y)
         && (page_rect.bottom() > window.bottom() + 1.0 || centre.y < window.center().y);
     if room_x {
-        assert!((centre.x - window.center().x).abs() < slack, "{what}: match {i} at x {} is not centred in {window:?} (zoom {})", centre.x, v.zoom);
+        assert!(
+            (centre.x - window.center().x).abs() < slack,
+            "{what}: match {i} at x {} is not centred in {window:?} (zoom {})",
+            centre.x,
+            v.view.zoom
+        );
     }
     if room_y {
-        assert!((centre.y - window.center().y).abs() < slack, "{what}: match {i} at y {} is not centred in {window:?} (zoom {})", centre.y, v.zoom);
+        assert!(
+            (centre.y - window.center().y).abs() < slack,
+            "{what}: match {i} at y {} is not centred in {window:?} (zoom {})",
+            centre.y,
+            v.view.zoom
+        );
     }
 }
 
@@ -147,7 +169,7 @@ fn every_match_is_shown_after_zooming() {
     let mut h = harness();
     let n = needles();
     for zoom in [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0] {
-        h.state_mut().views[0].set_zoom(zoom);
+        set_zoom(&mut h, zoom);
         settle(&mut h);
         for forward in [true, false] {
             for _ in 0..n {
@@ -164,7 +186,7 @@ fn every_match_is_shown_after_zooming() {
 fn search_panel_results_are_shown_after_zooming() {
     let mut h = harness();
     for zoom in [0.33, 3.0, 12.0] {
-        h.state_mut().views[0].set_zoom(zoom);
+        set_zoom(&mut h, zoom);
         settle(&mut h);
         for i in (0..needles()).rev() {
             h.state_mut().views[0].go_to_match(i);
@@ -187,11 +209,11 @@ fn zooming_and_stepping_in_any_order_shows_the_match() {
     for round in 0..80 {
         let same_frame = next(3) == 0;
         match next(4) {
-            0 => h.state_mut().views[0].zoom_step(true),
-            1 => h.state_mut().views[0].zoom_step(false),
+            0 => h.state_mut().views[0].view.zoom_step(true),
+            1 => h.state_mut().views[0].view.zoom_step(false),
             2 => {
                 let z = [0.2, 0.75, 1.5, 6.0, 10.0][next(5) as usize];
-                h.state_mut().views[0].set_zoom(z);
+                set_zoom(&mut h, z);
             }
             _ => {}
         }
@@ -215,9 +237,10 @@ fn zooming_and_stepping_in_any_order_shows_the_match() {
 /// the zoom keeps it where it went instead of holding the point under the pointer still.
 #[test]
 fn a_step_during_a_wheel_zoom_keeps_the_match_on_screen() {
-    let mut h = harness();
-    h.state_mut().set_option("animation_effects", "on").unwrap();
-    h.state_mut().views[0].set_zoom(3.0);
+    // Quarter-second harness frames complete the zoom before the search step arrives.
+    let mut h = harness_dt(1.0 / 60.0);
+    h.set_option("animation_effects", "on").unwrap();
+    set_zoom(&mut h, 3.0);
     settle(&mut h);
     let n = needles();
     for (i, dy) in (0..n).zip([60.0, -60.0].into_iter().cycle()) {
@@ -233,12 +256,12 @@ fn a_step_during_a_wheel_zoom_keeps_the_match_on_screen() {
             source: egui::MouseWheelSource::Unknown,
         });
         h.run_steps(2);
-        let before = h.state().views[0].zoom;
+        let before = h.state().views[0].view.zoom;
         h.state_mut().views[0].find_step(true);
         // Let the zoom finish easing, then the rendering.
         h.run_steps(60);
         settle(&mut h);
-        assert!((h.state().views[0].zoom - before).abs() > 1e-3, "step {i}: the zoom was still easing when the step came");
+        assert!((h.state().views[0].view.zoom - before).abs() > 1e-3, "step {i}: the zoom was still easing when the step came");
         assert_match_shown(&h, &format!("step {i} during a wheel zoom ({dy})"));
     }
 }
@@ -252,8 +275,8 @@ fn a_step_during_a_wheel_zoom_keeps_the_match_on_screen() {
 fn a_step_during_a_wheel_zoom_keeps_the_match_when_the_pointer_leaves_and_returns() {
     for (dy, out) in [(120.0, 2), (240.0, 4), (480.0, 3)] {
         let mut h = harness_dt(1.0 / 60.0);
-        h.state_mut().set_option("animation_effects", "on").unwrap();
-        h.state_mut().views[0].set_zoom(3.0);
+        h.set_option("animation_effects", "on").unwrap();
+        set_zoom(&mut h, 3.0);
         settle(&mut h);
         let w = h.state().views[0].viewport_rect();
         // The pointer well away from the middle, where the zoom would otherwise be anchored.
@@ -270,14 +293,14 @@ fn a_step_during_a_wheel_zoom_keeps_the_match_when_the_pointer_leaves_and_return
         h.run_steps(2);
         h.state_mut().views[0].find_step(true);
         h.run_steps(1);
-        let during = h.state().views[0].zoom;
+        let during = h.state().views[0].view.zoom;
         // Off the page view (over the toolbar above it) while the zoom eases, then back.
         h.hover_at(egui::pos2(corner.x, (w.min.y - 20.0).max(1.0)));
         h.run_steps(out);
         h.hover_at(corner);
         h.run_steps(30);
         settle(&mut h);
-        assert!((h.state().views[0].zoom - during).abs() > 1e-3, "{dy}: the zoom was still easing when the pointer left");
+        assert!((h.state().views[0].view.zoom - during).abs() > 1e-3, "{dy}: the zoom was still easing when the pointer left");
         assert_match_shown(&h, &format!("pointer out for {out} frames during a wheel zoom ({dy})"));
     }
 }
@@ -285,12 +308,17 @@ fn a_step_during_a_wheel_zoom_keeps_the_match_when_the_pointer_leaves_and_return
 /// Single page and two-up, scrolling or a page (spread) at a time: each step shows its match.
 #[test]
 fn every_page_display_shows_the_match_after_zooming() {
-    use pdfcraft_ui_egui::canvas::PageLayout;
     let mut h = harness();
-    for (layout, continuous) in [(PageLayout::Single, false), (PageLayout::TwoUp, true), (PageLayout::TwoUp, false)] {
-        h.state_mut().views[0].set_display(layout, continuous);
+    for (layout, continuous) in [(PageDisplay::Single, false), (PageDisplay::TwoUp, true), (PageDisplay::TwoUp, false)] {
+        {
+            let v = &mut h.state_mut().views[0].view;
+            v.display = layout;
+            v.continuous = continuous;
+            let current = v.current;
+            v.go_to(current);
+        }
         for zoom in [0.5, 4.0] {
-            h.state_mut().views[0].set_zoom(zoom);
+            set_zoom(&mut h, zoom);
             settle(&mut h);
             for _ in 0..needles() {
                 h.state_mut().views[0].find_step(true);
@@ -307,7 +335,7 @@ fn every_page_display_shows_the_match_after_zooming() {
 #[test]
 fn a_scroll_by_hand_after_a_step_lets_the_match_go() {
     let mut h = harness();
-    h.state_mut().views[0].set_zoom(3.0);
+    set_zoom(&mut h, 3.0);
     settle(&mut h);
     h.state_mut().views[0].find_step(true);
     settle(&mut h);
@@ -338,7 +366,8 @@ fn a_scroll_by_hand_after_a_step_lets_the_match_go() {
     settle(&mut h);
     let v = &h.state().views[0];
     let f = v.find.as_ref().unwrap();
-    let (page, range) = f.matches[f.current.unwrap()].clone();
+    let current = &f.matches.matches()[f.matches.current().unwrap()];
+    let (page, range) = (current.page, current.range.clone());
     let centre = v.glyph_screen_pos(page, range.start).map(|a| a.lerp(v.glyph_screen_pos(page, range.end - 1).unwrap_or(a), 0.5));
     assert!(
         centre.is_none_or(|c| c.distance(v.viewport_rect().center()) > 100.0),
