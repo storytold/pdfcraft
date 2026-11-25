@@ -277,6 +277,12 @@ fn the_quick_bar_colour_changes_the_selected_comment() {
     assert_eq!(doc.comment_props(0, 0).and_then(|props| props.color), Some([0.0, 0.47, 0.84]));
     assert_eq!(doc.can_undo(), Some("Change comment properties"), "recoloring is one undo step");
     assert_eq!(state.comment_prefs.style(CommentTool::Highlight).color, [0.0, 0.47, 0.84]);
+    // A swatch click reports on press and again on release. The second report must not add a step (#8207).
+    undo(&mut h);
+    let state = h.state();
+    let doc = state.session.get(state.views[0].id).expect("document");
+    assert_eq!(doc.comment_props(0, 0).and_then(|props| props.color), Some([1.0, 0.94, 0.0]));
+    assert_eq!(doc.can_undo(), Some("Add highlight"));
 }
 
 #[test]
