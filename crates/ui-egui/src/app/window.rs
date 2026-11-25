@@ -83,7 +83,7 @@ impl PdfCraftApp {
         let is_full = self.screen_mode.is_full_screen();
         if !was_shell && shell_saw_full {
             self.full_screen_maximized = ctx.input(|i| i.viewport().maximized);
-        } else if !is_full {
+        } else if !is_full && !shell_saw_full {
             self.full_screen_maximized = None;
         }
         self.shell_full_screen = shell_saw_full;
@@ -414,5 +414,58 @@ mod tests {
         if cfg!(target_os = "windows") {
             assert!(!app.full_screen(), "closing last tab exits full screen before AppShell draws");
         }
+    }
+
+    /// Regression (PR #8021 CodeRabbit review): when Escape leaves full screen after `AppShell`
+    /// has already run for the pass (`shell_saw_full == true`), `AppShell` still holds OS
+    /// fullscreen until the next pass. A save landing in that gap must retain the captured
+    /// pre-fullscreen maximize state, and the capture must be cleared once `AppShell` finishes
+    /// exiting on the subsequent pass.
+    #[test]
+    fn escape_exit_preserves_captured_maximize_until_shell_leaves_full_screen() {
+        use eframe::App as _;
+
+        let ctx = egui::Context::default();
+        PdfCraftApp::install_runtime(&ctx);
+        let mut app = PdfCraftApp::for_unit_tests();
+        let pdf = b"%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj\nxref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \ntrailer << /Size 4 /Root 1 0 R >>\nstartxref\n190\n%%EOF\n";
+        assert!(app.open_bytes(&ctx, "doc.pdf", None, pdf.to_vec()).is_ok());
+
+        // Pass 1: enter full screen from a maximized window; AppShell saw full screen.
+        app.set_full_screen(true);
+        let mut input = egui::RawInput::default();
+        input.viewports.entry(egui::ViewportId::ROOT).or_default().maximized = Some(true);
+        let _ = ctx.run_logic(&input, |ctx| app.sync_full_screen_after_shell(ctx, true));
+        assert_eq!(app.full_screen_maximized, Some(true));
+
+        // Pass 2: Escape leaves full screen *after* AppShell already ran with full screen.
+        // OS fullscreen exit is pending until Pass 3, so the captured maximize state must stay.
+        app.set_full_screen(false);
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.sync_full_screen_after_shell(ctx, true));
+        assert_eq!(app.full_screen_maximized, Some(true), "captured maximize state must remain until AppShell exits");
+
+        // A save (autosave or exit) landing before Pass 3 still sees `fullscreen:true,maximized:false`
+        // from eframe and must preserve `maximized:true` on Windows.
+        let mut store = Store::default();
+        let pending_exit = "(normal_geometry:(outer_position_pixels:Some((x:96.0,y:96.0)),scale_factor:1.25,inner_size_points:(x:1440.0,y:864.0)),fullscreen:true,maximized:false)";
+        store.set_string(WINDOW_KEY, pending_exit.into());
+        app.save(&mut store);
+        if cfg!(target_os = "windows") {
+            let saved = store.get_string(WINDOW_KEY).unwrap_or_default();
+            assert!(saved.contains("fullscreen:false"), "fullscreen cleared: {saved}");
+            assert!(saved.contains("maximized:true"), "pre-fullscreen maximize preserved during pending exit: {saved}");
+            assert!(saved.contains("outer_position_pixels:Some((x:96.0,y:96.0))"), "normal geometry kept: {saved}");
+        }
+
+        // Pass 3: AppShell now runs in Standard mode (`shell_saw_full == false`) and exits OS
+        // fullscreen; the captured maximize state is cleared now.
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.sync_full_screen_after_shell(ctx, false));
+        assert_eq!(app.full_screen_maximized, None, "capture cleared once AppShell leaves full screen");
+
+        // Subsequent ordinary non-fullscreen save is left untouched.
+        let normal = "(normal_geometry:(outer_position_pixels:Some((x:96.0,y:96.0)),scale_factor:1.25,inner_size_points:(x:1440.0,y:864.0)),fullscreen:false,maximized:false)";
+        store.set_string(WINDOW_KEY, normal.into());
+        app.save(&mut store);
+        assert_eq!(store.get_string(WINDOW_KEY).as_deref(), Some(normal));
     }
 }
