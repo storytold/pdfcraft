@@ -2199,3 +2199,68 @@ fn dense_pages_stop_at_the_recovery_budgets() {
     let (_, recovered, _) = layers(&twice);
     assert_eq!(count(recovered, 'o'), Some(1500), "within it, the doubles are dropped");
 }
+
+/// A page drawing `text` small enough for a long line to stay on the page, in a Type 0 font over
+/// a CID-keyed CFF program (no `/ToUnicode`): each character's glyph has CID
+/// `standard_string_id(c) + shift` and Helvetica's width for the character (600 for every glyph
+/// when `mono`).
+fn standard_order_page(text: &str, shift: i32, mono: bool) -> Vec<u8> {
+    let cid = |c: char| u16::try_from(i32::from(sid(c)) + shift).unwrap_or(0);
+    let mut unique: Vec<char> = text.chars().collect();
+    unique.sort_unstable();
+    unique.dedup();
+    let cids: Vec<u16> = unique.iter().map(|&c| cid(c)).collect();
+    let w: String = unique.iter().map(|&c| format!("{} [{}] ", cid(c), if mono { 600 } else { helvetica_width(c) })).collect();
+    let shown: String = text.chars().map(|c| format!("{:04X}", cid(c))).collect();
+    pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F3 5 0 R >> >> >>")
+        .stream("", format!("BT /F3 10 Tf 20 700 Td <{shown}> Tj ET"))
+        .obj("<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+Meta /Encoding /Identity-H /DescendantFonts [6 0 R] >>")
+        .obj(format!("<< /Type /Font /Subtype /CIDFontType0 /BaseFont /ABCDEF+Meta /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /W [{w}] /FontDescriptor 7 0 R >>"))
+        .obj("<< /Type /FontDescriptor /FontName /ABCDEF+Meta /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile3 8 0 R >>")
+        .stream("/Subtype /CIDFontType0C", pdfcraft_testkit::cff::cid_keyed(&cids))
+        .build()
+}
+
+/// Random words of letters, after a word the widths can check (`minimal endorsement`).
+fn standard_order_text() -> impl proptest::strategy::Strategy<Value = String> {
+    use proptest::prelude::*;
+    prop::collection::vec(prop::collection::vec(prop::sample::select(('a'..='z').chain('A'..='Z').collect::<Vec<char>>()), 1..9), 1..8).prop_map(
+        |words| {
+            std::iter::once("minimal endorsement".to_string())
+                .chain(words.into_iter().map(|w| w.into_iter().collect()))
+                .collect::<Vec<String>>()
+                .join(" ")
+        },
+    )
+}
+
+/// Cases for the property tests below: `PDFCRAFT_RECOVERY_CASES` (default 400).
+fn property_cases() -> u32 {
+    std::env::var("PDFCRAFT_RECOVERY_CASES").ok().and_then(|v| v.parse().ok()).unwrap_or(400)
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig { cases: property_cases(), failure_persistence: None, ..proptest::prelude::ProptestConfig::default() })]
+
+    /// Rule N (CIDs that are CFF standard string ids) reads a font numbered that way, and never
+    /// copies a wrong character: numbered one or two glyphs off (two ahead is the Macintosh
+    /// order, which its own rule may read), or monospaced so the widths prove nothing, the
+    /// font's text is either read right or not at all.
+    #[test]
+    fn standard_string_ids_read_right_or_not_at_all(
+        text in standard_order_text(),
+        shift in -2i32..=2,
+        mono in proptest::bool::weighted(0.2),
+    ) {
+        let (_, recovered, _) = layers(&parse(standard_order_page(&text, shift, mono)));
+        let read = recovered.map(|l| l.text.plain_text());
+        if shift == 0 && !mono {
+            proptest::prop_assert_eq!(read.as_deref(), Some(text.as_str()));
+        } else {
+            proptest::prop_assert!(read.is_none() || read.as_deref() == Some(text.as_str()), "shift {} mono {}: {:?} for {:?}", shift, mono, read, text);
+        }
+    }
+}
