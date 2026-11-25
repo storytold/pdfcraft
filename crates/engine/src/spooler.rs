@@ -556,7 +556,8 @@ mod tests {
     }
 
     /// Seven pages share one resource dictionary holding a soft-masked image only the first page
-    /// draws: the other six are not flattened.
+    /// draws. Imposed as a print imposes them, each sheet draws its page as a form that keeps that
+    /// dictionary: only the first sheet is flattened.
     #[test]
     fn pages_sharing_a_transparent_resource_they_dont_draw_are_not_flattened() {
         let source = pdf_of(|doc| {
@@ -571,11 +572,16 @@ mod tests {
                 })
                 .collect()
         });
-        let flat = flattened(Arc::new(source), 150.0).expect("flattened");
+        let settings = pdfcraft_print::Settings { pages: (0..7).collect(), ..Default::default() };
+        let sheets = pdfcraft_print::impose(&Document::open(Arc::new(source)).unwrap(), &settings).unwrap();
+        let imposed = Document::open(Arc::new(sheets.clone())).unwrap();
+        let flat = flattened(Arc::new(sheets), 150.0).expect("flattened");
         let doc = Document::open(Arc::new(flat)).unwrap();
         assert_eq!(page_images(&doc, 0), [(1275, 1650, false)]);
         for n in 1..7 {
-            assert_eq!(page_of(&doc, n).1, String::from_utf8_lossy(BLUE_SQUARE), "page {}", n + 1);
+            let content = page_of(&doc, n).1;
+            assert!(content.contains("/P0 Do"), "sheet {}: {content}", n + 1);
+            assert_eq!(content, page_of(&imposed, n).1, "sheet {}", n + 1);
         }
     }
 

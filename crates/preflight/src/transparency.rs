@@ -111,7 +111,7 @@ pub(crate) fn page_reads(doc: &Document, page: &Dict, shared: &mut Shared) -> us
 }
 
 fn walk_page<'a>(doc: &'a Document, page: &Dict, shared: &'a mut Shared) -> Walk<'a> {
-    let mut walk = Walk { doc, shared, seen: HashMap::new(), visits: 0, cuts: 0, found: Painting::default(), inherits: false };
+    let mut walk = Walk { doc, shared, seen: HashMap::new(), visits: 0, cuts: 0, found: Painting::default(), inherits: false, drawn: None };
     if let Some(r) = page.get(b"Resources") {
         walk.visit(r, 0, Walk::resources);
     }
@@ -120,21 +120,23 @@ fn walk_page<'a>(doc: &'a Document, page: &Dict, shared: &'a mut Shared) -> Walk
 }
 
 /// Whether what the page `page` draws can paint transparently ([`Painting::paints_transparently`]),
-/// as [`page_painting`] finds it, except that of the page's own resources only the entries its
-/// content names are read. Pages often share one resource dictionary holding what any of them
-/// draws, and an image or graphics state one page uses would otherwise count on every page. When
-/// some of the content can't be read, every entry counts, as in [`page_painting`].
+/// as [`page_painting`] finds it, except that of the page's own resources, and of each form
+/// XObject's it reaches, only the entries that content names are read. Pages often share one
+/// resource dictionary holding what any of them draws, and an image or graphics state one page
+/// uses would otherwise count on every page; a print-ready sheet draws each page as a form that
+/// keeps that dictionary. When some of the page's content can't be read, every entry counts, as
+/// in [`page_painting`]; when a form's can't, every entry of that form's resources does.
 pub(crate) fn page_draws_transparently(doc: &Document, page: &Dict) -> bool {
+    // Holds what each object draws, not what it holds, so it is never one `page_painting` reads.
     let mut shared = Shared::default();
-    let Some(named) = names_drawn(doc, page) else {
-        return page_painting(doc, page, &mut shared).paints_transparently;
+    let mut budget = DecodeBudget::page();
+    let Some(named) = names_drawn(doc, page.get(b"Resources"), page.get(b"Contents"), &mut budget) else {
+        return page_painting(doc, page, &mut Shared::default()).paints_transparently;
     };
-    let mut walk = Walk { doc, shared: &mut shared, seen: HashMap::new(), visits: 0, cuts: 0, found: Painting::default(), inherits: false };
-    // Read in place, not through `visit`: what one page names of a shared dictionary is not what
-    // the dictionary holds, so it must not go in `Shared`.
+    let mut walk =
+        Walk { doc, shared: &mut shared, seen: HashMap::new(), visits: 0, cuts: 0, found: Painting::default(), inherits: false, drawn: Some(budget) };
     if let Some(r) = page.get(b"Resources") {
-        walk.visits += 1;
-        walk.resources_within(r, 0, Some(&named));
+        walk.resources_named(r, 0, &named);
     }
     walk.annotations(page);
     if walk.inherits || walk.cuts > 0 {
@@ -146,12 +148,12 @@ pub(crate) fn page_draws_transparently(doc: &Document, page: &Dict) -> bool {
     walk.found.paints_transparently
 }
 
-/// The keys of the page's own resource entries ([`CATEGORIES`]) that its content names as an
-/// operand, its `/Contents` decoded within one page's allowance and joined with a space as
+/// The keys of the entries of `resources` ([`CATEGORIES`]) that `contents` names as an operand:
+/// a page's `/Contents` or a form XObject, decoded within `budget` and joined with a space as
 /// readers join them; `None` when a stream of it can't be read or is damaged partway. A name
 /// counts whatever operator takes it, so an entry is left out only when no operand names it.
-fn names_drawn(doc: &Document, page: &Dict) -> Option<HashSet<Vec<u8>>> {
-    let res = page.get(b"Resources").map(|r| held(doc, r));
+fn names_drawn(doc: &Document, resources: Option<&Object>, contents: Option<&Object>, budget: &mut DecodeBudget) -> Option<HashSet<Vec<u8>>> {
+    let res = resources.map(|r| held(doc, r));
     let mut keys: HashSet<Vec<u8>> = HashSet::new();
     for category in CATEGORIES {
         let entries = res.as_deref().and_then(Object::as_dict).and_then(|r| r.get(category)).map(|d| held(doc, d));
@@ -160,13 +162,13 @@ fn names_drawn(doc: &Document, page: &Dict) -> Option<HashSet<Vec<u8>>> {
         }
     }
     let mut named = HashSet::new();
-    let Some(contents) = page.get(b"Contents") else { return Some(named) };
+    let Some(contents) = contents else { return Some(named) };
     if keys.is_empty() {
         return Some(named);
     }
     let mut data = Vec::new();
     // A stream damaged partway gives only what came before the damage, which may leave out a name.
-    for piece in DecodeBudget::page().decode_contents_with_damage(doc, contents) {
+    for piece in budget.decode_contents_with_damage(doc, contents) {
         let (bytes, damaged) = piece.ok()?;
         if damaged {
             return None;
@@ -281,6 +283,9 @@ struct Walk<'a> {
     found: Painting,
     /// Whether a form, tiling pattern or Type 3 font read has no `/Resources` of its own.
     inherits: bool,
+    /// For [`page_draws_transparently`], the allowance form contents are decoded within: a form's
+    /// resources then count only by the entries its content names.
+    drawn: Option<DecodeBudget>,
 }
 
 impl Walk<'_> {
@@ -347,6 +352,18 @@ impl Walk<'_> {
         self.resources_within(r, depth, None);
     }
 
+    /// The entries of resource dictionary `r` that `named` holds, read in place, not through
+    /// `visit`: what one content names of a shared dictionary is not what the dictionary holds, so
+    /// it must not go in [`Shared`] under it.
+    fn resources_named(&mut self, r: &Object, depth: usize, named: &HashSet<Vec<u8>>) {
+        if self.visits >= MAX_VISITS || depth > MAX_DEPTH {
+            self.cuts = self.cuts.saturating_add(1);
+            return;
+        }
+        self.visits += 1;
+        self.resources_within(r, depth, Some(named));
+    }
+
     /// A resource dictionary's entries, or with `only` those of them whose key it holds.
     fn resources_within(&mut self, r: &Object, depth: usize, only: Option<&HashSet<Vec<u8>>>) {
         let doc = self.doc;
@@ -406,9 +423,9 @@ impl Walk<'_> {
 
     /// An image with a soft mask, or a form XObject that is a transparency group or holds
     /// transparency in its resources.
-    fn xobject(&mut self, x: &Object, depth: usize) {
+    fn xobject(&mut self, form: &Object, depth: usize) {
         let doc = self.doc;
-        let x = held(doc, x);
+        let x = held(doc, form);
         let Object::Stream(s) = &*x else { return };
         let d = &s.dict;
         if d.get(b"Subtype").is_some_and(|s| held(doc, s).as_name() == Some(b"Image")) {
@@ -423,9 +440,16 @@ impl Walk<'_> {
             .map(|g| held(doc, g))
             .is_some_and(|g| g.as_dict().is_some_and(|g| g.get(b"S").is_some_and(|s| held(doc, s).as_name() == Some(b"Transparency"))));
         self.found.transparency |= group;
-        match d.get(b"Resources") {
-            Some(r) => self.visit(r, depth + 1, Self::resources),
-            None => self.inherits = true,
+        let Some(r) = d.get(b"Resources") else {
+            self.inherits = true;
+            return;
+        };
+        // A form with resources of its own paints with nothing else (ISO 32000-1 7.8.3), so what
+        // its content names of them is all it can draw.
+        let named = self.drawn.as_mut().and_then(|budget| names_drawn(doc, Some(r), Some(form), budget));
+        match named {
+            Some(named) => self.resources_named(r, depth + 1, &named),
+            None => self.visit(r, depth + 1, Self::resources),
         }
     }
 
@@ -662,13 +686,58 @@ mod tests {
             "<< /Length 23 >>\nstream\n/Opaque gs 0 0 1 1 re f\nendstream",
             "<< /Length 6 >>\nstream\n/Fm Do\nendstream",
             "<< /Filter /NoSuchFilter /Length 4 >>\nstream\nnope\nendstream",
-            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /ExtGState << /G << /BM /Multiply >> >> >> /Length 0 >>\nstream\n\nendstream",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /ExtGState << /G << /BM /Multiply >> >> >> /Length 5 >>\nstream\n/G gs\nendstream",
         ]);
         let pages = pdfcraft_model::pages(&doc);
         let draws: Vec<bool> = pages.iter().map(|p| page_draws_transparently(&doc, &p.dict)).collect();
         // Page 1 sets the translucent state; page 2 draws the blending form in its second stream;
         // page 3's content can't be read, so every entry counts; page 4 names neither.
         assert_eq!(draws, [true, true, true, false]);
+        assert!(pages.iter().all(|p| crate::page_uses_transparency(&doc, &p.dict)));
+    }
+
+    #[test]
+    fn only_the_shared_resources_a_drawn_form_names_count_for_what_it_draws() {
+        // Each page draws one form, as a print-ready sheet does, and the forms share one resource
+        // dictionary. Page 1's form sets the opaque state; page 2's the translucent one; page 3's
+        // content can't be read, so every entry of its resources counts; page 4's draws a form of
+        // those resources whose own content sets a blending state.
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R] /Count 4 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /P0 8 0 R >> >> /Contents 12 0 R >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /P0 9 0 R >> >> /Contents 12 0 R >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /P0 10 0 R >> >> /Contents 12 0 R >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /P0 11 0 R >> >> /Contents 12 0 R >>",
+            "<< /ExtGState << /Half << /ca 0.5 >> /Opaque << /ca 1 >> >> /XObject << /Fm 13 0 R >> >>",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources 7 0 R /Length 23 >>
+stream
+/Opaque gs 0 0 1 1 re f
+endstream",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources 7 0 R /Length 21 >>
+stream
+/Half gs 0 0 1 1 re f
+endstream",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources 7 0 R /Filter /NoSuchFilter /Length 4 >>
+stream
+nope
+endstream",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources 7 0 R /Length 6 >>
+stream
+/Fm Do
+endstream",
+            "<< /Length 6 >>
+stream
+/P0 Do
+endstream",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /ExtGState << /G << /BM /Multiply >> >> >> /Length 5 >>
+stream
+/G gs
+endstream",
+        ]);
+        let pages = pdfcraft_model::pages(&doc);
+        let draws: Vec<bool> = pages.iter().map(|p| page_draws_transparently(&doc, &p.dict)).collect();
+        assert_eq!(draws, [false, true, true, true]);
         assert!(pages.iter().all(|p| crate::page_uses_transparency(&doc, &p.dict)));
     }
 

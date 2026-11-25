@@ -933,9 +933,11 @@ pub fn page_uses_transparency(doc: &Document, page: &Dict) -> bool {
 }
 
 /// Whether what the page `page` draws can paint transparently: [`page_uses_transparency`], except
-/// that of the page's own resources only those its content names count, so a page that shares a
-/// resource dictionary with one drawing a soft-masked image doesn't count for it. When the page's
-/// content can't all be read, the answer is [`page_uses_transparency`]'s.
+/// that of the page's own resources, and of each form XObject's it reaches, only those that
+/// content names count, so a page, or a sheet drawing it as a form, that shares a resource
+/// dictionary with one drawing a soft-masked image doesn't count for it. When the page's content
+/// can't all be read, the answer is [`page_uses_transparency`]'s; when a form's can't, every entry
+/// of that form's resources counts.
 pub fn page_draws_transparency(doc: &Document, page: &Dict) -> bool {
     transparency::page_draws_transparently(doc, page)
 }
