@@ -2950,7 +2950,7 @@ fn remove_security_asks_for_the_permissions_password_first() {
     h.run_steps(2);
     type_password(&mut h, "owner");
     // Unlocked: Remove security now asks (#2168).
-    h.get_by_label("Remove security?");
+    h.get_by_role_and_label(Role::Dialog, "Remove security?");
     h.get_all_by_label("Remove security").last().expect("the button").click();
     h.run_steps(3);
     let doc = h.state().session.get(id).unwrap();
@@ -2990,10 +2990,10 @@ fn removing_security_asks_first() {
     assert!(h.state().session.get(id).unwrap().security_summary().is_some());
     assert!(h.execute("protect.remove"));
     h.run_steps(2);
-    h.get_by_label("Remove security?");
+    h.get_by_role_and_label(Role::Dialog, "Remove security?");
     h.get_all_by_label("Cancel").last().expect("the button").click();
     h.run_steps(2);
-    assert!(h.query_by_label("Remove security?").is_none(), "the question is gone");
+    assert!(h.query_by_role_and_label(Role::Dialog, "Remove security?").is_none(), "the question is gone");
     assert!(h.state().session.get(id).unwrap().security_summary().is_some(), "cancelled: still protected");
     assert!(h.execute("protect.remove"));
     h.run_steps(2);
