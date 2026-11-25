@@ -293,6 +293,9 @@ pub struct PageSession {
     pub text: TextSelectState,
     /// Whether the current Select-tool primary press has dragged past the click threshold.
     pub(crate) select_dragged: bool,
+    /// The Select tool just finished a drag. The page body clears this and, when the drag left a
+    /// text selection, gives the keyboard to the page so Copy is not still the Find field's (#8189).
+    pub(crate) select_drag_ended: bool,
     /// Select All while scrolling continuously (#2639): the text of every page of the document,
     /// highlighted on each page as its text arrives and copied whole ([`DocView::whole_text`]).
     pub(crate) all_text: bool,
@@ -422,6 +425,7 @@ impl PageSession {
             placed: Vec::new(),
             text: TextSelectState::default(),
             select_dragged: false,
+            select_drag_ended: false,
             all_text: false,
             actions_dismissed: None,
             marks_waiting: None,
@@ -1346,6 +1350,18 @@ fn page_before(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallb
             session.pending_edit = Some(edit);
         }
         finish.apply(fill, area_mark, session, &tool_cx);
+        // A drag on the page never clicks another widget, so the Find field keeps the keyboard and
+        // Ctrl+C copies that field. A click already leaves it (#8189).
+        if session.select_drag_ended {
+            session.select_drag_ended = false;
+            if session.forms.focus.is_none() && session.text.selection.is_some() {
+                ui.ctx().memory_mut(|mem| {
+                    if let Some(id) = mem.focused() {
+                        mem.surrender_focus(id);
+                    }
+                });
+            }
+        }
         if let Some(why) = finish.refused.take() {
             session.objects.notice = Some(why);
         }
