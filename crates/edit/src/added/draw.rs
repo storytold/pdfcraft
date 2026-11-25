@@ -25,8 +25,11 @@ fn font_name(doc: &Document, t: &AddedText, taken: &Dict) -> String {
     let mut name = base.clone();
     let mut suffix = 0usize;
     // A PDF may already use our preferred name for a different font or encoding. Reuse only
-    // the exact font we would write, so repeated edits do not accumulate new resources.
-    while taken.get(name.as_bytes()).is_some_and(|f| doc.resolve(f).as_dict() != Some(&font)) {
+    // the exact font we would write, its entries in any order, so repeated edits do not
+    // accumulate new resources.
+    let same =
+        |f: &Object| doc.resolve(f).as_dict().is_some_and(|d| d.len() == font.len() && font.iter().all(|(key, value)| d.get(key) == Some(value)));
+    while taken.get(name.as_bytes()).is_some_and(|f| !same(f)) {
         suffix = suffix.saturating_add(1);
         name = format!("{base}{suffix}");
     }

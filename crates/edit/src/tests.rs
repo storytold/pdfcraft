@@ -1155,15 +1155,59 @@ fn added_text_preserves_an_occupied_font_name() {
     }
 }
 
+/// A Helvetica on the page under our name, with another `/Encoding`, with none or with an entry more,
+/// is another font: it stays, and the added text takes a suffixed name.
+#[test]
+fn added_text_does_not_reuse_a_helvetica_that_differs() {
+    for (key, value) in [("Encoding", Some("MacRomanEncoding")), ("Encoding", None), ("Name", Some("F1"))] {
+        let mut doc = fixture();
+        let page = pdfcraft_model::pages(&doc)[2].obj;
+        let mut other = Dict::new();
+        for (key, value) in [("Type", "Font"), ("Subtype", "Type1"), ("BaseFont", "Helvetica"), ("Encoding", "WinAnsiEncoding")] {
+            other.set(key.as_bytes().to_vec(), Object::name(value));
+        }
+        match value {
+            Some(value) => other.set(key.as_bytes().to_vec(), Object::name(value)),
+            None => drop(other.remove(key.as_bytes())),
+        }
+        let other = Object::Dict(other);
+        let mut fonts = Dict::new();
+        fonts.set(b"PCFHelvetica".to_vec(), other.clone());
+        let mut resources = Dict::new();
+        resources.set(b"Font".to_vec(), Object::Dict(fonts));
+        doc.update_dict(page, |d| d.set(b"Resources".to_vec(), Object::Dict(resources))).unwrap();
+        let text = AddedText { text: "Added".into(), rect: [72.0, 500.0, 300.0, 550.0], ..Default::default() };
+        add_content(&mut doc, 2, &Content::Text(text)).unwrap();
+        doc = reopen(&doc);
+        let p = &pdfcraft_model::pages(&doc)[2];
+        let resources = doc.resolve(p.dict.get(b"Resources").unwrap());
+        let fonts = doc.resolve(resources.as_dict().unwrap().get(b"Font").unwrap());
+        assert_eq!(fonts.as_dict().unwrap().get(b"PCFHelvetica"), Some(&other), "{key} {value:?}: the page's font stays");
+        assert!(streams(&doc, 2).join("\n").contains("/PCFHelvetica1 12 Tf"), "{key} {value:?}: the added text has its own font");
+    }
+}
+
 #[test]
 fn added_text_reuses_an_indirect_matching_font() {
+    let entries = [("Type", "Font"), ("Subtype", "Type1"), ("BaseFont", "Helvetica"), ("Encoding", "WinAnsiEncoding")];
+    reuses_indirect_font(entries);
+}
+
+/// The entries of the page's font can come in any order.
+#[test]
+fn added_text_reuses_a_matching_font_whatever_its_key_order() {
+    let mut entries = [("Type", "Font"), ("Subtype", "Type1"), ("BaseFont", "Helvetica"), ("Encoding", "WinAnsiEncoding")];
+    entries.reverse();
+    reuses_indirect_font(entries);
+}
+
+fn reuses_indirect_font(entries: [(&str, &str); 4]) {
     let mut doc = fixture();
     let page = pdfcraft_model::pages(&doc)[2].obj;
     let mut matching = Dict::new();
-    matching.set(b"Type".to_vec(), Object::name("Font"));
-    matching.set(b"Subtype".to_vec(), Object::name("Type1"));
-    matching.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
-    matching.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+    for (key, value) in entries {
+        matching.set(key.as_bytes().to_vec(), Object::name(value));
+    }
     let matching = Object::Ref(doc.add(Object::Dict(matching)));
     let mut fonts = Dict::new();
     fonts.set(b"PCFHelvetica".to_vec(), Object::Ref(pdfcraft_cos::ObjRef::new(8, 0)));
