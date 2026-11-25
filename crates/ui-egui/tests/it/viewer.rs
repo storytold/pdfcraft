@@ -1084,11 +1084,14 @@ trailer << /Root 1 0 R >>
     let at = saved.windows(21).position(|w| w == b"/EncryptMetadata fals").expect("/EncryptMetadata false");
     let mut edited = saved.clone();
     edited.splice(at..at + 22, b"/EncryptMetadata true ".iter().copied());
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("perms.pdf", None, edited.clone()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "perms.pdf", None, edited.clone()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     let id = h.state().views[0].id;

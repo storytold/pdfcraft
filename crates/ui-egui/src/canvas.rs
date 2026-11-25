@@ -1647,7 +1647,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     // the user turned it off (#4035): the restrictions themselves, and Document Properties ▸
     // Security, stay as they are.
     let secured = show_secured_notice && doc.security_summary().is_some_and(|s| !(s.owner || (s.permissions.modify() && s.permissions.assemble())));
-    let repaired = !doc.repair_log().is_empty();
+    let repaired = doc.structure_repaired();
     // PLAN: assumed `notices(view, doc, secured, repaired, lock_offer, banner, ui)`: pdf-canvas-w16 drops the tokens
     // argument and gives no other change.
     let bars_top = ui.available_rect_before_wrap().top();
