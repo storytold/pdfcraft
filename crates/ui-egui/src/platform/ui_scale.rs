@@ -57,20 +57,6 @@ pub fn percent(factor: f32) -> u32 {
     (factor * 100.0).round().clamp(0.0, 1000.0) as u32
 }
 
-/// Draw at `factor` from the next frame on, when it differs from the factor last applied
-/// (`applied`), so a zoom set elsewhere (a test harness's `pixels_per_point`) isn't undone every
-/// frame. egui's own ⌘+/⌘−/⌘0 interface zoom stays off: those keys zoom the page, and the
-/// preference alone decides the interface size.
-pub fn sync(ctx: &egui::Context, factor: f32, applied: &mut Option<f32>) {
-    if applied.is_none() {
-        ctx.options_mut(|o| o.zoom_with_keyboard = false);
-    }
-    if *applied != Some(factor) {
-        ctx.set_zoom_factor(factor);
-        *applied = Some(factor);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,42 +97,32 @@ mod tests {
     }
 
     #[test]
-    fn sync_sets_the_zoom_and_turns_off_keyboard_zoom() {
-        let ctx = egui::Context::default();
-        let mut applied = None;
-        sync(&ctx, 1.25, &mut applied);
-        assert_eq!(applied, Some(1.25));
-        // A bare context's first frame uploads the font atlas; nothing paints it here.
-        ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
-        assert_eq!(ctx.zoom_factor(), 1.25);
-        assert!(!ctx.options(|o| o.zoom_with_keyboard));
-    }
-
-    #[test]
     fn the_app_draws_at_the_system_scale_until_a_size_is_chosen() {
-        // A display that reports 200% (#456: a 1080p screen whose system reports 2×).
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).with_pixels_per_point(2.0).build_eframe(|_cc| {
-            let mut app = crate::PdfCraftApp::new();
-            app.system_text_scale = 1.25;
-            app
+        // A display that reports 200% (#456: a 1080p screen whose system reports 2×), and a desktop text scale of 125%.
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).with_pixels_per_point(2.0).build_eframe(|cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            craft::ui::testing::style::report_os_text_scale(&cc.egui_ctx, Some(1.25));
+            crate::PdfCraftApp::for_unit_tests()
         });
         h.run_steps(3);
-        assert_eq!(h.ctx.pixels_per_point(), 2.5, "Auto follows the display's scale and the system's text scale");
-        h.state_mut().set_option("ui-scale", "100%").expect("a valid size");
+        let ctx = h.ctx.clone();
+        assert_eq!(ctx.pixels_per_point(), 2.5, "Auto follows the display's scale and the system's text scale");
+        h.state_mut().set_option(&ctx, "ui-scale", "100%").expect("a valid size");
         h.run_steps(3);
         assert_eq!(h.ctx.pixels_per_point(), 1.0, "100% is one screen pixel per point");
-        h.state_mut().set_option("ui-scale", "150%").expect("a valid size");
+        h.state_mut().set_option(&ctx, "ui-scale", "150%").expect("a valid size");
         h.run_steps(3);
         assert_eq!(h.ctx.pixels_per_point(), 1.5);
-        assert!(h.state_mut().set_option("ui-scale", "5000").is_err());
+        assert!(h.state_mut().set_option(&ctx, "ui-scale", "5000").is_err());
         // The chosen size survives a restart; a hostile one in the settings follows the system.
-        let saved = h.state().persist();
-        let mut restored = crate::PdfCraftApp::new();
-        restored.restore(&saved);
-        assert_eq!(restored.ui_scale, Some(1.5));
-        restored.restore(&saved.replace("\"ui_scale\":1.5", "\"ui_scale\":1e30"));
-        assert_eq!(restored.ui_scale, None);
-        h.state_mut().set_option("ui-scale", "auto").expect("auto");
+        let saved = h.state().settings_snapshot();
+        h.state_mut().apply_settings(&saved);
+        h.run_steps(3);
+        assert_eq!(h.ctx.pixels_per_point(), 1.5, "the saved size is restored");
+        h.state_mut().apply_settings(&crate::app::settings::import_json(r#"{"ui_scale":1e30}"#).0);
+        h.run_steps(3);
+        assert_eq!(h.ctx.pixels_per_point(), 2.5, "a hostile saved size is no choice");
+        h.state_mut().set_option(&ctx, "ui-scale", "auto").expect("auto");
         h.run_steps(3);
         assert_eq!(h.ctx.pixels_per_point(), 2.5);
     }

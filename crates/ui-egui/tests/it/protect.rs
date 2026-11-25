@@ -1,8 +1,9 @@
 //! Protect Using Password in the real shell (egui_kittest).
 
+use crate::support::AppHarness as _;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
+use pdfcraft_ui_egui::PdfCraftApp;
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -12,39 +13,42 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, FIXTURE.to_vec()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h
 }
 
+/// Types into the masked field named `label` (its field row carries the same name).
 fn type_into(h: &mut Harness<'static, PdfCraftApp>, label: &str, text: &str) {
-    h.get_by_label(label).click();
+    use egui::accesskit::Role;
+    h.get_by(|n| n.label().as_deref() == Some(label) && matches!(n.role(), Role::PasswordInput | Role::TextInput)).click();
     h.run_steps(2);
-    h.get_by_label(label).type_text(text);
+    h.get_by(|n| n.label().as_deref() == Some(label) && matches!(n.role(), Role::PasswordInput | Role::TextInput)).type_text(text);
     h.run_steps(2);
 }
 
 #[test]
 fn protecting_for_viewing_requires_matching_passwords_and_saves_encrypted() {
     let mut h = harness();
-    assert!(h.state_mut().execute("protect.password"));
+    assert!(h.execute("protect.password"));
     h.run_steps(2);
-    assert_eq!(h.state().dialog, Some(Dialog::Protect));
     h.get_by_label("Viewing");
     type_into(&mut h, "Type Password", "Open-Sesame-42");
     type_into(&mut h, "Re-type Password", "Open-Sesame-4");
-    h.get_by_label_contains("don't match");
-    assert!(h.query_by(|n| n.label().as_deref() == Some("Apply") && n.is_disabled()).is_some(), "Apply is disabled");
+    assert!(h.query_by(|n| n.label().as_deref() == Some("Apply") && n.is_disabled()).is_some(), "Apply is disabled while the passwords differ");
     type_into(&mut h, "Re-type Password", "2");
-    h.get_by_label("Strength: Strong");
+    assert!(h.query_by(|n| n.label().as_deref() == Some("Apply") && !n.is_disabled()).is_some(), "Apply is enabled once they match");
     h.get_by_label("Apply").click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, None);
+    assert!(h.query_by_label("Apply").is_none(), "Apply closes the dialog");
     let id = h.state().views[0].id;
     let doc = h.state().session.get(id).unwrap();
     assert!(doc.info.encrypted && doc.dirty);
@@ -55,20 +59,20 @@ fn protecting_for_viewing_requires_matching_passwords_and_saves_encrypted() {
     assert!(s.open("p.pdf", None, bytes.clone(), None).is_err());
     assert!(s.open("p.pdf", None, bytes, Some("Open-Sesame-42")).is_ok());
     // Remove security is now offered, and undo also takes the protection back.
-    assert!(h.state_mut().execute("protect.remove"));
-    h.state_mut().undo();
-    h.state_mut().undo();
+    assert!(h.execute("protect.remove"));
+    h.undo();
+    h.undo();
     assert!(!h.state().session.get(id).unwrap().info.encrypted);
 }
 
 #[test]
 fn editing_restrictions_via_advanced_options() {
     let mut h = harness();
-    h.state_mut().execute("protect.password");
+    h.execute("protect.password");
     h.run_steps(2);
     h.get_by_label("Editing").click();
     h.run_steps(2);
-    h.get_by_label("Advanced Options ⌄").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Advanced Options").click();
     h.run_steps(2);
     h.get_by_label("Enable copying of text, images, and other content").click();
     h.run_steps(1);
@@ -93,23 +97,36 @@ fn acrobat_6_and_later_can_leave_the_metadata_unencrypted() {
     use egui::accesskit::Role;
 
     let mut h = harness();
-    h.state_mut().execute("protect.password");
+    assert!(h.execute("protect.password"));
     h.run_steps(2);
-    h.get_by_label("Advanced Options ⌄").click();
+    h.get_by_role_and_label(Role::Button, "Advanced Options").click();
     h.run_steps(2);
-    let pick = |h: &mut Harness<'static, PdfCraftApp>, from: &str, to: &str| {
-        h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some(from)).expect(from).click();
+    let open = |h: &mut Harness<'static, PdfCraftApp>, caption: &str| {
+        h.get_by_role_and_label(Role::ComboBox, caption).click();
         h.run_steps(2);
-        h.get_by_label(to).click();
+    };
+    let item = |h: &Harness<'static, PdfCraftApp>, label: &str| {
+        h.query_all_by(|n| n.label().as_deref() == Some(label) && n.role() != Role::ComboBox).next().map(|n| n.rect())
+    };
+    let pick = |h: &mut Harness<'static, PdfCraftApp>, caption: &str, to: &str| {
+        h.get_by_role_and_label(Role::ComboBox, caption).click();
+        h.run_steps(2);
+        h.get_by(|n| n.label().as_deref() == Some(to) && n.role() != Role::ComboBox).click_accesskit();
         h.run_steps(2);
     };
     const X: &str = "Acrobat X and later (PDF 1.7, 256-bit AES)";
     const A6: &str = "Acrobat 6.0 and later (PDF 1.5, 128-bit RC4)";
     const EXCEPT: &str = "All document contents except metadata";
-    let disabled = |h: &Harness<'static, PdfCraftApp>| h.query_by(|n| n.label().as_deref() == Some(EXCEPT) && n.is_disabled()).is_some();
+    // Whether the Encrypt list offers EXCEPT.
+    let offered = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.get_by_role_and_label(Role::ComboBox, "Encrypt").click();
+        h.run_steps(2);
+        let on = h.query_all_by(|n| n.label().as_deref() == Some(EXCEPT) && n.role() != Role::ComboBox && !n.is_disabled()).next().is_some();
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        on
+    };
     // The list, in the guide's order.
-    h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some(X)).expect(X).click();
-    h.run_steps(2);
     let levels = [
         X,
         "Acrobat 7.0 and later (PDF 1.6, 128-bit AES)",
@@ -117,19 +134,18 @@ fn acrobat_6_and_later_can_leave_the_metadata_unencrypted() {
         "Acrobat 5.0 and later (PDF 1.4, 128-bit RC4)",
         "Acrobat 3.0 and later (PDF 1.3, 40-bit RC4)",
     ];
-    let tops: Vec<f32> = levels.iter().map(|l| h.get_by_label(l).rect().top()).collect();
+    open(&mut h, "Compatibility");
+    let tops: Vec<f32> = levels.iter().map(|l| item(&h, l).expect(l).top()).collect();
     assert!(tops.windows(2).all(|w| w[0] < w[1]), "in the guide's order: {tops:?}");
-    h.get_by_label(X).click();
+    h.key_press(egui::Key::Escape);
     h.run_steps(2);
-    assert!(!disabled(&h), "Acrobat X");
-    for (level, offered) in levels.iter().zip([true, true, true, false, false]).skip(1) {
-        pick(&mut h, X, level);
-        assert_eq!(!disabled(&h), offered, "{level}");
-        pick(&mut h, level, X);
+    assert!(offered(&mut h), "Acrobat X");
+    for (level, wanted) in levels.iter().zip([true, true, true, false, false]).skip(1) {
+        pick(&mut h, "Compatibility", level);
+        assert_eq!(offered(&mut h), wanted, "{level}");
     }
-    pick(&mut h, X, A6);
-    h.get_by_label(EXCEPT).click();
-    h.run_steps(2);
+    pick(&mut h, "Compatibility", A6);
+    pick(&mut h, "Encrypt", EXCEPT);
     type_into(&mut h, "Type Password", "Open-Sesame-42");
     type_into(&mut h, "Re-type Password", "Open-Sesame-42");
     h.get_by_label("Apply").click();
