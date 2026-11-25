@@ -11,7 +11,10 @@ impl<'a> Scope<'a> {
             if let Some(hidden) = self.ocmd_cache.get(&r) {
                 return *hidden;
             }
-            if self.hidden_layers.contains(&r) {
+            // A membership dictionary listed among the groups (a non-conforming `/OCGs` entry) is
+            // still evaluated by its policy, as viewers do, not hidden because `/D` names it off.
+            let listed_ocmd = doc.resolve(o).as_dict().is_some_and(|d| has_type(doc, d, b"OCMD"));
+            if !listed_ocmd && self.hidden_layers.contains(&r) {
                 self.ocmd_cache.insert(r, true);
                 return true;
             }
@@ -263,7 +266,7 @@ pub(super) fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Ve
                 }
             }
             _ if hidden_now && scope.keep_hidden_state => {
-                if matches!(op.op.as_slice(), b"BT" | b"ET" | b"Tm") {
+                if starts_from_line(&op) {
                     advance_dropped = false;
                 }
                 let (kept, dropped_advance) = kept_state(op);
@@ -272,11 +275,10 @@ pub(super) fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Ve
             }
             _ => {
                 if !hidden_now {
-                    match op.op.as_slice() {
-                        // A new text object, or an absolute text matrix, starts where it says.
-                        b"BT" | b"ET" | b"Tm" => advance_dropped = false,
-                        b"Tj" | b"TJ" | b"'" | b"\"" | b"Td" | b"TD" | b"T*" if advance_dropped => scope.hidden_advance_lost = true,
-                        _ => {}
+                    if starts_from_line(&op) {
+                        advance_dropped = false;
+                    } else if advance_dropped && matches!(op.op.as_slice(), b"Tj" | b"TJ") {
+                        scope.hidden_advance_lost = true;
                     }
                     out.push(op);
                 }
@@ -284,6 +286,20 @@ pub(super) fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Ve
         }
     }
     (out, removed)
+}
+
+/// Does `op` place the text matrix without reading the advance of the glyphs shown before it?
+/// A new text object and a valid `Tm` start where they say. `Td`, `TD`, `T*`, `'` and `"` move
+/// from the text line matrix, which showing glyphs never changes, so a hidden string's advance
+/// left out before them moves nothing. A `Tm` without six numbers, or a `Td` or `TD` without
+/// two, changes nothing, as the interpreter reads it, so it is no boundary.
+fn starts_from_line(op: &Op) -> bool {
+    match op.op.as_slice() {
+        b"BT" | b"ET" | b"T*" | b"'" | b"\"" => true,
+        b"Td" | b"TD" => op.nums::<2>().is_some(),
+        b"Tm" => op.nums::<6>().is_some(),
+        _ => false,
+    }
 }
 
 /// What a hidden block keeps of `op` when printing, and whether it left out a text advance.
@@ -305,9 +321,11 @@ fn kept_state(mut op: Op) -> (Vec<Op>, bool) {
             (vec![op], true)
         }
         b"\"" => {
-            // `aw ac string "` is `aw Tw ac Tc string '`.
-            let mut operands = std::mem::take(&mut op.operands).into_iter();
-            let (Some(aw), Some(ac)) = (operands.next(), operands.next()) else { return (Vec::new(), true) };
+            // `aw ac string "` is `aw Tw ac Tc string '`. The two numbers are the ones just before
+            // the string, whatever surplus precedes them, as the interpreter reads them.
+            let operands = std::mem::take(&mut op.operands);
+            let from_end = |back: usize| operands.len().checked_sub(back).and_then(|i| operands.get(i)).cloned();
+            let (Some(aw), Some(ac)) = (from_end(3), from_end(2)) else { return (Vec::new(), true) };
             let at = |name: &str, operands: Vec<Object>| {
                 let mut o = Op::new(name, operands);
                 o.span = op.span.clone();
