@@ -3,7 +3,7 @@
 use crate::support::AppHarness as _;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT as _, Queryable};
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
 
 const FIXTURE: &[u8] = b"%PDF-1.7
@@ -137,4 +137,88 @@ fn the_crop_tool_leaves_the_page_grid_so_a_page_can_be_cropped() {
     let (w, hh) = size(&h, 0);
     assert!((w - 150.0).abs() < 2.0 && (hh - 200.0).abs() < 2.0, "{w}×{hh}");
     assert_eq!(size(&h, 1), (300.0, 400.0));
+}
+
+#[test]
+fn set_page_boxes_preview_updates_its_physical_dimensions() {
+    use crate::support::input::one_frame;
+    use egui::{Event, Key, Modifiers};
+    use pdfcraft_cos::{Document, Object, write_incremental};
+    use pdfcraft_ui_egui::units::Unit;
+
+    // Original synthetic PDF. An inset crop on a turned page separates the shown size from
+    // both the unturned crop and the media box, and /UserUnit separates it from raw coordinates.
+    let mut doc = Document::open(std::sync::Arc::new(crate::support::fixtures::pdf_pages(1))).unwrap();
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        d.set(b"Rotate".to_vec(), Object::Int(90));
+        d.set(b"UserUnit".to_vec(), Object::Int(2));
+        d.set(b"CropBox".to_vec(), Object::Array([20, 30, 250, 170].map(Object::Int).to_vec()));
+    })
+    .unwrap();
+    let bytes = write_incremental(&doc, &Default::default()).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::control::new_app();
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+        app.units = Unit::Points;
+        app.open_bytes(&cc.egui_ctx, "rotated-crop.pdf", None, bytes.clone()).unwrap();
+        app
+    });
+    h.run_steps(6);
+    let (width, height) = size(&h, 0);
+    let (width, height) = (f64::from(width), f64::from(height));
+    assert_eq!((width, height), (280.0, 460.0), "the synthetic CropBox in displayed points");
+    let open = |h: &mut Harness<'static, PdfCraftApp>| {
+        assert!(h.execute("page.boxes"));
+        h.run_steps(4);
+        h.get_by_role_and_label(Role::Dialog, "Set Page Boxes");
+    };
+    let shows = |h: &Harness<'static, PdfCraftApp>, text: &str| {
+        h.get_by_role_and_label(Role::Dialog, "Set Page Boxes").query_by_label_contains(text).is_some()
+    };
+    open(&mut h);
+    let original = Unit::Points.size(width, height);
+    let original_shown = shows(&h, &original);
+
+    // An extra 20 physical points off the top of the unturned page reduces the displayed width.
+    h.get_by_label("Top").click();
+    h.run_steps(1);
+    let key = |h: &mut Harness<'static, PdfCraftApp>, key, modifiers| {
+        for pressed in [true, false] {
+            one_frame(h, [Event::Key { key, physical_key: None, pressed, repeat: false, modifiers }]);
+        }
+    };
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    one_frame(&mut h, [Event::Text("80".into())]);
+    key(&mut h, Key::Tab, Modifiers::NONE);
+    let edited = Unit::Points.size(width - 20.0, height);
+    assert_eq!(size(&h, 0), (width as f32, height as f32), "the preview has not applied the edit");
+    assert!(shows(&h, &edited) && !shows(&h, &original), "after Tab and before OK, the preview should shrink from {original:?} to {edited:?}");
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    assert_eq!(size(&h, 0), ((width - 20.0) as f32, height as f32), "the dialog received the margin change");
+
+    h.state_mut().open_preferences();
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::RadioGroup, "Units").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::RadioGroup, "Units").get_by_role_and_label(Role::RadioButton, "mm").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    assert_eq!(h.state().units, Unit::Millimetres);
+
+    open(&mut h);
+    let metric = Unit::Millimetres.size(width - 20.0, height);
+    assert!(original_shown, "the original preview shows {original:?}");
+    assert!(shows(&h, &metric), "the preview follows the Units preference and shows {metric:?}");
+    let preview = h.get_by_role_and_label(Role::Image, "Page 1");
+    let label = format!("Box size: {metric}");
+    let readout = h.get_by_role_and_label(Role::Label, &label);
+    let preview = preview.accesskit_node();
+    let readout = readout.accesskit_node();
+    assert!(preview.description().is_some_and(|description| description.contains(&metric)));
+    assert_eq!(readout.live(), egui::accesskit::Live::Polite);
+    assert!(readout.bounding_box().unwrap().y0 >= preview.bounding_box().unwrap().y1);
 }

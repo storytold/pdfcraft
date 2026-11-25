@@ -6,13 +6,15 @@
 use craft::pages::ui::{PageRangeChoices, PageRangeOptions};
 use craft::pages::{PageRange, PageScope};
 use craft::ui::buttons::Button;
-use craft::ui::contract::{Bind, Show as _};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::dialog::dialog_id;
-use craft::ui::display::{Picture, PictureSize};
+use craft::ui::display::{Picture, PictureSize, Text};
+use craft::ui::layout_components::Stack;
 use craft::ui::list::{ThumbAspect, ThumbSize};
 use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, NumberUnit, Param, ParamDialog, ParamKind};
 use craft::ui::primitives::StrokeWidth;
 use craft::ui::runtime::env::UnitKind;
+use craft::ui::style::TypeRole;
 use egui::{CornerRadius, Rect, Stroke, pos2, vec2};
 use pdfcraft_engine::{BoxSpec, Edit, PageBox};
 
@@ -52,6 +54,10 @@ fn unit_id(unit: Unit) -> &'static str {
         Unit::Centimetres => "cm",
         Unit::Points => "pt",
     }
+}
+
+fn unit_of(fields: &DialogFields) -> Option<Unit> {
+    Unit::ALL.into_iter().find(|u| Some(unit_id(*u)) == fields.text("unit"))
 }
 
 /// Dialog state. Margins are kept in physical points (1/72 in): left, bottom, right, top. A page with
@@ -153,9 +159,19 @@ fn paint_preview(cx: &craft::ui::primitives::ContentPainterCx<'_>, rect: Rect, m
     }
 }
 
-/// The rows of the dialog for a document of `count` pages with `current` on screen; `media` is the current page's
-/// media box and `page_unit` its `/UserUnit`.
-fn params(count: usize, current: usize, media: Option<[f64; 4]>, page_unit: f64) -> Vec<Param> {
+/// The draft box size in physical points, ordered as the page is displayed.
+fn preview_size(rect: [f64; 4], margins: [f64; 4], page_unit: f64, rotation: u16, removal: bool) -> Option<[f64; 2]> {
+    let [left, bottom, right, top] = margins;
+    let width = (rect[2] - rect[0]) * page_unit - left - right;
+    let height = (rect[3] - rect[1]) * page_unit - bottom - top;
+    if ![width, height].into_iter().all(|side| side.is_finite() && side > 0.0 && (removal || side >= page_unit)) {
+        return None;
+    }
+    Some(if rotation.is_multiple_of(180) { [width, height] } else { [height, width] })
+}
+
+/// The dialog rows, with the current page's resolved boxes, scale and rotation for the preview.
+fn params(count: usize, current: usize, page: Option<[[f64; 4]; 5]>, page_unit: f64, rotation: u16) -> Vec<Param> {
     let boxes = BOXES.iter().map(|(_, id, name)| (id.to_string(), (*name).into())).collect();
     let units: Vec<NumberUnit> = Unit::ALL.iter().map(|u| NumberUnit::new(unit_id(*u), unit_kind(*u), u.label(), 1.0 / u.per_point())).collect();
     let unit_choices = Unit::ALL.iter().map(|u| (unit_id(*u).to_string(), u.label().into())).collect();
@@ -180,16 +196,37 @@ fn params(count: usize, current: usize, media: Option<[f64; 4]>, page_unit: f64)
         .companions(MARGIN_KEYS),
     );
     rows.push(PageRangeOptions::param("range", tl!("Pages"), count, current, PageRangeChoices::CurrentFromTo));
-    if let Some(media) = media {
+    if let Some(page) = page {
+        let media = page[0];
         let label = crate::i18n::fmt(tl!("Page {label}"), &[("label", &(current + 1).to_string())]);
         let aspect =
             ThumbAspect::new((media[2] - media[0]).round().clamp(1.0, 65535.0) as u16, (media[3] - media[1]).round().clamp(1.0, 65535.0) as u16);
         rows.push(
             Param::custom("preview", "", move |ui, fields, _| {
                 let margins = margins_of(fields);
-                Picture::painter(label.clone(), aspect, move |cx, rect| paint_preview(cx, rect, media, margins, page_unit))
-                    .extent(PictureSize::Sample(ThumbSize::Large))
-                    .show(ui)
+                // Removing a trim, bleed or art box falls back to the resolved crop box.
+                let removal = margins == [0.0; 4] && fields.text("box") != Some("media");
+                let crop_fallback = removal && matches!(fields.text("box"), Some("trim" | "bleed" | "art"));
+                let rect = if crop_fallback { page[1] } else { media };
+                let unit = unit_of(fields).unwrap_or_default();
+                let text = match preview_size(rect, margins, page_unit, rotation, removal) {
+                    Some([width, height]) => {
+                        let size = unit.size(width, height);
+                        crate::i18n::fmt(tl!("Box size: {size}"), &[("size", &size)])
+                    }
+                    None => tl!("The margins leave no valid box.").to_string(),
+                };
+                let margins = if crop_fallback { page_margins(&page, PageBox::Crop, page_unit) } else { margins };
+                Stack::new()
+                    .show(ui, |ui, _| {
+                        Picture::painter(label.clone(), aspect, move |cx, rect| paint_preview(cx, rect, media, margins, page_unit))
+                            .extent(PictureSize::Sample(ThumbSize::Large))
+                            .description(text.clone())
+                            .show(ui);
+                        let readout = Text::new(text.clone()).id_salt("box-size").role(TypeRole::Caption).show(ui);
+                        ui.ctx().accesskit_node_builder(readout.id, |node| node.set_live(egui::accesskit::Live::Polite));
+                    })
+                    .output
             })
             .full_width(),
         );
@@ -207,6 +244,7 @@ impl PdfCraftApp {
         let count = boxes.len().max(1);
         let page = boxes.get(current).copied();
         let page_unit = doc.page_user_unit(current);
+        let rotation = doc.info.pages.get(current).map_or(0, |page| page.rotation);
         let d = &mut self.boxes_draft;
         // Opening the dialog starts in the unit chosen in Preferences.
         d.unit = self.units;
@@ -224,9 +262,8 @@ impl PdfCraftApp {
             fields.set(*key, v);
         }
         fields.set("range", PageRangeOptions::field_value(&d.range));
-        let media = page.map(|b| b[0]);
         let dialog = HostedParamDialog::new(ctx, KEY, fields, move |fields| {
-            ParamDialog::new(KEY, tl!("Set Page Boxes"), params(count, current, media, page_unit)).values(Bind::bound(fields))
+            ParamDialog::new(KEY, tl!("Set Page Boxes"), params(count, current, page, page_unit, rotation)).values(Bind::bound(fields))
         });
         crate::dialogs::host::open(self, dialog);
     }
@@ -243,8 +280,8 @@ impl PdfCraftApp {
         if let Some((b, ..)) = BOXES.iter().find(|(_, id, _)| Some(*id) == f.text("box")) {
             d.which = *b;
         }
-        if let Some(u) = Unit::ALL.iter().find(|u| Some(unit_id(**u)) == f.text("unit")) {
-            d.unit = *u;
+        if let Some(u) = unit_of(f) {
+            d.unit = u;
         }
         d.margins = margins_of(f);
         if let Some(range) = PageRangeOptions::value(f, "range") {
@@ -270,6 +307,14 @@ mod tests {
         d.margins = [0.0; 4];
         d.which = PageBox::Media;
         assert!(matches!(d.edit(vec![0], &[]), Edit::SetPageBox { spec: BoxSpec::Margins(_), which: PageBox::Media, .. }));
+    }
+
+    #[test]
+    fn sub_unit_box_is_previewed_only_as_a_removal_fallback() {
+        let fallback = [0.0, 0.0, 0.5, 100.0];
+        assert_eq!(preview_size(fallback, [0.0; 4], 2.0, 0, true), Some([1.0, 200.0]));
+        let media = [0.0, 0.0, 100.0, 100.0];
+        assert_eq!(preview_size(media, [0.0, 0.0, 199.0, 0.0], 2.0, 0, false), None);
     }
 
     /// Two pages of 432 x 360 points, the first with `/UserUnit` 1 and the second with 2, opened in a session.
