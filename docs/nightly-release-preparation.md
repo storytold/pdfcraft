@@ -143,3 +143,13 @@ hand-off) says that health is unavailable instead of claiming a crash.
 policy); `.github/workflows/nightly-packaging.yml` builds the unsigned Windows ZIP, the Linux tar
 and the macOS bundle behind the `full-ci` label or a dispatch, checking each the way the Launcher
 unpacks it.
+
+## Activation prerequisite: the Sonar issue scope
+
+The pinned candidate validator requires every entry in `candidate_policy.sonar.issue_types` to map
+from a reviewed `accepted_conditions` row, and it requires the gate condition set to equal
+`accepted_conditions` plus `required_conditions`. The installed policy lists `VULNERABILITY` with no
+accepted condition, so it fails that contract before SonarCloud is read. Correct the policy in this
+app's activation review with Skylar, together with the live gate conditions, before the first run:
+the callers cannot run before that review anyway, because their `producer_workflow_id` stays null
+until `nightly.yml` is registered on `main` and the signer is promoted to `release`.
