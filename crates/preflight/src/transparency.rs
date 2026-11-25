@@ -148,22 +148,19 @@ pub(crate) fn page_draws_transparently(doc: &Document, page: &Dict) -> bool {
     walk.found.paints_transparently
 }
 
-/// The keys of the entries of `resources` ([`CATEGORIES`]) that `contents` names as an operand:
-/// a page's `/Contents` or a form XObject, decoded within `budget` and joined with a space as
+/// Every name `contents` gives as an operand, which picks the entries of `resources`
+/// ([`CATEGORIES`]) it can draw (an empty set when `resources` has none): a page's `/Contents` or a form XObject, decoded within `budget` and joined with a space as
 /// readers join them; `None` when a stream of it can't be read or is damaged partway. A name
 /// counts whatever operator takes it, so an entry is left out only when no operand names it.
 fn names_drawn(doc: &Document, resources: Option<&Object>, contents: Option<&Object>, budget: &mut DecodeBudget) -> Option<HashSet<Vec<u8>>> {
     let res = resources.map(|r| held(doc, r));
-    let mut keys: HashSet<Vec<u8>> = HashSet::new();
-    for category in CATEGORIES {
+    let has_entries = CATEGORIES.iter().any(|category| {
         let entries = res.as_deref().and_then(Object::as_dict).and_then(|r| r.get(category)).map(|d| held(doc, d));
-        if let Some(entries) = entries.as_deref().and_then(Object::as_dict) {
-            keys.extend(entries.iter().map(|(k, _)| k.to_vec()));
-        }
-    }
+        entries.as_deref().and_then(Object::as_dict).is_some_and(|d| d.iter().next().is_some())
+    });
     let mut named = HashSet::new();
     let Some(contents) = contents else { return Some(named) };
-    if keys.is_empty() {
+    if !has_entries {
         return Some(named);
     }
     let mut data = Vec::new();
@@ -176,15 +173,9 @@ fn names_drawn(doc: &Document, resources: Option<&Object>, contents: Option<&Obj
         data.extend_from_slice(&bytes);
         data.push(b' ');
     }
+    // Every name operand, so the cost follows the content rather than a shared dictionary's size.
     for op in pdfcraft_content::ops(&data) {
-        for name in op.operands.iter().filter_map(Object::as_name) {
-            if keys.contains(name) {
-                named.insert(name.to_vec());
-            }
-        }
-        if named.len() == keys.len() {
-            break;
-        }
+        named.extend(op.operands.iter().filter_map(Object::as_name).map(<[u8]>::to_vec));
     }
     Some(named)
 }
@@ -372,10 +363,12 @@ impl Walk<'_> {
         for category in CATEGORIES {
             let entries = res.get(category).map(|d| held(doc, d));
             let Some(entries) = entries.as_deref().and_then(Object::as_dict) else { continue };
-            for (k, v) in entries.iter() {
-                if only.is_some_and(|only| !only.contains(k.as_slice())) {
-                    continue;
-                }
+            // With `only`, look its names up, so the cost follows the content, not the dictionary.
+            let picked: Vec<&Object> = match only {
+                Some(only) => only.iter().filter_map(|k| entries.get(k.as_slice())).collect(),
+                None => entries.iter().map(|(_, v)| v).collect(),
+            };
+            for v in picked {
                 // Once the budget is spent nothing more is read, so nothing more is gathered either.
                 if self.visits >= MAX_VISITS {
                     self.cuts = self.cuts.saturating_add(1);
