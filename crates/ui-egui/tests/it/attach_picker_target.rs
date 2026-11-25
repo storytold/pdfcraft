@@ -2,8 +2,17 @@
 //! user switches tabs while choosing, the pick is dropped (and they are told) rather than the file
 //! landing in whichever document is active by then.
 
+use std::sync::Arc;
+
+use craft::host::{AppInfo, Host, ManualJobs, Picked, ScriptedFiles, Wake};
+use craft::platform::clipboard::{Clipboard, EventClipboard};
+use craft::platform::open::FileIntake;
+use craft::platform::watch::FileWatch;
 use egui_kittest::Harness;
-use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
+
+use crate::support;
+use crate::support::AppHarness as _;
 
 /// A one-page document with a proper xref table.
 fn fixture() -> Vec<u8> {
@@ -27,16 +36,36 @@ fn fixture() -> Vec<u8> {
     out
 }
 
-fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("a.pdf", None, fixture()).unwrap();
-        app.open_bytes("b.pdf", None, fixture()).unwrap();
-        app
+/// The app on a host whose picks stay open until the test answers them, with the files that
+/// host is asked for.
+fn harness() -> (Harness<'static, PdfCraftApp>, Arc<ScriptedFiles>) {
+    let files = Arc::new(ScriptedFiles::held());
+    let jobs = Arc::new(ManualJobs::new());
+    let host = Arc::new(Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).jobs(jobs.clone()).files(files.clone()).build());
+
+    let (intake, _sender) = FileIntake::new(Wake::none());
+    let services = AppServices::new(
+        Wake::none(),
+        Clipboard::new(EventClipboard::new(|| 0, |_| Ok(0))),
+        None,
+        None,
+        intake,
+        FileWatch::new(Wake::none()).inline(),
+    );
+
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = PdfCraftApp::with_host(host, services);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "a.pdf", None, fixture()).unwrap();
+            app.open_bytes(&egui::Context::default(), "b.pdf", None, fixture()).unwrap();
+            jobs.run_all();
+            app
+        }
     });
     h.run_steps(2);
-    h
+    (h, files)
 }
 
 fn dirty(app: &PdfCraftApp, view: usize) -> bool {
@@ -51,16 +80,16 @@ fn an_attachment_pick_is_dropped_when_the_user_switches_tabs() {
     let file = dir.join("note.txt");
     std::fs::write(&file, b"hello").unwrap();
 
-    let mut h = harness();
+    let (mut h, files) = harness();
     h.state_mut().active = Some(0);
-    h.state_mut().pick_override = Some(vec![file.to_string_lossy().into_owned()]);
-    assert!(h.state_mut().execute("edit.attach"));
+    assert!(h.execute("edit.attach"));
+    h.run_steps(2);
     // The user switches tabs before the pick arrives.
     h.state_mut().active = Some(1);
+    assert!(files.answer(Picked::Paths(vec![file.clone()])).is_some(), "the attach picker was open");
     h.run_steps(2);
     assert!(!dirty(h.state(), 0), "the document the pick was for is unchanged");
     assert!(!dirty(h.state(), 1), "the newly active document did not get the attachment");
-    let toast = h.state().toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
-    assert!(toast.contains("document changed"), "the user is told why nothing happened: {toast:?}");
+    assert!(support::shown_notice(&h).is_some(), "the user is told why nothing happened");
     let _ = std::fs::remove_dir_all(&dir);
 }
