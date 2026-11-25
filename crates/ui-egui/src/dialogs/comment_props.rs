@@ -1,37 +1,62 @@
 //! Comment Properties (Acrobat: right-click a comment ▸ Properties…; audit "Comment
 //! properties"): Appearance (colour, fill, opacity, line thickness, note icon), General (author,
-//! subject, modified) and Review History (status changes), with Acrobat's Locked box.
+//! subject, modified) and Review History (status changes), with Acrobat's Locked box. The dialog
+//! is a tabbed parameter dialog the app's dialog host shows; [`edited`] maps its values back to
+//! the comment's properties.
 
-use egui::{Align, Layout};
-use pdfcraft_engine::{CommentProps, Edit, LineEnding, NoteIcon};
+use craft::host::{PickRequest, Picked};
+use craft::theme::Srgba;
+use craft::ui::contract::Bind;
+use craft::ui::dialog::DialogId;
+use craft::ui::dialog::DialogResult;
+use craft::ui::patterns::form_dialogs::{
+    DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, PropertiesDialog, PropertiesTab, PropertyRow, SharedRows,
+};
+use craft::ui::runtime::env::UnitKind;
+use craft::ui::value_drag::SliderScale;
+use pdfcraft_engine::{BorderShape, CommentProps, Edit, LineEnding, NoteIcon};
 
-use crate::comments::swatch_grid;
-use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, widgets};
+use crate::PdfCraftApp;
+use crate::colour_picker::PickerHost;
+use crate::comments::{RecentColours, border_choice, fill_choice, palette};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PropsTab {
-    Appearance,
-    General,
-    ReviewHistory,
+/// A comment colour as the dialog's field value.
+fn field_colour(c: pdfcraft_engine::Rgb) -> FieldValue {
+    FieldValue::Color(c.map(|v| v as f32))
 }
 
+/// A dialog field's colour as the comment's. Each channel is the decimal the `f32` shows (its shortest form), not
+/// its binary widening: a colour the dialog opened with or was given (0.18) comes back as itself, not 0.18000000715.
+fn rgb(c: [f32; 3]) -> pdfcraft_engine::Rgb {
+    c.map(|v| v.to_string().parse().unwrap_or(f64::from(v)))
+}
+
+/// Where the Comment Properties dialog stands: the id the dialog host returned for it, and what it
+/// edits. The dialog itself lives in the host, which shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommentPropsDialog {
+    /// The host's id of the open dialog.
+    pub id: DialogId,
+    /// The comment the dialog edits and the others selected with it.
+    pub draft: PropsDraft,
+}
+
+/// The comment a Comment Properties dialog edits, as it was when the dialog opened.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PropsDraft {
     pub page: usize,
     pub index: usize,
-    pub tab: PropsTab,
     pub original: CommentProps,
-    pub edited: CommentProps,
-    /// Acrobat's Make Properties Default box: on OK, new comments of this kind take the edited
-    /// colour, opacity and line width too.
-    pub make_default: bool,
     /// The other selected comments, each with its own properties: OK makes the same changes to
     /// them where they apply (a colour to every one, a font size to text boxes, …).
     pub others: Vec<(usize, usize, CommentProps)>,
 }
 
-const ICONS: [NoteIcon; 14] = NoteIcon::ALL;
+const KEY: &str = "comment.properties";
+const COLOUR: &str = "comment.props.colour";
+const BORDER: &str = "comment.props.border";
+const FILL: &str = "comment.props.fill";
+const MAKE_DEFAULT: &str = "make_default";
 
 /// The name shown in the line-ending combo. [`LineEnding::name`] stays the PDF `/LE` token.
 fn ending_label(ending: LineEnding) -> &'static str {
@@ -49,30 +74,286 @@ fn ending_label(ending: LineEnding) -> &'static str {
     }
 }
 
+/// The key of the choice row for the line ending at `i`.
+fn ending_key(i: usize) -> String {
+    format!("ending.{i}")
+}
+
+/// The dialog's opening values for the comment `o`.
+fn opening(o: &CommentProps) -> DialogFields {
+    let mut f = DialogFields::new();
+    if let Some(icon) = o.icon {
+        f.set("icon", icon.name());
+    }
+    if let Some(c) = o.color {
+        f.set(COLOUR, field_colour(c));
+    }
+    if let Some(c) = o.border_color {
+        f.set(BORDER, field_colour(c));
+    }
+    if let Some(c) = o.fill {
+        f.set(FILL, field_colour(c));
+    }
+    if let Some(shape) = o.border_shape {
+        f.set("border_shape", shape.name());
+    }
+    if let Some(size) = o.font_size {
+        f.set("font_size", FieldValue::Number(size));
+    }
+    f.set("opacity", FieldValue::Number(o.opacity * 100.0));
+    if let Some(t) = o.text_opacity {
+        f.set("text_opacity", FieldValue::Number(t * 100.0));
+    }
+    if let Some(fo) = o.fill_opacity {
+        f.set("fill_opacity", FieldValue::Number(fo * 100.0));
+    }
+    if let Some(w) = o.width {
+        f.set("width", FieldValue::Number(w));
+    }
+    for (i, ending) in o.endings.iter().flatten().enumerate() {
+        f.set(ending_key(i), ending.name());
+    }
+    f.set("author", o.author.clone());
+    f.set("subject", o.subject.clone());
+    f.set("locked", FieldValue::Bool(o.locked));
+    f.set(MAKE_DEFAULT, FieldValue::Bool(false));
+    f
+}
+
+/// The comment's properties after the dialog's `fields`, starting from `original`. The Text opacity
+/// row, when the text is not drawn separately (see [`parts_shown`]), shows the text's opacity (else
+/// the whole comment's) and a change of it sets the whole comment's opacity and the text's
+/// together; with the text drawn separately it writes the text's opacity and Border opacity writes
+/// the comment's.
+pub fn edited(original: &CommentProps, fields: &DialogFields) -> CommentProps {
+    let mut e = original.clone();
+    let text = |key: &str| fields.text(key).map(str::to_string);
+    let percent = |key: &str| fields.number(key).map(|v| v / 100.0);
+    if let Some(name) = text("icon").filter(|_| e.icon.is_some()) {
+        e.icon = NoteIcon::ALL.into_iter().find(|i| i.name() == name).or(e.icon);
+    }
+    if e.color.is_some() || fields.color(COLOUR).is_some() {
+        e.color = fields.color(COLOUR).map(rgb).or(e.color);
+    }
+    if e.font_size.is_some() {
+        e.border_color = fields.color(BORDER).map(rgb);
+        e.font_size = fields.number("font_size").or(e.font_size);
+    }
+    if let Some(name) = text("border_shape").filter(|_| e.border_shape.is_some()) {
+        e.border_shape = BorderShape::ALL.into_iter().find(|s| s.name() == name).or(e.border_shape);
+    }
+    if e.fillable {
+        e.fill = fields.color(FILL).map(rgb);
+    }
+    if let Some(w) = fields.number("width").filter(|_| e.width.is_some()) {
+        e.width = Some(w);
+    }
+    if let Some(fo) = percent("fill_opacity").filter(|_| e.fill_opacity.is_some()) {
+        e.fill_opacity = Some(fo);
+    }
+    let whole = percent("opacity").unwrap_or(original.opacity);
+    match original.text_opacity {
+        Some(_) if parts_shown(original).1 => {
+            e.text_opacity = percent("text_opacity").or(original.text_opacity);
+            e.opacity = whole;
+        }
+        Some(own) => {
+            let before = own;
+            let shown = percent("text_opacity").unwrap_or(before);
+            if (shown - before).abs() > 1e-6 {
+                e.opacity = shown;
+                e.text_opacity = Some(shown);
+            }
+        }
+        None => e.opacity = whole,
+    }
+    if let Some(ends) = e.endings.as_mut() {
+        for (i, ending) in ends.iter_mut().enumerate() {
+            if let Some(name) = text(&ending_key(i)) {
+                *ending = LineEnding::ALL.into_iter().find(|l| l.name() == name).unwrap_or(*ending);
+            }
+        }
+    }
+    e.author = text("author").unwrap_or(e.author);
+    e.subject = text("subject").unwrap_or(e.subject);
+    e.locked = fields.bool("locked").unwrap_or(e.locked);
+    e
+}
+
+/// A colour row: the swatch palette over the colour kept under `key`, which the host's colour
+/// picker answers into.
+fn colour_row(key: &'static str, label: &'static str, optional: Optional, recent: RecentColours) -> Param {
+    Param::custom(key, label, move |ui, fields, cx| {
+        let current = fields.color(key).map(rgb);
+        let request = match optional {
+            Optional::No => {
+                let pick = palette(ui, label, current, key, &recent);
+                if let Some(c) = pick.picked {
+                    fields.set(key, field_colour(c));
+                }
+                pick.request
+            }
+            Optional::Border | Optional::Fill => {
+                let shown =
+                    if optional == Optional::Border { border_choice(ui, current, key, &recent) } else { fill_choice(ui, current, key, &recent) };
+                if let Some(choice) = shown.choice {
+                    set_optional(fields, key, choice);
+                }
+                shown.request
+            }
+        };
+        if request.is_some() {
+            cx.pick_color(key, Srgba::from_rgb_array(fields.color(key).unwrap_or([0.0; 3])));
+        }
+        ui.response()
+    })
+}
+
+/// Which colour row a [`colour_row`] is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Optional {
+    No,
+    Border,
+    Fill,
+}
+
+/// Keeps `choice` under `key`; no colour removes the value.
+fn set_optional(fields: &mut DialogFields, key: &str, choice: Option<pdfcraft_engine::Rgb>) {
+    match choice {
+        Some(c) => fields.set(key, field_colour(c)),
+        None => {
+            fields.remove(key);
+        }
+    }
+}
+
+/// An opacity row in percent; `enabled` false shows a part that is not drawn.
+fn opacity_row(key: &str, label: &'static str, enabled: bool) -> Param {
+    let row = Param::new(key, label, ParamKind::range(0.0, 100.0, 100.0, SliderScale::Linear)).unit(UnitKind::Percent);
+    if enabled { row } else { row.disabled() }
+}
+
+/// What the dialog shows of the comment: the three tabs over `fields`.
+fn comment_props_dialog<'b>(
+    fields: &'b mut DialogFields,
+    o: &CommentProps,
+    history: &[(String, String)],
+    has_default: bool,
+    selected: usize,
+    recent: &RecentColours,
+) -> ParamDialog<'b> {
+    let kind = tl!(crate::comments_panel::subtype_label(&o.subtype)).to_string();
+    let title = crate::i18n::fmt(tl!("{kind} Properties"), &[("kind", &kind)]);
+    let mut rows = Vec::new();
+    if o.icon.is_some() {
+        let options = NoteIcon::ALL.into_iter().map(|i| (i.name().to_string(), i.name().into())).collect();
+        rows.push(PropertyRow::field(Param::new("icon", tl!("Icon"), ParamKind::choice(options, None))));
+    }
+    rows.push(PropertyRow::field(colour_row(COLOUR, tl!("Colour"), Optional::No, recent.clone())));
+    if o.font_size.is_some() {
+        rows.push(PropertyRow::field(colour_row(BORDER, tl!("Border colour"), Optional::Border, recent.clone())));
+    }
+    if o.border_shape.is_some() {
+        let options = BorderShape::ALL.into_iter().map(|s| (s.name().to_string(), tl!(s.name()).into())).collect();
+        rows.push(PropertyRow::field(Param::new("border_shape", tl!("Border shape"), ParamKind::choice(options, None))));
+    }
+    if o.fillable {
+        rows.push(PropertyRow::field(colour_row(FILL, tl!("Fill colour"), Optional::Fill, recent.clone())));
+    }
+    if o.font_size.is_some() {
+        rows.push(PropertyRow::field(
+            Param::number("font_size", tl!("Font size"), 12.0, 0.5, 1).bounds(Some(1.0), Some(400.0)).unit(UnitKind::Points),
+        ));
+    }
+    // One opacity for the whole comment, or each part's of its own; a part not drawn is disabled.
+    let (fill, text) = parts_shown(o);
+    match (o.text_opacity.is_some(), o.fill_opacity.is_some()) {
+        (true, _) => {
+            rows.push(PropertyRow::field(opacity_row("text_opacity", tl!("Text opacity"), true)));
+            rows.push(PropertyRow::field(opacity_row("opacity", tl!("Border opacity"), text && has_border(o))));
+        }
+        (false, true) => rows.push(PropertyRow::field(opacity_row("opacity", tl!("Line opacity"), true))),
+        (false, false) => rows.push(PropertyRow::field(opacity_row("opacity", tl!("Opacity"), true))),
+    }
+    if o.fill_opacity.is_some() {
+        rows.push(PropertyRow::field(opacity_row("fill_opacity", tl!("Fill opacity"), fill)));
+    }
+    if o.width.is_some() {
+        let min_width = if o.font_size.is_some() { 0.0 } else { 0.5 };
+        rows.push(PropertyRow::field(
+            Param::new("width", tl!("Thickness"), ParamKind::range(min_width, crate::comments::MAX_LINE_WIDTH, 1.0, SliderScale::Linear))
+                .decimals(1)
+                .unit(UnitKind::Points),
+        ));
+    }
+    for i in 0..o.endings.as_ref().map_or(0, Vec::len) {
+        let options = LineEnding::ALL.into_iter().map(|l| (l.name().to_string(), ending_label(l).into())).collect();
+        let label = if i == 0 { tl!("Line ending").to_string() } else { crate::i18n::fmt(tl!("Line ending {n}"), &[("n", &(i + 1).to_string())]) };
+        rows.push(PropertyRow::field(Param::new(ending_key(i), label, ParamKind::choice(options, None))));
+    }
+    let appearance = PropertiesTab::new(tl!("Appearance"), rows);
+    let appearance =
+        if o.restylable { appearance } else { appearance.read_only(Some(tl!("This comment's appearance can't be changed yet.").into())) };
+
+    let modified = o.modified.as_deref().map(pdfcraft_render::pretty_date).unwrap_or_else(|| "—".into());
+    let general = PropertiesTab::new(
+        tl!("General"),
+        vec![
+            PropertyRow::field(Param::new("author", tl!("Author"), ParamKind::text(""))),
+            PropertyRow::field(Param::new("subject", tl!("Subject"), ParamKind::text(""))),
+            PropertyRow::field(Param::read_only_text("modified", tl!("Modified"), modified)),
+        ],
+    );
+    let review = if history.is_empty() {
+        vec![PropertyRow::value(tl!("Status"), tl!("No status has been set."))]
+    } else {
+        history.iter().map(|(state, line)| PropertyRow::value(tl!(state).to_string(), line.clone())).collect()
+    };
+    let review = PropertiesTab::new(tl!("Review History"), review);
+
+    // Acrobat's box beside Locked: only a comment whose look can change, made by a tool (or typed
+    // text, for Fill & Sign).
+    let default_row = Param::new(MAKE_DEFAULT, tl!("Make Properties Default"), ParamKind::bool(false));
+    let default_row = if o.restylable && has_default { default_row } else { default_row.disabled() };
+    let shared = vec![PropertyRow::field(Param::new("locked", tl!("Locked"), ParamKind::bool(false))), PropertyRow::field(default_row)];
+    let dialog = PropertiesDialog::new(KEY, title, vec![appearance, general, review], Bind::bound(fields))
+        .shared(shared)
+        .shared_rows(SharedRows::Below)
+        .into_param_dialog();
+    if selected > 1 {
+        let n = selected.to_string();
+        dialog.title_note(crate::i18n::fmt(tl!("Changes here apply to all {n} selected comments"), &[("n", &n)]))
+    } else {
+        dialog
+    }
+}
+
 impl PdfCraftApp {
-    /// Attach file: ask for a file (or take `attach_override`) and attach it at `at`.
+    /// Attach file: ask for a file and attach it at `at`, on the document the pick started on.
     pub fn attach_file_comment(&mut self, page: usize, at: [f64; 2]) {
-        match self.attach_override.take() {
-            Some((file, data)) => self.add_attachment_comment(page, at, file, data),
-            #[cfg(not(target_arch = "wasm32"))]
-            None => {
-                // Attached on a later frame, and only to the document it was started on.
-                let target = self.active_ids().map(|(_, id)| id);
-                let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Attach a file"));
-                self.ask_one(crate::pickers::Ask::File(dialog), target, move |app, p| match std::fs::read(&p) {
+        let target = self.pick_target(self.active_ids().map(|(_, id)| id));
+        self.pick_file(PickRequest::open("attach").title(tl!("Attach a file")), target, move |app, ctx, picked| match picked {
+            Picked::Paths(paths) => {
+                let Some(p) = paths.into_iter().next() else { return };
+                match std::fs::read(&p) {
                     Ok(data) => {
-                        app.add_attachment_comment(page, at, p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), data)
+                        app.add_attachment_comment(ctx, page, at, p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), data)
                     }
                     Err(e) => app.notify_fmt("Couldn't read {name}: {e}", &[("name", &p.display().to_string()), ("e", &e.to_string())]),
-                });
+                }
             }
-            #[cfg(target_arch = "wasm32")]
-            None => {}
-        }
+
+            Picked::Contents(files) => {
+                if let Some((file, data)) = files.into_iter().next() {
+                    app.add_attachment_comment(ctx, page, at, file, data);
+                }
+            }
+            _ => {}
+        });
     }
 
     /// Add a file attachment comment at `at` on `page` of the active document.
-    fn add_attachment_comment(&mut self, page: usize, at: [f64; 2], file: String, data: Vec<u8>) {
+    fn add_attachment_comment(&mut self, ctx: &egui::Context, page: usize, at: [f64; 2], file: String, data: Vec<u8>) {
         let tool = crate::comments::CommentTool::Attach;
         let shape = pdfcraft_engine::Shape::Attachment { at, icon: pdfcraft_engine::AttachIcon::PushPin, file, data };
         let edit = Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
@@ -84,9 +365,9 @@ impl PdfCraftApp {
         });
         // A one-shot tool: back to Select unless pinned (apply_edit acts on this).
         if let Some((i, _)) = self.active_ids() {
-            self.views[i].comments.tool_done = true;
+            self.views[i].session.comments.tool_done = true;
         }
-        self.apply_edit(edit);
+        self.apply_edit(ctx, edit);
     }
 
     /// Make Current Properties Default: new comments of this kind take this one's colour,
@@ -150,16 +431,16 @@ impl PdfCraftApp {
     }
 
     /// Give every selected comment of the active document `color`, as one undo step.
-    pub fn colour_selected_comments(&mut self, color: pdfcraft_engine::Rgb) {
-        self.colour_selection(color, |_| true);
+    pub fn colour_selected_comments(&mut self, ctx: &egui::Context, color: pdfcraft_engine::Rgb) {
+        self.colour_selection(ctx, color, |_| true);
     }
 
     /// Give the selected comments that `only` picks `color`, as one undo step: those whose look can
     /// change and that aren't locked (a locked one would refuse the whole step).
-    pub(crate) fn colour_selection(&mut self, color: pdfcraft_engine::Rgb, only: impl Fn(&pdfcraft_render::Annotation) -> bool) {
+    pub(crate) fn colour_selection(&mut self, ctx: &egui::Context, color: pdfcraft_engine::Rgb, only: impl Fn(&pdfcraft_render::Annotation) -> bool) {
         let Some((i, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
-        let keys = self.views.get(i).map(|v| v.comments.selection()).unwrap_or_default();
+        let keys = self.views.get(i).map(|v| v.session.comments.selection()).unwrap_or_default();
         let mut edits: Vec<Edit> = keys
             .into_iter()
             .filter(|(p, ix)| doc.info.annotations.iter().any(|a| a.page == *p && a.index == *ix && !a.is_reply() && only(a)))
@@ -169,25 +450,86 @@ impl PdfCraftApp {
         match edits.len() {
             0 => {}
             1 => {
-                self.apply_edit(edits.remove(0));
+                self.apply_edit(ctx, edits.remove(0));
             }
             _ => {
-                self.apply_edit(Edit::Batch { label: "Change comment properties".into(), edits });
+                self.apply_edit(ctx, Edit::Batch { label: "Change comment properties".into(), edits });
             }
         }
     }
 
     /// Open Comment Properties for the comment at `(page, index)` of the active document. When it
     /// is one of several selected comments, the changes go to all of them.
-    pub fn open_comment_props(&mut self, page: usize, index: usize) {
+    pub fn open_comment_props(&mut self, ctx: &egui::Context, page: usize, index: usize) {
         let Some((i, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
         let Some(p) = doc.comment_props(page, index) else { return };
-        let selection = self.views.get(i).map(|v| &v.comments).filter(|c| c.is_selected((page, index))).map(|c| c.selection()).unwrap_or_default();
-        let others =
+        let selection =
+            self.views.get(i).map(|v| &v.session.comments).filter(|c| c.is_selected((page, index))).map(|c| c.selection()).unwrap_or_default();
+        let others: Vec<(usize, usize, CommentProps)> =
             selection.into_iter().filter(|k| *k != (page, index)).filter_map(|(pg, ix)| doc.comment_props(pg, ix).map(|c| (pg, ix, c))).collect();
-        self.comment_props = Some(PropsDraft { page, index, tab: PropsTab::Appearance, original: p.clone(), edited: p, make_default: false, others });
-        self.dialog = Some(crate::Dialog::CommentProps);
+        let me = doc.info.annotations.iter().find(|a| a.page == page && a.index == index && !a.is_reply());
+        // Every state change set on it, including a reviewer's later ones, which reply to their
+        // earlier (ISO 32000-2 §12.5.6.3).
+        let states = pdfcraft_render::ReviewStates::new(&doc.info.annotations);
+        let history: Vec<(String, String)> = me
+            .map(|a| states.history(a))
+            .unwrap_or_default()
+            .iter()
+            .map(|r| {
+                (r.state.clone().unwrap_or_default(), format!("{}  {}", r.author.clone().unwrap_or_default(), r.modified.clone().unwrap_or_default()))
+            })
+            .collect();
+        let has_default = me.is_some_and(|a| {
+            crate::comments::tool_for_default(&doc.info.annotations, a, p.endings.as_deref()).is_some() || crate::comments::typed_text(a)
+        });
+        let selected = others.len() + 1;
+        let original = p.clone();
+        let recent = self.recent_colours.clone();
+        let dialog = HostedParamDialog::new(ctx, KEY, opening(&p), move |fields| {
+            comment_props_dialog(fields, &original, &history, has_default, selected, &recent)
+        })
+        .tab(0);
+        let id = crate::dialogs::host::open(self, dialog);
+        self.comment_props = Some(CommentPropsDialog { id, draft: PropsDraft { page, index, original: p, others } });
+    }
+
+    /// One pass over the open Comment Properties dialog: forwards a colour row's request to the
+    /// colour picker, and on OK applies the edits (one undo step) and Make Properties Default.
+    pub fn comment_props_pass(&mut self, ctx: &egui::Context) {
+        let Some(id) = self.comment_props.as_ref().map(|d| d.id) else { return };
+        let requested = self.dialogs.get_mut_by_id::<HostedParamDialog>(id).and_then(HostedParamDialog::pick_color);
+        if let Some(request) = requested {
+            let key = request.key.clone();
+            self.open_colour_picker(PickerHost::App, request, move |app, _: &egui::Context, color: Srgba| {
+                if let Some(d) = app.dialogs.get_mut_by_id::<HostedParamDialog>(id) {
+                    d.set_field(key, FieldValue::Color([color.r, color.g, color.b]));
+                }
+            });
+        }
+        match self.dialogs.take_by_id::<HostedParamDialog>(id) {
+            None => {}
+            Some(DialogResult::Ok(result)) => {
+                let Some(open) = self.comment_props.take() else { return };
+                let draft = open.draft;
+                let e = edited(&draft.original, &result.fields);
+                let mut edits = edits(&draft, &e);
+                match edits.len() {
+                    0 => {}
+                    1 => {
+                        self.apply_edit(ctx, edits.remove(0));
+                    }
+                    _ => {
+                        self.apply_edit(ctx, Edit::Batch { label: "Change comment properties".into(), edits });
+                    }
+                }
+                // Make Properties Default: the look chosen here, even when it was already the comment's.
+                if result.fields.bool(MAKE_DEFAULT) == Some(true) && e.restylable {
+                    self.make_props_default(draft.page, draft.index, &e);
+                }
+            }
+            Some(_) => self.comment_props = None,
+        }
     }
 }
 
@@ -211,12 +553,12 @@ fn has_border(p: &CommentProps) -> bool {
     p.font_size.is_some() && p.width.is_some_and(|w| w > 0.0)
 }
 
-/// The edits that make the comment match the draft (empty when nothing changed), and make the
+/// The edits that make the comment match `e` (empty when nothing changed), and make the
 /// same changes to the other selected comments where they apply. Locks come off first and go on
 /// last, as a locked comment refuses other changes; another comment that stays locked is left
 /// as it is.
-pub fn edits(d: &PropsDraft) -> Vec<Edit> {
-    let (o, e) = (&d.original, &d.edited);
+pub fn edits(d: &PropsDraft, e: &CommentProps) -> Vec<Edit> {
+    let o = &d.original;
     let targets: Vec<(usize, usize, &CommentProps)> =
         std::iter::once((d.page, d.index, o)).chain(d.others.iter().map(|(p, i, c)| (*p, *i, c))).collect();
     let mut out = Vec::new();
@@ -302,219 +644,4 @@ fn changes(o: &CommentProps, e: &CommentProps, page: usize, index: usize, t: &Co
     if author.is_some() || subject.is_some() || icon.is_some() {
         out.push(Edit::SetAnnotationInfo { page, index, author, subject, icon });
     }
-}
-
-/// Draw the dialog; returns (apply, cancel).
-pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
-    let history: Vec<(String, String, String)> = app
-        .active_ids()
-        .and_then(|(_, id)| app.session.get(id))
-        .zip(app.comment_props.as_ref())
-        .map(|(doc, d)| {
-            let me = doc.info.annotations.iter().find(|a| a.page == d.page && a.index == d.index && !a.is_reply());
-            // Every state change set on it, including a reviewer's later ones, which reply to
-            // their earlier (ISO 32000-2 §12.5.6.3).
-            let states = pdfcraft_render::ReviewStates::new(&doc.info.annotations);
-            me.map(|a| states.history(a))
-                .unwrap_or_default()
-                .iter()
-                .map(|r| (r.state.clone().unwrap_or_default(), r.author.clone().unwrap_or_default(), r.modified.clone().unwrap_or_default()))
-                .collect()
-        })
-        .unwrap_or_default();
-    let has_default = app.comment_props.as_ref().is_some_and(|d| {
-        let Some(doc) = app.active_ids().and_then(|(_, id)| app.session.get(id)) else { return false };
-        doc.info.annotations.iter().find(|a| a.page == d.page && a.index == d.index && !a.is_reply()).is_some_and(|a| {
-            crate::comments::tool_for_default(&doc.info.annotations, a, d.edited.endings.as_deref()).is_some() || crate::comments::typed_text(a)
-        })
-    });
-    let Some(d) = app.comment_props.as_mut() else { return (false, true) };
-    let kind = tl!(crate::comments_panel::subtype_label(&d.edited.subtype)).to_string();
-    ui.label(egui::RichText::new(crate::i18n::fmt(tl!("{kind} Properties"), &[("kind", &kind)])).font(theme::semibold(18.0)));
-    if !d.others.is_empty() {
-        let n = (d.others.len() + 1).to_string();
-        ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Changes here apply to all {n} selected comments"), &[("n", &n)])).color(t.text_muted));
-    }
-    ui.add_space(6.0);
-    ui.horizontal_wrapped(|ui| {
-        for (tab, label) in
-            [(PropsTab::Appearance, tl!("Appearance")), (PropsTab::General, tl!("General")), (PropsTab::ReviewHistory, tl!("Review History"))]
-        {
-            if widgets::mode_tab(ui, label, d.tab == tab).clicked() {
-                d.tab = tab;
-            }
-        }
-    });
-    ui.separator();
-    ui.add_space(6.0);
-    let e = &mut d.edited;
-    match d.tab {
-        PropsTab::Appearance => {
-            if !e.restylable {
-                ui.label(egui::RichText::new(tl!("This comment's appearance can't be changed yet.")).color(t.text_muted));
-            }
-            ui.add_enabled_ui(e.restylable, |ui| {
-                egui::Grid::new("comment-props").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
-                    if let Some(icon) = e.icon.as_mut() {
-                        ui.label(tl!("Icon"));
-                        craft_ui::ComboBox::from_id_salt("note-icon").selected_text(icon.name()).show_ui(ui, |ui| {
-                            for i in ICONS {
-                                ui.selectable_value(icon, i, i.name());
-                            }
-                        });
-                        ui.end_row();
-                    }
-                    ui.label(tl!("Colour"));
-                    if let Some(c) = swatch_grid(ui, e.color) {
-                        e.color = Some(c);
-                    }
-                    ui.end_row();
-                    // Text boxes, typewriter text and callouts: the border's own colour.
-                    if e.font_size.is_some() {
-                        ui.label(tl!("Border colour"));
-                        let text = e.color.unwrap_or([0.0; 3]);
-                        ui.horizontal(|ui| {
-                            if let Some(c) = crate::comments::border_colour_button(ui, e.border_color, text) {
-                                e.border_color = c;
-                            }
-                        });
-                        ui.end_row();
-                    }
-                    // Text boxes and typewriter text: an oval or a circle goes around the text.
-                    if let Some(shape) = e.border_shape.as_mut() {
-                        let label = ui.label(tl!("Border shape"));
-                        craft_ui::ComboBox::from_id_salt("border-shape")
-                            .selected_text(tl!(shape.name()))
-                            .show_ui(ui, |ui| {
-                                for s in pdfcraft_engine::BorderShape::ALL {
-                                    ui.selectable_value(shape, s, tl!(s.name()));
-                                }
-                            })
-                            .response
-                            .labelled_by(label.id);
-                        ui.end_row();
-                    }
-                    if e.fillable {
-                        ui.label(tl!("Fill colour"));
-                        if let Some(f) = crate::comments::fill_picker(ui, e.fill) {
-                            e.fill = f;
-                        }
-                        ui.end_row();
-                    }
-                    if let Some(size) = e.font_size.as_mut() {
-                        ui.label(tl!("Font size"));
-                        ui.add(egui::DragValue::new(size).range(1.0..=400.0).speed(0.5).suffix(" pt"));
-                        ui.end_row();
-                    }
-                    // One opacity for the whole comment, or each part's of its own: a text box's
-                    // text, border and fill, a shape's line and fill. The rows stay put; a part
-                    // not drawn (no fill, no border) is greyed.
-                    let percent = |ui: &mut egui::Ui, label: &str, value: &mut f64, enabled: bool| {
-                        let name = ui.add_enabled(enabled, egui::Label::new(label));
-                        let mut pct = *value * 100.0;
-                        if ui.add_enabled(enabled, egui::Slider::new(&mut pct, 0.0..=100.0).suffix("%")).labelled_by(name.id).changed() {
-                            *value = pct / 100.0;
-                        }
-                        ui.end_row();
-                    };
-                    let (fill, text) = parts_shown(e);
-                    let border = has_border(e);
-                    match (e.text_opacity.is_some(), e.fill_opacity.is_some()) {
-                        (true, _) => {
-                            // With neither a border nor a fill, the text is the whole comment:
-                            // shown at the opacity it is drawn at, a change sets the whole
-                            // comment's (which its parts then take).
-                            match e.text_opacity.as_mut() {
-                                Some(t) if text => percent(ui, tl!("Text opacity"), t, true),
-                                drawn => {
-                                    let mut shown = drawn.as_deref().copied().unwrap_or(e.opacity);
-                                    let before = shown;
-                                    percent(ui, tl!("Text opacity"), &mut shown, true);
-                                    if shown != before {
-                                        e.opacity = shown;
-                                        if let Some(t) = drawn {
-                                            *t = shown;
-                                        }
-                                    }
-                                }
-                            }
-                            if text {
-                                percent(ui, tl!("Border opacity"), &mut e.opacity, border);
-                            } else {
-                                let mut whole = e.opacity;
-                                percent(ui, tl!("Border opacity"), &mut whole, false);
-                            }
-                        }
-                        (false, true) => percent(ui, tl!("Line opacity"), &mut e.opacity, true),
-                        (false, false) => percent(ui, tl!("Opacity"), &mut e.opacity, true),
-                    }
-                    if let Some(f) = e.fill_opacity.as_mut() {
-                        percent(ui, tl!("Fill opacity"), f, fill);
-                    }
-                    let min_width = if e.font_size.is_some() { 0.0 } else { 0.5 };
-                    if let Some(w) = e.width.as_mut() {
-                        ui.label(tl!("Thickness"));
-                        ui.add(egui::Slider::new(w, min_width..=crate::comments::MAX_LINE_WIDTH).step_by(0.5).suffix(" pt"));
-                        ui.end_row();
-                    }
-                    if let Some(ends) = e.endings.as_mut() {
-                        ui.label(tl!("Line ending"));
-                        ui.horizontal(|ui| {
-                            for (i, ending) in ends.iter_mut().enumerate() {
-                                craft_ui::ComboBox::from_id_salt(("line-ending", i)).selected_text(ending_label(*ending)).width(188.0).show_ui(
-                                    ui,
-                                    |ui| {
-                                        for style in LineEnding::ALL {
-                                            ui.selectable_value(ending, style, ending_label(style));
-                                        }
-                                    },
-                                );
-                            }
-                        });
-                        ui.end_row();
-                    }
-                });
-            });
-        }
-        PropsTab::General => {
-            egui::Grid::new("comment-general").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
-                let l = ui.label(tl!("Author"));
-                ui.add(crate::widgets::line(&mut e.author).desired_width(280.0)).labelled_by(l.id);
-                ui.end_row();
-                let l = ui.label(tl!("Subject"));
-                ui.add(crate::widgets::line(&mut e.subject).desired_width(280.0)).labelled_by(l.id);
-                ui.end_row();
-                ui.label(tl!("Modified"));
-                ui.label(e.modified.as_deref().map(pdfcraft_render::pretty_date).unwrap_or_else(|| "—".into()));
-                ui.end_row();
-            });
-        }
-        PropsTab::ReviewHistory => {
-            if history.is_empty() {
-                ui.label(egui::RichText::new(tl!("No status has been set.")).color(t.text_muted));
-            }
-            for (state, who, when) in &history {
-                ui.label(format!("{} — {who}  {when}", tl!(state)));
-            }
-        }
-    }
-    ui.add_space(12.0);
-    ui.horizontal(|ui| {
-        ui.add(widgets::checkbox(&mut d.edited.locked, tl!("Locked")));
-        ui.add_space(16.0);
-        // Acrobat's box beside Locked. Only a comment whose look can change, made by a tool (or
-        // typed text, for Fill & Sign).
-        let defaultable = d.edited.restylable && has_default;
-        ui.add_enabled(defaultable, widgets::checkbox(&mut d.make_default, tl!("Make Properties Default")));
-    });
-    let (mut apply, mut cancel) = (false, false);
-    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        if widgets::pill_button(ui, tl!("OK"), true).clicked() {
-            apply = true;
-        }
-        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-            cancel = true;
-        }
-    });
-    (apply, cancel)
 }

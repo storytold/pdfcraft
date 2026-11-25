@@ -145,6 +145,9 @@ pub(crate) struct Output {
     /// Apply mode met vertical-writing text (which it cannot remove) while a redaction region was
     /// in force: the operation must fail closed rather than leave that text under the mark.
     pub vertical: bool,
+    /// Apply mode met text in a font whose CMap dropped codespace ranges while a redaction region
+    /// was in force: which text its strings hold is a guess, so the operation must fail closed.
+    pub dropped_codes: bool,
     /// The content holds an inline image the renderer reads no image for
     /// ([`pdfcraft_content::Parsed::ambiguous_images`]): what this scope placed after it may not
     /// be what the page shows, so a redaction must not trust it.
@@ -339,7 +342,9 @@ fn res_dict(doc: &Document, res: &Dict, key: &[u8]) -> Dict {
 /// predefined CMap name ending in `-V` (Identity-V and the like), or an embedded CMap stream
 /// whose `/WMode` is 1 (ISO 32000-2 §9.7.5).
 fn is_vertical(doc: &Document, font: &Dict) -> bool {
-    if font.name(b"Subtype") != Some(b"Type0".as_slice()) {
+    // `/Subtype` may be written by reference (#6750).
+    let subtype = font.get(b"Subtype").map(|s| doc.resolve(s));
+    if subtype.as_deref().and_then(Object::as_name) != Some(b"Type0".as_slice()) {
         return false;
     }
     match font.get(b"Encoding").map(|e| doc.resolve(e)).as_deref() {
@@ -845,6 +850,14 @@ impl Walk {
         {
             self.out.vertical = true;
         }
+        if self.gs.font.codespaces_dropped
+            && scope.mode == Mode::Apply
+            && scope.hidden_text.is_none()
+            && !scope.rects.is_empty()
+            && items.iter().any(|o| matches!(o, Object::String(s) if !s.bytes.is_empty()))
+        {
+            self.out.dropped_codes = true;
+        }
         let (new_items, removed) = show(scope, &self.gs, &mut self.tm, &items);
         if removed == 0 {
             return Some(op);
@@ -1109,7 +1122,10 @@ fn xobject(
     let r = xobjects.get(&name)?.as_ref()?;
     let obj = doc.get(r);
     let Object::Stream(s) = &*obj else { return None };
-    match s.dict.name(b"Subtype") {
+    // `/Subtype` may be written by reference, and the renderer follows it: an image named that way
+    // is still drawn, so it must still be redacted (#6750).
+    let subtype = s.dict.get(b"Subtype").map(|t| doc.resolve(t));
+    match subtype.as_deref().and_then(Object::as_name) {
         _ if s.dict.get(b"OC").is_some_and(|oc| scope.xobject_layer_hidden(doc, r, oc)) => {
             // Verify mode must count hidden XObjects too: scan uses that count to decide
             // whether the HiddenLayers pass is necessary.
@@ -1256,6 +1272,7 @@ fn xobject(
             scope.fonts = saved_fonts;
             out.residue += inner.residue;
             out.vertical |= inner.vertical;
+            out.dropped_codes |= inner.dropped_codes;
             out.ambiguous |= inner.ambiguous;
             out.unparsed |= inner.unparsed;
             out.doomed.extend_from_slice(&inner.doomed);
@@ -1337,7 +1354,33 @@ fn xobject(
             scope.report.forms_rewritten += 1;
             Some(Some(Op::new("Do", vec![Object::Name(n)])))
         }
-        _ => None,
+        // No `/Subtype`, or one the redactor does not read: what it draws is unknown, so a
+        // placement under a mark fails closed. Apply removes it, as it does a form it cannot read,
+        // and verification counts it as what may remain. Its place is the unit square an image
+        // fills or, when it has a `/BBox`, the box a form would draw in: either one under a mark
+        // counts. Both are read as the proof reads a form's, entries by reference included; a
+        // `/Matrix` or `/BBox` that is present but malformed leaves its place unknown, so it counts
+        // as under a mark rather than as outside every one.
+        _ => {
+            let unit = gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]);
+            let framed = match (crate::verify::matrix_of(doc, &s.dict), crate::verify::bbox_of(doc, &s.dict)) {
+                (Ok(m), Ok(bbox)) => bbox.is_some_and(|b| scope.hits(m.then(&gs.ctm).bbox(b))),
+                _ => true,
+            };
+            if !scope.hits(unit) && !framed {
+                return None;
+            }
+            if scope.mode == Mode::Verify {
+                out.residue += 1;
+                return None;
+            }
+            scope.report.forms_removed += 1;
+            // Any text it held was never read, so the metadata check can't know what went with it.
+            scope.removed_cut = true;
+            out.replaced.push(name);
+            out.doomed.push(r);
+            Some(None)
+        }
     }
 }
 
