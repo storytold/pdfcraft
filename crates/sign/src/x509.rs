@@ -335,7 +335,7 @@ impl Certificate {
 
     // Original certificate reader retained as an independent parity oracle; see source history.
     #[cfg(test)]
-    fn parse_legacy(raw: &[u8]) -> Result<Certificate, SignError> {
+    pub(crate) fn parse_legacy(raw: &[u8]) -> Result<Certificate, SignError> {
         let cert = Tlv::parse_all(raw)?.expect(tag::SEQUENCE, "Certificate")?;
         let parts = cert.children()?;
         let [tbs, sig_alg, sig] = parts.as_slice() else { return Err(SignError::Malformed("Certificate".into())) };

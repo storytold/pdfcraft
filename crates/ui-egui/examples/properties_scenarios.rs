@@ -8,11 +8,14 @@ use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use craft::ui::dialog::dialog_id;
+use craft::ui::patterns::form_dialogs::HostedParamDialog;
+use craft::ui::runtime::{env::WindowKey, toast};
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_engine::{DocId, Edit, Session};
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
+use pdfcraft_ui_egui::{PdfCraftApp, PropsTab};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -88,12 +91,13 @@ struct Adapter {
 impl Adapter {
     /// Open two independent fixtures and create a deterministic 60 Hz headless UI harness.
     fn new(artifacts: Option<PathBuf>) -> Result<Self, String> {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en")?;
+        let ctx = egui::Context::default();
+        let mut app = PdfCraftApp::new(&ctx);
+        app.set_option(&ctx, "language", "en")?;
         let mut originals = Vec::new();
         for (name, title) in [("A.pdf", "Original"), ("B.pdf", "Second document")] {
             let bytes = fixture(title)?;
-            app.open_bytes(name, None, bytes.as_ref().clone()).map_err(|e| e.to_string())?;
+            app.open_bytes(&ctx, name, None, bytes.as_ref().clone()).map_err(|e| e.to_string())?;
             let id = app.active_ids().map(|(_, id)| id).ok_or("fixture did not open")?;
             originals.push((id, bytes));
         }
@@ -111,9 +115,14 @@ impl Adapter {
         self.h.state().active_ids().map(|(_, id)| id).ok_or_else(|| "no active document".into())
     }
 
-    /// Report whether the active modal is a Document Properties tab.
+    /// The open Document Properties dialog, which the host keys `file.properties`.
+    fn properties(&self) -> Option<&HostedParamDialog> {
+        self.h.state().dialogs.get_by_id::<HostedParamDialog>(dialog_id("file.properties"))
+    }
+
+    /// Report whether Document Properties is open.
     fn properties_open(&self) -> bool {
-        matches!(self.h.state().dialog, Some(Dialog::Properties(_)))
+        self.properties().is_some()
     }
 
     /// Replace an enabled property field through focus and keyboard events; never set its buffer directly.
@@ -180,7 +189,8 @@ impl Adapter {
                 if self.properties_open() {
                     return Err("properties dialog is already open".into());
                 }
-                self.h.state_mut().run_command("file.properties");
+                let ctx = self.h.ctx.clone();
+                self.h.state_mut().run_command(&ctx, "file.properties");
             }
             Event::Type { field, value } => self.type_text(&field, &value)?,
             Event::Click { label } => self.click(&label)?,
@@ -220,7 +230,8 @@ impl Adapter {
                 if (if undo { doc.can_undo() } else { doc.can_redo() }).is_none() {
                     return Err("history action is unavailable".into());
                 }
-                self.h.state_mut().run_command(if undo { "edit.undo" } else { "edit.redo" });
+                let ctx = self.h.ctx.clone();
+                self.h.state_mut().run_command(&ctx, if undo { "edit.undo" } else { "edit.redo" });
             }
             Event::SaveReopen => {
                 let id = self.active()?;
@@ -243,17 +254,27 @@ impl Adapter {
         let doc = app.active_ids().and_then(|(_, id)| app.session.get(id));
         let original_bytes =
             doc.is_some_and(|doc| self.originals.iter().any(|(id, bytes)| *id == doc.id && bytes.as_slice() == doc.bytes.as_slice()));
-        let draft = app.props_draft.as_ref().map(|(_, fields)| {
-            let custom: serde_json::Map<String, Value> =
-                app.custom_draft.as_ref().into_iter().flat_map(|(_, d)| d.props.iter().map(|(k, v)| (k.clone(), json!(v)))).collect();
+        let draft = self.properties().map(|dialog| {
+            let fields = dialog.fields();
+            let custom: serde_json::Map<String, Value> = fields
+                .get("custom")
+                .and_then(|value| serde_json::to_value(value).ok())
+                .and_then(|value| value.as_array().cloned())
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| Some((entry.get("name")?.as_str()?.to_owned(), entry.get("value")?.clone())))
+                .collect();
             json!({
-                "title": fields.first(), "author": fields.get(1), "subject": fields.get(2), "keywords": fields.get(3),
-                "custom": custom, "display_title": app.view_draft.as_ref().map(|(_, v)| v.display_title),
+                "title": fields.text("title"), "author": fields.text("author"), "subject": fields.text("subject"),
+                "keywords": fields.text("keywords"), "custom": custom,
+                "display_title": fields.text("display_title").map(|show| show == "title"),
+                "tab": PropsTab::from_index(dialog.shown_tab()).map(|tab| format!("{tab:?}")),
             })
         });
         json!({
             "error": error, "properties_open": self.properties_open(), "active": doc.map(|d| &d.name),
-            "notice": app.toast.as_ref().map(|(message, _)| message),
+            // The newest notice card the main window shows, by its text.
+            "notice": toast::cards(&self.h.ctx, &WindowKey::main()).last().map(|card| card.toast.message.as_str().to_owned()),
             "document": doc.map(document_state), "draft": draft, "original_bytes": original_bytes,
             "reopened": self.reopened,
         })
