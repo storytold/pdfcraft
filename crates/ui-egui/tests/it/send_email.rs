@@ -160,7 +160,7 @@ fn an_email_app_that_cant_take_the_file_gets_a_message_and_the_file_is_shown() {
     assert!(problem_open(&h));
     h.get_by_label_contains("Firefox can't take a file from PdfCraft.");
     h.get_by_label_contains("PdfCraft will show unchanged.pdf in its folder");
-    h.get_by_label("Close");
+    close_button(&h);
     h.get_by_label(if cfg!(target_os = "macos") { "Reveal in Finder" } else { "Reveal in File Explorer" });
     h.get_by_label("Open message and show file").click();
     h.run_steps(3);
@@ -301,7 +301,7 @@ fn every_failure_is_said_and_close_closes() {
         h.run_steps(3);
         assert!(problem_open(&h));
         h.get_by_label_contains(text);
-        h.get_by_label("Close").click();
+        close_button(&h).click();
         h.run_steps(3);
         assert!(!crate::support::dialog_open(&h) && h.state().send_email.problem.is_none());
     }
@@ -507,4 +507,9 @@ fn an_allowed_email_link_opens_in_the_email_app_and_falls_back_to_a_web_link() {
     assert!(opened_as_web_link(&h, "https://example.org/"));
     assert_eq!(ADDRESSES.with(|a| a.borrow().len()), 2);
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+/// The dialog's Close button: on Linux the in-window File menu holds a hidden "Close" of its own.
+fn close_button<'a>(h: &'a Harness<'static, PdfCraftApp>) -> egui_kittest::Node<'a> {
+    h.get_by(|n| n.role() == egui::accesskit::Role::Button && !n.is_hidden() && n.label().as_deref() == Some("Close"))
 }
