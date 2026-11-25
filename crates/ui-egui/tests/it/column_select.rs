@@ -1,6 +1,7 @@
 //! Issue #740: column select, as in Acrobat. Alt-drag (Option-drag on macOS) with the Select tool,
 //! or a plain drag with Edit ▸ Column select, selects only the text inside the rectangle drawn.
 
+use crate::support::AppHarness as _;
 use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
@@ -28,14 +29,22 @@ trailer << /Root 1 0 R >>
 }
 
 fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("table.pdf", None, table()).expect("opens");
-        app.set_option("left", "closed").unwrap();
-        app.set_option("author", "Tester").unwrap();
-        setup(&mut app);
-        app
+    harness_on(crate::support::RecordingClipboard::default(), setup)
+}
+
+/// `harness` on the injected `clipboard`, whose recorded writes a test reads.
+fn harness_on(clipboard: crate::support::RecordingClipboard, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::support::app_with_clipboard(clipboard);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "table.pdf", None, table()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
+            setup(&mut app);
+            app
+        }
     });
     // Wait for the text layer itself (#1277): under load the first render takes longer than a
     // fixed second, and nothing may be pending yet before the text layer is asked for.
@@ -82,9 +91,10 @@ fn top_two_rows(h: &Harness<'static, PdfCraftApp>) -> (Pos2, Pos2) {
 fn alt_drag_selects_only_the_text_inside_the_rectangle() {
     let mut h = harness(|_| {});
     let (from, to) = top_two_rows(&h);
-    // A plain drag selects in reading order: everything from "Name" to "12".
+    // A plain drag selects the rows it covers. Reading order, column by column, would take "Pear"
+    // from the row below on its way from "Name" to "12".
     drag(&mut h, from, to, Modifiers::NONE);
-    assert_eq!(text(&h).as_deref(), Some("Name\nApple\nPear\nQty\n12"));
+    assert_eq!(text(&h).as_deref(), Some("Name\tQty\nApple\t12"));
     h.run_steps(60);
     // Alt (Option on macOS) at the start of the drag: only the rectangle, row by row.
     drag(&mut h, from, to, Modifiers::ALT);
@@ -98,7 +108,7 @@ fn alt_drag_selects_only_the_text_inside_the_rectangle() {
 
 #[test]
 fn the_column_select_tool_needs_no_modifier() {
-    let mut h = harness(|app| assert!(app.execute("edit.column_select")));
+    let mut h = harness(|app| assert!(app.execute(&egui::Context::default(), "edit.column_select")));
     assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::ColumnSelect);
     let (from, to) = top_two_rows(&h);
     drag(&mut h, from, to, Modifiers::NONE);
@@ -136,7 +146,7 @@ fn shift_click_clears_a_column_selection() {
 /// of a line. The drag starts on text, since off text the highlighter draws an area highlight.
 #[test]
 fn alt_drag_with_the_highlighter_marks_only_the_column() {
-    let mut h = harness(|app| assert!(app.execute("comment.highlight")));
+    let mut h = harness(|app| assert!(app.execute(&egui::Context::default(), "comment.highlight")));
     // Just above-left of the centre of "N", still on the glyph.
     let (from, to) = (glyph(&h, 0) - vec2(2.0, 2.0), below_right_of_row_two(&h));
     drag(&mut h, from, to, Modifiers::ALT);
@@ -151,20 +161,202 @@ fn alt_drag_with_the_highlighter_marks_only_the_column() {
 /// the clipboard and no HTML, even where the clipboard would take it.
 #[test]
 fn a_column_selection_copies_plain_text_only() {
-    let offered = std::sync::Arc::new(std::sync::Mutex::new(0usize));
-    let seen = offered.clone();
-    let mut h = harness(move |app| {
-        app.system_clipboard = true;
-        app.html_clipboard_override = Some(Box::new(move |_, _| {
-            *seen.lock().unwrap() += 1;
-            true
-        }));
-    });
+    let clipboard = crate::support::RecordingClipboard::default();
+    let mut h = harness_on(clipboard.clone(), |_| {});
     let (from, to) = top_two_rows(&h);
     drag(&mut h, from, to, Modifiers::ALT);
-    assert!(h.state_mut().execute("edit.copy"));
+    assert!(h.execute("edit.copy"));
     h.step();
-    assert_eq!(*offered.lock().unwrap(), 0, "no HTML for a column selection");
-    let copied = h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "Name\tQty\nApple\t12"));
-    assert!(copied, "the plain text goes out the usual way");
+    let html = clipboard.writes().iter().flatten().any(|flavor| flavor.mime == "text/html");
+    assert!(!html, "no HTML for a column selection");
+    assert_eq!(clipboard.copied().as_deref(), Some("Name\tQty\nApple\t12"), "the plain text goes out the usual way");
+}
+
+/// A plain drag along one row of a table that reads column by column selects that row, as
+/// Preview does, not the rest of the first column and the top of the second between its ends.
+/// The highlighter marks the same cells.
+#[test]
+fn a_plain_drag_along_one_table_row_selects_only_that_row() {
+    let mut h = harness(|_| {});
+    // From just left of "Apple" to past "12", level with both.
+    let (from, to) = (glyph(&h, 4) - vec2(4.0, 0.0), glyph(&h, 17) + vec2(12.0, 0.0));
+    for (a, b) in [(from, to), (to, from)] {
+        h.key_press(egui::Key::Escape);
+        h.run_steps(60);
+        drag(&mut h, a, b, Modifiers::NONE);
+        assert_eq!(text(&h).as_deref(), Some("Apple\t12"));
+    }
+
+    let mut h = harness(|app| assert!(app.execute(&egui::Context::default(), "comment.highlight")));
+    // The highlighter starts on text: the centre of "A".
+    let (from, to) = (glyph(&h, 4), glyph(&h, 17) + vec2(12.0, 0.0));
+    drag(&mut h, from, to, Modifiers::NONE);
+    h.run_steps(3);
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    let marks: Vec<(&str, usize)> = doc.info.annotations.iter().map(|a| (a.subtype.as_str(), a.quads.len())).collect();
+    assert_eq!(marks, [("Highlight", 2)], "Apple and 12, each its own quad");
+}
+
+/// A drag down from "Name" that ends in the gap between the columns, level with "Pear", crosses
+/// into the rows: the nearest glyph is still in the first column, but the pointer is not.
+#[test]
+fn a_drag_ending_between_the_columns_selects_the_rows() {
+    let mut h = harness(|_| {});
+    let (from, pear) = (glyph(&h, 0) - vec2(4.0, 0.0), glyph(&h, 12));
+    // A little right of "Pear", well short of "7".
+    let gap = pear + vec2((glyph(&h, 18).x - pear.x) / 4.0, 0.0);
+    drag(&mut h, from, gap, Modifiers::NONE);
+    assert_eq!(text(&h).as_deref(), Some("Name\tQty\nApple\t12\nPear"));
+    // Over the first column, the drag stays in it.
+    h.key_press(egui::Key::Escape);
+    h.run_steps(60);
+    drag(&mut h, from, pear, Modifiers::NONE);
+    assert_eq!(text(&h).as_deref(), Some("Name\nApple\nPear"));
+}
+
+/// Two article columns, the right one a line shorter: its last glyph, the end of reading order,
+/// sits above the left column's last line.
+fn uneven_columns() -> Vec<u8> {
+    let content = "BT /F1 14 Tf \
+        1 0 0 1 20 250 Tm (Left first line.) Tj 1 0 0 1 220 250 Tm (Right first line.) Tj \
+        1 0 0 1 20 225 Tm (Left other line.) Tj 1 0 0 1 220 225 Tm (Right final line.) Tj \
+        1 0 0 1 20 200 Tm (Left final line.) Tj ET";
+    format!(
+        "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
+4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Courier >> endobj\n\
+trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    )
+    .into_bytes()
+}
+
+/// Select all takes the page's text in reading order, whole: it has no pointer, so the rows a
+/// drag would take don't apply, though its last glyph is not the lowest.
+#[test]
+fn select_all_keeps_every_line_of_uneven_columns() {
+    let mut h = uneven_harness();
+    assert!(h.state_mut().views[0].select_all());
+    h.run_steps(1);
+    assert_eq!(text(&h).as_deref(), Some(UNEVEN_PAGE_TEXT));
+}
+
+/// Four clicks select the page, and a pointer that moves on a little after the fourth press
+/// keeps it whole: the page unit has no rows to take.
+#[test]
+fn four_clicks_then_a_short_drag_keep_the_whole_page() {
+    let mut h = uneven_harness();
+    let at = glyph(&h, 2);
+    for _ in 0..3 {
+        for pressed in [true, false] {
+            h.hover_at(at);
+            h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+        }
+    }
+    drag(&mut h, at, at + vec2(30.0, 8.0), Modifiers::NONE);
+    assert_eq!(text(&h).as_deref(), Some(UNEVEN_PAGE_TEXT));
+}
+
+fn uneven_harness() -> Harness<'static, PdfCraftApp> {
+    opened("uneven.pdf", uneven_columns())
+}
+
+/// A harness with the one-page PDF `bytes` open, its text layer ready.
+fn opened(name: &'static str, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), name, None, bytes).expect("opens");
+            app
+        }
+    });
+    crate::support::wait_until(&mut h, "the page's text layer", |app| app.views[0].glyph_screen_pos(0, 0).is_some() && !app.render_pending());
+    h
+}
+
+const UNEVEN_PAGE_TEXT: &str = "Left first line.\nLeft other line.\nLeft final line.\nRight first line.\nRight final line.";
+
+/// A drag after a double-click extends by whole words, and over a table it takes the rows as a
+/// plain drag does: from "Name" down to "12", not reading order's detour through "Pear".
+#[test]
+fn a_double_click_drag_over_table_rows_selects_the_rows() {
+    let mut h = harness(|_| {});
+    let (name, two) = (glyph(&h, 1), glyph(&h, 17));
+    for pressed in [true, false] {
+        h.hover_at(name);
+        h.event(Event::PointerButton { pos: name, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    }
+    drag(&mut h, name, two, Modifiers::NONE);
+    assert_eq!(text(&h).as_deref(), Some("Name\tQty\nApple\t12"));
+}
+
+/// An invoice's seal beside its QR code, the code drawn with a font as on a Mexican CFDI: eight
+/// rows of twelve 6 pt Courier glyphs stacked flush (6 pt apart), and five 8 pt lines 5 pt to their
+/// right, every other one on a code row's baseline. The seal reads first: glyphs 0–12 "one two
+/// three", 13–25 "four five six", 26–36 "seven eight", 37–44 "nine ten", 45–57 "eleven twelve".
+fn barcode_beside_seal() -> Vec<u8> {
+    let rows: String = BARCODE_ROWS.iter().map(|row| format!("({row}) Tj T* ")).collect();
+    let seal: String = SEAL.iter().map(|line| format!("({line}) Tj T* ")).collect();
+    let content = format!("BT /F1 6 Tf 6 TL 20 250 Td {rows}ET BT /F1 8 Tf 9 TL 68.2 250 Td {seal}ET");
+    format!(
+        "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
+4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Courier >> endobj\n\
+trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    )
+    .into_bytes()
+}
+
+const BARCODE_ROWS: [&str; 8] =
+    ["ABCDEFGHIJKL", "FGHIJKLMNOPQ", "KLMNOPQRSTUV", "PQRSTUVWXYZA", "UVWXYZABCDEF", "ZABCDEFGHIJK", "EFGHIJKLMNOP", "JKLMNOPQRSTU"];
+const SEAL: [&str; 5] = ["one two three", "four five six", "seven eight", "nine ten", "eleven twelve"];
+
+/// A drag down the seal beside a QR code drawn with a font selects the seal's lines, in order,
+/// and none of the code, whichever way it goes; the code's rows would otherwise join the seal's
+/// lines level with them.
+#[test]
+fn a_drag_down_text_beside_a_barcode_selects_only_the_text() {
+    let mut h = opened("cfdi.pdf", barcode_beside_seal());
+    // From just left of "one" to past the end of "nine ten".
+    let (from, to) = (glyph(&h, 0) - vec2(4.0, 0.0), glyph(&h, 44) + vec2(12.0, 0.0));
+    for (a, b) in [(from, to), (to, from)] {
+        h.key_press(egui::Key::Escape);
+        h.run_steps(60);
+        drag(&mut h, a, b, Modifiers::NONE);
+        assert_eq!(text(&h).as_deref(), Some("one two three\nfour five six\nseven eight\nnine ten"));
+    }
+    // Select all: the seal, then the code.
+    assert!(h.state_mut().views[0].select_all());
+    h.run_steps(1);
+    assert_eq!(text(&h), Some([SEAL.join("\n"), BARCODE_ROWS.join("\n")].join("\n")));
+}
+
+/// A drag after a double-click on "Qty", left and down into "Apple", takes both words whole, as
+/// rows: reading order has "Apple" first, but the rows start at the upper word. So does the drag
+/// the other way, from "Apple" up into "Qty", and along one row, from "Name" into "Qty" and back.
+#[test]
+fn a_double_click_drag_back_across_the_columns_keeps_whole_words() {
+    for (from, to, copied) in [(14, 6, "Qty\nApple"), (6, 14, "Qty\nApple"), (1, 14, "Name\tQty"), (14, 1, "Name\tQty")] {
+        let mut h = harness(|_| {});
+        let (from, to) = (glyph(&h, from), glyph(&h, to));
+        for pressed in [true, false] {
+            h.hover_at(from);
+            h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+        }
+        drag(&mut h, from, to, Modifiers::NONE);
+        assert_eq!(text(&h).as_deref(), Some(copied));
+    }
 }

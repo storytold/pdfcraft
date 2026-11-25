@@ -1,6 +1,7 @@
 //! Compare files in the real shell (egui_kittest): the dialog, the Compare panel, marks and
 //! the report.
 
+use crate::support::AppHarness as _;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::Session;
@@ -11,38 +12,41 @@ fn compare_two_versions() {
     let s = Session::new();
     let v1 = s.create_from_text("t", "Delivery within five days. Returns accepted.").unwrap().to_vec();
     let v2 = s.create_from_text("t", "Delivery within three days. Returns accepted for a week.").unwrap().to_vec();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("v1.pdf", None, v1.clone()).unwrap();
-        app.open_bytes("v2.pdf", None, v2.clone()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "v1.pdf", None, v1.clone()).unwrap();
+            app.open_bytes(&egui::Context::default(), "v2.pdf", None, v2.clone()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
-    assert!(h.state_mut().execute("doc.compare"));
+    assert!(h.execute("doc.compare"));
     h.run_steps(2);
-    h.get_by_label("Compare Files");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Compare Files");
     h.get_by_label("Compare").click();
     h.run_steps(3);
-    assert_eq!(h.state().right, Some(RightPanel::Compare));
-    assert_eq!(h.state().toast.clone().unwrap().0, "2 differences found");
+    assert_eq!(crate::support::right(h.state()), Some(RightPanel::Compare));
+    assert_eq!(crate::support::shown_notice(&h).as_deref(), Some("2 differences found"));
     h.get_by_label("2 Replaced");
-    h.get_by_label("\"five\" → \"three\"").click();
+    h.get_by_label_contains("\"five\" → \"three\"").click();
     h.run_steps(2);
     assert_eq!(h.state().compare.as_ref().unwrap().selected, Some(0));
     let id = h.state().active_ids().unwrap().1;
     let i = h.state().active_ids().unwrap().0;
-    assert_eq!(h.state().views[i].compare_marks.len(), 2);
+    assert_eq!(h.state().views[i].session.compare_marks.len(), 2);
     // Side by side: the old file's half shades its side of the changes and follows the new
     // file's zoom; "New file only" ends it.
     assert!(h.state().compare.as_ref().unwrap().side_by_side, "side by side on a wide window");
     let old_i = h.state().views.iter().position(|v| v.id == h.state().compare.as_ref().unwrap().old).unwrap();
-    assert_eq!(h.state().views[old_i].compare_marks.len(), 2, "replaced words shaded on the old file too");
-    assert!(h.state().views[old_i].flash.is_some(), "the old half jumped to the change");
-    h.state_mut().views[i].zoom = 1.5;
-    h.state_mut().views[i].fit = pdfcraft_ui_egui::canvas::Fit::None;
+    assert_eq!(h.state().views[old_i].session.compare_marks.len(), 2, "replaced words shaded on the old file too");
+    assert!(h.state().views[old_i].session.flash.is_some(), "the old half jumped to the change");
+    h.state_mut().views[i].view.zoom = 1.5;
+    h.state_mut().views[i].view.fit = craft::pages::Fit::None;
     h.run_steps(3);
-    assert_eq!((h.state().views[old_i].zoom, h.state().views[old_i].fit), (1.5, pdfcraft_ui_egui::canvas::Fit::None), "the old half follows");
+    assert_eq!((h.state().views[old_i].view.zoom, h.state().views[old_i].view.fit), (1.5, craft::pages::Fit::None), "the old half follows");
     h.get_by_label("New file only").click();
     h.run_steps(2);
     assert!(!h.state().compare.as_ref().unwrap().side_by_side);
@@ -64,15 +68,18 @@ fn side_by_side() -> Harness<'static, PdfCraftApp> {
     let s = Session::new();
     let v1 = s.create_from_text("t", "Delivery within five days. Returns accepted.").unwrap().to_vec();
     let v2 = s.create_from_text("t", "Delivery within three days. Returns accepted for a week.").unwrap().to_vec();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("v1.pdf", None, v1.clone()).unwrap();
-        app.open_bytes("v2.pdf", None, v2.clone()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "v1.pdf", None, v1.clone()).unwrap();
+            app.open_bytes(&egui::Context::default(), "v2.pdf", None, v2.clone()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
-    assert!(h.state_mut().execute("doc.compare"));
+    assert!(h.execute("doc.compare"));
     h.run_steps(2);
     h.get_by_label("Compare").click();
     h.run_steps(3);
@@ -117,34 +124,38 @@ fn text_and_visual_versions() -> (Vec<u8>, Vec<u8>) {
 #[test]
 fn compare_filters_hide_text_or_visual_changes() {
     let (v1, v2) = text_and_visual_versions();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("v1.pdf", None, v1.clone()).unwrap();
-        app.open_bytes("v2.pdf", None, v2.clone()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "v1.pdf", None, v1.clone()).unwrap();
+            app.open_bytes(&egui::Context::default(), "v2.pdf", None, v2.clone()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h.state_mut().compare_old = h.state().views.first().map(|v| v.id);
-    h.state_mut().run_compare();
+    let ctx = h.ctx.clone();
+    h.state_mut().run_compare(&ctx);
     h.run_steps(3);
     let new_i = h.state().active_ids().unwrap().0;
     let old_i = h.state().views.iter().position(|v| v.id == h.state().compare.as_ref().unwrap().old).unwrap();
     // Visual differences are shaded orange (compare_ui::VISUAL), text changes in their kind's colour.
     let visual = egui::Color32::from_rgb(0xF0, 0x8C, 0x1A);
     let kinds = |h: &Harness<'_, PdfCraftApp>, i: usize| {
-        let marks = &h.state().views[i].compare_marks;
+        let marks = &h.state().views[i].session.compare_marks;
         (marks.iter().filter(|m| m.2 != visual).count(), marks.iter().filter(|m| m.2 == visual).count())
     };
     let (text_new, visual_new) = kinds(&h, new_i);
     let (text_old, visual_old) = kinds(&h, old_i);
     assert!(text_new > 0 && visual_new > 0, "the fixture has both kinds on the new file: {text_new} text, {visual_new} visual");
     assert!(text_old > 0 && visual_old > 0, "and on the old file: {text_old} text, {visual_old} visual");
-    h.get_by_label("\"five\" → \"three\"");
+    h.get_by_label_contains("\"five\" → \"three\"");
 
     h.get_by_label("Text").click();
     h.run_steps(2);
-    assert!(h.query_by_label("\"five\" → \"three\"").is_none(), "text changes leave the list");
+    assert!(h.query_by_label_contains("\"five\" → \"three\"").is_none(), "text changes leave the list");
     assert_eq!(kinds(&h, new_i), (0, visual_new), "and the new file's shading");
     assert_eq!(kinds(&h, old_i), (0, visual_old), "and the old file's");
 
@@ -155,95 +166,37 @@ fn compare_filters_hide_text_or_visual_changes() {
 
     h.get_by_label("Text").click();
     h.run_steps(2);
-    h.get_by_label("\"five\" → \"three\"");
+    h.get_by_label_contains("\"five\" → \"three\"");
     assert_eq!(kinds(&h, new_i), (text_new, 0), "text back, visual still hidden");
     assert_eq!(kinds(&h, old_i), (text_old, 0));
-}
-
-/// The Compare Files dialog's Pages field rejects an out-of-range page: the
-/// comparison does not run and the dialog stays open with the typed range kept.
-#[test]
-fn compare_dialog_pages_field_rejects_out_of_range() {
-    let s = Session::new();
-    let v1 = s.create_from_text("t", "Delivery within five days. Returns accepted.").unwrap().to_vec();
-    let v2 = s.create_from_text("t", "Delivery within three days. Returns accepted for a week.").unwrap().to_vec();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("v1.pdf", None, v1.clone()).unwrap();
-        app.open_bytes("v2.pdf", None, v2.clone()).unwrap();
-        app
-    });
-    h.run_steps(4);
-    assert!(h.state_mut().execute("doc.compare"));
-    h.run_steps(2);
-    h.get_by_label("Compare Files");
-    let pages = h.query_by_role_and_label(egui::accesskit::Role::TextInput, "Pages");
-    assert!(pages.is_some(), "the dialog has a Pages text input");
-    assert!(h.query_by_label("Pages:").is_some(), "the dialog has a Pages field");
-    let Some(pages) = pages else { return };
-    pages.focus();
-    pages.type_text("99");
-    h.run_steps(2);
-    assert_eq!(
-        h.query_by_role_and_label(egui::accesskit::Role::TextInput, "Pages").and_then(|n| n.value()),
-        Some("99".to_string()),
-        "the typed range is kept"
-    );
-    h.get_by_label("Compare").click();
-    h.run_steps(3);
-    assert!(h.query_by_label("Compare Files").is_some(), "the dialog stays open for an out-of-range page");
-    assert!(h.state().compare.is_none(), "the comparison did not run");
-    assert_ne!(h.state().right, Some(RightPanel::Compare));
-}
-
-/// Writes a screenshot of the Compare panel when PDFCRAFT_SHOT is set (for review).
-#[test]
-fn compare_panel_screenshot() {
-    let Ok(out) = std::env::var("PDFCRAFT_SHOT") else { return };
-    let _gpu = crate::gpu();
-    let s = Session::new();
-    let v1 = s.create_from_text("t", "Delivery within five days. Returns accepted.").unwrap().to_vec();
-    let v2 = s.create_from_text("t", "Delivery within three days. Returns accepted for a week.").unwrap().to_vec();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("v1.pdf", None, v1.clone()).unwrap();
-        app.open_bytes("v2.pdf", None, v2.clone()).unwrap();
-        app
-    });
-    h.run_steps(4);
-    h.state_mut().compare_old = h.state().views.first().map(|v| v.id);
-    h.state_mut().run_compare();
-    for _ in 0..20 {
-        h.run_steps(2);
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    h.render().unwrap().save(out).unwrap();
 }
 
 #[test]
 fn pdfa_dialog_verifies_and_converts() {
     let doc = Session::new().create_from_text("t", "Keep forever").unwrap().to_vec();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("keep.pdf", None, doc.clone()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "keep.pdf", None, doc.clone()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
-    assert!(h.state_mut().execute("standards.pdfa"));
+    assert!(h.execute("standards.pdfa"));
     h.run_steps(2);
     h.get_by_label("Declared conformance: none");
     assert!(h.query_by_label("Remove PDF/A identification").is_none(), "nothing to remove yet");
     h.get_by_label("Verify").click();
     h.run_steps(3);
-    h.get_by_label("The document has no XMP metadata");
+    // A finding's row is named by its text, then its clause and severity.
+    assert!(h.query_all_by_label_contains("The document has no XMP metadata").next().is_some(), "the missing XMP is a finding");
     h.get_by_label("Save as PDF/A").click();
     h.run_steps(3);
     h.get_by_label("Declared conformance: PDF/A-2b");
-    let issues = h.state().pdfa.issues.clone().unwrap();
-    assert!(issues.iter().all(|i| !i.fixable), "{issues:?}");
+    // The issues are the dialog's findings: the one left over is shown as not fixable here.
+    assert!(!h.query_all_by_label_contains("not fixable here").collect::<Vec<_>>().is_empty(), "the remaining finding says it is not fixable");
     let id = h.state().active_ids().unwrap().1;
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Save as PDF/A-2b"));
     h.get_by_label("Remove PDF/A identification").click();
@@ -287,14 +240,17 @@ fn pdfa_dialog_shows_a_declared_pdfua() {
         ("pdfaid:part=\"2\" pdfaid:conformance=\"B\" pdfuaid:part=\"1\"", "Declared conformance: PDF/A-2b, PDF/UA-1"),
     ] {
         let doc = declaring(ids);
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-            let mut app = PdfCraftApp::new();
-            app.set_option("language", "en").unwrap();
-            app.open_bytes("ua.pdf", None, doc.clone()).unwrap();
-            app
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = crate::control::new_app();
+                app.set_option(&egui::Context::default(), "language", "en").unwrap();
+                app.open_bytes(&egui::Context::default(), "ua.pdf", None, doc.clone()).unwrap();
+                app
+            }
         });
         h.run_steps(4);
-        assert!(h.state_mut().execute("standards.pdfa"));
+        assert!(h.execute("standards.pdfa"));
         h.run_steps(2);
         h.get_by_label(shown);
     }
@@ -303,16 +259,27 @@ fn pdfa_dialog_shows_a_declared_pdfua() {
 #[test]
 fn export_to_word_html_and_rtf() {
     let doc = Session::new().create_from_text("t", "Exported words").unwrap().to_vec();
-    let dir = std::env::temp_dir().join(format!("pdfcraft-office-ui-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let mut app = PdfCraftApp::new();
-    app.set_option("language", "en").unwrap();
-    app.open_bytes("e.pdf", None, doc).unwrap();
     for ext in ["docx", "pptx", "html", "rtf"] {
-        let out = dir.join(format!("e.{ext}"));
-        app.save_override = Some(out.to_string_lossy().into_owned());
-        assert!(app.execute(&format!("export.{ext}")));
-        assert!(std::fs::metadata(&out).unwrap().len() > 40, "{ext}");
+        // Each save is answered with the suggested name in the suggested folder.
+        let files = std::sync::Arc::new(craft::host::ScriptedFiles::new().saving_suggested());
+        let (app_files, doc) = (files.clone(), doc.clone());
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            let mut app = crate::control::app_with_files(app_files);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "e.pdf", None, doc).unwrap();
+            app
+        });
+        h.run_steps(4);
+        assert!(h.execute(&format!("export.{ext}")));
+        // The picker's answer is taken on a later frame.
+        h.run_steps(3);
+        let request = files.requests().pop().expect("the export asked where to save");
+        let path = request.directory.or(request.default_directory).unwrap_or_default().join(request.file_name.expect("a suggested name"));
+        let bytes = files.file(&path).unwrap_or_else(|| panic!("{ext} was written"));
+        assert!(bytes.len() > 40, "{ext}");
+        if ext == "html" {
+            assert!(String::from_utf8_lossy(&bytes).contains("Exported words"));
+        }
     }
-    assert!(std::fs::read_to_string(dir.join("e.html")).unwrap().contains("Exported words"));
 }

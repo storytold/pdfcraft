@@ -13,7 +13,7 @@ pdfcraft-oracle = { workspace = true }
 pdfcraft-cos = { workspace = true }
 anyhow = "1"
 lopdf = "0.45"
-png = "0.18"
+craft-image-codecs = { workspace = true }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.11"
