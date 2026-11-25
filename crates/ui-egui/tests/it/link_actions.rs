@@ -1,10 +1,12 @@
 //! Links run the named (ISO 32000-2 §12.6.4.12), hide (§12.6.4.11) and reset-form (§12.7.6.3)
 //! actions, and the actions their `/Next` entries chain (§12.6.2), as push buttons run them.
 
+use crate::support::AppHarness as _;
+use craft::print::ui::HostedPrint;
 use egui::Pos2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
+use pdfcraft_ui_egui::PdfCraftApp;
 
 /// Link rows on page 1, by the y (PDF user space, 300 × 400 page) of their middle.
 const NEXT: f32 = 375.0;
@@ -87,18 +89,31 @@ fn fixture() -> Vec<u8> {
     out
 }
 
-fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("actions.pdf", None, fixture()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("panel", "none").unwrap();
-        app.set_option("zoom", "100").unwrap();
-        // The floating hotbar sits over the top middle of the page, where the first links are.
-        app.set_option("hotbar-side", "right").unwrap();
+/// The app with `files` open, the options applied, in a 1400 × 900 window.
+fn app_with(files: &[&str], options: &[(&str, &str)], step: Option<f32>) -> Harness<'static, PdfCraftApp> {
+    let files: Vec<String> = files.iter().map(|f| f.to_string()).collect();
+    let options: Vec<(String, String)> = options.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let mut b = Harness::builder().with_size(egui::vec2(1400.0, 900.0));
+    if let Some(dt) = step {
+        b = b.with_step_dt(dt);
+    }
+    b.build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let ctx = egui::Context::default();
+        let mut app = crate::control::new_app();
+        app.set_option(&ctx, "language", "en").unwrap();
+        for f in &files {
+            app.open_bytes(&ctx, f, None, fixture()).unwrap();
+        }
+        for (k, v) in &options {
+            app.set_option(&ctx, k, v).unwrap();
+        }
         app
-    });
+    })
+}
+
+fn harness() -> Harness<'static, PdfCraftApp> {
+    let mut h = app_with(&["actions.pdf"], &[("left", "closed"), ("panel", "none"), ("zoom", "100")], None);
     h.run_steps(8);
     h
 }
@@ -112,7 +127,7 @@ fn at(h: &Harness<'static, PdfCraftApp>, page: usize, y: f32) -> Pos2 {
 
 /// Click the link at height `y` on the current page.
 fn click(h: &mut Harness<'static, PdfCraftApp>, y: f32) {
-    let page = h.state().views[0].current;
+    let page = h.state().views[0].current();
     let p = at(h, page, y);
     h.hover_at(p);
     h.run_steps(1);
@@ -123,7 +138,7 @@ fn click(h: &mut Harness<'static, PdfCraftApp>, y: f32) {
 }
 
 fn current(h: &Harness<'static, PdfCraftApp>) -> usize {
-    h.state().views[0].current
+    h.state().views[0].current()
 }
 
 fn value(h: &Harness<'static, PdfCraftApp>, name: &str) -> String {
@@ -146,7 +161,11 @@ fn dirty(h: &Harness<'static, PdfCraftApp>) -> bool {
 }
 
 fn toast(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
-    h.state().toast.clone().map(|t| t.0)
+    crate::support::shown_notice(h)
+}
+
+fn print_open(h: &Harness<'static, PdfCraftApp>) -> bool {
+    h.state().dialogs.get::<HostedPrint>().is_some()
 }
 
 /// Table 215's four names go where they say; NextPage on the last page and PrevPage on the first
@@ -178,7 +197,7 @@ fn an_unknown_named_action_does_nothing() {
     click(&mut h, BOGUS);
     assert_eq!(current(&h), 0);
     assert_eq!(toast(&h), None);
-    assert_eq!(h.state().dialog, None);
+    assert!(!crate::support::dialog_open(&h));
     assert!(!dirty(&h));
 }
 
@@ -191,9 +210,10 @@ fn go_back_returns_to_the_previous_view_and_print_opens_the_dialog() {
     assert_eq!(current(&h), 0, "no previous view: nothing happens");
     assert_eq!(toast(&h), None);
     click(&mut h, PRINT);
-    assert_eq!(h.state().dialog, Some(Dialog::Print), "Print opens the dialog");
-    h.state_mut().dialog = None;
+    assert!(print_open(&h), "Print opens the dialog");
+    h.key_press(egui::Key::Escape);
     h.run_steps(2);
+    assert!(!print_open(&h));
     // NextPage to page 2, then PrevPage back to page 1: page 2 is the previous view.
     click(&mut h, NEXT);
     assert_eq!(current(&h), 1);
@@ -216,7 +236,7 @@ fn links_hide_and_show_fields_undoably() {
     click(&mut h, SHOW);
     assert!(!secret_hidden(&h), "/H false (by a widget reference) showed it again");
     assert_eq!(toast(&h), None, "nothing was reported as unsupported");
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(3);
     assert!(secret_hidden(&h), "undo hides it again");
 }
@@ -227,7 +247,7 @@ fn links_reset_listed_or_all_but_listed_fields() {
     let mut h = harness();
     click(&mut h, RESET_F1);
     assert_eq!((value(&h, "f1"), value(&h, "f2"), value(&h, "secret")), ("one".into(), "typed 2".into(), "SECRET".into()));
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(3);
     assert_eq!(value(&h, "f1"), "typed 1", "undoable");
     click(&mut h, RESET_ALL_BUT_F1);
@@ -243,7 +263,7 @@ fn links_run_next_action_chains() {
     click(&mut h, RESET_THEN_HIDE);
     assert_eq!(value(&h, "f2"), "two");
     assert!(secret_hidden(&h));
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(3);
     assert_eq!(value(&h, "f2"), "typed 2", "one undo takes back both");
     assert!(!secret_hidden(&h));
@@ -251,20 +271,26 @@ fn links_run_next_action_chains() {
     assert_eq!(current(&h), 3, "NextPage, then the chained GoTo");
 }
 
+/// Click `p` in the old half of a side-by-side comparison: the first click makes that half the
+/// one that leads the pair, the second reaches the page.
+fn click_in_the_old_half(h: &mut Harness<'static, PdfCraftApp>, p: Pos2) {
+    for _ in 0..2 {
+        h.hover_at(p);
+        h.run_steps(1);
+        h.drag_at(p);
+        h.run_steps(1);
+        h.drop_at(p);
+        h.run_steps(4);
+    }
+}
+
 /// The old half of a side-by-side comparison is not the active tab, but a link clicked there
 /// resets its own document's field at once, not when that tab later comes to the front.
 #[test]
 fn a_link_in_the_old_half_of_a_comparison_edits_its_document_at_once() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("old.pdf", None, fixture()).unwrap();
-        app.open_bytes("new.pdf", None, fixture()).unwrap();
-        app.set_option("zoom", "100").unwrap();
-        app
-    });
+    let mut h = app_with(&["old.pdf", "new.pdf"], &[("zoom", "100")], None);
     h.run_steps(4);
-    assert!(h.state_mut().execute("doc.compare"));
+    assert!(h.execute("doc.compare"));
     h.run_steps(2);
     h.get_by_label("Compare").click();
     h.run_steps(4);
@@ -276,12 +302,7 @@ fn a_link_in_the_old_half_of_a_comparison_edits_its_document_at_once() {
     let r = h.state().views[old].page_screen_rect(0).expect("the old page is on screen");
     let k = r.width() / 300.0;
     let p = r.min + egui::vec2(150.0 * k, (400.0 - RESET_F1) * k);
-    h.hover_at(p);
-    h.run_steps(1);
-    h.drag_at(p);
-    h.run_steps(1);
-    h.drop_at(p);
-    h.run_steps(4);
+    click_in_the_old_half(&mut h, p);
     assert_eq!(h.state().active, active, "the click did not change the active tab");
     let f1 = |h: &Harness<'static, PdfCraftApp>, id| {
         let doc = h.state().session.get(id).unwrap();
@@ -289,23 +310,16 @@ fn a_link_in_the_old_half_of_a_comparison_edits_its_document_at_once() {
     };
     assert_eq!(f1(&h, old_id), "one", "the old document's field was reset");
     assert_eq!(f1(&h, new_id), "typed 1", "the new document is untouched");
-    assert!(h.state().views[old].pending_edit.is_none(), "nothing is left waiting on the old tab");
+    assert!(h.state().views[old].session.pending_edit.is_none(), "nothing is left waiting on the old tab");
 }
 
 /// A Print link in a pane that isn't the active tab (the old file of a side-by-side comparison)
 /// doesn't open the dialog: the dialog prints the active tab, the other document.
 #[test]
 fn a_print_link_in_the_old_half_of_a_comparison_prints_nothing() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("old.pdf", None, fixture()).unwrap();
-        app.open_bytes("new.pdf", None, fixture()).unwrap();
-        app.set_option("zoom", "100").unwrap();
-        app
-    });
+    let mut h = app_with(&["old.pdf", "new.pdf"], &[("zoom", "100")], None);
     h.run_steps(4);
-    assert!(h.state_mut().execute("doc.compare"));
+    assert!(h.execute("doc.compare"));
     h.run_steps(2);
     h.get_by_label("Compare").click();
     h.run_steps(4);
@@ -316,13 +330,8 @@ fn a_print_link_in_the_old_half_of_a_comparison_prints_nothing() {
     let r = h.state().views[old].page_screen_rect(0).expect("the old page is on screen");
     let k = r.width() / 300.0;
     let p = r.min + egui::vec2(150.0 * k, (400.0 - PRINT) * k);
-    h.hover_at(p);
-    h.run_steps(1);
-    h.drag_at(p);
-    h.run_steps(1);
-    h.drop_at(p);
-    h.run_steps(4);
-    assert_eq!(h.state().dialog, None, "no print dialog for the other document");
+    click_in_the_old_half(&mut h, p);
+    assert!(!print_open(&h), "no print dialog for the other document");
 }
 
 /// A bookmark runs its named action on a click, and a double-click (which renames) runs it once,
@@ -330,15 +339,7 @@ fn a_print_link_in_the_old_half_of_a_comparison_prints_nothing() {
 #[test]
 fn a_bookmark_runs_its_named_action_once_per_click_or_double_click() {
     // At 60 frames a second, so two clicks a frame apart make a double-click.
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("actions.pdf", None, fixture()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("panel", "bookmarks").unwrap();
-        app.set_option("zoom", "100").unwrap();
-        app
-    });
+    let mut h = app_with(&["actions.pdf"], &[("left", "closed"), ("panel", "bookmarks"), ("zoom", "100")], Some(1.0 / 60.0));
     h.run_steps(8);
     let row = |h: &Harness<'static, PdfCraftApp>| {
         h.get_all_by_label("Onward").map(|n| n.rect()).max_by(|a, b| a.top().total_cmp(&b.top())).expect("the bookmark is listed").center()
