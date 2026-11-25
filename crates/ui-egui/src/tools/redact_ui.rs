@@ -3,16 +3,12 @@
 //! mark every match, set the default box colour and overlay text, and apply all marks (with a
 //! confirmation, as Acrobat asks) or clear them.
 
-use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
-use pdfcraft_engine::{Edit, NewAnnotation, REDACT_PATTERNS, REDACTION_CODE_SETS, RedactPattern, RedactionCodeSet, Rgb, Shape, Style, rect_quad};
-use pdfcraft_render::DocInfo;
+use pdfcraft_engine::{Edit, NewAnnotation, REDACTION_CODE_SETS, RedactPattern, RedactionCodeSet, Rgb, Shape, Style, rect_quad};
 
-use crate::canvas::{DocView, PageToolContext, PageXform};
-use crate::page_cursor::Layer;
-use crate::theme::Tokens;
-use crate::{PdfCraftApp, widgets};
+use crate::PdfCraftApp;
 
-const MARK_RED: Color32 = Color32::from_rgb(0xE3, 0x22, 0x22);
+pub(crate) mod dialogs;
+pub(crate) mod tool;
 
 /// Redaction Tool Properties: what new marks look like once applied.
 #[derive(Clone, Debug, PartialEq)]
@@ -168,20 +164,6 @@ impl RedactPrefs {
     }
 }
 
-/// Redact pages: which pages to mark.
-#[derive(Clone, Debug, PartialEq)]
-pub struct PagesDraft {
-    pub current: bool,
-    pub from: usize,
-    pub to: usize,
-}
-
-impl Default for PagesDraft {
-    fn default() -> Self {
-        Self { current: true, from: 1, to: 1 }
-    }
-}
-
 /// What Find text and redact looks for.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SearchMode {
@@ -223,75 +205,9 @@ impl Default for SearchDraft {
 /// The largest word list file Import list accepts.
 pub(crate) const MAX_WORD_LIST_BYTES: usize = 1 << 20;
 
-/// A box being drawn with the Redact tool: (page, start).
-pub type AreaDrag = Option<(usize, Pos2)>;
-
-fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
-    let (vx, vy) = xf.screen_to_view(p);
-    let u = info.pages[page].view_to_user(vx, vy);
-    [u[0] as f64, u[1] as f64]
-}
-
-/// Redact tool input on a page. Presses on text are left to text selection (the selection is
-/// marked when it ends, see [`after_text`]); presses nobody holds (`free`) elsewhere draw a box.
-/// Returns `true` when the gesture is a box.
-pub(crate) fn page_input(cx: PageToolContext<'_>, over_text: impl Fn(Pos2) -> bool, free: bool, view: &mut DocView) -> bool {
-    let PageToolContext { resp, xf, ptr, page, info, .. } = cx;
-    let pointer = ptr.pos;
-    if let Some((dp, start)) = view.redact_drag
-        && dp == page
-    {
-        if resp.drag_stopped() || !ptr.primary_down {
-            view.redact_drag = None;
-            let end = pointer.unwrap_or(start);
-            let r = Rect::from_two_pos(start, end).intersect(xf.rect);
-            if r.width() >= 3.0 && r.height() >= 3.0 {
-                let (a, b) = (to_user(xf, info, page, r.min), to_user(xf, info, page, r.max));
-                view.pending_redaction = Some((page, vec![rect_quad([a[0], a[1], b[0], b[1]])]));
-            }
-        }
-        return true;
-    }
-    // The tool's own press, of the primary button: one nobody holds, which began on this page off
-    // its text. egui may see the drag only once the pointer is past the page's edge.
-    if resp.drag_started_by(egui::PointerButton::Primary)
-        && free
-        && let Some(origin) = ptr.origin.filter(|o| xf.rect.contains(*o) && !over_text(*o))
-    {
-        view.redact_drag = Some((page, origin));
-        return true;
-    }
-    if pointer.is_some_and(|p| xf.rect.contains(p) && !over_text(p)) {
-        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
-    }
-    false
-}
-
-/// A finished text selection with the Redact tool becomes a mark.
-pub(crate) fn after_text(resp: &egui::Response, page: usize, info: &DocInfo, view: &mut DocView) {
-    if !(resp.drag_stopped_by(egui::PointerButton::Primary) || resp.double_clicked()) || view.redact_drag.is_some() {
-        return;
-    }
-    if let Some((p, quads)) = view.selection_quads(info).filter(|(p, _)| *p == page) {
-        view.clear_selection();
-        view.pending_redaction = Some((p, quads));
-    }
-}
-
-/// The box being drawn, to the pages' `pointer`.
-pub(crate) fn paint(painter: &egui::Painter, page: usize, view: &DocView, pointer: Option<Pos2>) {
-    if let (Some((dp, start)), Some(p)) = (view.redact_drag, pointer)
-        && dp == page
-    {
-        let r = Rect::from_two_pos(start, p);
-        painter.rect_filled(r, CornerRadius::ZERO, MARK_RED.gamma_multiply(0.12));
-        painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.5, MARK_RED), egui::StrokeKind::Inside);
-    }
-}
-
 impl PdfCraftApp {
     /// Mark every match of the search draft on every page; returns how many were marked.
-    pub fn redact_search(&mut self) -> usize {
+    pub fn redact_search(&mut self, ctx: &egui::Context) -> usize {
         let Some((_, id)) = self.active_ids() else { return 0 };
         let Some(doc) = self.session.get(id) else { return 0 };
         let d = self.redact_search.clone();
@@ -323,297 +239,33 @@ impl PdfCraftApp {
         }
         let n = edits.len();
         if n > 0 {
-            self.apply_edit(Edit::Batch { label: "Mark for redaction".into(), edits });
+            self.apply_edit(ctx, Edit::Batch { label: "Mark for redaction".into(), edits });
         }
         n
     }
 
-    /// Mark the pages of the Redact pages draft.
-    pub fn redact_pages(&mut self) {
-        let Some((i, id)) = self.active_ids() else { return };
+    /// Mark whole `pages` (0-based) with the current redaction properties.
+    pub fn redact_pages(&mut self, ctx: &egui::Context, pages: &[usize]) {
+        let Some((_, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
-        let n = doc.info.pages.len();
-        let d = self.redact_pages_draft.clone();
-        let pages: Vec<usize> = if d.current { vec![self.views[i].current] } else { (d.from.max(1) - 1..d.to.min(n)).collect() };
         let author = self.comment_prefs.author.clone();
         let edits: Vec<Edit> = pages
             .iter()
-            .map(|&p| {
-                let c = doc.info.pages[p].crop;
-                self.redact_prefs.mark(p, vec![rect_quad([c[0] as f64, c[1] as f64, c[2] as f64, c[3] as f64])], &author)
+            .filter_map(|&p| {
+                let c = doc.info.pages.get(p)?.crop;
+                Some(self.redact_prefs.mark(p, vec![rect_quad([c[0] as f64, c[1] as f64, c[2] as f64, c[3] as f64])], &author))
             })
             .collect();
         match <[Edit; 1]>::try_from(edits) {
             Ok([one]) => {
-                self.apply_edit(one);
+                self.apply_edit(ctx, one);
             }
             Err(edits) if edits.is_empty() => {}
             Err(edits) => {
-                self.apply_edit(Edit::Batch { label: "Mark pages for redaction".into(), edits });
+                self.apply_edit(ctx, Edit::Batch { label: "Mark pages for redaction".into(), edits });
             }
         }
     }
-}
-
-/// Redact pages ("Mark Page Range"). Returns (apply, cancel).
-pub(crate) fn pages_body(ui: &mut egui::Ui, d: &mut PagesDraft, pages: usize, _t: &Tokens) -> (bool, bool) {
-    ui.label(egui::RichText::new(tl!("Mark Page Range")).font(crate::theme::semibold(18.0)));
-    ui.add_space(8.0);
-    widgets::radio_value(ui, &mut d.current, true, tl!("Current page"));
-    let to_field = ui
-        .horizontal(|ui| {
-            let from_label = widgets::radio_value(ui, &mut d.current, false, tl!("Pages from"));
-            ui.add_enabled(!d.current, egui::DragValue::new(&mut d.from).range(1..=pages)).labelled_by(from_label.id);
-            let to_label = ui.label(tl!("to"));
-            let to_field = ui.add_enabled(!d.current, egui::DragValue::new(&mut d.to).range(1..=pages)).labelled_by(to_label.id);
-            ui.label(crate::i18n::fmt(tl!("of {name}"), &[("name", &pages.to_string())]));
-            to_field
-        })
-        .inner;
-    widgets::keep_range_ordered(d.from, &mut d.to, widgets::typing_into(&to_field));
-    ui.add_space(12.0);
-    let (ok, cancel) = buttons(ui, "OK", true);
-    if ok {
-        // OK while the end is still being typed (a screen reader can press it).
-        widgets::keep_range_ordered(d.from, &mut d.to, false);
-    }
-    (ok, cancel)
-}
-
-/// Find text and redact. Returns (search, cancel, import a word list).
-pub(crate) fn search_body(ui: &mut egui::Ui, d: &mut SearchDraft, t: &Tokens) -> (bool, bool, bool) {
-    ui.set_width(420.0);
-    ui.label(egui::RichText::new(tl!("Find text and redact")).font(crate::theme::semibold(18.0)));
-    ui.add_space(8.0);
-    widgets::radio_value(ui, &mut d.mode, SearchMode::Phrase, tl!("Single word or phrase"));
-    let mut enter = false;
-    ui.add_enabled_ui(d.mode == SearchMode::Phrase, |ui| {
-        let r = ui.add(crate::widgets::line(&mut d.text).hint_text(tl!("Text to find")).desired_width(380.0)).accessible_name(tl!("Text to find"));
-        enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-    });
-    ui.add_space(6.0);
-    widgets::radio_value(ui, &mut d.mode, SearchMode::Words, tl!("Multiple words or phrases"));
-    let mut import = false;
-    ui.add_enabled_ui(d.mode == SearchMode::Words, |ui| {
-        egui::ScrollArea::vertical().id_salt("redact-words").max_height(120.0).show(ui, |ui| {
-            ui.add(egui::TextEdit::multiline(&mut d.words).hint_text(tl!("One word or phrase per line")).desired_width(380.0).desired_rows(4))
-                .accessible_name(tl!("Words or phrases to redact"));
-        });
-        ui.horizontal(|ui| {
-            import = ui.button(tl!("Import list…")).clicked();
-            let n = pdfcraft_engine::redact_word_list(&d.words).len();
-            ui.label(egui::RichText::new(crate::i18n::fmt(tl!("{n} word(s) or phrase(s)"), &[("n", &n.to_string())])).small().color(t.text_faint));
-        });
-    });
-    ui.add_enabled_ui(d.mode != SearchMode::Patterns, |ui| {
-        ui.add(widgets::checkbox(&mut d.whole_words, tl!("Whole words only")));
-        ui.add(widgets::checkbox(&mut d.case_sensitive, tl!("Case-sensitive")));
-    });
-    ui.add_space(6.0);
-    widgets::radio_value(ui, &mut d.mode, SearchMode::Patterns, tl!("Patterns"));
-    ui.add_enabled_ui(d.mode == SearchMode::Patterns, |ui| {
-        craft_ui::ComboBox::from_id_salt("redact-pattern").selected_text(tl!(d.pattern.label())).width(240.0).show_ui(ui, |ui| {
-            for p in REDACT_PATTERNS {
-                ui.selectable_value(&mut d.pattern, p, tl!(p.label()));
-            }
-        });
-    });
-    ui.add_space(6.0);
-    ui.label(egui::RichText::new(tl!("Text in images isn't found; recognise text (OCR) first.")).small().color(t.text_faint));
-    if let Some(n) = d.found {
-        ui.label(
-            egui::RichText::new(if n == 0 {
-                tl!("No matches.").to_string()
-            } else {
-                crate::i18n::fmt(tl!("{n} match(es) marked for redaction."), &[("n", &n.to_string())])
-            })
-            .color(t.text_muted),
-        );
-    }
-    ui.add_space(12.0);
-    let (go, cancel) = buttons(ui, "Mark all", true);
-    (go || enter, cancel, import)
-}
-
-/// Redaction Tool Properties. Returns (apply, cancel).
-pub(crate) fn props_body(ui: &mut egui::Ui, d: &mut RedactPrefs, _t: &Tokens) -> (bool, bool) {
-    ui.set_width(780.0);
-    ui.label(egui::RichText::new(tl!("Redaction Tool Properties")).font(crate::theme::semibold(18.0)));
-    ui.add_space(8.0);
-    // Two columns, so three colour grids fit a short window: the redacted result and its
-    // overlay text on the left, the mark's own look (Acrobat's third group) on
-    // the right.
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
-            ui.set_width(380.0);
-            egui::Grid::new("redact-props").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
-                ui.label(tl!("Redacted area fill colour:"));
-                ui.horizontal(|ui| {
-                    let mut none = d.fill.is_none();
-                    if ui.add(widgets::checkbox(&mut none, tl!("No colour"))).changed() {
-                        d.fill = if none { None } else { Some([0.0, 0.0, 0.0]) };
-                    }
-                });
-                ui.end_row();
-                ui.label("");
-                if let Some(c) = crate::comments::swatch_grid(ui, d.fill) {
-                    d.fill = Some(c);
-                }
-                ui.end_row();
-                ui.label("");
-                ui.add(widgets::checkbox(&mut d.use_overlay, tl!("Use overlay text")));
-                ui.end_row();
-                let on = d.use_overlay;
-                let l = ui.add_enabled(on, widgets::radio(!d.use_code, tl!("Custom text:")));
-                if l.clicked() {
-                    d.use_code = false;
-                }
-                ui.add_enabled(on && !d.use_code, crate::widgets::line(&mut d.overlay).desired_width(220.0)).labelled_by(l.id);
-                ui.end_row();
-                if ui.add_enabled(on, widgets::radio(d.use_code, tl!("Redaction code:"))).clicked() {
-                    d.use_code = true;
-                }
-                let codes_on = on && d.use_code;
-                ui.add_enabled_ui(codes_on, |ui| {
-                    craft_ui::ComboBox::from_id_salt("redaction-code-set").selected_text(d.code_set.name).show_ui(ui, |ui| {
-                        for set in REDACTION_CODE_SETS {
-                            if ui.selectable_label(d.code_set == set, set.name).clicked() && d.code_set != set {
-                                d.code_set = set;
-                                d.codes.clear();
-                            }
-                        }
-                    });
-                });
-                ui.end_row();
-                for row in d.code_set.codes.chunks(4) {
-                    ui.label("");
-                    ui.add_enabled_ui(codes_on, |ui| {
-                        ui.horizontal(|ui| {
-                            for &code in row {
-                                let mut picked = d.codes.contains(&code);
-                                if ui.add_sized([62.0, 18.0], widgets::checkbox(&mut picked, code)).changed() {
-                                    d.codes.retain(|c| *c != code);
-                                    if picked {
-                                        d.codes.push(code);
-                                    }
-                                }
-                            }
-                        });
-                    });
-                    ui.end_row();
-                }
-                let look = &mut d.look;
-                ui.label(tl!("Font:"));
-                ui.add_enabled_ui(on, |ui| {
-                    craft_ui::ComboBox::from_id_salt("overlay-font").selected_text(look.font.name()).show_ui(ui, |ui| {
-                        for f in pdfcraft_engine::OverlayFont::ALL {
-                            ui.selectable_value(&mut look.font, f, f.name());
-                        }
-                    });
-                });
-                ui.end_row();
-                ui.label(tl!("Font size:"));
-                ui.add_enabled_ui(on, |ui| {
-                    ui.horizontal(|ui| {
-                        let mut auto = look.size <= 0.0;
-                        if ui.add(widgets::checkbox(&mut auto, tl!("Auto-size text to fit redaction region"))).changed() {
-                            look.size = if auto { 0.0 } else { 10.0 };
-                        }
-                        if !auto {
-                            ui.add(egui::DragValue::new(&mut look.size).range(2.0..=144.0).suffix(" pt"));
-                        }
-                    });
-                });
-                ui.end_row();
-                ui.label(tl!("Font colour:"));
-                ui.add_enabled_ui(on, |ui| {
-                    if let Some(c) = crate::comments::swatch_grid(ui, Some(look.color)) {
-                        look.color = c;
-                    }
-                });
-                ui.end_row();
-                ui.label("");
-                ui.add_enabled(on, widgets::checkbox(&mut look.repeat, tl!("Repeat overlay text")));
-                ui.end_row();
-                ui.label(tl!("Text alignment:"));
-                ui.add_enabled_ui(on, |ui| {
-                    ui.horizontal(|ui| {
-                        for (a, label) in [(0u8, tl!("Left")), (1, tl!("Center")), (2, tl!("Right"))] {
-                            widgets::radio_value(ui, &mut look.align, a, label);
-                        }
-                    });
-                });
-                ui.end_row();
-            });
-        });
-        // No separator here: in a horizontal layout it would stretch to the window's bottom.
-        ui.add_space(28.0);
-        ui.vertical(|ui| {
-            ui.set_width(340.0);
-            ui.label(egui::RichText::new(tl!("Redaction mark appearance")).strong());
-            ui.add_space(6.0);
-            egui::Grid::new("redact-mark").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
-                ui.label(tl!("Outline colour:"));
-                if let Some(c) = crate::comments::swatch_grid(ui, Some(d.outline)) {
-                    d.outline = c;
-                }
-                ui.end_row();
-                ui.label(tl!("Fill colour:"));
-                ui.vertical(|ui| {
-                    if let Some(c) = crate::comments::swatch_grid(ui, Some(d.hover_fill)) {
-                        d.hover_fill = c;
-                    }
-                    ui.label(egui::RichText::new(tl!("Shown while the pointer is over a mark.")).weak().size(11.5));
-                });
-                ui.end_row();
-                ui.label(tl!("Opacity:"));
-                let mut pct = d.opacity * 100.0;
-                if ui.add(egui::Slider::new(&mut pct, 10.0..=100.0).suffix("%")).changed() {
-                    d.opacity = (pct / 100.0).clamp(0.1, 1.0);
-                }
-                ui.end_row();
-                ui.label("");
-                ui.add(widgets::checkbox(&mut d.remember, tl!("Make properties default")));
-                ui.end_row();
-            });
-        });
-    });
-    ui.add_space(12.0);
-    buttons(ui, "OK", true)
-}
-
-/// Apply redactions confirmation. Returns (apply, cancel).
-pub(crate) fn apply_body(ui: &mut egui::Ui, marks: usize, t: &Tokens) -> (bool, bool) {
-    ui.set_width(420.0);
-    ui.label(egui::RichText::new(tl!("Apply redactions")).font(crate::theme::semibold(18.0)));
-    ui.add_space(8.0);
-    ui.label(if marks == 1 {
-        tl!("You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.").to_string()
-    } else {
-        crate::i18n::fmt(tl!("You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently."), &[("n", &marks.to_string())])
-    });
-    ui.add_space(4.0);
-    ui.label(
-        egui::RichText::new(tl!("Save the document afterwards: saving rewrites the whole file so no trace of the removed content stays in it."))
-            .small()
-            .color(t.text_muted),
-    );
-    ui.add_space(12.0);
-    buttons(ui, "Apply", true)
-}
-
-fn buttons(ui: &mut egui::Ui, ok: &str, primary: bool) -> (bool, bool) {
-    let (mut a, mut c) = (false, false);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        // `ok` stays English internally; only the display is translated.
-        if widgets::pill_button(ui, tl!(ok), primary).clicked() {
-            a = true;
-        }
-        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-            c = true;
-        }
-    });
-    (a, c)
 }
 
 /// Remove Hidden Information: each category with what was found, checked by default when
@@ -627,162 +279,105 @@ impl PdfCraftApp {
     pub fn open_remove_hidden(&mut self) {
         let Some((_, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
-        self.hidden_draft = HiddenDraft { found: doc.hidden_info().into_iter().map(|(h, n)| (h, n, n > 0)).collect() };
-        self.dialog = Some(crate::Dialog::RemoveHidden);
+        self.hidden_draft = Some(HiddenDraft { found: doc.hidden_info().into_iter().map(|(h, n)| (h, n, n > 0)).collect() });
     }
 }
 
-/// Returns (remove, cancel).
-pub(crate) fn hidden_body(ui: &mut egui::Ui, d: &mut HiddenDraft, t: &Tokens) -> (bool, bool) {
-    ui.set_width(440.0);
-    ui.label(egui::RichText::new(tl!("Remove hidden information")).font(crate::theme::semibold(18.0)));
-    ui.add_space(4.0);
-    ui.label(egui::RichText::new(tl!("Select the items to remove from this document.")).color(t.text_muted));
-    ui.add_space(8.0);
-    let total: usize = d.found.iter().map(|f| f.1).sum();
-    for (h, n, on) in d.found.iter_mut() {
-        ui.add_enabled_ui(*n > 0, |ui| {
-            ui.horizontal(|ui| {
-                ui.add(widgets::checkbox(on, tl!(h.label())));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new(if *n == 0 { tl!("None found").to_string() } else { n.to_string() }).color(t.text_muted));
-                });
-            });
-        });
+/// The Apply redactions prompt was confirmed: apply every mark, count the step for the
+/// `_Redacted` save rules, and say what the removed text left behind.
+pub(crate) fn finish_apply(ctx: &egui::Context, app: &mut PdfCraftApp) {
+    let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());
+    if !app.apply_edit(ctx, Edit::ApplyRedactions { pages: None }) {
+        return;
     }
-    ui.add_space(6.0);
-    ui.label(
-        egui::RichText::new(tl!("Form fields are flattened: their values stay visible. Saving rewrites the whole file.")).small().color(t.text_faint),
-    );
-    ui.add_space(12.0);
-    let any = d.found.iter().any(|f| f.2 && f.1 > 0);
-    let (mut a, mut c) = (false, false);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if ui.add_enabled_ui(any && total > 0, |ui| widgets::pill_button(ui, tl!("Remove"), true)).inner.clicked() {
-            a = true;
+    if let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) {
+        let delivered_undone = view.redactions_applied < view.redactions_downloaded;
+        view.redactions_applied = view.redactions_applied.saturating_add(1);
+        // A new step clears the redo history, so the undone saved steps can't come back.
+        if view.redactions_undone_after_save > 0 || delivered_undone {
+            view.redactions_undone_after_save = 0;
+            view.saved_redactions_cut_off = true;
         }
-        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-            c = true;
+    }
+    if let Some((_, id)) = app.active_ids() {
+        app.renew_recovery(id);
+    }
+    let applied = if marks == 1 {
+        tl!("Applied 1 redaction mark. Save to remove the content from the file.").to_string()
+    } else {
+        crate::i18n::fmt(tl!("Applied {n} redaction marks. Save to remove the content from the file."), &[("n", &marks.to_string())])
+    };
+    // Where the removed text is still held that applying leaves as it is, and what
+    // became of a PDF/A or PDF/UA claim in the document XMP it removed: said in the
+    // same notification, so neither can replace the first sentence.
+    let doc = app.active_ids().and_then(|(_, id)| app.session.get(id));
+    let left = doc.and_then(|d| d.redaction_elsewhere()).and_then(|e| still_holding_note(&e));
+    let id = doc.and_then(|d| d.redaction_identification()).and_then(|id| identification_note(&id));
+    let message = [Some(applied), left, id].into_iter().flatten().collect::<Vec<_>>().join(" ");
+    app.notify(message);
+}
+
+/// The Sanitize prompt was confirmed: remove every kind of hidden information.
+pub(crate) fn finish_sanitize(ctx: &egui::Context, app: &mut PdfCraftApp) {
+    if app.apply_edit(ctx, Edit::Sanitize) {
+        if let Some((_, id)) = app.active_ids() {
+            app.renew_recovery(id);
         }
+        app.notify_tr("Document sanitized. Save to finish: saving rewrites the whole file.");
+    }
+}
+
+/// The sentence telling the user where the removed text is still held that applying redactions
+/// leaves as it is, or `None` when it is nowhere else. When the text couldn't be searched for,
+/// the places are those holding any text, and the sentence says they may hold it.
+pub(crate) fn still_holding_note(e: &pdfcraft_engine::RedactionElsewhere) -> Option<String> {
+    let count = |n: usize, one: &str, many: &str| match n {
+        0 => None,
+        1 => Some(tl!(one).to_string()),
+        n => Some(crate::i18n::fmt(tl!(many), &[("n", &n.to_string())])),
+    };
+    let places: Vec<String> = [
+        count(e.bookmarks, "1 bookmark title", "{n} bookmark titles"),
+        count(e.attachments, "1 attachment", "{n} attachments"),
+        count(e.comments, "1 comment", "{n} comments"),
+        count(e.xmp, "1 other metadata stream", "{n} other metadata streams"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let (last, rest) = places.split_last()?;
+    let list = if rest.is_empty() { last.clone() } else { crate::i18n::fmt(tl!("{list} and {last}"), &[("list", &rest.join(", ")), ("last", last)]) };
+    let template = if e.unsearched {
+        "The redacted text couldn't be searched for, so {places} may still hold it. Remove hidden information removes them."
+    } else {
+        "The redacted text also appears in {places}, which redaction doesn't change. Remove hidden information removes them."
+    };
+    Some(crate::i18n::fmt(tl!(template), &[("places", &list)]))
+}
+
+/// The sentence telling the user what became of the document's PDF/A or PDF/UA identification
+/// when applying redactions removed the XMP packet that held it (and the redacted text), or
+/// `None` when no such packet was removed.
+pub(crate) fn identification_note(id: &pdfcraft_engine::RedactionIdentification) -> Option<String> {
+    use pdfcraft_engine::RedactionClaim as Claim;
+    let named = |claim: Claim| -> Option<String> {
+        match (id.pdfa == claim, id.pdfua == claim) {
+            (true, true) => Some(tl!("PDF/A and PDF/UA").to_string()),
+            (true, false) => Some("PDF/A".to_string()),
+            (false, true) => Some("PDF/UA".to_string()),
+            (false, false) => None,
+        }
+    };
+    let kept = named(Claim::Kept).map(|s| crate::i18n::fmt(tl!("Its {standard} identification was written back on its own."), &[("standard", &s)]));
+    let lost = named(Claim::Lost).map(|s| {
+        crate::i18n::fmt(
+            tl!("Its {standard} identification couldn't be kept, so the file no longer says it conforms to {standard}."),
+            &[("standard", &s)],
+        )
     });
-    (a, c)
-}
-
-/// Sanitize Document confirmation. Returns (sanitize, cancel).
-pub(crate) fn sanitize_body(ui: &mut egui::Ui, t: &Tokens) -> (bool, bool) {
-    ui.set_width(440.0);
-    ui.label(egui::RichText::new(tl!("Sanitize document")).font(crate::theme::semibold(18.0)));
-    ui.add_space(8.0);
-    ui.label(tl!("Sanitizing removes hidden information from the document: metadata, file attachments, comments, form fields (flattened), hidden text and layers, bookmarks, links, actions and scripts, and private application data."));
-    ui.add_space(4.0);
-    ui.label(
-        egui::RichText::new(tl!("Save the document afterwards; saving rewrites the whole file so nothing removed stays in it."))
-            .small()
-            .color(t.text_muted),
-    );
-    ui.add_space(12.0);
-    buttons(ui, "Sanitize", true)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use egui::accesskit::Role;
-    use egui_kittest::kittest::Queryable;
-
-    fn key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
-        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
+    if kept.is_none() && lost.is_none() {
+        return None;
     }
-
-    /// #5574: typing "12" into the end of 5 to 5 came out as 5. The end was raised to the start
-    /// after every keystroke, so the half-typed "1" was replaced before the "2" arrived.
-    #[test]
-    fn typing_the_last_page_keeps_what_is_typed() {
-        let mut fonts = false;
-        let mut h = egui_kittest::Harness::new_ui_state(
-            move |ui, d: &mut PagesDraft| {
-                // The app's fonts (the semibold heading) take effect from the next frame.
-                if !fonts {
-                    ui.ctx().set_fonts(crate::theme::font_definitions());
-                    fonts = true;
-                    return;
-                }
-                let t = Tokens::get(ui.ctx());
-                pages_body(ui, d, 20, &t);
-            },
-            PagesDraft { current: false, from: 5, to: 5 },
-        );
-        h.run();
-        for (typed, expected) in [("12", 12), ("3", 5)] {
-            h.get_by_role_and_label(Role::SpinButton, "to").click();
-            h.run();
-            h.event(key(egui::Key::A, egui::Modifiers::COMMAND));
-            for c in typed.chars() {
-                h.event(egui::Event::Text(c.to_string()));
-                h.run_steps(2);
-            }
-            h.event(key(egui::Key::Enter, egui::Modifiers::NONE));
-            h.run_steps(2);
-            assert_eq!(*h.state(), PagesDraft { current: false, from: 5, to: expected }, "typed {typed:?}");
-        }
-    }
-
-    /// The dialog with its OK result kept: (draft, OK pressed).
-    fn dialog() -> egui_kittest::Harness<'static, (PagesDraft, bool)> {
-        let mut fonts = false;
-        let mut h = egui_kittest::Harness::new_ui_state(
-            move |ui, (d, ok): &mut (PagesDraft, bool)| {
-                if !fonts {
-                    ui.ctx().set_fonts(crate::theme::font_definitions());
-                    fonts = true;
-                    return;
-                }
-                let t = Tokens::get(ui.ctx());
-                *ok |= pages_body(ui, d, 20, &t).0;
-            },
-            (PagesDraft { current: false, from: 5, to: 5 }, false),
-        );
-        h.run();
-        h
-    }
-
-    fn type_last_page(h: &mut egui_kittest::Harness<'static, (PagesDraft, bool)>, typed: &str) {
-        h.get_by_role_and_label(Role::SpinButton, "to").click();
-        h.run();
-        h.event(key(egui::Key::A, egui::Modifiers::COMMAND));
-        for c in typed.chars() {
-            h.event(egui::Event::Text(c.to_string()));
-            h.run_steps(2);
-        }
-    }
-
-    /// OK pressed while the end is still being typed (a screen reader's click leaves the field
-    /// focused) orders the range, so a reversed one never reaches the edit.
-    #[test]
-    fn ok_while_the_last_page_is_typed_orders_the_range() {
-        let mut h = dialog();
-        type_last_page(&mut h, "3");
-        assert_eq!(h.state().0.to, 3, "still typing");
-        h.get_by_label("OK").click_accesskit();
-        h.run_steps(2);
-        assert_eq!(*h.state(), (PagesDraft { current: false, from: 5, to: 5 }, true));
-    }
-
-    /// Switching to another window halfway through "12" leaves the typed "1" alone: the field
-    /// still has the keyboard when the window comes back.
-    #[test]
-    fn switching_windows_mid_number_keeps_what_is_typed() {
-        let mut h = dialog();
-        type_last_page(&mut h, "1");
-        h.input_mut().focused = false;
-        h.run_steps(2);
-        assert_eq!(h.state().0.to, 1, "the typed 1 stays while the window is in the background");
-        h.input_mut().focused = true;
-        h.run_steps(2);
-        h.event(egui::Event::Text("2".into()));
-        h.run_steps(2);
-        h.event(key(egui::Key::Enter, egui::Modifiers::NONE));
-        h.run_steps(2);
-        assert_eq!(h.state().0.to, 12);
-    }
+    let head = tl!("The document's XMP metadata held the redacted text and was removed.").to_string();
+    Some([Some(head), kept, lost].into_iter().flatten().collect::<Vec<_>>().join(" "))
 }

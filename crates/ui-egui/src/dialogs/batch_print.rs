@@ -2,9 +2,18 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use craft::ui::choice::Checkbox;
+use craft::ui::patterns::form_dialogs::FormDialog;
+use craft::ui::pickers::ComboBox;
+use craft::ui::sections::{DialogRole, FooterButton};
+use craft_ui::buttons::Button;
+use craft_ui::choice::Segmented;
+use craft_ui::contract::{Bind, Entry, Props, Show};
 use egui::{Align, Color32, Layout, RichText};
+use pdfcraft_engine::print;
 
-use crate::{PdfCraftApp, icons, theme, widgets};
+use crate::PdfCraftApp;
+use crate::workflows::print_ui::{self, Handling, PrintDraft, Which};
 
 #[derive(Clone, Debug)]
 pub struct BatchPrintItem {
@@ -28,10 +37,12 @@ pub enum BatchPrintStep {
 
 #[derive(Default)]
 pub struct BatchPrintDraft {
+    pub open: bool,
     pub step: BatchPrintStep,
     pub items: Vec<BatchPrintItem>,
     pub preview_cache: HashMap<usize, egui::TextureHandle>,
     pub last_grayscale: bool,
+    pub preview_sheet: usize,
 }
 
 impl BatchPrintDraft {
@@ -39,6 +50,7 @@ impl BatchPrintDraft {
         self.step = BatchPrintStep::SelectFiles;
         self.items.clear();
         self.preview_cache.clear();
+        self.preview_sheet = 0;
     }
 
     pub fn select_all(&mut self, select: bool) {
@@ -101,119 +113,348 @@ impl BatchPrintDraft {
     }
 }
 
-/// Renders the Batch Print dialog. Returns (go_print, cancel).
-pub fn dialog_batch_print(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool) {
-    match app.batch_print.step {
-        BatchPrintStep::SelectFiles => show_file_selection(ui, app),
-        BatchPrintStep::Settings => show_print_settings(ui, app),
+impl PdfCraftApp {
+    /// Open the Batch Print dialog.
+    pub fn open_batch_print(&mut self, ctx: &egui::Context) {
+        if !self.commit_form_typing(ctx) {
+            return;
+        }
+        self.batch_print.clear();
+        self.batch_print.open = true;
+        self.batch_print_add_open_documents();
+    }
+
+    /// Add all open documents to batch print draft.
+    pub fn batch_print_add_open_documents(&mut self) {
+        for view in &self.views {
+            if let Some(doc) = self.session.get(view.id)
+                && !self.batch_print.items.iter().any(|i| i.doc_id == Some(doc.id))
+            {
+                let page_sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
+                let page_labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
+                let page_count = doc.info.pages.len();
+                self.batch_print.items.push(BatchPrintItem {
+                    name: doc.name.clone(),
+                    path: doc.path.as_ref().map(PathBuf::from),
+                    doc_id: Some(doc.id),
+                    bytes: Some(doc.bytes.clone()),
+                    page_count,
+                    page_sizes,
+                    page_labels,
+                    selected: true,
+                    is_tab: true,
+                });
+            }
+        }
+    }
+
+    /// Prepare print draft for batch print settings, reading printers in the background.
+    pub fn prepare_batch_print_settings(&mut self) {
+        let raw_printers = print_ui::listed_printers();
+        let printers = print_ui::offered_printers(&raw_printers);
+        let mut keep = std::mem::take(&mut self.print_draft);
+        if keep.handling == Handling::Label {
+            keep.set_handling(Handling::Size);
+        }
+        let default = print_ui::default_printer(&keep, &printers);
+        let picked = keep.printer_picked && print_ui::offered(keep.printer.as_deref(), &printers);
+        let printer = if picked { keep.printer.clone() } else { default };
+        let changed = printer != keep.printer;
+        let fresh = PrintDraft::default();
+        self.print_draft = PrintDraft {
+            copies: fresh.copies,
+            range: fresh.range,
+            subset: fresh.subset,
+            reverse: fresh.reverse,
+            handling: fresh.handling,
+            per_sheet: fresh.per_sheet,
+            custom_grid: fresh.custom_grid,
+            cols: fresh.cols,
+            rows: fresh.rows,
+            order: fresh.order,
+            border: fresh.border,
+            auto_rotate: fresh.auto_rotate,
+            booklet_subset: fresh.booklet_subset,
+            poster_scale: fresh.poster_scale,
+            overlap: fresh.overlap,
+            cut_marks: fresh.cut_marks,
+            label_flip: fresh.label_flip,
+            orientation: fresh.orientation,
+            crops: Vec::new(),
+            crop_pages: None,
+            printer_picked: picked,
+            units: self.units,
+            printer: printer.clone(),
+            current_page: 0,
+            sheet: 0,
+            selected: Vec::new(),
+            which: Which::All,
+            area: None,
+            custom_new: None,
+            ..keep
+        };
+        if changed {
+            self.print_draft.apply_setup();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(p) = printer {
+            self.read_papers_in_background(p);
+        }
+    }
+
+    /// Ask for a folder of PDFs to include in batch printing.
+    pub fn batch_print_pick_folder(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let title = tl!("Choose a folder of PDFs to print");
+            self.pick_first(craft::host::PickRequest::folder("batch_print.folder").title(title), None, move |app, _, dir| {
+                app.batch_print.add_folder_pdfs(&dir);
+            });
+        }
+    }
+
+    /// Print each selected document with the current print settings.
+    pub fn print_batch_now(&mut self, ctx: &egui::Context) -> bool {
+        if !self.commit_form_typing(ctx) {
+            return false;
+        }
+
+        let selected: Vec<BatchPrintItem> = self.batch_print.items.iter().filter(|i| i.selected).cloned().collect();
+
+        if selected.is_empty() {
+            return false;
+        }
+
+        let printer = self.print_draft.printer.clone();
+        if printer.is_none() {
+            self.notify_tr("Batch printing requires a physical or system printer (Save as PDF not supported for batch)");
+            return false;
+        }
+
+        let mut printed_count = 0usize;
+        let mut failed_count = 0usize;
+
+        for item in &selected {
+            let mut succeeded = false;
+
+            if let Some(doc_id) = item.doc_id {
+                if let Some(doc) = self.session.get(doc_id) {
+                    let before = doc.edit_generation();
+                    self.session.run_document_actions(doc_id, pdfcraft_engine::js::DocumentScriptEvent::WillPrint);
+                    if self.session.get(doc_id).map(|d| d.edit_generation()) != Some(before) && self.print_draft.handling == Handling::Label {
+                        self.print_draft.crop_pages = None;
+                        self.read_label_crops(doc_id);
+                    }
+                }
+                if self.print_draft.handling == Handling::Label {
+                    self.print_draft.crop_pages = None;
+                    self.read_label_crops(doc_id);
+                }
+                if let Some(doc) = self.session.get(doc_id) {
+                    let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
+                    if let Ok(settings) = self.print_draft.settings(doc.info.pages.len(), &labels)
+                        && let Ok(bytes) = self.session.print_pdf(doc_id, &settings)
+                    {
+                        let mut job = self.print_draft.job(&doc.name);
+                        let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
+                        if let Ok(sheets) = print::layout(&sizes, &settings) {
+                            print::add_cups_orientation(&mut job.options, &sheets);
+                        }
+                        if let Some(ref p) = printer
+                            && self.send_to_printer(p.clone(), bytes, job).is_ok()
+                        {
+                            succeeded = true;
+                        }
+                    }
+                }
+            } else if let Some(path) = &item.path {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let file_bytes = match &item.bytes {
+                        Some(b) => Some(b.clone()),
+                        None => std::fs::read(path).ok().map(Arc::new),
+                    };
+                    if let Some(file_bytes) = file_bytes {
+                        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                        if let Ok(temp_id) = self.session.open(&name, Some(path.to_string_lossy().to_string()), file_bytes, None) {
+                            if self.print_draft.handling == Handling::Label {
+                                self.print_draft.crop_pages = None;
+                                self.read_label_crops(temp_id);
+                            }
+                            if let Some(doc) = self.session.get(temp_id) {
+                                let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
+                                if let Ok(settings) = self.print_draft.settings(doc.info.pages.len(), &labels)
+                                    && let Ok(bytes) = self.session.print_pdf(temp_id, &settings)
+                                {
+                                    let mut job = self.print_draft.job(&name);
+                                    let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
+                                    if let Ok(sheets) = print::layout(&sizes, &settings) {
+                                        print::add_cups_orientation(&mut job.options, &sheets);
+                                    }
+                                    if let Some(ref p) = printer
+                                        && self.send_to_printer(p.clone(), bytes, job).is_ok()
+                                    {
+                                        succeeded = true;
+                                    }
+                                }
+                            }
+                            self.session.close(temp_id);
+                        }
+                    }
+                }
+            }
+
+            if succeeded {
+                printed_count += 1;
+                if let Some(target) = self
+                    .batch_print
+                    .items
+                    .iter_mut()
+                    .find(|i| (item.doc_id.is_some() && i.doc_id == item.doc_id) || (item.path.is_some() && i.path == item.path))
+                {
+                    target.selected = false;
+                }
+            } else {
+                failed_count += 1;
+            }
+        }
+
+        if printed_count > 0 {
+            self.notify_fmt("Sent {n} documents to printer", &[("n", &printed_count.to_string())]);
+        }
+        if failed_count > 0 {
+            self.notify_fmt("{n} documents could not be printed", &[("n", &failed_count.to_string())]);
+        }
+
+        failed_count == 0 && printed_count > 0
     }
 }
 
-fn show_file_selection(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool) {
-    ui.label(RichText::new(tl!("Batch Print")).font(theme::semibold(18.0)));
-    ui.add_space(8.0);
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+struct BatchPrintFormState;
 
-    // Toolbar buttons
-    ui.horizontal(|ui| {
-        #[cfg(not(target_arch = "wasm32"))]
-        if widgets::pill_button(ui, tl!("Add folder…"), false).clicked() {
-            app.batch_print_pick_folder();
-        }
-        if widgets::pill_button(ui, tl!("All open documents"), false).clicked() {
-            app.batch_print_add_open_documents();
-        }
-        ui.separator();
-        if widgets::pill_button(ui, tl!("Select all"), false).clicked() {
-            app.batch_print.select_all(true);
-        }
-        if widgets::pill_button(ui, tl!("Deselect all"), false).clicked() {
-            app.batch_print.select_all(false);
-        }
-        if widgets::pill_button(ui, tl!("Clear list"), false).clicked() {
-            app.batch_print.preview_cache.clear();
-            app.batch_print.items.clear();
-        }
-    });
-
-    ui.add_space(8.0);
-
-    // Document list
-    let mut remove_index = None;
-    let max_h = 320.0;
-    egui::ScrollArea::vertical().max_height(max_h).min_scrolled_height(200.0).auto_shrink([false, false]).show(ui, |ui| {
-        if app.batch_print.items.is_empty() {
-            ui.add_space(40.0);
-            ui.vertical_centered(|ui| {
-                ui.label(tl!("No documents in batch print list."));
-                ui.label(tl!("Click 'All open documents' or 'Add folder…' to populate files."));
-            });
-            return;
-        }
-
-        for (idx, item) in app.batch_print.items.iter_mut().enumerate() {
-            ui.horizontal(|ui| {
-                ui.add(widgets::checkbox_without_text(&mut item.selected));
-                if item.is_tab {
-                    ui.colored_label(Color32::from_rgb(46, 160, 67), "[Tab]");
-                } else {
-                    ui.colored_label(Color32::from_rgb(56, 139, 253), "[File]");
-                }
-                ui.label(&item.name);
-
-                if item.page_count > 0 {
-                    ui.label(RichText::new(format!("({} p.)", item.page_count)).color(ui.visuals().weak_text_color()));
-                }
-
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if icons::button(ui, "x", 16.0, false, tl!("Remove")).clicked() {
-                        remove_index = Some(idx);
-                    }
-                });
-            });
-            ui.separator();
-        }
-    });
-
-    if let Some(idx) = remove_index {
-        app.batch_print.items.remove(idx);
-        app.batch_print.preview_cache.clear();
+/// Renders the Batch Print window/dialog.
+pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    if !app.batch_print.open {
+        return;
     }
+    match app.batch_print.step {
+        BatchPrintStep::SelectFiles => show_file_selection(app, ui),
+        BatchPrintStep::Settings => show_print_settings(app, ui),
+    }
+}
 
-    ui.add_space(10.0);
-
-    // Footer
+fn show_file_selection(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let selected_count = app.batch_print.items.iter().filter(|i| i.selected).count();
     let total_count = app.batch_print.items.len();
     let total_selected_pages: usize = app.batch_print.items.iter().filter(|i| i.selected).map(|i| i.page_count).sum();
 
-    let mut go_settings = false;
-    let mut cancel = false;
+    let mut open = true;
+    let mut pick_folder = false;
+    let mut add_open_docs = false;
+    let mut form_state = BatchPrintFormState;
 
-    ui.horizontal(|ui| {
-        if total_selected_pages > 0 {
-            ui.label(format!("Selected: {selected_count} / {total_count} documents ({total_selected_pages} pages)"));
-        } else {
-            ui.label(format!("Selected: {selected_count} / {total_count} documents"));
-        }
+    let shown = FormDialog::new(tl!("Batch Print"), Bind::bound(&mut form_state))
+        .opened(Bind::bound(&mut open))
+        .ok_label(tl!("Print settings"))
+        .ok_enabled(selected_count > 0)
+        .accept_stays_open(true)
+        .show(ui, |ui, _, _| {
+            let d = &mut app.batch_print;
+            let mut remove_idx = None;
 
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.add_enabled_ui(selected_count > 0, |ui| widgets::pill_button(ui, tl!("Print settings"), true)).inner.clicked() {
-                go_settings = true;
+            // Toolbar buttons
+            ui.horizontal(|ui| {
+                #[cfg(not(target_arch = "wasm32"))]
+                if Button::new(tl!("Add folder…")).show(ui).clicked() {
+                    pick_folder = true;
+                }
+                if Button::new(tl!("All open documents")).show(ui).clicked() {
+                    add_open_docs = true;
+                }
+                ui.separator();
+                if Button::new(tl!("Select all")).show(ui).clicked() {
+                    d.select_all(true);
+                }
+                if Button::new(tl!("Deselect all")).show(ui).clicked() {
+                    d.select_all(false);
+                }
+                if Button::new(tl!("Clear list")).show(ui).clicked() {
+                    d.preview_cache.clear();
+                    d.items.clear();
+                }
+            });
+
+            ui.add_space(8.0);
+
+            // Document list
+            let max_h = 320.0;
+            egui::ScrollArea::vertical().max_height(max_h).min_scrolled_height(200.0).auto_shrink([false, false]).show(ui, |ui| {
+                if d.items.is_empty() {
+                    ui.add_space(40.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(tl!("No documents in batch print list."));
+                        ui.label(tl!("Click 'All open documents' or 'Add folder…' to populate files."));
+                    });
+                    return;
+                }
+
+                for (idx, item) in d.items.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        Checkbox::new(Bind::bound(&mut item.selected)).show(ui);
+                        if item.is_tab {
+                            ui.colored_label(Color32::from_rgb(46, 160, 67), "[Tab]");
+                        } else {
+                            ui.colored_label(Color32::from_rgb(56, 139, 253), "[File]");
+                        }
+                        ui.label(&item.name);
+
+                        if item.page_count > 0 {
+                            ui.label(RichText::new(format!("({} p.)", item.page_count)).color(ui.visuals().weak_text_color()));
+                        }
+
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if Button::new("✕").show(ui).clicked() {
+                                remove_idx = Some(idx);
+                            }
+                        });
+                    });
+                    ui.separator();
+                }
+            });
+
+            if let Some(idx) = remove_idx {
+                d.items.remove(idx);
+                d.preview_cache.clear();
             }
 
-            if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-                cancel = true;
+            ui.add_space(8.0);
+            if total_selected_pages > 0 {
+                ui.label(format!("Selected: {selected_count} / {total_count} documents ({total_selected_pages} pages)"));
+            } else {
+                ui.label(format!("Selected: {selected_count} / {total_count} documents"));
             }
+            true
         });
-    });
 
-    if go_settings {
+    if pick_folder {
+        app.batch_print_pick_folder();
+    }
+    if add_open_docs {
+        app.batch_print_add_open_documents();
+    }
+
+    if shown.closed.is_some() || !open {
+        app.batch_print.clear();
+        app.batch_print.open = false;
+        return;
+    }
+
+    if shown.accepted.is_some() || shown.picked == Some(0) {
         app.batch_print.preview_cache.clear();
         app.batch_print.step = BatchPrintStep::Settings;
         app.prepare_batch_print_settings();
     }
-
-    (false, cancel)
 }
 
 fn apply_grayscale(img: &mut egui::ColorImage) {
@@ -223,11 +464,10 @@ fn apply_grayscale(img: &mut egui::ColorImage) {
     }
 }
 
-fn show_print_settings(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool) {
-    let t = theme::Tokens::get(ui.ctx());
+fn show_print_settings(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
 
-    if app.print_draft.handling == crate::print_ui::Handling::Label {
+    if app.print_draft.handling == Handling::Label {
         let label_crop_ids: Vec<pdfcraft_engine::DocId> = app.batch_print.items.iter().filter(|i| i.selected).filter_map(|i| i.doc_id).collect();
         for id in label_crop_ids {
             app.read_label_crops(id);
@@ -255,61 +495,159 @@ fn show_print_settings(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (bool, bool)
 
     let total_pages = all_sizes.len();
 
-    let mut go_back = false;
-    ui.horizontal(|ui| {
-        if widgets::pill_button(ui, tl!("Back to documents"), false).clicked() {
-            go_back = true;
-        }
-        ui.label(RichText::new(format!("Batch Print: {selected_count} documents · {total_pages} total pages")).font(theme::semibold(16.0)));
-    });
+    let mut open = true;
+    let mut form_state = BatchPrintFormState;
+    let raw_printers = print_ui::listed_printers();
+    let printers = print_ui::offered_printers(&raw_printers);
 
-    if go_back {
-        app.batch_print.preview_cache.clear();
-        app.batch_print.step = BatchPrintStep::SelectFiles;
-        return (false, false);
-    }
+    let back_btn = FooterButton::new(tl!("Back to documents"), DialogRole::Other);
 
-    ui.add_space(6.0);
+    let can_print = selected_count > 0 && app.print_draft.printer.is_some();
+    let shown = FormDialog::new(tl!("Batch Print - Settings"), Bind::bound(&mut form_state))
+        .opened(Bind::bound(&mut open))
+        .ok_label(tl!("Print"))
+        .ok_enabled(can_print)
+        .extra_buttons(vec![back_btn])
+        .show(ui, |ui, _, _| {
+            ui.label(RichText::new(format!("Batch Print: {selected_count} documents · {total_pages} total pages")).strong());
+            ui.add_space(8.0);
 
-    if !all_sizes.is_empty() {
-        crate::print_ui::body(ui, &mut app.print_draft, &t, &all_sizes, &all_labels, &mut |p| {
-            if let Some(handle) = app.batch_print.preview_cache.get(&p) {
-                return Some(handle.id());
-            }
+            ui.horizontal(|ui| {
+                // Left side: settings
+                ui.vertical(|ui| {
+                    ui.set_width(320.0);
 
-            let (bytes, doc_p) = find_page_render_source(&app.batch_print.items, &app.session, p)?;
+                    // Printer selection
+                    let entries: Vec<Entry<String>> = printers.iter().map(|p| Entry::new(p.name.clone(), p.name.clone())).collect();
+                    let mut current_printer = app.print_draft.printer.clone().unwrap_or_default();
+                    let _ = ComboBox::new(tl!("Printer"), Bind::bound(&mut current_printer), &entries).show(ui);
+                    if !current_printer.is_empty() && app.print_draft.printer.as_deref() != Some(&current_printer) {
+                        app.print_draft.printer = Some(current_printer.clone());
+                        app.print_draft.printer_picked = true;
+                        #[cfg(not(target_arch = "wasm32"))]
+                        app.read_papers_in_background(current_printer);
+                    }
 
-            let (w, h) = all_sizes.get(p).copied().unwrap_or((595.0, 842.0));
-            let scale = (800.0 / (w.max(h) as f32)).clamp(0.2, 3.0);
+                    ui.add_space(6.0);
 
-            let config = pdfcraft_render::RenderConfig { system_fonts: true, ..Default::default() };
-            let mut r = pdfcraft_render::PageRenderer::new(bytes, config);
-            let out = r.render(pdfcraft_render::RenderRequest {
-                page: doc_p,
-                kind: pdfcraft_render::RequestKind::Pixels,
-                tile: None,
-                scale,
-                tag: 0,
-                preview: true,
+                    // Copies
+                    ui.horizontal(|ui| {
+                        ui.label(tl!("Copies:"));
+                        ui.add(egui::DragValue::new(&mut app.print_draft.copies).range(1..=999));
+                    });
+
+                    // Grayscale & Collate
+                    Checkbox::new(Bind::bound(&mut app.print_draft.grayscale)).label(tl!("Grayscale (black and white)")).show(ui);
+                    Checkbox::new(Bind::bound(&mut app.print_draft.collate)).label(tl!("Collate")).show(ui);
+
+                    ui.add_space(6.0);
+                    let handling_entries = vec![
+                        Entry::new("size".to_string(), tl!("Fit to printable area")),
+                        Entry::new("poster".to_string(), tl!("Poster")),
+                        Entry::new("multiple".to_string(), tl!("Multiple pages per sheet")),
+                        Entry::new("booklet".to_string(), tl!("Booklet")),
+                    ];
+                    let mut current_handling = match app.print_draft.handling {
+                        Handling::Size => "size",
+                        Handling::Poster => "poster",
+                        Handling::Multiple => "multiple",
+                        Handling::Booklet => "booklet",
+                        Handling::Label => "label",
+                    }
+                    .to_string();
+                    let shown_handling =
+                        Segmented::new(tl!("Page Sizing & Handling"), Bind::bound(&mut current_handling), &handling_entries).show(ui);
+                    if let Some(picked) = shown_handling.value() {
+                        match picked.as_str() {
+                            "size" => app.print_draft.handling = Handling::Size,
+                            "poster" => app.print_draft.handling = Handling::Poster,
+                            "multiple" => app.print_draft.handling = Handling::Multiple,
+                            "booklet" => app.print_draft.handling = Handling::Booklet,
+                            _ => {}
+                        }
+                    }
+                });
+
+                ui.separator();
+
+                // Right side: preview
+                ui.vertical(|ui| {
+                    ui.set_min_width(260.0);
+                    let d = &mut app.batch_print;
+                    let sheet_idx = d.preview_sheet.min(total_pages.saturating_sub(1));
+                    ui.horizontal(|ui| {
+                        if Button::new("◀").enabled(sheet_idx > 0).show(ui).clicked() {
+                            d.preview_sheet = sheet_idx.saturating_sub(1);
+                        }
+                        ui.label(format!("Sheet {} / {}", sheet_idx + 1, total_pages.max(1)));
+                        if Button::new("▶").enabled(sheet_idx + 1 < total_pages).show(ui).clicked() {
+                            d.preview_sheet = sheet_idx.saturating_add(1);
+                        }
+                    });
+
+                    ui.add_space(4.0);
+
+                    if !all_sizes.is_empty() {
+                        let p = sheet_idx;
+                        if !d.preview_cache.contains_key(&p)
+                            && let Some((bytes, doc_p)) = find_page_render_source(&d.items, &app.session, p)
+                        {
+                            let (w, h) = all_sizes.get(p).copied().unwrap_or((595.0, 842.0));
+                            let scale = (800.0_f32 / (w.max(h) as f32)).clamp(0.2, 3.0);
+                            let config = pdfcraft_render::RenderConfig { system_fonts: true, ..Default::default() };
+                            let mut r = pdfcraft_render::PageRenderer::new(bytes, config);
+                            let out = r.render(pdfcraft_render::RenderRequest {
+                                page: doc_p,
+                                kind: pdfcraft_render::RequestKind::Pixels,
+                                tile: None,
+                                scale,
+                                tag: 0,
+                                preview: true,
+                            });
+                            if out.error.is_none() && out.width > 0 && out.height > 0 {
+                                let mut img = egui::ColorImage::from_rgba_unmultiplied([out.width as usize, out.height as usize], &out.rgba);
+                                if is_grayscale {
+                                    apply_grayscale(&mut img);
+                                }
+                                let handle = ctx.load_texture(format!("batch-sheet-{p}"), img, egui::TextureOptions::LINEAR);
+                                d.preview_cache.insert(p, handle);
+                            }
+                        }
+
+                        if let Some(texture) = d.preview_cache.get(&p) {
+                            let size = texture.size_vec2();
+                            let max_preview = egui::vec2(240.0, 320.0);
+                            let aspect = size.x / size.y.max(1.0);
+                            let preview_size = if aspect > max_preview.x / max_preview.y {
+                                egui::vec2(max_preview.x, max_preview.x / aspect)
+                            } else {
+                                egui::vec2(max_preview.y * aspect, max_preview.y)
+                            };
+                            ui.image((texture.id(), preview_size));
+                        }
+                    }
+                });
             });
 
-            if out.error.is_none() && out.width > 0 && out.height > 0 {
-                let mut img = crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba);
-                if is_grayscale {
-                    apply_grayscale(&mut img);
-                }
-                let handle = ctx.load_texture(format!("batch-sheet-{p}"), img, egui::TextureOptions::LINEAR);
-                let id = handle.id();
-                app.batch_print.preview_cache.insert(p, handle);
-                Some(id)
-            } else {
-                None
-            }
-        })
-    } else {
-        let dummy_sizes = vec![(595.0, 842.0)];
-        let dummy_labels = vec!["1".to_string()];
-        crate::print_ui::body(ui, &mut app.print_draft, &t, &dummy_sizes, &dummy_labels, &mut |_| None)
+            true
+        });
+
+    if shown.picked == Some(1) {
+        // "Back to documents" extra button was clicked
+        app.batch_print.preview_cache.clear();
+        app.batch_print.step = BatchPrintStep::SelectFiles;
+        return;
+    }
+
+    if shown.closed.is_some() || !open {
+        app.batch_print.clear();
+        app.batch_print.open = false;
+        return;
+    }
+
+    if (shown.accepted.is_some() || shown.picked == Some(0)) && app.print_batch_now(&ctx) {
+        app.batch_print.clear();
+        app.batch_print.open = false;
     }
 }
 
@@ -375,7 +713,7 @@ mod tests {
         assert!(draft.items[0].selected);
         assert!(!draft.items[1].selected);
 
-        draft.items.clear();
+        draft.clear();
         assert!(draft.items.is_empty());
     }
 }
