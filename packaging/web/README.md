@@ -14,6 +14,22 @@ static site in `pdfcraft-web-<version>/`:
 
 There is no server-side code. Upload the folder's contents anywhere that serves static files.
 
+## Publish from this repository
+
+The `Publish web app` workflow (`.github/workflows/web-pages.yml`) builds the WebAssembly app,
+stages the OCR models, and deploys the static site to GitHub Pages whenever `main` is updated.
+To turn it on, set **Settings → Pages → Build and deployment → Source** to **GitHub Actions**.
+The deployment URL is reported by the workflow (for a project repository, it is usually
+`https://<owner>.github.io/<repository>/`). The build uses relative asset URLs, so it works at
+that project subpath as well as at a domain root. You can also run the workflow manually from
+`main` in the Actions tab.
+
+For Vercel, Netlify, Cloudflare Pages or another static host, deploy the contents of
+`dist/web` after running `trunk build --release` from `apps/pdfcraft-web` and
+`cargo xtask models dist/web/models`. No server, database, account or environment variables are
+needed; document processing stays in the browser. Follow the server requirements below when
+configuring a host.
+
 ## Any path works
 
 All URLs in `index.html` are relative (`public_url = "./"` in `apps/pdfcraft-web/Trunk.toml`),
