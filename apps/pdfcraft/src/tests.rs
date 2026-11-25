@@ -3,7 +3,7 @@
 /// FreeBSD's CI machine the test process then died with SIGSEGV, in about half the runs:
 /// the first device was still being set up when the second test began its own. The UI
 /// tests take turns the same way (`crates/ui-egui/tests/it/main.rs`). Hold it for the whole
-/// test (declared before the instance, so it's released after the device is dropped). 
+/// test (declared before the instance, so it's released after the device is dropped).
 static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn gpu() -> std::sync::MutexGuard<'static, ()> {
