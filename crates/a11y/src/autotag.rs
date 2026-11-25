@@ -116,11 +116,12 @@ const EDITOR_MARKS: [&[u8]; 4] = [b"Span", b"PCSoft", b"PCHard", b"P"];
 
 /// Whether `op` opens one of the text editor's marked-content sequences. One that carries an
 /// `/MCID` is another writer's structure content and would collide with the new MCIDs; `/OC`
-/// layers and the like are not the editor's.
+/// layers and the like are not the editor's. An imported PDF can carry surplus operands, which the
+/// renderer reads from the end, so the operand count (one for BMC, two for BDC) is checked first.
 fn editor_mark(op: &Op) -> bool {
-    match op.op.as_slice() {
-        b"BMC" => op.name(0).is_some_and(|tag| EDITOR_MARKS.contains(&tag)),
-        b"BDC" => {
+    match (op.op.as_slice(), op.operands.len()) {
+        (b"BMC", 1) => op.name(0).is_some_and(|tag| EDITOR_MARKS.contains(&tag)),
+        (b"BDC", 2) => {
             op.name(0).is_some_and(|tag| EDITOR_MARKS.contains(&tag))
                 && op.operands.get(1).and_then(Object::as_dict).is_some_and(|d| !d.contains(b"MCID"))
         }
