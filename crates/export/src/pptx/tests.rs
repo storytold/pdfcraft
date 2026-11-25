@@ -73,6 +73,7 @@ fn sample_page() -> Page {
             size: [228.0, 150.0],
             rotation: 0.0,
         }],
+        ocr: false,
         background: None,
         rules: Vec::new(),
     }
@@ -208,6 +209,7 @@ fn pptx_package_parts_are_complete_and_consistent() {
             cell("100%", 200.0, 320.0),
         ],
         images: Vec::new(),
+        ocr: false,
         background: None,
         rules: Vec::new(),
     };
@@ -317,7 +319,7 @@ fn hostile_sizes_do_not_overflow_the_slide_position() {
             rotation: 0.0,
         })
         .collect();
-    let p = Page { width: f64::MAX, height: f64::NAN, blocks, images, background: None, rules: Vec::new() };
+    let p = Page { width: f64::MAX, height: f64::NAN, blocks, images, ocr: false, background: None, rules: Vec::new() };
     let bytes = pptx(&[p], "Hostile");
     let slide = part(&bytes, "ppt/slides/slide1.xml");
     assert!(slide.contains("Title") && slide.contains("<p:pic>"), "the slide is still written");
@@ -403,6 +405,7 @@ fn pptx_table_cell_with_largest_font_stays_in_table_and_not_in_title() {
             cell("100%", 200.0, 320.0, 100.0, 12.0),
         ],
         images: Vec::new(),
+        ocr: false,
         background: None,
         rules: Vec::new(),
     };

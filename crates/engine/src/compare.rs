@@ -267,6 +267,9 @@ impl crate::Document {
                 let unit = display_unit(info);
                 let reading = pdfcraft_edit::reading_blocks_checked(cos, i).unwrap_or_default();
                 let forms_unread = reading.truncated;
+                let ocr = !forms_unread
+                    && reading.blocks.iter().any(|b| !b.text.trim().is_empty())
+                    && reading.blocks.iter().filter(|b| !b.text.trim().is_empty()).all(|b| b.invisible);
                 let blocks = reading
                     .blocks
                     .into_iter()
@@ -322,7 +325,7 @@ impl crate::Document {
                 let background = pdfcraft_edit::page_background(cos, i).ok().flatten();
                 // The ruled lines tell a drawn table from text that merely lines up (#5149).
                 let rules = pdfcraft_edit::page_rules(cos, i).unwrap_or_default().into_iter().map(visible_rect).collect();
-                pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images, background, rules }
+                pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images, ocr, background, rules }
             })
             .collect();
         (pages, truncated)

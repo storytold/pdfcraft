@@ -8,7 +8,7 @@ mod pictures;
 
 use super::as_docx::{rgb8, room_for};
 use super::as_html::{allowed, language_tag};
-use super::layout::{Image, Item, Page, Run, Table, body_size, items, reading_order};
+use super::layout::{Image, Item, Page, Run, Table, body_size, items, items_filtered, reading_order};
 use craft_wordmodel::numbering::ListKind;
 use craft_wordmodel::para::{Anchor, Float, ShapeKind, Wrap};
 use craft_wordmodel::props::{Border, BorderStyle, Borders, CellProps, LineSpacing, NumRef, TableProps};
@@ -472,6 +472,9 @@ pub(crate) fn positioned(page: &Page) -> bool {
     let overlays = page
         .images
         .iter()
+        // Only a wholly OCR page's scan is exempt: on visible or mixed pages a full-page image
+        // remains artwork whose overlap with text must keep the page positioned.
+        .filter(|im| !page.ocr || !covers_page(im.rect, page))
         .map(|im| (im.rect, None))
         .chain(page.blocks.iter().enumerate().filter(|(_, b)| b.size >= 2.0 * body).map(|(i, b)| (b.rect, Some(i))));
     // Bound the pairwise test on hostile pages (many overlays times many blocks): past the
@@ -489,6 +492,11 @@ pub(crate) fn positioned(page: &Page) -> bool {
         }
     }
     false
+}
+
+/// Whether `r` covers the whole displayed page, as a scan beneath an OCR text layer does.
+fn covers_page(r: [f64; 4], page: &Page) -> bool {
+    r[0] <= 0.0 && r[1] <= 0.0 && r[2] >= page.width && r[3] >= page.height
 }
 
 /// Whether two [x0, y0, x1, y1] boxes share more than a hairline (0.5 pt each way); boxes that
@@ -608,7 +616,9 @@ pub(crate) fn word_doc(pages: &[Page], meta: &Meta) -> Document {
         if positioned(page) {
             positioned_page(&mut b, page);
         } else {
-            for it in items(std::slice::from_ref(page)) {
+            // Excluding an OCR scan before reading order keeps its geometry from moving an
+            // isolated folio ahead of the body, as well as keeping the picture out of flow.
+            for it in items_filtered(std::slice::from_ref(page), |page, im| !page.ocr || !covers_page(im.rect, page)) {
                 b.flow(it, &sec);
             }
         }

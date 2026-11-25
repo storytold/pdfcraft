@@ -6,7 +6,8 @@
 //! continues another on its line (an italic word, a link) is a run of that block's paragraph, and
 //! a paragraph that wraps onto the next line runs on there. Word keeps pages with
 //! rotated text, or text overlapped by artwork or watermark-sized text, as positioned, editable
-//! shapes to avoid reflowing overlays; other pages flow with images inline.
+//! shapes to avoid reflowing overlays; other pages flow with images inline. A page whose text is
+//! entirely OCR flows without its redundant page-sized scan.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 

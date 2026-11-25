@@ -50,6 +50,7 @@ const APPLICATION: &str = "PdfCraft";
 
 /// A Word document (.docx, Office Open XML). Ordinary pages flow as paragraphs and tables;
 /// pages with rotated text, or text that overlaps artwork, use floating shapes to retain their layout.
+/// A page whose text is entirely OCR flows without its redundant page-sized scan.
 pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
     docx_with_language(pages, title, None)
 }
