@@ -10,7 +10,7 @@ use craft::host::queue::{JobQueue, Priority, QueueOptions, QueueOrder};
 use craft::host::{Jobs, Wake};
 use craft::print::ui::HostedPrint;
 use craft::ui::contract::Bind;
-use craft::ui::dialog::{DialogId, DialogResult, DialogStack, Prompt, StackDialog, dialog_id};
+use craft::ui::dialog::{DialogId, DialogResult, DialogStack, HeldOk, Prompt, StackDialog, dialog_id};
 use craft::ui::sections::{DialogRole, FooterButton};
 use pdfcraft_engine::print::{self, Binding, BookletSubset, Content, Layout, Orientation, PageOrder, SizeMode, Subset, spool};
 
@@ -760,7 +760,7 @@ impl PdfCraftApp {
             None => {
                 if let Some(open) = self.dialogs.get_mut::<SecondSideDialog>() {
                     open.ready = ready;
-                } else if self.dialogs.stack().top().is_none() {
+                } else if self.second_side_can_open(ready) {
                     // Opened blocked, and with nothing focused (Print's button was), so no button of it starts
                     // focused for a stray key to press: Cancel drops the backs.
                     if let Some(focused) = ctx.memory(|m| m.focused()) {
@@ -785,6 +785,16 @@ impl PdfCraftApp {
                 self.notify_error(e);
             }
         }
+    }
+
+    /// Whether the [`SecondSideDialog`] can open now: no dialog is open, or the backs failed under an
+    /// open Print, which refuses a new manual print meanwhile. Not over a Print whose OK is being
+    /// answered: the window would be cancelled with it.
+    fn second_side_can_open(&self, ready: bool) -> bool {
+        let Some(top) = self.dialogs.stack().top() else { return true };
+        let answering = matches!(self.dialogs.held_state(top), Some(HeldOk::Waiting | HeldOk::Accepted));
+        let over_print = self.dialogs.get_by_id::<HostedPrint>(top).is_some();
+        ready && over_print && !answering
     }
 
     /// Mark the job just sent as the pass the saved backs wait on, and no other. `false` when

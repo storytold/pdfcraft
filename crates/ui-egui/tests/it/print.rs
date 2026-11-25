@@ -1886,3 +1886,37 @@ fn manual_two_sided_offers_the_backs_again_when_they_fail() {
     assert_eq!(sent.lock().unwrap().iter().map(|j| j.1).collect::<Vec<_>>(), [0, 1, 1], "the fronts once, the backs twice");
     assert!(!h.second_side_asked());
 }
+
+/// #2860: backs that fail while a second Print is open come back over it, and Print never takes
+/// their place: no new fronts are sent, and Continue still sends the first job's backs.
+#[test]
+fn manual_two_sided_keeps_failed_backs_while_a_second_print_is_open() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let fail = Arc::new(AtomicBool::new(false));
+    let (mut h, sent) = manual_two_sided_rig(fail.clone());
+    h.print_fronts();
+    h.run_steps(4);
+    // Continue, with the backs' job still to run, and Print opened again meanwhile.
+    fail.store(true, Ordering::SeqCst);
+    let (ctx, window) = (h.ctx.clone(), h.id());
+    assert!(h.h.state_mut().dialogs.confirm_by_id(&ctx, window));
+    h.run_steps(4);
+    h.open();
+    let print = h.id();
+    h.settle();
+    assert_eq!(sent.lock().unwrap().len(), 2, "the backs failed");
+    assert!(h.is_open(), "Print stays open");
+    assert!(h.second_side_asked(), "the backs are offered again, over Print");
+
+    fail.store(false, Ordering::SeqCst);
+    h.h.state_mut().dialogs.confirm_by_id(&ctx, print);
+    h.run_steps(4);
+    h.run_print();
+    assert_eq!(sent.lock().unwrap().len(), 2, "Print sends no new fronts");
+    assert!(h.second_side_asked(), "and the backs are still offered");
+
+    h.h.state_mut().dialogs.confirm_by_id(&ctx, window);
+    h.run_steps(4);
+    h.run_print();
+    assert_eq!(sent.lock().unwrap().iter().map(|j| j.1).collect::<Vec<_>>(), [0, 1, 1], "the first job's backs, again");
+}
