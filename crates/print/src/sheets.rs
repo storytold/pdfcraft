@@ -3,7 +3,7 @@ use super::imposition::decoded_contents;
 use super::settings::{Binding, BookletSubset, Layout, Orientation, PAPERS, PageOrder, Settings, SizeMode};
 use super::{DecodeBudget, Dict, Document, Matrix, Object};
 
-/// The CUPS job option that keeps landscape sheets landscape (`orientation-requested` 4). 
+/// The CUPS job option that keeps landscape sheets landscape (`orientation-requested` 4).
 ///
 /// The print-ready PDF's sheets are already laid out on their paper, but the paper is named
 /// portrait (`Letter`), and without this option CUPS leaves a landscape sheet unrotated and
