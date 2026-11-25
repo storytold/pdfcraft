@@ -409,6 +409,28 @@ fn crls_verify_and_report_revocation() {
     );
 }
 
+/// Issue #7928: evidence issued after the validation time (the usual long-term validation
+/// case) still revokes when it dates the revocation at or before that time; a later
+/// revocation, or a "good", from outside the window proves nothing.
+#[test]
+fn later_evidence_still_proves_an_earlier_revocation() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let issuer = &id.certificate;
+    let at = mid_june();
+    let (this, next) =
+        (Time { year: 2026, month: 7, day: 1, hour: 0, minute: 0, second: 0 }, Time { year: 2026, month: 8, day: 1, hour: 0, minute: 0, second: 0 });
+    let before = Time { year: 2026, month: 6, day: 1, hour: 8, minute: 0, second: 0 };
+    let after = Time { year: 2026, month: 6, day: 20, hour: 8, minute: 0, second: 0 };
+    let check_crl = |revoked: Option<(&[u8], Time)>| CertificateList::parse(&crl(&id, revoked, this, next)).unwrap().check(issuer, issuer, at);
+    assert_eq!(check_crl(Some((&issuer.serial, before))), RevocationStatus::Revoked { at: before });
+    assert_eq!(check_crl(Some((&issuer.serial, after))), RevocationStatus::Unknown);
+    assert_eq!(check_crl(None), RevocationStatus::Unknown);
+    let check_ocsp = |status| OcspResponse::parse(&ocsp(&id, status, this, next)).unwrap().check(issuer, issuer, at);
+    assert_eq!(check_ocsp(RevocationStatus::Revoked { at: before }), RevocationStatus::Revoked { at: before });
+    assert_eq!(check_ocsp(RevocationStatus::Revoked { at: after }), RevocationStatus::Unknown);
+    assert_eq!(check_ocsp(RevocationStatus::Good), RevocationStatus::Unknown);
+}
+
 /// Issue #159: `.p12` files that aren't clean DER still open — trailing
 /// whitespace, PEM armour or a bare base64 body — and real damage still fails,
 /// with the reason in the message.

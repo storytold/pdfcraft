@@ -121,7 +121,9 @@ impl CertificateList {
     }
 
     /// Check `cert` against this CRL at `at`. The CRL must be issued by `cert`'s issuer, its
-    /// signature must verify with the issuer's key, and `at` must fall inside its window.
+    /// signature must verify with the issuer's key. An entry dated at or before `at` revokes
+    /// whatever the CRL's own window: a list issued later, as long-term validation evidence
+    /// is, still proves the revocation. Otherwise `at` must fall inside its window.
     pub fn check(&self, cert: &Certificate, issuer: &Certificate, at: Time) -> RevocationStatus {
         if self.issuer_raw != issuer.subject.raw || issuer.subject.raw != cert.issuer.raw {
             return RevocationStatus::Unknown;
@@ -129,10 +131,16 @@ impl CertificateList {
         if !verify_signature(&self.tbs, &self.sig_alg, &self.signature, &issuer.public_key) {
             return RevocationStatus::Unknown;
         }
+        let entry = self.revoked.iter().find(|(serial, _)| strip(serial) == strip(&cert.serial));
+        if let Some((_, t)) = entry
+            && *t <= at
+        {
+            return RevocationStatus::Revoked { at: *t };
+        }
         if !valid_in_window(self.this_update, self.next_update, at) {
             return RevocationStatus::Unknown;
         }
-        match self.revoked.iter().find(|(serial, _)| strip(serial) == strip(&cert.serial)) {
+        match entry {
             Some((_, t)) => RevocationStatus::Revoked { at: *t },
             None => RevocationStatus::Good,
         }
@@ -320,8 +328,8 @@ impl OcspResponse {
 
     /// Check `cert` (issued by `issuer`) at `at`. The responder must be the issuer itself, or
     /// a delegated responder with the OCSP-signing EKU whose certificate is issued by the
-    /// issuer; the response signature and CertID must match, and `at` must fall inside the
-    /// response window.
+    /// issuer; the response signature and CertID must match. A revoked status dated at or
+    /// before `at` revokes whatever the response's window; otherwise `at` must fall inside it.
     pub fn check(&self, cert: &Certificate, issuer: &Certificate, at: Time) -> RevocationStatus {
         // Who signed the response? The issuer identified by responderID, or a delegated,
         // embedded responder identified the same way. Which of the two it is comes from that
@@ -362,6 +370,13 @@ impl OcspResponse {
             name_hash == r.cert_id.issuer_name_hash && key_hash == r.cert_id.issuer_key_hash && strip(&r.cert_id.serial) == strip(&cert.serial)
         });
         let Some(single) = single else { return RevocationStatus::Unknown };
+        // A response produced after `at`, as long-term validation evidence is, still proves a
+        // revocation it dates at or before `at`.
+        if let CertStatus::Revoked(t) = single.status
+            && t <= at
+        {
+            return RevocationStatus::Revoked { at: t };
+        }
         if !valid_in_window(single.this_update, single.next_update, at) {
             return RevocationStatus::Unknown;
         }
