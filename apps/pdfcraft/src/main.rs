@@ -18,10 +18,14 @@
 //! `--new-window` opens a window of its own. Without it, on Windows, a launch that only names files
 //! hands them to the PdfCraft already running, where they open as tabs (`single_instance`).
 //!
-//! `--control <file>` enables the UI control channel (off by default): the app listens on a random
-//! loopback port and writes `{"port", "token", "pid"}` to `<file>` (owner-only permissions). The
-//! app doesn't start if it can't.
-//! Agents then drive it with `pdfcraft-cli ui --control <file> <method> …`.
+//! `--control <PORT>` enables the UI control channel (off by default): the app listens on
+//! 127.0.0.1:<PORT> (`0` picks a free one) and asks for the token `--control-token <TOKEN>` or
+//! `--control-token-file <FILE>` gives (or `PDFCRAFT_CONTROL_PORT`, `PDFCRAFT_CONTROL_TOKEN`,
+//! `PDFCRAFT_CONTROL_TOKEN_FILE`). The app doesn't start if it can't listen.
+//! Agents then drive it with `pdfcraft-cli ui …`.
+//!
+// PLAN: apps/pdfcraft/Cargo.toml needs `craft = { workspace = true, features = ["automation", "window", "platform", "settings", "host", "ui"] }`; the manifest is not in this set's Files table.
+// PLAN: forms-02's `reorder_keys` wiring names no signature this set can call; its owner wires it here.
 
 // Release builds on Windows are GUI-subsystem programs, so launching the app doesn't open a console
 // window next to it (#57). `--version` and diagnostics then go nowhere when started from a terminal
@@ -37,15 +41,9 @@ use pdfcraft_ui_egui::PdfCraftApp;
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod compositor_gpu;
-mod decorations;
-mod logging;
-#[cfg(target_os = "windows")]
-mod motion;
 mod reopen;
-mod settings;
 mod single_instance;
 mod startup;
-mod text_scale;
 #[cfg(test)]
 #[path = "windows_manifest.rs"]
 mod windows_manifest;
@@ -72,7 +70,8 @@ Options:
   --new-window                open a window of its own instead of passing the files to a running PdfCraft
   --create-images [images…]   put the images in one PDF and ask for the page DPI
   --combine files…            add the files to the Combine files tab, of a running PdfCraft if there is one
-  --control <file>            enable the UI control channel (pdfcraft-cli ui --control <file> …)
+  --control <PORT>            enable the UI control channel on 127.0.0.1:<PORT> (0: a free port)
+  --control-token-file <FILE> the control channel's token, from FILE (or --control-token <TOKEN>)
   --page N, --zoom 150, --layout continuous, --theme dark, …
                               view settings applied once the files are open
   -h, --help                  print this and exit
@@ -88,27 +87,16 @@ fn print_and_exit(text: &str) -> eframe::Result {
     Ok(())
 }
 
-/// The app was called PrintCraft before; settings saved then are under this key.
-const LEGACY_STORAGE_KEY: &str = "printcraft";
-
-/// The preferences folder (`app.ron`, docs/development.md). In portable mode
-/// it is `PdfCraftData` beside the executable (#157). XDG desktops use the configuration base;
-/// other platforms retain eframe's PdfCraft folder. Logs and recovery stay in the data folder.
+// PLAN: assumed pdfcraft_ui_egui::settings::{resolution() -> &'static craft::settings::Resolved (the portable_dir() resolution), open() -> Store, dictionary_dir() -> Option<PathBuf>} (pdf-shell-w9).
+/// The preferences folder (`app.ron`, docs/development.md), as the settings resolution chose it:
+/// `PdfCraftData` beside the executable in portable mode (#157), else the platform's folder.
 fn settings_dir() -> Option<std::path::PathBuf> {
-    let legacy = eframe::storage_dir("PdfCraft");
-    match settings::directory(
-        cfg!(all(unix, not(target_os = "macos"))),
-        pdfcraft_ui_egui::portable::data_dir(),
-        legacy.clone(),
-        std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from),
-        std::env::home_dir(),
-    ) {
-        Ok(dir) => dir,
-        Err(e) => {
-            log::warn!("could not migrate preferences to the XDG configuration folder; using the original location: {e}");
-            legacy
-        }
-    }
+    pdfcraft_ui_egui::settings::resolution().dir.clone()
+}
+
+/// Whether settings, logs and recovery live beside the executable (#157).
+fn portable() -> bool {
+    pdfcraft_ui_egui::settings::resolution().rule == craft::settings::Rule::Portable
 }
 
 /// Move the settings and crash-recovery folders of the app's former name, PrintCraft, to the new
@@ -116,7 +104,7 @@ fn settings_dir() -> Option<std::path::PathBuf> {
 /// folder is left alone when the new one already exists or the move fails. A portable copy leaves
 /// the per-user folders alone.
 fn migrate_legacy_folders() {
-    if pdfcraft_ui_egui::portable::data_dir().is_some() {
+    if portable() {
         return;
     }
     let mut moves = vec![(eframe::storage_dir("PrintCraft"), eframe::storage_dir("PdfCraft"))];
@@ -138,37 +126,6 @@ fn migrate_legacy_folders() {
             Err(e) => log::warn!("moving {} to {}: {e}", old.display(), new.display()),
         }
     }
-}
-
-/// Desktop launchers (GNOME Files, KDE Dolphin…) only recognise an app as the default handler for a
-/// mime type if its `Exec` takes URIs (`%u`/`%U`), not just paths (`%F`); the packaged `.desktop`
-/// file uses `%U` accordingly (packaging/linux/ai.storyteller.pdfcraft.desktop). Decode a local
-/// `file://` argument (`file:///path` or `file://localhost/path`) to a plain path here so the rest
-/// of the app, which only ever opens paths, is unaffected. Other schemes (`http://`, `mailto:`…),
-/// URIs naming another host, and plain paths pass through untouched.
-fn path_from_arg(arg: String) -> String {
-    let Some(rest) = arg.strip_prefix("file://") else { return arg };
-    let rest = rest.strip_prefix("localhost").unwrap_or(rest);
-    if !rest.starts_with('/') {
-        return arg;
-    }
-    // `file:///C:/x.pdf` on Windows names `C:/x.pdf`. `rest` starts with the one-byte '/', so
-    // byte 1 is a char boundary.
-    let rest = if cfg!(windows) && rest.as_bytes().get(2) == Some(&b':') { &rest[1..] } else { rest };
-    let mut out = Vec::with_capacity(rest.len());
-    let mut bytes = rest.bytes();
-    while let Some(b) = bytes.next() {
-        if b == b'%' {
-            let hex = bytes.clone().take(2).collect::<Vec<u8>>();
-            if let Some(byte) = std::str::from_utf8(&hex).ok().filter(|h| h.len() == 2).and_then(|h| u8::from_str_radix(h, 16).ok()) {
-                out.push(byte);
-                bytes.nth(1);
-                continue;
-            }
-        }
-        out.push(b);
-    }
-    String::from_utf8(out).unwrap_or(arg)
 }
 
 /// Some programs start the PDF reader with the path unquoted (`pdfcraft.exe P:\Docs\01 Contract.PDF`),
@@ -213,8 +170,8 @@ fn main() -> eframe::Result {
     if let Some(result) = craft_update::self_update::finish(&pdfcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
         std::process::exit(i32::from(result.is_err()));
     }
-    // First, so the panic hook and every start-up warning are recorded (`logging`).
-    let logger = logging::install();
+    // First, so the panic hook and every start-up warning are recorded.
+    let logger = craft::platform::logs::install(craft::platform::logs::LogNames::new("pdfcraft"));
     if let Some(value) = pdfcraft_platform::crypto_env::dropped() {
         let name = pdfcraft_platform::crypto_env::IA32CAP;
         log::warn!("{name} was set to {value}; PdfCraft started again without it (aws-lc stops on a CPU feature the processor lacks)");
@@ -245,17 +202,18 @@ fn main() -> eframe::Result {
     }
     startup.files = rejoin_split_paths(startup.files, |p| std::path::Path::new(p).is_file());
     let may_hand_off = startup.may_hand_off();
-    let startup::Arguments { files, options, control_file, create_images, combine, two_paged, .. } = startup;
-    let integrated = cfg!(target_os = "macos");
-    // GNOME on Wayland leaves the window frame to the app (src/decorations.rs).
-    let window_controls = if cfg!(any(target_os = "macos", target_os = "windows")) { None } else { decorations::app_drawn() };
+    let startup::Arguments { files, options, control_port, control_token, control_token_file, create_images, combine, two_paged, .. } = startup;
+    // A bad control configuration stops the launch before any window opens.
+    let control = match control_options(control_port, control_token, control_token_file) {
+        Ok(control) => control,
+        Err(message) => usage_error(&message),
+    };
     migrate_legacy_folders();
     // The log file stays in the data folder; opened after the arguments (so `--version` leaves
     // no file behind) and after the PrintCraft migration (which a fresh folder would block).
     // Records logged until now are written to it first.
-    if let (Some(logger), Some(dir)) =
-        (logger, pdfcraft_ui_egui::portable::data_dir().map(std::path::Path::to_path_buf).or_else(|| eframe::storage_dir("PdfCraft")))
-    {
+    let data_dir = if portable() { settings_dir() } else { eframe::storage_dir("PdfCraft") };
+    if let (Some(logger), Some(dir)) = (logger, data_dir) {
         match logger.attach_dir(&dir.join("logs")) {
             Ok(path) => log::info!("PdfCraft {}, log file {}", pdfcraft_engine::build_info::version(), path.display()),
             // Standard error only by now (`attach_dir` gave up on the file); unlike `eprintln!`, never panics.
@@ -274,8 +232,22 @@ fn main() -> eframe::Result {
         single_instance::Claim::Primary(server) => Some(server),
         single_instance::Claim::Alone => None,
     };
+    // Who draws the window frame: the platform and Preferences ▸ Use system title bar decide,
+    // unless `PDFCRAFT_TITLEBAR` overrides them. The store is read here and opened again by the
+    // app (each window attempt opens its own: the OpenGL retry runs the creator again).
+    // The interface language is read the same way, for the fonts the runtime installs with.
+    let (title_bar, saved_lang) = {
+        let settings = pdfcraft_ui_egui::settings::open();
+        let saved = settings.get();
+        let title_bar = saved.layout.system_title_bar.map_or(Default::default(), |on| {
+            if on { craft::window::policy::TitleBarPref::System } else { craft::window::policy::TitleBarPref::Integrated }
+        });
+        (title_bar, saved.behavior.language.clone())
+    };
+    let frame = craft::window::policy::decide_for(craft::window::Prefix::new("PDFCRAFT"), craft::window::policy::Backend::from_env(), title_bar);
+    let lang = startup_lang(saved_lang.as_deref(), &options);
     let choice = renderer_choice(std::env::var("PDFCRAFT_RENDERER").ok().as_deref());
-    let launch = Launch { files, options, control_file, create_images, combine, integrated, window_controls, two_paged };
+    let launch = Launch { files, options, control, create_images, combine, frame, lang, two_paged };
     // Finder, Open With and the Dock deliver files as Apple events, not arguments; catch the one
     // that launched us as well as later ones. Lives until the event loop returns.
     #[cfg(target_os = "macos")]
@@ -285,7 +257,7 @@ fn main() -> eframe::Result {
     let first = if choice == RendererChoice::Gl { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
     let result = eframe::run_native(
         "PdfCraft",
-        native_options(launch.integrated, launch.window_controls.is_some(), first),
+        native_options(launch.integrated(), first),
         app_creator(
             launch.clone(),
             Rc::clone(&started),
@@ -303,7 +275,7 @@ fn main() -> eframe::Result {
             log::error!("the GPU renderer (wgpu) didn't start: {e}. Starting with OpenGL instead; set PDFCRAFT_RENDERER=gl to skip wgpu.");
             eframe::run_native(
                 "PdfCraft",
-                native_options(launch.integrated, launch.window_controls.is_some(), eframe::Renderer::Glow),
+                native_options(launch.integrated(), eframe::Renderer::Glow),
                 app_creator(
                     launch,
                     started,
@@ -336,6 +308,47 @@ fn renderer_choice(value: Option<&str>) -> RendererChoice {
     }
 }
 
+/// The control server's port and token from `--control <PORT>`, `--control-token`,
+/// `--control-token-file` and their `PDFCRAFT_CONTROL_*` variables; `None` leaves the server off.
+/// A port needs a token or a token file, so the token is never printed (AGENTS.md §3).
+fn control_options(port: Option<String>, token: Option<String>, token_file: Option<String>) -> Result<Option<(u16, String)>, String> {
+    use craft::automation::args::{ControlOptions, EnvNames, FlagNames, OptionsError, Source, Sources, control_port};
+    let names = EnvNames::for_app("PDFCRAFT");
+    let flags = FlagNames::default();
+    let port = match port {
+        Some(value) => Some(control_port(&value).map_err(|_| OptionsError::NotAPort { value, shown: format!("{} <PORT>", flags.port) }.to_string())?),
+        None => None,
+    };
+    let given = ControlOptions {
+        sources: Sources {
+            port: port.map(|_| Source::Flag),
+            token: token.as_ref().map(|_| Source::Flag),
+            token_file: token_file.as_ref().map(|_| Source::Flag),
+        },
+        port,
+        token,
+        token_file: token_file.map(std::path::PathBuf::from),
+    };
+    let options = ControlOptions::resolve(given, &names).map_err(|e| e.to_string())?;
+    options.check(&flags, &names).map_err(|e| e.to_string())?;
+    let Some(port) = options.port else { return Ok(None) };
+    if options.token.is_none() && options.token_file.is_none() {
+        return Err(format!(
+            "the argument '{} <PORT>' needs '{} <TOKEN>' or '{} <FILE>' (or {} or {})",
+            flags.port, flags.token, flags.token_file, names.token, names.token_file
+        ));
+    }
+    let token = options.server_token().map_err(|e| e.to_string())?;
+    let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("pdfcraft: {}\n", options.token_notice(&token)));
+    Ok(Some((port, token)))
+}
+
+/// A bad command line: say why as clap would, and exit with the usage status.
+fn usage_error(message: &str) -> ! {
+    let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("error: {message}\n\nFor more information, try '--help'.\n"));
+    std::process::exit(craft::automation::args::USAGE_EXIT_CODE)
+}
+
 /// Whether a failed run should be retried with OpenGL: only when wgpu was tried first by choice of
 /// nobody, and it failed before the app was created (so while starting the renderer, not later).
 fn retry_with_gl(choice: RendererChoice, app_started: bool) -> bool {
@@ -343,7 +356,7 @@ fn retry_with_gl(choice: RendererChoice, app_started: bool) -> bool {
 }
 
 /// The window and renderer settings for one run.
-fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer) -> eframe::NativeOptions {
+fn native_options(integrated: bool, renderer: eframe::Renderer) -> eframe::NativeOptions {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("PdfCraft")
         .with_inner_size([1440.0, 920.0])
@@ -365,11 +378,13 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
         Err(e) => log::warn!("app icon: {e}"),
     }
     if integrated {
-        viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
-    }
-    if app_frame {
-        // The tab strip is the title bar (pdfcraft_ui_egui::window_controls).
-        viewport = viewport.with_decorations(false);
+        // macOS keeps its traffic lights over the app's bar; elsewhere the app's bar is the whole
+        // title bar, with its own caption buttons.
+        viewport = if cfg!(target_os = "macos") {
+            viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false)
+        } else {
+            viewport.with_decorations(false)
+        };
     }
     let persistence_path = settings_dir().map(|d| d.join("app.ron"));
     // Set explicitly, so the renderer never depends on which one eframe defaults to.
@@ -388,26 +403,52 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
 struct Launch {
     files: Vec<String>,
     options: Vec<(String, String)>,
-    control_file: Option<String>,
+    /// The control server's port and token, when `--control` asked for one.
+    control: Option<(u16, String)>,
     create_images: bool,
     /// `--combine`: the files go to the Combine files tab.
     combine: bool,
-    integrated: bool,
-    /// The window buttons the app draws, when the desktop leaves the frame to it.
-    window_controls: Option<pdfcraft_ui_egui::window_controls::Layout>,
+    /// Who draws the root window's frame.
+    frame: craft::window::policy::Decision,
+    /// The language the interface starts in, whose fonts are installed with the runtime.
+    lang: pdfcraft_ui_egui::i18n::Lang,
     two_paged: bool,
 }
 
-/// Whether the window is a native Wayland one (not X11 or XWayland).
-#[cfg(all(unix, not(target_os = "macos")))]
-fn native_wayland(cc: &eframe::CreationContext<'_>) -> bool {
-    use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
-    cc.display_handle().is_ok_and(|handle| matches!(handle.as_raw(), RawDisplayHandle::Wayland(_)))
+impl Launch {
+    /// Whether the app's bar is the title bar.
+    fn integrated(&self) -> bool {
+        !matches!(self.frame.frame, craft::window::policy::Frame::Native)
+    }
 }
 
-#[cfg(not(all(unix, not(target_os = "macos"))))]
-fn native_wayland(_: &eframe::CreationContext<'_>) -> bool {
-    false
+/// The language the interface starts in: the last valid `--language`, else the saved preference,
+/// else the system's, as the app applies them once it is created.
+fn startup_lang(saved: Option<&str>, options: &[(String, String)]) -> pdfcraft_ui_egui::i18n::Lang {
+    use pdfcraft_ui_egui::i18n::{AUTO, Lang, normalize_pref};
+    let given = options.iter().rev().filter(|(key, _)| key == "language").find_map(|(_, value)| normalize_pref(value));
+    Lang::from_pref(given.or_else(|| saved.and_then(normalize_pref)).unwrap_or(AUTO))
+}
+
+/// Installs the framework runtime on eframe's context, with the root window's frame and the
+/// interface fonts of `lang`. Once per context, before the app is built.
+fn install_runtime(
+    cc: &eframe::CreationContext<'_>,
+    frame: craft::window::policy::Decision,
+    lang: pdfcraft_ui_egui::i18n::Lang,
+) -> Result<(), String> {
+    use craft::host::target::{Backend, ShellInfo};
+    use craft::ui::InstallSpec;
+    use craft::window::system::SystemWindows;
+    let ctx = cc.egui_ctx.clone();
+    let system = craft::ui::runtime::env::SystemReader::start(move || ctx.request_repaint());
+    let spec = InstallSpec::new(ShellInfo::default().backend(Backend::from_env()), std::sync::Arc::new(SystemWindows))
+        .system(system)
+        .app_id(APP_ID)
+        .frame(frame);
+    craft::ui::shell::embed::install(&cc.egui_ctx, spec, &pdfcraft_ui_egui::fonts::ui_fonts(lang))
+        .map(drop)
+        .map_err(|error| format!("the runtime could not be installed: {error}"))
 }
 
 /// Decode `png` as a [`winit::window::Icon`] for the Windows taskbar and Alt+Tab (`ICON_BIG`).
@@ -458,59 +499,54 @@ fn app_creator<'a>(
     instance: Option<&'a single_instance::Server>,
     #[cfg(target_os = "macos")] apple_events: &'a apple_events::AppleEvents,
 ) -> eframe::AppCreator<'a> {
-    let Launch { files, options, control_file, create_images, combine, integrated, window_controls, two_paged } = launch;
+    let Launch { files, options, control, create_images, combine, frame, lang, two_paged } = launch;
     Box::new(move |cc| {
         started.set(true);
-        let mut app = PdfCraftApp::new();
+        install_runtime(cc, frame, lang)?;
+        let ctx = cc.egui_ctx.clone();
+        let wake = craft::host::Wake::new(move || ctx.request_repaint());
+        // Files a second launch hands over arrive through the single-instance server.
+        // PLAN: assumed single_instance::Server::connect(&self, &egui::Context) -> FileIntake and apple_events::AppleEvents::connect(&self, IntakeSender, &egui::Context) (pdf-shell-w6).
+        let intake = match instance {
+            Some(server) => server.connect(&cc.egui_ctx),
+            None => craft::platform::open::FileIntake::new(wake).0,
+        };
+        // Finder, Open With and the Dock deliver files as Apple events, not arguments.
+        #[cfg(target_os = "macos")]
+        apple_events.connect(intake.sender(), &cc.egui_ctx);
+        let mut app = PdfCraftApp::with_intake(&cc.egui_ctx, intake);
         // First start (or settings from before Units existed): the region's unit.
         app.units = pdfcraft_ui_egui::units::Unit::system();
-        #[cfg(target_os = "linux")]
-        app.enable_desktop_theme();
         // The system's reopen-windows choice (macOS) starts the preference; a saved choice replaces it.
         app.reopen_last_session = reopen::system_default();
-        if let Some(json) = cc.storage.and_then(|s| s.get_string("pdfcraft").or_else(|| s.get_string(LEGACY_STORAGE_KEY))) {
-            app.restore(&json);
-        }
-        app.window_state = pdfcraft_ui_egui::window_state::WindowState::started_with(cc.storage);
-        app.integrated_titlebar = integrated;
-        app.window_controls = window_controls;
-        app.system_text_scale = text_scale::system();
-        // Windows' Animation effects setting, which Preferences ▸ Animation effects follows unless
-        // it is set to On or Off.
+        let settings = pdfcraft_ui_egui::settings::open();
+        app.apply_settings(settings.get());
+        app.attach_settings(settings);
         #[cfg(target_os = "windows")]
-        {
-            if let Some(window) = cc.winit_window() {
-                set_taskbar_icon(window);
-            }
-            app.motion.source = Some(motion::source());
+        if let Some(window) = cc.winit_window() {
+            set_taskbar_icon(window);
         }
         app.set_startup_update_check(true);
         app.printer_source = Some(pdfcraft_ui_egui::system_printers());
         app.two_sided_source = Some(pdfcraft_ui_egui::system_two_sided());
         app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows"));
+        // The native menu bar. Its Quit (⌘Q) closes the window rather than ending the process as
+        // winit's does (#1136), so the close path asks about unsaved changes, as for the close
+        // button.
         #[cfg(target_os = "macos")]
-        {
-            app.os_events = Some(apple_events.connect(&cc.egui_ctx));
-            // The native menu bar. Its Quit (⌘Q) closes the window rather than ending the process as
-            // winit's does (#1136), so `guard_quit` asks about unsaved changes, as for the close
-            // button.
-            if !app.install_native_menu(&cc.egui_ctx) {
-                log::warn!("couldn't install the macOS menu bar; the menus stay in the window");
-            }
+        if !app.install_native_menu(&cc.egui_ctx) {
+            log::warn!("couldn't install the macOS menu bar; the menus stay in the window");
         }
-        if let Some(server) = instance {
-            app.os_events = Some(server.connect(&cc.egui_ctx, native_wayland(cc)));
+        // `--control` was asked for: carrying on without the server would leave a script driving
+        // nothing, so a port that can't be listened on stops the launch before any document opens.
+        if let Some((port, token)) = &control {
+            let host = craft::ui::runtime::windows::WindowHost::of(&cc.egui_ctx);
+            let (requests, listening) =
+                craft::automation::server::listen(*port, token.clone(), host).map_err(|e| format!("--control {port}: {e}"))?;
+            app.attach_control(craft::automation::ControlChannel::new(requests), Some(listening));
         }
-        if let Some(file) = &control_file {
-            let client = app.attach_control(&cc.egui_ctx);
-            open_control_channel(file, pdfcraft_ui_egui::control::serve(client))?;
-        }
-        // Autosave unsaved changes; offer to recover documents a crashed session left behind.
-        if let Some(dir) = pdfcraft_ui_egui::RecoveryStore::default_dir() {
-            app.enable_recovery(pdfcraft_ui_egui::RecoveryStore::new(dir));
-        }
-        // The OCR Verify screen stores its per-language dictionary beside recovery data.
-        app.ocr_verify.dictionary_dir = pdfcraft_ui_egui::default_dictionary_dir();
+        // The OCR Verify screen stores its per-language dictionary in the data folder.
+        app.ocr_verify.dictionary_dir = pdfcraft_ui_egui::settings::dictionary_dir();
         if let Some(state) = &cc.wgpu_render_state {
             let adapter = state.adapter.get_info();
             let max_texture_dimension_2d = state.device.limits().max_texture_dimension_2d;
@@ -525,20 +561,17 @@ fn app_creator<'a>(
             log::info!("renderer: OpenGL (glow)");
         }
         // A portable marker whose data folder can't be written (#157): say where settings went.
-        if let Some(w) = &pdfcraft_ui_egui::portable::current().unwritable {
-            app.notify_fmt(
-                "Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.",
-                &[("folder", &w.folder.display().to_string()), ("error", &w.error)],
-            );
+        if let Some(warning) = &pdfcraft_ui_egui::settings::resolution().warning {
+            app.notify(warning.clone());
         }
         let defer_layout = two_paged && !files.is_empty() && !create_images;
         if create_images {
-            if let Err(e) = app.begin_image_import_paths(&files) {
+            if let Err(e) = app.begin_image_import_paths(&cc.egui_ctx, &files) {
                 app.notify(e);
             }
         } else if combine {
             app.reopen_last_files(&[]);
-            app.combine_paths(&files);
+            app.combine_paths(&cc.egui_ctx, &files);
         } else {
             // With the preference on, last session's files come back first; files named on
             // the command line open after them, in front (#442).
@@ -546,7 +579,7 @@ fn app_creator<'a>(
             startup::open_files(&mut app, &files, two_paged);
         }
         for (k, v) in options {
-            let result = if defer_layout && k == "layout" { app.set_launch_layout(&v) } else { app.set_option(&k, &v) };
+            let result = if defer_layout && k == "layout" { app.set_launch_layout(&v) } else { app.set_option(&cc.egui_ctx, &k, &v) };
             if let Err(e) = result {
                 log::warn!("--{k} {v}: {e}");
             }
@@ -563,131 +596,6 @@ fn notify_software_renderer(app: &mut PdfCraftApp, device_type: eframe::wgpu::De
     if device_type == eframe::wgpu::DeviceType::Cpu {
         app.notify_tr("PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.");
     }
-}
-
-/// Publish a started control channel in `file`.
-///
-/// A failure stops the app. `--control` was asked for, so carrying on without it would leave a
-/// script driving nothing, and the file that couldn't be replaced may be another user's, planted
-/// at a shared path such as `/tmp/pc.json` to receive the commands. This runs before any document
-/// opens, so nothing is lost.
-fn open_control_channel(file: &str, endpoint: std::io::Result<pdfcraft_ui_egui::control::Endpoint>) -> Result<(), String> {
-    match endpoint.and_then(|ep| write_control_file(file, ep.port, &ep.token).map(|()| ep.port)) {
-        // Never the token (app-agents.md rule 14): it stays in the owner-only file.
-        Ok(port) => {
-            log::info!("UI control channel on 127.0.0.1:{port} (connection details in {file})");
-            Ok(())
-        }
-        Err(e) => {
-            // cmd.exe doesn't expand `~` (#3922).
-            let example = if cfg!(windows) { r"%USERPROFILE%\.pdfcraft-control.json" } else { "~/.pdfcraft-control.json" };
-            let message = format!("--control {file}: {e}. Use a control file in a folder only you can write, such as {example}");
-            log::error!("{message}");
-            Err(message)
-        }
-    }
-}
-
-/// Write the control endpoint so that only the current user can read the token.
-///
-/// The JSON goes to a new file, created fresh and owner-only, which then replaces `path`. On Unix
-/// the file sits next to `path` with mode 0600. On Windows it sits in a new folder next to `path`
-/// whose access list, of this user and SYSTEM only, it inherits when it is created, so no other
-/// account can open it at any time (#3922; review on #3956). Opening `path` itself would follow a
-/// link planted there and truncate whatever it points at; a rename replaces the link and leaves
-/// its target alone. A reader polling for the file also never sees it half-written.
-fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()> {
-    use std::io::ErrorKind;
-    let json = serde_json::json!({ "port": port, "token": token, "pid": std::process::id() }).to_string();
-    let path = std::path::Path::new(path);
-    let name = path.file_name().ok_or_else(|| std::io::Error::new(ErrorKind::InvalidInput, "not a file name"))?;
-    // Windows: the user's SID, read once for the private folder and for the file in it, since each
-    // lookup starts `whoami` (review on #3956).
-    #[cfg(windows)]
-    let me = pdfcraft_platform::owner_only::current_user_sid()?;
-    #[cfg(windows)]
-    let restrict = |file: &std::path::Path| pdfcraft_platform::owner_only::restrict_to_owner(file, &me);
-    #[cfg(not(windows))]
-    let restrict = |_: &std::path::Path| Ok::<(), std::io::Error>(());
-    // Unpredictable suffixes, so the name can't be planted in advance. `RandomState` is keyed from
-    // the operating system's random source.
-    let random = std::hash::RandomState::new();
-    for i in 0..16u32 {
-        let mut staged = std::ffi::OsString::from(".");
-        staged.push(name);
-        staged.push(format!(".{:016x}.tmp", std::hash::BuildHasher::hash_one(&random, i)));
-        let staged = path.with_file_name(staged);
-        // Windows: a file created next to `path` would inherit that folder's access list, which may
-        // let other users read it, and restricting it afterwards leaves a window in which one of
-        // them opens a handle; Windows checks access only when a handle is opened, so a later
-        // change of the list doesn't revoke it. The file is created in a private folder instead,
-        // and that folder is removed once the file has left it.
-        #[cfg(windows)]
-        let (staging, staged) = {
-            match pdfcraft_platform::owner_only::create_private_dir(&staged, &me) {
-                Ok(()) => {}
-                Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
-                // As for a file below: something at the name we may not open still takes it.
-                Err(e) if e.kind() == ErrorKind::PermissionDenied && staged.symlink_metadata().is_ok() => continue,
-                Err(e) => return Err(e),
-            }
-            let file = staged.join(name);
-            (staged, file)
-        };
-        let done = stage_control_file(&staged, path, &json, &restrict);
-        #[cfg(windows)]
-        let _ = std::fs::remove_dir(&staging);
-        match done {
-            Some(done) => return done,
-            None => continue,
-        }
-    }
-    Err(std::io::Error::new(ErrorKind::AlreadyExists, "no free name for the control file's temporary copy"))
-}
-
-/// Create `staged` fresh and owner-only, `restrict` it, write `json` to it and rename it to `path`.
-/// `None` when something already has the name, so the caller tries another. On any other failure
-/// the new file is removed and nothing is left at `path`'s side.
-fn stage_control_file(
-    staged: &std::path::Path,
-    path: &std::path::Path,
-    json: &str,
-    restrict: &dyn Fn(&std::path::Path) -> std::io::Result<()>,
-) -> Option<std::io::Result<()>> {
-    use std::io::{ErrorKind, Write};
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let file = match opts.open(staged) {
-        Ok(f) => f,
-        Err(e) if e.kind() == ErrorKind::AlreadyExists => return None,
-        // Windows refuses `create_new` on a folder with "access denied"; the name is taken all
-        // the same. A folder we can't write to, with nothing at the name, still fails here.
-        Err(e) if e.kind() == ErrorKind::PermissionDenied && staged.symlink_metadata().is_ok() => return None,
-        Err(e) => return Some(Err(e)),
-    };
-    // Windows: the file inherited the private folder's list. It also gets a list of its own, so it
-    // stays private wherever the rename puts it, and that is checked before the token is written;
-    // nothing is written if that fails (#3922). Unix has mode 0600 above, and `restrict` does nothing.
-    if let Err(e) = restrict(staged) {
-        drop(file);
-        let _ = std::fs::remove_file(staged);
-        return Some(Err(e));
-    }
-    // The block closes the file before it is renamed.
-    let written = {
-        let mut file = file;
-        file.write_all(json.as_bytes())
-    };
-    let done = written.and_then(|()| std::fs::rename(staged, path));
-    if done.is_err() {
-        let _ = std::fs::remove_file(staged);
-    }
-    Some(done)
 }
 
 /// How wgpu finds a GPU. Each choice yields to its wgpu environment variable.
