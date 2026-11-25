@@ -31,7 +31,7 @@ pub mod tesseract;
 mod tiles;
 
 pub use confidence::{ConfidenceBand, band_for, is_suspect, low_confidence};
-pub use merge::{MergeStrategy, StrategyOutcome, mean_confidence, recognize_with_strategy, rover_merge};
+pub use merge::{MergeStrategy, StrategyOutcome, UNKNOWN_CONFIDENCE_BAR, iou, mean_confidence, recognize_with_strategy, rover_merge};
 pub use ocrs::{
     ALPHABET, DETECTION_MODEL, DETECTION_MODEL_SHA256, LANGUAGES, Models, Ocr, OcrsRecognizer, RECOGNITION_MODEL, RECOGNITION_MODEL_SHA256,
 };
