@@ -60,6 +60,7 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
         fill_sign: false,
         no_rotate,
         points: Vec::new(),
+        no_zoom: false,
         text_box: None,
         popup: None,
     };
@@ -97,6 +98,7 @@ fn listed(page: usize, index: usize, contents: &str, parent: Option<(usize, usiz
         fill_sign: false,
         no_rotate: false,
         points: Vec::new(),
+        no_zoom: false,
         text_box: None,
         popup: None,
     }
@@ -197,6 +199,7 @@ fn annotation(subtype: &str, contents: Option<&str>, fill_sign: bool) -> Annotat
         fill_sign,
         no_rotate: false,
         points: Vec::new(),
+        no_zoom: false,
         text_box: None,
         popup: None,
     }
@@ -535,6 +538,7 @@ fn a_replace_text_group_makes_replace_text_defaults() {
         fill_sign: false,
         no_rotate: false,
         points: Vec::new(),
+        no_zoom: false,
         text_box: None,
         popup: None,
     };
