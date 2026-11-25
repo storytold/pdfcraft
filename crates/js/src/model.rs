@@ -185,6 +185,8 @@ pub struct DocInfo {
     pub page_rotations: Vec<i64>,
     /// The document has an XFA form, so scripts see `xfa_installed`.
     pub xfa: bool,
+    /// The page templates, with whether each is hidden (`this.templates`, #1429).
+    pub templates: Vec<(String, bool)>,
     pub zoom: f64,
     pub runtime_highlight: bool,
     /// The document's layers (optional content groups), for `getOCGs`, in the viewer's order.
@@ -330,6 +332,19 @@ pub enum Request {
     },
     /// `app.execMenuItem("ShowHide…")`: show the side panel, or hide it when it is showing.
     ShowPanel(Panel),
+    /// `template.spawn(nPage, bRename, bOverlay)` or `this.spawnPageFromTemplate(…)`: a page from
+    /// template `name` at `page` (0-based), with its fields renamed or not, or laid over `page`.
+    SpawnTemplate {
+        name: String,
+        page: usize,
+        rename: bool,
+        overlay: bool,
+    },
+    /// `template.hidden = hidden`.
+    SetTemplateHidden {
+        name: String,
+        hidden: bool,
+    },
 }
 
 /// A side panel a script can show or hide (`app.execMenuItem("ShowHideFileAttachment")`, …).
