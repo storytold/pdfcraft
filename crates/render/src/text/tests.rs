@@ -2216,8 +2216,9 @@ fn rtl_line_with_number_and_punctuation_reads_in_logical_order() {
 }
 
 /// #8014: a Hebrew sentence with at least as many Latin letters as Hebrew ones still reads right to left when the
-/// outermost letters on both sides are right-to-left. A right-to-left line with Latin at both edges still goes by its
-/// letter count.
+/// outermost letters on both sides are right-to-left. A line with a Latin letter at either edge goes by the count.
+/// When the Latin letters are at least as many, the line reads left to right and only the Hebrew run reverses:
+/// that drawing is also a left-to-right sentence, and the line alone cannot tell them apart.
 #[test]
 fn rtl_line_with_more_latin_letters_reads_right_to_left_between_rtl_edges() {
     let line = |words: &[&str]| {
@@ -2236,8 +2237,14 @@ fn rtl_line_with_more_latin_letters_reads_right_to_left_between_rtl_edges() {
     // A URL has more Latin letters than the Hebrew around it, and its parentheses are mirrored in drawing order.
     assert_eq!(line(&["םויה", ")github.com/storytold(", "ואר"]), "ראו (github.com/storytold) היום");
     assert_eq!(line(&["םויה", ")github(", "ואר"]), "ראו (github) היום");
-    // Latin at both ends: the count still decides, so this right-to-left line is not read from its left edge.
+    // Latin at both ends, but more Hebrew letters: the count still reads it right to left.
     assert_eq!(line(&["cd", "םלוע", "םולש", "ab"]), "ab שלום עולם cd");
+    // Latin at both ends and more Latin letters. Drawn left to right this is PdfCraft, היום, יצאה, WordCraft,
+    // which is the left-to-right sentence "PdfCraft יצאה היום WordCraft" (the Hebrew run reverses inside it).
+    // The same ink is also the right-to-left sentence "WordCraft יצאה היום PdfCraft", and the line cannot tell.
+    assert_eq!(line(&["PdfCraft", "םויה", "האצי", "WordCraft"]), "PdfCraft יצאה היום WordCraft");
+    // Latin at the left end only, and more Latin letters: the Hebrew run still reverses inside a left-to-right line.
+    assert_eq!(line(&["WordCraft", "םויה", "האצי"]), "WordCraft יצאה היום");
 }
 
 /// Two lines, "ab cd" and "e fg": words stop at blank glyphs, word gaps and line ends.
