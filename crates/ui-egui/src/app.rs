@@ -290,6 +290,7 @@ impl PdfCraftApp {
             rename_returned: rename_ui::Returned::default(),
             active: None,
             last_frame_active: None,
+            landing: Vec::new(),
             mode: Mode::AllTools,
             default_mode: Mode::AllTools,
             view_defaults: Default::default(),
