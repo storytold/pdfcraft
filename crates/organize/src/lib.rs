@@ -15,6 +15,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, XrefEntry};
 
 mod attachments;
 mod boxes;
+mod boxes_outside;
 mod comments;
 mod dedupe;
 mod import;
@@ -30,6 +31,7 @@ mod xmp;
 
 pub use attachments::{add_attachment, attachment_keys, delete_attachment, mime_for_name, set_attachment_description};
 pub use boxes::{BoxSpec, PageBox, page_boxes, set_page_box};
+pub use boxes_outside::{BoxOutside, boxes_outside_media};
 pub use comments::import_comments;
 pub use dedupe::dedupe_resources;
 pub use import::{

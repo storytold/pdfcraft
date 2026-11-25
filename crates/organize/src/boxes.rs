@@ -55,7 +55,7 @@ pub enum BoxSpec {
 
 /// Parses a 4-number PDF rectangle `[x0, y0, x1, y1]` into `[xmin, ymin, xmax, ymax]` when it has
 /// finite coordinates and positive width and height.
-fn rect_of(o: Option<&Object>, doc: &Document) -> Option<[f64; 4]> {
+pub(crate) fn rect_of(o: Option<&Object>, doc: &Document) -> Option<[f64; 4]> {
     let o = doc.resolve(o?);
     let v: Vec<f64> = o.as_array()?.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
     if v.len() != 4 || !v.iter().all(|x| x.is_finite()) {

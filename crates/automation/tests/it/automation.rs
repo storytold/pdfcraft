@@ -3839,6 +3839,33 @@ fn duplicating_and_cropping_through_tools() {
     assert!(matches!(a.call("page_set_box", &json!({ "doc": doc, "rect": [0, 0, 10, 10] })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// ISO 32000-2 §14.11.2.1: a smaller media box leaves the crop and bleed boxes as stored, and the
+/// tool lists each one it no longer contains.
+#[test]
+fn shrinking_the_media_box_lists_the_boxes_left_outside() {
+    let dir = workdir("boxes-outside");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_set_box", json!({ "doc": doc, "pages": [1], "box": "crop", "margins": [10, 20, 30, 40] }));
+    ok(&mut a, "page_set_box", json!({ "doc": doc, "pages": [1, 2], "box": "bleed", "margins": [0, 0, 0, 0] }));
+    let r = ok(&mut a, "page_set_box", json!({ "doc": doc, "pages": [1], "box": "media", "margins": [0, 0, 40, 50] }));
+    let outside = r["boxes_outside"].as_array().unwrap();
+    let named: Vec<(u64, &str)> = outside.iter().map(|b| (b["page"].as_u64().unwrap(), b["box"].as_str().unwrap())).collect();
+    assert_eq!(named, [(1, "crop"), (1, "bleed")], "page 2 was not resized; trim and art follow the crop box");
+    let media = [0.0, 0.0, 160.0, 250.0];
+    for b in outside {
+        let r: Vec<f64> = b["rect_user_space"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+        assert!(r[2] > media[2] || r[3] > media[3], "{b} reaches past the new media box");
+    }
+    // The boxes stay as they were, so the same request lists them again.
+    let again = ok(&mut a, "page_set_box", json!({ "doc": doc, "pages": [1], "box": "media", "margins": [0, 0, 0, 0] }));
+    assert_eq!(again["boxes_outside"], r["boxes_outside"]);
+    let r = ok(&mut a, "page_set_box", json!({ "doc": doc, "pages": [3], "box": "media", "margins": [0, 0, 40, 50] }));
+    assert_eq!(r["boxes_outside"], json!([]), "a page with no other boxes has nothing outside");
+    let r = ok(&mut a, "page_set_box", json!({ "doc": doc, "pages": [2], "box": "crop", "margins": [5, 5, 5, 5] }));
+    assert!(r.get("boxes_outside").is_none(), "only a media box change reports");
+}
+
 #[test]
 fn headers_watermarks_and_backgrounds_through_tools() {
     let dir = workdir("marks");

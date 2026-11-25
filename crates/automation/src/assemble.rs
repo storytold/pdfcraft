@@ -138,8 +138,16 @@ impl Automation {
             }
             (None, None) => BoxSpec::Remove,
         };
-        let mut out = self.apply(a, Edit::SetPageBox { pages, which, spec })?;
-        out["page_sizes"] = json!(self.doc(a)?.info.pages.iter().map(|p| [p.width, p.height]).collect::<Vec<_>>());
+        let mut out = self.apply(a, Edit::SetPageBox { pages: pages.clone(), which, spec })?;
+        let doc = self.doc(a)?;
+        out["page_sizes"] = json!(doc.info.pages.iter().map(|p| [p.width, p.height]).collect::<Vec<_>>());
+        if which == PageBox::Media {
+            // A new media box leaves the other boxes as stored; say which ones it no longer contains.
+            out["boxes_outside"] = match doc.boxes_outside_media(&pages) {
+                Ok(list) => json!(list.iter().map(box_outside).collect::<Vec<_>>()),
+                Err(e) => return Err(failed(format!("the media box was set, but its pages could not be read back: {e}"))),
+            };
+        }
         Ok(out)
     }
 
@@ -455,4 +463,18 @@ impl Automation {
         }
         Ok(json!({ "files": files }))
     }
+}
+
+/// One `boxes_outside` entry of `page_set_box`: 1-based page, box name as `box` takes it, and the
+/// stored rectangle in PDF user space.
+fn box_outside(b: &pdfcraft_engine::BoxOutside) -> Value {
+    use pdfcraft_engine::PageBox;
+    let name = match b.which {
+        PageBox::Media => "media",
+        PageBox::Crop => "crop",
+        PageBox::Bleed => "bleed",
+        PageBox::Trim => "trim",
+        PageBox::Art => "art",
+    };
+    json!({ "page": b.page.saturating_add(1), "box": name, "rect_user_space": b.rect })
 }
