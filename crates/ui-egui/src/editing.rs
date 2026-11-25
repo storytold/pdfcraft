@@ -95,14 +95,6 @@ fn select_after_edit(
                 view.session.comments.open_editor(a.page, n, String::new());
             }
         }
-        Edit::DeleteAnnotations { .. } => {
-            // Replies on other pages go with their thread, so no open editor can be trusted to still point at its comment.
-            view.session.comments.clear_selection();
-            view.session.comments.panel.editing = None;
-            if view.session.comments.composer.as_ref().is_some_and(|c| matches!(c.kind, crate::comments::ComposerKind::Edit(_))) {
-                view.session.comments.composer = None;
-            }
-        }
         // Markup on a text selection across pages (marked so when it was made,
         // [`crate::DocView::selection_marks_edit`]; other batches of comments, such as Redact's
         // page range or search, are not) is followed up as one markup is: on the page the
