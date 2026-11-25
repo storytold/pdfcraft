@@ -7,7 +7,7 @@
 use super::*;
 
 /// Draws a 10×1 `/BitsPerComponent 1` source with a one-pixel stroke in column 1 across a
-/// 6-pixel-wide page (1.67:1): as an `/ImageMask` stencil, or as a DeviceGray image.
+/// 6-pixel-wide page (1.67:1): as an `/ImageMask` stencil, or as a DeviceGray image. 
 #[cfg(not(target_arch = "wasm32"))]
 fn draw_one_bit_stroke(mask: bool) -> RenderedPage {
     // Column 1 holds the only ink: for the mask a 0 sample paints (its default decode),
