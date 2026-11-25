@@ -2,7 +2,7 @@
 //! never repaired: a reader intersects each one with the media box, and a changed media box leaves
 //! the other boxes exactly as stored.
 
-use pdfcraft_cos::Document;
+use pdfcraft_cos::{Document, Object};
 
 use crate::boxes::{PageBox, page_boxes, rect_of};
 use crate::{OrganizeError, check, walk};
@@ -24,16 +24,19 @@ pub struct BoxOutside {
 /// The crop box is the page's own or an inherited one. Bleed, trim and art are not inheritable
 /// (§7.7.3.3, the page object's entries; §7.7.3.4), so only the page's own count; an absent one defaults to
 /// the crop box and is covered by the crop entry. A box that is not four finite numbers with a
-/// positive width and height frames nothing and is skipped.
+/// positive width and height frames nothing and is skipped, as is an array with any entry that
+/// isn't a number.
 ///
 /// Containment is exact, with no tolerance, so a box the smallest amount past an edge is listed.
-/// A page given twice is listed twice.
+/// A page given twice is listed twice, next to itself.
 pub fn boxes_outside_media(doc: &Document, pages: &[usize]) -> Result<Vec<BoxOutside>, OrganizeError> {
     let all = walk(doc)?;
     check(pages, all.len())?;
     let effective = page_boxes(doc)?;
+    let mut order = pages.to_vec();
+    order.sort_unstable();
     let mut out = Vec::new();
-    for &i in pages {
+    for i in order {
         let (Some((page, inherited)), Some(boxes)) = (all.get(i), effective.get(i)) else {
             continue;
         };
@@ -44,7 +47,7 @@ pub fn boxes_outside_media(doc: &Document, pages: &[usize]) -> Result<Vec<BoxOut
             let key = which.key();
             let value = own.and_then(|d| d.get(key));
             let value = if which == PageBox::Crop { value.or_else(|| inherited.get(key)) } else { value };
-            rect_of(value, doc)
+            value.filter(|v| four_numbers(v, doc)).and_then(|v| rect_of(Some(v), doc))
         };
         for which in [PageBox::Crop, PageBox::Bleed, PageBox::Trim, PageBox::Art] {
             if let Some(rect) = stored(which).filter(|r| !contains(media, *r)) {
@@ -53,6 +56,12 @@ pub fn boxes_outside_media(doc: &Document, pages: &[usize]) -> Result<Vec<BoxOut
         }
     }
     Ok(out)
+}
+
+/// Whether `o` is an array of exactly four entries that are all numbers, given directly or by
+/// reference. [`rect_of`] alone skips an entry that isn't a number.
+fn four_numbers(o: &Object, doc: &Document) -> bool {
+    doc.resolve(o).as_array().is_some_and(|a| a.len() == 4 && a.iter().all(|x| doc.resolve(x).as_f64().is_some()))
 }
 
 /// Whether normalized rectangle `outer` contains `inner`, edges included.

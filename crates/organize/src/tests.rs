@@ -2772,6 +2772,40 @@ fn a_smaller_media_box_reports_each_box_it_no_longer_contains() {
     assert_eq!(boxes_outside_media(&doc, &[2]), Err(OrganizeError::NoSuchPage(2)));
 }
 
+/// The report is in page order whatever order the pages were asked in; a page asked twice is listed
+/// twice, next to itself.
+#[test]
+fn boxes_outside_are_listed_in_page_order_whatever_the_request_order() {
+    let doc = open(build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 100 100] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /BleedBox [0 0 200 200] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /TrimBox [0 0 300 300] >>".into(),
+        ],
+        "/Root 1 0 R",
+    ));
+    let found: Vec<(usize, PageBox)> = boxes_outside_media(&doc, &[1, 0, 1]).unwrap().iter().map(|b| (b.page, b.which)).collect();
+    assert_eq!(found, [(0, PageBox::Bleed), (1, PageBox::Trim), (1, PageBox::Trim)]);
+}
+
+/// ISO 32000-2 §7.9.5: a rectangle is an array of four numbers. One with an entry that isn't a
+/// number, or with more than four entries, is not a box, so it is never reported.
+#[test]
+fn a_box_with_an_entry_that_is_not_a_number_is_never_reported() {
+    let doc = open(build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /CropBox [0 0 /Bad 200 200] /BleedBox [0 0 200 200 7] /TrimBox [0 0 4 0 R 200] >>".into(),
+            "300".into(),
+        ],
+        "/Root 1 0 R",
+    ));
+    let found: Vec<(PageBox, [f64; 4])> = boxes_outside_media(&doc, &[0]).unwrap().iter().map(|b| (b.which, b.rect)).collect();
+    assert_eq!(found, [(PageBox::Trim, [0.0, 0.0, 300.0, 200.0])], "an indirect number still counts");
+}
+
 #[test]
 fn page_boxes_remove_uninherited_crop_clip_disjoint_boxes_and_reject_overflow() {
     let mut doc = open(fixture());
