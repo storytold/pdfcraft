@@ -12,7 +12,7 @@
 //! a resource is not asked: a resource a page holds is one it may paint with. Blend modes are read
 //! from the same graphics states, so private data (`/PieceInfo`) is never taken for one.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object};
@@ -148,17 +148,18 @@ pub(crate) fn page_draws_transparently(doc: &Document, page: &Dict) -> bool {
     walk.found.paints_transparently
 }
 
-/// Every name `contents` gives as an operand, which picks the entries of `resources`
-/// ([`CATEGORIES`]) it can draw (an empty set when `resources` has none): a page's `/Contents` or a form XObject, decoded within `budget` and joined with a space as
-/// readers join them; `None` when a stream of it can't be read or is damaged partway. A name
-/// counts whatever operator takes it, so an entry is left out only when no operand names it.
-fn names_drawn(doc: &Document, resources: Option<&Object>, contents: Option<&Object>, budget: &mut DecodeBudget) -> Option<HashSet<Vec<u8>>> {
+/// Every name operand of `contents` (a page's `/Contents` or a form XObject), decoded within
+/// `budget` and joined with a space as readers join them; empty when `resources` has no
+/// [`CATEGORIES`] entry to pick. `None` when a stream of it can't be read or is damaged partway.
+/// A name counts whatever operator takes it, so an entry is left out only when no operand names
+/// it. Ordered, so the entries are read in the same order on every run.
+fn names_drawn(doc: &Document, resources: Option<&Object>, contents: Option<&Object>, budget: &mut DecodeBudget) -> Option<BTreeSet<Vec<u8>>> {
     let res = resources.map(|r| held(doc, r));
     let has_entries = CATEGORIES.iter().any(|category| {
         let entries = res.as_deref().and_then(Object::as_dict).and_then(|r| r.get(category)).map(|d| held(doc, d));
         entries.as_deref().and_then(Object::as_dict).is_some_and(|d| d.iter().next().is_some())
     });
-    let mut named = HashSet::new();
+    let mut named = BTreeSet::new();
     let Some(contents) = contents else { return Some(named) };
     if !has_entries {
         return Some(named);
@@ -346,7 +347,7 @@ impl Walk<'_> {
     /// The entries of resource dictionary `r` that `named` holds, read in place, not through
     /// `visit`: what one content names of a shared dictionary is not what the dictionary holds, so
     /// it must not go in [`Shared`] under it.
-    fn resources_named(&mut self, r: &Object, depth: usize, named: &HashSet<Vec<u8>>) {
+    fn resources_named(&mut self, r: &Object, depth: usize, named: &BTreeSet<Vec<u8>>) {
         if self.visits >= MAX_VISITS || depth > MAX_DEPTH {
             self.cuts = self.cuts.saturating_add(1);
             return;
@@ -356,7 +357,7 @@ impl Walk<'_> {
     }
 
     /// A resource dictionary's entries, or with `only` those of them whose key it holds.
-    fn resources_within(&mut self, r: &Object, depth: usize, only: Option<&HashSet<Vec<u8>>>) {
+    fn resources_within(&mut self, r: &Object, depth: usize, only: Option<&BTreeSet<Vec<u8>>>) {
         let doc = self.doc;
         let res = held(doc, r);
         let Some(res) = res.as_dict() else { return };
