@@ -166,6 +166,7 @@ impl PdfCraftApp {
             print_printers: json_text(&crate::print_ui::setups_to_json(&d.setups)),
             duplex: Some(print_names::duplex(d.duplex).to_string()),
             grayscale: Some(d.grayscale),
+            eco_mode: Some(d.eco_mode),
             collate: Some(d.collate),
             custom_scale: Some(d.custom_scale),
             size: Some(print_names::size_mode(d.size).to_string()),
@@ -429,12 +430,19 @@ impl PdfCraftApp {
         // or a scale outside the dialog's range keeps the default. The scale is applied before the
         // size mode, which carries it.
         let draft = &mut self.print_draft;
+        // Eco mode first, so grayscale and duplex choices saved explicitly win over it.
+        if p.eco_mode == Some(true) {
+            draft.set_eco_mode(true);
+        }
         if let Some(duplex) = p.duplex.as_deref().and_then(print_names::parse_duplex) {
             draft.duplex = duplex;
         }
         if let Some(on) = p.grayscale {
             draft.grayscale = on;
         }
+        // Eco mode is grayscale with long-edge two-sided printing, as the dialog keeps it: settings
+        // saved before Eco mode existed have no key for it, but may already hold both choices.
+        draft.sync_eco_mode();
         if let Some(on) = p.collate {
             draft.collate = on;
         }

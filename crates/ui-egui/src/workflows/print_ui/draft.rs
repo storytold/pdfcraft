@@ -40,6 +40,8 @@ pub struct PrintDraft {
     pub copies: u32,
     pub collate: bool,
     pub grayscale: bool,
+    /// Eco print mode: quickly enables grayscale and duplex (two-sided) printing to save ink and paper.
+    pub eco_mode: bool,
     /// `None` = the printer's own default (its Properties), as Acrobat does.
     pub duplex: Option<spool::Duplex>,
     pub which: Which,
@@ -124,6 +126,7 @@ impl Default for PrintDraft {
             copies: 1,
             collate: true,
             grayscale: false,
+            eco_mode: false,
             duplex: None,
             which: Which::All,
             range: String::new(),
@@ -394,6 +397,28 @@ impl PrintDraft {
         setups::record(&mut self.setups, &printer, setup);
     }
 
+    /// Whether grayscale and long-edge two-sided printing are both on.
+    pub(crate) fn is_eco(&self) -> bool {
+        self.grayscale && self.duplex == Some(spool::Duplex::LongEdge)
+    }
+
+    /// Keeps `eco_mode` in step with grayscale and long-edge two-sided printing.
+    pub(crate) fn sync_eco_mode(&mut self) {
+        self.eco_mode = self.is_eco();
+    }
+
+    /// Turns Eco mode on (grayscale and long-edge two-sided) or off (colour and printer default).
+    pub(crate) fn set_eco_mode(&mut self, on: bool) {
+        self.eco_mode = on;
+        if on {
+            self.grayscale = true;
+            self.duplex = Some(spool::Duplex::LongEdge);
+        } else {
+            self.grayscale = false;
+            self.duplex = None;
+        }
+    }
+
     /// Bring back what the chosen printer was last printed with, when it has been printed to
     /// (#2001); a printer never printed to keeps the dialog's choices. While Label holds the
     /// label stock, the printer's paper is what leaving Label gives back. A custom paper taken
@@ -404,6 +429,8 @@ impl PrintDraft {
         self.size = setup.size;
         self.custom_scale = setup.custom_scale;
         self.duplex = setup.duplex;
+        // Eco mode is grayscale with long-edge two-sided printing, as the dialog's own toggles keep it.
+        self.sync_eco_mode();
         if let Some(paper) = self.paper_index(&setup.paper) {
             if self.handling == Handling::Label {
                 self.paper_before_label = Some(paper);

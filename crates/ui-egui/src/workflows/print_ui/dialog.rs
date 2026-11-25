@@ -117,6 +117,7 @@ impl PdfCraftApp {
         if changed {
             self.print_draft.apply_setup();
         }
+        self.print_draft.sync_eco_mode();
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(p) = printer {
             self.read_papers_in_background(p);
@@ -221,6 +222,7 @@ impl PdfCraftApp {
         d.collate = settings.collate;
         d.grayscale = settings.grayscale;
         d.duplex = duplex_from_ui(settings.duplex);
+        d.sync_eco_mode();
         d.printer = match &settings.destination {
             Destination::Printer(name) if !name.is_empty() => Some(name.clone()),
             _ => None,
@@ -286,7 +288,7 @@ impl PdfCraftApp {
         let d = &self.print_draft;
         let new_fields = body::fields_from_draft(d);
         let sections = body::build(d, &sizes, self.units, d.area.is_some(), no_printers);
-        let (duplex, booklet) = (duplex_to_ui(d.duplex), d.handling == Handling::Booklet);
+        let (grayscale, duplex, booklet) = (d.grayscale, duplex_to_ui(d.duplex), d.handling == Handling::Booklet);
 
         let Some(dialog) = self.dialogs.get_mut::<HostedPrint>() else { return };
         let rows = dialog.fields_mut();
@@ -295,7 +297,8 @@ impl PdfCraftApp {
                 rows.set(key, value.clone());
             }
         }
-        // `apply_setup` can change two-sided; the dialog's other settings were just read from it.
+        // Eco mode and `apply_setup` can change grayscale and two-sided; the dialog's other settings were just read from it.
+        dialog.state_mut().settings.grayscale = grayscale;
         dialog.state_mut().settings.duplex = duplex;
         dialog.set_sections(sections);
         dialog.set_sheet(sheet);
@@ -320,10 +323,12 @@ impl PdfCraftApp {
     pub(super) fn show_chosen_printer(&mut self) {
         let Some(printer) = self.print_draft.printer.clone() else { return };
         let duplex = duplex_to_ui(self.print_draft.duplex);
+        let eco_mode = self.print_draft.eco_mode;
         let Some(dialog) = self.dialogs.get_mut::<HostedPrint>() else { return };
         let settings = &mut dialog.state_mut().settings;
         settings.destination = Destination::Printer(printer);
         settings.duplex = duplex;
+        dialog.fields_mut().set("eco_mode", eco_mode);
     }
 
     fn answer_print(&mut self, answer: Result<(), Label>) {

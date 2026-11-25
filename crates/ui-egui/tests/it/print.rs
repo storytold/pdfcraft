@@ -1484,6 +1484,150 @@ fn a_booklet_decides_two_sided_itself() {
     assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::LongEdge), "back to the choice");
 }
 
+#[test]
+fn eco_mode_enables_grayscale_and_duplex_and_persists() {
+    use craft::print::ui::Duplex as UiDuplex;
+    use pdfcraft_engine::print::spool::Duplex;
+    let mut h = harness();
+    list_printers(&mut h, &["Office"]);
+    h.open();
+    h.settle();
+
+    // Initial state: eco_mode is false, grayscale is false, duplex is None.
+    assert!(!h.state().print_draft.eco_mode);
+    assert!(!h.state().print_draft.grayscale);
+    assert_eq!(h.state().print_draft.duplex, None);
+    assert!(!h.hosted().state().settings.grayscale);
+    assert_eq!(h.hosted().state().settings.duplex, None);
+
+    // Click Eco mode checkbox in the dialog.
+    h.get_by_role_and_label(Role::CheckBox, "Eco mode (Grayscale, two-sided)").click();
+    h.run_steps(2);
+
+    assert!(h.state().print_draft.eco_mode);
+    assert!(h.state().print_draft.grayscale);
+    assert_eq!(h.state().print_draft.duplex, Some(Duplex::LongEdge));
+    assert!(h.hosted().state().settings.grayscale);
+    assert_eq!(h.hosted().state().settings.duplex, Some(UiDuplex::LongEdge));
+    assert_eq!(h.listed()["eco_mode"], json!(true));
+
+    // Persist and verify settings snapshot and JSON serialization.
+    let snapshot = h.state().settings_snapshot();
+    assert_eq!(snapshot.print.eco_mode, Some(true));
+    let saved = saved_json(h.state());
+    let json: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(json["print"]["eco_mode"], true);
+
+    // Restore into a fresh app and restarted dialog and verify settings are applied.
+    let mut app = crate::control::new_app();
+    restore(&mut app, &saved);
+    assert!(app.print_draft.eco_mode);
+    assert!(app.print_draft.grayscale);
+    assert_eq!(app.print_draft.duplex, Some(Duplex::LongEdge));
+
+    let mut restarted = harness_restarted(snapshot);
+    list_printers(&mut restarted, &["Office"]);
+    restarted.open();
+    restarted.settle();
+    assert!(restarted.state().print_draft.eco_mode);
+    assert!(restarted.state().print_draft.grayscale);
+    assert_eq!(restarted.state().print_draft.duplex, Some(Duplex::LongEdge));
+    assert!(restarted.hosted().state().settings.grayscale);
+    assert_eq!(restarted.hosted().state().settings.duplex, Some(UiDuplex::LongEdge));
+    assert_eq!(restarted.listed()["eco_mode"], json!(true));
+
+    // In the dialog, unticking grayscale unsets eco_mode.
+    h.get_by_role_and_label(Role::CheckBox, "Print in grayscale").click();
+    h.run_steps(2);
+    assert!(!h.state().print_draft.grayscale);
+    assert!(!h.state().print_draft.eco_mode);
+    assert_eq!(h.listed()["eco_mode"], json!(false));
+
+    // Clicking Eco mode again re-enables both.
+    h.get_by_role_and_label(Role::CheckBox, "Eco mode (Grayscale, two-sided)").click();
+    h.run_steps(2);
+    assert!(h.state().print_draft.eco_mode);
+    assert!(h.state().print_draft.grayscale);
+    assert_eq!(h.state().print_draft.duplex, Some(Duplex::LongEdge));
+    assert!(h.hosted().state().settings.grayscale);
+    assert_eq!(h.hosted().state().settings.duplex, Some(UiDuplex::LongEdge));
+
+    // Changing Two-sided away from Long edge unsets eco_mode while keeping grayscale.
+    h.set("duplex", json!("off"));
+    assert!(!h.state().print_draft.eco_mode);
+    assert!(h.state().print_draft.grayscale);
+    assert_eq!(h.state().print_draft.duplex, Some(Duplex::Off));
+    assert_eq!(h.listed()["eco_mode"], json!(false));
+
+    // Selecting Long edge again re-synchronizes eco_mode back to true.
+    h.set("duplex", json!("long_edge"));
+    assert!(h.state().print_draft.eco_mode);
+    assert!(h.state().print_draft.grayscale);
+    assert_eq!(h.state().print_draft.duplex, Some(Duplex::LongEdge));
+    assert_eq!(h.listed()["eco_mode"], json!(true));
+
+    // Unticking Eco mode resets grayscale and duplex.
+    h.get_by_role_and_label(Role::CheckBox, "Eco mode (Grayscale, two-sided)").click();
+    h.run_steps(2);
+    assert!(!h.state().print_draft.eco_mode);
+    assert!(!h.state().print_draft.grayscale);
+    assert_eq!(h.state().print_draft.duplex, None);
+    assert!(!h.hosted().state().settings.grayscale);
+    assert_eq!(h.hosted().state().settings.duplex, None);
+    assert_eq!(h.listed()["eco_mode"], json!(false));
+
+    // Driving Eco mode and grayscale through automation keeps them in step too.
+    h.set("eco_mode", json!(true));
+    assert!(h.state().print_draft.eco_mode);
+    assert!(h.state().print_draft.grayscale);
+    assert_eq!(h.state().print_draft.duplex, Some(Duplex::LongEdge));
+    h.set("grayscale", json!(false));
+    assert!(!h.state().print_draft.eco_mode);
+    h.set("grayscale", json!(true));
+    assert!(h.state().print_draft.eco_mode);
+    h.set("eco_mode", json!(false));
+    assert!(!h.state().print_draft.eco_mode);
+    assert!(!h.state().print_draft.grayscale);
+    assert_eq!(h.state().print_draft.duplex, None);
+}
+
+/// Leaving Eco mode on restore keeps the grayscale and duplex choices that were saved explicitly (#4843).
+#[test]
+fn restoring_without_eco_mode_keeps_saved_grayscale_and_duplex() {
+    use pdfcraft_engine::print::spool::Duplex;
+    let mut eco_app = crate::control::new_app();
+    eco_app.print_draft.eco_mode = true;
+    eco_app.print_draft.grayscale = true;
+    eco_app.print_draft.duplex = Some(Duplex::LongEdge);
+    let mut saved = crate::control::new_app();
+    saved.print_draft.grayscale = true;
+    saved.print_draft.duplex = Some(Duplex::ShortEdge);
+    eco_app.apply_settings(&saved.settings_snapshot());
+    assert!(!eco_app.print_draft.eco_mode);
+    assert!(eco_app.print_draft.grayscale, "the saved grayscale choice is kept");
+    assert_eq!(eco_app.print_draft.duplex, Some(Duplex::ShortEdge), "and the saved duplex choice");
+}
+
+/// Settings saved before Eco mode existed have no `eco_mode` key: grayscale with long-edge
+/// two-sided printing restores as Eco mode on, and any other pair as off (#4843).
+#[test]
+fn settings_without_an_eco_key_restore_eco_mode_from_grayscale_and_duplex() {
+    use pdfcraft_engine::print::spool::Duplex;
+    let older = |grayscale: bool, duplex: Option<Duplex>| {
+        let mut saved = crate::control::new_app();
+        saved.print_draft.grayscale = grayscale;
+        saved.print_draft.duplex = duplex;
+        let mut json: serde_json::Value = serde_json::from_str(&saved_json(&saved)).unwrap();
+        json["print"].as_object_mut().unwrap().remove("eco_mode").expect("settings_snapshot writes the eco key");
+        let mut app = crate::control::new_app();
+        restore(&mut app, &json.to_string());
+        (app.print_draft.eco_mode, app.print_draft.grayscale, app.print_draft.duplex)
+    };
+    assert_eq!(older(true, Some(Duplex::LongEdge)), (true, true, Some(Duplex::LongEdge)), "both eco choices restore as Eco mode");
+    assert_eq!(older(true, Some(Duplex::ShortEdge)), (false, true, Some(Duplex::ShortEdge)));
+    assert_eq!(older(false, Some(Duplex::LongEdge)), (false, false, Some(Duplex::LongEdge)));
+}
+
 /// #5861: The print dialog supports all papers detected from the printer driver, matches custom
 /// page sizes against them, and imposes on the chosen dimensions.
 #[test]
@@ -1739,4 +1883,45 @@ fn each_printer_keeps_what_it_last_printed_with_across_a_restart() {
     gone.open();
     gone.settle();
     assert_eq!(setup(&gone), office);
+}
+
+/// Choosing a printer applies its saved two-sided choice, and Eco mode follows it: a setup that
+/// prints one-sided turns Eco off, one with long-edge two-sided printing turns it back on (#4843).
+#[test]
+fn a_printer_setup_s_two_sided_choice_updates_eco_mode() {
+    use pdfcraft_engine::print::SizeMode;
+    use pdfcraft_engine::print::spool::Duplex;
+    use pdfcraft_ui_egui::PrinterSetup;
+    let mut app = crate::control::new_app();
+    let d = &mut app.print_draft;
+    d.eco_mode = true;
+    d.grayscale = true;
+    d.duplex = Some(Duplex::LongEdge);
+    d.printer = Some("Office".into());
+    d.setups = vec![("Office".into(), PrinterSetup { paper: "A4".into(), size: SizeMode::Fit, custom_scale: 100.0, duplex: None })];
+    d.apply_setup();
+    assert!(!d.eco_mode, "a one-sided setup is not Eco mode");
+    d.setups = vec![("Office".into(), PrinterSetup { paper: "A4".into(), size: SizeMode::Fit, custom_scale: 100.0, duplex: Some(Duplex::LongEdge) })];
+    d.apply_setup();
+    assert!(d.eco_mode, "grayscale with long-edge two-sided printing is Eco mode again");
+
+    let mut h = harness();
+    list_printers(&mut h, &["Duplexer", "Simplexer"]);
+    h.state_mut().print_draft.setups = vec![
+        ("Duplexer".into(), PrinterSetup { paper: "A4".into(), size: SizeMode::Fit, custom_scale: 100.0, duplex: Some(Duplex::LongEdge) }),
+        ("Simplexer".into(), PrinterSetup { paper: "A4".into(), size: SizeMode::Fit, custom_scale: 100.0, duplex: None }),
+    ];
+    h.open();
+    h.settle();
+    h.set("eco_mode", json!(true));
+    assert!(h.state().print_draft.eco_mode);
+    h.pick(Some("Simplexer"));
+    h.settle();
+    assert!(!h.state().print_draft.eco_mode, "switching to a one-sided printer setup clears Eco mode");
+    assert_eq!(h.listed()["eco_mode"], json!(false));
+    assert!(h.state().print_draft.grayscale, "grayscale stays on");
+    h.pick(Some("Duplexer"));
+    h.settle();
+    assert!(h.state().print_draft.eco_mode, "switching back to a long-edge setup restores Eco mode");
+    assert_eq!(h.listed()["eco_mode"], json!(true));
 }
