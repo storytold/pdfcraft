@@ -496,7 +496,10 @@ pub(crate) fn positioned(page: &Page) -> bool {
 
 /// Whether `r` covers the whole displayed page, as a scan beneath an OCR text layer does.
 fn covers_page(r: [f64; 4], page: &Page) -> bool {
-    r[0] <= 0.0 && r[1] <= 0.0 && r[2] >= page.width && r[3] >= page.height
+    // A scan placed by a producer rarely lands on the exact MediaBox: allow a few points of
+    // inset/overshoot (72-dpi scans sit ~1-2 pt inside it) before calling the picture an overlay.
+    let tolerance = 3.0;
+    r[0] <= tolerance && r[1] <= tolerance && r[2] >= page.width - tolerance && r[3] >= page.height - tolerance
 }
 
 /// Whether two [x0, y0, x1, y1] boxes share more than a hairline (0.5 pt each way); boxes that
