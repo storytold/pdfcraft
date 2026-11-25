@@ -7451,6 +7451,9 @@ fn print_stripping_refuses_to_move_visible_text_after_hidden_text() {
         b"BT /F1 10 Tf 10 100 Td /OC /H BDC (secret) Tj EMC (shown) Tj ET".as_slice(),
         b"BT /F1 10 Tf 10 100 Td /OC /H BDC (secret) Tj EMC 10 80 Tm (shown) Tj ET",
         b"BT /F1 10 Tf 10 100 Td /OC /H BDC [(secret)] TJ EMC -12 Td (shown) Tj ET",
+        // `Q` restores the text matrices the hidden string advanced, undoing the line move.
+        b"BT /F1 10 Tf 10 100 Td /OC /H BDC (secret) Tj EMC q 0 -12 Td Q (shown) Tj ET",
+        b"BT /F1 10 Tf 10 100 Td /OC /H BDC (secret) Tj EMC q q 0 -12 Td Q 1 0 0 1 0 0 Tm Q (shown) Tj ET",
     ] {
         let mut doc = layered_page(moved);
         assert!(matches!(strip_off_layer_content(&mut doc), Err(RedactError::HiddenLayerAdvance(1))), "{}", String::from_utf8_lossy(moved));
@@ -7465,6 +7468,8 @@ fn print_stripping_refuses_to_move_visible_text_after_hidden_text() {
         b"BT /F1 10 Tf 12 TL 10 100 Td /OC /H BDC (secret) Tj EMC (shown) ' ET",
         b"BT /F1 10 Tf 12 TL 10 100 Td /OC /H BDC (secret) Tj EMC 0 0 (shown) \" ET",
         b"BT /F1 10 Tf 12 TL 10 100 Td /OC /H BDC (secret) Tj 0 -12 Td EMC (shown) Tj ET",
+        // A hidden advance inside `q`/`Q` is undone by the `Q`.
+        b"BT /F1 10 Tf 10 100 Td q /OC /H BDC (secret) Tj EMC Q (shown) Tj ET",
     ] {
         let mut doc = layered_page(safe);
         assert_eq!(strip_off_layer_content(&mut doc).unwrap(), 1, "{}", String::from_utf8_lossy(safe));

@@ -238,8 +238,22 @@ pub(super) fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Ve
     let mut removed = 0;
     // Printing: a hidden block left out a text advance, and the text object is still open.
     let mut advance_dropped = false;
+    // The flag as it stood at each open `q`. The interpreter saves the text matrices with the
+    // graphics state (`Walk::graphics_state`), so the matching `Q` brings the flag back too:
+    // a line move between them is undone, and a hidden advance between them is undone as well.
+    // One entry per `q` operator already parsed, so it grows no faster than `ops`.
+    let mut saved_dropped: Vec<bool> = Vec::new();
     for op in ops {
         let hidden_now = stack.last().copied().unwrap_or(false);
+        match op.op.as_slice() {
+            b"q" => saved_dropped.push(advance_dropped),
+            b"Q" => {
+                if let Some(dropped) = saved_dropped.pop() {
+                    advance_dropped = dropped;
+                }
+            }
+            _ => {}
+        }
         match op.op.as_slice() {
             b"BDC" | b"BMC" => {
                 let this = op.is("BDC")
