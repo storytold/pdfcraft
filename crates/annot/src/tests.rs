@@ -3443,6 +3443,56 @@ fn text_box_alignment_updates_the_appearance_and_preserves_referenced_contents()
 }
 
 #[test]
+fn text_box_alignment_still_works_after_resizing_the_text() {
+    let plain = r"( First\rSecond\r\n\r\nLast\n )";
+    for contents in [plain, "5 0 R"] {
+        let text_box = format!("<< /Type /Annot /Subtype /FreeText /Rect [20 20 180 80] /DA (0 g /Helv 12 Tf) /Contents {contents} >>");
+        let mut doc = document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R] >>",
+            text_box.as_bytes(),
+            plain.as_bytes(),
+        ]);
+        let reference = ObjRef::new(4, 0);
+        let before = doc.get(reference).as_dict().unwrap().get(b"Contents").cloned();
+
+        set_font_size(&mut doc, 0, 0, 18.0, &Meta::default()).unwrap();
+        set_text_alignment(&mut doc, 0, 0, 2, &Meta::default()).unwrap();
+
+        let after = doc.get(reference);
+        let after = after.as_dict().unwrap();
+        let rich = after.get(b"RC").and_then(Object::as_string).unwrap().to_text();
+        let xml = roxmltree::Document::parse(&rich).unwrap();
+        let paragraphs: Vec<_> = xml.root_element().children().filter(|node| node.is_element()).map(|node| node.text().unwrap_or("")).collect();
+        assert_eq!(paragraphs, [" First", "Second", "", "Last", " "]);
+        assert_eq!(after.get(b"Contents"), before.as_ref());
+        assert_eq!(props(&doc, 0, 0).unwrap().text_alignment, Some(2));
+    }
+}
+
+#[test]
+fn text_box_alignment_keeps_css_encoded_in_an_xml_attribute() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /FreeText /Rect [20 20 180 80] /DA (0 g /Helv 12 Tf) /Contents (Keep this text) /RC 5 0 R >>",
+        br#"(<body style='text-align:&apos;left&apos;;font-size:12p&#116;'><p>Keep this text</p></body>)"#,
+    ]);
+    for (alignment, name) in [(2, "right"), (1, "center")] {
+        set_text_alignment(&mut doc, 0, 0, alignment, &Meta::default()).unwrap();
+        let annotation = doc.get(ObjRef::new(4, 0));
+        let rich = annotation.as_dict().unwrap().get(b"RC").and_then(Object::as_string).unwrap().to_text();
+        let xml = roxmltree::Document::parse(&rich).unwrap();
+        let style = xml.root_element().attribute("style").unwrap();
+        assert!(style.split(';').any(|rule| rule == "font-size:12pt"), "{style}");
+        assert!(style.ends_with(&format!("text-align:{name} !important")), "{style}");
+        assert_eq!(props(&doc, 0, 0).unwrap().text_alignment, Some(alignment));
+    }
+}
+
+#[test]
 fn alignment_leaves_an_inline_formatted_text_box_untouched() {
     let mut doc = document_of(&[
         b"<< /Type /Catalog /Pages 2 0 R >>",

@@ -1478,6 +1478,38 @@ fn comment_properties_updates_a_text_box_alignment() {
     assert_eq!(doc.info.annotations[0].contents.as_deref(), Some("Keep this text"));
 }
 
+#[test]
+fn comment_properties_aligns_a_borderless_oval_only_after_converting_it() {
+    use pdfcraft_engine::{BorderShape, Edit, NewAnnotation, Shape, Style};
+
+    let mut h = harness(|_| {});
+    let shape = Shape::TextBox { rect: [40.0, 120.0, 200.0, 160.0], font_size: 12.0 };
+    let mut style = Style::default_for(&shape);
+    style.width = 0.0;
+    style.border_shape = BorderShape::Oval;
+    let ctx = h.ctx.clone();
+    assert!(
+        h.state_mut().apply_edit(
+            &ctx,
+            Edit::AddAnnotation(NewAnnotation { page: 0, shape, style, contents: "Keep this text".into(), author: "Tester".into() })
+        )
+    );
+    h.run_steps(2);
+    open_comment_props(&mut h, 0, 0);
+    h.run_steps(2);
+    assert!(h.get_by_role_and_label(Role::ComboBox, "Text alignment").accesskit_node().is_disabled());
+
+    set_prop(&mut h, "border_shape", FieldValue::Text(BorderShape::Rectangle.name().into()));
+    assert!(!h.get_by_role_and_label(Role::ComboBox, "Text alignment").accesskit_node().is_disabled());
+    set_prop(&mut h, "text_alignment", FieldValue::Text("right".into()));
+    accept_props(&mut h);
+
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    let props = doc.comment_props(0, 0).unwrap();
+    assert_eq!((props.width, props.border_shape, props.text_alignment), (Some(0.0), Some(BorderShape::Rectangle), Some(2)));
+}
+
 /// Thickness 0 in Comment Properties takes a circle away with the line, as Border ▸ None does on
 /// the toolbar, and a default made from it draws no circle either.
 #[test]
