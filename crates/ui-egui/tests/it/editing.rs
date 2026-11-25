@@ -492,6 +492,25 @@ fn reversing_selected_pages_keeps_a_draft_note_on_a_page_that_stays() {
 }
 
 #[test]
+fn deleting_a_page_cancels_a_draft_note_on_a_later_page_that_moves_up() {
+    let mut h = organize(4);
+    h.get_by_label("Page 1").click();
+    h.run_steps(2);
+    // Page 4 moves up to page 3 once page 1 goes, so its draft must not land on another page.
+    h.state_mut().views[0].session.comments.composer = Some(pdfcraft_ui_egui::comments::Composer {
+        page: 3,
+        at: [100.0, 100.0],
+        kind: pdfcraft_ui_egui::comments::ComposerKind::Note,
+        text: "Draft".into(),
+        focus: false,
+    });
+    assert!(h.execute("page.delete"));
+    h.run_steps(3);
+    assert_eq!(page_texts(h.state()), ["Page 2", "Page 3", "Page 4"]);
+    assert!(h.state().views[0].session.comments.composer.is_none());
+}
+
+#[test]
 fn reverse_pages_from_organize_panel_reverses_and_preserves_selection() {
     let mut h = organize(3);
     h.get_by_label("Reverse pages").click();

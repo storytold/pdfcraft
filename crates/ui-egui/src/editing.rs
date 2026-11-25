@@ -68,8 +68,10 @@ fn select_after_edit(
             view.select_pages(&[(*at).min(info.pages.len() - 1)]);
         }
         Edit::DeletePages { pages } => {
-            // Only the reversed pages move; the others keep their drafts.
-            clear_moved_page_comment_state(view, |page| pages.contains(&page));
+            // Every page after the first deleted one moves up, so its draft would land elsewhere.
+            if let Some(&first) = pages.iter().min() {
+                clear_shifted_page_comment_state(view, first);
+            }
             view.select_pages(&[]);
         }
         Edit::ReversePages { pages } => {
