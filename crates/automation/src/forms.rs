@@ -901,8 +901,12 @@ impl Automation {
         let bytes = crate::read_input(&path)?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let before = (self.doc(a)?.info.annotations.len(), self.doc(a)?.form.iter().filter(|f| !f.value.is_empty()).count());
+        let repairs_before = self.doc(a)?.repair_log().len();
         let mut out = self.apply(a, Edit::ImportData { name, bytes: std::sync::Arc::new(bytes) })?;
         let doc = self.doc(a)?;
+        // What this import added to the repair log (values the form refused, comments taken
+        // without their appearance): the log is otherwise only in `doc_info`.
+        out["import_repairs"] = json!(doc.repair_log().into_iter().skip(repairs_before).collect::<Vec<_>>());
         out["comments"] = json!(doc.info.annotations.len() as i64 - before.0 as i64);
         out["filled_fields"] = json!(doc.form.iter().filter(|f| !f.value.is_empty()).count());
         Ok(out)

@@ -79,13 +79,14 @@ fn fixture() -> Vec<u8> {
 }
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("outer.pdf", None, fixture()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("panel", "none").unwrap();
-        app.set_option("zoom", "100").unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.open_bytes(&egui::Context::default(), "outer.pdf", None, fixture()).unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
         app
     });
     h.run_steps(8);
@@ -106,7 +107,7 @@ fn click(h: &mut Harness<'static, PdfCraftApp>, y: f32) {
 }
 
 fn toast(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
-    h.state().toast.clone().map(|t| t.0)
+    crate::support::shown_notice(h)
 }
 
 fn tab_name(h: &Harness<'static, PdfCraftApp>, i: usize) -> Option<String> {
@@ -123,7 +124,7 @@ fn an_embedded_go_to_link_opens_the_attached_pdf_at_its_destination() {
     assert_eq!(h.state().active, Some(1));
     assert_eq!(tab_name(&h, 1).as_deref(), Some("inner.pdf"));
     assert_eq!(h.state().session.get(h.state().views[1].id).unwrap().info.pages.len(), 3);
-    assert_eq!(h.state().views[1].current, 2, "the destination's page");
+    assert_eq!(h.state().views[1].current(), 2, "the destination's page");
     assert_eq!(h.state().session.get(h.state().views[1].id).unwrap().path, None, "opened from the document, not from a file");
 }
 
@@ -133,7 +134,7 @@ fn an_embedded_go_to_link_opens_a_file_attachment_annotations_pdf() {
     let mut h = harness();
     click(&mut h, BY_ANNOTATION);
     assert_eq!(h.state().views.len(), 2, "{:?}", toast(&h));
-    assert_eq!(h.state().views[1].current, 1);
+    assert_eq!(h.state().views[1].current(), 1);
 }
 
 /// The parent, a file that isn't attached, and a file that isn't a PDF open nothing and say so.

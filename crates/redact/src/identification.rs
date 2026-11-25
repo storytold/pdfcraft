@@ -183,19 +183,23 @@ fn read(text: &str) -> Option<Found> {
     if text.bytes().filter(|&b| b == b'=').count() > MAX_EQUALS {
         return None;
     }
-    let options = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
-    let xml = roxmltree::Document::parse_with_options(text, options).ok()?;
+    const CANON: craft_xml::Canonical<'_> = craft_xml::Canonical::new(&[("pdfaid", PDFA_ID), ("pdfuaid", PDFUA_ID)]);
+    let mut opts =
+        craft_xml::Options::canonical(&CANON).strict().with_limits(craft_xml::Limits { max_nodes: MAX_NODES as usize, ..Default::default() });
+    opts.doctype = craft_xml::Doctype::Reject;
+    let xml = opts.parse(text.as_bytes()).ok()?;
     let mut found = Found::default();
-    for node in xml.descendants().filter(roxmltree::Node::is_element) {
-        for (ns, id) in [(PDFA_ID, &mut found.pdfa), (PDFUA_ID, &mut found.pdfua)] {
+    for node in std::iter::once(&xml).chain(xml.descendants()) {
+        for (prefix, id) in [("pdfaid", &mut found.pdfa), ("pdfuaid", &mut found.pdfua)] {
             for (local, slot) in [("part", &mut id.part), ("conformance", &mut id.conformance), ("amd", &mut id.amd), ("rev", &mut id.rev)] {
                 if slot.is_some() {
                     continue;
                 }
-                if let Some(v) = node.attribute((ns, local)) {
+                let qname = format!("{prefix}:{local}");
+                if let Some(v) = node.attr(&qname) {
                     *slot = Some(v.trim().to_string());
-                } else if node.tag_name().namespace() == Some(ns) && node.tag_name().name() == local {
-                    *slot = Some(node.text().unwrap_or("").trim().to_string());
+                } else if node.name == qname {
+                    *slot = Some(node.text().trim().to_string());
                 }
             }
         }

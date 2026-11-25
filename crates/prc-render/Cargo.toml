@@ -11,7 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-pdfcraft-prc.workspace = true
+craft-prc.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
