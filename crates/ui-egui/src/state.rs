@@ -105,6 +105,7 @@ pub struct DeletePagesDraft {
     pub generation: u64,
     pub pages: Vec<usize>,
 }
+
 /// Page Properties: the document and pages it applies to (0-based), the document's edit
 /// generation when the dialog opened, and the pages' tab order as they have it (`None` when they
 /// differ). The order chosen is the hosted dialog's value.

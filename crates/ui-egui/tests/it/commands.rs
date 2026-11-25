@@ -451,6 +451,16 @@ fn escape_leaves_full_screen(h: &mut Harness<'static, PdfCraftApp>, _c: &Control
     assert!(!h.state().full_screen(), "Escape leaves full screen");
 }
 
+fn escape_leaves_full_screen(h: &mut Harness<'static, PdfCraftApp>, _c: &ControlClient) {
+    assert!(!h.state().full_screen());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+    h.run_steps(2);
+    assert!(h.state().full_screen(), "⌘L / Ctrl+L enters full screen");
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(!h.state().full_screen(), "Escape leaves full screen");
+}
+
 /// Check that choosing Edit ▸ Pages ▸ Delete pages in the menu bar asks, and the confirmation
 /// deletes the page once.
 #[test]
