@@ -1,21 +1,55 @@
 //! Redact a PDF in the real shell (egui_kittest): the Redact tool, Redact pages, the apply
 //! confirmation and Clear all.
 
+use crate::support::AppHarness as _;
+use std::sync::Arc;
+
+use craft::host::{Picked, ScriptedFiles};
 use egui::Pos2;
+use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp, SaveTarget};
+use pdfcraft_ui_egui::{PdfCraftApp, SaveTarget};
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
-        app.set_option("zoom", "150").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+            app
+        }
     });
     crate::support::settle(&mut h);
     h
+}
+
+/// The app with the file at `path` open, whose file pickers answer from `files`: a Save writes into
+/// `files` (read back with `files.file(..)`), not to disk.
+fn harness_on_file(path: String, files: Arc<ScriptedFiles>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::app_with_files(files);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_path(&path);
+            app
+        }
+    });
+    crate::support::settle(&mut h);
+    h
+}
+
+/// Answers the next pick with `path`.
+fn pick(files: &ScriptedFiles, path: &std::path::Path) {
+    files.queue(Picked::Paths(vec![path.to_owned()]));
+}
+
+/// The text of the newest notice card the main window shows.
+fn latest_notice(h: &Harness<'static, PdfCraftApp>) -> String {
+    crate::support::shown_notice(h).unwrap_or_default()
 }
 
 fn at(h: &Harness<'static, PdfCraftApp>, x: f32, y: f32) -> Pos2 {
@@ -32,9 +66,9 @@ fn marks(h: &Harness<'static, PdfCraftApp>) -> usize {
 #[test]
 fn marking_applying_and_clearing() {
     let mut h = harness();
-    assert!(h.state_mut().execute("redact.mark"));
+    assert!(h.execute("redact.mark"));
     h.run_steps(2);
-    h.get_by_label("Redact a PDF");
+    assert!(h.query_all_by_label("Redact a PDF").count() >= 1, "the panel title shows");
     // Draw a box in an empty part of the page.
     let (a, b) = (at(&h, 40.0, 280.0), at(&h, 200.0, 320.0));
     h.hover_at(a);
@@ -49,9 +83,9 @@ fn marking_applying_and_clearing() {
     h.run_steps(4);
     assert_eq!(marks(&h), 1);
     // Redact pages ▸ current page.
-    h.state_mut().execute("redact.pages");
+    h.execute("redact.pages");
     h.run_steps(2);
-    h.get_by_label("Mark Page Range");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Mark Page Range");
     h.get_by_label("OK").click();
     h.run_steps(3);
     assert_eq!(marks(&h), 2);
@@ -59,13 +93,13 @@ fn marking_applying_and_clearing() {
     h.get_by_label("Clear all").click();
     h.run_steps(3);
     assert_eq!(marks(&h), 0);
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(3);
     assert_eq!(marks(&h), 2);
     // Redact all asks first; Apply removes the marks (and the page's fields under them).
     h.get_by_label("Redact all").click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, Some(Dialog::RedactApply));
+    h.get_by_label("Apply");
     h.get_by_label("Apply").click();
     h.run_steps(4);
     let s = h.state();
@@ -86,35 +120,31 @@ fn saving_after_applying_redactions_asks_where() {
     let source = include_bytes!("../data/form.pdf").to_vec();
     std::fs::write(&original, &source).unwrap();
     let path = original.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_path(&path);
-        app
-    });
-    crate::support::settle(&mut h);
-    h.state_mut().execute("redact.pages");
+    let files = Arc::new(ScriptedFiles::new());
+    let mut h = harness_on_file(path, files.clone());
+    h.execute("redact.pages");
     h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
     assert_eq!(marks(&h), 1);
-    assert!(h.state_mut().execute("redact.apply"));
+    assert!(h.execute("redact.apply"));
     h.run_steps(2);
     h.get_by_label("Apply").click();
     h.run_steps(4);
     assert_eq!(marks(&h), 0);
     assert_eq!(h.state().views[0].redactions_applied, 1);
     let copy = dir.join("contract_Redacted.pdf");
-    h.state_mut().pick_override = Some(vec![copy.to_string_lossy().into_owned()]);
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "Save asks where first");
+    pick(&files, &copy);
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "Save asks where first");
     h.run_steps(3);
     assert_eq!(std::fs::read(&original).unwrap(), source, "the opened file is left as it was");
-    assert!(copy.exists(), "the redacted copy is written where the user chose");
+    assert!(files.file(&copy).is_some(), "the redacted copy is written where the user chose");
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().name, "contract_Redacted.pdf");
     assert_eq!(s.views[0].redactions_applied, 0);
-    h.state_mut().pick_override = None;
-    assert!(h.state_mut().save_active(SaveTarget::InPlace), "the next Save writes the copy in place");
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "the next Save writes the copy in place");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -128,48 +158,44 @@ fn undoing_saved_redactions_does_not_save_over_the_redacted_copy() {
     let original = dir.join("contract.pdf");
     std::fs::write(&original, include_bytes!("../data/form.pdf")).unwrap();
     let path = original.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_path(&path);
-        app
-    });
-    crate::support::settle(&mut h);
-    h.state_mut().execute("redact.pages");
+    let files = Arc::new(ScriptedFiles::new());
+    let mut h = harness_on_file(path, files.clone());
+    h.execute("redact.pages");
     h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
-    assert!(h.state_mut().execute("redact.apply"));
+    assert!(h.execute("redact.apply"));
     h.run_steps(2);
     h.get_by_label("Apply").click();
     h.run_steps(4);
     let copy = dir.join("contract_Redacted.pdf");
-    h.state_mut().pick_override = Some(vec![copy.to_string_lossy().into_owned()]);
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+    pick(&files, &copy);
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.run_steps(3);
-    h.state_mut().pick_override = None;
-    assert!(copy.exists());
+    assert!(files.file(&copy).is_some());
     // Undo and Redo leave the saved redactions in effect: Save writes the copy in place.
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(3);
-    h.state_mut().execute("edit.redo");
+    h.execute("edit.redo");
     h.run_steps(3);
     assert_eq!((h.state().views[0].redactions_applied, h.state().views[0].redactions_undone_after_save), (0, 0));
-    assert!(h.state_mut().save_active(SaveTarget::InPlace), "with the redactions back, Save writes the copy in place");
-    let saved = std::fs::read(&copy).unwrap();
-    h.state_mut().execute("edit.undo");
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "with the redactions back, Save writes the copy in place");
+    let saved = files.file(&copy).unwrap();
+    h.execute("edit.undo");
     h.run_steps(3);
     assert_eq!(h.state().views[0].redactions_undone_after_save, 1);
     let elsewhere = dir.join("contract_restored.pdf");
-    h.state_mut().pick_override = Some(vec![elsewhere.to_string_lossy().into_owned()]);
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "Save asks where instead of writing over the copy");
+    pick(&files, &elsewhere);
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "Save asks where instead of writing over the copy");
     h.run_steps(3);
-    h.state_mut().pick_override = None;
-    assert_eq!(std::fs::read(&copy).unwrap(), saved, "the redacted copy is left as it was");
-    assert!(elsewhere.exists(), "the restored version is written where the user chose");
+    assert_eq!(files.file(&copy).unwrap(), saved, "the redacted copy is left as it was");
+    assert!(files.file(&elsewhere).is_some(), "the restored version is written where the user chose");
     assert_eq!(h.state().views[0].redactions_undone_after_save, 0);
     // The restored version is now the saved one: Redo applies the redactions to it again.
-    h.state_mut().execute("edit.redo");
+    h.execute("edit.redo");
     h.run_steps(3);
     assert_eq!(h.state().views[0].redactions_applied, 1);
     let _ = std::fs::remove_dir_all(&dir);
@@ -185,46 +211,41 @@ fn redoing_a_new_apply_after_undoing_saved_redactions_still_asks_where() {
     let original = dir.join("contract.pdf");
     std::fs::write(&original, include_bytes!("../data/form.pdf")).unwrap();
     let path = original.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_path(&path);
-        app
-    });
-    crate::support::settle(&mut h);
-    h.state_mut().execute("redact.pages");
+    let files = Arc::new(ScriptedFiles::new());
+    let mut h = harness_on_file(path, files.clone());
+    h.execute("redact.pages");
     h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
-    assert!(h.state_mut().execute("redact.apply"));
+    assert!(h.execute("redact.apply"));
     h.run_steps(2);
     h.get_by_label("Apply").click();
     h.run_steps(4);
     let copy = dir.join("contract_Redacted.pdf");
-    h.state_mut().pick_override = Some(vec![copy.to_string_lossy().into_owned()]);
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+    pick(&files, &copy);
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.run_steps(3);
-    h.state_mut().pick_override = None;
-    let saved = std::fs::read(&copy).unwrap();
-    h.state_mut().execute("edit.undo");
+    let saved = files.file(&copy).unwrap();
+    h.execute("edit.undo");
     h.run_steps(3);
     // Apply the marks again as a new step, then Undo and Redo it.
-    assert!(h.state_mut().execute("redact.apply"));
+    assert!(h.execute("redact.apply"));
     h.run_steps(2);
     h.get_by_label("Apply").click();
     h.run_steps(4);
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(3);
     let view = &h.state().views[0];
     assert_eq!((view.redactions_applied, view.redactions_undone_after_save, view.saved_redactions_cut_off), (0, 0, true));
-    h.state_mut().execute("edit.redo");
+    h.execute("edit.redo");
     h.run_steps(3);
     let elsewhere = dir.join("contract_again.pdf");
-    h.state_mut().pick_override = Some(vec![elsewhere.to_string_lossy().into_owned()]);
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "Save asks where instead of writing over the copy");
+    pick(&files, &elsewhere);
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "Save asks where instead of writing over the copy");
     h.run_steps(3);
-    h.state_mut().pick_override = None;
-    assert_eq!(std::fs::read(&copy).unwrap(), saved, "the redacted copy is left as it was");
+    assert_eq!(files.file(&copy).unwrap(), saved, "the redacted copy is left as it was");
     assert!(!h.state().views[0].saved_redactions_cut_off);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -240,39 +261,34 @@ fn undoing_delivered_redactions_asks_where() {
     let original = dir.join("contract.pdf");
     std::fs::write(&original, include_bytes!("../data/form.pdf")).unwrap();
     let path = original.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_path(&path);
-        app
-    });
-    crate::support::settle(&mut h);
-    h.state_mut().execute("redact.pages");
+    let files = Arc::new(ScriptedFiles::new());
+    let mut h = harness_on_file(path, files.clone());
+    h.execute("redact.pages");
     h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
-    assert!(h.state_mut().execute("redact.apply"));
+    assert!(h.execute("redact.apply"));
     h.run_steps(2);
     h.get_by_label("Apply").click();
     h.run_steps(4);
     // The state a web save leaves: the step is delivered and stays counted.
     h.state_mut().views[0].redactions_downloaded = 1;
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(3);
     let elsewhere = dir.join("contract_restored.pdf");
-    h.state_mut().pick_override = Some(vec![elsewhere.to_string_lossy().into_owned()]);
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "Save asks where after Undo past a delivered step");
+    pick(&files, &elsewhere);
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "Save asks where after Undo past a delivered step");
     h.run_steps(3);
-    h.state_mut().pick_override = None;
-    assert!(elsewhere.exists());
+    assert!(files.file(&elsewhere).is_some());
     // A new Apply after Undo past a delivered step cannot be redone back to the delivered one.
     h.state_mut().views[0].redactions_downloaded = 1;
     h.state_mut().views[0].redactions_applied = 0;
-    h.state_mut().execute("redact.pages");
+    h.execute("redact.pages");
     h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
-    assert!(h.state_mut().execute("redact.apply"));
+    assert!(h.execute("redact.apply"));
     h.run_steps(2);
     h.get_by_label("Apply").click();
     h.run_steps(4);
@@ -290,24 +306,28 @@ fn delivered_redactions_save_in_place() {
     let original = dir.join("contract.pdf");
     std::fs::write(&original, include_bytes!("../data/form.pdf")).unwrap();
     let path = original.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_path(&path);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_path(&path);
+            app
+        }
     });
     crate::support::settle(&mut h);
-    h.state_mut().execute("redact.pages");
+    h.execute("redact.pages");
     h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
-    assert!(h.state_mut().execute("redact.apply"));
+    assert!(h.execute("redact.apply"));
     h.run_steps(2);
     h.get_by_label("Apply").click();
     h.run_steps(4);
     // The state a web save leaves: the step is delivered and stays counted.
     h.state_mut().views[0].redactions_downloaded = 1;
-    assert!(h.state_mut().save_active(SaveTarget::InPlace), "Save writes in place after the step is delivered");
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "Save writes in place after the step is delivered");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -321,43 +341,44 @@ fn undoing_saved_redactions_while_the_save_dialog_is_open_asks_again() {
     let original = dir.join("contract.pdf");
     std::fs::write(&original, include_bytes!("../data/form.pdf")).unwrap();
     let path = original.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_path(&path);
-        app
-    });
-    crate::support::settle(&mut h);
+    // Picks stay open until answered: the Save dialog is on screen while Undo runs.
+    let files = Arc::new(ScriptedFiles::held());
+    let mut h = harness_on_file(path, files.clone());
     let apply = |h: &mut Harness<'static, PdfCraftApp>| {
-        h.state_mut().execute("redact.pages");
+        h.execute("redact.pages");
         h.run_steps(2);
         h.get_by_label("OK").click();
         h.run_steps(3);
-        assert!(h.state_mut().execute("redact.apply"));
+        assert!(h.execute("redact.apply"));
         h.run_steps(2);
         h.get_by_label("Apply").click();
         h.run_steps(4);
     };
     apply(&mut h);
     let copy = dir.join("contract_Redacted.pdf");
-    h.state_mut().pick_override = Some(vec![copy.to_string_lossy().into_owned()]);
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+    pick(&files, &copy);
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.run_steps(3);
-    let saved = std::fs::read(&copy).unwrap();
+    let saved = files.file(&copy).unwrap();
     // A second Apply redactions makes Save ask where. Before the answer, Undo takes back the
     // second Apply, its marks and the saved Apply.
     apply(&mut h);
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     for _ in 0..3 {
-        h.state_mut().execute("edit.undo");
+        h.execute("edit.undo");
     }
     assert_eq!(h.state().views[0].redactions_undone_after_save, 1);
     let elsewhere = dir.join("contract_restored.pdf");
-    h.state_mut().pick_override = Some(vec![elsewhere.to_string_lossy().into_owned()]);
-    h.run_steps(4);
-    h.state_mut().pick_override = None;
-    assert_eq!(std::fs::read(&copy).unwrap(), saved, "the redacted copy is left as it was");
-    assert!(elsewhere.exists(), "Save asked again and wrote where the user chose");
+    assert!(files.answer(Picked::Paths(vec![copy.clone()])).is_some(), "first Save dialog is open");
+    h.run_steps(3);
+    assert_eq!(files.file(&copy).unwrap(), saved, "the first answer was discarded when redactions changed");
+    assert!(files.answer(Picked::Paths(vec![elsewhere.clone()])).is_some(), "Save asked again and waits for the user");
+    // The write runs on a worker: step until it has landed.
+    crate::support::wait_until(&mut h, "the save to land", |_| files.file(&elsewhere).is_some());
+    assert_eq!(files.file(&copy).unwrap(), saved, "the redacted copy is left as it was");
+    assert!(files.file(&elsewhere).is_some(), "Save asked again and wrote where the user chose");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -371,32 +392,31 @@ fn undoing_apply_redactions_while_the_save_dialog_is_open_asks_again() {
     let original = dir.join("contract.pdf");
     std::fs::write(&original, include_bytes!("../data/form.pdf")).unwrap();
     let path = original.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_path(&path);
-        app
-    });
-    crate::support::settle(&mut h);
-    h.state_mut().execute("redact.pages");
+    // Picks stay open until answered: the Save dialog is on screen while Undo runs.
+    let files = Arc::new(ScriptedFiles::held());
+    let mut h = harness_on_file(path, files.clone());
+    h.execute("redact.pages");
     h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
-    assert!(h.state_mut().execute("redact.apply"));
+    assert!(h.execute("redact.apply"));
     h.run_steps(2);
     h.get_by_label("Apply").click();
     h.run_steps(4);
     let copy = dir.join("contract_Redacted.pdf");
-    h.state_mut().pick_override = Some(vec![copy.to_string_lossy().into_owned()]);
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
-    h.state_mut().execute("edit.undo");
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
+    h.execute("edit.undo");
     assert_eq!(h.state().views[0].redactions_applied, 0);
     let elsewhere = dir.join("contract_copy.pdf");
-    h.state_mut().pick_override = Some(vec![elsewhere.to_string_lossy().into_owned()]);
-    h.run_steps(4);
-    h.state_mut().pick_override = None;
-    assert!(!copy.exists(), "the unredacted content is not saved under the _Redacted name");
-    assert!(elsewhere.exists(), "Save asked again and wrote where the user chose");
+    assert!(files.answer(Picked::Paths(vec![copy.clone()])).is_some(), "first Save dialog is open");
+    h.run_steps(3);
+    assert!(files.file(&copy).is_none(), "the first answer was discarded when redactions were undone");
+    assert!(files.answer(Picked::Paths(vec![elsewhere.clone()])).is_some(), "Save asked again and waits for the user");
+    // The write runs on a worker: step until it has landed.
+    crate::support::wait_until(&mut h, "the save to land", |_| files.file(&elsewhere).is_some());
+    assert!(files.file(&copy).is_none(), "the unredacted content is not saved under the _Redacted name");
+    assert!(files.file(&elsewhere).is_some(), "Save asked again and wrote where the user chose");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -409,40 +429,44 @@ fn undoing_apply_redactions_saves_in_place_again() {
     let original = dir.join("contract.pdf");
     std::fs::write(&original, include_bytes!("../data/form.pdf")).unwrap();
     let path = original.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_path(&path);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_path(&path);
+            app
+        }
     });
     crate::support::settle(&mut h);
     for _ in 0..2 {
-        h.state_mut().execute("redact.pages");
+        h.execute("redact.pages");
         h.run_steps(2);
         h.get_by_label("OK").click();
         h.run_steps(3);
-        assert!(h.state_mut().execute("redact.apply"));
+        assert!(h.execute("redact.apply"));
         h.run_steps(2);
         h.get_by_label("Apply").click();
         h.run_steps(4);
     }
     assert_eq!(h.state().views[0].redactions_applied, 2);
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(3);
     assert_eq!(h.state().views[0].redactions_applied, 1, "the first Apply redactions is still in effect");
     // Undoing the second mark leaves the first Apply redactions in effect.
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(3);
     assert_eq!(h.state().views[0].redactions_applied, 1);
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(3);
     assert_eq!(h.state().views[0].redactions_applied, 0);
-    h.state_mut().execute("edit.redo");
+    h.execute("edit.redo");
     h.run_steps(3);
     assert_eq!(h.state().views[0].redactions_applied, 1);
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(3);
-    assert!(h.state_mut().save_active(SaveTarget::InPlace), "with the redactions undone, Save writes in place");
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "with the redactions undone, Save writes in place");
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().name, "contract.pdf");
     let _ = std::fs::remove_dir_all(&dir);
@@ -457,29 +481,32 @@ fn reverting_after_apply_redactions_saves_in_place_again() {
     let original = dir.join("contract.pdf");
     std::fs::write(&original, include_bytes!("../data/form.pdf")).unwrap();
     let path = original.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_path(&path);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_path(&path);
+            app
+        }
     });
     crate::support::settle(&mut h);
-    h.state_mut().execute("redact.pages");
+    h.execute("redact.pages");
     h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
-    assert!(h.state_mut().execute("redact.apply"));
+    assert!(h.execute("redact.apply"));
     h.run_steps(2);
     h.get_by_label("Apply").click();
     h.run_steps(4);
     assert_eq!(h.state().views[0].redactions_applied, 1);
-    assert!(h.state_mut().execute("file.revert"));
+    assert!(h.execute("file.revert"));
     h.run_steps(2);
-    assert_eq!(h.state().dialog, Some(Dialog::Revert));
     h.get_all_by_label("Revert").last().expect("the button").click();
     h.run_steps(3);
     assert_eq!(h.state().views[0].redactions_applied, 0);
-    assert!(h.state_mut().save_active(SaveTarget::InPlace), "after Revert, Save writes in place");
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "after Revert, Save writes in place");
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().name, "contract.pdf");
     let _ = std::fs::remove_dir_all(&dir);
@@ -488,12 +515,19 @@ fn reverting_after_apply_redactions_saves_in_place_again() {
 #[test]
 fn redaction_codes_become_the_overlay_text() {
     let mut h = harness();
-    assert!(h.state_mut().execute("redact.properties"));
+    assert!(h.execute("redact.properties"));
     h.run_steps(2);
-    h.get_by_label("Redaction Tool Properties");
+    h.get_by_role_and_label(Role::Dialog, "Redaction Tool Properties");
+    // The long properties dialog opens scrolled below this row; bring it into view first.
+    h.get_by_label("Use overlay text").scroll_to_me();
+    h.run_steps(3);
+    assert!(h.get_by_role_and_label(Role::Dialog, "Redaction Tool Properties").rect().contains_rect(h.get_by_label("Use overlay text").rect()));
     h.get_by_label("Use overlay text").click();
     h.run_steps(2);
-    h.state_mut().redact_prefs.overlay = "CONFIDENTIAL".into();
+    h.get_by_label("Custom text").click();
+    h.run_steps(1);
+    h.get_by_label("Custom text").type_text("CONFIDENTIAL");
+    h.run_steps(2);
     h.get_by_label("Redaction code:").click();
     h.run_steps(2);
     h.get_by_label("(b)(7)(C)").click();
@@ -537,14 +571,14 @@ fn redaction_properties_survive_a_restart() {
     }
     // The defaults are what OK with "Make properties default" ticked leaves: go through the
     // dialog.
-    assert!(h.state_mut().execute("redact.properties"));
+    assert!(h.execute("redact.properties"));
     h.run_steps(6);
     h.get_by_label("Make properties default");
     h.get_by_label("OK").click();
     h.run_steps(2);
-    let json = h.state().persist();
-    let mut fresh = PdfCraftApp::new();
-    fresh.restore(&json);
+    let saved = h.state().settings_snapshot();
+    let mut fresh = crate::control::new_app();
+    fresh.apply_settings(&saved);
     let p = &fresh.redact_prefs;
     assert_eq!(p.fill, None, "no colour is a saved choice, not a missing one");
     assert_eq!(p.overlay_text(), "(b)(6), (b)(7)(C)");
@@ -559,14 +593,19 @@ fn redaction_properties_survive_a_restart() {
     assert_eq!((a.style.color, a.style.opacity, a.style.fill), ([0.0, 0.5, 0.0], 0.4, None));
     // Settings are untrusted: a bad colour, an unknown code set and a code outside the set are
     // dropped, the rest kept.
-    let mut odd = PdfCraftApp::new();
-    odd.restore(
-        r#"{"redact_prefs":{"outline":[2,0,0],"opacity":0.7,"code_set":"nope","codes":["(b)(6)","bogus"],"use_overlay":true,"use_code":true}}"#,
+    let mut odd = crate::control::new_app();
+    odd.apply_settings(
+        &pdfcraft_ui_egui::settings::import_json(
+            r#"{"redact_prefs":{"outline":[2,0,0],"opacity":0.7,"code_set":"nope","codes":["(b)(6)","bogus"],"use_overlay":true,"use_code":true,"size":500,"align":3}}"#,
+        )
+        .0,
     );
     let p = &odd.redact_prefs;
     assert_eq!((p.outline, p.opacity), ([0.89, 0.13, 0.13], 0.7));
     assert_eq!(p.code_set.id, pdfcraft_engine::REDACTION_CODE_SETS[0].id);
     assert_eq!(p.overlay_text(), "(b)(6)");
+    let look = pdfcraft_engine::OverlayLook::default();
+    assert_eq!((p.look.size, p.look.align), (look.size, look.align), "an out-of-range size and alignment keep the defaults");
 }
 
 /// "Make properties default" off: OK keeps the values for this run only, the saved defaults
@@ -574,27 +613,31 @@ fn redaction_properties_survive_a_restart() {
 #[test]
 fn redaction_properties_for_this_run_only_and_cancel() {
     let mut h = harness();
-    assert!(h.state_mut().execute("redact.properties"));
+    assert!(h.execute("redact.properties"));
     h.run_steps(6);
     h.get_by_label("Redaction mark appearance");
-    h.get_by_label("Outline colour:");
-    h.get_by_label("Fill colour:");
-    h.get_by_label("Opacity:");
+    // A colour row's name labels both its text and its swatch button.
+    for row in ["Outline colour:", "Fill colour:", "Opacity:"] {
+        assert!(h.get_all_by_label(row).count() > 0, "{row} is offered");
+    }
+    // The dialog's body scrolls; the check box is its last row, below the room the body shows.
+    h.get_by_label("Make properties default").scroll_to_me();
+    h.run_steps(3);
     h.get_by_label("Make properties default").click();
     h.run_steps(3);
-    assert!(!h.state().redact_prefs.remember);
-    h.state_mut().redact_prefs.outline = [0.0, 0.0, 1.0];
+    assert!(!h.state().redact_props.as_ref().unwrap().remember);
+    h.state_mut().redact_props.as_mut().unwrap().outline = [0.0, 0.0, 1.0];
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert_eq!(h.state().redact_prefs.outline, [0.0, 0.0, 1.0], "used for this run");
     assert_eq!(h.state().redact_defaults.outline, [0.89, 0.13, 0.13], "not made the default");
-    let mut fresh = PdfCraftApp::new();
-    fresh.restore(&h.state().persist());
+    let mut fresh = crate::control::new_app();
+    fresh.apply_settings(&h.state().settings_snapshot());
     assert_eq!(fresh.redact_prefs.outline, [0.89, 0.13, 0.13], "the next run starts from the saved defaults");
     // Cancel discards the edits made while the dialog was open.
-    assert!(h.state_mut().execute("redact.properties"));
+    assert!(h.execute("redact.properties"));
     h.run_steps(2);
-    h.state_mut().redact_prefs.opacity = 0.2;
+    h.state_mut().redact_props.as_mut().unwrap().opacity = 0.2;
     h.get_by_label("Cancel").click();
     h.run_steps(2);
     assert_eq!(h.state().redact_prefs.opacity, 1.0, "cancelled");
@@ -604,18 +647,22 @@ fn redaction_properties_for_this_run_only_and_cancel() {
 #[test]
 fn redacting_an_imported_word_list() {
     let memo = pdfcraft_engine::Session::new().create_from_text("memo", "Call Ada today\nAda is private\nPublic line").unwrap().to_vec();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("memo.pdf", None, memo.clone()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "memo.pdf", None, memo.clone()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
-    h.state_mut().execute("redact.search");
+    h.execute("redact.search");
     h.run_steps(2);
     h.get_by_label("Multiple words or phrases");
     let list = b"  Ada \n\nprivate\nAda\nabsent\n".to_vec();
-    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::RedactWords, vec![("names.txt".into(), list)]);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().use_files(&ctx_h, pdfcraft_ui_egui::FilePurpose::RedactWords, vec![("names.txt".into(), list)]);
     let d = &h.state().redact_search;
     assert_eq!((d.mode, d.words.as_str()), (pdfcraft_ui_egui::RedactSearchMode::Words, "Ada\nprivate\nabsent"));
     h.run_steps(2);
@@ -624,21 +671,25 @@ fn redacting_an_imported_word_list() {
     h.run_steps(3);
     assert_eq!((marks(&h), h.state().redact_search.found), (3, Some(3)));
     let too_big = vec![b'a'; 2 << 20];
-    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::RedactWords, vec![("huge.txt".into(), too_big)]);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().use_files(&ctx_h, pdfcraft_ui_egui::FilePurpose::RedactWords, vec![("huge.txt".into(), too_big)]);
     assert_eq!(h.state().redact_search.words, "Ada\nprivate\nabsent", "an oversized list changes nothing");
 }
 
 #[test]
 fn redaction_search_can_match_case_and_whole_words() {
     let memo = pdfcraft_engine::Session::new().create_from_text("memo", "Ada ada Adaline\nAda beta betamax").unwrap().to_vec();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("memo.pdf", None, memo.clone()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "memo.pdf", None, memo.clone()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
-    h.state_mut().execute("redact.search");
+    h.execute("redact.search");
     h.state_mut().redact_search.text = "Ada".into();
     h.run_steps(2);
     h.get_by_label("Whole words only").click();
@@ -653,11 +704,11 @@ fn redaction_search_can_match_case_and_whole_words() {
 #[test]
 fn removing_hidden_information_and_sanitizing() {
     let mut h = harness();
-    h.state_mut().execute("protect.remove_hidden");
+    h.execute("protect.remove_hidden");
     h.run_steps(2);
-    h.get_by_label("Remove hidden information");
+    h.get_by_role_and_label(Role::Dialog, "Remove hidden information");
     {
-        let d = &h.state().hidden_draft;
+        let d = h.state().hidden_draft.as_ref().unwrap();
         let fields = d.found.iter().find(|f| f.0 == pdfcraft_engine::Hidden::FormFields).unwrap();
         assert_eq!((fields.1, fields.2), (5, true), "five fields, checked");
     }
@@ -669,7 +720,7 @@ fn removing_hidden_information_and_sanitizing() {
         assert!(doc.form.is_empty());
         assert_eq!(doc.can_undo(), Some("Remove hidden information"));
     }
-    h.state_mut().execute("redact.sanitize");
+    h.execute("redact.sanitize");
     h.run_steps(2);
     h.get_by_label("Sanitize").click();
     h.run_steps(3);
@@ -710,17 +761,20 @@ fn bookmarked_pdf() -> Vec<u8> {
 /// as it is (here a bookmark title), in the same notification as the count of marks applied.
 #[test]
 fn applying_says_where_the_removed_text_is_still_held() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("bluefin.pdf", None, bookmarked_pdf()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "bluefin.pdf", None, bookmarked_pdf()).unwrap();
+            app
+        }
     });
     crate::support::settle(&mut h);
-    assert!(h.state_mut().execute("redact.mark"));
+    assert!(h.execute("redact.mark"));
     h.run_steps(2);
     // Redact pages ▸ current page, then Redact all ▸ Apply.
-    h.state_mut().execute("redact.pages");
+    h.execute("redact.pages");
     h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
@@ -730,7 +784,7 @@ fn applying_says_where_the_removed_text_is_still_held() {
     h.get_by_label("Apply").click();
     h.run_steps(4);
     assert_eq!(marks(&h), 0);
-    let toast = h.state().toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    let toast = latest_notice(&h);
     assert_eq!(
         toast,
         "Applied 1 redaction mark. Save to remove the content from the file. The redacted text also appears in 1 bookmark title, which redaction doesn't change. Remove hidden information removes them."
@@ -764,16 +818,19 @@ fn applying_says_the_pdfa_identification_was_written_back() {
         bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
     }
     bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("pdfa.pdf", None, bytes).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "pdfa.pdf", None, bytes).unwrap();
+            app
+        }
     });
     crate::support::settle(&mut h);
-    assert!(h.state_mut().execute("redact.mark"));
+    assert!(h.execute("redact.mark"));
     h.run_steps(2);
-    h.state_mut().execute("redact.pages");
+    h.execute("redact.pages");
     h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
@@ -783,7 +840,7 @@ fn applying_says_the_pdfa_identification_was_written_back() {
     h.get_by_label("Apply").click();
     h.run_steps(4);
     assert_eq!(marks(&h), 0);
-    let toast = h.state().toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    let toast = latest_notice(&h);
     assert_eq!(
         toast,
         "Applied 1 redaction mark. Save to remove the content from the file. The document's XMP metadata held the redacted text and was removed. Its PDF/A identification was written back on its own."
