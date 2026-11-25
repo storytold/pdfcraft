@@ -22,6 +22,10 @@ const MAX_VISITS: usize = 1 << 22;
 pub const MAX_INKS: usize = 1024;
 /// Distinct alternate spaces kept for one ink. Past it, [`InkList::complete`] is false.
 pub const MAX_ALTERNATES: usize = 16;
+/// Colorants read from one `DeviceN` space: the most a reader has to accept (ISO 32000-1
+/// Annex C). Past it the rest aren't read and [`InkList::complete`] is false, so a names array
+/// shared by many spaces costs each of them at most this much.
+pub const MAX_COLORANTS: usize = 32;
 /// Distinct dropped names remembered, to count them; past it each further sighting counts.
 const MAX_DROPPED_NAMES: usize = 1 << 16;
 /// The process colorants, in plate order.
@@ -52,8 +56,8 @@ pub struct InkList {
     /// Names past [`MAX_INKS`], not listed: distinct up to 65 536 of them, and past that each
     /// further sighting counts, so the count is approximate.
     pub dropped: usize,
-    /// False when a walk stopped at a limit (its allowance, its depth, or [`MAX_ALTERNATES`] for
-    /// one ink), so a page or an alternate may be missing. It covers the pages
+    /// False when a walk stopped at a limit (its allowance, its depth, [`MAX_ALTERNATES`] for one
+    /// ink, or [`MAX_COLORANTS`] for one space), so an ink, a page or an alternate may be missing. It covers the pages
     /// [`pdfcraft_model::pages`] yields; a reference to a missing object counts as null.
     pub complete: bool,
 }
@@ -190,7 +194,9 @@ impl Scan<'_> {
         let names: Vec<Vec<u8>> = if separation {
             names.as_name().map(<[u8]>::to_vec).into_iter().collect()
         } else {
-            names.as_array().map(|n| n.iter().filter_map(|n| self.doc.resolve(n).as_name().map(<[u8]>::to_vec)).collect()).unwrap_or_default()
+            let names = names.as_array().map(Vec::as_slice).unwrap_or_default();
+            self.capped |= names.len() > MAX_COLORANTS;
+            names.iter().take(MAX_COLORANTS).filter_map(|n| self.doc.resolve(n).as_name().map(<[u8]>::to_vec)).collect()
         };
         for name in names.iter().filter(|n| n.as_slice() != b"All" && n.as_slice() != b"None") {
             self.record(name_text(name), alternate);
@@ -262,7 +268,7 @@ mod tests {
 
     use pdfcraft_cos::Document;
 
-    use super::{InkList, MAX_ALTERNATES, MAX_INKS, inks};
+    use super::{InkList, MAX_ALTERNATES, MAX_COLORANTS, MAX_INKS, inks};
 
     /// A document of the objects `objs`, numbered from 1, with object 1 its catalog.
     fn build(objs: &[String]) -> Document {
@@ -279,6 +285,14 @@ mod tests {
         }
         out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
         Document::open(Arc::new(out)).unwrap()
+    }
+
+    /// An array of `DeviceN` spaces naming `/S0` to `/S{count - 1}`, at most [`MAX_COLORANTS`]
+    /// to a space, each tinted by function `f`.
+    fn floods(count: usize, f: usize) -> String {
+        let names: Vec<String> = (0..count).map(|i| format!("/S{i}")).collect();
+        let spaces: String = names.chunks(MAX_COLORANTS).map(|c| format!("[/DeviceN [{}] /DeviceCMYK {f} 0 R] ", c.join(" "))).collect();
+        format!("[{spaces}]")
     }
 
     fn list(objs: &[&str]) -> InkList {
@@ -319,8 +333,7 @@ mod tests {
 
     #[test]
     fn a_resource_cycle_ends_and_a_flood_of_names_is_cut_off() {
-        let names: String = (0..MAX_INKS + 10).map(|i| format!("/S{i} ")).collect();
-        let devicen = format!("[/DeviceN [{names}] /DeviceCMYK 6 0 R]");
+        let devicen = floods(MAX_INKS + 10, 6);
         let found = list(&[
             "<< /Type /Catalog /Pages 2 0 R >>",
             "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
@@ -338,8 +351,7 @@ mod tests {
 
     #[test]
     fn process_inks_survive_a_flood_and_too_many_alternates_leave_the_list_incomplete() {
-        let names: String = (0..MAX_INKS + 10).map(|i| format!("/S{i} ")).collect();
-        let flood = format!("[/DeviceN [{names}] /DeviceCMYK 4 0 R]");
+        let flood = floods(MAX_INKS + 10, 4);
         let alternates: String = (0..=MAX_ALTERNATES).map(|i| format!("/A{i} [/Separation /Gold /Alt{i} 4 0 R] ")).collect();
         let found = list(&[
             "<< /Type /Catalog /Pages 2 0 R >>",
@@ -352,6 +364,23 @@ mod tests {
         ]);
         assert!(found.inks.iter().any(|i| i.name == "Black" && i.process), "a process ink met after the cap is kept");
         assert!(!found.complete, "an ink's alternates were cut off");
+    }
+
+    #[test]
+    fn a_names_array_longer_than_a_space_can_be_is_read_only_to_the_limit() {
+        let names: String = (0..=MAX_COLORANTS).map(|i| format!("/S{i} ")).collect();
+        let found = list(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << /A 6 0 R /B 7 0 R >> >> >>",
+            "<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 0 1 0] /N 1 >>",
+            &format!("[{names}]"),
+            // Two spaces share the one names array.
+            "[/DeviceN 5 0 R /DeviceCMYK 4 0 R]",
+            "[/DeviceN 5 0 R /DeviceRGB 4 0 R]",
+        ]);
+        assert_eq!(found.inks.len(), MAX_COLORANTS, "the names past the limit aren't read");
+        assert!(!found.complete, "a space was cut off");
     }
 
     #[test]
