@@ -1,4 +1,7 @@
-use super::*;
+use super::settings::{self, PdfCraftSettings};
+use super::{PdfCraftApp, RedactPrefs, Session, actions_ui, canvas, combine_ui, fill_sign, i18n, print_paper, print_ui, stamps_ui, ui_scale};
+use craft::theme::ModeChoice;
+use craft::window::policy::TitleBarPref;
 use pdfcraft_engine::print::names as print_names;
 
 /// [`PdfCraftApp::date_text`] for callers that already borrow other parts of the app.
@@ -17,34 +20,92 @@ pub(crate) fn date_text_for_pdf(session: &Session) -> Result<String, String> {
 /// The longest author name kept (Preferences ▸ Identity, restored settings).
 pub(crate) const MAX_AUTHOR_CHARS: usize = 200;
 
-/// A restored colour: an `[r, g, b]` array of finite numbers, each clamped to 0–1 (restored
-/// settings are untrusted). Anything else (a string, a wrong length, a null or a non-finite
-/// number) is refused whole, so the caller keeps its default.
-fn rgb_triple(v: &serde_json::Value) -> Option<[f64; 3]> {
-    let a = v.as_array()?;
-    if a.len() != 3 {
-        return None;
-    }
-    let mut out = [0.0f64; 3];
-    for (slot, x) in out.iter_mut().zip(a.iter()) {
-        let n = x.as_f64()?;
-        if !n.is_finite() {
-            return None;
-        }
-        *slot = n.clamp(0.0, 1.0);
-    }
-    Some(out)
+/// The saved text of a JSON-text setting, parsed; `None` when absent or not JSON.
+fn parsed(text: &Option<String>) -> Option<serde_json::Value> {
+    text.as_deref().and_then(|t| serde_json::from_str(t).ok())
+}
+
+/// `value` as the JSON text a setting keeps; `None` when it cannot be written.
+fn json_text(value: &impl serde::Serialize) -> Option<String> {
+    serde_json::to_string(value).ok()
+}
+
+/// The name a unit-variant value serialises as (a side, a sort order); `None` for any other shape.
+fn name_of(value: &impl serde::Serialize) -> Option<String> {
+    serde_json::to_value(value).ok()?.as_str().map(str::to_string)
+}
+
+/// The value a saved name stands for; `None` for a name that is not one of its variants.
+fn from_name<T: serde::de::DeserializeOwned>(name: &str) -> Option<T> {
+    serde_json::from_value(serde_json::Value::String(name.to_string())).ok()
 }
 
 impl PdfCraftApp {
-    /// Sets the user's interface theme preference (Light, Dark, or System).
-    pub fn set_theme_preference(&mut self, preference: ThemePreference) {
+    /// The canvas's navigation choices: the scroll speed, the middle-button direction and whether zooms and wheel
+    /// notches ease. The rest keep the framework's defaults.
+    pub(crate) fn navigation_options(&self) -> craft::ui::canvas::NavigationOptions {
+        let mut options = craft::ui::canvas::NavigationOptions::default();
+        options.wheel_line = self.scroll_speed.wheel_line();
+        options.key_line = self.scroll_speed.key_line();
+        options.invert_middle = self.invert_middle_drag;
+        // PdfCraft's Hand stops at release; it does not coast after a drag.
+        options.flick_panning = false;
+        // Linux latches a middle-click auto-scroll; the other platforms drag the view.
+        if cfg!(target_os = "linux") {
+            options.middle_button = craft::behavior::MiddleButton::AutoScroll;
+        }
+        // Production's autoscroll: the speed grows with the pointer's whole distance from the mark, a release inside a
+        // short hold keeps it running, and it ends when the page view loses the keys.
+        options.middle_autoscroll = craft::ui::canvas::MiddleAutoscrollFeel::Reader;
+        let eased = !self.animation_effects.reduced(None);
+        options.animated_zoom = eased;
+        options.eased_wheel = eased;
+        // A ⌘/Ctrl-wheel notch zooms over about a quarter of a second, as production's egui wheel did, whatever the
+        // animation setting.
+        options.eased_wheel_zoom = true;
+        options
+    }
+
+    /// Sets the user's interface theme preference (Light, Dark, or System); the next frame's
+    /// [`Self::root_env`] carries it.
+    pub fn set_theme_preference(&mut self, preference: ModeChoice) {
         self.theme_preference = preference;
-        if let Some(ctx) = self.ctx.clone() {
-            self.sync_theme(&ctx);
-            theme::apply(&ctx, self.theme);
-        } else {
-            self.theme = preference.resolve(None, ThemeKind::Light);
+    }
+
+    /// Sets Preferences ▸ Animation effects; the next frame's [`Self::root_env`] carries it and
+    /// the next [`Self::save_settings`] keeps it.
+    pub fn set_motion(&mut self, motion: craft::theme::MotionChoice) {
+        self.animation_effects = motion;
+    }
+
+    /// The suite as Preferences ▸ Appearance shows it: the app's own mode and motion over the
+    /// in-memory suite's themes.
+    pub(crate) fn suite_view(&self) -> craft::theme_store::SuiteView {
+        let mut view = self.suite.view();
+        view.shown.mode = Some(self.theme_preference);
+        view.shown.motion = Some(self.animation_effects);
+        view
+    }
+
+    /// Applies what the Appearance page changed to the app's own settings.
+    pub(crate) fn apply_selection(&mut self, change: craft::theme_store::SelectionChange) {
+        if let Some(mode) = change.mode {
+            self.set_theme_preference(mode);
+        }
+        if let Some(motion) = change.motion {
+            self.set_motion(motion);
+        }
+    }
+
+    /// Hands the preferences to the settings store and writes them if they changed. A write that
+    /// fails is logged: the preferences stay in the app and the next save tries again.
+    pub(crate) fn save_settings(&mut self) {
+        let snapshot = self.settings_snapshot();
+        if let Some(store) = self.settings.as_mut() {
+            store.set(snapshot);
+            if let Err(e) = store.flush() {
+                log::warn!("the preferences could not be written: {e}");
+            }
         }
     }
 
@@ -61,78 +122,95 @@ impl PdfCraftApp {
         }
     }
 
-    /// Enable the Linux desktop portal in a native window. Headless contexts keep
-    /// their supplied input and never connect to the user's session bus.
-    #[cfg(target_os = "linux")]
-    pub fn enable_desktop_theme(&mut self) {
-        self.desktop_theme_enabled = true;
-    }
-
     /// Today in `fmt` (or Preferences ▸ Date format), with month and weekday names in the date
     /// language, or the interface language when it follows that.
     pub fn date_text(&self, fmt: Option<&str>) -> Result<String, String> {
         date_text(&self.session, fmt)
     }
 
-    /// Serialize the user's persistent state (recent files, theme). Local only.
-    pub fn persist(&self) -> String {
+    /// The user's persistent state as the typed settings the store writes. Local only.
+    pub fn settings_snapshot(&self) -> PdfCraftSettings {
         let trusted: Vec<String> = self.session.trusted_certificates().iter().map(pdfcraft_engine::sign::x509::to_pem).collect();
-        // The Print dialog's choices that describe how this computer prints (#2001), named as
-        // `doc_print` names them. Copies, pages, layout and orientation are one job's.
-        let print = serde_json::json!({
-            "duplex": print_names::duplex(self.print_draft.duplex),
-            "grayscale": self.print_draft.grayscale,
-            "collate": self.print_draft.collate,
-            "size": print_names::size_mode(self.print_draft.size),
-            "custom_scale": self.print_draft.custom_scale,
-            "comments_forms": print_names::content(self.print_draft.content),
-            "binding": print_names::binding(self.print_draft.binding),
-            "as_image": self.print_draft.as_image,
-            "dpi": self.print_draft.dpi,
-        });
-        let mut v = serde_json::json!({
-            "side_panels": self.side_panels.to_json(self.left_open),
-            "docking_right": self.right,
-            "recent": self.recent.iter().take(self.recent_limit).collect::<Vec<_>>(),
-            "reopen_last_session": self.reopen_last_session,
-            "restore_last_view": self.restore_last_view,
-            "last_views": self.last_views_to_save(),
-            // Kept only while the preference is on.
-            "last_session": self.reopen_last_session.then(|| self.session_to_save()),
-            "reload_changed_files": self.reload_changed_files,
-            "system_title_bar": self.system_title_bar,
-            "pinned_folders": self.pinned.folders,
-            "pinned_folders_collapsed": self.pinned.collapsed,
-            "theme": self.theme_preference,
-            "scroll_speed": self.scroll_speed,
-            "invert_middle_drag": self.invert_middle_drag,
-            "animation_effects": self.animation_effects,
-            "default_mode": self.default_mode,
-            "default_layout": canvas::display_token(self.view_defaults.layout, self.view_defaults.continuous),
-            "default_zoom": self.view_defaults.zoom_name(),
-            "always_default_view": self.always_default_view,
-            "highlight_fields": self.view_defaults.highlight_fields,
-            "units": self.units,
-            "language": self.language,
-            "reading_colors": self.reading_colors,
-            // Null follows the system's text scaling.
-            "ui_scale": self.ui_scale,
-            "flatten_fill_sign": self.flatten_fill_sign_on_save,
-            "ask_to_lock_signatures": self.ask_to_lock_signatures,
-            "fill_text_size": self.fill_text_size,
-            "fill_text_border": self.fill_text_default.width,
-            "fill_text_border_color": self.fill_text_default.color,
-            "fill_text_border_shape": self.fill_text_default.shape.name(),
-            "date_format": self.session.date_format(),
-            // Null follows the interface language.
-            "date_language": self.session.date_language(),
-            "author": self.comment_prefs.author,
-            // Per-tool comment defaults (colours, opacity, widths), so Make Current
-            // Properties Default survives a restart (#340).
-            "comment_styles": self
-                .comment_prefs
-                .styles()
-                .map(|(t, s)| serde_json::json!({
+        let d = &self.print_draft;
+        let size = d.paper_size();
+        let layout = settings::Layout {
+            reopen_last_session: Some(self.reopen_last_session),
+            restore_last_view: Some(self.restore_last_view),
+            last_views: json_text(&self.last_views_to_save()),
+            system_title_bar: Some(self.title_bar_choice == TitleBarPref::System),
+            reload_changed_files: Some(self.reload_changed_files),
+            update_check_at_start: Some(self.update_check_at_start),
+            show_secured_notice: Some(self.show_secured_notice),
+            text_links: Some(self.text_links),
+            pinned_folders: json_text(&self.pinned.folders),
+            pinned_folders_collapsed: json_text(&self.pinned.collapsed),
+            pinned_tools: Some(self.pinned_tools.clone()),
+            theme: Some(self.theme_preference),
+            scroll_speed: Some(self.scroll_speed),
+            invert_middle_drag: Some(self.invert_middle_drag),
+            animation_effects: Some(self.animation_effects),
+            default_mode: Some(self.default_mode),
+            default_layout: Some(canvas::display_token(self.view_defaults.display, self.view_defaults.continuous).to_string()),
+            combine_columns: Some(self.combine_columns.clone()),
+            combine_view: Some(self.combine_view.as_str().to_string()),
+            combine_zoom: Some(self.combine_zoom),
+            organize_zoom: Some(self.organize_zoom),
+        };
+        let print = settings::Print {
+            print_custom_papers: json_text(&d.custom_papers),
+            // Canonical names survive changes to the order of PAPERS and do not depend on UI
+            // language; a custom paper is stored by the name it was given.
+            print_paper: (d.paper < d.paper_count()).then(|| d.paper_name().to_string()),
+            print_paper_size: Some([size.0, size.1]),
+            print_paper_overridden: Some(d.paper_overridden),
+            print_printers: json_text(&crate::print_ui::setups_to_json(&d.setups)),
+            duplex: Some(print_names::duplex(d.duplex).to_string()),
+            grayscale: Some(d.grayscale),
+            collate: Some(d.collate),
+            custom_scale: Some(d.custom_scale),
+            size: Some(print_names::size_mode(d.size).to_string()),
+            comments_forms: Some(print_names::content(d.content).to_string()),
+            binding: Some(print_names::binding(d.binding).to_string()),
+            as_image: Some(d.as_image),
+            dpi: Some(d.dpi),
+        };
+        let behavior = settings::Behavior {
+            default_page_gaps: Some(self.view_defaults.page_gaps),
+            full_screen_fill: Some(self.full_screen_fill),
+            full_screen_escape_exits: Some(self.full_screen_escape_exits),
+            units: Some(self.units),
+            always_default_view: Some(self.always_default_view),
+            highlight_fields: Some(self.highlight_fields),
+            comments_panel_closed: Some(self.comments_panel_closed),
+            right_panel_closed: Some(self.right_panel_closed),
+            ocr: json_text(&self.ocr_draft.to_pref()),
+            default_zoom: Some(self.view_defaults.zoom_name().to_string()),
+            language: Some(self.language.clone()),
+            flatten_fill_sign: Some(self.flatten_fill_sign_on_save),
+            ask_to_lock_signatures: Some(self.ask_to_lock_signatures),
+            fill_text_size: Some(self.fill_text_size),
+            fill_text_color: Some(self.fill_text_color),
+            show_page_edge_shadows: Some(self.show_page_edge_shadows),
+            fill_text_border: Some(self.fill_text_default.width),
+            fill_text_border_shape: Some(self.fill_text_default.shape.name().to_string()),
+            // Absent is "the text's colour": TOML has no null.
+            fill_text_border_color: self.fill_text_default.color,
+            redact_prefs: json_text(&self.redact_defaults.to_json()),
+        };
+        let view = settings::View {
+            reading_colors: Some(self.reading_colors),
+            ui_scale: self.ui_scale.map(f64::from),
+            date_format: Some(self.session.date_format().to_string()),
+            date_language: self.session.date_language().map(str::to_string),
+            author: Some(self.comment_prefs.author.clone()),
+            hide_empty_highlight_hover: Some(self.comment_prefs.hide_empty_highlight_hover),
+            comment_tool_pinned: Some(self.comment_prefs.pinned),
+        };
+        let styles: Vec<serde_json::Value> = self
+            .comment_prefs
+            .styles()
+            .map(|(t, s)| {
+                serde_json::json!({
                     "tool": t.command(),
                     "color": s.color,
                     "opacity": s.opacity,
@@ -142,369 +220,350 @@ impl PdfCraftApp {
                     "fill": s.fill,
                     "border_color": s.border_color,
                     "border_shape": s.border_shape.name(),
-                }))
-                .collect::<Vec<_>>(),
-            // Default font sizes of new text boxes and callouts (#5767).
-            "comment_font_sizes": self
-                .comment_prefs
-                .font_sizes()
-                .map(|(t, size)| serde_json::json!({ "tool": t.command(), "font_size": size }))
-                .collect::<Vec<_>>(),
-            // Drawn signatures keep their original form (older settings read the same).
-            "signature": match &self.signature { Some(fill_sign::SavedSig::Drawn(s)) => Some(s), _ => None },
-            "signature_text": match &self.signature { Some(fill_sign::SavedSig::Typed(t)) => Some(t), _ => None },
-            "signature_image": match &self.signature { Some(s @ fill_sign::SavedSig::Image(_)) => Some(s), _ => None },
-            "initials": self.initials,
-            "sign_graphic": self.sign_graphic,
+                })
+            })
+            .collect();
+        let font_sizes: Vec<serde_json::Value> =
+            self.comment_prefs.font_sizes().map(|(t, size)| serde_json::json!({ "tool": t.command(), "font_size": size })).collect();
+        let comment = settings::Comment { comment_styles: json_text(&styles), comment_font_sizes: json_text(&font_sizes) };
+        let signature = settings::Signature {
+            signatures: Some({
+                let mut slots = craft::review::ui::signature::SignatureSettings::default();
+                slots.signature = self.signature.clone();
+                slots.initials = self.initials.clone();
+                slots
+            }),
+            sign_graphic: Some(self.sign_graphic.clone()),
             // macOS Keychain and Windows store identities are read from their OS key stores each time.
-            "digital_ids": self.digital_ids.iter().filter(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")).collect::<Vec<_>>(),
-            "trusted": trusted,
-            "custom_stamps": stamps_ui::encode(&self.custom_stamps),
-            "javascript": self.session.javascript(),
-            "actions": actions_ui::encode(&self.custom_actions),
-            "combine_columns": self.combine_columns.to_json(),
-            "combine_view": self.combine_view.as_str(),
-            "combine_zoom": self.combine_zoom,
-            "comments_panel_closed": self.comments_panel_closed,
-            "right_panel_closed": self.right_panel_closed,
-            "ocr": self.ocr_draft.to_pref(),
-        });
-        // Set apart: one more key inside the macro above passes serde_json's recursion limit.
-        v["default_page_gaps"] = serde_json::Value::Bool(self.view_defaults.show_page_gaps);
-        v["recent_limit"] = serde_json::json!(self.recent_limit);
-        v["fill_text_color"] = serde_json::json!(self.fill_text_color);
-        v["full_screen_fill"] = serde_json::Value::Bool(self.view_defaults.full_screen_fill);
-        v["full_screen_escape_exits"] = serde_json::Value::Bool(self.full_screen_escape_exits);
-        v["redact_prefs"] = self.redact_defaults.to_json();
-        v["pinned_tools"] = serde_json::json!(self.pinned_tools);
-        // Set outside json! above, which is at serde_json's macro recursion limit.
-        v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
-        // The Print dialog's own paper sizes (print.page-setup).
-        v["print_custom_papers"] = serde_json::json!(self.print_draft.custom_papers);
-        v["show_page_edge_shadows"] = self.show_page_edge_shadows.into();
-        // Not `check_updates_at_start`: that key was an opt-in of its own, off unless chosen, and
-        // settings written then would turn this off unasked.
-        v["update_check_at_start"] = self.update_check_at_start.into();
-        v["hotbar"] = serde_json::to_value(&self.hotbar).unwrap_or_default();
-        v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
-        v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
-        v["text_links"] = serde_json::Value::Bool(self.text_links);
-        v["organize_zoom"] = serde_json::json!(self.organize_zoom);
-        // Canonical names survive changes to the order of PAPERS and do not depend on UI language;
-        // a custom paper is stored by the name it was given.
-        let d = &self.print_draft;
-        v["print_paper"] = serde_json::json!((d.paper < d.paper_count()).then(|| d.paper_name()));
-        let size = self.print_draft.paper_size();
-        v["print_paper_size"] = serde_json::json!([size.0, size.1]);
-        v["print_paper_overridden"] = serde_json::json!(self.print_draft.paper_overridden);
-        // Also set outside json! above, which is at serde_json's macro recursion limit.
-        v["print"] = print;
-        // Each printer's paper, sizing and two-sided choice, the one printed to last first (#2001).
-        v["print_printers"] = crate::print_ui::setups_to_json(&self.print_draft.setups);
-        v.to_string()
+            digital_ids: Some(
+                self.digital_ids.iter().filter(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")).cloned().collect(),
+            ),
+            trusted: Some(trusted),
+            custom_stamps: json_text(&stamps_ui::encode(&self.custom_stamps)),
+            actions: json_text(&actions_ui::encode(&self.custom_actions)),
+            javascript: Some(self.session.javascript()),
+        };
+        // PLAN: assumed app fields `dock`, `rail_side`, `recent_view`, `recent_sort` (chrome-w13, chrome-w16)
+        let dock = settings::Dock { dock: json_text(&*self.dock), rail_side: name_of(&self.rail_side) };
+        let recent = settings::Recent {
+            recent: json_text(&self.recent.iter().take(self.recent_limit).collect::<Vec<_>>()),
+            recent_limit: u32::try_from(self.recent_limit).ok(),
+            recent_view: name_of(&self.recent_view),
+            recent_sort: name_of(&self.recent_sort),
+        };
+        let hotbar = settings::Hotbar { tools: Some(self.hotbar.tools.clone()) };
+        // Kept only while the preference is on.
+        let session = settings::Session { last_session: self.reopen_last_session.then(|| json_text(&self.session_to_save())).flatten() };
+        PdfCraftSettings { layout, print, behavior, view, comment, signature, dock, recent, hotbar, session }
     }
 
-    /// Restore state written by `persist`. Unknown or malformed data is ignored.
-    pub fn restore(&mut self, json: &str) {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return };
-        if let Ok(mut bar) = serde_json::from_value::<crate::hotbar::Hotbar>(v["hotbar"].clone()) {
-            if v["hotbar"].get("placed").is_none() {
-                bar.adopt_legacy();
-            }
-            bar.normalize();
-            self.hotbar = bar;
+    /// Hands the app the settings store it saves the preferences to from now on (the launch opens it).
+    pub fn attach_settings(&mut self, store: settings::Store) {
+        self.settings = Some(store);
+    }
+
+    /// Applies settings the store or an import produced. A value that is absent keeps what the app
+    /// has; a value out of range is clamped or refused as the dialogs would.
+    pub fn apply_settings(&mut self, s: &PdfCraftSettings) {
+        self.apply_hotbar(&s.hotbar);
+        self.apply_dock(&s.dock);
+        self.apply_recent(&s.recent);
+        self.apply_layout(&s.layout);
+        self.apply_behavior(&s.behavior);
+        self.apply_print(&s.print);
+        self.apply_view(&s.view);
+        self.apply_comment(&s.comment);
+        self.apply_signature(&s.signature);
+        self.apply_session(&s.session);
+    }
+
+    fn apply_hotbar(&mut self, s: &settings::Hotbar) {
+        if let Some(tools) = &s.tools {
+            self.hotbar.tools = tools.clone();
         }
-        let panels = side_panels::restore(&v);
-        self.side_panels = panels.panels;
-        if let Some(open) = panels.tools_open {
-            self.left_open = open;
+    }
+
+    fn apply_dock(&mut self, s: &settings::Dock) {
+        if let Some(workspace) = parsed(&s.dock).and_then(|v| serde_json::from_value(v).ok()) {
+            std::sync::Arc::make_mut(&mut self.dock).replace(workspace);
         }
-        if let Some(right) = v.get("docking_right") {
-            self.right = serde_json::from_value(right.clone()).ok().flatten().filter(|_| !panels.side_closed);
+        if let Some(side) = s.rail_side.as_deref().and_then(from_name) {
+            self.rail_side = side;
         }
-        self.combine_columns = combine_ui::Columns::from_json(&v["combine_columns"]);
-        if let Some(view) = v["combine_view"].as_str().and_then(combine_ui::CombineView::parse) {
-            self.combine_view = view;
-        }
-        if let Some(zoom) = v["combine_zoom"].as_f64() {
-            self.set_combine_zoom(zoom as f32);
-        }
-        // Clamped like any grid zoom when the grid next shows; nonsense keeps the usual size.
-        if let Some(zoom) = v["organize_zoom"].as_f64().map(|z| z as f32).filter(|z| z.is_finite()) {
-            self.organize_zoom = zoom.clamp(*canvas::GRID_ZOOM_RANGE.start(), *canvas::GRID_ZOOM_RANGE.end());
-        }
-        if let Ok(r) = serde_json::from_value::<Vec<RecentFile>>(v["recent"].clone()) {
+    }
+
+    /// The recent files, how Home lists them and how many are kept.
+    fn apply_recent(&mut self, s: &settings::Recent) {
+        if let Some(entries) = parsed(&s.recent).as_ref().and_then(serde_json::Value::as_array) {
+            let files: Vec<crate::RecentFile> = entries.iter().filter_map(|e| serde_json::from_value(e.clone()).ok()).collect();
             // Entries whose files are gone leave once the window is up: asking here could block
             // startup on a mount that has stopped answering (#5682).
-            self.recent_check.restored(r.iter().map(|f| f.path.clone()).collect());
-            self.recent = r;
+            self.recent_check.restored(files.iter().map(|f| f.path.clone()).collect());
+            self.recent = files;
         }
         // Nonsense keeps the limit it had; settings from before the limit have none.
-        if let Some(limit) = v["recent_limit"].as_u64() {
+        if let Some(limit) = s.recent_limit {
             self.recent_limit = usize::try_from(limit).map_or(crate::RECENT_FILES_MAX, |n| n.min(crate::RECENT_FILES_MAX));
         }
         self.recent.truncate(self.recent_limit);
-        self.restore_layout_prefs(&v);
-        self.restore_behavior_prefs(&v);
-        self.restore_view_prefs(&v);
-        self.restore_comment_prefs(&v);
-        self.restore_signature_prefs(&v);
+        if let Some(view) = s.recent_view.as_deref().and_then(from_name) {
+            self.recent_view = view;
+        }
+        if let Some(sort) = s.recent_sort.as_deref().and_then(from_name) {
+            self.recent_sort = sort;
+        }
     }
 
-    /// The panels, combine view, zoom and recent files.
-    fn restore_layout_prefs(&mut self, v: &serde_json::Value) {
-        if let Some(on) = v["reopen_last_session"].as_bool() {
+    /// The Last-session choice, window chrome, theme and the grids' zoom.
+    fn apply_layout(&mut self, s: &settings::Layout) {
+        if let Some(columns) = &s.combine_columns {
+            self.combine_columns = columns.clone();
+        }
+        if let Some(view) = s.combine_view.as_deref().and_then(combine_ui::CombineView::parse) {
+            self.combine_view = view;
+        }
+        if let Some(zoom) = s.combine_zoom {
+            self.set_combine_zoom(zoom);
+        }
+        // Clamped like any grid zoom; nonsense keeps the usual size.
+        if let Some(zoom) = s.organize_zoom.filter(|z| z.is_finite()) {
+            let range = craft::pages::ui::ORGANIZE_ZOOM.range();
+            self.organize_zoom = zoom.clamp(*range.start(), *range.end());
+        }
+        if let Some(on) = s.reopen_last_session {
             self.reopen_last_session = on;
         }
-        if let Some(on) = v["restore_last_view"].as_bool() {
+        if let Some(on) = s.restore_last_view {
             self.restore_last_view = on;
         }
-        self.restore_last_views(&v["last_views"]);
-        self.last_session = last_session::LastSession::from_json(&v["last_session"]);
-        if let Some(on) = v["system_title_bar"].as_bool() {
-            self.system_title_bar = on;
+        self.restore_last_views(&parsed(&s.last_views).unwrap_or(serde_json::Value::Null));
+        if let Some(on) = s.system_title_bar {
+            // The window follows in the next frame (`prepare_raw_input`).
+            self.title_bar_choice = if on { TitleBarPref::System } else { TitleBarPref::Integrated };
         }
-        if let Some(on) = v["reload_changed_files"].as_bool() {
+        if let Some(on) = s.reload_changed_files {
             self.reload_changed_files = on;
         }
-        if let Some(on) = v["update_check_at_start"].as_bool() {
+        if let Some(on) = s.update_check_at_start {
             self.update_check_at_start = on;
         }
-        if let Some(on) = v["show_secured_notice"].as_bool() {
+        if let Some(on) = s.show_secured_notice {
             self.show_secured_notice = on;
         }
-        if let Some(on) = v["text_links"].as_bool() {
+        if let Some(on) = s.text_links {
             self.text_links = on;
         }
-        self.pinned.restore(&v["pinned_folders"]);
-        self.pinned.restore_collapsed(&v["pinned_folders_collapsed"]);
-        if let Some(items) = v.get("pinned_tools").and_then(serde_json::Value::as_array) {
-            let mut tools = Vec::new();
-            for item in items {
-                if let Some(id) = item.as_str()
-                    && pdfcraft_engine::catalog::group(id).is_some()
-                    && !tools.iter().any(|t| t == id)
-                {
-                    tools.push(id.to_string());
+        self.pinned.restore(&parsed(&s.pinned_folders).unwrap_or(serde_json::Value::Null));
+        self.pinned.restore_collapsed(&parsed(&s.pinned_folders_collapsed).unwrap_or(serde_json::Value::Null));
+        if let Some(items) = &s.pinned_tools {
+            let mut tools: Vec<String> = Vec::new();
+            for id in items {
+                if pdfcraft_engine::catalog::group(id).is_some() && !tools.iter().any(|t| t == id) {
+                    tools.push(id.clone());
                 }
             }
             self.pinned_tools = tools;
         }
-        if let Ok(preference) = serde_json::from_value::<ThemePreference>(v["theme"].clone()) {
+        if let Some(preference) = s.theme {
             self.set_theme_preference(preference);
         }
-        if let Ok(speed) = serde_json::from_value::<scroll_speed::ScrollSpeed>(v["scroll_speed"].clone()) {
+        if let Some(speed) = s.scroll_speed {
             self.scroll_speed = speed;
         }
-        if let Some(invert) = v["invert_middle_drag"].as_bool() {
+        if let Some(invert) = s.invert_middle_drag {
             self.invert_middle_drag = invert;
         }
-        if let Ok(effects) = serde_json::from_value::<motion::AnimationEffects>(v["animation_effects"].clone()) {
+        if let Some(effects) = s.animation_effects {
             self.animation_effects = effects;
         }
-        if let Ok(mode) = serde_json::from_value::<Mode>(v["default_mode"].clone()) {
+        if let Some(mode) = s.default_mode {
             self.default_mode = mode;
         }
-        if let Some((layout, continuous)) = v["default_layout"].as_str().and_then(canvas::parse_display_token) {
-            (self.view_defaults.layout, self.view_defaults.continuous) = (layout, continuous);
+        if let Some((layout, continuous)) = s.default_layout.as_deref().and_then(canvas::parse_display_token) {
+            (self.view_defaults.display, self.view_defaults.continuous) = (layout, continuous);
         }
     }
 
-    /// The page gaps and full screen's switches: fill the screen, and whether Esc leaves it.
-    fn restore_page_display_prefs(&mut self, v: &serde_json::Value) {
-        if let Some(show) = v["default_page_gaps"].as_bool() {
-            self.view_defaults.show_page_gaps = show;
-        }
-        if let Some(fill) = v["full_screen_fill"].as_bool() {
-            self.view_defaults.full_screen_fill = fill;
-        }
-        if let Some(exits) = v["full_screen_escape_exits"].as_bool() {
-            self.full_screen_escape_exits = exits;
-        }
+    /// The windows to reopen. Absent clears them, as the choice is saved only while reopening is on.
+    fn apply_session(&mut self, s: &settings::Session) {
+        let value = parsed(&s.last_session).unwrap_or(serde_json::Value::Null);
+        self.last_session = craft::platform::session::Session::from_json(&value);
     }
 
     /// The Print dialog's papers, each printer's setup and the choices it keeps (#2001).
-    fn restore_print_prefs(&mut self, v: &serde_json::Value) {
+    fn apply_print(&mut self, p: &settings::Print) {
         // The Print dialog's own paper sizes; settings are untrusted, so each custom paper is
         // checked as if it were typed.
-        if v.get("print_custom_papers").is_some() {
-            self.print_draft.custom_papers = print_paper::read_custom(&v["print_custom_papers"]);
+        if let Some(papers) = parsed(&p.print_custom_papers) {
+            self.print_draft.custom_papers = print_paper::read_custom(&papers);
         }
         // After the custom papers, so a custom paper chosen last time is found by its name.
-        if let Some(name) = v.get("print_paper").and_then(serde_json::Value::as_str) {
-            let saved_size = v.get("print_paper_size").and_then(|s| {
-                let w = s.get(0)?.as_f64()?;
-                let h = s.get(1)?.as_f64()?;
-                if w >= 72.0 && h >= 72.0 && w.is_finite() && h.is_finite() { Some((w, h)) } else { None }
-            });
+        if let Some(name) = p.print_paper.as_deref() {
+            let saved_size =
+                p.print_paper_size.and_then(|[w, h]| if w >= 72.0 && h >= 72.0 && w.is_finite() && h.is_finite() { Some((w, h)) } else { None });
+            let size_ok = |s: &(f64, f64)| match saved_size {
+                Some(sz) => (s.0 - sz.0).abs() <= 1.0 && (s.1 - sz.1).abs() <= 1.0,
+                None => true,
+            };
             let matched_pos = self
                 .print_draft
                 .papers
                 .iter()
-                .position(|(n, s)| n == name && saved_size.is_none_or(|sz| (s.0 - sz.0).abs() <= 1.0 && (s.1 - sz.1).abs() <= 1.0))
-                .or_else(|| {
-                    pdfcraft_engine::print::PAPERS.iter().position(|(canonical, s)| {
-                        *canonical == name && saved_size.is_none_or(|sz| (s.0 - sz.0).abs() <= 1.0 && (s.1 - sz.1).abs() <= 1.0)
-                    })
-                })
+                .position(|(n, s)| n == name && size_ok(s))
+                .or_else(|| pdfcraft_engine::print::PAPERS.iter().position(|(canonical, s)| *canonical == name && size_ok(s)))
                 .or_else(|| self.print_draft.paper_index(name));
+            let overridden = p.print_paper_overridden.unwrap_or(false);
             if let Some(paper) = matched_pos {
                 self.print_draft.paper = paper;
-                self.print_draft.paper_overridden = v.get("print_paper_overridden").and_then(serde_json::Value::as_bool).unwrap_or(false);
+                self.print_draft.paper_overridden = overridden;
             } else if let Some(size) = saved_size {
                 self.print_draft.papers.push((name.to_string(), size));
                 self.print_draft.paper = self.print_draft.papers.len() - 1;
-                self.print_draft.paper_overridden = v.get("print_paper_overridden").and_then(serde_json::Value::as_bool).unwrap_or(false);
+                self.print_draft.paper_overridden = overridden;
             }
         }
-        if let Some(setups) = crate::print_ui::setups_from_json(&v["print_printers"]) {
+        if let Some(setups) = parsed(&p.print_printers).and_then(|v| crate::print_ui::setups_from_json(&v)) {
             self.print_draft.setups = setups;
         }
         // The Print dialog's remembered choices (#2001). Settings are untrusted: an unknown name
-        // or a scale outside the dialog's range keeps the default. The scale is read before the
+        // or a scale outside the dialog's range keeps the default. The scale is applied before the
         // size mode, which carries it.
-        let print = &v["print"];
         let draft = &mut self.print_draft;
-        if let Some(duplex) = print["duplex"].as_str().and_then(print_names::parse_duplex) {
+        if let Some(duplex) = p.duplex.as_deref().and_then(print_names::parse_duplex) {
             draft.duplex = duplex;
         }
-        if let Some(on) = print["grayscale"].as_bool() {
+        if let Some(on) = p.grayscale {
             draft.grayscale = on;
         }
-        if let Some(on) = print["collate"].as_bool() {
+        if let Some(on) = p.collate {
             draft.collate = on;
         }
-        if let Some(scale) = print["custom_scale"].as_f64().filter(|s| print_ui::CUSTOM_SCALE.contains(s)) {
+        if let Some(scale) = p.custom_scale.filter(|s| print_ui::CUSTOM_SCALE.contains(s)) {
             draft.custom_scale = scale;
         }
-        if let Some(size) = print["size"].as_str().and_then(|name| print_names::parse_size_mode(name, draft.custom_scale)) {
+        if let Some(size) = p.size.as_deref().and_then(|name| print_names::parse_size_mode(name, draft.custom_scale)) {
             draft.size = size;
         }
-        if let Some(content) = print["comments_forms"].as_str().and_then(print_names::parse_content) {
+        if let Some(content) = p.comments_forms.as_deref().and_then(print_names::parse_content) {
             draft.content = content;
         }
         // A booklet's binding side, as Acrobat keeps it (#2707).
-        if let Some(binding) = print["binding"].as_str().and_then(print_names::parse_binding) {
+        if let Some(binding) = p.binding.as_deref().and_then(print_names::parse_binding) {
             draft.binding = binding;
         }
         // Print as image and its resolution (#6392), so a printer that needs pictures keeps getting
         // them; a resolution the dialog doesn't offer keeps the default.
-        if let Some(on) = print["as_image"].as_bool() {
+        if let Some(on) = p.as_image {
             draft.as_image = on;
         }
-        if let Some(dpi) = print["dpi"].as_f64().filter(|d| print_ui::IMAGE_DPI.contains(d)) {
+        if let Some(dpi) = p.dpi.filter(|d| print_ui::IMAGE_DPI.contains(d)) {
             draft.dpi = dpi;
         }
     }
 
     /// Switches for reopening, window chrome and file watching.
-    fn restore_behavior_prefs(&mut self, v: &serde_json::Value) {
-        self.restore_page_display_prefs(v);
-        if let Ok(units) = serde_json::from_value::<units::Unit>(v["units"].clone()) {
+    fn apply_behavior(&mut self, b: &settings::Behavior) {
+        if let Some(show) = b.default_page_gaps {
+            self.view_defaults.page_gaps = show;
+        }
+        if let Some(fill) = b.full_screen_fill {
+            self.full_screen_fill = fill;
+        }
+        if let Some(exits) = b.full_screen_escape_exits {
+            self.full_screen_escape_exits = exits;
+        }
+        if let Some(units) = b.units {
             self.units = units;
         }
-        if let Some(on) = v["always_default_view"].as_bool() {
+        if let Some(on) = b.always_default_view {
             self.always_default_view = on;
         }
-        self.restore_print_prefs(v);
-        if let Some(on) = v["highlight_fields"].as_bool() {
-            self.view_defaults.highlight_fields = on;
+        if let Some(on) = b.highlight_fields {
+            self.highlight_fields = on;
         }
-        if let Some(closed) = v["comments_panel_closed"].as_bool() {
+        if let Some(closed) = b.comments_panel_closed {
             self.comments_panel_closed = closed;
         }
-        if let Some(closed) = v["right_panel_closed"].as_bool() {
+        if let Some(closed) = b.right_panel_closed {
             self.right_panel_closed = closed;
         }
         // Scan & OCR choices (language, engine, strategy, output mode, preprocessing and skip
         // flags); unknown or malformed values keep the defaults.
-        self.ocr_draft.apply_pref(&v["ocr"]);
-        if let Some(defaults) = v["default_zoom"].as_str().and_then(|zoom| self.view_defaults.with_zoom(zoom)) {
+        self.ocr_draft.apply_pref(&parsed(&b.ocr).unwrap_or(serde_json::Value::Null));
+        if let Some(defaults) = b.default_zoom.as_deref().and_then(|zoom| self.view_defaults.with_zoom(zoom)) {
             self.view_defaults = defaults;
         }
-        if let Some(language) = v["language"].as_str().and_then(i18n::normalize_pref) {
+        if let Some(language) = b.language.as_deref().and_then(i18n::normalize_pref) {
             self.language = language.to_string();
         }
-        if let Some(on) = v["flatten_fill_sign"].as_bool() {
+        if let Some(on) = b.flatten_fill_sign {
             self.flatten_fill_sign_on_save = on;
         }
-        if let Some(on) = v["ask_to_lock_signatures"].as_bool() {
+        if let Some(on) = b.ask_to_lock_signatures {
             self.ask_to_lock_signatures = on;
         }
-        if let Some(size) = v["fill_text_size"].as_f64().and_then(fill_sign::valid_text_size) {
+        if let Some(size) = b.fill_text_size.and_then(fill_sign::valid_text_size) {
             self.fill_text_size = size;
         }
-        if let Ok(color) = serde_json::from_value::<[f64; 3]>(v["fill_text_color"].clone())
-            && let Some(color) = fill_sign::valid_text_color(color)
-        {
+        if let Some(color) = b.fill_text_color.and_then(fill_sign::valid_text_color) {
             self.fill_text_color = color;
         }
-        if let Some(show) = v["show_page_edge_shadows"].as_bool() {
+        if let Some(show) = b.show_page_edge_shadows {
             self.show_page_edge_shadows = show;
         }
-        if let Some(width) = v["fill_text_border"].as_f64().and_then(fill_sign::valid_text_border) {
+        if let Some(width) = b.fill_text_border.and_then(fill_sign::valid_text_border) {
             self.fill_text_default.width = width;
         }
-        if let Some(shape) = v["fill_text_border_shape"].as_str().and_then(pdfcraft_engine::BorderShape::parse) {
+        if let Some(shape) = b.fill_text_border_shape.as_deref().and_then(pdfcraft_engine::BorderShape::parse) {
             self.fill_text_default.shape = shape;
         }
-        // `null` is a saved "the text's colour"; a missing or malformed one keeps the setting.
-        match v.get("fill_text_border_color") {
-            Some(serde_json::Value::Null) => self.fill_text_default.color = None,
-            Some(c) => {
-                if let Some(c) = rgb_triple(c) {
-                    self.fill_text_default.color = Some(c.map(|x| x.clamp(0.0, 1.0)));
-                }
-            }
-            None => {}
-        }
+        // Absent is a saved "the text's colour".
+        self.fill_text_default.color = b.fill_text_border_color.map(|c| c.map(|x| x.clamp(0.0, 1.0)));
         // Fill & Sign text starts from the saved border.
         self.fill_text_border = self.fill_text_default.width;
         self.fill_text_border_color = self.fill_text_default.color;
         self.fill_text_border_shape = self.fill_text_default.shape;
-        if let Some(prefs) = RedactPrefs::from_json(&v["redact_prefs"]) {
+        if let Some(prefs) = parsed(&b.redact_prefs).and_then(|v| RedactPrefs::from_json(&v)) {
             self.redact_prefs = prefs.clone();
             self.redact_defaults = prefs;
         }
     }
 
-    /// Display defaults, units, language and sign-in details.
-    fn restore_view_prefs(&mut self, v: &serde_json::Value) {
-        // Settings are untrusted: an unreadable value (a colour that isn't three bytes, say)
-        // fails to deserialize and keeps Off.
-        if let Ok(colors) = serde_json::from_value::<pdfcraft_render::ReadingColors>(v["reading_colors"].clone()) {
+    /// Display defaults, units, language and the author.
+    fn apply_view(&mut self, v: &settings::View) {
+        if let Some(colors) = v.reading_colors {
             self.reading_colors = colors;
         }
-        // Settings are untrusted: a size out of range follows the system instead.
-        self.ui_scale = v["ui_scale"].as_f64().and_then(ui_scale::valid);
+        // A size out of range follows the system, and so does none: TOML has no null to save it as.
+        self.ui_scale = v.ui_scale.and_then(ui_scale::valid);
         // Settings are untrusted: an unusable pattern keeps the default.
-        if let Some(f) = v["date_format"].as_str() {
+        if let Some(f) = v.date_format.as_deref() {
             let _ = self.session.set_date_format(f);
         }
-        if let Some(l) = v["date_language"].as_str() {
+        if let Some(l) = v.date_language.as_deref() {
             let _ = self.session.set_date_language(Some(l));
         }
         // An empty or missing name keeps the login-name default; settings are untrusted, so the
         // name is cut to a sane length.
-        if let Some(author) = v["author"].as_str().map(str::trim).filter(|a| !a.is_empty()) {
+        if let Some(author) = v.author.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
             self.comment_prefs.author = author.chars().take(MAX_AUTHOR_CHARS).collect();
         }
-        if let Some(hide) = v["hide_empty_highlight_hover"].as_bool() {
+        if let Some(hide) = v.hide_empty_highlight_hover {
             self.comment_prefs.hide_empty_highlight_hover = hide;
         }
-        if let Some(pinned) = v["comment_tool_pinned"].as_bool() {
+        if let Some(pinned) = v.comment_tool_pinned {
             self.comment_prefs.pinned = pinned;
         }
     }
 
-    /// The author and per-tool comment styles.
-    fn restore_comment_prefs(&mut self, v: &serde_json::Value) {
+    /// The per-tool comment styles and font sizes.
+    fn apply_comment(&mut self, c: &settings::Comment) {
         // Per-tool comment styles (#340): each field goes through its clamping setter, so a
         // malformed or hostile entry is clamped or ignored rather than trusted.
-        if let Some(styles) = v["comment_styles"].as_array() {
+        if let Some(styles) = parsed(&c.comment_styles).as_ref().and_then(serde_json::Value::as_array) {
             for e in styles {
                 let Some(tool) = e["tool"].as_str().and_then(crate::comments::CommentTool::from_command) else { continue };
-                if let Some(c) = rgb_triple(&e["color"]) {
+                if let Some(c) = settings::rgb_triple(&e["color"]) {
                     self.comment_prefs.set_color(tool, c);
                 }
                 if let Some(o) = e["opacity"].as_f64() {
@@ -519,7 +578,7 @@ impl PdfCraftApp {
                 // missing or malformed fill keeps it.
                 let fill = match e.get("fill") {
                     Some(serde_json::Value::Null) => Some(None),
-                    Some(v) => rgb_triple(v).map(Some),
+                    Some(v) => settings::rgb_triple(v).map(Some),
                     None => None,
                 };
                 if let Some(fill) = fill {
@@ -532,7 +591,7 @@ impl PdfCraftApp {
                 match e.get("border_color") {
                     Some(serde_json::Value::Null) => self.comment_prefs.set_border_color(tool, None),
                     Some(c) => {
-                        if let Some(c) = rgb_triple(c) {
+                        if let Some(c) = settings::rgb_triple(c) {
                             self.comment_prefs.set_border_color(tool, Some(c));
                         }
                     }
@@ -545,7 +604,7 @@ impl PdfCraftApp {
         }
         // Default font sizes (#5767), clamped by the setter; a missing or malformed size keeps
         // the tool's own.
-        if let Some(sizes) = v["comment_font_sizes"].as_array() {
+        if let Some(sizes) = parsed(&c.comment_font_sizes).as_ref().and_then(serde_json::Value::as_array) {
             for e in sizes {
                 let Some(tool) = e["tool"].as_str().and_then(crate::comments::CommentTool::from_command) else { continue };
                 if let Some(size) = e["font_size"].as_f64() {
@@ -556,32 +615,26 @@ impl PdfCraftApp {
     }
 
     /// Saved signatures, stamps, actions and trusted certificates.
-    fn restore_signature_prefs(&mut self, v: &serde_json::Value) {
-        if let Ok(s) = serde_json::from_value::<Vec<Vec<[f32; 2]>>>(v["signature"].clone())
-            && s.iter().all(|st| st.iter().all(|p| p.iter().all(|x| x.is_finite())))
-        {
-            self.signature = Some(fill_sign::SavedSig::Drawn(s));
-        }
-        if let Some(t) = v["signature_text"].as_str().filter(|t| !t.trim().is_empty()) {
-            self.signature = Some(fill_sign::SavedSig::Typed(t.to_string()));
-        }
-        if let Ok(s @ fill_sign::SavedSig::Image(_)) = serde_json::from_value::<fill_sign::SavedSig>(v["signature_image"].clone()) {
-            self.signature = Some(s);
-        }
-        if let Ok(i) = serde_json::from_value::<fill_sign::SavedSig>(v["initials"].clone()) {
-            self.initials = Some(i);
+    fn apply_signature(&mut self, s: &settings::Signature) {
+        if let Some(slots) = &s.signatures {
+            self.signature = slots.signature.clone();
+            self.initials = slots.initials.clone();
         }
         // An unreadable choice (a damaged image) falls back to the name.
-        self.sign_graphic = serde_json::from_value(v["sign_graphic"].clone()).unwrap_or_default();
-        if let Ok(ids) = serde_json::from_value::<Vec<DigitalIdEntry>>(v["digital_ids"].clone()) {
-            self.digital_ids = ids;
+        self.sign_graphic = s.sign_graphic.clone().unwrap_or_default();
+        if let Some(ids) = &s.digital_ids {
+            self.digital_ids = ids.clone();
         }
-        self.custom_stamps = stamps_ui::decode(&v["custom_stamps"]);
-        self.custom_actions = actions_ui::decode(&v["actions"]);
-        if let Some(on) = v["javascript"].as_bool() {
+        if let Some(stamps) = parsed(&s.custom_stamps) {
+            self.custom_stamps = stamps_ui::decode(&stamps);
+        }
+        if let Some(actions) = parsed(&s.actions) {
+            self.custom_actions = actions_ui::decode(&actions);
+        }
+        if let Some(on) = s.javascript {
             self.session.set_javascript(on);
         }
-        if let Ok(pems) = serde_json::from_value::<Vec<String>>(v["trusted"].clone()) {
+        if let Some(pems) = &s.trusted {
             let certs = pems.iter().filter_map(|p| pdfcraft_engine::sign::x509::load_certificates(p.as_bytes()).ok()).flatten().collect();
             self.apply_trusted_certificates(certs);
         }
