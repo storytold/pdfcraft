@@ -50,7 +50,11 @@ impl crate::PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         let pending_opens: Vec<Value> = Vec::new();
         let cards = craft::ui::runtime::toast::cards(ctx, &craft::ui::runtime::env::WindowKey::main());
-        let notice = cards.last().map(|card| card.toast.message.as_str().to_string());
+        // A plain notice carries its text as the card's title; a notice with a body has the title above it.
+        let notice = cards.last().map(|card| {
+            let title = card.toast.title.as_ref().map(|t| t.as_str().to_owned());
+            [title, Some(card.toast.message.as_str().to_owned())].into_iter().flatten().filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n")
+        });
         let progress =
             cards.iter().rev().find_map(|card| card.toast.progress.map(|f| json!({ "label": card.toast.message.as_str(), "fraction": f })));
         let dock = crate::side_panels::state(self);

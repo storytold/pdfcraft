@@ -966,6 +966,7 @@ fn ukrainian_preferences_and_search_keep_command_ids() {
     ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": "none" }));
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeletePages { pages: vec![0, 1, 2, 3, 4] }));
+    settle(&mut h);
     let state = ok(&mut h, &c, "ui.state", json!({}));
     assert_eq!(state["language"], "uk");
     assert_eq!(state["notice"], "Помилка «Видалити сторінки»: a document must keep at least one page");
@@ -1059,6 +1060,8 @@ fn japanese_dialogs_errors_and_custom_action_names() {
     ok(&mut h, &c, "ui.set", json!({"key": "dialog", "value": "none"}));
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeletePages { pages: vec![0, 1, 2, 3, 4] }));
+    // The refusal is queued and shown as a card in the next pass; `ui.state` reads the cards.
+    settle(&mut h);
     let state = ok(&mut h, &c, "ui.state", json!({}));
     // The frame is translated; the engine's own error text is shown as it is.
     assert_eq!(state["notice"], "操作「ページを削除」に失敗しました: a document must keep at least one page");
@@ -1111,6 +1114,7 @@ fn simplified_chinese_signature_prompts_and_errors_keep_document_state() {
     ok(&mut h, &c, "ui.click", json!({"label": "取消"}));
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeletePages { pages: vec![0, 1, 2, 3, 4] }));
+    settle(&mut h);
     let state = ok(&mut h, &c, "ui.state", json!({}));
     assert_eq!(state["notice"], "删除页面失败：a document must keep at least one page");
     assert_eq!(state["documents"], documents, "a language change and failed edit must preserve the document");
