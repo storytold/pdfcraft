@@ -110,6 +110,7 @@ pub fn ci(_: &[String]) -> anyhow::Result<()> {
     type Step = (&'static str, Box<dyn Fn() -> anyhow::Result<()>>);
     let steps: Vec<Step> = vec![
         ("fmt", Box::new(|| run_args(&["fmt", "--all", "--", "--check"]))),
+        ("pdf-deps", Box::new(|| crate::pdf_deps::run(&root()).map_err(anyhow::Error::msg))),
         ("clippy", Box::new(|| run_args(&["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]))),
         ("cli-no-default-features", Box::new(|| run_args(&["check", "-p", "pdfcraft-cli", "--no-default-features"]))),
         ("test", Box::new(|| test(&[]))),
@@ -120,12 +121,18 @@ pub fn ci(_: &[String]) -> anyhow::Result<()> {
         ("deny", Box::new(|| deny(&[]))),
         ("parity", Box::new(|| crate::parity::run(&[]))),
     ];
-    for (i, (name, f)) in steps.iter().enumerate() {
+    // Independent steps keep running after a failure, so one run reports every failing step.
+    let mut failed = Vec::new();
+    for (name, f) in &steps {
         eprintln!("\n=== ci: {name} ===");
         if let Err(e) = f() {
-            println!("\nCI: {} passed, FAILED at `{name}`: {e:#}", i);
-            bail!("ci failed at `{name}`");
+            println!("\nCI: `{name}` FAILED: {e:#}");
+            failed.push(*name);
         }
+    }
+    if !failed.is_empty() {
+        println!("\nCI: {} of {} steps passed, FAILED: {}", steps.len() - failed.len(), steps.len(), failed.join(", "));
+        bail!("ci failed at {}", failed.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", "));
     }
     println!("\nCI: all {} steps passed", steps.len());
     Ok(())

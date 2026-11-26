@@ -354,12 +354,25 @@ impl Layouter<'_> {
                 if !edge.visible() {
                     return Ok(());
                 }
-                let (from, to) = if *slope_up {
+                // A line without a width is vertical and one without a height is horizontal,
+                // whatever its slope says; one too narrow or too flat for its stroke runs along its
+                // box's longer side (a zero-height line is horizontal).
+                let width = edge.thickness.clamp(0.1, 20.0);
+                let thin = inner.w <= width * 2.0 || inner.h <= width * 2.0;
+                let vertical = d.common.w.is_none() || (d.common.h.is_some() && thin && inner.h > inner.w);
+                let horizontal = !vertical && (d.common.h.is_none() || thin);
+                let (from, to) = if vertical {
+                    let x = inner.x + inner.w / 2.0;
+                    ((x, inner.y), (x, inner.bottom()))
+                } else if horizontal {
+                    let y = inner.y + inner.h / 2.0;
+                    ((inner.x, y), (inner.right(), y))
+                } else if *slope_up {
                     ((inner.x, inner.bottom()), (inner.right(), inner.y))
                 } else {
                     ((inner.x, inner.y), (inner.right(), inner.bottom()))
                 };
-                self.push(Item::Line { from, to, width: edge.thickness.clamp(0.1, 20.0), color: edge.color.0, dashed: edge.stroke == Stroke::Dashed })
+                self.push(Item::Line { from, to, width, color: edge.color.0, dashed: edge.stroke == Stroke::Dashed })
             }
             Value::Rectangle(b) => self.draw_border(b, inner),
             Value::Empty => Ok(()),
@@ -485,20 +498,24 @@ impl Layouter<'_> {
         if let Some(kept) = self.kept.by_som.get(som) {
             for name in kept {
                 if self.may_keep(name, &base, fallback) && self.taken.insert(name.clone()) {
+                    self.page_taken.push(name.clone());
                     return name.clone();
                 }
             }
         }
         // The template's own name, while no other field has it.
         if !fallback && !self.kept.all.contains(&base) && self.taken.insert(base.clone()) {
+            self.page_taken.push(base.clone());
             return base;
         }
         loop {
+            self.page_names.entry(base.clone()).or_insert_with(|| self.names.get(&base).copied());
             let n = self.names.entry(base.clone()).or_insert(0);
             *n = n.saturating_add(1);
             let candidate = if *n == 1 { base.clone() } else { format!("{base}_{n}") };
             let reserved = ((fallback || *n > 1) && self.template_names.contains(&candidate)) || self.kept.all.contains(&candidate);
             if !reserved && self.taken.insert(candidate.clone()) {
+                self.page_taken.push(candidate.clone());
                 return candidate;
             }
         }
