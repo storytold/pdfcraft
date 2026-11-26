@@ -3,6 +3,7 @@
 mod algorithms;
 mod ber;
 mod chain;
+mod changes_after_signing;
 mod cms;
 mod crypto;
 mod encrypted_signing;

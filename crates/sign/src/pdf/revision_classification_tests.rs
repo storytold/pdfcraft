@@ -7,7 +7,8 @@ use std::sync::Arc;
 use pdfcraft_cos::{Document, ObjRef, Object};
 
 use super::Modification;
-use super::changes::classify_changes;
+use super::locks::LockScope;
+use super::operations::judge_changes;
 
 /// One cross-reference row: an object written with header generation `.0` under row generation `.1`.
 enum Row<'a> {
@@ -65,7 +66,7 @@ fn r(num: u32, generation: u16) -> ObjRef {
 }
 
 fn assert_refused(doc: &Document, old: Document, p: u8) {
-    let verdict = classify_changes(doc, Some(old), Some(p));
+    let verdict = judge_changes(doc, Some(old), Some(p), &LockScope::none());
     assert!(matches!(verdict, Modification::Disallowed(_)), "P={p}: main returns {verdict:?}");
 }
 
@@ -207,7 +208,7 @@ fn hidden_shared_alias_form_fill() {
 }
 
 fn verdict(doc: &Document, old: Document, p: Option<u8>) -> Modification {
-    classify_changes(doc, Some(old), p)
+    judge_changes(doc, Some(old), p, &LockScope::none())
 }
 
 /// A widget whose /Annots entry is rewritten to a generation its slot never had no longer
@@ -349,15 +350,30 @@ fn a_signature_added_with_respelled_strings_is_signing() {
     ]);
     let catalog =
         |lang: &str, da: &str| format!("<< /Type /Catalog /Pages 2 0 R /Lang {lang} /AcroForm << /DA {da} /Fields [5 0 R 6 0 R] /SigFlags 3 >> >>");
-    let sig = "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Sig1) /Rect [0 0 0 0] /P 4 0 R >>";
+    let sig = "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Sig1) /V 7 0 R /Rect [0 0 0 0] /P 4 0 R >>";
+    // The signature value signs the revision that adds it: its /ByteRange ends where that
+    // revision ends. Written once with a placeholder range of the same width to learn the end.
     let now = |lang: &str, da: &str| {
-        signed.clone().revision(&[(1, Row::Obj(0, 0, &catalog(lang, da))), (4, Row::Obj(0, 0, &page("/Annots [6 0 R]"))), (6, Row::Obj(0, 0, sig))])
+        let with_range = |a: usize, b: usize, c: usize| {
+            let value = format!(
+                "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 {a:010} {b:010} {c:010}] /Contents <00> >>"
+            );
+            signed.clone().revision(&[
+                (1, Row::Obj(0, 0, &catalog(lang, da))),
+                (4, Row::Obj(0, 0, &page("/Annots [6 0 R]"))),
+                (6, Row::Obj(0, 0, sig)),
+                (7, Row::Obj(0, 0, &value)),
+            ])
+        };
+        let end = with_range(0, 0, 0).bytes.len();
+        with_range(1, 2, end - 2)
     };
     let respelled = now("<656E2D5553>", "<2F48656C76203020546620302067>");
     assert_eq!(verdict(&respelled.open(), signed.open(), Some(2)), Modification::Allowed(vec![super::kind::SIGNATURE]));
-    // A /DA that now says something else is a form change, however it is spelled.
+    // A /DA that now says something else is a form change, however it is spelled: it redraws
+    // every field that has no appearance of its own, which no fill or signature does (#7032).
     let restyled = now("<656E2D5553>", "<2F48656C7620313220546620302067>");
-    assert_eq!(verdict(&restyled.open(), signed.open(), None), Modification::Allowed(vec![super::kind::FORM_FILL, super::kind::SIGNATURE]));
+    assert_eq!(verdict(&restyled.open(), signed.open(), None), Modification::Disallowed(vec![super::kind::OTHER]));
 }
 
 /// A signed widget whose /Rect was written with reals, filled and saved by PdfCraft's own writer,
@@ -396,4 +412,236 @@ fn a_widget_rect_saved_back_as_integers_is_a_form_fill() {
     assert_eq!(verdict(&filled, signed.open(), Some(2)), Modification::Allowed(vec![super::kind::FORM_FILL]));
     let moved = save(Some(20.5));
     assert_eq!(verdict(&moved, signed.open(), Some(2)), Modification::Disallowed(vec![super::kind::PAGE_CONTENT]));
+}
+
+/// `f` with its newest trailer naming object `info` as the document information. The trailer
+/// follows the cross-reference table, so no offset moves.
+fn with_info(mut f: File, info: u32) -> File {
+    let at = f.xref.unwrap();
+    let tail = String::from_utf8(f.bytes.split_off(at)).unwrap();
+    f.bytes.extend_from_slice(tail.replacen("/Root 1 0 R", &format!("/Root 1 0 R /Info {info} 0 R"), 1).as_bytes());
+    f
+}
+
+/// From review on #7041: a list box shown by one widget is filled by changing its value and the
+/// selected indices together. That is a form fill, as it is for a field whose widgets are
+/// objects of their own; the indices changed without a new value are not.
+#[test]
+fn a_list_box_widget_filled_with_its_indices_is_a_form_fill() {
+    let list = |v: &str, i: u8| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Ch /T (Pick) /Opt [(a) (b)] /V ({v}) /I [{i}] /Rect [20 20 120 40] /P 3 0 R >>")
+    };
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>")),
+        (2, Row::Obj(0, 0, PAGES)),
+        (3, Row::Obj(0, 0, &page("/Annots [5 0 R]"))),
+        (4, Row::Obj(0, 0, &page("/Annots []"))),
+        (5, Row::Obj(0, 0, &list("a", 0))),
+    ]);
+    let filled = signed.clone().revision(&[(5, Row::Obj(0, 0, &list("b", 1)))]);
+    assert_eq!(verdict(&filled.open(), signed.open(), Some(2)), Modification::Allowed(vec![super::kind::FORM_FILL]));
+    let indices_only = signed.clone().revision(&[(5, Row::Obj(0, 0, &list("a", 1)))]);
+    assert!(matches!(verdict(&indices_only.open(), signed.open(), Some(2)), Modification::Disallowed(_)));
+}
+
+/// From review on #7041: a signature value the trailer also names as `/Info` is still the
+/// signature. Its `/Reason` rewritten is no change to the document information.
+#[test]
+fn a_signature_value_named_as_info_is_not_rewritten_as_metadata() {
+    let sig = |reason: &str| {
+        format!("<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 10 20 10] /Contents <00> /Reason ({reason}) >>")
+    };
+    let signed = with_info(
+        File::new().revision(&[
+            (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] /SigFlags 3 >> >>")),
+            (2, Row::Obj(0, 0, PAGES)),
+            (3, Row::Obj(0, 0, &page("/Annots [5 0 R]"))),
+            (4, Row::Obj(0, 0, &page("/Annots []"))),
+            (5, Row::Obj(0, 0, "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /V 6 0 R /Rect [150 20 280 70] /P 3 0 R >>")),
+            (6, Row::Obj(0, 0, &sig("Approved"))),
+        ]),
+        6,
+    );
+    let forged = with_info(signed.clone().revision(&[(6, Row::Obj(0, 0, &sig("Forged")))]), 6);
+    for p in [Some(1), Some(2), Some(3), None] {
+        let v = verdict(&forged.open(), signed.open(), p);
+        assert!(matches!(v, Modification::Disallowed(_)), "P={p:?}: {v:?}");
+    }
+}
+
+/// From review on #7041: the signed catalog's `/Perms`, also named as `/Info`, rewritten in place
+/// to name another signature as the certification, is no document information at any level.
+#[test]
+fn the_catalogs_perms_named_as_info_is_not_rewritten_as_metadata() {
+    let sig = "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 10 20 10] /Contents <00> >>";
+    let signed = with_info(
+        File::new().revision(&[
+            (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /Perms 7 0 R >>")),
+            (2, Row::Obj(0, 0, PAGES)),
+            (3, Row::Obj(0, 0, &page("/Annots []"))),
+            (4, Row::Obj(0, 0, &page("/Annots []"))),
+            (5, Row::Obj(0, 0, sig)),
+            (6, Row::Obj(0, 0, sig)),
+            (7, Row::Obj(0, 0, "<< /DocMDP 5 0 R >>")),
+        ]),
+        7,
+    );
+    let redirected = with_info(signed.clone().revision(&[(7, Row::Obj(0, 0, "<< /DocMDP 6 0 R >>"))]), 7);
+    for p in [Some(1), Some(2), Some(3), None] {
+        let v = verdict(&redirected.open(), signed.open(), p);
+        assert!(matches!(v, Modification::Disallowed(_)), "P={p:?}: {v:?}");
+    }
+}
+
+/// From review on #7041: an entry of a signed page's `/Annots` that led nowhere when signed,
+/// filled later with a widget the trailer names as `/Info`, puts a widget on the signed page. A
+/// dictionary with a role of its own is not document information because the trailer names it.
+#[test]
+fn a_widget_named_as_new_info_is_not_document_information() {
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R >>")),
+        (2, Row::Obj(0, 0, PAGES)),
+        (3, Row::Obj(0, 0, &page("/Annots [5 0 R]"))),
+        (4, Row::Obj(0, 0, &page("/Annots []"))),
+    ]);
+    let widget = "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Pay) /V (1000) /Rect [20 20 120 40] /P 3 0 R /F 4 >>";
+    let filled = with_info(signed.clone().revision(&[(5, Row::Obj(0, 0, widget))]), 5);
+    for p in [Some(2), Some(3), None] {
+        let v = verdict(&filled.open(), signed.open(), p);
+        assert!(matches!(v, Modification::Disallowed(_)), "P={p:?}: {v:?}");
+    }
+    // A plain information dictionary written as a new object is still housekeeping.
+    let info = with_info(signed.clone().revision(&[(6, Row::Obj(0, 0, "<< /Producer (Writer) >>"))]), 6);
+    assert_eq!(verdict(&info.open(), signed.open(), Some(2)), Modification::Allowed(vec![super::kind::METADATA]));
+}
+
+/// From review on #7041: a signed page's comment moved to another page is a comment change, as
+/// it was before the recogniser, and a widget moved so is still refused (`widget_moved_between_pages`).
+#[test]
+fn a_comment_moved_to_another_page_is_a_comment_change() {
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R >>")),
+        (2, Row::Obj(0, 0, PAGES)),
+        (3, Row::Obj(0, 0, &page("/Annots [5 0 R]"))),
+        (4, Row::Obj(0, 0, &page("/Annots []"))),
+        (5, Row::Obj(0, 0, COMMENT)),
+    ]);
+    let moved = signed.clone().revision(&[(3, Row::Obj(0, 0, &page("/Annots []"))), (4, Row::Obj(0, 0, &page("/Annots [5 0 R]")))]);
+    assert_eq!(verdict(&moved.open(), signed.open(), Some(3)), Modification::Allowed(vec![super::kind::COMMENTS]));
+    assert_eq!(verdict(&moved.open(), signed.open(), Some(2)), Modification::Disallowed(vec![super::kind::COMMENTS]));
+}
+
+/// From review on #7041: a link taken off a signed page changes where a click goes, as adding or
+/// changing one does, so it is no comment change at any level.
+#[test]
+fn a_link_removed_from_a_signed_page_is_no_comment_change() {
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R >>")),
+        (2, Row::Obj(0, 0, PAGES)),
+        (3, Row::Obj(0, 0, &page("/Annots [5 0 R]"))),
+        (4, Row::Obj(0, 0, &page("/Annots []"))),
+        (5, Row::Obj(0, 0, "<< /Type /Annot /Subtype /Link /Rect [0 0 50 50] /A << /S /URI /URI (https://example.com) >> >>")),
+    ]);
+    let removed = signed.clone().revision(&[(3, Row::Obj(0, 0, &page("/Annots []")))]);
+    for p in [Some(3), None] {
+        assert_eq!(verdict(&removed.open(), signed.open(), p), Modification::Disallowed(vec![super::kind::LINKS]), "P={p:?}");
+    }
+}
+
+/// From review on #7041: validation data is only added. A later revision that drops the signed
+/// document security store, or points the catalog at one that lost its entries, adds nothing;
+/// one that keeps them and adds more does.
+#[test]
+fn the_signed_document_security_store_is_not_dropped_or_swapped() {
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /DSS 5 0 R >>")),
+        (2, Row::Obj(0, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")),
+        (3, Row::Obj(0, 0, &page(""))),
+        (5, Row::Obj(0, 0, "<< /Certs [6 0 R] >>")),
+        (
+            6,
+            Row::Obj(
+                0,
+                0,
+                "<< /Length 3 >>
+stream
+abc
+endstream",
+            ),
+        ),
+    ]);
+    let catalog = |dss: &str| format!("<< /Type /Catalog /Pages 2 0 R {dss} >>");
+    let dropped = signed.clone().revision(&[(1, Row::Obj(0, 0, &catalog("")))]);
+    let swapped = signed.clone().revision(&[(1, Row::Obj(0, 0, &catalog("/DSS 7 0 R"))), (7, Row::Obj(0, 0, "<< /Certs [] >>"))]);
+    for (what, f) in [("dropped", &dropped), ("swapped", &swapped)] {
+        for p in [Some(1), Some(2), Some(3), None] {
+            let v = verdict(&f.open(), signed.open(), p);
+            assert!(matches!(v, Modification::Disallowed(_)), "{what} P={p:?}: {v:?}");
+        }
+    }
+    let grown = signed.clone().revision(&[
+        (1, Row::Obj(0, 0, &catalog("/DSS 7 0 R"))),
+        (7, Row::Obj(0, 0, "<< /Certs [6 0 R 8 0 R] >>")),
+        (
+            8,
+            Row::Obj(
+                0,
+                0,
+                "<< /Length 3 >>
+stream
+def
+endstream",
+            ),
+        ),
+    ]);
+    assert_eq!(verdict(&grown.open(), signed.open(), Some(1)), Modification::Allowed(vec![super::kind::SECURITY_STORE]));
+}
+
+/// From review on #7041: a form whose `/Fields` is an array of its own gains a signature field in
+/// that array, the form dictionary and its reference unchanged. That is signing, as it is for an
+/// inline array; the same array gaining a text field, or losing the signed one, is not.
+#[test]
+fn a_signature_field_added_to_an_indirect_fields_array_is_signing() {
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields 8 0 R >> >>")),
+        (2, Row::Obj(0, 0, PAGES)),
+        (3, Row::Obj(0, 0, &page("/Annots [5 0 R]"))),
+        (4, Row::Obj(0, 0, &page("/Annots []"))),
+        (5, Row::Obj(0, 0, TEXT_FIELD)),
+        (8, Row::Obj(0, 0, "[5 0 R]")),
+    ]);
+    let sig = "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Sig1) /V 7 0 R /Rect [0 0 0 0] /P 4 0 R >>";
+    let with_range = |fields: &str, a: usize, b: usize, c: usize| {
+        let value =
+            format!("<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 {a:010} {b:010} {c:010}] /Contents <00> >>");
+        signed.clone().revision(&[
+            (4, Row::Obj(0, 0, &page("/Annots [6 0 R]"))),
+            (6, Row::Obj(0, 0, sig)),
+            (7, Row::Obj(0, 0, &value)),
+            (8, Row::Obj(0, 0, fields)),
+        ])
+    };
+    let signing = |fields: &str| {
+        let end = with_range(fields, 0, 0, 0).bytes.len();
+        with_range(fields, 1, 2, end - 2)
+    };
+    for p in [Some(2), Some(3), None] {
+        assert_eq!(verdict(&signing("[5 0 R 6 0 R]").open(), signed.open(), p), Modification::Allowed(vec![super::kind::SIGNATURE]), "P={p:?}");
+    }
+    // The signed field dropped while the signature is added.
+    assert!(matches!(verdict(&signing("[6 0 R]").open(), signed.open(), Some(2)), Modification::Disallowed(_)));
+    // A later save that changes only /SigFlags is judged against each signature by what changed
+    // since it: for the certification the signature and the flags together are what one signing
+    // save writes; the approval signature that save follows did not set them, and refuses it.
+    let approved = signing("[5 0 R 6 0 R]");
+    let flagged = approved.clone().revision(&[(1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields 8 0 R /SigFlags 1 >> >>"))]);
+    assert_eq!(verdict(&flagged.open(), signed.open(), Some(2)), Modification::Allowed(vec![super::kind::SIGNATURE]));
+    assert!(matches!(verdict(&flagged.open(), approved.open(), None), Modification::Disallowed(_)));
+    // A text field added to the array signs nothing.
+    let text = TEXT_FIELD.replace("(Name)", "(Other)").replace("3 0 R", "4 0 R");
+    let added =
+        signed.clone().revision(&[(4, Row::Obj(0, 0, &page("/Annots [9 0 R]"))), (8, Row::Obj(0, 0, "[5 0 R 9 0 R]")), (9, Row::Obj(0, 0, &text))]);
+    for p in [Some(2), Some(3), None] {
+        assert!(matches!(verdict(&added.open(), signed.open(), p), Modification::Disallowed(_)), "P={p:?}");
+    }
 }
