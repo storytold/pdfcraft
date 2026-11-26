@@ -9273,6 +9273,16 @@ fn a_styled_phrase_centred_on_its_own_keeps_its_box() {
     for l in &lines {
         assert!(l.rect[0] >= 0.0 && l.rect[2] <= 600.0, "on the page: {:?}", l.rect);
     }
+
+    // Set flush left, the same title is no longer centred: it grows from its left edge without
+    // end, one row past the margin (the colour range splits that row into two lines).
+    let mut doc = text_page("BT /F1 12 Tf 3 Tr 262 700 Td (TITLE) Tj ET BT /F1 11 Tf 3 Tr 298 700 Td (BLOCK) Tj ET");
+    let left = text::BlockStyle { align: Some(added::Align::Left), ..styled.clone() };
+    text::rewrite_block(&mut doc, 0, 0, Some(long), &left).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    let first = lines[0].rect;
+    assert!(lines.iter().all(|l| (l.rect[1] - first[1]).abs() < 1.0), "one row: {lines:?}");
+    assert!(lines.iter().any(|l| l.rect[2] > 600.0 - 36.0), "past the margin: {lines:?}");
 }
 
 /// #2578: a single turned row grows along its baseline only up to the page's 36 pt margin and wraps

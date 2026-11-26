@@ -697,6 +697,8 @@ fn paragraph_geometry(
     // A recognised phrase is never wrapped: it grows along its line, past the page's edge if it
     // must, as its changed words do on an upright page (#8475). One flush right or centred, asked
     // for or on its own, keeps its box, as a page's own single line does, growing to the margin.
+    // An alignment asked for replaces the implicit centring, as it does when the rows are laid out.
+    let centred = centred && style.align.is_none();
     let natural = if block.invisible && !centred && matches!(style.align, None | Some(crate::added::Align::Left)) {
         14_400.0
     } else if block.invisible || block.rows.len() == 1 {
