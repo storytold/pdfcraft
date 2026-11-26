@@ -8,7 +8,7 @@ use craft::theme::TypeRole;
 use craft::ui::buttons::IconButton;
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft::ui::contract::{
-    Access, Bind, Common, Component, Cx, MeasureCx, NoValue, Outcome, PaintUi, Pointer as _, Props as _, Role, Show as _, ShowContainer as _, clicked,
+    Bind, Common, Component, Cx, MeasureCx, NoValue, Outcome, PaintUi, Pointer as _, Props as _, Role, Show as _, ShowContainer as _, clicked,
 };
 use craft::ui::dialog::Dialog;
 use craft::ui::display::{Divider, Shade, Text};
@@ -413,10 +413,6 @@ impl Component for LoupeViewport {
             }
         }
         ui.draw().stroke(&PaintShape::Rect(rect, cx.style.corners), StrokeWidth::Thin, cx.style.border);
-    }
-
-    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
-        access.role(Role::IMAGE);
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> LoupeViewportOutput {
