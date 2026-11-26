@@ -11942,6 +11942,71 @@ fn cropping_an_existing_image_clips_it_and_moves_with_it() {
     assert!(s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Crop([10.0, 10.0, 10.0, 50.0]) }).is_err());
 }
 
+/// A certified (DocMDP P=2) form, as a certifying application leaves it: signed over the whole
+/// file, with nothing appended.
+fn certified_xfa(original: &[u8]) -> Arc<Vec<u8>> {
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let id = sign::pkcs12::open(&p12, "test").unwrap();
+    let cos = pdfcraft_cos::Document::open(Arc::new(original.to_vec())).unwrap();
+    let opts = SignOptions { certify: Some(2), date: "D:20270115080000Z".into(), ..SignOptions::default() };
+    Arc::new(sign::sign(&cos, &id, &opts).unwrap())
+}
+
+/// What opening an XFA form writes (its layout, the values from its data, its open scripts) is
+/// PdfCraft's own working revision, not a change to the file: a certified government form
+/// opened untouched is not "altered since it was signed" (#2759). Once the user changes it, or
+/// saves, the file Save writes is what is judged, open-time revisions included.
+#[test]
+fn certified_xfa_forms_open_unaltered() {
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let signer = sign::pkcs12::open(&p12, "test").unwrap().certificate;
+    let forms = [
+        // Laying the template out adds pages: a change the certification doesn't permit.
+        ("dynamic", pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template(3)), "familyName", sign::kind::PAGES, SignatureStatus::Invalid),
+        // Taking the values from the data fills the fields: a permitted change.
+        (
+            "static",
+            pdfcraft_xfa::fixtures::static_shell("<form1><page1><name>Ada</name><agree>1</agree></page1></form1>"),
+            "form1[0].page1[0].name[0]",
+            sign::kind::FORM_FILL,
+            SignatureStatus::Valid,
+        ),
+    ];
+    for (what, form, field, saved_kind, saved_status) in forms {
+        let certified = certified_xfa(&form);
+        let mut s = Session::new().with_clock(|| 1_800_000_000);
+        let id = s.open("imm.pdf", None, certified.clone(), None).expect("opens");
+        let doc = s.get(id).unwrap();
+        assert!(doc.bytes.len() > certified.len() && !doc.dirty, "{what}: opening wrote a working revision, not an edit");
+        let verdict = |s: &Session| {
+            let sig = s.get(id).unwrap().signatures[0].clone();
+            (sig.status, sig.modification)
+        };
+        assert_eq!(s.get(id).unwrap().signatures[0].certify, Some(2), "{what}");
+        assert_eq!(verdict(&s), (SignatureStatus::Unknown, sign::Modification::None), "{what}: {:?}", s.get(id).unwrap().signatures[0].details);
+        // Trusting the signer revalidates the file as opened too.
+        s.set_trusted_certificates(vec![signer.clone()]);
+        assert_eq!(verdict(&s), (SignatureStatus::Valid, sign::Modification::None), "{what}");
+        // An edit is judged with everything Save would write; undoing it is the file as opened.
+        s.apply(id, Edit::SetFieldValue { name: field.into(), value: FieldValue::Text("Singh".into()) }).unwrap();
+        assert_ne!(verdict(&s).1, sign::Modification::None, "{what}");
+        s.undo(id).unwrap();
+        assert_eq!(verdict(&s), (SignatureStatus::Valid, sign::Modification::None), "{what}");
+        s.revert(id).unwrap();
+        assert_eq!(verdict(&s), (SignatureStatus::Valid, sign::Modification::None), "{what}");
+        // Saved, the open-time revision is part of the file.
+        let saved = s.save_bytes(id).unwrap();
+        s.mark_saved(id, saved, None).unwrap();
+        let (status, modification) = verdict(&s);
+        assert_eq!(status, saved_status, "{what}: {modification:?}");
+        let kinds = match &modification {
+            sign::Modification::Allowed(k) | sign::Modification::Disallowed(k) => k.clone(),
+            sign::Modification::None => Vec::new(),
+        };
+        assert!(kinds.contains(&saved_kind), "{what}: {modification:?}");
+    }
+}
+
 /// Convert colours re-encodes pictures too (RGB → gray, the JPEG staying JPEG) and is one undo
 /// step; a document with nothing to convert refuses rather than leaving an empty step.
 #[test]

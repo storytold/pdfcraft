@@ -6433,8 +6433,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.validate"]
 tools = ["sign_list"]
-evidence = ["crates/sign/tests/it/pdf.rs::signing_then_validating_with_and_without_trust", "crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/sign/tests/it/chain.rs::a_trusted_signer_whose_certificate_may_not_sign_is_not_valid"]
-notes = "The signer's key usage, extended key usage and critical extensions are checked; name constraints are not"
+evidence = ["crates/sign/tests/it/pdf.rs::signing_then_validating_with_and_without_trust", "crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/sign/tests/it/chain.rs::a_trusted_signer_whose_certificate_may_not_sign_is_not_valid", "crates/engine/src/tests.rs::certified_xfa_forms_open_unaltered"]
+notes = "The signer's key usage, extended key usage and critical extensions are checked; name constraints are not. A signed XFA form is validated as the file was read: the revisions opening appends (dynamic layout, values from the data, open scripts) are not counted as changes until the user edits or saves (#2759). Still missing: saving a certified dynamic XFA form writes PdfCraft's page layout into the file, which the certification does not permit, so an edited or saved one reports pages added; there are no AATL/EUTL trust lists, so publicly issued signers and timestamp authorities stay unknown until their roots are trusted by hand"
 
 [[feature]]
 id = "sign.signatures-panel"
