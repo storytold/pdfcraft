@@ -312,8 +312,16 @@ pub(crate) fn combine(args: &[String]) -> Result<(), CliError> {
     if inputs.len() < 2 {
         return Err("combine: give at least two input files".into());
     }
-    let sources = inputs.iter().map(|p| Ok((file_stem(p), read(p)?))).collect::<Result<Vec<_>, String>>()?;
-    let bytes = purview_session().combine(&sources).map_err(|e| e.to_string())?;
+    let session = purview_session();
+    let sources = inputs
+        .iter()
+        .map(|path| {
+            let bytes = read(path)?;
+            let bytes = session.source_export_bytes(path, &bytes).map_err(|error| error.to_string())?;
+            Ok((file_stem(path), bytes))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let bytes = session.combine(&sources).map_err(|e| e.to_string())?;
     write_pdf(Path::new(out), &bytes)
 }
 

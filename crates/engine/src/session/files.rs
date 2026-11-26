@@ -40,7 +40,7 @@ impl Session {
     /// Ask Microsoft Purview for an exportable plaintext working copy before a source file is
     /// converted, combined, inserted or otherwise copied into a new PDF. The SDK handle is
     /// disposable here: subsequent operations use the authorized in-memory bytes.
-    pub(crate) fn source_export_bytes(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, EditError> {
+    pub fn source_export_bytes(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, EditError> {
         self.source_bytes(name, bytes, true)
     }
 

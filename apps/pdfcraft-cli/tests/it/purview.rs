@@ -99,4 +99,9 @@ fn pfile_extension_is_authorized_before_pdf_inspection() {
     let output = run(&["info", pfile.to_str().unwrap()]);
     assert_purview_failure(&output);
     assert!(output.stdout.is_empty());
+
+    let combined = fixture.0.join("combined.pfile.pdf");
+    let output = run(&["combine", pfile.to_str().unwrap(), pdf.to_str().unwrap(), "--out", combined.to_str().unwrap()]);
+    assert_purview_failure(&output);
+    assert!(!combined.exists());
 }
