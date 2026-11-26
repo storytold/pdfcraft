@@ -158,3 +158,65 @@ fn hide_actions_hide_and_show_fields() {
     click_field(&mut h, "show");
     assert!(!name_hidden(&h), "the Hide action with /H false showed it again");
 }
+
+/// One page: two push buttons on the same spot, a two-state toggle. Each one's action hides
+/// itself and then, through `/Next`, shows the other, as character sheets built of Hide actions
+/// do (#8104). The second starts hidden.
+fn toggle_fixture() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] /DA (/Helv 0 Tf 0 g) >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (one) /F 4 /Rect [20 300 100 320] /P 3 0 R \
+         /A << /S /Hide /T (one) /Next << /S /Hide /T (two) /H false >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (two) /F 6 /Rect [20 300 100 320] /P 3 0 R \
+         /A << /S /Hide /T (two) /Next [<< /S /Hide /T (one) /H false >>] >> >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// Whether widget object `num` has the Hidden annotation flag in the saved document.
+fn hidden(h: &Harness<'static, PdfCraftApp>, num: u32) -> bool {
+    let s = h.state();
+    let bytes = s.session.save_bytes(s.views[0].id).unwrap();
+    let doc = pdfcraft_cos::Document::open(bytes).unwrap();
+    doc.get(pdfcraft_cos::ObjRef::new(num, 0)).as_dict().and_then(|d| d.int(b"F")).unwrap_or(0) & 2 != 0
+}
+
+/// #8104: a button runs every action of its `/Next` chain in order, and what they change is one
+/// undo step.
+#[test]
+fn a_button_runs_its_chained_actions_in_order() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "toggle.pdf", None, toggle_fixture()).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+            app
+        }
+    });
+    h.run_steps(6);
+    assert!(!hidden(&h, 4) && hidden(&h, 5));
+    click_field(&mut h, "one");
+    assert!(hidden(&h, 4) && !hidden(&h, 5), "the first state hid itself and showed the second");
+    // The second, now shown on the same spot, takes the next click and turns back.
+    click_field(&mut h, "two");
+    assert!(!hidden(&h, 4) && hidden(&h, 5), "the second state hid itself and showed the first");
+    let id = h.state().views[0].id;
+    h.state_mut().session.undo(id).unwrap();
+    assert!(hidden(&h, 4) && !hidden(&h, 5), "one undo takes back both actions of a click");
+}

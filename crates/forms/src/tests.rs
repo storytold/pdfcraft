@@ -3378,6 +3378,39 @@ fn push_buttons_read_hide_actions() {
     assert_eq!(button(&mut doc, Object::Ref(looped), None), hide(&["loop"], true));
 }
 
+/// #8104: a push button's action and those its `/Next` names (one dictionary or an array) are
+/// read in the order they run, each action before its own `/Next`; a cycle reads each once.
+#[test]
+fn push_buttons_read_chained_actions_in_order() {
+    let mut doc = fixture();
+    let go = field(&fields(&doc), "go").obj;
+    let hide = |t: &str, h: bool, next: Option<Object>| {
+        let mut a = Dict::new();
+        a.set(b"S".to_vec(), Object::name("Hide"));
+        a.set(b"T".to_vec(), Object::String(PdfString::text(t)));
+        a.set(b"H".to_vec(), Object::Bool(h));
+        if let Some(next) = next {
+            a.set(b"Next".to_vec(), next);
+        }
+        a
+    };
+    let step = |t: &str, h: bool| af::ButtonAction::ShowHide { fields: vec![t.into()], hide: h };
+    // a, then its /Next array [b (whose /Next is c), d]: a, b, c, d.
+    let b = hide("b", true, Some(Object::Dict(hide("c", false, None))));
+    let a = hide("a", true, Some(Object::Array(vec![Object::Dict(b), Object::Dict(hide("d", false, None))])));
+    doc.update_dict(go, |d| d.set(b"A".to_vec(), Object::Dict(a))).unwrap();
+    assert_eq!(
+        field(&fields(&doc), "go").button,
+        Some(af::ButtonAction::Chain(vec![step("a", true), step("b", true), step("c", false), step("d", false)]))
+    );
+    // Two actions naming each other run once each.
+    let first = doc.add(Object::Dict(Dict::new()));
+    let second = doc.add(Object::Dict(hide("y", false, Some(Object::Ref(first)))));
+    doc.set(first, Object::Dict(hide("x", true, Some(Object::Ref(second)))));
+    doc.update_dict(go, |d| d.set(b"A".to_vec(), Object::Ref(first))).unwrap();
+    assert_eq!(field(&fields(&doc), "go").button, Some(af::ButtonAction::Chain(vec![step("x", true), step("y", false)])));
+}
+
 #[test]
 fn push_buttons_read_set_layer_actions() {
     use af::LayerOp::{Off, On, Toggle};

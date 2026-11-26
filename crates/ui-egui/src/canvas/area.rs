@@ -262,6 +262,18 @@ pub(super) fn run_button(
             let id = app.views[index].id;
             app.run_button_script_target(ctx, id, name, Some(identity), &js);
         }
+        // Each action runs in turn (#8104); what they change is one undo step, in their order.
+        B::Chain(actions) => {
+            let mut edits: Vec<pdfcraft_engine::Edit> = app.views[index].session.pending_edit.take().into_iter().collect();
+            for action in actions {
+                run_button(app, ctx, index, name, identity, action);
+                edits.extend(app.views[index].session.pending_edit.take());
+            }
+            app.views[index].session.pending_edit = match edits.len() {
+                0 | 1 => edits.pop(),
+                _ => Some(pdfcraft_engine::Edit::Batch { label: "Button actions".into(), edits }),
+            };
+        }
     }
 }
 
