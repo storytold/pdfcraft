@@ -1,19 +1,35 @@
-use super::{Arc, Color32, Edit, LineEditor, PageXform, Pos2, TextTarget};
+use craft::ui::primitives::textures::{CachedTexture, Revision, TextureState, TextureStore, TextureStoreOptions};
+use craft::ui::primitives::{ContentPainterCx, Draw};
+use egui::Color32;
+
+use super::{Arc, Edit, LineEditor, PageXform, Pos2, TextTarget};
+
+/// The store's salt: the one raster of the open paragraph's page lives under it.
+pub(super) const BACKGROUND_SALT: &str = "pdf-text-editor-background";
+
+/// What the store keys the raster by: the document generation, the page and the paragraph or added
+/// text it was rendered without.
+pub(super) type BackgroundKey = (u64, usize, TextTarget);
+
+/// The store the raster lives in: the page-sized budget, since the raster stands in for the page.
+pub(super) fn background_store(ctx: &egui::Context) -> TextureStore<BackgroundKey> {
+    TextureStore::in_context(ctx, BACKGROUND_SALT, TextureStoreOptions::pages())
+}
 
 /// A cached, read-only page background. The source glyphs are removed before rasterization;
 /// colour, pictures and unselected text beneath the editor remain visible.
 #[derive(Default)]
 pub(crate) struct TextBackground {
-    key: Option<(u64, usize, TextTarget)>,
-    pub(super) renderer: Option<pdfcraft_render::RenderPool>,
-    pub(super) texture: Option<egui::TextureHandle>,
+    key: Option<BackgroundKey>,
+    renderer: Option<pdfcraft_render::RenderPool>,
+    /// The scale (in thousandths) the raster in flight was asked for; the raster's revision.
     pub(super) tag: Option<u64>,
     received: Option<u64>,
+    /// The raster as the store holds it, kept so `ready` and `paint` need no context. Its id stays
+    /// valid while the key is in the store; every `prepare` marks the entry seen so it is not evicted.
+    shown: Option<CachedTexture>,
     draft_key: Option<(String, pdfcraft_engine::BlockStyle)>,
     draft_rect: Option<[f64; 4]>,
-    /// This frame's place for the textless page under the open paragraph's editor. It stays
-    /// empty, so the page shows its own text, until the paragraph is changed ([`Self::reveal`]).
-    slot: Option<(egui::Painter, egui::layers::ShapeIdx, egui::Shape)>,
     /// How the open paragraph looked in its editor last frame.
     look: Option<EditorLook>,
     /// An applied paragraph's last look. The page raster still has the old text until the page
@@ -49,7 +65,7 @@ impl TextBackground {
         let look = self.look.take().filter(|look| {
             matches!(edit, Edit::EditTextBlock { page, block, .. } if (look.page, look.block) == (*page, *block))
                 && self.key.is_some_and(|(_, page, target)| (page, target) == (look.page, TextTarget::Block(look.block)))
-                && self.texture.is_some()
+                && self.shown.is_some()
         });
         match look {
             Some(look) => {
@@ -74,14 +90,17 @@ impl TextBackground {
         draft: Option<&crate::content_ui::TextDraft>,
         scale: f32,
     ) {
+        let store = background_store(ctx);
         let key = editor
             .map(|ed| (doc.edit_generation(), ed.page, TextTarget::Block(ed.block)))
             .or_else(|| draft.and_then(|d| d.index.map(|index| (doc.edit_generation(), d.page, TextTarget::Added(index)))));
-        self.slot = None;
         if key.is_none() && self.settling.is_some() {
             return;
         }
         if self.key != key {
+            if let Some(old) = &self.key {
+                store.forget(ctx, old);
+            }
             *self = Self { key, ..Default::default() };
             if let Some((_, page, target)) = key {
                 self.renderer = match target {
@@ -99,7 +118,8 @@ impl TextBackground {
                 self.draft_key = Some(draft_key);
             }
         }
-        let (Some((_, page, _)), Some(renderer)) = (self.key, self.renderer.as_ref()) else { return };
+        let (Some(key), Some(renderer)) = (self.key, self.renderer.as_ref()) else { return };
+        let page = key.1;
         let Some(p) = doc.info.pages.get(page) else { return };
         // One raster stands in for the page's tiles while a paragraph is open, so everything
         // around the editor is drawn from it: at the tiling threshold it stays sharp on a Retina
@@ -115,17 +135,20 @@ impl TextBackground {
         if let Some(out) = renderer.try_recv() {
             if out.error.is_some() {
                 self.renderer = None;
-                self.texture = None;
+                self.shown = None;
+                store.forget(ctx, &key);
                 return;
             }
             if out.request.tag == tag {
-                self.texture = Some(ctx.load_texture(
-                    "text-editor-background",
-                    crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba),
-                    egui::TextureOptions::LINEAR,
-                ));
+                let image = crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba);
+                self.shown = Some(store.put(ctx, key, Revision::new(tag), image));
                 self.received = Some(tag);
             }
+        }
+        // Marks the entry seen this frame, so the store keeps it; one the store dropped is asked for again.
+        if self.shown.is_some() && matches!(store.state(ctx, &key, Revision::new(tag)), TextureState::Missing) {
+            self.shown = None;
+            self.received = None;
         }
         if self.received != Some(tag) {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
@@ -138,22 +161,26 @@ impl TextBackground {
     }
 
     pub fn ready(&self, page: usize, block: usize) -> bool {
-        self.key.is_some_and(|(_, p, target)| (p, target) == (page, TextTarget::Block(block))) && self.texture.is_some()
+        self.key.is_some_and(|(_, p, target)| (p, target) == (page, TextTarget::Block(block))) && self.shown.is_some()
     }
 
     pub fn ready_added(&self, page: usize, index: usize) -> bool {
-        self.key.is_some_and(|(_, p, target)| (p, target) == (page, TextTarget::Added(index))) && self.texture.is_some()
+        self.key.is_some_and(|(_, p, target)| (p, target) == (page, TextTarget::Added(index))) && self.shown.is_some()
     }
 
+    /// Paints the textless page over `page` where a paragraph or added text is being changed, and an
+    /// applied paragraph's last look until the page raster catches up. An open paragraph that has not
+    /// changed paints nothing: the page draws its own text.
     pub fn paint(
-        &mut self,
-        painter: &egui::Painter,
+        &self,
+        draw: &Draw<'_>,
+        content: &ContentPainterCx<'_>,
         xf: &PageXform,
         page: usize,
         editor: Option<&LineEditor>,
         draft: Option<&crate::content_ui::TextDraft>,
     ) {
-        let for_editor = editor.is_some_and(|ed| ed.page == page && self.ready(page, ed.block));
+        let for_editor = editor.is_some_and(|ed| ed.page == page && ed.has_changes() && self.ready(page, ed.block));
         // A zoom or a turn of the view since the paragraph was applied would misplace its rows:
         // the page raster (with the old text) shows until the new one arrives instead.
         let settled =
@@ -163,33 +190,17 @@ impl TextBackground {
         if !ready {
             return;
         }
-        let Some(tex) = &self.texture else { return };
+        let Some(tex) = self.shown else { return };
         // Font metrics can underestimate the actual glyph ink. Paint the complete textless
         // page so overhanging glyphs cannot remain outside the estimated source rectangle.
-        let painter = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
-        if for_editor {
-            // Its place under everything drawn on the page later; the editor fills it once the
-            // paragraph changes (an unchanged paragraph looks as the page draws it).
-            let mut mesh = egui::Mesh::with_texture(tex.id());
-            for (u, v) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
-                mesh.vertices.push(egui::epaint::Vertex { pos: xf.norm_to_screen(u, v), uv: Pos2::new(u, v), color: Color32::WHITE });
-            }
-            mesh.add_triangle(0, 1, 2);
-            mesh.add_triangle(0, 2, 3);
-            let idx = painter.add(egui::Shape::Noop);
-            self.slot = Some((painter, idx, egui::Shape::mesh(mesh)));
+        if xf.rot == 0 {
+            draw.texture(xf.rect, tex.id, egui::Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)));
         } else {
-            xf.paint_image(&painter, tex.id(), 0.0, 0.0, 1.0, 1.0);
-            if let Some(look) = settled {
-                painter.galley(xf.norm_to_screen(look.at.0, look.at.1), Arc::clone(&look.galley), look.color);
-            }
+            // `Draw::texture` paints an upright rect; a turned page maps the raster's corners instead.
+            xf.paint_image(&content.painter, tex.id, 0.0, 0.0, 1.0, 1.0);
         }
-    }
-
-    /// The open paragraph has changed: show the textless page under its editor this frame.
-    pub fn reveal(&mut self) {
-        if let Some((painter, idx, shape)) = self.slot.take() {
-            painter.set(idx, shape);
+        if let Some(look) = settled {
+            content.painter.galley(xf.norm_to_screen(look.at.0, look.at.1), Arc::clone(&look.galley), look.color);
         }
     }
 }

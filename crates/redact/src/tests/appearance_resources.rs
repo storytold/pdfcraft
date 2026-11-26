@@ -112,7 +112,7 @@ fn a_type3_font_written_in_an_appearance_s_own_resources_is_passed_over() {
 }
 
 /// What the Type 3 cleanup refuses a font written in place with.
-const DIRECT: &str = "a Type 3 font is not an indirect object";
+const DIRECT: &str = "a Type 3 font is written inside a resource dictionary, not as an object of its own";
 
 /// The same font in a resource dictionary given by reference, which other appearances can share:
 /// its glyph programs can't be cleaned, and the redaction is refused rather than leave them.
@@ -120,8 +120,8 @@ const DIRECT: &str = "a Type 3 font is not an indirect object";
 fn a_type3_font_written_in_shared_appearance_resources_is_refused() {
     let mut doc = with_appearance_font(b"9 0 R", vec![b"<< /Font << /PCTh1 FONT >> >>".to_vec()]);
     mark(&mut doc, 0, &[[9.0, 95.0, 40.0, 110.0]], "");
-    assert!(refused_for(&apply(&mut doc, None), DIRECT), "a direct Type 3 font other appearances can reach was not refused");
+    assert!(refused_for(&apply(&mut doc, None), None, DIRECT), "a direct Type 3 font other appearances can reach was not refused");
     let mut doc = with_appearance_font(b"<< /Font 9 0 R >>", vec![b"<< /PCTh1 FONT >>".to_vec()]);
     mark(&mut doc, 0, &[[9.0, 95.0, 40.0, 110.0]], "");
-    assert!(refused_for(&apply(&mut doc, None), DIRECT), "a direct Type 3 font in a shared /Font dictionary was not refused");
+    assert!(refused_for(&apply(&mut doc, None), None, DIRECT), "a direct Type 3 font in a shared /Font dictionary was not refused");
 }

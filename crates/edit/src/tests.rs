@@ -6,6 +6,8 @@ use super::*;
 
 #[path = "mark_transaction_tests.rs"]
 mod mark_transactions;
+#[path = "paragraph_grouping_tests.rs"]
+mod paragraph_grouping;
 
 /// Three pages: an upright page with content that leaves the graphics state changed (an
 /// unbalanced `cm`), a page rotated 90° and one with inherited, shared resources.
@@ -724,6 +726,173 @@ fn flattening_fields_drops_the_ones_on_no_page() {
     let fields = doc.resolve(af.as_dict().unwrap().get(b"Fields").unwrap());
     let left: Vec<pdfcraft_cos::ObjRef> = fields.as_array().unwrap().iter().filter_map(|f| f.as_ref()).collect();
     assert_eq!(left, [pdfcraft_cos::ObjRef::new(7, 0)], "only the hidden field on the page stays");
+}
+
+/// #2670: flattening form fields drops removed fields from `/AcroForm /CO` (calculation order)
+/// and removes `/CO` once empty, and drops `/SigFlags` once no signature fields remain.
+#[test]
+fn flattening_fields_cleans_calculation_order_and_sigflags() {
+    let page = stream("", " ");
+    // Test 1: both fields flattened -> /Fields becomes empty, /CO and /SigFlags are removed.
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] /CO [5 0 R] /SigFlags 1 >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (calc) /Rect [10 10 150 40] /F 4 /AP << /N 7 0 R >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /T (sig) /Rect [10 50 150 80] /F 4 /AP << /N 7 0 R >> >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>\nstream\n\nendstream",
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 2);
+    let doc = reopen(&doc);
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let af_dict = af.as_dict().unwrap();
+    let fields = doc.resolve(af_dict.get(b"Fields").unwrap());
+    assert_eq!(fields.as_array().unwrap().len(), 0, "no fields remain");
+    assert!(!af_dict.contains(b"CO"), "empty calculation order was removed");
+    assert!(!af_dict.contains(b"SigFlags"), "SigFlags was removed with no signature fields");
+
+    // Test 2: one field flattened, one surviving field -> /CO retains surviving field, SigFlags kept.
+    // The signature field has no appearance but is signed (a value), so it stays (#1794, #4017).
+    let mut doc2 = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] /CO [5 0 R 6 0 R] /SigFlags 1 >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (calc1) /Rect [10 10 150 40] /F 4 /AP << /N 7 0 R >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /T (sig_undrawable) /V << /Type /Sig >> /Rect [10 50 150 80] /F 4 >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>\nstream\n\nendstream",
+    ]);
+    assert_eq!(flatten(&mut doc2, &[0], false, true).unwrap(), 1, "only calc1 with appearance is drawn");
+    let doc2 = reopen(&doc2);
+    let root2 = doc2.root().unwrap();
+    let af2 = doc2.resolve(doc2.get(root2).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let af_dict2 = af2.as_dict().unwrap();
+    let co2 = doc2.resolve(af_dict2.get(b"CO").unwrap());
+    let co_refs: Vec<pdfcraft_cos::ObjRef> = co2.as_array().unwrap().iter().filter_map(|f| f.as_ref()).collect();
+    assert_eq!(co_refs, [pdfcraft_cos::ObjRef::new(6, 0)], "only surviving field remains in /CO");
+    assert!(af_dict2.contains(b"SigFlags"), "SigFlags kept because signature field survived");
+}
+
+/// #2670: removing an emptied `/CO` or an unneeded `/SigFlags` drops the key only. Both may be
+/// indirect objects that something else also refers to, and those references must still resolve.
+#[test]
+fn flattening_keeps_shared_calculation_order_and_sigflags_objects() {
+    let page = stream("", " ");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] /CO 9 0 R /SigFlags 8 0 R >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (calc) /Rect [10 10 150 40] /F 4 /AP << /N 7 0 R >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (kept) /V (Ada) /Ff 8 0 R /Order 9 0 R /Rect [10 50 150 80] /F 4 >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>
+stream
+
+endstream",
+        "3",
+        "[5 0 R]",
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1, "only calc is drawn; kept has no appearance");
+    let doc = reopen(&doc);
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let af_dict = af.as_dict().unwrap();
+    assert!(!af_dict.contains(b"CO"), "the emptied calculation order was removed");
+    assert!(!af_dict.contains(b"SigFlags"), "SigFlags was removed with no signature field left");
+    let kept = doc.get(pdfcraft_cos::ObjRef::new(6, 0));
+    let kept = kept.as_dict().unwrap();
+    assert_eq!(doc.resolve(kept.get(b"Ff").unwrap()).as_int(), Some(3), "the shared /SigFlags object still resolves");
+    assert!(doc.resolve(kept.get(b"Order").unwrap()).as_array().is_some(), "the shared /CO array still resolves");
+}
+
+/// #2670: a calculation order that loses some fields but not all is shortened for the form alone.
+/// Its indirect array may be shared, and the other references must still see the whole list.
+#[test]
+fn flattening_shortens_a_shared_calculation_order_without_changing_it() {
+    let page = stream("", " ");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] /CO 8 0 R >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (calc) /Rect [10 10 150 40] /F 4 /AP << /N 7 0 R >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (kept) /V (Ada) /Order 8 0 R /Rect [10 50 150 80] /F 4 >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>
+stream
+
+endstream",
+        "[5 0 R 6 0 R]",
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1, "only calc is drawn; kept has no appearance");
+    let doc = reopen(&doc);
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let co = doc.resolve(af.as_dict().unwrap().get(b"CO").expect("one field is left in the calculation order"));
+    let co: Vec<_> = co.as_array().unwrap().iter().map(|o| o.as_ref()).collect();
+    assert_eq!(co, [Some(pdfcraft_cos::ObjRef::new(6, 0))], "the form's order keeps only the field that is left");
+    let kept = doc.get(pdfcraft_cos::ObjRef::new(6, 0));
+    let order = doc.resolve(kept.as_dict().unwrap().get(b"Order").unwrap());
+    assert_eq!(order.as_array().map(|a| a.len()), Some(2), "the shared array still lists both fields");
+}
+
+/// #2670: a signature field kept deeper than the pruning cutoff still counts as left, so it keeps
+/// its `/CO` entry and the form keeps `/SigFlags`.
+#[test]
+fn flattening_keeps_a_deep_signature_field_in_the_calculation_order_and_sigflags() {
+    let levels = 66;
+    let page = stream("", " ");
+    // 5: the flattened widget; 6…: the chain; then the signed widget at its end, on the page.
+    let leaf = 6 + levels;
+    let mut objs: Vec<String> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] /CO [5 0 R {leaf} 0 R] /SigFlags 3 >> >>"),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R {leaf} 0 R] >>"),
+        page,
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (calc) /Rect [10 10 150 40] /F 4 /AP << /N {} 0 R >> >>", leaf + 1),
+    ];
+    for i in 0..levels {
+        objs.push(format!("<< /T (n{i}) /Kids [{} 0 R] >>", 7 + i));
+    }
+    objs.push("<< /Type /Annot /Subtype /Widget /FT /Sig /T (sig) /V << /Type /Sig >> /Rect [10 50 150 80] /F 4 >>".into());
+    objs.push("<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>\nstream\n\nendstream".into());
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let mut doc = build(&objs);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1, "only calc is drawn; the signed field has no appearance");
+    let doc = reopen(&doc);
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let af_dict = af.as_dict().unwrap();
+    let co = doc.resolve(af_dict.get(b"CO").expect("the deep field stays in the calculation order"));
+    let co: Vec<_> = co.as_array().unwrap().iter().filter_map(|o| o.as_ref()).collect();
+    assert_eq!(co, [pdfcraft_cos::ObjRef::new(leaf as u32, 0)]);
+    assert!(af_dict.contains(b"SigFlags"), "the deep signature field is still there");
+}
+
+/// #2670: flattening every page takes a field on no page out of its kept parent's `/Kids`. Nothing
+/// is drawn and `/Fields` keeps its length, but `/CO` and `/SigFlags` still lose that field.
+#[test]
+fn flattening_cleans_the_calculation_order_and_sigflags_of_an_orphan_under_a_kept_parent() {
+    let page = stream("", " ");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] /CO [6 0 R 7 0 R] /SigFlags 1 >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [6 0 R] >>",
+        &page,
+        "<< /FT /Tx /T (parent) /Kids [6 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /V (Ada) /Rect [10 10 150 40] /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /T (orphan) /Parent 5 0 R /Rect [10 50 150 80] /F 4 >>",
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 0, "the kept widget has no appearance to draw");
+    let doc = reopen(&doc);
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let af_dict = af.as_dict().unwrap();
+    let co = doc.resolve(af_dict.get(b"CO").expect("the kept widget stays in the calculation order"));
+    let co: Vec<_> = co.as_array().unwrap().iter().filter_map(|o| o.as_ref()).collect();
+    assert_eq!(co, [pdfcraft_cos::ObjRef::new(6, 0)], "the orphan left the calculation order");
+    assert!(!af_dict.contains(b"SigFlags"), "no signature field is left");
 }
 
 /// #1794: a form field whose widget has no usable appearance (none stored, or none for its
@@ -2338,8 +2507,8 @@ fn cyrillic_in_a_serif_line_falls_back_to_a_face_that_has_it() {
         return;
     }
     let replacement = "Привет, world";
-    let has_all = |f: &pdfcraft_fonts::CraftFont| replacement.chars().all(|ch| pdfcraft_fonts::japanese_glyph_from(f, ch).is_ok());
-    if !pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.covers("Jpan") && has_all(f)) {
+    let has_all = |f: &pdfcraft_fonts::EmbeddedFace| replacement.chars().all(|ch| pdfcraft_fonts::japanese_glyph_from(f, ch).is_ok());
+    if !pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.has_script("Jpan") && has_all(f)) {
         eprintln!("skipping: no Japanese fallback face has Cyrillic");
         return;
     }
@@ -4767,6 +4936,866 @@ fn page_images_move_turn_replace_and_delete() {
     images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
     assert!(images::page_images(&doc, 0).unwrap().is_empty());
     assert!(images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).is_err());
+}
+
+fn identifiable_test_image(bytes: &[u8]) -> Stream {
+    let mut d = Dict::new();
+    for (k, v) in [
+        (&b"Type"[..], Object::name("XObject")),
+        (b"Subtype", Object::name("Image")),
+        (b"Width", Object::Int(4)),
+        (b"Height", Object::Int(2)),
+        (b"ColorSpace", Object::name("DeviceGray")),
+        (b"BitsPerComponent", Object::Int(8)),
+    ] {
+        d.set(k.to_vec(), v);
+    }
+    Stream::from_raw(d, bytes.to_vec())
+}
+
+#[test]
+fn deleting_or_replacing_an_image_unlinks_its_unreferenced_resource_on_full_save() {
+    const OLD: &[u8] = b"PRIVATE_IMAGE_BYTES_3499";
+    const NEW: &[u8] = b"PUBLIC_IMAGE_BYTES_3511";
+
+    let mut deleted = image_page();
+    let old = images::page_images(&deleted, 0).unwrap()[0].object.unwrap();
+    deleted.set(old, Object::Stream(identifiable_test_image(OLD)));
+    images::change_image(&mut deleted, 0, 0, &images::ImageChange::Delete).unwrap();
+    let bytes = write_full(&deleted, &SaveOptions::default()).unwrap();
+    assert!(!bytes.windows(OLD.len()).any(|w| w == OLD), "deleted image data survived the full save");
+    let saved = Document::open(Arc::new(bytes)).unwrap();
+    assert_eq!(xobject(&saved, 0, b"Im0"), None, "deleted resource remains reachable from the page");
+
+    let mut replaced = image_page();
+    let old = images::page_images(&replaced, 0).unwrap()[0].object.unwrap();
+    replaced.set(old, Object::Stream(identifiable_test_image(OLD)));
+    let new = replaced.add(Object::Stream(identifiable_test_image(NEW)));
+    images::change_image(&mut replaced, 0, 0, &images::ImageChange::Replace(new)).unwrap();
+    let bytes = write_full(&replaced, &SaveOptions::default()).unwrap();
+    assert!(!bytes.windows(OLD.len()).any(|w| w == OLD), "replaced image data survived the full save");
+    assert!(bytes.windows(NEW.len()).any(|w| w == NEW), "replacement image data is missing");
+    let saved = Document::open(Arc::new(bytes)).unwrap();
+    let images = images::page_images(&saved, 0).unwrap();
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0].name, format!("PCImg{}", new.num));
+    assert!(images[0].object.is_some());
+}
+
+#[test]
+fn deleting_one_of_two_placements_keeps_the_resource_still_in_use() {
+    let mut doc = image_page_with("q 200 0 0 100 100 100 cm /Im0 Do Q q 200 0 0 100 300 100 cm /Im0 Do Q");
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert_eq!(images::page_images(&saved, 0).unwrap().len(), 1);
+    assert!(xobject(&saved, 0, b"Im0").is_some());
+}
+
+#[test]
+fn deleting_a_page_image_keeps_it_when_a_nested_resource_less_form_inherits_it() {
+    const PRIVATE: &[u8] = b"PRIVATE_NESTED_FORM_IMAGE";
+    let mut doc = image_page_with("q 200 0 0 100 100 100 cm /Im0 Do Q /Bare Do");
+    let image = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    doc.set(image, Object::Stream(identifiable_test_image(PRIVATE)));
+
+    let mut form = Dict::new();
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array([0, 0, 300, 300].map(Object::Int).to_vec()));
+    form.set(b"Resources".to_vec(), Object::Null);
+    let inner = doc.add(Object::Stream(Stream::flate(form.clone(), b"/Im0 Do")));
+    let outer = doc.add(Object::Stream(Stream::flate(form, b"/Inner Do")));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    let mut resources = doc.get(page).as_dict().unwrap().get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+    let mut xobjects = resources.get(b"XObject").and_then(Object::as_dict).cloned().unwrap();
+    xobjects.set(b"Inner".to_vec(), Object::Ref(inner));
+    xobjects.set(b"Bare".to_vec(), Object::Ref(outer));
+    resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+    let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), b"q 200 0 0 100 100 100 cm /Im0 Do Q /Bare Do")));
+    doc.update_dict(page, |d| {
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+        d.set(b"Contents".to_vec(), Object::Ref(contents));
+    })
+    .unwrap();
+
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(bytes.windows(PRIVATE.len()).any(|w| w == PRIVATE), "the nested form's image was lost");
+    let saved = Document::open(Arc::new(bytes)).unwrap();
+    assert!(xobject(&saved, 0, b"Im0").is_some(), "the page resource inherited by the Form was removed");
+    assert_eq!(images::reading_images(&saved, 0).unwrap().len(), 1);
+}
+
+#[test]
+fn deleting_an_image_with_too_many_aliases_skips_optional_pruning() {
+    const PRIVATE: &[u8] = b"PRIVATE_HIGH_ALIAS_COUNT_IMAGE";
+    let mut doc = image_page();
+    let image = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    doc.set(image, Object::Stream(identifiable_test_image(PRIVATE)));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+        let mut xobjects = resources.get(b"XObject").and_then(Object::as_dict).cloned().unwrap();
+        for i in 0..256 {
+            xobjects.set(format!("Alias{i}").into_bytes(), Object::Ref(image));
+        }
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(bytes.windows(PRIVATE.len()).any(|w| w == PRIVATE), "over-limit optional pruning unexpectedly removed the image");
+    let saved = Document::open(Arc::new(bytes)).unwrap();
+    assert!(images::page_images(&saved, 0).unwrap().is_empty());
+    assert!(xobject(&saved, 0, b"Alias0").is_some());
+}
+
+fn set_image_content(doc: &mut Document, page: usize, pieces: &[&[u8]]) {
+    let page = pdfcraft_model::pages(doc)[page].obj;
+    let contents = pieces.iter().map(|data| Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), data))))).collect::<Vec<_>>();
+    doc.update_dict(page, |d| d.set(b"Contents".to_vec(), Object::Array(contents))).unwrap();
+}
+
+fn add_blank_page(doc: &mut Document, resources: Option<Object>) {
+    let mut page = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Page")),
+        (b"Parent".to_vec(), Object::Ref(pdfcraft_cos::ObjRef::new(2, 0))),
+        (b"MediaBox".to_vec(), Object::Array([0, 0, 600, 800].map(Object::Int).to_vec())),
+    ]);
+    if let Some(resources) = resources {
+        page.set(b"Resources".to_vec(), resources);
+    }
+    let added = doc.add(Object::Dict(page));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |d| {
+        d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(pdfcraft_cos::ObjRef::new(3, 0)), Object::Ref(added)]));
+        d.set(b"Count".to_vec(), Object::Int(2));
+    })
+    .unwrap();
+}
+
+fn image_pruning_fixture(blank_resources: Option<Option<Object>>, font_count: usize, private: &[u8]) -> Document {
+    let mut doc = image_page();
+    let target = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    doc.set(target, Object::Stream(identifiable_test_image(private)));
+    if let Some(resources) = blank_resources {
+        add_blank_page(&mut doc, resources);
+    }
+    if font_count > 0 {
+        let mut fonts = doc
+            .get(pdfcraft_model::pages(&doc)[0].obj)
+            .as_dict()
+            .and_then(|d| d.get(b"Resources"))
+            .and_then(Object::as_dict)
+            .and_then(|d| d.get(b"Font"))
+            .and_then(Object::as_dict)
+            .cloned()
+            .unwrap_or_default();
+        for index in 0..font_count {
+            let font = doc.add(Object::Dict(Dict::from_iter([
+                (b"Type".to_vec(), Object::name("Font")),
+                (b"Subtype".to_vec(), Object::name("Type1")),
+                (b"BaseFont".to_vec(), Object::name("Helvetica")),
+                (b"FirstChar".to_vec(), Object::Int(32)),
+                (b"LastChar".to_vec(), Object::Int(255)),
+                (b"Widths".to_vec(), Object::Array(vec![Object::Int(500); 224])),
+            ])));
+            fonts.set(format!("ReviewFont{index}").into_bytes(), Object::Ref(font));
+        }
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| {
+            let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
+            resources.set(b"Font".to_vec(), Object::Dict(fonts));
+            d.set(b"Resources".to_vec(), Object::Dict(resources));
+        })
+        .unwrap();
+    }
+    doc
+}
+
+#[test]
+fn deleted_image_is_kept_when_reachable_through_each_non_page_consumer() {
+    const PRIVATE: &[u8] = b"PRIVATE_CONTEXT_IMAGE";
+
+    // Type 3 CharProc content uses the caller's resource scope when the font has no Resources.
+    {
+        let mut doc = image_page();
+        let target = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+        doc.set(target, Object::Stream(identifiable_test_image(PRIVATE)));
+        let glyph = doc.add(Object::Stream(Stream::flate(Dict::new(), b"/Im0 Do")));
+        let mut charprocs = Dict::new();
+        charprocs.set(b"A".to_vec(), Object::Ref(glyph));
+        let mut font = Dict::new();
+        font.set(b"Type".to_vec(), Object::name("Font"));
+        font.set(b"Subtype".to_vec(), Object::name("Type3"));
+        font.set(b"CharProcs".to_vec(), Object::Dict(charprocs));
+        let font = doc.add(Object::Dict(font));
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| {
+            let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+            let mut fonts = resources.get(b"Font").and_then(Object::as_dict).cloned().unwrap();
+            fonts.set(b"T3".to_vec(), Object::Ref(font));
+            resources.set(b"Font".to_vec(), Object::Dict(fonts));
+            d.set(b"Resources".to_vec(), Object::Dict(resources));
+        })
+        .unwrap();
+        set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q BT /T3 10 Tf (A) Tj ET"]);
+        images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+        assert!(write_full(&doc, &SaveOptions::default()).unwrap().windows(PRIVATE.len()).any(|w| w == PRIVATE));
+    }
+
+    // A selected soft mask's Form inherits the page's resources.
+    {
+        let mut doc = image_page();
+        let target = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+        doc.set(target, Object::Stream(identifiable_test_image(PRIVATE)));
+        let form = doc.add(Object::Stream(Stream::flate(
+            Dict::from_iter([(b"Subtype".to_vec(), Object::name("Form")), (b"BBox".to_vec(), Object::Array([0, 0, 1, 1].map(Object::Int).to_vec()))]),
+            b"/Im0 Do",
+        )));
+        let mut soft_mask = Dict::new();
+        soft_mask.set(b"G".to_vec(), Object::Ref(form));
+        let mut gs = Dict::new();
+        gs.set(b"SMask".to_vec(), Object::Dict(soft_mask));
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| {
+            let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+            let mut states = Dict::new();
+            states.set(b"GS".to_vec(), Object::Dict(gs));
+            resources.set(b"ExtGState".to_vec(), Object::Dict(states));
+            d.set(b"Resources".to_vec(), Object::Dict(resources));
+        })
+        .unwrap();
+        set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /GS gs"]);
+        images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+        assert!(write_full(&doc, &SaveOptions::default()).unwrap().windows(PRIVATE.len()).any(|w| w == PRIVATE));
+    }
+
+    // A used tiling Pattern can draw an image with its caller's resources.
+    {
+        let mut doc = image_page();
+        let target = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+        doc.set(target, Object::Stream(identifiable_test_image(PRIVATE)));
+        let mut pattern_dict = Dict::new();
+        for (key, value) in [
+            (&b"PatternType"[..], Object::Int(1)),
+            (b"PaintType", Object::Int(1)),
+            (b"TilingType", Object::Int(1)),
+            (b"BBox", Object::Array([0, 0, 1, 1].map(Object::Int).to_vec())),
+            (b"XStep", Object::Int(1)),
+            (b"YStep", Object::Int(1)),
+        ] {
+            pattern_dict.set(key.to_vec(), value);
+        }
+        let pattern = doc.add(Object::Stream(Stream::flate(pattern_dict, b"/Im0 Do")));
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| {
+            let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+            let mut patterns = Dict::new();
+            patterns.set(b"P".to_vec(), Object::Ref(pattern));
+            resources.set(b"Pattern".to_vec(), Object::Dict(patterns));
+            d.set(b"Resources".to_vec(), Object::Dict(resources));
+        })
+        .unwrap();
+        set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q 0 /P scn 0 0 10 10 re f"]);
+        images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+        assert!(write_full(&doc, &SaveOptions::default()).unwrap().windows(PRIVATE.len()).any(|w| w == PRIVATE));
+    }
+
+    // Every annotation appearance state is a consumer, even if it is not the normal state.
+    {
+        let mut doc = image_page();
+        let target = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+        doc.set(target, Object::Stream(identifiable_test_image(PRIVATE)));
+        let form = doc.add(Object::Stream(Stream::flate(
+            Dict::from_iter([
+                (b"Subtype".to_vec(), Object::name("Form")),
+                (b"BBox".to_vec(), Object::Array([0, 0, 10, 10].map(Object::Int).to_vec())),
+            ]),
+            b"/Im0 Do",
+        )));
+        let mut states = Dict::new();
+        states.set(b"Off".to_vec(), Object::Ref(form));
+        let mut ap = Dict::new();
+        ap.set(b"D".to_vec(), Object::Dict(states));
+        let mut annotation = Dict::new();
+        annotation.set(b"AP".to_vec(), Object::Dict(ap));
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Dict(annotation)]))).unwrap();
+        images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+        assert!(write_full(&doc, &SaveOptions::default()).unwrap().windows(PRIVATE.len()).any(|w| w == PRIVATE));
+    }
+}
+
+#[test]
+fn deleted_image_census_joins_content_pieces_and_checks_each_page_scope() {
+    const PRIVATE: &[u8] = b"PRIVATE_SCOPED_IMAGE";
+    let mut doc = image_page();
+    let target = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    doc.set(target, Object::Stream(identifiable_test_image(PRIVATE)));
+    set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /Im0", b" Do"]);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+    assert!(
+        write_full(&doc, &SaveOptions::default()).unwrap().windows(PRIVATE.len()).any(|w| w == PRIVATE),
+        "the retained second Do spans content pieces"
+    );
+
+    // A shared Form is evaluated in each caller's effective resource scope. The first page maps
+    // /Im0 to a different image; the second page maps it to the deleted target.
+    let mut doc = image_page();
+    let target = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    doc.set(target, Object::Stream(identifiable_test_image(PRIVATE)));
+    let other = doc.add(Object::Stream(identifiable_test_image(b"OTHER_SCOPED_IMAGE")));
+    let shared = doc.add(Object::Stream(Stream::flate(
+        Dict::from_iter([
+            (b"Subtype".to_vec(), Object::name("Form")),
+            (b"BBox".to_vec(), Object::Array([0, 0, 1, 1].map(Object::Int).to_vec())),
+            (b"Resources".to_vec(), Object::Null),
+        ]),
+        b"/Im0 Do",
+    )));
+    let page0 = pdfcraft_model::pages(&doc)[0].obj;
+    let mut res0 = doc.get(page0).as_dict().unwrap().get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+    let mut xo0 = res0.get(b"XObject").and_then(Object::as_dict).cloned().unwrap();
+    xo0.set(b"Target".to_vec(), Object::Ref(target));
+    xo0.set(b"Other".to_vec(), Object::Ref(other));
+    xo0.set(b"Im0".to_vec(), Object::Ref(other));
+    xo0.set(b"Shared".to_vec(), Object::Ref(shared));
+    res0.set(b"XObject".to_vec(), Object::Dict(xo0));
+    doc.update_dict(page0, |d| {
+        d.set(b"Resources".to_vec(), Object::Dict(res0));
+    })
+    .unwrap();
+    set_image_content(&mut doc, 0, &[b"/Target Do /Shared Do"]);
+    let page1_contents = doc.add(Object::Stream(Stream::flate(Dict::new(), b"/Shared Do")));
+    let page1 = doc.add(Object::Dict(Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Page")),
+        (b"Parent".to_vec(), Object::Ref(pdfcraft_cos::ObjRef::new(2, 0))),
+        (b"MediaBox".to_vec(), Object::Array([0, 0, 600, 800].map(Object::Int).to_vec())),
+        (
+            b"Resources".to_vec(),
+            Object::Dict(Dict::from_iter([(
+                b"XObject".to_vec(),
+                Object::Dict(Dict::from_iter([(b"Im0".to_vec(), Object::Ref(target)), (b"Shared".to_vec(), Object::Ref(shared))])),
+            )])),
+        ),
+        (b"Contents".to_vec(), Object::Ref(page1_contents)),
+    ])));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |d| {
+        let mut kids = d.get(b"Kids").and_then(Object::as_array).cloned().unwrap();
+        kids.push(Object::Ref(page1));
+        d.set(b"Kids".to_vec(), Object::Array(kids));
+        d.set(b"Count".to_vec(), Object::Int(2));
+    })
+    .unwrap();
+    assert_eq!(images::page_images(&doc, 0).unwrap().len(), 2);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+    assert!(
+        write_full(&doc, &SaveOptions::default()).unwrap().windows(PRIVATE.len()).any(|w| w == PRIVATE),
+        "the same Form must use page one's different inherited scope"
+    );
+}
+
+#[test]
+fn extgstate_selected_type3_font_keeps_its_glyph_image_after_page_image_delete() {
+    const PRIVATE: &[u8] = b"PRIVATE_GSTATE_TYPE3_GLYPH_IMAGE";
+    let mut doc = image_page();
+    let target = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    doc.set(target, Object::Stream(identifiable_test_image(PRIVATE)));
+
+    let glyph = doc.add(Object::Stream(Stream::flate(Dict::new(), b"/GlyphImg Do")));
+    let mut charprocs = Dict::new();
+    charprocs.set(b"A".to_vec(), Object::Ref(glyph));
+    let glyph_resources = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"GlyphImg".to_vec(), Object::Ref(target))])))]);
+    let mut font_dict = Dict::new();
+    for (key, value) in [
+        (&b"Type"[..], Object::name("Font")),
+        (b"Subtype", Object::name("Type3")),
+        (b"FontBBox", Object::Array([0, 0, 1000, 1000].map(Object::Int).to_vec())),
+        (b"FontMatrix", Object::Array(vec![Object::Int(1), Object::Int(0), Object::Int(0), Object::Int(1), Object::Int(0), Object::Int(0)])),
+        (b"FirstChar", Object::Int(65)),
+        (b"LastChar", Object::Int(65)),
+        (b"Widths", Object::Array(vec![Object::Int(1000)])),
+        (b"Encoding", Object::Dict(Dict::from_iter([(b"Differences".to_vec(), Object::Array(vec![Object::Int(65), Object::name("A")]))]))),
+        (b"CharProcs", Object::Dict(charprocs)),
+        (b"Resources", Object::Dict(glyph_resources)),
+    ] {
+        font_dict.set(key.to_vec(), value);
+    }
+    let font = doc.add(Object::Dict(font_dict));
+    let ext_gstate = Object::Dict(Dict::from_iter([(b"Font".to_vec(), Object::Array(vec![Object::Ref(font), Object::Int(10)]))]));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+        resources.set(b"ExtGState".to_vec(), Object::Dict(Dict::from_iter([(b"GS".to_vec(), ext_gstate)])));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /GS gs BT (A) Tj ET"]);
+
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(bytes.windows(PRIVATE.len()).any(|w| w == PRIVATE));
+    let saved = Document::open(Arc::new(bytes)).unwrap();
+    let page = pdfcraft_model::pages(&saved)[0].clone();
+    let resources = page.dict.get(b"Resources").map(|o| saved.resolve(o)).unwrap();
+    let ext_gstates = resources.as_dict().unwrap().get(b"ExtGState").map(|o| saved.resolve(o)).unwrap();
+    let selected = ext_gstates.as_dict().unwrap().get(b"GS").map(|o| saved.resolve(o)).unwrap();
+    let font_ref = selected.as_dict().unwrap().get(b"Font").map(|o| saved.resolve(o)).unwrap().as_array().unwrap()[0].as_ref().unwrap();
+    let font = saved.get(font_ref);
+    let charproc_ref =
+        font.as_dict().unwrap().get(b"CharProcs").map(|o| saved.resolve(o)).unwrap().as_dict().unwrap().get(b"A").unwrap().as_ref().unwrap();
+    let charproc = saved.get(charproc_ref);
+    let glyph_content = match charproc.as_ref() {
+        Object::Stream(stream) => String::from_utf8_lossy(&stream.decoded().unwrap()).into_owned(),
+        _ => String::new(),
+    };
+    assert!(glyph_content.contains("/GlyphImg Do"));
+    let font_resources = font.as_dict().unwrap().get(b"Resources").map(|o| saved.resolve(o)).unwrap();
+    let glyph_image = font_resources.as_dict().unwrap().get(b"XObject").map(|o| saved.resolve(o)).unwrap();
+    // A full save renumbers the objects it keeps, so the alias is followed to the payload rather
+    // than compared with the number the image had in the document being edited.
+    let kept = glyph_image.as_dict().unwrap().get(b"GlyphImg").and_then(Object::as_ref).expect("the glyph keeps its image alias");
+    let Object::Stream(kept) = &*saved.get(kept) else { panic!("the glyph's image alias points at a stream") };
+    assert!(kept.raw.windows(PRIVATE.len()).any(|w| w == PRIVATE), "the glyph keeps the image it draws");
+}
+
+#[test]
+fn appearance_dictionary_dag_exhaustion_skips_optional_image_pruning() {
+    const PRIVATE: &[u8] = b"PRIVATE_APPEARANCE_DAG_IMAGE";
+    let mut doc = image_page();
+    let target = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    doc.set(target, Object::Stream(identifiable_test_image(PRIVATE)));
+
+    let mut child = doc.add(Object::Dict(Dict::new()));
+    for _ in 0..30 {
+        child = doc.add(Object::Dict(Dict::from_iter([(b"Left".to_vec(), Object::Ref(child)), (b"Right".to_vec(), Object::Ref(child))])));
+    }
+    let appearance = Dict::from_iter([(b"N".to_vec(), Object::Ref(child))]);
+    let annotation = Dict::from_iter([(b"AP".to_vec(), Object::Dict(appearance))]);
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Dict(annotation)]))).unwrap();
+
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(bytes.windows(PRIVATE.len()).any(|w| w == PRIVATE));
+}
+
+#[test]
+fn unused_image_mask_dependency_is_removed_before_full_save() {
+    const PRIVATE: &[u8] = b"PRIVATE_UNUSED_IMAGE_MASK_DEPENDENCY";
+    let mut doc = image_page();
+    let target = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    doc.set(target, Object::Stream(identifiable_test_image(PRIVATE)));
+
+    let mut unused_image = identifiable_test_image(b"INACTIVE_IMAGE_OWNER");
+    unused_image.dict.set(b"SMask".to_vec(), Object::Ref(target));
+    let unused = doc.add(Object::Stream(unused_image));
+    let mut mask_owner = identifiable_test_image(b"INACTIVE_MASK_OWNER");
+    mask_owner.dict.set(b"Mask".to_vec(), Object::Ref(target));
+    let mask_owner = doc.add(Object::Stream(mask_owner));
+    let mut alternate = Dict::new();
+    alternate.set(b"Image".to_vec(), Object::Ref(target));
+    let mut alternate_owner = identifiable_test_image(b"INACTIVE_ALTERNATE_OWNER");
+    alternate_owner.dict.set(b"Alternates".to_vec(), Object::Array(vec![Object::Dict(alternate)]));
+    let alternate_owner = doc.add(Object::Stream(alternate_owner));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+        let mut xobjects = resources.get(b"XObject").and_then(Object::as_dict).cloned().unwrap();
+        xobjects.set(b"Unused".to_vec(), Object::Ref(unused));
+        xobjects.set(b"MaskOwner".to_vec(), Object::Ref(mask_owner));
+        xobjects.set(b"AlternateOwner".to_vec(), Object::Ref(alternate_owner));
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!bytes.windows(PRIVATE.len()).any(|w| w == PRIVATE));
+    let saved = Document::open(Arc::new(bytes)).unwrap();
+    let unused = saved.get(xobject(&saved, 0, b"Unused").unwrap());
+    assert!(matches!(unused.as_ref(), Object::Stream(stream) if stream.dict.get(b"SMask").is_none()));
+    let mask_owner = saved.get(xobject(&saved, 0, b"MaskOwner").unwrap());
+    assert!(matches!(mask_owner.as_ref(), Object::Stream(stream) if stream.dict.get(b"Mask").is_none()));
+    let alternate_owner = saved.get(xobject(&saved, 0, b"AlternateOwner").unwrap());
+    assert!(
+        matches!(alternate_owner.as_ref(), Object::Stream(stream) if stream.dict.get(b"Alternates").and_then(Object::as_array).is_some_and(Vec::is_empty))
+    );
+}
+
+#[test]
+fn deleting_image_prunes_unused_shared_resources_across_all_pages() {
+    const PRIVATE: &[u8] = b"PRIVATE_UNUSED_SHARED_IMAGE";
+    let mut doc = fixture();
+    let target = doc.add(Object::Stream(identifiable_test_image(PRIVATE)));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+        let mut xobjects = Dict::new();
+        xobjects.set(b"Im0".to_vec(), Object::Ref(target));
+        d.set(b"XObject".to_vec(), Object::Dict(xobjects));
+    })
+    .unwrap();
+    let content = doc.add(Object::Stream(Stream::flate(Dict::new(), b"/Im0 Do")));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |d| d.set(b"Contents".to_vec(), Object::Ref(content))).unwrap();
+    assert_eq!(images::page_images(&doc, 0).unwrap().len(), 1);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!bytes.windows(PRIVATE.len()).any(|w| w == PRIVATE));
+    let saved = Document::open(Arc::new(bytes)).unwrap();
+    assert!(xobject(&saved, 0, b"Im0").is_none());
+    assert!(xobject(&saved, 1, b"Im0").is_none());
+}
+
+#[test]
+fn image_payload_pruning_handles_missing_resources_and_wide_scalar_arrays() {
+    const PRIVATE: &[u8] = b"PRIVATE_REVIEW_DELETED_IMAGE_PAYLOAD";
+    for (resources, font_count) in [(Some(None), 0), (Some(Some(Object::Dict(Dict::new()))), 0), (None, 225)] {
+        for replace in [false, true] {
+            let mut source = image_pruning_fixture(resources.clone(), font_count, PRIVATE);
+            let input = write_full(&source, &SaveOptions::default()).unwrap();
+            assert!(input.windows(PRIVATE.len()).any(|window| window == PRIVATE), "fixture lacked payload before editing");
+            source = Document::open(Arc::new(input)).unwrap();
+            let change = if replace {
+                images::ImageChange::Replace(source.add(Object::Stream(identifiable_test_image(b"PUBLIC_REPLACEMENT"))))
+            } else {
+                images::ImageChange::Delete
+            };
+            images::change_image(&mut source, 0, 0, &change).unwrap();
+
+            let output = write_full(&source, &SaveOptions::default()).unwrap();
+            let reopened = Document::open(Arc::new(output.clone())).unwrap();
+            assert!(!output.windows(PRIVATE.len()).any(|window| window == PRIVATE), "replace={replace}, resources={resources:?}, fonts={font_count}");
+            assert_eq!(images::page_images(&reopened, 0).unwrap().len(), usize::from(replace));
+        }
+    }
+}
+
+#[test]
+fn malformed_present_page_resources_keep_image_payload() {
+    const PRIVATE: &[u8] = b"PRIVATE_MALFORMED_RESOURCES_IMAGE";
+    let mut source = image_pruning_fixture(None, 0, PRIVATE);
+    add_blank_page(&mut source, Some(Object::Int(7)));
+    let input = write_full(&source, &SaveOptions::default()).unwrap();
+    assert!(input.windows(PRIVATE.len()).any(|window| window == PRIVATE), "fixture lacked payload before editing");
+    let mut source = Document::open(Arc::new(input)).unwrap();
+
+    images::change_image(&mut source, 0, 0, &images::ImageChange::Delete).unwrap();
+    let output = write_full(&source, &SaveOptions::default()).unwrap();
+    assert!(output.windows(PRIVATE.len()).any(|window| window == PRIVATE), "malformed present Resources unexpectedly allowed pruning");
+}
+
+#[test]
+fn rewrite_entry_budget_failure_keeps_earlier_staged_image_mappings() {
+    const PRIVATE: &[u8] = b"PRIVATE_REWRITE_BUDGET_IMAGE";
+    const OVERSIZED_CONTAINER: usize = 100_001;
+    let mut source = image_pruning_fixture(None, 0, PRIVATE);
+    let form = source.add(Object::Stream(Stream::flate(
+        Dict::from_iter([
+            (b"Subtype".to_vec(), Object::name("Form")),
+            (b"BBox".to_vec(), Object::Array([0, 0, 10, 10].map(Object::Int).to_vec())),
+            (b"Probe".to_vec(), Object::Array(vec![Object::Int(0); OVERSIZED_CONTAINER])),
+        ]),
+        b"",
+    )));
+    let page = pdfcraft_model::pages(&source)[0].obj;
+    source
+        .update_dict(page, |d| {
+            let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+            let mut xobjects = resources.get(b"XObject").and_then(Object::as_dict).cloned().unwrap();
+            xobjects.set(b"F".to_vec(), Object::Ref(form));
+            resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+            d.set(b"Resources".to_vec(), Object::Dict(resources));
+        })
+        .unwrap();
+    set_image_content(&mut source, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /F Do"]);
+    let input = write_full(&source, &SaveOptions::default()).unwrap();
+    assert!(input.windows(PRIVATE.len()).any(|window| window == PRIVATE), "fixture lacked payload before editing");
+    let mut source = Document::open(Arc::new(input)).unwrap();
+
+    images::change_image(&mut source, 0, 0, &images::ImageChange::Delete).unwrap();
+    let output = write_full(&source, &SaveOptions::default()).unwrap();
+    let reopened = Document::open(Arc::new(output.clone())).unwrap();
+    assert!(output.windows(PRIVATE.len()).any(|window| window == PRIVATE), "rewrite budget failure pruned image payload");
+    assert!(xobject(&reopened, 0, b"Im0").is_some(), "partial staging removed the page's image alias");
+}
+
+#[test]
+fn image_mask_dependency_keeps_a_deleted_image_live() {
+    const PRIVATE: &[u8] = b"PRIVATE_IMAGE_MASK_DEPENDENCY";
+    let mut doc = image_page();
+    let target = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    doc.set(target, Object::Stream(identifiable_test_image(PRIVATE)));
+    let mut dependent = Dict::new();
+    dependent.set(b"Type".to_vec(), Object::name("XObject"));
+    dependent.set(b"Subtype".to_vec(), Object::name("Image"));
+    dependent.set(b"Width".to_vec(), Object::Int(1));
+    dependent.set(b"Height".to_vec(), Object::Int(1));
+    dependent.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    dependent.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    dependent.set(b"SMask".to_vec(), Object::Ref(target));
+    let dependent = doc.add(Object::Stream(Stream::from_raw(dependent, vec![1])));
+    let mut chain_owner = Dict::new();
+    chain_owner.set(b"Type".to_vec(), Object::name("XObject"));
+    chain_owner.set(b"Subtype".to_vec(), Object::name("Image"));
+    chain_owner.set(b"Width".to_vec(), Object::Int(1));
+    chain_owner.set(b"Height".to_vec(), Object::Int(1));
+    chain_owner.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    chain_owner.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    chain_owner.set(b"SMask".to_vec(), Object::Ref(dependent));
+    let chain_owner = doc.add(Object::Stream(Stream::from_raw(chain_owner, vec![1])));
+    set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /Source Do"]);
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+        let mut xobjects = resources.get(b"XObject").and_then(Object::as_dict).cloned().unwrap();
+        xobjects.set(b"Source".to_vec(), Object::Ref(chain_owner));
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+    assert!(write_full(&doc, &SaveOptions::default()).unwrap().windows(PRIVATE.len()).any(|w| w == PRIVATE));
+}
+
+#[test]
+fn malformed_extgstate_soft_masks_skip_optional_image_pruning() {
+    const PRIVATE: &[u8] = b"PRIVATE_EXTGSTATE_IMAGE";
+    let cases = [
+        ("unresolved reference", Object::Ref(pdfcraft_cos::ObjRef::new(999_999, 0))),
+        ("non-dictionary", Object::String(pdfcraft_cos::PdfString::text("bad mask"))),
+        ("missing group", Object::Dict(Dict::new())),
+        ("malformed group", Object::Dict(Dict::from_iter([(b"G".to_vec(), Object::Int(7))]))),
+    ];
+
+    for (case, mask) in cases {
+        let mut doc = image_page();
+        let target = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+        doc.set(target, Object::Stream(identifiable_test_image(PRIVATE)));
+        let mut gs = Dict::new();
+        gs.set(b"SMask".to_vec(), mask);
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| {
+            let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+            resources.set(b"ExtGState".to_vec(), Object::Dict(Dict::from_iter([(b"GS".to_vec(), Object::Dict(gs))])));
+            d.set(b"Resources".to_vec(), Object::Dict(resources));
+        })
+        .unwrap();
+        set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /GS gs"]);
+
+        assert!(
+            write_full(&doc, &SaveOptions::default()).unwrap().windows(PRIVATE.len()).any(|w| w == PRIVATE),
+            "{case} fixture lacked payload before edit"
+        );
+        images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+        let saved = write_full(&doc, &SaveOptions::default()).unwrap();
+        assert!(saved.windows(PRIVATE.len()).any(|w| w == PRIVATE), "{case} unexpectedly allowed pruning");
+    }
+
+    // `/None` is the valid ExtGState spelling for no soft mask and does not block pruning.
+    let mut doc = image_page();
+    let target = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    doc.set(target, Object::Stream(identifiable_test_image(PRIVATE)));
+    let mut gs = Dict::new();
+    gs.set(b"SMask".to_vec(), Object::name("None"));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+        resources.set(b"ExtGState".to_vec(), Object::Dict(Dict::from_iter([(b"GS".to_vec(), Object::Dict(gs))])));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /GS gs"]);
+    assert!(
+        write_full(&doc, &SaveOptions::default()).unwrap().windows(PRIVATE.len()).any(|w| w == PRIVATE),
+        "valid /None fixture lacked payload before edit"
+    );
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+    let saved = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!saved.windows(PRIVATE.len()).any(|w| w == PRIVATE), "valid /None prevented pruning");
+}
+
+#[test]
+fn image_typed_soft_mask_group_skips_optional_image_pruning() {
+    const PRIVATE: &[u8] = b"PRIVATE_IMAGE_TYPED_SOFT_MASK_GROUP";
+    let mut doc = image_page();
+    let target = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    doc.set(target, Object::Stream(identifiable_test_image(PRIVATE)));
+
+    // The renderer decodes `/G` as a Form regardless of its declared subtype. Its content
+    // inherits the page resources, so the image remains a live consumer despite the bad type.
+    let group = doc.add(Object::Stream(Stream::flate(
+        Dict::from_iter([(b"Subtype".to_vec(), Object::name("Image")), (b"BBox".to_vec(), Object::Array([0, 0, 1, 1].map(Object::Int).to_vec()))]),
+        b"/Im0 Do",
+    )));
+    let mut soft_mask = Dict::new();
+    soft_mask.set(b"G".to_vec(), Object::Ref(group));
+    let mut gs = Dict::new();
+    gs.set(b"SMask".to_vec(), Object::Dict(soft_mask));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+        resources.set(b"ExtGState".to_vec(), Object::Dict(Dict::from_iter([(b"GS".to_vec(), Object::Dict(gs))])));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /GS gs"]);
+
+    assert!(write_full(&doc, &SaveOptions::default()).unwrap().windows(PRIVATE.len()).any(|w| w == PRIVATE), "fixture lacked payload before edit");
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+    let saved = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(saved.windows(PRIVATE.len()).any(|w| w == PRIVATE), "malformed image-typed SMask group unexpectedly allowed pruning");
+}
+
+#[test]
+fn late_image_prune_staging_failure_does_not_partially_rewrite_resources() {
+    const PRIVATE: &[u8] = b"PRIVATE_LATE_PRUNE_FAILURE";
+    let mut doc = image_page();
+    let target = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    doc.set(target, Object::Stream(identifiable_test_image(PRIVATE)));
+    assert!(write_full(&doc, &SaveOptions::default()).unwrap().windows(PRIVATE.len()).any(|w| w == PRIVATE), "fixture lacked payload before edit");
+
+    // This valid candidate is staged for removal before the later deeply nested object
+    // exceeds the rewrite walk budget. Nothing staged may be committed after that failure.
+    let holder =
+        doc.add(Object::Dict(Dict::from_iter([(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"Alias".to_vec(), Object::Ref(target))])))])));
+    let mut deep = Object::Null;
+    for _ in 0..=65 {
+        deep = Object::Array(vec![deep]);
+    }
+    doc.add(deep);
+
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+    let holder = doc.resolve(&Object::Ref(holder));
+    assert_eq!(
+        holder.as_dict().and_then(|d| d.get(b"XObject")).and_then(Object::as_dict).and_then(|d| d.get(b"Alias")).and_then(Object::as_ref),
+        Some(target)
+    );
+    let saved = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(saved.windows(PRIVATE.len()).any(|w| w == PRIVATE), "failed optional prune partially removed the image payload");
+}
+
+#[test]
+fn image_alternate_dependency_keeps_a_deleted_image_live() {
+    const PRIVATE: &[u8] = b"PRIVATE_IMAGE_ALTERNATE_DEPENDENCY";
+    let mut doc = image_page();
+    let target = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    doc.set(target, Object::Stream(identifiable_test_image(PRIVATE)));
+    let mut alternate = Dict::new();
+    alternate.set(b"Image".to_vec(), Object::Ref(target));
+    let mut primary = identifiable_test_image(b"PRIMARY_IMAGE");
+    primary.dict.set(b"Alternates".to_vec(), Object::Array(vec![Object::Dict(alternate)]));
+    let primary = doc.add(Object::Stream(primary));
+    set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /Source Do"]);
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+        let mut xobjects = resources.get(b"XObject").and_then(Object::as_dict).cloned().unwrap();
+        xobjects.set(b"Source".to_vec(), Object::Ref(primary));
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+    assert!(write_full(&doc, &SaveOptions::default()).unwrap().windows(PRIVATE.len()).any(|w| w == PRIVATE));
+}
+
+#[test]
+fn unsupported_resource_consumer_skips_optional_pruning_but_keeps_edit_successful() {
+    const PRIVATE: &[u8] = b"PRIVATE_UNSUPPORTED_CONTEXT_IMAGE";
+    let mut doc = image_page();
+    let target = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    doc.set(target, Object::Stream(identifiable_test_image(PRIVATE)));
+    let mut unknown = Dict::new();
+    unknown.set(b"Subtype".to_vec(), Object::name("UnknownContent"));
+    unknown.set(
+        b"Resources".to_vec(),
+        Object::Dict(Dict::from_iter([(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"Im0".to_vec(), Object::Ref(target))])))])),
+    );
+    doc.add(Object::Stream(Stream::flate(unknown, b"/Im0 Do")));
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(bytes.windows(PRIVATE.len()).any(|w| w == PRIVATE));
+}
+
+#[test]
+fn deleting_one_page_image_preserves_shared_inherited_resources_used_by_sibling_pages() {
+    const SHARED: &[u8] = b"SHARED_INHERITED_IMAGE";
+    let mut doc = fixture();
+    let image = doc.add(Object::Stream(identifiable_test_image(SHARED)));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+        let mut xobjects = Dict::new();
+        xobjects.set(b"Im0".to_vec(), Object::Ref(image));
+        d.set(b"XObject".to_vec(), Object::Dict(xobjects));
+    })
+    .unwrap();
+    doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(Stream::flate(Dict::new(), b"/Im0 Do")));
+    assert_eq!(images::page_images(&doc, 0).unwrap().len(), 1);
+    assert_eq!(images::page_images(&doc, 1).unwrap().len(), 1);
+
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert!(images::page_images(&saved, 0).unwrap().is_empty());
+    assert_eq!(images::page_images(&saved, 1).unwrap().len(), 1);
+    // Both pages inherit the same resource dictionary. Keep its mapping while the sibling page
+    // still draws the image; removing it would break that live use.
+    assert!(xobject(&saved, 0, b"Im0").is_some());
+    assert!(xobject(&saved, 1, b"Im0").is_some());
+}
+
+#[test]
+fn replacing_an_image_with_the_same_object_keeps_the_replacement_reachable() {
+    const SAME: &[u8] = b"SAME_IMAGE_OBJECT";
+    let mut doc = image_page();
+    let image = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    doc.set(image, Object::Stream(identifiable_test_image(SAME)));
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Replace(image)).unwrap();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(bytes.windows(SAME.len()).any(|w| w == SAME));
+    let saved = Document::open(Arc::new(bytes)).unwrap();
+    assert_eq!(images::page_images(&saved, 0).unwrap().len(), 1);
+    assert_eq!(images::page_images(&saved, 0).unwrap()[0].name, format!("PCImg{}", image.num));
+}
+
+#[test]
+fn deleting_an_image_prunes_unused_aliases_when_no_alias_is_drawn_and_keeps_live_aliases() {
+    const ALIASED: &[u8] = b"ALIASED_IMAGE_BYTES";
+    let mut doc = image_page();
+    let image = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    doc.set(image, Object::Stream(identifiable_test_image(ALIASED)));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+        let mut xobjects = resources.get(b"XObject").and_then(Object::as_dict).cloned().unwrap();
+        xobjects.set(b"UnusedAlias".to_vec(), Object::Ref(image));
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!bytes.windows(ALIASED.len()).any(|w| w == ALIASED), "an unused alias kept the deleted image reachable");
+    let saved = Document::open(Arc::new(bytes)).unwrap();
+    assert!(xobject(&saved, 0, b"Im0").is_none());
+    assert!(xobject(&saved, 0, b"UnusedAlias").is_none());
+
+    let mut doc = image_page_with("q 200 0 0 100 100 100 cm /Im0 Do Q /Alias Do");
+    let image = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    doc.set(image, Object::Stream(identifiable_test_image(ALIASED)));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+        let mut xobjects = resources.get(b"XObject").and_then(Object::as_dict).cloned().unwrap();
+        xobjects.set(b"Alias".to_vec(), Object::Ref(image));
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Delete).unwrap();
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert_eq!(images::page_images(&saved, 0).unwrap().len(), 1);
+    assert!(xobject(&saved, 0, b"Im0").is_some());
+    assert!(xobject(&saved, 0, b"Alias").is_some());
 }
 
 #[test]
@@ -9590,12 +10619,13 @@ fn japanese_paragraphs_wrap_between_characters_without_closing_marks_at_a_row_st
 
 #[test]
 fn rewritten_paragraph_is_drawn_after_backgrounds_between_its_rows() {
-    // Each row has its own background box drawn immediately before its BT..ET, as cards and
-    // highlighted headings exported from LibreOffice or browsers do (#2377).
-    let card = "0 0.45 0.25 rg 60 696 240 16 re f BT /F1 10 Tf 1 1 1 rg 64 700 Td (SEMINARIO ONLINE) Tj ET \
-                0 0.45 0.25 rg 60 668 240 24 re f BT /F1 16 Tf 1 1 1 rg 64 674 Td (Dalla teoria alla pratica:) Tj ET \
-                0 0.45 0.25 rg 60 632 240 32 re f BT /F1 24 Tf 1 1 1 rg 64 640 Td (gestire con metodo) Tj ET \
-                0 0.45 0.25 rg 60 596 240 32 re f BT /F1 24 Tf 1 1 1 rg 64 604 Td (un progetto complesso) Tj ET";
+    // Layered paragraph-wide backgrounds still paint between rows (#2377), but every row has
+    // the same container membership. Compatible size changes retain the mixed-style rewrite
+    // without asking the grouping heuristic to merge independent panels or headings.
+    let card = "0 0.45 0.25 rg 60 540 240 180 re f BT /F1 16 Tf 1 1 1 rg 64 700 Td (SEMINARIO ONLINE) Tj ET \
+                0 0.45 0.25 rg 60 540 240 180 re f BT /F1 20 Tf 1 1 1 rg 64 674 Td (Dalla teoria alla pratica:) Tj ET \
+                0 0.45 0.25 rg 60 540 240 180 re f BT /F1 24 Tf 1 1 1 rg 64 640 Td (gestire con metodo) Tj ET \
+                0 0.45 0.25 rg 60 540 240 180 re f BT /F1 24 Tf 1 1 1 rg 64 604 Td (un progetto complesso) Tj ET";
     let shown_at = |ops: &[pdfcraft_content::Op], needle: &str| {
         ops.iter()
             .position(|op| {
@@ -9608,6 +10638,13 @@ fn rewritten_paragraph_is_drawn_after_backgrounds_between_its_rows() {
     // 1. Editing the title rows emits all rewritten rows after all four background fills.
     let mut doc = text_page(card);
     assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 1);
+    let source_ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+    let source_fills: Vec<usize> = source_ops.iter().enumerate().filter_map(|(i, op)| op.is("f").then_some(i)).collect();
+    assert_eq!(source_fills.len(), 4);
+    for (row, needle) in ["SEMINARIO", "pratica:", "metodo", "complesso"].iter().enumerate() {
+        let shown = shown_at(&source_ops, needle);
+        assert!(source_fills[row] < shown && source_fills.get(row + 1).is_none_or(|next| shown < *next), "backgrounds must stay interleaved");
+    }
     let edited = "SEMINARIO ONLINE\nDalla teoria alla pratica:\ngestire con criterio\nun progetto nuovo";
     text::rewrite_block(&mut doc, 0, 0, Some(edited), &text::BlockStyle::default()).unwrap();
     let doc = reopen(&doc);
@@ -9643,6 +10680,9 @@ fn rewritten_paragraph_is_drawn_after_backgrounds_between_its_rows() {
     let wrapped_edit = "SEMINARIO ONLINE\nDalla teoria alla pratica:\ngestire con criterio e metodo approfondito\nun progetto complesso";
     text::rewrite_block(&mut doc, 0, 0, Some(wrapped_edit), &text::BlockStyle::default()).unwrap();
     let doc = reopen(&doc);
+    let wrapped = text::text_blocks(&doc, 0).unwrap();
+    assert!(wrapped[0].rows.len() > 4, "the long edit must wrap and push the suffix row down");
+    assert_eq!(wrapped[0].text, wrapped_edit.replace('\n', " "));
     let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
     let last_fill = ops.iter().rposition(|op| op.is("f")).unwrap();
     assert!(
@@ -9652,8 +10692,8 @@ fn rewritten_paragraph_is_drawn_after_backgrounds_between_its_rows() {
 
     // 4. Single-style paragraph path across a CTM change between rows, with movement, underline,
     // and a trailing unrelated line sharing the second row's BT..ET.
-    let cross_ctm = "0.9 0.9 0.2 rg 60 696 240 18 re f BT /F1 12 Tf 0 0 0 rg 64 700 Td (First highlighted row) Tj ET \
-                     q 1 0 0 1 10 12 cm 0.9 0.9 0.2 rg 50 668 240 18 re f \
+    let cross_ctm = "0.9 0.9 0.2 rg 60 676 240 38 re f BT /F1 12 Tf 0 0 0 rg 64 700 Td (First highlighted row) Tj ET \
+                     q 1 0 0 1 10 12 cm 0.9 0.9 0.2 rg 50 664 240 38 re f \
                      BT /F1 12 Tf 0 0 0 rg 54 672 Td (Second highlighted row) Tj 246 -40 Td (Side footer) Tj ET Q";
     let mut doc = text_page(cross_ctm);
     let para = text::text_blocks(&doc, 0).unwrap().into_iter().position(|b| b.text.starts_with("First highlighted")).unwrap();
@@ -10867,6 +11907,225 @@ fn reading_keeps_dotted_leader_entries_whole_and_in_order() {
     );
 }
 
+/// #3803: Tesseract and PDFium write invisible (`3 Tr`) OCR layers in a `/Glyphless` CIDFontType2
+/// whose `/ToUnicode` and `/W` cover Latin text while `/CIDToGIDMap` maps every CID to GID 1 (a
+/// solid rectangle). Rewriting such text as visible (`0 Tr`) must substitute a real font rather
+/// than drawing the replacement in `/Glyphless` rectangles.
+#[test]
+fn editing_glyphless_ocr_text_substitutes_a_visible_font() {
+    let mut one_glyph_ttf = include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec();
+    let count = u16::from_be_bytes(one_glyph_ttf[4..6].try_into().unwrap()) as usize;
+    let loca_rec = (0..count).map(|i| 12 + i * 16).find(|i| &one_glyph_ttf[*i..*i + 4] == b"loca").unwrap();
+    let loca_off = u32::from_be_bytes(one_glyph_ttf[loca_rec + 8..loca_rec + 12].try_into().unwrap()) as usize;
+    let loca_len = u32::from_be_bytes(one_glyph_ttf[loca_rec + 12..loca_rec + 16].try_into().unwrap()) as usize;
+    one_glyph_ttf[loca_off..loca_off + 8].fill(0);
+    for chunk in one_glyph_ttf[loca_off + 8..loca_off + loca_len].as_chunks_mut::<4>().0 {
+        *chunk = 4u32.to_be_bytes();
+    }
+
+    let make_page = |content: &str, base: &str| {
+        let mut doc = text_page(content);
+        let program = doc.add(Object::Stream(Stream::flate(Dict::new(), &one_glyph_ttf)));
+        let cid_to_gid = doc.add(Object::Stream(Stream::flate(Dict::new(), &[0, 1].repeat(256))));
+        let cmap = b"1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfrange <0000> <00FF> <0000> endbfrange";
+        let unicode = doc.add(Object::Stream(Stream::flate(Dict::new(), cmap)));
+        let descriptor = Dict::from_iter([
+            (b"Type".to_vec(), Object::name("FontDescriptor")),
+            (b"FontName".to_vec(), Object::name(base)),
+            (b"Flags".to_vec(), Object::Int(5)),
+            (b"FontBBox".to_vec(), Object::Array([0, -207, 500, 718].map(Object::Int).to_vec())),
+            (b"Ascent".to_vec(), Object::Int(718)),
+            (b"Descent".to_vec(), Object::Int(-207)),
+            (b"FontFile2".to_vec(), Object::Ref(program)),
+        ]);
+        let cid_font = Dict::from_iter([
+            (b"Type".to_vec(), Object::name("Font")),
+            (b"Subtype".to_vec(), Object::name("CIDFontType2")),
+            (b"BaseFont".to_vec(), Object::name(base)),
+            (b"CIDToGIDMap".to_vec(), Object::Ref(cid_to_gid)),
+            (b"DW".to_vec(), Object::Int(500)),
+            (b"W".to_vec(), Object::Array(vec![Object::Int(32), Object::Array(vec![Object::Int(285)])])),
+            (b"FontDescriptor".to_vec(), Object::Dict(descriptor)),
+        ]);
+        let font = Dict::from_iter([
+            (b"Type".to_vec(), Object::name("Font")),
+            (b"Subtype".to_vec(), Object::name("Type0")),
+            (b"BaseFont".to_vec(), Object::name(base)),
+            (b"Encoding".to_vec(), Object::name("Identity-H")),
+            (b"DescendantFonts".to_vec(), Object::Array(vec![Object::Dict(cid_font)])),
+            (b"ToUnicode".to_vec(), Object::Ref(unicode)),
+        ]);
+        let p = pdfcraft_model::pages(&doc)[0].obj;
+        let fonts = Dict::from_iter([(b"F0".to_vec(), Object::Dict(font))]);
+        doc.update_dict(p, |d| d.set(b"Resources".to_vec(), Object::Dict(Dict::from_iter([(b"Font".to_vec(), Object::Dict(fonts))])))).unwrap();
+        doc
+    };
+
+    // Single-line OCR paragraph (rewrite_block_from path) and replace_line path.
+    let single = "BT 3 Tr 0.055 Tw -0.581 Tc 100 Tz /F0 15.75 Tf 1 0 0 1 114.75 568.8 Tm \
+                  [<0044> -27 <0065> -23 <0020> -22 <006B> -29 <0069> -28 <006E> -27 <0064> -29 <0065> -23 <0072> -28 <0065> -23 <006E>] TJ ET";
+    for base in ["Glyphless", "CustomOCR"] {
+        let mut doc = make_page(single, base);
+        assert!(text::text_editor_fonts(&doc, 0).unwrap().iter().all(|f| f.choice_only), "{base} must not be loaded into the inline editor");
+        let before = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].text, "De kinderen");
+        assert!(before[0].invisible);
+
+        let edit = text::replace_block(&mut doc, 0, 0, "De Kinderen").unwrap();
+        assert_eq!(edit.substituted.as_deref(), Some("Helvetica"), "{base} must substitute Helvetica instead of drawing in /F0");
+        let after = text::text_blocks(&reopen(&doc), 0).unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].text, "De Kinderen");
+        assert!(!after[0].invisible, "the edited OCR paragraph is now visible");
+        assert_eq!(after[0].base_font, "Helvetica");
+
+        let mut line_doc = make_page(single, base);
+        let line_edit = text::replace_line(&mut line_doc, 0, 0, "De Kinderen").unwrap();
+        assert_eq!(line_edit.substituted.as_deref(), Some("Helvetica"), "{base} replace_line must also substitute");
+        assert_eq!(text::text_lines(&reopen(&line_doc), 0).unwrap()[0].base_font, "Helvetica");
+    }
+
+    // Multi-run OCR phrase on one row with slightly different OCR font sizes (rewrite_styled_block
+    // path): both runs switch to the visible substitute font and keep calibrated widths without
+    // stretching spaces to 200%.
+    let multi_run = "BT 3 Tr /F0 15.75 Tf 1 0 0 1 114.75 568.8 Tm <004400650020006B0069006E0064006500720065006E> Tj ET \
+                     BT 3 Tr /F0 15.5 Tf 1 0 0 1 205.0 568.8 Tm <006B0075006E006E0065006E> Tj ET";
+    let mut doc = make_page(multi_run, "Glyphless");
+    let before_lines = text::text_lines(&doc, 0).unwrap();
+    let before = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].lines.len(), 2, "two runs on one OCR row");
+    let edit = text::replace_block(&mut doc, 0, 0, "De kinderen Kunnen").unwrap();
+    assert_eq!(edit.substituted.as_deref(), Some("Helvetica"));
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.trim()).collect::<Vec<_>>(), ["De kinderen", "Kunnen"]);
+    for line in &lines {
+        assert_eq!(line.base_font, "Helvetica", "every run must use the visible substitute font: {line:?}");
+    }
+    let old_w = before_lines[0].rect[2] - before_lines[0].rect[0];
+    let new_w = lines[0].rect[2] - lines[0].rect[0];
+    assert!((new_w - old_w).abs() < 5.0, "calibrated first run keeps its width ({old_w} -> {new_w}): {lines:?}");
+    assert!(lines[1].rect[0] >= lines[0].rect[2] - 1.0, "calibrated first run does not stretch into the second: {lines:?}");
+    let blocks = text::text_blocks(&reopen(&doc), 0).unwrap();
+    assert!(!blocks[0].invisible, "the whole rewritten paragraph is visible");
+
+    // High WinAnsi characters on a glyphless OCR line also use the Helvetica substitute rather
+    // than /F0, and explicitly selecting the glyphless resource is refused.
+    let mut win_ansi_doc = make_page(single, "Glyphless");
+    let win_edit = text::replace_block(&mut win_ansi_doc, 0, 0, "De kinderen € — café").unwrap();
+    assert_eq!(win_edit.substituted.as_deref(), Some("Helvetica"));
+    assert_eq!(text::text_blocks(&reopen(&win_ansi_doc), 0).unwrap()[0].text, "De kinderen € — café");
+
+    let mut explicit = make_page(single, "Glyphless");
+    let explicit_err =
+        text::rewrite_block(&mut explicit, 0, 0, Some("De Kinderen"), &BlockStyle { resource: Some("F0".into()), ..Default::default() });
+    assert!(explicit_err.is_err(), "explicitly selecting a glyphless font resource must be refused");
+
+    // Legitimate whitespace-only subsets and 1-glyph subsets with intentional CID aliases remain
+    // exposed to the inline editor and accepted when explicitly selected as a resource.
+    let mut zero_glyph_ttf = one_glyph_ttf.clone();
+    zero_glyph_ttf[loca_off..loca_off + loca_len].fill(0);
+    let mut ws_doc = text_page("BT /F0 12 Tf 1 0 0 1 72 700 Tm <0001> Tj /WS 12 Tf ( ) Tj ET");
+    let ws_prog = ws_doc.add(Object::Stream(Stream::flate(Dict::new(), &zero_glyph_ttf)));
+    let ws_desc = Dict::from_iter([(b"FontName".to_vec(), Object::name("ABCDEF+SpaceOnly")), (b"FontFile2".to_vec(), Object::Ref(ws_prog))]);
+    let ws_font = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("TrueType")),
+        (b"BaseFont".to_vec(), Object::name("ABCDEF+SpaceOnly")),
+        (b"Encoding".to_vec(), Object::name("WinAnsiEncoding")),
+        (b"FirstChar".to_vec(), Object::Int(32)),
+        (b"LastChar".to_vec(), Object::Int(32)),
+        (b"Widths".to_vec(), Object::Array(vec![Object::Int(250)])),
+        (b"FontDescriptor".to_vec(), Object::Dict(ws_desc)),
+    ]);
+    let alias_prog = ws_doc.add(Object::Stream(Stream::flate(Dict::new(), &one_glyph_ttf)));
+    let alias_map = ws_doc.add(Object::Stream(Stream::flate(Dict::new(), &[0, 0, 0, 1, 0, 1, 0, 1])));
+    let alias_tu = ws_doc.add(Object::Stream(Stream::flate(Dict::new(), b"2 beginbfchar <0001> <0041> <0002> <0061> endbfchar")));
+    let alias_desc = Dict::from_iter([(b"FontName".to_vec(), Object::name("ABCDEF+AliasOne")), (b"FontFile2".to_vec(), Object::Ref(alias_prog))]);
+    let alias_cid = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("CIDFontType2")),
+        (b"BaseFont".to_vec(), Object::name("ABCDEF+AliasOne")),
+        (b"CIDToGIDMap".to_vec(), Object::Ref(alias_map)),
+        (b"W".to_vec(), Object::Array(vec![Object::Int(1), Object::Array(vec![Object::Int(600), Object::Int(600)])])),
+        (b"FontDescriptor".to_vec(), Object::Dict(alias_desc)),
+    ]);
+    let alias_font = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("Type0")),
+        (b"BaseFont".to_vec(), Object::name("ABCDEF+AliasOne")),
+        (b"Encoding".to_vec(), Object::name("Identity-H")),
+        (b"DescendantFonts".to_vec(), Object::Array(vec![Object::Dict(alias_cid)])),
+        (b"ToUnicode".to_vec(), Object::Ref(alias_tu)),
+    ]);
+    let p = pdfcraft_model::pages(&ws_doc)[0].obj;
+    let fonts = Dict::from_iter([(b"F0".to_vec(), Object::Dict(alias_font)), (b"WS".to_vec(), Object::Dict(ws_font))]);
+    ws_doc.update_dict(p, |d| d.set(b"Resources".to_vec(), Object::Dict(Dict::from_iter([(b"Font".to_vec(), Object::Dict(fonts))])))).unwrap();
+    let editor_resources: Vec<_> = text::text_editor_fonts(&ws_doc, 0).unwrap().into_iter().map(|f| f.resource).collect();
+    assert!(editor_resources.contains(&"F0".to_string()) && editor_resources.contains(&"WS".to_string()), "{editor_resources:?}");
+    let mut ws_only = ws_doc.clone();
+    text::rewrite_block(&mut ws_only, 0, 0, Some(" "), &BlockStyle { resource: Some("WS".into()), ..Default::default() }).unwrap();
+    text::rewrite_block(&mut ws_doc, 0, 0, Some("Aa"), &BlockStyle { resource: Some("F0".into()), ..Default::default() }).unwrap();
+    assert_eq!(text::text_blocks(&reopen(&ws_doc), 0).unwrap()[0].text, "Aa");
+}
+
+/// Same-face generated subsets share a source line; TJ adjustment must survive a style edit.
+#[test]
+fn split_subset_source_keeps_calibrated_advance() {
+    let mut doc = text_page("BT /A 12 Tf 72 700 Td [<01> -100] TJ /B 12 Tf <01> Tj ET BT /F1 13 Tf 1 0 0 1 85.2 700 Tm (X) Tj ET");
+    let mut fonts = Dict::new();
+    // AA sorts before B and encodes B too, but its unrelated face must not supply metrics.
+    for (name, unicode, face, width) in
+        [("A", "0041", "SyntheticSubset", 500), ("AA", "0042", "OtherFace", 900), ("B", "0042", "SyntheticSubset", 500)]
+    {
+        let cmap = format!("1 begincodespacerange <01> <FF> endcodespacerange 1 beginbfchar <01> <{unicode}> endbfchar");
+        let tu = doc.add(Object::Stream(Stream::flate(Dict::new(), cmap.as_bytes())));
+        let proc = doc.add(Object::Stream(Stream::flate(Dict::new(), b"500 0 d0 0 0 400 700 re f")));
+        let font = Dict::from_iter([
+            (b"Type".to_vec(), Object::name("Font")),
+            (b"Subtype".to_vec(), Object::name("Type3")),
+            (b"Name".to_vec(), Object::name("PCJapanese")),
+            (b"BaseFont".to_vec(), Object::name(face)),
+            (b"FontBBox".to_vec(), Object::Array([0, 0, 500, 700].map(Object::Int).to_vec())),
+            (b"FontMatrix".to_vec(), Object::Array([0.001, 0.0, 0.0, 0.001, 0.0, 0.0].map(Object::Real).to_vec())),
+            (b"FirstChar".to_vec(), Object::Int(1)),
+            (b"LastChar".to_vec(), Object::Int(1)),
+            (b"Widths".to_vec(), Object::Array(vec![Object::Int(width)])),
+            (
+                b"Encoding".to_vec(),
+                Object::Dict(Dict::from_iter([(b"Differences".to_vec(), Object::Array(vec![Object::Int(1), Object::name("g01")]))])),
+            ),
+            (b"CharProcs".to_vec(), Object::Dict(Dict::from_iter([(b"g01".to_vec(), Object::Ref(proc))]))),
+            (b"ToUnicode".to_vec(), Object::Ref(tu)),
+        ]);
+        fonts.set(name.as_bytes().to_vec(), Object::Dict(font));
+    }
+    fonts.set(
+        b"F1".to_vec(),
+        Object::Dict(Dict::from_iter([
+            (b"Type".to_vec(), Object::name("Font")),
+            (b"Subtype".to_vec(), Object::name("Type1")),
+            (b"BaseFont".to_vec(), Object::name("Helvetica")),
+        ])),
+    );
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| d.set(b"Resources".to_vec(), Object::Dict(Dict::from_iter([(b"Font".to_vec(), Object::Dict(fonts))])))).unwrap();
+    let before = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(before[0].text, "AB");
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 1, "{blocks:?}");
+    assert_eq!(blocks[0].lines.len(), 2);
+    let original_width = before[0].rect[2] - before[0].rect[0];
+    for (draft, factor) in [("ABX", 1.0), ("ABAX", 1.5)] {
+        let mut edited = doc.clone();
+        text::rewrite_block(&mut edited, 0, 0, Some(draft), &BlockStyle { color: Some([0.0, 0.0, 1.0]), ..Default::default() }).unwrap();
+        let after = text::text_lines(&reopen(&edited), 0).unwrap();
+        let width = after[0].rect[2] - after[0].rect[0];
+        assert!((width - original_width * factor).abs() < 0.01, "{draft}: original {original_width}, rewritten {width}; {after:?}");
+    }
+}
+
 #[cfg(test)]
 mod proptests {
     use super::*;
@@ -10999,6 +12258,53 @@ fn noop_arrange_is_not_ok_without_change() {
     let r = arrange(&mut doc, 0, 1, images::ArrangeOrder::BringToFront);
     let after = write_incremental(&doc, &SaveOptions::default()).unwrap();
     assert!(r.is_err() || before != after, "Ok with no change");
+}
+
+/// Bring to front on an at-limit image that shares its only content unit with paint
+/// already before it is a no-op, so it is refused instead of rebuilding the same placement.
+#[test]
+fn arrange_front_image_in_single_shared_unit_is_refused() {
+    let mut doc = image_page_with("q 0 0 10 10 re f 100 0 0 100 50 50 cm /Im0 Do Q");
+    let before = page_content_bytes(&doc, 0);
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
+#[test]
+fn arrange_front_image_in_single_shared_unit_moves_past_following_paint() {
+    let mut doc = image_page_with("q 100 0 0 100 50 50 cm /Im0 Do 0 0 10 10 re f Q");
+    assert!(
+        arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_ok(),
+        "an image before following paint in one shared unit can be brought to front"
+    );
+    let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(s.find("re f").unwrap() < s.rfind("/Im0 Do").unwrap(), "{s}");
+    let mut doc = image_page_with("q q 100 0 0 100 50 50 cm /Im0 Do Q q 50 50 10 10 re f Q Q");
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_ok(), "separate inner units inside a page wrapper can be reordered");
+    let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(s.find("re f").unwrap() < s.rfind("/Im0 Do").unwrap(), "{s}");
+    let mut doc = image_page_with("q 0 0 10 10 re f 100 0 0 100 50 50 cm /Im0 Do Q");
+    let before = page_content_bytes(&doc, 0);
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringForward).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
+#[test]
+fn arrange_backward_in_single_shared_unit_moves_before_paint_and_refuses_without_it() {
+    for order in [images::ArrangeOrder::SendToBack, images::ArrangeOrder::SendBackward] {
+        let mut doc = image_page_with("q q 0 0 10 10 re f 100 0 0 100 50 50 cm /Im0 Do Q Q");
+        arrange(&mut doc, 0, 0, order).unwrap();
+        let doc = reopen(&doc);
+        let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+        assert!(s.find("/Im0 Do").unwrap() < s.find("re f").unwrap(), "{order:?}: {s}");
+        assert_eq!(images::page_images(&doc, 0).unwrap()[0].rect, [50.0, 50.0, 150.0, 150.0]);
+    }
+    for order in [images::ArrangeOrder::SendToBack, images::ArrangeOrder::SendBackward] {
+        let mut doc = image_page_with("q q 100 0 0 100 50 50 cm /Im0 Do 0 0 10 10 re f Q Q");
+        let before = page_content_bytes(&doc, 0);
+        assert!(arrange(&mut doc, 0, 0, order).is_err(), "{order:?}");
+        assert_eq!(page_content_bytes(&doc, 0), before);
+    }
 }
 
 /// Cropping a turned image keeps the requested upright box in user space, rather than expanding
@@ -13963,6 +15269,19 @@ fn remove_crop_refuses_an_unmarked_author_clip_without_changes() {
     assert_eq!(page_content_bytes(&doc, 0), before);
 }
 
+/// A PdfCraft crop marker whose clip is written as `W q Q n` is still recorded on the image, but
+/// scope detection does not treat that path as a removable crop. The error says the crop cannot
+/// be removed, not that none exists.
+#[test]
+fn remove_crop_reports_a_recorded_crop_it_cannot_strip() {
+    let mut doc = image_page_with("q /PdfCraftImageCrop MP 100 100 50 50 re W q Q n 200 0 0 100 100 100 cm /Im0 Do Q");
+    assert!(images::page_images(&doc, 0).unwrap()[0].has_editor_crop());
+    let before = page_content_bytes(&doc, 0);
+    let err = remove_crop(&mut doc, 0, 0).unwrap_err().to_string();
+    assert!(err.contains("cannot be safely removed") && !err.contains("has no PdfCraft crop"), "{err}");
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
 #[test]
 fn arrange_refuses_unrestorable_extended_print_state() {
     let mut unexpectedly_moved = Vec::new();
@@ -15658,4 +16977,521 @@ fn thai_paragraphs_break_the_row_on_unicode_row_breaks() {
             .unwrap_or_else(|e| panic!("matching U+{:04X}: {e}", u32::from(separator)));
         assert_eq!(rows(&doc), ["กข", "ค"], "matching U+{:04X}", u32::from(separator));
     }
+}
+
+/// The deleted image's payload survived a full save: the census could not prove it unused.
+fn payload_after_delete(doc: &mut Document, private: &[u8]) -> bool {
+    images::change_image(doc, 0, 0, &images::ImageChange::Delete).unwrap();
+    let bytes = write_full(doc, &SaveOptions::default()).unwrap();
+    bytes.windows(private.len()).any(|w| w == private)
+}
+
+/// A form `name` that draws what `body` says, in the page's own resource scope plus `xobjects`.
+fn add_form(doc: &mut Document, name: &[u8], body: &[u8], xobjects: Dict) -> ObjRef {
+    let mut dict = Dict::new();
+    dict.set(b"Type".to_vec(), Object::name("XObject"));
+    dict.set(b"Subtype".to_vec(), Object::name("Form"));
+    dict.set(b"BBox".to_vec(), Object::Array([0, 0, 10, 10].map(Object::Int).to_vec()));
+    let mut resources = Dict::from_iter([(b"Font".to_vec(), Object::Dict(Dict::new()))]);
+    if !xobjects.is_empty() {
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+    }
+    dict.set(b"Resources".to_vec(), Object::Dict(resources));
+    let form = doc.add(Object::Stream(Stream::flate(dict, body)));
+    let page = pdfcraft_model::pages(doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
+        let mut names = resources.get(b"XObject").and_then(Object::as_dict).cloned().unwrap_or_default();
+        names.set(name.to_vec(), Object::Ref(form));
+        resources.set(b"XObject".to_vec(), Object::Dict(names));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    form
+}
+
+/// The image `private` a page draws as `/Im0`, with the object it is drawn through.
+fn private_page(private: &[u8]) -> (Document, ObjRef) {
+    let mut doc = image_page();
+    let target = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    doc.set(target, Object::Stream(identifiable_test_image(private)));
+    (doc, target)
+}
+
+/// The page's `/ExtGState` gains `name` with `entries`.
+fn add_extgstate(doc: &mut Document, name: &[u8], entries: Dict) {
+    let page = pdfcraft_model::pages(doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
+        let mut states = resources.get(b"ExtGState").and_then(Object::as_dict).cloned().unwrap_or_default();
+        states.set(name.to_vec(), Object::Dict(entries));
+        resources.set(b"ExtGState".to_vec(), Object::Dict(states));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+}
+
+/// A form that draws itself leaves the census no way to say what it reaches, so the deleted image's
+/// payload stays: the alias in the page's resources is kept rather than the object dropped.
+#[test]
+fn a_form_cycle_keeps_the_image_the_census_cannot_see_through() {
+    const PRIVATE: &[u8] = b"PRIVATE_FORM_CYCLE_IMAGE";
+    let (mut doc, _target) = private_page(PRIVATE);
+    let form = add_form(&mut doc, b"Loop", b"/Loop Do", Dict::new());
+    // Its own scope names it too, so the walk comes back to it.
+    doc.update_dict(form, |d| {
+        let resources = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"Loop".to_vec(), Object::Ref(form))])))]);
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /Loop Do"]);
+    assert!(payload_after_delete(&mut doc, PRIVATE), "a cycle must keep the image");
+}
+
+/// A chain deeper than the census's depth limit stops the walk before it reaches the image, so the
+/// payload stays. The image really is drawn, at a depth the census refuses to guess about.
+#[test]
+fn a_form_chain_past_the_census_depth_limit_keeps_the_image() {
+    const PRIVATE: &[u8] = b"PRIVATE_DEEP_CHAIN_IMAGE";
+    let (mut doc, target) = private_page(PRIVATE);
+    let mut next: Option<ObjRef> = None;
+    for level in (0..70).rev() {
+        let body: Vec<u8> = if next.is_some() { format!("/D{level} Do").into_bytes() } else { b"/Im0 Do".to_vec() };
+        let names = match next {
+            Some(inner) => Dict::from_iter([(format!("D{level}").into_bytes(), Object::Ref(inner))]),
+            None => Dict::from_iter([(b"Im0".to_vec(), Object::Ref(target))]),
+        };
+        // The form is added under its own name at the page, and each one draws the next.
+        next = Some(add_form(&mut doc, format!("F{level}").into_bytes().as_slice(), &body, names));
+    }
+    set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /F0 Do"]);
+    assert!(payload_after_delete(&mut doc, PRIVATE), "a chain past the depth limit must keep the image");
+}
+
+/// Soft masks and alternates that are malformed (or name nothing) must not be read as "no consumer":
+/// the image stays. The benign spellings of "no mask" (null, /None, an array of nulls) still let the
+/// unused image go.
+#[test]
+fn malformed_soft_masks_and_alternates_keep_the_image_while_the_empty_spellings_do_not() {
+    for (label, entries, kept) in [
+        ("/SMask null", Dict::from_iter([(b"SMask".to_vec(), Object::Null)]), false),
+        ("/SMask /None", Dict::from_iter([(b"SMask".to_vec(), Object::name("None"))]), false),
+        ("/Mask [null null]", Dict::from_iter([(b"Mask".to_vec(), Object::Array(vec![Object::Null, Object::Null]))]), false),
+        ("/SMask a dictionary", Dict::from_iter([(b"SMask".to_vec(), Object::Dict(Dict::new()))]), true),
+        ("/Alternates a dictionary", Dict::from_iter([(b"Alternates".to_vec(), Object::Dict(Dict::new()))]), true),
+        ("/Alternates without /Image", Dict::from_iter([(b"Alternates".to_vec(), Object::Array(vec![Object::Dict(Dict::new())]))]), true),
+    ] {
+        const PRIVATE: &[u8] = b"PRIVATE_MASKED_CONSUMER_IMAGE";
+        let (mut doc, _target) = private_page(PRIVATE);
+        let mut image = Dict::new();
+        image.set(b"Type".to_vec(), Object::name("XObject"));
+        image.set(b"Subtype".to_vec(), Object::name("Image"));
+        image.set(b"Width".to_vec(), Object::Int(4));
+        image.set(b"Height".to_vec(), Object::Int(2));
+        image.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        image.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        for (key, value) in entries.iter() {
+            image.set(key.clone(), value.clone());
+        }
+        let other = doc.add(Object::Stream(Stream::from_raw(image, vec![0u8; 8])));
+        add_form(&mut doc, b"Other", b"/OtherImage Do", Dict::from_iter([(b"OtherImage".to_vec(), Object::Ref(other))]));
+        set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /Other Do"]);
+        assert_eq!(payload_after_delete(&mut doc, PRIVATE), kept, "{label}");
+    }
+}
+
+/// `gs`, `Tf` and `scn` naming something the census cannot read leave the image alone; the states it
+/// can read (a Type3 font with glyph programs, a tiling pattern) are walked, and an unused image goes.
+#[test]
+fn resource_operators_the_census_cannot_read_keep_the_image() {
+    for (label, state, content) in [
+        (
+            "an ExtGState font that is not a pair",
+            Some((b"GS".to_vec(), Dict::from_iter([(b"Font".to_vec(), Object::Array(vec![Object::Int(0)]))]))),
+            "/GS gs",
+        ),
+        ("an ExtGState font that is not an array", Some((b"GS".to_vec(), Dict::from_iter([(b"Font".to_vec(), Object::name("F1"))]))), "/GS gs"),
+        ("an ExtGState soft mask that is not a dictionary", Some((b"GS".to_vec(), Dict::from_iter([(b"SMask".to_vec(), Object::Int(1))]))), "/GS gs"),
+        (
+            "a soft mask group that is not a form",
+            Some((b"GS".to_vec(), Dict::from_iter([(b"SMask".to_vec(), Object::Dict(Dict::from_iter([(b"G".to_vec(), Object::Int(1))])))]))),
+            "/GS gs",
+        ),
+    ] {
+        const PRIVATE: &[u8] = b"PRIVATE_UNREADABLE_OPERATOR_IMAGE";
+        let (mut doc, _target) = private_page(PRIVATE);
+        if let Some((name, entries)) = state {
+            add_extgstate(&mut doc, &name, entries);
+        }
+        set_image_content(&mut doc, 0, &[format!("q 200 0 0 100 100 100 cm /Im0 Do Q {content}").into_bytes().as_slice()]);
+        assert!(payload_after_delete(&mut doc, PRIVATE), "{label}");
+    }
+}
+
+/// A shading painted through `scn` draws no XObject, so it is no reason to keep the image: the
+/// census reads it as nothing to follow and the unused image still goes.
+#[test]
+fn a_shading_painted_through_scn_does_not_keep_the_image() {
+    const PRIVATE: &[u8] = b"PRIVATE_SHADING_PATTERN_IMAGE";
+    let (mut doc, _target) = private_page(PRIVATE);
+    let shading =
+        doc.add(Object::Dict(Dict::from_iter([(b"ShadingType".to_vec(), Object::Int(2)), (b"ColorSpace".to_vec(), Object::name("DeviceGray"))])));
+    // /Pattern names a Type 2 pattern, not the shading dictionary itself. Its shading has no
+    // ExtGState and cannot consume an XObject, so the positive cleanup assertion stays unchanged.
+    let pattern = doc.add(Object::Dict(Dict::from_iter([(b"PatternType".to_vec(), Object::Int(2)), (b"Shading".to_vec(), Object::Ref(shading))])));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
+        resources.set(b"Pattern".to_vec(), Object::Dict(Dict::from_iter([(b"P1".to_vec(), Object::Ref(pattern))])));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /Pattern cs /P1 scn"]);
+    assert!(!payload_after_delete(&mut doc, PRIVATE), "a shading is no consumer, so the image goes");
+}
+
+/// An image XObject whose `/SMask` or `/Alternates` points at an object that is not one is not read
+/// as "nothing there": the image stays. An XObject that is not a stream at all does the same.
+#[test]
+fn a_page_drawing_something_that_is_not_an_xobject_keeps_the_image() {
+    const PRIVATE: &[u8] = b"PRIVATE_NOT_A_STREAM_IMAGE";
+    let (mut doc, _target) = private_page(PRIVATE);
+    let not_a_stream = doc.add(Object::Dict(Dict::from_iter([(b"Type".to_vec(), Object::name("Font"))])));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
+        let mut names = resources.get(b"XObject").and_then(Object::as_dict).cloned().unwrap_or_default();
+        names.set(b"Bad".to_vec(), Object::Ref(not_a_stream));
+        resources.set(b"XObject".to_vec(), Object::Dict(names));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /Bad Do"]);
+    assert!(payload_after_delete(&mut doc, PRIVATE), "an unreadable XObject must keep the image");
+}
+
+/// `/Annots` that is not an array leaves the appearance walks unknown, so the image stays.
+#[test]
+fn annots_that_are_not_an_array_keep_the_image() {
+    const PRIVATE: &[u8] = b"PRIVATE_ANNOTS_IMAGE";
+    let (mut doc, _target) = private_page(PRIVATE);
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Int(1))).unwrap();
+    assert!(payload_after_delete(&mut doc, PRIVATE), "unreadable /Annots must keep the image");
+}
+
+/// The prune rewrites resource dictionaries it reaches through a reference, so a genuinely unused
+/// image still goes even when its alias sits in an indirect `/XObject` dictionary.
+#[test]
+fn an_indirect_xobject_dictionary_is_rewritten_so_an_unused_image_still_goes() {
+    const PRIVATE: &[u8] = b"PRIVATE_INDIRECT_DICT_IMAGE";
+    let (mut doc, target) = private_page(PRIVATE);
+    // An orphan dictionary, referenced by nothing the census reads, naming the image.
+    let orphan =
+        doc.add(Object::Dict(Dict::from_iter([(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"Unused".to_vec(), Object::Ref(target))])))])));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
+        resources.set(b"Properties".to_vec(), Object::Dict(Dict::from_iter([(b"L9".to_vec(), Object::Ref(orphan))])));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    assert!(!payload_after_delete(&mut doc, PRIVATE), "an unused indirect alias must be pruned");
+}
+
+/// More aliases than the rewrite will stage keeps the image: the census stops rather than rewrite a
+/// document it could not finish, and nothing of the edit's cleanup is applied.
+#[test]
+fn more_aliases_than_the_rewrite_will_stage_keeps_the_image() {
+    const PRIVATE: &[u8] = b"PRIVATE_MANY_ALIASES_IMAGE";
+    let (mut doc, target) = private_page(PRIVATE);
+    let mut aliases = Dict::new();
+    for index in 0..300 {
+        aliases.set(format!("Unused{index}").into_bytes(), Object::Ref(target));
+    }
+    let orphan = doc.add(Object::Dict(Dict::from_iter([(b"XObject".to_vec(), Object::Dict(aliases))])));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
+        resources.set(b"Properties".to_vec(), Object::Dict(Dict::from_iter([(b"L9".to_vec(), Object::Ref(orphan))])));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    assert!(payload_after_delete(&mut doc, PRIVATE), "past the alias cap the image must stay");
+}
+
+/// An annotation appearance is walked through its dictionary, its states and its form streams, and
+/// any shape the census cannot read keeps the image: an appearance dictionary naming its own
+/// `/Resources`, and one whose states come back to it.
+#[test]
+fn annotation_appearances_are_walked_and_the_unreadable_ones_keep_the_image() {
+    // The readable shape first: a form appearance that draws the image, reached through a state
+    // dictionary and an array. The image is used, so deleting it from the page keeps it.
+    const PRIVATE: &[u8] = b"PRIVATE_APPEARANCE_IMAGE";
+    let (mut doc, _target) = private_page(PRIVATE);
+    let drawing = add_form(&mut doc, b"DrawsIm0", b"/Im0 Do", Dict::new());
+    let states = doc.add(Object::Dict(Dict::from_iter([(b"N".to_vec(), Object::Ref(drawing)), (b"On".to_vec(), Object::Ref(drawing))])));
+    let selected = doc.add(Object::Array(vec![Object::Ref(states)]));
+    let annot = doc.add(Object::Dict(Dict::from_iter([(b"AP".to_vec(), Object::Dict(Dict::from_iter([(b"N".to_vec(), Object::Ref(selected))])))])));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(annot)]))).unwrap();
+    assert!(payload_after_delete(&mut doc, PRIVATE), "an appearance that draws the image keeps it");
+
+    for (label, cycle) in [("an appearance dictionary naming its own /Resources", false), ("appearance states that come back to it", true)] {
+        const KEPT: &[u8] = b"PRIVATE_UNREADABLE_APPEARANCE_IMAGE";
+        let (mut doc, _target) = private_page(KEPT);
+        let state = if cycle {
+            let holder = doc.add(Object::Dict(Dict::new()));
+            doc.update_dict(holder, |d| d.set(b"On".to_vec(), Object::Ref(holder))).unwrap();
+            Object::Dict(Dict::from_iter([(b"On".to_vec(), Object::Ref(holder))]))
+        } else {
+            Object::Dict(Dict::from_iter([(b"Resources".to_vec(), Object::Dict(Dict::new()))]))
+        };
+        let annot = doc.add(Object::Dict(Dict::from_iter([(b"AP".to_vec(), Object::Dict(Dict::from_iter([(b"N".to_vec(), state)])))])));
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(annot)]))).unwrap();
+        assert!(payload_after_delete(&mut doc, KEPT), "{label} must keep the image");
+    }
+}
+
+/// `/Alternates` arrays that name the deleted image are rewritten wherever the rewrite finds them,
+/// directly and through a reference, so an image nothing draws is still released; an entry whose
+/// `/Image` is not the deleted one stays.
+#[test]
+fn alternate_arrays_naming_the_image_are_rewritten_through_references() {
+    const PRIVATE: &[u8] = b"PRIVATE_ALTERNATE_IMAGE";
+    let (mut doc, target) = private_page(PRIVATE);
+    let other = doc.add(Object::Stream(identifiable_test_image(b"OTHER_IMAGE_BYTES")));
+    let kept_entry = Object::Dict(Dict::from_iter([(b"Image".to_vec(), Object::Ref(other))]));
+    let dropped_entry = Object::Dict(Dict::from_iter([(b"Image".to_vec(), Object::Ref(target))]));
+    // One array named directly by an orphan image, one given through a reference.
+    let orphan = doc.add(Object::Stream(Stream::from_raw(
+        Dict::from_iter([
+            (b"Type".to_vec(), Object::name("XObject")),
+            (b"Subtype".to_vec(), Object::name("Image")),
+            (b"Width".to_vec(), Object::Int(4)),
+            (b"Height".to_vec(), Object::Int(2)),
+            (b"ColorSpace".to_vec(), Object::name("DeviceGray")),
+            (b"BitsPerComponent".to_vec(), Object::Int(8)),
+            (b"Alternates".to_vec(), Object::Array(vec![kept_entry.clone(), dropped_entry])),
+        ]),
+        vec![0u8; 8],
+    )));
+    let indirect = doc.add(Object::Array(vec![kept_entry, Object::Dict(Dict::from_iter([(b"Image".to_vec(), Object::Ref(target))]))]));
+    let second = doc.add(Object::Stream(Stream::from_raw(
+        Dict::from_iter([
+            (b"Type".to_vec(), Object::name("XObject")),
+            (b"Subtype".to_vec(), Object::name("Image")),
+            (b"Width".to_vec(), Object::Int(4)),
+            (b"Height".to_vec(), Object::Int(2)),
+            (b"ColorSpace".to_vec(), Object::name("DeviceGray")),
+            (b"BitsPerComponent".to_vec(), Object::Int(8)),
+            (b"Alternates".to_vec(), Object::Ref(indirect)),
+        ]),
+        vec![0u8; 8],
+    )));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
+        resources.set(
+            b"Properties".to_vec(),
+            Object::Dict(Dict::from_iter([(b"L1".to_vec(), Object::Ref(orphan)), (b"L2".to_vec(), Object::Ref(second))])),
+        );
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    assert!(!payload_after_delete(&mut doc, PRIVATE), "nothing draws the image, so it goes");
+}
+
+/// A Type3 font's glyph programs are walked with the font's own scope, and one that is not a stream
+/// stops the walk: the image stays.
+#[test]
+fn type3_glyph_programs_are_walked_and_a_broken_one_keeps_the_image() {
+    const PRIVATE: &[u8] = b"PRIVATE_TYPE3_CHARPROC_IMAGE";
+    for (label, charproc) in [("a form that draws the image", None), ("a program that is not a stream", Some(Object::Int(1)))] {
+        let (mut doc, target) = private_page(PRIVATE);
+        let program = match charproc {
+            None => {
+                let form = add_form(&mut doc, b"Glyph", b"/Im0 Do", Dict::new());
+                Object::Ref(form)
+            }
+            Some(not_a_stream) => not_a_stream,
+        };
+        let mut charprocs = Dict::new();
+        charprocs.set(b"A".to_vec(), program);
+        let mut glyph_resources = Dict::new();
+        glyph_resources.set(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"Im0".to_vec(), Object::Ref(target))])));
+        let mut font_dict = Dict::new();
+        for (key, value) in [
+            (&b"Type"[..], Object::name("Font")),
+            (b"Subtype", Object::name("Type3")),
+            (b"FontBBox", Object::Array([0, 0, 1000, 1000].map(Object::Int).to_vec())),
+            (b"FontMatrix", Object::Array(vec![Object::Int(1), Object::Int(0), Object::Int(0), Object::Int(1), Object::Int(0), Object::Int(0)])),
+            (b"FirstChar", Object::Int(65)),
+            (b"LastChar", Object::Int(65)),
+            (b"Widths", Object::Array(vec![Object::Int(1000)])),
+            (b"Encoding", Object::Dict(Dict::from_iter([(b"Differences".to_vec(), Object::Array(vec![Object::Int(65), Object::name("A")]))]))),
+            (b"CharProcs", Object::Dict(charprocs)),
+            (b"Resources", Object::Dict(glyph_resources)),
+        ] {
+            font_dict.set(key.to_vec(), value);
+        }
+        let font = doc.add(Object::Dict(font_dict));
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| {
+            let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
+            let mut fonts = resources.get(b"Font").and_then(Object::as_dict).cloned().unwrap_or_default();
+            fonts.set(b"F2".to_vec(), Object::Ref(font));
+            resources.set(b"Font".to_vec(), Object::Dict(fonts));
+            d.set(b"Resources".to_vec(), Object::Dict(resources));
+        })
+        .unwrap();
+        set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q BT /F2 10 Tf (A) Tj ET"]);
+        assert!(payload_after_delete(&mut doc, PRIVATE), "{label} must keep the image");
+    }
+}
+
+/// A second page whose `/Contents` is not a stream leaves the census unable to say what that page
+/// draws, so the image stays even though the page being edited is clean.
+#[test]
+fn another_page_with_contents_that_are_not_a_stream_keeps_the_image() {
+    const PRIVATE: &[u8] = b"PRIVATE_NON_STREAM_CONTENTS_IMAGE";
+    let (mut doc, _target) = private_page(PRIVATE);
+    add_blank_page(&mut doc, None);
+    let not_a_stream = doc.add(Object::Int(1));
+    let second = pdfcraft_model::pages(&doc)[1].obj;
+    doc.update_dict(second, |d| d.set(b"Contents".to_vec(), Object::Ref(not_a_stream))).unwrap();
+    assert!(payload_after_delete(&mut doc, PRIVATE), "a page with unreadable /Contents must keep the image");
+}
+
+#[test]
+fn census_retains_images_drawn_by_each_widget_icon() {
+    const PRIVATE: &[u8] = b"PRIVATE_WIDGET_ICON_IMAGE";
+    for key in [b"I".as_slice(), b"RI", b"IX"] {
+        let (mut doc, target) = private_page(PRIVATE);
+        let form = add_form(&mut doc, b"Icon", b"/IconImg Do", Dict::from_iter([(b"IconImg".to_vec(), Object::Ref(target))]));
+        let mk = doc.add(Object::Dict(Dict::from_iter([(key.to_vec(), Object::Ref(form))])));
+        let annotation = Object::Dict(Dict::from_iter([
+            (b"Subtype".to_vec(), Object::name("Widget")),
+            (b"FT".to_vec(), Object::name("Btn")),
+            (b"MK".to_vec(), Object::Ref(mk)),
+        ]));
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(vec![annotation]))).unwrap();
+        assert!(payload_after_delete(&mut doc, PRIVATE), "widget icon {key:?} lost its image");
+        let saved = reopen(&doc);
+        let bytes = write_full(&saved, &SaveOptions::default()).unwrap();
+        assert!(bytes.windows(PRIVATE.len()).any(|b| b == PRIVATE));
+    }
+}
+
+#[test]
+fn census_retains_images_in_shading_pattern_soft_masks() {
+    const PRIVATE: &[u8] = b"PRIVATE_SHADING_PATTERN_MASK";
+    for type_spelling in ["direct", "indirect", "missing", "invalid"] {
+        let (mut doc, target) = private_page(PRIVATE);
+        let form = add_form(&mut doc, b"MaskForm", b"/MaskImg Do", Dict::from_iter([(b"MaskImg".to_vec(), Object::Ref(target))]));
+        let state =
+            doc.add(Object::Dict(Dict::from_iter([(b"SMask".to_vec(), Object::Dict(Dict::from_iter([(b"G".to_vec(), Object::Ref(form))])))])));
+        let mut pattern = Dict::from_iter([(b"ExtGState".to_vec(), Object::Ref(state))]);
+        let kind = match type_spelling {
+            "direct" => Some(Object::Int(2)),
+            "indirect" => Some(Object::Ref(doc.add(Object::Int(2)))),
+            "missing" => None,
+            _ => Some(Object::name("Unknown")),
+        };
+        if let Some(kind) = kind {
+            pattern.set(b"PatternType".to_vec(), kind);
+        }
+        let pattern = Object::Dict(pattern);
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| {
+            let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+            resources.set(b"Pattern".to_vec(), Object::Dict(Dict::from_iter([(b"P".to_vec(), pattern)])));
+            d.set(b"Resources".to_vec(), Object::Dict(resources));
+        })
+        .unwrap();
+        set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /Pattern cs /P scn 0 0 10 10 re f"]);
+        assert!(payload_after_delete(&mut doc, PRIVATE), "the shading pattern's mask still draws the image");
+    }
+}
+
+#[test]
+fn census_keeps_inherited_type3_glyph_scope_but_prunes_with_a_private_font_scope() {
+    const PRIVATE: &[u8] = b"PRIVATE_INHERITED_TYPE3_IMAGE";
+    for (own_scope, indirect_subtype) in [(false, false), (false, true), (true, false), (true, true)] {
+        let (mut doc, target) = private_page(PRIVATE);
+        let other = doc.add(Object::Stream(identifiable_test_image(b"OTHER_TYPE3_IMAGE")));
+        let glyph = doc.add(Object::Stream(Stream::flate(Dict::new(), b"/GlyphImg Do")));
+        let mut font = Dict::from_iter([
+            (b"Subtype".to_vec(), Object::name("Type3")),
+            (b"CharProcs".to_vec(), Object::Dict(Dict::from_iter([(b"A".to_vec(), Object::Ref(glyph))]))),
+        ]);
+        let glyph_scope = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"GlyphImg".to_vec(), Object::Ref(other))])))]);
+        if own_scope {
+            font.set(b"Resources".to_vec(), Object::Dict(glyph_scope));
+        }
+        if indirect_subtype {
+            let subtype = doc.add(Object::name("Type3"));
+            font.set(b"Subtype".to_vec(), Object::Ref(subtype));
+        }
+        let font = doc.add(Object::Dict(font));
+        let form = add_form(&mut doc, b"TextForm", b"BT (A) Tj ET", Dict::from_iter([(b"GlyphImg".to_vec(), Object::Ref(target))]));
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| {
+            let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+            resources.set(b"Font".to_vec(), Object::Dict(Dict::from_iter([(b"T3".to_vec(), Object::Ref(font))])));
+            let mut names = resources.get(b"XObject").and_then(Object::as_dict).cloned().unwrap();
+            names.set(b"GlyphImg".to_vec(), Object::Ref(other));
+            names.set(b"TextForm".to_vec(), Object::Ref(form));
+            resources.set(b"XObject".to_vec(), Object::Dict(names));
+            d.set(b"Resources".to_vec(), Object::Dict(resources));
+        })
+        .unwrap();
+        set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q BT /T3 10 Tf ET /TextForm Do"]);
+        assert_eq!(payload_after_delete(&mut doc, PRIVATE), !own_scope, "private font resources: {own_scope}");
+    }
+}
+
+#[test]
+fn census_does_not_use_a_corrupt_streams_tolerated_prefix_as_a_nonuse_proof() {
+    const PRIVATE: &[u8] = b"PRIVATE_CORRUPT_CENSUS_IMAGE";
+    let (mut doc, _target) = private_page(PRIVATE);
+    add_blank_page(&mut doc, None);
+    // A nonfinal stored DEFLATE block yields valid content, then an invalid block type fails.
+    // A corrupt Adler checksum alone is intentionally accepted by the shared PDF decoder.
+    let stream =
+        Stream::from_raw(Dict::from_iter([(b"Filter".to_vec(), Object::name("FlateDecode"))]), b"\x78\x01\x00\x04\x00\xfb\xffq Q\n\x07".to_vec());
+    assert_eq!(stream.decoded().unwrap(), b"q Q\n");
+    assert!(stream.decoded_strict().is_err());
+    let content = doc.add(Object::Stream(stream));
+    let page = pdfcraft_model::pages(&doc)[1].obj;
+    doc.update_dict(page, |d| d.set(b"Contents".to_vec(), Object::Ref(content))).unwrap();
+    assert!(payload_after_delete(&mut doc, PRIVATE), "corruption cannot authorize destructive cleanup");
+}
+
+#[test]
+fn census_retains_images_drawn_by_tiling_patterns_with_indirect_types() {
+    const PRIVATE: &[u8] = b"PRIVATE_INDIRECT_TILING_PATTERN";
+    let (mut doc, target) = private_page(PRIVATE);
+    let kind = doc.add(Object::Int(1));
+    let pattern = doc.add(Object::Stream(Stream::flate(
+        Dict::from_iter([
+            (b"PatternType".to_vec(), Object::Ref(kind)),
+            (
+                b"Resources".to_vec(),
+                Object::Dict(Dict::from_iter([(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"TileImg".to_vec(), Object::Ref(target))])))])),
+            ),
+        ]),
+        b"/TileImg Do",
+    )));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+        resources.set(b"Pattern".to_vec(), Object::Dict(Dict::from_iter([(b"P".to_vec(), Object::Ref(pattern))])));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /Pattern cs /P scn 0 0 10 10 re f"]);
+    assert!(payload_after_delete(&mut doc, PRIVATE), "an indirect pattern type still draws its image");
 }
