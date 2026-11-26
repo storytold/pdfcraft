@@ -482,6 +482,14 @@ impl Layouter<'_> {
                     let content = self.content_height(k, inner, &own, &own.som, &ctx.para, depth + 1);
                     clamp_opt(content + s.common.margin.vertical(), None, s.common.max_h)
                 }
+                // A button without a width is as wide as its caption (`measure`), but as a cell
+                // it is drawn at its column's width: it is as tall as its caption is there.
+                Node::Field(f) if f.ui == Ui::Button && f.common.w.is_none() && f.common.h.is_none() => {
+                    let own = ctx.with_som(&f.common, sibs.at(i));
+                    let inner = (w - f.common.margin.horizontal()).max(1.0);
+                    let content = self.content_height(k, inner, &own, &own.som, &ctx.para, depth + 1);
+                    clamp_opt(content + f.common.margin.vertical(), f.common.min_h, f.common.max_h)
+                }
                 _ => ch,
             };
             out.push((i, Rect::new(x, 0.0, w, ch)));
