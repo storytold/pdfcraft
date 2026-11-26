@@ -11400,6 +11400,53 @@ fn noop_arrange_is_not_ok_without_change() {
     assert!(r.is_err() || before != after, "Ok with no change");
 }
 
+/// Bring to front on an at-limit image that shares its only content unit with paint
+/// already before it is a no-op, so it is refused instead of rebuilding the same placement.
+#[test]
+fn arrange_front_image_in_single_shared_unit_is_refused() {
+    let mut doc = image_page_with("q 0 0 10 10 re f 100 0 0 100 50 50 cm /Im0 Do Q");
+    let before = page_content_bytes(&doc, 0);
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
+#[test]
+fn arrange_front_image_in_single_shared_unit_moves_past_following_paint() {
+    let mut doc = image_page_with("q 100 0 0 100 50 50 cm /Im0 Do 0 0 10 10 re f Q");
+    assert!(
+        arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_ok(),
+        "an image before following paint in one shared unit can be brought to front"
+    );
+    let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(s.find("re f").unwrap() < s.rfind("/Im0 Do").unwrap(), "{s}");
+    let mut doc = image_page_with("q q 100 0 0 100 50 50 cm /Im0 Do Q q 50 50 10 10 re f Q Q");
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_ok(), "separate inner units inside a page wrapper can be reordered");
+    let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(s.find("re f").unwrap() < s.rfind("/Im0 Do").unwrap(), "{s}");
+    let mut doc = image_page_with("q 0 0 10 10 re f 100 0 0 100 50 50 cm /Im0 Do Q");
+    let before = page_content_bytes(&doc, 0);
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringForward).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
+#[test]
+fn arrange_backward_in_single_shared_unit_moves_before_paint_and_refuses_without_it() {
+    for order in [images::ArrangeOrder::SendToBack, images::ArrangeOrder::SendBackward] {
+        let mut doc = image_page_with("q q 0 0 10 10 re f 100 0 0 100 50 50 cm /Im0 Do Q Q");
+        arrange(&mut doc, 0, 0, order).unwrap();
+        let doc = reopen(&doc);
+        let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+        assert!(s.find("/Im0 Do").unwrap() < s.find("re f").unwrap(), "{order:?}: {s}");
+        assert_eq!(images::page_images(&doc, 0).unwrap()[0].rect, [50.0, 50.0, 150.0, 150.0]);
+    }
+    for order in [images::ArrangeOrder::SendToBack, images::ArrangeOrder::SendBackward] {
+        let mut doc = image_page_with("q q 100 0 0 100 50 50 cm /Im0 Do 0 0 10 10 re f Q Q");
+        let before = page_content_bytes(&doc, 0);
+        assert!(arrange(&mut doc, 0, 0, order).is_err(), "{order:?}");
+        assert_eq!(page_content_bytes(&doc, 0), before);
+    }
+}
+
 /// Cropping a turned image keeps the requested upright box in user space, rather than expanding
 /// to the bounding box of the turned image coordinates.
 #[test]
@@ -14359,6 +14406,19 @@ fn remove_crop_refuses_an_unmarked_author_clip_without_changes() {
     let mut doc = image_page_with("q 50 50 8 8 re W n 10 0 0 10 50 50 cm /Im0 Do Q");
     let before = page_content_bytes(&doc, 0);
     assert!(remove_crop(&mut doc, 0, 0).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
+/// A PdfCraft crop marker whose clip is written as `W q Q n` is still recorded on the image, but
+/// scope detection does not treat that path as a removable crop. The error says the crop cannot
+/// be removed, not that none exists.
+#[test]
+fn remove_crop_reports_a_recorded_crop_it_cannot_strip() {
+    let mut doc = image_page_with("q /PdfCraftImageCrop MP 100 100 50 50 re W q Q n 200 0 0 100 100 100 cm /Im0 Do Q");
+    assert!(images::page_images(&doc, 0).unwrap()[0].has_editor_crop());
+    let before = page_content_bytes(&doc, 0);
+    let err = remove_crop(&mut doc, 0, 0).unwrap_err().to_string();
+    assert!(err.contains("cannot be safely removed") && !err.contains("has no PdfCraft crop"), "{err}");
     assert_eq!(page_content_bytes(&doc, 0), before);
 }
 
