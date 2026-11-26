@@ -4,8 +4,17 @@ use pdfcraft_engine::{
     DocId,
     js::{InteractiveEvent, JsOutput, MenuItem, PendingScript, Prompt},
 };
+use std::borrow::Cow;
 use std::sync::mpsc::{Sender, TryRecvError};
 use std::time::{Duration, Instant};
+
+fn edit_text_value(value: &serde_json::Value) -> Cow<'_, str> {
+    match value {
+        serde_json::Value::String(text) => Cow::Borrowed(text),
+        serde_json::Value::Number(_) | serde_json::Value::Bool(_) => Cow::Owned(value.to_string()),
+        _ => Cow::Borrowed(""),
+    }
+}
 
 fn dialog_values(elements: &[pdfcraft_engine::js::DialogElement], values: &mut std::collections::BTreeMap<String, serde_json::Value>) {
     for e in elements {
@@ -117,7 +126,7 @@ fn custom_elements(
                     "edit_text" => {
                         let text = values.entry(e.id.clone()).or_insert_with(|| "".into());
                         if !text.is_string() {
-                            *text = if value.is_number() || value.is_boolean() { value.to_string().into() } else { "".into() };
+                            *text = edit_text_value(&value).into_owned().into();
                         }
                         if let Some(text) = text.as_str().map(str::to_owned) {
                             let mut text = text;
@@ -131,13 +140,13 @@ fn custom_elements(
                                 response.request_focus();
                                 *needs_focus = false;
                             }
-                            if response.changed() {
-                                values.insert(e.id.clone(), text.into());
-                            }
                             // Moving from an unchanged field into a popup must not resume the
                             // script: its next dialog snapshot would close the open dropdown.
-                            if response.lost_focus() && values.get(&e.id).is_some_and(|value| *value != e.value) {
+                            if response.lost_focus() && text != edit_text_value(&e.value) {
                                 *event = Some(e.id.clone());
+                            }
+                            if response.changed() {
+                                values.insert(e.id.clone(), text.into());
                             }
                         }
                     }
@@ -704,20 +713,21 @@ mod review_tests {
 
     #[test]
     fn opening_a_dialog_dropdown_only_commits_changed_text() {
-        for edited in [false, true] {
+        for (initial, edited) in [("\"1\"", false), ("1", false), ("true", false), ("null", false), ("1", true)] {
             let mut app = PdfCraftApp::new();
             let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
             app.open_bytes("synthetic.pdf", None, bytes.to_vec()).unwrap();
             let id = app.active_ids().unwrap().1;
             app.start_ui_script(
                 id,
-                r#"app.execDialog({
-                    initialize: function(d) { d.load({text: '1', pick: {Fighter: 1, Wizard: -2}}); d.focus('text'); },
+                &r#"app.execDialog({
+                    initialize: function(d) { d.load({text: INITIAL, pick: {Fighter: 1, Wizard: -2}}); d.focus('text'); },
                     description: {name: 'Choose class', elements: [
                         {type: 'edit_text', item_id: 'text'},
                         {type: 'popup', item_id: 'pick'}
                     ]}
-                });"#,
+                });"#
+                    .replace("INITIAL", initial),
                 None,
                 None,
             );
