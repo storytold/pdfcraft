@@ -224,6 +224,30 @@ fn figures_stop_at_a_form_drawing_itself_and_reach_nested_forms() {
     doc.set(FORM_OBJ, Object::Stream(Stream::flate(form, body.as_bytes())));
     let clipped = figures(&doc).into_iter().find(|f| f.obj == FORM_FIGURE).expect("form figure");
     assert_eq!(clipped.bbox, Some([300.0, 600.0, 360.0, 660.0]), "content outside the outer form's /BBox is clipped");
+    // Two disjoint `re` subpaths that both lie outside the inner form's `/BBox` [0, 0, 10, 10]
+    // contribute no bound, even though their combined hull [-20, 0, 30, 10] spans the clip.
+    doc.set(
+        inner,
+        Object::Stream(Stream::flate(
+            {
+                let mut d = pdfcraft_cos::Dict::new();
+                d.set(b"Subtype".to_vec(), Object::name("Form"));
+                d.set(b"BBox".to_vec(), Object::Array([0, 0, 10, 10].map(Object::Int).to_vec()));
+                d
+            },
+            b"/Figure <</MCID 3>> BDC -20 0 5 10 re 25 0 5 10 re f EMC",
+        )),
+    );
+    doc.update_dict(FORM_FIGURE, |d| {
+        let mut only_inner = pdfcraft_cos::Dict::new();
+        only_inner.set(b"Type".to_vec(), Object::name("MCR"));
+        only_inner.set(b"MCID".to_vec(), Object::Int(3));
+        only_inner.set(b"Stm".to_vec(), Object::Ref(inner));
+        d.set(b"K".to_vec(), Object::Dict(only_inner));
+    })
+    .unwrap();
+    let outside = figures(&doc).into_iter().find(|f| f.obj == FORM_FIGURE).expect("form figure");
+    assert_eq!(outside.bbox, None, "rectangles outside the form's /BBox do not produce a bound from their hull");
 }
 
 #[test]
@@ -483,6 +507,44 @@ fn multi_page_failure_leaves_earlier_pages_untouched() {
     assert_eq!(mark_decorative(&mut damaged, PAGE_FIGURE), Err(pdfcraft_a11y::AltError::Damaged));
     assert_eq!(damaged.get(ObjRef::new(10, 0)).as_dict().and_then(|d| d.reference(b"Contents")), Some(ObjRef::new(11, 0)));
     assert_eq!(parent_tree(&damaged), before_pt);
+
+    // Multi-page rewrite exceeding the operation-wide budget: each page is within the per-page
+    // decode budget, but across 8 pages the retained plans exceed MAX_REWRITE_BYTES and return
+    // TooLarge without modifying earlier pages.
+    let mut body = PAGE.as_bytes().to_vec();
+    body.resize(10 << 20, b' ');
+    let big_stream = Stream::flate(pdfcraft_cos::Dict::new(), &body);
+    let mut objects = vec![
+        (1, "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 3 0 R /MarkInfo << /Marked true >> >>".into()),
+        (2, "<< /Type /Pages /Kids [10 0 R 30 0 R 31 0 R 32 0 R 33 0 R 34 0 R 35 0 R 36 0 R] /Count 8 >>".into()),
+        (3, "<< /Type /StructTreeRoot /K 4 0 R /ParentTree 5 0 R >>".into()),
+        (4, "<< /Type /StructElem /S /Document /P 3 0 R /K [20 0 R] >>".into()),
+        (5, "<< /Nums [0 [20 0 R]] >>".into()),
+        (10, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 11 0 R /StructParents 0 >>".into()),
+        (11, "<< /Length 0 >>\nstream\n\nendstream".into()),
+        (
+            20,
+            "<< /Type /StructElem /S /Figure /P 4 0 R /Pg 10 0 R /K [0 \
+             << /Type /MCR /Pg 30 0 R /MCID 0 >> \
+             << /Type /MCR /Pg 31 0 R /MCID 0 >> \
+             << /Type /MCR /Pg 32 0 R /MCID 0 >> \
+             << /Type /MCR /Pg 33 0 R /MCID 0 >> \
+             << /Type /MCR /Pg 34 0 R /MCID 0 >> \
+             << /Type /MCR /Pg 35 0 R /MCID 0 >> \
+             << /Type /MCR /Pg 36 0 R /MCID 0 >>] >>"
+                .into(),
+        ),
+    ];
+    for p in 30..=36 {
+        objects.push((p, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 11 0 R >>".into()));
+    }
+    let mut huge = build(&objects);
+    huge.set(ObjRef::new(11, 0), Object::Stream(big_stream));
+    let before_huge_pt = parent_tree(&huge);
+    assert_eq!(mark_tag_artifact(&mut huge, PAGE_FIGURE), Err(pdfcraft_a11y::ArtifactError::TooLarge));
+    assert_eq!(mark_decorative(&mut huge, PAGE_FIGURE), Err(pdfcraft_a11y::AltError::TooLarge));
+    assert_eq!(huge.get(ObjRef::new(10, 0)).as_dict().and_then(|d| d.reference(b"Contents")), Some(ObjRef::new(11, 0)));
+    assert_eq!(parent_tree(&huge), before_huge_pt);
 }
 
 /// Removing a child tag from a parent whose `/K` also holds a direct MCR on the same page keeps

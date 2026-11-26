@@ -407,8 +407,10 @@ impl Bounds<'_> {
                     }
                 }
                 b"re" => {
-                    if let Some([x, y, w, h]) = op.nums::<4>() {
-                        path = Some(union(path, top.bbox([x, y, x + w, y + h])));
+                    if let Some([x, y, w, h]) = op.nums::<4>()
+                        && let Some(b) = intersect(top.bbox([x, y, x + w, y + h]), clip)
+                    {
+                        path = Some(union(path, b));
                     }
                 }
                 b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s" | b"n" => {
@@ -662,23 +664,36 @@ fn remap_stms(doc: &mut Document, page: ObjRef, replaced: &[(ObjRef, ObjRef)]) -
     Ok(())
 }
 
+/// What all pages and forms rewritten in one artifact operation may decode and keep: a tag can
+/// reference many pages, so the per-page decode budget alone would let one edit retain a plan for
+/// every page.
+const MAX_REWRITE_BYTES: usize = 128 * 1024 * 1024;
+
+/// A `/Contents` entry and, when the stream changes, its dictionary and spliced bytes.
+type PlannedEntry = (Object, Option<(Dict, Vec<u8>)>);
+
 /// What planning an artifact rewrite of one page's content streams found.
 enum PageArtifact<'a> {
-    /// The page, its streams and the spliced data for each decoded stream.
-    Ready(&'a pdfcraft_model::Page, Vec<DecodedStream>, Vec<Vec<u8>>),
+    /// The page and the planned rewrite of each `/Contents` entry.
+    Ready(&'a pdfcraft_model::Page, Vec<PlannedEntry>),
     /// None of the content is on the page, or with `require_all` not all of it.
     NotFound,
     /// Some of it is, or may be, in a stream damaged partway or one that doesn't decode, neither of
     /// which can be rewritten without losing what wasn't read, or after the damage.
     Damaged,
-    /// Decoding the page's streams took more than a page's allowance.
+    /// Decoding the page's streams took more than a page's allowance, or the operation's allowance.
     TooLarge,
 }
 
 /// Plan turning the tag's marked-content blocks on `page` into artifacts, without changing the
-/// document. With `require_all`, every id in `ids` must appear on the page.
-fn artifact_page<'a>(doc: &Document, page: &'a pdfcraft_model::Page, ids: &HashSet<i64>, require_all: bool) -> PageArtifact<'a> {
+/// document. With `require_all`, every id in `ids` must appear on the page. `spent` counts the
+/// bytes decoded and retained across the whole operation, bounded by [`MAX_REWRITE_BYTES`].
+fn artifact_page<'a>(doc: &Document, page: &'a pdfcraft_model::Page, ids: &HashSet<i64>, require_all: bool, spent: &mut usize) -> PageArtifact<'a> {
     let Some(streams) = decode_page_streams(doc, &page.dict) else { return PageArtifact::TooLarge };
+    let decoded_bytes: usize = streams.iter().filter_map(|(_, s)| s.as_ref().map(|(_, bytes, _)| bytes.len())).sum();
+    if spent.saturating_add(decoded_bytes) > MAX_REWRITE_BYTES {
+        return PageArtifact::TooLarge;
+    }
     let props = page_properties(doc, &page.dict);
     // The pieces are the streams, in order.
     let decoded: Vec<&[u8]> = streams.iter().filter_map(|(_, s)| s.as_ref().map(|(_, bytes, _)| bytes.as_slice())).collect();
@@ -713,34 +728,42 @@ fn artifact_page<'a>(doc: &Document, page: &'a pdfcraft_model::Page, ids: &HashS
     if read.iter().zip(&decoded).zip(&spliced).any(|((read, old), new)| *read != Read::Whole && *old != new.as_slice()) {
         return PageArtifact::Damaged;
     }
-    PageArtifact::Ready(page, streams, spliced)
+    let mut spliced = spliced.into_iter();
+    let mut entries = Vec::with_capacity(streams.len());
+    let mut retained = 0usize;
+    for (entry, stream) in streams {
+        let Some((stream, old, _)) = stream else {
+            entries.push((entry, None));
+            continue;
+        };
+        let Some(new) = spliced.next() else {
+            entries.push((entry, None));
+            continue;
+        };
+        if new == old {
+            entries.push((entry, None));
+            continue;
+        }
+        retained = retained.saturating_add(new.len());
+        entries.push((entry, Some((stream.dict, new))));
+    }
+    *spent = spent.saturating_add(decoded_bytes).saturating_add(retained);
+    if *spent > MAX_REWRITE_BYTES {
+        return PageArtifact::TooLarge;
+    }
+    PageArtifact::Ready(page, entries)
 }
 
 /// Write a planned page artifact rewrite, rewriting only the streams that contain the tag's
 /// marked content. Other content streams, and unknown entries on a rewritten stream, stay.
-fn write_page(
-    doc: &mut Document,
-    page: &pdfcraft_model::Page,
-    streams: Vec<DecodedStream>,
-    spliced: Vec<Vec<u8>>,
-) -> Result<(), pdfcraft_cos::CosError> {
-    let mut spliced = spliced.into_iter();
-    let mut next = Vec::with_capacity(streams.len());
+fn write_page(doc: &mut Document, page: &pdfcraft_model::Page, entries: Vec<PlannedEntry>) -> Result<(), pdfcraft_cos::CosError> {
+    let mut next = Vec::with_capacity(entries.len());
     let mut replaced = Vec::new();
-    for (entry, stream) in streams {
-        let Some((stream, old, _)) = stream else {
+    for (entry, changed) in entries {
+        let Some((mut dict, new)) = changed else {
             next.push(entry);
             continue;
         };
-        let Some(new) = spliced.next() else {
-            next.push(entry);
-            continue;
-        };
-        if new == old {
-            next.push(entry);
-            continue;
-        }
-        let mut dict = stream.dict;
         dict.remove(b"Length");
         dict.remove(b"Filter");
         dict.remove(b"DecodeParms");
@@ -818,7 +841,7 @@ enum FormArtifact {
 /// The stream `form` (which an MCR's `/Stm` names) with its marked content `ids` made artifacts,
 /// without changing the document. Its named property lists are its own `/Resources`, or the
 /// page's when it has none.
-fn artifact_form(doc: &Document, form: ObjRef, page: Option<&Dict>, ids: &HashSet<i64>, require_all: bool) -> FormArtifact {
+fn artifact_form(doc: &Document, form: ObjRef, page: Option<&Dict>, ids: &HashSet<i64>, require_all: bool, spent: &mut usize) -> FormArtifact {
     let target = doc.get(form);
     let Object::Stream(s) = &*target else { return FormArtifact::NotFound };
     let mut budget = DecodeBudget::page();
@@ -828,6 +851,9 @@ fn artifact_form(doc: &Document, form: ObjRef, page: Option<&Dict>, ids: &HashSe
         Err(_) if budget.exhausted() => return FormArtifact::TooLarge,
         Err(_) => return FormArtifact::Damaged,
     };
+    if spent.saturating_add(data.len()) > MAX_REWRITE_BYTES {
+        return FormArtifact::TooLarge;
+    }
     let props = match s.dict.get(b"Resources") {
         Some(_) => sub_dict(doc, &sub_dict(doc, &s.dict, b"Resources"), b"Properties"),
         None => page.map(|p| page_properties(doc, p)).unwrap_or_default(),
@@ -845,6 +871,10 @@ fn artifact_form(doc: &Document, form: ObjRef, page: Option<&Dict>, ids: &HashSe
         return FormArtifact::NotFound;
     }
     let Some(new) = pieces.splice(edits).into_iter().next() else { return FormArtifact::NotFound };
+    *spent = spent.saturating_add(data.len()).saturating_add(new.len());
+    if *spent > MAX_REWRITE_BYTES {
+        return FormArtifact::TooLarge;
+    }
     let mut dict = s.dict.clone();
     dict.remove(b"Length");
     dict.remove(b"Filter");
@@ -859,11 +889,12 @@ fn plan_forms(
     pages: &[pdfcraft_model::Page],
     forms: &[FormMarks],
     require_all: bool,
+    spent: &mut usize,
 ) -> Result<Vec<(ObjRef, Stream, Option<i64>)>, FormArtifact> {
     let mut ready = Vec::with_capacity(forms.len());
     for (form, pg, ids) in forms {
         let page = pg.and_then(|r| pages.iter().find(|p| p.obj == r)).map(|p| &p.dict);
-        match artifact_form(doc, *form, page, ids, require_all) {
+        match artifact_form(doc, *form, page, ids, require_all, spent) {
             FormArtifact::Ready(stream, key) => ready.push((*form, stream, key)),
             FormArtifact::NotFound if !require_all => {}
             other => return Err(other),
@@ -894,7 +925,8 @@ pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> 
     let mut streams = HashMap::new();
     let owned = mcids(doc, &d, pg, &pages, &mut streams);
     let (page_ids, forms) = split_by_stream(&owned);
-    let forms = match plan_forms(doc, &pages, &forms, false) {
+    let mut spent = 0usize;
+    let forms = match plan_forms(doc, &pages, &forms, false, &mut spent) {
         Ok(ready) => ready,
         Err(FormArtifact::TooLarge) => return Err(AltError::TooLarge),
         Err(_) => return Err(AltError::Damaged),
@@ -902,16 +934,16 @@ pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> 
     let mut page_work = Vec::new();
     for (pg, ids) in page_ids {
         if let Some(page) = pg.and_then(|r| pages.iter().find(|x| x.obj == r)) {
-            match artifact_page(doc, page, &ids, false) {
-                PageArtifact::Ready(page, streams, spliced) => page_work.push((page, streams, spliced)),
+            match artifact_page(doc, page, &ids, false, &mut spent) {
+                PageArtifact::Ready(page, entries) => page_work.push((page, entries)),
                 PageArtifact::NotFound => {}
                 PageArtifact::TooLarge => return Err(AltError::TooLarge),
                 PageArtifact::Damaged => return Err(AltError::Damaged),
             }
         }
     }
-    for (page, streams, spliced) in page_work {
-        write_page(doc, page, streams, spliced)?;
+    for (page, entries) in page_work {
+        write_page(doc, page, entries)?;
         // The parent tree no longer points those ids at the figure.
         if let Some(key) = page.dict.get(b"StructParents").and_then(|o| doc.resolve(o).as_int()) {
             clear_parent_tree(doc, key, obj)?;
@@ -954,11 +986,12 @@ pub fn mark_tag_artifact(doc: &mut Document, obj: ObjRef) -> Result<(), Artifact
     }
     // Content in a page's own streams needs that page; content in a form only the form.
     let (page_ids, forms) = split_by_stream(&owned);
+    let mut spent = 0usize;
     let mut page_work = Vec::with_capacity(page_ids.len());
     for (pg, ids) in page_ids {
         let page = pg.and_then(|r| pages.iter().find(|page| page.obj == r)).ok_or(ArtifactError::NoPage)?;
-        match artifact_page(doc, page, &ids, true) {
-            PageArtifact::Ready(page, streams, spliced) => page_work.push((page, streams, spliced)),
+        match artifact_page(doc, page, &ids, true, &mut spent) {
+            PageArtifact::Ready(page, entries) => page_work.push((page, entries)),
             PageArtifact::NotFound => return Err(ArtifactError::ContentNotFound),
             PageArtifact::TooLarge => return Err(ArtifactError::TooLarge),
             PageArtifact::Damaged => return Err(ArtifactError::Damaged),
@@ -968,14 +1001,14 @@ pub fn mark_tag_artifact(doc: &mut Document, obj: ObjRef) -> Result<(), Artifact
     replacement_kids(doc, parent, obj)?;
     // Every form is checked before anything is written, so a form missing some of the content, or
     // one that can't be rewritten whole, leaves the document as it was.
-    let forms = match plan_forms(doc, &pages, &forms, true) {
+    let forms = match plan_forms(doc, &pages, &forms, true, &mut spent) {
         Ok(ready) => ready,
         Err(FormArtifact::TooLarge) => return Err(ArtifactError::TooLarge),
         Err(FormArtifact::Damaged) => return Err(ArtifactError::Damaged),
         Err(_) => return Err(ArtifactError::ContentNotFound),
     };
-    for (page, streams, spliced) in page_work {
-        write_page(doc, page, streams, spliced)?;
+    for (page, entries) in page_work {
+        write_page(doc, page, entries)?;
         if let Some(key) = page.dict.get(b"StructParents").and_then(|o| doc.resolve(o).as_int()) {
             clear_parent_tree(doc, key, obj).map_err(|e| ArtifactError::ParentTree(e.to_string()))?;
         }
