@@ -5,6 +5,8 @@ use super::edit::{EditCtx, check_permission, run_edit};
 use super::*;
 use pdfcraft_render::{Layer, LayerOp, OpenError, ReadingColors};
 
+mod print_marks;
+
 /// A minimal `n`-page document; page `i` shows "Page i+1".
 pub(crate) fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
@@ -699,7 +701,7 @@ fn edits_update_view_data_and_mark_dirty() {
 
 /// A font of an Adobe CJK collection that a PDF does not embed is drawn with an installed face on
 /// the viewer's pool only. An export of the same page, which can be saved, has nothing drawn with
-/// an installed font (AGENTS.md §1.2, §1.4). Skipped where no such face is installed.
+/// an installed font (licences.md; docs/development.md "Fonts and attribution"). Skipped where no such face is installed.
 #[test]
 fn installed_cjk_fonts_draw_in_the_viewer_but_not_in_an_export() {
     let content = "BT /F1 40 Tf 5 15 Td <7E419AD45B57> Tj ET";
@@ -986,7 +988,7 @@ fn undo_to_the_opened_file_is_not_dirty() {
     let opened = Arc::new(fixture(2));
     let id = session.open("existing.pdf", None, opened.clone(), None).unwrap();
     assert!(!session.get(id).unwrap().dirty);
-    assert!(session.autosave_snapshots().is_empty());
+    assert!(session.recovery_snapshot(id).is_none());
 
     session.apply(id, Edit::DeletePages { pages: vec![0] }).unwrap();
     assert_eq!(session.get(id).unwrap().info.pages.len(), 1);
@@ -995,7 +997,7 @@ fn undo_to_the_opened_file_is_not_dirty() {
     assert!(!document.dirty, "the opened bytes are the saved version");
     assert_eq!(document.bytes, opened);
     assert_eq!(document.info.pages.len(), 2);
-    assert!(session.autosave_snapshots().is_empty(), "nothing unsaved to recover");
+    assert!(session.recovery_snapshot(id).is_none(), "nothing unsaved to recover");
 
     session.redo(id).unwrap();
     assert!(session.get(id).unwrap().dirty);
@@ -2287,47 +2289,49 @@ fn render_password_for_recovers_the_user_password_of_older_revisions() {
 #[test]
 fn autosave_snapshots_only_changed_documents() {
     let (mut s, id) = session_with(2);
-    assert!(!s.has_pending_autosave());
-    assert!(s.autosave_snapshots().is_empty(), "clean documents are not snapshotted");
+    let entry = |s: &Session| s.autosave_docs().find(|(d, ..)| *d == id).unwrap();
+    assert!(!entry(&s).2);
+    assert!(s.recovery_snapshot(id).is_none(), "clean documents are not snapshotted");
     s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
-    assert!(s.has_pending_autosave());
-    assert!(s.has_pending_autosave(), "checking a deadline must not consume a snapshot");
-    let snaps = s.autosave_snapshots();
-    assert!(!s.has_pending_autosave());
-    assert_eq!(snaps.len(), 1);
-    assert_eq!(snaps[0].bytes, s.get(id).unwrap().bytes, "the working file");
-    assert!(s.autosave_snapshots().is_empty(), "nothing new since the last snapshot");
+    let (_, first, dirty) = entry(&s);
+    assert!(dirty);
+    let snap = s.recovery_snapshot(id).unwrap();
+    assert_eq!(snap.bytes, s.get(id).unwrap().bytes, "the working file");
+    assert_eq!(entry(&s).1, first, "taking a snapshot marks nothing");
     s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
-    assert_eq!(s.autosave_snapshots().len(), 1);
+    assert_ne!(entry(&s).1, first, "an edit is a new generation");
+    let second = entry(&s).1;
     s.undo(id).unwrap();
     assert!(s.get(id).unwrap().dirty, "the rotation is still unsaved");
-    assert_eq!(s.autosave_snapshots().len(), 1, "undo that leaves unsaved work is a change");
+    assert!(entry(&s).2 && entry(&s).1 != second, "undo that leaves unsaved work is a change");
+    assert!(s.recovery_snapshot(id).is_some());
     s.undo(id).unwrap();
     assert!(!s.get(id).unwrap().dirty, "undo back to the opened file is saved");
-    assert!(s.autosave_snapshots().is_empty(), "a clean document needs no recovery");
+    assert!(s.recovery_snapshot(id).is_none(), "a clean document needs no recovery");
     let saved = s.save_bytes(id).unwrap();
     s.mark_saved(id, saved, None).unwrap();
-    assert!(s.autosave_snapshots().is_empty(), "saved documents need no recovery");
+    assert!(!entry(&s).2 && s.recovery_snapshot(id).is_none(), "saved documents need no recovery");
 }
 
 #[test]
 fn autosave_snapshots_a_new_unsaved_document_once() {
     let (mut s, clean) = session_with(1);
     let id = s.open_new("Untitled.pdf", Arc::new(fixture(1))).unwrap();
-    let snaps = s.autosave_snapshots();
-    assert_eq!(snaps.len(), 1, "the new document is unsaved work");
-    assert_eq!(snaps[0].doc, id);
-    assert!(snaps.iter().all(|x| x.doc != clean), "the clean document stays out");
-    assert!(s.autosave_snapshots().is_empty(), "nothing new since the last snapshot");
+    let dirty: Vec<(DocId, u64)> = s.autosave_docs().filter(|d| d.2).map(|d| (d.0, d.1)).collect();
+    assert_eq!(dirty.len(), 1, "the new document is unsaved work");
+    assert_eq!(dirty[0].0, id);
+    assert!(s.recovery_snapshot(clean).is_none(), "the clean document stays out");
+    assert_eq!(s.recovery_snapshot(id).unwrap().doc, id);
     s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
-    assert_eq!(s.autosave_snapshots().len(), 1, "a later edit is snapshotted again");
+    let after = s.autosave_docs().find(|d| d.0 == id).unwrap().1;
+    assert_ne!(after, dirty[0].1, "a later edit is a new generation");
 }
 
 #[test]
 fn recovered_documents_reopen_unsaved_at_their_original_path() {
     let (mut s, id) = session_with(2);
     s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
-    let snap = s.autosave_snapshots().remove(0);
+    let snap = s.recovery_snapshot(id).unwrap();
     // A new session after a crash.
     let mut s2 = Session::new();
     let rid = s2.open(snap.name.clone(), None, snap.bytes.clone(), None).unwrap();
@@ -2336,7 +2340,7 @@ fn recovered_documents_reopen_unsaved_at_their_original_path() {
     assert!(d.dirty);
     assert_eq!(d.path.as_deref(), Some("/docs/report.pdf"));
     assert_eq!(d.info.pages.len(), 1, "the edit survived");
-    assert!(s2.autosave_snapshots().is_empty(), "already in the recovery store");
+    assert!(s2.autosave_docs().any(|(d, _, dirty)| d == rid && dirty), "listed as unsaved work");
 }
 
 fn outline_titles(items: &[pdfcraft_render::OutlineItem]) -> Vec<String> {
@@ -3216,9 +3220,8 @@ fn password_field_values_are_kept_in_memory_but_written_to_no_file() {
     assert!(!appears_in_pdf(&saved, "*******"), "the typed length is not kept in the appearance");
     assert!(!appears_in_pdf(&s.save_full_bytes(id).unwrap(), "hunter2"), "a full rewrite");
     assert!(!appears_in_pdf(&s.reduced_bytes(id).unwrap().0, "hunter2"), "Reduce File Size");
-    let snaps = s.autosave_snapshots();
-    assert_eq!(snaps.len(), 1);
-    assert!(!appears_in_pdf(&snaps[0].bytes, "hunter2"), "the recovery snapshot");
+    let snap = s.recovery_snapshot(id).expect("the document has unsaved work");
+    assert!(!appears_in_pdf(&snap.bytes, "hunter2"), "the recovery snapshot");
     // New files built from its pages too (#3943 review): Extract copies the fields of the pages it
     // takes, and Split writes each part the same way.
     let extracted = s.extract(id, &[0]).unwrap();
@@ -3415,10 +3418,9 @@ fn xfa_password_field_values_are_not_saved_in_datasets_or_widgets() {
         assert!(!appears_in_pdf(&s.save_full_bytes(id).unwrap(), leak), "save_full_bytes leaked {leak}");
         assert!(!appears_in_pdf(&s.reduced_bytes(id).unwrap().0, leak), "reduced_bytes leaked {leak}");
     }
-    let snaps = s.autosave_snapshots();
-    assert_eq!(snaps.len(), 1);
+    let snap = s.recovery_snapshot(id).expect("the document has unsaved work");
     for leak in ["hunter2", "secret1", "*******"] {
-        assert!(!appears_in_pdf(&snaps[0].bytes, leak), "autosave snapshot leaked {leak}");
+        assert!(!appears_in_pdf(&snap.bytes, leak), "autosave snapshot leaked {leak}");
     }
 
     // Reopening the saved file in a new session leaves the password field empty (it does not
@@ -7501,6 +7503,38 @@ fn active_xfa_does_not_run_pdf_container_scripts_but_keeps_requested_alerts() {
 }
 
 #[test]
+fn take_js_errors_leaves_the_alerts_for_take_js_output() {
+    let template = pdfcraft_xfa::fixtures::scripted_template()
+        .replace("if (qty.rawValue === null) qty.rawValue = 2;", "qty.rawValue = 2; xfa.host.messageBox('opened'); throw new Error('open failed');");
+    // Raised time limits: a busy machine does not stop the scripts this checks.
+    let mut s = Session::new().with_xfa_time_scale(100);
+    let id = s.open("xfa.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    let errors = s.take_js_errors(id);
+    assert!(errors.iter().any(|e| e.contains("open failed")), "{errors:?}");
+    assert!(s.take_js_errors(id).is_empty());
+    let out = s.take_js_output(id);
+    assert!(out.errors.is_empty(), "{out:?}");
+    assert_eq!(out.alerts, [js::Message::plain("opened")]);
+}
+
+#[test]
+fn take_js_errors_reports_a_document_scripts_error_again_on_the_next_edit() {
+    let helpers = "function times\\(a, b\\) { return a * b; } this.getField\\('go'\\).missingTestMethod\\(\\);";
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, Arc::new(scripted_form_with(helpers)), None).unwrap();
+    assert_eq!(s.take_js_errors(id).len(), 1, "the document script fails at open");
+    // The document scripts run again when the script list changes, which each pass does.
+    for qty in ["4", "5"] {
+        let script = format!("/* {qty} */ function times(a, b) {{ return a * b; }} this.getField('go').missingTestMethod();");
+        s.apply(id, Edit::SetDocumentScript { name: "helpers".into(), script: Some(script) }).unwrap();
+        s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text(qty.into()) }).unwrap();
+        let errors = s.take_js_errors(id);
+        assert_eq!(errors.len(), 1, "qty {qty}: {errors:?}");
+        assert!(errors[0].starts_with("document script 1: TypeError"), "qty {qty}: {errors:?}");
+    }
+}
+
+#[test]
 fn active_xfa_without_template_scripts_does_not_initialize_pdf_fallback_scripts() {
     let template = r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
 <subform name="form" layout="tb"><pageSet><pageArea name="page">
@@ -8312,11 +8346,13 @@ fn on_changes_notes_only_the_exits_that_ran() {
     let names = vec!["probe".to_string()];
     let mut exited = Vec::new();
     let mut out = crate::js::JsOutput::default();
-    let mut stopped = crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: true, highlight: false, time_scale: 1 };
+    let mut stopped =
+        crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: true, highlight: false, time_scale: 1, relaid: false };
     crate::xfa::on_changes(&mut cos, &tpl, &names, &mut stopped, &mut exited).unwrap();
     assert!(exited.is_empty(), "no exit ran: {exited:?}");
     let mut out = crate::js::JsOutput::default();
-    let mut running = crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, highlight: false, time_scale: 1 };
+    let mut running =
+        crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, highlight: false, time_scale: 1, relaid: false };
     crate::xfa::on_changes(&mut cos, &tpl, &names, &mut running, &mut exited).unwrap();
     assert_eq!(exited.len(), 1, "the exit ran: {exited:?}");
 }
@@ -9387,6 +9423,153 @@ fn filling_growable_xfa_text_reflows_and_undo_restores_the_layout() {
         s.redo(id).unwrap();
         assert_eq!(s.get(id).unwrap().info.pages.len(), 3);
     }
+}
+
+/// What the last edit (the top of the undo stack) said it changed.
+fn last_scope(s: &Session, id: DocId) -> crate::history::Scope {
+    s.get(id).unwrap().editor.as_ref().unwrap().undo.last().unwrap().3
+}
+
+/// The view's entry for field `name`: its page index and first widget's rectangle.
+fn field_place(s: &Session, id: DocId, name: &str) -> (Option<usize>, Option<[f32; 4]>) {
+    let f = s.get(id).unwrap().info.fields.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("no field {name}")).clone();
+    (f.page, f.rect)
+}
+
+/// Bytes that save and reopen as the document the session shows (the save check of #1698).
+fn saves_and_reopens(s: &mut Session, id: DocId, pages: usize) {
+    let bytes = s.save_bytes(id).unwrap();
+    s.check_save(id, &bytes).unwrap();
+    let again = s.open("saved.pdf", None, bytes, None).unwrap();
+    assert_eq!(s.get(again).unwrap().info.pages.len(), pages);
+    s.close(again);
+}
+
+/// A check box's change script that shows a hidden section lays the form out onto a second
+/// page: the view's pages and fields are rebuilt, the file saves and reopens, undo and redo
+/// rebuild them too, and hiding the section again takes the page away.
+#[test]
+fn an_xfa_script_that_shows_a_section_adds_its_page_and_undo_takes_it_away() {
+    let template = pdfcraft_xfa::fixtures::presence_growth_template(false, "", "", "");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("grow.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    let pages = |s: &Session| s.get(id).unwrap().info.pages.len();
+    let fields = |s: &Session| s.get(id).unwrap().info.fields.len();
+    assert_eq!(pages(&s), 1);
+    let before = fields(&s);
+    assert!(s.get(id).unwrap().info.fields.iter().all(|f| f.name != "d1"), "a hidden section has no widgets");
+    s.apply(id, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(true) }).unwrap();
+    let out = s.take_js_output(id);
+    assert_eq!(pages(&s), 2, "{:?}", out.errors);
+    assert_eq!(last_scope(&s, id), crate::history::Scope::Full);
+    assert_eq!(fields(&s), s.get(id).unwrap().form.len(), "the field list is the form's");
+    assert!(fields(&s) > before);
+    for name in ["d1", "d2"] {
+        let (page, rect) = field_place(&s, id, name);
+        assert_eq!(page, Some(1), "{name}");
+        assert!(rect.is_some(), "{name}");
+    }
+    saves_and_reopens(&mut s, id, 2);
+    // A value typed into the new section lays nothing out: only the values are refreshed.
+    s.apply(id, Edit::SetFieldValue { name: "d1".into(), value: FieldValue::Text("typed".into()) }).unwrap();
+    assert_eq!(last_scope(&s, id), crate::history::Scope::Form);
+    assert_eq!(pages(&s), 2);
+    s.undo(id).unwrap();
+    s.undo(id).unwrap();
+    assert_eq!(pages(&s), 1);
+    assert_eq!(fields(&s), before);
+    saves_and_reopens(&mut s, id, 1);
+    s.redo(id).unwrap();
+    assert_eq!(pages(&s), 2);
+    assert_eq!(field_place(&s, id, "d2").0, Some(1));
+    saves_and_reopens(&mut s, id, 2);
+    // Hidden again: the form shrinks back to one page.
+    s.apply(id, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(false) }).unwrap();
+    assert_eq!(pages(&s), 1);
+    assert_eq!(fields(&s), before);
+    saves_and_reopens(&mut s, id, 1);
+}
+
+/// A relayout that keeps the page count still replaces the pages: a field the shown section
+/// pushes onto the second page is placed there in the view.
+#[test]
+fn an_xfa_script_relayout_that_keeps_the_page_count_moves_fields_in_the_view() {
+    let after = r#"<field name="late" w="3in" h="0.5in"><ui><textEdit/></ui></field><draw name="tail" w="7.5in" h="2in"><value><text>Tail</text></value></draw>"#;
+    let template = pdfcraft_xfa::fixtures::presence_growth_template(false, "", after, "");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("moves.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+    assert_eq!(field_place(&s, id, "late").0, Some(0));
+    s.apply(id, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(true) }).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2, "{:?}", s.take_js_output(id).errors);
+    let (page, rect) = field_place(&s, id, "late");
+    assert_eq!(page, Some(1));
+    let widget = s.get(id).unwrap().form.iter().find(|f| f.name == "late").unwrap().widgets[0].rect;
+    assert_eq!(rect, Some(widget.map(|v| v as f32)), "the view has the new widget's place");
+    s.undo(id).unwrap();
+    assert_eq!(field_place(&s, id, "late").0, Some(0));
+    saves_and_reopens(&mut s, id, 2);
+}
+
+/// A reset whose calculations hide the section lays the form out again too.
+#[test]
+fn an_xfa_reset_whose_calculations_hide_a_section_takes_its_page_away() {
+    let template = pdfcraft_xfa::fixtures::presence_growth_template(true, "", "", "");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("reset.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 1);
+    s.apply(id, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(true) }).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2, "{:?}", s.take_js_output(id).errors);
+    s.apply(id, Edit::ResetForm { names: None }).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 1, "{:?}", s.take_js_output(id).errors);
+    assert_eq!(last_scope(&s, id), crate::history::Scope::Full);
+    saves_and_reopens(&mut s, id, 1);
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+}
+
+/// Two relayouts in one event, and a script that fails after them: the form was still laid
+/// out again, so the view is rebuilt.
+#[test]
+fn an_xfa_event_that_lays_out_twice_then_fails_still_rebuilds_the_view() {
+    let template = pdfcraft_xfa::fixtures::presence_growth_template(false, "", "", r#"xfa.layout.relayout(); throw new Error("late failure");"#);
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("twice.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(true) }).unwrap();
+    let out = s.take_js_output(id);
+    assert!(out.errors.iter().any(|e| e.contains("late failure")), "{:?}", out.errors);
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+    assert_eq!(last_scope(&s, id), crate::history::Scope::Full);
+    saves_and_reopens(&mut s, id, 2);
+}
+
+/// A picture chosen for an image field lays the form out again from its data.
+#[test]
+fn an_xfa_picture_lays_the_form_out_again_and_rebuilds_the_view() {
+    let after = r#"<field name="photo" w="1in" h="1in"><ui><imageEdit/></ui></field>"#;
+    let template = pdfcraft_xfa::fixtures::presence_growth_template(false, "", after, "");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("photo.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    s.apply(id, Edit::SetFieldImage { name: "photo".into(), image: Arc::new(pdfcraft_xfa::fixtures::TINY_GIF.to_vec()) }).unwrap();
+    assert_eq!(last_scope(&s, id), crate::history::Scope::Full, "{:?}", s.take_js_output(id).errors);
+    saves_and_reopens(&mut s, id, 1);
+}
+
+/// Text growth, then a script: each lays the form out onto one more page, and it saves.
+#[test]
+fn xfa_text_growth_then_a_script_relayout_both_add_pages() {
+    let before = r#"<field name="notes" w="7.5in" minH="0.5in"><ui><textEdit multiLine="1"/></ui></field>"#;
+    let template = pdfcraft_xfa::fixtures::presence_growth_template(false, before, "", "");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("mixed.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 1);
+    let notes: String = (1..=60).map(|i| format!("line {i}\n")).collect();
+    s.apply(id, Edit::SetFieldValue { name: "notes".into(), value: FieldValue::Text(notes) }).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+    saves_and_reopens(&mut s, id, 2);
+    s.apply(id, Edit::SetFieldValue { name: "more".into(), value: FieldValue::Check(true) }).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 3, "{:?}", s.take_js_output(id).errors);
+    saves_and_reopens(&mut s, id, 3);
 }
 
 #[test]
@@ -11874,7 +12057,7 @@ fn undo_never_makes_an_unsaved_document_clean() {
     s.apply(new, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
     s.undo(new).unwrap();
     assert!(s.get(new).unwrap().dirty, "a new document is unsaved until it is saved");
-    assert_eq!(s.autosave_snapshots().len(), 1, "and still needs recovery");
+    assert!(s.recovery_snapshot(new).is_some(), "and still needs recovery");
     s.revert(new).unwrap();
     assert!(s.get(new).unwrap().dirty, "Revert goes back to the created bytes, which aren't saved anywhere");
 

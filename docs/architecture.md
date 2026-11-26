@@ -84,19 +84,19 @@ The PDF object graph *is* the model (`crates/engine/README.md` §The editing mod
 
 ## Agent control
 
-Every user-facing feature is reachable headlessly (`AGENTS.md` §3):
+Every user-facing feature is reachable headlessly (app-agents.md rule 14):
 
 - the **command registry** (`crates/engine/src/commands.rs`, 184 commands) generates menus,
   shortcuts and the command palette;
 - the **automation tool table** (`crates/automation`, 141 tools) is shared by `pdfcraft-cli run`
   and the opt-in **MCP server** (stdio only; `pdfcraft-cli mcp`), confined to `--root`;
-- the opt-in **UI control channel** (`pdfcraft --control FILE`; loopback, per-launch token) lets an
+- the opt-in **UI control channel** (`pdfcraft --control PORT`; loopback, token-authenticated) lets an
   agent inspect, click, type, run commands and take screenshots of the real interface.
 
 ## Safety
 
 - `unsafe_code = "forbid"` workspace-wide; crates deny `unwrap`/`expect`/`panic!`; engine entry
-  points keep a last-resort `catch_unwind` (`AGENTS.md` §4).
+  points keep a last-resort `catch_unwind` (app-agents.md rule 13).
 - Every input-derived size is bounded (decompression, images, recursion, content per page).
 - `cargo xtask fuzz` runs nightly; every finding becomes a synthetic regression test.
 
