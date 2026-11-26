@@ -658,7 +658,7 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
         scope.layers_enabled = layers;
         let mut out = process(doc, &mut scope, &data, &resources, Matrix::IDENTITY);
         if let Some(error) = out.error {
-            return Err(error.into());
+            return Err(error.on_page(pi + 1));
         }
         // Bytes the parser can't read, or an inline image whose end is a guess: the walk reads past
         // them, so what it reads around them may not be what other readers draw (hidden text in a
@@ -708,10 +708,10 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
             if out.has_resource_changes() {
                 // A full save keeps whatever is still referenced: unlink the originals this page no
                 // longer draws so the removed form or image bytes cannot survive in the saved file.
-                out.apply_resources(doc, &mut budget, &mut res, &page_content)?;
+                out.apply_resources(doc, &mut budget, &mut res, &page_content).map_err(|e| e.on_page(pi + 1))?;
             }
-            retired_properties.extend(crate::interp::prune_properties(doc, &mut budget, &mut res, &page_content)?);
-            crate::type3::prune_type3_from_resources(doc, &mut budget, &mut res, &page_content, Some(&page.dict))?;
+            retired_properties.extend(crate::interp::prune_properties(doc, &mut budget, &mut res, &page_content).map_err(|e| e.on_page(pi + 1))?);
+            crate::type3::prune_type3_from_resources(doc, &mut budget, &mut res, &page_content, Some(&page.dict)).map_err(|e| e.on_page(pi + 1))?;
             doc.update_dict(page.obj, |d| {
                 d.set(b"Contents".to_vec(), Object::Array(new_list));
                 d.set(b"Resources".to_vec(), Object::Dict(res));

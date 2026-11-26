@@ -169,7 +169,7 @@ pub(crate) struct Output {
     /// rewrite would drop the bytes but keep the strings. A redaction must not trust it.
     pub unparsed: bool,
     pub tag_changes: Vec<(ObjRef, ObjRef, HashSet<i64>, HashSet<i64>)>,
-    pub error: Option<CosError>,
+    pub error: Option<RedactError>,
 }
 
 impl Output {
@@ -177,7 +177,7 @@ impl Output {
         !self.xobjects.is_empty() || !self.replaced.is_empty() || !self.ext_gstates.is_empty() || !self.replaced_ext_gstates.is_empty()
     }
 
-    pub fn apply_resources(&self, doc: &Document, budget: &mut DecodeBudget, res: &mut Dict, content: &[Vec<u8>]) -> Result<(), CosError> {
+    pub fn apply_resources(&self, doc: &Document, budget: &mut DecodeBudget, res: &mut Dict, content: &[Vec<u8>]) -> Result<(), RedactError> {
         // A form with no /Resources of its own draws these names through this dictionary.
         // Read that use before any entry is removed; an unreadable form keeps the names by
         // failing the redaction rather than dropping a font or pattern it still paints.
@@ -1262,8 +1262,12 @@ fn sanitize_stream_form(
         out.doomed.push(r);
         return StreamOutcome::Removed;
     }
-    // Strict, like page content: a Form read only in part counts as undecodable.
-    let data = if scope.budget.enter_form() {
+    // Strict, like page content: a Form read only in part counts as undecodable. With its
+    // `/DecodeParms` given by reference too, as the cleanups after the walk read it: read
+    // without them, it looks empty and is left as it was, drawing whatever lies under a mark.
+    let refused = scope.budget.refused();
+    let entered = scope.budget.enter_form();
+    let data = if entered {
         scope.budget.decode_strict(doc, s)
     } else {
         Err(CosError::Filter(format!("the page draws more than {MAX_PAGE_FORMS} form XObjects")))
@@ -1274,7 +1278,11 @@ fn sanitize_stream_form(
         // verification counts the form as content that may remain.
         Err(e) if scope.budget.exhausted() => {
             if scope.mode == Mode::Apply {
-                out.error = Some(e);
+                // The budget spent says nothing of this form: it went past what the page
+                // may read only where it was refused for that; one that doesn't decode
+                // says why.
+                let past = !entered || scope.budget.refused() > refused;
+                out.error = Some(if past { RedactError::past_allowance(e) } else { e.into() });
             } else if scope.everywhere() {
                 scope.layer_blocks += 1;
             } else {
@@ -1301,7 +1309,7 @@ fn sanitize_stream_form(
     let res = own.clone().unwrap_or_else(|| resources.clone());
     let saved_fonts = std::mem::take(&mut scope.fonts);
     scope.depth += 1;
-    let inner = process_from(doc, scope, std::slice::from_ref(&data), &res, gs);
+    let mut inner = process_from(doc, scope, std::slice::from_ref(&data), &res, gs);
     scope.depth -= 1;
     scope.fonts = saved_fonts;
     out.residue += inner.residue;
@@ -1317,7 +1325,7 @@ fn sanitize_stream_form(
     out.keeps_all_patterns |= inner.keeps_all_patterns;
     out.tag_changes.extend(inner.tag_changes.clone());
     out.replacements.extend_from_slice(&inner.replacements);
-    out.error = inner.error.clone().or(out.error.take());
+    out.error = inner.error.take().or(out.error.take());
     // A form without /Resources of its own paints with its caller's patterns, so what it
     // still paints keeps the caller's entry. Only the painted side is passed up: a name
     // the form selected but no longer paints with is left for the caller to keep.
@@ -1527,16 +1535,14 @@ fn xobject(
                 // the form is walked as it stands.
                 Err(()) if scope.everywhere() && scope.hidden_text.is_none() => Matrix::IDENTITY,
                 // Otherwise where the form draws, and so whether it reaches a mark or leaves the
-                // page, can't be told. Apply refuses the page, and the scans count it, as for a
-                // form past the page's budget below.
+                // page, can't be told. Apply refuses the page, and the scans count it, as
+                // `form_data` does for a form past the page's budget.
                 Err(()) => {
                     if scope.mode == Mode::Apply {
-                        out.error = Some(CosError::Syntax {
-                            offset: 0,
-                            detail:
-                                "a form XObject's /Matrix isn't six numbers given directly or through one reference, so where it draws can't be told"
-                                    .into(),
-                        });
+                        out.error = Some(RedactError::Refused(
+                            "a form XObject's /Matrix isn't six numbers given directly or through one reference, so where it draws can't be told"
+                                .into(),
+                        ));
                     } else if scope.everywhere() {
                         scope.layer_blocks += 1;
                     } else {
