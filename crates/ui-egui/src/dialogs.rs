@@ -59,7 +59,7 @@ mod password_draft_tests {
         app.start_signing(&egui::Context::default(), 0, None, None, None);
         let sign = app.sign_draft.as_mut().unwrap();
         sign.step = crate::sign_ui::SignStep::Choose;
-        sign.password = "sign password".into();
+        sign.password = zeroize::Zeroizing::new("sign password".into());
         sign.new_id.password = "new ID password".into();
         sign.new_id.confirm = "new ID password".into();
         sign.new_id.file_password = "import password".into();

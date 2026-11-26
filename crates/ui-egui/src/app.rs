@@ -435,6 +435,11 @@ impl PdfCraftApp {
             a11y: a11y_ui::A11yState::default(),
             tags_state: Default::default(),
             a11y_skipped: Default::default(),
+            // The OS key store listing is rolled out per platform; on Linux the PKCS #11
+            // tokens (Rutoken, JaCarta, …) are the desktop signing story.
+            // Off by default: the OS key store listing changes the chooser's contents
+            // wherever a token (or p11-kit's view of one) is present — a user decision,
+            // not something to switch on per platform. Linux users flip it in Preferences.
             os_key_store_ids: false,
             cert_viewer: None,
             space_audit: Default::default(),

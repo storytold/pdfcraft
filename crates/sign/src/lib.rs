@@ -17,6 +17,8 @@ pub mod graphic;
 pub mod keychain;
 pub mod keys;
 pub mod pdf;
+#[cfg(target_os = "linux")]
+pub mod pkcs11;
 pub mod pkcs12;
 pub mod revocation;
 pub mod status_layers;
@@ -61,4 +63,13 @@ pub enum SignError {
     Pdf(String),
     #[error(transparent)]
     Cos(#[from] pdfcraft_cos::CosError),
+}
+
+impl SignError {
+    /// The PKCS #11 listing found no module at all (no p11-kit, no `PDFCRAFT_PKCS11_MODULE`):
+    /// on most Linux machines that means "no tokens", not a failure. Callers classify by
+    /// this rather than by matching the message text. Produced by [`crate::pkcs11::list`].
+    pub fn is_missing_module(&self) -> bool {
+        matches!(self, SignError::Crypto(e) if e.starts_with("no PKCS #11 module"))
+    }
 }

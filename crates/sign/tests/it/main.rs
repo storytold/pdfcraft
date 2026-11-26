@@ -8,6 +8,9 @@ mod crypto;
 mod encrypted_signing;
 mod field_locks;
 mod pdf;
+
+#[cfg(target_os = "linux")]
+mod pkcs11;
 mod revision_classification;
 mod signed_structure;
 mod store_keys;

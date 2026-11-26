@@ -152,7 +152,7 @@ fn sign_with_created_id(h: &mut Harness<'static, PdfCraftApp>, dir: &std::path::
     support::outside_menus(h, "Sign").click();
     h.run_steps(3);
     h.get_by_label("The password is incorrect.");
-    h.state_mut().sign_draft.as_mut().unwrap().password = "secret12".into();
+    h.state_mut().sign_draft.as_mut().unwrap().password = zeroize::Zeroizing::new("secret12".into());
     field(h, "Reason").click();
     h.run_steps(1);
     field(h, "Reason").type_text("I approve");
@@ -332,7 +332,7 @@ fn certifying_without_a_visible_signature() {
     h.run_steps(2);
     h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Certify as \"Test Signer EC\"");
     h.get_by_label("Permitted actions after certifying");
-    h.state_mut().sign_draft.as_mut().unwrap().password = "test".into();
+    h.state_mut().sign_draft.as_mut().unwrap().password = zeroize::Zeroizing::new("test".into());
     support::outside_menus(&h, "Sign").click();
     h.run_steps(6);
     let s = h.state();
@@ -498,7 +498,7 @@ fn sign_the_empty_field(h: &mut Harness<'static, PdfCraftApp>) {
         let d = h.state_mut().sign_draft.as_mut().unwrap();
         d.selected = Some(entry);
         d.step = SignStep::SignAs;
-        d.password = "test".into();
+        d.password = zeroize::Zeroizing::new("test".into());
     }
     h.run_steps(2);
     support::outside_menus(h, "Sign").click();
@@ -580,7 +580,7 @@ fn signing_an_xfa_box_runs_its_signing_scripts_in_the_app() {
         let d = h.state_mut().sign_draft.as_mut().unwrap();
         d.selected = Some(entry);
         d.step = SignStep::SignAs;
-        d.password = "test".into();
+        d.password = zeroize::Zeroizing::new("test".into());
     }
     h.run_steps(2);
     support::outside_menus(&h, "Sign").click();
@@ -640,7 +640,7 @@ fn the_fill_and_sign_signature_or_an_image_shows_in_a_digital_signature() {
         h.state_mut().start_signing(&ctx_h, 0, Some(rect), None, None);
         let entry = h.state_mut().add_digital_id(p12, &cert);
         let d = h.state_mut().sign_draft.as_mut().unwrap();
-        (d.selected, d.step, d.password) = (Some(entry), SignStep::SignAs, "test".into());
+        (d.selected, d.step, d.password) = (Some(entry), SignStep::SignAs, zeroize::Zeroizing::new("test".into()));
         h.run_steps(2);
     };
 
@@ -729,7 +729,7 @@ fn the_signature_labels_follow_the_interface_language() {
         let entry = h.state_mut().add_digital_id(p12, &cert);
         {
             let d = h.state_mut().sign_draft.as_mut().unwrap();
-            (d.selected, d.step, d.password, d.reason) = (Some(entry), SignStep::SignAs, "test".into(), "OK".into());
+            (d.selected, d.step, d.password, d.reason) = (Some(entry), SignStep::SignAs, zeroize::Zeroizing::new("test".into()), "OK".into());
             d.appearance.reason = true;
         }
         h.run_steps(3);
@@ -758,6 +758,7 @@ fn os_store_identities_are_not_persisted() {
             email: String::new(),
             expires: "2030.01.01".into(),
             unusable: None,
+            token: None,
         });
     }
     let saved = app.settings_snapshot();
@@ -786,6 +787,7 @@ fn windows_store_identity_does_not_ask_for_a_file_password() {
         email: String::new(),
         expires: "2030.01.01".into(),
         unusable: None,
+        token: None,
     });
     let draft = h.state_mut().sign_draft.as_mut().unwrap();
     draft.step = SignStep::Choose;
@@ -815,6 +817,7 @@ fn an_unusable_id_is_shown_with_its_reason_and_cannot_be_chosen() {
         email: String::new(),
         expires: String::new(),
         unusable: Some("its private key can't be opened: the key is missing from its key store (Windows error 0x80090016)".into()),
+        token: None,
     });
     let ctx_h = h.ctx.clone();
     h.state_mut().start_signing(&ctx_h, 0, None, None, None);
@@ -836,6 +839,7 @@ fn an_unusable_id_is_shown_with_its_reason_and_cannot_be_chosen() {
         email: String::new(),
         expires: "2030.01.01".into(),
         unusable: None,
+        token: None,
     });
     let ctx_h = h.ctx.clone();
     h.state_mut().start_signing(&ctx_h, 0, None, None, None);
@@ -905,7 +909,7 @@ fn signing_preserves_destination_opening_attributes() {
     h.state_mut().start_signing(&ctx_h, 0, None, None, None);
     let entry = h.state_mut().add_digital_id(p12, &cert);
     let d = h.state_mut().sign_draft.as_mut().unwrap();
-    (d.selected, d.step, d.password) = (Some(entry), SignStep::SignAs, "test".into());
+    (d.selected, d.step, d.password) = (Some(entry), SignStep::SignAs, zeroize::Zeroizing::new("test".into()));
     h.run_steps(2);
     support::outside_menus(&h, "Sign").click();
     h.run_steps(6);

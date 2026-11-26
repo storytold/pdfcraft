@@ -8,6 +8,7 @@ use craft::host::PickRequest;
 use craft::review::{SavedSignature, SignatureImage};
 use pdfcraft_engine::sign::{self, Appearance, AppearanceLabels, Certificate, DigitalId, Name, PrivateKey};
 use pdfcraft_engine::{SignOptions, SignatureInfo, SignatureStatus, StatusCaptions};
+use zeroize::Zeroizing;
 
 use crate::FilePurpose;
 use crate::PdfCraftApp;
@@ -38,6 +39,10 @@ pub struct DigitalIdEntry {
     /// greyed with the reason, and never selectable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unusable: Option<String>,
+    /// The PKCS #11 token's label ("Rutoken ECP #2", "test", …): shown next to the store name
+    /// in the chooser, while the certificate's display name stays the identity's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,7 +128,9 @@ pub struct SignDraft {
     pub certify: Option<u8>,
     pub step: SignStep,
     pub selected: Option<usize>,
-    pub password: String,
+    /// A `Zeroizing` string zeroes its buffer on drop, so the typed password doesn't linger
+    /// in freed memory; a clone's buffer is zeroized the same way.
+    pub password: Zeroizing<String>,
     pub reason: String,
     pub location: String,
     pub appearance: Appearance,
@@ -147,7 +154,7 @@ impl SignDraft {
             certify,
             step: if ids.is_empty() { SignStep::Configure } else { SignStep::Choose },
             selected: ids.iter().position(|e| e.unusable.is_none()),
-            password: String::new(),
+            password: Zeroizing::new(String::new()),
             reason: String::new(),
             location: String::new(),
             appearance: Appearance::default(),
@@ -239,6 +246,18 @@ fn windows_id(reference: &str) -> Result<DigitalId, String> {
     Err(format!("{reference}: Windows certificate store identities are only available on Windows"))
 }
 
+/// A PKCS #11 token identity by its `pkcs11:` reference, signed in with the PIN when one is
+/// typed (tokens that don't need a PIN ignore it).
+fn pkcs11_id(reference: &str, pin: Option<&str>) -> Result<DigitalId, String> {
+    #[cfg(target_os = "linux")]
+    return sign::pkcs11::find_with_pin(reference, pin).map_err(|e| e.to_string());
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pin;
+        Err(format!("{reference}: PKCS #11 token identities are only available on Linux"))
+    }
+}
+
 pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
     DigitalIdEntry {
         path: path.to_string(),
@@ -247,6 +266,7 @@ pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
         email: c.subject.email().unwrap_or("").to_string(),
         expires: format!("{:04}.{:02}.{:02}", c.not_after.year, c.not_after.month, c.not_after.day),
         unusable: None,
+        token: None,
     }
 }
 
@@ -259,6 +279,7 @@ fn entry_unusable(u: &sign::windows::Unusable) -> DigitalIdEntry {
         issuer: String::new(),
         email: String::new(),
         expires: String::new(),
+        token: None,
         unusable: Some(u.reason.clone()),
     }
 }
@@ -335,7 +356,7 @@ impl PdfCraftApp {
 
     /// List OS key store signing identities (after the file-based IDs).
     fn refresh_os_key_store_ids(&mut self) {
-        self.digital_ids.retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:"));
+        self.digital_ids.retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:") && !e.path.starts_with("pkcs11:"));
         #[cfg(target_os = "macos")]
         if self.os_key_store_ids {
             match sign::keychain::identities(None) {
@@ -350,6 +371,25 @@ impl PdfCraftApp {
                     }
                 }
                 Err(e) => self.notify_fmt("The Keychain's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
+            }
+        }
+        #[cfg(target_os = "linux")]
+        if self.os_key_store_ids {
+            match sign::pkcs11::list() {
+                Ok(ids) => {
+                    for id in ids {
+                        let mut entry = entry_for(&sign::pkcs11::reference(&id.certificate), &id.certificate);
+                        // The token's label ("Rutoken ECP #2", "test", …) is shown next to the
+                        // store name; the certificate's display name stays the identity's name
+                        // (it is what the signed PDF shows, and a token holds several of them).
+                        entry.token = id.friendly_name;
+                        self.digital_ids.push(entry);
+                    }
+                }
+                // No module (no p11-kit, no PDFCRAFT_PKCS11_MODULE): most Linux machines
+                // have no token, that's not an error worth a notice.
+                Err(e) if e.is_missing_module() => {}
+                Err(e) => self.notify_fmt("The token digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
             }
         }
         #[cfg(target_os = "windows")]
@@ -384,7 +424,11 @@ impl PdfCraftApp {
     /// disk. Keychain and Windows store IDs belong to the OS and are listed again on every
     /// signing, so they can't be removed here. The open dialog's selection follows the list.
     pub fn remove_digital_id(&mut self, index: usize) -> bool {
-        if self.digital_ids.get(index).is_none_or(|e| e.path.starts_with("keychain:") || e.path.starts_with("windows:")) {
+        if self
+            .digital_ids
+            .get(index)
+            .is_none_or(|e| e.path.starts_with("keychain:") || e.path.starts_with("windows:") || e.path.starts_with("pkcs11:"))
+        {
             return false;
         }
         self.digital_ids.remove(index);
@@ -473,6 +517,10 @@ impl PdfCraftApp {
             keychain_id(&entry.path)?
         } else if entry.path.starts_with("windows:") {
             windows_id(&entry.path)?
+        } else if entry.path.starts_with("pkcs11:") {
+            // The PIN goes as typed: PKCS #11 PINs are UTF-8 and a token may accept one with
+            // spaces; only a field left empty means "no PIN".
+            pkcs11_id(&entry.path, (!d.password.is_empty()).then_some(d.password.as_str()))?
         } else {
             let bytes = std::fs::read(&entry.path).map_err(|e| format!("{}: {e}", entry.path))?;
             sign::pkcs12::open(&bytes, &d.password).map_err(|e| match e {
@@ -884,7 +932,15 @@ mod tests {
     }
 
     fn listed(path: &str, name: &str) -> DigitalIdEntry {
-        DigitalIdEntry { path: path.into(), name: name.into(), issuer: String::new(), email: String::new(), expires: String::new(), unusable: None }
+        DigitalIdEntry {
+            path: path.into(),
+            name: name.into(),
+            issuer: String::new(),
+            email: String::new(),
+            expires: String::new(),
+            unusable: None,
+            token: None,
+        }
     }
 
     /// Issue #1396: an imported ID can be taken off the list (its file stays), the dialog's
@@ -1029,7 +1085,7 @@ mod tests {
                 app.digital_ids = vec![listed("/ids/grace.p12", "Grace Hopper")];
                 let mut draft = SignDraft::new(0, None, None, None, &app.digital_ids);
                 draft.step = SignStep::SignAs;
-                draft.password = "secret12".into();
+                draft.password = Zeroizing::new("secret12".into());
                 app.sign_draft = Some(draft);
                 app
             }
@@ -1058,7 +1114,7 @@ mod tests {
         assert!(d.new_id.password.is_empty() && d.new_id.confirm.is_empty() && d.new_id.file_password.is_empty());
 
         // Dismissing the modal with Escape clears sign_draft completely.
-        h.state_mut().sign_draft.as_mut().unwrap().password = "secret12".into();
+        h.state_mut().sign_draft.as_mut().unwrap().password = Zeroizing::new("secret12".into());
         h.key_press(egui::Key::Escape);
         h.run_steps(2);
         assert!(!h.state().modal_open());
@@ -1087,7 +1143,7 @@ mod tests {
         import_app.open_bytes(&egui::Context::default(), "unsigned.pdf", None, bytes.as_ref().clone()).unwrap();
         let mut sign_draft = SignDraft::new(0, None, None, None, &import_app.digital_ids);
         sign_draft.step = SignStep::SignAs;
-        sign_draft.password = "secret12".into();
+        sign_draft.password = Zeroizing::new("secret12".into());
         import_app.sign_draft = Some(sign_draft);
         assert_eq!(import_app.finish_signing(&egui::Context::default()), Ok(()));
         import_app.process_picks(&egui::Context::default());

@@ -10,7 +10,7 @@ use craft::host::{AppInfo, Host, ManualJobs, Picked, ScriptedFiles, Wake};
 use craft::platform::open::FileIntake;
 use craft::platform::watch::FileWatch;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT as _, Queryable};
 use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 use pdfcraft_ui_egui::settings::import_json;
 use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
@@ -444,6 +444,42 @@ fn theme_commands_and_options_report_preference_and_effective_colours() {
     assert_eq!(state["theme"], "Light");
     assert!(call(&mut h, &c, "ui.set", json!({ "key": "theme", "value": "purple" })).is_err());
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["theme_preference"], "System");
+}
+
+#[test]
+fn lithuanian_password_dialog_translates_dynamic_labels_and_validation() {
+    if crate::support::skip_without_catalogs("lithuanian_password_dialog_translates_dynamic_labels_and_validation") {
+        return;
+    }
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "lt" }));
+    ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": "protect" }));
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "Peržiūrėti");
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "Redaguoti").click();
+    h.run_steps(2);
+    assert_eq!(
+        h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "Redaguoti").accesskit_node().toggled(),
+        Some(egui::accesskit::Toggled::True),
+        "the Editing radio reports its state"
+    );
+    // The dialog's draft lives inside the dialog host, so the mismatch is provoked through the
+    // fields themselves: the typed passwords disagree.
+    let type_into = |h: &mut Harness<'static, PdfCraftApp>, label: &str, text: &str| {
+        h.get_by(|n| {
+            n.label().as_deref() == Some(label) && matches!(n.role(), egui::accesskit::Role::PasswordInput | egui::accesskit::Role::TextInput)
+        })
+        .click();
+        h.run_steps(2);
+        h.get_by(|n| {
+            n.label().as_deref() == Some(label) && matches!(n.role(), egui::accesskit::Role::PasswordInput | egui::accesskit::Role::TextInput)
+        })
+        .type_text(text);
+        h.run_steps(2);
+    };
+    type_into(&mut h, "Įveskite slaptažodį", "abc");
+    type_into(&mut h, "Pakartokite slaptažodį", "xyz");
+    h.get_by_label("Slaptažodžiai nesutampa.");
 }
 
 #[test]

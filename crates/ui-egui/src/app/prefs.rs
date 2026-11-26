@@ -234,9 +234,14 @@ impl PdfCraftApp {
                 slots
             }),
             sign_graphic: Some(self.sign_graphic.clone()),
-            // macOS Keychain and Windows store identities are read from their OS key stores each time.
+            // OS key store identities (Keychain, Windows store, Linux PKCS #11 tokens) are read
+            // from their stores each time, so they don't persist here.
             digital_ids: Some(
-                self.digital_ids.iter().filter(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")).cloned().collect(),
+                self.digital_ids
+                    .iter()
+                    .filter(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:") && !e.path.starts_with("pkcs11:"))
+                    .cloned()
+                    .collect(),
             ),
             trusted: Some(trusted),
             custom_stamps: json_text(&stamps_ui::encode(&self.custom_stamps)),

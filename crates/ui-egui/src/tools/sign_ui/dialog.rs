@@ -144,9 +144,12 @@ fn extra_buttons(d: &SignDraft, ids: &[DigitalIdEntry]) -> Vec<FooterButton> {
     }
 }
 
-/// The selected list entry when it is a file the app may take off the list (the OS key stores' IDs stay).
+/// The selected list entry when it is a file the app may take off the list (the OS key stores' and
+/// tokens' IDs stay).
 fn removable(d: &SignDraft, ids: &[DigitalIdEntry]) -> Option<usize> {
-    d.selected.filter(|&i| ids.get(i).is_some_and(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")))
+    d.selected.filter(|&i| {
+        ids.get(i).is_some_and(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:") && !e.path.starts_with("pkcs11:"))
+    })
 }
 
 /// Carries out the footer button picked this pass and what the body asked.
@@ -235,6 +238,11 @@ fn details(e: &DigitalIdEntry) -> String {
         tl!("Keychain  ·  ").to_string()
     } else if e.path.starts_with("windows:") {
         tl!("Windows store  ·  ").to_string()
+    } else if e.path.starts_with("pkcs11:") {
+        match &e.token {
+            Some(token) => format!("{}«{token}»  ·  ", tl!("PKCS #11 token")),
+            None => tl!("PKCS #11 token  ·  ").to_string(),
+        }
     } else {
         String::new()
     };
@@ -249,6 +257,17 @@ fn details(e: &DigitalIdEntry) -> String {
             date = e.expires,
         ),
     }
+}
+
+/// Moves the chooser's selection to `i` (`None` clears it). A PIN typed for the previous
+/// selection must not reach another token: it could burn a failed-login attempt or lock it on
+/// the last one, so a changed selection zeroes the draft's password first.
+fn select(d: &mut SignDraft, i: Option<usize>) {
+    if d.selected != i {
+        d.password = zeroize::Zeroizing::new(String::new());
+    }
+    d.selected = i;
+    d.confirm_remove = None;
 }
 
 /// Sign with a Digital ID: the list of IDs, unusable ones with their reason, and the removal question.
@@ -274,16 +293,14 @@ fn choose(ui: &mut egui::Ui, d: &mut SignDraft, ids: &[DigitalIdEntry], asked: &
         for event in out.events {
             match event {
                 CollectionEvent::Selection(SelectionChange::Set(keys)) => {
-                    d.selected = keys.last().copied().filter(|&i| ids.get(i).is_some_and(|e| e.unusable.is_none()));
-                    d.confirm_remove = None;
+                    select(d, keys.last().copied().filter(|&i| ids.get(i).is_some_and(|e| e.unusable.is_none())));
                 }
                 CollectionEvent::Selection(SelectionChange::Toggle(key)) => {
-                    d.selected = (d.selected != Some(key)).then_some(key);
-                    d.confirm_remove = None;
+                    select(d, (d.selected != Some(key)).then_some(key));
                 }
-                CollectionEvent::Selection(SelectionChange::Clear) => d.selected = None,
+                CollectionEvent::Selection(SelectionChange::Clear) => select(d, None),
                 CollectionEvent::Activate(key) if ids.get(key).is_some_and(|e| e.unusable.is_none()) => {
-                    d.selected = Some(key);
+                    select(d, Some(key));
                     d.step = SignStep::SignAs;
                 }
                 _ => {}
@@ -530,7 +547,18 @@ fn sign_as(
             TextField::new(label, Bind::bound(&mut *value)).placeholder(tl!("Optional")).show(ui);
         });
     }
-    if in_os_key_store {
+    if entry.path.starts_with("pkcs11:") {
+        // The token's key is unlocked for this one signing by the PIN; it stays typed only in
+        // the `Zeroizing` draft.
+        Field::new(tl!("Token PIN")).show(ui, |ui, _| {
+            // PLAN: `submits()` is assumed to make Enter report `EditResponse::submitted`.
+            let out = TextField::new(tl!("Token PIN"), Bind::bound(&mut *d.password)).masked().submits().show(ui);
+            if out.submitted {
+                asked.submit = true;
+            }
+        });
+        caption(tl!("The key is on a PKCS #11 token; the PIN unlocks it for this signing.")).show(ui);
+    } else if in_os_key_store {
         let note = if entry.path.starts_with("windows:") {
             tl!("The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.")
         } else {
@@ -540,7 +568,7 @@ fn sign_as(
     } else {
         Field::new(tl!("Digital ID password")).show(ui, |ui, _| {
             // PLAN: `submits()` is assumed to make Enter report `EditResponse::submitted`.
-            let out = TextField::new(tl!("Digital ID password"), Bind::bound(&mut d.password)).masked().submits().show(ui);
+            let out = TextField::new(tl!("Digital ID password"), Bind::bound(&mut *d.password)).masked().submits().show(ui);
             if out.submitted {
                 asked.submit = true;
             }

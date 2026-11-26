@@ -15,6 +15,7 @@ use craft::ui::runtime::env::Label;
 use craft::ui::style::TypeRole;
 use egui::Ui;
 use pdfcraft_engine::{Algorithm, Changes, Edit, Printing, Protection};
+use zeroize::Zeroizing;
 
 use crate::PdfCraftApp;
 
@@ -23,15 +24,24 @@ use crate::PdfCraftApp;
 pub struct ProtectDraft {
     /// `true`: password required for Viewing; `false`: for Editing.
     pub viewing: bool,
-    pub password: String,
-    pub confirm: String,
+    /// A `Zeroizing` string zeroes on drop, so the password this draft holds doesn't linger
+    /// in freed memory after the dialog closes. (While the dialog is open, egui's own widget
+    /// state keeps its copies of what is being typed; that is egui's, and clears with it.)
+    pub password: Zeroizing<String>,
+    pub confirm: Zeroizing<String>,
     pub advanced: bool,
     pub protection: Protection,
 }
 
 impl Default for ProtectDraft {
     fn default() -> Self {
-        Self { viewing: true, password: String::new(), confirm: String::new(), advanced: false, protection: Protection::default() }
+        Self {
+            viewing: true,
+            password: Zeroizing::new(String::new()),
+            confirm: Zeroizing::new(String::new()),
+            advanced: false,
+            protection: Protection::default(),
+        }
     }
 }
 
@@ -63,15 +73,17 @@ impl ProtectDraft {
         }
     }
 
-    /// The edit Apply makes.
+    /// The edit Apply makes. The edit carries the password into the engine, where its undo
+    /// `Keys` need it to reopen the document; that copy is the engine's `Protection` type
+    /// (its `Debug` already redacts), not the dialog's to zero.
     pub fn edit(&self) -> Edit {
         let mut p = self.protection.clone();
         if self.viewing {
-            p.open_password = Some(self.password.clone());
+            p.open_password = Some(self.password.to_string());
             p.permissions_password = None;
         } else {
             p.open_password = None;
-            p.permissions_password = Some(self.password.clone());
+            p.permissions_password = Some(self.password.to_string());
         }
         Edit::Protect(p)
     }
@@ -103,7 +115,9 @@ fn body(ui: &mut Ui, d: &mut ProtectDraft) -> bool {
             Radio::new(false).label(text("Editing")).show(ui);
         });
     });
-    PasswordFields::new(text("Type Password"), Bind::bound(&mut d.password)).confirm(Bind::bound(&mut d.confirm)).error(error).show(ui);
+    // The draft holds `Zeroizing` strings: bind through their `DerefMut`, which hands the
+    // widget an ordinary `String` to write through to.
+    PasswordFields::new(text("Type Password"), Bind::bound(&mut *d.password)).confirm(Bind::bound(&mut *d.confirm)).error(error).show(ui);
     let advanced = text("Advanced Options");
     Row::new().show(ui, |ui, _| {
         Disclosure::new(Bind::bound(&mut d.advanced)).label(advanced.clone()).show(ui);
@@ -233,10 +247,10 @@ mod tests {
     fn drafts_validate_and_map_to_the_right_password() {
         let mut d = ProtectDraft::default();
         assert!(d.problem().is_some());
-        d.password = "abc".into();
-        d.confirm = "abd".into();
+        d.password = Zeroizing::new("abc".to_owned());
+        d.confirm = Zeroizing::new("abd".to_owned());
         assert_eq!(d.problem(), Some("The passwords don't match."));
-        d.confirm = "abc".into();
+        d.confirm = Zeroizing::new("abc".to_owned());
         assert_eq!(d.problem(), None);
         match d.edit() {
             Edit::Protect(p) => assert_eq!((p.open_password.as_deref(), p.permissions_password), (Some("abc"), None)),
