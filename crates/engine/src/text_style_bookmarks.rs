@@ -30,7 +30,7 @@ impl TextStyle {
 }
 
 /// How far apart two sizes may be and still be one style.
-const SIZE_TOLERANCE: f64 = 0.25;
+pub(crate) const SIZE_TOLERANCE: f64 = 0.25;
 
 /// A style and how much text is set in it.
 #[derive(Clone, Debug, PartialEq)]
@@ -49,22 +49,53 @@ pub const MAX_PAGES: usize = 5000;
 /// The most bookmarks made at once.
 pub const MAX_BOOKMARKS: usize = 10_000;
 /// The longest bookmark title kept, in characters (a heading run on into a paragraph).
-const MAX_TITLE_CHARS: usize = 300;
+pub(crate) const MAX_TITLE_CHARS: usize = 300;
 /// The longest sample shown for a style.
 const SAMPLE_CHARS: usize = 60;
 /// The most styles listed, the largest first.
 const MAX_STYLES: usize = 200;
 
 /// One line of text in reading order.
-struct Line {
-    page: usize,
-    text: String,
-    style: TextStyle,
-    /// Top, bottom, left and right of its box in user space.
-    top: f64,
-    bottom: f64,
-    left: f64,
-    right: f64,
+#[derive(Clone)]
+pub(crate) struct Line {
+    pub(crate) page: usize,
+    pub(crate) text: String,
+    pub(crate) style: TextStyle,
+    /// Top, bottom, left and right of its box as displayed (after the page's `/Rotate`, y up), so
+    /// reading order and the join of a heading's lines are right on a turned page. Only
+    /// differences between these values are used: they are offset from points on the page.
+    pub(crate) top: f64,
+    pub(crate) bottom: f64,
+    pub(crate) left: f64,
+    pub(crate) right: f64,
+    /// The `/XYZ` position `[left, top]` (user space) that puts the top of the line as displayed
+    /// at the top of the window. The box edge displayed on top depends on the rotation: the top
+    /// edge, the left edge (90), the bottom edge (180) or the right edge (270). On a page turned
+    /// a quarter it is a user-space x, so it is `left`, and `top` stays unspecified.
+    pub(crate) anchor: [Option<f64>; 2],
+}
+
+impl Line {
+    /// Whether this line goes on with a heading whose last line is `above`: on the same page, on
+    /// the next row down, close below it and under it. A line on the same row (two headings side
+    /// by side), or in another column, starts a heading of its own.
+    pub(crate) fn continues(&self, above: &Line) -> bool {
+        let size = self.style.size;
+        let under = self.left < above.right && above.left < self.right;
+        self.page == above.page && self.top < above.top - size * 0.5 && above.bottom - self.top < size * 0.6 && under
+    }
+}
+
+/// A box in user space `[x0, y0, x1, y1]` on a page turned `rotation` degrees clockwise → its
+/// displayed top, bottom, left and right (y up), and the `/XYZ` anchor of its displayed top.
+fn displayed(rotation: i64, [x0, y0, x1, y1]: [f64; 4]) -> ([f64; 4], [Option<f64>; 2]) {
+    let (xl, xh, yl, yh) = (x0.min(x1), x0.max(x1), y0.min(y1), y0.max(y1));
+    match rotation {
+        90 => ([-xl, -xh, yl, yh], [Some(xl), None]),
+        180 => ([-yl, -yh, -xh, -xl], [None, Some(yl)]),
+        270 => ([xh, xl, -yh, -yl], [Some(xh), None]),
+        _ => ([yh, yl, xl, xh], [None, Some(yh)]),
+    }
 }
 
 /// `name` without a subset tag: six capital letters and a `+` (ISO 32000-2 §9.9.2).
@@ -77,11 +108,21 @@ fn without_subset_tag(name: &str) -> &str {
 
 /// The text lines of `doc`'s first [`MAX_PAGES`] pages, each page's in reading order. Text that
 /// is only whitespace, or whose size can't be read, is left out.
-fn lines(doc: &Document) -> Vec<Line> {
+pub(crate) fn lines(doc: &Document) -> Vec<Line> {
+    read_lines(doc).0
+}
+
+/// [`lines`], and how many pages' text was read: a page whose text can't be read (its content
+/// past the page's decode allowance, say) is skipped and not counted.
+pub(crate) fn read_lines(doc: &Document) -> (Vec<Line>, usize) {
     let pages = pdfcraft_organize::page_count(doc).unwrap_or(0).min(MAX_PAGES);
+    let rotations = pdfcraft_organize::page_rotations(doc).unwrap_or_default();
     let mut out = Vec::new();
+    let mut read = 0usize;
     for page in 0..pages {
+        let rotation = rotations.get(page).copied().unwrap_or(0);
         let Ok(found) = pdfcraft_edit::text_lines(doc, page) else { continue };
+        read = read.saturating_add(1);
         let mut on_page: Vec<Line> = found
             .into_iter()
             .filter_map(|l| {
@@ -91,6 +132,7 @@ fn lines(doc: &Document) -> Vec<Line> {
                 let size = l.size;
                 let [x0, y0, x1, y1] = l.rect;
                 let ok = !text.is_empty() && size.is_finite() && size > 0.0 && [x0, y0, x1, y1].iter().all(|v| v.is_finite());
+                let ([top, bottom, left, right], anchor) = displayed(rotation, l.rect);
                 ok.then(|| Line {
                     page,
                     text,
@@ -100,10 +142,11 @@ fn lines(doc: &Document) -> Vec<Line> {
                         bold: l.bold,
                         italic: l.italic,
                     },
-                    top: y0.max(y1),
-                    bottom: y0.min(y1),
-                    left: x0.min(x1),
-                    right: x0.max(x1),
+                    top,
+                    bottom,
+                    left,
+                    right,
+                    anchor,
                 })
             })
             .collect();
@@ -112,7 +155,7 @@ fn lines(doc: &Document) -> Vec<Line> {
         on_page.sort_by(|a, b| (b.top * 10.0).round().total_cmp(&(a.top * 10.0).round()).then(a.left.total_cmp(&b.left)));
         out.extend(on_page);
     }
-    out
+    (out, read)
 }
 
 /// The styles `doc`'s text is set in, the largest size first (then the most used): headings
@@ -157,25 +200,17 @@ pub fn styles(doc: &Document) -> Vec<TextStyleUse> {
 /// The bookmarks for the lines in `levels`' styles: a line in `levels[0]`'s style is a level-1
 /// bookmark, `levels[1]`'s a level-2 one under the level-1 bookmark before it, and so on. A
 /// heading set on several lines (one after another in the same style, close below each other)
-/// is one bookmark. Each goes to the top of its heading.
+/// is one bookmark. Each goes to the top of its heading as displayed, also on a turned page.
 pub fn headings(doc: &Document, levels: &[TextStyle]) -> Vec<OutlineEntry> {
     let mut entries: Vec<OutlineEntry> = Vec::new();
-    // The heading the previous line belonged to: its level, and the top, bottom, left and right
-    // of its last line.
-    let mut open: Option<(usize, f64, f64, f64, f64)> = None;
+    // The heading the previous line belonged to: its level and its last line.
+    let mut open: Option<(usize, Line)> = None;
     for line in lines(doc) {
         let Some(level) = levels.iter().position(|s| s.matches(&line.style)) else {
             open = None;
             continue;
         };
-        // A heading goes on to the next row down, close below its last line and under it. A line
-        // on the same row (two headings side by side), or in another column, is a heading of
-        // its own.
-        let continues = open.is_some_and(|(l, top, bottom, left, right)| {
-            let size = line.style.size;
-            let under = line.left < right && left < line.right;
-            l == level && line.top < top - size * 0.5 && bottom - line.top < size * 0.6 && under
-        }) && entries.last().is_some_and(|e| e.page == line.page);
+        let continues = open.as_ref().is_some_and(|(l, above)| *l == level && line.continues(above));
         if continues {
             if let Some(e) = entries.last_mut()
                 && e.title.chars().count() < MAX_TITLE_CHARS
@@ -191,15 +226,10 @@ pub fn headings(doc: &Document, levels: &[TextStyle]) -> Vec<OutlineEntry> {
             // The level counts from 1; the position in `levels` is at most its length, which a
             // caller keeps small (a few levels), so it fits a u8.
             let level = u8::try_from(level.saturating_add(1)).unwrap_or(u8::MAX);
-            entries.push(OutlineEntry {
-                level,
-                title: line.text.chars().take(MAX_TITLE_CHARS).collect(),
-                page: line.page,
-                element: None,
-                top: Some(line.top),
-            });
+            let [left, top] = line.anchor;
+            entries.push(OutlineEntry { level, title: line.text.chars().take(MAX_TITLE_CHARS).collect(), page: line.page, element: None, left, top });
         }
-        open = Some((level, line.top, line.bottom, line.left, line.right));
+        open = Some((level, line));
     }
     entries
 }
