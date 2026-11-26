@@ -34,6 +34,7 @@ mod overlay;
 mod pattern_guard;
 pub mod patterns;
 pub mod sanitize;
+mod stroke;
 mod tags;
 #[cfg(test)]
 mod tests;

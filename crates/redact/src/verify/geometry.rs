@@ -3,11 +3,12 @@
 
 use std::collections::HashSet;
 
-use pdfcraft_content::{Matrix, contains, overlaps, parse};
+use pdfcraft_content::{Matrix, Op, contains, overlaps, parse};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 use super::extract::{appearance_matrix, bbox_of, matrix_of, page_content, res_dict};
 use super::util::{Ctx, image_codec};
+use crate::stroke::{INITIAL_MITER_LIMIT, fill_box, join_miters, stroke_box, union};
 use crate::verify::limits::{MAX_CLIP_SUBPATHS, MAX_DEPTH, MAX_GS_STACK, MAX_HOLES, MAX_PIXELS};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -26,7 +27,20 @@ pub(super) struct Gs {
     pub(super) ctm: Matrix,
     /// Device-space boxes cut out of the clip (even-odd clips with a hole).
     pub(super) holes: Vec<[f64; 4]>,
+    pub(super) pen: Pen,
 }
+
+/// What a stroke paints around its path: the line width in user space (`w`, an ExtGState's `/LW`),
+/// and whether its joins are mitered (`j`, `/LJ`) and up to which limit (`M`, `/ML`).
+#[derive(Clone, Copy)]
+pub(super) struct Pen {
+    pub(super) width: f64,
+    pub(super) miters: bool,
+    pub(super) miter_limit: f64,
+}
+
+/// The pen a page starts with (ISO 32000-2 Table 51): a width of 1, mitered joins, a limit of 10.
+const INITIAL_PEN: Pen = Pen { width: 1.0, miters: true, miter_limit: INITIAL_MITER_LIMIT };
 
 pub(super) struct Geo<'a> {
     pub(super) doc: &'a Document,
@@ -48,7 +62,7 @@ pub(super) fn check_geometry(doc: &Document, page: &Dict, regions: &[[f64; 4]], 
     let Ok(data) = page_content(doc, page, ctx, true) else { return unverifiable("the page content can't be read in full") };
     let mut geo = Geo { doc, ctx, regions, found: Vec::new(), reported: HashSet::new(), searched: HashSet::new() };
     let res = page.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
-    geo.run(&data, &res, Matrix::IDENTITY, Vec::new(), 0);
+    geo.run(&data, &res, Matrix::IDENTITY, Vec::new(), INITIAL_PEN, 0);
     geo.appearances(page, &res);
     geo.found
 }
@@ -69,6 +83,13 @@ impl Geo<'_> {
     /// output means what it paints can't be vouched for.
     fn appearances(&mut self, page: &Dict, res: &Dict) {
         let doc = self.doc;
+        // A NoRotate appearance is turned off its /Rect on a rotated page, by rules the screen and
+        // print don't share (flag 5, or implied for /Text, widgets and links among them or not), and
+        // a /Rotate the renderer can't read gives way to an inherited one. So an appearance is taken
+        // to land on its /Rect only on a page certainly not turned: no /Rotate (inherited), or a
+        // whole multiple of 360.
+        let unturned =
+            page.get(b"Rotate").is_none_or(|o| doc.resolve(o).as_int().and_then(|r| i32::try_from(r).ok()).is_some_and(|r| r.rem_euclid(360) == 0));
         for a in crate::annots_of(doc, page) {
             // A direct dictionary has no reference of its own; it is checked like an indirect
             // one (what its appearance paints does not depend on how it is stored).
@@ -109,8 +130,16 @@ impl Geo<'_> {
                         self.unverifiable("an annotation appearance can't be placed, so what it paints can't be checked");
                         continue;
                     };
+                    // The renderer clips an appearance to its /BBox where it lands, on its /Rect
+                    // (ISO 32000-2 §12.5.5), as a form's: one whose /Rect is beside every region,
+                    // as the walk tells it, paints none there, though a stroke along its edge
+                    // reaches past it. On a page that may be turned it is checked where it is
+                    // placed here, as before.
+                    if unturned && rect.is_some_and(|r| self.touching(r).is_empty()) {
+                        continue;
+                    }
                     let own = st.dict.get(b"Resources").and_then(|x| doc.resolve(x).as_dict().cloned());
-                    self.run(&data, own.as_ref().unwrap_or(res), ctm, Vec::new(), 1);
+                    self.run(&data, own.as_ref().unwrap_or(res), ctm, Vec::new(), INITIAL_PEN, 1);
                 }
             }
         }
@@ -128,7 +157,7 @@ impl Geo<'_> {
         !gs.holes.iter().any(|h| contains(*h, reach, 0.01))
     }
 
-    fn run(&mut self, data: &[u8], res: &Dict, ctm: Matrix, holes: Vec<[f64; 4]>, depth: usize) {
+    fn run(&mut self, data: &[u8], res: &Dict, ctm: Matrix, holes: Vec<[f64; 4]>, pen: Pen, depth: usize) {
         if depth > MAX_DEPTH {
             for i in 0..self.regions.len() {
                 self.report(i, Finding::Unverifiable("forms are nested too deep to check"));
@@ -136,26 +165,45 @@ impl Geo<'_> {
             return;
         }
         let xobjects = res_dict(self.doc, res, b"XObject");
+        let states = res_dict(self.doc, res, b"ExtGState");
         self.hidden_images(res, depth);
-        let mut gs = Gs { ctm, holes };
+        let mut gs = Gs { ctm, holes, pen };
         let mut stack: Vec<Gs> = Vec::new();
-        // The current path in device space: its subpaths, and the clip operator it carries.
+        // The current path in device space: its subpaths, and the clip operator it carries; what
+        // it paints (`Drawn`); and the operators that make it, whose joins a stroke paints at.
         let mut sub: Vec<Vec<(f64, f64)>> = Vec::new();
         let mut clip: Option<bool> = None;
+        let mut drawn = Drawn::default();
+        let mut path: Vec<Op> = Vec::new();
         for op in parse(data).ops {
             let o = op.op.as_slice();
             if matches!(o, b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re" | b"W" | b"W*") {
+                draw(&op, &gs.ctm, !sub.is_empty(), &mut drawn);
                 extend_path(&op, &gs.ctm, &mut sub, &mut clip);
+                path.push(op);
                 continue;
             }
             if matches!(o, b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"n") {
-                self.paint_path(o, &mut gs, &sub, clip);
+                // `s`, `b` and `b*` close the last subpath: a move left waiting is then a point
+                // closed, which a round cap paints, unless the path ends closed already.
+                if matches!(o, b"s" | b"b" | b"b*") && !drawn.closed {
+                    drawn.at = union(drawn.at, drawn.moved);
+                }
+                self.paint_path(o, &mut gs, &sub, &path, clip, drawn.at);
                 sub.clear();
                 clip = None;
+                drawn = Drawn::default();
+                path.clear();
                 continue;
             }
-            sub.clear();
-            clip = None;
+            // A line-state operator between building a path and painting it applies to that paint,
+            // as the walk takes it: the path stays. Any other operator ends the path unpainted.
+            if path.is_empty() || !matches!(o, b"w" | b"M" | b"j" | b"J" | b"d" | b"gs") {
+                sub.clear();
+                clip = None;
+                drawn = Drawn::default();
+                path.clear();
+            }
             match o {
                 b"q" => {
                     // The saved state carries the holes with it, so an unbounded stack of them
@@ -173,6 +221,36 @@ impl Geo<'_> {
                 b"cm" => {
                     if let Some(m) = op.nums::<6>() {
                         gs.ctm = Matrix(m).then(&gs.ctm);
+                    }
+                }
+                // Read as the renderer reads them, the last operand; a negative width at its size.
+                b"w" => {
+                    if let Some([width]) = op.nums::<1>() {
+                        gs.pen.width = width.abs();
+                    }
+                }
+                b"j" => {
+                    if let Some([join]) = op.nums::<1>() {
+                        gs.pen.miters = join_miters(join);
+                    }
+                }
+                b"M" => {
+                    if let Some([limit]) = op.nums::<1>() {
+                        gs.pen.miter_limit = limit;
+                    }
+                }
+                b"gs" => {
+                    let state = op.last_name().and_then(|n| states.get(n)).map(|s| self.doc.resolve(s));
+                    let state = state.as_deref().and_then(Object::as_dict);
+                    let number = |key: &[u8]| state.and_then(|d| d.get(key)).and_then(|v| self.doc.resolve(v).as_f64());
+                    if let Some(width) = number(b"LW") {
+                        gs.pen.width = width.abs();
+                    }
+                    if let Some(join) = number(b"LJ") {
+                        gs.pen.miters = join_miters(join);
+                    }
+                    if let Some(limit) = number(b"ML") {
+                        gs.pen.miter_limit = limit;
                     }
                 }
                 b"sh" => {
@@ -211,18 +289,16 @@ impl Geo<'_> {
         }
     }
 
-    /// A path-painting operator `o` ends the current path: report what it paints over a region,
-    /// and let an even-odd clip add its holes to `gs`.
-    fn paint_path(&mut self, o: &[u8], gs: &mut Gs, sub: &[Vec<(f64, f64)>], clip: Option<bool>) {
-        let pts: Vec<(f64, f64)> = sub.iter().flatten().copied().collect();
-        let bbox = pts.iter().fold(None, |b: Option<[f64; 4]>, &(u, v)| {
-            Some(match b {
-                None => [u, v, u, v],
-                Some(b) => [b[0].min(u), b[1].min(v), b[2].max(u), b[3].max(v)],
-            })
-        });
+    /// A path-painting operator `o` ends the current path, whose painted points lie in `bbox`:
+    /// report what it paints over a region, and let an even-odd clip add its holes to `gs`.
+    fn paint_path(&mut self, o: &[u8], gs: &mut Gs, sub: &[Vec<(f64, f64)>], ops: &[Op], clip: Option<bool>, bbox: Option<[f64; 4]>) {
+        // A stroke and a fill paint the boxes the walk measures them by (`stroke_box`, `fill_box`).
+        let strokes = matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
+        let closes = matches!(o, b"s" | b"b" | b"b*");
+        let paints =
+            bbox.map(|b| if strokes { stroke_box(b, ops, closes, &gs.ctm, gs.pen.width, gs.pen.miters, gs.pen.miter_limit) } else { fill_box(b) });
         if o != b"n"
-            && let Some(b) = bbox
+            && let Some(b) = paints
         {
             for i in self.touching(b) {
                 if self.unclipped(i, b, gs) {
@@ -283,7 +359,7 @@ impl Geo<'_> {
             return;
         };
         let own = s.dict.get(b"Resources").and_then(|r| self.doc.resolve(r).as_dict().cloned());
-        self.run(&data, own.as_ref().unwrap_or(parent), fctm, gs.holes.clone(), depth + 1);
+        self.run(&data, own.as_ref().unwrap_or(parent), fctm, gs.holes.clone(), gs.pen, depth + 1);
     }
 
     /// Images drawn from tiling patterns, soft-mask groups and Type3 glyph procedures can't be
@@ -400,6 +476,59 @@ fn extend_path(op: &pdfcraft_content::Op, ctm: &Matrix, sub: &mut Vec<Vec<(f64, 
         b"W" => *clip = Some(false),
         b"W*" => *clip = Some(true),
         _ => {}
+    }
+}
+
+/// What the current path paints, as [`draw`] grows it.
+#[derive(Default)]
+struct Drawn {
+    /// The device-space box of its painted points.
+    at: Option<[f64; 4]>,
+    /// The box of the moves' points since something last drew from one.
+    moved: Option<[f64; 4]>,
+    /// Whether the path ends closed, which `h` and a closing paint then leave as it is.
+    closed: bool,
+}
+
+/// Grow `drawn` by one construction operator (`current`: the path has a subpath for a segment to
+/// extend, as [`extend_path`] has it). A move's point counts once a segment or `h` follows it, or
+/// the painting operator closes it: a subpath that is only a move paints nothing (ISO 32000-2
+/// §8.5.3.2, and as the renderer draws). A move another overrides paints nothing either, but each
+/// is kept until something draws: the renderer skips a move whose last two operands aren't numbers
+/// to it, leaving the one before it, and doesn't read every number the content parser does
+/// (`3e2`). After `re` the renderer strokes a segment from the point before it, so a move waits
+/// across one; and as `re` and `h` leave the path closed, an `h` or closing paint after them
+/// closes nothing.
+fn draw(op: &Op, ctm: &Matrix, current: bool, drawn: &mut Drawn) {
+    let o = op.op.as_slice();
+    let at = |x: f64, y: f64| ctm.apply(x, y);
+    // Each takes its numbers from the end, as the renderer reads them (and as `extend_path` does).
+    let pts: Vec<(f64, f64)> = match o {
+        b"m" => op.nums::<2>().map(|[x, y]| vec![at(x, y)]),
+        b"l" if current => op.nums::<2>().map(|[x, y]| vec![at(x, y)]),
+        b"c" if current => op.nums::<6>().map(|[x1, y1, x2, y2, x3, y3]| vec![at(x1, y1), at(x2, y2), at(x3, y3)]),
+        b"v" | b"y" if current => op.nums::<4>().map(|[x1, y1, x2, y2]| vec![at(x1, y1), at(x2, y2)]),
+        b"re" => op.nums::<4>().map(|[x, y, w, h]| vec![at(x, y), at(x + w, y), at(x + w, y + h), at(x, y + h)]),
+        _ => None,
+    }
+    .unwrap_or_default();
+    let grown = pts.into_iter().fold(None, |b, (u, v)| union(b, Some([u, v, u, v])));
+    match o {
+        b"m" => {
+            drawn.moved = union(drawn.moved, grown);
+            drawn.closed = false;
+        }
+        b"l" | b"c" | b"v" | b"y" => drawn.at = union(union(drawn.at, drawn.moved.take()), grown),
+        b"h" => {
+            if !drawn.closed {
+                drawn.at = union(drawn.at, drawn.moved.take());
+            }
+            drawn.closed = true;
+        }
+        _ => {
+            drawn.closed |= o == b"re" && grown.is_some();
+            drawn.at = union(drawn.at, grown);
+        }
     }
 }
 
