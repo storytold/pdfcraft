@@ -2,6 +2,7 @@
 //! document, and manage trusted certificates. Rectangles are points from the top-left of the
 //! displayed page.
 
+use pdfcraft_engine::js::SignEvent;
 use pdfcraft_engine::sign::{self, Certificate, DigitalId, Modification, Name, PrivateKey};
 use pdfcraft_engine::{SignOptions, SignatureInfo, SignatureStatus};
 use serde_json::{Value, json};
@@ -15,6 +16,62 @@ fn bad(m: impl Into<String>) -> ToolError {
 /// Seconds since 1970 → a DER time.
 fn time(secs: i64) -> sign::Time {
     sign::Time::from_unix(secs)
+}
+
+/// The longest label `sign_document` takes (characters): a label is a few words.
+const MAX_LABEL_CHARS: usize = 200;
+
+/// `appearance`: which items the visible signature shows; those not given keep the default
+/// (name, date and labels on; reason, location and distinguished name off).
+fn appearance_arg(v: &Value) -> Result<sign::Appearance> {
+    const KEYS: &str = "name, date, reason, location, distinguished_name, labels";
+    let o = v.as_object().ok_or_else(|| bad(format!("appearance must be an object of true/false items ({KEYS})")))?;
+    let mut shown = sign::Appearance::default();
+    for (key, value) in o {
+        let on = value.as_bool().ok_or_else(|| bad(format!("appearance.{key} must be true or false")))?;
+        let item = match key.as_str() {
+            "name" => &mut shown.name,
+            "date" => &mut shown.date,
+            "reason" => &mut shown.reason,
+            "location" => &mut shown.location,
+            "distinguished_name" => &mut shown.distinguished_name,
+            "labels" => &mut shown.labels,
+            other => return Err(bad(format!("unknown appearance item {other:?} ({KEYS})"))),
+        };
+        *item = on;
+    }
+    Ok(shown)
+}
+
+/// `labels`: the words of the visible signature's labels; those not given keep the English. Each
+/// must be drawable in the signature's font. Nobody sees a preview here, so a label it can't draw
+/// is refused even when this signature doesn't show it.
+fn labels_arg(v: &Value) -> Result<sign::AppearanceLabels> {
+    const KEYS: &str = "signed_by, distinguished_name, reason, location, date";
+    let o = v.as_object().ok_or_else(|| bad(format!("labels must be an object of strings ({KEYS})")))?;
+    let mut labels = sign::AppearanceLabels::default();
+    for (key, value) in o {
+        let text = value.as_str().ok_or_else(|| bad(format!("labels.{key} must be a string")))?;
+        if text.chars().count() > MAX_LABEL_CHARS {
+            return Err(bad(format!("labels.{key} is longer than {MAX_LABEL_CHARS} characters")));
+        }
+        let label = match key.as_str() {
+            "signed_by" => &mut labels.signed_by,
+            "distinguished_name" => &mut labels.distinguished_name,
+            "reason" => &mut labels.reason,
+            "location" => &mut labels.location,
+            "date" => &mut labels.date,
+            other => return Err(bad(format!("unknown label {other:?} ({KEYS})"))),
+        };
+        *label = text.to_string();
+    }
+    if let Some((field, c)) = labels.first_undrawable() {
+        return Err(bad(format!(
+            "labels.{field}: {}",
+            pdfcraft_engine::undrawable_message(&format!("the {field} label of the visible signature"), c)
+        )));
+    }
+    Ok(labels)
 }
 
 pub(crate) fn cert_json(c: &Certificate) -> Value {
@@ -63,6 +120,7 @@ impl Automation {
             "page": s.page.map(|p| p + 1),
             "rect": rect,
             "visible": s.visible,
+            "verdict_shown": s.verdict_shown,
             "revision": s.revision,
             "sub_filter": s.sub_filter,
             "algorithm": s.algorithm,
@@ -70,7 +128,8 @@ impl Automation {
             "timestamp_time": s.timestamp_time.map(|t| t.to_string()),
             "modification": modification,
             "changes": changes,
-            "details": s.details,
+            // Scripts read this, so the sentences stay in English, whatever the interface reads in.
+            "details": s.details.iter().map(|d| d.message.clone()).collect::<Vec<_>>(),
         }))
     }
 
@@ -88,8 +147,8 @@ impl Automation {
             return Err(bad("name must not be empty"));
         }
         let password = a.str("password")?;
-        if password.chars().count() < 6 {
-            return Err(bad("the password must have at least 6 characters"));
+        if password.chars().count() < sign::pkcs12::MIN_PASSWORD_CHARS {
+            return Err(bad(format!("the password must have at least {} characters", sign::pkcs12::MIN_PASSWORD_CHARS)));
         }
         let path = self.resolve(a.str("path")?, true)?;
         let key = match a.opt_str("key")?.unwrap_or("rsa2048") {
@@ -117,6 +176,8 @@ impl Automation {
         Ok(json!({ "path": path.to_string_lossy(), "certificate": cert_json(&id.certificate) }))
     }
 
+    /// The digital ID `id` names: a .p12/.pfx file opened with `password`, or an OS key store
+    /// identity (`keychain:` on macOS, `windows:` on Windows).
     fn open_id(&self, a: &Args) -> Result<DigitalId> {
         // A macOS Keychain identity: "keychain:<fingerprint>" or "keychain:<common name>".
         if let Some(r) = a.str("id")?.strip_prefix("keychain:") {
@@ -132,13 +193,15 @@ impl Automation {
             return Err(failed(format!("windows:{r}: Windows certificate store identities are only available on Windows")));
         }
         let path = self.resolve(a.str("id")?, false)?;
-        let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+        let bytes = crate::read_input(&path)?;
         sign::pkcs12::open(&bytes, a.opt_str("password")?.unwrap_or("")).map_err(|e| match e {
             sign::SignError::WrongPassword => bad("the digital ID password is incorrect"),
             e => failed(e),
         })
     }
 
+    /// `sign_document`: sign the document with a digital ID into `out`, visibly (in a field or a
+    /// rectangle) or not, running a dynamic form's signing scripts around it.
     pub(crate) fn sign_document(&mut self, a: &Args) -> Result<Value> {
         let id = self.open_id(a)?;
         let doc = self.doc(a)?;
@@ -151,7 +214,7 @@ impl Automation {
         };
         let rect = match a.nums::<4>("rect")? {
             Some(r) => {
-                let p = &doc.info.pages[page];
+                let p = doc.info.pages.get(page).ok_or_else(|| bad("the document has no page to put the signature on"))?;
                 let (u0, u1) = (p.view_to_user(r[0] as f32, r[1] as f32), p.view_to_user(r[2] as f32, r[3] as f32));
                 let u = [u0[0].min(u1[0]) as f64, u0[1].min(u1[1]) as f64, u0[0].max(u1[0]) as f64, u0[1].max(u1[1]) as f64];
                 if u[2] - u[0] < 4.0 || u[3] - u[1] < 4.0 {
@@ -171,29 +234,154 @@ impl Automation {
             }),
             Some(v) => Some(v.as_u64().filter(|n| (1..=3).contains(n)).ok_or_else(|| bad("certify must be 1, 2 or 3"))? as u8),
         };
-        let out = self.resolve(a.str("out")?, true)?;
-        let opts = SignOptions {
-            field,
-            page,
-            rect,
-            reason: a.opt_str("reason")?.map(str::to_string),
-            location: a.opt_str("location")?.map(str::to_string),
-            contact: a.opt_str("contact")?.map(str::to_string),
-            certify,
-            ..SignOptions::default()
+        let graphic = match a.get("graphic") {
+            None | Some(Value::Null) => None,
+            Some(g) if rect.is_none() && field.is_none() => return Err(bad(format!("graphic {g} needs a visible signature: pass rect or field"))),
+            Some(g) => Some(self.signature_graphic(g)?),
         };
-        let signed = self.session.sign(doc_id, &id, opts).map_err(failed)?;
-        write_atomic(&out, &signed)?;
+        let visible = rect.is_some() || field.is_some();
+        let appearance = match a.get("appearance") {
+            None | Some(Value::Null) => sign::Appearance::default(),
+            Some(_) if !visible => return Err(bad("appearance needs a visible signature: pass rect or field")),
+            Some(v) => appearance_arg(v)?,
+        };
+        let appearance_labels = match a.get("labels") {
+            None | Some(Value::Null) => sign::AppearanceLabels::default(),
+            Some(_) if !visible => return Err(bad("labels needs a visible signature: pass rect or field")),
+            Some(v) => labels_arg(v)?,
+        };
+        let out = self.resolve(a.str("out")?, true)?;
+        // A dynamic form's signing scripts run only when asked: what preSign changes is signed,
+        // and the caller hasn't seen it. What they changed is listed.
+        let run_scripts = a.opt_bool("run_form_scripts")?.unwrap_or(false);
+        // Every argument is read before the preSign scripts change anything, so a bad one is
+        // refused with the document as it was.
+        let reason = a.opt_str("reason")?.map(str::to_string);
+        let location = a.opt_str("location")?.map(str::to_string);
+        let contact = a.opt_str("contact")?.map(str::to_string);
+        let signing = field.clone();
+        let scripted = signing.as_deref().is_some_and(|f| {
+            self.session.sign_event_scripted(doc_id, f, SignEvent::Before) || self.session.sign_event_scripted(doc_id, f, SignEvent::After)
+        });
+        // Each field's value and whether it is read-only, to tell what the preSign scripts changed.
+        let values = |me: &Automation| -> std::collections::BTreeMap<String, (Vec<String>, bool)> {
+            me.session.get(doc_id).map(|d| d.form.iter().map(|f| (f.name.clone(), (f.value.clone(), f.read_only()))).collect()).unwrap_or_default()
+        };
+        let was = values(self);
+        let before = match &signing {
+            Some(f) if run_scripts => self.session.run_sign_event(doc_id, f, SignEvent::Before).map_err(failed)?,
+            _ => false,
+        };
+        let changed: Vec<Value> = if before {
+            values(self)
+                .into_iter()
+                .filter(|(name, now)| was.get(name) != Some(now))
+                .map(|(name, (value, read_only))| {
+                    let (old, old_ro) = was.get(&name).cloned().unwrap_or_default();
+                    json!({ "field": name, "before": old, "after": value, "read_only_before": old_ro, "read_only": read_only })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let opts =
+            SignOptions { field, page, rect, reason, location, contact, certify, appearance, appearance_labels, graphic, ..SignOptions::default() };
+        let signed = self.session.sign(doc_id, &id, opts).map_err(|e| match e {
+            // A graphic the signer refuses is the caller's to fix.
+            pdfcraft_engine::EditError::Sign(m) if m.starts_with("the signature graphic") => bad(m),
+            e => failed(e),
+        });
+        let signed = match signed {
+            Ok(s) => s,
+            Err(e) => {
+                // Not signed: what the preSign scripts did is taken back.
+                if before {
+                    let _ = self.session.undo(doc_id);
+                    let _ = self.session.take_js_output(doc_id);
+                }
+                return Err(e);
+            }
+        };
+        if let Err(e) = write_atomic(&out, &signed) {
+            // Not saved, so not signed: what the preSign scripts did is taken back too.
+            if before {
+                let _ = self.session.undo(doc_id);
+                let _ = self.session.take_js_output(doc_id);
+            }
+            return Err(e);
+        }
         let path = out.to_string_lossy().into_owned();
         self.session.mark_signed(doc_id, signed.clone(), Some(path.clone())).map_err(failed)?;
+        // Then its postSign scripts; what they change is a change after signing, not saved yet.
+        // The file is signed and saved by now: a postSign step that fails is reported, not an error.
+        let (after, after_error) = match &signing {
+            Some(f) if run_scripts => match self.session.run_sign_event(doc_id, f, SignEvent::After) {
+                Ok(ran) => (ran, None),
+                Err(e) => (true, Some(format!("the postSign step couldn't finish: {e}"))),
+            },
+            _ => (false, None),
+        };
+        let mut scripts = self.session.take_js_output(doc_id);
+        scripts.errors.extend(after_error);
         let doc = self.doc(a)?;
         let newest = doc.signatures.iter().filter(|s| s.signed).max_by_key(|s| s.revision).cloned();
-        Ok(json!({ "path": path, "bytes": signed.len(), "signature": newest.map(|s| self.sig_json(a, &s)).transpose()? }))
+        let mut result = json!({ "path": path, "bytes": signed.len(), "signature": newest.map(|s| self.sig_json(a, &s)).transpose()? });
+        if before || after {
+            result["form_scripts"] = json!({
+                "before_signing": before,
+                "after_signing": after,
+                "changed": changed,
+                "alerts": scripts.alerts.iter().map(crate::a11y::form_tools::alert_json).collect::<Vec<_>>(),
+                "errors": scripts.errors,
+                "unsaved_changes": self.doc(a)?.dirty,
+            });
+        } else if scripted {
+            result["form_scripts"] = json!({ "skipped": true, "why": "the field has signing scripts; pass run_form_scripts: true to run them" });
+        }
+        Ok(result)
+    }
+
+    /// `{"image": path}` (PNG or JPEG), `{"text": name}` (typed in the script font) or
+    /// `{"strokes": [[[x, y], …], …]}` (y up; the drawing pad is 1 wide).
+    fn signature_graphic(&self, g: &Value) -> Result<sign::Graphic> {
+        let kinds = "graphic must be an object with exactly one of image (a PNG or JPEG path), text, or strokes";
+        let Some(o) = g.as_object().filter(|o| o.len() == 1) else { return Err(bad(kinds)) };
+        if let Some(path) = o.get("image") {
+            let path = self.resolve(path.as_str().ok_or_else(|| bad("graphic.image must be a path"))?, false)?;
+            let file = std::fs::File::open(&path).map_err(|e| bad(format!("graphic.image {}: {e}", path.display())))?;
+            return Ok(pdfcraft_engine::SignatureImage::read(file).map_err(|e| bad(e.to_string()))?.graphic());
+        }
+        if let Some(text) = o.get("text") {
+            let text = text.as_str().ok_or_else(|| bad("graphic.text must be a string"))?;
+            // Nobody sees a preview here: refuse what the script font and its fallback would leave out.
+            if let Some(c) = pdfcraft_engine::script_missing(text) {
+                return Err(bad(format!(
+                    "the signature script font can't draw \"{}\" (U+{:04X}) in graphic.text; type it in Latin, Cyrillic or Greek letters, or pass graphic.image instead",
+                    c.escape_debug(),
+                    u32::from(c)
+                )));
+            }
+            return pdfcraft_engine::typed_signature_graphic(text).ok_or_else(|| {
+                bad(format!(
+                    "graphic.text {text:?} has nothing the script font can draw (at most {} characters)",
+                    pdfcraft_engine::MAX_SIGNATURE_CHARS
+                ))
+            });
+        }
+        if let Some(strokes) = o.get("strokes") {
+            let strokes: Vec<Vec<[f64; 2]>> =
+                serde_json::from_value(strokes.clone()).map_err(|e| bad(format!("graphic.strokes must be strokes of [x, y] points: {e}")))?;
+            return Ok(sign::Graphic::Strokes(strokes));
+        }
+        Err(bad(kinds))
     }
 
     pub(crate) fn sign_trust(&mut self, a: &Args) -> Result<Value> {
         let mut certs: Vec<Certificate> =
             if a.opt_bool("clear")?.unwrap_or(false) { Vec::new() } else { self.session.trusted_certificates().to_vec() };
+        // Which certificates are already in, by their bytes: a set, so a bundle of many distinct
+        // certificates isn't compared against every one before it.
+        let mut known: std::collections::HashSet<Vec<u8>> = certs.iter().map(|c| c.raw.clone()).collect();
         let paths: Vec<String> = match a.get("paths") {
             None => Vec::new(),
             Some(v) => v
@@ -205,7 +393,7 @@ impl Automation {
         };
         for p in paths {
             let path = self.resolve(&p, false)?;
-            let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+            let bytes = crate::read_input(&path)?;
             let lower = p.to_ascii_lowercase();
             let found = if lower.ends_with(".p12") || lower.ends_with(".pfx") {
                 let id = sign::pkcs12::open(&bytes, a.opt_str("password")?.unwrap_or("")).map_err(failed)?;
@@ -214,7 +402,7 @@ impl Automation {
                 sign::x509::load_certificates(&bytes).map_err(failed)?
             };
             for c in found {
-                if !certs.iter().any(|t| t.raw == c.raw) {
+                if known.insert(c.raw.clone()) {
                     certs.push(c);
                 }
             }

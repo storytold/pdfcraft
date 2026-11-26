@@ -1,13 +1,13 @@
 use log::{error, warn};
 use std::cmp;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::convert::TryInto;
 #[cfg(not(feature = "async"))]
 use std::fs::File;
 #[cfg(not(feature = "async"))]
 use std::io::Read;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
@@ -22,7 +22,7 @@ use crate::common_data_structures;
 use crate::encryption::{self, EncryptionState};
 use crate::error::{ParseError, XrefError};
 use crate::load_options::{FilterFunc, LoadOptions};
-use crate::object_stream::ObjectStream;
+use crate::object_stream::{MAX_LOAD_NODES, NodeBudget, ObjectStream};
 use crate::parser;
 use crate::xref::{Xref, XrefEntry, XrefType};
 use crate::{Dictionary, Document, Error, IncrementalDocument, Object, ObjectId, Result};
@@ -838,6 +838,8 @@ impl Reader<'_> {
         Ok(self.document)
     }
 
+    /// Load an encrypted document: read every object's raw bytes first, then decrypt and parse
+    /// them, object streams from one shared node budget.
     fn load_encrypted_document(&mut self, _filter_func: Option<FilterFunc>) -> Result<()> {
         // First, extract all raw object bytes without parsing
         let entries: Vec<_> = self
@@ -849,6 +851,8 @@ impl Reader<'_> {
             .collect();
 
         let mut object_streams = Vec::new();
+        // PdfCraft patch: one object budget for every object stream this load parses.
+        let node_budget = NodeBudget::new(MAX_LOAD_NODES);
 
         for (obj_num, entry) in entries {
             match entry {
@@ -894,8 +898,9 @@ impl Reader<'_> {
                 }
             }
 
-            let mut streams_to_process: std::collections::HashMap<u32, Vec<(u32, u16)>> =
-                std::collections::HashMap::new();
+            // PdfCraft patch: object streams in object-number order, so the members a spent node
+            // budget skips are the same on every load.
+            let mut streams_to_process: BTreeMap<u32, Vec<(u32, u16)>> = BTreeMap::new();
             for (obj_num, container_id, index) in object_streams {
                 streams_to_process
                     .entry(container_id)
@@ -907,7 +912,11 @@ impl Reader<'_> {
                 if let Some(container_obj) = self.document.objects.get(&(container_id, 0))
                     && let Ok(stream) = container_obj.as_stream()
                 {
-                    match ObjectStream::new_with_limit(stream, self.max_decompressed_size) {
+                    // PdfCraft patch: parse only the members the table places in this stream, so
+                    // the others spend nothing from the budget.
+                    let listed: BTreeSet<u32> = objects_in_stream.iter().map(|&(obj_num, _)| obj_num).collect();
+                    let keep = |obj_num: u32| listed.contains(&obj_num);
+                    match ObjectStream::new_members_within(stream, self.max_decompressed_size, &node_budget, keep) {
                         Ok(object_stream) => {
                             for (obj_num, _index) in objects_in_stream {
                                 let obj_id = (obj_num, 0);
@@ -960,10 +969,12 @@ impl Reader<'_> {
         self.document.reference_table = xref;
     }
 
+    /// Load every object in the cross-reference table, expanding object streams from one node
+    /// budget shared by the whole load.
     fn load_objects_raw(&mut self, filter_func: Option<FilterFunc>) -> Result<()> {
         let is_encrypted = self.document.trailer.get(b"Encrypt").is_ok();
         let zero_length_streams = Mutex::new(vec![]);
-        let object_streams = Mutex::new(vec![]);
+        let object_stream_ids = Mutex::new(vec![]);
 
         // Build a map of which container each compressed object belongs to
         // according to the xref. This prevents stale ObjStm copies (e.g., from
@@ -1014,36 +1025,10 @@ impl Reader<'_> {
 
                 if let Ok(stream) = object.as_stream() {
                     if stream.dict.has_type(b"ObjStm") && !is_encrypted {
-                        let obj_stream = match ObjectStream::new_with_limit(stream, self.max_decompressed_size) {
-                            Ok(obj_stream) => obj_stream,
-                            // Not an encryption-related loss, so it obeys the same
-                            // strict-mode policy as any other load error.
-                            Err(e) => {
-                                error!("Object stream load error for {object_id:?}: {e:?}");
-                                return if self.strict { Err(e) } else { Ok(None) };
-                            }
-                        };
-                        let container_id = object_id.0;
-                        let mut object_streams = object_streams.lock().unwrap();
-                        if let Some(filter_func) = filter_func {
-                            let objects: BTreeMap<(u32, u16), Object> = obj_stream
-                                .objects
-                                .into_iter()
-                                .filter(|((obj_num, _), _)| {
-                                    compressed_obj_containers
-                                        .get(obj_num)
-                                        .is_none_or(|&c| c == container_id)
-                                })
-                                .filter_map(|(object_id, mut object)| filter_func(object_id, &mut object))
-                                .collect();
-                            object_streams.extend(objects);
-                        } else {
-                            object_streams.extend(obj_stream.objects.into_iter().filter(|((obj_num, _), _)| {
-                                compressed_obj_containers
-                                    .get(obj_num)
-                                    .is_none_or(|&c| c == container_id)
-                            }));
-                        }
+                        // PdfCraft patch: object streams are expanded after this parallel pass,
+                        // one at a time in object-number order (below).
+                        let mut object_stream_ids = object_stream_ids.lock().unwrap_or_else(PoisonError::into_inner);
+                        object_stream_ids.push(object_id);
                     } else if stream.content.is_empty() {
                         let mut zero_length_streams = zero_length_streams.lock().unwrap();
                         zero_length_streams.push(object_id);
@@ -1079,9 +1064,59 @@ impl Reader<'_> {
                 .collect::<Result<BTreeMap<_, _>>>()?;
         }
 
-        // Only add entries, but never replace entries
-        for (id, entry) in object_streams.into_inner().unwrap() {
-            self.document.objects.entry(id).or_insert(entry);
+        // PdfCraft patch: expand the object streams one at a time in object-number order, from one
+        // node budget for the whole load, so many streams, each inside the decompression limit,
+        // cannot together build billions of objects, and the members a spent budget skips are the
+        // same on every load. A stream parses only the members it would add: none the table
+        // places in another stream (stale copies), and none already loaded, as an ordinary object
+        // or from an earlier stream, since a member never replaces an object. Those spend nothing.
+        // Members the table doesn't list at all are still parsed (a rebuilt table lists no
+        // compressed objects) and share the budget.
+        let node_budget = NodeBudget::new(MAX_LOAD_NODES);
+        let mut object_stream_ids = object_stream_ids.into_inner().unwrap_or_else(PoisonError::into_inner);
+        object_stream_ids.sort_unstable();
+        object_stream_ids.dedup();
+        for object_id in object_stream_ids {
+            let container_id = object_id.0;
+            let loaded = &self.document.objects;
+            let keep = |obj_num: u32| {
+                compressed_obj_containers
+                    .get(&obj_num)
+                    .is_none_or(|&c| c == container_id)
+                    && !loaded.contains_key(&(obj_num, 0))
+            };
+            let parsed = match loaded.get(&object_id).map(Object::as_stream) {
+                Some(Ok(stream)) => {
+                    ObjectStream::new_members_within(stream, self.max_decompressed_size, &node_budget, keep)
+                }
+                _ => continue,
+            };
+            match parsed {
+                Ok(obj_stream) => {
+                    let members: BTreeMap<_, _> = match filter_func {
+                        Some(filter_func) => obj_stream
+                            .objects
+                            .into_iter()
+                            .filter_map(|(object_id, mut object)| filter_func(object_id, &mut object))
+                            .collect(),
+                        None => obj_stream.objects,
+                    };
+                    // Only add entries, but never replace entries
+                    for (id, entry) in members {
+                        self.document.objects.entry(id).or_insert(entry);
+                    }
+                }
+                // Not an encryption-related loss, so it obeys the same strict-mode policy as
+                // any other load error; a lenient load drops the stream, as it drops any object
+                // that fails to load.
+                Err(e) => {
+                    error!("Object stream load error for {object_id:?}: {e:?}");
+                    if self.strict {
+                        return Err(e);
+                    }
+                    self.document.objects.remove(&object_id);
+                }
+            }
         }
 
         for object_id in zero_length_streams.into_inner().unwrap() {
@@ -1174,8 +1209,14 @@ impl Reader<'_> {
         let container_id = (container_id, 0);
         let container_obj = self.get_object(container_id, already_seen)?;
         let container_stream = container_obj.as_stream()?;
-        let object_stream = ObjectStream::new_with_limit(container_stream, self.max_decompressed_size)?;
-        object_stream.objects.get(&id).cloned().ok_or(Error::MissingXrefEntry)
+        // PdfCraft patch: a lookup parses only the member it wants, from one object's budget
+        // rather than a load's, so the members before it can't spend that budget first.
+        let budget = NodeBudget::new(parser::MAX_OBJECT_NODES);
+        let mut object_stream =
+            ObjectStream::new_members_within(container_stream, self.max_decompressed_size, &budget, |obj_num| {
+                obj_num == id.0
+            })?;
+        object_stream.objects.remove(&id).ok_or(Error::MissingXrefEntry)
     }
 
     pub fn get_object(&self, id: ObjectId, already_seen: &mut HashSet<ObjectId>) -> Result<Object> {
@@ -1627,8 +1668,38 @@ impl Reader<'_> {
         Some((number, generation))
     }
 
-    /// Newest backwards-scanned `trailer` whose `/Root` references a scanned object.
+    /// Newest backwards-scanned `trailer` whose `/Root` references a scanned object, one whose
+    /// `/Root` is the catalog first.
     fn find_latest_trailer(&self, xref: &Xref) -> Option<(usize, Dictionary)> {
+        // PdfCraft patch: (#2365) an in-file /Root must also match its generation, as
+        // `get_offset` requires when the root is loaded.
+        let usable = |dict: &Dictionary| {
+            dict.get(b"Root")
+                .and_then(Object::as_reference)
+                .is_ok_and(|root| match xref.entries.get(&root.0) {
+                    Some(XrefEntry::Normal { generation, .. }) => *generation == root.1,
+                    entry => entry.is_some(),
+                })
+        };
+        // PdfCraft patch: (#2365) a candidate whose /Root is the catalog (`/Type /Catalog` or
+        // `/Pages`) beats one whose /Root is another dictionary, such as /Info, wherever it is;
+        // the other kind is still taken when nothing better is there (an FDF's /Root).
+        let is_catalog = |dict: &Dictionary| {
+            let Ok(root) = dict.get(b"Root").and_then(Object::as_reference) else {
+                return false;
+            };
+            let Some(XrefEntry::Normal { offset, generation }) = xref.entries.get(&root.0) else {
+                return false;
+            };
+            if *generation != root.1 {
+                return false;
+            }
+            parser::indirect_object(self.buffer, *offset as usize, None, self, &mut HashSet::new(), None)
+                .ok()
+                .and_then(|(_, object)| object.as_dict().map(|d| d.has_type(b"Catalog") || d.has(b"Pages")).ok())
+                .unwrap_or(false)
+        };
+        let mut latest: Option<(bool, usize, Dictionary)> = None;
         let mut bound = self.buffer.len();
         for _ in 0..MAX_TRAILER_CANDIDATES {
             let Some(pos) = Reader::search_substring(&self.buffer[..bound], b"trailer", 0) else {
@@ -1643,15 +1714,54 @@ impl Reader<'_> {
             let Ok((_, dict)) = parser::dictionary(&after_keyword[dict_start..]) else {
                 continue;
             };
-            if dict
-                .get(b"Root")
-                .and_then(Object::as_reference)
-                .is_ok_and(|root| xref.entries.contains_key(&root.0))
-            {
-                return Some((pos, dict));
+            if usable(&dict) {
+                let catalog = is_catalog(&dict);
+                if latest.is_none() || catalog {
+                    latest = Some((catalog, pos, dict));
+                }
+                if catalog {
+                    break;
+                }
             }
         }
-        None
+        // PdfCraft patch: (#2365) a file whose only trailer is a cross-reference stream has
+        // no `trailer` keyword, so the scan above found nothing and the rebuild failed; its
+        // /Info and /ID were then lost. Such a stream's dictionary is the trailer, and the
+        // latest one in the file wins, as a later `trailer` keyword would.
+        const HEADER_WINDOW: usize = 32;
+        const DICT_WINDOW: usize = 4096;
+        for entry in xref.entries.values() {
+            let XrefEntry::Normal { offset, .. } = entry else {
+                continue;
+            };
+            let offset = *offset as usize;
+            if latest.as_ref().is_some_and(|(catalog, pos, _)| *catalog && *pos >= offset) {
+                continue;
+            }
+            let Some(head) = self.buffer.get(offset..) else {
+                continue;
+            };
+            let Some(dict_start) = head[..cmp::min(head.len(), HEADER_WINDOW)]
+                .windows(2)
+                .position(|window| window == b"<<")
+            else {
+                continue;
+            };
+            let dict_bytes = &head[dict_start..cmp::min(head.len(), dict_start + DICT_WINDOW)];
+            if !dict_bytes.windows(5).any(|window| window == b"/XRef") {
+                continue;
+            }
+            let Ok((_, dict)) = parser::dictionary(&head[dict_start..]) else {
+                continue;
+            };
+            if dict.has_type(b"XRef") && usable(&dict) {
+                let rank = (is_catalog(&dict), offset);
+                if latest.as_ref().is_none_or(|(catalog, pos, _)| rank > (*catalog, *pos)) {
+                    latest = Some((rank.0, offset, dict));
+                }
+            }
+        }
+        latest.map(|(_, pos, dict)| (pos, dict))
     }
 
     /// Some generators write `startxref` (or trailer `Prev`) values that are
