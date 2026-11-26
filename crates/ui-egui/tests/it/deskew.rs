@@ -1,6 +1,7 @@
 //! Scan & OCR ▸ Straighten page / Straighten all pages in the real shell: the commands are wired,
 //! a page with nothing to measure is left alone, and the batch opens its report.
 
+use crate::support::AppHarness as _;
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
 
@@ -13,13 +14,16 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "100").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, FIXTURE.to_vec()).unwrap();
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
+            app
+        }
     });
     h.run_steps(6);
     h
@@ -29,12 +33,12 @@ fn harness() -> Harness<'static, PdfCraftApp> {
 fn the_deskew_commands_are_wired_and_leave_a_blank_page_alone() {
     let mut h = harness();
     // Both commands are handled by the shell, not silently dropped.
-    assert!(h.state_mut().execute("ocr.deskew"), "Straighten page is not wired");
-    assert!(h.state_mut().execute("ocr.deskew_all"), "Straighten all pages is not wired");
+    assert!(h.execute("ocr.deskew"), "Straighten page is not wired");
+    assert!(h.execute("ocr.deskew_all"), "Straighten all pages is not wired");
     h.run_steps(2);
     // Two blank pages have nothing to measure: no edit, and the batch still reports.
     let s = h.state();
     let id = s.views[0].id;
     assert_eq!(s.session.get(id).unwrap().can_undo(), None);
-    assert!(s.deskew_report.is_some(), "the batch opens its report");
+    assert!(!s.deskew_text.lock().map(|t| t.clone()).unwrap_or_default().is_empty(), "the batch opens its report");
 }

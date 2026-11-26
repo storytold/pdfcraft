@@ -267,7 +267,7 @@ pub struct PdfCraftApp {
     /// again with it on the next frame.
     pub(crate) rename_returned: rename_ui::Returned,
     /// The straighten report's text, shared with the dialog on the host so the pass can update it.
-    pub(crate) deskew_text: std::sync::Arc<std::sync::Mutex<String>>,
+    pub deskew_text: std::sync::Arc<std::sync::Mutex<String>>,
     /// The batch deskew in flight, advanced one page per frame (Dialog::DeskewReport).
     pub deskew_job: Option<deskew_job::Job>,
     /// `None` shows the Home tab.
