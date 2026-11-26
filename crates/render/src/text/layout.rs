@@ -616,7 +616,10 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             for (w, pair) in sc.placed.windows(2).enumerate() {
                 let &[p, c] = pair else { continue };
                 let Some(&Some(gap)) = sc.cluster_gap.get(w + 1) else { continue };
-                let pair_threshold = pair_threshold(glyphs[p], glyphs[c], typical, threshold);
+                // A combining mark is measured by its cluster's base, as its text is: its own small box would lower the
+                // threshold next to it.
+                let base = |i: usize| glyphs.get(sc.anchor.get(i).copied().unwrap_or(i)).copied().unwrap_or(glyphs[i]);
+                let pair_threshold = pair_threshold(base(p), base(c), typical, threshold);
                 let (pt, ct) = (cluster_text(p), cluster_text(c));
                 // Character spacing is added after every glyph of a show (`Tc`, ISO 32000-2 §9.3.2), so text spread to a
                 // wider column -- a Chinese label on a form, 分散對齊 -- repeats one gap, while the gap between two cells

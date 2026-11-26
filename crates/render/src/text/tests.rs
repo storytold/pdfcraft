@@ -1367,6 +1367,20 @@ fn a_superscript_close_to_its_host_takes_no_space() {
     assert_eq!(layout(v).plain_text(), "ax2");
 }
 
+/// #3172: a combining mark is measured by its cluster's base. Its own small box would shrink the word-gap threshold
+/// next to it, so a close letter after "á" read as a new word (noted in review).
+#[test]
+fn a_letter_close_after_a_combining_mark_takes_no_space() {
+    let v = vec![
+        g("x", 0.0, 10.0, 6.0),
+        g("a", 6.0, 10.0, 12.0),
+        tall("\u{301}", 10.0, 19.0, 12.0, 1.0),
+        g("b", 13.0, 10.0, 19.0),
+        g("y", 19.0, 10.0, 25.0),
+    ];
+    assert_eq!(layout(v).plain_text(), "xa\u{301}by");
+}
+
 /// #3172: only another run's ink drops a blank. A space its own run's letter is kerned over is still that run's word
 /// break, even on a line where another run overprints elsewhere.
 #[test]
