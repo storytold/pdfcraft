@@ -1,6 +1,6 @@
 use super::{
     Arc, DocId, Document, EditError, Keys, OpenError, RecoverySnapshot, RenderPool, SaveOptions, Session, SignOptions, StatusCaptions, TrustStore,
-    display_bytes, display_config, guard, render_threads, restore_session_passwords, signatures_of, writable, write_full, write_incremental,
+    display_bytes, display_config, editor_signatures, guard, render_threads, restore_session_passwords, writable, write_full, write_incremental,
 };
 
 fn inspect_protected_output(state: &crate::PurviewDocumentState, name: &str, bytes: &Arc<Vec<u8>>) -> Result<crate::PurviewOpen, EditError> {
@@ -204,6 +204,8 @@ impl Session {
                 editor.saved_keys = keys;
                 editor.unsaved_file = false;
             }
+            // The saved file holds what opening appended: from now on it is the file.
+            editor.as_opened = None;
         }
         doc.saved_purview = doc.purview.clone();
         if let Some(p) = path {
@@ -431,7 +433,7 @@ impl Session {
             return;
         }
         let Some(editor) = doc.editor.as_mut() else { return };
-        let mut signatures = signatures_of(&editor.cos, &doc.bytes, &doc.trust, &doc.sig_cache);
+        let mut signatures = editor_signatures(editor, &doc.bytes, &doc.trust, &doc.sig_cache);
         doc.display = display_bytes(Some(editor), &doc.bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
