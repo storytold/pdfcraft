@@ -11106,8 +11106,8 @@ fn enhance_scanned_file_reports_the_xfa_data_it_could_not_write_once() {
     );
     std::fs::write(dir.join("data.pdf"), pdfcraft_xfa::fixtures::shell(&tpl)).unwrap();
     // Dull paper with a dark stroke, so the cleanup changes the picture.
-    let img = image::GrayImage::from_fn(300, 400, |_, y| image::Luma([if (100..110).contains(&y) { 30 } else { 150 }]));
-    img.save(dir.join("scan.jpg")).unwrap();
+    let gray: Vec<u8> = (0..400u32).flat_map(|y| std::iter::repeat_n(if (100..110).contains(&y) { 30 } else { 150 }, 300)).collect();
+    std::fs::write(dir.join("scan.jpg"), encode_jpeg_dpi(300, 400, craft_image_codecs::ChannelLayout::Gray, gray, 90, 72.0)).unwrap();
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "data.pdf" }))["doc"].as_u64().unwrap();
     let structured = |out: &Value, key: &str| {
