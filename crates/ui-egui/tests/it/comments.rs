@@ -3392,6 +3392,19 @@ fn check_typewriter_drag(turned: bool) {
     click(&mut h, pos2(page.left() - 20.0, page.center().y));
     let a = comments(&h).into_iter().find(|a| a.contents.as_deref() == Some("WWWWWW")).expect("the typed text");
     assert!(a.fill_sign && a.subtype == "FreeText", "{a:?}");
+    let [x0, y0, x1, y1] = a.rect;
+    // The field's left edge crosses the old text box, leaving the drag start at its centre free.
+    let edge = x0 + (x1 - x0) * 0.75;
+    assert!(h.state_mut().apply_edit(
+        &ctx,
+        pdfcraft_engine::Edit::AddField {
+            page: 0,
+            rect: [edge, y0 - 6.0, x1 + 18.0, y1 + 6.0].map(f64::from),
+            kind: pdfcraft_engine::NewField::Text { multiline: false },
+            name: Some("overlapping_field".into()),
+        },
+    ));
+    h.set_option("fields", "on").unwrap();
     assert!(h.execute("view.select_tool"));
     h.state_mut().views[0].session.comments.clear_selection();
     if turned {
@@ -3404,14 +3417,18 @@ fn check_typewriter_drag(turned: bool) {
     let generation = doc.edit_generation();
     let xf = view.page_xform(0).expect("page visible");
     let original = xf.user_rect(&doc.info, 0, a.rect);
-    let [x0, y0, x1, y1] = a.rect;
+    let highlight = xf.user_rect(&doc.info, 0, [edge - 1.5, y0 + 3.0, edge + 1.5, y1 - 3.0]);
     let destination = xf.user_rect(&doc.info, 0, [x0 + 120.0, y0 - 60.0, x1 + 120.0, y1 - 60.0]);
     let (from, to) = (original.center(), destination.center());
     let was = original.shrink(3.0);
     let goes = was.translate(to - from);
     let ink = |img: &image::RgbaImage, r| pixels_in(img, r).filter(|px| px.0[..3].iter().all(|c| *c < 100)).count();
     let red = |img: &image::RgbaImage| pixels_in(img, was).filter(|px| px[0] > 200 && px[1] < 80 && px[2] < 80).count();
+    let blue_edge =
+        |img: &image::RgbaImage| pixels_in(img, highlight).filter(|p| p[2] > p[0].saturating_add(30) && p[2] > p[1].saturating_add(15)).count();
     let before = h.render().unwrap();
+    let highlighted = blue_edge(&before);
+    assert!(original.contains_rect(highlight) && highlighted > 0, "a field highlight crosses the old text box");
     let source_ink = ink(&before, was);
     if let Ok(path) = std::env::var("PDFCRAFT_5531_SHOT") {
         before.save(format!("{path}.before.png")).unwrap();
@@ -3442,6 +3459,12 @@ fn check_typewriter_drag(turned: bool) {
         assert!(ink(&held, goes) > 0, "the typed text follows the held pointer");
         assert!(cleared, "old position still holds {} ink pixels during the drag", ink(&held, was));
         assert!(red(&held) >= red(&before), "the overlapping annotation is still drawn under the old position");
+        assert!(
+            blue_edge(&held) > highlighted / 2,
+            "the field highlight still paints over the old-position tile: {} → {}",
+            highlighted,
+            blue_edge(&held),
+        );
         assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation, "dragging does not edit the PDF");
         held
     };

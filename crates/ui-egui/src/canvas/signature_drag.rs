@@ -6,10 +6,10 @@ use craft::behavior::{Input, Sense};
 use craft::pages::ui::PlacedPage;
 use craft::review::AnnotationEdit;
 use craft::ui::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Role};
-use craft::ui::primitives::Draw;
 use craft::ui::primitives::textures::{
     CachedTexture, Revision, TextureState, TextureStore, TextureStoreOptions, ThumbRequest, fit_rect, texture_side,
 };
+use craft::ui::primitives::{Draw, PaintSlot};
 use craft::ui::style::{ComponentStyle, Metrics, StyleCx};
 use egui::emath::GuiRounding as _;
 use egui::{ColorImage, Pos2, Rect, Response, TextureId, Vec2, pos2, vec2};
@@ -78,7 +78,7 @@ struct TypewriterBackground {
     pixels: Option<CachedTexture>,
     /// The current backing raster and its unturned dimensions, available only when this page
     /// has a ready whole-page picture whose sampling grid the tile can match.
-    backing: Option<(Rect, [u32; 2], (f32, f32))>,
+    backing: Option<(Rect, [u32; 2])>,
     stored: Option<DragKey>,
 }
 
@@ -391,6 +391,23 @@ impl SignatureDrag {
         }
     }
 
+    /// Paint the ready tile in the earlier slot, below the field highlights and other page overlays.
+    fn paint_move_background(&self, ui: &PaintUi<'_>, ctx: &egui::Context, cx: &PageCx<'_>, slot: PaintSlot) {
+        if let Some(((_, page, index), m)) = &self.moving
+            && *page == cx.page
+            && !cx.hidden
+            && cx.get(*index).is_some()
+            && m.layer.pixels.is_some()
+            && let Some(background) = &m.background
+            && background.pixels.is_some()
+            && background.backing.is_some()
+        {
+            let capture = ui.reserve_slot(cx.xf.rect);
+            background.paint(&ui.draw(), cx.xf);
+            slot.extend(ctx, capture.take_after(ctx));
+        }
+    }
+
     /// The comment being moved, drawn where it goes (as far as its frame has gone).
     pub fn paint_move(&self, draw: &Draw<'_>, cx: &PageCx<'_>, map: &PageMap<'_>, cv: &CommentView, pending: Option<&Edit>) {
         let Some(((_, page, index), m)) = &self.moving else { return };
@@ -402,15 +419,19 @@ impl SignatureDrag {
         // already where it went).
         let rect = cx.adjusted_rect(map, a, cv.tool.in_flight(), pending);
         let from = cx.xf.user_rect(cx.info, *page, m.layer.from);
-        draw.clipped(cx.xf.rect, |draw| {
-            if m.layer.pixels.is_some()
-                && let Some(background) = &m.background
-            {
-                background.paint(draw, cx.xf);
-            }
-            m.layer.paint(draw, cx, *page, from.translate(rect.min - from.min));
-        });
+        draw.clipped(cx.xf.rect, |draw| m.layer.paint(draw, cx, *page, from.translate(rect.min - from.min)));
     }
+}
+
+/// Reserve the old-position tile below the overlays, clipped to the page's visible band.
+pub(super) fn reserve_move_background(ui: &egui::Ui, cv: &CommentView, pages: &[PlacedPage], viewport: Rect) -> Option<(usize, PaintSlot)> {
+    let AnnotationEdit::Move { ids, .. } = cv.tool.in_flight()? else { return None };
+    let (page, _) = key_of(*ids.first()?);
+    let placed = pages.iter().find(|p| p.page == page)?;
+    let rect = placed.rect;
+    let band = Rect::from_min_max(pos2(rect.left(), rect.top() + placed.band.0), pos2(rect.right(), rect.top() + placed.band.1));
+    let painter = ui.painter_at(viewport.intersect(rect).intersect(band));
+    Some((page, PaintSlot::reserve(&painter)))
 }
 
 /// The style of the drag's layers: they paint the document's own pixels and nothing of the theme.
@@ -435,6 +456,7 @@ pub(crate) struct DragLayer<'a> {
     tool: QuickTool,
     cv: &'a CommentView,
     pending: Option<&'a Edit>,
+    background_slot: Option<PaintSlot>,
 }
 
 impl<'a> DragLayer<'a> {
@@ -445,8 +467,9 @@ impl<'a> DragLayer<'a> {
         tool: QuickTool,
         cv: &'a CommentView,
         pending: Option<&'a Edit>,
+        background_slot: Option<PaintSlot>,
     ) -> Self {
-        DragLayer { common: Common::new(), drag, cx, map, tool, cv, pending }
+        DragLayer { common: Common::new(), drag, cx, map, tool, cv, pending, background_slot }
     }
 }
 
@@ -473,9 +496,12 @@ impl Component for DragLayer<'_> {
         Sense::empty()
     }
 
-    fn paint(&mut self, ui: &mut PaintUi<'_>, _: &Cx<'_, Self>) {
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let draw = ui.draw();
         self.drag.paint(&draw, self.cx, self.map, self.tool, self.cv, self.pending);
+        if let Some(slot) = self.background_slot {
+            self.drag.paint_move_background(ui, &cx.core.ctx, self.cx, slot);
+        }
         self.drag.paint_move(&draw, self.cx, self.map, self.cv, self.pending);
     }
 
@@ -594,7 +620,7 @@ impl TypewriterBackground {
             return;
         }
         let picture = fit_rect(placed.rect, backing.size_vec2()).round_to_pixels(ppp);
-        self.backing = Some((picture, full, placed.band));
+        self.backing = Some((picture, full));
         let request = RenderRequest { page: key.1, tile: Some(tile), scale, tag: u64::from(scale.to_bits()), ..Default::default() };
         if self.request != Some(request) {
             self.request = Some(request);
@@ -627,7 +653,7 @@ impl TypewriterBackground {
     }
 
     fn paint(&self, draw: &Draw<'_>, xf: &PageXform) {
-        let (Some(pixels), Some((rect, [w, h], band)), Some(tile)) = (self.pixels, self.backing, self.request.and_then(|r| r.tile)) else {
+        let (Some(pixels), Some((rect, [w, h])), Some(tile)) = (self.pixels, self.backing, self.request.and_then(|r| r.tile)) else {
             return;
         };
         // Use the same pixel-rounded containment as the backing picture. Coordinates refer to
@@ -636,8 +662,7 @@ impl TypewriterBackground {
         let (l, t) = (tile.x, tile.y);
         let (r, b) = (l.saturating_add(tile.w), t.saturating_add(tile.h));
         let corners = [(l, t), (r, t), (r, b), (l, b)].map(|(x, y)| raster.norm_to_screen(x as f32 / w as f32, y as f32 / h as f32));
-        let band = Rect::from_min_max(pos2(xf.rect.left(), xf.rect.top() + band.0), pos2(xf.rect.right(), xf.rect.top() + band.1));
-        draw.clipped(band, |draw| draw.texture_quad(corners, pixels.id, pixels.uv()));
+        draw.texture_quad(corners, pixels.id, pixels.uv());
     }
 }
 
