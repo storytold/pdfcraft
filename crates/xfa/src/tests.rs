@@ -426,6 +426,8 @@ fn the_xdp_template_wins_over_the_config_packets_template_element() {
     assert_eq!(tpl.root.common.name.as_deref(), Some("form"));
 }
 
+/// The sample form lays out over two pages: captions, draws and page numbers are drawn,
+/// hidden draws take no space, and each field gets its widget with its size, kind and SOM path.
 #[test]
 fn layout_places_captions_fields_and_sizes_containers_to_their_content() {
     let form = layout_xml(&template(1)).unwrap();
@@ -484,6 +486,97 @@ fn layout_places_captions_fields_and_sizes_containers_to_their_content() {
     );
 }
 
+/// The left edges of the lines of a draw `w` points wide holding `text` in Arial 8 pt, with
+/// `para` attributes, from the content area's left edge (0.5in).
+fn line_starts(text: &str, w: f64, para: &str) -> Vec<f64> {
+    let xdp = format!(
+        r##"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <draw name="label" w="{w}pt" h="1in"><value><text>{text}</text></value><font typeface="Arial" size="8pt"/><para {para} lineHeight="8pt"/></draw>
+</subform>
+</template></xdp:xdp>"##
+    );
+    let form = layout_xml(&xdp).unwrap();
+    let mut lines: Vec<(i64, f64)> = Vec::new();
+    for item in &form.pages[0].items {
+        let Item::Text(s) = item else { continue };
+        let key = (s.baseline * 100.0).round() as i64;
+        match lines.iter_mut().find(|(b, _)| *b == key) {
+            Some((_, x)) => *x = x.min(s.x),
+            None => lines.push((key, s.x)),
+        }
+    }
+    lines.sort_by_key(|(b, _)| *b);
+    lines.into_iter().map(|(_, x)| x - 36.0).collect()
+}
+
+/// A negative textIndent hangs the first line: it starts left of the others, never left of the
+/// box, and the other lines move in by the hang. A positive indent still moves only the first line.
+#[test]
+fn a_negative_text_indent_hangs_the_first_line_and_indents_the_rest() {
+    let text = "11. SERVICE MEMBER BALANCE (TOTAL)";
+    // No left margin: the first line starts at the box's edge and the others 18pt in.
+    let starts = line_starts(text, 58.0, r#"textIndent="-18pt""#);
+    assert!(starts.len() >= 3, "{starts:?}");
+    assert!(starts[0].abs() < 1e-6, "first line at the edge: {starts:?}");
+    assert!(starts[1..].iter().all(|x| (x - 18.0).abs() < 1e-6), "the rest hang 18pt in: {starts:?}");
+    // With a left margin wider than the hang, the first line starts at the margin less the hang.
+    let starts = line_starts(text, 90.0, r#"marginLeft="30pt" textIndent="-18pt""#);
+    assert!(starts.len() >= 2, "{starts:?}");
+    assert!((starts[0] - 12.0).abs() < 1e-6 && starts[1..].iter().all(|x| (x - 30.0).abs() < 1e-6), "{starts:?}");
+    // A positive indent still moves only the first line in.
+    let starts = line_starts(text, 58.0, r#"textIndent="10pt""#);
+    assert!((starts[0] - 10.0).abs() < 1e-6 && starts[1..].iter().all(|x| x.abs() < 1e-6), "{starts:?}");
+    // Without a negative indent a negative left margin moves every line left, as before.
+    let starts = line_starts(text, 58.0, r#"marginLeft="-6pt""#);
+    assert!(starts.iter().all(|x| (x + 6.0).abs() < 1e-6), "{starts:?}");
+    let starts = line_starts(text, 58.0, r#"marginLeft="-6pt" textIndent="10pt""#);
+    assert!((starts[0] - 4.0).abs() < 1e-6 && starts[1..].iter().all(|x| (x + 6.0).abs() < 1e-6), "{starts:?}");
+}
+
+/// A hang wider than its box is bounded by it: every line still starts and ends inside the box,
+/// and lines after the first keep room for the widest glyph when the text wraps.
+#[test]
+fn a_hang_wider_than_the_box_keeps_every_line_inside_it() {
+    // A 58pt box hanging its first line by 100pt, right-aligned.
+    for text in ["AB CD EF", "ABCDEFGHIJ KLMNOPQRST UVWXYZ MMMM WWWW"] {
+        let xdp = format!(
+            r##"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <draw name="label" w="58pt" h="5in"><value><text>{text}</text></value><font typeface="Arial" size="8pt"/><para hAlign="right" textIndent="-100pt" lineHeight="8pt"/></draw>
+</subform>
+</template></xdp:xdp>"##
+        );
+        let form = layout_xml(&xdp).unwrap();
+        let mut lines = std::collections::BTreeSet::new();
+        for item in &form.pages[0].items {
+            let Item::Text(s) = item else { continue };
+            lines.insert((s.baseline * 100.0).round() as i64);
+            let right = s.x + s.face.width(s.text.trim_end());
+            assert!(s.x >= 36.0 - 1e-6 && right <= 36.0 + 58.0 + 1e-6, "{text}: {:?} runs from {} to {right}", s.text, s.x);
+        }
+        if text.len() > 10 {
+            assert!(lines.len() > 1, "{text}: wraps onto more lines ({})", lines.len());
+        }
+    }
+}
+
+/// A label without a width that hangs its first line is as wide as that line is laid out: the
+/// hang takes back the left margin the first line doesn't use, so right-aligned text starts at
+/// the label's x.
+#[test]
+fn a_label_without_a_width_measures_its_hanging_indent_as_it_is_laid_out() {
+    let items = positioned(
+        r#"<draw name="a" x="1in" y="0"><value><text>11. BALANCE</text></value><font typeface="Arial" size="8pt"/><para hAlign="right" marginLeft="18pt" textIndent="-18pt"/></draw>"#,
+    );
+    let span = items.iter().find_map(|i| if let Item::Text(s) = i { Some(s) } else { None }).expect("the text");
+    assert!((span.x - (36.0 + 72.0)).abs() < 0.05, "starts at its x: {}", span.x);
+}
+
+/// A long table breaks across pages between whole rows, repeats its header row at the top of
+/// each page it continues on, and keeps every row (and field name) once.
 #[test]
 fn tables_break_across_pages_and_repeat_their_header_row() {
     let form = layout_xml(&template(40)).unwrap();
@@ -3938,6 +4031,163 @@ fn a_zero_caption_reserve_sizes_the_caption_as_none_does() {
     let x_of = |name: &str| widgets(&form.pages[0]).iter().find(|w| w.name == name).map(|w| w.rect.x).unwrap();
     assert!(x_of("withZero") > 36.0 + 1.0, "the caption takes its text's width: {}", x_of("withZero"));
     assert!((x_of("withZero") - x_of("without")).abs() < 0.01, "as without a reserve: {} {}", x_of("withZero"), x_of("without"));
+}
+
+/// A date field is shown through its display picture and typed in its edit picture's pattern: its
+/// format action takes the display picture's letters (weekday and month names included), its
+/// keystroke action the edit picture's; without a display picture both take the edit pattern.
+#[test]
+fn date_fields_are_shown_through_their_display_picture() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="plain" w="2in" h="0.3in"><ui><dateTimeEdit/></ui><value><date/></value><format><picture>date{YYYYMMDD}</picture></format></field>
+ <field name="long" w="3in" h="0.3in"><ui><dateTimeEdit/></ui><value><date/></value><format><picture>date{EEEE, MMMM D, YYYY}</picture></format></field>
+ <field name="both" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYYYMMDD}|date{DDMMMYY}</picture></ui><value><date/></value><format><picture>date{YYYYMMMDD}</picture></format></field>
+ <field name="none" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date/></value></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let form = layout_xml(xdp).unwrap();
+    let w = widgets(&form.pages[0]);
+    let shown = |n: &str| w.iter().find(|w| w.name == n).unwrap().display_date.clone();
+    assert_eq!(shown("plain").as_deref(), Some("yyyymmdd"));
+    assert_eq!(shown("long").as_deref(), Some("dddd, mmmm d, yyyy"));
+    assert_eq!(shown("both").as_deref(), Some("yyyymmmdd"));
+    assert_eq!(shown("none"), None);
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let fields = pdfcraft_forms_free_fields(&doc);
+    let action = |n: &str, k: &[u8]| {
+        let d = fields.iter().find(|(name, _)| name == n).map(|(_, d)| d.clone()).unwrap();
+        let aa = doc.resolve(d.get(b"AA").unwrap()).as_dict().unwrap().clone();
+        let a = doc.resolve(aa.get(k).unwrap()).as_dict().unwrap().clone();
+        doc.resolve(a.get(b"JS").unwrap()).as_string().unwrap().to_text()
+    };
+    assert_eq!(action("plain", b"F"), r#"AFDate_FormatEx("yyyymmdd");"#);
+    assert_eq!(action("plain", b"K"), r#"AFDate_KeystrokeEx("yyyy-mm-dd");"#, "typed in the default edit pattern");
+    assert_eq!(action("long", b"F"), r#"AFDate_FormatEx("dddd, mmmm d, yyyy");"#);
+    assert_eq!(
+        (action("both", b"F"), action("both", b"K")),
+        (r#"AFDate_FormatEx("yyyymmmdd");"#.to_string(), r#"AFDate_KeystrokeEx("yyyymmdd");"#.to_string())
+    );
+    assert_eq!(action("none", b"F"), r#"AFDate_FormatEx("dd/mm/yyyy");"#);
+}
+
+/// A date field with a format action but no keystroke action (as another tool may lay one out)
+/// keeps its data in the format action's pattern: the date it shows is written to the datasets as
+/// ISO and read back in that pattern, rather than kept as text.
+#[test]
+fn a_date_field_without_a_keystroke_action_keeps_its_data_in_the_format_pattern() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="when" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date/></value></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let mut fields = field_data(&doc);
+    let when = fields.iter().find(|f| f.name == "when").map(|f| f.obj).unwrap();
+    doc.update_dict(when, |d| {
+        let Some(Object::Dict(aa)) = d.get_mut(b"AA") else { panic!("the layout gives a date field its actions") };
+        assert!(aa.remove(b"K").is_some(), "a keystroke action to take away");
+        assert!(aa.get(b"F").is_some(), "the format action stays");
+    })
+    .unwrap();
+    for f in &mut fields {
+        if f.name == "when" {
+            f.data = FieldData::Text("18/10/2016".into());
+        }
+    }
+    let w = write_datasets(&mut doc, &fields).unwrap();
+    assert!(w.written && w.warnings.is_empty(), "{w:?}");
+    let p = read_packets(&doc).unwrap().unwrap();
+    let data = parse_datasets(&p.xdp).unwrap();
+    assert_eq!(data.text_at(&som_to_path("form[0].when[0]")), Some("2016-10-18"));
+    let values = read_values(&doc, &fields);
+    assert!(values.contains(&("when".to_string(), FieldData::Text("18/10/2016".into()))), "{values:?}");
+}
+
+/// Taking the XFA out makes each date field one a static form keeps working: held and typed as
+/// it shows, as another viewer checks typing against the keystroke pattern but reads the value
+/// again in the format's. Its keystroke takes the format's pattern and its value (held in the
+/// edit pattern) is written in it; the report counts the fields changed.
+#[test]
+fn taking_the_xfa_out_types_dates_as_they_show() {
+    use crate::pdf::strip;
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="dayFirst" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date>2016-10-18</date></value><format><picture>date{MM/DD/YYYY}</picture></format></field>
+ <field name="same" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date>2016-10-18</date></value></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let r = strip(&mut doc).unwrap();
+    assert_eq!(r.date_fields, 1, "{r:?}");
+    assert!(r.notes().iter().any(|n| n.contains("1 date field(s)")), "{:?}", r.notes());
+    let fields = pdfcraft_forms_free_fields(&doc);
+    let field = |n: &str| fields.iter().find(|(name, _)| name == n).map(|(_, d)| d.clone()).unwrap();
+    let action = |n: &str, k: &[u8]| {
+        let aa = doc.resolve(field(n).get(b"AA").unwrap()).as_dict().unwrap().clone();
+        let a = doc.resolve(aa.get(k).unwrap()).as_dict().unwrap().clone();
+        doc.resolve(a.get(b"JS").unwrap()).as_string().unwrap().to_text()
+    };
+    let value = |n: &str| doc.resolve(field(n).get(b"V").unwrap()).as_string().unwrap().to_text();
+    assert_eq!(action("dayFirst", b"K"), r#"AFDate_KeystrokeEx("mm/dd/yyyy");"#);
+    assert_eq!(action("dayFirst", b"F"), r#"AFDate_FormatEx("mm/dd/yyyy");"#);
+    assert_eq!(value("dayFirst"), "10/18/2016");
+    assert!(!field("dayFirst").contains(DATE_KEY), "the private mark goes as before");
+    // Typed and shown alike: the layout already holds its value in that pattern.
+    assert_eq!((action("same", b"K"), value("same")), (r#"AFDate_KeystrokeEx("dd/mm/yyyy");"#.to_string(), "18/10/2016".to_string()));
+}
+
+/// A template's default date is canonical: ISO (`2016-10-11`, October 11) or its basic form. The
+/// layout holds it in the field's edit pattern, as it holds the data's dates and typed ones, so
+/// an edit pattern laid out like ISO with day and month swapped (`yyyy-dd-mm`) doesn't read it
+/// as November 10, before or after the XFA is taken out.
+#[test]
+fn template_default_dates_are_held_in_the_edit_pattern() {
+    use crate::pdf::strip;
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="swapped" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYYY-DD-MM}</picture></ui><value><date>2016-10-11</date></value><format><picture>date{MM/DD/YYYY}</picture></format></field>
+ <field name="basic" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date>20161011</date></value></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let form = layout_xml(xdp).unwrap();
+    let w = widgets(&form.pages[0]);
+    let held = |n: &str| w.iter().find(|w| w.name == n).unwrap().value.clone();
+    assert_eq!(held("swapped").as_deref(), Some("2016-11-10"), "October 11 in yyyy-dd-mm");
+    assert_eq!(held("basic").as_deref(), Some("11/10/2016"));
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    strip(&mut doc).unwrap();
+    let fields = pdfcraft_forms_free_fields(&doc);
+    let value = |n: &str, key: &[u8]| {
+        let d = fields.iter().find(|(name, _)| name == n).map(|(_, d)| d.clone()).unwrap();
+        doc.resolve(d.get(key).unwrap()).as_string().unwrap().to_text()
+    };
+    assert_eq!(value("swapped", b"V"), "10/11/2016", "still October 11 once static");
+    assert_eq!(value("swapped", b"DV"), "10/11/2016", "and so is its default");
 }
 
 /// The terminal fields by full name, down the field tree.
