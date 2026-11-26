@@ -1,6 +1,7 @@
 //! Issue #740: column select, as in Acrobat. Alt-drag (Option-drag on macOS) with the Select tool,
 //! or a plain drag with Edit ▸ Column select, selects only the text inside the rectangle drawn.
 
+use crate::support::AppHarness as _;
 use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
@@ -28,14 +29,22 @@ trailer << /Root 1 0 R >>
 }
 
 fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("table.pdf", None, table()).expect("opens");
-        app.set_option("left", "closed").unwrap();
-        app.set_option("author", "Tester").unwrap();
-        setup(&mut app);
-        app
+    harness_on(crate::support::RecordingClipboard::default(), setup)
+}
+
+/// `harness` on the injected `clipboard`, whose recorded writes a test reads.
+fn harness_on(clipboard: crate::support::RecordingClipboard, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::support::app_with_clipboard(clipboard);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "table.pdf", None, table()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
+            setup(&mut app);
+            app
+        }
     });
     // Wait for the text layer itself (#1277): under load the first render takes longer than a
     // fixed second, and nothing may be pending yet before the text layer is asked for.
@@ -99,7 +108,7 @@ fn alt_drag_selects_only_the_text_inside_the_rectangle() {
 
 #[test]
 fn the_column_select_tool_needs_no_modifier() {
-    let mut h = harness(|app| assert!(app.execute("edit.column_select")));
+    let mut h = harness(|app| assert!(app.execute(&egui::Context::default(), "edit.column_select")));
     assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::ColumnSelect);
     let (from, to) = top_two_rows(&h);
     drag(&mut h, from, to, Modifiers::NONE);
@@ -137,7 +146,7 @@ fn shift_click_clears_a_column_selection() {
 /// of a line. The drag starts on text, since off text the highlighter draws an area highlight.
 #[test]
 fn alt_drag_with_the_highlighter_marks_only_the_column() {
-    let mut h = harness(|app| assert!(app.execute("comment.highlight")));
+    let mut h = harness(|app| assert!(app.execute(&egui::Context::default(), "comment.highlight")));
     // Just above-left of the centre of "N", still on the glyph.
     let (from, to) = (glyph(&h, 0) - vec2(2.0, 2.0), below_right_of_row_two(&h));
     drag(&mut h, from, to, Modifiers::ALT);
@@ -152,22 +161,15 @@ fn alt_drag_with_the_highlighter_marks_only_the_column() {
 /// the clipboard and no HTML, even where the clipboard would take it.
 #[test]
 fn a_column_selection_copies_plain_text_only() {
-    let offered = std::sync::Arc::new(std::sync::Mutex::new(0usize));
-    let seen = offered.clone();
-    let mut h = harness(move |app| {
-        app.system_clipboard = true;
-        app.html_clipboard_override = Some(Box::new(move |_, _| {
-            *seen.lock().unwrap() += 1;
-            true
-        }));
-    });
+    let clipboard = crate::support::RecordingClipboard::default();
+    let mut h = harness_on(clipboard.clone(), |_| {});
     let (from, to) = top_two_rows(&h);
     drag(&mut h, from, to, Modifiers::ALT);
-    assert!(h.state_mut().execute("edit.copy"));
+    assert!(h.execute("edit.copy"));
     h.step();
-    assert_eq!(*offered.lock().unwrap(), 0, "no HTML for a column selection");
-    let copied = h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "Name\tQty\nApple\t12"));
-    assert!(copied, "the plain text goes out the usual way");
+    let html = clipboard.writes().iter().flatten().any(|flavor| flavor.mime == "text/html");
+    assert!(!html, "no HTML for a column selection");
+    assert_eq!(clipboard.copied().as_deref(), Some("Name\tQty\nApple\t12"), "the plain text goes out the usual way");
 }
 
 /// A plain drag along one row of a table that reads column by column selects that row, as
@@ -185,7 +187,7 @@ fn a_plain_drag_along_one_table_row_selects_only_that_row() {
         assert_eq!(text(&h).as_deref(), Some("Apple\t12"));
     }
 
-    let mut h = harness(|app| assert!(app.execute("comment.highlight")));
+    let mut h = harness(|app| assert!(app.execute(&egui::Context::default(), "comment.highlight")));
     // The highlighter starts on text: the centre of "A".
     let (from, to) = (glyph(&h, 4), glyph(&h, 17) + vec2(12.0, 0.0));
     drag(&mut h, from, to, Modifiers::NONE);
@@ -266,11 +268,14 @@ fn uneven_harness() -> Harness<'static, PdfCraftApp> {
 
 /// A harness with the one-page PDF `bytes` open, its text layer ready.
 fn opened(name: &'static str, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes(name, None, bytes).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), name, None, bytes).expect("opens");
+            app
+        }
     });
     crate::support::wait_until(&mut h, "the page's text layer", |app| app.views[0].glyph_screen_pos(0, 0).is_some() && !app.render_pending());
     h
