@@ -218,3 +218,88 @@ fn a_dynamic_custom_stamp_keeps_its_line_and_fills_it_in_when_placed() {
     again.apply_settings(&s.settings_snapshot());
     assert_eq!(again.custom_stamps[0].line, s.custom_stamps[0].line, "kept with the library");
 }
+
+#[test]
+fn enter_chooses_and_places_a_focused_custom_stamp() {
+    enter_places_focused_stamp(true);
+}
+
+#[test]
+fn enter_chooses_and_places_a_focused_builtin_stamp() {
+    enter_places_focused_stamp(false);
+}
+
+fn enter_places_focused_stamp(custom: bool) {
+    use crate::support::input::one_frame;
+
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let mut app = crate::control::new_app();
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+        app.open_bytes(&cc.egui_ctx, "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app.set_option(&cc.egui_ctx, "zoom", "100").unwrap();
+        app
+    });
+    h.run_steps(6);
+    assert!(h.execute("comment.stamp"));
+    h.run_steps(2);
+
+    let (label, tool) = if custom {
+        let mut png = Vec::new();
+        image::RgbImage::from_pixel(60, 20, image::Rgb([20, 120, 220]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let ctx = h.ctx.clone();
+        h.state_mut().start_custom_stamp(&ctx, "keyboard-stamp.png".into(), png);
+        h.run_steps(2);
+        h.get_by_label("OK").click();
+        h.run_steps(2);
+        ("keyboard-stamp", QuickTool::CustomStamp(0))
+    } else {
+        h.get_all_by_label("APPROVED").next().expect("built-in dynamic stamp").click();
+        h.run_steps(2);
+        ("APPROVED", QuickTool::Stamp(pdfcraft_engine::StampKind::DynApproved))
+    };
+    assert_eq!(h.state().quick_tool, tool);
+
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    let first = page.min + egui::vec2(page.width() * 0.35, page.height() * 0.85);
+    let second = page.min + egui::vec2(page.width() * 0.68, page.height() * 0.85);
+    let click = |h: &mut Harness<'_, pdfcraft_ui_egui::PdfCraftApp>, pos| {
+        one_frame(h, [egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            one_frame(h, [egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE }]);
+        }
+        h.run_steps(4);
+    };
+    let stamp_count = |h: &Harness<'_, pdfcraft_ui_egui::PdfCraftApp>| {
+        let app = h.state();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        doc.info.annotations.iter().filter(|a| a.subtype == "Stamp").count()
+    };
+    click(&mut h, first);
+    assert_eq!(stamp_count(&h), 1, "the first stamp was placed");
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "placing once clears the stamp selection");
+
+    let key = |h: &mut Harness<'_, pdfcraft_ui_egui::PdfCraftApp>, key| {
+        for pressed in [true, false] {
+            one_frame(h, [egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: egui::Modifiers::NONE }]);
+        }
+    };
+    key(&mut h, egui::Key::F6);
+    // Move the focus lead to the row without making the selection that pointer choice or arrows can make.
+    h.get_all_by_label(label).next().unwrap().focus();
+    h.run_steps(2);
+    let parent = if custom { "Custom stamps" } else { "Stamps" };
+    assert!(
+        h.get_by_label(parent).is_focused() || h.get_all_by_label(label).next().unwrap().is_focused(),
+        "the keyboard focus is in the stamp collection"
+    );
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "focusing a row does not choose it");
+    key(&mut h, egui::Key::Enter);
+    let chosen = h.state().quick_tool;
+    click(&mut h, second);
+
+    assert_eq!((chosen, stamp_count(&h)), (tool, 2), "Enter chooses the focused stamp and the next page click places it");
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+}
