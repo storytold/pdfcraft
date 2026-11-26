@@ -222,7 +222,7 @@ mod page_argument_tests {
         assert!(String::from_utf8_lossy(&out.stderr).contains("'--page <N>' cannot be used multiple times"));
     }
 
-    /// A password that looks like a flag is written `--password=--page` (RFC-0012 §1.4).
+    /// A password that looks like a flag is written `--password=--page` (RFC-0018 §1.4).
     #[test]
     fn an_option_shaped_password_is_not_parsed_as_a_page_flag() {
         let dir = PageDir::new();

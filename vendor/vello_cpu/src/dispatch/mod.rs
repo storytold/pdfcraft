@@ -70,6 +70,14 @@ pub(crate) trait Dispatcher: Debug + Send + Sync {
     fn pop_layer(&mut self);
     fn reset(&mut self);
     fn flush(&mut self, encoded_paints: &[EncodedPaint]);
+    /// PdfCraft patch (1): whether a path was left out of this scene because its coverage was
+    /// full (only the single-threaded dispatcher keeps count).
+    fn coverage_full(&self) -> bool {
+        false
+    }
+    /// PdfCraft patch (1): keep the scene to `max` coverage values (never more than a strip's
+    /// index reaches); the single-threaded dispatcher leaves later paths out past it.
+    fn set_max_coverage(&mut self, _max: usize) {}
     fn rasterize(
         &self,
         buffer: &mut [u8],

@@ -1,4 +1,4 @@
-//! Writes the shell completions and man pages of `pdfcraft-cli` into a folder (RFC-0012 §1.9).
+//! Writes the shell completions and man pages of `pdfcraft-cli` into a folder (RFC-0018 §1.9).
 //!
 //! `cargo run -p pdfcraft-cli --example man-and-completions -- DIR`
 //!

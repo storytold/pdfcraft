@@ -43,15 +43,21 @@ esac
 # Only binaries for this machine run here (the --version check at the end); a FreeBSD target built
 # on another OS never does.
 HOST_ARCH="$(release_arch "$(uname -m)" 2>/dev/null)" || HOST_ARCH="$(uname -m)"
-if [ -n "${CARGO_BUILD_TARGET:-}" ] && [ "$(uname -s)" != FreeBSD ]; then
+if [[ -n "${CARGO_BUILD_TARGET:-}" ]] && [[ "$(uname -s)" != FreeBSD ]]; then
   HOST_ARCH="$(uname -s) $HOST_ARCH"
 fi
 BASENAME="pdfcraft-$VERSION-freebsd-$ARCH"
 
 echo "==> PdfCraft $VERSION for FreeBSD $ARCH"
 
+# The man-and-completions example writes pdfcraft-cli's man pages and shell completions below. It
+# is built in its own cargo run: built with the binaries, its dev-dependencies' features would be
+# unified into them. A cross build can't run it.
 if [[ "$SKIP_BUILD" = 0 ]]; then
   (cd "$ROOT" && cargo build --release --locked ${CARGO_BUILD_TARGET:+--target "$CARGO_BUILD_TARGET"} -p pdfcraft -p pdfcraft-cli)
+  if [[ -z "${CARGO_BUILD_TARGET:-}" ]] && [[ "$ARCH" = "$HOST_ARCH" ]]; then
+    (cd "$ROOT" && cargo build --release --locked -p pdfcraft-cli --example man-and-completions)
+  fi
 fi
 # Cargo puts a cross build under target/<triple>/release.
 BIN="$CARGO_TARGET_DIR/${CARGO_BUILD_TARGET:+$CARGO_BUILD_TARGET/}release"
@@ -70,16 +76,33 @@ sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$PDFCRAFT_BUILD_DATE/g" \
   "$LINUX/$APP_ID.metainfo.xml.in" >"$STAGE/share/metainfo/$APP_ID.metainfo.xml"
 cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/share/icons/"
 copy_docs "$STAGE/share/doc/pdfcraft"
+# pdfcraft-cli's man pages and shell completions, from its clap definition, written by the example
+# built above. A cross build can't run it, and a --skip-build run whose prebuilt binaries came
+# without the example has none: both leave them out.
+CLI_DOCS="$BIN/examples/man-and-completions"
+if [[ -n "${CARGO_BUILD_TARGET:-}" ]] || [[ "$ARCH" != "$HOST_ARCH" ]]; then
+  warn "cross-building $ARCH, so pdfcraft-cli's man pages and completions are left out"
+elif [[ ! -x "$CLI_DOCS" ]]; then
+  warn "$CLI_DOCS is not built, so pdfcraft-cli's man pages and completions are left out"
+else
+  "$CLI_DOCS" "$WORK/cli-docs"
+  mkdir -p "$STAGE/man/man1" "$STAGE/share/bash-completion/completions" \
+    "$STAGE/share/zsh/site-functions" "$STAGE/share/fish/vendor_completions.d"
+  install -m 644 "$WORK"/cli-docs/*.1 "$STAGE/man/man1/"
+  install -m 644 "$WORK/cli-docs/pdfcraft-cli.bash" "$STAGE/share/bash-completion/completions/pdfcraft-cli"
+  install -m 644 "$WORK/cli-docs/_pdfcraft-cli" "$STAGE/share/zsh/site-functions/_pdfcraft-cli"
+  install -m 644 "$WORK/cli-docs/pdfcraft-cli.fish" "$STAGE/share/fish/vendor_completions.d/pdfcraft-cli.fish"
+fi
 # OCR models: the app finds them at <bin>/../share/pdfcraft/models. They come from cargo xtask,
 # which has to run here: build it for this machine, not for CARGO_BUILD_TARGET.
 (unset CARGO_BUILD_TARGET; stage_models "$STAGE/share/pdfcraft/models")
 
-if [ -z "${CARGO_BUILD_TARGET:-}" ] && [ "$ARCH" = "$HOST_ARCH" ]; then
+if [[ -z "${CARGO_BUILD_TARGET:-}" ]] && [[ "$ARCH" = "$HOST_ARCH" ]]; then
   "$STAGE/bin/pdfcraft" --version
 else
   # They cannot run here, so check what they are instead: executables, not libraries or objects.
   # An older file(1) calls a PIE a shared object; its interpreter still marks it as a program.
-  want="$ARCH"; [ "$ARCH" != x86_64 ] || want=x86-64
+  want="$ARCH"; [[ "$ARCH" != x86_64 ]] || want=x86-64
   for b in "$STAGE"/bin/*; do
     case "$(file -b "$b")" in
       ELF*" executable, "*"$want"*FreeBSD* | ELF*"$want"*FreeBSD*interpreter*) ;;

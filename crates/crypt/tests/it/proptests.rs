@@ -9,7 +9,7 @@
 //! one, a ciphertext cut short by a damaged `/Length`, and keys of a length `create` never builds.
 //!
 //! - plaintext survives encryption at every length, for each algorithm and each crypt filter;
-//! - truncated or mutated ciphertext produces bytes rather than a panic (`AGENTS.md` §4: PdfCraft
+//! - truncated or mutated ciphertext produces bytes rather than a panic (app-agents.md rule 13: PdfCraft
 //!   opens files from strangers, and encrypted streams in the wild do get truncated);
 //! - object keys are scoped to their object, and AES-256's documented exception still holds;
 //! - a file opens for exactly the passwords whose effective bytes match, stated as a rule over
@@ -19,7 +19,7 @@
 
 use pdfcraft_crypt::{
     Algorithm, Auth, CryptError, Method, NewEncryption, PADDING, SecurityHandler, StreamKind, aes_cbc_decrypt, aes_cbc_encrypt, create,
-    effective_password, pdfdoc_byte, rc4,
+    create_legacy, effective_password, pdfdoc_byte, rc4,
 };
 use proptest::prelude::*;
 
@@ -92,8 +92,11 @@ fn expected_auth(algorithm: Algorithm, user_target: &[u8], owner_target: &[u8], 
 }
 
 fn make(algorithm: Algorithm, user: &str, owner: &str) -> SecurityHandler {
-    create(&NewEncryption { algorithm, user_password: user, owner_password: owner, permissions: -1, encrypt_metadata: true, seed: [0x5e; 32] }, ID)
-        .unwrap()
+    create_legacy(
+        &NewEncryption { algorithm, user_password: user, owner_password: owner, permissions: -1, encrypt_metadata: true, seed: [0x5e; 32] },
+        ID,
+    )
+    .unwrap()
 }
 
 proptest! {
@@ -457,7 +460,7 @@ proptest! {
         }
 
         // Revisions below 4 always encrypt metadata, whatever the caller asked for.
-        let legacy = create(&NewEncryption { algorithm: Algorithm::Rc4_128, user_password: "user", owner_password: "owner", permissions: -1, encrypt_metadata: false, seed: [0x5e; 32] }, ID).unwrap();
+        let legacy = create_legacy(&NewEncryption { algorithm: Algorithm::Rc4_128, user_password: "user", owner_password: "owner", permissions: -1, encrypt_metadata: false, seed: [0x5e; 32] }, ID).unwrap();
         prop_assert!(legacy.dict().encrypt_metadata && legacy.encrypts_metadata(), "V<4 always encrypts metadata, as create() documents");
     }
 

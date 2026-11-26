@@ -71,10 +71,11 @@ The PDF object graph *is* the model (`crates/engine/README.md` §The editing mod
 ## File I/O
 
 - PDF in: any revision chain, xref tables or streams, hybrid files, damaged files (repaired and
-  logged), all standard-security revisions. Image codecs (DCT, JPX, JBIG2) decode through the
-  bootstrap renderer; CCITT decodes through `pdfcraft-filters` (`decode_ccitt`, behind
-  `Document::decoded_image`) for export, redaction and the optimizer, and through the renderer
-  for display. Export ▸ Images decodes JPEG itself.
+  logged), all standard-security revisions. Image codecs (DCT, JPX) decode through the bootstrap
+  renderer; CCITT and JBIG2 decode through `pdfcraft-filters` (`decode_ccitt_within`,
+  `decode_jbig2_within`, behind `ImageBudget::decode`, the only way to decode an image outside
+  the renderer, which shares one allowance across an operation's images) for export, redaction
+  and the optimizer, and through the renderer for display. Export ▸ Images decodes JPEG itself.
 - PDF out: incremental or full saves, object streams, re-encryption, resource de-duplication when
   combining.
 - Other formats: images and text in (`create`); PNG/JPEG/TIFF, text, RTF, Word and HTML out
@@ -83,19 +84,27 @@ The PDF object graph *is* the model (`crates/engine/README.md` §The editing mod
 
 ## Agent control
 
-Every user-facing feature is reachable headlessly (`AGENTS.md` §3):
+Every user-facing feature is reachable headlessly (app-agents.md rule 14):
 
 - the **command registry** (`crates/engine/src/commands.rs`, 184 commands) generates menus,
   shortcuts and the command palette;
 - the **automation tool table** (`crates/automation`, 141 tools) is shared by `pdfcraft-cli run`
   and the opt-in **MCP server** (stdio only; `pdfcraft-cli mcp`), confined to `--root`;
-- the opt-in **UI control channel** (`pdfcraft --control FILE`; loopback, per-launch token) lets an
+- the opt-in **UI control channel** (`pdfcraft --control PORT`; loopback, token-authenticated) lets an
   agent inspect, click, type, run commands and take screenshots of the real interface.
+
+`pdfcraft-cli` Follows RFC-0018 (command-line conventions): clap parses every subcommand, so an
+unknown or repeated flag, a bad value or a conflicting pair of flags is a usage error (exit 2, on
+stderr) before any work starts; failures exit 1 as `error: …`; a process ended by a signal exits
+128 plus its number (130 for Ctrl-C); `-V`/`--version` and `--help` work on every subcommand. The
+Linux and FreeBSD packages install its man pages and bash, zsh and fish completions
+(`cargo run -p pdfcraft-cli --example man-and-completions -- DIR` writes them). `ui` takes the
+app's `--control PORT` and a token (`--control-token`, `--control-token-file` or `PDFCRAFT_CONTROL_TOKEN`).
 
 ## Safety
 
 - `unsafe_code = "forbid"` workspace-wide; crates deny `unwrap`/`expect`/`panic!`; engine entry
-  points keep a last-resort `catch_unwind` (`AGENTS.md` §4).
+  points keep a last-resort `catch_unwind` (app-agents.md rule 13).
 - Every input-derived size is bounded (decompression, images, recursion, content per page).
 - `cargo xtask fuzz` runs nightly; every finding becomes a synthetic regression test.
 

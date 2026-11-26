@@ -15,7 +15,18 @@ pub(crate) fn check_one(args: &CheckOneArgs, io: &mut Io) -> Result<(), CliError
     let path = args.file.as_path();
     let dpi = args.dpi;
     let start = Instant::now();
-    let bytes = read(path)?;
+    // A file that can't be read (past the input cap, say) is this file's record, not a crash of the child.
+    let bytes = match read(path) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            let status = if matches!(e, CliError::InputTooLarge(_)) { "input-too-large" } else { "read-error" };
+            let line = serde_json::json!({ "file": path.to_string_lossy(), "status": status, "pages": 0, "failed_pages": 0, "warnings": 0,
+                "ms": start.elapsed().as_millis() as u64, "detail": e.to_string().chars().take(400).collect::<String>() });
+            stdout_line(io, format_args!("{line}"))?;
+            // (the record is the answer `check` reads; the error and exit status are for a direct run)
+            return Err(e);
+        }
+    };
     let (status, pages, failed, detail, warnings) = match inspect(bytes.clone(), None) {
         Err(e) => (format!("open-error:{}", short(&e.to_string())), 0, 0, e.to_string(), 0),
         Ok(info) => {
@@ -37,7 +48,7 @@ pub(crate) fn check_one(args: &CheckOneArgs, io: &mut Io) -> Result<(), CliError
     // `--edit` (fuzzing): also run our own object layer end to end, with no panic safety net,
     // so a panic in cos shows up as a crash of this process.
     if args.edit {
-        edit_round_trip(&std::fs::read(path).map_err(|e| CliError::file(path, e))?);
+        edit_round_trip(&read(path)?);
     }
     let line = serde_json::json!({ "file": path.to_string_lossy(), "status": status, "pages": pages, "failed_pages": failed, "warnings": warnings,
         "ms": start.elapsed().as_millis() as u64, "detail": detail.chars().take(400).collect::<String>() });
@@ -47,13 +58,19 @@ pub(crate) fn check_one(args: &CheckOneArgs, io: &mut Io) -> Result<(), CliError
 /// Open with cos, touch every object, edit the catalog, save incrementally and in full (both
 /// output styles), and reopen each result. Errors are fine; panics, hangs and aborts are bugs.
 fn edit_round_trip(bytes: &[u8]) {
-    use pdfcraft_cos::{Document, Object, SaveOptions, write_full, write_incremental};
+    use pdfcraft_cos::{DecodeBudget, Document, Object, SaveOptions, write_full, write_incremental};
     let Ok(mut doc) = Document::open(Arc::new(bytes.to_vec())) else { return };
+    // One allowance for every stream, charged for what each decode did (failed ones too), so
+    // many small bombs can't each inflate to the per-stream limit.
+    let mut budget = DecodeBudget::page();
     for num in doc.object_numbers().into_iter().take(20_000) {
+        if budget.exhausted() {
+            break;
+        }
         if let Ok(o) = doc.try_get(num)
             && let Object::Stream(s) = &*o
         {
-            let _ = s.decoded();
+            let _ = budget.decode(s);
         }
     }
     if let Some(root) = doc.root() {
@@ -84,7 +101,7 @@ fn collect(paths: &[PathBuf], io: &mut Io) -> Vec<PathBuf> {
             let identity = match p.canonicalize() {
                 Ok(identity) => identity,
                 Err(error) => {
-                    let _ = writeln!(io.err, "{}: could not resolve directory: {error}", p.display());
+                    let _ = writeln!(io.err, "{}: could not resolve directory: {error}", p.display().to_string().escape_debug());
                     continue;
                 }
             };
@@ -118,13 +135,17 @@ pub(crate) fn check(args: &CheckArgs, io: &mut Io) -> Result<(), CliError> {
         let status = r["status"].as_str().unwrap_or("?").to_string();
         *counts.entry(status.split(':').next().unwrap_or("?").to_string()).or_default() += 1;
         if status != "ok" {
+            // One record per line: a file name or detail with a line break or a terminal control in
+            // it is written escaped, so it can't forge another record (the JSON report keeps both).
+            let detail: String = r["detail"].as_str().unwrap_or("").chars().take(160).collect();
             let _ = writeln!(
                 io.err,
-                "[{}/{}] {status:<28} {}  {}",
+                "[{}/{}] {:<28} {}  {}",
                 n + 1,
                 files.len(),
-                f.display(),
-                r["detail"].as_str().unwrap_or("").chars().take(160).collect::<String>()
+                status.escape_debug().to_string(),
+                f.display().to_string().escape_debug(),
+                detail.escape_debug()
             );
         }
         results.push(r);

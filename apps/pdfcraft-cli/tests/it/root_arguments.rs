@@ -93,7 +93,7 @@ fn a_directory_name_starting_with_a_single_hyphen_remains_valid() {
         .output()
         .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    // Bare, it is a flag: RFC-0012 §1.4 (a value flag never takes the next flag as its value).
+    // Bare, it is a flag: RFC-0018 §1.4 (a value flag never takes the next flag as its value).
     let out = Command::new(BIN)
         .current_dir(&dir.0)
         .args(["run", "doc_create", "from=blank", "width=100", "height=100", "--root", "-documents"])

@@ -1,4 +1,4 @@
-//! Every way the command line can fail, as types (RFC-0012 §2.2).
+//! Every way the command line can fail, as types (RFC-0018 §2.2).
 //!
 //! Three kinds, three exit codes: a value clap's parser rejects is a [`ValueError`] inside a clap
 //! error, a combination of flags it cannot express is a [`UsageError`], and both exit 2; a command
@@ -15,6 +15,9 @@ pub enum CliError {
     /// A file or folder could not be read or written.
     #[error("{}: {source}", path.display())]
     File { path: PathBuf, source: io::Error },
+    /// An input file is past the read cap ([`crate::commands::MAX_INPUT`]).
+    #[error("{}: the file is larger than 512 MiB", .0.display())]
+    InputTooLarge(PathBuf),
     /// Writing a result to stdout failed. A closed pipe is not a failure ([`CliError::is_closed_pipe`]).
     #[error("stdout: {0}")]
     Stdout(io::Error),
@@ -33,6 +36,8 @@ pub enum CliError {
     Command { command: &'static str, message: String },
     #[error("text: the document's permissions don't allow copying its text; pass the owner password with --password to extract it")]
     CopyingNotAllowed,
+    #[error("render: the document's permissions don't allow copying its pages as images; pass the owner password with --password to render it")]
+    RenderCopyingNotAllowed,
     #[error("text: the document could not be parsed")]
     NotParsed,
     #[error("text: page(s) {} could not be read", list(.0))]

@@ -33,7 +33,7 @@ fn non_edit_commands_reject_unknown_options_before_io() {
 /// wrote the PDF to a file called `--password` and exited 0. The unknown option hidden in a value
 /// position passed the check above too, since the walk skipped it along with the option.
 ///
-/// RFC-0012 §1.4 extends that to every value flag: a password or a title that starts with `-` is
+/// RFC-0018 §1.4 extends that to every value flag: a password or a title that starts with `-` is
 /// written `--password=--page`, so a flag never takes the next flag as its value.
 #[test]
 fn a_file_option_refuses_a_value_that_is_another_option() {
@@ -120,4 +120,15 @@ fn an_argument_that_is_not_utf8_is_an_error_not_a_panic() {
     // A name that is not UTF-8 works as a path: it is the file `info` reports.
     let out = Command::new(BIN).args([OsStr::new("info"), OsStr::from_bytes(b"/tmp/caf\xe9.pdf")]).output().expect("run cli");
     assert!(String::from_utf8_lossy(&out.stderr).contains("caf"), "the file is named");
+}
+
+/// A file `check-one` cannot read is a record on stdout with its own status and the reason, which
+/// `check` relays, not an empty stdout that reads as a crash.
+#[test]
+fn check_one_reports_an_unreadable_file_as_a_record() {
+    let out = Command::new(BIN).args(["check-one", "missing.pdf"]).output().expect("run cli");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let record: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| panic!("{e}: {stdout:?}"));
+    assert_eq!(record["status"], "read-error");
+    assert!(record["detail"].as_str().is_some_and(|d| d.contains("missing.pdf")), "{record}");
 }

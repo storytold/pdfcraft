@@ -7,8 +7,19 @@ use crate::cli::{AuditArgs, CombineArgs, EditArgs, EditStep, ExtractArgs, InfoAr
 use crate::error::CliError;
 use crate::{Io, stdout_line};
 
+/// Largest input file read into memory (512 MiB, as automation's `doc_open` reads).
+pub(crate) const MAX_INPUT: u64 = 512 * 1024 * 1024;
+
+/// The file at `path`, read no further than [`MAX_INPUT`]: a name that leads to something
+/// endless (a device, a pipe nobody closes) fails at the cap instead of filling memory.
 pub(crate) fn read(path: &Path) -> Result<Arc<Vec<u8>>, CliError> {
-    std::fs::read(path).map(Arc::new).map_err(|e| CliError::file(path, e))
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).and_then(|f| f.take(MAX_INPUT + 1).read_to_end(&mut bytes)).map_err(|e| CliError::file(path, e))?;
+    if bytes.len() as u64 > MAX_INPUT {
+        return Err(CliError::InputTooLarge(path.to_path_buf()));
+    }
+    Ok(Arc::new(bytes))
 }
 
 fn text_of(path: &Path) -> String {
@@ -28,24 +39,33 @@ pub(crate) fn info(args: &InfoArgs, io: &mut Io) -> Result<(), CliError> {
     let mut info = inspect(bytes.clone(), render_password.as_deref()).map_err(|e| CliError::Render(e.to_string()))?;
     let pdf_pages = info.pages.len();
     let acroform_fields = info.fields.len();
+    // The document as the app opens it: the notes about damage repaired while opening, which the
+    // app shows in Document Properties, and for a dynamic XFA form the laid-out pages and fields.
+    // Inspection runs none of the document's scripts: an XFA form's initialize and calculate
+    // scripts, which the app runs on opening, are left alone, as with JavaScript turned off.
+    let mut session = pdfcraft_engine::Session::new();
+    session.set_javascript(false);
+    let opened = session.open("info.pdf", None, bytes.clone(), password).ok().and_then(|id| session.get(id));
     // Dynamic XFA forms: say what laying the template out gives (what the app shows).
-    let xfa_layout = (info.xfa == Some(pdfcraft_render::Xfa::Dynamic))
-        .then(|| {
-            let mut s = pdfcraft_engine::Session::new();
-            let id = s.open("info.pdf", None, bytes.clone(), password).ok()?;
-            let d = s.get(id)?;
-            d.xfa.as_ref().map(|x| {
-                info = d.info.clone();
-                // The in-memory layout is an appended revision, not the file being inspected.
-                info.file_size = bytes.len();
-                serde_json::json!({ "pages": x.pages, "fields": x.fields, "warnings": x.warnings })
-            })
+    let xfa_layout = opened.filter(|_| info.xfa == Some(pdfcraft_render::Xfa::Dynamic)).and_then(|d| {
+        d.xfa.as_ref().map(|x| {
+            info = d.info.clone();
+            // The in-memory layout is an appended revision, not the file being inspected.
+            info.file_size = bytes.len();
+            serde_json::json!({ "pages": x.pages, "fields": x.fields, "warnings": x.warnings })
         })
-        .flatten();
-    // What the document declares as a standard, read the way the Standards panel reads it, so
-    // `info` and the app agree. A file that declares nothing leaves these null and empty.
-    let declared =
-        pdfcraft_cos::Document::open_with_password(bytes.clone(), password).map(|doc| pdfcraft_preflight::declared(&doc)).unwrap_or_default();
+    });
+    // What the document declares as a standard, as the Standards panel reads it, and the notes
+    // Document Properties shows, which include what the app repaired after reading the objects (a
+    // page tree rebuilt from the pages found by scanning), both from the session's own reading. A
+    // file the app cannot open is read once more for what the object reader declares and repaired.
+    // A file that declares nothing leaves the standards null and empty.
+    let (declared, repairs) = match opened {
+        Some(d) => (d.standards(), d.repair_log()),
+        None => pdfcraft_cos::Document::open_with_password(bytes.clone(), password)
+            .map(|cos| (pdfcraft_preflight::declared(&cos), cos.repair_log().to_vec()))
+            .unwrap_or_default(),
+    };
     let json = serde_json::json!({
         "file": text_of(path),
         "pdf_version": info.pdf_version,
@@ -66,6 +86,7 @@ pub(crate) fn info(args: &InfoArgs, io: &mut Io) -> Result<(), CliError> {
         "custom_properties": info.custom.len(),
         "page_labels": info.pages.iter().take(8).map(|p| p.label.clone()).collect::<Vec<_>>(),
         "warnings": info.warnings,
+        "repairs": repairs,
     });
     stdout_line(io, format_args!("{}", serde_json::to_string_pretty(&json).unwrap_or_default()))
 }
@@ -176,8 +197,7 @@ pub(crate) fn edit(args: &EditArgs, steps: Vec<EditStep>) -> Result<(), CliError
 /// Write a PDF a command produced, through a staging file beside the target (#2166): a write
 /// that fails, or `--out` naming the input, never leaves a truncated file where a good one was.
 fn write_pdf(out: &Path, bytes: &[u8]) -> Result<(), CliError> {
-    use pdfcraft_platform::staging::{StagingName, write_atomically};
-    write_atomically(out, bytes, StagingName::SuffixThenTag).map_err(|e| CliError::file(out, e))
+    craft::atomic::atomic_write(out, bytes).map_err(|e| CliError::file(out, e))
 }
 
 fn file_stem(path: &Path) -> String {
@@ -228,13 +248,20 @@ pub(crate) fn render(args: &RenderArgs, io: &mut Io) -> Result<(), CliError> {
     let page = args.page.get();
     let dpi = args.dpi;
     let out = args.out.path.as_path();
-    // The app renders a display copy that draws comments missing their /AP streams; the CLI
-    // must agree with it (and with independent viewers), while keeping the file it reads intact.
+    // The app renders a display copy that draws comments missing their /AP streams and the state
+    // of named-layer signatures (here with no trusted certificates); the CLI must agree with it
+    // (and with independent viewers), while keeping the file it reads intact.
     let bytes = read(path)?;
     let password = args.password.password.as_deref();
     // The renderer takes only the user password of R2–R4 files; `Session::open` and the display
     // copy take either.
     let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
+    // A page image is an image taken out of the document, as a snapshot or Export is in the app:
+    // like `text`, it needs the document to allow copying (or the permissions password).
+    let mut session = pdfcraft_engine::Session::new();
+    if let Some(doc) = session.open(text_of(path), None, bytes.clone(), password).ok().and_then(|id| session.get(id)) {
+        doc.check_copying().map_err(|_| CliError::RenderCopyingNotAllowed)?;
+    }
     let display = if inspect(bytes.clone(), render_password.as_deref()).is_ok_and(|info| info.xfa == Some(pdfcraft_render::Xfa::Dynamic)) {
         let mut session = pdfcraft_engine::Session::new();
         let id = session.open(text_of(path), None, bytes, password).map_err(|e| CliError::Engine(e.to_string()))?;
@@ -263,10 +290,22 @@ pub(crate) fn render(args: &RenderArgs, io: &mut Io) -> Result<(), CliError> {
     for warning in &p.warnings {
         match warning {
             pdfcraft_render::RenderWarning::ContentTruncated => {
-                let _ = writeln!(io.err, "warning: page {page}: content past the page's safety budget was skipped");
+                let _ = writeln!(
+                    io.err,
+                    "warning: page {page}: content past the page's safety budget, or a picture whose JBIG2 mask is past a decoder limit, was skipped"
+                );
             }
             pdfcraft_render::RenderWarning::ColourFallback => {
                 let _ = writeln!(io.err, "warning: page {page}: a colour that could not be computed was painted in a fallback colour");
+            }
+            pdfcraft_render::RenderWarning::MalformedIndexedImage => {
+                let _ = writeln!(io.err, "warning: page {page}: an image with a malformed Indexed colour table may be drawn wrongly or not at all");
+            }
+            pdfcraft_render::RenderWarning::Type3WidthsMissing => {
+                let _ = writeln!(
+                    io.err,
+                    "warning: page {page}: a Type 3 font has no /Widths; its glyphs were spaced by the widths their glyph procedures give"
+                );
             }
         }
     }

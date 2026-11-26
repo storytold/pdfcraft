@@ -23,7 +23,7 @@ fn help_flags_print_generated_help_to_stdout() {
         for command in ["info", "render", "text", "edit", "combine", "extract", "split", "check", "audit", "batch", "tools", "run", "ui"] {
             assert!(stdout.contains(&format!("\n  {command} ")), "{args:?} {command}: {stdout}");
         }
-        assert!(stdout.contains("Exit status: 0 success, 1 the command failed, 2 usage error."), "{args:?}: {stdout}");
+        assert!(stdout.contains("Exit status: 0 success, 1 the command failed, 2 usage error, 128 + the signal number"), "{args:?}: {stdout}");
         assert!(out.stderr.is_empty(), "{args:?}: {}", text(&out.stderr));
     }
 }

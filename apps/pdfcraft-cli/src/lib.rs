@@ -15,7 +15,7 @@
 //! *separate child process* with a wall-clock timeout, so hangs, panics and aborts in any
 //! dependency are observed and reported instead of taking the harness down.
 //!
-//! The command line follows RFC-0012: arguments are parsed by clap before any work, a usage error
+//! The command line follows RFC-0018: arguments are parsed by clap before any work, a usage error
 //! (unknown or repeated flag, bad value, conflicting flags) exits 2 on stderr, a command that
 //! fails exits 1 with `error: <message>`, and results go to stdout.
 

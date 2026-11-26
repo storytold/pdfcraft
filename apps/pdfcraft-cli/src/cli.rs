@@ -1,6 +1,6 @@
 //! The command line, as clap sees it. Everything the parser can check is checked here, before any
 //! file is opened: unknown and repeated flags, missing and conflicting ones, and the type and
-//! range of each value (RFC-0012 §1.4, §2.1).
+//! range of each value (RFC-0018 §1.4, §2.1).
 //!
 //! A value that starts with `-` is written `--out=-x.png` (or `./-x.png`): a flag never takes the
 //! next flag as its value, so `--out --password` is an error and not a file called `--password`
@@ -22,7 +22,7 @@ pub struct Cli {
     pub command: Cmd,
 }
 
-const AFTER_HELP: &str = "Exit status: 0 success, 1 the command failed, 2 usage error.\n\
+const AFTER_HELP: &str = "Exit status: 0 success, 1 the command failed, 2 usage error, 128 + the signal number when a signal ends the process (130 for Ctrl-C).\n\
 A value that starts with `-` is written `--flag=-value` or `./-name`.\n\
 help and feedback: https://discord.gg/artcraft";
 
@@ -58,7 +58,7 @@ pub enum Cmd {
     Tools,
     /// Run an automation tool, or a script of them
     Run(RunArgs),
-    /// Drive a running app started with `pdfcraft --control FILE`
+    /// Drive a running app started with `pdfcraft --control PORT`
     Ui(UiArgs),
     /// MCP server on stdin/stdout (opt-in)
     #[cfg(feature = "mcp")]
@@ -357,9 +357,15 @@ impl RunArgs {
 
 #[derive(Args, Debug)]
 pub struct UiArgs {
-    /// The control file the app wrote
-    #[arg(long, value_name = "FILE", required = true, value_parser = path)]
-    pub control: PathBuf,
+    /// The port the app listens on (`pdfcraft --control PORT`)
+    #[arg(long, value_name = "PORT", required = true)]
+    pub control: String,
+    /// The control token (or --control-token-file, or the PDFCRAFT_CONTROL_TOKEN variable)
+    #[arg(long, value_name = "TOKEN", conflicts_with = "control_token_file")]
+    pub control_token: Option<String>,
+    /// A file that holds the control token; refused when group or others can read it
+    #[arg(long, value_name = "FILE", value_parser = path)]
+    pub control_token_file: Option<PathBuf>,
     /// state, inspect, click, drag, type, key, command, commands, set, open or screenshot
     pub method: String,
     #[arg(value_name = "KEY=VALUE", value_parser = key_value)]

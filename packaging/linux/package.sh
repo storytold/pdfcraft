@@ -52,11 +52,16 @@ BASENAME="pdfcraft-$VERSION$LABEL_SUFFIX-linux-$ARCH"
 
 echo "==> PdfCraft $VERSION$LABEL_SUFFIX for Linux $ARCH ($FORMATS)"
 
+# The man-and-completions example writes pdfcraft-cli's man pages and shell completions below. It
+# is built in its own cargo run: built with the binaries, its dev-dependencies' features would be
+# unified into them.
 if [[ "$SKIP_BUILD" = 0 ]]; then
   if [[ -n "${CROSS_TARGET:-}" ]]; then
     (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli --target "$CROSS_TARGET")
+    (cd "$ROOT" && cargo build --release --locked -p pdfcraft-cli --example man-and-completions --target "$CROSS_TARGET")
   else
     (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli)
+    (cd "$ROOT" && cargo build --release --locked -p pdfcraft-cli --example man-and-completions)
   fi
 fi
 BIN="$CARGO_TARGET_DIR/${CROSS_TARGET:+$CROSS_TARGET/}release"
@@ -68,6 +73,27 @@ rm -rf "$WORK"
 install -Dm755 "$BIN/pdfcraft" "$STAGE/usr/bin/pdfcraft"
 install -Dm755 "$BIN/pdfcraft-cli" "$STAGE/usr/bin/pdfcraft-cli"
 "${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/pdfcraft" "$STAGE/usr/bin/pdfcraft-cli" 2>/dev/null || true
+# pdfcraft-cli's man pages and shell completions, from its clap definition, written by the example
+# built above. A cross build runs it through $EMULATOR, like the --version check at the end, and
+# leaves them out without one, as a --skip-build run whose prebuilt binaries came without the
+# example does. zsh reads site-functions on Fedora and openSUSE; the deb also links the completion
+# into Debian's vendor-completions (nfpm.yaml).
+CLI_DOCS="$BIN/examples/man-and-completions"
+if [[ -n "${CROSS_TARGET:-}" ]] && [[ -z "${EMULATOR:-}" ]]; then
+  warn "no EMULATOR to run the $CROSS_TARGET build, so pdfcraft-cli's man pages and completions are left out"
+elif [[ ! -x "$CLI_DOCS" ]]; then
+  warn "$CLI_DOCS is not built, so pdfcraft-cli's man pages and completions are left out"
+else
+  if [[ -n "${CROSS_TARGET:-}" ]]; then
+    "$EMULATOR" "$CLI_DOCS" "$WORK/cli-docs"
+  else
+    "$CLI_DOCS" "$WORK/cli-docs"
+  fi
+  install -Dm644 -t "$STAGE/usr/share/man/man1" "$WORK"/cli-docs/*.1
+  install -Dm644 "$WORK/cli-docs/pdfcraft-cli.bash" "$STAGE/usr/share/bash-completion/completions/pdfcraft-cli"
+  install -Dm644 "$WORK/cli-docs/_pdfcraft-cli" "$STAGE/usr/share/zsh/site-functions/_pdfcraft-cli"
+  install -Dm644 "$WORK/cli-docs/pdfcraft-cli.fish" "$STAGE/usr/share/fish/vendor_completions.d/pdfcraft-cli.fish"
+fi
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
 mkdir -p "$STAGE/usr/share/metainfo"
@@ -126,7 +152,13 @@ if has deb || has rpm; then
   export RELEASE="1${PDFCRAFT_BUILD_LABEL:+.$PDFCRAFT_BUILD_LABEL}"
   export NFPM_ARCH="$DEB_ARCH"
   # nfpm expands env vars in fields like `version` and `arch`, but not in `contents[].src`.
-  sed "s|\${STAGE}|$STAGE|g" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"
+  # Without the completions (a cross build with no EMULATOR) the deb's zsh symlink would dangle, so
+  # its entry is dropped.
+  DROP_ZSH_LINK=
+  # shellcheck disable=SC2016
+  [[ -f "$STAGE/usr/share/zsh/site-functions/_pdfcraft-cli" ]] || DROP_ZSH_LINK='\|^  - src: /usr/share/zsh/site-functions/|,/packager: deb/d;'
+  # shellcheck disable=SC2016
+  sed "${DROP_ZSH_LINK}s|\${STAGE}|$STAGE|g" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"
   for fmt in deb rpm; do
     if has "$fmt"; then (cd "$ROOT" && nfpm package -f "$WORK/nfpm.yaml" -p "$fmt" -t "$DIST/$BASENAME.$fmt"); fi
   done
