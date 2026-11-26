@@ -10076,7 +10076,7 @@ fn exporting_to_word_html_and_rtf() {
     let dir = workdir("office");
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
-    for ext in ["docx", "pptx", "html", "rtf", "md"] {
+    for ext in ["docx", "pptx", "xlsx", "html", "rtf", "md"] {
         let r = ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": format!("a.{ext}") }));
         assert_eq!(r["format"], ext);
     }
@@ -10095,6 +10095,7 @@ fn exporting_to_word_html_and_rtf() {
     assert!(a.call("doc_export_office", &json!({ "doc": doc, "path": "bad.docx", "html_mode": "simple" })).is_err());
     assert!(std::fs::read(dir.join("a.docx")).unwrap().starts_with(b"PK"));
     assert!(std::fs::read(dir.join("a.pptx")).unwrap().starts_with(b"PK"));
+    assert!(std::fs::read(dir.join("a.xlsx")).unwrap().starts_with(b"PK"));
     assert!(std::fs::read_to_string(dir.join("a.rtf")).unwrap().contains("Page 2"));
     // #1595: Markdown, with a rule between pages.
     let md = std::fs::read_to_string(dir.join("a.md")).unwrap();
@@ -14853,4 +14854,135 @@ fn grouped_existing_thai_body_edits_saves_reopens_and_undo_restores_original_gly
     assert_eq!(a.call("page_render", &json!({"doc":reopened,"page":1,"dpi":72})).unwrap(), after);
     assert_eq!(page_text(&mut a, reopened), [new, old]);
     assert_eq!(ok(&mut a, "content_list", json!({"doc":reopened}))["count"], 0, "editing existing text must not create Add Text objects");
+}
+
+#[test]
+fn vector_line_list_and_edit_roundtrip_and_mcp() {
+    use pdfcraft_cos::{Dict, Object, SaveOptions, Stream, write_full};
+
+    let dir = workdir("vector-lines");
+    let mut cos = pdfcraft_cos::Document::new_empty();
+    let pages = cos.get(cos.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+    let stream_ref = cos.add(Object::Stream(Stream::from_raw(Dict::new(), b"10 20 m 100 20 l S\n".to_vec())));
+    let mut page = Dict::new();
+    page.set(b"Type".to_vec(), Object::name("Page"));
+    page.set(b"Parent".to_vec(), Object::Ref(pages));
+    page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 200.into(), 300.into()]));
+    page.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(stream_ref)]));
+    let page_ref = cos.add(page);
+    cos.update_dict(pages, |d| {
+        d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page_ref)]));
+        d.set(b"Count".to_vec(), Object::Int(1));
+    })
+    .unwrap();
+    let pdf_path = dir.join("lines.pdf");
+    std::fs::write(&pdf_path, write_full(&cos, &SaveOptions::default()).unwrap()).unwrap();
+
+    // CLI / Automation API path
+    let mut a = auto(&dir);
+    let doc_id = ok(&mut a, "doc_open", json!({"path": "lines.pdf"}))["doc"].as_u64().unwrap();
+    let before = a.call("page_render", &json!({"doc": doc_id, "page": 1, "dpi": 72})).unwrap();
+    let listed = ok(&mut a, "line_list", json!({"doc": doc_id, "page": 1}));
+    assert_eq!(listed["count"], 1);
+    assert_eq!(listed["lines"][0]["start"], json!([10.0, 280.0]));
+    assert_eq!(listed["lines"][0]["end"], json!([100.0, 280.0]));
+
+    assert!(a.call("line_edit", &json!({"doc": doc_id, "page": 1, "line": 1, "width": 0.1})).is_err());
+
+    ok(
+        &mut a,
+        "line_edit",
+        json!({"doc": doc_id, "page": 1, "line": 1, "start": [20.0, 260.0], "end": [120.0, 260.0], "color": "red", "width": 3.5, "dash": [4.0, 2.0]}),
+    );
+    let after_edit = ok(&mut a, "line_list", json!({"doc": doc_id, "page": 1}));
+    assert_eq!(after_edit["lines"][0]["start"], json!([20.0, 260.0]));
+    assert_eq!(after_edit["lines"][0]["end"], json!([120.0, 260.0]));
+    assert!((after_edit["lines"][0]["thickness"].as_f64().unwrap() - 3.5).abs() < 1e-4);
+
+    let after_render = a.call("page_render", &json!({"doc": doc_id, "page": 1, "dpi": 72})).unwrap();
+    assert_ne!(after_render, before);
+
+    ok(&mut a, "edit_undo", json!({"doc": doc_id}));
+    let undone = ok(&mut a, "line_list", json!({"doc": doc_id, "page": 1}));
+    assert_eq!(undone["lines"][0]["start"], json!([10.0, 280.0]));
+    ok(&mut a, "edit_redo", json!({"doc": doc_id}));
+    ok(&mut a, "doc_save", json!({"doc": doc_id, "path": "lines_edited.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path": "lines_edited.pdf"}))["doc"].as_u64().unwrap();
+    let saved_lines = ok(&mut a, "line_list", json!({"doc": reopened, "page": 1}));
+    assert_eq!(saved_lines["lines"][0]["start"], json!([20.0, 260.0]));
+    assert!((saved_lines["lines"][0]["thickness"].as_f64().unwrap() - 3.5).abs() < 1e-4);
+
+    #[cfg(feature = "mcp")]
+    {
+        let mut s = McpServer::new(auto(&dir));
+        rpc(&mut s, 1, "initialize", json!({}));
+        let tool_list = rpc(&mut s, 2, "tools/list", json!({}));
+        let names: Vec<&str> = tool_list["result"]["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
+        assert!(names.contains(&"line_list") && names.contains(&"line_edit"));
+        rpc(&mut s, 3, "tools/call", json!({"name": "doc_open", "arguments": {"path": "lines_edited.pdf"}}));
+        let mcp_lines = rpc(&mut s, 4, "tools/call", json!({"name": "line_list", "arguments": {"doc": 1, "page": 1}}));
+        assert_eq!(mcp_lines["result"]["isError"], false);
+        assert_eq!(mcp_lines["result"]["structuredContent"]["lines"][0]["start"], json!([20.0, 260.0]));
+        let mcp_edit = rpc(&mut s, 5, "tools/call", json!({"name": "line_edit", "arguments": {"doc": 1, "page": 1, "line": 1, "width": 2.0}}));
+        assert_eq!(mcp_edit["result"]["isError"], false);
+        let mcp_check = rpc(&mut s, 6, "tools/call", json!({"name": "line_list", "arguments": {"doc": 1, "page": 1}}));
+        assert!((mcp_check["result"]["structuredContent"]["lines"][0]["thickness"].as_f64().unwrap() - 2.0).abs() < 1e-4);
+    }
+}
+
+#[test]
+fn vector_line_edit_combined_shrink_keeps_target_and_rejects_collapse() {
+    use pdfcraft_cos::{Dict, Object, SaveOptions, Stream, write_full};
+
+    let dir = workdir("vector-lines-shrink");
+    let mut cos = pdfcraft_cos::Document::new_empty();
+    let pages = cos.get(cos.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+    let stream_ref = cos.add(Object::Stream(Stream::from_raw(Dict::new(), b"10 20 m 100 20 l S\n10 60 m 100 60 l S\n".to_vec())));
+    let mut page = Dict::new();
+    page.set(b"Type".to_vec(), Object::name("Page"));
+    page.set(b"Parent".to_vec(), Object::Ref(pages));
+    page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 200.into(), 300.into()]));
+    page.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(stream_ref)]));
+    let page_ref = cos.add(page);
+    cos.update_dict(pages, |d| {
+        d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page_ref)]));
+        d.set(b"Count".to_vec(), Object::Int(1));
+    })
+    .unwrap();
+    std::fs::write(dir.join("two_lines.pdf"), write_full(&cos, &SaveOptions::default()).unwrap()).unwrap();
+
+    let mut a = auto(&dir);
+    let doc_id = ok(&mut a, "doc_open", json!({"path": "two_lines.pdf"}))["doc"].as_u64().unwrap();
+
+    // Shrinking line 1 to <= 0.0001 pt together with stroke properties must fail atomically without mutating line 1 or line 2.
+    let collapsed = a.call("line_edit", &json!({"doc": doc_id, "page": 1, "line": 1, "end": [10.00005, 280.0], "color": "red", "width": 4.0}));
+    assert!(collapsed.is_err(), "shrinking line <= 0.0001 pt must be rejected: {collapsed:?}");
+
+    let after_reject = ok(&mut a, "line_list", json!({"doc": doc_id, "page": 1}));
+    assert_eq!(after_reject["count"], 2);
+    assert_eq!(after_reject["lines"][0]["end"], json!([100.0, 280.0]));
+    assert!((after_reject["lines"][0]["thickness"].as_f64().unwrap() - 1.0).abs() < 1e-4);
+    assert_eq!(after_reject["lines"][0]["color"], json!([0.0, 0.0, 0.0]));
+    assert!((after_reject["lines"][1]["thickness"].as_f64().unwrap() - 1.0).abs() < 1e-4);
+    assert_eq!(after_reject["lines"][1]["color"], json!([0.0, 0.0, 0.0]));
+
+    // A valid combined shrink (> 0.0001 pt) and property update must apply only to line 1, leaving line 2 untouched.
+    ok(&mut a, "line_edit", json!({"doc": doc_id, "page": 1, "line": 1, "end": [10.05, 280.0], "color": "red", "width": 4.0}));
+    let after_ok = ok(&mut a, "line_list", json!({"doc": doc_id, "page": 1}));
+    assert_eq!(after_ok["count"], 2);
+    assert_eq!(after_ok["lines"][0]["end"], json!([10.05, 280.0]));
+    assert!((after_ok["lines"][0]["thickness"].as_f64().unwrap() - 4.0).abs() < 1e-4);
+    assert_ne!(after_ok["lines"][0]["color"], json!([0.0, 0.0, 0.0]));
+    assert!((after_ok["lines"][1]["thickness"].as_f64().unwrap() - 1.0).abs() < 1e-4);
+    assert_eq!(after_ok["lines"][1]["color"], json!([0.0, 0.0, 0.0]));
+}
+
+#[test]
+fn page_add_qr_rejects_non_numeric_rect_elements() {
+    let dir = workdir("qr-bad-rect");
+    let mut a = auto(&dir);
+    let doc_id = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+    let res = a.call("page_add_qr", &json!({"doc": doc_id, "page": 1, "text": "hello", "rect": [10, "bad", 20, 110, 120]}));
+    assert!(matches!(res, Err(ToolError::InvalidArgs(_))), "must reject non-numeric rect array element: {res:?}");
+    assert_eq!(ok(&mut a, "content_list", json!({"doc": doc_id}))["count"], 0);
 }

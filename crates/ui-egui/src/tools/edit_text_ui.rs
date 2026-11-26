@@ -42,7 +42,7 @@ pub use image::{CropMode, ImageAction, ImageSelection};
 pub(crate) use image::{PictureMenu, delete_picture, picture_context, picture_controls, picture_menu, picture_parts, picture_press, user_to_screen};
 pub(crate) use layout::editor_font;
 #[cfg(test)]
-use layout::{DARK_EDITOR_FILL, contrast, editor_fill, editor_job};
+use layout::{DARK_EDITOR_FILL, contrast, editor_fill};
 use layout::{color32, editor_galley, look_of, source_look};
 
 /// What an edit box shows text for: a page paragraph, or text added in this session.
@@ -273,16 +273,20 @@ pub struct LineEditor {
     pub block: usize,
     pub text: String,
     original: String,
-    rect: Rect,
+    pub rect: Rect,
+    /// Page rotation in degrees (0, 90, 180, 270) to transform screen deltas to user space.
+    pub rotation: i32,
     /// The original PDF rectangle, in user space. It is converted again each frame so the editor
     /// stays attached while the page is zoomed, scrolled, or rotated.
-    source_rect: [f32; 4],
+    pub source_rect: [f32; 4],
     multiline: bool,
     source: Option<(pdfcraft_engine::TextBlock, Vec<pdfcraft_engine::TextLine>)>,
     /// The draft extends outside the source container; its frame follows the live draft bounds.
     pub overflow: bool,
+    /// Measured height of the editor's text galley in screen coordinates.
+    pub measured_h: f32,
     /// The initial source container width in screen pixels.
-    max_width: f32,
+    pub max_width: f32,
     /// Current screen-space size. Recomputed from the current page transform before painting.
     size: f32,
     /// Take the keyboard focus on the next frame.
@@ -812,12 +816,23 @@ fn open_by_click(session: &mut PageSession, doc: &pdfcraft_engine::Document, pag
         if session.line_editor.as_ref().is_some_and(|open| open.page == page && open.block == block) {
             return finished;
         }
-        let applied = session.line_editor.take().and_then(|old| {
+        let applied = session.line_editor.take().and_then(|mut old| {
             let style = old.style();
-            (old.text != old.original || style != pdfcraft_engine::BlockStyle::default()).then(|| {
+            if old.text != old.original || style != pdfcraft_engine::BlockStyle::default() {
+                let old_xf = session.page_xform(old.page, geo);
+                old.rotation = effective_rotation(&doc.info, old.page, old_xf.as_ref());
                 session.applied_editor = Some(old.clone());
-                Edit::EditTextBlock { page: old.page, block: old.block, text: old.text, style }
-            })
+                let reflow = session.reflow_paragraphs;
+                let old_blocks = if reflow { if old.page == page { Some(blocks.as_slice()) } else { None } } else { None };
+                if reflow && old_blocks.is_none() {
+                    let other_blocks = doc.text_blocks(old.page);
+                    finished_edit_with_reflow(old, true, Some(&other_blocks))
+                } else {
+                    finished_edit_with_reflow(old, reflow, old_blocks)
+                }
+            } else {
+                None
+            }
         });
         // The clicked box opens next frame, from the document with that edit applied.
         session.pending_text_open = blocks.get(block).map(|l| (page, pdfcraft_engine::BlockKey::of(l)));
@@ -840,8 +855,10 @@ fn open_editor(session: &mut PageSession, doc: &pdfcraft_engine::Document, page:
     session.image_selection = None;
     let source_lines = doc.text_lines(page);
     let text = l.editor_text.clone();
-    // Screen pixels per point, from the box's width.
-    let scale = (b.width() - 4.0) / ((l.rect[2] - l.rect[0]).max(1.0) as f32);
+    let rot = effective_rotation(&doc.info, page, Some(&xf));
+    let user_w = user_span_for_screen_w(rot, l.rect.map(|v| v as f32)).max(1.0);
+    // Screen pixels per point, from the box's rotated width.
+    let scale = (b.width() - 4.0) / user_w;
     // How far the editor box may grow: a single-line paragraph's rewrite grows to the
     // page's right edge, a multi-line paragraph rewraps to its own width.
     let right = xf.rect.right().min(geo.viewport.right()) - 6.0;
@@ -856,10 +873,12 @@ fn open_editor(session: &mut PageSession, doc: &pdfcraft_engine::Document, page:
         text: text.clone(),
         original: text,
         rect: b,
+        rotation: rot,
         source_rect: l.rect.map(|v| v as f32),
         multiline: l.rows.len() > 1,
         source: Some((l.clone(), source_lines)),
         overflow: false,
+        measured_h: b.height(),
         max_width,
         size: (l.size as f32 * scale).clamp(8.0, 72.0),
         focus: true,
@@ -1276,8 +1295,9 @@ fn editor_session(
     // Reproject the source box every frame. The page may have been zoomed, scrolled or rotated
     // while the format panel was open.
     ed.rect = xf.user_rect(info, ed.page, ed.source_rect);
+    ed.rotation = effective_rotation(info, ed.page, Some(&xf));
     ed.max_width = ed.rect.width();
-    let scale = (ed.rect.width() / (ed.source_rect[2] - ed.source_rect[0]).abs().max(0.01)).max(0.01);
+    let scale = (ed.rect.width() / user_span_for_screen_w(ed.rotation, ed.source_rect).max(0.01)).max(0.01);
     ed.size = (ed.look.size as f32 * scale).clamp(1.0, 300.0);
     let text_color = color32(ed.look.color);
     // A one-row draft grows toward the page's right edge.
@@ -1311,6 +1331,7 @@ fn editor_session(
         (output, host.galley())
     };
     ed.selection = Some(selection);
+    ed.measured_h = galley.rect.height();
     if ed.has_changes() {
         ParagraphText::new(origin, Arc::clone(&galley), text_color).show_at(ui, page_clip);
     }
@@ -1326,22 +1347,149 @@ fn editor_session(
             None
         }
         Some(_) => {
-            let ed = session.line_editor.take()?;
+            let mut ed = session.line_editor.take()?;
+            ed.rotation = effective_rotation(&doc.info, ed.page, Some(&xf));
             session.applied_editor = Some(ed.clone());
-            finished_edit(ed)
+            let reflow = session.reflow_paragraphs;
+            let blocks = if reflow { Some(doc.text_blocks(ed.page)) } else { None };
+            finished_edit_with_reflow(ed, reflow, blocks.as_deref())
         }
     }
 }
 
-/// The edit a closed paragraph editor applies, or `None` when nothing in it changed.
-pub(crate) fn finished_edit(ed: LineEditor) -> Option<Edit> {
-    let style = ed.style();
-    (ed.text != ed.original || style != pdfcraft_engine::BlockStyle::default()).then_some(Edit::EditTextBlock {
-        page: ed.page,
-        block: ed.block,
-        text: ed.text,
-        style,
-    })
+fn is_block_below(rot: i32, ed_source: [f32; 4], b_rect: [f64; 4]) -> bool {
+    let ed_x0 = (ed_source[0] as f64).min(ed_source[2] as f64);
+    let ed_x1 = (ed_source[0] as f64).max(ed_source[2] as f64);
+    let ed_y0 = (ed_source[1] as f64).min(ed_source[3] as f64);
+    let ed_y1 = (ed_source[1] as f64).max(ed_source[3] as f64);
+    let b_x0 = b_rect[0].min(b_rect[2]);
+    let b_x1 = b_rect[0].max(b_rect[2]);
+    let b_y0 = b_rect[1].min(b_rect[3]);
+    let b_y1 = b_rect[1].max(b_rect[3]);
+    match rot {
+        90 => b_x0 >= ed_x1 - 4.0,
+        180 => b_y0 >= ed_y1 - 4.0,
+        270 => b_x1 <= ed_x0 + 4.0,
+        _ => b_y1 <= ed_y0 + 4.0,
+    }
+}
+
+fn is_block_in_flow(rot: i32, ed_source: [f32; 4], b_rect: [f64; 4]) -> bool {
+    let (ed_min, ed_max, b_min, b_max) = if rot % 180 == 90 {
+        let y0 = (ed_source[1] as f64).min(ed_source[3] as f64);
+        let y1 = (ed_source[1] as f64).max(ed_source[3] as f64);
+        let by0 = b_rect[1].min(b_rect[3]);
+        let by1 = b_rect[1].max(b_rect[3]);
+        (y0, y1, by0, by1)
+    } else {
+        let x0 = (ed_source[0] as f64).min(ed_source[2] as f64);
+        let x1 = (ed_source[0] as f64).max(ed_source[2] as f64);
+        let bx0 = b_rect[0].min(b_rect[2]);
+        let bx1 = b_rect[0].max(b_rect[2]);
+        (x0, x1, bx0, bx1)
+    };
+    let overlap = (ed_max.min(b_max) - ed_min.max(b_min)).max(0.0);
+    let ed_len = (ed_max - ed_min).max(1.0);
+    let b_len = (b_max - b_min).max(1.0);
+    let overlaps = overlap > 8.0 && (overlap / ed_len.min(b_len)) > 0.25;
+    let page_wide = b_len > ed_len * 1.6 && (b_min < ed_min - 20.0 || b_max > ed_max + 20.0);
+    overlaps && !page_wide
+}
+
+/// Effective clockwise display rotation in degrees, combining the page `/Rotate` and canvas view rotation.
+pub(crate) fn effective_rotation(info: &DocInfo, page: usize, xf: Option<&PageXform>) -> i32 {
+    let page_rot = info.pages.get(page).map_or(0, |p| i32::from(p.rotation));
+    let view_rot = xf.map_or(0, |x| i32::from(x.rot));
+    (page_rot + view_rot).rem_euclid(360)
+}
+
+fn user_span_for_screen_w(rot: i32, r: [f32; 4]) -> f32 {
+    if rot.rem_euclid(360) / 90 % 2 == 1 { (r[3] - r[1]).abs() } else { (r[2] - r[0]).abs() }
+}
+
+impl LineEditor {
+    /// Recomputes `rotation`, `rect`, `size`, and wrapped `measured_h` from the live draft text and zoom scale.
+    pub(crate) fn refresh_measured_h(&mut self, ctx: &egui::Context, doc: &pdfcraft_engine::Document, xf: Option<&PageXform>) {
+        self.rotation = effective_rotation(&doc.info, self.page, xf);
+        let room_limit = if let Some(xf) = xf {
+            self.rect = xf.user_rect(&doc.info, self.page, self.source_rect);
+            self.max_width = self.rect.width();
+            Some(xf.rect.right() - self.rect.left())
+        } else {
+            None
+        };
+        let scale = (self.rect.width() / user_span_for_screen_w(self.rotation, self.source_rect).max(0.01)).max(0.01);
+        self.size = (self.look.size as f32 * scale).clamp(1.0, 300.0);
+        let faces = BTreeMap::new();
+        let single_run = self.source.as_ref().is_some_and(|(block, _)| block.rows.len() == 1 || block.invisible);
+        let width = if !self.multiline && single_run && !self.text.contains('\n') && self.has_changes() {
+            let room = room_limit.map_or_else(|| self.max_width.max(self.rect.width()), |r| (r - 36.0 * scale).max(self.rect.width()));
+            let job = layout::editor_job(ctx, self, &faces, &self.text, scale, f32::INFINITY);
+            let natural = ctx.fonts_mut(|f| f.layout_job(job)).size().x;
+            natural.max(self.size * 0.4).min(room)
+        } else {
+            self.rect.width().max(1.0)
+        };
+        let galley = layout::editor_galley(ctx, self, &faces, &self.text, scale, width);
+        self.measured_h = galley.rect.height();
+    }
+}
+
+/// The edit a closed paragraph editor applies with optional paragraph reflow.
+pub(crate) fn finished_edit_with_reflow(ed: LineEditor, reflow: bool, page_blocks: Option<&[pdfcraft_engine::TextBlock]>) -> Option<Edit> {
+    let mut style = ed.style();
+    let current_user_w = (ed.source_rect[2] - ed.source_rect[0]).abs() as f64;
+    if current_user_w > 1.0
+        && style.width.is_none()
+        && let Some((block, _)) = &ed.source
+    {
+        let orig_w = (block.rect[2] - block.rect[0]).abs();
+        if (current_user_w - orig_w).abs() > 1.0 {
+            style.width = Some(current_user_w);
+        }
+    }
+    let text_changed = ed.text != ed.original;
+    let style_changed = style != pdfcraft_engine::BlockStyle::default();
+    if !text_changed && !style_changed {
+        return None;
+    }
+
+    let edit = Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text, style };
+
+    if reflow && let Some(blocks) = page_blocks {
+        let delta_h = (ed.measured_h - ed.rect.height()) as f64;
+        let rot = (ed.rotation.rem_euclid(360)) / 90 * 90;
+        let scale = if rot % 180 == 90 {
+            (ed.rect.height() / (ed.source_rect[2] - ed.source_rect[0]).abs().max(0.01)).max(0.01) as f64
+        } else {
+            (ed.rect.height() / (ed.source_rect[3] - ed.source_rect[1]).abs().max(0.01)).max(0.01) as f64
+        };
+        let delta_user_h = delta_h / scale;
+        if delta_user_h.abs() > 2.0 {
+            let offset = match rot {
+                90 => [delta_user_h, 0.0],
+                180 => [0.0, delta_user_h],
+                270 => [-delta_user_h, 0.0],
+                _ => [0.0, -delta_user_h],
+            };
+            let mut targets = Vec::new();
+            for (idx, b) in blocks.iter().enumerate() {
+                if idx != ed.block && is_block_below(rot, ed.source_rect, b.rect) && is_block_in_flow(rot, ed.source_rect, b.rect) {
+                    targets.push(pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::Text, index: idx });
+                }
+            }
+            if !targets.is_empty() {
+                let mut edits = Vec::new();
+                for chunk in targets.chunks(1000) {
+                    edits.push(Edit::MoveObjects { page: ed.page, objects: chunk.to_vec(), offset });
+                }
+                edits.push(edit);
+                return Some(Edit::Batch { label: "Edit text and reflow paragraphs".into(), edits });
+            }
+        }
+    }
+
+    Some(edit)
 }
 
 #[cfg(test)]
@@ -1535,10 +1683,12 @@ mod tests {
             text: block.text.clone(),
             original: block.text.clone(),
             rect: Rect::NOTHING,
+            rotation: 0,
             source_rect: block.rect.map(|v| v as f32),
             multiline: block.rows.len() > 1,
             source: None,
             overflow: false,
+            measured_h: 0.0,
             max_width: 400.0,
             size: block.size as f32,
             focus: true,
@@ -1793,9 +1943,11 @@ mod tests {
             text: "Paragraph text".to_string(),
             original: "Paragraph text".to_string(),
             rect: egui::Rect::ZERO,
+            rotation: 0,
             source_rect: [0.0; 4],
             max_width: 100.0,
             overflow: false,
+            measured_h: 0.0,
             selection: None,
             font_resource: None,
             source: None,
@@ -1813,5 +1965,384 @@ mod tests {
         let style = ed.style();
         assert_eq!(style.line_spacing, Some(1.33));
         assert_eq!(style.underline, Some(true));
+    }
+
+    #[test]
+    fn test_finished_edit_with_and_without_reflow() {
+        let (_app, mut ed) = preview_app();
+        ed.text = "Expanded line 1\nLine 2\nLine 3".into();
+        ed.rect = Rect::from_min_max(Pos2::new(50.0, 100.0), Pos2::new(250.0, 150.0));
+        ed.source_rect = [50.0, 100.0, 250.0, 150.0];
+        ed.measured_h = 90.0;
+
+        let edited_block = pdfcraft_engine::TextBlock {
+            text: "Original text".into(),
+            rect: [50.0, 100.0, 250.0, 150.0],
+            base_font: "Helvetica".into(),
+            size: 12.0,
+            bold: false,
+            italic: false,
+            color: [0.0, 0.0, 0.0],
+            rotation: 0.0,
+            lines: vec![],
+            rows: vec![],
+            editor_text: "Original text".into(),
+            reflow_text: "Original text".into(),
+            spans: vec![],
+            invisible: false,
+        };
+        let other_block_above = pdfcraft_engine::TextBlock {
+            text: "Above".into(),
+            rect: [50.0, 160.0, 250.0, 200.0],
+            base_font: "Helvetica".into(),
+            size: 12.0,
+            bold: false,
+            italic: false,
+            color: [0.0, 0.0, 0.0],
+            rotation: 0.0,
+            lines: vec![],
+            rows: vec![],
+            editor_text: "Above".into(),
+            reflow_text: "Above".into(),
+            spans: vec![],
+            invisible: false,
+        };
+        let other_block_below = pdfcraft_engine::TextBlock {
+            text: "Below".into(),
+            rect: [50.0, 20.0, 250.0, 80.0],
+            base_font: "Helvetica".into(),
+            size: 12.0,
+            bold: false,
+            italic: false,
+            color: [0.0, 0.0, 0.0],
+            rotation: 0.0,
+            lines: vec![],
+            rows: vec![],
+            editor_text: "Below".into(),
+            reflow_text: "Below".into(),
+            spans: vec![],
+            invisible: false,
+        };
+        let page_blocks = vec![edited_block, other_block_above, other_block_below];
+
+        // 1. When reflow is OFF: returns single Edit::EditTextBlock
+        let no_reflow_edit = finished_edit_with_reflow(ed.clone(), false, Some(&page_blocks));
+        assert!(matches!(no_reflow_edit, Some(Edit::EditTextBlock { .. })));
+
+        // 2. When reflow is ON: returns Edit::Batch with Edit::MoveObjects for block below (index 2) and Edit::EditTextBlock
+        let reflow_edit = finished_edit_with_reflow(ed, true, Some(&page_blocks));
+        assert!(matches!(reflow_edit, Some(Edit::Batch { ref edits, .. }) if edits.len() == 2));
+        if let Some(Edit::Batch { edits, .. }) = reflow_edit {
+            assert!(matches!(&edits[0], Edit::MoveObjects { objects, .. } if objects.len() == 1 && objects[0].index == 2));
+            assert!(matches!(edits[1], Edit::EditTextBlock { .. }));
+        }
+    }
+
+    #[test]
+    fn test_finished_edit_reflow_excludes_other_column_and_footer() {
+        let (_app, mut ed) = preview_app();
+        ed.text = "Expanded line 1\nLine 2\nLine 3".into();
+        ed.rect = Rect::from_min_max(Pos2::new(50.0, 100.0), Pos2::new(200.0, 150.0));
+        ed.source_rect = [50.0, 100.0, 200.0, 150.0];
+        ed.measured_h = 90.0;
+
+        let edited_block = pdfcraft_engine::TextBlock {
+            text: "Original text".into(),
+            rect: [50.0, 100.0, 200.0, 150.0],
+            base_font: "Helvetica".into(),
+            size: 12.0,
+            bold: false,
+            italic: false,
+            color: [0.0, 0.0, 0.0],
+            rotation: 0.0,
+            lines: vec![],
+            rows: vec![],
+            editor_text: "Original text".into(),
+            reflow_text: "Original text".into(),
+            spans: vec![],
+            invisible: false,
+        };
+        // Another column to the right (x=280..450), also vertically below (y=20..80)
+        let other_column = pdfcraft_engine::TextBlock {
+            text: "Column 2".into(),
+            rect: [280.0, 20.0, 450.0, 80.0],
+            base_font: "Helvetica".into(),
+            size: 12.0,
+            bold: false,
+            italic: false,
+            color: [0.0, 0.0, 0.0],
+            rotation: 0.0,
+            lines: vec![],
+            rows: vec![],
+            editor_text: "Column 2".into(),
+            reflow_text: "Column 2".into(),
+            spans: vec![],
+            invisible: false,
+        };
+        // A page-wide footer spanning across the whole page (x=40..550), at y=10..30
+        let page_footer = pdfcraft_engine::TextBlock {
+            text: "Page Footer".into(),
+            rect: [40.0, 10.0, 550.0, 30.0],
+            base_font: "Helvetica".into(),
+            size: 10.0,
+            bold: false,
+            italic: false,
+            color: [0.0, 0.0, 0.0],
+            rotation: 0.0,
+            lines: vec![],
+            rows: vec![],
+            editor_text: "Page Footer".into(),
+            reflow_text: "Page Footer".into(),
+            spans: vec![],
+            invisible: false,
+        };
+        let page_blocks = vec![edited_block, other_column, page_footer];
+        let reflow_edit = finished_edit_with_reflow(ed, true, Some(&page_blocks));
+        // Neither other_column nor page_footer should be targeted by reflow
+        assert!(matches!(reflow_edit, Some(Edit::EditTextBlock { .. })));
+    }
+
+    #[test]
+    fn test_finished_edit_reflow_quarter_turn() {
+        let (_app, mut ed) = preview_app();
+        ed.rotation = 90;
+        ed.text = "Expanded line 1\nLine 2\nLine 3".into();
+        ed.rect = Rect::from_min_max(Pos2::new(100.0, 50.0), Pos2::new(150.0, 250.0));
+        ed.source_rect = [100.0, 50.0, 150.0, 250.0];
+        ed.measured_h = 240.0;
+
+        let edited_block = pdfcraft_engine::TextBlock {
+            text: "Original text".into(),
+            rect: [100.0, 50.0, 150.0, 250.0],
+            base_font: "Helvetica".into(),
+            size: 12.0,
+            bold: false,
+            italic: false,
+            color: [0.0, 0.0, 0.0],
+            rotation: 90.0,
+            lines: vec![],
+            rows: vec![],
+            editor_text: "Original text".into(),
+            reflow_text: "Original text".into(),
+            spans: vec![],
+            invisible: false,
+        };
+        let other_block_next = pdfcraft_engine::TextBlock {
+            text: "Below on screen".into(),
+            rect: [160.0, 50.0, 200.0, 250.0],
+            base_font: "Helvetica".into(),
+            size: 12.0,
+            bold: false,
+            italic: false,
+            color: [0.0, 0.0, 0.0],
+            rotation: 90.0,
+            lines: vec![],
+            rows: vec![],
+            editor_text: "Below on screen".into(),
+            reflow_text: "Below on screen".into(),
+            spans: vec![],
+            invisible: false,
+        };
+        let page_blocks = vec![edited_block, other_block_next];
+        let reflow_edit = finished_edit_with_reflow(ed, true, Some(&page_blocks));
+        assert!(matches!(reflow_edit, Some(Edit::Batch { ref edits, .. }) if edits.len() == 2));
+        if let Some(Edit::Batch { edits, .. }) = reflow_edit {
+            assert!(
+                matches!(&edits[0], Edit::MoveObjects { objects, offset, .. } if objects.len() == 1 && objects[0].index == 1 && offset[0] > 0.0 && offset[1] == 0.0)
+            );
+            assert!(matches!(edits[1], Edit::EditTextBlock { .. }));
+        }
+    }
+
+    #[test]
+    fn test_finished_edit_reflow_non_unit_zoom() {
+        let (_app, mut ed) = preview_app();
+        ed.text = "Expanded text\nspanning multiple\nnew lines".into();
+        // At 2.0x zoom: screen rect height is 100.0, user source_rect height is 50.0
+        ed.rect = Rect::from_min_max(Pos2::new(100.0, 200.0), Pos2::new(500.0, 300.0));
+        ed.source_rect = [50.0, 100.0, 250.0, 150.0];
+        // Measured screen height expanded to 180.0 px (delta_h = 80.0 px).
+        // Since scale is 2.0 (100.0 screen px / 50.0 user pt), delta_user_h must be exactly 40.0 pt.
+        ed.measured_h = 180.0;
+
+        let edited_block = pdfcraft_engine::TextBlock {
+            text: "Original text".into(),
+            rect: [50.0, 100.0, 250.0, 150.0],
+            base_font: "Helvetica".into(),
+            size: 12.0,
+            bold: false,
+            italic: false,
+            color: [0.0, 0.0, 0.0],
+            rotation: 0.0,
+            lines: vec![],
+            rows: vec![],
+            editor_text: "Original text".into(),
+            reflow_text: "Original text".into(),
+            spans: vec![],
+            invisible: false,
+        };
+        let other_block_below = pdfcraft_engine::TextBlock {
+            text: "Below".into(),
+            rect: [50.0, 20.0, 250.0, 80.0],
+            base_font: "Helvetica".into(),
+            size: 12.0,
+            bold: false,
+            italic: false,
+            color: [0.0, 0.0, 0.0],
+            rotation: 0.0,
+            lines: vec![],
+            rows: vec![],
+            editor_text: "Below".into(),
+            reflow_text: "Below".into(),
+            spans: vec![],
+            invisible: false,
+        };
+        let page_blocks = vec![edited_block, other_block_below];
+        let reflow_edit = finished_edit_with_reflow(ed, true, Some(&page_blocks));
+        assert!(matches!(reflow_edit, Some(Edit::Batch { ref edits, .. }) if edits.len() == 2));
+        if let Some(Edit::Batch { edits, .. }) = reflow_edit {
+            if let Edit::MoveObjects { offset, objects, .. } = &edits[0] {
+                assert_eq!(objects.len(), 1);
+                assert_eq!(objects[0].index, 1);
+                assert_eq!(offset[0], 0.0);
+                assert!((offset[1] - (-40.0)).abs() < 1e-4, "offset was {:?}", offset);
+            } else {
+                panic!("expected MoveObjects edit");
+            }
+            assert!(matches!(edits[1], Edit::EditTextBlock { .. }));
+        }
+    }
+
+    #[test]
+    fn effective_rotation_composes_page_and_view_rotations() {
+        let info = DocInfo {
+            pages: vec![
+                pdfcraft_render::PageInfo { width: 595.0, height: 842.0, label: String::new(), crop: [0.0, 0.0, 595.0, 842.0], rotation: 90 },
+                pdfcraft_render::PageInfo { width: 595.0, height: 842.0, label: String::new(), crop: [0.0, 0.0, 595.0, 842.0], rotation: 270 },
+            ],
+            ..Default::default()
+        };
+        let xf_90 = PageXform { rect: Rect::from_min_max(Pos2::ZERO, pos2(842.0, 595.0)), pw: 842.0, ph: 595.0, rot: 90 };
+        let xf_180 = PageXform { rect: Rect::from_min_max(Pos2::ZERO, pos2(595.0, 842.0)), pw: 595.0, ph: 842.0, rot: 180 };
+        assert_eq!(effective_rotation(&info, 0, Some(&xf_90)), 180);
+        assert_eq!(effective_rotation(&info, 1, Some(&xf_180)), 90);
+        assert_eq!(effective_rotation(&info, 0, None), 90);
+    }
+
+    #[test]
+    fn reflow_recalculates_measured_h_from_live_draft_and_zoom() {
+        let (app, mut ed) = preview_app();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        let page = doc.info.pages[0];
+        let ctx = egui::Context::default();
+        // Force a narrow box and wrapped multi-line draft text.
+        ed.source_rect = [50.0, 700.0, 130.0, 720.0];
+        ed.text = "Wrapped draft line that grows taller than the original single row".into();
+        ed.original = "Original".into();
+        let xf_1x = PageXform { rect: Rect::from_min_max(Pos2::ZERO, pos2(page.width, page.height)), pw: page.width, ph: page.height, rot: 0 };
+        let xf_2x =
+            PageXform { rect: Rect::from_min_max(Pos2::ZERO, pos2(page.width * 2.0, page.height * 2.0)), pw: page.width, ph: page.height, rot: 0 };
+
+        ed.refresh_measured_h(&ctx, doc, Some(&xf_1x));
+        let h_1x = ed.measured_h;
+        assert!(h_1x > ed.rect.height(), "expected wrapped draft height {h_1x} > box height {}", ed.rect.height());
+        let mut b1 = ed.source.as_ref().map(|(b, _)| b.clone()).unwrap_or_else(|| doc.text_blocks(0).remove(0));
+        b1.rect = [50.0, 700.0, 130.0, 720.0];
+        let mut below = b1.clone();
+        below.rect = [50.0, 620.0, 130.0, 660.0];
+        let blocks = vec![b1, below];
+        let edit_1x = finished_edit_with_reflow(ed.clone(), true, Some(&blocks));
+
+        ed.refresh_measured_h(&ctx, doc, Some(&xf_2x));
+        let h_2x = ed.measured_h;
+        assert!(h_2x > h_1x * 1.5, "expected 2x zoom measured height {h_2x} to scale with zoom from {h_1x}");
+        let edit_2x = finished_edit_with_reflow(ed, true, Some(&blocks));
+
+        let dy1 = match edit_1x {
+            Some(Edit::Batch { edits, .. }) => match &edits[0] {
+                Edit::MoveObjects { offset, .. } => offset[1],
+                other => panic!("expected MoveObjects, got {other:?}"),
+            },
+            other => panic!("expected Batch at 1x, got {other:?}"),
+        };
+        let dy2 = match edit_2x {
+            Some(Edit::Batch { edits, .. }) => match &edits[0] {
+                Edit::MoveObjects { offset, .. } => offset[1],
+                other => panic!("expected MoveObjects, got {other:?}"),
+            },
+            other => panic!("expected Batch at 2x, got {other:?}"),
+        };
+        assert!((dy1 - dy2).abs() < 3.0, "zoom should yield matching user-space reflow delta: 1x={dy1}, 2x={dy2}");
+    }
+
+    #[test]
+    fn production_completion_recalculates_measured_h_on_draft_and_zoom_change() {
+        let mut app = crate::PdfCraftApp::for_unit_tests();
+        let ctx = egui::Context::default();
+        let stream = b"BT /F1 12 Tf 50 700 Td (Short) Tj ET\nBT /F1 12 Tf 50 640 Td (Below paragraph) Tj ET\n";
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 595 842] >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> >> >>".to_string(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+            format!("<< /Length {} >>\nstream\n{}\nendstream", stream.len(), String::from_utf8_lossy(stream)),
+        ];
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+
+        app.open_bytes(&ctx, "reflow.pdf", None, pdf).unwrap();
+        let id = app.views[0].id;
+        let doc = app.session.get(id).unwrap();
+        let page_info = doc.info.pages[0];
+        let blocks = doc.text_blocks(0);
+        let below_y_before = blocks.iter().find(|b| b.text.contains("Below")).unwrap().rect[1];
+        let top_block = blocks[0].clone();
+        let source_lines = doc.text_lines(0);
+        let top_rect = top_block.rect.map(|v| v as f32);
+
+        // Open editor at 1x, then zoom to 2x and wrap into multi-line draft without running another frame.
+        let zoom_rect = Rect::from_min_size(Pos2::ZERO, vec2(page_info.width * 2.0, page_info.height * 2.0));
+        app.views[0].session.placed = vec![PlacedPage::new(0, zoom_rect, 2.0, (0.0, page_info.height * 2.0))];
+        app.views[0].session.reflow_paragraphs = true;
+
+        let (_, mut ed) = preview_app();
+        ed.page = 0;
+        ed.block = 0;
+        ed.source_rect = top_rect;
+        ed.rect = Rect::from_min_size(pos2(50.0, 130.0), vec2(60.0, 12.0));
+        ed.measured_h = 12.0;
+        ed.original = top_block.text.clone();
+        ed.text = "Line one\nLine two\nLine three\nLine four".into();
+        ed.multiline = true;
+        ed.source = Some((top_block.clone(), source_lines.clone()));
+        ed.look = look_of(&top_block);
+        ed.look0 = ed.look.clone();
+
+        // First verify unchanged text + style color change gives zero delta at 2x zoom.
+        let mut color_only = ed.clone();
+        color_only.text = top_block.text.clone();
+        color_only.multiline = false;
+        color_only.look.color = [1.0, 0.0, 0.0, 1.0];
+        color_only.rect = Rect::NOTHING;
+        color_only.measured_h = 0.0;
+        let color_edit = crate::editing::finish_line_editor_edit(&ctx, doc, &app.views[0], &mut color_only);
+        assert!(matches!(color_edit, Some(Edit::EditTextBlock { .. })), "unchanged text must not reflow");
+
+        // Now complete wrapped draft at 2x zoom through production close_text_editors.
+        app.views[0].session.line_editor = Some(ed);
+        assert!(app.close_text_editors(&ctx, 0, id));
+        let updated_blocks = app.session.get(id).unwrap().text_blocks(0);
+        let below_y_after = updated_blocks.iter().find(|b| b.text.contains("Below")).unwrap().rect[1];
+        assert!(below_y_after < below_y_before - 5.0, "below paragraph should reflow down: {below_y_before} -> {below_y_after}");
     }
 }

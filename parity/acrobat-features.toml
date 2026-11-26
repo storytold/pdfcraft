@@ -2247,11 +2247,11 @@ title = "Select, move, scale, recolour and delete vector paths"
 area = "C"
 tier = "P1"
 milestone = "M7"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["edit.edit_text"]
+tools = ["line_list", "line_edit"]
+evidence = ["crates/edit/src/objects.rs::test_vector_line_round_trip_edit_and_properties", "crates/edit/src/objects.rs::test_stroked_rectangle_edges_and_endpoint_edit", "crates/automation/tests/it/automation.rs::vector_line_list_and_edit_roundtrip_and_mcp"]
+notes = "Interactive UI and automation tools (line_list, line_edit) for stroked straight line segments (select, move endpoints with optional perpendicular grid extension, and update stroke colour, width 0.5–20 pt and dash pattern) and stroked rectangle (re) edges (geometry-only edge resizing without crossing or collapse; stroke style changes on individual rectangle edges are refused), undoable and surviving save/reopen. Missing: per-edge rectangle stroke styling, arbitrary curves/fills, deleting standalone vector strokes, and compound path editing."
 
 [[feature]]
 id = "edit.edit-object-tool"
@@ -7255,11 +7255,11 @@ title = "Export to Excel (.xlsx) with table detection"
 area = "J"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["export.xlsx"]
+tools = ["doc_export_office"]
+evidence = ["crates/export/src/xlsx.rs::test_xlsx_package_generation", "crates/export/src/xlsx.rs::test_col_name_mapping", "crates/export/src/xlsx.rs::test_numeric_parsing", "crates/automation/tests/it/automation.rs::exporting_to_word_html_and_rtf", "crates/engine/src/tests.rs::exporting_office_files_keeps_images"]
+notes = "Full OpenXML SpreadsheetML workbook generation (.xlsx) with table and spatial grid reconstruction, cell formatting, column widths, merge cells, and numeric parsing."
 
 [[feature]]
 id = "create.export-pptx"

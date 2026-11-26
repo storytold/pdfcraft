@@ -328,6 +328,40 @@ fn footer_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp) {
         QuickTool::Comment(tool) => comment_controls(ui, app, tool),
         _ => {}
     }
+    // QR & Barcode Tools (Scanner & Generator HUD)
+    if let Some((tab_idx, _)) = app.active_ids() {
+        let is_open = app.views.get(tab_idx).is_some_and(|v| v.session.barcode_hud.open);
+        if IconButton::new(IconId::new("file-scan")).label(tl!("QR & Barcode Tools")).selected(is_open).show(ui).clicked()
+            && let Some(v) = app.views.get_mut(tab_idx)
+        {
+            v.session.barcode_hud.open = !v.session.barcode_hud.open;
+            v.session.barcode_hud.panel_open = v.session.barcode_hud.open;
+            if v.session.barcode_hud.open {
+                v.session.barcode_hud.last_scanned_page = None;
+            }
+        }
+        // Barcode select tool: click a code on any visible page to open its HUD.
+        let qr_tool = app.quick_tool == QuickTool::QrBarcode;
+        if IconButton::new(IconId::new("scan-text")).label(tl!("Select barcodes")).selected(qr_tool).show(ui).clicked() {
+            app.quick_tool = if qr_tool { QuickTool::Select } else { QuickTool::QrBarcode };
+            if !qr_tool && let Some(v) = app.views.get_mut(tab_idx) {
+                v.session.barcode_hud.last_scanned_page = None;
+            }
+        }
+    }
+    // Reading Eye-Strain Background Tint
+    let bg_mode = app.reading_bg.mode;
+    let bg_active = bg_mode != crate::canvas::PageBackground::Default;
+    let bg_tip =
+        crate::i18n::fmt(tl!("Eye strain background: {mode} (click to cycle, right-click for tint settings)"), &[("mode", tl!(bg_mode.label()))]);
+    let bg_btn = IconButton::new(IconId::new(bg_mode.icon())).label(bg_tip).selected(bg_active).show(ui);
+    if bg_btn.clicked() {
+        app.reading_bg.cycle_mode();
+        ui.ctx().request_repaint();
+    }
+    if bg_btn.response.secondary_clicked() {
+        app.reading_bg.toggle_picker(bg_btn.response.id);
+    }
 }
 
 /// The colour of new Fill & Sign text, and of the selected text.

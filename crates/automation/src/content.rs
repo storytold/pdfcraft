@@ -24,7 +24,7 @@ fn to_view(r: [f64; 4], ph: f64) -> [f64; 4] {
 pub(crate) fn rect_arg(a: &Args, key: &str) -> Result<Option<[f64; 4]>> {
     a.get(key)
         .map(|v| {
-            let r: Vec<f64> = v.as_array().map(|x| x.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+            let r: Vec<f64> = v.as_array().and_then(|x| x.iter().map(Value::as_f64).collect::<Option<Vec<f64>>>()).unwrap_or_default();
             <[f64; 4]>::try_from(r).map_err(|_| bad(format!("{key} must be 4 numbers")))
         })
         .transpose()
@@ -196,6 +196,26 @@ impl Automation {
         let mine: Vec<_> = doc.added().iter().filter(|x| x.page == page).collect();
         out["index"] = json!(mine.len());
         out["rect"] = json!(mine.last().map(|x| to_view(x.content.rect(), ph)));
+        Ok(out)
+    }
+
+    pub(crate) fn page_add_qr(&mut self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let ph = self.doc(a)?.info.pages.get(page).map(|p| p.height as f64).ok_or_else(|| bad("the page no longer exists"))?;
+        let text = a.str("text")?;
+        if text.trim().is_empty() {
+            return Err(bad("text must not be empty"));
+        }
+        let rect = rect_arg(a, "rect")?.map(|r| to_display(r, ph));
+        let matrix = pdfcraft_engine::qr::QrCode::encode_text(text).map_err(|e| failed(e.to_string()))?;
+        let png_bytes = matrix.to_png_bytes(8, 4).map_err(|e| failed(e.to_string()))?;
+        let mut out = self.apply(a, Edit::AddImage { page, rect, name: "QRCode.png".into(), bytes: std::sync::Arc::new(png_bytes) })?;
+        let doc = self.doc(a)?;
+        let mine: Vec<_> = doc.added().iter().filter(|x| x.page == page).collect();
+        out["index"] = json!(mine.len());
+        out["rect"] = json!(mine.last().map(|x| to_view(x.content.rect(), ph)));
+        out["qr_version"] = json!(matrix.size.saturating_sub(17) / 4);
+        out["qr_modules"] = json!(matrix.size);
         Ok(out)
     }
 
@@ -455,4 +475,102 @@ impl Automation {
         result["pasted"] = json!(count);
         Ok(result)
     }
+
+    /// List editable stroked vector line segments on `page` (top-left-origin displayed points).
+    pub(crate) fn line_list(&self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let doc = self.doc(a)?;
+        let info = doc.info.pages.get(page).ok_or_else(|| bad("the page no longer exists"))?;
+        let round2 = |v: f32| (f64::from(v) * 100.0).round() / 100.0;
+        let to_view_pt = |pt: [f64; 2]| {
+            let v = info.user_to_view(pt[0] as f32, pt[1] as f32);
+            [round2(v[0]), round2(v[1])]
+        };
+        let lines = doc.editable_lines(page).map_err(failed)?;
+        let list: Vec<Value> = lines
+            .iter()
+            .map(|l| {
+                let s = to_view_pt(l.start);
+                let e = to_view_pt(l.end);
+                let bbox = [s[0].min(e[0]), s[1].min(e[1]), s[0].max(e[0]), s[1].max(e[1])];
+                json!({
+                    "line": l.index.saturating_add(1),
+                    "start": s,
+                    "end": e,
+                    "bbox": bbox,
+                    "thickness": l.thickness,
+                    "color": l.stroke_color,
+                })
+            })
+            .collect();
+        Ok(json!({ "page": page + 1, "count": list.len(), "lines": list }))
+    }
+
+    /// Update endpoints and/or stroke properties of an editable vector line on `page`.
+    pub(crate) fn line_edit(&mut self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::{ObjectKind, ObjectTarget};
+        let page = self.page(a)?;
+        let k = a.int("line")?;
+        let target_idx = usize::try_from(k.checked_sub(1).unwrap_or(-1)).map_err(|_| bad("line must be >= 1"))?;
+        let lines = self.doc(a)?.editable_lines(page).map_err(failed)?;
+        let current = lines
+            .iter()
+            .find(|l| l.index == target_idx)
+            .ok_or_else(|| bad(format!("line {k} is out of range: page {} has {} editable line(s)", page + 1, lines.len())))?
+            .clone();
+        let target = ObjectTarget { kind: ObjectKind::VectorLine, index: current.index };
+
+        let start_view = parse_line_view_pt(a, "start")?;
+        let end_view = parse_line_view_pt(a, "end")?;
+        let color = a.opt_str("color")?.map(parse_color).transpose()?;
+        let width = a.opt_num("width")?;
+        let dash = parse_line_dash(a)?;
+
+        if start_view.is_none() && end_view.is_none() && color.is_none() && width.is_none() && dash.is_none() {
+            return Err(bad("specify at least one of start, end, color, width or dash"));
+        }
+
+        let mut edits = Vec::new();
+        // Apply stroke properties before moving endpoints so a rejected or near-threshold shrink never shifts target.index.
+        if color.is_some() || width.is_some() || dash.is_some() {
+            edits.push(Edit::SetLineProperties { page, target, color, width, dash });
+        }
+        if start_view.is_some() || end_view.is_some() {
+            let doc = self.doc(a)?;
+            let info = doc.info.pages.get(page).ok_or_else(|| bad("the page no longer exists"))?;
+            let new_start = start_view.map(|pt| info.view_to_user_f64(pt[0], pt[1])).unwrap_or(current.start);
+            let new_end = end_view.map(|pt| info.view_to_user_f64(pt[0], pt[1])).unwrap_or(current.end);
+            edits.push(Edit::UpdateLineEndpoints { page, target, new_start, new_end });
+        }
+        let edit = if edits.len() == 1 {
+            edits.into_iter().next().ok_or_else(|| failed("missing line edit"))?
+        } else {
+            Edit::Batch { label: "Edit vector line".into(), edits }
+        };
+        let mut out = self.apply(a, edit)?;
+        out["page"] = json!(page + 1);
+        out["line"] = json!(k);
+        Ok(out)
+    }
+}
+
+fn parse_line_view_pt(a: &Args, key: &str) -> Result<Option<[f64; 2]>> {
+    let Some(v) = a.get(key) else { return Ok(None) };
+    let arr = v.as_array().ok_or_else(|| bad(format!("{key} must be [x, y]")))?;
+    if arr.len() != 2 {
+        return Err(bad(format!("{key} must be [x, y]")));
+    }
+    let x = arr.first().and_then(Value::as_f64).ok_or_else(|| bad(format!("{key} must contain numbers")))?;
+    let y = arr.get(1).and_then(Value::as_f64).ok_or_else(|| bad(format!("{key} must contain numbers")))?;
+    if !x.is_finite() || !y.is_finite() {
+        return Err(bad(format!("{key} coordinates must be finite")));
+    }
+    Ok(Some([x, y]))
+}
+
+fn parse_line_dash(a: &Args) -> Result<Option<Vec<f64>>> {
+    let Some(v) = a.get("dash") else { return Ok(None) };
+    let arr = v.as_array().ok_or_else(|| bad("dash must be an array of numbers"))?;
+    let parsed = arr.iter().map(Value::as_f64).collect::<Option<Vec<f64>>>().ok_or_else(|| bad("dash must contain numbers"))?;
+    Ok(Some(parsed))
 }

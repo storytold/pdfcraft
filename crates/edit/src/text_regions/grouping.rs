@@ -117,6 +117,24 @@ pub(crate) fn group_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
 
 /// Exporters currently represent a block with one style. Keep their style boundaries until
 /// they support rich runs, while edit selection may encompass the complete visual region.
+fn shift_block_indices(mut b: TextBlock, offset: usize) -> TextBlock {
+    if offset == 0 {
+        return b;
+    }
+    for l in &mut b.lines {
+        *l += offset;
+    }
+    for row in &mut b.rows {
+        for idx in row {
+            *idx += offset;
+        }
+    }
+    for (_, idx) in &mut b.spans {
+        *idx += offset;
+    }
+    b
+}
+
 /// Dotted-leader entries stay on one row and use the title run's style.
 pub(crate) fn group_reading_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
     let mut blocks = Vec::new();
@@ -138,16 +156,16 @@ pub(crate) fn group_reading_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
         {
             // Tab leaders are a single reading row, even when the title, dots and page
             // number are separate text objects far apart. Do not merge neighbouring entries.
-            blocks.extend(group_layout(lines.get(start..offset).unwrap_or_default(), false));
+            blocks.extend(group_layout(lines.get(start..offset).unwrap_or_default(), false).into_iter().map(|b| shift_block_indices(b, start)));
             let mut line = first.clone();
             line.text = text;
             line.rect = row.iter().map(|line| line.rect).reduce(union).unwrap_or(first.rect);
-            blocks.extend(group_layout(std::slice::from_ref(&line), false));
+            blocks.extend(group_layout(std::slice::from_ref(&line), false).into_iter().map(|b| shift_block_indices(b, offset)));
             start = offset + row.len();
         }
         offset += row.len();
     }
-    blocks.extend(group_layout(lines.get(start..).unwrap_or_default(), false));
+    blocks.extend(group_layout(lines.get(start..).unwrap_or_default(), false).into_iter().map(|b| shift_block_indices(b, start)));
     blocks
 }
 

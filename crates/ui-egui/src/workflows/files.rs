@@ -782,7 +782,10 @@ impl PdfCraftApp {
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
         let ext = format.extension();
         let folder = document_folder(doc.path.as_deref());
-        let bytes = doc.export_office(format);
+        let export = doc.export_office_checked(format);
+        let bytes = export.bytes;
+        let truncated_pages = export.truncated_pages;
+        let unreadable_pages = export.unreadable_pages;
         let mut request =
             PickRequest::save("export.office").title(tl!("Export")).filter(ext.to_uppercase(), &[ext]).file_name(format!("{stem}.{ext}"));
         if let Some(folder) = folder {
@@ -791,7 +794,30 @@ impl PdfCraftApp {
         self.pick_file(request, None, move |app, _, picked| {
             let Some(path) = picked.first_path() else { return };
             match app.host.files().write(&path, &bytes, WriteIntent::SaveAs) {
-                Ok(_) => app.notify_fmt("Exported to {path}", &[("path", &path.display().to_string())]),
+                Ok(_) if truncated_pages.is_empty() && unreadable_pages.is_empty() => {
+                    app.notify_fmt("Exported to {path}", &[("path", &path.display().to_string())])
+                }
+                Ok(_) => {
+                    let limit_pages: Vec<String> =
+                        truncated_pages.iter().filter(|p| !unreadable_pages.contains(p)).map(|p| (p + 1).to_string()).collect();
+                    let read_pages: Vec<String> = unreadable_pages.iter().map(|p| (p + 1).to_string()).collect();
+                    let path_str = path.display().to_string();
+                    match (!limit_pages.is_empty(), !read_pages.is_empty()) {
+                        (true, false) => app.notify_fmt(
+                            "Exported to {path} (page text or images omitted on page(s) {pages} due to export or image budget limits)",
+                            &[("path", &path_str), ("pages", &limit_pages.join(", "))],
+                        ),
+                        (false, true) => app.notify_fmt(
+                            "Exported to {path} (page content omitted on page(s) {pages} due to unreadable content streams)",
+                            &[("path", &path_str), ("pages", &read_pages.join(", "))],
+                        ),
+                        (true, true) => app.notify_fmt(
+                            "Exported to {path} (text or images omitted due to export/image budget limits on page(s) {limit_pages} and unreadable content on page(s) {read_pages})",
+                            &[("path", &path_str), ("limit_pages", &limit_pages.join(", ")), ("read_pages", &read_pages.join(", "))],
+                        ),
+                        (false, false) => app.notify_fmt("Exported to {path}", &[("path", &path_str)]),
+                    }
+                }
                 Err(e) => app.notify_fmt("Couldn't write {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
             }
         });

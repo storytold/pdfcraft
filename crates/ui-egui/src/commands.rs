@@ -567,7 +567,7 @@ impl PdfCraftApp {
                 let on = !self.full_screen();
                 self.set_full_screen(on);
             }
-            "view.read_mode" => self.switch_mode(ctx, if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false),
+            "view.read_mode" => return Some(self.switch_mode(ctx, if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false)),
             "view.split" => self.toggle_split(ctx),
             crate::viewer_prefs::TOGGLE => self.toggle_interface(),
             "view.previous_view" | "view.next_view" => {
@@ -818,6 +818,7 @@ impl PdfCraftApp {
                 }
             }
             "export.docx" => self.export_office_dialog(ctx, pdfcraft_engine::compare::OfficeFormat::Docx),
+            "export.xlsx" => self.export_office_dialog(ctx, pdfcraft_engine::compare::OfficeFormat::Xlsx),
             "export.pptx" => self.export_office_dialog(ctx, pdfcraft_engine::compare::OfficeFormat::Pptx),
             "export.html" => self.export_office_dialog(ctx, pdfcraft_engine::compare::OfficeFormat::Html),
             "export.rtf" => self.export_office_dialog(ctx, pdfcraft_engine::compare::OfficeFormat::Rtf),

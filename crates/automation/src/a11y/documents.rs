@@ -5,7 +5,7 @@ impl Automation {
         let path = self.resolve(a.str("path")?, true)?;
         let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
         let format = pdfcraft_engine::compare::OfficeFormat::from_extension(&ext)
-            .ok_or_else(|| ToolError::InvalidArgs(format!("unsupported extension {ext:?} (docx, pptx, html, rtf or md)")))?;
+            .ok_or_else(|| ToolError::InvalidArgs(format!("unsupported extension {ext:?} (docx, xlsx, pptx, html, rtf or md)")))?;
         let html_mode = a.opt_str("html_mode")?.unwrap_or("rich");
         let format = match (format, html_mode) {
             (pdfcraft_engine::compare::OfficeFormat::Html, "rich") => pdfcraft_engine::compare::OfficeFormat::Html,
@@ -17,13 +17,26 @@ impl Automation {
         write_atomic(&path, &export.bytes)?;
         // Text left out to keep a hostile page bounded is said, not silent (#3120).
         let truncated: Vec<usize> = export.truncated_pages.iter().map(|p| p.saturating_add(1)).collect();
+        let unreadable: Vec<usize> = export.unreadable_pages.iter().map(|p| p.saturating_add(1)).collect();
         let mut out = json!({ "path": path.to_string_lossy(), "bytes": export.bytes.len(), "format": format.extension(),
             "truncated": !truncated.is_empty(), "truncated_pages": truncated });
-        if !export.truncated_pages.is_empty() {
+        let mut warnings = Vec::new();
+        let limit_pages: Vec<usize> =
+            export.truncated_pages.iter().filter(|p| !export.unreadable_pages.contains(p)).map(|p| p.saturating_add(1)).collect();
+        if !limit_pages.is_empty() {
             use pdfcraft_engine::compare::{MAX_FORM_DEPTH, MAX_FORM_VISITS};
-            out["warnings"] = json!([format!(
-                "pictures past what one export may hold or decode, or forms nested more than {MAX_FORM_DEPTH} deep, or past the first {MAX_FORM_VISITS} forms of a page (forms the page draws itself count too), were left out on the pages in truncated_pages: their text and images are missing from the export, although the viewer may still show them"
-            )]);
+            warnings.push(format!(
+                "pictures past what one export may hold or decode, or forms nested more than {MAX_FORM_DEPTH} deep, or past the first {MAX_FORM_VISITS} forms of a page (forms the page draws itself count too), were left out on the pages in truncated_pages ({limit_pages:?}): their text and images are missing from the export, although the viewer may still show them"
+            ));
+        }
+        if !unreadable.is_empty() {
+            warnings.push(format!(
+                "unreadable or oversized /Contents streams could not be decoded on page(s) {:?}: their text is missing from the export, although the viewer may still show them",
+                unreadable
+            ));
+        }
+        if !warnings.is_empty() {
+            out["warnings"] = json!(warnings);
         }
         Ok(out)
     }

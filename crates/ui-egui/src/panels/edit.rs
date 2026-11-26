@@ -288,6 +288,17 @@ fn centred_text(cx: &craft::ui::primitives::ContentPainterCx<'_>, at: egui::Pos2
 /// new text gets.
 fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     use crate::format_text_ui::{Target, panel};
+    let can_modify = app.active_ids().and_then(|(_, id)| app.session.get(id)).is_some_and(|d| d.allows_modification());
+    if can_modify && let Some((i, doc_id)) = app.active_ids() {
+        craft::ui::choice::Checkbox::new(Bind::bound(&mut app.views[i].session.vector_edit_mode))
+            .label(tl!("Edit vector lines & borders").to_string())
+            .show(ui);
+        ui.add_space(4.0);
+        if let Some(doc) = app.session.get(doc_id) {
+            crate::canvas::sync_vector_line_selection(&mut app.views[i].session, doc);
+        }
+        crate::editing::line_properties_panel(ui, &mut app.views[i].session);
+    }
     // Editing a paragraph of existing text: its formatting, applied as it changes.
     if let Some((i, _)) = app.active_ids()
         && let Some(ed) = app.views[i].session.line_editor.clone()
@@ -304,6 +315,10 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         let fmt = ed.selection_formatting(&sources);
         ed.sync_selection_look(&fmt);
         panel(app, ui, i, Target::Paragraph(Box::new(ed)), Some(&fmt), &sources);
+        ui.add_space(4.0);
+        craft::ui::choice::Checkbox::new(Bind::bound(&mut app.views[i].session.reflow_paragraphs))
+            .label(tl!("Reflow paragraphs below").to_string())
+            .show(ui);
         return;
     }
     // Typing added text: the box's formatting, and alignment for the lines a selection touches.
@@ -397,7 +412,14 @@ impl PdfCraftApp {
 
     /// Apply the open paragraph's formatting as one change; the paragraph stays open.
     pub(crate) fn apply_line_format(&mut self, ctx: &egui::Context, index: usize, mut ed: crate::edit_text_ui::LineEditor) {
-        let edit = pdfcraft_engine::Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text.clone(), style: ed.style() };
+        if let Some(doc) = self.session.get(self.views[index].id) {
+            let xf = self.views[index].page_xform(ed.page);
+            ed.refresh_measured_h(ctx, doc, xf.as_ref());
+        }
+        let reflow = self.views[index].session.reflow_paragraphs;
+        let page_blocks = if reflow { self.session.get(self.views[index].id).map(|d| d.text_blocks(ed.page)) } else { None };
+        let edit = crate::edit_text_ui::finished_edit_with_reflow(ed.clone(), reflow, page_blocks.as_deref())
+            .unwrap_or_else(|| pdfcraft_engine::Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text.clone(), style: ed.style() });
         if self.apply_edit(ctx, edit) {
             ed.applied();
             if let Some(doc) = self.session.get(self.views[index].id)

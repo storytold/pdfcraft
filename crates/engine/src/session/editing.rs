@@ -32,6 +32,22 @@ fn prepare_ocr_text_edit(editor: &mut crate::history::Editor, info: &pdfcraft_re
             }
             Edit::EditTextBlock { page, block, text, style }
         }
+        Edit::Batch { label, edits } => {
+            let mut prepared = Vec::with_capacity(edits.len());
+            let mut dropped_any = false;
+            for inner in edits {
+                match prepare_ocr_text_edit(editor, info, inner) {
+                    Some(e) => prepared.push(e),
+                    None => dropped_any = true,
+                }
+            }
+            // Reflow batches pair MoveObjects shifts with the EditTextBlock that caused them:
+            // if the OCR draft had zero word changes, drop the whole batch so nothing moves.
+            if dropped_any && prepared.iter().all(|e| matches!(e, Edit::MoveObjects { .. })) {
+                return None;
+            }
+            Edit::Batch { label, edits: prepared }
+        }
         other => other,
     })
 }
@@ -123,6 +139,13 @@ fn sync_script_history(doc: &Document, previous: &pdfcraft_cos::Document, restor
 }
 
 impl Session {
+    /// Generate a QR code encoding `text` and place it onto `page` at `rect`.
+    pub fn add_qr_code(&mut self, id: DocId, page: usize, text: &str, rect: Option<[f64; 4]>) -> Result<(), EditError> {
+        let matrix = crate::qr::QrCode::encode_text(text).map_err(|e| EditError::Invalid(e.to_string()))?;
+        let png_bytes = matrix.to_png_bytes(8, 4).map_err(|e| EditError::Invalid(e.to_string()))?;
+        self.apply(id, Edit::AddImage { page, rect, name: "QRCode.png".into(), bytes: Arc::new(png_bytes) })
+    }
+
     /// Apply an edit. On success the previous state is undoable and the view data is refreshed.
     pub fn apply(&mut self, id: DocId, edit: Edit) -> Result<(), EditError> {
         self.apply_reporting(id, edit).map(|_| ())
@@ -603,6 +626,8 @@ impl Session {
                     | Edit::ReplaceImage { .. }
                     | Edit::PasteContent { .. }
                     | Edit::EditPageImage { .. }
+                    | Edit::UpdateLineEndpoints { .. }
+                    | Edit::SetLineProperties { .. }
             ) || matches!(e, Edit::MoveObjects { objects, .. } | Edit::DeleteObjects { objects, .. } if objects.iter().any(|o| o.kind == ObjectKind::Added))
         });
         let touches_marks = edit.is_none_or(|e| {
@@ -814,4 +839,143 @@ fn edit_notices(edit: &Edit, prev: &pdfcraft_cos::Document, next: &pdfcraft_cos:
         }
     }
     notices
+}
+
+#[cfg(test)]
+mod ocr_batch_tests {
+    use super::*;
+    use crate::ObjectTarget;
+    use crate::ocr::PlacedWord;
+    use pdfcraft_render::{PageRenderer, RenderRequest};
+
+    const PAPER: [u8; 3] = [230, 225, 200];
+    const INK: [u8; 3] = [20, 30, 90];
+    // Top-down image pixels over the second OCR word ("Smith" at PDF x=70..100, y=100..120 on height=140).
+    const SMITH_PX: [u32; 4] = [70, 20, 100, 40];
+
+    fn near(a: [u8; 3], b: [u8; 3]) -> bool {
+        a.iter().zip(b).all(|(x, y)| x.abs_diff(y) <= 24)
+    }
+
+    fn scanned_reflow_doc() -> (Session, DocId) {
+        let (w, h) = (200u32, 140u32);
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let ink = (40..100).contains(&x) && (SMITH_PX[1]..SMITH_PX[3]).contains(&y);
+                rgba.extend(if ink { INK } else { PAPER });
+                rgba.push(255);
+            }
+        }
+        let png = crate::export::encode_png(w, h, &rgba).unwrap();
+        let mut s = Session::new();
+        let bytes = s.create_from_images(&[("scan.png".into(), png)]).unwrap();
+        let id = s.open("scan.pdf", None, bytes, None).unwrap();
+        let word = |text: &str, x0: f64, x1: f64, y0: f64| PlacedWord {
+            text: text.into(),
+            origin: [x0, y0],
+            across: [x1 - x0, 0.0],
+            up: [0.0, 20.0],
+            confidence: None,
+            source: "ocrs".into(),
+        };
+        s.apply(
+            id,
+            Edit::AddOcrText {
+                page: 0,
+                words: vec![word("John", 40.0, 66.0, 100.0), word("Smith", 70.0, 100.0, 100.0), word("Below", 40.0, 80.0, 40.0)],
+            },
+        )
+        .unwrap();
+        (s, id)
+    }
+
+    fn block_index(doc: &Document, text: &str) -> (usize, [f64; 4]) {
+        doc.text_blocks(0).iter().enumerate().find(|(_, b)| b.text == text).map(|(i, b)| (i, b.rect)).unwrap()
+    }
+
+    #[test]
+    fn reflow_batch_preserves_ocr_cover_ink_and_changed_words_only() {
+        let (mut s, id) = scanned_reflow_doc();
+        let (phrase_idx, _) = block_index(s.get(id).unwrap(), "John Smith");
+        let (below_idx, below_before) = block_index(s.get(id).unwrap(), "Below");
+        let batch = Edit::Batch {
+            label: "Edit text and reflow paragraphs".into(),
+            edits: vec![
+                Edit::MoveObjects { page: 0, objects: vec![ObjectTarget { kind: ObjectKind::Text, index: below_idx }], offset: [0.0, -15.0] },
+                Edit::EditTextBlock { page: 0, block: phrase_idx, text: "John Smyth".into(), style: Default::default() },
+            ],
+        };
+        s.apply(id, batch).unwrap();
+
+        let doc = s.get(id).unwrap();
+        assert_eq!(doc.can_undo(), Some("Edit text and reflow paragraphs"));
+        let blocks = doc.text_blocks(0);
+        let kept_john = blocks.iter().find(|b| b.text == "John").expect("kept OCR word stays as scan");
+        let drawn_smyth = blocks.iter().find(|b| b.text == "Smyth").expect("changed OCR word is redrawn");
+        assert!(kept_john.invisible, "changed_words_only must keep unchanged 'John' invisible");
+        assert!(!drawn_smyth.invisible, "changed 'Smyth' must be drawn visibly");
+
+        let (_, below_after) = block_index(doc, "Below");
+        assert!(below_after[1] < below_before[1] - 10.0, "reflow MoveObjects must shift paragraph below: {below_before:?} -> {below_after:?}");
+
+        let out = PageRenderer::new(doc.bytes.clone(), Default::default()).render(RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        assert!(out.error.is_none(), "{:?}", out.error);
+        let (mut paper_count, mut ink_count, mut total) = (0usize, 0usize, 0usize);
+        for y in SMITH_PX[1] + 2..SMITH_PX[3] - 2 {
+            for x in SMITH_PX[0] + 2..SMITH_PX[2] - 2 {
+                let i = ((y * out.width + x) * 4) as usize;
+                let px = [out.rgba[i], out.rgba[i + 1], out.rgba[i + 2]];
+                paper_count += usize::from(near(px, PAPER));
+                ink_count += usize::from(near(px, INK));
+                total += 1;
+            }
+        }
+        assert!(paper_count * 10 > total * 4, "scan cover must mask old ink: {paper_count} of {total}");
+        assert!(ink_count * 100 > total * 2, "new text must render in sampled scan ink: {ink_count} of {total}");
+
+        s.undo(id).unwrap();
+        let restored = s.get(id).unwrap();
+        assert!(restored.text_blocks(0).iter().any(|b| b.text == "John Smith" && b.invisible));
+        assert_eq!(block_index(restored, "Below").1, below_before);
+    }
+
+    #[test]
+    fn reflow_batch_with_zero_ocr_word_changes_is_noop() {
+        let (mut s, id) = scanned_reflow_doc();
+        let (phrase_idx, _) = block_index(s.get(id).unwrap(), "John Smith");
+        let (below_idx, below_before) = block_index(s.get(id).unwrap(), "Below");
+        let bytes_before = s.get(id).unwrap().bytes.clone();
+        let gen_before = s.get(id).unwrap().edit_generation();
+
+        let batch = Edit::Batch {
+            label: "Edit text and reflow paragraphs".into(),
+            edits: vec![
+                Edit::MoveObjects { page: 0, objects: vec![ObjectTarget { kind: ObjectKind::Text, index: below_idx }], offset: [0.0, -15.0] },
+                Edit::EditTextBlock { page: 0, block: phrase_idx, text: "John Smith ".into(), style: Default::default() },
+            ],
+        };
+        s.apply(id, batch.clone()).unwrap();
+
+        let doc = s.get(id).unwrap();
+        assert_eq!(doc.bytes, bytes_before, "unchanged OCR reflow batch must leave bytes alone");
+        assert_eq!(doc.edit_generation(), gen_before, "unchanged OCR reflow batch must not bump edit generation");
+        assert_eq!(doc.can_undo(), None, "unchanged OCR reflow batch must push no undo step");
+        assert_eq!(block_index(doc, "Below").1, below_before, "companion MoveObjects must not run when OCR edit is a no-op");
+
+        // Direct checks on prepare_ocr_text_edit: nested unchanged batch drops cleanly, standalone MoveObjects batch stays intact.
+        let doc_mut = s.doc_mut(id).unwrap();
+        let info = doc_mut.info.clone();
+        let editor = doc_mut.editor.as_mut().unwrap();
+        assert!(prepare_ocr_text_edit(editor, &info, Edit::Batch { label: "Outer".into(), edits: vec![batch] }).is_none());
+        let move_only = Edit::Batch {
+            label: "Move".into(),
+            edits: vec![Edit::MoveObjects {
+                page: 0,
+                objects: vec![ObjectTarget { kind: ObjectKind::Text, index: below_idx }],
+                offset: [0.0, -15.0],
+            }],
+        };
+        assert!(prepare_ocr_text_edit(editor, &info, move_only).is_some());
+    }
 }

@@ -1,0 +1,18 @@
+[package]
+name = "pdf-typographic-converter"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[dependencies]
+pdfium-render = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+docx-rs = "0.4"
+rust_xlsxwriter = "0.80"
+png = "0.17"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+
+[lints]
+workspace = true

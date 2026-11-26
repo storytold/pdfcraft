@@ -233,7 +233,8 @@ pub(crate) fn tool_selects_text(tool: QuickTool, preparing: bool) -> bool {
         | QuickTool::Link
         | QuickTool::SignArea { .. }
         | QuickTool::MarqueeZoom
-        | QuickTool::Snapshot => false,
+        | QuickTool::Snapshot
+        | QuickTool::QrBarcode => false,
     }
 }
 
@@ -417,6 +418,7 @@ pub(crate) fn page_tool<'a>(
         QuickTool::Link => Arm::Area(Box::new(LinkTool::new(session, cx.pages, cx.info, *press))),
         QuickTool::SignArea { certify } => Arm::SignArea(SignAreaTool::new(certify, &mut session.box_drag, cx.pages, cx.rotation, cx.info)),
         QuickTool::Snapshot => Arm::Snapshot(SnapshotTool::new(&mut session.box_drag, cx.pages, cx.rotation, size)),
+        QuickTool::QrBarcode => Arm::Hand(hand(session, cx.navigation)),
     };
     PageTool {
         arm,
@@ -597,6 +599,7 @@ pub(crate) fn edit_text_press(
                         let edit_on_click = matches!(tool, QuickTool::AddText | QuickTool::EditText);
                         crate::tools::content_ui::added_press(session, doc, pages, &forwarded, edit_on_click)
                     }
+                    pdfcraft_engine::ObjectKind::VectorLine => None,
                 };
             }
             crate::tools::object_ui::objects_press(session, doc, info, press, geo)

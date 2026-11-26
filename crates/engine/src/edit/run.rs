@@ -121,6 +121,8 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::UpdateContent { .. }
         | Edit::MoveObjects { .. }
         | Edit::DeleteObjects { .. }
+        | Edit::UpdateLineEndpoints { .. }
+        | Edit::SetLineProperties { .. }
         | Edit::DeleteContent { .. }
         | Edit::ReplaceImage { .. }
         | Edit::PasteContent { .. }
@@ -935,6 +937,12 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
         Edit::DeleteObjects { page, objects } => crate::object_clip::delete(doc, *page, objects, |doc, edit| run_edit(doc, edit, cx))?,
         Edit::PasteObjects { page, clip, offset } => crate::object_clip::paste(doc, *page, clip, *offset)?,
+        Edit::UpdateLineEndpoints { page, target, new_start, new_end } => {
+            pdfcraft_edit::update_line_endpoints(doc, *page, *target, *new_start, *new_end)?;
+        }
+        Edit::SetLineProperties { page, target, color, width, dash } => {
+            pdfcraft_edit::set_line_properties(doc, *page, *target, *color, *width, dash.clone())?;
+        }
         Edit::EditTextBlock { page, block, text, style } => {
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;
         }
@@ -1181,6 +1189,36 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
     Ok(())
 }
 
+fn line_edit_target(edit: &Edit) -> Option<(usize, crate::ObjectTarget)> {
+    match edit {
+        Edit::UpdateLineEndpoints { page, target, .. } | Edit::SetLineProperties { page, target, .. } => Some((*page, *target)),
+        _ => None,
+    }
+}
+
+fn check_line_batch_target(
+    doc: &pdfcraft_cos::Document,
+    page: usize,
+    target: crate::ObjectTarget,
+    initial_lines: &std::collections::BTreeMap<usize, Vec<pdfcraft_edit::LineSegment>>,
+    edited_targets: &std::collections::BTreeSet<(usize, crate::ObjectTarget)>,
+) -> Result<(), EditError> {
+    let Some(initial) = initial_lines.get(&page) else { return Ok(()) };
+    let current = pdfcraft_edit::editable_lines(doc, page)?;
+    if current.len() != initial.len() {
+        return Err(EditError::Invalid("line batch changed the page line inventory; select lines again".into()));
+    }
+    if !edited_targets.contains(&(page, target)) {
+        let orig = initial.get(target.index);
+        let now = current.get(target.index);
+        let unchanged = orig.zip(now).is_some_and(|(a, b)| a.rect_op == b.rect_op && a.start == b.start && a.end == b.end);
+        if !unchanged {
+            return Err(EditError::Invalid("line batch target changed after an earlier edit; select lines again".into()));
+        }
+    }
+    Ok(())
+}
+
 /// Apply an edit batch while keeping reset deferral scoped to adjacent script writeback.
 fn run_batch(doc: &mut pdfcraft_cos::Document, edits: &[Edit], cx: &mut EditCtx) -> Result<(), EditError> {
     // A form-script event runs on its own: in a batch, its scripts and those the batch's
@@ -1199,12 +1237,30 @@ fn run_batch(doc: &mut pdfcraft_cos::Document, edits: &[Edit], cx: &mut EditCtx)
             _ => writes_values = false,
         }
     }
+    let line_edit_count = edits.iter().filter(|e| line_edit_target(e).is_some()).count();
+    let mut initial_lines = std::collections::BTreeMap::new();
+    if line_edit_count > 1 {
+        for (page, _) in edits.iter().filter_map(line_edit_target) {
+            if let std::collections::btree_map::Entry::Vacant(entry) = initial_lines.entry(page) {
+                entry.insert(pdfcraft_edit::editable_lines(doc, page)?);
+            }
+        }
+    }
+    let mut edited_targets = std::collections::BTreeSet::new();
     let deferred = cx.defer_reset_callbacks;
     for (index, e) in edits.iter().enumerate() {
+        if let Some((page, target)) = line_edit_target(e)
+            && !edited_targets.is_empty()
+        {
+            check_line_batch_target(doc, page, target, &initial_lines, &edited_targets)?;
+        }
         cx.defer_reset_callbacks = script_writeback[index];
         let result = run_edit(doc, e, cx);
         cx.defer_reset_callbacks = deferred;
         result?;
+        if let Some((page, target)) = line_edit_target(e) {
+            edited_targets.insert((page, target));
+        }
         if let Some(js) = cx.js.as_mut() {
             if js.refused.is_some() {
                 break;
@@ -1213,4 +1269,82 @@ fn run_batch(doc: &mut pdfcraft_cos::Document, edits: &[Edit], cx: &mut EditCtx)
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod line_batch_tests {
+    use super::*;
+    use crate::{ObjectKind, ObjectTarget, Session};
+    use pdfcraft_cos::{Dict, Object, SaveOptions, Stream, write_full};
+
+    fn pdf_with_stream(stream_bytes: &[u8]) -> Arc<Vec<u8>> {
+        let mut cos = pdfcraft_cos::Document::new_empty();
+        let pages = cos.get(cos.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+        let stream_ref = cos.add(Object::Stream(Stream::from_raw(Dict::new(), stream_bytes.to_vec())));
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Parent".to_vec(), Object::Ref(pages));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 200.into(), 200.into()]));
+        page.set(b"Contents".to_vec(), Object::Ref(stream_ref));
+        let page_ref = cos.add(page);
+        cos.update_dict(pages, |d| {
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page_ref)]));
+            d.set(b"Count".to_vec(), Object::Int(1));
+        })
+        .unwrap();
+        Arc::new(write_full(&cos, &SaveOptions::default()).unwrap())
+    }
+
+    #[test]
+    fn batch_rejects_shifted_line_targets_after_zero_width_rect_expansion() {
+        let mut s = Session::new();
+        let bytes = pdf_with_stream(b"0 0 0 10 re S 20 0 m 30 0 l S 40 0 m 50 0 l S 60 0 m 70 0 l S\n");
+        let id = s.open("lines.pdf", None, bytes, None).unwrap();
+        let before = s.get(id).unwrap().editable_lines(0).unwrap();
+        assert_eq!(before.len(), 5);
+
+        // Index 0 is the zero-width rect's right edge; widening it exposes 2 new horizontal edges and shifts indices 2..4.
+        // Index 4 was originally the third standalone line (60..70), which would collide with an earlier line after shift.
+        let batch = Edit::Batch {
+            label: "Batch line edit".into(),
+            edits: vec![
+                Edit::UpdateLineEndpoints {
+                    page: 0,
+                    target: ObjectTarget { kind: ObjectKind::VectorLine, index: 0 },
+                    new_start: [10.0, 0.0],
+                    new_end: [10.0, 10.0],
+                },
+                Edit::SetLineProperties {
+                    page: 0,
+                    target: ObjectTarget { kind: ObjectKind::VectorLine, index: 4 },
+                    color: Some([1.0, 0.0, 0.0]),
+                    width: Some(3.0),
+                    dash: None,
+                },
+            ],
+        };
+        assert!(s.apply(id, batch).is_err(), "stale line target after inventory shift must fail atomically");
+        let after = s.get(id).unwrap().editable_lines(0).unwrap();
+        assert_eq!(after, before, "rejected line batch must leave all lines untouched");
+    }
+
+    #[test]
+    fn batch_allows_combined_style_and_endpoints_on_same_line() {
+        let mut s = Session::new();
+        let bytes = pdf_with_stream(b"10 20 m 100 20 l S\n");
+        let id = s.open("one.pdf", None, bytes, None).unwrap();
+        let target = ObjectTarget { kind: ObjectKind::VectorLine, index: 0 };
+        let batch = Edit::Batch {
+            label: "Edit line".into(),
+            edits: vec![
+                Edit::SetLineProperties { page: 0, target, color: Some([1.0, 0.0, 0.0]), width: Some(4.0), dash: None },
+                Edit::UpdateLineEndpoints { page: 0, target, new_start: [15.0, 25.0], new_end: [115.0, 25.0] },
+            ],
+        };
+        s.apply(id, batch).unwrap();
+        let after = s.get(id).unwrap().editable_lines(0).unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].start, [15.0, 25.0]);
+        assert!((after[0].thickness - 4.0).abs() < 1e-4);
+    }
 }

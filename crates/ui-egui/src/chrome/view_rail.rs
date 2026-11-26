@@ -84,6 +84,28 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut Ui) {
     IconButton::command(IconId::new("maximize_2"), "view.fit_toggle").show(ui);
     IconButton::command(IconId::new("rotate_cw"), "view.rotate.cw").show(ui);
 
+    // Reading Eye-Strain Background Tint: primary click cycles Default -> Light -> Dark;
+    // right-click or the context/settings action opens the Tint settings window with keyboard focus.
+    let bg_mode = app.reading_bg.mode;
+    let bg_active = bg_mode != crate::canvas::PageBackground::Default;
+    let bg_tip =
+        crate::i18n::fmt(tl!("Eye strain background: {mode} (click to cycle, right-click for tint settings)"), &[("mode", tl!(bg_mode.label()))]);
+    let bg_btn = IconButton::new(IconId::new(bg_mode.icon())).label(bg_tip).selected(bg_active).show(ui);
+    if bg_btn.clicked() {
+        app.reading_bg.cycle_mode();
+        ui.ctx().request_repaint();
+    }
+    if bg_btn.response.secondary_clicked() {
+        app.reading_bg.toggle_picker(bg_btn.response.id);
+        ui.ctx().request_repaint();
+    }
+    let tint_btn =
+        IconButton::new(IconId::new("sliders-horizontal")).label(tl!("Eye strain tint settings")).selected(app.reading_bg.picker_open).show(ui);
+    if tint_btn.clicked() {
+        app.reading_bg.toggle_picker(tint_btn.response.id);
+        ui.ctx().request_repaint();
+    }
+
     // The rows' marks come from the commands' checked state (the catalog), not from here.
     let display_icon = if view.view.display == PageDisplay::Single { "file-text" } else { "columns-2" };
     let display = IconButton::new(IconId::new(display_icon)).label("Page display").popup(PopupKind::Menu).show(ui);

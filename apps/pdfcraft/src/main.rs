@@ -393,6 +393,7 @@ fn native_options(integrated: bool, renderer: eframe::Renderer) -> eframe::Nativ
     // provider would read every installed face, including proprietary ones, into every UI pass.
     native.system_font_fallback = false;
     if renderer == eframe::Renderer::Wgpu {
+        native.wgpu_options.surface.desired_maximum_frame_latency = Some(1);
         configure_gpu(&mut native);
     }
     native

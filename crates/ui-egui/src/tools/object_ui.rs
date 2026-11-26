@@ -34,6 +34,10 @@ pub(crate) struct ObjectSelection {
     select_paragraph: Option<(usize, usize)>,
     /// Modifiers held when a marquee drag started, so releasing Shift before the mouse button still extends.
     marquee_mods: Mods,
+    /// Axis locked during a Shift-constrained object drag: `Some(true)` locks horizontal, `Some(false)` vertical.
+    shift_axis: Option<bool>,
+    /// Page and press origin where `modified_press` claimed `Down`, so Shift changes mid-drag never steal `Release`.
+    modified_down: Option<(usize, Pos2)>,
 }
 
 impl ObjectSelection {
@@ -100,6 +104,8 @@ impl ObjectSelection {
         self.selected.clear();
         self.pending = None;
         self.select_paragraph = None;
+        self.shift_axis = None;
+        self.modified_down = None;
     }
 
     /// Select paragraph `block` of `page` as an object at the next `prepare`, as Acrobat does
@@ -269,14 +275,21 @@ pub(crate) fn modified_press_at(session: &mut PageSession, doc: &Document, info:
 pub(crate) fn modified_press(session: &mut PageSession, doc: &Document, info: &DocInfo, press: &PagePress, geo: PageGeometry<'_>) -> bool {
     let Some(xf) = session.page_xform(press.page, geo) else { return false };
     match press.phase {
-        PressPhase::Down { start, .. } => modified_press_at(session, doc, info, press.page, &xf, start.origin),
-        // The rest of a press its Down took is the toggle's too: its release is no click on what lies under it
-        // (a click on added text would open it for typing).
-        _ => press.phase.start().is_some_and(|start| match modified_target(session, doc, press.page, &xf, start.origin) {
-            ModifiedTarget::None => false,
-            ModifiedTarget::Refused(_) => true,
-            ModifiedTarget::Objects(objects) => object_at(&xf, info, press.page, &objects, start.origin).is_some(),
-        }),
+        PressPhase::Down { start, .. } => {
+            let claimed = modified_press_at(session, doc, info, press.page, &xf, start.origin);
+            session.objects.modified_down = claimed.then_some((press.page, start.origin));
+            claimed
+        }
+        // Only claim non-Down phases of a press whose Down actually belonged to modified_press,
+        // so holding Shift on release after a normal drag does not swallow Release and skip the move.
+        PressPhase::Release { .. } | PressPhase::Cancel { .. } => {
+            let claimed = press.phase.start().is_some_and(|start| session.objects.modified_down == Some((press.page, start.origin)));
+            if claimed {
+                session.objects.modified_down = None;
+            }
+            claimed
+        }
+        _ => press.phase.start().is_some_and(|start| session.objects.modified_down == Some((press.page, start.origin))),
     }
 }
 
@@ -416,14 +429,47 @@ pub(crate) fn object_controls(
         if s.page != Some(page) || s.selected.is_empty() {
             continue;
         }
-        let offset = presses
-            .iter()
-            .filter(|p| p.page == page && matches!(p.owner, Owner::Objects { .. } | Owner::Frame { .. }))
-            .find_map(|p| match &p.phase {
-                PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } => Some(*pos - start.origin),
+        let active_drag = presses.iter().filter(|p| p.page == page && matches!(p.owner, Owner::Objects { .. } | Owner::Frame { .. })).find_map(|p| {
+            match &p.phase {
+                PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } => Some((*pos - start.origin, p.mods.shift)),
                 _ => None,
-            })
-            .unwrap_or(Vec2::ZERO);
+            }
+        });
+        let offset = match active_drag {
+            Some((mut delta, true)) => {
+                // Only lock the constraint axis once pointer displacement clears micro-jitter,
+                // avoiding permanent horizontal lock on an initial zero-delta DragStart frame.
+                let horiz = if let Some(lock) = session.objects.shift_axis {
+                    lock
+                } else if delta.x.abs() > 2.0 || delta.y.abs() > 2.0 {
+                    *session.objects.shift_axis.insert(delta.x.abs() >= delta.y.abs())
+                } else {
+                    delta.x.abs() >= delta.y.abs()
+                };
+                if horiz {
+                    delta.y = 0.0;
+                } else {
+                    delta.x = 0.0;
+                }
+                delta
+            }
+            Some((delta, false)) => {
+                session.objects.shift_axis = None;
+                delta
+            }
+            None => {
+                // Keep shift_axis only while Release is queued this frame so objects_press can consume it;
+                // clear on idle or Cancel frames so a prior drag never leaves stale axis lock behind.
+                let releasing = presses.iter().any(|p| {
+                    p.page == page && matches!(p.owner, Owner::Objects { .. } | Owner::Frame { .. }) && matches!(p.phase, PressPhase::Release { .. })
+                });
+                if !releasing {
+                    session.objects.shift_axis = None;
+                }
+                Vec2::ZERO
+            }
+        };
+        let s = &session.objects;
         let rects: Vec<Rect> = s.selected.iter().map(|o| screen(&xf, info, page, o)).collect();
         let shown: Vec<BezPath> = rects.iter().map(|r| outline_path(body, r.translate(offset))).collect();
         SelectionOutline::solid(tl!("Selected object"), &shown).color(accent_ink(ui, 1.0)).show(ui);
@@ -499,9 +545,25 @@ pub(crate) fn objects_press(session: &mut PageSession, doc: &Document, _info: &D
             }
             None
         }
-        PressPhase::Release { start, pos, .. } => {
+        PressPhase::Release { start, mut pos, .. } => {
+            session.objects.modified_down = None;
+            let locked_axis = if press.mods.shift {
+                session.objects.shift_axis.take()
+            } else {
+                session.objects.shift_axis = None;
+                None
+            };
             if start.origin.distance(pos) <= 3.0 || session.pending_edit.is_some() {
                 return None;
+            }
+            if press.mods.shift {
+                let d = pos - start.origin;
+                let horiz = locked_axis.unwrap_or_else(|| d.x.abs() >= d.y.abs());
+                if horiz {
+                    pos.y = start.origin.y;
+                } else {
+                    pos.x = start.origin.x;
+                }
             }
             let xf = session.page_xform(page, geo)?;
             let (a, b) = (xf.screen_to_view(start.origin), xf.screen_to_view(pos));
@@ -512,6 +574,11 @@ pub(crate) fn objects_press(session: &mut PageSession, doc: &Document, _info: &D
                     None
                 }
             }
+        }
+        PressPhase::Cancel { .. } => {
+            session.objects.shift_axis = None;
+            session.objects.modified_down = None;
+            None
         }
         _ => None,
     }

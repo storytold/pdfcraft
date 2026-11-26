@@ -35,7 +35,9 @@ macro_rules! tl_ctx {
         $crate::i18n::tr_ctx($crate::i18n::current(), $context, $s)
     };
 }
+pub mod barcode_hud;
 pub mod canvas;
+pub mod canvas_selection;
 mod chrome;
 pub use combine_ui::{CombineView, Lock as CombineLock, SortKey};
 mod commands;
@@ -63,6 +65,7 @@ pub use print_ui::{
 };
 pub use redact_ui::{HiddenDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
+pub mod symbol_palette;
 pub mod viewer_prefs;
 // PLAN: the lead adds `mod notices; mod icons; mod brand; mod colour_picker; pub mod fonts;` here, and `pub mod settings;` in app.rs, at combine (L-212).
 
@@ -71,7 +74,7 @@ use pdfcraft_engine::{DocId, Session};
 pub use app::AppServices;
 #[cfg(not(target_arch = "wasm32"))]
 pub use app::UpdateSource;
-pub use canvas::DocView;
+pub use canvas::{DocView, ReadingBgState};
 
 /// Smallest window the shell is laid out for, in egui points (logical pixels, so the OS scale
 /// factor is already applied: 480 points are 600 px at 125 % and 720 px at 150 %). 480 is half of a
@@ -324,6 +327,8 @@ pub struct PdfCraftApp {
     /// The reading-colours preference (Preferences ▸ Reading colours): applied to every open
     /// document, and documents open with it (Acrobat's Replace Document Colors).
     pub reading_colors: pdfcraft_render::ReadingColors,
+    /// Session-persistent eye-strain reading background preference and tint settings.
+    pub reading_bg: ReadingBgState,
     /// App-wide page decoration only; never part of a PDF edit or render request.
     pub show_page_edge_shadows: bool,
     /// How far a mouse-wheel notch scrolls.

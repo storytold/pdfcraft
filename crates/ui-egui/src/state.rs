@@ -61,6 +61,8 @@ pub enum RightPanel {
 pub enum QuickTool {
     Select,
     Hand,
+    /// Click a barcode or QR code on the page to open its HUD.
+    QrBarcode,
     /// A commenting tool (Add comments).
     Comment(comments::CommentTool),
     Measure(measure_ui::Tool),

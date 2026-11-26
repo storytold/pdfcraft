@@ -144,6 +144,188 @@ pub(crate) fn snapshot_tab_name(title: &str, file_name: &str, snapshot: &Snapsho
     }
 }
 
+/// Viewport reading background preference to reduce eye strain (Light, Default, Dark).
+/// Strictly a non-destructive UI/reading setting: does not alter the PDF file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PageBackground {
+    #[default]
+    Default,
+    Light,
+    Dark,
+}
+
+impl PageBackground {
+    pub const ALL: [Self; 3] = [Self::Default, Self::Light, Self::Dark];
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Default => Self::Light,
+            Self::Light => Self::Dark,
+            Self::Dark => Self::Default,
+        }
+    }
+
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::Default => "sun",
+            Self::Light => "contrast",
+            Self::Dark => "moon",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Default => "Default",
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+        }
+    }
+
+    pub fn color(self) -> Option<Color32> {
+        match self {
+            Self::Default => None,
+            Self::Light => Some(Color32::from_rgb(0xF5, 0xF2, 0xEB)),
+            Self::Dark => Some(Color32::from_rgb(0x1E, 0x1E, 0x1E)),
+        }
+    }
+}
+
+/// Global reading background and tint overlay preference (session-persistent).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReadingBgState {
+    pub mode: PageBackground,
+    pub color: Color32,
+    pub tint_strength: f32,
+    pub picker_open: bool,
+    pub picker_opener: Option<egui::Id>,
+    pub picker_focus_pending: bool,
+}
+
+impl Default for ReadingBgState {
+    fn default() -> Self {
+        Self {
+            mode: PageBackground::Default,
+            color: Color32::from_rgb(0x1E, 0x1E, 0x1E),
+            tint_strength: 0.5,
+            picker_open: false,
+            picker_opener: None,
+            picker_focus_pending: false,
+        }
+    }
+}
+
+impl ReadingBgState {
+    pub fn cycle_mode(&mut self) {
+        self.mode = self.mode.next();
+        self.color = match self.mode {
+            PageBackground::Light => Color32::from_rgb(0xF5, 0xF2, 0xEB),
+            PageBackground::Dark => Color32::from_rgb(0x1E, 0x1E, 0x1E),
+            PageBackground::Default => self.color,
+        };
+    }
+
+    pub fn toggle_picker(&mut self, opener: egui::Id) {
+        self.picker_open = !self.picker_open;
+        if self.picker_open {
+            self.picker_opener = Some(opener);
+            self.picker_focus_pending = true;
+        }
+    }
+}
+
+/// Local state for the vector line properties panel.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinePropertiesState {
+    pub color: [f32; 3],
+    pub width: f64,
+    pub dash_idx: usize,
+    pub last_error: Option<String>,
+    pub initial_color: [f32; 3],
+    pub initial_width: f64,
+    pub initial_dash_idx: usize,
+}
+
+impl Default for LinePropertiesState {
+    fn default() -> Self {
+        Self {
+            color: [0.0, 0.0, 0.0],
+            width: 1.0,
+            dash_idx: 0,
+            last_error: None,
+            initial_color: [0.0, 0.0, 0.0],
+            initial_width: 1.0,
+            initial_dash_idx: 0,
+        }
+    }
+}
+
+impl LinePropertiesState {
+    pub fn reset_to_line(&mut self, line: &pdfcraft_engine::LineSegment) {
+        self.color = match line.stroke_color {
+            Some(c) => [c[0] as f32, c[1] as f32, c[2] as f32],
+            None => [0.0, 0.0, 0.0],
+        };
+        self.width = line.thickness;
+        self.dash_idx = 0;
+        self.initial_color = self.color;
+        self.initial_width = self.width;
+        self.initial_dash_idx = self.dash_idx;
+        self.last_error = None;
+    }
+
+    pub fn dash_pattern(&self) -> Vec<f64> {
+        Self::dash_pattern_for(self.dash_idx)
+    }
+
+    pub fn dash_pattern_for(dash_idx: usize) -> Vec<f64> {
+        match dash_idx {
+            1 => vec![2.0, 2.0],
+            2 => vec![6.0, 3.0],
+            3 => vec![6.0, 2.0, 2.0, 2.0],
+            _ => vec![],
+        }
+    }
+
+    pub fn dash_idx_for(pattern: &[f64]) -> usize {
+        if pattern.is_empty() {
+            return 0;
+        }
+        let close = |expected: &[f64]| pattern.len() == expected.len() && pattern.iter().zip(expected).all(|(a, b)| (a - b).abs() < 1e-4);
+        if close(&[2.0, 2.0]) {
+            1
+        } else if close(&[6.0, 3.0]) {
+            2
+        } else if close(&[6.0, 2.0, 2.0, 2.0]) {
+            3
+        } else {
+            0
+        }
+    }
+
+    /// Refresh properties from `line`, preserving the active dash selection unless `dash_idx` is given.
+    pub fn refresh_from_line(&mut self, line: &pdfcraft_engine::LineSegment, dash_idx: Option<usize>) {
+        self.color = match line.stroke_color {
+            Some(c) => [c[0] as f32, c[1] as f32, c[2] as f32],
+            None => [0.0, 0.0, 0.0],
+        };
+        self.width = line.thickness;
+        if let Some(idx) = dash_idx {
+            self.dash_idx = idx;
+        }
+        self.initial_color = self.color;
+        self.initial_width = self.width;
+        self.initial_dash_idx = self.dash_idx;
+        self.last_error = None;
+    }
+
+    /// Restore editable properties back to the last committed line baseline.
+    pub fn revert_to_initial(&mut self) {
+        self.color = self.initial_color;
+        self.width = self.initial_width;
+        self.dash_idx = self.initial_dash_idx;
+    }
+}
+
 /// Markup quadrilaterals in user space, one entry per page: (page, quads).
 pub type PageMarks = Vec<(usize, Vec<[f64; 8]>)>;
 
@@ -396,6 +578,30 @@ pub struct PageSession {
     pub fill_text: Option<crate::fill_sign::TypeBox>,
     /// The caret and selection in the Fill & Sign text being typed.
     pub fill_selection: craft::text::ui::editor::TextSelection,
+    /// Vector editing: the line segments per page (by document generation).
+    pub(crate) vector_lines: HashMap<usize, (u64, Vec<pdfcraft_engine::LineSegment>)>,
+    /// Interactive canvas element selection state.
+    pub canvas_selection: crate::canvas_selection::SelectionState,
+    /// Whether vector line editing mode is active.
+    pub vector_edit_mode: bool,
+    /// When true, dragging a line also extends/contracts touching perpendicular lines (Excel grid mode).
+    pub extend_perpendicular_lines: bool,
+    /// Local state for vector line property editing panel.
+    pub line_properties: LinePropertiesState,
+    /// Active vector line endpoint/move drag: `(handle, current_user_coord, start_user_coord)`.
+    pub line_drag: Option<(crate::canvas_selection::SelectionHandle, [f64; 2], [f64; 2])>,
+    /// Set when the last queued edit updated a vector line's properties so `document_changed` preserves its selection.
+    pub(crate) pending_line_edit: bool,
+    /// Set when `document_changed` kept a vector line selection that must be re-synced against `doc`.
+    pub(crate) line_sel_needs_sync: bool,
+    /// Dash preset index staged from the floating vector-line menu until `apply_edit` accepts it.
+    pub(crate) pending_dash_idx: Option<usize>,
+    /// Whether editing a paragraph reflows paragraphs below it.
+    pub reflow_paragraphs: bool,
+    /// Barcode and QR code scanner HUD state.
+    pub barcode_hud: crate::barcode_hud::BarcodeHudState,
+    /// A page scan running on a worker thread: `(document id, page, edit generation, result)`.
+    pub(crate) barcode_scan: Option<(u64, usize, u64, std::sync::mpsc::Receiver<Vec<pdfcraft_engine::barcode_scan::ScannedCode>>)>,
     pub(crate) signature_drag: crate::signature_drag::SignatureDrag,
     /// The rectangle being dragged on a page by Snapshot, Crop, Redact or a signature area: the page tools are built
     /// each pass, so the drag lives here from its press to its release.
@@ -465,6 +671,18 @@ impl PageSession {
             area_pick: None,
             fill_text: None,
             fill_selection: Default::default(),
+            vector_lines: HashMap::new(),
+            canvas_selection: Default::default(),
+            vector_edit_mode: false,
+            extend_perpendicular_lines: false,
+            line_properties: Default::default(),
+            line_drag: None,
+            pending_line_edit: false,
+            line_sel_needs_sync: false,
+            pending_dash_idx: None,
+            reflow_paragraphs: false,
+            barcode_hud: Default::default(),
+            barcode_scan: None,
             signature_drag: Default::default(),
             box_drag: PageBoxDrag::default(),
             hand: craft::ui::canvas::HandTool::new(Default::default()),
@@ -662,6 +880,29 @@ impl DocView {
         self.session.area_pick = None;
         self.view.go_to = None;
         self.session.flash = None;
+        self.session.vector_lines.clear();
+        self.session.line_drag = None;
+        let keep_line_sel = std::mem::take(&mut self.session.pending_line_edit);
+        if keep_line_sel
+            && self
+                .session
+                .canvas_selection
+                .selected
+                .as_ref()
+                .is_some_and(|s| s.kind == crate::canvas_selection::SelectableKind::VectorLine && s.page <= last && self.page_count > 0)
+        {
+            self.session.canvas_selection.multi_selected.retain(|s| s.page <= last && self.page_count > 0);
+            self.session.canvas_selection.hovered = None;
+            self.session.line_sel_needs_sync = true;
+        } else {
+            self.session.canvas_selection.selected = None;
+            self.session.canvas_selection.multi_selected.clear();
+            self.session.canvas_selection.hovered = None;
+            self.session.canvas_selection.symbol_palette_open = false;
+            self.session.line_sel_needs_sync = false;
+            self.session.pending_dash_idx = None;
+            self.session.line_properties = LinePropertiesState::default();
+        }
         // Thumbnail drags hold page indexes from before the change.
         self.cancel_page_drags(ctx);
         self.session.comments.document_changed(info);
@@ -737,6 +978,61 @@ impl DocView {
     /// The number of pages the view was last given.
     pub(crate) fn page_count(&self) -> usize {
         self.page_count
+    }
+}
+
+/// Vector lines parsed once per page and document edit generation.
+pub(crate) fn cached_vector_lines<'a>(
+    session: &'a mut PageSession,
+    doc: &pdfcraft_engine::Document,
+    page: usize,
+) -> &'a [pdfcraft_engine::LineSegment] {
+    let generation = doc.edit_generation();
+    let entry = session.vector_lines.entry(page).or_insert_with(|| (generation, doc.editable_lines(page).unwrap_or_default()));
+    if entry.0 != generation {
+        *entry = (generation, doc.editable_lines(page).unwrap_or_default());
+    }
+    &entry.1
+}
+
+/// Keeps an active `VectorLine` selection and its properties baseline synced with `doc`,
+/// refreshing after accepted edits and rolling back diverged drag previews when an edit is refused.
+pub(crate) fn sync_vector_line_selection(session: &mut PageSession, doc: &pdfcraft_engine::Document) {
+    if session.line_drag.is_some() || session.pending_edit.is_some() {
+        return;
+    }
+    let needs_prop_sync = std::mem::take(&mut session.line_sel_needs_sync);
+    let pending_dash = session.pending_dash_idx.take();
+    let Some((sel_page, sel_index)) = session
+        .canvas_selection
+        .selected
+        .as_ref()
+        .filter(|sel| sel.kind == crate::canvas_selection::SelectableKind::VectorLine)
+        .map(|sel| (sel.page, sel.index))
+    else {
+        session.line_properties = LinePropertiesState::default();
+        return;
+    };
+    let updated = cached_vector_lines(session, doc, sel_page).iter().find(|l| l.index == sel_index).cloned();
+    match updated {
+        Some(line) => {
+            if let Some(sel) = session.canvas_selection.selected.as_mut()
+                && sel.line.as_ref() != Some(&line)
+            {
+                sel.line = Some(line.clone());
+                sel.user_rect = line.bbox();
+            }
+            if needs_prop_sync {
+                session.line_properties.refresh_from_line(&line, pending_dash);
+            }
+        }
+        None => {
+            session.canvas_selection.selected = None;
+            session.canvas_selection.multi_selected.clear();
+            session.canvas_selection.hovered = None;
+            session.canvas_selection.symbol_palette_open = false;
+            session.line_properties = LinePropertiesState::default();
+        }
     }
 }
 
@@ -904,6 +1200,7 @@ struct PageBodyCx<'a> {
     units: crate::units::Unit,
     find_marks: &'a [TextMark],
     table_preview: Option<&'a crate::field_table_ui::Preview>,
+    reading_bg: ReadingBgState,
 }
 
 impl PageBodyCx<'_> {
@@ -1460,6 +1757,80 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbac
     if cx.tool == QuickTool::Link {
         crate::link_ui::link_outlines(ui, body, &session.links, cx.doc.links(), cx.info);
     }
+    if cx.reading_bg.mode != PageBackground::Default && cx.reading_bg.tint_strength > 0.0 {
+        let tint_alpha = (cx.reading_bg.tint_strength.clamp(0.0, 1.0) * 200.0).round() as u8;
+        if tint_alpha > 0 {
+            let c = cx.reading_bg.color;
+            let tint = Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), tint_alpha);
+            let painter = ui.painter().with_clip_rect(body.rect);
+            for placed in body.pages {
+                let r = placed.rect.intersect(body.rect);
+                if r.is_positive() {
+                    painter.rect_filled(r, 0.0, tint);
+                }
+            }
+        }
+    }
+    if (session.barcode_hud.open || cx.tool == QuickTool::QrBarcode) && !cx.veiled {
+        for placed in body.pages {
+            let size = cx.sizes.get(placed.page).copied().unwrap_or_default();
+            let xf = PageXform::of(placed, cx.rotation, size);
+            let clip = placed.rect.intersect(body.rect);
+            if clip.is_positive() {
+                crate::barcode_hud::BarcodeScannerHud::paint_page_highlights(ui, clip, &xf, cx.info, &session.barcode_hud, placed.page);
+            }
+        }
+    }
+    if (session.vector_edit_mode || cx.tool == QuickTool::EditText) && cx.can_modify && !cx.veiled {
+        let hover_pos = ui.input(|i| i.pointer.hover_pos().filter(|_| !i.pointer.any_down()));
+        let over_higher = parts_out.hovered.is_some();
+        for placed in body.pages {
+            let size = cx.sizes.get(placed.page).copied().unwrap_or_default();
+            let xf = PageXform::of(placed, cx.rotation, size);
+            let _ = cached_vector_lines(session, cx.doc, placed.page);
+            let page_lines = session.vector_lines.get(&placed.page).map_or(&[][..], |(_, lines)| lines.as_slice());
+            let painter = ui.painter().with_clip_rect(placed.rect.intersect(body.rect));
+            if let Some(pos) = hover_pos
+                && placed.rect.contains(pos)
+                && !over_higher
+                && let Some(hovered_line) = page_lines.iter().find(|l| crate::canvas_selection::hit_test_line(pos, l, &xf, cx.info, 5.0))
+            {
+                let already_selected = session.canvas_selection.selected.as_ref().is_some_and(|s| {
+                    s.page == placed.page && s.kind == crate::canvas_selection::SelectableKind::VectorLine && s.index == hovered_line.index
+                });
+                if !already_selected {
+                    crate::canvas_selection::paint_line_highlight(
+                        ui,
+                        &painter,
+                        hovered_line,
+                        crate::canvas_selection::LineHighlightState::Hover,
+                        &xf,
+                        cx.info,
+                    );
+                }
+            }
+            if session
+                .canvas_selection
+                .selected
+                .as_ref()
+                .is_some_and(|s| s.page == placed.page && s.kind == crate::canvas_selection::SelectableKind::VectorLine)
+            {
+                let extend_perpendicular = session.extend_perpendicular_lines;
+                let PageSession { vector_lines, canvas_selection, line_editor, line_drag, pending_edit, .. } = session;
+                let lines = vector_lines.get(&placed.page).map_or(&[][..], |(_, v)| v.as_slice());
+                if let Some(edit) = crate::canvas_selection::SelectionLayoutEngine::paint_selection_overlay_with_lines(
+                    ui,
+                    &painter,
+                    crate::canvas_selection::LineOverlayTarget { page: placed.page, xf: &xf, info: cx.info },
+                    canvas_selection,
+                    line_editor.as_mut(),
+                    crate::canvas_selection::LineOverlayLines { page_lines: lines, extend_perpendicular, line_drag },
+                ) {
+                    *pending_edit = Some(edit);
+                }
+            }
+        }
+    }
     // The comment being dragged, drawn from its own layers where it goes, over the page that still shows it where it
     // was. A page whose picture is of this revision has the released move: its layer settles.
     {
@@ -1602,6 +1973,178 @@ fn text_demand(view: &DocView, visible: std::ops::Range<usize>, hand: bool) -> (
     }
     (visible, rest)
 }
+fn handle_symbol_palette(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo) {
+    let anchor = if let Some(ed) = &view.session.line_editor {
+        ed.rect.left_bottom()
+    } else {
+        view.session
+            .canvas_selection
+            .selected
+            .as_ref()
+            .and_then(|sel| {
+                let placed = view.session.placed.iter().find(|p| p.page == sel.page)?;
+                let size = view.page_sizes.get(sel.page).copied().unwrap_or_default();
+                let xf = PageXform::of(placed, view.view.rotation, size);
+                Some(sel.screen_rect(&xf, info))
+            })
+            .map(|r| r.left_bottom())
+            .unwrap_or_else(|| ui.max_rect().center())
+    };
+    if let Some(sym) = crate::symbol_palette::SymbolPalette::show(ui, anchor) {
+        if let Some(ed) = &mut view.session.line_editor {
+            let len = ed.text.chars().count();
+            let sel = ed.selection.unwrap_or_else(|| craft::text::ui::editor::TextSelection::caret_at(len));
+            let range = sel.anchor.min(sel.caret).min(len)..sel.anchor.max(sel.caret).min(len);
+            let min_idx = ed.text.char_indices().nth(range.start).map_or(ed.text.len(), |(at, _)| at);
+            let max_idx = ed.text.char_indices().nth(range.end).map_or(ed.text.len(), |(at, _)| at);
+            ed.text.replace_range(min_idx..max_idx, sym);
+            let new_char = range.start + sym.chars().count();
+            ed.selection = Some(craft::text::ui::editor::TextSelection::caret_at(new_char));
+            ed.focus = true;
+        } else if let Some(sel) = &view.session.canvas_selection.selected {
+            let new_text = format!("{}{}", sel.text.as_deref().unwrap_or(""), sym);
+            if sel.kind == crate::canvas_selection::SelectableKind::TextBlock {
+                view.session.pending_edit =
+                    Some(pdfcraft_engine::Edit::EditTextBlock { page: sel.page, block: sel.index, text: new_text, style: Default::default() });
+            } else if sel.kind == crate::canvas_selection::SelectableKind::TextLine {
+                view.session.pending_edit = Some(pdfcraft_engine::Edit::EditTextLine { page: sel.page, line: sel.index, text: new_text });
+            }
+        }
+        view.session.canvas_selection.symbol_palette_open = false;
+    }
+}
+
+struct SymbolAndHudCx<'a> {
+    doc: &'a pdfcraft_engine::Document,
+    info: &'a DocInfo,
+    can_modify: bool,
+    can_copy: bool,
+    tool: QuickTool,
+    visible_pages: &'a [usize],
+}
+
+fn handle_symbol_palette_and_hud(ui: &mut egui::Ui, view: &mut DocView, cx: &SymbolAndHudCx<'_>) {
+    let now = ui.input(|i| i.time);
+    let scan_active = view.session.barcode_hud.open || view.session.barcode_hud.panel_open || cx.tool == QuickTool::QrBarcode;
+    crate::barcode_hud::BarcodeScannerHud::auto_scan_on_page_change(view, cx.doc, now, scan_active, Some(ui.ctx()), cx.visible_pages);
+
+    if let Some(hud_edit) = crate::barcode_hud::BarcodeScannerHud::show(ui, view, cx.doc, cx.info, cx.can_modify) {
+        view.session.pending_edit = Some(hud_edit);
+    }
+
+    let viewport = view.viewport;
+    if let Some(action) = crate::canvas_selection::FloatingContextMenu::show(ui, viewport, view, cx.info, cx.can_modify, cx.can_copy) {
+        match action {
+            crate::canvas_selection::FloatingMenuAction::ToggleGridMode => {
+                view.session.extend_perpendicular_lines = !view.session.extend_perpendicular_lines;
+            }
+            crate::canvas_selection::FloatingMenuAction::SetStrokeColor(rgb) => {
+                if cx.can_modify
+                    && let Some(sel) = &view.session.canvas_selection.selected
+                    && sel.kind == crate::canvas_selection::SelectableKind::VectorLine
+                {
+                    let target = pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: sel.index };
+                    view.session.pending_edit =
+                        Some(pdfcraft_engine::Edit::SetLineProperties { page: sel.page, target, color: Some(rgb), width: None, dash: None });
+                }
+            }
+            crate::canvas_selection::FloatingMenuAction::SetStrokeWidth(w) => {
+                if cx.can_modify
+                    && let Some(sel) = &view.session.canvas_selection.selected
+                    && sel.kind == crate::canvas_selection::SelectableKind::VectorLine
+                {
+                    let target = pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: sel.index };
+                    view.session.pending_edit =
+                        Some(pdfcraft_engine::Edit::SetLineProperties { page: sel.page, target, color: None, width: Some(w), dash: None });
+                }
+            }
+            crate::canvas_selection::FloatingMenuAction::SetDash(dash_idx) => {
+                if cx.can_modify
+                    && let Some(sel) = &view.session.canvas_selection.selected
+                    && sel.kind == crate::canvas_selection::SelectableKind::VectorLine
+                {
+                    let target = pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: sel.index };
+                    let dash = LinePropertiesState::dash_pattern_for(dash_idx);
+                    view.session.pending_dash_idx = Some(dash_idx);
+                    view.session.pending_edit =
+                        Some(pdfcraft_engine::Edit::SetLineProperties { page: sel.page, target, color: None, width: None, dash: Some(dash) });
+                }
+            }
+            crate::canvas_selection::FloatingMenuAction::Delete => {
+                if cx.can_modify
+                    && let Some(sel) = view.session.canvas_selection.selected.as_ref()
+                    && let Some(edit) = selection_delete_edit(sel)
+                {
+                    view.session.pending_edit = Some(edit);
+                    view.session.canvas_selection.selected = None;
+                }
+            }
+            crate::canvas_selection::FloatingMenuAction::OpenSymbolPalette => {
+                view.session.canvas_selection.symbol_palette_open = !view.session.canvas_selection.symbol_palette_open;
+            }
+            crate::canvas_selection::FloatingMenuAction::ToggleReflow => {
+                view.session.reflow_paragraphs = !view.session.reflow_paragraphs;
+            }
+            crate::canvas_selection::FloatingMenuAction::EditText => {
+                if let Some(sel) = &view.session.canvas_selection.selected {
+                    view.session.pending_text_open =
+                        Some((sel.page, pdfcraft_engine::BlockKey::new(sel.text.clone().unwrap_or_default(), sel.user_rect)));
+                }
+            }
+            crate::canvas_selection::FloatingMenuAction::Cut => {
+                if cx.can_copy
+                    && let Some(sel) = &view.session.canvas_selection.selected
+                    && let Some(text) = &sel.text
+                    && !text.is_empty()
+                {
+                    ui.ctx().copy_text(text.clone());
+                }
+                if cx.can_modify
+                    && let Some(sel) = view.session.canvas_selection.selected.as_ref()
+                    && let Some(edit) = selection_delete_edit(sel)
+                {
+                    view.session.pending_edit = Some(edit);
+                    view.session.canvas_selection.selected = None;
+                }
+            }
+            crate::canvas_selection::FloatingMenuAction::Copy => {
+                if cx.can_copy
+                    && let Some(sel) = &view.session.canvas_selection.selected
+                    && let Some(text) = &sel.text
+                    && !text.is_empty()
+                {
+                    ui.ctx().copy_text(text.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if view.session.canvas_selection.symbol_palette_open && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        view.session.canvas_selection.symbol_palette_open = false;
+    }
+    if view.session.canvas_selection.symbol_palette_open {
+        handle_symbol_palette(ui, view, cx.info);
+    }
+}
+
+fn selection_delete_edit(sel: &crate::canvas_selection::SelectableElement) -> Option<pdfcraft_engine::Edit> {
+    match sel.kind {
+        crate::canvas_selection::SelectableKind::TextBlock => Some(pdfcraft_engine::Edit::EditTextBlock {
+            page: sel.page,
+            block: sel.index,
+            text: String::new(),
+            style: pdfcraft_engine::BlockStyle::default(),
+        }),
+        crate::canvas_selection::SelectableKind::TextLine => {
+            Some(pdfcraft_engine::Edit::EditTextLine { page: sel.page, line: sel.index, text: String::new() })
+        }
+        crate::canvas_selection::SelectableKind::Image => {
+            Some(pdfcraft_engine::Edit::EditPageImage { page: sel.page, index: sel.index, change: pdfcraft_engine::ImageEdit::Delete })
+        }
+        _ => None,
+    }
+}
 
 /// Draws the document tab at `index` in the room left in `ui`: [`document_area_at`] with the available rect.
 pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
@@ -1674,7 +2217,6 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     }
     // The room under the notice bars, inside the rect the caller gave.
     let rect = rect.intersect(ui.available_rect_before_wrap());
-
     let preparing = app.is_preparing();
     // Prepare a form ▸ Calculation order: the order's steps and links on the page.
     let calc_order = preparing && crate::side_panels::panel_visible(app, crate::LeftPanel::CalculationOrder);
@@ -1687,10 +2229,16 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     let allowed = doc.allows_annotation();
     let can_modify = doc.allows_modification();
     let form = doc.form.clone();
-    let paper = app.session.reading_colors(doc_id).and_then(|c| c.params).map_or(Color32::WHITE, |p| {
+    let default_paper = match app.reading_bg.mode {
+        PageBackground::Dark => Color32::from_rgb(0x1E, 0x1E, 0x1E),
+        PageBackground::Light => Color32::from_rgb(0xF5, 0xF2, 0xEB),
+        PageBackground::Default => Color32::WHITE,
+    };
+    let paper = app.session.reading_colors(doc_id).and_then(|c| c.params).map_or(default_paper, |p| {
         let [r, g, b] = p.background;
         Color32::from_rgb(r, g, b)
     });
+    let reading_bg = app.reading_bg;
     let table_preview = crate::field_table_ui::preview(&mut app.dialogs, doc_id);
     // Full screen shows the pages on black, as production does.
     let surround = if app.full_screen_document() { PasteboardColor::Black } else { PasteboardColor::Default };
@@ -1704,6 +2252,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         view.session.prepare.selected = None;
     }
     view.session.objects.prepare(doc, tool == QuickTool::EditText && can_modify);
+    sync_vector_line_selection(&mut view.session, doc);
     let scale = view.render_scale(ui.ctx().pixels_per_point());
     let session = &mut view.session;
     session.text_background.prepare(ui.ctx(), doc, session.line_editor.as_ref(), session.content.draft.as_ref(), scale);
@@ -1820,6 +2369,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         units: app.units,
         find_marks: &find_marks,
         table_preview: table_preview.as_ref(),
+        reading_bg,
     };
     let source = DocPages::new(&app.session, doc_id).rotated(state.rotation).revisions(revisions).reports(reports);
     // A modal over the pages blocks the canvas's keys and presses in the framework, so the view needs no gate here.
@@ -1842,6 +2392,39 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         && let Some(page) = body_out.pressed_page
     {
         view.view.current = page;
+    }
+    if !presenting
+        && unobstructed
+        && !body_out.over_part
+        && let Some(start) = out.canvas.press.phase.start()
+        && start.button == PointerButton::Primary
+        && matches!(out.canvas.press.phase, PressPhase::Release { click: true, .. })
+        && let Some(placed) = view.session.placed.iter().find(|p| p.rect.contains(start.origin)).cloned()
+    {
+        let clicked_page = placed.page;
+        let size = view.page_sizes.get(clicked_page).copied().unwrap_or_default();
+        let xf = PageXform::of(&placed, view.view.rotation, size);
+        if tool == QuickTool::QrBarcode {
+            view.session.barcode_hud.page_codes.entry(clicked_page).or_insert_with(|| doc.scan_page_codes(clicked_page));
+            if let Some(hit_idx) = view.session.barcode_hud.codes_for_page(clicked_page).and_then(|codes| {
+                codes.iter().position(|c| xf.user_rect(info, clicked_page, c.rect.map(|v| v as f32)).expand(6.0).contains(start.origin))
+            }) {
+                view.session.barcode_hud.focus_page_code(clicked_page, hit_idx);
+                view.view.current = clicked_page;
+            }
+        } else if (view.session.vector_edit_mode || tool == QuickTool::EditText) && can_modify {
+            let line_hit = cached_vector_lines(&mut view.session, doc, clicked_page)
+                .iter()
+                .find(|l| crate::canvas_selection::hit_test_line(start.origin, l, &xf, info, 5.0))
+                .cloned();
+            if let Some(line) = line_hit {
+                view.session.canvas_selection.selected =
+                    Some(crate::canvas_selection::SelectableElement::new_line_vector(clicked_page, line.clone()));
+                view.session.line_properties.reset_to_line(&line);
+            } else if view.session.canvas_selection.selected.as_ref().is_some_and(|s| s.kind == crate::canvas_selection::SelectableKind::VectorLine) {
+                view.session.canvas_selection.selected = None;
+            }
+        }
     }
     if out.scrolled {
         view.end_find_following();
@@ -2044,6 +2627,26 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         generation: app.session.get(doc_id).map_or(0, |d| d.edit_generation()),
     };
     apply_frame_requests(app, ui.ctx(), index, requests);
+    if let Some(doc) = app.session.get(doc_id)
+        && let Some(view) = app.views.get_mut(index)
+    {
+        let hud_cx = SymbolAndHudCx {
+            doc,
+            info: &doc.info,
+            can_modify: doc.allows_modification(),
+            can_copy: doc.allows_copying(),
+            tool,
+            visible_pages: &visible_pages,
+        };
+        handle_symbol_palette_and_hud(ui, view, &hud_cx);
+    }
+    #[cfg(target_arch = "wasm32")]
+    if let Some((name, bytes)) = app.views.get_mut(index).and_then(|v| v.session.barcode_hud.pending_download.take())
+        && app.download_files(&[(name.clone(), bytes)])
+    {
+        let msg = crate::i18n::fmt(tl!("Downloaded {name}!"), &[("name", &name)]);
+        app.views[index].session.barcode_hud.show_toast(msg, ui.input(|i| i.time));
+    }
     Some(out)
 }
 
@@ -2312,6 +2915,130 @@ pub(crate) mod page_box_drag;
 mod sign_tab_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod line_sync_tests {
+    use super::*;
+    use crate::canvas_selection::SelectableElement;
+
+    fn line_pdf(color: [f64; 3], width: f64, y: f64) -> Vec<u8> {
+        let stream = format!("q {width} w {} {} {} RG 10 {y} m 110 {y} l S Q", color[0], color[1], color[2]);
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>".to_string(),
+            format!("<< /Length {} >>\nstream\n{stream}\nendstream", stream.len()),
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    #[test]
+    fn line_properties_dash_round_trip_and_refresh_preserves_dash() {
+        for idx in 0..=3 {
+            let pat = LinePropertiesState::dash_pattern_for(idx);
+            assert_eq!(LinePropertiesState::dash_idx_for(&pat), idx);
+        }
+
+        let mut sess = pdfcraft_engine::Session::new();
+        let id = sess.open("line.pdf", None, line_pdf([0.2, 0.4, 0.8], 3.5, 20.0), None).expect("open line pdf");
+        let line = sess.get(id).expect("doc").editable_lines(0).expect("lines").remove(0);
+
+        let mut props = LinePropertiesState { dash_idx: 2, last_error: Some("stale".into()), ..Default::default() };
+        props.refresh_from_line(&line, None);
+        assert_eq!(props.dash_idx, 2);
+        assert_eq!(props.initial_dash_idx, 2);
+        assert!((props.width - 3.5).abs() < 1e-9);
+        assert!((props.initial_width - 3.5).abs() < 1e-9);
+        assert_eq!(props.color, [0.2_f32, 0.4_f32, 0.8_f32]);
+        assert_eq!(props.initial_color, props.color);
+        assert!(props.last_error.is_none());
+
+        props.refresh_from_line(&line, Some(1));
+        assert_eq!(props.dash_idx, 1);
+        assert_eq!(props.initial_dash_idx, 1);
+    }
+
+    #[test]
+    fn sync_vector_line_selection_refreshes_on_accepted_edit_rolls_back_and_clears_on_undo() {
+        let mut sess = pdfcraft_engine::Session::new();
+        let id = sess.open("line.pdf", None, line_pdf([0.0, 0.0, 0.0], 1.0, 20.0), None).expect("open line pdf");
+        let initial_line = sess.get(id).expect("doc").editable_lines(0).expect("lines").remove(0);
+
+        let mut view = DocView::new(id, &sess.get(id).expect("doc").info, ViewDefaults::default(), false);
+        view.session.canvas_selection.selected = Some(SelectableElement::new_line_vector(0, initial_line.clone()));
+        view.session.line_properties.reset_to_line(&initial_line);
+        view.session.line_properties.dash_idx = 2;
+
+        // Simulated drag preview that was not committed: sync snaps sel.line back to doc.
+        if let Some(sel) = view.session.canvas_selection.selected.as_mut()
+            && let Some(line) = sel.line.as_mut()
+        {
+            line.end = [180.0, 90.0];
+            sel.user_rect = line.bbox();
+        }
+        sync_vector_line_selection(&mut view.session, sess.get(id).expect("doc"));
+        let synced = view.session.canvas_selection.selected.as_ref().and_then(|s| s.line.as_ref()).expect("line kept");
+        assert_eq!(synced.end, initial_line.end);
+
+        // Accepted edit: document_changed with pending_line_edit marks line_sel_needs_sync, and sync updates both sel.line and line_properties.
+        let target = pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: initial_line.index };
+        sess.apply(
+            id,
+            pdfcraft_engine::Edit::SetLineProperties {
+                page: 0,
+                target,
+                color: Some([0.85, 0.15, 0.15]),
+                width: Some(4.0),
+                dash: Some(vec![6.0, 3.0]),
+            },
+        )
+        .expect("apply property edit");
+        view.session.pending_line_edit = true;
+        let ctx = egui::Context::default();
+        view.document_changed(&ctx, &sess.get(id).expect("doc").info);
+        assert!(view.session.line_sel_needs_sync);
+        sync_vector_line_selection(&mut view.session, sess.get(id).expect("doc"));
+        assert!(!view.session.line_sel_needs_sync);
+        assert!((view.session.line_properties.width - 4.0).abs() < 1e-9);
+        assert!((view.session.line_properties.initial_width - 4.0).abs() < 1e-9);
+        assert_eq!(view.session.line_properties.dash_idx, 2);
+        let after_edit = view.session.canvas_selection.selected.as_ref().and_then(|s| s.line.as_ref()).expect("line present");
+        assert!((after_edit.thickness - 4.0).abs() < 1e-9);
+
+        // Undo / unrelated document_changed without pending_line_edit clears selection & resets line_properties.
+        view.document_changed(&ctx, &sess.get(id).expect("doc").info);
+        assert!(view.session.canvas_selection.selected.is_none());
+        assert_eq!(view.session.line_properties.dash_idx, 0);
+        assert!((view.session.line_properties.width - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn sync_vector_line_selection_clears_when_line_missing_in_doc() {
+        let mut sess = pdfcraft_engine::Session::new();
+        let id = sess.open("line.pdf", None, line_pdf([0.0, 0.0, 0.0], 1.0, 20.0), None).expect("open line pdf");
+        let base = sess.get(id).expect("doc").editable_lines(0).expect("lines").remove(0);
+        let missing = pdfcraft_engine::LineSegment { index: 99, ..base };
+        let mut view = DocView::new(id, &sess.get(id).expect("doc").info, ViewDefaults::default(), false);
+        view.session.canvas_selection.selected = Some(SelectableElement::new_line_vector(0, missing.clone()));
+        view.session.line_properties.reset_to_line(&missing);
+        view.session.line_properties.dash_idx = 3;
+
+        sync_vector_line_selection(&mut view.session, sess.get(id).expect("doc"));
+        assert!(view.session.canvas_selection.selected.is_none());
+        assert_eq!(view.session.line_properties.dash_idx, 0);
+    }
+}
 pub(crate) use page_box_drag::PageBoxDrag;
 pub(crate) mod page_menu;
 pub(crate) mod page_select;

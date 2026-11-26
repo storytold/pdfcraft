@@ -169,7 +169,6 @@ impl PdfCraftApp {
         let Some((i, id)) = self.active_ids() else { return false };
         // Taken whatever happens to this edit, so it never carries over to another.
         let across_pages = std::mem::take(&mut self.views[i].session.marks_across_pages).filter(|_| annotated_pages(&edit).is_some());
-        let label = edit.label();
         let target_arrange_image = match &edit {
             Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Arrange(_) } => {
                 let doc = self.session.get(id);
@@ -217,6 +216,8 @@ impl PdfCraftApp {
                 let Some(doc) = self.session.get(id) else { return true };
                 let info = &doc.info;
                 let view = &mut self.views[i];
+                let line_edit = is_vector_line_edit(&edit);
+                view.session.pending_line_edit = line_edit;
                 view.session.applied_editor = None;
                 // A picture picked with the Select tool may be the one this edit removed or moved:
                 // drop its highlight now, not on the next frame (which only comes with the next input).
@@ -256,6 +257,9 @@ impl PdfCraftApp {
                     view.session.comments.document_changed(info);
                 } else {
                     view.document_changed(ctx, info);
+                }
+                if line_edit {
+                    sync_after_line_edit(doc, view, &edit);
                 }
                 if let Some(selection) = view.session.image_selection.as_mut()
                     && selection.settled.is_some()
@@ -300,29 +304,51 @@ impl PdfCraftApp {
                 true
             }
             Err(e) => {
-                if let Some(view) = self.views.get_mut(i) {
-                    // A drawing whose annotation wasn't added must not stay painted.
-                    view.session.comments.drawings_refused();
-                    if matches!(&edit, Edit::EditPageImage { change, .. } if !matches!(change, pdfcraft_engine::ImageEdit::Arrange(_))) {
-                        view.session.image_selection = None;
-                    }
-                    // A paragraph that couldn't be applied opens again with its typing, instead of
-                    // the box the click moved to.
-                    if let Edit::EditTextBlock { page, block, .. } = &edit
-                        && let Some(mut ed) = view.session.applied_editor.take().filter(|ed| (ed.page, ed.block) == (*page, *block))
-                    {
-                        ed.focus = true;
-                        view.session.line_editor = Some(ed);
-                        view.session.pending_text_open = None;
-                    }
-                }
-                let message = if matches!(edit, Edit::MoveObjects { .. }) { crate::object_ui::move_error(&e) } else { e.to_string() };
-                let text = crate::i18n::fmt(tl!("{label} failed: {e}"), &[("label", &crate::i18n::edit_label(&label)), ("e", &message)]);
-                self.last_edit_refusal = Some(text.clone());
-                self.notify(text);
+                self.handle_apply_edit_refusal(i, &edit, &e);
                 false
             }
         }
+    }
+
+    fn handle_apply_edit_refusal(&mut self, i: usize, edit: &Edit, e: &pdfcraft_engine::EditError) {
+        let line_edit = is_vector_line_edit(edit);
+        if let Some(view) = self.views.get_mut(i) {
+            if line_edit {
+                view.session.pending_line_edit = false;
+                view.session.line_properties.color = view.session.line_properties.initial_color;
+                view.session.line_properties.width = view.session.line_properties.initial_width;
+                view.session.line_properties.dash_idx = view.session.line_properties.initial_dash_idx;
+            }
+            view.session.comments.drawings_refused();
+            if matches!(edit, Edit::EditPageImage { change, .. } if !matches!(change, pdfcraft_engine::ImageEdit::Arrange(_))) {
+                view.session.image_selection = None;
+            }
+            let text_target = match edit {
+                Edit::EditTextBlock { page, block, .. } => Some((*page, *block)),
+                Edit::Batch { edits, .. } => edits.iter().find_map(|e| match e {
+                    Edit::EditTextBlock { page, block, .. } => Some((*page, *block)),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            if let Some((page, block)) = text_target
+                && let Some(mut ed) = view.session.applied_editor.take().filter(|ed| (ed.page, ed.block) == (page, block))
+            {
+                ed.focus = true;
+                view.session.line_editor = Some(ed);
+                view.session.pending_text_open = None;
+            }
+        }
+        let label = edit.label();
+        let message = if matches!(edit, Edit::MoveObjects { .. }) { crate::object_ui::move_error(e) } else { e.to_string() };
+        let text = crate::i18n::fmt(tl!("{label} failed: {e}"), &[("label", &crate::i18n::edit_label(&label)), ("e", &message)]);
+        self.last_edit_refusal = Some(text.clone());
+        if matches!(edit, Edit::SetLineProperties { .. })
+            && let Some(view) = self.views.get_mut(i)
+        {
+            view.session.line_properties.last_error = Some(text.clone());
+        }
+        self.notify(text);
     }
 
     /// Undo the last change: to the Combine files list while its tab shows, else the document.
@@ -456,14 +482,16 @@ impl PdfCraftApp {
             self.notify(crate::content_ui::undrawable_message(c));
             return false;
         }
-        if let Some(ed) = view.session.line_editor.take()
-            && let Some(edit) = crate::edit_text_ui::finished_edit(ed.clone())
-            && !self.apply_edit(ctx, edit)
-        {
-            if let Some(view) = self.views.get_mut(i) {
-                view.session.line_editor = Some(ed);
+        if let Some(mut ed) = view.session.line_editor.take() {
+            let edit = self.session.get(id).and_then(|doc| finish_line_editor_edit(ctx, doc, &self.views[i], &mut ed));
+            if let Some(edit) = edit
+                && !self.apply_edit(ctx, edit)
+            {
+                if let Some(view) = self.views.get_mut(i) {
+                    view.session.line_editor = Some(ed);
+                }
+                return false;
             }
-            return false;
         }
         let added = self.session.get(id).map(|d| d.added().to_vec()).unwrap_or_default();
         let Some(view) = self.views.get_mut(i) else { return true };
@@ -1003,7 +1031,7 @@ impl PdfCraftApp {
         // back whichever one the document refuses: typed text must not be lost.
         let (draft, select_added, editor) = (view.session.content.draft.clone(), view.session.content.select_added, view.session.line_editor.clone());
         let added = view.session.content.finish_draft(doc.added());
-        let paragraph = view.session.line_editor.take_if(|ed| ed.has_changes()).and_then(crate::edit_text_ui::finished_edit);
+        let paragraph = view.session.line_editor.take_if(|ed| ed.has_changes()).and_then(|mut ed| finish_line_editor_edit(ctx, doc, view, &mut ed));
         let added_ok = added.is_none_or(|edit| self.apply_edit(ctx, edit));
         let paragraph_ok = paragraph.is_none_or(|edit| self.apply_edit(ctx, edit));
         if let Some(view) = self.views.get_mut(i) {
@@ -1143,6 +1171,96 @@ fn content_page(edit: &Edit) -> Option<usize> {
         | Edit::PasteObjects { page, .. } => Some(*page),
         _ => None,
     }
+}
+
+fn is_vector_line_edit(edit: &Edit) -> bool {
+    matches!(edit, Edit::SetLineProperties { .. } | Edit::UpdateLineEndpoints { .. })
+        || matches!(edit, Edit::Batch { edits, .. } if !edits.is_empty() && edits.iter().all(|e| matches!(e, Edit::SetLineProperties { .. } | Edit::UpdateLineEndpoints { .. })))
+}
+
+fn dash_index_for_pattern(pat: &[f64]) -> usize {
+    match pat {
+        [a, b] if (*a - 2.0).abs() < 1e-3 && (*b - 2.0).abs() < 1e-3 => 1,
+        [a, b] if (*a - 6.0).abs() < 1e-3 && (*b - 3.0).abs() < 1e-3 => 2,
+        [a, b, c, d] if (*a - 6.0).abs() < 1e-3 && (*b - 2.0).abs() < 1e-3 && (*c - 2.0).abs() < 1e-3 && (*d - 2.0).abs() < 1e-3 => 3,
+        _ => 0,
+    }
+}
+
+fn sync_line_properties_from_edit(
+    lp: &mut crate::canvas::LinePropertiesState,
+    color: Option<[f64; 3]>,
+    width: Option<f64>,
+    dash: Option<&[f64]>,
+    live: Option<&pdfcraft_engine::LineSegment>,
+) {
+    if let Some(c) = color {
+        lp.color = [c[0] as f32, c[1] as f32, c[2] as f32];
+    } else if let Some(sc) = live.and_then(|l| l.stroke_color) {
+        lp.color = [sc[0] as f32, sc[1] as f32, sc[2] as f32];
+    }
+    lp.initial_color = lp.color;
+    if let Some(w) = width {
+        lp.width = w;
+    } else if let Some(l) = live {
+        lp.width = l.thickness;
+    }
+    lp.initial_width = lp.width;
+    if let Some(pat) = dash {
+        lp.dash_idx = dash_index_for_pattern(pat);
+    }
+    lp.initial_dash_idx = lp.dash_idx;
+    lp.last_error = None;
+}
+
+fn sync_after_line_edit(doc: &pdfcraft_engine::Document, view: &mut crate::DocView, edit: &Edit) {
+    let page = match edit {
+        Edit::SetLineProperties { page, .. } | Edit::UpdateLineEndpoints { page, .. } => Some(*page),
+        Edit::Batch { edits, .. } => edits.iter().find_map(|e| match e {
+            Edit::SetLineProperties { page, .. } | Edit::UpdateLineEndpoints { page, .. } => Some(*page),
+            _ => None,
+        }),
+        _ => None,
+    };
+    let Some(page) = page else { return };
+    let lines = doc.editable_lines(page).ok();
+    if let Some(ref lines_vec) = lines {
+        view.session.vector_lines.insert(page, (doc.edit_generation(), lines_vec.clone()));
+        if let Some(sel) = view.session.canvas_selection.selected.as_mut()
+            && sel.page == page
+            && sel.kind == crate::canvas_selection::SelectableKind::VectorLine
+            && let Some(updated) = lines_vec.iter().find(|l| l.index == sel.index)
+        {
+            sel.user_rect = updated.bbox();
+            sel.line = Some(updated.clone());
+        }
+    }
+    let last_prop = match edit {
+        Edit::SetLineProperties { target, color, width, dash, .. } => Some((*target, *color, *width, dash.as_deref())),
+        Edit::Batch { edits, .. } => edits.iter().rev().find_map(|e| match e {
+            Edit::SetLineProperties { target, color, width, dash, .. } => Some((*target, *color, *width, dash.as_deref())),
+            _ => None,
+        }),
+        _ => None,
+    };
+    if let Some((target, color, width, dash)) = last_prop {
+        let live = lines.as_ref().and_then(|ls| ls.iter().find(|l| l.index == target.index));
+        sync_line_properties_from_edit(&mut view.session.line_properties, color, width, dash, live);
+    }
+}
+
+/// Finalizes an open paragraph editor, syncing composed rotation and live draft layout at current zoom before reflow.
+pub(crate) fn finish_line_editor_edit(
+    ctx: &egui::Context,
+    doc: &pdfcraft_engine::Document,
+    view: &crate::DocView,
+    ed: &mut crate::edit_text_ui::LineEditor,
+) -> Option<Edit> {
+    let xf = view.page_xform(ed.page);
+    ed.refresh_measured_h(ctx, doc, xf.as_ref());
+    let reflow = view.session.reflow_paragraphs;
+    let blocks = if reflow { Some(doc.text_blocks(ed.page)) } else { None };
+    crate::edit_text_ui::finished_edit_with_reflow(ed.clone(), reflow, blocks.as_deref())
 }
 
 /// A signature shows its state on its own page, which an edit elsewhere can change (a
@@ -1402,8 +1520,191 @@ fn step_typing(
     stepped
 }
 
+/// Line Properties panel for vector line editing.
+pub fn line_properties_panel(ui: &mut egui::Ui, session: &mut crate::canvas::PageSession) {
+    use craft::behavior::Mixed;
+    use craft::color_ui::ui::SwatchPalette;
+    use craft::theme::variant::Tone;
+    use craft::theme::{Srgba, TypeRole, Variant};
+    use craft::ui::buttons::Button;
+    use craft::ui::choice::{Checkbox, Swatch};
+    use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+    use craft::ui::display::Text;
+    use craft::ui::form::SliderField;
+    use craft::ui::notices::{Notice, NoticeLayout};
+    use craft::ui::pickers::Select;
+    use craft::ui::popover::Popover;
+    use craft::ui::runtime::env::{Env, Label};
+
+    if !session.vector_edit_mode {
+        return;
+    }
+    let Some(sel) = &session.canvas_selection.selected else {
+        return;
+    };
+    if sel.kind != crate::canvas_selection::SelectableKind::VectorLine || !session.canvas_selection.multi_selected.is_empty() {
+        return;
+    }
+
+    let page = sel.page;
+    let target = pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: sel.index };
+    let gap = Env::of(ui).tokens.space.gap.tight;
+    let color_open_id = ui.scope_id().with("line-props-color-open");
+    let mut color_open = ui.data_mut(|d| d.get_temp::<bool>(color_open_id).unwrap_or(false));
+
+    ui.group(|ui| {
+        Text::new(tl!("Line Properties").to_string()).role(TypeRole::Heading).show(ui);
+        ui.add_space(gap);
+
+        let rgb_f64 = session.line_properties.color.map(f64::from);
+        let swatch_resp = ui
+            .horizontal(|ui| {
+                Text::new(tl!("Color").to_string()).role(TypeRole::Label).show(ui);
+                Swatch::new(tl!("Color").to_string(), crate::tools::comments::colours::to_srgba(rgb_f64)).show(ui).response
+            })
+            .inner;
+        let mut close_popover = false;
+        Popover::new(tl!("Color").to_string(), Bind::bound(&mut color_open)).opened_by(&swatch_resp).show(ui, |ui, _| {
+            let mut shown: Mixed<Option<Srgba>> = Mixed::Same(Some(crate::tools::comments::colours::to_srgba(rgb_f64)));
+            let named = crate::tools::comments::colours::swatches();
+            let out = SwatchPalette::optional(Label::from(tl!("Color").to_string()), Bind::bound_mixed(&mut shown), &named).show(ui);
+            if let Some(c) = out.picked {
+                session.line_properties.color = [c.r, c.g, c.b];
+                close_popover = true;
+            }
+            let mut r = (f64::from(session.line_properties.color[0]) * 255.0).round();
+            let mut g = (f64::from(session.line_properties.color[1]) * 255.0).round();
+            let mut b = (f64::from(session.line_properties.color[2]) * 255.0).round();
+            let (r0, g0, b0) = (r, g, b);
+            SliderField::new(tl!("Red"), Bind::bound(&mut r), 0.0..=255.0).step(1.0).show(ui);
+            SliderField::new(tl!("Green"), Bind::bound(&mut g), 0.0..=255.0).step(1.0).show(ui);
+            SliderField::new(tl!("Blue"), Bind::bound(&mut b), 0.0..=255.0).step(1.0).show(ui);
+            if (r - r0).abs() > 1e-4 || (g - g0).abs() > 1e-4 || (b - b0).abs() > 1e-4 {
+                session.line_properties.color =
+                    [(r as f32 / 255.0).clamp(0.0, 1.0), (g as f32 / 255.0).clamp(0.0, 1.0), (b as f32 / 255.0).clamp(0.0, 1.0)];
+            }
+        });
+        color_open &= !close_popover;
+        ui.data_mut(|d| d.insert_temp(color_open_id, color_open));
+        ui.add_space(gap);
+
+        SliderField::new(tl!("Width"), Bind::bound(&mut session.line_properties.width), 0.5..=20.0).step(0.5).unit(tl!("pt")).show(ui);
+        ui.add_space(gap);
+
+        let dash_entries = [
+            Entry::new(0usize, tl!("Solid")),
+            Entry::new(1usize, tl!("Dotted")),
+            Entry::new(2usize, tl!("Dashed")),
+            Entry::new(3usize, tl!("DashDot")),
+        ];
+        Select::new(tl!("Dash").to_string(), Bind::bound(&mut session.line_properties.dash_idx), &dash_entries).show(ui);
+        ui.add_space(gap);
+        Checkbox::new(Bind::bound(&mut session.extend_perpendicular_lines)).label(tl!("Extend touching lines (Excel grid)").to_string()).show(ui);
+        ui.add_space(gap);
+
+        if Button::new(tl!("Apply")).variant(Variant::PRIMARY).show(ui).clicked() {
+            let color = if (session.line_properties.color[0] - session.line_properties.initial_color[0]).abs() > 1e-4
+                || (session.line_properties.color[1] - session.line_properties.initial_color[1]).abs() > 1e-4
+                || (session.line_properties.color[2] - session.line_properties.initial_color[2]).abs() > 1e-4
+            {
+                Some([session.line_properties.color[0] as f64, session.line_properties.color[1] as f64, session.line_properties.color[2] as f64])
+            } else {
+                None
+            };
+            let width = if (session.line_properties.width - session.line_properties.initial_width).abs() > 1e-4 {
+                Some(session.line_properties.width)
+            } else {
+                None
+            };
+            let dash = if session.line_properties.dash_idx != session.line_properties.initial_dash_idx {
+                Some(session.line_properties.dash_pattern())
+            } else {
+                None
+            };
+            if color.is_some() || width.is_some() || dash.is_some() {
+                session.pending_edit = Some(pdfcraft_engine::Edit::SetLineProperties { page, target, color, width, dash });
+            }
+            session.line_properties.last_error = None;
+            ui.ctx().request_repaint();
+        }
+
+        if let Some(err) = &session.line_properties.last_error {
+            ui.add_space(gap);
+            Notice::new(Tone::Bad, err.clone()).layout(NoticeLayout::Inline).show(ui);
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod line_properties_sync_tests {
+    use super::*;
+
+    #[test]
+    fn accepted_line_properties_edit_updates_baselines_and_selection_preserves_flag() {
+        let mut lp = crate::canvas::LinePropertiesState::default();
+        let line = pdfcraft_engine::LineSegment {
+            page: 0,
+            index: 3,
+            start: [10.0, 10.0],
+            end: [90.0, 10.0],
+            thickness: 3.5,
+            stroke_color: Some([0.2, 0.4, 0.6]),
+            rect_op: None,
+        };
+        sync_line_properties_from_edit(&mut lp, Some([0.2, 0.4, 0.6]), Some(3.5), Some(&[6.0, 3.0]), Some(&line));
+        assert!((lp.initial_width - 3.5).abs() < 1e-6);
+        assert_eq!(lp.initial_dash_idx, 2);
+        assert!((lp.initial_color[1] - 0.4).abs() < 1e-4);
+        assert!(lp.last_error.is_none());
+
+        assert!(is_vector_line_edit(&Edit::SetLineProperties {
+            page: 0,
+            target: pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: 3 },
+            color: None,
+            width: Some(2.0),
+            dash: None,
+        }));
+        assert!(!is_vector_line_edit(&Edit::DeletePages { pages: vec![0] }));
+    }
+
+    #[test]
+    fn failed_set_line_properties_sets_last_error_and_reverts_controls() {
+        let mut app = PdfCraftApp::for_unit_tests();
+        let ctx = egui::Context::default();
+        let bytes = app.session.create_blank(300.0, 400.0, 1).unwrap();
+        app.open_bytes(&ctx, "blank.pdf", None, bytes.as_ref().clone()).unwrap();
+        let id = app.views[0].id;
+        app.views[0].session.line_properties.initial_color = [0.1, 0.2, 0.3];
+        app.views[0].session.line_properties.initial_width = 2.0;
+        app.views[0].session.line_properties.initial_dash_idx = 1;
+        app.views[0].session.line_properties.color = [0.9, 0.1, 0.1];
+        app.views[0].session.line_properties.width = 9.0;
+        app.views[0].session.line_properties.dash_idx = 3;
+        app.views[0].session.pending_line_edit = true;
+
+        // Invalid out-of-range page/index triggers Err(e) in apply_edit.
+        let ok = app.apply_edit(
+            &ctx,
+            Edit::SetLineProperties {
+                page: 99,
+                target: pdfcraft_engine::ObjectTarget { kind: pdfcraft_engine::ObjectKind::VectorLine, index: 0 },
+                color: Some([0.9, 0.1, 0.1]),
+                width: Some(9.0),
+                dash: None,
+            },
+        );
+        assert!(!ok);
+        let view = app.views.iter().find(|v| v.id == id).unwrap();
+        assert!(!view.session.pending_line_edit, "refused edit must clear pending_line_edit");
+        assert!(view.session.line_properties.last_error.is_some(), "refused SetLineProperties must surface error");
+        assert_eq!(view.session.line_properties.color, [0.1, 0.2, 0.3]);
+        assert_eq!(view.session.line_properties.width, 2.0);
+        assert_eq!(view.session.line_properties.dash_idx, 1);
+    }
+}
 
 #[cfg(test)]
 mod revert_draft_tests {

@@ -850,6 +850,15 @@ pub fn tools() -> Vec<ToolDef> {
             json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "path": { "type": "string" }, "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 } }),
             &["doc", "page", "path"],
         )),
+        t(
+            "page_add_qr",
+            "Generate and add a QR code to a page",
+            "Generate a QR code encoding text or URL and place it as content on a page: in rect (points from the top-left of the page), or centred at its natural size. Undoable; movable with content_update.",
+        )
+        .with(schema(
+            json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "text": { "type": "string", "minLength": 1 }, "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 } }),
+            &["doc", "page", "text"],
+        )),
         t("content_update", "Edit added content", "Move/resize (rect), retype (text) or restyle (font, size, bold, italic, color or gray or cmyk as page_add_text takes them, align, char_spacing in points) an added item (page, index from content_list). Images: rotate (degrees, multiple of 90, counter-clockwise), flip_h / flip_v (toggle), crop [left, bottom, right, top] as fractions trimmed, image (a file that replaces the picture). Undoable.")
             .with(schema(
                 json!({
@@ -1477,7 +1486,7 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "field": { "type": "string" }, "event": { "type": "string", "enum": ["keystroke", "format", "validate", "calculate", "mouse_up"] }, "script": { "type": "string" } }),
                 &["doc", "field", "event"],
             )),
-        t("doc_export_office", "Export to Word, PowerPoint, HTML, RTF or Markdown", "Export a PDF ▸ Word (.docx), PowerPoint (.pptx, one slide per page), HTML (.html, one file with images inline), RTF (.rtf) or Markdown (.md or .markdown: pipe tables, images left out), chosen by path's extension: text, headings, bold and italic. HTML uses rich styling by default; set html_mode to simple for CSS-free headings, paragraphs, emphasis and tables. Simple HTML keeps text and inline images but omits colour and layout styling. Word uses inferred tables, bordered only along the grid lines the page draws, and positioned editable shapes on pages with artwork, rotated or large text; each source page retains its size. Font matching and vector graphics remain limited. Export reads forms 50 deep and up to 50 000 a page, counting forms the page draws itself. Pages that go past either limit, or that have pictures past what one export may hold or decode, are listed in truncated_pages, with a warning; what was left out is missing.")
+        t("doc_export_office", "Export to Word, Excel, PowerPoint, HTML, RTF or Markdown", "Export a PDF ▸ Word (.docx), Excel (.xlsx), PowerPoint (.pptx, one slide per page), HTML (.html, one file with images inline), RTF (.rtf) or Markdown (.md or .markdown: pipe tables, images left out), chosen by path's extension: text, headings, bold and italic. HTML uses rich styling by default; set html_mode to simple for CSS-free headings, paragraphs, emphasis and tables. Simple HTML keeps text and inline images but omits colour and layout styling. Word uses inferred tables, bordered only along the grid lines the page draws, and positioned editable shapes on pages with artwork, rotated or large text; each source page retains its size. Font matching and vector graphics remain limited. Export reads forms 50 deep and up to 50 000 a page, counting forms the page draws itself. Pages that go past either limit, or that have pictures past what one export may hold or decode, are listed in truncated_pages, with a warning; what was left out is missing.")
             .cmd("export.docx")
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" }, "html_mode": { "type": "string", "enum": ["rich", "simple"], "default": "rich" } }), &["doc", "path"])),
         t("pdfa_verify", "Verify PDF/A", "Standards ▸ Verify PDF/A compliance: the PDF/A-2b or 3b rules the document breaks (ISO 19005 clause, message, page, whether Save as PDF/A can fix it), plus what it declares.")
@@ -1704,6 +1713,25 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("edit.edit_text")
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 } }), &["doc", "page"])),
+        t("line_list", "List editable vector lines", "Stroked vector line segments on a page (Edit a PDF ▸ Edit vector lines): 1-based line number, start [x, y], end [x, y] and bbox [x0, y0, x1, y1] (top-left-origin points), thickness (points) and stroke color. Use the line number with line_edit.")
+            .ro()
+            .cmd("edit.edit_text")
+            .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 } }), &["doc", "page"])),
+        t("line_edit", "Edit a vector line", "Move endpoints (start [x, y], end [x, y] in top-left-origin points) and/or set stroke properties (color as #RRGGBB or colour name, width 0.5–20.0 pt, dash pattern array up to 8 numbers) of an editable vector line from line_list. Undoable.")
+            .cmd("edit.edit_text")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "page": { "type": "integer", "minimum": 1 },
+                    "line": { "type": "integer", "minimum": 1 },
+                    "start": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+                    "end": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+                    "color": { "type": "string", "description": "Stroke colour as #RRGGBB or a colour name (black, red, blue, green, orange, gray, white)." },
+                    "width": { "type": "number", "minimum": 0.5, "maximum": 20.0 },
+                    "dash": { "type": "array", "items": { "type": "number", "minimum": 0 }, "maxItems": 8 },
+                }),
+                &["doc", "page", "line"],
+            )),
         t("image_hit", "Hit test page artwork", "List image/Form numbers whose placement and all clipping paths contain point [x,y] in top-left-origin points. Bezier curves, even-odd/nonzero fill and holes are respected. Read only.")
             .ro()
             .cmd("edit.edit_text")

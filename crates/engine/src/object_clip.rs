@@ -132,24 +132,31 @@ impl ObjectClipboard {
 impl Edit {
     /// The edit that deletes `targets` (indexes into one inventory of `page`) as one undo step:
     /// what Delete and Cut do to objects selected together. One object is deleted by its own
-    /// edit, several by [`Edit::DeleteObjects`]; none is no edit.
+    /// edit, several by [`Edit::DeleteObjects`]; none (or any unsupported target such as
+    /// [`ObjectKind::VectorLine`]) is no edit.
     pub fn delete_objects(page: usize, mut targets: Vec<ObjectTarget>) -> Option<Edit> {
+        if targets.iter().any(|t| t.kind == crate::ObjectKind::VectorLine) {
+            return None;
+        }
         targets.sort();
         targets.dedup();
         match targets.as_slice() {
             [] => None,
-            [t] => Some(delete_one(page, *t)),
+            [t] => delete_one(page, *t).ok(),
             _ => Some(Edit::DeleteObjects { page, objects: targets }),
         }
     }
 }
 
-fn delete_one(page: usize, t: ObjectTarget) -> Edit {
+fn delete_one(page: usize, t: ObjectTarget) -> Result<Edit, EditError> {
     use crate::ObjectKind;
     match t.kind {
-        ObjectKind::Text => Edit::EditTextBlock { page, block: t.index, text: String::new(), style: crate::BlockStyle::default() },
-        ObjectKind::Image => Edit::EditPageImage { page, index: t.index, change: crate::ImageEdit::Delete },
-        ObjectKind::Added => Edit::DeleteContent { page, index: t.index },
+        ObjectKind::Text => Ok(Edit::EditTextBlock { page, block: t.index, text: String::new(), style: crate::BlockStyle::default() }),
+        ObjectKind::Image => Ok(Edit::EditPageImage { page, index: t.index, change: crate::ImageEdit::Delete }),
+        ObjectKind::Added => Ok(Edit::DeleteContent { page, index: t.index }),
+        ObjectKind::VectorLine => {
+            Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("vector lines cannot be deleted together with other objects".into())))
+        }
     }
 }
 
@@ -165,6 +172,9 @@ pub(crate) fn delete(
     mut run: impl FnMut(&mut pdfcraft_cos::Document, &Edit) -> Result<(), EditError>,
 ) -> Result<(), EditError> {
     use crate::ObjectKind;
+    if objects.iter().any(|t| t.kind == ObjectKind::VectorLine) {
+        return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("vector lines cannot be deleted together with other objects".into())));
+    }
     let mut targets = objects.to_vec();
     targets.sort_by_key(|t| (t.kind == ObjectKind::Added, std::cmp::Reverse(t.index)));
     targets.dedup();
@@ -176,9 +186,9 @@ pub(crate) fn delete(
                     EditError::Edit(pdfcraft_edit::EditError::Invalid("a selected paragraph no longer exists; select the objects again".into()))
                 })?;
                 let Some(block) = key.find(&pdfcraft_edit::text_blocks(doc, page)?, t.index) else { continue };
-                delete_one(page, ObjectTarget { kind: t.kind, index: block })
+                delete_one(page, ObjectTarget { kind: t.kind, index: block })?
             }
-            _ => delete_one(page, t),
+            _ => delete_one(page, t)?,
         };
         run(doc, &edit)?;
     }
@@ -209,3 +219,55 @@ pub(crate) fn paste(doc: &mut pdfcraft_cos::Document, page: usize, clip: &Object
 #[cfg(test)]
 #[path = "object_clip_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod vector_line_tests {
+    use super::*;
+    use crate::{ObjectKind, Session};
+    use pdfcraft_cos::{Dict, Object, SaveOptions, Stream, write_full};
+
+    fn simple_pdf() -> Arc<Vec<u8>> {
+        let mut cos = pdfcraft_cos::Document::new_empty();
+        let pages = cos.get(cos.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+        let mut font = Dict::new();
+        font.set(b"Type".to_vec(), Object::name("Font"));
+        font.set(b"Subtype".to_vec(), Object::name("Type1"));
+        font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+        let font_ref = cos.add(font);
+        let mut fonts = Dict::new();
+        fonts.set(b"F1".to_vec(), Object::Ref(font_ref));
+        let mut res = Dict::new();
+        res.set(b"Font".to_vec(), Object::Dict(fonts));
+        let stream_ref = cos.add(Object::Stream(Stream::from_raw(Dict::new(), b"BT /F1 12 Tf 20 200 Td (Keep) Tj ET".to_vec())));
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Parent".to_vec(), Object::Ref(pages));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 300.into(), 300.into()]));
+        page.set(b"Resources".to_vec(), Object::Dict(res));
+        page.set(b"Contents".to_vec(), Object::Ref(stream_ref));
+        let page_ref = cos.add(page);
+        cos.update_dict(pages, |d| {
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page_ref)]));
+            d.set(b"Count".to_vec(), Object::Int(1));
+        })
+        .unwrap();
+        Arc::new(write_full(&cos, &SaveOptions::default()).unwrap())
+    }
+
+    #[test]
+    fn delete_objects_rejects_any_vector_line_without_partial_deletion() {
+        let text = ObjectTarget { kind: ObjectKind::Text, index: 0 };
+        let line = ObjectTarget { kind: ObjectKind::VectorLine, index: 0 };
+        assert!(Edit::delete_objects(0, vec![line]).is_none());
+        assert!(Edit::delete_objects(0, vec![text, line]).is_none());
+        assert!(Edit::delete_objects(0, vec![text]).is_some());
+
+        let mut s = Session::new();
+        let id = s.open("doc.pdf", None, simple_pdf(), None).unwrap();
+        let err = s.apply(id, Edit::DeleteObjects { page: 0, objects: vec![text, line] });
+        assert!(err.is_err(), "direct DeleteObjects containing VectorLine must error");
+        let remaining = s.get(id).unwrap().editable_objects(0).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].text.as_deref(), Some("Keep"));
+    }
+}
