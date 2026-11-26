@@ -3816,6 +3816,30 @@ fn imported_font_does_not_take_an_alias_an_existing_field_selects_without_dr_ent
     assert_eq!(f2_1.name(b"BaseFont"), Some(b"Courier".as_slice()));
 }
 
+/// The fresh-variant allocator skips the effective aliases too: with an existing field falling
+/// back to `F1-1` (its `/DA` selects it, `/DR` lacks it) and `F1` taken by another face, an
+/// incoming `F1` becomes `F1-2` — not `F1-1`, which would hijack the existing field's edits.
+#[test]
+fn a_fresh_alias_does_not_land_on_an_effective_alias() {
+    let mut dst = doc_form(&[("F1", "Helvetica")], None, &[("local", Some("(/F1-1 0 Tf 0 g)"))], &[]);
+    let src = doc_form(&[("F1", "Courier")], None, &[("imported", Some("(/F1 18 Tf 0 g)"))], &[]);
+    import_pages_with(&mut dst, &src, &[0], 1, FieldConflicts::Rename).unwrap();
+    assert_eq!(dr_base_font_for_da(&dst, "imported").as_deref(), Some(b"Courier".as_slice()));
+    let form = catalog(&dst).get(b"AcroForm").map(|f| dst.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap();
+    let fonts = form
+        .get(b"DR")
+        .map(|d| dst.resolve(d))
+        .and_then(|d| d.as_dict().cloned())
+        .unwrap()
+        .get(b"Font")
+        .map(|f| dst.resolve(f))
+        .and_then(|f| f.as_dict().cloned())
+        .unwrap();
+    assert!(fonts.get(b"F1-1").is_none());
+    let f1_2 = fonts.get(b"F1-2").map(|f| dst.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap();
+    assert_eq!(f1_2.name(b"BaseFont"), Some(b"Courier".as_slice()));
+}
+
 /// A flexible one-page form document: `/Alias BaseFont` pairs in `/DR /Font`, an optional
 /// AcroForm-level `/DA`, one field per `(name, /DA value inserted verbatim)` (no `/DA` when
 /// `None`), and extra object bodies after the fields (for indirect `/DA` strings).

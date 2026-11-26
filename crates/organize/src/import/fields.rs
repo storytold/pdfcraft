@@ -449,6 +449,9 @@ pub(super) fn import_dr_fonts(dst: &mut Document, src: &Document, copier: &mut C
     // Names existing destination fields resolve their edits through even though `/DR` lacks
     // them: taking such a name for an incoming font would silently change those fields' face.
     let effective = effective_field_aliases(dst);
+    // They are reserved for replacement allocation too: a fresh `name-N` variant must not land
+    // on an alias an existing field falls back to.
+    taken.extend(effective.iter().cloned());
     let mut map: HashMap<String, String> = HashMap::new();
     let mut pending: Vec<(String, Object)> = Vec::new();
     for name in wanted {
