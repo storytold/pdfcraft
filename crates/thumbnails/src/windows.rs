@@ -18,7 +18,7 @@ use windows::Win32::Foundation::{
     CLASS_E_CLASSNOTAVAILABLE, CLASS_E_NOAGGREGATION, E_INVALIDARG, E_OUTOFMEMORY, E_POINTER, ERROR_ALREADY_INITIALIZED, S_FALSE,
 };
 use windows::Win32::Graphics::Gdi::{BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateDIBSection, DIB_RGB_COLORS, HBITMAP};
-use windows::Win32::System::Com::{IClassFactory, IClassFactory_Impl, IStream, STATFLAG, STATFLAG_NONAME, STATSTG};
+use windows::Win32::System::Com::{IClassFactory, IClassFactory_Impl, IStream, STATFLAG_NONAME, STATSTG};
 use windows::Win32::UI::Shell::PropertiesSystem::{IInitializeWithStream, IInitializeWithStream_Impl};
 use windows::Win32::UI::Shell::{IThumbnailProvider, IThumbnailProvider_Impl, WTS_ALPHATYPE, WTS_E_FAILEDEXTRACTION, WTSAT_RGB, WTSAT_UNKNOWN};
 use windows_core::{BOOL, GUID, HRESULT, IUnknown, Interface, Ref, implement};
@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn read_all_still_reads_when_stat_fails() {
         use windows::Win32::Foundation::E_FAIL;
-        use windows::Win32::System::Com::{ISequentialStream_Impl, IStream_Impl, LOCKTYPE, STGC, STREAM_SEEK};
+        use windows::Win32::System::Com::{ISequentialStream_Impl, IStream_Impl, LOCKTYPE, STATFLAG, STGC, STREAM_SEEK};
 
         #[implement(IStream)]
         struct StatFailsStream {
@@ -290,11 +290,11 @@ mod tests {
 
         impl ISequentialStream_Impl for StatFailsStream_Impl {
             fn Read(&self, pv: *mut core::ffi::c_void, cb: u32, pcbread: *mut u32) -> HRESULT {
-                unsafe { self.inner.Read(pv, cb, if pcbread.is_null() { None } else { Some(pcbread) }) }.into()
+                unsafe { self.inner.Read(pv, cb, if pcbread.is_null() { None } else { Some(pcbread) }) }
             }
 
             fn Write(&self, pv: *const core::ffi::c_void, cb: u32, pcbwritten: *mut u32) -> HRESULT {
-                unsafe { self.inner.Write(pv, cb, if pcbwritten.is_null() { None } else { Some(pcbwritten) }) }.into()
+                unsafe { self.inner.Write(pv, cb, if pcbwritten.is_null() { None } else { Some(pcbwritten) }) }
             }
         }
 
