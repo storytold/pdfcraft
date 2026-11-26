@@ -2071,4 +2071,4 @@ mod encoding_tests {
 
 mod thai;
 use thai::composite_glyph_maps;
-pub use thai::{ExistingThaiRun, LegacyThaiFont, recovered_thai_map};
+pub use thai::{ExistingThaiRun, LegacyThaiFont, legacy_thai_presentation_base, recovered_thai_map};

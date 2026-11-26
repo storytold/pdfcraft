@@ -152,6 +152,15 @@ pub fn recovered_thai_map(doc: &Document, font: &Dict) -> Option<Vec<(u16, char)
 /// assignments of <https://linux.thai.net/~thep/th-otf/shaping.html>).
 const PUA_BASES: [char; 27] = ['ฐ', 'ิ', 'ี', 'ึ', 'ื', '่', '้', '๊', '๋', '์', '่', '้', '๊', '๋', '์', 'ญ', 'ั', 'ํ', '็', '่', '้', '๊', '๋', '์', 'ุ', 'ู', 'ฺ'];
 
+/// The Thai character a legacy Windows Thai presentation form (U+F700–U+F71A) stands for, or `None` for any
+/// other character. Old Thai fonts give these private-use code points to the alternate glyphs they draw in
+/// place of the nominal ones (a tone mark moved left or lower, ฐ and ญ without their descenders), and their
+/// ToUnicode maps often point at the alternate's code point instead of the character the reader sees.
+pub fn legacy_thai_presentation_base(c: char) -> Option<char> {
+    let index = u32::from(c).checked_sub(0xf700)?;
+    PUA_BASES.get(usize::try_from(index).ok()?).copied()
+}
+
 /// Whether a Thai character is a vowel or tone mark set above or below its base, with no advance
 /// of its own (U+0E31, U+0E34–U+0E3A, U+0E47–U+0E4E). Sara Am and the other vowels advance.
 fn is_thai_mark(ch: char) -> bool {

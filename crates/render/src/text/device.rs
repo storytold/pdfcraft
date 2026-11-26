@@ -1,4 +1,4 @@
-use super::layout::{Flow, along_baseline, arrange_flow, compatible, continues, from_upright, to_upright, union, unrolled};
+use super::layout::{Flow, along_baseline, arrange_flow, compatible, continues, from_upright, standard_thai_forms, to_upright, union, unrolled};
 use super::{
     Affine, BezPath, BlendMode, ClipPath, Context, Device, Glyph, GlyphDrawMode, HashMap, Image, InterpreterCache, InterpreterSettings,
     InterpreterWarning, PageText, Paint, PathDrawMode, Pdf, Rect, Shape, SoftMask, TextFilter, TextGlyph, TransformExt, interpret_page,
@@ -635,7 +635,8 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
     if dev.partial_replacement {
         return Err("a replacement text span mixes included and excluded content; disable the exclusions to count this page".into());
     }
-    let glyphs = dev.glyphs;
+    let mut glyphs = dev.glyphs;
+    standard_thai_forms(&mut glyphs, |g| &mut g.2);
     // Text on a curved path: glyphs that each continue the previous one's line while the
     // direction turns. Each such run is one line.
     let turned = |u: [f64; 2]| u[0].abs().min(u[1].abs()) > DIRECTION_TOLERANCE;

@@ -192,12 +192,45 @@ pub(super) fn union(a: &mut [f32; 4], b: &[f32; 4]) {
 ///    after a space (a label and its value, words drawn out of order or in another size). A block of
 ///    several lines does so only after a one-line block narrower than [`SAME_LINE_GAP`] heights (a
 ///    label): beside a wider one, or the last line of a column, it is the next column.
-pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
+pub fn layout(mut glyphs: Vec<TextGlyph>) -> PageText {
+    standard_thai_forms(&mut glyphs, |g| g);
     let (order, line_of, space_before) = arrange(&glyphs);
     let mut slots: Vec<Option<TextGlyph>> = glyphs.into_iter().map(Some).collect();
     // Each glyph is emitted exactly once.
     let glyphs = order.iter().filter_map(|i| slots.get_mut(*i).and_then(Option::take)).collect();
     PageText { glyphs, line_of, space_before, truncated: false }
+}
+
+/// Whether `text` holds a Thai character (U+0E01–U+0E5B).
+fn has_thai(text: &str) -> bool {
+    text.chars().any(|c| matches!(u32::from(c), 0x0e01..=0x0e5b))
+}
+
+/// Each legacy Thai presentation form (U+F700–U+F71A) a glyph reads as, written as the Thai character it
+/// stands for when the glyph itself, the one drawn before it or the one after it holds Thai. Old Thai fonts map
+/// their alternate glyphs (a tone mark or above vowel moved left, ฐ and ญ without descenders) to these
+/// private-use code points, so
+/// copied text kept them and Find could not match the word: "เป็น" read as "เป", U+F712, "น", and as a
+/// letter of its own, not a mark, the alternate was then sorted by x after the next letter. The same code
+/// points are icons in symbol fonts, which is why Thai in or next to the glyph is required; glyphs are taken in content
+/// order, so a second alternate stacked on the first counts the first, once written as Thai, as its neighbour.
+pub(super) fn standard_thai_forms<G>(glyphs: &mut [G], glyph: fn(&mut G) -> &mut TextGlyph) {
+    let legacy = |c: char| pdfcraft_fonts::pdf::legacy_thai_presentation_base(c);
+    let thai_at = |glyphs: &mut [G], i: usize| glyphs.get_mut(i).is_some_and(|g| has_thai(&glyph(g).text));
+    for i in 0..glyphs.len() {
+        if !glyphs.get_mut(i).is_some_and(|g| glyph(g).text.chars().any(|c| legacy(c).is_some())) {
+            continue;
+        }
+        let own = thai_at(glyphs, i);
+        let before = i.checked_sub(1).is_some_and(|p| thai_at(glyphs, p));
+        let after = thai_at(glyphs, i + 1);
+        if (own || before || after)
+            && let Some(g) = glyphs.get_mut(i)
+        {
+            let g = glyph(g);
+            g.text = g.text.chars().map(|c| legacy(c).unwrap_or(c)).collect();
+        }
+    }
 }
 
 /// [`layout`] as the reading order of indices into `glyphs`, with each one's line and word gap.
