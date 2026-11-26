@@ -55,11 +55,11 @@ pub(super) fn parse_datasets_packet(text: &str) -> Option<DataNode> {
 /// The data path a SOM expression names: `form[0].#subform[0].name[1]` → `[(form, 0), (name, 1)]`.
 /// Unnamed containers (`#subform`) have no data node.
 pub fn som_to_path(som: &str) -> DataPath {
-    som_segments(som).map(|(name, index)| (xml_name(name), index)).collect()
+    bound_path(None, som, xml_name)
 }
 
 // Template lookup uses the original spelling. Only names used in the XML data tree are cleaned.
-pub(super) fn som_segments(som: &str) -> impl Iterator<Item = (&str, usize)> {
+fn som_segments(som: &str) -> impl Iterator<Item = (&str, usize)> {
     som.split('.').filter_map(|seg| {
         let seg = seg.trim();
         if seg.is_empty() || seg.starts_with('#') || seg.starts_with('$') {
@@ -79,6 +79,12 @@ pub(super) fn som_segments(som: &str) -> impl Iterator<Item = (&str, usize)> {
 /// area's parent, as Adobe's viewers write it. The template tells which segments are areas;
 /// segments it doesn't have (page-set objects, or a SOM from another template) are kept.
 pub fn data_path(tpl: &Template, som: &str) -> DataPath {
+    bound_path(Some(tpl), som, xml_name)
+}
+
+/// Apply the spelling function only to segments retained in the data path.
+pub(super) fn bound_path(tpl: Option<&Template>, som: &str, mut spelling: impl FnMut(&str) -> String) -> DataPath {
+    let Some(tpl) = tpl else { return som_segments(som).map(|(name, idx)| (spelling(name), idx)).collect() };
     let mut out = DataPath::new();
     // The template children the next segment is looked up in; `None` until the root matched,
     // and again once a segment is not a container the template has.
@@ -101,11 +107,11 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
             Some(Container::Area(children)) => level = Some(children),
             Some(Container::Children(children)) => {
                 level = Some(children);
-                out.push((xml_name(&name), index));
+                out.push((spelling(&name), index));
             }
             None => {
                 level = None;
-                out.push((xml_name(&name), index));
+                out.push((spelling(&name), index));
             }
         }
     }

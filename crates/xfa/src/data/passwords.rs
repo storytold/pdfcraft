@@ -113,7 +113,7 @@ fn password_dataset_wants(doc: &Document) -> Result<Vec<Want>, XfaError> {
     let Ok(Some(packet)) = datasets_packet(doc) else { return Ok(Vec::new()) };
     let Some(data) = parse_datasets_packet(&packet) else { return Ok(Vec::new()) };
     Ok(with_template(doc, None, |tpl| {
-        let mut candidates: Vec<(String, DataPath, String)> = Vec::new();
+        let mut candidates: Vec<(String, DataPath, Vec<String>, String)> = Vec::new();
         let mut seen = std::collections::HashSet::new();
         if let Some(t) = tpl {
             struct Walk<'a> {
@@ -121,7 +121,7 @@ fn password_dataset_wants(doc: &Document) -> Result<Vec<Want>, XfaError> {
                 data: &'a DataNode,
                 nodes: usize,
                 seen: &'a mut std::collections::HashSet<DataPath>,
-                out: &'a mut Vec<(String, DataPath, String)>,
+                out: &'a mut Vec<(String, DataPath, Vec<String>, String)>,
             }
             impl Walk<'_> {
                 fn child_som(parent: &str, name: Option<&str>, index: usize) -> String {
@@ -166,10 +166,10 @@ fn password_dataset_wants(doc: &Document) -> Result<Vec<Want>, XfaError> {
                             }
                             Node::Field(f) if f.ui == Ui::PasswordEdit => {
                                 let som = Self::child_som(parent_som, f.common.name.as_deref().or(Some("field")), sib);
-                                let path = data_path(self.tpl, &som);
+                                let (path, raw_names) = path_of(Some(self.tpl), &som);
                                 if !path.is_empty() && self.seen.insert(path.clone()) {
                                     let default = f.value.plain().map(|v| f.saved_value(v.trim())).unwrap_or_default();
-                                    self.out.push((som, path, default));
+                                    self.out.push((som, path, raw_names, default));
                                 }
                             }
                             _ => {}
@@ -188,16 +188,16 @@ fn password_dataset_wants(doc: &Document) -> Result<Vec<Want>, XfaError> {
             }
         }
         for (som, default) in acro_fields {
-            let path = path_of(tpl, &som);
+            let (path, raw_names) = path_of(tpl, &som);
             if !path.is_empty() && seen.insert(path.clone()) {
-                candidates.push((som, path, default));
+                candidates.push((som, path, raw_names, default));
             }
         }
         candidates
             .into_iter()
-            .filter_map(|(som, path, default)| {
+            .filter_map(|(som, path, raw_names, default)| {
                 let cur = data.value_at(&path)?;
-                (!cur.is_empty() && cur != default).then_some(Want { som, path, text: default, ensure: false })
+                (!cur.is_empty() && cur != default).then_some(Want { som, path, raw_names, text: default, ensure: false })
             })
             .collect()
     }))

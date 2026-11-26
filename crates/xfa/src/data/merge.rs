@@ -7,7 +7,7 @@ use super::{DataPath, HashMap, MAX_NODES, XFA_DATA_NS};
 /// What a rewrite of the datasets packet does.
 #[derive(Clone, Copy)]
 pub(super) enum Op<'a> {
-    Legacy(&'a [(&'a DataPath, &'a str)]),
+    Legacy(&'a [(&'a DataPath, &'a [String])]),
     /// Put these values in (adding nodes as needed).
     Values(&'a [Want]),
     /// Take the node at this path out.
@@ -313,7 +313,7 @@ fn mark_data_group_edit(src: &str, node: crate::xml::Node) -> Option<Edit> {
 
 /// Recover names written by the ASCII-only writer. Both reads and updates use this pass;
 /// reads use the repaired XML in memory, while updates merge values into the repaired packet.
-pub(super) fn recover_names(text: &str, within: Within, paths: &[(&DataPath, &str)]) -> Option<String> {
+pub(super) fn recover_names(text: &str, within: Within, paths: &[(&DataPath, &[String])]) -> Option<String> {
     if paths.iter().all(|(p, _)| p.iter().all(|(name, _)| name.is_ascii())) {
         return None;
     }
@@ -323,14 +323,14 @@ pub(super) fn recover_names(text: &str, within: Within, paths: &[(&DataPath, &st
     }
 }
 
-fn rename_legacy(src: &str, root: crate::xml::Node, paths: &[(&DataPath, &str)], edits: &mut Vec<Edit>) {
+fn rename_legacy(src: &str, root: crate::xml::Node, paths: &[(&DataPath, &[String])], edits: &mut Vec<Edit>) {
     type Children = HashMap<String, Vec<crate::xml::NodeId>>;
     let mut index: HashMap<crate::xml::NodeId, Children> = HashMap::new();
     let mut claims = HashMap::new();
     let tree = root.document();
-    for &(path, som) in paths {
+    for &(path, raw_names) in paths {
         let mut parent = root.id();
-        for (name, idx) in path {
+        for (depth, (name, idx)) in path.iter().enumerate() {
             let children = index.entry(parent).or_insert_with(|| {
                 let mut by = Children::new();
                 if let Some(node) = tree.get_node(parent) {
@@ -345,7 +345,7 @@ fn rename_legacy(src: &str, root: crate::xml::Node, paths: &[(&DataPath, &str)],
             } else if !name.is_ascii() {
                 // The new writer prefixes certain leading characters with '_'. Use the
                 // original SOM spelling when available before applying the old writer's rule.
-                let raw = super::path::som_segments(som).map(|(n, _)| n).find(|n| xml_name(n) == *name).unwrap_or(name);
+                let raw = raw_names.get(depth).unwrap_or(name);
                 let mut old: String = raw.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.') { c } else { '_' }).collect();
                 if !old.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
                     old.insert(0, '_');
@@ -529,7 +529,7 @@ pub(super) fn merge_all(text: &str, within: Within, ops: &[Op], warnings: &mut V
         if let Op::Values(wants) = op
             && wants.iter().any(|w| w.path.iter().any(|(n, _)| !n.is_ascii()))
         {
-            let paths: Vec<_> = wants.iter().map(|w| (&w.path, w.som.as_str())).collect();
+            let paths: Vec<_> = wants.iter().map(|w| (&w.path, w.raw_names.as_slice())).collect();
             if let Some(xml) = recover_names(current.as_deref().unwrap_or(text), within, &paths) {
                 current = Some(xml);
             }

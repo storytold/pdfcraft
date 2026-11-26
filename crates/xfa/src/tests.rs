@@ -1851,6 +1851,30 @@ fn legacy_unicode_dataset_spelling_is_read_and_migrated_on_save() {
 }
 
 #[test]
+fn legacy_names_follow_each_bound_som_segment() {
+    for area in [false, true] {
+        let mark = '\u{301}';
+        let parent = format!("_{mark}a");
+        let child = format!("{mark}a");
+        let wrap = |inner: String| if area { format!(r#"<area name="layout">{inner}</area>"#) } else { inner };
+        let field = wrap(format!(r#"<field name="{child}"><ui><textEdit/></ui></field>"#));
+        let xdp = format!(
+            r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form"><subform name="{parent}">{field}</subform></subform></template><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><__a><_a>saved</_a></__a></form></xfa:data></xfa:datasets></xdp:xdp>"#
+        );
+        let mut doc = Document::open(Arc::new(shell(&xdp))).unwrap();
+        let mut fields = static_fields("", false);
+        fields.truncate(1);
+        let layout = if area { "layout[0]." } else { "" };
+        fields[0].name = format!("form[0].{parent}[0].{layout}{child}[0]");
+        assert_eq!(read_values(&doc, &fields), vec![(fields[0].name.clone(), FieldData::Text("saved".into()))]);
+        fields[0].data = FieldData::Text("edited".into());
+        write_datasets(&mut doc, &fields).unwrap();
+        let xml = read_packets(&doc).unwrap().unwrap().xdp;
+        assert!(xml.contains(&format!("<form><{parent}><{parent}>edited</{parent}></{parent}></form>")), "{xml}");
+    }
+}
+
+#[test]
 fn legacy_unicode_picture_renames_the_existing_indexed_nodes() {
     let xml = fields_template("<form><Gr_ppe><Foto_Stra_e>first</Foto_Stra_e><Foto_Stra_e/></Gr_ppe></form>");
     let mut doc = Document::open(Arc::new(shell(&xml))).unwrap();

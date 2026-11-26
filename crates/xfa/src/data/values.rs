@@ -1,5 +1,5 @@
 use super::dates::{data_date_pattern, data_to_iso, iso_to_data, iso_to_pattern, pattern_to_iso};
-use super::path::{data_path, parse_datasets, som_to_path};
+use super::path::{bound_path, parse_datasets};
 use super::{DataPath, Dict, Document, ObjRef, Object, Template};
 
 /// What a field holds, for writing the datasets.
@@ -150,6 +150,8 @@ fn date_pattern_of(doc: &Document, f: &FieldDatum) -> Option<String> {
 pub(super) struct Want {
     pub(super) som: String,
     pub(super) path: DataPath,
+    /// Raw SOM names aligned with the retained segments for Unicode field bindings.
+    pub(super) raw_names: Vec<String>,
     pub(super) text: String,
     /// Create the node even for an empty value (an instance of a repeating subform).
     pub(super) ensure: bool,
@@ -166,12 +168,17 @@ pub(super) fn with_template<T>(doc: &Document, tpl: Option<&Template>, f: impl F
     }
 }
 
-/// [`data_path`] when the template is known, else [`som_to_path`].
-pub(super) fn path_of(tpl: Option<&Template>, som: &str) -> DataPath {
-    match tpl {
-        Some(t) => data_path(t, som),
-        None => som_to_path(som),
-    }
+/// Compute the data path and retain the pre-normalization spelling at each depth for legacy XML.
+pub(super) fn path_of(tpl: Option<&Template>, som: &str) -> (DataPath, Vec<String>) {
+    let mut raw_names = Vec::new();
+    let keep_raw = !som.is_ascii();
+    let path = bound_path(tpl, som, |name| {
+        if keep_raw {
+            raw_names.push(name.to_owned());
+        }
+        super::build::xml_name(name)
+    });
+    (path, raw_names)
 }
 
 /// The values the datasets should hold for `fields`, by data path: dates in each field's data
@@ -180,7 +187,7 @@ pub(super) fn wanted(doc: &Document, fields: &[FieldDatum], tpl: Option<&Templat
     let mut out = Vec::new();
     for f in fields {
         let som = som_of(doc, f);
-        let path = path_of(tpl, &som);
+        let (path, raw_names) = path_of(tpl, &som);
         if path.is_empty() {
             continue;
         }
@@ -200,7 +207,7 @@ pub(super) fn wanted(doc: &Document, fields: &[FieldDatum], tpl: Option<&Templat
             FieldData::Radio(sel) => radio_dataset_value(doc, f, sel),
             FieldData::None => continue,
         };
-        out.push(Want { som, path, text, ensure: false });
+        out.push(Want { som, path, raw_names, text, ensure: false });
     }
     out
 }
@@ -225,15 +232,15 @@ fn values_at(doc: &Document, tpl: Option<&Template>, fields: &[FieldDatum]) -> V
         .iter()
         .map(|f| {
             let som = som_of(doc, f);
-            let path = path_of(tpl, &som);
-            (f, som, path)
+            let (path, raw_names) = path_of(tpl, &som);
+            (f, som, path, raw_names)
         })
         .collect();
-    let names: Vec<_> = bindings.iter().map(|(_, som, path)| (path, som.as_str())).collect();
+    let names: Vec<_> = bindings.iter().map(|(_, _, path, raw_names)| (path, raw_names.as_slice())).collect();
     let repaired = super::merge::recover_names(&p.xdp, super::merge::Within::Xdp, &names);
     let Some(data) = parse_datasets(repaired.as_deref().unwrap_or(&p.xdp)) else { return Vec::new() };
     let mut out = Vec::new();
-    for (f, som, path) in bindings {
+    for (f, som, path, _) in bindings {
         let Some(text) = data.value_at(&path) else { continue };
         let text = text.as_str();
         let value = match &f.data {
