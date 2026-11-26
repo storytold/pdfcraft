@@ -178,6 +178,23 @@ pub(crate) fn ok(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, metho
     call(h, c, method, params).unwrap_or_else(|e| panic!("{method}: {e}"))
 }
 
+/// A pointer click at the centre of a widget `ui.inspect` returned, as a user clicks it. The mode
+/// tabs and combo boxes react to a pointer press, not to the accessibility click that `ui.click`
+/// sends for a `label` or `id`.
+fn click_center(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, widget: &Value) {
+    let rect = &widget["rect"];
+    let x = (rect[0].as_f64().unwrap() + rect[2].as_f64().unwrap()) / 2.0;
+    let y = (rect[1].as_f64().unwrap() + rect[3].as_f64().unwrap()) / 2.0;
+    ok(h, c, "ui.click", json!({ "x": x, "y": y }));
+    h.run_steps(2);
+}
+
+/// Clicks the mode tab labelled `label` with the pointer.
+fn click_tab(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, label: &str) {
+    let tab = ok(h, c, "ui.inspect", json!({ "query": label, "role": "Tab" }));
+    click_center(h, c, &tab["widgets"][0]);
+}
+
 /// Presses `from`, moves through `steps` points to `to` and releases, the way `ui.drag` did: a
 /// click that holds, moves, then releases. `modifiers` are held for the whole gesture and `button`
 /// is `"left"`, `"secondary"` or `"middle"`.
@@ -868,7 +885,8 @@ fn japanese_controls_and_search_keep_command_ids() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "ja" }));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], "ja");
-    ok(&mut h, &c, "ui.click", json!({ "label": "変換" }));
+    h.run_steps(2);
+    click_tab(&mut h, &c, "変換");
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Convert");
 
     ok(&mut h, &c, "ui.command", json!({ "id": "app.preferences" }));
@@ -889,7 +907,8 @@ fn japanese_controls_and_search_keep_command_ids() {
     }
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][0]["name"], "doc.pdf");
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "en" }));
-    ok(&mut h, &c, "ui.click", json!({ "label": "All tools" }));
+    h.run_steps(2);
+    click_tab(&mut h, &c, "All tools");
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "AllTools");
 }
 
@@ -904,16 +923,7 @@ fn german_preferences_and_search_keep_command_ids() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "de" }));
     h.run_steps(2);
-    // A pointer click at the widget's center, as a user clicks it.
-    fn click_center(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, widget: &Value) {
-        let rect = &widget["rect"];
-        let x = (rect[0].as_f64().unwrap() + rect[2].as_f64().unwrap()) / 2.0;
-        let y = (rect[1].as_f64().unwrap() + rect[3].as_f64().unwrap()) / 2.0;
-        ok(h, c, "ui.click", json!({ "x": x, "y": y }));
-        h.run_steps(2);
-    }
-    let tab = ok(&mut h, &c, "ui.inspect", json!({ "query": "Konvertieren", "role": "Tab" }));
-    click_center(&mut h, &c, &tab["widgets"][0]);
+    click_tab(&mut h, &c, "Konvertieren");
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Convert");
     ok(&mut h, &c, "ui.command", json!({ "id": "app.preferences" }));
     h.run_steps(2);
@@ -926,7 +936,7 @@ fn german_preferences_and_search_keep_command_ids() {
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], "en");
     let selector = ok(&mut h, &c, "ui.inspect", json!({ "query": "English" }));
     let combo = selector["widgets"].as_array().unwrap().iter().find(|w| w["role"] == "ComboBox").expect("language selector");
-    ok(&mut h, &c, "ui.click", json!({ "id": combo["id"] }));
+    click_center(&mut h, &c, combo);
     ok(&mut h, &c, "ui.click", json!({ "label": "Deutsch" }));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], "de");
     ok(&mut h, &c, "ui.click", json!({ "label": "OK" }));
@@ -1023,7 +1033,7 @@ fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
     {
         let selector = ok(&mut h, &c, "ui.inspect", json!({ "query": current }));
         let combo = selector["widgets"].as_array().unwrap().iter().find(|w| w["role"] == "ComboBox").expect("language selector");
-        ok(&mut h, &c, "ui.click", json!({ "id": combo["id"] }));
+        click_center(&mut h, &c, combo);
         ok(&mut h, &c, "ui.click", json!({ "label": next }));
         assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], code);
     }
