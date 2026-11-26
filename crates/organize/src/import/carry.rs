@@ -36,28 +36,28 @@ fn write_attachments(dst: &mut Document, entries: &mut [(Vec<u8>, Object)], uniq
     if entries.is_empty() {
         return Ok(());
     }
-    // Names are compared and numbered as text: a key written as UTF-16 (a name with an accent
-    // or Chinese letters) must not get ASCII bytes appended to it.
+    // Names are compared and numbered as text, and a renamed key keeps the encoding it came in:
+    // " (2)" is appended as UTF-16 to a UTF-16 key (either byte order) and as bytes to a
+    // PDFDocEncoding one, so a name with an accent or Chinese letters never gets ASCII bytes
+    // appended to it and the rest of the key stays byte for byte as the file wrote it.
     if uniquify {
-        let reserved: std::collections::HashSet<String> =
-            entries.iter().map(|(k, _)| pdfcraft_cos::PdfString::literal(k.clone()).to_text()).collect();
+        let reserved: std::collections::HashSet<String> = entries.iter().map(|(k, _)| key_text(k)).collect();
         let mut seen = std::collections::HashSet::new();
         for (k, _) in entries.iter_mut() {
-            let base = pdfcraft_cos::PdfString::literal(k.clone()).to_text();
-            let mut text = base.clone();
+            let base = key_text(k);
+            if seen.insert(base.clone()) {
+                continue;
+            }
             let mut n = 2;
-            if !seen.insert(text.clone()) {
-                loop {
-                    text = format!("{base} ({n})");
-                    n += 1;
-                    if !reserved.contains(&text) && seen.insert(text.clone()) {
-                        break;
-                    }
+            let suffix = loop {
+                let suffix = format!(" ({n})");
+                n += 1;
+                let text = format!("{base}{suffix}");
+                if !reserved.contains(&text) && seen.insert(text) {
+                    break suffix;
                 }
-            }
-            if text != base {
-                *k = pdfcraft_cos::PdfString::text(&text).bytes;
-            }
+            };
+            append_in_encoding(k, &suffix);
         }
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -254,6 +254,26 @@ pub(super) fn add_outline(doc: &mut Document, marks: &[Mark]) -> Result<(), Orga
         c.set(b"PageMode".to_vec(), Object::name("UseOutlines"));
     })?;
     Ok(())
+}
+
+/// A name-tree key as text: UTF-16 with either byte-order mark, else PDFDocEncoding.
+fn key_text(key: &[u8]) -> String {
+    match key {
+        [0xff, 0xfe, rest @ ..] => {
+            let units: Vec<u16> = rest.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+            String::from_utf16_lossy(&units)
+        }
+        _ => pdfcraft_cos::PdfString::literal(key.to_vec()).to_text(),
+    }
+}
+
+/// Appends `suffix` (ASCII) to `key` in the key's own encoding.
+fn append_in_encoding(key: &mut Vec<u8>, suffix: &str) {
+    match key.get(..2) {
+        Some([0xfe, 0xff]) => key.extend(suffix.encode_utf16().flat_map(u16::to_be_bytes)),
+        Some([0xff, 0xfe]) => key.extend(suffix.encode_utf16().flat_map(u16::to_le_bytes)),
+        _ => key.extend_from_slice(suffix.as_bytes()),
+    }
 }
 
 #[cfg(test)]
